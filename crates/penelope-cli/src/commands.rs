@@ -189,6 +189,12 @@ pub enum SessionCmd {
     Export {
         session: String,
     },
+    /// Renomme une session.
+    Title {
+        session: String,
+        #[arg(required = true, num_args = 1..)]
+        title: Vec<String>,
+    },
     /// Duplique une session (transcript, métadonnées, résumés).
     Fork {
         #[arg(long)]
@@ -503,6 +509,9 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Mcp(McpCmd::List) if !cli.json => {
             println!("{}", render_mcp_list(&value));
         }
+        Command::Session(SessionCmd::List) if !cli.json => {
+            println!("{}", render_session_list(&value));
+        }
         Command::Session(SessionCmd::Compact { .. })
         | Command::Mem(MemCmd::Dream { .. })
         | Command::Import(_)
@@ -519,6 +528,31 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         _ => output::print(&value, cli.json),
     }
     Ok(())
+}
+
+/// `penelope session list` : titre et date d'abord, l'identifiant pour `switch`.
+fn render_session_list(v: &Value) -> String {
+    let sessions = v.as_array().cloned().unwrap_or_default();
+    if sessions.is_empty() {
+        return "Aucune session.".into();
+    }
+    let rows: Vec<Value> = sessions
+        .iter()
+        .map(|s| {
+            let when = s["last_activity"]
+                .as_str()
+                .or_else(|| s["created_at"].as_str())
+                .unwrap_or("")
+                .replace('T', " ");
+            json!({
+                "titre": s["title"].as_str().filter(|t| !t.trim().is_empty()).unwrap_or("(sans titre)"),
+                "activité": when.chars().take(16).collect::<String>(),
+                "état": s["state"],
+                "session": s["id"],
+            })
+        })
+        .collect();
+    output::table(&rows)
 }
 
 /// `penelope mcp list` : un serveur par ligne, puis les déclarations invalides.
@@ -638,6 +672,10 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
 
         Command::Session(SessionCmd::List) => (m::SESSION_LIST, json!({})),
         Command::Session(SessionCmd::New { title }) => (m::SESSION_NEW, json!({"title": title})),
+        Command::Session(SessionCmd::Title { session, title }) => (
+            m::SESSION_TITLE,
+            json!({"session": session, "title": title.join(" ")}),
+        ),
         Command::Session(SessionCmd::Model { alias, session }) => (
             m::SESSION_MODEL,
             json!({"alias": alias, "session": session}),
@@ -1466,6 +1504,10 @@ mod tests {
                     "{\"type\":\"notify\",\"template\":\"revue\"}",
                 ],
                 m::SCHEDULE_ADD,
+            ),
+            (
+                vec!["session", "title", "s_1", "Refonte", "du", "site"],
+                m::SESSION_TITLE,
             ),
             (vec!["mcp", "list"], m::MCP_LIST),
             (vec!["mcp", "show", "redmine"], m::MCP_SHOW),

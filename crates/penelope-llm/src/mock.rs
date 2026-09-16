@@ -21,6 +21,8 @@ pub enum Scripted {
     ContextOverflow,
     /// Texte puis images (`data:` URI), pour tester la génération d'image.
     Images(String, Vec<String>),
+    /// Flux ouvert (HTTP 200) puis erreur réessayable, après un texte éventuel.
+    MidStreamError(String, String),
 }
 
 #[derive(Clone, Default)]
@@ -172,6 +174,19 @@ impl Provider for MockProvider {
                         let _ = tx.send(StreamChunk::Image { url }).await;
                     }
                     FinishReason::Stop
+                }
+                Scripted::MidStreamError(t, message) => {
+                    if !t.is_empty() {
+                        let _ = tx.send(StreamChunk::Delta { text: t }).await;
+                    }
+                    let _ = tx
+                        .send(StreamChunk::Error {
+                            message,
+                            retryable: true,
+                            error_type: None,
+                        })
+                        .await;
+                    return;
                 }
                 _ => FinishReason::Stop,
             };

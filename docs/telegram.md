@@ -167,10 +167,10 @@ skills, workflows, planification, HITL, système. Chacune est reliée à une mé
 un test vérifie que **toutes** le sont : une commande sans méthode serait une impasse.
 
 ```
-/new /sessions /switch /fork /rewind /compact /export /stop
+/new /sessions /switch /title /fork /rewind /compact /export /stop
 /model /models /budget
 /note /retiens /oublie /recall /appris /pratique /dream /intentions /mien /forget
-/mcp /p
+/mcp /mcp auth /p
 /skills /skill
 /wf /run /runs /resume
 /schedules
@@ -180,6 +180,23 @@ un test vérifie que **toutes** le sont : une commande sans méthode serait une 
 
 `/secret` liste ou supprime, jamais ne saisit : un secret ne transite pas par une
 conversation.
+
+Une session reçoit un titre de quelques mots après son premier échange ; `/sessions` les
+liste avec leur date, `/title <texte>` renomme la session courante. `/upgrade` indique
+la dernière version publiée, `/upgrade install` l'installe (retour automatique à
+l'ancienne si elle ne démarre pas), `/upgrade rollback` revient au binaire précédent.
+
+Un tour qui échoue arrive avec un bouton « 🔁 Réessayer » : la réponse est relancée sur
+la même conversation, sans renvoyer le message. Quand le plafond d'une session, du jour
+ou d'un run est atteint, le message donne la clé exacte à relever (`budget.session_usd`,
+`budget.daily_usd` ou `budget.run_usd`).
+
+Vocaux, photos (albums compris) et documents (PDF, `.docx`, HTML, Markdown, texte) sont reçus : un vocal
+est transcrit, une photo montrée au modèle s'il lit les images, un document versé dans
+les sources du vault.
+
+Une adresse de retour OAuth collée (`code=` et `state=`, avec ou sans `http://`) termine
+l'autorisation en attente et ne part jamais vers le modèle.
 
 ## Sujets
 
@@ -204,8 +221,9 @@ cargo test -p penelope-telegram
 Il sert aussi aux suites transverses, par exemple pour dérouler le flux OAuth
 `paste_back` de bout en bout dans la suite de conformance MCP.
 
-## Ce qui n'est pas encore branché
+## Limites actuelles
 
-Le daemon ne lance pas encore la boucle de scrutation des updates ni la file d'envoi
-sortante : le client, le rendu, les gabarits, les CTA et les formulaires sont complets et
-testés, mais rien ne les appelle en continu. Voir [progress.md](progress.md).
+- Seul le long polling est lancé : `telegram.mode = "webhook"` n'est pas servi.
+- Pas d'OCR : un PDF scanné sans couche texte est signalé, pas lu.
+
+Voir [progress.md](progress.md).

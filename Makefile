@@ -33,8 +33,12 @@ build:
 update: pull build
 
 install: build
-	$(SUDO) install -d "$(dir $(DEST))"
-	$(SUDO) install -m 0755 $(BIN) "$(DEST)"
+	@if [ "$(BIN)" -ef "$(DEST)" ]; then \
+		echo "$(DEST) est déjà le binaire compilé : pas de copie"; \
+	else \
+		$(SUDO) install -d "$(dir $(DEST))" && \
+		$(SUDO) install -m 0755 $(BIN) "$(DEST)"; \
+	fi
 	@"$(DEST)" --version
 
 restart:

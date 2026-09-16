@@ -96,6 +96,15 @@ impl Rpc {
                 let sid = self.session_param(p).await?;
                 Ok(json!({"session": sid, "stopped": self.daemon.bus.cancel_session(&sid)}))
             }
+            method::SESSION_TITLE => {
+                let sid = self.session_param(p).await?;
+                let title = required_str(p, "title")?;
+                let title = crate::titles::clean(&title)
+                    .ok_or_else(|| anyhow::anyhow!("titre vide ou refusé"))?;
+                s.sessions.require(&sid).await?;
+                s.sessions.set_title(&sid, &title, false).await?;
+                Ok(json!({"session": sid, "title": title}))
+            }
             method::SESSION_SWITCH => {
                 let sid = required_str(p, "session")?;
                 s.sessions.require(&sid).await?;
@@ -962,7 +971,19 @@ pub fn outcome_json(session_id: &str, turn_id: &str, o: &TurnOutcome) -> Value {
         }
         TurnOutcome::LoopAborted { report } => ("loop_aborted", json!({"report": report})),
         TurnOutcome::Cancelled => ("cancelled", json!({})),
-        TurnOutcome::BudgetExceeded { scope } => ("budget_exceeded", json!({"scope": scope})),
+        TurnOutcome::BudgetExceeded {
+            scope,
+            spent_usd,
+            limit_usd,
+        } => (
+            "budget_exceeded",
+            json!({
+                "scope": scope,
+                "spent_usd": spent_usd,
+                "limit_usd": limit_usd,
+                "text": crate::agent::budget_exceeded_text(scope, *spent_usd, *limit_usd),
+            }),
+        ),
         TurnOutcome::Failed { error } => ("failed", json!({"error": error})),
     };
     let mut v = json!({"session": session_id, "turn": turn_id, "outcome": kind});
@@ -1021,9 +1042,13 @@ fn to_stream_event(ev: &crate::bus::BusEvent) -> Option<StreamEvent> {
             session_id: Some(session_id),
             message: format!("boucle détectée, tour arrêté\n{report}"),
         },
-        BusKind::Finished(TurnOutcome::BudgetExceeded { scope }) => StreamEvent::Error {
+        BusKind::Finished(TurnOutcome::BudgetExceeded {
+            scope,
+            spent_usd,
+            limit_usd,
+        }) => StreamEvent::Error {
             session_id: Some(session_id),
-            message: format!("budget `{scope}` atteint"),
+            message: crate::agent::budget_exceeded_text(scope, *spent_usd, *limit_usd),
         },
         _ => return None,
     })

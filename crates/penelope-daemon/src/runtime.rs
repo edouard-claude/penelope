@@ -149,9 +149,11 @@ impl Services {
     pub async fn for_tests(root: PathBuf, clock: SharedClock) -> anyhow::Result<Services> {
         let platform = Arc::new(Platform::for_tests(root.clone())?);
         let store = Store::open(platform.dirs.db_path())?;
-        // Sans revue de fond par défaut : elle consommerait les réponses scriptées des tests.
+        // Sans revue de fond ni titre automatique par défaut : ils consommeraient les
+        // réponses scriptées des tests.
         let mut sample = Config::sample(42);
         sample.memory.review_max_candidates = 0;
+        sample.context.auto_title = false;
         let config = Arc::new(ConfigStore::new(
             sample,
             platform.dirs.config_file(),

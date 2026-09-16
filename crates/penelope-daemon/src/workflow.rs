@@ -1023,7 +1023,7 @@ async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
             TurnOutcome::Failed { error } => {
                 return Ok(done(StepResult::Error, json!({"error": error})));
             }
-            TurnOutcome::BudgetExceeded { scope } => {
+            TurnOutcome::BudgetExceeded { scope, .. } => {
                 return Ok(done(
                     StepResult::Error,
                     json!({"error": format!("budget {scope} atteint")}),
@@ -1184,7 +1184,7 @@ pub async fn run_sub_agent(
         }
         TurnOutcome::Failed { error } => Err(error),
         TurnOutcome::LoopAborted { report } => Err(report),
-        TurnOutcome::BudgetExceeded { scope } => Err(format!("budget {scope} atteint")),
+        TurnOutcome::BudgetExceeded { scope, .. } => Err(format!("budget {scope} atteint")),
         TurnOutcome::Cancelled => Err("sous-agent interrompu".into()),
     }
 }

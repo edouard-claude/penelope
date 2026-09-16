@@ -20,13 +20,14 @@ vivent dans `docs/`.
 | HITL, politiques, bac à sable, outils natifs | complet |
 | Telegram : rendu, gabarits, CTA, formulaires, mock Bot API | complet |
 | Workflows : 9 types d'étapes, conditions, reprise, workflows livrés | complet |
-| Conversation : `penelope chat`, pool de runners, reprise après approbation | branché |
-| Passerelle Telegram : réception, commandes, cartes d'approbation, brouillons, file d'envoi | branchée |
-| Catalogue de modèles OpenRouter, rafraîchi par le daemon | branché |
-| Superviseur MCP, ordonnanceur, moteur de workflows, rêve nocturne | à brancher, voir `docs/progress.md` |
+| Conversation : `penelope chat`, pool de runners, reprise après approbation, titres de session | branché |
+| Passerelle Telegram : commandes, cartes d'approbation, brouillons, file d'envoi, vocaux, photos, documents | branchée |
+| Catalogue de modèles OpenRouter, routage par complexité, repli, budgets | branché |
+| Superviseur MCP et OAuth depuis Telegram, ordonnanceur, moteur de workflows, sous-agents, images | branché |
+| Mémoire qui apprend : revue de fond, consolidation nocturne, digest du matin | branché |
+| Exploitation : `upgrade` avec retour arrière automatique, `import hermes`, sauvegarde, export | branché |
 
-`docs/progress.md` tient la liste exacte de ce qui reste, y compris les méthodes RPC
-déclarées mais pas encore servies.
+`docs/progress.md` tient la liste exacte de ce qui reste.
 
 ## Démarrer
 
@@ -80,7 +81,7 @@ penelope-platform            penelope-observe ├──► penelope-mcp     ├�
 cargo test --workspace
 ```
 
-1125 tests, tous hors réseau. Les suites nommées du PRD §20.1 sont des filtres sur cette
+1138 tests, tous hors réseau. Les suites nommées du PRD §20.1 sont des filtres sur cette
 même commande, ce qui évite qu'un chemin de test diverge de l'autre :
 
 ```bash
@@ -133,7 +134,7 @@ Détails dans [.github/workflows/README.md](.github/workflows/README.md).
 - [docs/install-headless.md](docs/install-headless.md) : installation sur un Mac sans écran.
 - [docs/mcp.md](docs/mcp.md) : client MCP, versions, transports, OAuth, registre paresseux.
 - [docs/workflows.md](docs/workflows.md) : référence complète du schéma de workflow, dont [schemas/workflow.schema.json](schemas/workflow.schema.json).
-- [docs/telegram.md](docs/telegram.md) : catalogue des gabarits et rendu.
+- [docs/telegram.md](docs/telegram.md) : commandes, gabarits et rendu.
 - [docs/ca-matrix.md](docs/ca-matrix.md) : critères d'acceptation et tests qui les couvrent.
 - [docs/progress.md](docs/progress.md) : avancement, décisions, reste à faire.
 - [docs/decisions/](docs/decisions/) : écarts assumés par rapport à un « DEVRAIT » du PRD.

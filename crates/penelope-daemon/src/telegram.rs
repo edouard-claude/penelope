@@ -16,7 +16,7 @@ use penelope_hitl::{ApprovalRequest, ApprovalState, Decision};
 use penelope_kernel::api::method as m;
 use penelope_kernel::risk::PolicyWindow;
 use penelope_store::rusqlite::params;
-use penelope_telegram::actions::{ClickOutcome, kind as k};
+use penelope_telegram::actions::{Action, ClickOutcome, kind as k};
 use penelope_telegram::api::{BotTransport, HttpTransport, inline_keyboard, reaction};
 use penelope_telegram::render::ButtonSpec;
 use penelope_telegram::{Bot, Incoming, TgError, classify, html_to_plain, markdown_to_html};
@@ -30,6 +30,8 @@ use tokio::sync::Notify;
 /// Longueur d'un fragment Markdown avant conversion HTML : marge pour les balises.
 const FRAGMENT_CHARS: usize = 3_500;
 const MAX_ATTEMPTS: i64 = 6;
+/// Durée de validité du bouton « Réessayer » d'un tour échoué.
+const RETRY_TTL_MS: i64 = 24 * 3600 * 1000;
 
 pub struct TelegramGateway {
     pub daemon: Arc<Daemon>,
@@ -377,15 +379,91 @@ impl TelegramGateway {
                 if let Some(old) = s.sessions.find_by_topic(chat_id, topic_id).await? {
                     s.sessions.set_state(old.id.as_str(), "closed").await?;
                 }
-                let title = (!args.is_empty()).then(|| args.to_string());
+                let title = (!args.is_empty())
+                    .then(|| crate::titles::clean(args))
+                    .flatten();
                 let sess = s
                     .sessions
-                    .create(penelope_kernel::session::SessionKind::Chat, title)
+                    .create(penelope_kernel::session::SessionKind::Chat, title.clone())
                     .await?;
                 s.sessions
                     .bind_telegram(sess.id.as_str(), chat_id, topic_id)
                     .await?;
-                format!("🆕 Nouvelle session `{}`.", sess.id)
+                if let Some(title) = title {
+                    format!("🆕 Nouvelle session « {title} » (`{}`).", sess.id)
+                } else {
+                    // Sans titre : le message sera complété quand le titre automatique arrive.
+                    let text = format!(
+                        "🆕 Nouvelle session `{}`. Son titre suivra le premier échange.",
+                        sess.id
+                    );
+                    let sent = self
+                        .bot
+                        .send_text(
+                            chat_id,
+                            topic_id,
+                            &markdown_to_html(&text),
+                            None,
+                            Some(message_id),
+                        )
+                        .await;
+                    match sent
+                        .ok()
+                        .and_then(|v| v.get("message_id").and_then(|m| m.as_i64()))
+                    {
+                        Some(mid) => {
+                            d.kv_set(
+                                &format!("tg.new_session.{}", sess.id),
+                                &format!("{chat_id}:{mid}"),
+                            )
+                            .await?;
+                            return Ok(());
+                        }
+                        None => text,
+                    }
+                }
+            }
+            "title" => {
+                let session = d.chat_session_for(&origin).await?;
+                match crate::titles::clean(args) {
+                    None => "Usage : `/title <titre de la session>`".into(),
+                    Some(title) => {
+                        s.sessions.set_title(&session, &title, false).await?;
+                        format!("✏️ Session renommée : « {title} ».")
+                    }
+                }
+            }
+            "sessions" => {
+                // Sans créer de session : lister ne doit rien ajouter à la liste.
+                let current = s
+                    .sessions
+                    .find_by_topic(chat_id, topic_id)
+                    .await?
+                    .map(|sess| sess.id.to_string());
+                let list = s
+                    .sessions
+                    .list(Some(penelope_kernel::session::SessionKind::Chat), 12)
+                    .await?;
+                if list.is_empty() {
+                    "Aucune session.".into()
+                } else {
+                    let mut out = String::from("**Sessions récentes**\n");
+                    for sess in &list {
+                        let marker = if current.as_deref() == Some(sess.id.as_str()) {
+                            "▶️"
+                        } else if sess.state == "closed" {
+                            "▫️"
+                        } else {
+                            "•"
+                        };
+                        out.push_str(&format!(
+                            "\n{marker} {} · `/switch {}`",
+                            crate::titles::label(sess),
+                            sess.id
+                        ));
+                    }
+                    out
+                }
             }
             "compact" => {
                 // Un résumé prend de quelques secondes à une minute : la file des updates
@@ -509,7 +587,13 @@ impl TelegramGateway {
                 } else {
                     s.sessions.bind_telegram(args, chat_id, topic_id).await?;
                     s.sessions.touch(args).await?;
-                    format!("↪️ Session `{args}` reprise.")
+                    match s.sessions.get(args).await? {
+                        Some(sess) => format!(
+                            "↪️ Session « {} » reprise (`{args}`).",
+                            crate::titles::label(&sess)
+                        ),
+                        None => format!("↪️ Session `{args}` reprise."),
+                    }
                 }
             }
             "model" => {
@@ -1494,6 +1578,13 @@ impl TelegramGateway {
                 .await;
         }
         if let ClickOutcome::Accepted(action) = &outcome
+            && action.action == k::REGENERATE
+        {
+            let _ = self.bot.answer_callback(callback_id, None, false).await;
+            let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+            return self.retry_clicked(action, chat_id).await;
+        }
+        if let ClickOutcome::Accepted(action) = &outcome
             && action.action == k::CHOICE
             && action.args.get("visit").is_some()
         {
@@ -1766,6 +1857,85 @@ impl TelegramGateway {
             }),
         )
         .await
+    }
+
+    /// Échec d'un tour, avec un bouton « Réessayer » qui relance la réponse sur le même
+    /// transcript.
+    async fn send_failure(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        reply_to: Option<i64>,
+        session_id: &str,
+        error: &str,
+    ) -> anyhow::Result<()> {
+        let token = self
+            .daemon
+            .services
+            .actions
+            .create(
+                k::REGENERATE,
+                session_id,
+                json!({"topic_id": topic_id}),
+                RETRY_TTL_MS,
+                true,
+            )
+            .await?;
+        let error: String = error.chars().take(3_500).collect();
+        let mut payload = json!({
+            "chat_id": chat_id,
+            "text": markdown_to_html(&format!("❌ {error}")),
+            "parse_mode": "HTML",
+            "link_preview_options": {"is_disabled": true},
+            "reply_markup": inline_keyboard(&[vec![ButtonSpec::callback(
+                "🔁 Réessayer",
+                &token.token,
+                "",
+            )]]),
+        });
+        if let Some(t) = topic_id {
+            payload["message_thread_id"] = json!(t);
+        }
+        if let Some(r) = reply_to {
+            payload["reply_parameters"] =
+                json!({"message_id": r, "allow_sending_without_reply": true});
+        }
+        self.outbox_push(chat_id, topic_id, "sendMessage", payload)
+            .await
+    }
+
+    /// Bouton « Réessayer » : relance, sauf si la conversation a continué depuis.
+    async fn retry_clicked(&self, action: &Action, chat_id: i64) -> anyhow::Result<()> {
+        let d = &self.daemon;
+        let session = action.target.clone();
+        let topic_id = action.args["topic_id"].as_i64();
+        let answered = d
+            .services
+            .context
+            .history
+            .last_entry(&session)
+            .await?
+            .is_some_and(|e| {
+                e.message.role == penelope_llm::types::Role::Assistant
+                    && e.message.tool_calls.is_empty()
+            });
+        if answered {
+            return self
+                .reply(
+                    chat_id,
+                    topic_id,
+                    None,
+                    "La conversation a continué depuis cet échec : rien à relancer.",
+                )
+                .await;
+        }
+        let origin = Origin::Telegram {
+            chat_id,
+            topic_id,
+            message_id: None,
+        };
+        d.enqueue_retry(&session, &origin, &action.token).await?;
+        Ok(())
     }
 
     /// Carte `mcp_oauth_required` : bouton d'autorisation, collage, relance (§8.5).
@@ -2244,10 +2414,31 @@ impl TelegramGateway {
 
 #[async_trait::async_trait]
 impl ChannelDelivery for TelegramGateway {
+    async fn session_titled(&self, session_id: &str, title: &str) {
+        let key = format!("tg.new_session.{session_id}");
+        let Some((chat_id, message_id)) =
+            self.daemon.kv_get(&key).await.ok().flatten().and_then(|v| {
+                let (c, m) = v.split_once(':')?;
+                Some((c.parse::<i64>().ok()?, m.parse::<i64>().ok()?))
+            })
+        else {
+            return;
+        };
+        let text = format!("🆕 Nouvelle session « {title} » (`{session_id}`).");
+        if let Err(e) = self
+            .bot
+            .edit_text(chat_id, message_id, &markdown_to_html(&text), None)
+            .await
+        {
+            tracing::debug!(error = %e, "message de nouvelle session non mis à jour");
+        }
+        let _ = self.daemon.kv_delete(&key).await;
+    }
+
     async fn deliver(
         &self,
         _turn_id: &str,
-        _session_id: &str,
+        session_id: &str,
         origin: &Origin,
         outcome: &TurnOutcome,
     ) {
@@ -2289,20 +2480,21 @@ impl ChannelDelivery for TelegramGateway {
                     self.reply(chat_id, topic_id, None, "⏹ Génération arrêtée.")
                         .await?;
                 }
-                TurnOutcome::BudgetExceeded { scope } => {
+                TurnOutcome::BudgetExceeded {
+                    scope,
+                    spent_usd,
+                    limit_usd,
+                } => {
                     self.reply(
                         chat_id,
                         topic_id,
                         message_id,
-                        &format!(
-                            "💸 Budget `{scope}` atteint : tour suspendu. Relever le plafond, \
-                             par exemple `penelope config set budget.daily_usd 30`."
-                        ),
+                        &crate::agent::budget_exceeded_text(scope, *spent_usd, *limit_usd),
                     )
                     .await?;
                 }
                 TurnOutcome::Failed { error } => {
-                    self.reply(chat_id, topic_id, message_id, &format!("❌ {error}"))
+                    self.send_failure(chat_id, topic_id, message_id, session_id, error)
                         .await?;
                     if let Some(mid) = message_id {
                         self.react(chat_id, mid, reaction::ERROR);
@@ -2941,6 +3133,76 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let reactions = t.calls_to(tg::SET_MESSAGE_REACTION).await;
         assert!(reactions.len() >= 2, "{reactions:?}");
+    }
+
+    /// Issue #5 : un tour échoué porte un bouton « Réessayer » qui relance la réponse sur
+    /// le même transcript, sans dupliquer le message.
+    #[tokio::test]
+    async fn a_failed_turn_offers_a_retry_button() {
+        let (_d, g, t, p) = gateway().await;
+        p.reply(r#"{"complexity":"low"}"#);
+        p.push(Scripted::Error(
+            penelope_llm::types::LlmErrorKind::Other,
+            "panne du fournisseur".into(),
+        ));
+        g.process_update(&updates::text_message(1, OWNER, OWNER, "salut"))
+            .await
+            .unwrap();
+        drain(&g).await;
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        let failure = sent.last().unwrap();
+        assert!(
+            failure["text"]
+                .as_str()
+                .unwrap()
+                .contains("panne du fournisseur"),
+            "{failure}"
+        );
+        let token = failure["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        p.reply("Deuxième essai réussi.");
+        g.process_update(&updates::callback(2, OWNER, &token, 1001))
+            .await
+            .unwrap();
+        drain(&g).await;
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        assert_eq!(
+            sent.last().unwrap()["text"],
+            "Deuxième essai réussi.",
+            "{sent:?}"
+        );
+        let sid = g
+            .daemon
+            .services
+            .sessions
+            .find_by_topic(OWNER, None)
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+        let history = g
+            .daemon
+            .services
+            .context
+            .history
+            .load(sid.as_str(), 0)
+            .await
+            .unwrap();
+        let users = history
+            .iter()
+            .filter(|e| e.message.role == penelope_llm::types::Role::User)
+            .count();
+        assert_eq!(users, 1, "le message n'est pas rejoué");
+
+        // Une fois la réponse obtenue, un second clic ne relance rien.
+        g.process_update(&updates::callback(3, OWNER, &token, 1001))
+            .await
+            .unwrap();
+        drain(&g).await;
+        assert_eq!(t.calls_to(tg::SEND_MESSAGE).await.len(), sent.len());
     }
 
     #[tokio::test]
@@ -3942,6 +4204,93 @@ mod tests {
             .unwrap();
         let second = g.daemon.chat_session_for(&origin).await.unwrap();
         assert_ne!(first, second);
+    }
+
+    /// Issue #2 : une session reçoit un titre lisible après son premier échange ; il
+    /// complète le message « Nouvelle session », se change par `/title` et s'affiche
+    /// dans `/sessions`.
+    #[tokio::test]
+    async fn sessions_get_a_readable_title() {
+        let (_d, g, t, p) = gateway().await;
+        g.daemon
+            .publish_config("test", |c| {
+                c.context.auto_title = true;
+                Ok(vec!["context.auto_title".into()])
+            })
+            .unwrap();
+        g.process_update(&updates::text_message(40, OWNER, OWNER, "/new"))
+            .await
+            .unwrap();
+        let origin = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: None,
+        };
+        let sid = g.daemon.chat_session_for(&origin).await.unwrap();
+
+        p.reply(r#"{"complexity":"low"}"#);
+        p.reply("On garde la maquette verte pour Zéphyr.");
+        p.reply("« Refonte du site Zéphyr. »");
+        g.process_update(&updates::text_message(
+            41,
+            OWNER,
+            OWNER,
+            "Quelle maquette pour la refonte du site Zéphyr ?",
+        ))
+        .await
+        .unwrap();
+        drain(&g).await;
+        let mut title = None;
+        for _ in 0..100 {
+            title = g
+                .daemon
+                .services
+                .sessions
+                .get(&sid)
+                .await
+                .unwrap()
+                .unwrap()
+                .title;
+            if title.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(title.as_deref(), Some("Refonte du site Zéphyr"));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let edits = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
+        assert!(
+            edits.iter().any(|e| e["text"]
+                .as_str()
+                .unwrap()
+                .contains("Refonte du site Zéphyr")),
+            "{edits:?}"
+        );
+
+        g.process_update(&updates::text_message(
+            42,
+            OWNER,
+            OWNER,
+            "/title Maquette Zéphyr",
+        ))
+        .await
+        .unwrap();
+        g.process_update(&updates::text_message(43, OWNER, OWNER, "/sessions"))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(sent.iter().any(|x| x.contains("renommée")), "{sent:?}");
+        assert!(sent.last().unwrap().contains("Maquette Zéphyr"), "{sent:?}");
+        // Un titre posé à la main n'est jamais remplacé par un titre automatique.
+        assert!(
+            !g.daemon
+                .services
+                .sessions
+                .set_title(&sid, "Autre", true)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

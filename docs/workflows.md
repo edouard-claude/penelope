@@ -180,9 +180,9 @@ porter un identifiant commençant par `$`.
 
 ## Sous-groupes
 
-`subGroup` marque un ensemble d'étapes qui forment une boucle logique. Une transition
-portant un `tag` s'échappe du sous-groupe au lieu de continuer la boucle. C'est la
-sémantique OpenFox du §12.7, reprise telle quelle.
+`subGroup` marque un ensemble d'étapes qui forment une boucle logique. Le champ est lu et
+validé, mais la sortie par transition taguée (sémantique OpenFox du §12.7) n'est pas
+encore appliquée : les transitions d'un sous-groupe se suivent comme les autres.
 
 ## Cycle de vie d'un run
 
@@ -237,8 +237,19 @@ cargo test -p penelope-evals --test resilience
 Ils sont validés au chargement comme n'importe quel fichier utilisateur : un workflow
 livré qui deviendrait invalide ferait échouer les tests plutôt que de se charger à moitié.
 
-## Ce qui n'est pas encore branché
+## Lancer, planifier, suivre
 
-`wf.run`, `schedule.add` et `schedule.run_now` ne sont pas encore servis par le RPC, et
-l'ordonnanceur ne tourne pas en tâche de fond. Le moteur, la validation, la reprise et le
-registre sont complets. Voir [progress.md](progress.md).
+Le daemon pilote les runs en tâche de fond et sert toutes les méthodes `wf.*` et
+`schedule.*` : `penelope wf run <id>`, `/run <id>` sur Telegram, ou une planification
+(`penelope schedule add`, `/schedules`) qui lance un workflow sur un cron, un intervalle,
+un fichier surveillé ou un sondage MCP. Une carte de progression suit le run sur
+Telegram ; les questions d'une étape `user` arrivent avec leurs boutons.
+
+## Limites actuelles
+
+- Sous-groupes : voir plus haut, la sortie par transition taguée n'est pas appliquée.
+- La saisie `form:<schema>` d'une étape `user` et l'attente `mcp_task` ne sont pas
+  implémentées.
+- Le scénario `ticket-to-deploy` de bout en bout contre des mocks (CA 12) reste à écrire.
+
+Voir [progress.md](progress.md).

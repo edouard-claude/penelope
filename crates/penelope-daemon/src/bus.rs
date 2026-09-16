@@ -70,6 +70,9 @@ pub trait ChannelDelivery: Send + Sync {
         origin: &Origin,
         outcome: &TurnOutcome,
     );
+
+    /// Une session vient de recevoir son titre automatique.
+    async fn session_titled(&self, _session_id: &str, _title: &str) {}
 }
 
 /// Un événement publié sur le bus.

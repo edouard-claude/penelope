@@ -25,6 +25,7 @@ pub mod selfknow;
 pub mod session_ops;
 pub mod supervisor;
 pub mod telegram;
+pub mod titles;
 pub mod upgrade;
 pub mod vault_ops;
 pub mod workflow;

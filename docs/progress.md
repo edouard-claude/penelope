@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1125 tests verts**, tous hors réseau.
+- **1138 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -22,14 +22,14 @@ Dernière mise à jour : 16 septembre 2026.
 | # | Étape | État | Tests |
 |---|---|---|---|
 | 1 | `store` + `kernel` + `observe` | fait | 95 kernel, 13 store, 28 observe |
-| 2 | `llm` + boucle d'agent | fait, `cli chat` non branché | 82 llm, 36 daemon |
+| 2 | `llm` + boucle d'agent | fait, `penelope chat` et Telegram branchés | 82 llm, 36 daemon |
 | 3 | `context` (tuiles, ancres, niveaux 0 à 4, LCM) | fait | 73 |
-| 4 | `telegram` (transport, rendu, gabarits, CTA, formulaires) | bibliothèque faite, boucle non lancée | 85 |
+| 4 | `telegram` (transport, rendu, gabarits, CTA, formulaires) | fait, passerelle lancée par le daemon | 85 |
 | 5 | `hitl` + bac à sable + `tools` | fait | 16 hitl, 64 tools, 54 platform |
-| 6 | `mcp` (négociation, transports, primitives, OAuth, registre, supervision) | fait, superviseur lancé par le daemon ; OAuth non branché | 96 + 19 conformité + 13 daemon |
+| 6 | `mcp` (négociation, transports, primitives, OAuth, registre, supervision) | fait, superviseur et OAuth branchés | 96 + 19 conformité + 13 daemon |
 | 7 | `memory` + `skills` | fait | 97 memory, 12 skills |
-| 8 | `workflow` + déclencheurs + workflows livrés | moteur fait, ordonnanceur non lancé | 74 |
-| 9 | Routage par complexité, budgets, images, STT | fait côté bibliothèque ; l'ingestion Telegram qui les alimenterait ne tourne pas | inclus en llm |
+| 8 | `workflow` + déclencheurs + workflows livrés | fait, ordonnanceur et pilote des runs lancés | 74 |
+| 9 | Routage par complexité, budgets, images, STT | fait, alimenté par Telegram (vocaux, photos, documents) | inclus en llm |
 | 10 | `resilience`, `upgrade`, `backup`, suites live, `ab-hermes` | résilience, sauvegarde et `upgrade` faits ; suites live et A/B non faits | 10 resilience, 5 upgrade |
 
 ## Suites du §20.1
@@ -261,6 +261,55 @@ Dernière mise à jour : 16 septembre 2026.
   `${VAR}` et `${env:VAR}` du `.env` d'Hermes) partent dans le SecretStore, la
   déclaration ne porte que `${SECRET:…}`. `--dry-run` décrit sans écrire ; un second
   import ne duplique rien ; le rapport part aussi sur Telegram.
+
+### 0.3.2
+
+Les huit issues ouvertes sur le dépôt, corrigées :
+
+- #1 **Recherche d'historique** : `history_grep` déclare `scope` en `session` ou `all`
+  et dit quand l'utiliser ; sans résultat dans la session, la réponse suggère `all`.
+  `history_expand_query` cherche dans toutes les sessions mot significatif par mot
+  significatif (mots vides retirés) et classe par nombre de mots trouvés. Chaque extrait
+  porte le titre et la date de sa session. Correctif au passage : les résumés LCM n'étaient
+  jamais trouvés par une requête de plusieurs mots.
+- #2 **Titres de session** : titre de 3 à 6 mots donné par le modèle rapide après le
+  premier échange (`context.auto_title`), jamais par-dessus un titre posé à la main ;
+  `/title`, `penelope session title`, méthode `session.title` ; titres et dates dans
+  `/sessions`, `penelope session list`, `/switch`, et le message « Nouvelle session »
+  complété quand le titre arrive.
+- #3 **Documentation** : README, `mcp.md`, `telegram.md` et `workflows.md` remis en accord
+  avec le code ; un test échoue si une section « pas encore branché » cite une méthode RPC
+  servie. Routine de livraison ci-dessous.
+- #4 **Budget atteint** : le message nomme la clé du périmètre atteint
+  (`budget.session_usd`, `budget.daily_usd` ou `budget.run_usd`), la dépense et le
+  plafond, rappelle `/new` pour une session et que `/compact` ne rembourse rien.
+- #5 **Flux coupé** : une erreur réessayable arrivée pendant le flux, avant tout texte ou
+  appel d'outil, donne un nouvel essai puis le modèle de repli (même avec OpenRouter) ;
+  après du texte, l'échec le dit. Tout tour échoué porte un bouton « Réessayer » qui
+  relance la réponse sur le même transcript.
+- #6 **Retour OAuth collé sans schéma** : `127.0.0.1:7777/…?code=…&state=…` est reconnu ;
+  un texte portant `code=` et `state=` ne part jamais vers le modèle.
+- #7 **`make deploy`** : quand le binaire du PATH est celui de `target/release`, la copie
+  est sautée et le redémarrage a lieu.
+- #8 **Gros résultats d'outils** : budget d'admission plafonné en valeur absolue
+  (`min(fenêtre × part, large_payload_tokens)`) ; `http_fetch` rend une page HTML en texte
+  lisible, le brut en artefact ; une longue liste `fs_list` part en artefact avec un
+  résumé par dossier.
+
+### Routine de livraison
+
+Avant chaque tag :
+
+1. `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+   `cargo test --workspace`, `cargo deny check`.
+2. `progress.md` : nouvelle section de version, compte de tests, tableau du §21.
+3. Relire **toutes** les sections « Limites actuelles » et « pas encore branché » de
+   `README.md` et de `docs/` (`mcp.md`, `telegram.md`, `workflows.md`,
+   `install-headless.md`), pas seulement celle-ci. Le test `docs_freshness` attrape une
+   méthode RPC servie présentée comme absente, pas le reste.
+4. `install-headless.md` pour tout ce qui change l'usage ; `UPDATE_CA_MATRIX=1` si un
+   test `ca_*` a été ajouté.
+5. CI verte sur `main`, puis tag annoncé, release suivie jusqu'aux artefacts.
 
 ### Encore à brancher
 

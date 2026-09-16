@@ -249,6 +249,26 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Donne un titre lisible. Avec `only_if_untitled`, un titre déjà posé (à la main ou
+    /// par `/new`) est gardé ; `CLI` compte comme absence de titre. Renvoie vrai si le
+    /// titre a changé.
+    pub async fn set_title(&self, id: &str, title: &str, only_if_untitled: bool) -> Result<bool> {
+        let (id, title) = (id.to_string(), title.trim().to_string());
+        let changed = self
+            .store
+            .write(move |tx| {
+                let sql = if only_if_untitled {
+                    "UPDATE sessions SET title=?2 WHERE id=?1
+                     AND (title IS NULL OR trim(title) = '' OR title = 'CLI')"
+                } else {
+                    "UPDATE sessions SET title=?2 WHERE id=?1"
+                };
+                Ok(tx.execute(sql, params![id, title])?)
+            })
+            .await?;
+        Ok(changed > 0)
+    }
+
     pub async fn bind_telegram(&self, id: &str, chat_id: i64, topic_id: Option<i64>) -> Result<()> {
         let id = id.to_string();
         self.store

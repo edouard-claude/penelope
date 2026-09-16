@@ -50,9 +50,16 @@ impl CompactionParams {
             .clamp(self.tail_min_tokens, self.tail_max_tokens)
     }
 
-    /// Budget d'admission d'un groupe de résultats d'outils.
+    /// Budget d'admission d'un groupe de résultats d'outils : une part de la fenêtre,
+    /// plafonnée en valeur absolue. Sans plafond, un modèle à 1,3 M de tokens gardait
+    /// entiers des résultats de 175 k (issue #8).
     pub fn tool_group_budget(&self) -> u64 {
-        (self.window as f64 * self.max_tool_result_share) as u64
+        let share = (self.window as f64 * self.max_tool_result_share) as u64;
+        if self.large_payload_tokens == 0 {
+            share
+        } else {
+            share.min(self.large_payload_tokens)
+        }
     }
 
     pub fn threshold_tokens(&self) -> u64 {
@@ -647,8 +654,38 @@ mod tests {
     }
 
     #[test]
-    fn tool_group_budget_is_a_share_of_the_window() {
-        assert_eq!(params(200_000).tool_group_budget(), 50_000);
+    fn tool_group_budget_is_a_capped_share_of_the_window() {
+        assert_eq!(
+            params(40_000).tool_group_budget(),
+            10_000,
+            "petite fenêtre : la part"
+        );
+        assert_eq!(
+            params(200_000).tool_group_budget(),
+            25_000,
+            "plafond absolu"
+        );
+        assert_eq!(params(1_300_000).tool_group_budget(), 25_000);
+    }
+
+    /// Issue #8 : sur un modèle à grande fenêtre, un résultat de 150 k tokens part en
+    /// artefact au lieu de rester entier dans le contexte.
+    #[test]
+    fn a_huge_result_is_externalised_even_on_a_huge_window() {
+        let body = "documentation ".repeat(150_000 * 4 / 14);
+        let decisions = level1_admission(&[(0, body.clone(), 150_000)], &params(1_300_000));
+        match &decisions[0].1 {
+            Admission::Externalise {
+                head,
+                tail,
+                original_tokens,
+            } => {
+                assert_eq!(*original_tokens, 150_000);
+                let kept = (head.chars().count() + tail.chars().count()) as f64 / 3.6;
+                assert!(kept <= 25_000.0 * 1.05, "{kept} tokens gardés");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

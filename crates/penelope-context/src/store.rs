@@ -12,6 +12,7 @@ use penelope_store::Store;
 use penelope_store::rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 #[derive(Clone)]
 pub struct HistoryStore {
@@ -29,6 +30,177 @@ pub struct GrepHit {
     /// `raw` pour un message brut, `summary` pour un nœud LCM.
     pub source: String,
     pub node_id: Option<String>,
+}
+
+/// Passage retrouvé par [`HistoryStore::grep_terms`], avec les mots qui l'ont trouvé.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RankedHit {
+    #[serde(flatten)]
+    pub hit: GrepHit,
+    pub matched: Vec<String>,
+}
+
+/// Mots vides retirés d'une question avant la recherche : sans eux, une phrase
+/// entière ne correspond à rien, puisque le plein texte exige chaque mot.
+const STOPWORDS: &[&str] = &[
+    "au",
+    "aux",
+    "avec",
+    "avait",
+    "avais",
+    "avions",
+    "avoir",
+    "ai",
+    "as",
+    "avons",
+    "avez",
+    "ont",
+    "ce",
+    "ces",
+    "cet",
+    "cette",
+    "ceci",
+    "cela",
+    "ça",
+    "comme",
+    "comment",
+    "dans",
+    "de",
+    "des",
+    "du",
+    "déjà",
+    "donc",
+    "dont",
+    "elle",
+    "elles",
+    "en",
+    "est",
+    "et",
+    "été",
+    "être",
+    "était",
+    "étaient",
+    "il",
+    "ils",
+    "je",
+    "la",
+    "le",
+    "les",
+    "leur",
+    "leurs",
+    "lui",
+    "ma",
+    "mais",
+    "me",
+    "mes",
+    "moi",
+    "mon",
+    "ne",
+    "nos",
+    "notre",
+    "nous",
+    "on",
+    "ou",
+    "où",
+    "par",
+    "pas",
+    "plus",
+    "pour",
+    "pourquoi",
+    "quand",
+    "que",
+    "quel",
+    "quelle",
+    "quelles",
+    "quels",
+    "qui",
+    "quoi",
+    "sa",
+    "sans",
+    "se",
+    "ses",
+    "si",
+    "son",
+    "sont",
+    "sur",
+    "ta",
+    "te",
+    "tes",
+    "toi",
+    "ton",
+    "tu",
+    "un",
+    "une",
+    "vos",
+    "votre",
+    "vous",
+    "parlé",
+    "parler",
+    "parlions",
+    "discuté",
+    "dit",
+    "session",
+    "sessions",
+    "précédente",
+    "précédent",
+    "dernière",
+    "dernier",
+    "fois",
+    "chose",
+    "truc",
+    "retrouve",
+    "retrouver",
+    "souviens",
+    "rappelle",
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "of",
+    "to",
+    "in",
+    "on",
+    "for",
+    "with",
+    "about",
+    "was",
+    "were",
+    "is",
+    "are",
+    "we",
+    "you",
+    "it",
+    "that",
+    "this",
+    "what",
+    "which",
+    "who",
+    "how",
+    "when",
+    "why",
+    "did",
+    "do",
+    "does",
+    "had",
+    "have",
+    "has",
+    "be",
+    "been",
+];
+
+/// Mots significatifs d'une question en langage naturel, dans l'ordre, sans doublon.
+pub fn significant_terms(question: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    // Les apostrophes coupent aussi : « d'un projet » donne « d », « un », « projet ».
+    for raw in question.split(|c: char| !(c.is_alphanumeric() || c == '-' || c == '_')) {
+        let w = raw.trim_matches(['-', '_']).to_lowercase();
+        if w.chars().count() < 2 || STOPWORDS.contains(&w.as_str()) || out.contains(&w) {
+            continue;
+        }
+        out.push(w);
+    }
+    out
 }
 
 /// Artefact externalisé (§5.5 « payloads volumineux »).
@@ -129,6 +301,22 @@ impl HistoryStore {
                     out.push(r?);
                 }
                 Ok(out)
+            })
+            .await
+    }
+
+    /// Dernier message d'une session.
+    pub async fn last_entry(&self, session_id: &str) -> penelope_store::Result<Option<Entry>> {
+        let sid = session_id.to_string();
+        self.store
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT seq, role, content, tool_call_id, tool_name, tokens_est, episode,
+                            eager, artifact_id, compacted
+                     FROM messages WHERE session_id = ?1 ORDER BY seq DESC LIMIT 1",
+                )?;
+                let mut rows = st.query_map(params![sid], row_to_entry)?;
+                Ok(rows.next().transpose()?)
             })
             .await
     }
@@ -311,13 +499,18 @@ impl HistoryStore {
                     out.push(r?);
                 }
 
-                // 2. Résumés LCM (recherche simple : ils sont peu nombreux).
+                // 2. Résumés LCM (recherche simple : ils sont peu nombreux). Comme en plein
+                // texte, tous les mots doivent y être.
                 let mut st = c.prepare(
                     "SELECT id, session_id, from_seq, summary FROM lcm_nodes
                      WHERE (?2 IS NULL OR session_id = ?2) AND superseded_by IS NULL
                      ORDER BY level DESC, created_at DESC LIMIT 200",
                 )?;
-                let needle = q.to_lowercase();
+                let words: Vec<String> = q
+                    .split_whitespace()
+                    .map(|w| w.trim_matches('"').to_lowercase())
+                    .filter(|w| !w.is_empty())
+                    .collect();
                 let rows = st.query_map(params![q, sid], |r| {
                     Ok((
                         r.get::<_, String>(0)?,
@@ -328,12 +521,13 @@ impl HistoryStore {
                 })?;
                 for r in rows {
                     let (id, session, from_seq, summary) = r?;
-                    if summary.to_lowercase().contains(&needle) {
+                    let lower = summary.to_lowercase();
+                    if words.iter().all(|w| lower.contains(w.as_str())) {
                         out.push(GrepHit {
                             session_id: session,
                             seq: from_seq.unwrap_or(0),
                             role: "summary".into(),
-                            excerpt: excerpt_around(&summary, &needle, 160),
+                            excerpt: excerpt_around(&summary, &words[0], 160),
                             source: "summary".into(),
                             node_id: Some(id),
                         });
@@ -342,6 +536,41 @@ impl HistoryStore {
                 Ok(out)
             })
             .await
+    }
+
+    /// Recherche mot par mot (`history_expand_query`) : un passage par message, classé
+    /// par nombre de mots trouvés, puis du plus récent au plus ancien.
+    pub async fn grep_terms(
+        &self,
+        terms: &[String],
+        session_id: Option<&str>,
+        per_term: i64,
+        limit: usize,
+    ) -> penelope_store::Result<Vec<RankedHit>> {
+        let mut found: BTreeMap<(String, i64, String), RankedHit> = BTreeMap::new();
+        for term in terms {
+            for hit in self.grep(term, session_id, per_term).await? {
+                let key = (hit.session_id.clone(), hit.seq, hit.source.clone());
+                let entry = found.entry(key).or_insert_with(|| RankedHit {
+                    hit,
+                    matched: Vec::new(),
+                });
+                if !entry.matched.contains(term) {
+                    entry.matched.push(term.clone());
+                }
+            }
+        }
+        let mut ranked: Vec<RankedHit> = found.into_values().collect();
+        // Les identifiants de session sont des ULID : l'ordre lexical suit le temps.
+        ranked.sort_by(|a, b| {
+            b.matched
+                .len()
+                .cmp(&a.matched.len())
+                .then_with(|| b.hit.session_id.cmp(&a.hit.session_id))
+                .then_with(|| b.hit.seq.cmp(&a.hit.seq))
+        });
+        ranked.truncate(limit);
+        Ok(ranked)
     }
 
     // ------------------------------------------------------------- artefacts

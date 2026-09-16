@@ -57,6 +57,13 @@ pub fn all() -> Vec<Command> {
             m::SESSION_SWITCH,
         ),
         c(
+            "title",
+            "Session",
+            "Renomme la session",
+            "/title Refonte du site",
+            m::SESSION_TITLE,
+        ),
+        c(
             "fork",
             "Session",
             "Duplique la session courante",

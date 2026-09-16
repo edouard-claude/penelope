@@ -381,6 +381,8 @@ pub struct Context {
     pub model_thresholds: BTreeMap<String, f64>,
     pub background_compaction_margin: f64,
     pub cooldown_ms: Vec<u64>,
+    /// Titre de 3 à 6 mots donné par le modèle rapide après le premier échange.
+    pub auto_title: bool,
 }
 
 impl Default for Context {
@@ -396,6 +398,7 @@ impl Default for Context {
             model_thresholds: BTreeMap::new(),
             background_compaction_margin: 0.10,
             cooldown_ms: vec![60_000, 300_000, 900_000],
+            auto_title: true,
         }
     }
 }

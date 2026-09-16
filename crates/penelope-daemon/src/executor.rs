@@ -215,7 +215,27 @@ impl NativeToolExecutor {
                 let p = self.path_arg(args, "path")?;
                 let rec = b_arg(args, "recursive").unwrap_or(false);
                 let max = u_arg(args, "max_entries").unwrap_or(500);
-                return Ok(ToolOutcome::ok(penelope_tools::fs::list(&p, rec, max)?).eager());
+                let v = penelope_tools::fs::list(&p, rec, max)?;
+                let listing = render_listing(&p, &v);
+                let mut o = ToolOutcome::ok(v.clone()).eager();
+                // Une longue liste part en artefact : le modèle garde un résumé (issue #8).
+                o.text = if listing.chars().count() > FS_LIST_INLINE_CHARS {
+                    let art = s
+                        .context
+                        .history
+                        .put_artifact(
+                            Some(&self.env.session_id),
+                            self.env.run_id.as_deref(),
+                            "listing",
+                            None,
+                            &listing,
+                        )
+                        .await?;
+                    summarise_listing(&p, &v, max, &listing, &art.id)
+                } else {
+                    listing
+                };
+                return Ok(o);
             }
             "fs_search" => {
                 let root = match args.get("path").and_then(|v| v.as_str()) {
@@ -355,13 +375,10 @@ impl NativeToolExecutor {
                     cfg.tools.http_block_private_ips,
                 )
                 .await?;
-                // Le contenu web est une donnée non fiable : on l'encadre (§13.3).
-                let mut o = ToolOutcome::ok(v.clone());
-                o.text = penelope_observe::injection::wrap_untrusted(
-                    &format!("http_fetch {}", str_arg(args, "url")?),
-                    &penelope_tools::render(&v),
-                );
-                return Ok(o.eager());
+                return self
+                    .fetched_page(v, &str_arg(args, "url")?)
+                    .await
+                    .map(ToolOutcome::eager);
             }
 
             // -------------------------------------------------------- soi-même
@@ -656,7 +673,17 @@ impl NativeToolExecutor {
                     .history
                     .grep(&str_arg(args, "query")?, session, 20)
                     .await?;
-                serde_json::to_value(hits).unwrap_or_default()
+                let mut hits = serde_json::to_value(hits).unwrap_or_default();
+                with_session_labels(s, &mut hits).await;
+                if scope != "all" && hits.as_array().is_some_and(|h| h.is_empty()) {
+                    json!({
+                        "extraits": hits,
+                        "note": "rien dans cette session : `scope: \"all\"` cherche dans les \
+                                 sessions précédentes",
+                    })
+                } else {
+                    hits
+                }
             }
             "history_describe" => {
                 let m = s.context.lcm.describe(&str_arg(args, "node_id")?).await?;
@@ -683,12 +710,11 @@ impl NativeToolExecutor {
             }
             "history_expand_query" => {
                 let q = str_arg(args, "question")?;
-                let hits = s
-                    .context
-                    .history
-                    .grep(&q, Some(&self.env.session_id), 30)
-                    .await?;
-                json!({"question": q, "extraits": hits})
+                let terms = penelope_context::store::significant_terms(&q);
+                let ranked = s.context.history.grep_terms(&terms, None, 20, 30).await?;
+                let mut hits = serde_json::to_value(ranked).unwrap_or_default();
+                with_session_labels(s, &mut hits).await;
+                json!({"question": q, "mots": terms, "extraits": hits})
             }
             "artifact_read" => {
                 let cursor = u_arg(args, "cursor").unwrap_or(0) as u64;
@@ -946,6 +972,40 @@ impl NativeToolExecutor {
         Ok(ToolOutcome::ok(v))
     }
 
+    /// Réponse de `http_fetch` telle que le modèle la lit : une page HTML devient du texte
+    /// lisible et le brut reste relisible en artefact (issue #8) ; le tout encadré comme
+    /// donnée non fiable (§13.3).
+    async fn fetched_page(&self, mut v: Value, url: &str) -> ToolResult<ToolOutcome> {
+        let s = &self.services;
+        let content_type = v["contentType"].as_str().unwrap_or_default().to_string();
+        let body = v["body"].as_str().unwrap_or_default().to_string();
+        if penelope_tools::html::looks_like_html(&content_type, &body) {
+            let base = v["url"].as_str().and_then(|u| url::Url::parse(u).ok());
+            let text = penelope_tools::html::to_text(&body, base.as_ref());
+            let raw = s
+                .context
+                .history
+                .put_artifact(
+                    Some(&self.env.session_id),
+                    self.env.run_id.as_deref(),
+                    "html",
+                    None,
+                    &body,
+                )
+                .await?;
+            v["body"] = json!(text);
+            v["format"] = json!("texte extrait du HTML");
+            v["raw_artifact"] = json!(raw.id);
+        }
+        let mut shown = penelope_tools::render(&v);
+        if let Some(id) = v["raw_artifact"].as_str() {
+            shown.push_str(&format!("\n\n[HTML d'origine : artifact_read(\"{id}\")]"));
+        }
+        let mut o = ToolOutcome::ok(v);
+        o.text = penelope_observe::injection::wrap_untrusted(&format!("http_fetch {url}"), &shown);
+        Ok(o)
+    }
+
     async fn tool_search(&self, args: &Value) -> ToolResult<ToolOutcome> {
         let q = str_arg(args, "query")?;
         let hits = self
@@ -1147,6 +1207,125 @@ fn b_arg(args: &Value, key: &str) -> Option<bool> {
     args.get(key).and_then(|v| v.as_bool())
 }
 
+/// Au-delà, la liste d'un `fs_list` part en artefact avec un résumé (~4 k tokens).
+const FS_LIST_INLINE_CHARS: usize = 16_000;
+
+fn size_label(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1 << 30 => format!("{:.1} Gio", b as f64 / (1u64 << 30) as f64),
+        b if b >= 1 << 20 => format!("{:.1} Mio", b as f64 / (1u64 << 20) as f64),
+        b if b >= 1 << 10 => format!("{:.1} Kio", b as f64 / (1u64 << 10) as f64),
+        b => format!("{b} o"),
+    }
+}
+
+/// `fs_list` en lignes compactes, chemins relatifs à la racine.
+fn render_listing(root: &Path, v: &Value) -> String {
+    let items = v["items"].as_array().cloned().unwrap_or_default();
+    let mut out = format!("{} ({} entrées)\n", root.display(), items.len());
+    for it in &items {
+        let path = it["path"].as_str().unwrap_or_default();
+        let rel = Path::new(path)
+            .strip_prefix(root)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| path.to_string());
+        if it["dir"].as_bool().unwrap_or(false) {
+            out.push_str(&format!("{rel}/\n"));
+        } else {
+            let size = size_label(it["bytes"].as_u64().unwrap_or(0));
+            out.push_str(&format!("{rel}  {size}\n"));
+        }
+    }
+    out
+}
+
+/// Résumé d'une longue liste : décompte par dossier de premier niveau et aperçu.
+fn summarise_listing(root: &Path, v: &Value, max: usize, listing: &str, artifact: &str) -> String {
+    let items = v["items"].as_array().cloned().unwrap_or_default();
+    let dirs = items
+        .iter()
+        .filter(|i| i["dir"].as_bool().unwrap_or(false))
+        .count();
+    let mut per_top: std::collections::BTreeMap<String, usize> = Default::default();
+    for it in &items {
+        let path = Path::new(it["path"].as_str().unwrap_or_default());
+        if let Ok(rel) = path.strip_prefix(root)
+            && let Some(first) = rel.components().next()
+        {
+            let is_leaf_file =
+                rel.components().count() == 1 && !it["dir"].as_bool().unwrap_or(false);
+            let key = if is_leaf_file {
+                "(racine)".to_string()
+            } else {
+                format!("{}/", first.as_os_str().to_string_lossy())
+            };
+            *per_top.entry(key).or_default() += 1;
+        }
+    }
+    let mut top: Vec<(String, usize)> = per_top.into_iter().collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let mut out = format!(
+        "{} : {} entrées ({dirs} dossiers, {} fichiers){}.\nPar dossier de premier niveau :\n",
+        root.display(),
+        items.len(),
+        items.len() - dirs,
+        if items.len() >= max {
+            format!(", liste arrêtée à max_entries = {max}")
+        } else {
+            String::new()
+        }
+    );
+    for (name, n) in top.iter().take(30) {
+        out.push_str(&format!("- {name} {n}\n"));
+    }
+    if top.len() > 30 {
+        out.push_str(&format!("- … {} autres\n", top.len() - 30));
+    }
+    out.push_str("Aperçu :\n");
+    for line in listing.lines().skip(1).take(40) {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str(&format!(
+        "Liste complète : artifact_read(\"{artifact}\"). Pour moins de bruit, lister un \
+         sous-dossier ou passer par fs_search."
+    ));
+    out
+}
+
+/// Ajoute à chaque extrait le titre et la date de sa session.
+async fn with_session_labels(s: &Services, hits: &mut Value) {
+    let Some(items) = hits.as_array_mut() else {
+        return;
+    };
+    let mut known: std::collections::BTreeMap<String, (String, String)> = Default::default();
+    for h in items.iter_mut() {
+        let Some(sid) = h["session_id"].as_str().map(String::from) else {
+            continue;
+        };
+        if !known.contains_key(&sid) {
+            let label = match s.sessions.get(&sid).await {
+                Ok(Some(sess)) => (
+                    sess.title
+                        .filter(|t| !t.trim().is_empty())
+                        .unwrap_or_else(|| "(sans titre)".into()),
+                    sess.last_activity
+                        .unwrap_or(sess.created_at)
+                        .chars()
+                        .take(10)
+                        .collect(),
+                ),
+                _ => ("(session inconnue)".into(), String::new()),
+            };
+            known.insert(sid.clone(), label);
+        }
+        if let Some((title, date)) = known.get(&sid) {
+            h["session_titre"] = json!(title);
+            h["session_date"] = json!(date);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1171,6 +1350,159 @@ mod tests {
             turn_model: None,
         };
         (dir, NativeToolExecutor::new(s, env))
+    }
+
+    /// Issue #8 : une page HTML arrive en texte lisible, le brut reste en artefact ; une
+    /// longue liste de fichiers part en artefact avec un résumé.
+    #[tokio::test]
+    async fn web_pages_and_long_listings_stay_small_in_context() {
+        let (dir, x) = executor().await;
+        let page = format!(
+            "<!doctype html><html><head><title>Guide</title><script>{}</script></head>\
+             <body><h1>Jetons</h1><p>Un jeton par <a href=\"/cles\">clé</a>.</p></body></html>",
+            "var x = 1;".repeat(2_000)
+        );
+        // Réponse telle que `penelope_tools::http::fetch` la rend (le réseau local est
+        // refusé par l'outil lui-même).
+        let fetched = x
+            .fetched_page(
+                json!({
+                    "url": "https://docs.exemple.fr/guide",
+                    "status": 200,
+                    "contentType": "text/html; charset=utf-8",
+                    "bytes": page.len(),
+                    "truncated": false,
+                    "body": page,
+                }),
+                "https://docs.exemple.fr/guide",
+            )
+            .await
+            .unwrap();
+        assert!(fetched.text.contains("# Jetons"), "{}", fetched.text);
+        assert!(
+            fetched.text.contains("[clé](https://docs.exemple.fr/cles)"),
+            "{}",
+            fetched.text
+        );
+        assert!(fetched.text.len() < 1_000, "{}", fetched.text.len());
+        assert!(!fetched.text.contains("var x"), "{}", fetched.text);
+        let raw_id = fetched.value["raw_artifact"].as_str().unwrap();
+        let (raw, _, _) = x
+            .services
+            .context
+            .history
+            .read_artifact(raw_id, 0, 100_000)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(raw.contains("var x = 1;"));
+
+        let ws = dir.path().join("ws");
+        for d in 0..12 {
+            let sub = ws.join(format!("module_{d:02}"));
+            std::fs::create_dir_all(&sub).unwrap();
+            for f in 0..60 {
+                std::fs::write(sub.join(format!("fichier_numero_{f:03}.rs")), "x").unwrap();
+            }
+        }
+        let listed = x
+            .execute(
+                "fs_list",
+                &json!({"path": ".", "recursive": true, "max_entries": 2000}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.value["entries"], 732);
+        assert!(listed.text.chars().count() < 6_000, "{}", listed.text.len());
+        assert!(listed.text.contains("- module_00/ 61"), "{}", listed.text);
+        assert!(listed.text.contains("artifact_read(\""), "{}", listed.text);
+
+        let small = x
+            .execute("fs_list", &json!({"path": "module_03"}))
+            .await
+            .unwrap();
+        assert!(
+            small.text.contains("fichier_numero_007.rs  1 o"),
+            "{}",
+            small.text
+        );
+        assert!(!small.text.contains("artifact_read"));
+    }
+
+    /// Issue #1 : une conversation d'une session fermée se retrouve depuis une autre
+    /// session, par mots-clés en `all` comme par une question en phrase.
+    #[tokio::test]
+    async fn past_sessions_are_found_with_their_title_and_date() {
+        let (_d, x) = executor().await;
+        let s = x.services.clone();
+        let old = s
+            .sessions
+            .create(
+                penelope_kernel::session::SessionKind::Chat,
+                Some("Refonte du site Zéphyr".into()),
+            )
+            .await
+            .unwrap();
+        for text in [
+            "Pour le projet Zéphyr, on garde la maquette verte.",
+            "Le client Zéphyr veut une livraison en octobre.",
+        ] {
+            s.context
+                .history
+                .append(
+                    old.id.as_str(),
+                    &penelope_llm::types::ChatMessage::user(text),
+                    12,
+                    0,
+                    false,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        s.sessions
+            .set_state(old.id.as_str(), "closed")
+            .await
+            .unwrap();
+
+        let here = x
+            .execute("history_grep", &json!({"query": "Zéphyr"}))
+            .await
+            .unwrap();
+        assert!(
+            here.value["note"].as_str().unwrap().contains("all"),
+            "{}",
+            here.value
+        );
+
+        let all = x
+            .execute(
+                "history_grep",
+                &json!({"query": "Zéphyr maquette", "scope": "all"}),
+            )
+            .await
+            .unwrap();
+        let hits = all.value.as_array().unwrap();
+        assert_eq!(hits.len(), 1, "{}", all.value);
+        assert_eq!(hits[0]["session_titre"], "Refonte du site Zéphyr");
+        assert_eq!(hits[0]["session_date"].as_str().unwrap().len(), 10);
+
+        let asked = x
+            .execute(
+                "history_expand_query",
+                &json!({"question": "On avait parlé d'un projet Zéphyr dans une session précédente ?"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(asked.value["mots"], json!(["projet", "zéphyr"]));
+        let extraits = asked.value["extraits"].as_array().unwrap();
+        assert_eq!(extraits.len(), 2, "{}", asked.value);
+        assert_eq!(
+            extraits[0]["matched"].as_array().unwrap().len(),
+            2,
+            "le passage qui a les deux mots d'abord"
+        );
+        assert_eq!(extraits[0]["session_titre"], "Refonte du site Zéphyr");
     }
 
     #[tokio::test]

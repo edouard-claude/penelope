@@ -152,6 +152,30 @@ impl Daemon {
         Ok(id)
     }
 
+    /// Relance la réponse d'une session sur son transcript, sans nouveau message
+    /// (bouton « Réessayer » après un échec).
+    pub async fn enqueue_retry(
+        &self,
+        session_id: &str,
+        origin: &Origin,
+        token: &str,
+    ) -> anyhow::Result<Option<TurnId>> {
+        let payload = json!({"retry": true, "origin": origin.to_value()});
+        let id = self
+            .services
+            .turns
+            .enqueue(
+                session_id,
+                TurnKind::Resume,
+                payload,
+                Some(format!("retry:{token}")),
+                10,
+            )
+            .await?;
+        self.bus.notify_enqueued();
+        Ok(id)
+    }
+
     /// Remet en file la suite d'un tour suspendu par une approbation.
     pub async fn enqueue_resume(
         &self,
@@ -255,6 +279,19 @@ impl Daemon {
                     self.clone(),
                     turn.session_id.clone(),
                     turn.id.to_string(),
+                    said.to_string(),
+                    answer.clone(),
+                );
+            }
+            // Premier échange d'une session sans titre : un titre lisible (issue #2).
+            if self.services.config.config().context.auto_title
+                && !said.trim().is_empty()
+                && let Ok(Some(sess)) = self.services.sessions.get(&turn.session_id).await
+                && crate::titles::wants_title(&sess)
+            {
+                crate::titles::spawn(
+                    self.clone(),
+                    turn.session_id.clone(),
                     said.to_string(),
                     answer.clone(),
                 );

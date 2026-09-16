@@ -9,6 +9,7 @@
 pub mod error;
 pub mod fs;
 pub mod git;
+pub mod html;
 pub mod http;
 pub mod loops;
 pub mod shell;

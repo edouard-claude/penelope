@@ -235,7 +235,18 @@ classifier = false
   message ─────────────────────────────────────────► main
 panne avant le premier jeton
   main ─► fast ; reasoning ─► main       (fallback, fait par OpenRouter)
+flux coupé avant tout texte (429, surcharge)
+  même modèle après 2 s ─► modèle de repli
+flux coupé après du texte
+  échec affiché, bouton « Réessayer »
 ```
+
+Une erreur qui arrive **pendant** le flux, après la réponse HTTP, est traitée comme une
+panne d'avant flux tant que rien n'a été montré (ni texte, ni appel d'outil) : un nouvel
+essai du même modèle (après le `Retry-After` s'il est court), puis le modèle de repli, y
+compris avec OpenRouter dont le repli ne joue qu'avant le flux. Si du texte est déjà
+parti, rien n'est relancé en silence : le message d'échec dit que la réponse a été coupée
+et le bouton « 🔁 Réessayer » relance la réponse sur la même conversation.
 
 Conséquence directe : `penelope model set main …` ne suffit pas à tout faire passer par
 ce modèle tant que le classifieur est actif, puisque `fast` et `reasoning` gardent leurs
@@ -595,6 +606,25 @@ chargement) ; le répertoire d'un run éphémère est effacé 7 jours après sa 
 L'outil `image_generate` produit une image avec l'alias `image` et l'envoie sur
 Telegram.
 
+### Retrouver une conversation
+
+Chaque session reçoit un titre de quelques mots après son premier échange (réglage
+`context.auto_title`, modèle `fast`) ; `/title` ou `penelope session title <session>
+<titre>` le remplace, et un titre posé à la main n'est jamais écrasé. `/sessions` et
+`penelope session list` affichent titres et dates. Pour retrouver un sujet d'une session
+fermée, Pénélope cherche dans toutes les sessions (`history_grep` en `scope: all`, ou
+`history_expand_query` avec la question en phrase) et cite le titre et la date de la
+session d'où vient chaque extrait.
+
+### Gros résultats d'outils
+
+Une page web lue par `http_fetch` arrive en texte lisible (titres, listes, liens) ; le
+HTML d'origine reste relisible en artefact. Au-delà de `context.large_payload_tokens`
+(25 k par défaut), un résultat d'outil part en artefact avec un aperçu du début et de la
+fin, quelle que soit la fenêtre du modèle : un modèle à un million de tokens ne garde pas
+un résultat de 175 k entier. Une longue liste de fichiers (`fs_list` récursif) est
+résumée par dossier, la liste complète en artefact.
+
 ### Longues conversations
 
 Quand une conversation approche le seuil de sa fenêtre (70 % par défaut, moins une marge
@@ -712,8 +742,8 @@ questions plutôt que des relances. `penelope approvals` montre ce qui attend un
 
 ## 11. Ce qui n'est pas encore branché
 
-Conversation (CLI et Telegram), approbations, catalogue de modèles, vocaux et serveurs
-MCP, rappels et déclencheurs, résumé des longues conversations, photos et documents,
-workflows, génération d'images, consolidation nocturne de la mémoire, autorisation
-OAuth des serveurs MCP, mise à jour du binaire et import d'Hermes fonctionnent. Voir [progress.md](progress.md) pour
-l'état exact.
+Tout ce que décrit ce guide fonctionne. Restent : les frontières d'épisode de la mémoire
+(la revue se fait tour par tour), la signature minisign des releases (seule la somme
+SHA-256 est vérifiée), le mode webhook de Telegram, l'OCR des PDF scannés, et côté
+workflows les sous-groupes, la saisie `form:<schema>` et l'attente `mcp_task`. Voir
+[progress.md](progress.md) pour l'état exact.

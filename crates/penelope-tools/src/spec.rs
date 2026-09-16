@@ -453,11 +453,23 @@ pub fn all() -> Vec<ToolSpec> {
         spec(
             "history_grep",
             RiskClass::Read,
-            "Recherche plein texte dans les messages bruts et les résumés.",
+            "Recherche plein texte dans les messages bruts et les résumés. Par défaut dans \
+             la session en cours ; `scope: \"all\"` cherche dans toutes les sessions, y \
+             compris fermées, pour retrouver une conversation antérieure. `query` attend des \
+             mots-clés, pas une phrase : chaque mot doit apparaître. Chaque extrait donne le \
+             titre et la date de sa session.",
             obj(
                 json!({
-                    "query": {"type":"string"},
-                    "scope": {"type":"string"},
+                    "query": {
+                        "type":"string",
+                        "description":"mots-clés, tous exigés (ex. « facturation ACME »)"
+                    },
+                    "scope": {
+                        "type":"string",
+                        "enum":["session","all"],
+                        "description":"session : la conversation en cours (défaut) ; all : \
+                                       toutes les sessions"
+                    },
                     "depth": {"type":"integer","minimum":0,"maximum":10}
                 }),
                 &["query"],
@@ -490,8 +502,10 @@ pub fn all() -> Vec<ToolSpec> {
         spec(
             "history_expand_query",
             RiskClass::Read,
-            "Lance un sub-agent borné qui navigue l'historique et renvoie une réponse \
-             sourcée.",
+            "Retrouve, dans toutes les sessions y compris fermées, les passages liés à une \
+             question en langage naturel : recherche mot significatif par mot significatif, \
+             extraits classés par nombre de mots trouvés, avec le titre et la date de leur \
+             session. `history_expand` lit ensuite un passage en entier.",
             obj(
                 json!({"question": {"type":"string"}, "budget": {"type":"integer"}}),
                 &["question"],

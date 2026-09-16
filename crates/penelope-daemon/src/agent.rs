@@ -42,9 +42,11 @@ pub enum TurnOutcome {
     },
     /// Annulé (bouton stop, `/stop`, annulation du run).
     Cancelled,
-    /// Budget épuisé.
+    /// Budget épuisé : périmètre (`jour`, `session`, `run`), dépense et plafond.
     BudgetExceeded {
         scope: String,
+        spent_usd: f64,
+        limit_usd: f64,
     },
     Failed {
         error: String,
@@ -162,6 +164,40 @@ impl CallFailure {
             context_length: false,
         }
     }
+}
+
+/// Message d'un plafond atteint : la clé à relever est celle du périmètre atteint, et
+/// ce qui ne débloque rien est dit (issue #4).
+pub fn budget_exceeded_text(scope: &str, spent_usd: f64, limit_usd: f64) -> String {
+    let (label, key) = match scope {
+        "session" => ("de la session", "budget.session_usd"),
+        "run" => ("du run", "budget.run_usd"),
+        _ => ("du jour", "budget.daily_usd"),
+    };
+    let raised = (limit_usd * 2.0).max(spent_usd + 1.0).ceil();
+    let mut out = format!(
+        "💸 Budget {label} atteint : {spent_usd:.2} $ dépensés pour un plafond de \
+         {limit_usd:.2} $. Tour suspendu.\n\n"
+    );
+    match scope {
+        "session" => out.push_str(&format!(
+            "`/new` repart de zéro dans une nouvelle session. Pour continuer celle-ci, relever \
+             le plafond : `penelope config set {key} {raised}`."
+        )),
+        "run" => out.push_str(&format!(
+            "Pour laisser le run continuer, relever le plafond : `penelope config set {key} \
+             {raised}`."
+        )),
+        _ => out.push_str(&format!(
+            "La dépense du jour repart de zéro à minuit. D'ici là, relever le plafond : \
+             `penelope config set {key} {raised}`."
+        )),
+    }
+    out.push_str(
+        "\n`/compact` allège le contexte des prochains tours mais ne rembourse pas ce qui est \
+         déjà dépensé.",
+    );
+    out
 }
 
 /// Transcript en mémoire : sous-agents, tests, appels ponctuels.
@@ -379,6 +415,8 @@ impl AgentLoop {
                     .await?;
                 return Ok(TurnOutcome::BudgetExceeded {
                     scope: exceeded.scope.as_str().to_string(),
+                    spent_usd: exceeded.spent_usd,
+                    limit_usd: exceeded.limit_usd,
                 });
             }
 
@@ -601,13 +639,17 @@ impl AgentLoop {
         }
         let mut last_error = CallFailure::plain("aucun modèle n'a répondu");
         let mut waited = false;
+        // Erreur en cours de flux avant tout texte : un nouvel essai, puis les replis
+        // (côté client, même avec OpenRouter dont le repli ne joue qu'avant le flux).
+        let mut stream_retried = false;
+        let mut client_fallbacks = !server_side_fallback;
 
         let mut attempt = 0;
         while attempt < candidates.len() {
-            let model_id = &candidates[attempt];
+            let model_id = candidates[attempt].clone();
             let request = ChatRequest {
                 model: model_id.clone(),
-                messages: fit_modalities(&messages, &s.catalog, model_id),
+                messages: fit_modalities(&messages, &s.catalog, &model_id),
                 tools: spec.tools.clone(),
                 tool_choice: if spec.tools.is_empty() {
                     None
@@ -632,7 +674,7 @@ impl AgentLoop {
                     &llm_id,
                     Some(&spec.session_id),
                     spec.run_id.as_deref(),
-                    model_id,
+                    &model_id,
                     self.provider.name(),
                     &body,
                 )
@@ -676,14 +718,22 @@ impl AgentLoop {
                 model_id: model_id.clone(),
             });
 
+            // Ce qui est déjà parti vers l'utilisateur : texte de réponse ou appel d'outil.
+            let shown = std::sync::atomic::AtomicBool::new(false);
             let observe = |chunk: &StreamChunk| match chunk {
-                StreamChunk::Delta { text } => sink.emit(TurnEvent::Delta(text.clone())),
+                StreamChunk::Delta { text } => {
+                    if !text.is_empty() {
+                        shown.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    sink.emit(TurnEvent::Delta(text.clone()))
+                }
                 StreamChunk::Reasoning { text } => sink.emit(TurnEvent::Reasoning(text.clone())),
+                StreamChunk::ToolCall(_) => shown.store(true, std::sync::atomic::Ordering::SeqCst),
                 _ => {}
             };
             match collect_stream_observed(
                 stream,
-                model_id,
+                &model_id,
                 self.provider.name(),
                 &s.catalog,
                 &observe,
@@ -692,7 +742,7 @@ impl AgentLoop {
             {
                 Ok(r) => {
                     s.llm_state.completed(&llm_id).await?;
-                    let requested = penelope_llm::catalog::strip_provider(model_id);
+                    let requested = penelope_llm::catalog::strip_provider(&model_id);
                     if !r.model.is_empty() && r.model != requested {
                         // Repli fait par OpenRouter : on le dit, rien n'est silencieux.
                         tracing::warn!(
@@ -720,8 +770,56 @@ impl AgentLoop {
                     s.llm_state
                         .failed(&llm_id, &e.to_string(), e.maybe_billed)
                         .await?;
-                    // Des fragments sont peut-être déjà partis : pas de repli silencieux.
-                    return Ok(Err(CallFailure::from_llm(&e)));
+                    let shown = shown.load(std::sync::atomic::Ordering::SeqCst);
+                    if shown {
+                        // Des fragments sont déjà partis : pas de repli silencieux, on le dit.
+                        let mut failure = CallFailure::from_llm(&e);
+                        failure.message = format!(
+                            "{}\n\nLa réponse a été coupée en cours d'écriture : le début \
+                             affiché est incomplet.",
+                            failure.message
+                        );
+                        return Ok(Err(failure));
+                    }
+                    last_error = CallFailure::from_llm(&e);
+                    if !penelope_llm::Router::should_fallback(&e) || spec.cancel.is_cancelled() {
+                        return Ok(Err(last_error));
+                    }
+                    if !stream_retried {
+                        stream_retried = true;
+                        let secs = e
+                            .retry_after
+                            .filter(|s| *s <= RETRY_AFTER_MAX_SECS)
+                            .unwrap_or(STREAM_RETRY_SECS);
+                        tracing::warn!(
+                            model = %model_id,
+                            error = %e,
+                            secs,
+                            "flux interrompu avant tout texte : nouvel essai"
+                        );
+                        if !sleep_unless_cancelled(&spec.cancel, secs).await {
+                            return Ok(Err(CallFailure::plain("arrêt demandé")));
+                        }
+                        continue;
+                    }
+                    if !client_fallbacks {
+                        client_fallbacks = true;
+                        for m in &spec.fallback_models {
+                            if !candidates.contains(m) {
+                                candidates.push(m.clone());
+                            }
+                        }
+                    }
+                    if attempt + 1 < candidates.len() {
+                        tracing::warn!(
+                            model = %model_id,
+                            error = %e,
+                            "flux interrompu avant tout texte : repli sur le modèle suivant"
+                        );
+                        attempt += 1;
+                        continue;
+                    }
+                    return Ok(Err(last_error));
                 }
             }
         }
@@ -1137,6 +1235,8 @@ pub fn pending_calls(tail: &[ChatMessage]) -> Vec<ToolCall> {
 /// Message d'erreur lisible pour le propriétaire.
 /// Attente maximale honorée pour un `Retry-After`.
 const RETRY_AFTER_MAX_SECS: u64 = 20;
+/// Attente avant de relancer un flux coupé sans `Retry-After`.
+const STREAM_RETRY_SECS: u64 = 2;
 
 /// Dort `secs` secondes, sauf annulation. Vrai si l'attente est allée au bout.
 async fn sleep_unless_cancelled(cancel: &CancelToken, secs: u64) -> bool {
@@ -1699,9 +1799,34 @@ mod tests {
             .run(request(&sid), &e)
             .await
             .unwrap();
-        assert!(matches!(out, TurnOutcome::BudgetExceeded { .. }), "{out:?}");
+        match &out {
+            TurnOutcome::BudgetExceeded {
+                spent_usd,
+                limit_usd,
+                ..
+            } => assert!(spent_usd > limit_usd, "{out:?}"),
+            other => panic!("{other:?}"),
+        }
         assert_eq!(p.call_count(), 0, "le modèle n'est pas appelé");
         assert_eq!(s.approvals.pending(10).await.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_budget_message_names_the_key_of_the_scope_reached() {
+        let session = budget_exceeded_text("session", 5.12, 5.0);
+        assert!(
+            session.contains("5.12 $ dépensés pour un plafond de 5.00 $"),
+            "{session}"
+        );
+        assert!(session.contains("budget.session_usd 10"), "{session}");
+        assert!(session.contains("/new"), "{session}");
+        assert!(!session.contains("daily_usd"), "{session}");
+        assert!(session.contains("/compact"), "{session}");
+
+        let day = budget_exceeded_text("jour", 20.4, 20.0);
+        assert!(day.contains("budget.daily_usd 40"), "{day}");
+        assert!(!day.contains("/new"), "{day}");
+        assert!(budget_exceeded_text("run", 6.0, 5.0).contains("budget.run_usd 10"));
     }
 
     #[tokio::test]
@@ -1768,6 +1893,56 @@ mod tests {
         assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
         let models: Vec<String> = p.requests().iter().map(|r| r.model.clone()).collect();
         assert_eq!(models, vec!["mock/model", "mock/repli"]);
+    }
+
+    /// Issue #5 : une erreur arrivée pendant le flux, avant tout texte, est rejouée puis
+    /// passe au modèle de repli ; après du texte, elle est dite telle quelle.
+    #[tokio::test]
+    async fn a_stream_cut_before_any_text_is_retried_then_falls_back() {
+        let (_d, s, p) = setup().await;
+        let sid = session(&s).await;
+        let mut sp = spec(&sid);
+        sp.fallback_models = vec!["mock/repli".into()];
+
+        p.push(Scripted::MidStreamError(
+            String::new(),
+            "Too many requests".into(),
+        ));
+        p.push(Scripted::MidStreamError(
+            String::new(),
+            "Too many requests".into(),
+        ));
+        p.reply("réponse du repli");
+        let conv = MemoryConversation::new("Tu es Pénélope.", "salut");
+        let out = AgentLoop::new(s.clone(), p.clone())
+            .run_conversation(&sp, &conv, &exec(false), &NullSink)
+            .await
+            .unwrap();
+        assert!(
+            matches!(out, TurnOutcome::Answered { ref text, .. } if text == "réponse du repli"),
+            "{out:?}"
+        );
+        let models: Vec<String> = p.requests().iter().map(|r| r.model.clone()).collect();
+        assert_eq!(models, vec!["mock/model", "mock/model", "mock/repli"]);
+
+        // Du texte est déjà parti : pas de relance silencieuse, l'échec le dit.
+        p.push(Scripted::MidStreamError(
+            "Voici le début".into(),
+            "Too many requests".into(),
+        ));
+        let conv = MemoryConversation::new("Tu es Pénélope.", "encore");
+        let before = p.requests().len();
+        let out = AgentLoop::new(s.clone(), p.clone())
+            .run_conversation(&sp, &conv, &exec(false), &NullSink)
+            .await
+            .unwrap();
+        match out {
+            TurnOutcome::Failed { error } => {
+                assert!(error.contains("coupée en cours d'écriture"), "{error}")
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(p.requests().len(), before + 1, "un seul appel");
     }
 
     #[tokio::test]

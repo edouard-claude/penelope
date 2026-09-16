@@ -381,12 +381,18 @@ pub fn parse_command(text: &str) -> Option<(String, String)> {
     Some((name, args.to_string()))
 }
 
-/// Une URL collée qui porte `code=` et `state=` déclenche le flux OAuth `paste_back`.
+/// Un texte qui porte les paramètres `code=` et `state=` est un retour OAuth `paste_back`,
+/// avec ou sans schéma (`127.0.0.1:7777/oauth/callback?code=…&state=…` après un
+/// copier-coller tronqué). Il ne part jamais vers le modèle : le code d'autorisation
+/// n'a rien à faire dans l'historique.
 pub fn looks_like_oauth_callback(text: &str) -> bool {
     let t = text.trim();
-    (t.starts_with("http://") || t.starts_with("https://") || t.starts_with("code="))
-        && t.contains("code=")
-        && t.contains("state=")
+    let param = |name: &str| {
+        t.starts_with(&format!("{name}="))
+            || t.contains(&format!("?{name}="))
+            || t.contains(&format!("&{name}="))
+    };
+    param("code") && param("state")
 }
 
 /// Fenêtre de regroupement d'un album (§14.4 : `media_group_id`, 1,5 s).
@@ -513,6 +519,22 @@ mod tests {
         assert!(looks_like_oauth_callback(url));
         assert!(!looks_like_oauth_callback("https://example.com/page"));
         assert!(!looks_like_oauth_callback("code=abc"));
+        // Schéma perdu au copier-coller : toujours un retour OAuth.
+        assert!(looks_like_oauth_callback(
+            "127.0.0.1:7777/oauth/callback?code=abc&state=xyz"
+        ));
+        assert!(looks_like_oauth_callback(
+            "localhost:8765/callback?state=xyz&code=abc"
+        ));
+        assert!(looks_like_oauth_callback("code=abc&state=xyz"));
+        assert!(!looks_like_oauth_callback(
+            "le paramètre code= et le state= de la doc"
+        ));
+        let bare = updates::text_message(2, OWNER, OWNER, "127.0.0.1:7777/cb?code=a&state=b");
+        assert!(matches!(
+            classify(&bare, OWNER, false),
+            Incoming::OAuthCallback { .. }
+        ));
 
         let u = updates::text_message(1, OWNER, OWNER, url);
         assert!(matches!(

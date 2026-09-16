@@ -182,8 +182,26 @@ gabarits, complétions, abonnements, journalisation, santé, tâches, élicitati
 `input_required`, découverte OAuth, PKCE, rejet d'un `iss` invalide, consentement
 incrémental, et le flux `paste_back` de bout en bout à travers le mock Telegram.
 
-## Ce qui n'est pas encore branché
+## Administration
 
-Les méthodes RPC `mcp.*` (`list`, `add`, `auth`, `restart`, `logs`…) ne sont pas encore
-servies par le daemon, et le superviseur n'est pas démarré par la boucle de fond. La
-bibliothèque, elle, est complète et testée. Voir [progress.md](progress.md).
+Le daemon démarre le superviseur et sert toutes les méthodes `mcp.*` : `penelope mcp
+list|show|add|edit|rm|enable|disable|restart|test|auth|logs` en ligne de commande, `/mcp`
+sur Telegram. Un serveur qui demande une autorisation OAuth passe en
+`auth_required` ; le lien arrive sur Telegram (`/mcp auth <nom>` le redemande) et
+l'adresse de retour se colle dans la conversation, avec ou sans `http://`. Le détail
+d'installation est dans [install-headless.md](install-headless.md), section « Serveurs
+MCP ».
+
+`penelope import hermes` reprend les `mcp_servers` d'un `config.yaml` Hermes : chaque
+serveur est converti en `mcp.d/<nom>.toml`, essayé, puis marqué `ok`, `auth_required` ou
+`failed` ; les secrets partent dans le SecretStore.
+
+## Limites actuelles
+
+- Les requêtes `sampling/createMessage` d'un serveur sont refusées et les formulaires
+  d'élicitation déclinés.
+- Les filtres d'outils `include`/`exclude` d'Hermes n'ont pas d'équivalent : tous les
+  outils d'un serveur sont exposés, la politique par outil (`tool_policy`) en restreint
+  l'usage.
+
+Voir [progress.md](progress.md).
