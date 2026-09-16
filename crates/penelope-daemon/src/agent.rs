@@ -766,7 +766,7 @@ impl AgentLoop {
                     }
 
                     // 4. Politique et approbation.
-                    let verdict = s
+                    let mut verdict = s
                         .policies
                         .evaluate(
                             &cfg.mcp.policy,
@@ -778,6 +778,16 @@ impl AgentLoop {
                             Some(&spec.session_id),
                         )
                         .await?;
+                    // Une règle « toujours » posée pour `config_set` vaut pour les réglages
+                    // ordinaires, jamais pour le bac à sable, les providers ou Telegram.
+                    if info.effective_name == "config_set"
+                        && info.risk == RiskClass::Destructive
+                        && verdict.decision != PolicyDecision::Deny
+                    {
+                        verdict.decision = PolicyDecision::AskTwice;
+                        verdict.reason =
+                            "réglage sensible : double confirmation à chaque fois".into();
+                    }
 
                     match verdict.decision {
                         PolicyDecision::Deny => {

@@ -309,6 +309,11 @@ impl Daemon {
     }
 
     /// Impose un provider pour tous les modèles (tests, suites sans réseau).
+    /// Provider imposé (tests), s'il y en a un.
+    pub fn provider_override_active(&self) -> Option<Arc<dyn penelope_llm::Provider>> {
+        self.provider_override.read().ok().and_then(|g| g.clone())
+    }
+
     pub fn set_provider_override(&self, p: Arc<dyn penelope_llm::Provider>) {
         if let Ok(mut g) = self.provider_override.write() {
             *g = Some(p);

@@ -301,6 +301,18 @@ pub struct ChatResponse {
     pub refusal: Option<String>,
 }
 
+/// Résultat d'une transcription audio (`/audio/transcriptions`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Transcription {
+    pub text: String,
+    /// Durée de l'audio, quand le serveur la donne.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<f64>,
+    /// Coût facturé (`usage.cost` chez OpenRouter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+}
+
 /// Fragment reçu en streaming SSE.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

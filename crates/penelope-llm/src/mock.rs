@@ -27,7 +27,13 @@ pub struct MockProvider {
     pub seen: Arc<Mutex<Vec<ChatRequest>>>,
     usage: Arc<Mutex<Usage>>,
     models: Arc<Mutex<Vec<ModelInfo>>>,
+    /// Transcription renvoyée par `transcribe`, et fichiers reçus.
+    transcript: Arc<Mutex<Option<String>>>,
+    pub transcribed: Arc<Mutex<Vec<TranscribedFile>>>,
 }
+
+/// Fichier reçu par `transcribe` : nom, taille en octets, langue demandée.
+pub type TranscribedFile = (String, usize, Option<String>);
 
 impl MockProvider {
     pub fn new() -> Self {
@@ -44,7 +50,15 @@ impl MockProvider {
                 "mock",
                 128_000,
             )])),
+            transcript: Arc::new(Mutex::new(None)),
+            transcribed: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Texte que rendra la prochaine transcription ; `None` : le provider refuse.
+    pub fn set_transcript(&self, text: Option<&str>) -> &Self {
+        *self.transcript.lock().unwrap_or_else(|p| p.into_inner()) = text.map(String::from);
+        self
     }
 
     pub fn push(&self, s: Scripted) -> &Self {
@@ -154,6 +168,39 @@ impl Provider for MockProvider {
             let _ = tx.send(StreamChunk::Done { finish }).await;
         });
         Ok(rx)
+    }
+
+    async fn transcribe(
+        &self,
+        _model: &str,
+        audio: Vec<u8>,
+        filename: &str,
+        language: Option<&str>,
+    ) -> Result<Transcription> {
+        self.transcribed
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push((
+                filename.to_string(),
+                audio.len(),
+                language.map(String::from),
+            ));
+        match self
+            .transcript
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+        {
+            Some(text) => Ok(Transcription {
+                text,
+                seconds: Some(3.0),
+                cost_usd: Some(0.0001),
+            }),
+            None => Err(LlmError::new(
+                LlmErrorKind::BadRequest,
+                "le provider `mock` ne sait pas transcrire",
+            )),
+        }
     }
 
     async fn fetch_models(&self) -> Result<Vec<ModelInfo>> {

@@ -704,7 +704,7 @@ fn classify(e: &anyhow::Error) -> i32 {
 }
 
 /// `config set a.b.c = valeur` : applique une modification par chemin.
-fn set_config_path(daemon: &Daemon, path: &str, value: Value) -> anyhow::Result<u64> {
+pub(crate) fn set_config_path(daemon: &Daemon, path: &str, value: Value) -> anyhow::Result<u64> {
     let path_owned = path.to_string();
     let generation = daemon.publish_config("cli", move |c| {
         let mut v = serde_json::to_value(&*c).map_err(penelope_kernel::KernelError::Json)?;

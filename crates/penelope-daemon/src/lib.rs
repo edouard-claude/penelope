@@ -11,6 +11,7 @@ pub mod executor;
 pub mod rpc;
 pub mod runner;
 pub mod runtime;
+pub mod selfknow;
 pub mod supervisor;
 pub mod telegram;
 pub mod vault_ops;

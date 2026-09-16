@@ -65,6 +65,19 @@ pub fn conversation_aliases(cfg: &penelope_kernel::config::Config) -> Vec<String
     out
 }
 
+#[async_trait::async_trait]
+impl crate::selfknow::Admin for Daemon {
+    fn uptime_s(&self) -> u64 {
+        self.handle.uptime_s(self.services.clock.now_ms())
+    }
+
+    async fn set_config(&self, path: &str, value: Value) -> Result<u64, String> {
+        let g = crate::rpc::set_config_path(self, path, value).map_err(|e| e.to_string())?;
+        self.invalidate_providers().await;
+        Ok(g)
+    }
+}
+
 /// Sink qui publie les événements d'un tour sur le bus.
 pub struct BusSink {
     pub bus: Arc<Bus>,
@@ -280,8 +293,13 @@ impl Daemon {
                 origin: origin.clone(),
                 workspaces: default_workspaces(&s),
                 in_workflow: false,
+                turn_model: Some(crate::selfknow::TurnModel {
+                    alias: alias.clone(),
+                    model_id: model_id.clone(),
+                }),
             },
         );
+        exec.admin = Some(self.clone() as Arc<dyn crate::selfknow::Admin>);
         exec.messenger = self.hooks.messenger();
         exec.mcp = self.hooks.mcp();
         exec.orchestrator = self.hooks.orchestrator();
@@ -305,6 +323,58 @@ impl Daemon {
         AgentLoop::new(s.clone(), provider)
             .run_conversation(&spec, &conv, &exec, sink)
             .await
+    }
+
+    /// Transcrit un audio avec le modèle du rôle `stt` (§14.4) et en compte le coût.
+    ///
+    /// Un alias `openai_compat:…` vise le serveur local (`providers.local`) : s'il n'est
+    /// pas activé, on le dit plutôt que d'envoyer l'audio à OpenRouter par défaut.
+    pub async fn transcribe(
+        &self,
+        audio: Vec<u8>,
+        filename: &str,
+        session_id: &str,
+    ) -> Result<String, String> {
+        let s = &self.services;
+        let cfg = s.config.config();
+        let alias = cfg.role_alias("stt");
+        let model = cfg
+            .alias_model(&alias)
+            .ok_or_else(|| format!("aucun modèle pour l'alias `{alias}` du rôle `stt`"))?
+            .to_string();
+        if penelope_llm::catalog::provider_of(&model) != "openrouter"
+            && !cfg.providers.local.enabled
+            && self.provider_override_active().is_none()
+        {
+            return Err(format!(
+                "l'alias `{alias}` vise un serveur local (`{model}`) mais `providers.local` \
+                 n'est pas activé : `penelope config set providers.local.enabled true`, ou \
+                 transcrire via OpenRouter : `penelope model set {alias} \
+                 openrouter:openai/whisper-large-v3`"
+            ));
+        }
+        let provider = self.provider_for(&model).await?;
+        let language = Some(cfg.owner.language.clone()).filter(|l| !l.is_empty());
+        let t = tokio::time::timeout(
+            std::time::Duration::from_secs(180),
+            provider.transcribe(&model, audio, filename, language.as_deref()),
+        )
+        .await
+        .map_err(|_| "transcription trop longue (plus de 3 min)".to_string())?
+        .map_err(|e| format!("{} ({model})", e.message))?;
+        let _ = s
+            .budget
+            .record(penelope_kernel::budget::UsageRecord {
+                session_id: Some(session_id.to_string()),
+                model: penelope_llm::catalog::strip_provider(&model).to_string(),
+                provider: provider.name().to_string(),
+                role: Some("stt".into()),
+                cost_usd: t.cost_usd.unwrap_or(0.0),
+                estimated: t.cost_usd.is_none(),
+                ..Default::default()
+            })
+            .await;
+        Ok(t.text)
     }
 
     /// Choisit l'alias et le modèle d'un tour (§10.3).
@@ -704,6 +774,135 @@ mod tests {
         let turn = claim(&d).await;
         d.run_turn(&turn).await;
         assert_eq!(p.call_count(), 5, "un seul appel de plus : la réponse");
+    }
+
+    #[tokio::test]
+    async fn penelope_reports_her_own_model_and_state() {
+        let (_dir, d, p) = daemon().await;
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "c1".into(),
+                name: "self_status".into(),
+                arguments: json!({}),
+            }],
+        ));
+        p.reply("Je tourne sur le modèle de l'alias main.");
+        d.enqueue_message(&sid, "C'est quel LLM ?", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        match d.run_turn(&turn).await {
+            TurnOutcome::Answered { .. } => {}
+            other => panic!("{other:?}"),
+        }
+        let main = d
+            .services
+            .config
+            .config()
+            .alias_model("main")
+            .unwrap()
+            .to_string();
+        let history = d.services.context.history.load(&sid, 0).await.unwrap();
+        let report = history
+            .iter()
+            .find(|e| e.message.name.as_deref() == Some("self_status"))
+            .map(|e| e.message.text())
+            .expect("résultat de self_status");
+        let v: Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(v["this_turn"]["alias"], "main");
+        assert_eq!(v["this_turn"]["model"]["id"], main);
+        assert!(v["machine"]["arch"].is_string(), "{v}");
+        assert!(v["penelope"]["uptime_s"].is_number(), "{v}");
+        // Le préfixe dit au modèle que son état n'est pas secret.
+        let first = p.requests()[0].clone();
+        assert!(first.messages[0].text().contains("self_status"));
+    }
+
+    #[tokio::test]
+    async fn config_set_asks_twice_for_sensitive_settings_even_with_an_always_rule() {
+        let (_dir, d, p) = daemon().await;
+        let s = &d.services;
+        s.policies
+            .create_rule(
+                penelope_hitl::policy::RuleScope::Tool,
+                Some("config_set"),
+                None,
+                None,
+                penelope_kernel::risk::PolicyDecision::Auto,
+                penelope_kernel::risk::PolicyWindow::Always,
+                None,
+            )
+            .await
+            .unwrap();
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+
+        // Réglage ordinaire : la règle « toujours » s'applique, c'est exécuté.
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "c1".into(),
+                name: "config_set".into(),
+                arguments: json!({"path": "models.routing.classifier", "value": "false"}),
+            }],
+        ));
+        p.reply("C'est fait.");
+        d.enqueue_message(&sid, "coupe le routage adaptatif", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        assert!(matches!(
+            d.run_turn(&turn).await,
+            TurnOutcome::Answered { .. }
+        ));
+        d.services.turns.complete(&turn).await.unwrap();
+        assert!(!s.config.config().models.routing.classifier);
+
+        // Bac à sable : double confirmation malgré la règle, rien n'est appliqué.
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "c2".into(),
+                name: "config_set".into(),
+                arguments: json!({"path": "sandbox.default_profile", "value": "full"}),
+            }],
+        ));
+        d.enqueue_message(&sid, "enlève le bac à sable", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        let approval_id = match d.run_turn(&turn).await {
+            TurnOutcome::AwaitingApproval { approval_id } => approval_id,
+            other => panic!("{other:?}"),
+        };
+        let a = s.approvals.get(&approval_id).await.unwrap().unwrap();
+        assert_eq!(a.payload["double"], true);
+        assert_eq!(s.config.config().sandbox.default_profile, "workspace-write");
+
+        // Un secret ne passe jamais, même approuvé.
+        let x = crate::executor::NativeToolExecutor::new(
+            s.clone(),
+            crate::executor::ToolEnv {
+                session_id: sid.clone(),
+                run_id: None,
+                origin: Origin::Cli,
+                workspaces: crate::executor::default_workspaces(s),
+                in_workflow: false,
+                turn_model: None,
+            },
+        );
+        use crate::agent::ToolExecutor;
+        let err = x
+            .execute(
+                "config_set",
+                &json!({"path": "providers.openrouter.api_key", "value": "sk-or-v1-x"}),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("penelope secret set"), "{err}");
     }
 
     #[tokio::test]

@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1010 tests verts**, tous hors réseau.
+- **1025 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -72,7 +72,7 @@ Dernière mise à jour : 16 septembre 2026.
 - **Catalogue de modèles** chargé au démarrage puis toutes les 6 h ; `model list` montre
   les alias et cherche dans le catalogue.
 
-### Depuis la 0.2.1
+### Depuis la 0.2.1 (0.2.2 et 0.2.3)
 
 - **OpenRouter aligné sur sa documentation** : coût facturé (`usage.cost`, BYOK compris)
   plutôt qu'estimé ; `session_id` pour le routage collant et le cache ; replis de modèle
@@ -94,6 +94,11 @@ Dernière mise à jour : 16 septembre 2026.
   `/budget`.
 - **Shell** : réseau autorisé par défaut (`sandbox.shell_network`), agent SSH et
   emplacements de configuration transmis ; `Makefile` (`make deploy`).
+- **Vocaux Telegram** : téléchargement, transcription par le rôle `stt` (OpenRouter ou
+  serveur local OpenAI-compatible comme whisper.cpp), citation puis tour normal.
+- **Pénélope connaît son état** : outil `self_status` (modèle du tour, routage,
+  configuration sans secret, coûts, file, machine avec batterie, disque, mémoire, charge) ;
+  `config_set` sous approbation, double et systématique pour les réglages sensibles.
 
 ### Encore à brancher
 
@@ -104,7 +109,7 @@ Dernière mise à jour : 16 septembre 2026.
 3. **Moteur de workflows** : exécuter les runs étape par étape (`wf.run`,
    `workflow_start`, sous-agents, étapes `user` et `wait`).
 4. **Rêve nocturne et digest** : consolidation des candidats, méthodes `mem.*`.
-5. **Pièces jointes Telegram** : photos (vision), vocaux (transcription), documents.
+5. **Pièces jointes Telegram** : photos (vision) et documents ; les vocaux sont branchés.
 6. **Compaction de niveau 3** (résumés LCM) déclenchée en fond pendant les longues sessions.
 
 ### Méthodes RPC déclarées mais non servies

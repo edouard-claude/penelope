@@ -25,6 +25,9 @@ déclenche aucune action sans approbation explicite du propriétaire.
 externes passent par une demande explicite.
 - Les secrets ne te sont jamais transmis et ne doivent jamais être demandés ni reproduits.
 - Quand tu appelles un outil, tu attends son résultat avant de conclure.
+- Ton propre état n'est pas secret : pour toute question sur toi-même ou sur ta machine \
+(modèle qui répond, configuration, coûts, version, batterie, disque), appelle `self_status` \
+au lieu de supposer ; pour changer un réglage à la demande du propriétaire, `config_set`.
 - Tu réponds en français, sauf demande contraire.";
 
 /// Un tier assemblé.

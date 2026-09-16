@@ -62,6 +62,8 @@ pub struct ToolEnv {
     pub origin: Origin,
     pub workspaces: Vec<PathBuf>,
     pub in_workflow: bool,
+    /// Modèle qui répond au tour, pour `self_status`.
+    pub turn_model: Option<crate::selfknow::TurnModel>,
 }
 
 /// L'exécuteur du daemon.
@@ -73,6 +75,7 @@ pub struct NativeToolExecutor {
     pub messenger: Option<Arc<dyn Messenger>>,
     pub mcp: Option<Arc<dyn McpGateway>>,
     pub orchestrator: Option<Arc<dyn Orchestrator>>,
+    pub admin: Option<Arc<dyn crate::selfknow::Admin>>,
 }
 
 /// Workspaces autorisés : configuration, sinon `{data}/workspace`.
@@ -108,6 +111,7 @@ impl NativeToolExecutor {
             messenger: None,
             mcp: None,
             orchestrator: None,
+            admin: None,
         }
     }
 
@@ -317,6 +321,44 @@ impl NativeToolExecutor {
                 return Ok(o.eager());
             }
 
+            // -------------------------------------------------------- soi-même
+            "self_status" => {
+                let section = args
+                    .get("section")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("all")
+                    .to_string();
+                crate::selfknow::status(
+                    s,
+                    &self.env.session_id,
+                    self.env.turn_model.as_ref(),
+                    self.admin.as_deref(),
+                    &section,
+                )
+                .await
+                .map_err(|e| ToolError::Io(e.to_string()))?
+            }
+            "config_set" => {
+                let path = str_arg(args, "path")?;
+                if let Some(why) = crate::selfknow::forbidden_path(&path) {
+                    return Err(ToolError::Denied(why));
+                }
+                let raw = str_arg(args, "value")?;
+                let value = crate::selfknow::parse_scalar(&raw);
+                let admin = self.admin.as_ref().ok_or_else(|| {
+                    ToolError::Denied("configuration non modifiable depuis ce contexte".into())
+                })?;
+                let generation = admin
+                    .set_config(&path, value.clone())
+                    .await
+                    .map_err(ToolError::Invalid)?;
+                json!({
+                    "path": path,
+                    "value": value,
+                    "generation": generation,
+                    "applied": "à chaud, dès le prochain appel",
+                })
+            }
             "time_now" => {
                 let tz = args
                     .get("timezone")
@@ -884,6 +926,18 @@ impl ToolExecutor for NativeToolExecutor {
                     risk,
                 }
             }
+            "config_set" => {
+                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                CallInfo {
+                    effective_name: name.to_string(),
+                    risk: if crate::selfknow::sensitive_path(path) {
+                        RiskClass::Destructive
+                    } else {
+                        RiskClass::Write
+                    },
+                    idempotent: true,
+                }
+            }
             _ => CallInfo {
                 effective_name: name.to_string(),
                 risk: penelope_tools::effective_risk(name, &Default::default()),
@@ -978,6 +1032,7 @@ mod tests {
             origin: Origin::Cli,
             workspaces: vec![penelope_platform::sandbox::normalise(&ws)],
             in_workflow: false,
+            turn_model: None,
         };
         (dir, NativeToolExecutor::new(s, env))
     }

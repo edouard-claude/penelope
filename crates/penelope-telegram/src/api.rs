@@ -51,12 +51,25 @@ pub trait BotTransport: Send + Sync {
             "ce transport ne sait pas envoyer de fichier".into(),
         ))
     }
+
+    /// Télécharge un fichier reçu, à partir du `file_path` rendu par `getFile`.
+    async fn download(&self, file_path: &str) -> TgResult<Vec<u8>> {
+        let _ = file_path;
+        Err(TgError::Transport(
+            "ce transport ne sait pas télécharger de fichier".into(),
+        ))
+    }
 }
+
+/// Taille maximale d'un fichier téléchargeable par un bot (Bot API : 20 Mo).
+pub const DOWNLOAD_MAX_BYTES: usize = 20 * 1024 * 1024;
 
 /// Transport HTTP réel.
 pub struct HttpTransport {
     client: reqwest::Client,
     base: String,
+    /// `{api}/file/bot<jeton>` : racine des téléchargements.
+    file_base: String,
 }
 
 impl HttpTransport {
@@ -68,12 +81,45 @@ impl HttpTransport {
                 .build()
                 .map_err(|e| TgError::Transport(e.to_string()))?,
             base: format!("{}/bot{token}", api_base.trim_end_matches('/')),
+            file_base: format!("{}/file/bot{token}", api_base.trim_end_matches('/')),
         })
     }
 }
 
 #[async_trait::async_trait]
 impl BotTransport for HttpTransport {
+    async fn download(&self, file_path: &str) -> TgResult<Vec<u8>> {
+        use futures::StreamExt;
+        let resp = self
+            .client
+            .get(format!(
+                "{}/{}",
+                self.file_base,
+                file_path.trim_start_matches('/')
+            ))
+            .send()
+            .await
+            .map_err(|e| TgError::Transport(e.to_string()))?;
+        let status = resp.status().as_u16();
+        if status >= 400 {
+            return Err(TgError::Transport(format!(
+                "téléchargement refusé ({status})"
+            )));
+        }
+        let mut out = Vec::new();
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| TgError::Transport(e.to_string()))?;
+            if out.len() + chunk.len() > DOWNLOAD_MAX_BYTES {
+                return Err(TgError::Transport(
+                    "fichier trop gros : un bot ne télécharge pas plus de 20 Mo".into(),
+                ));
+            }
+            out.extend_from_slice(&chunk);
+        }
+        Ok(out)
+    }
+
     async fn call(&self, method: &str, body: Value) -> TgResult<ApiResponse> {
         let resp = self
             .client
@@ -463,6 +509,14 @@ impl Bot {
     }
 
     /// Télécharge un fichier reçu (`getFile` puis URL de fichier).
+    /// Récupère le contenu d'un fichier reçu. Renvoie aussi son `file_path`, dont
+    /// l'extension dit le format.
+    pub async fn download_file(&self, file_id: &str) -> TgResult<(Vec<u8>, String)> {
+        let path = self.file_path(file_id).await?;
+        let bytes = self.transport.download(&path).await?;
+        Ok((bytes, path))
+    }
+
     pub async fn file_path(&self, file_id: &str) -> TgResult<String> {
         let v = self
             .call(method::GET_FILE, None, json!({"file_id": file_id}))

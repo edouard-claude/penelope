@@ -262,6 +262,29 @@ impl TelegramGateway {
                     self.daemon.bus.cancel_session(&session);
                 }
             }
+            Incoming::Voice {
+                update_id,
+                chat_id,
+                message_id,
+                topic_id,
+                file_id,
+                file_name,
+                mime_type,
+                file_size,
+                ..
+            } => {
+                self.voice(
+                    update_id,
+                    chat_id,
+                    topic_id,
+                    message_id,
+                    &file_id,
+                    file_name.as_deref(),
+                    mime_type.as_deref(),
+                    file_size,
+                )
+                .await?;
+            }
             Incoming::Photo {
                 chat_id,
                 message_id,
@@ -271,18 +294,13 @@ impl TelegramGateway {
                 chat_id,
                 message_id,
                 ..
-            }
-            | Incoming::Voice {
-                chat_id,
-                message_id,
-                ..
             } => {
                 self.reply(
                     chat_id,
                     None,
                     Some(message_id),
-                    "Les pièces jointes (photo, document, vocal) ne sont pas encore prises en \
-                     charge. Envoie le contenu en texte, ou dépose le fichier dans le workspace.",
+                    "Les photos et documents ne sont pas encore pris en charge. Envoie le \
+                     contenu en texte, ou dépose le fichier dans le workspace.",
                 )
                 .await?;
             }
@@ -677,7 +695,94 @@ impl TelegramGateway {
         Ok(())
     }
 
-    /// `/budget` : dépense du jour et de la session, requêtes les plus chères.    /// `/budget` : dépense du jour et de la session, requêtes les plus chères.
+    /// Vocal ou fichier audio (§14.4) : téléchargement, transcription par le rôle `stt`,
+    /// texte montré en citation, puis traité comme un message tapé.
+    #[allow(clippy::too_many_arguments)]
+    async fn voice(
+        &self,
+        update_id: i64,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        message_id: i64,
+        file_id: &str,
+        file_name: Option<&str>,
+        mime_type: Option<&str>,
+        file_size: Option<i64>,
+    ) -> anyhow::Result<()> {
+        let reply_to = Some(message_id);
+        if file_size.unwrap_or(0) as usize > penelope_telegram::api::DOWNLOAD_MAX_BYTES {
+            return self
+                .reply(
+                    chat_id,
+                    topic_id,
+                    reply_to,
+                    "🎙️ Fichier trop gros : un bot Telegram ne télécharge pas plus de 20 Mo.",
+                )
+                .await;
+        }
+        self.react(chat_id, message_id, reaction::RECEIVED);
+        let (audio, path) = match self.bot.download_file(file_id).await {
+            Ok(x) => x,
+            Err(e) => {
+                return self
+                    .reply(
+                        chat_id,
+                        topic_id,
+                        reply_to,
+                        &format!("🎙️ Téléchargement du vocal impossible : {e}"),
+                    )
+                    .await;
+            }
+        };
+        let origin = Origin::Telegram {
+            chat_id,
+            topic_id,
+            message_id: Some(message_id),
+        };
+        let session = self.daemon.chat_session_for(&origin).await?;
+        let filename = audio_filename(&path, file_name, mime_type);
+        let text = match self.daemon.transcribe(audio, &filename, &session).await {
+            Ok(t) => t,
+            Err(e) => {
+                return self
+                    .reply(
+                        chat_id,
+                        topic_id,
+                        reply_to,
+                        &format!("🎙️ Transcription impossible : {e}"),
+                    )
+                    .await;
+            }
+        };
+        if text.trim().is_empty() {
+            return self
+                .reply(
+                    chat_id,
+                    topic_id,
+                    reply_to,
+                    "🎙️ Rien d'audible dans ce vocal.",
+                )
+                .await;
+        }
+        let quoted: String = text
+            .lines()
+            .map(|l| format!("> {l}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.reply(chat_id, topic_id, reply_to, &format!("🎙️\n{quoted}"))
+            .await?;
+        self.daemon
+            .enqueue_message(
+                &session,
+                &format!("(message vocal transcrit) {text}"),
+                &origin,
+                Some(format!("tg:{update_id}")),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// `/budget` : dépense du jour et de la session, requêtes les plus chères.
     /// `/budget sessions|requêtes|modèles|jours` : un regroupement précis.
     async fn budget_text(&self, session: &str, args: &str) -> anyhow::Result<String> {
         let s = &self.daemon.services;
@@ -1496,6 +1601,26 @@ fn model_pin_notice(view: &Value) -> String {
     }
 }
 
+/// Nom de fichier à transmettre au serveur de transcription : l'extension y dit le
+/// format. Les vocaux Telegram (`.oga`, Opus dans Ogg) deviennent `.ogg`, que les
+/// serveurs OpenAI-compatibles reconnaissent.
+fn audio_filename(file_path: &str, file_name: Option<&str>, mime_type: Option<&str>) -> String {
+    let source = file_name.unwrap_or(file_path);
+    let ext = std::path::Path::new(source)
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase());
+    let ext = match (ext.as_deref(), mime_type) {
+        (Some("oga") | Some("opus"), _) => "ogg".to_string(),
+        (Some(e), _) if !e.is_empty() => e.to_string(),
+        (_, Some("audio/mpeg")) => "mp3".into(),
+        (_, Some("audio/mp4") | Some("audio/x-m4a") | Some("audio/m4a")) => "m4a".into(),
+        (_, Some("audio/wav") | Some("audio/x-wav")) => "wav".into(),
+        (_, Some("audio/flac")) => "flac".into(),
+        _ => "ogg".into(),
+    };
+    format!("audio.{ext}")
+}
+
 /// Alias et routage, tels que `model.list` les décrit.
 fn routing_text(v: &Value) -> String {
     let mut t = String::from("**Alias**\n\n");
@@ -2028,6 +2153,82 @@ mod tests {
             "{out:?}"
         );
         assert!(out.last().unwrap().contains("alias inconnu"), "{out:?}");
+    }
+
+    #[tokio::test]
+    async fn a_voice_note_is_transcribed_quoted_then_answered() {
+        let (_d, g, t, p) = gateway().await;
+        t.set_file("v1", b"OggS\x00fake-opus").await;
+        p.set_transcript(Some("Rappelle-moi d'appeler Paul demain"));
+        p.reply(r#"{"complexity":"medium"}"#);
+        p.reply("C'est noté.");
+        g.process_update(&updates::voice(60, OWNER, OWNER))
+            .await
+            .unwrap();
+        drain(&g).await;
+
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            sent[0].contains("Rappelle-moi d'appeler Paul demain"),
+            "{sent:?}"
+        );
+        assert!(sent[0].contains("blockquote"), "citation : {sent:?}");
+        assert!(sent.iter().any(|m| m.contains("C'est noté.")), "{sent:?}");
+
+        let (name, size, lang) = p.transcribed.lock().unwrap()[0].clone();
+        assert_eq!(name, "audio.ogg");
+        assert_eq!(size, 14);
+        assert_eq!(lang.as_deref(), Some("fr"));
+        let chat = p.requests().last().unwrap().clone();
+        assert!(
+            chat.messages
+                .iter()
+                .any(|m| m.text().contains("(message vocal transcrit) Rappelle-moi")),
+            "le modèle reçoit le texte transcrit"
+        );
+        let stt = g
+            .daemon
+            .services
+            .budget
+            .report("role", None, None, 10)
+            .await
+            .unwrap();
+        assert!(stt.iter().any(|r| r.key == "stt"), "{stt:?}");
+    }
+
+    #[tokio::test]
+    async fn a_voice_note_without_local_stt_explains_what_to_configure() {
+        let (_d, g, t, _p) = gateway().await;
+        // Sans provider imposé : la configuration par défaut vise un serveur local éteint.
+        let g = TelegramGateway::with_transport(
+            Arc::new(Daemon::from_services(g.daemon.services.clone())),
+            t.clone(),
+        );
+        t.set_file("v1", b"OggS").await;
+        g.process_update(&updates::voice(61, OWNER, OWNER))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(sent[0].contains("providers.local"), "{sent:?}");
+        assert_eq!(g.daemon.services.turns.pending_count().await.unwrap(), 0);
+    }
+
+    #[test]
+    fn audio_filenames_carry_a_format_servers_understand() {
+        assert_eq!(
+            audio_filename("voice/file_12.oga", None, Some("audio/ogg")),
+            "audio.ogg"
+        );
+        assert_eq!(
+            audio_filename("music/file_3", Some("note.m4a"), None),
+            "audio.m4a"
+        );
+        assert_eq!(
+            audio_filename("music/file_4", None, Some("audio/mpeg")),
+            "audio.mp3"
+        );
+        assert_eq!(audio_filename("x", None, None), "audio.ogg");
     }
 
     #[tokio::test]

@@ -705,6 +705,54 @@ pub fn all() -> Vec<ToolSpec> {
             true,
             false,
         ),
+        // ------------------------------------------------------------ soi-même
+        spec(
+            "self_status",
+            RiskClass::Read,
+            "État complet de Pénélope et de sa machine : version, modèle qui répond à ce \
+             tour et routage, configuration effective (alias, rôles, bac à sable, budgets, \
+             Telegram, providers, transcription), coûts du jour et de la session, file de \
+             travail, chemins, et machine (batterie, secteur, disque, mémoire, charge, \
+             démarrage, système). À appeler pour toute question sur toi-même ou sur \
+             l'ordinateur, plutôt que de supposer. Aucun secret n'y figure.",
+            obj(
+                json!({
+                    "section": {
+                        "type": "string",
+                        "enum": ["all", "model", "config", "costs", "machine"],
+                        "description": "Partie voulue ; `all` par défaut."
+                    }
+                }),
+                &[],
+            ),
+            true,
+            false,
+            false,
+        ),
+        spec(
+            "config_set",
+            RiskClass::Write,
+            "Modifie un réglage de ta propre configuration, appliqué à chaud : chemin \
+             pointé et valeur, par exemple `models.aliases.main` = \
+             `openrouter:z-ai/glm-5.3`, `models.routing.classifier` = `false`, \
+             `budget.daily_usd` = `30`. Lire d'abord `self_status` (section config). \
+             Jamais de secret : une clé se pose en SSH avec `penelope secret set`. \
+             Approbation du propriétaire requise, double pour le bac à sable, les \
+             providers et Telegram.",
+            obj(
+                json!({
+                    "path": {"type": "string", "description": "Chemin pointé, ex. `models.aliases.main`."},
+                    "value": {
+                        "type": "string",
+                        "description": "Valeur en texte : `true`, `42`, `openrouter:z-ai/glm-5.3`, ou JSON pour une liste ou un objet."
+                    }
+                }),
+                &["path", "value"],
+            ),
+            false,
+            false,
+            false,
+        ),
     ];
     v.sort_by_key(|s| s.name);
     v
@@ -779,6 +827,8 @@ mod tests {
             "return_value",
             "ask_user",
             "image_generate",
+            "self_status",
+            "config_set",
         ] {
             assert!(names.contains(&expected), "outil manquant : {expected}");
         }

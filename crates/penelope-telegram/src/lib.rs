@@ -69,7 +69,13 @@ pub enum Incoming {
         chat_id: i64,
         from_id: i64,
         message_id: i64,
+        topic_id: Option<i64>,
         file_id: String,
+        /// Nom d'origine d'un fichier audio (`audio.file_name`) ; absent pour un vocal.
+        file_name: Option<String>,
+        mime_type: Option<String>,
+        file_size: Option<i64>,
+        duration: Option<i64>,
     },
     Callback {
         update_id: i64,
@@ -289,16 +295,18 @@ pub fn classify(update: &Value, owner_id: i64, allow_groups: bool) -> Incoming {
         };
     }
     if let Some(v) = msg.get("voice").or_else(|| msg.get("audio")) {
+        let str_of = |k: &str| v.get(k).and_then(|x| x.as_str()).map(String::from);
         return Incoming::Voice {
             update_id,
             chat_id,
             from_id,
             message_id,
-            file_id: v
-                .get("file_id")
-                .and_then(|x| x.as_str())
-                .unwrap_or_default()
-                .to_string(),
+            topic_id,
+            file_id: str_of("file_id").unwrap_or_default(),
+            file_name: str_of("file_name"),
+            mime_type: str_of("mime_type"),
+            file_size: v.get("file_size").and_then(|x| x.as_i64()),
+            duration: v.get("duration").and_then(|x| x.as_i64()),
         };
     }
 

@@ -28,6 +28,94 @@ pub trait Provider: Send + Sync {
 
     /// Rafraîchit le catalogue depuis le provider.
     async fn fetch_models(&self) -> Result<Vec<ModelInfo>>;
+
+    /// Transcrit un fichier audio (rôle `stt`). Le nom de fichier porte le format
+    /// (`.ogg`, `.mp3`, `.wav`…), que les serveurs lisent à l'extension.
+    async fn transcribe(
+        &self,
+        model: &str,
+        audio: Vec<u8>,
+        filename: &str,
+        language: Option<&str>,
+    ) -> Result<Transcription> {
+        let _ = (model, audio, filename, language);
+        Err(LlmError::new(
+            LlmErrorKind::BadRequest,
+            format!("le provider `{}` ne sait pas transcrire", self.name()),
+        ))
+    }
+}
+
+/// Taille maximale d'un envoi multipart de transcription (limite d'OpenAI et d'OpenRouter).
+pub const TRANSCRIPTION_MAX_BYTES: usize = 25 * 1024 * 1024;
+
+/// Envoie un audio en `multipart/form-data` à un endpoint `/audio/transcriptions`
+/// OpenAI-compatible (OpenRouter, whisper.cpp, faster-whisper-server…).
+async fn transcribe_multipart(
+    request: reqwest::RequestBuilder,
+    model: &str,
+    audio: Vec<u8>,
+    filename: &str,
+    language: Option<&str>,
+) -> Result<Transcription> {
+    if audio.is_empty() {
+        return Err(LlmError::new(LlmErrorKind::BadRequest, "audio vide"));
+    }
+    if audio.len() > TRANSCRIPTION_MAX_BYTES {
+        return Err(LlmError::new(
+            LlmErrorKind::BadRequest,
+            format!(
+                "audio trop gros pour une transcription ({} Mo, 25 au plus)",
+                audio.len() / (1024 * 1024)
+            ),
+        ));
+    }
+    let mut form = reqwest::multipart::Form::new()
+        .text("model", strip_provider(model).to_string())
+        .text("response_format", "json")
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(audio).file_name(filename.to_string()),
+        );
+    if let Some(l) = language.filter(|l| !l.is_empty()) {
+        form = form.text("language", l.to_string());
+    }
+    let resp = request
+        .multipart(form)
+        .send()
+        .await
+        .map_err(map_reqwest_error)?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    if status >= 400 {
+        return Err(LlmError::from_status(status, &body));
+    }
+    let v: Value = serde_json::from_str(&body).map_err(|_| {
+        LlmError::new(
+            LlmErrorKind::Other,
+            format!(
+                "réponse de transcription illisible : {}",
+                body.chars().take(200).collect::<String>()
+            ),
+        )
+    })?;
+    if v.get("error").is_some() {
+        return Err(LlmError::from_status(status.max(500), &body));
+    }
+    let usage = v.get("usage");
+    Ok(Transcription {
+        text: v
+            .get("text")
+            .and_then(|t| t.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        seconds: usage
+            .and_then(|u| u.get("seconds"))
+            .and_then(|x| x.as_f64())
+            .or_else(|| v.get("duration").and_then(|x| x.as_f64())),
+        cost_usd: usage.and_then(|u| u.get("cost")).and_then(|x| x.as_f64()),
+    })
 }
 
 /// Jeton d'annulation minimal (§3.3), sans dépendre de `tokio-util`.
@@ -178,6 +266,23 @@ impl Provider for OpenRouterProvider {
         stream_from_response(resp, cancel, self.name().to_string()).await
     }
 
+    async fn transcribe(
+        &self,
+        model: &str,
+        audio: Vec<u8>,
+        filename: &str,
+        language: Option<&str>,
+    ) -> Result<Transcription> {
+        let request = self
+            .http
+            .post(format!("{}/audio/transcriptions", self.base_url))
+            .bearer_auth(&self.api_key)
+            .header("HTTP-Referer", &self.referer)
+            .header("X-OpenRouter-Title", &self.title)
+            .header("X-OpenRouter-Categories", &self.categories);
+        transcribe_multipart(request, model, audio, filename, language).await
+    }
+
     async fn fetch_models(&self) -> Result<Vec<ModelInfo>> {
         let url = format!("{}/models", self.base_url);
         let resp = self
@@ -274,39 +379,28 @@ impl OpenAiCompatProvider {
             })
             .collect())
     }
-
-    /// Transcription audio (§14.4, rôle `stt`).
-    pub async fn transcribe(&self, model: &str, audio: Vec<u8>, filename: &str) -> Result<String> {
-        let url = format!("{}/audio/transcriptions", self.base_url);
-        let part = reqwest::multipart::Part::bytes(audio).file_name(filename.to_string());
-        let form = reqwest::multipart::Form::new()
-            .text("model", strip_provider(model).to_string())
-            .part("file", part);
-        let mut req = self.http.post(&url).multipart(form);
-        if !self.api_key.is_empty() {
-            req = req.bearer_auth(&self.api_key);
-        }
-        let resp = req.send().await.map_err(map_reqwest_error)?;
-        let status = resp.status().as_u16();
-        let body: Value = resp
-            .json()
-            .await
-            .map_err(|e| LlmError::new(LlmErrorKind::Other, e.to_string()))?;
-        if status >= 400 {
-            return Err(LlmError::from_status(status, &body.to_string()));
-        }
-        Ok(body
-            .get("text")
-            .and_then(|t| t.as_str())
-            .unwrap_or_default()
-            .to_string())
-    }
 }
 
 #[async_trait::async_trait]
 impl Provider for OpenAiCompatProvider {
     fn name(&self) -> &str {
         &self.label
+    }
+
+    async fn transcribe(
+        &self,
+        model: &str,
+        audio: Vec<u8>,
+        filename: &str,
+        language: Option<&str>,
+    ) -> Result<Transcription> {
+        let mut request = self
+            .http
+            .post(format!("{}/audio/transcriptions", self.base_url));
+        if !self.api_key.is_empty() {
+            request = request.bearer_auth(&self.api_key);
+        }
+        transcribe_multipart(request, model, audio, filename, language).await
     }
 
     async fn chat_stream(&self, req: ChatRequest, cancel: CancelToken) -> Result<ChunkStream> {
@@ -1125,6 +1219,112 @@ mod tests {
         assert_eq!(r.cost_usd, 0.00042);
         assert!(!r.cost_estimated);
         assert_eq!(r.upstream.as_deref(), Some("Z.AI"));
+    }
+
+    /// Faux serveur qui capture la requête reçue avant de répondre.
+    async fn capturing_server(
+        response: String,
+    ) -> (String, tokio::sync::oneshot::Receiver<Vec<u8>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut got = Vec::new();
+            let mut buf = vec![0u8; 65536];
+            // Lit jusqu'à la fin du corps multipart (délimiteur final `--\r\n`).
+            loop {
+                let n = tokio::time::timeout(
+                    std::time::Duration::from_millis(500),
+                    sock.read(&mut buf),
+                )
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                got.extend_from_slice(&buf[..n]);
+                if got.ends_with(b"--\r\n") {
+                    break;
+                }
+            }
+            sock.write_all(response.as_bytes()).await.unwrap();
+            sock.flush().await.unwrap();
+            let _ = tx.send(got);
+        });
+        (format!("http://{addr}/v1"), rx)
+    }
+
+    #[tokio::test]
+    async fn local_whisper_transcription_uses_the_openai_multipart_form() {
+        let body = r#"{"text":" Bonjour Pénélope, rappelle-moi demain. "}"#;
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let (url, seen) = capturing_server(resp).await;
+        let p = OpenAiCompatProvider::new(url, "", Catalog::new()).unwrap();
+        let t = p
+            .transcribe(
+                "openai_compat:whisper",
+                b"OggS-fake-audio".to_vec(),
+                "voice.ogg",
+                Some("fr"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(t.text, "Bonjour Pénélope, rappelle-moi demain.");
+        assert_eq!(t.cost_usd, None);
+
+        let raw = String::from_utf8_lossy(&seen.await.unwrap()).to_string();
+        assert!(raw.starts_with("POST /v1/audio/transcriptions"), "{raw}");
+        assert!(raw.contains("multipart/form-data"), "{raw}");
+        assert!(
+            raw.contains("name=\"file\"; filename=\"voice.ogg\""),
+            "{raw}"
+        );
+        assert!(raw.contains("name=\"language\"\r\n\r\nfr"), "{raw}");
+        assert!(raw.contains("name=\"model\"\r\n\r\nwhisper"), "{raw}");
+        assert!(
+            !raw.to_lowercase().contains("authorization"),
+            "pas de clé : pas d'en-tête"
+        );
+    }
+
+    #[tokio::test]
+    async fn openrouter_transcription_reports_its_cost() {
+        let body = r#"{"text":"Salut","usage":{"seconds":9.2,"total_tokens":113,"cost":0.000508}}"#;
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let (url, seen) = capturing_server(resp).await;
+        let p = OpenRouterProvider::new(url, "sk-or-v1-test", Catalog::new()).unwrap();
+        let t = p
+            .transcribe(
+                "openrouter:openai/whisper-large-v3",
+                b"ID3".to_vec(),
+                "a.mp3",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(t.text, "Salut");
+        assert_eq!(t.cost_usd, Some(0.000508));
+        assert_eq!(t.seconds, Some(9.2));
+        let raw = String::from_utf8_lossy(&seen.await.unwrap()).to_lowercase();
+        assert!(raw.contains("authorization: bearer sk-or-v1-test"), "{raw}");
+        assert!(raw.contains("x-openrouter-title"), "{raw}");
+        assert!(raw.contains("openai/whisper-large-v3"), "{raw}");
+
+        let empty = p
+            .transcribe("m", Vec::new(), "a.ogg", None)
+            .await
+            .unwrap_err();
+        assert_eq!(empty.kind, LlmErrorKind::BadRequest);
     }
 
     #[tokio::test]

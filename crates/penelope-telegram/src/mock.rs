@@ -21,6 +21,8 @@ struct State {
     replies: std::collections::BTreeMap<String, VecDeque<Value>>,
     next_message_id: i64,
     updates: VecDeque<Value>,
+    /// Contenu des fichiers téléchargeables, par `file_path`.
+    files: std::collections::BTreeMap<String, Vec<u8>>,
 }
 
 /// Transport simulé.
@@ -87,6 +89,13 @@ impl MockTransport {
             .collect()
     }
 
+    /// Rend un fichier téléchargeable : `getFile(file_id)` renverra `voice/<file_id>.oga`.
+    pub async fn set_file(&self, file_id: &str, bytes: &[u8]) {
+        let mut g = self.state.lock().await;
+        g.files
+            .insert(format!("voice/{file_id}.oga"), bytes.to_vec());
+    }
+
     pub async fn clear(&self) {
         let mut g = self.state.lock().await;
         g.calls.clear();
@@ -95,6 +104,14 @@ impl MockTransport {
 
 #[async_trait::async_trait]
 impl BotTransport for MockTransport {
+    async fn download(&self, file_path: &str) -> TgResult<Vec<u8>> {
+        let g = self.state.lock().await;
+        g.files
+            .get(file_path)
+            .cloned()
+            .ok_or_else(|| TgError::Transport(format!("fichier inconnu : {file_path}")))
+    }
+
     async fn upload(
         &self,
         method: &str,
@@ -170,6 +187,15 @@ impl BotTransport for MockTransport {
             | crate::api::method::SEND_RICH_MESSAGE_DRAFT => {
                 // L'API réelle renvoie `True`.
                 json!(true)
+            }
+            crate::api::method::GET_FILE => {
+                let id = body.get("file_id").and_then(|v| v.as_str()).unwrap_or("f");
+                json!({
+                    "file_id": id,
+                    "file_unique_id": format!("u{id}"),
+                    "file_size": 2048,
+                    "file_path": format!("voice/{id}.oga"),
+                })
             }
             crate::api::method::CREATE_FORUM_TOPIC => {
                 g.next_message_id += 1;

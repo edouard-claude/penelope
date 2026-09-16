@@ -340,6 +340,58 @@ penelope config set sandbox.default_profile full
 Les approbations restent en place : c'est la carte `shell_exec` (« Toujours » compris) qui
 décide.
 
+### Messages vocaux
+
+Un vocal (ou un fichier audio) envoyé sur Telegram est téléchargé, transcrit par le modèle
+du rôle `stt`, montré en citation, puis traité comme un message tapé. Le coût de la
+transcription est compté avec le rôle `stt`. Deux façons de transcrire.
+
+Par OpenRouter, sans rien installer :
+
+```bash
+penelope model set stt openrouter:openai/whisper-large-v3
+```
+
+En local, avec whisper.cpp (accéléré par Metal sur Apple Silicon ; `ffmpeg` convertit
+les vocaux Opus de Telegram) :
+
+```bash
+brew install whisper-cpp ffmpeg
+```
+
+```bash
+mkdir -p ~/models && curl -L -o ~/models/ggml-large-v3-turbo-q5_0.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
+```
+
+```bash
+whisper-server -m ~/models/ggml-large-v3-turbo-q5_0.bin --host 127.0.0.1 --port 8080 --inference-path /v1/audio/transcriptions --convert -l fr
+```
+
+Le serveur doit tourner en permanence (un LaunchAgent comme celui de Pénélope, ou une
+session `tmux`). Puis activer le provider local, qui vise `http://127.0.0.1:8080/v1` par
+défaut ; l'alias `stt` livré (`openai_compat:whisper-default`) le désigne déjà :
+
+```bash
+penelope config set providers.local.enabled true
+```
+
+Sans provider local actif, un vocal reçoit une réponse qui dit quoi configurer, au lieu
+d'être envoyé ailleurs.
+
+### Ce que Pénélope sait d'elle-même
+
+L'outil `self_status` lui donne son état complet : version et durée de fonctionnement,
+modèle qui répond au tour et routage, configuration effective (secrets désignés par leur
+nom, jamais par leur valeur), coûts du jour et de la session, file de travail, chemins, et
+la machine : batterie et alimentation, disque, mémoire, charge, démarrage, système. Elle
+l'appelle d'elle-même dès qu'on lui pose une question sur elle ou sur l'ordinateur.
+
+Elle peut aussi changer un réglage à ta demande avec `config_set`, appliqué à chaud et
+toujours soumis à approbation. Le bac à sable, les providers, Telegram, les outils et les
+politiques exigent une double confirmation à chaque fois : une règle « Toujours » ne les
+couvre pas. Les secrets et l'identifiant du propriétaire sont refusés : ils ne se règlent
+qu'en ligne de commande.
+
 ## 7. Premier essai en CLI
 
 Dans un premier terminal, le daemon au premier plan (les journaux s'affichent) :

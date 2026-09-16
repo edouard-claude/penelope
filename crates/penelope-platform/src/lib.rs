@@ -12,6 +12,7 @@
 
 pub mod backend;
 pub mod dirs;
+pub mod host;
 pub mod ipc;
 pub mod power;
 pub mod process;
@@ -119,6 +120,11 @@ impl Platform {
 
     pub fn os_name(&self) -> &'static str {
         backend::OS_NAME
+    }
+
+    /// État de la machine (batterie, disque, mémoire, charge…). Bloquant.
+    pub fn host_status(&self, now_unix: i64) -> host::HostStatus {
+        host::status(&self.dirs.data(), now_unix)
     }
 
     /// Contrôles `doctor` communs + propres à l'OS (§2.11).
