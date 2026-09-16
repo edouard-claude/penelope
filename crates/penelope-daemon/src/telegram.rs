@@ -464,6 +464,35 @@ impl TelegramGateway {
                     Err(e) => format!("❌ {e}"),
                 }
             }
+            "upgrade" => {
+                let params = match args {
+                    "" | "check" => json!({"check": true}),
+                    "install" => json!({}),
+                    "rollback" => json!({"rollback": true}),
+                    tag if tag.starts_with('v') && !tag.contains(char::is_whitespace) => {
+                        json!({"tag": tag})
+                    }
+                    _ => {
+                        let usage = "Usage : `/upgrade` (vérifier), `/upgrade install`, \
+                                     `/upgrade rollback` ou `/upgrade v0.3.1`.";
+                        return self.reply(chat_id, topic_id, reply_to, usage).await;
+                    }
+                };
+                // Le téléchargement prend du temps : la file des updates n'attend pas.
+                self.react(chat_id, message_id, reaction::RECEIVED);
+                let (daemon, messenger) = (d.clone(), d.hooks.messenger());
+                tokio::spawn(async move {
+                    let rpc = crate::rpc::Rpc::new(daemon);
+                    let text = match rpc.call(m::UPGRADE, params).await {
+                        Ok(v) => crate::upgrade::render(&v),
+                        Err(e) => format!("❌ {e}"),
+                    };
+                    if let Some(m) = messenger {
+                        let _ = m.send_text(&origin, &text).await;
+                    }
+                });
+                return Ok(());
+            }
             "stop" => {
                 let session = d.chat_session_for(&origin).await?;
                 if d.bus.cancel_session(&session) {

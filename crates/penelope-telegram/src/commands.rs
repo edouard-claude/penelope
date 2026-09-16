@@ -300,8 +300,8 @@ pub fn all() -> Vec<Command> {
         c(
             "upgrade",
             "Système",
-            "Met à jour le binaire",
-            "/upgrade",
+            "Vérifie, installe (`install`) ou annule (`rollback`) une mise à jour",
+            "/upgrade install",
             m::UPGRADE,
         ),
         c(

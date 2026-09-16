@@ -463,6 +463,22 @@ dans le SecretStore et rafraîchis avant chaque connexion ; ils ne partent que v
 serveur en HTTPS (ou en boucle locale). Le sampling reste refusé et les formulaires
 d'elicitation déclinés.
 
+### Venir d'Hermes
+
+Une instance Hermes se reprend en une commande, d'abord à blanc :
+
+```bash
+penelope import hermes --dry-run
+```
+
+Skills, `SOUL.md`, `AGENTS.md`, mémoire (`MEMORY.md`, `USER.md`) et serveurs MCP de
+`config.yaml` sont listés avec ce qui serait fait ; rien n'est écrit. Sans `--dry-run`,
+chaque serveur importé est essayé et marqué `ok`, `auth_required` (`penelope mcp auth
+<nom>`) ou `failed`, et le rapport part aussi sur Telegram. Les secrets trouvés dans la
+configuration ou le `.env` d'Hermes vont dans le trousseau, jamais dans `mcp.d`. Rien
+d'existant n'est écrasé : un `SOUL.md` déjà présent reste en place et la version Hermes
+est mise de côté pour fusion. `--path` pointe une autre racine que `~/.hermes`.
+
 ### Rappels et tâches planifiées
 
 L'ordonnanceur passe toutes les dix secondes. « Rappelle-moi vendredi à 9 h d'appeler
@@ -667,7 +683,19 @@ chaîne.
 
 ## 10. Mise à jour
 
-Depuis le dépôt cloné sur la machine :
+Depuis les releases GitHub :
+
+```bash
+penelope upgrade
+```
+
+L'archive est vérifiée (somme SHA-256), le binaire courant gardé en
+`<binaire>.previous`, puis le daemon redémarre sur la nouvelle version. S'il ne confirme
+pas sa santé dans la minute, l'ancien binaire revient tout seul et Telegram le signale.
+`penelope upgrade --check` indique seulement la dernière version, `--tag v0.3.1` en
+choisit une, `--rollback` revient au binaire précédent. Le répertoire du binaire doit
+être inscriptible par l'utilisateur du service ; sinon, ou pour une version pas encore
+publiée, depuis le dépôt cloné sur la machine :
 
 ```bash
 make deploy
@@ -686,6 +714,6 @@ questions plutôt que des relances. `penelope approvals` montre ce qui attend un
 
 Conversation (CLI et Telegram), approbations, catalogue de modèles, vocaux et serveurs
 MCP, rappels et déclencheurs, résumé des longues conversations, photos et documents,
-workflows, génération d'images, consolidation nocturne de la mémoire et autorisation
-OAuth des serveurs MCP fonctionnent. Voir [progress.md](progress.md) pour
+workflows, génération d'images, consolidation nocturne de la mémoire, autorisation
+OAuth des serveurs MCP, mise à jour du binaire et import d'Hermes fonctionnent. Voir [progress.md](progress.md) pour
 l'état exact.

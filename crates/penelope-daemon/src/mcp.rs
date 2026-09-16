@@ -1001,10 +1001,17 @@ impl McpSupervisor {
                         "ms": started.elapsed().as_millis() as u64,
                         "logs": logs,
                     }),
-                    Err(e) => json!({"ok": false, "error": e.to_string(), "logs": logs}),
+                    Err(e) => json!({
+                        "ok": false,
+                        "error": e.to_string(),
+                        "logs": logs,
+                        "auth_required": e.needs_auth(),
+                    }),
                 }
             }
-            Err((e, logs, _)) => json!({"ok": false, "error": e, "logs": logs}),
+            Err((e, logs, auth)) => {
+                json!({"ok": false, "error": e, "logs": logs, "auth_required": auth})
+            }
         }
     }
 

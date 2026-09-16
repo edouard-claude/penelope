@@ -8,13 +8,13 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1113 tests verts**, tous hors réseau.
+- **1125 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
 - CI GitHub Actions (format, lint, tests, binaire, dépendances) et workflow de release
   sur tag `vX.Y.Z` avec binaire universel macOS.
-- 65 tests d'acceptation nommés `ca_<section>_<n>_<nom>`, couvrant 14 sections du PRD,
+- 66 tests d'acceptation nommés `ca_<section>_<n>_<nom>`, couvrant 14 sections du PRD,
   indexés dans [ca-matrix.md](ca-matrix.md), qui est généré depuis les sources.
 
 ## Étapes du §21
@@ -30,7 +30,7 @@ Dernière mise à jour : 16 septembre 2026.
 | 7 | `memory` + `skills` | fait | 97 memory, 12 skills |
 | 8 | `workflow` + déclencheurs + workflows livrés | moteur fait, ordonnanceur non lancé | 74 |
 | 9 | Routage par complexité, budgets, images, STT | fait côté bibliothèque ; l'ingestion Telegram qui les alimenterait ne tourne pas | inclus en llm |
-| 10 | `resilience`, `upgrade`, `backup`, suites live, `ab-hermes` | résilience et sauvegarde faites ; `upgrade`, suites live et A/B non faits | 10 resilience |
+| 10 | `resilience`, `upgrade`, `backup`, suites live, `ab-hermes` | résilience, sauvegarde et `upgrade` faits ; suites live et A/B non faits | 10 resilience, 5 upgrade |
 
 ## Suites du §20.1
 
@@ -231,23 +231,46 @@ Dernière mise à jour : 16 septembre 2026.
   le texte canonique stocké, jamais relu puis réécrit ; les chaînes existantes se
   vérifient sans migration.
 
+### 0.3.1
+
+- **Commandes secondaires** : `session.fork` (copie de l'historique dans une nouvelle
+  session), `session.rewind` (derniers échanges mis de côté, jamais effacés), `export`
+  JSONL (`session`, `run`, `all`), `store.rebuild` (index plein texte, index mémoire,
+  audit), `skill.rollback`. `restore` et `eval.run` répondent par la marche à suivre :
+  une restauration se fait daemon arrêté (`penelope restore`, base actuelle mise de
+  côté) et une suite d'évaluation tourne depuis les sources (`penelope eval <suite>`).
+  `/fork`, `/rewind`, `/export` sur Telegram.
+- **`penelope upgrade`** (§2.12) : dernière release (les 0.x sont publiées en
+  pre-release, la liste est lue plutôt que `releases/latest`), somme SHA-256 vérifiée
+  contre `SHA256SUMS`, archive extraite, le nouveau binaire doit annoncer sa version
+  avant tout remplacement. L'ancien est gardé en `<binaire>.previous`, le nouveau prend
+  sa place par renommage et le daemon redémarre. Chaque démarrage à l'essai est compté
+  avant l'ouverture de la base ; sans confirmation de santé 60 s après le premier essai
+  (ou au-delà de 5 essais), l'ancien binaire est remis en place et le propriétaire
+  prévenu. Un chien de garde quitte un processus bloqué au bout de 90 s pour que ce
+  retour s'applique aussi. `--check`, `--tag`, `--force`, `--rollback` (bascule entre
+  les deux binaires) ; sans daemon, la CLI fait la même chose elle-même. `/upgrade`,
+  `/upgrade install|rollback|v0.3.1`. Un binaire de `target/` est refusé (`make deploy`).
+- **`penelope import hermes`** (§7, §8.7) : skills de `~/.hermes/skills/**` (nom
+  normalisé en slug, description repliée, annexes copiées, existantes gardées),
+  `SOUL.md` et `AGENTS.md` vers le vault (mis de côté pour fusion si le vault a déjà le
+  sien), `memories/MEMORY.md` et `USER.md` vers `memoire.md` et `profil.md` (une entrée
+  par ligne, uid, origine `owner`, doublons ignorés, secrets et injections refusés),
+  `mcp_servers` de `config.yaml` convertis en `mcp.d/<nom>.toml` puis essayés et marqués
+  `ok`, `auth_required` ou `failed`. Les secrets rencontrés (valeurs littérales,
+  `${VAR}` et `${env:VAR}` du `.env` d'Hermes) partent dans le SecretStore, la
+  déclaration ne porte que `${SECRET:…}`. `--dry-run` décrit sans écrire ; un second
+  import ne duplique rien ; le rapport part aussi sur Telegram.
+
 ### Encore à brancher
 
 1. **Frontières d'épisode** (§6.6) : clôture sur inactivité ou changement de sujet,
    ingestion du transcript de l'épisode ; aujourd'hui la revue se fait tour par tour.
-2. **Commandes secondaires** : `session.fork`, `session.rewind`, `export`, `restore`,
-   `upgrade`, `import.hermes`, `skill.rollback`, `store.rebuild`, `eval.run`.
 
 ### Méthodes RPC déclarées mais non servies
 
-Un test (`penelope-daemon`, `rpc.rs`) fixe cette liste : elle ne peut pas s'allonger en
-silence.
-
-```
-session.fork  session.rewind
-skill.rollback
-import.hermes  export  restore  store.rebuild  eval.run  upgrade
-```
+Aucune. Un test (`penelope-daemon`, `rpc.rs`) fixe cette liste vide : une méthode
+déclarée sans être servie le fait échouer.
 
 ### Autres manques
 
@@ -256,8 +279,11 @@ import.hermes  export  restore  store.rebuild  eval.run  upgrade
   `ticket-to-deploy` de bout en bout contre des mocks (CA 12) reste à écrire.
 - Pas d'OCR : un PDF scanné sans couche texte est signalé, pas lu. L'extraction PDF de
   `lopdf` ignore la mise en page (colonnes, tableaux) et les polices sans table Unicode.
-- `penelope import hermes` (§20.2, point 3) : non implémenté.
-- `penelope upgrade` : non implémenté.
+- `penelope import hermes` n'a pas encore tourné sur l'instance réelle (§20.2, point 3) :
+  le format suit la documentation d'Hermes, l'importeur reste tolérant. Les filtres
+  `tools` et les réglages TLS d'un serveur Hermes n'ont pas d'équivalent (signalés).
+- `penelope upgrade` vérifie la somme SHA-256 mais pas encore de signature minisign
+  (§2.12) : il faut d'abord une clé de signature dans le workflow de release.
 - Les captures d'écran de [telegram.md](telegram.md) sont des maquettes ASCII.
 
 ## Décisions

@@ -53,6 +53,22 @@ pub enum Command {
     Stop,
     /// Redémarre le daemon.
     Restart,
+    /// Met à jour le binaire depuis les releases GitHub (somme SHA-256 vérifiée, retour
+    /// automatique à l'ancienne version si la nouvelle ne démarre pas).
+    Upgrade {
+        /// Indique seulement la dernière version publiée.
+        #[arg(long, conflicts_with_all = ["rollback", "tag", "force"])]
+        check: bool,
+        /// Remet en place le binaire précédent.
+        #[arg(long, conflicts_with_all = ["tag", "force"])]
+        rollback: bool,
+        /// Version précise (`v0.3.1`), antérieure comprise.
+        #[arg(long)]
+        tag: Option<String>,
+        /// Réinstalle même si cette version tourne déjà.
+        #[arg(long)]
+        force: bool,
+    },
     /// État du daemon.
     Status,
     /// Diagnostic complet.
@@ -130,6 +146,9 @@ pub enum Command {
     Backup,
     /// Restaure une sauvegarde, daemon arrêté (la base actuelle est d'abord mise de côté).
     Restore { file: PathBuf },
+    /// Import depuis un autre agent.
+    #[command(subcommand)]
+    Import(ImportCmd),
     /// Exporte en JSONL : `session [id]`, `run <id>` ou `all`.
     Export { what: String, id: Option<String> },
     /// Stockage : reconstruction des index dérivés.
@@ -137,6 +156,22 @@ pub enum Command {
     Store(StoreCmd),
     /// Lance une suite d'évaluation depuis les sources (`cargo test`), sans daemon.
     Eval { suite: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ImportCmd {
+    /// Skills, SOUL.md, AGENTS.md, mémoire et serveurs MCP d'une instance Hermes.
+    Hermes {
+        /// Racine de l'instance (par défaut `$HERMES_HOME`, sinon `~/.hermes`).
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Montre ce qui serait importé, sans rien écrire.
+        #[arg(long)]
+        dry_run: bool,
+        /// N'essaie pas les serveurs MCP importés.
+        #[arg(long)]
+        no_test: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -436,6 +471,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
             return service(&cli);
         }
         Command::Daemon => return daemon(&cli).await,
+        Command::Upgrade { .. } => return upgrade(&cli).await,
         Command::Chat { session, message } => {
             return chat(&cli, session.clone(), message.clone()).await;
         }
@@ -467,7 +503,9 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Mcp(McpCmd::List) if !cli.json => {
             println!("{}", render_mcp_list(&value));
         }
-        Command::Session(SessionCmd::Compact { .. }) | Command::Mem(MemCmd::Dream { .. })
+        Command::Session(SessionCmd::Compact { .. })
+        | Command::Mem(MemCmd::Dream { .. })
+        | Command::Import(_)
             if !cli.json =>
         {
             println!("{}", value["text"].as_str().unwrap_or_default());
@@ -576,6 +614,27 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Status => (m::STATUS, json!({})),
         Command::Doctor => (m::DOCTOR, json!({})),
         Command::Restart => (m::RESTART, json!({})),
+        Command::Import(ImportCmd::Hermes {
+            path,
+            dry_run,
+            no_test,
+        }) => (
+            m::IMPORT_HERMES,
+            json!({
+                "path": path.as_ref().map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone())),
+                "apply": !dry_run,
+                "test": !no_test,
+            }),
+        ),
+        Command::Upgrade {
+            check,
+            rollback,
+            tag,
+            force,
+        } => (
+            m::UPGRADE,
+            json!({"check": check, "rollback": rollback, "tag": tag, "force": force}),
+        ),
 
         Command::Session(SessionCmd::List) => (m::SESSION_LIST, json!({})),
         Command::Session(SessionCmd::New { title }) => (m::SESSION_NEW, json!({"title": title})),
@@ -725,6 +784,54 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
             return Err(CliError::Usage(format!("commande non routée : {other:?}")));
         }
     })
+}
+
+/// `penelope upgrade` : par le daemon s'il tourne (il redémarre ensuite), sinon ici.
+async fn upgrade(cli: &Cli) -> CliResult<()> {
+    let (method, params) = route(&cli.command)?;
+    let socket = socket_path(cli.home.clone())?;
+    let (value, offline) = match call(&socket, method, params.clone()).await {
+        Ok(v) => (v, false),
+        Err(CliError::DaemonUnreachable(_)) => (upgrade_offline(cli, &params).await?, true),
+        Err(e) => return Err(e),
+    };
+    if cli.json {
+        output::print(&value, true);
+        return Ok(());
+    }
+    println!("{}", penelope_daemon::upgrade::render(&value));
+    let changed = value["installed"].is_string() || value["rolled_back"].as_bool() == Some(true);
+    if changed && offline {
+        println!("Daemon arrêté : `penelope start` pour démarrer la nouvelle version.");
+    } else if changed {
+        println!("Le daemon redémarre : `penelope status` dans quelques secondes.");
+    }
+    Ok(())
+}
+
+async fn upgrade_offline(cli: &Cli, p: &Value) -> CliResult<Value> {
+    use penelope_daemon::upgrade as up;
+    let source = up::Source::from_env();
+    if p["check"].as_bool().unwrap_or(false) {
+        return up::check(&source).await.map_err(CliError::Io);
+    }
+    let binary = up::installed_binary().map_err(CliError::Usage)?;
+    let dirs = penelope_platform::resolve_directories(cli.home.clone())
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    let state = dirs.state();
+    if p["rollback"].as_bool().unwrap_or(false) {
+        return up::manual_rollback(&binary, &state).map_err(CliError::Io);
+    }
+    up::install(up::Install {
+        source: &source,
+        tag: p["tag"].as_str(),
+        force: p["force"].as_bool().unwrap_or(false),
+        binary: &binary,
+        state_dir: &state,
+        now: chrono::Utc::now().to_rfc3339(),
+    })
+    .await
+    .map_err(CliError::Io)
 }
 
 /// Suite d'évaluation depuis les sources : `cargo test` avec le filtre de la suite.
@@ -991,6 +1098,27 @@ fn service(cli: &Cli) -> CliResult<()> {
 }
 
 async fn daemon(cli: &Cli) -> CliResult<()> {
+    use penelope_daemon::upgrade::{self, Boot};
+    // Nouveau binaire à l'essai : ce démarrage est compté avant d'ouvrir quoi que ce soit,
+    // pour qu'un plantage plus loin mène aussi au retour arrière.
+    let dirs = penelope_platform::resolve_directories(cli.home.clone())
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    match upgrade::on_boot_now(&dirs.state(), penelope_daemon::VERSION) {
+        Boot::RolledBack { from, to } => {
+            return Err(CliError::Io(format!(
+                "la version {from} n'a pas confirmé son démarrage : binaire {to} remis en \
+                 place, le service repart avec lui"
+            )));
+        }
+        Boot::Trial { attempt } => {
+            eprintln!(
+                "mise à jour {} à l'essai (démarrage {attempt})",
+                penelope_daemon::VERSION
+            );
+            upgrade::arm_watchdog(upgrade::WATCHDOG);
+        }
+        Boot::Normal => {}
+    }
     let d = penelope_daemon::Daemon::new(cli.home.clone())
         .await
         .map_err(|e| CliError::Io(e.to_string()))?;
@@ -1375,6 +1503,9 @@ mod tests {
             vec!["status"],
             vec!["doctor"],
             vec!["restart"],
+            vec!["upgrade", "--check"],
+            vec!["import", "hermes", "--dry-run"],
+            vec!["upgrade", "--rollback"],
             vec!["approvals"],
             vec!["approve", "a_1"],
             vec!["deny", "a_1"],

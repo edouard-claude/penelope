@@ -49,6 +49,7 @@ impl Daemon {
             tokio::spawn(crate::scheduler::scheduler_loop(self.clone())),
             tokio::spawn(crate::workflow::driver_loop(self.clone())),
             tokio::spawn(crate::mcp_auth::callback_server(self.clone())),
+            tokio::spawn(crate::upgrade::confirm_when_healthy(self.clone())),
         ];
 
         // Serveurs MCP de `mcp.d/` : chargés en fond, pour ne pas retarder le démarrage.

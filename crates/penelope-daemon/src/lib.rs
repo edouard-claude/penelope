@@ -10,6 +10,7 @@ pub mod doctor;
 pub mod dream;
 pub mod engine;
 pub mod executor;
+pub mod hermes;
 pub mod images;
 pub mod ingest;
 pub mod mcp;
@@ -24,6 +25,7 @@ pub mod selfknow;
 pub mod session_ops;
 pub mod supervisor;
 pub mod telegram;
+pub mod upgrade;
 pub mod vault_ops;
 pub mod workflow;
 

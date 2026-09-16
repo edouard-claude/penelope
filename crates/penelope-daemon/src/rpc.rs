@@ -71,6 +71,8 @@ impl Rpc {
                 self.daemon.handle.request_restart();
                 Ok(json!({"ok": true}))
             }
+            method::UPGRADE => crate::upgrade::rpc(&self.daemon, p).await,
+            method::IMPORT_HERMES => crate::hermes::rpc(&self.daemon, p).await,
 
             // ------------------------------------------------------------ chat
             method::CHAT_SEND => {
@@ -1426,8 +1428,7 @@ mod tests {
         }
         // Les méthodes non encore servies sont connues et listées : elles ne doivent pas
         // apparaître silencieusement.
-        let expected: std::collections::BTreeSet<&str> =
-            ["import.hermes", "upgrade"].into_iter().collect();
+        let expected: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
         let actual: std::collections::BTreeSet<&str> = unimplemented.into_iter().collect();
         assert_eq!(
             actual, expected,

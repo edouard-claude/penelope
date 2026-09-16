@@ -9,7 +9,7 @@ Pour le régénérer après avoir ajouté un test :
 UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 ```
 
-65 tests d'acceptation, 14 sections couvertes.
+66 tests d'acceptation, 14 sections couvertes.
 
 ## §2. Plateformes, portabilité et exploitation headless
 
@@ -18,6 +18,7 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 | CA 2.2 | Penelope home reroots everything | `crates/penelope-platform/src/lib.rs` |
 | CA 2.3 | No os specific code outside the platform crate | `crates/penelope-archtest/src/lib.rs` |
 | CA 2.5 | Workspace write blocks outside writes | `crates/penelope-evals/tests/security.rs` |
+| CA 2.8 | A broken upgrade is rolled back automatically | `crates/penelope-daemon/src/upgrade.rs` |
 
 ## §3. Architecture
 
