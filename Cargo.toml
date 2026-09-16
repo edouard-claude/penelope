@@ -1,0 +1,77 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+authors = ["Penelope"]
+repository = "https://github.com/edouard-claude/penelope"
+
+[workspace.dependencies]
+# --- core async / serde ---
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "process", "net", "signal"] }
+futures = "0.3"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+toml = "0.8"
+toml_edit = "0.22"
+
+# --- infra ---
+rusqlite = { version = "0.32", features = ["bundled", "blob", "functions", "limits"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
+arc-swap = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+thiserror = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+
+# --- crypto / encoding ---
+sha2 = "0.10"
+base64 = "0.22"
+getrandom = "0.2"
+argon2 = "0.5"
+chacha20poly1305 = { version = "0.10", features = ["alloc"] }
+
+# --- misc ---
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+regex = "1"
+url = "2"
+pulldown-cmark = { version = "0.12", default-features = false }
+unicode-width = "0.2"
+libc = "0.2"
+
+# --- dev ---
+tempfile = "3"
+
+# --- internal ---
+penelope-platform = { path = "crates/penelope-platform", version = "1.0.0" }
+penelope-store    = { path = "crates/penelope-store", version = "1.0.0" }
+penelope-kernel   = { path = "crates/penelope-kernel", version = "1.0.0" }
+penelope-observe  = { path = "crates/penelope-observe", version = "1.0.0" }
+penelope-llm      = { path = "crates/penelope-llm", version = "1.0.0" }
+penelope-context  = { path = "crates/penelope-context", version = "1.0.0" }
+penelope-memory   = { path = "crates/penelope-memory", version = "1.0.0" }
+penelope-mcp      = { path = "crates/penelope-mcp", version = "1.0.0" }
+penelope-skills   = { path = "crates/penelope-skills", version = "1.0.0" }
+penelope-tools    = { path = "crates/penelope-tools", version = "1.0.0" }
+penelope-hitl     = { path = "crates/penelope-hitl", version = "1.0.0" }
+penelope-telegram = { path = "crates/penelope-telegram", version = "1.0.0" }
+penelope-workflow = { path = "crates/penelope-workflow", version = "1.0.0" }
+penelope-evals    = { path = "crates/penelope-evals", version = "1.0.0" }
+penelope-daemon   = { path = "crates/penelope-daemon", version = "1.0.0" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.dev]
+opt-level = 0
+debug = 1

@@ -1,0 +1,162 @@
+name: Release
+
+# Déclenché par un tag `vX.Y.Z`. Produit un binaire universel macOS, plus les deux
+# binaires par architecture, chacun avec sa somme de contrôle.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag à publier (par exemple v1.0.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  verification:
+    name: Vérifier avant de publier
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Chaîne d'outils
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      # On ne publie pas un binaire dont les suites ne sont pas vertes.
+      - name: Tests
+        run: cargo test --workspace
+
+  construire:
+    name: Construire (${{ matrix.target }})
+    needs: verification
+    runs-on: macos-14
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Chaîne d'outils
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "$TARGET"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Construire
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked -p penelope-cli --target "$TARGET"
+
+      # Seul l'hôte arm64 exécute son propre binaire sans Rosetta.
+      - name: Vérifier que le binaire répond
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: ./target/aarch64-apple-darwin/release/penelope --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: penelope-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/penelope
+          retention-days: 1
+          if-no-files-found: error
+
+  publier:
+    name: Publier la release
+    needs: construire
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: binaires
+
+      - name: Assembler les archives
+        env:
+          # Un tag ne peut venir que d'un porteur des droits d'écriture ; il passe
+          # quand même par l'environnement, jamais dans la ligne de commande.
+          VERSION: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist universel
+
+          # Binaire universel : une seule archive, Intel comme Apple Silicon.
+          lipo -create -output universel/penelope \
+            binaires/penelope-aarch64-apple-darwin/penelope \
+            binaires/penelope-x86_64-apple-darwin/penelope
+          chmod +x universel/penelope
+          lipo -info universel/penelope
+          tar -czf "dist/penelope-${VERSION}-macos-universal.tar.gz" -C universel penelope
+
+          for arch in aarch64 x86_64; do
+            src="binaires/penelope-${arch}-apple-darwin"
+            chmod +x "${src}/penelope"
+            tar -czf "dist/penelope-${VERSION}-macos-${arch}.tar.gz" -C "$src" penelope
+          done
+
+          cd dist
+          shasum -a 256 ./*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Rédiger les notes
+        env:
+          VERSION: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Binaires macOS 13 ou plus récent, construits et testés par la CI."
+            echo
+            echo "L'archive \`macos-universal\` marche sur Apple Silicon comme sur Intel ;"
+            echo "les archives par architecture sont là pour qui préfère un binaire plus petit."
+            echo
+            echo '```bash'
+            echo "shasum -a 256 -c SHA256SUMS --ignore-missing"
+            echo '```'
+            echo
+            echo '```bash'
+            echo "tar -xzf penelope-${VERSION}-macos-universal.tar.gz"
+            echo "sudo mv penelope /usr/local/bin/ && penelope doctor"
+            echo '```'
+            echo
+            echo "Ce qui est livré et ce qui manque : voir \`docs/progress.md\`."
+          } > notes.md
+          cat notes.md
+
+      - name: Créer la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release edit "$VERSION" --title "Pénélope $VERSION" --notes-file notes.md
+          else
+            gh release create "$VERSION" --title "Pénélope $VERSION" --notes-file notes.md
+          fi
+          gh release upload "$VERSION" dist/* --clobber

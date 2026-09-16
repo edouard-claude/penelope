@@ -1,0 +1,466 @@
+//! `penelope-archtest` : test d'architecture (§2.1, §3.1).
+//!
+//! Vérifie par lecture des manifestes et recherche de motifs :
+//! - les règles de dépendance entre crates ;
+//! - l'absence de chemins littéraux, d'appels shell, de signaux Unix et d'API Trousseau
+//!   **hors** `penelope-platform` ;
+//! - l'interdiction de `unsafe` hors des crates FFI explicitement listés.
+
+#![forbid(unsafe_code)]
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+/// Un crate du workspace.
+#[derive(Debug, Clone)]
+pub struct Crate {
+    pub name: String,
+    pub dir: PathBuf,
+    /// Dépendances `penelope-*` déclarées.
+    pub internal_deps: BTreeSet<String>,
+    /// Dépendances externes déclarées.
+    pub external_deps: BTreeSet<String>,
+}
+
+/// Racine du workspace, déduite de l'emplacement de ce crate.
+pub fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Lit tous les crates du workspace.
+pub fn crates() -> Vec<Crate> {
+    let root = workspace_root().join("crates");
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for e in entries.flatten() {
+        let dir = e.path();
+        let manifest = dir.join("Cargo.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&manifest) else {
+            continue;
+        };
+        let Ok(parsed) = raw.parse::<toml::Value>() else {
+            continue;
+        };
+        let name = parsed
+            .get("package")
+            .and_then(|p| p.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        let mut internal = BTreeSet::new();
+        let mut external = BTreeSet::new();
+        for table in ["dependencies", "dev-dependencies"] {
+            let is_dev = table == "dev-dependencies";
+            if let Some(deps) = parsed.get(table).and_then(|d| d.as_table()) {
+                for k in deps.keys() {
+                    if k.starts_with("penelope-") {
+                        // Les dépendances de développement ne comptent pas dans les
+                        // règles d'architecture : elles ne sont pas livrées.
+                        if !is_dev {
+                            internal.insert(k.clone());
+                        }
+                    } else if !is_dev {
+                        external.insert(k.clone());
+                    }
+                }
+            }
+        }
+        out.push(Crate {
+            name,
+            dir,
+            internal_deps: internal,
+            external_deps: external,
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// Fichiers sources d'un crate.
+pub fn sources(c: &Crate) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    collect(&c.dir.join("src"), &mut out);
+    out.sort();
+    out
+}
+
+fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect(&p, out);
+        } else if p.extension().and_then(|s| s.to_str()) == Some("rs") {
+            out.push(p);
+        }
+    }
+}
+
+/// Une violation détectée.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Violation {
+    pub crate_name: String,
+    pub file: PathBuf,
+    pub line: usize,
+    pub rule: &'static str,
+    pub text: String,
+}
+
+impl std::fmt::Display for Violation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[{}] {}:{} — {} : {}",
+            self.crate_name,
+            self.file.display(),
+            self.line,
+            self.rule,
+            self.text.trim()
+        )
+    }
+}
+
+/// Motifs interdits hors `penelope-platform` (§2.1).
+pub const FORBIDDEN_PATTERNS: &[(&str, &str)] = &[
+    ("chemin littéral macOS", "~/Library"),
+    ("chemin littéral macOS", "/Library/Application Support"),
+    ("chemin littéral Windows", "C:\\\\"),
+    ("chemin absolu /tmp", "\"/tmp/"),
+    ("appel shell", "Command::new(\"sh\")"),
+    ("appel shell", "Command::new(\"bash\")"),
+    ("appel shell", "Command::new(\"zsh\")"),
+    ("appel shell", "Command::new(\"/bin/sh\")"),
+    ("appel shell", "Command::new(\"/bin/bash\")"),
+    ("signal Unix", "libc::kill"),
+    ("signal Unix", "signal_hook"),
+    ("API Trousseau", "security-framework"),
+    ("API Trousseau", "SecKeychain"),
+    ("séparateur de chemin en dur", "\"/\".to_string() +"),
+];
+
+/// Crates autorisés à contenir ces motifs.
+///
+/// `penelope-archtest` en fait partie parce qu'il **contient la table des motifs** :
+/// s'exclure lui-même est la seule façon de ne pas se détecter soi-même.
+pub const PLATFORM_CRATES: &[&str] = &["penelope-platform", "penelope-archtest"];
+
+/// Recherche les motifs interdits.
+pub fn forbidden_patterns() -> Vec<Violation> {
+    let mut out = Vec::new();
+    for c in crates() {
+        if PLATFORM_CRATES.contains(&c.name.as_str()) {
+            continue;
+        }
+        for file in sources(&c) {
+            let Ok(raw) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            let mut in_tests = false;
+            for (i, line) in raw.lines().enumerate() {
+                // Les blocs de test peuvent manipuler des chemins temporaires.
+                if line.trim_start().starts_with("#[cfg(test)]") {
+                    in_tests = true;
+                }
+                if in_tests {
+                    continue;
+                }
+                // Une ligne de commentaire ou de documentation n'est pas du code.
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                for (rule, needle) in FORBIDDEN_PATTERNS {
+                    if line.contains(needle) {
+                        out.push(Violation {
+                            crate_name: c.name.clone(),
+                            file: file.clone(),
+                            line: i + 1,
+                            rule,
+                            text: line.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Règles de dépendance (§3.1).
+///
+/// `penelope-store` est une **infrastructure**, pas un crate métier : `penelope-kernel`
+/// peut en dépendre (voir `docs/decisions/0001-kernel-depend-de-store.md`).
+pub fn dependency_rules() -> BTreeMap<&'static str, Vec<&'static str>> {
+    let mut m = BTreeMap::new();
+    m.insert("penelope-store", vec![]);
+    m.insert("penelope-kernel", vec!["penelope-store"]);
+    m.insert("penelope-observe", vec![]);
+    m.insert("penelope-platform", vec![]);
+    m.insert(
+        "penelope-llm",
+        vec![
+            "penelope-kernel",
+            "penelope-store",
+            "penelope-observe",
+            "penelope-platform",
+        ],
+    );
+    m.insert(
+        "penelope-context",
+        vec![
+            "penelope-kernel",
+            "penelope-store",
+            "penelope-llm",
+            "penelope-observe",
+        ],
+    );
+    m.insert(
+        "penelope-hitl",
+        vec!["penelope-kernel", "penelope-store", "penelope-observe"],
+    );
+    m.insert(
+        "penelope-telegram",
+        vec!["penelope-kernel", "penelope-store", "penelope-observe"],
+    );
+    m
+}
+
+/// Vérifie les règles de dépendance.
+pub fn dependency_violations() -> Vec<String> {
+    let rules = dependency_rules();
+    let mut out = Vec::new();
+    for c in crates() {
+        let Some(allowed) = rules.get(c.name.as_str()) else {
+            continue;
+        };
+        for dep in &c.internal_deps {
+            if !allowed.contains(&dep.as_str()) {
+                out.push(format!(
+                    "`{}` ne doit pas dépendre de `{dep}` (autorisés : {})",
+                    c.name,
+                    if allowed.is_empty() {
+                        "aucun".to_string()
+                    } else {
+                        allowed.join(", ")
+                    }
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Détecte les cycles de dépendance entre crates.
+pub fn dependency_cycles() -> Vec<String> {
+    let all = crates();
+    let graph: BTreeMap<String, BTreeSet<String>> = all
+        .iter()
+        .map(|c| (c.name.clone(), c.internal_deps.clone()))
+        .collect();
+
+    let mut cycles = Vec::new();
+    for start in graph.keys() {
+        let mut stack = vec![(start.clone(), vec![start.clone()])];
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        while let Some((node, path)) = stack.pop() {
+            for dep in graph.get(&node).cloned().unwrap_or_default() {
+                if &dep == start {
+                    cycles.push(format!("{} → {}", path.join(" → "), dep));
+                    continue;
+                }
+                if seen.insert(dep.clone()) {
+                    let mut p = path.clone();
+                    p.push(dep.clone());
+                    stack.push((dep, p));
+                }
+            }
+        }
+    }
+    cycles.sort();
+    cycles.dedup();
+    cycles
+}
+
+/// Crates qui peuvent contenir `unsafe` (§3.2 : aucun, hors FFI explicitement listé).
+pub const UNSAFE_ALLOWED: &[&str] = &[];
+
+/// Vérifie que chaque crate interdit `unsafe`.
+pub fn unsafe_violations() -> Vec<String> {
+    let mut out = Vec::new();
+    for c in crates() {
+        if UNSAFE_ALLOWED.contains(&c.name.as_str()) {
+            continue;
+        }
+        let lib = c.dir.join("src/lib.rs");
+        let main = c.dir.join("src/main.rs");
+        let entry = if lib.is_file() { lib } else { main };
+        let Ok(raw) = std::fs::read_to_string(&entry) else {
+            out.push(format!("`{}` : point d'entrée introuvable", c.name));
+            continue;
+        };
+        if !raw.contains("#![forbid(unsafe_code)]") {
+            out.push(format!(
+                "`{}` : `#![forbid(unsafe_code)]` manquant dans {}",
+                c.name,
+                entry.display()
+            ));
+        }
+    }
+    out
+}
+
+/// Dépendances propres à un OS interdites hors `penelope-platform` (§2.1).
+pub const OS_SPECIFIC_CRATES: &[&str] = &[
+    "security-framework",
+    "core-foundation",
+    "windows",
+    "windows-service",
+    "landlock",
+    "seccompiler",
+    "nix",
+];
+
+pub fn os_dependency_violations() -> Vec<String> {
+    let mut out = Vec::new();
+    for c in crates() {
+        if PLATFORM_CRATES.contains(&c.name.as_str()) {
+            continue;
+        }
+        for dep in &c.external_deps {
+            if OS_SPECIFIC_CRATES.contains(&dep.as_str()) {
+                out.push(format!(
+                    "`{}` dépend de `{dep}`, propre à un OS : cela doit rester dans \
+                     penelope-platform",
+                    c.name
+                ));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_workspace_is_discovered() {
+        let all = crates();
+        assert!(all.len() >= 15, "crates trouvés : {}", all.len());
+        let names: Vec<&str> = all.iter().map(|c| c.name.as_str()).collect();
+        for expected in [
+            "penelope-kernel",
+            "penelope-store",
+            "penelope-platform",
+            "penelope-mcp",
+            "penelope-memory",
+            "penelope-daemon",
+            "penelope-cli",
+        ] {
+            assert!(names.contains(&expected), "crate manquant : {expected}");
+        }
+    }
+
+    /// CA 3 : le test d'architecture échoue si une dépendance interdite est ajoutée.
+    #[test]
+    fn ca_3_1_dependency_rules_hold() {
+        let v = dependency_violations();
+        assert!(v.is_empty(), "violations :\n{}", v.join("\n"));
+    }
+
+    #[test]
+    fn store_depends_on_no_business_crate() {
+        let all = crates();
+        let store = all.iter().find(|c| c.name == "penelope-store").unwrap();
+        assert!(
+            store.internal_deps.is_empty(),
+            "penelope-store doit rester une infrastructure pure : {:?}",
+            store.internal_deps
+        );
+    }
+
+    #[test]
+    fn kernel_depends_only_on_store() {
+        let all = crates();
+        let kernel = all.iter().find(|c| c.name == "penelope-kernel").unwrap();
+        assert_eq!(
+            kernel.internal_deps,
+            ["penelope-store".to_string()].into_iter().collect(),
+            "le noyau ne dépend que du stockage"
+        );
+    }
+
+    #[test]
+    fn there_is_no_dependency_cycle() {
+        let c = dependency_cycles();
+        assert!(c.is_empty(), "cycles :\n{}", c.join("\n"));
+    }
+
+    /// CA 2 : le test échoue si un chemin littéral, un appel shell ou une API propre à un
+    /// OS apparaît hors de `penelope-platform`.
+    #[test]
+    fn ca_2_3_no_os_specific_code_outside_the_platform_crate() {
+        let v = forbidden_patterns();
+        assert!(
+            v.is_empty(),
+            "motifs interdits :\n{}",
+            v.iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
+    #[test]
+    fn no_os_specific_dependencies_outside_the_platform_crate() {
+        let v = os_dependency_violations();
+        assert!(v.is_empty(), "{}", v.join("\n"));
+    }
+
+    #[test]
+    fn unsafe_is_forbidden_everywhere() {
+        let v = unsafe_violations();
+        assert!(v.is_empty(), "{}", v.join("\n"));
+    }
+
+    #[test]
+    fn the_pattern_detector_actually_detects() {
+        // Garde-fou : si la détection cassait, les tests ci-dessus passeraient à tort.
+        let sample = "let p = \"~/Library/Application Support/x\";";
+        assert!(
+            FORBIDDEN_PATTERNS
+                .iter()
+                .any(|(_, needle)| sample.contains(needle)),
+            "le détecteur de motifs ne détecte plus rien"
+        );
+        let shell = "Command::new(\"bash\").arg(\"-c\")";
+        assert!(
+            FORBIDDEN_PATTERNS
+                .iter()
+                .any(|(_, needle)| shell.contains(needle))
+        );
+    }
+
+    #[test]
+    fn every_crate_has_sources() {
+        for c in crates() {
+            assert!(
+                !sources(&c).is_empty(),
+                "{} n'a aucun fichier source",
+                c.name
+            );
+        }
+    }
+}

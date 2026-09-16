@@ -1,0 +1,1177 @@
+//! Index SQLite dérivé du vault (§6.2, §6.11, §6.12).
+//!
+//! Le vault est la vérité ; l'index est **reconstructible** (`penelope mem reindex`).
+//! Seuls la provenance et les signaux ne sont pas reconstructibles : ils sont conservés
+//! par `entry_uid`, qui est stable.
+
+use crate::provenance::{Origin, Provenance};
+use crate::vault::{Annotations, Level, VaultEntry, When};
+use penelope_kernel::clock::SharedClock;
+use penelope_store::{
+    Store, cosine_similarity, decode_embedding, encode_embedding, rusqlite::params,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// Entrée indexée.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IndexedEntry {
+    pub uid: String,
+    pub file: String,
+    pub anchor: Option<String>,
+    pub level: Level,
+    pub etype: String,
+    pub slug: Option<String>,
+    pub text: String,
+    pub quand: Option<When>,
+    pub importance: Option<u8>,
+    pub projet: Option<String>,
+    pub confiance: Option<f64>,
+    pub statut: String,
+    pub depuis: Option<String>,
+    pub maj: String,
+    pub pinned: bool,
+    pub declencheurs: Vec<String>,
+    pub content_hash: String,
+    pub retired_at: Option<String>,
+}
+
+impl IndexedEntry {
+    pub fn from_vault(
+        e: &VaultEntry,
+        file: &str,
+        level: Level,
+        etype: &str,
+        slug: Option<&str>,
+        maj: &str,
+    ) -> IndexedEntry {
+        IndexedEntry {
+            uid: e.uid.clone(),
+            file: file.to_string(),
+            anchor: (!e.section.is_empty()).then(|| e.section.clone()),
+            level,
+            etype: etype.to_string(),
+            slug: slug.map(String::from),
+            text: e.text.clone(),
+            quand: e.annotations.quand.clone(),
+            importance: e.annotations.importance,
+            projet: e.annotations.projet.clone(),
+            confiance: e.annotations.confiance,
+            statut: "active".into(),
+            depuis: e.annotations.depuis.clone(),
+            maj: maj.to_string(),
+            pinned: matches!(level, Level::Profil | Level::Coeur),
+            declencheurs: e.annotations.declencheurs.clone(),
+            content_hash: penelope_kernel::canonical::sha256_hex(e.text.as_bytes()),
+            retired_at: None,
+        }
+    }
+}
+
+/// Signaux d'une entrée (§6.8, non reconstructibles).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Signals {
+    pub occurrences: u32,
+    pub sessions: u32,
+    pub days: u32,
+    pub recalls: u32,
+    pub useful_recalls: u32,
+    pub successes: u32,
+    pub contradictions: u32,
+    pub last_recall: Option<String>,
+    pub distinct_queries: Vec<String>,
+}
+
+/// Entrée avec son score de classement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Scored {
+    pub entry: IndexedEntry,
+    pub score: f64,
+    pub fts_rank: Option<usize>,
+    pub vec_rank: Option<usize>,
+    pub similarity: f64,
+}
+
+/// Filtres de recherche (`mem_search`).
+#[derive(Debug, Clone, Default)]
+pub struct SearchFilter {
+    pub level: Option<Level>,
+    pub etype: Option<String>,
+    pub projet: Option<String>,
+    pub slug: Option<String>,
+    /// Inclure le niveau épisodique et le contenu non fiable (recherche explicite).
+    pub include_episodic: bool,
+    pub include_untrusted: bool,
+    pub limit: usize,
+}
+
+impl SearchFilter {
+    pub fn explicit() -> Self {
+        SearchFilter {
+            include_episodic: true,
+            include_untrusted: true,
+            limit: 20,
+            ..Default::default()
+        }
+    }
+}
+
+/// Facteurs de score (§6.7).
+#[derive(Debug, Clone, Copy)]
+pub struct ScoreParams {
+    pub half_life_days: f64,
+    pub rrf_k: f64,
+}
+
+impl Default for ScoreParams {
+    fn default() -> Self {
+        ScoreParams {
+            half_life_days: 30.0,
+            rrf_k: 60.0,
+        }
+    }
+}
+
+/// `decay = exp(−âge/30 j × ln 2)` ; 1 pour profil, cœur et épinglés.
+pub fn decay(age_days: f64, half_life_days: f64, pinned: bool) -> f64 {
+    if pinned {
+        return 1.0;
+    }
+    if half_life_days <= 0.0 {
+        return 1.0;
+    }
+    (-(age_days / half_life_days) * std::f64::consts::LN_2).exp()
+}
+
+/// `imp = 0,5 + importance/20` (neutre = 1 si absente).
+pub fn importance_factor(importance: Option<u8>) -> f64 {
+    match importance {
+        Some(i) => 0.5 + (i as f64) / 20.0,
+        None => 1.0,
+    }
+}
+
+/// `proj` : 1,3 si projet actif, 0,85 si autre projet, 1 si non annoté.
+pub fn project_factor(entry_project: Option<&str>, active: &[String]) -> f64 {
+    match entry_project {
+        None => 1.0,
+        Some(p) => {
+            if active.iter().any(|a| a == p) {
+                1.3
+            } else {
+                0.85
+            }
+        }
+    }
+}
+
+/// `conf = 0,5 + confiance/2` pour pratiques et exceptions, 1 sinon.
+pub fn confidence_factor(confiance: Option<f64>) -> f64 {
+    match confiance {
+        Some(c) => 0.5 + c / 2.0,
+        None => 1.0,
+    }
+}
+
+/// Fusion de rangs réciproques (RRF).
+pub fn rrf(fts_rank: Option<usize>, vec_rank: Option<usize>, k: f64) -> f64 {
+    let f = fts_rank.map(|r| 1.0 / (k + r as f64 + 1.0)).unwrap_or(0.0);
+    let v = vec_rank.map(|r| 1.0 / (k + r as f64 + 1.0)).unwrap_or(0.0);
+    // Normalisé pour que deux rangs 0 donnent ~1.
+    (f + v) * (k + 1.0)
+}
+
+#[derive(Clone)]
+pub struct MemoryIndex {
+    store: Store,
+    clock: SharedClock,
+    params: ScoreParams,
+}
+
+impl MemoryIndex {
+    pub fn new(store: Store, clock: SharedClock) -> Self {
+        MemoryIndex {
+            store,
+            clock,
+            params: ScoreParams::default(),
+        }
+    }
+
+    pub fn with_params(mut self, p: ScoreParams) -> Self {
+        self.params = p;
+        self
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    /// Insère ou met à jour une entrée, avec sa provenance.
+    pub async fn upsert(&self, e: &IndexedEntry, prov: &Provenance) -> penelope_store::Result<()> {
+        let row = e.clone();
+        let p = prov.clone();
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "INSERT INTO mem_entries(uid, file, anchor, level, etype, slug, text, quand,
+                        importance, projet, confiance, statut, depuis, maj, pinned, declencheurs,
+                        content_hash, retired_at)
+                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+                     ON CONFLICT(uid) DO UPDATE SET
+                        file=excluded.file, anchor=excluded.anchor, level=excluded.level,
+                        etype=excluded.etype, slug=excluded.slug, text=excluded.text,
+                        quand=excluded.quand, importance=excluded.importance,
+                        projet=excluded.projet, confiance=excluded.confiance,
+                        statut=excluded.statut, depuis=excluded.depuis, maj=excluded.maj,
+                        pinned=excluded.pinned, declencheurs=excluded.declencheurs,
+                        content_hash=excluded.content_hash, retired_at=excluded.retired_at",
+                    params![
+                        row.uid,
+                        row.file,
+                        row.anchor,
+                        row.level.as_str(),
+                        row.etype,
+                        row.slug,
+                        row.text,
+                        row.quand.as_ref().map(|q| q.render()),
+                        row.importance.map(|i| i as i64),
+                        row.projet,
+                        row.confiance,
+                        row.statut,
+                        row.depuis,
+                        row.maj,
+                        row.pinned as i64,
+                        serde_json::to_string(&row.declencheurs).unwrap_or_default(),
+                        row.content_hash,
+                        row.retired_at
+                    ],
+                )?;
+
+                tx.execute("DELETE FROM mem_fts WHERE uid = ?1", [&row.uid])?;
+                tx.execute(
+                    "INSERT INTO mem_fts(text, declencheurs, uid) VALUES(?1,?2,?3)",
+                    params![row.text, row.declencheurs.join(" "), row.uid],
+                )?;
+
+                tx.execute("DELETE FROM mem_links WHERE from_uid = ?1", [&row.uid])?;
+                for target in crate::vault::links(&row.text) {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO mem_links(from_uid, to_slug) VALUES(?1,?2)",
+                        params![row.uid, target],
+                    )?;
+                }
+
+                // La provenance n'est écrite qu'une fois : elle ne peut pas être
+                // « améliorée » après coup par l'agent.
+                tx.execute(
+                    "INSERT OR IGNORE INTO mem_provenance(uid, origin, session_kind, observed_at,
+                        supersedes_uid, source_ref, session_id)
+                     VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                    params![
+                        row.uid,
+                        p.origin.as_str(),
+                        p.session_kind,
+                        p.observed_at,
+                        p.supersedes_uid,
+                        p.source_ref,
+                        p.session_id
+                    ],
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO mem_signals(uid) VALUES(?1)",
+                    [&row.uid],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Retire une entrée (suppression manuelle dans le fichier). Le signal est conservé
+    /// 30 jours pour permettre l'annulation (§6.12).
+    pub async fn retire(&self, uid: &str) -> penelope_store::Result<()> {
+        let (uid, now) = (uid.to_string(), self.clock.now_rfc3339());
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "UPDATE mem_entries SET statut='retiree', retired_at=?2 WHERE uid=?1",
+                    params![uid, now],
+                )?;
+                tx.execute("DELETE FROM mem_fts WHERE uid = ?1", [&uid])?;
+                Ok(())
+            })
+            .await
+    }
+
+    pub async fn get(&self, uid: &str) -> penelope_store::Result<Option<IndexedEntry>> {
+        let uid = uid.to_string();
+        self.store
+            .read(move |c| {
+                let mut st = c.prepare(&format!("{SELECT} WHERE uid = ?1"))?;
+                let mut rows = st.query([&uid])?;
+                match rows.next()? {
+                    Some(r) => Ok(Some(row_to_entry(r)?)),
+                    None => Ok(None),
+                }
+            })
+            .await
+    }
+
+    pub async fn by_slug(&self, slug: &str) -> penelope_store::Result<Vec<IndexedEntry>> {
+        let slug = slug.to_string();
+        self.store
+            .read(move |c| {
+                let mut st = c.prepare(&format!(
+                    "{SELECT} WHERE slug = ?1 AND statut != 'retiree' ORDER BY uid"
+                ))?;
+                let rows = st.query_map([slug], row_to_entry)?;
+                let mut v = Vec::new();
+                for r in rows {
+                    v.push(r?);
+                }
+                Ok(v)
+            })
+            .await
+    }
+
+    pub async fn by_level(&self, level: Level) -> penelope_store::Result<Vec<IndexedEntry>> {
+        let l = level.as_str();
+        self.store
+            .read(move |c| {
+                let mut st = c.prepare(&format!(
+                    "{SELECT} WHERE level = ?1 AND statut != 'retiree' ORDER BY uid"
+                ))?;
+                let rows = st.query_map([l], row_to_entry)?;
+                let mut v = Vec::new();
+                for r in rows {
+                    v.push(r?);
+                }
+                Ok(v)
+            })
+            .await
+    }
+
+    pub async fn origin_of(&self, uid: &str) -> penelope_store::Result<Option<Origin>> {
+        let uid = uid.to_string();
+        self.store
+            .read(move |c| {
+                let s: Option<String> = c
+                    .query_row(
+                        "SELECT origin FROM mem_provenance WHERE uid = ?1",
+                        [&uid],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                Ok(s.and_then(|s| Origin::parse(&s)))
+            })
+            .await
+    }
+
+    pub async fn signals_of(&self, uid: &str) -> penelope_store::Result<Signals> {
+        let uid = uid.to_string();
+        self.store
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT occurrences, sessions, days, recalls, useful_recalls, successes,
+                            contradictions, last_recall, distinct_queries
+                     FROM mem_signals WHERE uid = ?1",
+                )?;
+                let mut rows = st.query([&uid])?;
+                match rows.next()? {
+                    Some(r) => {
+                        let dq: String = r.get(8)?;
+                        Ok(Signals {
+                            occurrences: r.get::<_, i64>(0)? as u32,
+                            sessions: r.get::<_, i64>(1)? as u32,
+                            days: r.get::<_, i64>(2)? as u32,
+                            recalls: r.get::<_, i64>(3)? as u32,
+                            useful_recalls: r.get::<_, i64>(4)? as u32,
+                            successes: r.get::<_, i64>(5)? as u32,
+                            contradictions: r.get::<_, i64>(6)? as u32,
+                            last_recall: r.get(7)?,
+                            distinct_queries: serde_json::from_str(&dq).unwrap_or_default(),
+                        })
+                    }
+                    None => Ok(Signals::default()),
+                }
+            })
+            .await
+    }
+
+    /// Enregistre un rappel, avec la requête qui l'a déclenché (diversité des requêtes).
+    pub async fn record_recall(
+        &self,
+        uid: &str,
+        query: &str,
+        useful: bool,
+    ) -> penelope_store::Result<()> {
+        let (uid, q, now) = (uid.to_string(), query.to_string(), self.clock.now_rfc3339());
+        self.store
+            .write(move |tx| {
+                let existing: String = tx
+                    .query_row(
+                        "SELECT distinct_queries FROM mem_signals WHERE uid = ?1",
+                        [&uid],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or_else(|_| "[]".into());
+                let mut queries: Vec<String> = serde_json::from_str(&existing).unwrap_or_default();
+                let norm = q.to_lowercase();
+                if !queries.iter().any(|x| x == &norm) {
+                    queries.push(norm);
+                    if queries.len() > 50 {
+                        queries.remove(0);
+                    }
+                }
+                tx.execute(
+                    "INSERT INTO mem_signals(uid, recalls, useful_recalls, last_recall,
+                        distinct_queries)
+                     VALUES(?1, 1, ?2, ?3, ?4)
+                     ON CONFLICT(uid) DO UPDATE SET
+                        recalls = recalls + 1,
+                        useful_recalls = useful_recalls + ?2,
+                        last_recall = ?3,
+                        distinct_queries = ?4",
+                    params![
+                        uid,
+                        useful as i64,
+                        now,
+                        serde_json::to_string(&queries).unwrap_or_default()
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Enregistre un succès ou une contradiction (calcul de confiance, §6.8).
+    pub async fn record_outcome(&self, uid: &str, success: bool) -> penelope_store::Result<()> {
+        let uid = uid.to_string();
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "INSERT INTO mem_signals(uid, successes, contradictions)
+                     VALUES(?1, ?2, ?3)
+                     ON CONFLICT(uid) DO UPDATE SET
+                        successes = successes + ?2, contradictions = contradictions + ?3",
+                    params![uid, success as i64, (!success) as i64],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Stocke un embedding.
+    pub async fn put_embedding(
+        &self,
+        uid: &str,
+        model: &str,
+        vector: &[f32],
+    ) -> penelope_store::Result<()> {
+        let (uid, model, blob, dim, now) = (
+            uid.to_string(),
+            model.to_string(),
+            encode_embedding(vector),
+            vector.len() as i64,
+            self.clock.now_rfc3339(),
+        );
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "INSERT INTO mem_vec(uid, dim, model, embedding, updated_at)
+                     VALUES(?1,?2,?3,?4,?5)
+                     ON CONFLICT(uid) DO UPDATE SET dim=excluded.dim, model=excluded.model,
+                        embedding=excluded.embedding, updated_at=excluded.updated_at",
+                    params![uid, dim, model, blob, now],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Recherche hybride : FTS puis vecteurs, fusionnés par RRF, puis pondérés.
+    pub async fn search(
+        &self,
+        query: &str,
+        query_vector: Option<Vec<f32>>,
+        filter: &SearchFilter,
+        active_projects: &[String],
+    ) -> penelope_store::Result<Vec<Scored>> {
+        let fts = crate::index::fts_query(query);
+        let f = filter.clone_for_move();
+        let projects = active_projects.to_vec();
+        let params_ = self.params;
+        let now_ms = self.clock.now_ms();
+
+        self.store
+            .read(move |c| {
+                let mut candidates: BTreeMap<
+                    String,
+                    (IndexedEntry, Option<usize>, Option<usize>, f64),
+                > = BTreeMap::new();
+
+                // 1. FTS.
+                if !fts.is_empty() {
+                    let mut st = c.prepare(&format!(
+                        "{SELECT_PREFIXED} FROM mem_fts f JOIN mem_entries e ON e.uid = f.uid
+                         WHERE mem_fts MATCH ?1 AND e.statut != 'retiree'
+                         ORDER BY rank LIMIT 200"
+                    ))?;
+                    let rows = st.query_map([&fts], row_to_entry)?;
+                    for (i, r) in rows.enumerate() {
+                        let e = r?;
+                        candidates.insert(e.uid.clone(), (e, Some(i), None, 0.0));
+                    }
+                }
+
+                // 2. Vecteurs, recherche exhaustive (§6.11).
+                if let Some(qv) = &query_vector {
+                    let mut st = c.prepare(
+                        "SELECT v.uid, v.embedding FROM mem_vec v
+                         JOIN mem_entries e ON e.uid = v.uid
+                         WHERE e.statut != 'retiree'",
+                    )?;
+                    let rows = st.query_map([], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+                    })?;
+                    let mut sims: Vec<(String, f64)> = Vec::new();
+                    for r in rows {
+                        let (uid, blob) = r?;
+                        let v = decode_embedding(&blob);
+                        let s = cosine_similarity(qv, &v) as f64;
+                        if s > 0.0 {
+                            sims.push((uid, s));
+                        }
+                    }
+                    sims.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                    for (rank, (uid, sim)) in sims.into_iter().take(200).enumerate() {
+                        match candidates.get_mut(&uid) {
+                            Some(entry) => {
+                                entry.2 = Some(rank);
+                                entry.3 = sim;
+                            }
+                            None => {
+                                let mut st = c.prepare(&format!("{SELECT} WHERE uid = ?1"))?;
+                                let mut rows = st.query([&uid])?;
+                                if let Some(r) = rows.next()? {
+                                    let e = row_to_entry(r)?;
+                                    candidates.insert(uid, (e, None, Some(rank), sim));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 3. Filtrage et pondération.
+                let mut out: Vec<Scored> = Vec::new();
+                for (_, (entry, fr, vr, sim)) in candidates {
+                    if !f.accepts(&entry) {
+                        continue;
+                    }
+                    let base = rrf(fr, vr, params_.rrf_k);
+                    let age = age_days(&entry.maj, now_ms);
+                    let score = base
+                        * decay(age, params_.half_life_days, entry.pinned)
+                        * importance_factor(entry.importance)
+                        * project_factor(entry.projet.as_deref(), &projects)
+                        * confidence_factor(entry.confiance);
+                    out.push(Scored {
+                        entry,
+                        score,
+                        fts_rank: fr,
+                        vec_rank: vr,
+                        similarity: sim,
+                    });
+                }
+                out.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.entry.uid.cmp(&b.entry.uid))
+                });
+                out.truncate(f.limit.max(1));
+                Ok(out)
+            })
+            .await
+    }
+
+    pub async fn count(&self) -> penelope_store::Result<i64> {
+        self.store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM mem_entries WHERE statut != 'retiree'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+    }
+
+    /// Efface l'index dérivé, **sans** toucher à la provenance ni aux signaux :
+    /// c'est ce qui permet à `penelope mem reindex` de tout reconstruire du vault seul.
+    pub async fn clear_derived(&self) -> penelope_store::Result<()> {
+        self.store
+            .write(|tx| {
+                tx.execute("DELETE FROM mem_entries", [])?;
+                tx.execute("DELETE FROM mem_fts", [])?;
+                tx.execute("DELETE FROM mem_links", [])?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Retire toutes les entrées dérivées d'une session (`/forget`, §6.5).
+    pub async fn forget_session(&self, session_id: &str) -> penelope_store::Result<Vec<String>> {
+        let sid = session_id.to_string();
+        let now = self.clock.now_rfc3339();
+        self.store
+            .write(move |tx| {
+                let uids: Vec<String> = {
+                    let mut st =
+                        tx.prepare("SELECT uid FROM mem_provenance WHERE session_id = ?1")?;
+                    let rows = st.query_map([&sid], |r| r.get::<_, String>(0))?;
+                    let mut v = Vec::new();
+                    for r in rows {
+                        v.push(r?);
+                    }
+                    v
+                };
+                for uid in &uids {
+                    tx.execute(
+                        "UPDATE mem_entries SET statut='retiree', retired_at=?2 WHERE uid=?1",
+                        params![uid, now],
+                    )?;
+                    tx.execute("DELETE FROM mem_fts WHERE uid = ?1", [uid])?;
+                }
+                tx.execute(
+                    "UPDATE mem_candidates SET state='rejected',
+                     reject_reason='session oubliée' WHERE session_id = ?1",
+                    [&sid],
+                )?;
+                Ok(uids)
+            })
+            .await
+    }
+}
+
+impl SearchFilter {
+    fn clone_for_move(&self) -> SearchFilter {
+        self.clone()
+    }
+
+    fn accepts(&self, e: &IndexedEntry) -> bool {
+        if let Some(l) = self.level {
+            if e.level != l {
+                return false;
+            }
+        }
+        if let Some(t) = &self.etype {
+            if &e.etype != t {
+                return false;
+            }
+        }
+        if let Some(p) = &self.projet {
+            if e.projet.as_deref() != Some(p.as_str()) {
+                return false;
+            }
+        }
+        if let Some(s) = &self.slug {
+            if e.slug.as_deref() != Some(s.as_str()) {
+                return false;
+            }
+        }
+        if !self.include_episodic && e.level == Level::Episodic {
+            return false;
+        }
+        true
+    }
+}
+
+fn age_days(maj: &str, now_ms: i64) -> f64 {
+    let parsed = chrono::NaiveDate::parse_from_str(maj, "%Y-%m-%d")
+        .ok()
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|dt| dt.and_utc().timestamp_millis())
+        .or_else(|| {
+            chrono::DateTime::parse_from_rfc3339(maj)
+                .ok()
+                .map(|d| d.timestamp_millis())
+        });
+    match parsed {
+        Some(ms) => ((now_ms - ms).max(0) as f64) / 86_400_000.0,
+        None => 0.0,
+    }
+}
+
+/// Requête FTS assainie.
+pub fn fts_query(q: &str) -> String {
+    let cleaned: String = q
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c.is_whitespace() {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect();
+    cleaned
+        .split_whitespace()
+        .filter(|w| !matches!(*w, "AND" | "OR" | "NOT" | "NEAR"))
+        .filter(|w| w.chars().count() > 2)
+        .map(|w| format!("\"{w}\"*"))
+        .collect::<Vec<_>>()
+        .join(" OR ")
+}
+
+const COLUMNS: &str = "uid, file, anchor, level, etype, slug, text, quand, importance, projet,
+     confiance, statut, depuis, maj, pinned, declencheurs, content_hash, retired_at";
+
+const SELECT: &str = "SELECT uid, file, anchor, level, etype, slug, text, quand, importance,
+     projet, confiance, statut, depuis, maj, pinned, declencheurs, content_hash, retired_at
+     FROM mem_entries";
+
+const SELECT_PREFIXED: &str = "SELECT e.uid, e.file, e.anchor, e.level, e.etype, e.slug, e.text,
+     e.quand, e.importance, e.projet, e.confiance, e.statut, e.depuis, e.maj, e.pinned,
+     e.declencheurs, e.content_hash, e.retired_at";
+
+fn row_to_entry(
+    r: &penelope_store::rusqlite::Row<'_>,
+) -> penelope_store::rusqlite::Result<IndexedEntry> {
+    let level: String = r.get(3)?;
+    let quand: Option<String> = r.get(7)?;
+    let declencheurs: String = r.get(15)?;
+    Ok(IndexedEntry {
+        uid: r.get(0)?,
+        file: r.get(1)?,
+        anchor: r.get(2)?,
+        level: Level::parse(&level).unwrap_or(Level::Cure),
+        etype: r.get(4)?,
+        slug: r.get(5)?,
+        text: r.get(6)?,
+        quand: quand.and_then(|q| When::parse(&q).ok()),
+        importance: r.get::<_, Option<i64>>(8)?.map(|i| i as u8),
+        projet: r.get(9)?,
+        confiance: r.get(10)?,
+        statut: r.get(11)?,
+        depuis: r.get(12)?,
+        maj: r.get(13)?,
+        pinned: r.get::<_, i64>(14)? != 0,
+        declencheurs: serde_json::from_str(&declencheurs).unwrap_or_default(),
+        content_hash: r.get(16)?,
+        retired_at: r.get(17)?,
+    })
+}
+
+/// Utilisé par les tests d'intégration pour vérifier la liste de colonnes.
+pub fn columns() -> &'static str {
+    COLUMNS
+}
+
+/// Construit une entrée d'annotation minimale (utilitaire de test et d'import).
+pub fn simple_entry(uid: &str, text: &str, level: Level, maj: &str) -> IndexedEntry {
+    IndexedEntry {
+        uid: uid.to_string(),
+        file: "profil.md".into(),
+        anchor: None,
+        level,
+        etype: "fait".into(),
+        slug: None,
+        text: text.to_string(),
+        quand: None,
+        importance: None,
+        projet: None,
+        confiance: None,
+        statut: "active".into(),
+        depuis: None,
+        maj: maj.to_string(),
+        pinned: matches!(level, Level::Profil | Level::Coeur),
+        declencheurs: Vec::new(),
+        content_hash: penelope_kernel::canonical::sha256_hex(text.as_bytes()),
+        retired_at: None,
+    }
+}
+
+/// Annotations d'une entrée indexée, pour réécriture du fichier.
+pub fn annotations_of(e: &IndexedEntry) -> Annotations {
+    Annotations {
+        uid: Some(e.uid.clone()),
+        importance: e.importance,
+        declencheurs: e.declencheurs.clone(),
+        projet: e.projet.clone(),
+        depuis: e.depuis.clone(),
+        source: None,
+        quand: e.quand.clone(),
+        confiance: e.confiance,
+        preuves: Vec::new(),
+        occurrences: None,
+        revue: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use penelope_kernel::clock::TestClock;
+    use std::sync::Arc;
+
+    fn index(clock: TestClock) -> MemoryIndex {
+        MemoryIndex::new(Store::open_memory().unwrap(), Arc::new(clock))
+    }
+
+    fn prov() -> Provenance {
+        Provenance::owner("s1", "interactive", "2026-09-16T10:00:00Z")
+    }
+
+    #[test]
+    fn scoring_factors_follow_the_prd_table() {
+        assert!((decay(0.0, 30.0, false) - 1.0).abs() < 1e-9);
+        assert!((decay(30.0, 30.0, false) - 0.5).abs() < 1e-9);
+        assert!((decay(60.0, 30.0, false) - 0.25).abs() < 1e-9);
+        assert_eq!(decay(365.0, 30.0, true), 1.0, "un épinglé ne décroît pas");
+
+        assert!((importance_factor(Some(10)) - 1.0).abs() < 1e-9);
+        assert!((importance_factor(Some(0)) - 0.5).abs() < 1e-9);
+        assert_eq!(importance_factor(None), 1.0);
+
+        let active = vec!["penelope".to_string()];
+        assert!((project_factor(Some("penelope"), &active) - 1.3).abs() < 1e-9);
+        assert!((project_factor(Some("autre"), &active) - 0.85).abs() < 1e-9);
+        assert_eq!(project_factor(None, &active), 1.0);
+
+        assert!((confidence_factor(Some(0.8)) - 0.9).abs() < 1e-9);
+        assert_eq!(confidence_factor(None), 1.0);
+    }
+
+    #[test]
+    fn rrf_rewards_being_in_both_lists() {
+        let both = rrf(Some(0), Some(0), 60.0);
+        let one = rrf(Some(0), None, 60.0);
+        assert!(both > one);
+        assert!(rrf(Some(0), None, 60.0) > rrf(Some(10), None, 60.0));
+        assert_eq!(rrf(None, None, 60.0), 0.0);
+    }
+
+    #[tokio::test]
+    async fn upsert_and_get() {
+        let i = index(TestClock::default());
+        let e = simple_entry(
+            "u1",
+            "Le déploiement passe par CapRover.",
+            Level::Coeur,
+            "2026-09-16",
+        );
+        i.upsert(&e, &prov()).await.unwrap();
+        let back = i.get("u1").await.unwrap().unwrap();
+        assert_eq!(back.text, e.text);
+        assert!(back.pinned);
+        assert_eq!(i.origin_of("u1").await.unwrap(), Some(Origin::Owner));
+    }
+
+    #[tokio::test]
+    async fn provenance_is_written_once_and_never_upgraded() {
+        let i = index(TestClock::default());
+        let e = simple_entry("u1", "texte", Level::Cure, "2026-09-16");
+        let untrusted = Provenance {
+            origin: Origin::Untrusted,
+            session_kind: "interactive".into(),
+            observed_at: "t".into(),
+            supersedes_uid: None,
+            source_ref: None,
+            session_id: Some("s1".into()),
+        };
+        i.upsert(&e, &untrusted).await.unwrap();
+        // Une seconde écriture prétendant `owner` ne doit pas écraser la provenance.
+        i.upsert(&e, &prov()).await.unwrap();
+        assert_eq!(
+            i.origin_of("u1").await.unwrap(),
+            Some(Origin::Untrusted),
+            "la provenance est fixée à la première écriture"
+        );
+    }
+
+    #[tokio::test]
+    async fn fts_search_finds_entries() {
+        let i = index(TestClock::default());
+        for (uid, text) in [
+            ("u1", "Le déploiement se fait par CapRover en production."),
+            ("u2", "Les revues de code passent par une pull request."),
+        ] {
+            i.upsert(&simple_entry(uid, text, Level::Cure, "2026-09-16"), &prov())
+                .await
+                .unwrap();
+        }
+        let hits = i
+            .search("deploiement", None, &SearchFilter::explicit(), &[])
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].entry.uid, "u1");
+        assert!(hits[0].fts_rank.is_some());
+    }
+
+    #[tokio::test]
+    async fn vector_search_complements_fts() {
+        let i = index(TestClock::default());
+        i.upsert(
+            &simple_entry("u1", "mise en ligne du service", Level::Cure, "2026-09-16"),
+            &prov(),
+        )
+        .await
+        .unwrap();
+        i.put_embedding("u1", "m", &[1.0, 0.0, 0.0]).await.unwrap();
+
+        // Le mot « déploiement » n'apparaît pas : seul le vecteur peut trouver.
+        let hits = i
+            .search(
+                "déploiement",
+                Some(vec![0.95, 0.1, 0.0]),
+                &SearchFilter::explicit(),
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].vec_rank.is_some());
+        assert!(hits[0].similarity > 0.9);
+    }
+
+    #[tokio::test]
+    async fn active_project_entries_rank_higher() {
+        let clock = TestClock::default();
+        let i = index(clock);
+        for (uid, projet) in [("u1", "penelope"), ("u2", "autre")] {
+            let mut e = simple_entry(
+                uid,
+                "la convention de nommage des branches",
+                Level::Cure,
+                "2026-09-16",
+            );
+            e.projet = Some(projet.to_string());
+            i.upsert(&e, &prov()).await.unwrap();
+        }
+        let hits = i
+            .search(
+                "convention nommage",
+                None,
+                &SearchFilter::explicit(),
+                &["penelope".to_string()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(hits[0].entry.uid, "u1", "le projet actif remonte");
+    }
+
+    #[tokio::test]
+    async fn episodic_is_excluded_unless_explicitly_requested() {
+        let i = index(TestClock::default());
+        i.upsert(
+            &{
+                let mut e = simple_entry(
+                    "u1",
+                    "note du journal sur le déploiement",
+                    Level::Episodic,
+                    "2026-09-16",
+                );
+                e.file = "journal/2026-09-16.md".into();
+                e
+            },
+            &prov(),
+        )
+        .await
+        .unwrap();
+
+        let implicit = SearchFilter {
+            limit: 10,
+            ..Default::default()
+        };
+        assert!(
+            i.search("deploiement", None, &implicit, &[])
+                .await
+                .unwrap()
+                .is_empty(),
+            "l'épisodique n'est jamais injecté automatiquement"
+        );
+        assert_eq!(
+            i.search("deploiement", None, &SearchFilter::explicit(), &[])
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn retire_removes_from_search_but_keeps_the_row() {
+        let i = index(TestClock::default());
+        i.upsert(
+            &simple_entry(
+                "u1",
+                "une entrée sur le déploiement",
+                Level::Cure,
+                "2026-09-16",
+            ),
+            &prov(),
+        )
+        .await
+        .unwrap();
+        i.retire("u1").await.unwrap();
+        assert!(
+            i.search("deploiement", None, &SearchFilter::explicit(), &[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let row = i.get("u1").await.unwrap().unwrap();
+        assert_eq!(row.statut, "retiree");
+        assert!(
+            row.retired_at.is_some(),
+            "le signal reste annulable 30 jours"
+        );
+    }
+
+    #[tokio::test]
+    async fn signals_accumulate() {
+        let i = index(TestClock::default());
+        i.upsert(
+            &simple_entry("u1", "texte", Level::Cure, "2026-09-16"),
+            &prov(),
+        )
+        .await
+        .unwrap();
+        i.record_recall("u1", "Comment on déploie ?", true)
+            .await
+            .unwrap();
+        i.record_recall("u1", "comment on déploie ?", true)
+            .await
+            .unwrap();
+        i.record_recall("u1", "quelle est la procédure ?", false)
+            .await
+            .unwrap();
+        let s = i.signals_of("u1").await.unwrap();
+        assert_eq!(s.recalls, 3);
+        assert_eq!(s.useful_recalls, 2);
+        assert_eq!(
+            s.distinct_queries.len(),
+            2,
+            "deux requêtes distinctes seulement (casse normalisée)"
+        );
+
+        i.record_outcome("u1", true).await.unwrap();
+        i.record_outcome("u1", false).await.unwrap();
+        let s = i.signals_of("u1").await.unwrap();
+        assert_eq!(s.successes, 1);
+        assert_eq!(s.contradictions, 1);
+    }
+
+    /// CA 6 (reconstruction) : l'index dérivé peut être effacé et reconstruit ; la
+    /// provenance et les signaux survivent.
+    #[tokio::test]
+    async fn ca_6_9_reindex_keeps_provenance_and_signals() {
+        let i = index(TestClock::default());
+        let e = simple_entry(
+            "u1",
+            "Le déploiement passe par CapRover.",
+            Level::Cure,
+            "2026-09-16",
+        );
+        i.upsert(&e, &prov()).await.unwrap();
+        i.record_recall("u1", "deploiement", true).await.unwrap();
+
+        i.clear_derived().await.unwrap();
+        assert_eq!(i.count().await.unwrap(), 0);
+        assert_eq!(
+            i.origin_of("u1").await.unwrap(),
+            Some(Origin::Owner),
+            "la provenance n'est pas effacée"
+        );
+        assert_eq!(i.signals_of("u1").await.unwrap().recalls, 1);
+
+        // Reconstruction depuis le vault : mêmes uid, mêmes résultats.
+        i.upsert(&e, &prov()).await.unwrap();
+        let hits = i
+            .search("deploiement", None, &SearchFilter::explicit(), &[])
+            .await
+            .unwrap();
+        assert_eq!(hits[0].entry.uid, "u1");
+        assert_eq!(i.signals_of("u1").await.unwrap().recalls, 1);
+    }
+
+    #[tokio::test]
+    async fn forget_session_retires_its_entries() {
+        let i = index(TestClock::default());
+        i.upsert(
+            &simple_entry(
+                "u1",
+                "entrée de la session s1 sur le déploiement",
+                Level::Cure,
+                "2026-09-16",
+            ),
+            &Provenance::owner("s1", "interactive", "t"),
+        )
+        .await
+        .unwrap();
+        i.upsert(
+            &simple_entry(
+                "u2",
+                "entrée de la session s2 sur le déploiement",
+                Level::Cure,
+                "2026-09-16",
+            ),
+            &Provenance::owner("s2", "interactive", "t"),
+        )
+        .await
+        .unwrap();
+
+        let forgotten = i.forget_session("s1").await.unwrap();
+        assert_eq!(forgotten, vec!["u1"]);
+        let hits = i
+            .search("deploiement", None, &SearchFilter::explicit(), &[])
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].entry.uid, "u2");
+    }
+
+    #[tokio::test]
+    async fn links_are_indexed() {
+        let i = index(TestClock::default());
+        i.upsert(
+            &simple_entry(
+                "u1",
+                "voir [[client-x]] et [[projet-a]]",
+                Level::Cure,
+                "2026-09-16",
+            ),
+            &prov(),
+        )
+        .await
+        .unwrap();
+        let n: i64 = i
+            .store()
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM mem_links WHERE from_uid='u1'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn age_is_computed_from_dates_and_timestamps() {
+        // 2026-09-16T00:00:00Z
+        let now = 1_789_516_800_000i64;
+        assert!((age_days("2026-09-16", now) - 0.0).abs() < 0.01);
+        assert!((age_days("2026-09-06", now) - 10.0).abs() < 0.01);
+        assert_eq!(age_days("pas une date", now), 0.0);
+    }
+
+    #[test]
+    fn fts_query_drops_short_words() {
+        assert_eq!(fts_query("le déploiement"), "\"déploiement\"*");
+        assert_eq!(fts_query("a b"), "");
+    }
+}

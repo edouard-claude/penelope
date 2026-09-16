@@ -1,0 +1,83 @@
+name: CI
+
+# La définition de « terminé » du PRD (§20.2) : suites sans réseau vertes,
+# `cargo clippy -- -D warnings` et `cargo deny check` propres. La CI ne fait rien
+# d'autre que rejouer exactement ces commandes.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  verification:
+    name: Format, lint et tests
+    # macOS est la plateforme cible : les tests touchent Seatbelt, launchd et le
+    # trousseau, autant les exécuter là où ils comptent.
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Chaîne d'outils
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version && cargo --version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # 921 tests, tous hors réseau. Les suites nommées du §20.1 sont des filtres sur
+      # cette commande : `arch`, `ctx-safety`, `mcp-conformance`, `hot-reload`,
+      # `resilience` et `security` en font partie.
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: Binaire de release
+        run: cargo build --release --locked -p penelope-cli
+
+  dependances:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo-deny
+        id: cache-deny
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ runner.os }}-v1
+
+      - name: Installer cargo-deny
+        if: steps.cache-deny.outputs.cache-hit != 'true'
+        run: cargo install cargo-deny --locked
+
+      # Avis de sécurité, licences autorisées, dépendances interdites, provenance.
+      - name: Vérifier
+        run: cargo deny check

@@ -1,0 +1,32 @@
+[package]
+name = "penelope-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "penelope"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+futures.workspace = true
+clap.workspace = true
+chrono.workspace = true
+penelope-kernel.workspace = true
+penelope-platform.workspace = true
+penelope-observe.workspace = true
+penelope-daemon.workspace = true
+penelope-store.workspace = true
+penelope-workflow.workspace = true
+penelope-tools.workspace = true
+penelope-telegram.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

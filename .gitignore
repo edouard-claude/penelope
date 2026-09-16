@@ -1,0 +1,6 @@
+/target
+spec
+*.db
+*.db-wal
+*.db-shm
+.penelope-home/

@@ -1,0 +1,30 @@
+[package]
+name = "penelope-telegram"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+futures.workspace = true
+reqwest.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+regex.workspace = true
+getrandom.workspace = true
+toml.workspace = true
+pulldown-cmark.workspace = true
+unicode-width.workspace = true
+async-trait.workspace = true
+penelope-kernel.workspace = true
+penelope-store.workspace = true
+penelope-observe.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util"] }

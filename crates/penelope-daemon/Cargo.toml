@@ -1,0 +1,37 @@
+[package]
+name = "penelope-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+futures.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+regex.workspace = true
+arc-swap.workspace = true
+penelope-kernel.workspace = true
+penelope-store.workspace = true
+penelope-platform.workspace = true
+penelope-observe.workspace = true
+penelope-llm.workspace = true
+penelope-context.workspace = true
+penelope-memory.workspace = true
+penelope-mcp.workspace = true
+penelope-skills.workspace = true
+penelope-tools.workspace = true
+penelope-hitl.workspace = true
+penelope-telegram.workspace = true
+penelope-workflow.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util"] }

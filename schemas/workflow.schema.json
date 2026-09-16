@@ -1,0 +1,296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://penelope.local/schemas/workflow.schema.json",
+  "title": "Workflow Pénélope",
+  "description": "Schéma des fichiers `<id>.workflow.json` (PRD §12.2 à §12.9). Le validateur de référence reste `penelope wf validate` : ce schéma couvre la forme, pas les règles inter-champs (identifiant égal au nom du fichier, cibles de transition existantes, outils connus, profondeur d'imbrication).",
+  "type": "object",
+  "required": ["metadata", "entryStep", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "metadata": { "$ref": "#/$defs/metadata" },
+    "entryStep": {
+      "description": "Identifiant de l'étape de départ. Doit exister dans `steps`.",
+      "$ref": "#/$defs/stepId"
+    },
+    "settings": { "$ref": "#/$defs/settings" },
+    "startCondition": {
+      "description": "Condition d'admission du run. Par défaut `{\"type\": \"always\"}`.",
+      "$ref": "#/$defs/condition"
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/step" }
+    }
+  },
+
+  "$defs": {
+    "stepId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "Un identifiant d'étape ne commence jamais par `$` : ce préfixe est réservé aux cibles terminales."
+    },
+
+    "transitionTarget": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Étape cible, ou `$done` (terminé) ou `$blocked` (aucune transition vraie)."
+    },
+
+    "metadata": {
+      "type": "object",
+      "required": ["id", "name", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$",
+          "maxLength": 64,
+          "description": "Slug, égal au nom du fichier sans `.workflow.json`."
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "default": "1.0.0" },
+        "color": { "type": "string", "default": "#3b82f6" },
+        "parameters": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/parameter" }
+        },
+        "platforms": {
+          "type": "array",
+          "description": "OS sur lesquels le workflow est exécutable (§2.10). Vide = tous.",
+          "items": { "enum": ["macos", "linux", "windows"] },
+          "uniqueItems": true
+        },
+        "config": {
+          "description": "Configuration libre propre au workflow."
+        }
+      }
+    },
+
+    "parameter": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "label": { "type": "string" },
+        "type": {
+          "enum": ["string", "number", "integer", "boolean", "enum"],
+          "default": "string"
+        },
+        "required": { "type": "boolean", "default": false },
+        "default": {},
+        "description": { "type": "string" }
+      }
+    },
+
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxIterations": { "type": "integer", "minimum": 1, "default": 40 },
+        "budget": { "$ref": "#/$defs/budget" },
+        "concurrency": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxConcurrent": { "type": "integer", "minimum": 1, "default": 1 },
+            "admission": {
+              "enum": ["parallel", "hold", "coalesce", "drop"],
+              "default": "hold",
+              "description": "Que faire quand un run du même workflow tourne déjà (§12.8)."
+            }
+          }
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^(ephemeral|persistent:.+)$",
+          "default": "ephemeral"
+        },
+        "tracker": { "type": "string" },
+        "deploy_workflow": { "type": "string" }
+      }
+    },
+
+    "budget": {
+      "type": "object",
+      "description": "Un budget global est obligatoire : au moins un des trois plafonds doit être non nul.",
+      "additionalProperties": false,
+      "properties": {
+        "maxUsd": { "type": "number", "minimum": 0, "default": 5.0 },
+        "maxTokens": { "type": "integer", "minimum": 0, "default": 2000000 },
+        "maxWallMs": { "type": "integer", "minimum": 0, "default": 7200000 }
+      }
+    },
+
+    "retry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max": { "type": "integer", "minimum": 0, "default": 0 },
+        "backoffMs": { "type": "integer", "minimum": 0, "default": 1000 }
+      }
+    },
+
+    "condition": {
+      "type": "object",
+      "required": ["type"],
+      "description": "Les transitions sont évaluées dans l'ordre déclaré ; la première vraie gagne. Si aucune n'est vraie, le run passe à `$blocked` (§12.4). Les conditions `metadata_*` sont vraies par vacuité sur une liste vide.",
+      "properties": {
+        "type": {
+          "enum": [
+            "always",
+            "step_result",
+            "metadata_all_match",
+            "metadata_any_match",
+            "metadata_all_in",
+            "output_match",
+            "all",
+            "any",
+            "not"
+          ]
+        },
+        "result": { "type": "string", "description": "`step_result` : résultat attendu." },
+        "key": { "type": "string", "description": "`metadata_*` : clé de la liste." },
+        "field": { "type": "string", "description": "`metadata_*` : champ de chaque élément." },
+        "value": { "type": "string", "description": "`metadata_*_match` : valeur attendue." },
+        "values": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "`metadata_all_in` : ensemble des valeurs acceptées."
+        },
+        "path": { "type": "string", "description": "`output_match` : chemin simplifié dans la sortie de l'étape, par exemple `resultat.items[0].statut` (le `$.` de tête est optionnel)." },
+        "equals": { "description": "`output_match` : égalité, comparée aussi en texte." },
+        "in": { "type": "array", "description": "`output_match` : appartenance à une liste." },
+        "regex": { "type": "string", "description": "`output_match` : expression régulière appliquée à la valeur rendue en texte." },
+        "of": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/condition" },
+          "description": "`all` / `any` : sous-conditions."
+        },
+        "cond": { "$ref": "#/$defs/condition" }
+      }
+    },
+
+    "transition": {
+      "type": "object",
+      "required": ["goto"],
+      "additionalProperties": false,
+      "properties": {
+        "goto": { "$ref": "#/$defs/transitionTarget" },
+        "condition": { "$ref": "#/$defs/condition" },
+        "tag": {
+          "type": "string",
+          "description": "Marque d'échappement d'un sous-groupe (§12.7)."
+        }
+      }
+    },
+
+    "step": {
+      "type": "object",
+      "required": ["id", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/stepId" },
+        "name": { "type": "string" },
+        "type": {
+          "enum": [
+            "agent",
+            "sub_agent",
+            "shell",
+            "tool",
+            "user",
+            "parallel",
+            "workflow",
+            "wait",
+            "verify"
+          ]
+        },
+        "phase": {
+          "enum": ["plan", "build", "verification", "waiting", "deploy", "done"],
+          "default": "build"
+        },
+        "subGroup": { "type": "string" },
+        "transitions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/transition" }
+        },
+        "budget": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/budget" }] },
+        "retry": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/retry" }] },
+        "timeoutMs": { "type": ["integer", "null"], "minimum": 1 },
+        "model": {
+          "type": "string",
+          "description": "Alias de modèle (`main`, `fast`, `reasoning`, `code`, `summarizer`), jamais un identifiant de modèle brut."
+        },
+
+        "agentId": { "type": "string", "description": "`agent` : agent nommé." },
+        "subAgentType": { "type": "string", "description": "`sub_agent` : type de sous-agent." },
+        "prompt": { "type": "string", "description": "`agent` / `sub_agent` : obligatoire et non vide." },
+        "nudgePrompt": { "type": "string", "description": "Relance quand l'étape boucle sur elle-même." },
+        "tools": { "type": "array", "items": { "type": "string" } },
+        "outputSchema": {
+          "type": ["object", "null"],
+          "description": "`sub_agent` : schéma de la sortie structurée. Doit porter un `type`."
+        },
+
+        "command": {
+          "description": "`shell` : chaîne, ou table par OS (`unix`, `macos`, `linux`, `windows`), la clé la plus spécifique gagnant (§2.10).",
+          "type": ["string", "object", "null"]
+        },
+        "cwd": { "type": "string" },
+        "successExitCodes": {
+          "type": "array",
+          "items": { "type": "integer" },
+          "default": [0]
+        },
+
+        "tool": { "type": "string", "description": "`tool` : outil natif ou `mcp__<serveur>__<outil>`." },
+        "args": { "description": "`tool` : arguments, validés contre le schéma de l'outil." },
+
+        "template": { "type": "string", "description": "`user` : gabarit Telegram." },
+        "choices": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "`user` : au moins un choix."
+        },
+        "input": {
+          "type": "string",
+          "pattern": "^(none|text|form:.+)$",
+          "default": "none"
+        },
+
+        "children": {
+          "type": "array",
+          "description": "`parallel` : au moins un enfant, de type `sub_agent`, `shell` ou `tool` (§12.6).",
+          "items": { "$ref": "#/$defs/step" }
+        },
+        "maxConcurrency": { "type": ["integer", "null"], "minimum": 1 },
+
+        "workflowId": { "type": "string", "description": "`workflow` : sous-workflow appelé." },
+        "params": { "description": "`workflow` : paramètres passés au sous-workflow." },
+
+        "on": {
+          "type": ["object", "null"],
+          "description": "`wait` : condition de réveil. Exactement une forme parmi `event`, `cron`, `duration_ms` et `mcp_task`.",
+          "properties": {
+            "event": { "type": "string" },
+            "cron": { "type": "string", "description": "Expression cron à 5 champs, validée au chargement." },
+            "duration_ms": { "type": "integer", "minimum": 1 },
+            "mcp_task": { "type": "string" }
+          }
+        },
+
+        "criteriaKey": { "type": "string", "default": "criteria" },
+        "verifier": { "type": "string" },
+        "checks": {
+          "type": "array",
+          "items": { "type": "object" },
+          "description": "`verify` : vérifications mécaniques exécutées avant le jugement du modèle."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+# Politique de dépendances (§20.2, point 1 : `cargo deny check` propre).
+#
+# Trois questions, trois sections : est-ce vulnérable, est-ce autorisé, d'où ça vient.
+
+[graph]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+# Aucune exception : une dépendance vulnérable se remplace ou se retire.
+ignore = []
+
+[licenses]
+version = 2
+# Permissives uniquement. Une copyleft forte obligerait à publier le vault de
+# l'utilisateur avec le binaire, ce qui n'a pas de sens ici.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "BSL-1.0",
+    # Magasin de racines Mozilla (`webpki-roots`) : licence de données permissive.
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+# Rien ne doit contourner `penelope-platform` en tirant sa propre abstraction d'OS,
+# et rien ne doit ramener un second runtime asynchrone.
+deny = [
+    { crate = "openssl", reason = "TLS passe par rustls, pas par OpenSSL du système" },
+    { crate = "openssl-sys", reason = "voir openssl" },
+    { crate = "async-std", reason = "un seul runtime asynchrone : tokio" },
+    { crate = "smol", reason = "un seul runtime asynchrone : tokio" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
