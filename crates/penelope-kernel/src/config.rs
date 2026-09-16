@@ -200,7 +200,7 @@ impl Default for OpenRouter {
             api_key: "${SECRET:openrouter_api_key}".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
             catalog_refresh: "6h".into(),
-            referer: "https://github.com/penelope-agent/penelope".into(),
+            referer: "https://github.com/edouard-claude/penelope".into(),
             title: "Penelope".into(),
             routing: OpenRouterRouting::default(),
             enabled: true,

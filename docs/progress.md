@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **921 tests verts**, tous hors réseau.
+- **924 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -98,6 +98,12 @@ nulle part : `import.hermes` et `upgrade`.
   et sont testées, mais rien ne les alimente : c'est la boucle Telegram qui reçoit les
   photos et les messages vocaux, et elle ne tourne pas.
 - `penelope upgrade` : non implémenté.
+- `penelope model list` reste vide : le catalogue OpenRouter est rafraîchi par une tâche
+  de fond non lancée. Et `model set` ne vérifie pas que l'identifiant existe chez le
+  provider.
+- `penelope secret set` écrit en local, sans passer par le daemon (voulu : une
+  installation neuve se configure avant le premier démarrage). La méthode RPC
+  `secret.set` reste donc non servie.
 - Les captures d'écran de [telegram.md](telegram.md) sont des maquettes ASCII, pas des
   captures réelles : il faut un bot de test pour les produire.
 

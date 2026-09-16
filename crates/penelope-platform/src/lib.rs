@@ -24,7 +24,7 @@ pub use dirs::{Dir, Directories, RootedDirs, resolve_directories, slugify, valid
 pub use power::{PowerManager, SleepGuard};
 pub use process::{ProcessHost, ProcessSpec, UnixProcessHost, which};
 pub use sandbox::{Coverage, Profile, ProfileKind, Sandbox};
-pub use secrets::{MemorySecretStore, SecretStore};
+pub use secrets::{MemorySecretStore, SecretStore, validate_secret_name};
 pub use service::{ServiceManager, ServiceStatus};
 
 use std::path::PathBuf;

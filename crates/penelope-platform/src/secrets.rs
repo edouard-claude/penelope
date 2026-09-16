@@ -59,6 +59,26 @@ pub trait SecretStore: Send + Sync {
     }
 }
 
+/// Valide un nom de secret.
+///
+/// Plus large qu'un slug : les noms en usage portent des soulignés
+/// (`openrouter_api_key`) et les fichiers `mcp.d` des majuscules (`FORGE_TOKEN`).
+/// Rien d'autre n'est admis, pour que le nom reste sûr comme service du Trousseau et
+/// comme clé du fichier chiffré.
+pub fn validate_secret_name(name: &str) -> Result<()> {
+    let ok_len = (1..=128).contains(&name.len());
+    let ok_chars = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+    if !ok_len || !ok_chars || name.starts_with('.') {
+        return Err(PlatformError::Secret(format!(
+            "nom de secret invalide : `{name}` (attendu 1 à 128 caractères parmi \
+             [A-Za-z0-9_.-], sans point initial)"
+        )));
+    }
+    Ok(())
+}
+
 /// Repère les placeholders présents dans une valeur, sans les résoudre.
 pub fn placeholders(raw: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -305,6 +325,32 @@ impl SecretStore for MemorySecretStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secret_names_accept_what_the_project_actually_uses() {
+        for ok in [
+            "openrouter_api_key",
+            "telegram_bot_token",
+            "FORGE_TOKEN",
+            "redmine.api-key",
+        ] {
+            validate_secret_name(ok).unwrap_or_else(|e| panic!("refusé à tort : {ok} → {e}"));
+        }
+        for bad in [
+            "",
+            ".cache",
+            "pas un nom",
+            "clé",
+            "a/b",
+            "$(whoami)",
+            &"x".repeat(129),
+        ] {
+            assert!(
+                validate_secret_name(bad).is_err(),
+                "accepté à tort : {bad:?}"
+            );
+        }
+    }
 
     #[test]
     fn encrypted_store_roundtrip() {

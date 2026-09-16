@@ -75,6 +75,22 @@ Les secrets vivent dans le trousseau macOS, pilotés par `/usr/bin/security` app
 exécutable, jamais via un shell. Seul l'index des **noms** est stocké en clair :
 `dump-keychain` exigerait un déverrouillage interactif, impossible sans écran.
 
+Les secrets attendus au minimum, sous ces noms exacts :
+
+- `openrouter_api_key` ;
+- `telegram_bot_token`.
+
+La valeur se passe **sur l'entrée standard**, jamais en argument : un argument resterait
+dans l'historique du shell et serait visible dans `ps`. Le plus propre est de copier la
+clé dans le presse-papiers, puis :
+
+```bash
+pbpaste | penelope secret set openrouter_api_key
+```
+
+La commande fonctionne sans daemon, donc avant le tout premier démarrage. Elle affiche le
+nom, le backend et la longueur de la valeur, jamais la valeur elle-même.
+
 ```bash
 penelope secret list
 ```
@@ -83,12 +99,11 @@ penelope secret list
 penelope secret backend
 ```
 
-Les secrets attendus au minimum :
+Le Trousseau est commun à tous les `PENELOPE_HOME` d'un même utilisateur. Pour une
+instance d'essai qui ne doit pas y toucher, forcer le fichier chiffré :
+`PENELOPE_SECRETS=file` avec `PENELOPE_PASSPHRASE` ou `PENELOPE_MASTER_KEY_FILE`.
 
-- `OPENROUTER_API_KEY` ;
-- `TELEGRAM_BOT_TOKEN`.
-
-Un fichier `mcp.d/*.toml` référence un secret par `${SECRET:NOM}` dans ses en-têtes ou son
+Un fichier `mcp.d/*.toml` référence un secret par `${SECRET:nom}` dans ses en-têtes ou son
 environnement : la valeur n'apparaît jamais dans la configuration ni dans un journal.
 
 ## 5. Configuration
@@ -98,7 +113,18 @@ penelope config validate
 ```
 
 Hors daemon, donc utilisable avant le premier démarrage et en CI. Le fichier de référence
-commenté est au §19 du PRD. Les réglages à poser d'emblée :
+commenté est au §19 du PRD.
+
+**Le propriétaire d'abord.** Tant que `owner.telegram_user_id` vaut 0, la configuration
+est invalide (un bot sans propriétaire serait ouvert à tous), et toute autre modification
+est refusée. C'est donc le premier réglage à poser :
+
+```bash
+penelope config set owner.telegram_user_id 123456789
+```
+
+L'identifiant s'obtient en écrivant à `@userinfobot` sur Telegram. Les autres réglages à
+poser d'emblée :
 
 ```toml
 [owner]
@@ -127,7 +153,72 @@ penelope config status
 `config status` montre quels sous-systèmes ont pris la génération, et lesquels demandent
 un redémarrage.
 
-## 6. Démarrer et surveiller
+## 6. Modèles
+
+Pénélope ne connaît jamais un modèle par son nom brut, seulement par **alias**. Trois
+étages, du plus concret au plus abstrait :
+
+```
+ rôle (qui a besoin d'un modèle)   alias (un nom stable)   modèle réel (chez un provider)
+ ───────────────────────────────   ─────────────────────   ─────────────────────────────────────
+ chat_default ───────────────────► main ─────────────────► openrouter:deepseek/deepseek-v4-pro
+ classifier, memory_review ──────► fast ─────────────────► openrouter:deepseek/deepseek-v4-flash
+ code ───────────────────────────► reasoning ────────────► openrouter:z-ai/glm-5.2
+ compaction ─────────────────────► summarizer ───────────► openrouter:deepseek/deepseek-v4-flash
+ image_describe ─────────────────► vision ───────────────► openrouter:google/gemini-3.1-flash-image
+ image_generate ─────────────────► image ────────────────► openrouter:google/gemini-3.1-flash-image
+```
+
+Changer de modèle, c'est donc changer **une** ligne : l'alias. Les workflows, les skills et
+les rôles n'ont pas à bouger. Le format est `provider:identifiant`, l'identifiant étant
+celui affiché sur openrouter.ai :
+
+```bash
+penelope model set main openrouter:anthropic/claude-sonnet-4.5
+```
+
+La modification est écrite dans `config.toml` puis publiée à chaud ; `penelope config
+status` montre que chaque sous-système a pris la nouvelle génération.
+
+En fichier, les trois tables correspondantes :
+
+```toml
+[models.aliases]
+main = "openrouter:anthropic/claude-sonnet-4.5"
+fast = "openrouter:deepseek/deepseek-v4-flash"
+reasoning = "openrouter:z-ai/glm-5.2"
+
+[models.roles]
+chat_default = "main"
+code = "reasoning"
+
+[models.routing]
+classifier = true      # un petit modèle estime la complexité de chaque demande
+low = "fast"           # demande simple
+medium = "main"        # demande ordinaire
+high = "reasoning"     # demande difficile
+sticky = true          # une session garde son modèle jusqu'à la prochaine compaction
+fallback = { main = ["fast"], reasoning = ["main"] }
+```
+
+`sticky` compte plus qu'il n'y paraît : changer de modèle en pleine session casserait le
+cache du provider et ferait payer tout le contexte une seconde fois.
+
+Le budget se règle à côté, en dollars :
+
+```toml
+[budget]
+daily_usd = 20.0
+session_usd = 5.0
+alert_ratio = 0.8
+```
+
+Deux limites à connaître. `penelope model list` reste vide : le catalogue OpenRouter est
+rafraîchi par une tâche de fond qui n'est pas encore lancée. Et `model set` ne vérifie pas
+que l'identifiant existe chez le provider : une faute de frappe ne se verra qu'au premier
+appel.
+
+## 7. Démarrer et surveiller
 
 ```bash
 penelope start
@@ -144,7 +235,7 @@ penelope stop
 `penelope daemon` lance le processus au premier plan : c'est la forme utile pour déboguer
 en SSH, puisque les journaux partent alors sur le terminal.
 
-## 7. Sauvegarde et audit
+## 8. Sauvegarde et audit
 
 ```bash
 penelope backup
@@ -161,7 +252,7 @@ Recalcule la chaîne de hachage du journal d'événements et nomme le premier ma
 s'il y en a un. Une purge RGPD conserve le hachage d'origine : purger n'invalide pas la
 chaîne.
 
-## 8. Mise à jour
+## 9. Mise à jour
 
 ```bash
 cargo build --release && sudo cp target/release/penelope /usr/local/bin/penelope && penelope restart
@@ -171,7 +262,7 @@ Au démarrage suivant, la reprise (§17) s'exécute : les tours interrompus sont
 file, les runs repartent à leur étape courante, les effets restés en vol deviennent des
 questions plutôt que des relances. `penelope approvals` montre ce qui attend une réponse.
 
-## 9. Ce qui n'est pas encore branché
+## 10. Ce qui n'est pas encore branché
 
 Le daemon sert le RPC et exécute la reprise au démarrage, mais les boucles de fond
 (scrutation Telegram, superviseur MCP, ordonnanceur, pool de runners, rêve nocturne) ne

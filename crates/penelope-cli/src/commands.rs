@@ -135,7 +135,20 @@ pub enum ConfigCmd {
 pub enum SecretCmd {
     List,
     Backend,
-    Rm { name: String },
+    /// Enregistre un secret, la valeur étant lue sur l'entrée standard.
+    ///
+    /// Elle n'est jamais un argument de la ligne de commande : elle resterait dans
+    /// l'historique du shell et serait visible dans `ps`. Fonctionne **sans daemon**,
+    /// pour qu'une installation neuve puisse être configurée avant le premier démarrage.
+    ///
+    /// Sur macOS, le plus propre est de passer par le presse-papiers :
+    /// `pbpaste | penelope secret set openrouter_api_key`
+    Set {
+        name: String,
+    },
+    Rm {
+        name: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -199,6 +212,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
             return validate_config(&cli, file.clone());
         }
         Command::Wf(WfCmd::Validate { file }) => return validate_workflow(&cli, file.clone()),
+        Command::Secret(SecretCmd::Set { name }) => return set_secret(&cli, name.clone()),
         Command::Install | Command::Uninstall | Command::Start | Command::Stop => {
             return service(&cli);
         }
@@ -331,6 +345,47 @@ fn paths(cli: &Cli) -> CliResult<()> {
         "mcp.d": dirs.mcp_d(),
     });
     output::print(&v, cli.json);
+    Ok(())
+}
+
+/// `penelope secret set <nom>` : la valeur vient de l'entrée standard, jamais d'un
+/// argument, et n'est **jamais** réaffichée.
+fn set_secret(cli: &Cli, name: String) -> CliResult<()> {
+    use std::io::Read;
+
+    penelope_platform::validate_secret_name(&name).map_err(|e| CliError::Usage(e.to_string()))?;
+
+    let mut raw = String::new();
+    std::io::stdin()
+        .read_to_string(&mut raw)
+        .map_err(|e| CliError::Io(format!("lecture de l'entrée standard : {e}")))?;
+    // Un copier-coller traîne presque toujours un retour à la ligne ou une espace.
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(CliError::Usage(format!(
+            "valeur vide : passer le secret sur l'entrée standard, par exemple \
+             `pbpaste | penelope secret set {name}`"
+        )));
+    }
+
+    let dirs = penelope_platform::resolve_directories(cli.home.clone())
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    dirs.ensure_all().map_err(|e| CliError::Io(e.to_string()))?;
+    let store = penelope_platform::backend::secret_store(dirs.as_ref())
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    store
+        .set(&name, value)
+        .map_err(|e| CliError::Io(e.to_string()))?;
+
+    output::print(
+        &json!({
+            "name": name,
+            "backend": store.backend(),
+            "bytes": value.len(),
+            "stored": true,
+        }),
+        cli.json,
+    );
     Ok(())
 }
 
@@ -594,6 +649,31 @@ mod tests {
             e.exit_code(),
             penelope_kernel::api::exit_code::VALIDATION_FAILED
         );
+    }
+
+    /// `secret set` doit vivre hors du RPC : une installation neuve se configure
+    /// avant le premier démarrage du daemon.
+    #[test]
+    fn setting_a_secret_never_goes_through_the_rpc() {
+        let c = parse(&["secret", "set", "openrouter_api_key"]);
+        assert!(
+            route(&c.command).is_err(),
+            "`secret set` ne doit pas être routé vers une méthode RPC"
+        );
+        // Les autres sous-commandes, elles, passent bien par le daemon.
+        assert!(route(&parse(&["secret", "list"]).command).is_ok());
+        assert!(route(&parse(&["secret", "rm", "x"]).command).is_ok());
+    }
+
+    #[test]
+    fn a_secret_name_must_be_a_slug() {
+        let cli = parse(&["--home", "/srv/pen", "secret", "set", "pas un nom"]);
+        let name = match &cli.command {
+            Command::Secret(SecretCmd::Set { name }) => name.clone(),
+            other => panic!("{other:?}"),
+        };
+        let e = set_secret(&cli, name).unwrap_err();
+        assert!(e.to_string().contains("nom de secret invalide"), "{e}");
     }
 
     #[test]
