@@ -583,28 +583,20 @@ mod tests {
                     "serverInfo": {"name": "xcode-tools", "version": "25317"}
                 }))
             }
-            "tools/list" if !seen.load(std::sync::atomic::Ordering::SeqCst) => {
-                Err(McpError::Rpc {
-                    code: -32603,
-                    message: "Received a request before initialization completed.".into(),
-                    data: None,
-                })
-            }
+            "tools/list" if !seen.load(std::sync::atomic::Ordering::SeqCst) => Err(McpError::Rpc {
+                code: -32603,
+                message: "Received a request before initialization completed.".into(),
+                data: None,
+            }),
             "tools/list" => Ok(json!({"tools": [{
                 "name": "BuildProject",
                 "inputSchema": {"type": "object"}
             }]})),
             _ => Ok(json!({})),
         });
-        let client = McpClient::connect(
-            "xcode",
-            tr.clone(),
-            ProtocolVersion::V20260728,
-            t(500),
-            4,
-        )
-        .await
-        .unwrap();
+        let client = McpClient::connect("xcode", tr.clone(), ProtocolVersion::V20260728, t(500), 4)
+            .await
+            .unwrap();
         assert!(!client.negotiated().stateless);
         assert_eq!(client.version(), ProtocolVersion::V20250618);
         assert!(initialized.load(std::sync::atomic::Ordering::SeqCst));
@@ -613,10 +605,18 @@ mod tests {
 
         let order: Vec<String> = tr.call_log().await.into_iter().map(|(m, _)| m).collect();
         let pos = |m: &str| order.iter().position(|x| x == m).unwrap();
-        assert!(pos("initialize") < pos("notifications/initialized"), "{order:?}");
-        assert!(pos("notifications/initialized") < pos("tools/list"), "{order:?}");
+        assert!(
+            pos("initialize") < pos("notifications/initialized"),
+            "{order:?}"
+        );
+        assert!(
+            pos("notifications/initialized") < pos("tools/list"),
+            "{order:?}"
+        );
         assert!(!looks_like_discovery(&json!({})), "réponse vide");
-        assert!(looks_like_discovery(&json!({"protocolVersion": "2026-07-28"})));
+        assert!(looks_like_discovery(
+            &json!({"protocolVersion": "2026-07-28"})
+        ));
     }
 
     /// Un serveur stdio qui ignore `server/discover` (la sonde expire) passe quand même
