@@ -221,6 +221,28 @@ impl TelegramGateway {
                 forwarded,
                 ..
             } => {
+                // Une saisie était attendue par une étape `user` de workflow.
+                let input_key = format!("tg.await_input.{chat_id}");
+                if let Some(raw) = self.daemon.kv_get(&input_key).await?
+                    && !raw.is_empty()
+                {
+                    self.daemon.kv_set(&input_key, "").await?;
+                    let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+                    let note = match crate::workflow::answer(
+                        &self.daemon,
+                        v["run"].as_str().unwrap_or_default(),
+                        v["visit"].as_str().unwrap_or_default(),
+                        v["choice"].as_str().unwrap_or_default(),
+                        Some(&text),
+                    )
+                    .await
+                    {
+                        Ok(()) => "✔️ Réponse transmise au workflow.".to_string(),
+                        Err(e) => format!("ℹ️ {e}"),
+                    };
+                    return self.reply(chat_id, topic_id, Some(message_id), &note).await;
+                }
+
                 // Une raison de refus était attendue : ce message la donne.
                 let reason_key = format!("tg.await_reason.{chat_id}");
                 if let Some(approval_id) = self.daemon.kv_get(&reason_key).await?
@@ -659,10 +681,33 @@ impl TelegramGateway {
                 }
             }
             "recall" => render_value(&rpc.call(m::MEM_SEARCH, json!({"query": args})).await?),
-            "resume" => render_value(
-                &rpc.call(m::WF_CONTROL, json!({"run": args, "op": "resume"}))
-                    .await?,
-            ),
+            "run" => {
+                let mut words = args.splitn(2, char::is_whitespace);
+                match words.next().filter(|w| !w.is_empty()) {
+                    None => {
+                        "Usage : `/run <workflow> clé=valeur…` (`/wf` liste les workflows).".into()
+                    }
+                    Some(id) => {
+                        let params = parse_params(words.next().unwrap_or_default());
+                        match crate::workflow::start_run(d, id, params, &origin, None, 0).await {
+                            Ok(run) => format!("▶️ Run `{}` lancé.", run.id),
+                            Err(e) => format!("❌ {e}"),
+                        }
+                    }
+                }
+            }
+            "resume" => {
+                if args.is_empty() {
+                    "Usage : `/resume <run>` (`/runs` liste les runs).".into()
+                } else {
+                    match crate::workflow::control(d, args, &penelope_workflow::Control::Resume)
+                        .await
+                    {
+                        Ok(state) => format!("▶️ Run `{args}` : {}.", state.as_str()),
+                        Err(e) => format!("❌ {e}"),
+                    }
+                }
+            }
             other => {
                 // Commandes du catalogue sans traitement dédié : appel RPC générique.
                 let cmd = penelope_telegram::commands::all()
@@ -770,6 +815,40 @@ impl TelegramGateway {
     }
 
     /// Clic sur un bouton du menu `/model`.
+    /// Bouton d'une question de workflow : le choix part au run, ou attend la saisie.
+    async fn workflow_choice_clicked(
+        &self,
+        callback_id: &str,
+        action: &penelope_telegram::actions::Action,
+        chat_id: i64,
+        message_id: i64,
+    ) -> anyhow::Result<()> {
+        let run = action.target.as_str();
+        let visit = action.args["visit"].as_str().unwrap_or_default();
+        let choice = action.args["choice"].as_str().unwrap_or_default();
+        let wants_input = action.args["input"].as_bool().unwrap_or(false);
+        let _ = self
+            .bot
+            .answer_callback(callback_id, Some(choice), false)
+            .await;
+        let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+        let note = if wants_input {
+            self.daemon
+                .kv_set(
+                    &format!("tg.await_input.{chat_id}"),
+                    &json!({"run": run, "visit": visit, "choice": choice}).to_string(),
+                )
+                .await?;
+            format!("✏️ « {choice} » : précise en un message.")
+        } else {
+            match crate::workflow::answer(&self.daemon, run, visit, choice, None).await {
+                Ok(()) => format!("✔️ « {choice} »"),
+                Err(e) => format!("ℹ️ {e}"),
+            }
+        };
+        self.reply(chat_id, None, None, &note).await
+    }
+
     async fn model_pin_clicked(
         &self,
         callback_id: &str,
@@ -1223,6 +1302,14 @@ impl TelegramGateway {
         {
             return self
                 .model_pin_clicked(callback_id, action, chat_id, message_id)
+                .await;
+        }
+        if let ClickOutcome::Accepted(action) = &outcome
+            && action.action == k::CHOICE
+            && action.args.get("visit").is_some()
+        {
+            return self
+                .workflow_choice_clicked(callback_id, action, chat_id, message_id)
                 .await;
         }
         // `answerCallbackQuery` d'abord : Telegram attend une réponse sous une seconde.
@@ -1979,6 +2066,89 @@ impl Messenger for TelegramGateway {
             .map_err(|e| e.to_string())
     }
 
+    async fn send_question(
+        &self,
+        origin: &Origin,
+        markdown: &str,
+        run_id: &str,
+        visit: &str,
+        choices: &[String],
+        wants_input: bool,
+    ) -> Result<(), String> {
+        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or((self.owner_id, None));
+        let s = &self.daemon.services;
+        let ttl = 7 * 24 * 3_600_000;
+        let labels: Vec<String> = if choices.is_empty() {
+            vec![
+                if wants_input {
+                    "✏️ Répondre"
+                } else {
+                    "OK"
+                }
+                .to_string(),
+            ]
+        } else {
+            choices.to_vec()
+        };
+        let mut rows: Vec<Vec<ButtonSpec>> = Vec::new();
+        for label in &labels {
+            let t = s
+                .actions
+                .create(
+                    k::CHOICE,
+                    run_id,
+                    json!({"visit": visit, "choice": label, "input": wants_input}),
+                    ttl,
+                    true,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            rows.push(vec![ButtonSpec::callback(label, &t.token, "")]);
+        }
+        self.bot
+            .send_text(
+                chat_id,
+                topic_id,
+                &markdown_to_html(markdown),
+                Some(inline_keyboard(&rows)),
+                None,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    async fn upsert_card(&self, origin: &Origin, key: &str, markdown: &str) -> Result<(), String> {
+        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or((self.owner_id, None));
+        let html = markdown_to_html(markdown);
+        let kv_key = format!("tg.card.{key}");
+        let known = self
+            .daemon
+            .kv_get(&kv_key)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|m| m.parse::<i64>().ok());
+        if let Some(message_id) = known {
+            match self.bot.edit_text(chat_id, message_id, &html, None).await {
+                Ok(_) => return Ok(()),
+                // Contenu identique : rien à faire.
+                Err(e) if e.to_string().contains("not modified") => return Ok(()),
+                // Message trop ancien ou supprimé : une nouvelle carte.
+                Err(_) => {}
+            }
+        }
+        let sent = self
+            .bot
+            .send_text(chat_id, topic_id, &html, None, None)
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Some(id) = sent.get("message_id").and_then(|m| m.as_i64()) {
+            let _ = self.daemon.kv_set(&kv_key, &id.to_string()).await;
+        }
+        Ok(())
+    }
+
     async fn send_approval(&self, origin: &Origin, approval_id: &str) -> Result<(), String> {
         let (chat_id, topic_id) = origin.telegram_chat().unwrap_or((self.owner_id, None));
         let a = self
@@ -1993,6 +2163,23 @@ impl Messenger for TelegramGateway {
             .await
             .map_err(|e| e.to_string())
     }
+}
+
+/// `clé=valeur clé2=valeur2` : chaque valeur est lue en JSON si possible (nombres,
+/// booléens), sinon gardée en texte.
+pub fn parse_params(raw: &str) -> Value {
+    let mut out = serde_json::Map::new();
+    for pair in raw.split_whitespace() {
+        let Some((k, v)) = pair.split_once('=') else {
+            continue;
+        };
+        let value = serde_json::from_str::<Value>(v)
+            .ok()
+            .filter(|x| !x.is_string())
+            .unwrap_or_else(|| json!(v));
+        out.insert(k.to_string(), value);
+    }
+    Value::Object(out)
 }
 
 /// Met les photos reçues en file, dans la session de la conversation.
@@ -3357,6 +3544,112 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_workflow_runs_from_telegram_with_buttons_and_typed_input() {
+        let (_d, g, t, _p) = gateway().await;
+        let s = &g.daemon.services;
+        let raw = json!({
+            "metadata": {"id": "validation", "name": "Validation", "parameters": [
+                {"id": "sujet", "label": "Sujet", "type": "string", "required": true}
+            ]},
+            "entryStep": "decider",
+            "settings": {"budget": {"maxUsd": 1.0, "maxTokens": 1000, "maxWallMs": 60000}},
+            "steps": [
+                {"id": "decider", "name": "Valider {{sujet}} ?", "type": "user",
+                 "template": "question", "choices": ["Valider", "Réviser"], "input": "text",
+                 "transitions": [
+                    {"goto": "$done", "condition": {"type": "step_result", "result": "Valider"}},
+                    {"goto": "$blocked", "condition": {"type": "step_result", "result": "Réviser"}}
+                 ]}
+            ]
+        });
+        let wf = penelope_workflow::Workflow::from_json(&raw.to_string()).unwrap();
+        let known = crate::runtime::workflow_known(&s.config.config(), &s.mcp_tools).await;
+        let dir = s.platform.dirs.workflows();
+        std::fs::create_dir_all(&dir).unwrap();
+        s.workflows.write(&dir, &wf, &known).unwrap();
+        s.workflows
+            .load_dir(&dir, penelope_workflow::registry::Scope::User, &known);
+
+        g.process_update(&updates::text_message(120, OWNER, OWNER, "/run validation"))
+            .await
+            .unwrap();
+        g.process_update(&updates::text_message(
+            121,
+            OWNER,
+            OWNER,
+            "/run validation sujet=devis-42",
+        ))
+        .await
+        .unwrap();
+        g.flush_outbox().await.unwrap();
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            sent.iter().any(|m| m.contains("sujet")),
+            "paramètre manquant signalé : {sent:?}"
+        );
+        let run = s
+            .runs
+            .list(None, 5)
+            .await
+            .unwrap()
+            .pop()
+            .expect("run lancé");
+        assert_eq!(run.params["sujet"], "devis-42");
+
+        crate::workflow::drive(&g.daemon, &run.id).await.unwrap();
+        let calls = t.calls_to(tg::SEND_MESSAGE).await;
+        let question = calls
+            .iter()
+            .find(|c| {
+                c["text"]
+                    .as_str()
+                    .is_some_and(|x| x.contains("Valider devis-42"))
+            })
+            .expect("question avec boutons");
+        let token = question["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // « Valider » demande une précision : le message suivant la donne.
+        g.process_update(&updates::callback(122, OWNER, &token, 700))
+            .await
+            .unwrap();
+        g.process_update(&updates::text_message(
+            123,
+            OWNER,
+            OWNER,
+            "ok pour la version 2",
+        ))
+        .await
+        .unwrap();
+        g.flush_outbox().await.unwrap();
+        assert!(
+            s.turns.claim("test").await.unwrap().is_none(),
+            "la saisie n'est pas un message de conversation"
+        );
+        assert_eq!(
+            crate::workflow::drive(&g.daemon, &run.id).await.unwrap(),
+            penelope_workflow::RunState::Done
+        );
+        let done = s.runs.get(&run.id).await.unwrap().unwrap();
+        assert_eq!(done.step_outputs["decider"]["choice"], "Valider");
+        assert_eq!(
+            done.step_outputs["decider"]["input"],
+            "ok pour la version 2"
+        );
+
+        // La carte du run a été éditée sur place, pas renvoyée à chaque étape.
+        let edits = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
+        assert!(
+            edits
+                .iter()
+                .any(|e| e["text"].as_str().is_some_and(|x| x.contains("terminé"))),
+            "{edits:?}"
         );
     }
 

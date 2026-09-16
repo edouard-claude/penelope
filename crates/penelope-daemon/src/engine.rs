@@ -159,6 +159,13 @@ impl Daemon {
         approval_id: &str,
         origin: &Origin,
     ) -> anyhow::Result<Option<TurnId>> {
+        // Un run de workflow reprend par son pilote, pas par un tour de conversation.
+        if let Ok(Some(sess)) = self.services.sessions.get(session_id).await
+            && sess.kind == penelope_kernel::session::SessionKind::WorkflowRun
+        {
+            self.workflows.wake();
+            return Ok(None);
+        }
         let payload = json!({"approval_id": approval_id, "origin": origin.to_value()});
         let id = self
             .services

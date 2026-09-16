@@ -37,11 +37,17 @@ impl Daemon {
         let report = self.recover().await?;
         tracing::info!(?report, "reprise terminée");
 
+        // Workflows, sous-agents et images : offerts aux outils et à l'ordonnanceur.
+        self.hooks
+            .set_orchestrator(Arc::new(crate::workflow::WorkflowOrchestrator {
+                daemon: self.clone(),
+            }));
         let mut tasks = vec![
             tokio::spawn(crate::runner::run_pool(self.clone())),
             tokio::spawn(maintenance_loop(self.clone())),
             tokio::spawn(catalog_loop(self.clone())),
             tokio::spawn(crate::scheduler::scheduler_loop(self.clone())),
+            tokio::spawn(crate::workflow::driver_loop(self.clone())),
         ];
 
         // Serveurs MCP de `mcp.d/` : chargés en fond, pour ne pas retarder le démarrage.
@@ -164,6 +170,22 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
         d.enqueue_resume(sid, a.id.as_str(), &origin).await?;
     }
     s.actions.purge_expired().await?;
+
+    // Workspaces éphémères des runs terminés depuis longtemps (§12.7). Un workspace
+    // persistant n'est jamais effacé.
+    let retention = s.config.config().workflows.workspace_retention_days.max(1);
+    let ephemeral_root = s.platform.dirs.state().join("runs");
+    for (run_id, workdir) in s.runs.expired_workspaces(retention).await? {
+        let path = std::path::PathBuf::from(&workdir);
+        if path.starts_with(&ephemeral_root)
+            && path.exists()
+            && let Err(e) = std::fs::remove_dir_all(&path)
+        {
+            tracing::warn!(run = %run_id, error = %e, "workspace de run non nettoyé");
+            continue;
+        }
+        s.runs.forget_workdir(&run_id).await?;
+    }
     Ok(())
 }
 

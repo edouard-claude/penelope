@@ -140,6 +140,36 @@ pub trait Sandbox: Send + Sync {
     ) -> Result<Wrapped>;
 }
 
+/// Le chemin tel que donné, plus sa forme résolue quand elle diffère.
+///
+/// Seatbelt compare les chemins réels : `/var/folders/…` (dossier temporaire) ou `/tmp`
+/// sont des liens vers `/private/…`, et une règle écrite sur le lien n'autorise rien.
+/// Pour un chemin qui n'existe pas encore, on résout son plus proche ancêtre existant.
+fn with_real_path(p: &std::path::Path) -> Vec<PathBuf> {
+    let mut out = vec![p.to_path_buf()];
+    let mut existing = p;
+    let mut rest: Vec<&std::ffi::OsStr> = Vec::new();
+    loop {
+        if let Ok(real) = existing.canonicalize() {
+            let mut full = real;
+            for part in rest.iter().rev() {
+                full.push(part);
+            }
+            if full != p {
+                out.push(full);
+            }
+            return out;
+        }
+        match (existing.file_name(), existing.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name);
+                existing = parent;
+            }
+            _ => return out,
+        }
+    }
+}
+
 /// Génère un profil Seatbelt (SBPL) pour macOS.
 ///
 /// Le profil part d'un refus global, puis autorise le strict nécessaire. Les chemins sont
@@ -153,18 +183,18 @@ pub fn seatbelt_profile(p: &Profile) -> String {
     s.push_str("  (subpath \"/System\") (subpath \"/Library\") (subpath \"/opt\")\n");
     s.push_str("  (subpath \"/private/var/db\") (subpath \"/dev\") (literal \"/\"))\n");
 
-    for r in &p.readable {
-        s.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", esc(r)));
+    for r in p.readable.iter().flat_map(|r| with_real_path(r)) {
+        s.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", esc(&r)));
     }
     if p.kind == ProfileKind::ReadOnly {
         // Lecture du répertoire courant autorisée, aucune écriture.
         s.push_str("(allow file-read*)\n");
     } else {
         s.push_str("(allow file-read*)\n");
-        for w in &p.writable {
+        for w in p.writable.iter().flat_map(|w| with_real_path(w)) {
             s.push_str(&format!(
                 "(allow file-write* file-read* (subpath \"{}\"))\n",
-                esc(w)
+                esc(&w)
             ));
         }
         // /dev/null et consorts, indispensables à tout processus.
@@ -222,6 +252,23 @@ pub fn unsupported(profile: &Profile, os: &str) -> PlatformError {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_workspaces_are_allowed_by_their_real_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("reel");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = dir.path().join("lien");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let profile = seatbelt_profile(&Profile::workspace_write(link.join("run-1")));
+        let resolved = real.canonicalize().unwrap().join("run-1");
+        assert!(
+            profile.contains(&format!("(subpath \"{}\")", resolved.display())),
+            "le chemin réel d'un dossier encore inexistant est autorisé :\n{profile}"
+        );
+        assert!(profile.contains(&format!("(subpath \"{}\")", link.join("run-1").display())));
+    }
+
     use super::*;
     use std::path::Path;
 

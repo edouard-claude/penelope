@@ -27,6 +27,32 @@ pub trait Messenger: Send + Sync {
     async fn send_approval(&self, _origin: &Origin, _approval_id: &str) -> Result<(), String> {
         Ok(())
     }
+    /// Question d'une étape `user` : un bouton par choix. Sans boutons, le texte dit
+    /// comment répondre en ligne de commande.
+    async fn send_question(
+        &self,
+        origin: &Origin,
+        markdown: &str,
+        run_id: &str,
+        visit: &str,
+        choices: &[String],
+        wants_input: bool,
+    ) -> Result<(), String> {
+        let _ = (visit, wants_input);
+        let mut text = markdown.to_string();
+        if !choices.is_empty() {
+            text.push_str(&format!(
+                "\n\nRépondre : `penelope wf control {run_id} answer --choice <{}>`",
+                choices.join("|")
+            ));
+        }
+        self.send_text(origin, &text).await
+    }
+    /// Carte mise à jour sur place (progression d'un run) ; à défaut, un nouveau message.
+    async fn upsert_card(&self, origin: &Origin, key: &str, markdown: &str) -> Result<(), String> {
+        let _ = key;
+        self.send_text(origin, markdown).await
+    }
 }
 
 /// Accès aux serveurs MCP vivants.
@@ -64,6 +90,11 @@ pub trait Orchestrator: Send + Sync {
         tools: Vec<String>,
     ) -> Result<Value, String>;
     async fn generate_image(&self, prompt: &str, size: Option<&str>) -> Result<Value, String>;
+    /// Contrôle d'un run (`pause`, `resume`, `cancel`, `retry-step`, `skip-step`, `goto:<étape>`).
+    async fn control_run(&self, run_id: &str, op: &str) -> Result<Value, String> {
+        let _ = (run_id, op);
+        Err("moteur de workflows indisponible".into())
+    }
 }
 
 /// Contexte d'un appel.
@@ -763,10 +794,20 @@ impl NativeToolExecutor {
                 .unwrap_or_default(),
             "workflow_control" => {
                 let op = str_arg(args, "op")?;
-                let control = penelope_workflow::Control::parse(&op)
-                    .ok_or_else(|| ToolError::Invalid(format!("opération inconnue : {op}")))?;
-                let st = s.runs.control(&str_arg(args, "run_id")?, &control).await?;
-                json!({"state": st.as_str()})
+                let run_id = str_arg(args, "run_id")?;
+                match &self.orchestrator {
+                    Some(o) => o
+                        .control_run(&run_id, &op)
+                        .await
+                        .map_err(ToolError::Other)?,
+                    None => {
+                        let control = penelope_workflow::Control::parse(&op).ok_or_else(|| {
+                            ToolError::Invalid(format!("opération inconnue : {op}"))
+                        })?;
+                        let st = s.runs.control(&run_id, &control).await?;
+                        json!({"state": st.as_str()})
+                    }
+                }
             }
             "workflow_author" => {
                 let draft = args.get("draft").cloned().unwrap_or(Value::Null);
@@ -776,7 +817,8 @@ impl NativeToolExecutor {
                 };
                 let w = penelope_workflow::Workflow::from_json(&raw)
                     .map_err(|e| ToolError::Invalid(format!("JSON invalide : {e}")))?;
-                let known = crate::runtime::workflow_known(&cfg, &s.mcp_tools).await;
+                let known =
+                    crate::runtime::workflow_known_with(&cfg, &s.mcp_tools, &s.workflows).await;
                 let dir = s.platform.dirs.workflows();
                 let path = s
                     .workflows
@@ -845,6 +887,33 @@ impl NativeToolExecutor {
                 }
                 json!({"asked": true, "remarque": "la réponse arrivera comme un nouveau message"})
             }
+            "step_done" | "return_value" if self.env.in_workflow => {
+                let run = self
+                    .env
+                    .run_id
+                    .clone()
+                    .ok_or_else(|| ToolError::Denied("aucun run en cours".into()))?;
+                let key = crate::workflow::step_done_key(&run);
+                let mut state: Value = crate::workflow::kv_get(s, &key)
+                    .await
+                    .map_err(|e| ToolError::Other(e.to_string()))?
+                    .and_then(|raw| serde_json::from_str(&raw).ok())
+                    .unwrap_or_else(|| json!({}));
+                if name == "return_value" {
+                    state["result"] = args.get("result").cloned().unwrap_or(Value::Null);
+                    state["content"] = args.get("content").cloned().unwrap_or(Value::Null);
+                } else {
+                    state["done"] = json!(true);
+                }
+                crate::workflow::kv_set(s, &key, &state.to_string())
+                    .await
+                    .map_err(|e| ToolError::Other(e.to_string()))?;
+                if name == "step_done" {
+                    json!({"ok": true, "remarque": "étape terminée : termine ta réponse"})
+                } else {
+                    json!({"ok": true})
+                }
+            }
             "step_done" | "return_value" => {
                 return Err(ToolError::Denied(format!(
                     "`{name}` n'a de sens que dans une étape de workflow"
@@ -855,12 +924,22 @@ impl NativeToolExecutor {
                     .orchestrator
                     .as_ref()
                     .ok_or_else(|| ToolError::Other("génération d'image indisponible".into()))?;
-                o.generate_image(
-                    &str_arg(args, "prompt")?,
-                    args.get("size").and_then(|v| v.as_str()),
-                )
-                .await
-                .map_err(ToolError::Other)?
+                let v = o
+                    .generate_image(
+                        &str_arg(args, "prompt")?,
+                        args.get("size").and_then(|v| v.as_str()),
+                    )
+                    .await
+                    .map_err(ToolError::Other)?;
+                // Les images partent aussitôt vers le propriétaire (§10.4).
+                if let Some(m) = &self.messenger {
+                    for f in v["files"].as_array().cloned().unwrap_or_default() {
+                        if let Some(path) = f.as_str() {
+                            let _ = m.send_file(&self.env.origin, Path::new(path), None).await;
+                        }
+                    }
+                }
+                v
             }
             other => return Err(ToolError::Unknown(other.to_string())),
         };
@@ -1043,7 +1122,7 @@ pub fn render_mcp_result(v: &Value) -> String {
     out
 }
 
-fn shell_override(raw: &str) -> Option<(String, Vec<String>)> {
+pub(crate) fn shell_override(raw: &str) -> Option<(String, Vec<String>)> {
     let mut parts = raw.split_whitespace();
     let program = parts.next()?.to_string();
     let mut args: Vec<String> = parts.map(String::from).collect();

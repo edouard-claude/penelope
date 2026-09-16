@@ -1226,7 +1226,7 @@ pub(crate) fn server_of(tool: &str) -> Option<String> {
         .map(String::from)
 }
 
-fn effect_kind(tool: &str) -> EffectKind {
+pub(crate) fn effect_kind(tool: &str) -> EffectKind {
     if tool.starts_with("mcp__") {
         return EffectKind::Mcp;
     }

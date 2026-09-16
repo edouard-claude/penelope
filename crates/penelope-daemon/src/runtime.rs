@@ -107,6 +107,13 @@ impl Services {
             penelope_workflow::registry::Scope::User,
             &known,
         );
+        // Second passage : un workflow utilisateur peut en appeler un autre du même dossier.
+        let known = workflow_known_with(&cfg, &mcp_tools, &workflows).await;
+        workflows.load_dir(
+            &dirs.workflows(),
+            penelope_workflow::registry::Scope::User,
+            &known,
+        );
         let runs = RunStore::new(store.clone(), clock.clone());
         let schedules = ScheduleStore::new(store.clone(), clock.clone(), &cfg.owner.timezone);
 
@@ -212,6 +219,18 @@ pub async fn workflow_known(cfg: &Config, mcp_tools: &ToolRegistry) -> penelope_
     known
 }
 
+/// Comme [`workflow_known`], avec les workflows déjà chargés : un workflow peut en
+/// appeler un autre écrit par l'utilisateur.
+pub async fn workflow_known_with(
+    cfg: &Config,
+    mcp_tools: &ToolRegistry,
+    workflows: &WorkflowRegistry,
+) -> penelope_workflow::Known {
+    let mut known = workflow_known(cfg, mcp_tools).await;
+    known.workflow_ids.extend(workflows.ids());
+    known
+}
+
 /// Poignée de contrôle du daemon.
 #[derive(Clone)]
 pub struct DaemonHandle {
@@ -256,6 +275,8 @@ pub struct Daemon {
     pub hooks: Hooks,
     /// Compactions de fond en cours et demandées (§5.4).
     pub compaction: crate::compaction::State,
+    /// Runs de workflow pilotés par ce processus (§12.7).
+    pub workflows: crate::workflow::State,
     /// Providers construits à la demande (la clé peut arriver après le démarrage).
     providers: tokio::sync::Mutex<Option<Arc<penelope_llm::ProviderSet>>>,
     /// Provider imposé, pour les tests et les suites sans réseau.
@@ -276,6 +297,11 @@ pub struct Hooks {
 impl Hooks {
     pub fn messenger(&self) -> Option<Arc<dyn crate::executor::Messenger>> {
         self.messenger.read().ok().and_then(|g| g.clone())
+    }
+    pub fn set_orchestrator(&self, o: Arc<dyn crate::executor::Orchestrator>) {
+        if let Ok(mut g) = self.orchestrator.write() {
+            *g = Some(o);
+        }
     }
     pub fn mcp(&self) -> Option<Arc<dyn crate::executor::McpGateway>> {
         self.mcp.read().ok().and_then(|g| g.clone())
@@ -320,6 +346,7 @@ impl Daemon {
             bus: Arc::new(crate::bus::Bus::new()),
             hooks: Hooks::default(),
             compaction: crate::compaction::State::default(),
+            workflows: crate::workflow::State::default(),
             providers: tokio::sync::Mutex::new(None),
             provider_override: std::sync::RwLock::new(None),
         }

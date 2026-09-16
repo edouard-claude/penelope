@@ -228,6 +228,9 @@ pub struct ChatRequest {
     /// jeton : une panne en début de flux bascule sans erreur côté client.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallback_models: Vec<String>,
+    /// Modalités de sortie demandées : `["image", "text"]` pour générer une image (§10.4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modalities: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -333,6 +336,10 @@ pub enum StreamChunk {
     /// Refus du modèle (`delta.refusal`).
     Refusal {
         text: String,
+    },
+    /// Image produite par le modèle, en URI `data:` (`delta.images`).
+    Image {
+        url: String,
     },
     /// Provider amont et raison d'arrêt brute, dès qu'ils sont connus.
     Meta {

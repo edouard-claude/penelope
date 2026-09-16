@@ -19,6 +19,8 @@ pub enum Scripted {
     Error(LlmErrorKind, String),
     /// Erreur de dépassement de contexte, pour tester la compaction d'urgence.
     ContextOverflow,
+    /// Texte puis images (`data:` URI), pour tester la génération d'image.
+    Images(String, Vec<String>),
 }
 
 #[derive(Clone, Default)]
@@ -161,6 +163,15 @@ impl Provider for MockProvider {
                         let _ = tx.send(StreamChunk::ToolCall(c)).await;
                     }
                     FinishReason::ToolCalls
+                }
+                Scripted::Images(t, urls) => {
+                    if !t.is_empty() {
+                        let _ = tx.send(StreamChunk::Delta { text: t }).await;
+                    }
+                    for url in urls {
+                        let _ = tx.send(StreamChunk::Image { url }).await;
+                    }
+                    FinishReason::Stop
                 }
                 _ => FinishReason::Stop,
             };

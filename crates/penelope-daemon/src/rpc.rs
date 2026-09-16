@@ -471,7 +471,12 @@ impl Rpc {
                 let stem = p.get("name").and_then(|n| n.as_str());
                 let w = penelope_workflow::Workflow::from_json(&raw)
                     .map_err(|e| anyhow::anyhow!("JSON invalide : {e}"))?;
-                let known = crate::runtime::workflow_known(&s.config.config(), &s.mcp_tools).await;
+                let known = crate::runtime::workflow_known_with(
+                    &s.config.config(),
+                    &s.mcp_tools,
+                    &s.workflows,
+                )
+                .await;
                 let report = penelope_workflow::validate(&w, stem, &known);
                 Ok(json!({
                     "valid": report.is_valid(),
@@ -486,12 +491,43 @@ impl Rpc {
                 let id = required_str(p, "run")?;
                 Ok(json!(s.runs.trace(&id).await?))
             }
+            method::WF_RUN => {
+                let id = required_str(p, "id")?;
+                let params = p.get("params").cloned().unwrap_or(json!({}));
+                let origin = crate::scheduler::owner_origin(&self.daemon);
+                let run = crate::workflow::start_run(&self.daemon, &id, params, &origin, None, 0)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                Ok(serde_json::to_value(run)?)
+            }
             method::WF_CONTROL => {
                 let run = required_str(p, "run")?;
                 let op = required_str(p, "op")?;
+                if op == "answer" {
+                    let choice = required_str(p, "choice")?;
+                    let current = s
+                        .runs
+                        .get(&run)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("run {run} introuvable"))?;
+                    let visit = format!(
+                        "{}.{}",
+                        current.current_step.unwrap_or_default(),
+                        current.iterations
+                    );
+                    crate::workflow::answer(
+                        &self.daemon,
+                        &run,
+                        &visit,
+                        &choice,
+                        p.get("input").and_then(|i| i.as_str()),
+                    )
+                    .await?;
+                    return Ok(json!({"run": run, "answered": choice}));
+                }
                 let control = penelope_workflow::Control::parse(&op)
                     .ok_or_else(|| anyhow::anyhow!("opération inconnue : {op}"))?;
-                let state = s.runs.control(&run, &control).await?;
+                let state = crate::workflow::control(&self.daemon, &run, &control).await?;
                 Ok(json!({"state": state.as_str()}))
             }
 
@@ -1261,7 +1297,6 @@ mod tests {
             "session.rewind",
             "mcp.auth",
             "skill.rollback",
-            "wf.run",
             "mem.history",
             "mem.restore",
             "mem.reindex",

@@ -526,6 +526,9 @@ pub fn to_openai_body(req: &ChatRequest) -> Value {
     if let Some(f) = &req.response_format {
         obj.insert("response_format".into(), f.clone());
     }
+    if !req.modalities.is_empty() {
+        obj.insert("modalities".into(), json!(req.modalities));
+    }
     b
 }
 
@@ -740,6 +743,7 @@ pub async fn collect_stream_observed(
     let mut reasoning = String::new();
     let mut reasoning_parts: Vec<Value> = Vec::new();
     let mut refusal = String::new();
+    let mut images: Vec<String> = Vec::new();
     let mut calls = Vec::new();
     let mut usage = Usage::default();
     let mut finish = FinishReason::Stop;
@@ -761,6 +765,7 @@ pub async fn collect_stream_observed(
             StreamChunk::Reasoning { text: t } => reasoning.push_str(&t),
             StreamChunk::ReasoningDetails(v) => reasoning_parts.push(v),
             StreamChunk::Refusal { text: t } => refusal.push_str(&t),
+            StreamChunk::Image { url } => images.push(url),
             StreamChunk::Meta {
                 upstream: u,
                 native_finish: n,
@@ -792,13 +797,19 @@ pub async fn collect_stream_observed(
             true,
         ),
     };
+    let mut content = if text.is_empty() {
+        Vec::new()
+    } else {
+        vec![Content::text(text)]
+    };
+    content.extend(
+        images
+            .into_iter()
+            .map(|url| Content::ImageUrl { url, detail: None }),
+    );
     let message = ChatMessage {
         role: Role::Assistant,
-        content: if text.is_empty() {
-            Vec::new()
-        } else {
-            vec![Content::text(text)]
-        },
+        content,
         tool_calls: calls,
         tool_call_id: None,
         name: None,

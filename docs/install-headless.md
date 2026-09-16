@@ -499,6 +499,43 @@ Déposer un fichier dans `vault/inbox/` en SSH fait la même chose : il est ing�
 bilan arrive sur Telegram et la boîte est vidée (un format refusé part dans
 `inbox/refusés/`). Un PDF scanné sans couche texte n'est pas lu : il n'y a pas d'OCR.
 
+### Workflows
+
+Un workflow enchaîne des étapes : agent (Pénélope travaille jusqu'à `step_done()`),
+sous-agent (contexte neuf, sortie JSON validée), commande shell, outil, question à
+boutons, étapes en parallèle, sous-workflow, attente (délai, événement, cron) et
+vérification des critères. Chaque run a son répertoire de travail et sa carte sur
+Telegram, mise à jour à chaque étape.
+
+```bash
+penelope wf list
+```
+
+```bash
+penelope wf run build-verify --param objectif="corriger le calcul de TVA"
+```
+
+Sur Telegram : `/wf`, `/run build-verify objectif=…`, `/runs`, `/resume <run>`. Une
+question arrive avec ses boutons ; si l'étape attend une précision, le message suivant
+la donne. Un outil soumis à approbation (écriture, push) envoie sa carte comme en
+conversation, et le run reprend après la décision. Un arrêt du daemon reprend chaque run
+à son étape courante sans refaire une commande ou un appel déjà passés.
+
+Les runs se pilotent aussi en ligne de commande :
+
+```bash
+penelope wf control <run> pause
+```
+
+(`resume`, `cancel`, `retry-step`, `skip-step`, `goto:<étape>`, ou `answer --choice …
+--input …`). Un run s'arrête en « bloqué » quand ses itérations, son budget ou sa durée
+sont épuisés, ou quand aucune transition ne convient ; `/resume` le relance. Les
+workflows se déposent dans `{data}/workflows/<id>.workflow.json` (validés au
+chargement) ; le répertoire d'un run éphémère est effacé 7 jours après sa fin.
+
+L'outil `image_generate` produit une image avec l'alias `image` et l'envoie sur
+Telegram.
+
 ### Longues conversations
 
 Quand une conversation approche le seuil de sa fenêtre (70 % par défaut, moins une marge
@@ -605,7 +642,7 @@ questions plutôt que des relances. `penelope approvals` montre ce qui attend un
 ## 11. Ce qui n'est pas encore branché
 
 Conversation (CLI et Telegram), approbations, catalogue de modèles, vocaux et serveurs
-MCP, rappels et déclencheurs, résumé des longues conversations, photos et documents
-fonctionnent. Le moteur de workflows, le rêve nocturne et
-l'OAuth des serveurs MCP ne sont pas encore lancés par le daemon. Voir [progress.md](progress.md) pour
+MCP, rappels et déclencheurs, résumé des longues conversations, photos et documents,
+workflows et génération d'images fonctionnent. Le rêve nocturne et l'OAuth des serveurs MCP ne
+sont pas encore lancés par le daemon. Voir [progress.md](progress.md) pour
 l'état exact.

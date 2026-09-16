@@ -263,12 +263,24 @@ pub enum WfCmd {
         file: PathBuf,
     },
     Runs,
+    /// Démarre un run : `penelope wf run ticket-to-deploy --param ticket_url=https://…`.
+    Run {
+        id: String,
+        #[arg(long = "param")]
+        params: Vec<String>,
+    },
     Trace {
         run: String,
     },
+    /// `pause`, `resume`, `cancel`, `retry-step`, `skip-step`, `goto:<étape>`, ou
+    /// `answer --choice <choix> [--input <texte>]` pour une étape qui pose une question.
     Control {
         run: String,
         op: String,
+        #[arg(long)]
+        choice: Option<String>,
+        #[arg(long)]
+        input: Option<String>,
     },
 }
 
@@ -532,7 +544,19 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Wf(WfCmd::Show { id }) => (m::WF_SHOW, json!({"id": id})),
         Command::Wf(WfCmd::Runs) => (m::WF_RUNS, json!({})),
         Command::Wf(WfCmd::Trace { run }) => (m::WF_TRACE, json!({"run": run})),
-        Command::Wf(WfCmd::Control { run, op }) => (m::WF_CONTROL, json!({"run": run, "op": op})),
+        Command::Wf(WfCmd::Run { id, params }) => (
+            m::WF_RUN,
+            json!({"id": id, "params": penelope_daemon::telegram::parse_params(&params.join(" "))}),
+        ),
+        Command::Wf(WfCmd::Control {
+            run,
+            op,
+            choice,
+            input,
+        }) => (
+            m::WF_CONTROL,
+            json!({"run": run, "op": op, "choice": choice, "input": input}),
+        ),
 
         Command::Schedule(ScheduleCmd::List) => (m::SCHEDULE_LIST, json!({})),
         Command::Schedule(ScheduleCmd::Pause { id }) => (m::SCHEDULE_PAUSE, json!({"id": id})),
@@ -1107,6 +1131,10 @@ mod tests {
             (vec!["session", "list"], m::SESSION_LIST),
             (vec!["session", "model", "main"], m::SESSION_MODEL),
             (vec!["session", "compact"], m::SESSION_COMPACT),
+            (
+                vec!["wf", "run", "build-verify", "--param", "objectif=x"],
+                m::WF_RUN,
+            ),
             (vec!["schedule", "run", "sch_1"], m::SCHEDULE_RUN_NOW),
             (
                 vec![

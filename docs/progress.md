@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1087 tests verts**, tous hors réseau.
+- **1100 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -165,12 +165,36 @@ Dernière mise à jour : 16 septembre 2026.
 - Version minimale de Rust portée à 1.88 (exigée par `lopdf` et `zip`), lints clippy
   associés appliqués.
 
+### 0.2.8
+
+- **Moteur de workflows** (§12.7) : un pilote par run actif, étape courante exécutée,
+  transition choisie, `advance` transactionnel. Étapes `agent` (session du run, outils de
+  workflow, relances bornées jusqu'à `step_done()`), `sub_agent` (contexte neuf, outils
+  en lecture par défaut, `outputSchema` validé en deux tentatives), `shell` et `tool`
+  (ledger d'effets : rejoués après un crash, jamais ré-exécutés ; politique et
+  approbations comme en conversation), `user` (question à boutons, saisie texte),
+  `parallel` (concurrence bornée, agrégat `success`/`partial`/`failure`), `workflow`
+  (profondeur 3), `wait` (délai, événement, cron, `timeoutMs`), `verify` (contrôles puis
+  vérificateur, statuts des critères mis à jour). `retry` avec backoff, bornes
+  d'itérations, de budget (recalculé depuis l'usage du run) et de durée.
+- Admission `hold` (file), `coalesce`, `drop`, `parallel` ; paramètres vérifiés
+  (obligatoires, défauts, inconnus refusés) ; workspace éphémère `{state}/runs/<run>`
+  nettoyé après la rétention, ou persistant.
+- Contrôle `pause`, `resume`, `cancel`, `retry-step`, `skip-step`, `goto` ; `skip-step` et
+  `goto` refusés à l'outil de l'agent. Une décision d'approbation réveille le run.
+- Carte de progression Telegram éditée sur place ; `/run`, `/resume`, `wf.run`,
+  `penelope wf run`, `penelope wf control … answer`. L'ordonnanceur démarre les
+  workflows ciblés.
+- **Sous-agents** (`sub_agent_spawn`) et **génération d'images** (`image_generate`,
+  modalités `image` + `text`, images `data:` enregistrées puis envoyées).
+- Bac à sable macOS : les chemins autorisés sont aussi déclarés sous leur forme résolue
+  (`/var` → `/private/var`, `/tmp`), faute de quoi l'écriture était refusée dans un
+  workspace atteint par un lien symbolique.
+
 ### Encore à brancher
 
 1. **OAuth des serveurs MCP** : flux `paste_back` depuis Telegram, `mcp.auth`.
-2. **Moteur de workflows** : exécuter les runs étape par étape (`wf.run`,
-   `workflow_start`, sous-agents, étapes `user` et `wait`).
-3. **Rêve nocturne et digest** : consolidation des candidats, méthodes `mem.*`.
+2. **Rêve nocturne et digest** : consolidation des candidats, méthodes `mem.*`.
 
 ### Méthodes RPC déclarées mais non servies
 
@@ -180,7 +204,7 @@ silence.
 ```
 session.fork  session.rewind
 mcp.auth
-skill.rollback  wf.run
+skill.rollback
 mem.history  mem.restore  mem.reindex  mem.forget  mem.candidates
 mem.dream  mem.learned  vault.sync  vault.check
 import.hermes  export  restore  store.rebuild  eval.run  upgrade
@@ -188,6 +212,9 @@ import.hermes  export  restore  store.rebuild  eval.run  upgrade
 
 ### Autres manques
 
+- Workflows : sémantique des sous-groupes (échappement par transition taguée), saisie
+  `form:<schema>` des étapes `user` et attente `mcp_task` non implémentées ; le scénario
+  `ticket-to-deploy` de bout en bout contre des mocks (CA 12) reste à écrire.
 - Pas d'OCR : un PDF scanné sans couche texte est signalé, pas lu. L'extraction PDF de
   `lopdf` ignore la mise en page (colonnes, tableaux) et les polices sans table Unicode.
 - `penelope import hermes` (§20.2, point 3) : non implémenté.

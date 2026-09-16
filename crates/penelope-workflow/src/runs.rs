@@ -292,6 +292,53 @@ impl RunStore {
             .await
     }
 
+    /// Répertoire de travail du run, connu une fois le run créé.
+    pub async fn set_workdir(&self, run_id: &str, workdir: &str) -> penelope_store::Result<()> {
+        let (id, w) = (run_id.to_string(), workdir.to_string());
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "UPDATE workflow_runs SET workdir = ?2 WHERE id = ?1",
+                    params![id, w],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Oublie le répertoire de travail d'un run, une fois nettoyé.
+    pub async fn forget_workdir(&self, run_id: &str) -> penelope_store::Result<()> {
+        let id = run_id.to_string();
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "UPDATE workflow_runs SET workdir = NULL WHERE id = ?1",
+                    params![id],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Dépense du run, recalculée depuis le ledger d'usage.
+    pub async fn set_spent(
+        &self,
+        run_id: &str,
+        usd: f64,
+        tokens: u64,
+    ) -> penelope_store::Result<()> {
+        let id = run_id.to_string();
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "UPDATE workflow_runs SET spent_usd = ?2, spent_tokens = ?3 WHERE id = ?1",
+                    params![id, usd, tokens as i64],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
     pub async fn set_state(
         &self,
         run_id: &str,

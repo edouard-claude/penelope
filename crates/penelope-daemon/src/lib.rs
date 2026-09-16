@@ -9,6 +9,7 @@ pub mod conversation;
 pub mod doctor;
 pub mod engine;
 pub mod executor;
+pub mod images;
 pub mod ingest;
 pub mod mcp;
 pub mod media;
@@ -20,6 +21,7 @@ pub mod selfknow;
 pub mod supervisor;
 pub mod telegram;
 pub mod vault_ops;
+pub mod workflow;
 
 pub use agent::{AgentLoop, TurnOutcome};
 pub use runtime::{Daemon, DaemonHandle, Services};

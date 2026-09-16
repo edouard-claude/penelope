@@ -208,6 +208,19 @@ impl StreamAccumulator {
                 self.refusal.push_str(t);
                 out.push(StreamChunk::Refusal { text: t.into() });
             }
+            // Génération d'image : `images: [{type: "image_url", image_url: {url}}]`.
+            if let Some(images) = delta.get("images").and_then(|i| i.as_array()) {
+                for img in images {
+                    if let Some(url) = img
+                        .get("image_url")
+                        .and_then(|u| u.get("url"))
+                        .and_then(|u| u.as_str())
+                        .filter(|u| !u.is_empty())
+                    {
+                        out.push(StreamChunk::Image { url: url.into() });
+                    }
+                }
+            }
             if let Some(details) = delta.get("reasoning_details")
                 && details.as_array().map(|a| !a.is_empty()).unwrap_or(false)
             {
@@ -648,6 +661,19 @@ mod tests {
             parse_usage(&serde_json::json!({"prompt_tokens": 1})).cost_usd,
             None
         );
+    }
+
+    #[test]
+    fn generated_images_are_collected() {
+        let mut a = StreamAccumulator::new();
+        let out = a.push_payload(
+            r#"{"id":"1","model":"m","choices":[{"delta":{"content":"Voici.",
+               "images":[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo="}}]}}]}"#,
+        );
+        assert!(out.iter().any(|c| matches!(
+            c,
+            StreamChunk::Image { url } if url.starts_with("data:image/png;base64,")
+        )));
     }
 
     #[test]
