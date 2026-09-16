@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1041 tests verts**, tous hors réseau.
+- **1049 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -113,16 +113,26 @@ Dernière mise à jour : 16 septembre 2026.
   `/mcp`, contrôles `doctor`, état dans `self_status`. Validé contre un vrai serveur
   mcp-go (37 outils) sous bac à sable.
 
+### 0.2.5
+
+- **Ordonnanceur** : cron (fuseau du propriétaire, tir unique `once` pour les rappels
+  datés), intervalle, `mcp_poll` (outils en lecture seulement, amorçage sans tir,
+  déduplication, coalescence des notifications), `watch_file`, `event` (fenêtre
+  d'événements bornée, historique ignoré). Cibles `notify` (sans modèle), `prompt` (tour
+  déclencheur dans la conversation d'origine) et `workflow`. Tir manqué rattrapé une fois.
+  `schedule.add` et `schedule.run_now`, `penelope schedule add|run`, `/schedules`.
+- **Intentions** : une intention armée revient dans le contexte du message qui la
+  réveille, tire une fois par tour même rejoué ; une intention datée est redirigée vers
+  un déclencheur.
+
 ### Encore à brancher
 
 1. **OAuth des serveurs MCP** : flux `paste_back` depuis Telegram, `mcp.auth`.
-2. **Ordonnanceur** : faire battre les schedules (cron, intervalle, `mcp_poll`) et les
-   intentions.
-3. **Moteur de workflows** : exécuter les runs étape par étape (`wf.run`,
+2. **Moteur de workflows** : exécuter les runs étape par étape (`wf.run`,
    `workflow_start`, sous-agents, étapes `user` et `wait`).
-4. **Rêve nocturne et digest** : consolidation des candidats, méthodes `mem.*`.
-5. **Pièces jointes Telegram** : photos (vision) et documents ; les vocaux sont branchés.
-6. **Compaction de niveau 3** (résumés LCM) déclenchée en fond pendant les longues sessions.
+3. **Rêve nocturne et digest** : consolidation des candidats, méthodes `mem.*`.
+4. **Pièces jointes Telegram** : photos (vision) et documents ; les vocaux sont branchés.
+5. **Compaction de niveau 3** (résumés LCM) déclenchée en fond pendant les longues sessions.
 
 ### Méthodes RPC déclarées mais non servies
 
@@ -132,7 +142,7 @@ silence.
 ```
 session.fork  session.rewind  session.compact
 mcp.auth
-skill.rollback  wf.run  schedule.add  schedule.run_now
+skill.rollback  wf.run
 mem.history  mem.restore  mem.reindex  mem.forget  mem.candidates
 mem.dream  mem.learned  vault.sync  vault.check
 import.hermes  export  restore  store.rebuild  eval.run  upgrade

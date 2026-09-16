@@ -270,9 +270,30 @@ pub enum WfCmd {
 #[derive(Subcommand, Debug)]
 pub enum ScheduleCmd {
     List,
-    Pause { id: String },
-    Resume { id: String },
-    Rm { id: String },
+    /// Crée un déclencheur : `penelope schedule add cron --spec '{"expr":"0 9 * * 1"}'
+    /// --target '{"type":"notify","template":"⏰ Revue hebdo"}'`.
+    Add {
+        kind: String,
+        #[arg(long)]
+        spec: String,
+        #[arg(long)]
+        target: String,
+        #[arg(long)]
+        dedup: Option<String>,
+    },
+    Pause {
+        id: String,
+    },
+    Resume {
+        id: String,
+    },
+    Rm {
+        id: String,
+    },
+    /// Déclenche tout de suite, hors calendrier.
+    Run {
+        id: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -506,6 +527,30 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Schedule(ScheduleCmd::Pause { id }) => (m::SCHEDULE_PAUSE, json!({"id": id})),
         Command::Schedule(ScheduleCmd::Resume { id }) => (m::SCHEDULE_RESUME, json!({"id": id})),
         Command::Schedule(ScheduleCmd::Rm { id }) => (m::SCHEDULE_RM, json!({"id": id})),
+        Command::Schedule(ScheduleCmd::Run { id }) => (m::SCHEDULE_RUN_NOW, json!({"id": id})),
+        Command::Schedule(ScheduleCmd::Add {
+            kind,
+            spec,
+            target,
+            dedup,
+        }) => {
+            let json_arg = |name: &str, raw: &str| {
+                serde_json::from_str::<Value>(raw)
+                    .map_err(|e| CliError::Usage(format!("--{name} n'est pas du JSON : {e}")))
+            };
+            (
+                m::SCHEDULE_ADD,
+                json!({
+                    "kind": kind,
+                    "spec": json_arg("spec", spec)?,
+                    "target": json_arg("target", target)?,
+                    "dedup": match dedup {
+                        Some(d) => json_arg("dedup", d)?,
+                        None => json!({}),
+                    },
+                }),
+            )
+        }
 
         Command::Mem(MemCmd::Search { query }) => (m::MEM_SEARCH, json!({"query": query})),
         Command::Mem(MemCmd::Show { uid }) => (m::MEM_SHOW, json!({"uid": uid})),
@@ -1050,6 +1095,19 @@ mod tests {
             (vec!["backup"], m::BACKUP),
             (vec!["session", "list"], m::SESSION_LIST),
             (vec!["session", "model", "main"], m::SESSION_MODEL),
+            (vec!["schedule", "run", "sch_1"], m::SCHEDULE_RUN_NOW),
+            (
+                vec![
+                    "schedule",
+                    "add",
+                    "cron",
+                    "--spec",
+                    "{\"expr\":\"0 9 * * 1\"}",
+                    "--target",
+                    "{\"type\":\"notify\",\"template\":\"revue\"}",
+                ],
+                m::SCHEDULE_ADD,
+            ),
             (vec!["mcp", "list"], m::MCP_LIST),
             (vec!["mcp", "show", "redmine"], m::MCP_SHOW),
             (vec!["mcp", "rm", "redmine"], m::MCP_RM),

@@ -451,6 +451,31 @@ Pas encore branché : l'autorisation OAuth des serveurs HTTP (ils restent en
 « autorisation requise »), le sampling (refusé) et les formulaires d'elicitation
 (déclinés).
 
+### Rappels et tâches planifiées
+
+L'ordonnanceur passe toutes les dix secondes. « Rappelle-moi vendredi à 9 h d'appeler
+Paul » devient un déclencheur `cron` à tir unique (`once`) dont la cible `notify` envoie
+le message tel quel, sans appel au modèle ; « chaque lundi à 8 h, fais le point sur mes
+tickets » garde le `cron` sans `once` avec une cible `prompt`, qui fait travailler
+Pénélope à l'heure dite dans la conversation d'origine. Un rappel manqué pendant un
+arrêt part une fois au redémarrage.
+
+Les autres déclencheurs : `interval` (toutes les N minutes), `mcp_poll` (un outil MCP en
+lecture interrogé à intervalle ; seuls les éléments nouveaux déclenchent, le premier
+passage ne fait que mémoriser l'existant), `watch_file` (un fichier modifié) et `event`
+(un événement du journal, `run.done` par exemple). La création passe par une approbation.
+
+Sur Telegram, `/schedules` liste les déclencheurs et `/schedules pause|resume|rm|run <id>`
+les gère. En ligne de commande :
+
+```bash
+penelope schedule list
+```
+
+Une « intention » est l'autre mémoire prospective : « quand on reparle du déploiement,
+rappelle-moi le changelog » reste armée et revient dans le contexte du premier message
+qui en parle (trois fois au plus, une fois par jour au plus).
+
 ## 7. Premier essai en CLI
 
 Dans un premier terminal, le daemon au premier plan (les journaux s'affichent) :
@@ -536,6 +561,6 @@ questions plutôt que des relances. `penelope approvals` montre ce qui attend un
 ## 11. Ce qui n'est pas encore branché
 
 Conversation (CLI et Telegram), approbations, catalogue de modèles, vocaux et serveurs
-MCP fonctionnent. L'ordonnanceur, le moteur de workflows, le rêve nocturne et l'OAuth des
-serveurs MCP ne sont pas encore lancés par le daemon. Voir [progress.md](progress.md) pour
+MCP, rappels et déclencheurs fonctionnent. Le moteur de workflows, le rêve nocturne et
+l'OAuth des serveurs MCP ne sont pas encore lancés par le daemon. Voir [progress.md](progress.md) pour
 l'état exact.

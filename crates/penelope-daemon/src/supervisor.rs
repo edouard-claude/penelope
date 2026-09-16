@@ -41,6 +41,7 @@ impl Daemon {
             tokio::spawn(crate::runner::run_pool(self.clone())),
             tokio::spawn(maintenance_loop(self.clone())),
             tokio::spawn(catalog_loop(self.clone())),
+            tokio::spawn(crate::scheduler::scheduler_loop(self.clone())),
         ];
 
         // Serveurs MCP de `mcp.d/` : chargés en fond, pour ne pas retarder le démarrage.

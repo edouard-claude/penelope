@@ -535,6 +535,17 @@ impl NativeToolExecutor {
             }
             "intent_create" => {
                 let texte = str_arg(args, "texte")?;
+                if let penelope_memory::intents::IntentKind::Temporal(when) =
+                    penelope_memory::intents::classify_intent(&texte)
+                {
+                    return Err(ToolError::Invalid(format!(
+                        "intention datée (« {when} ») : c'est un rappel, pas une intention. \
+                         Utiliser `schedule_create` avec kind `cron`, spec `{{\"expr\": \"<minute> \
+                         <heure> <jour> <mois> *\", \"once\": true}}` (sans `once` s'il se répète) \
+                         et target `{{\"type\": \"notify\", \"template\": \"⏰ …\"}}` ; `time_now` \
+                         donne la date du jour"
+                    )));
+                }
                 let mut triggers: Vec<String> = args
                     .get("declencheurs")
                     .and_then(|v| v.as_array())
@@ -1047,6 +1058,31 @@ mod tests {
             turn_model: None,
         };
         (dir, NativeToolExecutor::new(s, env))
+    }
+
+    #[tokio::test]
+    async fn a_dated_intent_is_redirected_to_a_schedule() {
+        let (_d, x) = executor().await;
+        let e = x
+            .execute(
+                "intent_create",
+                &json!({"texte": "rappelle-moi vendredi d'appeler Paul"}),
+            )
+            .await
+            .unwrap_err();
+        let msg = e.to_string();
+        assert!(
+            msg.contains("schedule_create") && msg.contains("once"),
+            "{msg}"
+        );
+        let ok = x
+            .execute(
+                "intent_create",
+                &json!({"texte": "quand on reparle du déploiement, rappelle-moi le changelog"}),
+            )
+            .await
+            .unwrap();
+        assert!(ok.value["id"].as_str().unwrap().starts_with("i_"));
     }
 
     #[tokio::test]

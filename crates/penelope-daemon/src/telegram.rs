@@ -468,6 +468,34 @@ impl TelegramGateway {
                 }
                 t
             }
+            "schedules" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                let by_id = |method: &'static str, id: &str| rpc.call(method, json!({"id": id}));
+                match parts.as_slice() {
+                    [] => match rpc.call(m::SCHEDULE_LIST, json!({})).await {
+                        Ok(v) => schedules_text(&v),
+                        Err(e) => format!("❌ {e}"),
+                    },
+                    [op @ ("pause" | "resume" | "rm" | "run"), id] => {
+                        let method = match *op {
+                            "pause" => m::SCHEDULE_PAUSE,
+                            "resume" => m::SCHEDULE_RESUME,
+                            "rm" => m::SCHEDULE_RM,
+                            _ => m::SCHEDULE_RUN_NOW,
+                        };
+                        match by_id(method, id).await {
+                            Ok(_) => match *op {
+                                "pause" => format!("⏸ `{id}` en pause."),
+                                "resume" => format!("▶️ `{id}` repris."),
+                                "rm" => format!("🗑 `{id}` supprimé."),
+                                _ => format!("⚡ `{id}` déclenché."),
+                            },
+                            Err(e) => format!("❌ {e}"),
+                        }
+                    }
+                    _ => "Usage : `/schedules`, `/schedules pause|resume|rm|run <id>`".into(),
+                }
+            }
             "mcp" => {
                 let parts: Vec<&str> = args.split_whitespace().collect();
                 let call =
@@ -1689,6 +1717,66 @@ fn audio_filename(file_path: &str, file_name: Option<&str>, mime_type: Option<&s
     format!("audio.{ext}")
 }
 
+/// `/schedules` : un déclencheur par ligne, prochain passage et cible.
+fn schedules_text(v: &Value) -> String {
+    let list = v.as_array().cloned().unwrap_or_default();
+    if list.is_empty() {
+        return "Aucun déclencheur planifié.".into();
+    }
+    let mut t = String::from("**Déclencheurs**\n\n");
+    for sc in &list {
+        let state = sc["state"].as_str().unwrap_or("?");
+        let icon = match state {
+            "active" => "🟢",
+            "paused" => "⏸",
+            "done" => "✅",
+            _ => "⚪",
+        };
+        let spec = &sc["spec"];
+        let when = match sc["kind"].as_str().unwrap_or("?") {
+            "cron" => format!(
+                "cron `{}`{}",
+                spec["expr"].as_str().unwrap_or("?"),
+                if spec["once"].as_bool() == Some(true) {
+                    " (une fois)"
+                } else {
+                    ""
+                }
+            ),
+            "interval" | "mcp_poll" => format!(
+                "{} toutes les {} min",
+                sc["kind"].as_str().unwrap_or("?"),
+                spec["every_ms"].as_u64().unwrap_or(0) / 60_000
+            ),
+            "watch_file" => format!("fichier `{}`", spec["path"].as_str().unwrap_or("?")),
+            other => format!("{other} `{}`", spec["event"].as_str().unwrap_or("?")),
+        };
+        let target = &sc["target"];
+        let what = match target["type"].as_str().unwrap_or("?") {
+            "notify" => target["template"].as_str().unwrap_or("").to_string(),
+            "prompt" => target["prompt"].as_str().unwrap_or("").to_string(),
+            "workflow" => format!("workflow {}", target["workflowId"].as_str().unwrap_or("?")),
+            other => other.to_string(),
+        };
+        t.push_str(&format!(
+            "{icon} `{}` · {when} · {}\n",
+            sc["id"].as_str().unwrap_or("?"),
+            what.chars().take(80).collect::<String>()
+        ));
+        if let Some(next) = sc["next_run"].as_str().filter(|_| state == "active") {
+            t.push_str(&format!("   ↳ prochain : {next}\n"));
+        }
+        if let Some(e) = sc["last_error"].as_str() {
+            t.push_str(&format!(
+                "   ↳ erreur : {}\n",
+                e.chars().take(160).collect::<String>()
+            ));
+        }
+    }
+    t.push_str("\n`/schedules pause|resume|rm|run <id>`");
+    t
+}
+
 fn mcp_state_icon(state: &str) -> &'static str {
     match state {
         "ready" => "🟢",
@@ -2444,6 +2532,52 @@ mod tests {
         assert!(out[2].contains("redémarré"), "{out:?}");
         assert!(out[3].contains("Aucune ligne"), "{out:?}");
         assert_eq!(fake.opened("redmine"), 2);
+    }
+
+    #[tokio::test]
+    async fn schedules_are_listed_paused_and_run_from_telegram() {
+        let (_d, g, t, _p) = gateway().await;
+        let sched = g
+            .daemon
+            .services
+            .schedules
+            .create(
+                penelope_workflow::TriggerKind::Cron,
+                json!({"expr": "0 9 * * 1"}),
+                json!({"type": "notify", "template": "⏰ Revue hebdo"}),
+                json!({}),
+            )
+            .await
+            .unwrap();
+        let id = sched.id.clone();
+        for (i, text) in [
+            "/schedules".to_string(),
+            format!("/schedules pause {id}"),
+            format!("/schedules run {id}"),
+            "/schedules".to_string(),
+        ]
+        .iter()
+        .enumerate()
+        {
+            g.process_update(&updates::text_message(90 + i as i64, OWNER, OWNER, text))
+                .await
+                .unwrap();
+        }
+        drain(&g).await;
+        let out = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            out[0].contains("0 9 * * 1") && out[0].contains("Revue hebdo"),
+            "{out:?}"
+        );
+        assert!(out[1].contains("en pause"), "{out:?}");
+        // Le tir immédiat envoie le rappel lui-même, puis la confirmation.
+        assert!(
+            out.iter()
+                .any(|m| m.contains("⏰ Revue hebdo") && !m.contains("cron")),
+            "{out:?}"
+        );
+        assert!(out.iter().any(|m| m.contains("déclenché")), "{out:?}");
+        assert!(out.last().unwrap().contains("⏸"), "{out:?}");
     }
 
     #[tokio::test]

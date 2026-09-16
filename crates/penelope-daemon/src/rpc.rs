@@ -484,6 +484,29 @@ impl Rpc {
 
             // ------------------------------------------------------------ schedules
             method::SCHEDULE_LIST => Ok(serde_json::to_value(s.schedules.list().await?)?),
+            method::SCHEDULE_ADD => {
+                let kind = penelope_workflow::TriggerKind::parse(&required_str(p, "kind")?)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "kind inconnu : cron, interval, mcp_poll, watch_file ou event"
+                        )
+                    })?;
+                let sched = s
+                    .schedules
+                    .create(
+                        kind,
+                        p.get("spec").cloned().unwrap_or(json!({})),
+                        p.get("target").cloned().unwrap_or(json!({})),
+                        p.get("dedup").cloned().unwrap_or(json!({})),
+                    )
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                Ok(serde_json::to_value(sched)?)
+            }
+            method::SCHEDULE_RUN_NOW => {
+                let id = required_str(p, "id")?;
+                crate::scheduler::run_now(&self.daemon, &id).await
+            }
             method::SCHEDULE_PAUSE => {
                 s.schedules
                     .set_state(&required_str(p, "id")?, "paused")
@@ -1218,8 +1241,6 @@ mod tests {
             "mcp.auth",
             "skill.rollback",
             "wf.run",
-            "schedule.add",
-            "schedule.run_now",
             "mem.history",
             "mem.restore",
             "mem.reindex",

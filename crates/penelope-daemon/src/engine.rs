@@ -287,7 +287,11 @@ impl Daemon {
             Some(m) => m.server_lines().await,
             None => Vec::new(),
         };
-        let tiers = build_tiers(&s, &text, &mcp_lines, None).await;
+        let mut tiers = build_tiers(&s, &text, &mcp_lines, None).await;
+        if let Some(block) = self.intents_block(turn, &text).await? {
+            tiers.volatile.push_str("\n\n");
+            tiers.volatile.push_str(&block);
+        }
         let conv = SessionConversation::new(
             s.clone(),
             &turn.session_id,
@@ -341,6 +345,46 @@ impl Daemon {
         AgentLoop::new(s.clone(), provider)
             .run_conversation(&spec, &conv, &exec, sink)
             .await
+    }
+
+    /// Intentions armées que ce message réveille (§6.9) : elles tirent une fois, et leur
+    /// texte rejoint le contexte volatil du tour. Un tour rejoué retrouve le même bloc
+    /// sans tirer une seconde fois.
+    async fn intents_block(&self, turn: &Turn, text: &str) -> anyhow::Result<Option<String>> {
+        if turn.kind != TurnKind::Message || text.trim().is_empty() {
+            return Ok(None);
+        }
+        let key = format!("turn.intents.{}", turn.id);
+        if let Some(saved) = self.kv_get(&key).await? {
+            return Ok((!saved.is_empty()).then_some(saved));
+        }
+        let s = &self.services;
+        let max = s.config.config().memory.intents.max_per_turn.max(1);
+        let matches = s.intents.matching(text, None, 0.5, max).await?;
+        let mut lines = Vec::new();
+        for i in &matches {
+            s.intents.fire(&i.id).await?;
+            s.events
+                .append(
+                    penelope_kernel::event::EventDraft::new(
+                        "intent.fired",
+                        json!({"intent": i.id, "texte": i.texte}),
+                    )
+                    .session(&turn.session_id),
+                )
+                .await?;
+            lines.push(format!("- {} (intention {})", i.texte, i.id));
+        }
+        let block = if lines.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "Intentions armées que ce message concerne, à honorer dans la réponse :\n{}",
+                lines.join("\n")
+            )
+        };
+        self.kv_set(&key, &block).await?;
+        Ok((!block.is_empty()).then_some(block))
     }
 
     /// Transcrit un audio avec le modèle du rôle `stt` (§14.4) et en compte le coût.
@@ -995,6 +1039,66 @@ mod tests {
             1,
             "delete_issue n'a jamais atteint le serveur"
         );
+    }
+
+    #[tokio::test]
+    async fn an_armed_intent_comes_back_with_the_message_that_mentions_it() {
+        let (_dir, d, p) = daemon().await;
+        let s = &d.services;
+        let intent = s
+            .intents
+            .create(
+                "rappeler le changelog de la 0.3",
+                vec!["déploiement".into()],
+                None,
+                86_400_000,
+                3,
+                None,
+            )
+            .await
+            .unwrap();
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        p.reply("Noté, et voici le changelog.");
+        d.enqueue_message(
+            &sid,
+            "on prépare le déploiement de vendredi",
+            &Origin::Cli,
+            None,
+        )
+        .await
+        .unwrap();
+        let turn = claim(&d).await;
+        d.run_turn(&turn).await;
+        d.run_turn(&turn).await; // rejoué : même bloc, pas de second tir
+
+        let req = p.requests()[0].clone();
+        let last_user = req
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == penelope_llm::types::Role::User)
+            .unwrap()
+            .text();
+        assert!(
+            last_user.contains("rappeler le changelog de la 0.3"),
+            "{last_user}"
+        );
+        assert!(
+            p.requests()[1]
+                .messages
+                .iter()
+                .any(|m| m.text().contains("changelog de la 0.3"))
+        );
+        let after = s
+            .intents
+            .all()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|i| i.id == intent.id)
+            .unwrap();
+        assert_eq!(after.tirs, 1);
     }
 
     #[tokio::test]

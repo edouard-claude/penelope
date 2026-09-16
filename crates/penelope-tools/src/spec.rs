@@ -276,8 +276,14 @@ pub fn all() -> Vec<ToolSpec> {
         spec(
             "schedule_create",
             RiskClass::Write,
-            "Crée un déclencheur planifié. Un aperçu et une approbation précèdent \
-             l'activation.",
+            "Crée un déclencheur planifié, soumis à approbation. Rappel daté : kind \
+             `cron`, spec `{\"expr\": \"0 9 20 9 *\", \"once\": true}` (fuseau du \
+             propriétaire par défaut, `tz` pour un autre), target `{\"type\": \"notify\", \
+             \"template\": \"⏰ Appeler Paul\"}`. Tâche récurrente : sans `once`, ou target \
+             `{\"type\": \"prompt\", \"prompt\": \"…\"}` pour travailler à l'heure dite. \
+             Autres kinds : `interval` (`every_ms`), `mcp_poll` (`server`, `tool` en lecture, \
+             `args`, `every_ms` ≥ 60000, `item_path`, `id_path`, `filter`), `watch_file` \
+             (`path`), `event` (`event`). Le retour arrive dans cette conversation.",
             obj(
                 json!({
                     "kind": {"type":"string","enum":["cron","interval","mcp_poll","watch_file","event"]},
@@ -411,7 +417,9 @@ pub fn all() -> Vec<ToolSpec> {
         spec(
             "intent_create",
             RiskClass::Write,
-            "Arme une intention : temporelle (compilée en schedule) ou événementielle.",
+            "Arme une intention événementielle : « quand on reparle de X, rappelle-moi Y ». \
+             Elle revient dans le contexte du message qui en parle. Pour un rappel daté, \
+             utiliser `schedule_create`.",
             obj(
                 json!({"texte": {"type":"string"}, "declencheurs": {"type":"array","items":{"type":"string"}}}),
                 &["texte"],
