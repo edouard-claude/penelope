@@ -35,10 +35,15 @@ pub trait ServiceManager: Send + Sync {
 pub const SERVICE_LABEL: &str = "com.penelope.daemon";
 
 /// Génère le `plist` du LaunchAgent macOS.
+///
+/// `path` est le PATH du terminal qui lance `penelope install`, enrichi : `launchd` ne
+/// fournit sinon que les répertoires système, et le daemon ne trouverait ni `npx`, ni
+/// `uvx`, ni `docker`.
 pub fn launchd_plist(
     exe: &std::path::Path,
     home: Option<&std::path::Path>,
     logs: &std::path::Path,
+    path: &str,
 ) -> String {
     let mut args = format!(
         "        <string>{}</string>\n        <string>daemon</string>\n",
@@ -74,12 +79,15 @@ pub fn launchd_plist(
     <dict>
         <key>PENELOPE_SERVICE</key>
         <string>1</string>
+        <key>PATH</key>
+        <string>{path}</string>
     </dict>
 </dict>
 </plist>
 "#,
         out = xml_escape(&logs.join("daemon.out.log").to_string_lossy()),
         err = xml_escape(&logs.join("daemon.err.log").to_string_lossy()),
+        path = xml_escape(path),
     )
 }
 
@@ -121,8 +129,12 @@ mod tests {
             Path::new("/usr/local/bin/penelope"),
             None,
             Path::new("/tmp/logs"),
+            "/opt/homebrew/bin:/usr/bin:/bin",
         );
         assert!(p.contains("<key>KeepAlive</key>\n    <true/>"));
+        assert!(
+            p.contains("<key>PATH</key>\n        <string>/opt/homebrew/bin:/usr/bin:/bin</string>")
+        );
         assert!(p.contains("<key>RunAtLoad</key>\n    <true/>"));
         assert!(p.contains("<string>Interactive</string>"));
         assert!(p.contains("com.penelope.daemon"));
@@ -135,6 +147,7 @@ mod tests {
             Path::new("/usr/local/bin/penelope"),
             Some(Path::new("/srv/penelope")),
             Path::new("/tmp/logs"),
+            "/usr/bin",
         );
         assert!(p.contains("--home"));
         assert!(p.contains("/srv/penelope"));
@@ -142,7 +155,12 @@ mod tests {
 
     #[test]
     fn plist_escapes_xml() {
-        let p = launchd_plist(Path::new("/opt/a&b/penelope"), None, Path::new("/tmp"));
+        let p = launchd_plist(
+            Path::new("/opt/a&b/penelope"),
+            None,
+            Path::new("/tmp"),
+            "/usr/bin",
+        );
         assert!(p.contains("/opt/a&amp;b/penelope"));
     }
 

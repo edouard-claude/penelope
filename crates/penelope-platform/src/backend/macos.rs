@@ -309,7 +309,11 @@ impl ServiceManager for LaunchdService {
         if let Some(p) = self.plist.parent() {
             std::fs::create_dir_all(p)?;
         }
-        std::fs::write(&self.plist, launchd_plist(exe, home, &self.logs))?;
+        let path = crate::process::search_path();
+        std::fs::write(
+            &self.plist,
+            launchd_plist(exe, home, &self.logs, &path.to_string_lossy()),
+        )?;
         // `bootstrap` est l'API moderne ; `load -w` reste le repli sur les anciens macOS.
         let out = Self::launchctl(&["bootstrap", &Self::domain(), &self.plist.to_string_lossy()]);
         if out.map(|o| !o.status.success()).unwrap_or(true) {
@@ -330,6 +334,27 @@ impl ServiceManager for LaunchdService {
 
     fn start(&self) -> Result<()> {
         let target = format!("{}/{SERVICE_LABEL}", Self::domain());
+        // Après un `stop`, le service est déchargé : il faut le recharger avant de le lancer.
+        let loaded = Self::launchctl(&["print", &target])
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !loaded {
+            if !self.plist.exists() {
+                return Err(PlatformError::Service(
+                    "service non installé : `penelope install`".into(),
+                ));
+            }
+            let out =
+                Self::launchctl(&["bootstrap", &Self::domain(), &self.plist.to_string_lossy()])
+                    .map_err(|e| PlatformError::Service(e.to_string()))?;
+            if !out.status.success() {
+                return Err(PlatformError::Service(format!(
+                    "launchctl bootstrap : {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                )));
+            }
+            return Ok(());
+        }
         let out = Self::launchctl(&["kickstart", "-k", &target])
             .map_err(|e| PlatformError::Service(e.to_string()))?;
         if !out.status.success() {
@@ -342,8 +367,21 @@ impl ServiceManager for LaunchdService {
     }
 
     fn stop(&self) -> Result<()> {
+        // `kill SIGTERM` ne suffit pas : avec `KeepAlive`, launchd relance aussitôt. On
+        // décharge le service ; le plist reste en place, `start` le recharge.
         let target = format!("{}/{SERVICE_LABEL}", Self::domain());
-        let _ = Self::launchctl(&["kill", "SIGTERM", &target]);
+        let out = Self::launchctl(&["bootout", &target])
+            .map_err(|e| PlatformError::Service(e.to_string()))?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr).to_lowercase();
+            // Déjà arrêté : ce n'est pas une erreur.
+            if !(err.contains("no such process") || err.contains("could not find")) {
+                return Err(PlatformError::Service(format!(
+                    "launchctl bootout : {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -442,21 +480,23 @@ pub fn doctor_checks() -> Vec<crate::DoctorItem> {
         });
     }
 
-    // Accès distant (SSH).
-    let rl = Command::new("/usr/sbin/systemsetup")
-        .arg("-getremotelogin")
-        .output();
-    if let Ok(o) = rl {
-        let t = String::from_utf8_lossy(&o.stdout);
-        let on = t.to_lowercase().contains("on");
-        v.push(crate::DoctorItem {
-            id: "macos.remote_login".into(),
-            label: "Accès distant (Remote Login)".into(),
-            ok: on,
-            detail: t.trim().to_string(),
-            fix: (!on).then(|| "sudo systemsetup -setremotelogin on".to_string()),
-        });
-    }
+    // Accès distant (SSH). `systemsetup -getremotelogin` exige les droits
+    // administrateur : on regarde plutôt si `sshd` écoute sur le port 22.
+    let addr: std::net::SocketAddr = ([127, 0, 0, 1], 22).into();
+    let on =
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok();
+    v.push(crate::DoctorItem {
+        id: "macos.remote_login".into(),
+        label: "Accès distant (Remote Login)".into(),
+        ok: on,
+        detail: if on {
+            "sshd écoute sur le port 22".into()
+        } else {
+            "aucun service SSH sur le port 22".into()
+        },
+        fix: (!on)
+            .then(|| "Réglages Système → Général → Partage → Connexion à distance".to_string()),
+    });
 
     // Bac à sable.
     let cov = SeatbeltSandbox.coverage();

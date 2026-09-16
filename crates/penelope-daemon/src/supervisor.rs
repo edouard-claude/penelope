@@ -19,6 +19,21 @@ use std::time::Duration;
 impl Daemon {
     /// Fait tourner le daemon jusqu'à l'arrêt.
     pub async fn run(self: Arc<Self>) -> anyhow::Result<()> {
+        // Un seul daemon par répertoire : la socket est prise avant toute autre chose.
+        let socket = self.services.platform.dirs.socket_path();
+        let listener = penelope_platform::ipc::IpcListener::bind(&socket)
+            .await
+            .map_err(|e| {
+                let logs = self.services.platform.dirs.logs();
+                anyhow::anyhow!(
+                    "{e}\n→ un daemon tourne déjà, probablement le service installé : inutile \
+                     d'en lancer un second. Utiliser directement `penelope chat`.\n\
+                     → journaux du service : tail -f \"{}\"\n\
+                     → pour déboguer au premier plan : `penelope stop`, puis `penelope daemon`",
+                    logs.join("daemon.err.log").display()
+                )
+            })?;
+
         let report = self.recover().await?;
         tracing::info!(?report, "reprise terminée");
 
@@ -39,7 +54,7 @@ impl Daemon {
             Err(e) => tracing::error!(error = %e, "Telegram non démarré"),
         }
 
-        let serve = crate::rpc::serve(self.clone());
+        let serve = crate::rpc::serve_on(self.clone(), listener);
         tokio::select! {
             r = serve => {
                 if let Err(e) = r {

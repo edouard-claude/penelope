@@ -687,11 +687,23 @@ fn set_config_path(daemon: &Daemon, path: &str, value: Value) -> anyhow::Result<
 
 /// Sert la socket locale jusqu'à l'arrêt du daemon.
 pub async fn serve(daemon: Arc<Daemon>) -> anyhow::Result<()> {
-    use tokio::io::{AsyncBufReadExt, BufReader};
-
     let path = daemon.services.platform.dirs.socket_path();
     let listener = penelope_platform::ipc::IpcListener::bind(&path).await?;
-    tracing::info!(socket = %path.display(), "RPC à l'écoute");
+    serve_on(daemon, listener).await
+}
+
+/// Sert une socket déjà ouverte. Le daemon l'ouvre **avant** de lancer ses boucles : un
+/// second daemon s'arrête ainsi avant d'avoir touché à la file des tours.
+pub async fn serve_on(
+    daemon: Arc<Daemon>,
+    listener: penelope_platform::ipc::IpcListener,
+) -> anyhow::Result<()> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    tracing::info!(
+        socket = %daemon.services.platform.dirs.socket_path().display(),
+        "RPC à l'écoute"
+    );
     let rpc = Arc::new(Rpc::new(daemon.clone()));
 
     loop {

@@ -8,9 +8,13 @@ use penelope_kernel::api::DoctorCheck;
 
 /// Exécute tous les contrôles.
 pub async fn run(s: &Services) -> Vec<DoctorCheck> {
-    let mut checks: Vec<DoctorCheck> = s
-        .platform
-        .doctor()
+    // Les contrôles de l'OS lancent des sous-processus (`pmset`, `docker --version`…) :
+    // hors des fils asynchrones, pour ne pas geler les tours en cours.
+    let platform = s.platform.clone();
+    let os_checks = tokio::task::spawn_blocking(move || platform.doctor())
+        .await
+        .unwrap_or_default();
+    let mut checks: Vec<DoctorCheck> = os_checks
         .into_iter()
         .map(|i| DoctorCheck {
             id: i.id,
@@ -54,6 +58,19 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
             continue;
         }
         let present = s.platform.secrets.get(name).ok().flatten().is_some();
+        let (detail, fix) = match name {
+            "telegram_bot_token" => (
+                "absent du magasin : c'est le jeton du bot donné par @BotFather, pas ton \
+                 identifiant (owner.telegram_user_id)",
+                "dans Telegram, écrire à @BotFather puis /newbot ; puis \
+                 `penelope secret set telegram_bot_token` et coller le jeton à l'invite",
+            ),
+            _ => (
+                "absent du magasin",
+                "créer une clé sur https://openrouter.ai/keys, puis \
+                 `penelope secret set openrouter_api_key` et coller la clé à l'invite",
+            ),
+        };
         checks.push(if present {
             DoctorCheck::ok(
                 &format!("secret.{name}"),
@@ -64,8 +81,8 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
             DoctorCheck::fail(
                 &format!("secret.{name}"),
                 &format!("Secret `{name}`"),
-                "absent du magasin",
-                Some(format!("penelope secret set {name}")),
+                detail,
+                Some(fix.to_string()),
             )
         });
     }

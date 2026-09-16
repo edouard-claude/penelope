@@ -890,7 +890,7 @@ fn humanise_llm_error(e: &LlmError) -> String {
     match e.kind {
         LlmErrorKind::Auth => format!(
             "le provider refuse la clé ({e}). Vérifier la clé : \
-             `pbpaste | penelope secret set openrouter_api_key`"
+             `penelope secret set openrouter_api_key`"
         ),
         LlmErrorKind::UnknownModel => format!(
             "modèle inconnu du provider ({e}). Changer de modèle : \

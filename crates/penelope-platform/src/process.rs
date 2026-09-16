@@ -82,14 +82,156 @@ pub fn default_inherited_env() -> Vec<String> {
     .collect()
 }
 
-/// Résolution d'un exécutable via PATH (et PATHEXT sous Windows). Jamais de nom en dur :
-/// `npx` devient `npx.cmd` sous Windows.
+/// Emplacements usuels des exécutables installés par l'utilisateur.
+///
+/// Un service système démarre avec un PATH minimal : sous `launchd`, seulement
+/// `/usr/bin:/bin:/usr/sbin:/sbin`. Sans ces emplacements, `npx`, `uvx`, `docker` ou
+/// `cargo` seraient introuvables pour le daemon alors qu'ils marchent dans un terminal.
+pub fn extra_bin_dirs(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        v.extend(
+            [
+                "/opt/homebrew/bin",
+                "/opt/homebrew/sbin",
+                "/usr/local/bin",
+                "/usr/local/sbin",
+                "/Applications/Docker.app/Contents/Resources/bin",
+                "/opt/local/bin",
+            ]
+            .map(PathBuf::from),
+        );
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        v.extend(
+            [
+                "/usr/local/bin",
+                "/home/linuxbrew/.linuxbrew/bin",
+                "/snap/bin",
+            ]
+            .map(PathBuf::from),
+        );
+    }
+    if let Some(h) = home {
+        for rel in [
+            ".local/bin",
+            ".cargo/bin",
+            ".bun/bin",
+            ".deno/bin",
+            ".volta/bin",
+            ".orbstack/bin",
+        ] {
+            v.push(h.join(rel));
+        }
+        // nvm : la version de Node la plus récente installée.
+        if let Some(bin) = newest_nvm_bin(&h.join(".nvm/versions/node")) {
+            v.push(bin);
+        }
+    }
+    #[cfg(unix)]
+    {
+        v.extend(["/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(PathBuf::from));
+    }
+    v
+}
+
+fn newest_nvm_bin(root: &Path) -> Option<PathBuf> {
+    let parse = |name: &str| -> Option<Vec<u64>> {
+        name.strip_prefix('v')?
+            .split('.')
+            .map(|p| p.parse().ok())
+            .collect()
+    };
+    let mut best: Option<(Vec<u64>, PathBuf)> = None;
+    for e in std::fs::read_dir(root).ok()?.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some(ver) = parse(&name) else { continue };
+        let bin = e.path().join("bin");
+        if bin.is_dir() && best.as_ref().map(|(b, _)| ver > *b).unwrap_or(true) {
+            best = Some((ver, bin));
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// PATH hérité, complété des emplacements usuels qui existent, sans doublon et dans
+/// l'ordre : ce que l'utilisateur a choisi passe toujours en premier.
+pub fn merge_paths(current: Option<&std::ffi::OsStr>, extras: &[PathBuf]) -> std::ffi::OsString {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out: Vec<PathBuf> = Vec::new();
+    let inherited: Vec<PathBuf> = current
+        .map(|c| std::env::split_paths(c).collect())
+        .unwrap_or_default();
+    for p in inherited.into_iter().chain(extras.iter().cloned()) {
+        if p.as_os_str().is_empty() {
+            continue;
+        }
+        let is_extra = extras.contains(&p);
+        if is_extra && !p.is_dir() {
+            continue;
+        }
+        if seen.insert(p.clone()) {
+            out.push(p);
+        }
+    }
+    std::env::join_paths(out).unwrap_or_default()
+}
+
+/// Lance `<programme> --version` et renvoie la première ligne, ou `None` s'il ne répond
+/// pas dans le délai. Sert au diagnostic : présent dans le PATH ne veut pas dire utilisable.
+pub fn probe_version(program: &Path, timeout: std::time::Duration) -> Option<String> {
+    let mut child = std::process::Command::new(program)
+        .arg("--version")
+        .env("PATH", search_path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let out = child.wait_with_output().ok()?;
+                let text = if out.stdout.is_empty() {
+                    String::from_utf8_lossy(&out.stderr).to_string()
+                } else {
+                    String::from_utf8_lossy(&out.stdout).to_string()
+                };
+                let first = text.lines().next().unwrap_or("").trim().to_string();
+                return (status.success() && !first.is_empty()).then_some(first);
+            }
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
+/// PATH effectif de Pénélope et de tout ce qu'elle lance.
+pub fn search_path() -> std::ffi::OsString {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    merge_paths(
+        std::env::var_os("PATH").as_deref(),
+        &extra_bin_dirs(home.as_deref()),
+    )
+}
+
+/// Résolution d'un exécutable via le PATH effectif (et PATHEXT sous Windows). Jamais de
+/// nom en dur : `npx` devient `npx.cmd` sous Windows.
 pub fn which(program: &str) -> Option<PathBuf> {
     let p = Path::new(program);
     if p.is_absolute() || program.contains(std::path::MAIN_SEPARATOR) {
         return p.is_file().then(|| p.to_path_buf());
     }
-    let path = std::env::var_os("PATH")?;
+    let path = search_path();
     let exts: Vec<String> = if cfg!(windows) {
         std::env::var("PATHEXT")
             .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
@@ -117,6 +259,11 @@ pub fn which(program: &str) -> Option<PathBuf> {
 pub fn effective_env(spec: &ProcessSpec) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     for k in &spec.inherit_env {
+        // PATH hérité = PATH effectif : l'enfant trouve ce que le daemon trouve.
+        if k == "PATH" {
+            out.insert(k.clone(), search_path().to_string_lossy().to_string());
+            continue;
+        }
         if let Some(v) = std::env::var_os(k) {
             out.insert(k.clone(), v.to_string_lossy().to_string());
         }
@@ -502,6 +649,61 @@ mod tests {
             );
         }
         assert!(!env.contains_key("OPENROUTER_API_KEY"));
+    }
+
+    #[test]
+    fn paths_keep_the_user_order_and_add_existing_extras() {
+        let dir = tempfile::tempdir().unwrap();
+        let brew = dir.path().join("brew/bin");
+        let missing = dir.path().join("absent/bin");
+        std::fs::create_dir_all(&brew).unwrap();
+        let current = std::env::join_paths(["/usr/bin", "/mon/outil"]).unwrap();
+        let merged = merge_paths(Some(&current), &[brew.clone(), missing, "/usr/bin".into()]);
+        let parts: Vec<PathBuf> = std::env::split_paths(&merged).collect();
+        assert_eq!(
+            parts,
+            vec![PathBuf::from("/usr/bin"), PathBuf::from("/mon/outil"), brew],
+            "ordre de l'utilisateur, extras existants seulement, pas de doublon"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn versions_are_probed_with_a_timeout() {
+        let git = which("git").expect("git est requis pour les tests");
+        let v = probe_version(&git, std::time::Duration::from_secs(5)).unwrap();
+        assert!(v.starts_with("git version"), "{v}");
+        // Un programme qui ne comprend pas `--version` ne passe pas pour sain.
+        let sleep = which("sleep").unwrap();
+        assert!(probe_version(&sleep, std::time::Duration::from_millis(200)).is_none());
+    }
+
+    #[test]
+    fn the_newest_nvm_node_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(".nvm/versions/node");
+        for v in ["v18.20.4", "v22.11.0", "v9.0.0"] {
+            std::fs::create_dir_all(root.join(v).join("bin")).unwrap();
+        }
+        assert_eq!(
+            newest_nvm_bin(&root),
+            Some(root.join("v22.11.0").join("bin"))
+        );
+        let extras = extra_bin_dirs(Some(dir.path()));
+        assert!(extras.contains(&root.join("v22.11.0").join("bin")));
+        assert!(extras.contains(&dir.path().join(".local/bin")));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_service_path_still_finds_homebrew_tools() {
+        // Sous `launchd`, le PATH ne contient que les répertoires système.
+        let minimal = std::env::join_paths(["/usr/bin", "/bin", "/usr/sbin", "/sbin"]).unwrap();
+        let merged = merge_paths(Some(&minimal), &extra_bin_dirs(None));
+        let parts: Vec<PathBuf> = std::env::split_paths(&merged).collect();
+        if Path::new("/opt/homebrew/bin").is_dir() {
+            assert!(parts.contains(&PathBuf::from("/opt/homebrew/bin")));
+        }
     }
 
     #[test]

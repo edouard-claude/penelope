@@ -17,6 +17,9 @@ pub async fn run(cwd: &Path, args: &[&str]) -> ToolResult<(i32, String, String)>
         // Aucune invite interactive : un mot de passe demandé bloquerait le daemon.
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_ASKPASS", "")
+        // Les aides de git (`git-lfs`, gestionnaires d'identifiants) vivent souvent hors
+        // du PATH minimal d'un service.
+        .env("PATH", penelope_platform::process::search_path())
         .stdin(Stdio::null())
         .output()
         .await

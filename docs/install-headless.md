@@ -43,6 +43,15 @@ Par défaut, sur macOS :
 | Journaux | `~/Library/Logs/Penelope` |
 | Cache | `~/Library/Caches/Penelope` |
 
+`install` inscrit dans le service le PATH du terminal qui la lance, complété des
+emplacements usuels (Homebrew, `~/.local/bin`, Docker, nvm) : sans cela, `launchd` ne
+fournit que les répertoires système, et le daemon ne trouverait ni `npx`, ni `uvx`, ni
+`docker`. Après avoir installé un nouvel outil ailleurs, réinstaller le service :
+
+```bash
+penelope uninstall && penelope install
+```
+
 `PENELOPE_HOME=/un/répertoire` (ou `--home`) déplace **tout** l'ensemble d'un coup. Utile
 pour un bac à sable, une seconde instance ou un test : aucun chemin n'est codé en dur
 ailleurs que dans `penelope-platform`, et un test d'architecture l'impose.
@@ -77,19 +86,33 @@ exécutable, jamais via un shell. Seul l'index des **noms** est stocké en clair
 
 Les secrets attendus au minimum, sous ces noms exacts :
 
-- `openrouter_api_key` ;
-- `telegram_bot_token`.
+- `openrouter_api_key` : une clé créée sur https://openrouter.ai/keys ;
+- `telegram_bot_token` : le jeton **du bot**, à ne pas confondre avec ton identifiant
+  Telegram (`owner.telegram_user_id`, qui dit seulement qui a le droit de parler au bot).
 
-La valeur se passe **sur l'entrée standard**, jamais en argument : un argument resterait
-dans l'historique du shell et serait visible dans `ps`. Le plus propre est de copier la
-clé dans le presse-papiers, puis :
+Pour obtenir le jeton du bot : dans Telegram, écrire à `@BotFather`, envoyer `/newbot`,
+choisir un nom puis un identifiant qui finit par `bot`. BotFather répond avec un jeton de
+la forme `123456789:AAH…` : c'est lui qu'il faut enregistrer.
+
+La valeur n'est jamais un argument : elle resterait dans l'historique du shell et serait
+visible dans `ps`. La commande la demande, sans l'afficher :
+
+```bash
+penelope secret set openrouter_api_key
+```
+
+Coller la valeur à l'invite, puis Entrée. En SSH, c'est la bonne méthode : `pbpaste`
+lirait le presse-papiers **de la machine distante**. En local, une redirection marche
+aussi :
 
 ```bash
 pbpaste | penelope secret set openrouter_api_key
 ```
 
 La commande fonctionne sans daemon, donc avant le tout premier démarrage. Elle affiche le
-nom, le backend et la longueur de la valeur, jamais la valeur elle-même.
+nom, le backend et la longueur de la valeur, jamais la valeur elle-même. Un daemon déjà
+lancé prend une nouvelle clé en compte au tour suivant ; le jeton Telegram, lui, demande
+`penelope restart`.
 
 ```bash
 penelope secret list

@@ -339,7 +339,7 @@ impl Daemon {
                     .map_err(|e| {
                         format!(
                             "aucun provider utilisable : {e}. Poser la clé avec \
-                         `pbpaste | penelope secret set openrouter_api_key`"
+                         `penelope secret set openrouter_api_key`"
                         )
                     })?;
             *guard = Some(Arc::new(set));

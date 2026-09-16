@@ -18,6 +18,7 @@ pub mod process;
 pub mod sandbox;
 pub mod secrets;
 pub mod service;
+pub mod terminal;
 pub mod watcher;
 
 pub use dirs::{Dir, Directories, RootedDirs, resolve_directories, slugify, validate_slug};
@@ -161,18 +162,42 @@ impl Platform {
             }),
         }
 
-        // Dépendances MCP.
+        // Dépendances MCP : trouvées dans le PATH effectif, puis interrogées.
         for dep in ["git", "npx", "uvx", "docker"] {
-            let found = which(dep);
-            v.push(DoctorItem {
-                id: format!("dep.{dep}"),
-                label: format!("Dépendance `{dep}`"),
-                ok: found.is_some(),
-                detail: found
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "absent du PATH".into()),
-                fix: None,
-            });
+            let item = match which(dep) {
+                Some(path) => {
+                    match process::probe_version(&path, std::time::Duration::from_secs(3)) {
+                        Some(version) => DoctorItem {
+                            id: format!("dep.{dep}"),
+                            label: format!("Dépendance `{dep}`"),
+                            ok: true,
+                            detail: format!("{version} ({})", path.display()),
+                            fix: None,
+                        },
+                        None => DoctorItem {
+                            id: format!("dep.{dep}"),
+                            label: format!("Dépendance `{dep}`"),
+                            ok: false,
+                            detail: format!("{} ne répond pas à `--version`", path.display()),
+                            fix: Some(format!("vérifier l'installation de `{dep}`")),
+                        },
+                    }
+                }
+                None => DoctorItem {
+                    id: format!("dep.{dep}"),
+                    label: format!("Dépendance `{dep}`"),
+                    ok: false,
+                    detail: format!(
+                        "introuvable, y compris dans les emplacements usuels (PATH effectif : {})",
+                        process::search_path().to_string_lossy()
+                    ),
+                    fix: Some(format!(
+                        "installer `{dep}`, ou réinstaller le service depuis un terminal où \
+                         `{dep}` marche : `penelope uninstall && penelope install`"
+                    )),
+                },
+            };
+            v.push(item);
         }
 
         // Secrets.

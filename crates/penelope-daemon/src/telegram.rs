@@ -476,7 +476,7 @@ impl TelegramGateway {
                         format!("🗑 Secret `{}` supprimé.", parts[1])
                     }
                     _ => "Un secret ne se saisit **jamais** dans une conversation. En SSH : \
-                          `pbpaste | penelope secret set <nom>`"
+                          `penelope secret set <nom>` puis coller la valeur à l'invite"
                         .into(),
                 }
             }

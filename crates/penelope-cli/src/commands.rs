@@ -143,14 +143,14 @@ pub enum ConfigCmd {
 pub enum SecretCmd {
     List,
     Backend,
-    /// Enregistre un secret, la valeur étant lue sur l'entrée standard.
+    /// Enregistre un secret. La valeur est demandée sans écho, ou lue sur l'entrée
+    /// standard si elle est redirigée.
     ///
     /// Elle n'est jamais un argument de la ligne de commande : elle resterait dans
     /// l'historique du shell et serait visible dans `ps`. Fonctionne **sans daemon**,
     /// pour qu'une installation neuve puisse être configurée avant le premier démarrage.
     ///
-    /// Sur macOS, le plus propre est de passer par le presse-papiers :
-    /// `pbpaste | penelope secret set openrouter_api_key`
+    /// En SSH, coller la valeur à l'invite : `pbpaste` lirait le presse-papiers distant.
     Set {
         name: String,
     },
@@ -362,20 +362,18 @@ fn paths(cli: &Cli) -> CliResult<()> {
 /// `penelope secret set <nom>` : la valeur vient de l'entrée standard, jamais d'un
 /// argument, et n'est **jamais** réaffichée.
 fn set_secret(cli: &Cli, name: String) -> CliResult<()> {
-    use std::io::Read;
-
     penelope_platform::validate_secret_name(&name).map_err(|e| CliError::Usage(e.to_string()))?;
 
-    let mut raw = String::new();
-    std::io::stdin()
-        .read_to_string(&mut raw)
-        .map_err(|e| CliError::Io(format!("lecture de l'entrée standard : {e}")))?;
+    let raw = penelope_platform::terminal::read_secret(&format!(
+        "Colle la valeur de `{name}` puis Entrée (rien ne s'affiche) : "
+    ))
+    .map_err(|e| CliError::Io(format!("lecture de la valeur : {e}")))?;
     // Un copier-coller traîne presque toujours un retour à la ligne ou une espace.
     let value = raw.trim();
     if value.is_empty() {
         return Err(CliError::Usage(format!(
-            "valeur vide : passer le secret sur l'entrée standard, par exemple \
-             `pbpaste | penelope secret set {name}`"
+            "valeur vide : relancer `penelope secret set {name}` et coller la valeur à \
+             l'invite"
         )));
     }
 
