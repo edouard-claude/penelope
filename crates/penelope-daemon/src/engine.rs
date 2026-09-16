@@ -76,6 +76,18 @@ impl crate::selfknow::Admin for Daemon {
         self.invalidate_providers().await;
         Ok(g)
     }
+
+    async fn mcp_servers(&self) -> Value {
+        let Some(sup) = self.hooks.mcp_supervisor() else {
+            return json!("superviseur MCP non démarré");
+        };
+        json!({
+            "dir": sup.dir(),
+            "servers": sup.statuses().await,
+            "invalid": sup.invalid(),
+            "admin": "penelope mcp list|show|restart|logs|test ; déclarations dans mcp.d/*.toml, prises en compte à chaud",
+        })
+    }
 }
 
 /// Sink qui publie les événements d'un tour sur le bus.
@@ -315,7 +327,13 @@ impl Daemon {
                 .into_iter()
                 .map(|d| d.model_id)
                 .collect(),
-            tools: tool_defs(false, !mcp_lines.is_empty()),
+            tools: {
+                let mut tools = tool_defs(false, !mcp_lines.is_empty());
+                if let Some(m) = self.hooks.mcp() {
+                    tools.extend(m.eager_tools().await);
+                }
+                tools
+            },
             allowed_tools: Vec::new(),
             cancel,
         };
@@ -903,6 +921,80 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("penelope secret set"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn the_model_reaches_mcp_tools_through_the_supervisor() {
+        use crate::mcp::testing::{FakeConnector, declare, server, tool};
+        let (_dir, d, p) = daemon().await;
+        let fake = Arc::new(FakeConnector::default());
+        fake.serve(
+            "redmine",
+            server(Arc::new(std::sync::Mutex::new(vec![
+                tool("list_issues", json!({"readOnlyHint": true})),
+                tool("delete_issue", json!({"destructiveHint": true})),
+            ]))),
+        );
+        let sup = crate::mcp::McpSupervisor::new(d.services.clone(), fake.clone());
+        declare(&sup, "redmine", "[tool_policy]\ndelete_issue = \"deny\"\n");
+        sup.reload().await;
+        d.hooks.set_mcp(sup.clone());
+
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![
+                ToolCall {
+                    id: "c1".into(),
+                    name: "tool_call".into(),
+                    arguments: json!({"name": "mcp__redmine__list_issues", "args": {"project": "penelope"}}),
+                },
+                ToolCall {
+                    id: "c2".into(),
+                    name: "tool_call".into(),
+                    arguments: json!({"name": "mcp__redmine__delete_issue", "args": {}}),
+                },
+            ],
+        ));
+        p.reply("Voici les tickets.");
+        d.enqueue_message(&sid, "liste mes tickets", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        match d.run_turn(&turn).await {
+            TurnOutcome::Answered { text, .. } => assert!(text.contains("tickets")),
+            other => panic!("{other:?}"),
+        }
+
+        // Le prompt annonce le serveur et les méta-outils.
+        let first = p.requests()[0].clone();
+        assert!(first.messages[0].text().contains("redmine : 2 outils"));
+        assert!(first.tools.iter().any(|t| t.name == "tool_search"));
+
+        let history = d.services.context.history.load(&sid, 0).await.unwrap();
+        let results: Vec<String> = history
+            .iter()
+            .filter(|e| e.message.role == penelope_llm::types::Role::Tool)
+            .map(|e| e.message.text())
+            .collect();
+        assert!(
+            results
+                .iter()
+                .any(|r| r.contains("list_issues") && r.contains("penelope")),
+            "{results:?}"
+        );
+        assert!(
+            results
+                .iter()
+                .any(|r| r.contains("Refusé") || r.contains("refus")),
+            "la déclaration interdit delete_issue : {results:?}"
+        );
+        assert_eq!(
+            sup.statuses().await[0].calls,
+            1,
+            "delete_issue n'a jamais atteint le serveur"
+        );
     }
 
     #[tokio::test]

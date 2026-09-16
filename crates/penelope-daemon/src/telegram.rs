@@ -468,6 +468,74 @@ impl TelegramGateway {
                 }
                 t
             }
+            "mcp" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                let call =
+                    |method: &'static str, name: &str| rpc.call(method, json!({"name": name}));
+                match parts.as_slice() {
+                    [] => match rpc.call(m::MCP_LIST, json!({})).await {
+                        Ok(v) => mcp_list_text(&v),
+                        Err(e) => format!("❌ {e}"),
+                    },
+                    ["restart", name] => match call(m::MCP_RESTART, name).await {
+                        Ok(v) => format!(
+                            "🔄 `{name}` redémarré : {} outil(s), état {}.",
+                            v["tool_count"], v["state"].as_str().unwrap_or("?")
+                        ),
+                        Err(e) => format!("❌ {e}"),
+                    },
+                    ["logs", name] => match call(m::MCP_LOGS, name).await {
+                        Ok(v) => {
+                            let lines: Vec<String> = v["lines"]
+                                .as_array()
+                                .cloned()
+                                .unwrap_or_default()
+                                .iter()
+                                .rev()
+                                .take(30)
+                                .rev()
+                                .filter_map(|l| l.as_str().map(String::from))
+                                .collect();
+                            if lines.is_empty() {
+                                format!("Aucune ligne de journal pour `{name}`.")
+                            } else {
+                                format!("```\n{}\n```", lines.join("\n").replace("```", "ʼʼʼ"))
+                            }
+                        }
+                        Err(e) => format!("❌ {e}"),
+                    },
+                    ["test", name] => match call(m::MCP_TEST, name).await {
+                        Ok(v) if v["ok"].as_bool() == Some(true) => format!(
+                            "✅ `{name}` répond : protocole {}, {} outil(s), {} ms.",
+                            v["protocol"].as_str().unwrap_or("?"),
+                            v["tools"],
+                            v["ms"]
+                        ),
+                        Ok(v) => format!(
+                            "❌ `{name}` : {}",
+                            v["error"].as_str().unwrap_or("échec")
+                        ),
+                        Err(e) => format!("❌ {e}"),
+                    },
+                    [op @ ("enable" | "disable"), name] => {
+                        let method = if *op == "enable" {
+                            m::MCP_ENABLE
+                        } else {
+                            m::MCP_DISABLE
+                        };
+                        match call(method, name).await {
+                            Ok(_) if *op == "enable" => format!("▶️ `{name}` activé."),
+                            Ok(_) => format!("⏸ `{name}` désactivé."),
+                            Err(e) => format!("❌ {e}"),
+                        }
+                    }
+                    [name] => match call(m::MCP_SHOW, name).await {
+                        Ok(v) => mcp_show_text(&v),
+                        Err(e) => format!("❌ {e}"),
+                    },
+                    _ => "Usage : `/mcp`, `/mcp <serveur>`, `/mcp restart|logs|test|enable|disable <serveur>`".into(),
+                }
+            }
             "budget" => {
                 let session = d.chat_session_for(&origin).await?;
                 self.budget_text(&session, args).await?
@@ -1621,7 +1689,106 @@ fn audio_filename(file_path: &str, file_name: Option<&str>, mime_type: Option<&s
     format!("audio.{ext}")
 }
 
-/// Alias et routage, tels que `model.list` les décrit.
+fn mcp_state_icon(state: &str) -> &'static str {
+    match state {
+        "ready" => "🟢",
+        "degraded" => "🟡",
+        "connecting" => "🔄",
+        "failed" => "🔴",
+        "disabled" => "⏸",
+        "auth_required" => "🔐",
+        _ => "⚪",
+    }
+}
+
+/// `/mcp` : un serveur par ligne, puis les déclarations invalides.
+fn mcp_list_text(v: &Value) -> String {
+    let servers = v["servers"].as_array().cloned().unwrap_or_default();
+    let mut t = if servers.is_empty() {
+        "Aucun serveur MCP déclaré.".to_string()
+    } else {
+        let mut t = String::from("**Serveurs MCP**\n\n");
+        for srv in &servers {
+            let state = srv["state"].as_str().unwrap_or("?");
+            let label = match state {
+                "configured" => "démarre au premier appel",
+                "ready" => "prêt",
+                "degraded" => "dégradé",
+                "connecting" => "connexion",
+                "failed" => "en panne",
+                "disabled" => "désactivé",
+                "auth_required" => "autorisation requise",
+                other => other,
+            };
+            t.push_str(&format!(
+                "{} `{}` · {} outil(s) · {label}\n",
+                mcp_state_icon(state),
+                srv["name"].as_str().unwrap_or("?"),
+                srv["tools"]
+            ));
+            if let Some(e) = srv["last_error"].as_str().filter(|_| state != "ready") {
+                t.push_str(&format!(
+                    "   ↳ {}\n",
+                    e.chars().take(200).collect::<String>()
+                ));
+            }
+        }
+        t
+    };
+    for bad in v["invalid"].as_array().cloned().unwrap_or_default() {
+        t.push_str(&format!(
+            "\n⚠️ `{}` : {}",
+            bad["file"].as_str().unwrap_or("?"),
+            bad["error"].as_str().unwrap_or("?")
+        ));
+    }
+    t.push_str("\n\nDétail : `/mcp <serveur>` ; `/mcp restart|logs|test <serveur>`");
+    t
+}
+
+/// `/mcp <serveur>` : état, outils, dernière erreur.
+fn mcp_show_text(v: &Value) -> String {
+    let st = &v["status"];
+    let name = st["name"].as_str().unwrap_or("?");
+    let state = st["state"].as_str().unwrap_or("?");
+    let mut t = format!(
+        "{} **{name}** · {} · {} outil(s) · {} appel(s), {} erreur(s)\n",
+        mcp_state_icon(state),
+        state,
+        st["tool_count"],
+        st["calls"],
+        st["errors"]
+    );
+    if let Some(p) = st["protocol"].as_str() {
+        t.push_str(&format!(
+            "Protocole {p} · transport {}\n",
+            st["transport"].as_str().unwrap_or("?")
+        ));
+    }
+    if let Some(e) = st["last_error"].as_str() {
+        t.push_str(&format!(
+            "Dernière erreur : {}\n",
+            e.chars().take(300).collect::<String>()
+        ));
+    }
+    let tools = v["tools"].as_array().cloned().unwrap_or_default();
+    if !tools.is_empty() {
+        t.push('\n');
+        for tool in tools.iter().take(25) {
+            t.push_str(&format!(
+                "- `{}` ({})\n",
+                tool["title"].as_str().unwrap_or("?"),
+                tool["risk"].as_str().unwrap_or("?")
+            ));
+        }
+        if tools.len() > 25 {
+            t.push_str(&format!("… et {} autres\n", tools.len() - 25));
+        }
+    }
+    t
+}
+
+/// Alias et routage, tels que `model.list` les décrit./// Alias et routage, tels que `model.list` les décrit.
 fn routing_text(v: &Value) -> String {
     let mut t = String::from("**Alias**\n\n");
     for a in v["aliases"].as_array().cloned().unwrap_or_default() {
@@ -2229,6 +2396,54 @@ mod tests {
             "audio.mp3"
         );
         assert_eq!(audio_filename("x", None, None), "audio.ogg");
+    }
+
+    #[tokio::test]
+    async fn mcp_servers_are_visible_and_restartable_from_telegram() {
+        use crate::mcp::testing::{FakeConnector, declare, server, tool};
+        let (_d, g, t, _p) = gateway().await;
+        let fake = Arc::new(FakeConnector::default());
+        fake.serve(
+            "redmine",
+            server(Arc::new(std::sync::Mutex::new(vec![tool(
+                "list_issues",
+                json!({"readOnlyHint": true}),
+            )]))),
+        );
+        let sup = crate::mcp::McpSupervisor::new(g.daemon.services.clone(), fake.clone());
+        declare(&sup, "redmine", "");
+        sup.reload().await;
+        g.daemon.hooks.set_mcp(sup.clone());
+        std::fs::write(sup.dir().join("casse.toml"), "transport = \"stdio\"\n").unwrap();
+        sup.reload().await;
+
+        for (i, text) in [
+            "/mcp",
+            "/mcp redmine",
+            "/mcp restart redmine",
+            "/mcp logs redmine",
+        ]
+        .iter()
+        .enumerate()
+        {
+            g.process_update(&updates::text_message(80 + i as i64, OWNER, OWNER, text))
+                .await
+                .unwrap();
+        }
+        drain(&g).await;
+        let out = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            out[0].contains("redmine") && out[0].contains("prêt"),
+            "{out:?}"
+        );
+        assert!(
+            out[0].contains("casse"),
+            "déclaration invalide signalée : {out:?}"
+        );
+        assert!(out[1].contains("list_issues"), "{out:?}");
+        assert!(out[2].contains("redémarré"), "{out:?}");
+        assert!(out[3].contains("Aucune ligne"), "{out:?}");
+        assert_eq!(fake.opened("redmine"), 2);
     }
 
     #[tokio::test]

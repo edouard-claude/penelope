@@ -383,6 +383,11 @@ pub async fn negotiate(
             Err(e) if !e.is_retryable() => {
                 tracing::debug!(error = %e, "server/discover en échec, repli sur initialize");
             }
+            // Un serveur stdio d'avant 2026 peut ignorer une requête reçue avant
+            // `initialize` : la sonde courte expire, on passe au handshake historique.
+            Err(McpError::Timeout { .. }) if transport.kind() == "stdio" => {
+                tracing::debug!("server/discover sans réponse en stdio, repli sur initialize");
+            }
             Err(e) => return Err(e),
         }
     }
@@ -536,6 +541,42 @@ mod tests {
         assert_eq!(n.version, ProtocolVersion::V20250618);
         assert!(!n.stateless);
         assert!(n.capabilities.resources_subscribe);
+    }
+
+    /// Un serveur stdio qui ignore `server/discover` (la sonde expire) passe quand même
+    /// par `initialize`.
+    #[tokio::test]
+    async fn a_silent_discover_probe_on_stdio_falls_back_to_initialize() {
+        let tr = LoopbackTransport::new("stdio", |m, _| match m {
+            "server/discover" => Err(McpError::Timeout {
+                method: "server/discover".into(),
+                ms: 3_000,
+            }),
+            "initialize" => Ok(json!({
+                "protocolVersion":"2025-06-18",
+                "capabilities":{"tools":{}},
+                "serverInfo":{"name":"go-mcp"}
+            })),
+            _ => Ok(json!({})),
+        });
+        let n = negotiate(tr.as_ref(), ProtocolVersion::V20260728, t(500))
+            .await
+            .unwrap();
+        assert_eq!(n.version, ProtocolVersion::V20250618);
+        assert!(!n.stateless);
+
+        // En HTTP, un délai dépassé reste une panne : rien ne dit que le serveur existe.
+        let http = LoopbackTransport::new("http", |_, _| {
+            Err(McpError::Timeout {
+                method: "server/discover".into(),
+                ms: 500,
+            })
+        });
+        assert!(
+            negotiate(http.as_ref(), ProtocolVersion::V20260728, t(500))
+                .await
+                .is_err()
+        );
     }
 
     /// −32022 : on descend vers la meilleure version commune annoncée.

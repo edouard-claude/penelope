@@ -267,6 +267,8 @@ pub struct Hooks {
     pub mcp: std::sync::RwLock<Option<Arc<dyn crate::executor::McpGateway>>>,
     pub orchestrator: std::sync::RwLock<Option<Arc<dyn crate::executor::Orchestrator>>>,
     pub telegram: std::sync::RwLock<Option<Arc<dyn crate::bus::ChannelDelivery>>>,
+    /// Superviseur MCP concret, pour l'administration (`mcp.*`).
+    pub mcp_supervisor: std::sync::RwLock<Option<Arc<crate::mcp::McpSupervisor>>>,
 }
 
 impl Hooks {
@@ -281,6 +283,18 @@ impl Hooks {
     }
     pub fn telegram(&self) -> Option<Arc<dyn crate::bus::ChannelDelivery>> {
         self.telegram.read().ok().and_then(|g| g.clone())
+    }
+    pub fn mcp_supervisor(&self) -> Option<Arc<crate::mcp::McpSupervisor>> {
+        self.mcp_supervisor.read().ok().and_then(|g| g.clone())
+    }
+    /// Branche un superviseur MCP : passerelle des outils et administration.
+    pub fn set_mcp(&self, sup: Arc<crate::mcp::McpSupervisor>) {
+        if let Ok(mut g) = self.mcp.write() {
+            *g = Some(sup.clone() as Arc<dyn crate::executor::McpGateway>);
+        }
+        if let Ok(mut g) = self.mcp_supervisor.write() {
+            *g = Some(sup);
+        }
     }
 }
 
@@ -430,6 +444,10 @@ impl Daemon {
     pub async fn status(&self) -> anyhow::Result<penelope_kernel::api::StatusReport> {
         let s = &self.services;
         let cfg = s.config.config();
+        let mcp = match self.hooks.mcp_supervisor() {
+            Some(sup) => sup.statuses().await,
+            None => Vec::new(),
+        };
         Ok(penelope_kernel::api::StatusReport {
             version: crate::VERSION.to_string(),
             uptime_s: self.handle.uptime_s(s.clock.now_ms()),
@@ -447,8 +465,8 @@ impl Daemon {
                 .await?
                 .len() as u64,
             approvals_pending: s.approvals.count_pending().await? as u64,
-            mcp_ready: 0,
-            mcp_total: 0,
+            mcp_ready: mcp.iter().filter(|m| m.state.is_usable()).count() as u64,
+            mcp_total: mcp.len() as u64,
             turns_queued: s.turns.pending_count().await? as u64,
             rss_mb: rss_mb(),
             spent_today_usd: s.budget.spent_today().await?,

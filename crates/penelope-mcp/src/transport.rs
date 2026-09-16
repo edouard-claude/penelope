@@ -531,6 +531,13 @@ pub fn sse_payloads(body: &str) -> Vec<String> {
 pub type LoopbackHandler =
     Arc<dyn Fn(&str, &serde_json::Value) -> Result<serde_json::Value> + Send + Sync>;
 
+/// Réponse enregistrée par [`LoopbackTransport`] : identifiant de la requête du serveur,
+/// puis résultat ou message d'erreur.
+pub type LoopbackResponse = (
+    serde_json::Value,
+    std::result::Result<serde_json::Value, String>,
+);
+
 /// Serveur simulé en processus, pour la suite de conformance (§8, CA 8).
 ///
 /// Il implémente le même contrat que les transports réels : c'est ce qui permet de tester
@@ -539,6 +546,8 @@ pub struct LoopbackTransport {
     handler: LoopbackHandler,
     incoming_tx: broadcast::Sender<Incoming>,
     pub calls: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+    /// Réponses du client aux requêtes du serveur : `(id, résultat ou message d'erreur)`.
+    pub responses: Arc<Mutex<Vec<LoopbackResponse>>>,
     kind: &'static str,
 }
 
@@ -552,6 +561,7 @@ impl LoopbackTransport {
             handler: Arc::new(handler),
             incoming_tx: tx,
             calls: Arc::new(Mutex::new(Vec::new())),
+            responses: Arc::new(Mutex::new(Vec::new())),
             kind,
         })
     }
@@ -601,9 +611,13 @@ impl Transport for LoopbackTransport {
 
     async fn respond(
         &self,
-        _id: serde_json::Value,
-        _result: Result<serde_json::Value>,
+        id: serde_json::Value,
+        result: Result<serde_json::Value>,
     ) -> Result<()> {
+        self.responses
+            .lock()
+            .await
+            .push((id, result.map_err(|e| e.to_string())));
         Ok(())
     }
 

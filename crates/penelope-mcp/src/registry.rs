@@ -368,6 +368,26 @@ impl ToolRegistry {
             .await
     }
 
+    /// Outils d'un serveur, triés par nom.
+    pub async fn list_server(&self, server: &str) -> penelope_store::Result<Vec<RegisteredTool>> {
+        let srv = server.to_string();
+        self.store
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT qualified, server, name, title, description, input_schema,
+                            output_schema, annotations, risk, schema_bytes
+                     FROM mcp_tools WHERE server = ?1 ORDER BY name",
+                )?;
+                let rows = st.query_map([&srv], row_to_tool)?;
+                let mut out = Vec::new();
+                for r in rows {
+                    out.push(r?);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
     pub async fn count(&self) -> penelope_store::Result<i64> {
         self.store
             .read(|c| Ok(c.query_row("SELECT count(*) FROM mcp_tools", [], |r| r.get(0))?))

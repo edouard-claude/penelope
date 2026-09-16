@@ -181,6 +181,8 @@ pub struct CallInfo {
     pub effective_name: String,
     pub risk: RiskClass,
     pub idempotent: bool,
+    /// Politique imposée par la déclaration du serveur MCP (`tool_policy`).
+    pub policy: Option<PolicyDecision>,
 }
 
 /// Exécution concrète d'un outil, fournie par le daemon (ou simulée en test).
@@ -201,6 +203,7 @@ pub trait ToolExecutor {
             idempotent: penelope_tools::tool_spec(name)
                 .map(|s| s.idempotent)
                 .unwrap_or(false),
+            policy: None,
         }
     }
 }
@@ -778,6 +781,17 @@ impl AgentLoop {
                             Some(&spec.session_id),
                         )
                         .await?;
+                    // La déclaration du serveur MCP peut imposer sa politique à un outil :
+                    // un refus l'emporte toujours, le reste cède à une règle du propriétaire.
+                    if let Some(forced) = info.policy {
+                        if forced == PolicyDecision::Deny || verdict.rule_id.is_none() {
+                            verdict.decision = forced;
+                            verdict.reason = format!(
+                                "politique de la déclaration du serveur : `{}`",
+                                forced.as_str()
+                            );
+                        }
+                    }
                     // Une règle « toujours » posée pour `config_set` vaut pour les réglages
                     // ordinaires, jamais pour le bac à sable, les providers ou Telegram.
                     if info.effective_name == "config_set"

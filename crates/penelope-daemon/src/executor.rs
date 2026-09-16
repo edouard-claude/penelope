@@ -32,6 +32,14 @@ pub trait McpGateway: Send + Sync {
     async fn call_tool(&self, qualified: &str, args: &Value) -> Result<Value, String>;
     /// Une ligne par serveur prêt, pour la tuile T1.
     async fn server_lines(&self) -> Vec<String>;
+    /// Politique imposée à un outil par la déclaration de son serveur (`tool_policy`).
+    async fn tool_policy(&self, _qualified: &str) -> Option<String> {
+        None
+    }
+    /// Outils exposés directement au modèle (serveurs `eager_schemas`).
+    async fn eager_tools(&self) -> Vec<penelope_llm::ToolDef> {
+        Vec::new()
+    }
 }
 
 /// Capacités qui dépendent du moteur de workflows et des sous-agents.
@@ -893,10 +901,23 @@ impl ToolExecutor for NativeToolExecutor {
 
     async fn describe_call(&self, name: &str, args: &Value) -> CallInfo {
         let s = &self.services;
-        let registry_risk = |q: String| async move {
-            match s.mcp_tools.get(&q).await {
-                Ok(Some(t)) => (q, t.risk),
-                _ => (q, RiskClass::Unknown),
+        let mcp_info = |q: String| async move {
+            let risk = match s.mcp_tools.get(&q).await {
+                Ok(Some(t)) => t.risk,
+                _ => RiskClass::Unknown,
+            };
+            let policy = match &self.mcp {
+                Some(gw) => gw
+                    .tool_policy(&q)
+                    .await
+                    .and_then(|p| penelope_kernel::risk::PolicyDecision::parse(&p)),
+                None => None,
+            };
+            CallInfo {
+                idempotent: risk == RiskClass::Read,
+                effective_name: q,
+                risk,
+                policy,
             }
         };
         match name {
@@ -904,6 +925,7 @@ impl ToolExecutor for NativeToolExecutor {
                 effective_name: name.to_string(),
                 risk: RiskClass::Read,
                 idempotent: true,
+                policy: None,
             },
             "tool_call" => {
                 let q = args
@@ -911,21 +933,9 @@ impl ToolExecutor for NativeToolExecutor {
                     .and_then(|v| v.as_str())
                     .unwrap_or("tool_call")
                     .to_string();
-                let (effective_name, risk) = registry_risk(q).await;
-                CallInfo {
-                    effective_name,
-                    idempotent: risk == RiskClass::Read,
-                    risk,
-                }
+                mcp_info(q).await
             }
-            n if n.starts_with("mcp__") => {
-                let (effective_name, risk) = registry_risk(n.to_string()).await;
-                CallInfo {
-                    effective_name,
-                    idempotent: risk == RiskClass::Read,
-                    risk,
-                }
-            }
+            n if n.starts_with("mcp__") => mcp_info(n.to_string()).await,
             "config_set" => {
                 let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
                 CallInfo {
@@ -936,6 +946,7 @@ impl ToolExecutor for NativeToolExecutor {
                         RiskClass::Write
                     },
                     idempotent: true,
+                    policy: None,
                 }
             }
             _ => CallInfo {
@@ -944,6 +955,7 @@ impl ToolExecutor for NativeToolExecutor {
                 idempotent: penelope_tools::tool_spec(name)
                     .map(|t| t.idempotent)
                     .unwrap_or(false),
+                policy: None,
             },
         }
     }

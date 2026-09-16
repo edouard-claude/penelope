@@ -232,6 +232,70 @@ async fn reachable_check(host: &str) -> DoctorCheck {
     }
 }
 
+/// Serveurs MCP : état de chacun, secrets manquants, déclarations invalides.
+pub async fn mcp_checks(s: &Services, sup: &crate::mcp::McpSupervisor) -> Vec<DoctorCheck> {
+    let mut out = Vec::new();
+    for st in sup.statuses().await {
+        let id = format!("mcp.{}", st.name);
+        let label = format!("Serveur MCP `{}`", st.name);
+        if let Some(cfg) = sup.config_of(&st.name).await {
+            if let Err(e) = cfg.resolve_secrets(s.platform.secrets.as_ref()) {
+                out.push(DoctorCheck::fail(
+                    &id,
+                    &label,
+                    e.to_string(),
+                    Some("penelope secret set <nom du secret>".into()),
+                ));
+                continue;
+            }
+        }
+        use penelope_mcp::ServerState::*;
+        out.push(match st.state {
+            Ready | Degraded => DoctorCheck::ok(
+                &id,
+                &label,
+                format!("{} outil(s), {} appel(s)", st.tool_count, st.calls),
+            ),
+            Configured if st.tool_count > 0 => DoctorCheck::ok(
+                &id,
+                &label,
+                format!("{} outil(s), démarre au premier appel", st.tool_count),
+            ),
+            Disabled => DoctorCheck::ok(&id, &label, "désactivé".to_string()),
+            _ => DoctorCheck::fail(
+                &id,
+                &label,
+                format!(
+                    "{} : {}",
+                    st.state.as_str(),
+                    st.last_error
+                        .as_deref()
+                        .unwrap_or("pas encore joint")
+                        .chars()
+                        .take(300)
+                        .collect::<String>()
+                ),
+                Some(format!(
+                    "penelope mcp logs {0} ; penelope mcp restart {0}",
+                    st.name
+                )),
+            ),
+        });
+    }
+    for (file, error) in sup.invalid() {
+        out.push(DoctorCheck::fail(
+            &format!("mcp.invalid.{file}"),
+            &format!("Déclaration MCP `{file}`"),
+            &error,
+            Some(format!(
+                "corriger {}",
+                sup.dir().join(format!("{file}.toml")).display()
+            )),
+        ));
+    }
+    out
+}
+
 /// Rendu texte, pour la CLI et pour `/doctor`.
 pub fn render(checks: &[DoctorCheck]) -> String {
     let mut s = String::new();

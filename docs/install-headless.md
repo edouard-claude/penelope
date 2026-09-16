@@ -392,6 +392,65 @@ politiques exigent une double confirmation à chaque fois : une règle « Toujou
 couvre pas. Les secrets et l'identifiant du propriétaire sont refusés : ils ne se règlent
 qu'en ligne de commande.
 
+### Serveurs MCP
+
+Chaque serveur se déclare dans un fichier de `mcp.d` (`penelope paths` donne le
+répertoire), un serveur par fichier :
+
+```toml
+# mcp.d/redmine.toml
+command = "~/go/bin/redmine-mcp"
+timeout = "30s"
+
+[env]
+REDMINE_URL = "https://projets.exemple.fr"
+REDMINE_API_KEY = "${SECRET:redmine_api_key}"
+
+[tool_policy]
+delete_issue = "deny"
+```
+
+Le daemon lit `mcp.d` au démarrage puis dès qu'un fichier change (quelques secondes). Un
+serveur dont les outils sont inconnus est lancé une fois pour les lister ; ensuite, il ne
+démarre qu'au premier appel et s'arrête après `idle_timeout` d'inactivité. Une panne est
+retentée à intervalle croissant (1 s à 5 min) ; après 8 échecs, le serveur passe en panne
+jusqu'à `penelope mcp restart`. Un serveur qui ne comprend pas la sonde de protocole 2026
+est rappelé en `initialize`, sans intervention.
+
+Le modèle voit une ligne par serveur (« redmine : 12 outils ») et passe par `tool_search`,
+`tool_describe` et `tool_call`. Avec `eager_schemas = true`, les outils d'un petit
+serveur critique lui sont donnés directement. Le risque de chaque outil vient de ses
+annotations (lecture, écriture, destructif, externe), corrigeable par `tool_risk` ; la
+politique par classe (`mcp.policy`) décide de l'approbation, et `tool_policy` l'impose
+outil par outil (un `deny` l'emporte toujours).
+
+Chaque serveur stdio tourne sous le profil `mcp-stdio` : écriture limitée à
+`mcp-data/<nom>` et au répertoire temporaire, réseau autorisé, secrets injectés dans son
+environnement seulement. Si un serveur doit écrire ailleurs (un cache dans son dossier de
+configuration, par exemple), son journal le montre et `penelope mcp list` le signale ; le
+profil `full` se donne alors serveur par serveur, dans la déclaration
+(`sandbox_profile = "full"`) et en l'autorisant :
+
+```bash
+penelope config set sandbox.allow_full_for '["mailbridge"]'
+```
+
+Administration, en ligne de commande comme sur Telegram (`/mcp`, `/mcp redmine`,
+`/mcp restart|logs|test redmine`) :
+
+```bash
+penelope mcp list
+```
+
+`show <nom>` détaille état, déclaration et outils ; `test <nom>` (ou `--file x.toml`)
+essaie une connexion à blanc ; `logs <nom>` donne le stderr du serveur ; `add <fichier>`,
+`edit <nom> <champ> <valeur>`, `enable`, `disable` et `rm` modifient `mcp.d` ; `penelope
+doctor` signale les serveurs en panne et les secrets manquants.
+
+Pas encore branché : l'autorisation OAuth des serveurs HTTP (ils restent en
+« autorisation requise »), le sampling (refusé) et les formulaires d'elicitation
+(déclinés).
+
 ## 7. Premier essai en CLI
 
 Dans un premier terminal, le daemon au premier plan (les journaux s'affichent) :
@@ -476,6 +535,7 @@ questions plutôt que des relances. `penelope approvals` montre ce qui attend un
 
 ## 11. Ce qui n'est pas encore branché
 
-Conversation (CLI et Telegram), approbations et catalogue de modèles fonctionnent. Le
-superviseur MCP, l'ordonnanceur, le moteur de workflows et le rêve nocturne ne sont pas
-encore lancés par le daemon. Voir [progress.md](progress.md) pour l'état exact.
+Conversation (CLI et Telegram), approbations, catalogue de modèles, vocaux et serveurs
+MCP fonctionnent. L'ordonnanceur, le moteur de workflows, le rêve nocturne et l'OAuth des
+serveurs MCP ne sont pas encore lancés par le daemon. Voir [progress.md](progress.md) pour
+l'état exact.

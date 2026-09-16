@@ -43,6 +43,14 @@ impl Daemon {
             tokio::spawn(catalog_loop(self.clone())),
         ];
 
+        // Serveurs MCP de `mcp.d/` : chargés en fond, pour ne pas retarder le démarrage.
+        let mcp = crate::mcp::McpSupervisor::new(
+            self.services.clone(),
+            Arc::new(crate::mcp::ProcessConnector::new(self.services.clone())),
+        );
+        self.hooks.set_mcp(mcp.clone());
+        tasks.extend(mcp.start());
+
         match crate::telegram::TelegramGateway::from_config(self.clone()).await {
             Ok(Some(gw)) => match gw.start().await {
                 Ok(handles) => tasks.extend(handles),
@@ -68,6 +76,8 @@ impl Daemon {
 
         self.handle.shutdown();
         self.bus.notify_enqueued();
+        // Les processus des serveurs MCP ne doivent pas survivre au daemon.
+        mcp.stop_all().await;
         // Les tours en cours ont un peu de temps pour finir ; le reste sera repris au
         // prochain démarrage (leases, ledger).
         for t in &tasks {

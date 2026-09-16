@@ -13,6 +13,10 @@ pub trait Admin: Send + Sync {
     fn uptime_s(&self) -> u64;
     /// Écrit un réglage (chemin pointé) et le publie à chaud. Renvoie la génération.
     async fn set_config(&self, path: &str, value: Value) -> Result<u64, String>;
+    /// Serveurs MCP : état, outils, dernière erreur.
+    async fn mcp_servers(&self) -> Value {
+        Value::Null
+    }
 }
 
 /// Modèle qui répond au tour en cours.
@@ -144,6 +148,12 @@ pub async fn status(
             out.insert("config_full".into(), redacted_config(&cfg));
         } else {
             out.insert("config".into(), summary);
+        }
+    }
+
+    if all || section == "config" {
+        if let Some(a) = admin {
+            out.insert("mcp_servers".into(), a.mcp_servers().await);
         }
     }
 

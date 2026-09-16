@@ -8,6 +8,7 @@ pub mod conversation;
 pub mod doctor;
 pub mod engine;
 pub mod executor;
+pub mod mcp;
 pub mod rpc;
 pub mod runner;
 pub mod runtime;

@@ -114,10 +114,17 @@ pub fn extra_bin_dirs(home: Option<&Path>) -> Vec<PathBuf> {
             .map(PathBuf::from),
         );
     }
+    // `go install` : `$GOPATH/bin`, `~/go/bin` par défaut.
+    if let Some(gopath) = std::env::var_os("GOPATH").filter(|g| !g.is_empty()) {
+        for p in std::env::split_paths(&gopath) {
+            v.push(p.join("bin"));
+        }
+    }
     if let Some(h) = home {
         for rel in [
             ".local/bin",
             ".cargo/bin",
+            "go/bin",
             ".bun/bin",
             ".deno/bin",
             ".volta/bin",

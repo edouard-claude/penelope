@@ -56,7 +56,13 @@ impl Rpc {
                 "db": s.platform.dirs.db_path(),
                 "socket": s.platform.dirs.socket_path(),
             })),
-            method::DOCTOR => Ok(json!(crate::doctor::run(s).await)),
+            method::DOCTOR => {
+                let mut checks = crate::doctor::run(s).await;
+                if let Some(sup) = self.daemon.hooks.mcp_supervisor() {
+                    checks.extend(crate::doctor::mcp_checks(s, &sup).await);
+                }
+                Ok(json!(checks))
+            }
             method::SHUTDOWN => {
                 self.daemon.handle.shutdown();
                 Ok(json!({"ok": true}))
@@ -153,6 +159,105 @@ impl Rpc {
             }
 
             // ------------------------------------------------------------ modèles
+            // ------------------------------------------------------------ MCP
+            method::MCP_LIST => {
+                let sup = self.mcp()?;
+                let servers: Vec<Value> = sup
+                    .statuses()
+                    .await
+                    .into_iter()
+                    .map(|st| {
+                        json!({
+                            "name": st.name,
+                            "state": st.state.as_str(),
+                            "transport": st.transport,
+                            "tools": st.tool_count,
+                            "running": st.running,
+                            "lazy": st.lazy,
+                            "protocol": st.protocol,
+                            "calls": st.calls,
+                            "errors": st.errors,
+                            "p95_ms": st.p95_ms.round(),
+                            "last_error": st.last_error,
+                        })
+                    })
+                    .collect();
+                let invalid: Vec<Value> = sup
+                    .invalid()
+                    .into_iter()
+                    .map(|(file, error)| json!({"file": file, "error": error}))
+                    .collect();
+                Ok(json!({"servers": servers, "invalid": invalid, "dir": sup.dir()}))
+            }
+            method::MCP_SHOW => {
+                let name = required_str(p, "name")?;
+                self.mcp()?.show(&name).await.map_err(anyhow::Error::msg)
+            }
+            method::MCP_ADD => {
+                let sup = self.mcp()?;
+                let cfg = mcp_config_param(p)?;
+                let name = cfg.name.clone();
+                let report = sup.add(cfg, false).await.map_err(anyhow::Error::msg)?;
+                Ok(mcp_change(&sup, &name, &report).await)
+            }
+            method::MCP_EDIT => {
+                let sup = self.mcp()?;
+                let name = required_str(p, "name")?;
+                let patch = p
+                    .get("patch")
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("paramètre `patch` manquant"))?;
+                let report = sup.edit(&name, &patch).await.map_err(anyhow::Error::msg)?;
+                Ok(mcp_change(&sup, &name, &report).await)
+            }
+            method::MCP_RM => {
+                let name = required_str(p, "name")?;
+                let report = self
+                    .mcp()?
+                    .remove(&name)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                Ok(json!({"report": report}))
+            }
+            method::MCP_ENABLE | method::MCP_DISABLE => {
+                let sup = self.mcp()?;
+                let name = required_str(p, "name")?;
+                let report = sup
+                    .set_enabled(&name, method == method::MCP_ENABLE)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                Ok(mcp_change(&sup, &name, &report).await)
+            }
+            method::MCP_RESTART => {
+                let name = required_str(p, "name")?;
+                let status = self
+                    .mcp()?
+                    .restart(&name)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                Ok(serde_json::to_value(status)?)
+            }
+            method::MCP_TEST => {
+                let sup = self.mcp()?;
+                let cfg = match p.get("name").and_then(|n| n.as_str()) {
+                    Some(name) if p.get("toml").is_none() => sup
+                        .config_of(name)
+                        .await
+                        .ok_or_else(|| anyhow::anyhow!("serveur MCP introuvable : `{name}`"))?,
+                    _ => mcp_config_param(p)?,
+                };
+                Ok(sup.test(&cfg).await)
+            }
+            method::MCP_LOGS => {
+                let name = required_str(p, "name")?;
+                let n = p.get("lines").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+                let lines = self
+                    .mcp()?
+                    .logs(&name, n.clamp(1, 500))
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                Ok(json!({"name": name, "lines": lines}))
+            }
             method::SESSION_MODEL => {
                 let sid = self.session_param(p).await?;
                 match p.get("alias").and_then(|a| a.as_str()) {
@@ -465,7 +570,48 @@ pub fn round_usd(x: f64) -> f64 {
     (x * 1_000_000.0).round() / 1_000_000.0
 }
 
+/// Déclaration de serveur passée en paramètre : `toml` (texte d'un fichier `mcp.d`) ou
+/// `config` (objet JSON).
+fn mcp_config_param(p: &Value) -> anyhow::Result<penelope_mcp::config::ServerConfig> {
+    if let Some(raw) = p.get("toml").and_then(|v| v.as_str()) {
+        let default_name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let mut v = penelope_mcp::config::parse_file(raw, default_name)?;
+        if v.len() != 1 {
+            anyhow::bail!(
+                "une déclaration à la fois : le fichier en contient {}",
+                v.len()
+            );
+        }
+        let cfg = v.remove(0);
+        if cfg.name.is_empty() {
+            anyhow::bail!("paramètre `name` manquant (ou champ `name` dans la déclaration)");
+        }
+        return Ok(cfg);
+    }
+    match p.get("config") {
+        Some(c) => Ok(serde_json::from_value(c.clone())?),
+        None => anyhow::bail!("paramètre `toml` manquant"),
+    }
+}
+
+/// Résultat d'une modification : ce qui a changé et l'état du serveur après coup.
+async fn mcp_change(
+    sup: &crate::mcp::McpSupervisor,
+    name: &str,
+    report: &crate::mcp::ReloadReport,
+) -> Value {
+    let status = sup.statuses().await.into_iter().find(|s| s.name == name);
+    json!({"report": report, "status": status})
+}
+
 impl Rpc {
+    fn mcp(&self) -> anyhow::Result<Arc<crate::mcp::McpSupervisor>> {
+        self.daemon
+            .hooks
+            .mcp_supervisor()
+            .ok_or_else(|| anyhow::anyhow!("superviseur MCP non démarré dans ce daemon"))
+    }
+
     /// Session visée : paramètre `session`, sinon la session courante de la CLI.
     async fn session_param(&self, p: &Value) -> anyhow::Result<String> {
         match p.get("session").and_then(|v| v.as_str()) {
@@ -823,6 +969,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mcp_servers_are_administered_over_rpc() {
+        use crate::mcp::testing::{FakeConnector, server, tool};
+        let (_d, r) = rpc().await;
+        let without = call(&r, method::MCP_LIST, json!({})).await;
+        assert!(without.error.unwrap().message.contains("non démarré"));
+
+        let fake = Arc::new(FakeConnector::default());
+        fake.serve(
+            "forge",
+            server(Arc::new(std::sync::Mutex::new(vec![tool(
+                "create_pr",
+                json!({}),
+            )]))),
+        );
+        let sup = crate::mcp::McpSupervisor::new(r.daemon.services.clone(), fake.clone());
+        r.daemon.hooks.set_mcp(sup.clone());
+
+        let toml = "command = \"/opt/mcp/forge\"\ntimeout = \"20s\"\n";
+        let tested = call(&r, method::MCP_TEST, json!({"toml": toml, "name": "forge"})).await;
+        let tested = tested.result.unwrap();
+        assert_eq!(tested["ok"], true, "{tested}");
+        assert_eq!(tested["tools"], 1);
+        assert!(sup.statuses().await.is_empty(), "un essai n'ajoute rien");
+
+        let added = call(&r, method::MCP_ADD, json!({"toml": toml, "name": "forge"})).await;
+        let added = added.result.unwrap();
+        assert_eq!(added["report"]["added"][0], "forge");
+        assert_eq!(added["status"]["tool_count"], 1);
+
+        let list = call(&r, method::MCP_LIST, json!({})).await.result.unwrap();
+        assert_eq!(list["servers"][0]["name"], "forge");
+        assert_eq!(list["servers"][0]["state"], "ready");
+
+        let edited = call(
+            &r,
+            method::MCP_EDIT,
+            json!({"name": "forge", "patch": {"timeout": "45s"}}),
+        )
+        .await;
+        assert!(edited.error.is_none(), "{:?}", edited.error);
+        assert_eq!(sup.config_of("forge").await.unwrap().timeout, "45s");
+
+        let show = call(&r, method::MCP_SHOW, json!({"name": "forge"}))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(show["tools"][0]["name"], "mcp__forge__create_pr");
+
+        let status = call(&r, method::STATUS, json!({})).await.result.unwrap();
+        assert_eq!(
+            (status["mcp_ready"].clone(), status["mcp_total"].clone()),
+            (json!(1), json!(1))
+        );
+
+        let rm = call(&r, method::MCP_RM, json!({"name": "forge"})).await;
+        assert_eq!(rm.result.unwrap()["report"]["removed"][0], "forge");
+        let missing = call(&r, method::MCP_RESTART, json!({"name": "forge"})).await;
+        assert!(missing.error.unwrap().message.contains("inconnu"));
+    }
+
+    #[tokio::test]
     async fn status_and_paths() {
         let (_d, r) = rpc().await;
         let resp = call(&r, method::STATUS, json!({})).await;
@@ -1008,17 +1215,7 @@ mod tests {
             "session.fork",
             "session.rewind",
             "session.compact",
-            "mcp.list",
-            "mcp.show",
-            "mcp.add",
-            "mcp.edit",
-            "mcp.rm",
-            "mcp.enable",
-            "mcp.disable",
-            "mcp.restart",
-            "mcp.test",
             "mcp.auth",
-            "mcp.logs",
             "skill.rollback",
             "wf.run",
             "schedule.add",

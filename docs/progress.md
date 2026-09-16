@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1025 tests verts**, tous hors réseau.
+- **1041 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -26,7 +26,7 @@ Dernière mise à jour : 16 septembre 2026.
 | 3 | `context` (tuiles, ancres, niveaux 0 à 4, LCM) | fait | 73 |
 | 4 | `telegram` (transport, rendu, gabarits, CTA, formulaires) | bibliothèque faite, boucle non lancée | 85 |
 | 5 | `hitl` + bac à sable + `tools` | fait | 16 hitl, 64 tools, 54 platform |
-| 6 | `mcp` (négociation, transports, primitives, OAuth, registre, supervision) | bibliothèque faite, superviseur non lancé | 95 + 19 conformité |
+| 6 | `mcp` (négociation, transports, primitives, OAuth, registre, supervision) | fait, superviseur lancé par le daemon ; OAuth non branché | 96 + 19 conformité + 13 daemon |
 | 7 | `memory` + `skills` | fait | 97 memory, 12 skills |
 | 8 | `workflow` + déclencheurs + workflows livrés | moteur fait, ordonnanceur non lancé | 74 |
 | 9 | Routage par complexité, budgets, images, STT | fait côté bibliothèque ; l'ingestion Telegram qui les alimenterait ne tourne pas | inclus en llm |
@@ -100,10 +100,22 @@ Dernière mise à jour : 16 septembre 2026.
   configuration sans secret, coûts, file, machine avec batterie, disque, mémoire, charge) ;
   `config_set` sous approbation, double et systématique pour les réglages sensibles.
 
+### 0.2.4
+
+- **Superviseur MCP** : serveurs de `mcp.d/` chargés au démarrage et à chaud, découverte
+  des outils quand ils sont inconnus, démarrage paresseux au premier appel, arrêt des
+  inactifs, reprise à backoff puis panne déclarée, repli `initialize` pour les serveurs
+  que la sonde 2026 déroute. Profils de bac à sable par serveur (`full` sur autorisation
+  explicite), secrets injectés dans l'environnement du serveur seulement, requêtes du
+  serveur traitées (`roots/list`, `ping` ; sampling refusé, elicitation déclinée),
+  `list_changed` suivi. `tool_policy` et `tool_risk` appliqués, outils `eager_schemas`
+  donnés directement au modèle. Méthodes `mcp.*` (sauf `mcp.auth`), `penelope mcp`,
+  `/mcp`, contrôles `doctor`, état dans `self_status`. Validé contre un vrai serveur
+  mcp-go (37 outils) sous bac à sable.
+
 ### Encore à brancher
 
-1. **Superviseur MCP** : démarrer les serveurs de `mcp.d/`, remplir le registre, servir
-   `tool_call`, flux OAuth `paste_back` depuis Telegram, méthodes `mcp.*`.
+1. **OAuth des serveurs MCP** : flux `paste_back` depuis Telegram, `mcp.auth`.
 2. **Ordonnanceur** : faire battre les schedules (cron, intervalle, `mcp_poll`) et les
    intentions.
 3. **Moteur de workflows** : exécuter les runs étape par étape (`wf.run`,
@@ -119,8 +131,7 @@ silence.
 
 ```
 session.fork  session.rewind  session.compact
-mcp.list  mcp.show  mcp.add  mcp.edit  mcp.rm  mcp.enable  mcp.disable
-mcp.restart  mcp.test  mcp.auth  mcp.logs
+mcp.auth
 skill.rollback  wf.run  schedule.add  schedule.run_now
 mem.history  mem.restore  mem.reindex  mem.forget  mem.candidates
 mem.dream  mem.learned  vault.sync  vault.check

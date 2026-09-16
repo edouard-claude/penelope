@@ -72,6 +72,9 @@ pub enum Command {
     /// Modèles.
     #[command(subcommand)]
     Model(ModelCmd),
+    /// Serveurs MCP déclarés dans `mcp.d`.
+    #[command(subcommand)]
+    Mcp(McpCmd),
     /// Workflows.
     #[command(subcommand)]
     Wf(WfCmd),
@@ -194,6 +197,57 @@ pub enum ModelCmd {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum McpCmd {
+    /// État de chaque serveur, et déclarations invalides.
+    List,
+    /// Détail d'un serveur : état, déclaration, outils, journal.
+    Show {
+        name: String,
+    },
+    /// Ajoute un serveur depuis un fichier TOML (copié dans `mcp.d`).
+    Add {
+        file: PathBuf,
+        /// Nom du serveur, si le fichier ne le donne pas.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Modifie un champ : `penelope mcp edit redmine timeout 60s`.
+    Edit {
+        name: String,
+        field: String,
+        value: String,
+    },
+    /// Retire un serveur : processus arrêté, outils retirés.
+    Rm {
+        name: String,
+    },
+    Enable {
+        name: String,
+    },
+    Disable {
+        name: String,
+    },
+    /// Redémarre un serveur et relit ses outils.
+    Restart {
+        name: String,
+    },
+    /// Essai à blanc : connexion, négociation, liste des outils.
+    Test {
+        /// Serveur déclaré à essayer.
+        name: Option<String>,
+        /// Ou un fichier TOML pas encore ajouté.
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+    /// Dernières lignes d'erreur du serveur.
+    Logs {
+        name: String,
+        #[arg(long, default_value_t = 50)]
+        lines: u64,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub enum WfCmd {
     List,
     Show {
@@ -287,9 +341,52 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Model(ModelCmd::List { .. }) if !cli.json => {
             println!("{}", render_model_list(&value));
         }
+        Command::Mcp(McpCmd::List) if !cli.json => {
+            println!("{}", render_mcp_list(&value));
+        }
+        Command::Mcp(McpCmd::Logs { .. }) if !cli.json => {
+            for l in value["lines"].as_array().cloned().unwrap_or_default() {
+                println!("{}", l.as_str().unwrap_or_default());
+            }
+        }
+        Command::Mcp(_) => output::print(&value, true),
         _ => output::print(&value, cli.json),
     }
     Ok(())
+}
+
+/// `penelope mcp list` : un serveur par ligne, puis les déclarations invalides.
+fn render_mcp_list(v: &Value) -> String {
+    let servers = v["servers"].as_array().cloned().unwrap_or_default();
+    let mut out = if servers.is_empty() {
+        format!(
+            "Aucun serveur MCP déclaré dans {}",
+            v["dir"].as_str().unwrap_or("mcp.d")
+        )
+    } else {
+        let rows: Vec<Value> = servers
+            .iter()
+            .map(|s| {
+                json!({
+                    "serveur": s["name"],
+                    "état": s["state"],
+                    "outils": s["tools"],
+                    "actif": if s["running"].as_bool().unwrap_or(false) { "oui" } else { "non" },
+                    "appels": s["calls"],
+                    "erreur": s["last_error"].as_str().unwrap_or(""),
+                })
+            })
+            .collect();
+        output::table(&rows)
+    };
+    for bad in v["invalid"].as_array().cloned().unwrap_or_default() {
+        out.push_str(&format!(
+            "\n⚠️ {} : {}",
+            bad["file"].as_str().unwrap_or("?"),
+            bad["error"].as_str().unwrap_or("?")
+        ));
+    }
+    out
 }
 
 /// `penelope model list` : alias, routage en vigueur, puis recherche au catalogue.
@@ -375,6 +472,26 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Secret(SecretCmd::Rm { name }) => (m::SECRET_RM, json!({"name": name})),
 
         Command::Model(ModelCmd::List { filter }) => (m::MODEL_LIST, json!({"filter": filter})),
+        Command::Mcp(McpCmd::List) => (m::MCP_LIST, json!({})),
+        Command::Mcp(McpCmd::Show { name }) => (m::MCP_SHOW, json!({"name": name})),
+        Command::Mcp(McpCmd::Add { file, name }) => {
+            (m::MCP_ADD, json!({"toml": read_toml(file)?, "name": name}))
+        }
+        Command::Mcp(McpCmd::Edit { name, field, value }) => (
+            m::MCP_EDIT,
+            json!({"name": name, "patch": {field.clone(): parse_scalar(value)}}),
+        ),
+        Command::Mcp(McpCmd::Rm { name }) => (m::MCP_RM, json!({"name": name})),
+        Command::Mcp(McpCmd::Enable { name }) => (m::MCP_ENABLE, json!({"name": name})),
+        Command::Mcp(McpCmd::Disable { name }) => (m::MCP_DISABLE, json!({"name": name})),
+        Command::Mcp(McpCmd::Restart { name }) => (m::MCP_RESTART, json!({"name": name})),
+        Command::Mcp(McpCmd::Test { name, file }) => match file {
+            Some(f) => (m::MCP_TEST, json!({"toml": read_toml(f)?, "name": name})),
+            None => (m::MCP_TEST, json!({"name": name})),
+        },
+        Command::Mcp(McpCmd::Logs { name, lines }) => {
+            (m::MCP_LOGS, json!({"name": name, "lines": lines}))
+        }
         Command::Model(ModelCmd::Set { alias, model }) => {
             (m::MODEL_SET, json!({"alias": alias, "model": model}))
         }
@@ -418,6 +535,11 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
             return Err(CliError::Usage(format!("commande non routée : {other:?}")));
         }
     })
+}
+
+/// Contenu d'un fichier de déclaration MCP.
+fn read_toml(path: &std::path::Path) -> CliResult<String> {
+    std::fs::read_to_string(path).map_err(|e| CliError::Io(format!("{} : {e}", path.display())))
 }
 
 /// `"12"` devient un nombre, `"true"` un booléen, le reste une chaîne.
@@ -928,6 +1050,18 @@ mod tests {
             (vec!["backup"], m::BACKUP),
             (vec!["session", "list"], m::SESSION_LIST),
             (vec!["session", "model", "main"], m::SESSION_MODEL),
+            (vec!["mcp", "list"], m::MCP_LIST),
+            (vec!["mcp", "show", "redmine"], m::MCP_SHOW),
+            (vec!["mcp", "rm", "redmine"], m::MCP_RM),
+            (vec!["mcp", "enable", "redmine"], m::MCP_ENABLE),
+            (vec!["mcp", "disable", "redmine"], m::MCP_DISABLE),
+            (vec!["mcp", "restart", "redmine"], m::MCP_RESTART),
+            (vec!["mcp", "test", "redmine"], m::MCP_TEST),
+            (vec!["mcp", "logs", "redmine"], m::MCP_LOGS),
+            (
+                vec!["mcp", "edit", "redmine", "timeout", "60s"],
+                m::MCP_EDIT,
+            ),
             (vec!["config", "get"], m::CONFIG_GET),
             (vec!["secret", "list"], m::SECRET_LIST),
             (vec!["model", "list"], m::MODEL_LIST),
