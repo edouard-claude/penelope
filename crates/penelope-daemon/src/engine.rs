@@ -239,6 +239,27 @@ impl Daemon {
         };
         self.bus.end(&turn.session_id, turn.id.as_str());
         self.handle.record_turn();
+        // Apprentissage continu (§6.6) : revue de fond des échanges qui le méritent.
+        if let (TurnKind::Message, TurnOutcome::Answered { text: answer, .. }) =
+            (turn.kind, &outcome)
+        {
+            let said = turn
+                .payload
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or_default();
+            if self.services.config.config().memory.review_max_candidates > 0
+                && crate::review::wants_review(said)
+            {
+                crate::review::spawn(
+                    self.clone(),
+                    turn.session_id.clone(),
+                    turn.id.to_string(),
+                    said.to_string(),
+                    answer.clone(),
+                );
+            }
+        }
         // Frontière de tour : résumé prêt publié, compaction de fond lancée si besoin.
         crate::compaction::after_turn(self, &turn.session_id).await;
         outcome

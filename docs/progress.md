@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1100 tests verts**, tous hors réseau.
+- **1110 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -191,10 +191,31 @@ Dernière mise à jour : 16 septembre 2026.
   (`/var` → `/private/var`, `/tmp`), faute de quoi l'écriture était refusée dans un
   workspace atteint par un lien symbolique.
 
+### 0.2.9
+
+- **Revue de fond** (§6.6) après les échanges substantiels : rôle `memory_review`, au plus
+  `memory.review_max_candidates` candidats typés, filtre d'écriture, origine `owner` pour
+  ce que le propriétaire a dit, importance 8 pour une correction, ligne dans le journal du
+  jour.
+- **Consolidation nocturne** (§6.8) : verrou, `dream_runs` (Light → REM → Deep), groupes
+  dédoublonnés, réflexions dans `DREAMS.md`, portes déterministes (non fiable et système
+  exclus avant tout prompt), contradictions en questions, opérations du rôle `compaction`
+  validées (uids, pratiques, prédicats, plafond de retrait, conflit d'édition manuelle,
+  filtre) puis appliquées ligne par ligne (`add_entry`, `replace_entry`, `retire_entry`,
+  `add_exception`, `record_ecart`, `update_exception`, `link`, `create_entity`), pré-images
+  dans `mem_history`, index mis à jour, commit git du vault. `update_default` reste une
+  proposition. `--dry-run` n'écrit rien. Écarts périmés expirés.
+- **Digest du matin** et crons système `dreaming_cron`, `digest_cron`.
+- Méthodes `mem.history`, `mem.restore`, `mem.reindex`, `mem.forget`, `mem.candidates`,
+  `mem.dream`, `mem.learned`, `vault.sync`, `vault.check` ; `penelope mem …`,
+  `penelope vault …` ; `/dream`, `/appris`, `/pratique`.
+- Correctif : une pratique réécrite perdait son défaut à la relecture (puce manquante).
+
 ### Encore à brancher
 
 1. **OAuth des serveurs MCP** : flux `paste_back` depuis Telegram, `mcp.auth`.
-2. **Rêve nocturne et digest** : consolidation des candidats, méthodes `mem.*`.
+2. **Frontières d'épisode** (§6.6) : clôture sur inactivité ou changement de sujet,
+   ingestion du transcript de l'épisode ; aujourd'hui la revue se fait tour par tour.
 
 ### Méthodes RPC déclarées mais non servies
 
@@ -205,8 +226,6 @@ silence.
 session.fork  session.rewind
 mcp.auth
 skill.rollback
-mem.history  mem.restore  mem.reindex  mem.forget  mem.candidates
-mem.dream  mem.learned  vault.sync  vault.check
 import.hermes  export  restore  store.rebuild  eval.run  upgrade
 ```
 

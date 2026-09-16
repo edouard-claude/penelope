@@ -84,6 +84,9 @@ pub enum Command {
     /// Mémoire.
     #[command(subcommand)]
     Mem(MemCmd),
+    /// Vault : synchronisation git et vérification.
+    #[command(subcommand)]
+    Vault(VaultCmd),
     /// Skills.
     #[command(subcommand)]
     Skill(SkillCmd),
@@ -315,8 +318,48 @@ pub enum ScheduleCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum MemCmd {
-    Search { query: String },
-    Show { uid: String },
+    Search {
+        query: String,
+    },
+    Show {
+        uid: String,
+    },
+    /// Pré-images d'une entrée ou d'un fichier du vault.
+    History {
+        #[arg(long)]
+        uid: Option<String>,
+        #[arg(long)]
+        file: Option<String>,
+    },
+    /// Remet un fichier dans l'état d'une pré-image (`mem history` donne l'identifiant).
+    Restore {
+        id: i64,
+    },
+    /// Reconstruit l'index depuis le vault.
+    Reindex,
+    Forget {
+        uid: String,
+    },
+    /// Candidats en attente de consolidation.
+    Candidates,
+    /// Lance la consolidation (`--dry-run` : rien n'est écrit).
+    Dream {
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Apprentissages des derniers jours.
+    Learned {
+        #[arg(default_value_t = 7)]
+        days: i64,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum VaultCmd {
+    /// Commit du vault (et push si un remote est configuré).
+    Sync,
+    /// Vérifie frontmatter, pratiques et contenu interdit.
+    Check,
 }
 
 #[derive(Subcommand, Debug)]
@@ -382,7 +425,9 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Mcp(McpCmd::List) if !cli.json => {
             println!("{}", render_mcp_list(&value));
         }
-        Command::Session(SessionCmd::Compact { .. }) if !cli.json => {
+        Command::Session(SessionCmd::Compact { .. }) | Command::Mem(MemCmd::Dream { .. })
+            if !cli.json =>
+        {
             println!("{}", value["text"].as_str().unwrap_or_default());
         }
         Command::Mcp(McpCmd::Logs { .. }) if !cli.json => {
@@ -589,6 +634,17 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
 
         Command::Mem(MemCmd::Search { query }) => (m::MEM_SEARCH, json!({"query": query})),
         Command::Mem(MemCmd::Show { uid }) => (m::MEM_SHOW, json!({"uid": uid})),
+        Command::Mem(MemCmd::History { uid, file }) => {
+            (m::MEM_HISTORY, json!({"uid": uid, "file": file}))
+        }
+        Command::Mem(MemCmd::Restore { id }) => (m::MEM_RESTORE, json!({"id": id})),
+        Command::Mem(MemCmd::Reindex) => (m::MEM_REINDEX, json!({})),
+        Command::Mem(MemCmd::Forget { uid }) => (m::MEM_FORGET, json!({"uid": uid})),
+        Command::Mem(MemCmd::Candidates) => (m::MEM_CANDIDATES, json!({})),
+        Command::Mem(MemCmd::Dream { dry_run }) => (m::MEM_DREAM, json!({"dry_run": dry_run})),
+        Command::Mem(MemCmd::Learned { days }) => (m::MEM_LEARNED, json!({"days": days})),
+        Command::Vault(VaultCmd::Sync) => (m::VAULT_SYNC, json!({})),
+        Command::Vault(VaultCmd::Check) => (m::VAULT_CHECK, json!({})),
 
         Command::Skill(SkillCmd::List) => (m::SKILL_LIST, json!({})),
         Command::Skill(SkillCmd::Show { name }) => (m::SKILL_SHOW, json!({"name": name})),
@@ -1166,6 +1222,9 @@ mod tests {
             (vec!["wf", "list"], m::WF_LIST),
             (vec!["schedule", "list"], m::SCHEDULE_LIST),
             (vec!["mem", "search", "x"], m::MEM_SEARCH),
+            (vec!["mem", "dream", "--dry-run"], m::MEM_DREAM),
+            (vec!["mem", "restore", "12"], m::MEM_RESTORE),
+            (vec!["vault", "check"], m::VAULT_CHECK),
             (vec!["skill", "list"], m::SKILL_LIST),
         ] {
             let c = parse(&args);

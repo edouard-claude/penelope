@@ -563,8 +563,10 @@ impl Practice {
         );
 
         let mut body = format!("# {}\n\n## Défaut\n", self.title);
+        // Le défaut est une entrée de liste comme les autres : sans puce, il disparaîtrait
+        // à la relecture.
         if let Some(d) = &self.default_entry {
-            body.push_str(&format!("{} {}\n", d.text, d.annotations.render()));
+            body.push_str(&format!("- {} {}\n", d.text, d.annotations.render()));
         }
         body.push_str("\n## Exceptions\n");
         for e in &self.exceptions {
@@ -941,5 +943,17 @@ mod tests {
             vec!["client-x", "projet-a"]
         );
         assert!(links("aucun lien").is_empty());
+    }
+    #[test]
+    fn a_rendered_practice_reads_back_identically() {
+        let raw = "---\ntype: pratique\nid: langage-backend\nconfiance: 0.8\n---\n# Langage backend\n\n## Défaut\n- Go <!-- uid: D1 -->\n\n## Exceptions\n- Rust <!-- uid: E1 --> <!-- quand: tache=code -->\n\n## Écarts observés\n";
+        let p = Practice::parse(raw, "langage-backend").unwrap();
+        let again = Practice::parse(&p.render(), "langage-backend").unwrap();
+        assert_eq!(
+            again.default_entry.as_ref().map(|e| e.text.as_str()),
+            Some("Go")
+        );
+        assert_eq!(again.exceptions.len(), 1);
+        assert_eq!(again.default_entry.unwrap().uid, "D1");
     }
 }

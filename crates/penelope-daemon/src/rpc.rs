@@ -438,6 +438,64 @@ impl Rpc {
                 let uid = required_str(p, "uid")?;
                 Ok(serde_json::to_value(s.memory.get(&uid).await?)?)
             }
+            method::MEM_HISTORY => {
+                crate::dream::history(
+                    s,
+                    p.get("uid").and_then(|v| v.as_str()),
+                    p.get("file").and_then(|v| v.as_str()),
+                )
+                .await
+            }
+            method::MEM_RESTORE => {
+                let id = p
+                    .get("id")
+                    .and_then(|v| {
+                        v.as_i64()
+                            .or_else(|| v.as_str().and_then(|x| x.parse().ok()))
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("paramètre `id` (entier) obligatoire"))?;
+                crate::dream::restore(s, id).await
+            }
+            method::MEM_REINDEX => {
+                let vault = crate::conversation::vault_dir(s);
+                let n = crate::vault_ops::reindex(s, &vault)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                Ok(json!({"entries": n}))
+            }
+            method::MEM_FORGET => {
+                let uid = required_str(p, "uid")?;
+                let vault = crate::conversation::vault_dir(s);
+                let done = crate::vault_ops::forget(s, &vault, &uid)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                Ok(json!({"uid": uid, "forgotten": done}))
+            }
+            method::MEM_CANDIDATES => Ok(serde_json::to_value(s.candidates.pending(None).await?)?),
+            method::MEM_DREAM => {
+                let dry_run = p.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
+                let outcome = crate::dream::run(&self.daemon, dry_run).await?;
+                let mut v = serde_json::to_value(&outcome)?;
+                v["text"] = json!(outcome.report.render());
+                Ok(v)
+            }
+            method::MEM_LEARNED => {
+                let days = p
+                    .get("days")
+                    .and_then(|v| {
+                        v.as_i64()
+                            .or_else(|| v.as_str().and_then(|x| x.parse().ok()))
+                    })
+                    .unwrap_or(7);
+                Ok(json!(crate::dream::learned(s, days).await?))
+            }
+            method::VAULT_SYNC => {
+                let day = s.clock.now_rfc3339()[..10].to_string();
+                crate::dream::vault_sync(&self.daemon, &format!("sync: {day}"))
+                    .await
+                    .map_err(anyhow::Error::msg)
+            }
+            method::VAULT_CHECK => Ok(crate::dream::vault_check(s).await),
             method::INTENT_LIST => Ok(serde_json::to_value(s.intents.all().await?)?),
             method::INTENT_CANCEL => {
                 let id = required_str(p, "id")?;
@@ -1297,15 +1355,6 @@ mod tests {
             "session.rewind",
             "mcp.auth",
             "skill.rollback",
-            "mem.history",
-            "mem.restore",
-            "mem.reindex",
-            "mem.forget",
-            "mem.candidates",
-            "mem.dream",
-            "mem.learned",
-            "vault.sync",
-            "vault.check",
             "import.hermes",
             "export",
             "restore",

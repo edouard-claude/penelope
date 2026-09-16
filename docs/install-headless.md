@@ -499,6 +499,37 @@ Déposer un fichier dans `vault/inbox/` en SSH fait la même chose : il est ing�
 bilan arrive sur Telegram et la boîte est vidée (un format refusé part dans
 `inbox/refusés/`). Un PDF scanné sans couche texte n'est pas lu : il n'y a pas d'OCR.
 
+### Mémoire qui apprend
+
+Après un échange qui en vaut la peine (message un peu long, correction, règle énoncée),
+le modèle de l'alias du rôle `memory_review` note au plus cinq candidats : préférence,
+correction, décision, fait, écart. Rien n'est écrit dans le profil ni la mémoire à ce
+moment-là : les candidats vont dans le journal du jour.
+
+Chaque nuit (03:30, `memory.dreaming_cron`), la consolidation les passe à des règles
+fixes : une préférence doit venir de toi et être formulée comme une règle (« toujours »,
+« désormais ») ou revenir dans deux sessions, un fait doit être important ou rappelé,
+un écart doit se répéter sur plusieurs jours, un contenu non fiable n'est jamais retenu.
+Ce qui passe est confié au modèle, qui propose des modifications ligne par ligne,
+vérifiées avant écriture ; une contradiction avec ce qui est déjà retenu devient une
+question, un changement de défaut une proposition. Le digest du matin (08:00) résume la
+nuit, les demandes en attente, les runs et la dépense de la veille.
+
+```bash
+penelope mem dream --dry-run
+```
+
+`/dream` lance une passe, `/appris 7` liste ce qui a été retenu, `/pratique <slug>`
+affiche une pratique. Chaque modification garde son état antérieur :
+
+```bash
+penelope mem history --file profil.md
+```
+
+puis `penelope mem restore <id>`. `penelope vault check` signale un frontmatter cassé ou
+un secret écrit à la main ; si le vault est un dépôt git, chaque passe fait un commit
+`dream: AAAA-MM-JJ` (poussé si `memory.vault_git_remote` est renseigné).
+
 ### Workflows
 
 Un workflow enchaîne des étapes : agent (Pénélope travaille jusqu'à `step_done()`),
@@ -643,6 +674,6 @@ questions plutôt que des relances. `penelope approvals` montre ce qui attend un
 
 Conversation (CLI et Telegram), approbations, catalogue de modèles, vocaux et serveurs
 MCP, rappels et déclencheurs, résumé des longues conversations, photos et documents,
-workflows et génération d'images fonctionnent. Le rêve nocturne et l'OAuth des serveurs MCP ne
-sont pas encore lancés par le daemon. Voir [progress.md](progress.md) pour
+workflows, génération d'images et consolidation nocturne de la mémoire fonctionnent.
+L'OAuth des serveurs MCP n'est pas encore branché. Voir [progress.md](progress.md) pour
 l'état exact.

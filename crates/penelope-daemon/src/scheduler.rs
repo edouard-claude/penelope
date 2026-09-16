@@ -54,6 +54,9 @@ pub async fn scheduler_loop(d: Arc<Daemon>) {
                 busy.store(false, std::sync::atomic::Ordering::SeqCst);
             });
         }
+        if let Err(e) = crate::dream::system_crons(&d).await {
+            tracing::warn!(error = %e, "consolidation ou digest programmés");
+        }
         match tick(&d).await {
             Ok(r) if !r.fired.is_empty() || !r.errors.is_empty() => {
                 tracing::info!(?r, "ordonnanceur")

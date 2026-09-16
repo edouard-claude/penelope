@@ -611,6 +611,87 @@ impl TelegramGateway {
                 let session = d.chat_session_for(&origin).await?;
                 self.budget_text(&session, args).await?
             }
+            "dream" => {
+                // Une passe peut prendre une minute : le bilan arrive quand il est prêt.
+                self.react(chat_id, message_id, reaction::RECEIVED);
+                let (daemon, messenger) = (d.clone(), d.hooks.messenger());
+                let dry_run = args.contains("dry");
+                tokio::spawn(async move {
+                    let text = match crate::dream::run(&daemon, dry_run).await {
+                        Ok(o) => format!(
+                            "🌙 {}{}",
+                            if o.dry_run { "(à blanc) " } else { "" },
+                            o.report.render()
+                        ),
+                        Err(e) => format!("❌ {e}"),
+                    };
+                    if let Some(m) = messenger {
+                        let _ = m.send_text(&origin, &text).await;
+                    }
+                });
+                return Ok(());
+            }
+            "appris" => {
+                let days = args.trim().parse::<i64>().unwrap_or(7);
+                let items = crate::dream::learned(s, days).await?;
+                if items.is_empty() {
+                    format!("Rien appris sur les {days} derniers jours.")
+                } else {
+                    let mut t = format!("📚 **Appris sur {days} jours**\n");
+                    for i in items.iter().take(30) {
+                        t.push_str(&format!(
+                            "\n- {} _({}, {})_",
+                            i["text"].as_str().unwrap_or("(entrée retirée depuis)"),
+                            i["file"].as_str().unwrap_or("?"),
+                            &i["ts"].as_str().unwrap_or("")
+                                [..10.min(i["ts"].as_str().unwrap_or("").len())]
+                        ));
+                    }
+                    t
+                }
+            }
+            "pratique" => {
+                if args.is_empty() {
+                    "Usage : `/pratique <slug>`".into()
+                } else {
+                    let slug = penelope_platform::slugify(args);
+                    let path =
+                        crate::conversation::vault_dir(s).join(format!("pratiques/{slug}.md"));
+                    match std::fs::read_to_string(&path)
+                        .map_err(|_| format!("pratique `{slug}` introuvable"))
+                        .and_then(|raw| penelope_memory::vault::Practice::parse(&raw, &slug))
+                    {
+                        Ok(p) => {
+                            let mut t = format!(
+                                "📐 **{}** · confiance {:.1} · {}\n\nDéfaut : {}",
+                                p.title,
+                                p.confiance,
+                                p.statut.as_str(),
+                                p.default_entry
+                                    .as_ref()
+                                    .map(|e| e.text.as_str())
+                                    .unwrap_or("(aucun)")
+                            );
+                            for e in &p.exceptions {
+                                t.push_str(&format!(
+                                    "\n- Exception : {} ({})",
+                                    e.text,
+                                    e.annotations
+                                        .quand
+                                        .as_ref()
+                                        .map(|q| q.render())
+                                        .unwrap_or_default()
+                                ));
+                            }
+                            if !p.ecarts.is_empty() {
+                                t.push_str(&format!("\n{} écart(s) observé(s).", p.ecarts.len()));
+                            }
+                            t
+                        }
+                        Err(e) => format!("❌ {e}"),
+                    }
+                }
+            }
             "retiens" => {
                 if args.is_empty() {
                     "Usage : `/retiens <ce qu'il faut retenir>`".into()
