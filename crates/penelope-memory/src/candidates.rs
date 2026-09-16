@@ -283,7 +283,7 @@ impl CandidateStore {
         mut candidates: Vec<Candidate>,
         max_per_turn: usize,
     ) -> penelope_store::Result<usize> {
-        candidates.sort_by(|a, b| b.importance.cmp(&a.importance));
+        candidates.sort_by_key(|c| std::cmp::Reverse(c.importance));
         candidates.truncate(max_per_turn);
         // L'anti-boucle et la provenance filtrent **avant** l'écriture.
         let accepted: Vec<Candidate> = candidates

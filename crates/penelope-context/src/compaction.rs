@@ -149,10 +149,9 @@ pub fn level1_admission(
         .iter()
         .map(|(_, _, t)| share.saturating_sub(*t))
         .sum();
+    // Aucun dépassement : rien à redistribuer, et surtout pas de division par zéro.
     let over = results.iter().filter(|(_, _, t)| *t >= share).count() as u64;
-    if over > 0 {
-        share += unused / over;
-    }
+    share += unused.checked_div(over).unwrap_or(0);
 
     results
         .iter()

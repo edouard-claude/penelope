@@ -377,13 +377,11 @@ fn validate_step(
                 }
             }
         }
-        "verify" => {
-            if s.verifier.is_empty() && s.checks.is_empty() {
-                r.error(
-                    format!("{path}/verifier"),
-                    "une étape `verify` doit avoir un vérificateur ou des contrôles",
-                );
-            }
+        "verify" if s.verifier.is_empty() && s.checks.is_empty() => {
+            r.error(
+                format!("{path}/verifier"),
+                "une étape `verify` doit avoir un vérificateur ou des contrôles",
+            );
         }
         _ => {}
     }

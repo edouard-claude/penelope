@@ -29,8 +29,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Chaîne d'outils
         run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
-          rustup default stable
+          rustup toolchain install
+          rustc --version
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
@@ -51,13 +51,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Les deux cibles macOS sont déclarées dans `rust-toolchain.toml`.
       - name: Chaîne d'outils
-        env:
-          TARGET: ${{ matrix.target }}
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          rustup target add "$TARGET"
+          rustup toolchain install
+          rustc --version
 
       - name: Cache cargo
         uses: actions/cache@v4

@@ -100,10 +100,7 @@ impl Control {
             "cancel" => Control::Cancel,
             "retry-step" | "retry_step" => Control::RetryStep,
             "skip-step" | "skip_step" => Control::SkipStep,
-            other => match other.strip_prefix("goto:") {
-                Some(target) => Control::Goto(target.to_string()),
-                None => return None,
-            },
+            other => Control::Goto(other.strip_prefix("goto:")?.to_string()),
         })
     }
     /// Les opérations qui exigent une approbation du propriétaire.

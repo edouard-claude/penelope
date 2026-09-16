@@ -21,6 +21,11 @@ Linux, qui est plus rapide et moins cher.
 
 Aucune suite ne demande le réseau : la CI n'a besoin d'aucun secret.
 
+La version de la chaîne d'outils est épinglée dans `rust-toolchain.toml`, que `rustup`
+lit aussi bien sur le poste de travail que sur le runner. Sans cet épinglage, une
+nouvelle version stable de clippy casse la CI alors qu'aucune ligne n'a bougé, et le
+lint local ne dit pas la même chose que le lint distant.
+
 ## `release.yml`
 
 Sur un tag `vX.Y.Z`, ou à la main avec le tag en paramètre.

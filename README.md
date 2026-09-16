@@ -97,6 +97,9 @@ automatiquement.
 UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 ```
 
+La chaîne d'outils est épinglée dans `rust-toolchain.toml` : le lint local rend
+exactement le même verdict que la CI.
+
 Lint et dépendances :
 
 ```bash

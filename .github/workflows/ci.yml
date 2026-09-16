@@ -28,10 +28,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `rust-toolchain.toml` épingle la version : rustup l'installe tout seul.
       - name: Chaîne d'outils
         run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
-          rustup default stable
+          rustup toolchain install
           rustc --version && cargo --version
 
       - name: Cache cargo
