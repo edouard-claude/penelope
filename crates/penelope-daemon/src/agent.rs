@@ -128,6 +128,40 @@ pub trait Conversation: Send + Sync {
     async fn record(&self, message: &ChatMessage, eager: bool) -> anyhow::Result<()>;
     /// Queue du transcript, sans prompt système : sert à retrouver les appels en attente.
     async fn tail(&self) -> anyhow::Result<Vec<ChatMessage>>;
+    /// Compacte tout de suite après un dépassement de fenêtre prouvé par le provider.
+    /// Vrai si des messages ont été résumés : la requête peut être reconstruite.
+    async fn compact_for_overflow(&self) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+}
+
+/// Compaction à la demande d'une session (§5.4 : une tentative bornée sur dépassement).
+#[async_trait::async_trait]
+pub trait Compactor: Send + Sync {
+    async fn compact_now(&self, session_id: &str) -> anyhow::Result<bool>;
+}
+
+/// Échec d'un appel au modèle, déjà formulé pour l'utilisateur.
+pub(crate) struct CallFailure {
+    pub message: String,
+    /// Le provider a prouvé que la requête dépasse la fenêtre du modèle.
+    pub context_length: bool,
+}
+
+impl CallFailure {
+    fn from_llm(e: &LlmError) -> Self {
+        CallFailure {
+            message: humanise_llm_error(e),
+            context_length: e.kind == LlmErrorKind::ContextLength,
+        }
+    }
+
+    fn plain(message: impl Into<String>) -> Self {
+        CallFailure {
+            message: message.into(),
+            context_length: false,
+        }
+    }
 }
 
 /// Transcript en mémoire : sous-agents, tests, appels ponctuels.
@@ -294,6 +328,8 @@ impl AgentLoop {
         let mut cost = 0.0f64;
         // Une réponse vide a droit à une seule relance, puis devient une erreur explicite.
         let mut empty_retry = false;
+        // Un dépassement de fenêtre prouvé a droit à une compaction, pas davantage.
+        let mut overflow_compacted = false;
 
         s.events
             .append(
@@ -357,7 +393,38 @@ impl AgentLoop {
             }
             let response = match self.call_model(spec, messages, sink).await? {
                 Ok(r) => r,
-                Err(error) => return Ok(TurnOutcome::Failed { error }),
+                Err(failure) if failure.context_length && !overflow_compacted => {
+                    overflow_compacted = true;
+                    match conv.compact_for_overflow().await {
+                        Ok(true) => {
+                            tracing::info!(
+                                session = %spec.session_id,
+                                "fenêtre dépassée : historique compacté, nouvel essai"
+                            );
+                            continue;
+                        }
+                        Ok(false) => {
+                            return Ok(TurnOutcome::Failed {
+                                error: failure.message,
+                            });
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                session = %spec.session_id,
+                                error = %e,
+                                "compaction sur dépassement impossible"
+                            );
+                            return Ok(TurnOutcome::Failed {
+                                error: failure.message,
+                            });
+                        }
+                    }
+                }
+                Err(failure) => {
+                    return Ok(TurnOutcome::Failed {
+                        error: failure.message,
+                    });
+                }
             };
 
             cost += response.cost_usd;
@@ -519,7 +586,7 @@ impl AgentLoop {
         spec: &TurnSpec,
         messages: Vec<ChatMessage>,
         sink: &dyn TurnSink,
-    ) -> anyhow::Result<Result<ChatResponse, String>> {
+    ) -> anyhow::Result<Result<ChatResponse, CallFailure>> {
         let s = &self.services;
         let server_side_fallback = self.provider.name() == "openrouter";
         let mut candidates = vec![spec.model_id.clone()];
@@ -531,7 +598,7 @@ impl AgentLoop {
                     .cloned(),
             );
         }
-        let mut last_error = String::new();
+        let mut last_error = CallFailure::plain("aucun modèle n'a répondu");
         let mut waited = false;
 
         let mut attempt = 0;
@@ -581,14 +648,14 @@ impl AgentLoop {
                     s.llm_state
                         .failed(&llm_id, &e.to_string(), e.maybe_billed)
                         .await?;
-                    last_error = humanise_llm_error(&e);
+                    last_error = CallFailure::from_llm(&e);
                     // `Retry-After` court : une seule attente, puis le même modèle.
                     if let Some(secs) = e.retry_after.filter(|s| *s <= RETRY_AFTER_MAX_SECS) {
                         if !waited && penelope_llm::Router::should_fallback(&e) {
                             waited = true;
                             tracing::warn!(model = %model_id, secs, "limite de débit : nouvel essai");
                             if !sleep_unless_cancelled(&spec.cancel, secs).await {
-                                return Ok(Err("arrêt demandé".into()));
+                                return Ok(Err(CallFailure::plain("arrêt demandé")));
                             }
                             continue;
                         }
@@ -652,7 +719,7 @@ impl AgentLoop {
                         .failed(&llm_id, &e.to_string(), e.maybe_billed)
                         .await?;
                     // Des fragments sont peut-être déjà partis : pas de repli silencieux.
-                    return Ok(Err(humanise_llm_error(&e)));
+                    return Ok(Err(CallFailure::from_llm(&e)));
                 }
             }
         }
@@ -1104,8 +1171,8 @@ fn humanise_llm_error(e: &LlmError) -> String {
             format!("le provider a refusé la demande (filtre de contenu : {msg})")
         }
         LlmErrorKind::ContextLength => format!(
-            "la conversation dépasse la fenêtre du modèle ({msg}). `/new` repart d'une \
-             session vide"
+            "la conversation dépasse la fenêtre du modèle ({msg}). `/compact` résume les \
+             anciens échanges, `/new` repart d'une session vide"
         ),
         LlmErrorKind::Transient => format!("provider indisponible pour l'instant ({msg})"),
         _ => e.to_string(),

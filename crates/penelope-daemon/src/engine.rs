@@ -23,7 +23,7 @@ fn pin_key(session_id: &str) -> String {
     format!("session.model_pin.{session_id}")
 }
 
-fn last_model_key(session_id: &str) -> String {
+pub(crate) fn last_model_key(session_id: &str) -> String {
     format!("session.model_last.{session_id}")
 }
 
@@ -209,6 +209,8 @@ impl Daemon {
         };
         self.bus.end(&turn.session_id, turn.id.as_str());
         self.handle.record_turn();
+        // Frontière de tour : résumé prêt publié, compaction de fond lancée si besoin.
+        crate::compaction::after_turn(self, &turn.session_id).await;
         outcome
     }
 
@@ -292,13 +294,22 @@ impl Daemon {
             tiers.volatile.push_str("\n\n");
             tiers.volatile.push_str(&block);
         }
+        // Un résumé prêt depuis le tour précédent (ou avant un redémarrage) est publié
+        // avant de construire la projection.
+        if let Err(e) = crate::compaction::publish_pending(self, &turn.session_id).await {
+            tracing::warn!(session = %turn.session_id, error = %e, "résumé en attente non publié");
+        }
         let conv = SessionConversation::new(
             s.clone(),
             &turn.session_id,
             &model_id,
             tiers,
             session.episode_seq,
-        );
+        )
+        .with_compactor(Arc::new(crate::compaction::OverflowCompactor {
+            daemon: self.clone(),
+            turn_id: Some(origin_turn.clone()),
+        }));
 
         // 5. Outils.
         let mut exec = NativeToolExecutor::new(
@@ -342,9 +353,14 @@ impl Daemon {
             cancel,
         };
 
-        AgentLoop::new(s.clone(), provider)
+        let outcome = AgentLoop::new(s.clone(), provider)
             .run_conversation(&spec, &conv, &exec, sink)
-            .await
+            .await;
+        if conv.wants_compaction() {
+            self.compaction
+                .request(&turn.session_id, spec.turn_id.clone());
+        }
+        outcome
     }
 
     /// Intentions armées que ce message réveille (§6.9) : elles tirent une fois, et leur
@@ -665,6 +681,18 @@ impl Daemon {
                 })
             })
             .await?)
+    }
+
+    pub async fn kv_delete(&self, key: &str) -> anyhow::Result<()> {
+        let k = key.to_string();
+        self.services
+            .store
+            .write(move |tx| {
+                tx.execute("DELETE FROM kv WHERE k = ?1", [k])?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
     }
 
     pub async fn kv_set(&self, key: &str, value: &str) -> anyhow::Result<()> {

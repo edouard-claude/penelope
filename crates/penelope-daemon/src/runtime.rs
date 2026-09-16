@@ -254,6 +254,8 @@ pub struct Daemon {
     pub bus: Arc<crate::bus::Bus>,
     /// Branchements optionnels : canal de message, MCP, orchestration.
     pub hooks: Hooks,
+    /// Compactions de fond en cours et demandées (§5.4).
+    pub compaction: crate::compaction::State,
     /// Providers construits à la demande (la clé peut arriver après le démarrage).
     providers: tokio::sync::Mutex<Option<Arc<penelope_llm::ProviderSet>>>,
     /// Provider imposé, pour les tests et les suites sans réseau.
@@ -317,6 +319,7 @@ impl Daemon {
             },
             bus: Arc::new(crate::bus::Bus::new()),
             hooks: Hooks::default(),
+            compaction: crate::compaction::State::default(),
             providers: tokio::sync::Mutex::new(None),
             provider_override: std::sync::RwLock::new(None),
         }

@@ -114,6 +114,19 @@ impl Rpc {
                     .await?;
                 Ok(serde_json::to_value(sess)?)
             }
+            method::SESSION_COMPACT => {
+                let sid = self.session_param(p).await?;
+                let report = crate::compaction::compact(
+                    &self.daemon,
+                    &sid,
+                    crate::compaction::Trigger::Manual,
+                    None,
+                )
+                .await?;
+                let mut v = serde_json::to_value(&report)?;
+                v["text"] = json!(crate::compaction::report_text(&report));
+                Ok(v)
+            }
             method::SESSION_EXPORT => {
                 let sid = required_str(p, "session")?;
                 let entries = s.context.history.load(&sid, 0).await?;
@@ -1237,7 +1250,6 @@ mod tests {
         let expected: std::collections::BTreeSet<&str> = [
             "session.fork",
             "session.rewind",
-            "session.compact",
             "mcp.auth",
             "skill.rollback",
             "wf.run",

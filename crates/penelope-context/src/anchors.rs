@@ -124,6 +124,19 @@ pub fn extract_many(texts: &[&str], max: usize) -> Vec<Anchor> {
     set.into_iter().collect()
 }
 
+/// Fusionne l'index d'un résumé mis à jour : les ancres récentes d'abord, puis les
+/// anciennes tant que le plafond le permet. Résultat trié, sans doublon.
+pub fn merge(recent: &[Anchor], older: &[Anchor], max: usize) -> Vec<Anchor> {
+    let mut set: BTreeSet<Anchor> = BTreeSet::new();
+    for a in recent.iter().chain(older) {
+        if set.len() >= max {
+            break;
+        }
+        set.insert(a.clone());
+    }
+    set.into_iter().collect()
+}
+
 /// Rendu compact de l'index, injecté avec le résumé.
 pub fn render(anchors: &[Anchor]) -> String {
     if anchors.is_empty() {
@@ -241,6 +254,18 @@ mod tests {
         assert!(r.contains("chemin :"));
         assert!(r.contains("ticket :"));
         assert!(r.contains("url :"));
+    }
+
+    #[test]
+    fn merge_prefers_recent_anchors_under_the_cap() {
+        let recent = extract("src/nouveau.rs et PROJ-2");
+        let older = extract("src/ancien.rs, src/vieux.rs et PROJ-2");
+        let all = merge(&recent, &older, 10);
+        assert_eq!(all.len(), 4, "PROJ-2 n'apparaît qu'une fois : {all:?}");
+        let capped = merge(&recent, &older, 3);
+        assert_eq!(capped.len(), 3);
+        assert!(capped.iter().any(|a| a.value == "src/nouveau.rs"));
+        assert!(capped.iter().any(|a| a.value == "PROJ-2"));
     }
 
     #[test]

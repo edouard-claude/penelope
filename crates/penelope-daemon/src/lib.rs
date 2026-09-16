@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod bus;
+pub mod compaction;
 pub mod conversation;
 pub mod doctor;
 pub mod engine;

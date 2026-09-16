@@ -209,6 +209,40 @@ impl Lcm {
         anchors: &[crate::anchors::Anchor],
         tokens_self: u64,
     ) -> penelope_store::Result<String> {
+        self.replace(old_id, None, new_summary, anchors, tokens_self)
+            .await
+    }
+
+    /// Met à jour un nœud **et** prolonge sa couverture jusqu'à `to_seq` : le résumé
+    /// précédent absorbe les messages qui le suivent. La provenance suit : l'intervalle
+    /// s'étend et les tokens source s'additionnent.
+    pub async fn extend(
+        &self,
+        old_id: &str,
+        to_seq: i64,
+        added_tokens_src: u64,
+        new_summary: &str,
+        anchors: &[crate::anchors::Anchor],
+        tokens_self: u64,
+    ) -> penelope_store::Result<String> {
+        self.replace(
+            old_id,
+            Some((to_seq, added_tokens_src)),
+            new_summary,
+            anchors,
+            tokens_self,
+        )
+        .await
+    }
+
+    async fn replace(
+        &self,
+        old_id: &str,
+        extension: Option<(i64, u64)>,
+        new_summary: &str,
+        anchors: &[crate::anchors::Anchor],
+        tokens_self: u64,
+    ) -> penelope_store::Result<String> {
         let old = old_id.to_string();
         let (sum, anc, ts) = (
             new_summary.to_string(),
@@ -219,15 +253,16 @@ impl Lcm {
         let nid = new_id.clone();
         self.store
             .write(move |tx| {
-                let (sid, kind, level, from, to, src): (
+                let (sid, kind, level, from, to, src, superseded): (
                     String,
                     String,
                     i64,
                     Option<i64>,
                     Option<i64>,
                     i64,
+                    Option<String>,
                 ) = tx.query_row(
-                    "SELECT session_id, kind, level, from_seq, to_seq, tokens_src
+                    "SELECT session_id, kind, level, from_seq, to_seq, tokens_src, superseded_by
                      FROM lcm_nodes WHERE id = ?1",
                     [&old],
                     |r| {
@@ -238,9 +273,22 @@ impl Lcm {
                             r.get(3)?,
                             r.get(4)?,
                             r.get(5)?,
+                            r.get(6)?,
                         ))
                     },
                 )?;
+                // Deux mises à jour concurrentes du même nœud : la seconde est périmée.
+                if let Some(by) = superseded {
+                    return Err(penelope_store::StoreError::other(format!(
+                        "le nœud {old} a déjà été remplacé par {by}"
+                    )));
+                }
+                let (to, src) = match extension {
+                    Some((until, added)) => {
+                        (Some(to.map_or(until, |t| t.max(until))), src + added as i64)
+                    }
+                    None => (to, src),
+                };
                 tx.execute(
                     "INSERT INTO lcm_nodes(id, session_id, kind, level, from_seq, to_seq, summary,
                         anchors, tokens_src, tokens_self, tokens_subtree, created_at)
@@ -510,6 +558,33 @@ mod tests {
             "l'intervalle couvert est conservé"
         );
         assert_eq!(active[0].tokens_src, 5000, "la provenance est conservée");
+    }
+
+    #[tokio::test]
+    async fn extension_absorbs_the_following_messages() {
+        let l = lcm();
+        let a = l
+            .insert_leaf("s1", 1, 10, "tours 1-10", &[], 5000, 300)
+            .await
+            .unwrap();
+        let b = l
+            .extend(&a, 24, 2500, "tours 1-24", &[], 380)
+            .await
+            .unwrap();
+
+        let active = l.active_nodes("s1").await.unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, b);
+        assert_eq!((active[0].from_seq, active[0].to_seq), (Some(1), Some(24)));
+        assert_eq!(
+            active[0].tokens_src, 7500,
+            "les tokens source s'additionnent"
+        );
+        assert!(Lcm::coverage_gaps(&active, 24).is_empty());
+
+        // Le nœud remplacé ne se met plus à jour : une seconde écriture est périmée.
+        assert!(l.extend(&a, 30, 100, "doublon", &[], 10).await.is_err());
+        assert_eq!(l.active_nodes("s1").await.unwrap()[0].id, b);
     }
 
     #[tokio::test]

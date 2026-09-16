@@ -205,6 +205,11 @@ impl Bus {
         }
     }
 
+    /// Un tour de cette session est-il en cours ?
+    pub fn is_active(&self, session_id: &str) -> bool {
+        lock(&self.active).contains_key(session_id)
+    }
+
     /// Annule le tour en cours d'une session. Vrai s'il y en avait un.
     pub fn cancel_session(&self, session_id: &str) -> bool {
         match lock(&self.active).get(session_id) {

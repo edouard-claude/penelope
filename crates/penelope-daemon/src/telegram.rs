@@ -363,6 +363,30 @@ impl TelegramGateway {
                     .await?;
                 format!("🆕 Nouvelle session `{}`.", sess.id)
             }
+            "compact" => {
+                // Un résumé prend de quelques secondes à une minute : la file des updates
+                // n'attend pas, le bilan arrive en réponse quand il est prêt.
+                let session = d.chat_session_for(&origin).await?;
+                self.react(chat_id, message_id, reaction::RECEIVED);
+                let (daemon, messenger) = (d.clone(), d.hooks.messenger());
+                tokio::spawn(async move {
+                    let text = match crate::compaction::compact(
+                        &daemon,
+                        &session,
+                        crate::compaction::Trigger::Manual,
+                        None,
+                    )
+                    .await
+                    {
+                        Ok(r) => crate::compaction::report_text(&r),
+                        Err(e) => format!("❌ {e}"),
+                    };
+                    if let Some(m) = messenger {
+                        let _ = m.send_text(&origin, &text).await;
+                    }
+                });
+                return Ok(());
+            }
             "stop" => {
                 let session = d.chat_session_for(&origin).await?;
                 if d.bus.cancel_session(&session) {
@@ -2578,6 +2602,56 @@ mod tests {
         );
         assert!(out.iter().any(|m| m.contains("déclenché")), "{out:?}");
         assert!(out.last().unwrap().contains("⏸"), "{out:?}");
+    }
+
+    #[tokio::test]
+    async fn compact_summarises_the_chat_session_and_reports_back() {
+        let (_d, g, t, p) = gateway().await;
+        let origin = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: None,
+        };
+        let sid = g.daemon.chat_session_for(&origin).await.unwrap();
+        let h = &g.daemon.services.context.history;
+        for i in 0..40 {
+            let m = if i % 2 == 0 {
+                penelope_llm::types::ChatMessage::user(format!("q{i} {}", "mot ".repeat(500)))
+            } else {
+                penelope_llm::types::ChatMessage::assistant(format!("r{i} {}", "mot ".repeat(500)))
+            };
+            h.append(&sid, &m, 600, 0, false, None).await.unwrap();
+        }
+        p.reply(r#"{"objectif": "tester /compact", "fait": "tout"}"#);
+
+        g.process_update(&updates::text_message(95, OWNER, OWNER, "/compact"))
+            .await
+            .unwrap();
+        // Le bilan arrive quand le résumé est publié, sans bloquer la file des updates.
+        let mut out = Vec::new();
+        for _ in 0..100 {
+            g.flush_outbox().await.unwrap();
+            out = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+            if !out.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            out.iter().any(|m| m.contains("messages résumés")),
+            "{out:?}"
+        );
+        assert_eq!(
+            g.daemon
+                .services
+                .context
+                .lcm
+                .active_nodes(&sid)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]

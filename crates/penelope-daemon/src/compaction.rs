@@ -1,0 +1,918 @@
+//! Compaction niveau 3 (§5.4) : résumés LCM écrits par le rôle `compaction`.
+//!
+//! Trois déclencheurs : la fin d'un tour dont la projection atteint le seuil moins la
+//! marge (tâche de fond), `/compact` (lève le cooldown), et le dépassement de fenêtre
+//! prouvé par le provider (une tentative, publiée aussitôt). Le résumé se calcule sans
+//! bloquer la conversation ; il est publié à une frontière de tour : tout de suite si la
+//! session est au repos, sinon à la fin du tour en cours.
+
+use crate::runtime::Daemon;
+use penelope_context::{CompactionParams, Cooldown, SummaryJob};
+use penelope_kernel::event::EventDraft;
+use penelope_llm::Provider;
+use penelope_llm::catalog::strip_provider;
+use penelope_llm::provider::{CancelToken, collect_stream};
+use penelope_llm::types::ChatRequest;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// Lots résumés au plus par compaction ; la suivante reprend le reste.
+const MAX_PASSES: usize = 12;
+/// Au-delà, le résumeur est en échec et le cooldown s'applique.
+const SUMMARY_TIMEOUT: Duration = Duration::from_secs(180);
+/// Attente maximale d'une compaction concurrente, sur dépassement de fenêtre.
+const OVERFLOW_WAIT: Duration = Duration::from_secs(200);
+
+/// Ce qui déclenche une compaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Trigger {
+    /// Fin d'un tour au-delà du seuil moins la marge.
+    Background,
+    /// `/compact`, `penelope session compact` : force un lot et lève le cooldown.
+    Manual,
+    /// Dépassement de fenêtre prouvé par le provider, en plein tour.
+    Overflow,
+}
+
+impl Trigger {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Trigger::Background => "background",
+            Trigger::Manual => "manual",
+            Trigger::Overflow => "overflow",
+        }
+    }
+}
+
+/// État partagé du daemon : compactions en cours, sessions à compacter après leur tour.
+#[derive(Default)]
+pub struct State {
+    running: Mutex<HashSet<String>>,
+    /// Session → tour qui a demandé la compaction (le coût lui est attribué).
+    wanted: Mutex<HashMap<String, Option<String>>>,
+}
+
+impl State {
+    /// Demande une compaction de fond à la fin du tour en cours.
+    pub fn request(&self, session_id: &str, turn_id: Option<String>) {
+        if let Ok(mut g) = self.wanted.lock() {
+            g.insert(session_id.to_string(), turn_id);
+        }
+    }
+
+    fn take_request(&self, session_id: &str) -> Option<Option<String>> {
+        self.wanted
+            .lock()
+            .ok()
+            .and_then(|mut g| g.remove(session_id))
+    }
+
+    pub fn is_running(&self, session_id: &str) -> bool {
+        self.running
+            .lock()
+            .map(|g| g.contains(session_id))
+            .unwrap_or(false)
+    }
+
+    fn claim(&self, session_id: &str) -> Option<Claim<'_>> {
+        let mut g = self.running.lock().ok()?;
+        g.insert(session_id.to_string()).then(|| Claim {
+            state: self,
+            session_id: session_id.to_string(),
+        })
+    }
+}
+
+/// Une compaction à la fois par session : libérée en fin de portée, même sur erreur.
+struct Claim<'a> {
+    state: &'a State,
+    session_id: String,
+}
+
+impl Drop for Claim<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut g) = self.state.running.lock() {
+            g.remove(&self.session_id);
+        }
+    }
+}
+
+/// Bilan d'une compaction.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Report {
+    pub session: String,
+    pub trigger: String,
+    /// Lots résumés et publiés.
+    pub published: usize,
+    /// Un résumé est prêt et attend la fin du tour en cours.
+    pub deferred: bool,
+    /// Messages couverts par les lots publiés.
+    pub messages: i64,
+    pub node: Option<String>,
+    /// Dernier message couvert par le résumé actif.
+    pub covered_to: i64,
+    /// Tokens des messages résumés.
+    pub tokens_src: u64,
+    /// Tokens du résumé qui les remplace.
+    pub tokens_summary: u64,
+    /// Lots restant à résumer : la prochaine compaction les reprend.
+    pub remaining_batches: usize,
+    pub model: Option<String>,
+    pub cost_usd: f64,
+    /// Pourquoi rien n'a été fait.
+    pub skipped: Option<String>,
+}
+
+/// Résumé calculé, en attente d'une frontière de tour. Persisté : un redémarrage ne
+/// perd pas un appel déjà payé.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Pending {
+    job: SummaryJob,
+    summary: Value,
+    model: String,
+}
+
+fn cooldown_key(session_id: &str) -> String {
+    format!("compaction.cooldown.{session_id}")
+}
+
+fn pending_key(session_id: &str) -> String {
+    format!("compaction.pending.{session_id}")
+}
+
+/// Fin de tour : publie le résumé en attente, puis lance la compaction de fond si le
+/// tour l'a demandée.
+pub async fn after_turn(d: &Arc<Daemon>, session_id: &str) {
+    if let Err(e) = publish_pending(d, session_id).await {
+        tracing::warn!(session = %session_id, error = %e, "résumé en attente non publié");
+    }
+    if let Some(turn_id) = d.compaction.take_request(session_id) {
+        spawn(
+            d.clone(),
+            session_id.to_string(),
+            Trigger::Background,
+            turn_id,
+        );
+    }
+}
+
+/// Lance une compaction sans l'attendre.
+pub fn spawn(d: Arc<Daemon>, session_id: String, trigger: Trigger, turn_id: Option<String>) {
+    tokio::spawn(async move {
+        match compact(&d, &session_id, trigger, turn_id.as_deref()).await {
+            Ok(r) if r.published > 0 || r.deferred => tracing::info!(
+                session = %session_id,
+                trigger = trigger.as_str(),
+                messages = r.messages,
+                tokens_src = r.tokens_src,
+                tokens_summary = r.tokens_summary,
+                deferred = r.deferred,
+                "contexte compacté"
+            ),
+            Ok(r) => {
+                tracing::debug!(session = %session_id, skipped = ?r.skipped, "rien à compacter")
+            }
+            Err(e) => tracing::warn!(session = %session_id, error = %e, "compaction en échec"),
+        }
+    });
+}
+
+/// Publie le résumé qui attendait une frontière de tour, s'il y en a un.
+pub async fn publish_pending(d: &Arc<Daemon>, session_id: &str) -> anyhow::Result<Option<Report>> {
+    // Une compaction en cours publie elle-même ce qu'elle a préparé.
+    let Some(_claim) = d.compaction.claim(session_id) else {
+        return Ok(None);
+    };
+    let Some(pending) = load_pending(d, session_id).await? else {
+        return Ok(None);
+    };
+    let mut report = Report {
+        session: session_id.to_string(),
+        trigger: Trigger::Background.as_str().into(),
+        ..Default::default()
+    };
+    publish_saved(d, session_id, pending, Trigger::Background, &mut report).await;
+    Ok(Some(report))
+}
+
+/// Compacte une session : prépare les lots, les fait résumer, les publie.
+pub async fn compact(
+    d: &Arc<Daemon>,
+    session_id: &str,
+    trigger: Trigger,
+    turn_id: Option<&str>,
+) -> anyhow::Result<Report> {
+    let s = &d.services;
+    let mut report = Report {
+        session: session_id.to_string(),
+        trigger: trigger.as_str().into(),
+        ..Default::default()
+    };
+
+    let _claim = match d.compaction.claim(session_id) {
+        Some(c) => c,
+        // Sur dépassement, le résumé de fond déjà en route est la meilleure chance.
+        None if trigger == Trigger::Overflow => match wait_claim(d, session_id).await {
+            Some(c) => c,
+            None => {
+                report.skipped = Some("une autre compaction ne se termine pas".into());
+                return Ok(report);
+            }
+        },
+        None => {
+            report.skipped = Some("une compaction est déjà en cours pour cette session".into());
+            return Ok(report);
+        }
+    };
+
+    // Un résumé prêt passe d'abord : le lot suivant se prépare sur l'état publié.
+    if let Some(pending) = load_pending(d, session_id).await? {
+        if trigger != Trigger::Overflow && d.bus.is_active(session_id) {
+            report.deferred = true;
+            report.skipped = Some("un résumé attend déjà la fin du tour en cours".into());
+            return Ok(report);
+        }
+        publish_saved(d, session_id, pending, trigger, &mut report).await;
+    }
+
+    let cfg = s.config.config();
+    let mut cooldown = load_cooldown(d, session_id).await;
+    let now = s.clock.now_ms();
+    match trigger {
+        Trigger::Background if cooldown.is_active(now) => {
+            report.skipped = Some(format!(
+                "échec récent, nouvel essai possible dans {} s",
+                (cooldown.until_ms - now) / 1000
+            ));
+            return Ok(report);
+        }
+        Trigger::Manual | Trigger::Overflow if cooldown.failures > 0 => {
+            cooldown.clear();
+            save_cooldown(d, session_id, &cooldown).await;
+        }
+        _ => {}
+    }
+    // Hors demande explicite, un budget atteint n'est pas dépensé en résumés.
+    if trigger == Trigger::Background {
+        let statuses = s.budget.status(&cfg.budget, Some(session_id), None).await?;
+        if let Some(b) = statuses.iter().find(|b| b.exceeded) {
+            report.skipped = Some(format!("budget {} atteint", b.scope.as_str()));
+            return Ok(report);
+        }
+    }
+
+    let alias = cfg.role_alias("compaction");
+    let model = cfg
+        .alias_model(&alias)
+        .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}` du rôle `compaction`"))?
+        .to_string();
+    let provider = d.provider_for(&model).await.map_err(anyhow::Error::msg)?;
+    let conversation = conversation_model(d, session_id).await;
+    let params = CompactionParams::from_config(
+        &cfg,
+        s.catalog.window_of(strip_provider(&conversation)),
+        &conversation,
+    );
+    let window = s.catalog.window_of(strip_provider(&model));
+
+    for pass in 0..MAX_PASSES {
+        let force = pass == 0 && trigger != Trigger::Background;
+        let Some(job) = s
+            .context
+            .prepare_summary(session_id, &params, window, &model, force)
+            .await?
+        else {
+            break;
+        };
+        report.remaining_batches = job.remaining_batches();
+
+        let summary = match summarise(d, provider.as_ref(), &model, &job, turn_id).await {
+            Ok((summary, cost)) => {
+                report.cost_usd += cost;
+                summary
+            }
+            Err(error) => {
+                cooldown.record_failure(s.clock.now_ms(), &cfg.context.cooldown_ms);
+                save_cooldown(d, session_id, &cooldown).await;
+                let retry_in_s = (cooldown.until_ms - s.clock.now_ms()).max(0) / 1000;
+                let _ = s
+                    .events
+                    .append(
+                        EventDraft::new(
+                            "context.compaction_failed",
+                            json!({
+                                "error": error,
+                                "trigger": trigger.as_str(),
+                                "failures": cooldown.failures,
+                                "retry_in_s": retry_in_s,
+                                "model": model,
+                            }),
+                        )
+                        .session(session_id),
+                    )
+                    .await;
+                penelope_observe::metrics::counter_inc(
+                    "penelope_compactions_total",
+                    &[("trigger", trigger.as_str()), ("outcome", "failed")],
+                    1.0,
+                );
+                if report.published == 0 {
+                    anyhow::bail!("le résumé a échoué ({error}), nouvel essai dans {retry_in_s} s");
+                }
+                break;
+            }
+        };
+
+        let pending = Pending {
+            job,
+            summary,
+            model: model.clone(),
+        };
+        if trigger != Trigger::Overflow && d.bus.is_active(session_id) {
+            save_pending(d, session_id, &pending).await?;
+            report.deferred = true;
+            report.model = Some(model.clone());
+            // Le tour a pu se terminer pendant l'écriture : sa frontière est passée.
+            if !d.bus.is_active(session_id) {
+                if let Some(p) = load_pending(d, session_id).await? {
+                    report.deferred = false;
+                    publish_saved(d, session_id, p, trigger, &mut report).await;
+                }
+            }
+            break;
+        }
+        let more = pending.job.remaining_batches() > 0;
+        publish(d, session_id, &pending, trigger, &mut report).await?;
+        if !more {
+            break;
+        }
+    }
+
+    if report.published > 0 && cooldown.failures > 0 {
+        cooldown.clear();
+        save_cooldown(d, session_id, &cooldown).await;
+    }
+    if report.published == 0 && !report.deferred && report.skipped.is_none() {
+        report.skipped =
+            Some("rien à compacter : la conversation tient dans la queue verbatim".into());
+    }
+    Ok(report)
+}
+
+async fn wait_claim<'a>(d: &'a Arc<Daemon>, session_id: &str) -> Option<Claim<'a>> {
+    let deadline = tokio::time::Instant::now() + OVERFLOW_WAIT;
+    loop {
+        if let Some(c) = d.compaction.claim(session_id) {
+            return Some(c);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// Fait résumer un lot par le modèle du rôle `compaction` et valide sa sortie.
+async fn summarise(
+    d: &Arc<Daemon>,
+    provider: &dyn Provider,
+    model: &str,
+    job: &SummaryJob,
+    turn_id: Option<&str>,
+) -> Result<(Value, f64), String> {
+    let s = &d.services;
+    let info = s.catalog.get(strip_provider(model));
+    let effort = info.as_ref().and_then(|i| i.lightest_effort());
+    let structured = info
+        .as_ref()
+        .map(|i| i.supports_structured_output())
+        .unwrap_or(false);
+    let request = ChatRequest {
+        model: model.to_string(),
+        messages: job.summarizer_messages(),
+        stream: true,
+        // Neuf sections de 4 000 caractères au plus, plus le raisonnement éventuel.
+        max_tokens: Some(if effort.as_deref() == Some("none") {
+            8_000
+        } else {
+            16_000
+        }),
+        reasoning_effort: effort,
+        response_format: structured.then(penelope_context::compaction::summary_response_format),
+        session_id: Some(job.session_id.clone()),
+        ..Default::default()
+    };
+    let call = async {
+        let rx = provider
+            .chat_stream(request, CancelToken::new())
+            .await
+            .map_err(|e| e.to_string())?;
+        collect_stream(rx, model, provider.name(), &s.catalog)
+            .await
+            .map_err(|e| e.to_string())
+    };
+    let response = tokio::time::timeout(SUMMARY_TIMEOUT, call)
+        .await
+        .map_err(|_| {
+            format!(
+                "le résumeur n'a pas répondu en {} s",
+                SUMMARY_TIMEOUT.as_secs()
+            )
+        })??;
+    let _ = s
+        .budget
+        .record(penelope_kernel::budget::UsageRecord {
+            session_id: Some(job.session_id.clone()),
+            turn_id: turn_id.map(String::from),
+            model: response.model.clone(),
+            provider: response.provider.clone(),
+            role: Some("compaction".into()),
+            generation_id: (!response.id.is_empty()).then(|| response.id.clone()),
+            upstream: response.upstream.clone(),
+            finish: Some(format!("{:?}", response.finish).to_lowercase()),
+            prompt: response.usage.prompt,
+            completion: response.usage.completion,
+            cached: response.usage.cached,
+            cache_write: response.usage.cache_write,
+            reasoning: response.usage.reasoning,
+            cost_usd: response.cost_usd,
+            estimated: response.cost_estimated,
+            ..Default::default()
+        })
+        .await;
+    let summary = penelope_context::compaction::validate_summary(&response.message.text())?;
+    Ok((summary, response.cost_usd))
+}
+
+/// Publie un résumé validé : nœud LCM, canonique marqué, événement.
+async fn publish(
+    d: &Arc<Daemon>,
+    session_id: &str,
+    pending: &Pending,
+    trigger: Trigger,
+    report: &mut Report,
+) -> anyhow::Result<()> {
+    let s = &d.services;
+    let job = &pending.job;
+    let node_id = s
+        .context
+        .apply_summary(job, &pending.summary, &pending.model)
+        .await?;
+    let tokens_summary = s
+        .context
+        .lcm
+        .get(&node_id)
+        .await?
+        .map(|n| n.tokens_self)
+        .unwrap_or(0);
+
+    report.published += 1;
+    report.messages += job.messages();
+    report.node = Some(node_id.clone());
+    report.covered_to = job.to_seq;
+    report.tokens_src += job.tokens_src;
+    report.tokens_summary = tokens_summary;
+    report.model = Some(pending.model.clone());
+
+    s.events
+        .append(
+            EventDraft::new(
+                "context.compacted",
+                json!({
+                    "node": node_id,
+                    "from_seq": job.from_seq,
+                    "to_seq": job.to_seq,
+                    "chunk_from_seq": job.chunk_from_seq,
+                    "messages": job.messages(),
+                    "tokens_src": job.tokens_src,
+                    "tokens_summary": tokens_summary,
+                    "updated": job.previous_node_id,
+                    "model": pending.model,
+                    "trigger": trigger.as_str(),
+                }),
+            )
+            .session(session_id),
+        )
+        .await?;
+    penelope_observe::metrics::counter_inc(
+        "penelope_compactions_total",
+        &[("trigger", trigger.as_str()), ("outcome", "published")],
+        1.0,
+    );
+    Ok(())
+}
+
+/// Publie un résumé mis de côté. Il est retiré d'abord : un résumé périmé ne revient
+/// pas en boucle.
+async fn publish_saved(
+    d: &Arc<Daemon>,
+    session_id: &str,
+    pending: Pending,
+    trigger: Trigger,
+    report: &mut Report,
+) {
+    if let Err(e) = d.kv_delete(&pending_key(session_id)).await {
+        tracing::warn!(session = %session_id, error = %e, "résumé en attente non retiré");
+        return;
+    }
+    if let Err(e) = publish(d, session_id, &pending, trigger, report).await {
+        tracing::warn!(session = %session_id, error = %e, "résumé en attente abandonné");
+    }
+}
+
+async fn load_pending(d: &Arc<Daemon>, session_id: &str) -> anyhow::Result<Option<Pending>> {
+    let Some(raw) = d.kv_get(&pending_key(session_id)).await? else {
+        return Ok(None);
+    };
+    match serde_json::from_str(&raw) {
+        Ok(p) => Ok(Some(p)),
+        Err(e) => {
+            tracing::warn!(session = %session_id, error = %e, "résumé en attente illisible, écarté");
+            d.kv_delete(&pending_key(session_id)).await?;
+            Ok(None)
+        }
+    }
+}
+
+async fn save_pending(d: &Arc<Daemon>, session_id: &str, pending: &Pending) -> anyhow::Result<()> {
+    d.kv_set(&pending_key(session_id), &serde_json::to_string(pending)?)
+        .await
+}
+
+async fn load_cooldown(d: &Arc<Daemon>, session_id: &str) -> Cooldown {
+    d.kv_get(&cooldown_key(session_id))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+async fn save_cooldown(d: &Arc<Daemon>, session_id: &str, cooldown: &Cooldown) {
+    let raw = serde_json::to_string(cooldown).unwrap_or_default();
+    if let Err(e) = d.kv_set(&cooldown_key(session_id), &raw).await {
+        tracing::warn!(session = %session_id, error = %e, "cooldown de compaction non enregistré");
+    }
+}
+
+/// Modèle de la conversation : sa fenêtre fixe la queue et le seuil.
+async fn conversation_model(d: &Arc<Daemon>, session_id: &str) -> String {
+    if let Some(pin) = d.pinned_model(session_id).await {
+        return pin.model_id;
+    }
+    let cfg = d.services.config.config();
+    let alias = d
+        .kv_get(&crate::engine::last_model_key(session_id))
+        .await
+        .ok()
+        .flatten()
+        .filter(|a| !a.is_empty())
+        .unwrap_or_else(|| cfg.role_alias("chat_default"));
+    cfg.alias_model(&alias).unwrap_or_default().to_string()
+}
+
+/// Compaction sur dépassement de fenêtre, offerte à la conversation d'un tour.
+pub struct OverflowCompactor {
+    pub daemon: Arc<Daemon>,
+    pub turn_id: Option<String>,
+}
+
+#[async_trait::async_trait]
+impl crate::agent::Compactor for OverflowCompactor {
+    async fn compact_now(&self, session_id: &str) -> anyhow::Result<bool> {
+        let r = compact(
+            &self.daemon,
+            session_id,
+            Trigger::Overflow,
+            self.turn_id.as_deref(),
+        )
+        .await?;
+        Ok(r.published > 0)
+    }
+}
+
+/// Bilan lisible, pour Telegram et la CLI.
+pub fn report_text(r: &Report) -> String {
+    if r.published > 0 {
+        let mut s = format!(
+            "🗜 {} messages résumés : {} tokens remplacés par un résumé de {}.",
+            r.messages, r.tokens_src, r.tokens_summary
+        );
+        if r.remaining_batches > 0 {
+            s.push_str(&format!(
+                " Il reste {} lot(s), repris à la prochaine compaction.",
+                r.remaining_batches
+            ));
+        }
+        return s;
+    }
+    if r.deferred {
+        return "🗜 Résumé prêt : publié à la fin du tour en cours.".into();
+    }
+    format!(
+        "Rien à compacter : {}.",
+        r.skipped
+            .as_deref()
+            .unwrap_or("la conversation tient dans la queue verbatim")
+            .trim_start_matches("rien à compacter : ")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::Conversation;
+    use crate::bus::Origin;
+    use crate::conversation::SessionConversation;
+    use penelope_kernel::clock::TestClock;
+    use penelope_llm::catalog::ModelInfo;
+    use penelope_llm::mock::{MockProvider, Scripted};
+    use penelope_llm::types::ChatMessage;
+
+    const SUMMARY: &str = r#"{"objectif": "préparer la migration PROJ-7",
+        "contraintes_et_preferences": "réponses courtes", "fait": "schéma exporté",
+        "en_cours": "vérification", "bloque": "", "decisions_cles": "PostgreSQL 17",
+        "fichiers_et_ressources": "db/schema.sql", "prochaines_etapes": "migrer ce soir",
+        "contexte_critique": ""}"#;
+
+    async fn daemon() -> (tempfile::TempDir, Arc<Daemon>, Arc<MockProvider>) {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+                .await
+                .unwrap(),
+        );
+        let d = Arc::new(Daemon::from_services(s));
+        let p = Arc::new(MockProvider::new());
+        d.set_provider_override(p.clone());
+        (dir, d, p)
+    }
+
+    /// Une longue conversation : 40 échanges d'environ 600 tokens chacun.
+    async fn long_session(d: &Arc<Daemon>) -> String {
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        let h = &d.services.context.history;
+        for i in 0..20 {
+            let q = format!("question {i} sur PROJ-7 : {}", "détail ".repeat(340));
+            let a = format!("réponse {i} : {}", "analyse ".repeat(300));
+            h.append(&sid, &ChatMessage::user(q), 600, 0, false, None)
+                .await
+                .unwrap();
+            h.append(&sid, &ChatMessage::assistant(a), 600, 0, false, None)
+                .await
+                .unwrap();
+        }
+        sid
+    }
+
+    fn summarizer_requests(p: &MockProvider) -> Vec<penelope_llm::types::ChatRequest> {
+        p.requests()
+            .into_iter()
+            .filter(|r| {
+                r.messages
+                    .first()
+                    .is_some_and(|m| m.text().contains("module de compaction"))
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn manual_compaction_replaces_old_turns_with_a_summary() {
+        let (_dir, d, p) = daemon().await;
+        let sid = long_session(&d).await;
+        p.reply(SUMMARY);
+
+        let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+        assert_eq!(r.published, 1, "{r:?}");
+        assert!(r.messages > 10 && r.tokens_src > 0 && r.tokens_summary > 0);
+        assert!(r.skipped.is_none());
+        assert!(report_text(&r).contains("messages résumés"));
+
+        // Le résumeur est le modèle du rôle `compaction`.
+        let cfg = d.services.config.config();
+        let asked = summarizer_requests(&p);
+        assert_eq!(asked.len(), 1);
+        assert_eq!(
+            asked[0].model,
+            cfg.alias_model(&cfg.role_alias("compaction")).unwrap()
+        );
+
+        // Canonique marqué, un seul nœud, projection = résumé + queue verbatim.
+        let s = &d.services;
+        let nodes = s.context.lcm.active_nodes(&sid).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].summary.contains("PostgreSQL 17"));
+        assert!(nodes[0].anchors.iter().any(|a| a.value == "PROJ-7"));
+        let history = s.context.history.load(&sid, 0).await.unwrap();
+        assert!(history.iter().any(|e| e.compacted));
+        assert!(
+            !history.last().unwrap().compacted,
+            "la queue reste verbatim"
+        );
+
+        let conv = SessionConversation::new(
+            s.clone(),
+            &sid,
+            "openrouter:deepseek/deepseek-v4-pro",
+            penelope_context::TiersBuilder::new()
+                .soul("Pénélope.")
+                .build(),
+            0,
+        );
+        let texts: Vec<String> = conv
+            .request_messages()
+            .await
+            .unwrap()
+            .iter()
+            .map(|m| m.text())
+            .collect();
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("Résumé de la conversation antérieure"))
+        );
+        assert!(
+            !texts.iter().any(|t| t.starts_with("question 0 ")),
+            "les tours résumés ne sont plus envoyés"
+        );
+        assert!(texts.iter().any(|t| t.starts_with("question 19 ")));
+
+        // Coût et trace.
+        let roles = s.budget.report("role", Some(&sid), None, 10).await.unwrap();
+        assert!(roles.iter().any(|r| r.key == "compaction"));
+        let events = s.events.session_events(&sid, 0).await.unwrap();
+        let ev = events
+            .iter()
+            .find(|e| e.kind == "context.compacted")
+            .expect("événement de compaction");
+        assert_eq!(ev.payload["trigger"], "manual");
+
+        // Rien de neuf : pas de second appel au résumeur, même forcé.
+        let again = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+        assert_eq!(again.published, 0);
+        assert!(again.skipped.is_some());
+        assert_eq!(summarizer_requests(&p).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_summary_ready_during_a_turn_waits_for_its_end() {
+        let (_dir, d, p) = daemon().await;
+        let sid = long_session(&d).await;
+        let _active = d.bus.begin("t_en_cours", &sid, &Origin::Cli);
+        p.reply(SUMMARY);
+
+        let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+        assert!(r.deferred && r.published == 0, "{r:?}");
+        assert!(report_text(&r).contains("fin du tour"));
+        let s = &d.services;
+        assert!(s.context.lcm.active_nodes(&sid).await.unwrap().is_empty());
+
+        // Pendant l'attente, aucune autre compaction ne prépare un lot concurrent.
+        let other = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+        assert!(other.deferred && other.published == 0);
+        assert_eq!(summarizer_requests(&p).len(), 1);
+
+        d.bus.end(&sid, "t_en_cours");
+        let published = publish_pending(&d, &sid)
+            .await
+            .unwrap()
+            .expect("publication");
+        assert_eq!(published.published, 1);
+        assert_eq!(s.context.lcm.active_nodes(&sid).await.unwrap().len(), 1);
+        assert!(
+            publish_pending(&d, &sid).await.unwrap().is_none(),
+            "publié une fois"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_summary_cools_down_until_compact_is_forced() {
+        let (_dir, d, p) = daemon().await;
+        let sid = long_session(&d).await;
+        p.reply("Désolé, je ne peux pas résumer.");
+
+        let err = compact(&d, &sid, Trigger::Manual, None).await.unwrap_err();
+        assert!(err.to_string().contains("résumé a échoué"), "{err}");
+        let cooldown = load_cooldown(&d, &sid).await;
+        assert_eq!(cooldown.failures, 1);
+        let events = d.services.events.session_events(&sid, 0).await.unwrap();
+        assert!(events.iter().any(|e| e.kind == "context.compaction_failed"));
+
+        // La tâche de fond respecte le cooldown…
+        let bg = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+        assert!(bg.skipped.unwrap().contains("échec récent"));
+        assert_eq!(summarizer_requests(&p).len(), 1);
+
+        // … `/compact` le lève.
+        p.reply(SUMMARY);
+        let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+        assert_eq!(r.published, 1);
+        assert_eq!(load_cooldown(&d, &sid).await.failures, 0);
+    }
+
+    #[tokio::test]
+    async fn a_turn_over_the_threshold_compacts_in_the_background() {
+        let (_dir, d, p) = daemon().await;
+        let sid = long_session(&d).await;
+        // Fenêtre réduite du modèle principal : la conversation dépasse le seuil de fond.
+        let cfg = d.services.config.config();
+        let main = strip_provider(cfg.alias_model("main").unwrap()).to_string();
+        d.services
+            .catalog
+            .upsert(vec![ModelInfo::minimal(&main, "deepseek", 40_000)]);
+
+        p.reply(r#"{"complexity":"medium"}"#);
+        p.reply("Je reprends où nous en étions.");
+        p.reply(SUMMARY);
+        d.enqueue_message(&sid, "on continue ?", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = d.services.turns.claim("test").await.unwrap().unwrap();
+        let out = d.run_turn(&turn).await;
+        assert!(
+            matches!(out, crate::agent::TurnOutcome::Answered { .. }),
+            "{out:?}"
+        );
+        d.services.turns.complete(&turn).await.unwrap();
+
+        let s = &d.services;
+        let mut nodes = Vec::new();
+        for _ in 0..100 {
+            nodes = s.context.lcm.active_nodes(&sid).await.unwrap();
+            if !nodes.is_empty() && !d.compaction.is_running(&sid) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(nodes.len(), 1, "la compaction de fond a publié son résumé");
+        let by_turn = s.budget.report("turn", Some(&sid), None, 10).await.unwrap();
+        assert_eq!(
+            by_turn.len(),
+            1,
+            "le résumé est attribué au tour qui l'a déclenché"
+        );
+        assert_eq!(by_turn[0].calls, 3, "classifieur, réponse, résumé");
+    }
+
+    #[tokio::test]
+    async fn a_proven_overflow_compacts_then_retries_once() {
+        let (_dir, d, p) = daemon().await;
+        let sid = long_session(&d).await;
+        p.reply(r#"{"complexity":"medium"}"#);
+        p.push(Scripted::ContextOverflow);
+        p.reply(SUMMARY);
+        p.reply("C'est reparti.");
+        d.enqueue_message(&sid, "et maintenant ?", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = d.services.turns.claim("test").await.unwrap().unwrap();
+        match d.run_turn(&turn).await {
+            crate::agent::TurnOutcome::Answered { text, .. } => {
+                assert_eq!(text, "C'est reparti.")
+            }
+            other => panic!("{other:?}"),
+        }
+        d.services.turns.complete(&turn).await.unwrap();
+
+        assert_eq!(
+            d.services
+                .context
+                .lcm
+                .active_nodes(&sid)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let last = p.requests().last().unwrap().clone();
+        assert!(
+            last.messages
+                .iter()
+                .any(|m| m.text().contains("Résumé de la conversation antérieure")),
+            "la nouvelle requête part avec le résumé"
+        );
+
+        // Un second dépassement dans le même tour n'entraîne pas de boucle : une seule
+        // compaction, puis l'échec est dit. (`medium` colle : pas de classifieur.)
+        p.push(Scripted::ContextOverflow);
+        p.reply(SUMMARY);
+        p.push(Scripted::ContextOverflow);
+        d.enqueue_message(&sid, "encore ?", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = d.services.turns.claim("test").await.unwrap().unwrap();
+        match d.run_turn(&turn).await {
+            crate::agent::TurnOutcome::Failed { error } => {
+                assert!(error.contains("/compact"), "{error}")
+            }
+            other => panic!("{other:?}"),
+        }
+        d.services.turns.complete(&turn).await.unwrap();
+        assert_eq!(summarizer_requests(&p).len(), 2, "une compaction par tour");
+    }
+}

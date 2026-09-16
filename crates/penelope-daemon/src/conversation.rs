@@ -10,6 +10,7 @@ use penelope_context::tiers::{Tiers, TiersBuilder, volatile_header};
 use penelope_context::transcript::Entry;
 use penelope_llm::types::{ChatMessage, Role};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Nombre d'entrées relues pour retrouver les appels d'outils en attente.
 const TAIL_ENTRIES: usize = 64;
@@ -21,6 +22,10 @@ pub struct SessionConversation {
     model_id: String,
     tiers: Tiers,
     episode: i64,
+    /// Compaction immédiate, sur dépassement de fenêtre prouvé par le provider.
+    compactor: Option<Arc<dyn crate::agent::Compactor>>,
+    /// La dernière projection a atteint le seuil de la compaction de fond.
+    wants_compaction: AtomicBool,
 }
 
 impl SessionConversation {
@@ -37,7 +42,19 @@ impl SessionConversation {
             model_id: model_id.to_string(),
             tiers,
             episode,
+            compactor: None,
+            wants_compaction: AtomicBool::new(false),
         }
+    }
+
+    pub fn with_compactor(mut self, compactor: Arc<dyn crate::agent::Compactor>) -> Self {
+        self.compactor = Some(compactor);
+        self
+    }
+
+    /// Vrai si une projection de ce tour a atteint le seuil moins la marge (§5.4).
+    pub fn wants_compaction(&self) -> bool {
+        self.wants_compaction.load(Ordering::SeqCst)
     }
 
     fn bare_model(&self) -> &str {
@@ -94,6 +111,9 @@ impl Conversation for SessionConversation {
             &self.model_id,
             self.anthropic_cache(),
         );
+        if ctx.needs_background_compaction || !ctx.fits {
+            self.wants_compaction.store(true, Ordering::SeqCst);
+        }
         if ctx.fits {
             return Ok(ctx.messages);
         }
@@ -134,6 +154,13 @@ impl Conversation for SessionConversation {
             }
         }
         Ok(())
+    }
+
+    async fn compact_for_overflow(&self) -> anyhow::Result<bool> {
+        match &self.compactor {
+            Some(c) => c.compact_now(&self.session_id).await,
+            None => Ok(false),
+        }
     }
 
     async fn tail(&self) -> anyhow::Result<Vec<ChatMessage>> {

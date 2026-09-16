@@ -25,6 +25,8 @@ pub struct CompactionParams {
     pub min_tail_user_messages: usize,
     pub max_tool_result_share: f64,
     pub large_payload_tokens: u64,
+    /// Marge sous le seuil à partir de laquelle la compaction de fond démarre.
+    pub background_margin: f64,
 }
 
 impl CompactionParams {
@@ -38,6 +40,7 @@ impl CompactionParams {
             min_tail_user_messages: cfg.context.min_tail_user_messages,
             max_tool_result_share: cfg.context.max_tool_result_share,
             large_payload_tokens: cfg.context.large_payload_tokens as u64,
+            background_margin: cfg.context.background_compaction_margin,
         }
     }
 
@@ -256,6 +259,21 @@ pub fn level2_degrade(
 /// La frontière tombe toujours sur une frontière de **groupe**, et la queue contient au
 /// moins `min_tail_user_messages` messages utilisateur.
 pub fn split_for_summary(entries: &[Entry], params: &CompactionParams) -> (usize, u64) {
+    let (mut boundary, mut tail_tokens) = natural_split(entries, params);
+
+    // Toujours laisser quelque chose à résumer, sinon la compaction ne sert à rien.
+    if boundary == 0 && entries.len() > 2 {
+        if let Some(g) = group(entries).first() {
+            boundary = g.range.end;
+            tail_tokens = entries[boundary..].iter().map(|e| e.tokens).sum();
+        }
+    }
+    (boundary, tail_tokens)
+}
+
+/// Frontière dessinée par le seul budget de la queue : `0` quand toute l'entrée tient
+/// dans la queue verbatim. La compaction de fond s'en contente ; `/compact` force.
+pub fn natural_split(entries: &[Entry], params: &CompactionParams) -> (usize, u64) {
     let groups = group(entries);
     let budget = params.tail_budget();
     let mut tail_tokens = 0u64;
@@ -277,14 +295,6 @@ pub fn split_for_summary(entries: &[Entry], params: &CompactionParams) -> (usize
         user_messages += g_users;
         boundary = g.range.start;
     }
-
-    // Toujours laisser quelque chose à résumer, sinon la compaction ne sert à rien.
-    if boundary == 0 && entries.len() > 2 {
-        if let Some(g) = groups.first() {
-            boundary = g.range.end;
-            tail_tokens = entries[boundary..].iter().map(|e| e.tokens).sum();
-        }
-    }
     (boundary, tail_tokens)
 }
 
@@ -301,6 +311,17 @@ pub const SUMMARY_SECTIONS: &[&str] = &[
     "Contexte critique",
 ];
 
+/// Longueur maximale d'une section du résumé, en caractères.
+pub const SECTION_MAX_CHARS: usize = 4_000;
+
+/// Sections obligatoires : un résumé qui les laisse toutes vides est rejeté.
+pub const REQUIRED_SECTIONS: &[&str] = &["objectif", "fait", "en_cours", "prochaines_etapes"];
+
+/// Clés JSON des sections, dans l'ordre du gabarit.
+pub fn section_keys() -> Vec<String> {
+    SUMMARY_SECTIONS.iter().map(|s| section_key(s)).collect()
+}
+
 /// Schéma JSON du résumé demandé au modèle (sortie validée).
 pub fn summary_schema() -> serde_json::Value {
     let props: serde_json::Map<String, serde_json::Value> = SUMMARY_SECTIONS
@@ -308,16 +329,116 @@ pub fn summary_schema() -> serde_json::Value {
         .map(|s| {
             (
                 section_key(s),
-                serde_json::json!({"type": "string", "maxLength": 4000}),
+                serde_json::json!({"type": "string", "maxLength": SECTION_MAX_CHARS}),
             )
         })
         .collect();
     serde_json::json!({
         "type": "object",
         "properties": props,
-        "required": ["objectif", "fait", "en_cours", "prochaines_etapes"],
+        "required": REQUIRED_SECTIONS,
         "additionalProperties": false
     })
+}
+
+/// `response_format` envoyé au résumeur : sortie structurée stricte, toutes les clés
+/// présentes (une section sans objet est une chaîne vide). Les longueurs, que le mode
+/// strict ne sait pas toujours exprimer, sont imposées à la validation.
+pub fn summary_response_format() -> serde_json::Value {
+    let keys = section_keys();
+    let props: serde_json::Map<String, serde_json::Value> = keys
+        .iter()
+        .map(|k| (k.clone(), serde_json::json!({"type": "string"})))
+        .collect();
+    serde_json::json!({
+        "type": "json_schema",
+        "json_schema": {
+            "name": "resume",
+            "strict": true,
+            "schema": {
+                "type": "object",
+                "properties": props,
+                "required": keys,
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+/// Valide la sortie du résumeur et la ramène au gabarit.
+///
+/// Tolère un bloc de code autour du JSON, une section rendue en liste ou absente ;
+/// tronque chaque section à [`SECTION_MAX_CHARS`]. Rejette ce qui n'est pas un objet
+/// JSON ou un résumé dont toutes les sections obligatoires sont vides.
+pub fn validate_summary(raw: &str) -> Result<serde_json::Value, String> {
+    let start = raw
+        .find('{')
+        .ok_or("le résumeur n'a pas rendu d'objet JSON")?;
+    let end = raw
+        .rfind('}')
+        .filter(|e| *e > start)
+        .ok_or("le résumeur n'a pas rendu d'objet JSON complet")?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw[start..=end])
+        .map_err(|e| format!("JSON du résumé invalide : {e}"))?;
+    let obj = parsed
+        .as_object()
+        .ok_or("le résumé doit être un objet JSON")?;
+
+    let mut out = serde_json::Map::new();
+    let mut known = 0usize;
+    for key in section_keys() {
+        let text = match obj.get(&key) {
+            None | Some(serde_json::Value::Null) => String::new(),
+            Some(serde_json::Value::String(t)) => t.trim().to_string(),
+            Some(serde_json::Value::Array(items)) => items
+                .iter()
+                .map(|i| match i {
+                    serde_json::Value::String(t) => format!("- {}", t.trim()),
+                    other => format!("- {other}"),
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Some(other) => other.to_string(),
+        };
+        if obj.contains_key(&key) {
+            known += 1;
+        }
+        out.insert(
+            key,
+            serde_json::Value::String(text.chars().take(SECTION_MAX_CHARS).collect()),
+        );
+    }
+    if known == 0 {
+        return Err("le résumé ne contient aucune section attendue".into());
+    }
+    let filled = REQUIRED_SECTIONS.iter().any(|k| {
+        out.get(*k)
+            .and_then(|v| v.as_str())
+            .map(|t| !t.is_empty())
+            .unwrap_or(false)
+    });
+    if !filled {
+        return Err("résumé vide : aucune section obligatoire n'est remplie".into());
+    }
+    Ok(serde_json::Value::Object(out))
+}
+
+/// En-tête du résumé rendu.
+pub const SUMMARY_HEADER: &str = "## Résumé des tours compactés";
+/// Titre du bloc des messages utilisateur conservés tels quels.
+pub const VERBATIM_HEADER: &str = "### Messages utilisateur conservés verbatim";
+
+/// Sections rédigées d'un résumé rendu, sans l'en-tête ni les blocs ajoutés
+/// mécaniquement (messages verbatim, ancres) : c'est ce que le résumeur met à jour.
+pub fn summary_sections_only(rendered: &str) -> String {
+    let body = rendered.strip_prefix(SUMMARY_HEADER).unwrap_or(rendered);
+    let mut cut = body.len();
+    for marker in [format!("\n{VERBATIM_HEADER}"), "\nAncres :\n".to_string()] {
+        if let Some(i) = body.find(&marker) {
+            cut = cut.min(i);
+        }
+    }
+    body[..cut].trim().to_string()
 }
 
 pub fn section_key(section: &str) -> String {
@@ -330,7 +451,7 @@ pub fn section_key(section: &str) -> String {
 
 /// Rend un résumé validé en texte injectable.
 pub fn render_summary(v: &serde_json::Value, anchors: &str, verbatim_users: &[String]) -> String {
-    let mut s = String::from("## Résumé des tours compactés\n");
+    let mut s = format!("{SUMMARY_HEADER}\n");
     for section in SUMMARY_SECTIONS {
         let key = section_key(section);
         if let Some(t) = v.get(&key).and_then(|x| x.as_str()) {
@@ -340,7 +461,7 @@ pub fn render_summary(v: &serde_json::Value, anchors: &str, verbatim_users: &[St
         }
     }
     if !verbatim_users.is_empty() {
-        s.push_str("\n### Messages utilisateur conservés verbatim\n");
+        s.push_str(&format!("\n{VERBATIM_HEADER}\n"));
         for u in verbatim_users {
             s.push_str(&format!("- « {} »\n", u.replace('\n', " ")));
         }
@@ -506,6 +627,7 @@ mod tests {
             min_tail_user_messages: 2,
             max_tool_result_share: 0.25,
             large_payload_tokens: 25_000,
+            background_margin: 0.10,
         }
     }
 
@@ -773,6 +895,78 @@ mod tests {
         assert_eq!(plan_levels(10_000, &p, false), vec![0, 2]);
         assert_eq!(plan_levels(80_000, &p, true), vec![3]);
         assert_eq!(plan_levels(80_000, &p, false), vec![0, 2, 3]);
+    }
+
+    #[test]
+    fn natural_split_leaves_a_short_history_alone() {
+        let p = params(100_000); // queue : 10 000 tokens
+        let entries: Vec<Entry> = (1..=6)
+            .map(|i| Entry::new(i, ChatMessage::user(format!("m{i}")), 500))
+            .collect();
+        assert_eq!(natural_split(&entries, &p).0, 0, "tout tient dans la queue");
+        assert!(
+            split_for_summary(&entries, &p).0 > 0,
+            "la découpe forcée trouve toujours quelque chose à résumer"
+        );
+    }
+
+    #[test]
+    fn summary_validation_normalises_the_model_output() {
+        let raw = "Voici le résumé :\n```json\n{\"objectif\": \" livrer la 0.3 \", \
+                   \"fait\": [\"tests verts\", \"CI verte\"], \"en_cours\": null, \
+                   \"bruit\": 1}\n```";
+        let v = validate_summary(raw).expect("résumé valide");
+        assert_eq!(v["objectif"], "livrer la 0.3");
+        assert_eq!(v["fait"], "- tests verts\n- CI verte");
+        assert_eq!(v["en_cours"], "");
+        assert_eq!(v["bloque"], "", "toutes les sections sont présentes");
+        assert!(v.get("bruit").is_none(), "les clés inconnues sont écartées");
+        assert!(penelope_kernel::schema::validate(&summary_schema(), &v).is_empty());
+
+        let long = format!("{{\"objectif\": \"{}\"}}", "é".repeat(9_000));
+        let v = validate_summary(&long).unwrap();
+        assert_eq!(
+            v["objectif"].as_str().unwrap().chars().count(),
+            SECTION_MAX_CHARS
+        );
+    }
+
+    #[test]
+    fn summary_validation_rejects_empty_or_foreign_output() {
+        assert!(validate_summary("je ne sais pas").is_err());
+        assert!(validate_summary("[1, 2]").is_err());
+        assert!(validate_summary("{\"autre\": \"x\"}").is_err());
+        assert!(
+            validate_summary("{\"objectif\": \"\", \"fait\": \" \"}").is_err(),
+            "un résumé sans contenu ne remplace pas l'historique"
+        );
+    }
+
+    #[test]
+    fn response_format_requires_every_section() {
+        let f = summary_response_format();
+        let schema = &f["json_schema"]["schema"];
+        assert_eq!(f["json_schema"]["strict"], true);
+        assert_eq!(
+            schema["required"].as_array().unwrap().len(),
+            SUMMARY_SECTIONS.len()
+        );
+        assert!(schema["properties"]["contraintes_et_preferences"].is_object());
+    }
+
+    #[test]
+    fn sections_only_strips_mechanical_blocks() {
+        let rendered = render_summary(
+            &json!({"objectif": "migrer la base", "fait": "export"}),
+            "Ancres :\n- chemin : db/schema.sql\n",
+            &["on migre ce soir".into()],
+        );
+        let body = summary_sections_only(&rendered);
+        assert!(body.starts_with("### Objectif"));
+        assert!(body.contains("export"));
+        assert!(!body.contains("verbatim"));
+        assert!(!body.contains("db/schema.sql"));
+        assert!(!body.contains(SUMMARY_HEADER));
     }
 
     #[test]

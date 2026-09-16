@@ -144,6 +144,11 @@ pub enum SessionCmd {
         #[arg(long)]
         session: Option<String>,
     },
+    /// Résume les anciens échanges de la session (compaction niveau 3, lève le cooldown).
+    Compact {
+        #[arg(long)]
+        session: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -365,6 +370,9 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Mcp(McpCmd::List) if !cli.json => {
             println!("{}", render_mcp_list(&value));
         }
+        Command::Session(SessionCmd::Compact { .. }) if !cli.json => {
+            println!("{}", value["text"].as_str().unwrap_or_default());
+        }
         Command::Mcp(McpCmd::Logs { .. }) if !cli.json => {
             for l in value["lines"].as_array().cloned().unwrap_or_default() {
                 println!("{}", l.as_str().unwrap_or_default());
@@ -478,6 +486,9 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         ),
         Command::Session(SessionCmd::Export { session }) => {
             (m::SESSION_EXPORT, json!({"session": session}))
+        }
+        Command::Session(SessionCmd::Compact { session }) => {
+            (m::SESSION_COMPACT, json!({"session": session}))
         }
 
         Command::Config(ConfigCmd::Get) => (m::CONFIG_GET, json!({})),
@@ -1095,6 +1106,7 @@ mod tests {
             (vec!["backup"], m::BACKUP),
             (vec!["session", "list"], m::SESSION_LIST),
             (vec!["session", "model", "main"], m::SESSION_MODEL),
+            (vec!["session", "compact"], m::SESSION_COMPACT),
             (vec!["schedule", "run", "sch_1"], m::SCHEDULE_RUN_NOW),
             (
                 vec![

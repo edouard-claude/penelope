@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1049 tests verts**, tous hors réseau.
+- **1066 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -125,6 +125,24 @@ Dernière mise à jour : 16 septembre 2026.
   réveille, tire une fois par tour même rejoué ; une intention datée est redirigée vers
   un déclencheur.
 
+### 0.2.6
+
+- **Compaction de niveau 3** : quand la projection d'un tour atteint le seuil moins la
+  marge, le rôle `compaction` résume en tâche de fond les messages que la queue verbatim
+  ne garde pas. Résumé structuré validé (sortie JSON stricte quand le modèle la supporte,
+  sections tronquées à 4 000 caractères, résumé vide refusé), ancres extraites du texte
+  complet, messages utilisateur verbatim. La re-compaction **prolonge** le nœud précédent
+  (couverture et tokens source additionnés) au lieu d'en empiler un second.
+- Lots explicites quand la fenêtre du résumeur est trop petite (jamais d'abandon), gros
+  messages échantillonnés tête et queue pour le résumeur.
+- Publication à la frontière de tour : immédiate si la session est au repos, sinon mise
+  de côté (persistée) et publiée à la fin du tour. Un travail périmé est refusé.
+- Cooldown persisté 60 s, 300 s, 900 s ; `/compact`, `penelope session compact` et
+  `session.compact` le lèvent. Un dépassement de fenêtre prouvé par le provider déclenche
+  une compaction immédiate puis une seule relance de la requête.
+- Coût attribué au tour déclencheur (rôle `compaction`), événements `context.compacted`
+  et `context.compaction_failed`, métrique `penelope_compactions_total`.
+
 ### Encore à brancher
 
 1. **OAuth des serveurs MCP** : flux `paste_back` depuis Telegram, `mcp.auth`.
@@ -132,7 +150,6 @@ Dernière mise à jour : 16 septembre 2026.
    `workflow_start`, sous-agents, étapes `user` et `wait`).
 3. **Rêve nocturne et digest** : consolidation des candidats, méthodes `mem.*`.
 4. **Pièces jointes Telegram** : photos (vision) et documents ; les vocaux sont branchés.
-5. **Compaction de niveau 3** (résumés LCM) déclenchée en fond pendant les longues sessions.
 
 ### Méthodes RPC déclarées mais non servies
 
@@ -140,7 +157,7 @@ Un test (`penelope-daemon`, `rpc.rs`) fixe cette liste : elle ne peut pas s'allo
 silence.
 
 ```
-session.fork  session.rewind  session.compact
+session.fork  session.rewind
 mcp.auth
 skill.rollback  wf.run
 mem.history  mem.restore  mem.reindex  mem.forget  mem.candidates

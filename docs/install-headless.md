@@ -476,6 +476,27 @@ Une « intention » est l'autre mémoire prospective : « quand on reparle du d�
 rappelle-moi le changelog » reste armée et revient dans le contexte du premier message
 qui en parle (trois fois au plus, une fois par jour au plus).
 
+### Longues conversations
+
+Quand une conversation approche le seuil de sa fenêtre (70 % par défaut, moins une marge
+de 10 points), Pénélope fait résumer les anciens échanges en tâche de fond par l'alias du
+rôle `compaction` (`summarizer`). La conversation ne s'arrête pas : le résumé est publié
+à la fin du tour en cours. Les derniers échanges restent mot pour mot, les identifiants
+(chemins, tickets, SHA, URLs) sont conservés tels quels, et un résumé existant est mis à
+jour plutôt que refait. Rien n'est effacé : les échanges résumés restent consultables par
+`history_grep` et `history_expand`.
+
+`/compact` sur Telegram force un résumé tout de suite. En ligne de commande :
+
+```bash
+penelope session compact
+```
+
+Un résumé raté attend 1 min, puis 5, puis 15 avant un nouvel essai de fond ; `/compact`
+lève cette attente. Si le provider refuse une requête trop longue, Pénélope résume une
+fois et relance la même demande. Le coût apparaît sous le rôle `compaction` de
+`/budget rôles` ; un budget atteint suspend les résumés de fond, pas `/compact`.
+
 ## 7. Premier essai en CLI
 
 Dans un premier terminal, le daemon au premier plan (les journaux s'affichent) :
@@ -561,6 +582,6 @@ questions plutôt que des relances. `penelope approvals` montre ce qui attend un
 ## 11. Ce qui n'est pas encore branché
 
 Conversation (CLI et Telegram), approbations, catalogue de modèles, vocaux et serveurs
-MCP, rappels et déclencheurs fonctionnent. Le moteur de workflows, le rêve nocturne et
+MCP, rappels et déclencheurs, résumé des longues conversations fonctionnent. Le moteur de workflows, le rêve nocturne et
 l'OAuth des serveurs MCP ne sont pas encore lancés par le daemon. Voir [progress.md](progress.md) pour
 l'état exact.
