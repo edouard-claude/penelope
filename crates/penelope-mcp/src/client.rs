@@ -357,7 +357,7 @@ pub async fn negotiate(
             .request("server/discover", params, probe_timeout)
             .await
         {
-            Ok(v) => {
+            Ok(v) if looks_like_discovery(&v) => {
                 let version = v
                     .get("protocolVersion")
                     .and_then(|s| s.as_str())
@@ -375,6 +375,14 @@ pub async fn negotiate(
                         .and_then(|s| s.as_str())
                         .map(String::from),
                 });
+            }
+            // Certains serveurs (le pont MCP de Xcode) répondent à une méthode inconnue par
+            // un résultat `isError` plutôt que par -32601 : ce n'est pas une découverte.
+            Ok(v) => {
+                tracing::debug!(
+                    response = %v,
+                    "server/discover sans découverte, repli sur initialize"
+                );
             }
             Err(e) if is_method_absent(&e) => {
                 tracing::debug!("server/discover absent, repli sur initialize");
@@ -477,6 +485,15 @@ fn announced_versions(data: Option<&Value>) -> Vec<String> {
 
 /// Vrai si l'erreur signifie « cette méthode n'existe pas ici » (§8.2 : méthode inconnue,
 /// 404, 405).
+/// Une réponse à `server/discover` qui décrit vraiment un serveur : au moins une version,
+/// une identité ou des capacités, et pas un résultat en échec.
+fn looks_like_discovery(v: &Value) -> bool {
+    v.get("isError").and_then(|e| e.as_bool()) != Some(true)
+        && ["protocolVersion", "serverInfo", "capabilities"]
+            .iter()
+            .any(|k| v.get(*k).is_some_and(|x| !x.is_null()))
+}
+
 fn is_method_absent(e: &McpError) -> bool {
     match e {
         McpError::Rpc { code, .. } => *code == METHOD_NOT_FOUND,
@@ -541,6 +558,65 @@ mod tests {
         assert_eq!(n.version, ProtocolVersion::V20250618);
         assert!(!n.stateless);
         assert!(n.capabilities.resources_subscribe);
+    }
+
+    /// Issue #9 : le pont MCP de Xcode répond à `server/discover` par un résultat
+    /// `isError`. Ce n'est pas une découverte : le handshake historique doit suivre, sinon
+    /// la première requête reçoit -32603 (« request before initialization completed »).
+    #[tokio::test]
+    async fn an_is_error_result_to_discover_falls_back_to_initialize() {
+        let initialized = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = initialized.clone();
+        let tr = LoopbackTransport::new("stdio", move |m, _| match m {
+            "server/discover" => Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": "The message contained an unknown method 'server/discover'"
+                }],
+                "isError": true
+            })),
+            "initialize" => {
+                seen.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "xcode-tools", "version": "25317"}
+                }))
+            }
+            "tools/list" if !seen.load(std::sync::atomic::Ordering::SeqCst) => {
+                Err(McpError::Rpc {
+                    code: -32603,
+                    message: "Received a request before initialization completed.".into(),
+                    data: None,
+                })
+            }
+            "tools/list" => Ok(json!({"tools": [{
+                "name": "BuildProject",
+                "inputSchema": {"type": "object"}
+            }]})),
+            _ => Ok(json!({})),
+        });
+        let client = McpClient::connect(
+            "xcode",
+            tr.clone(),
+            ProtocolVersion::V20260728,
+            t(500),
+            4,
+        )
+        .await
+        .unwrap();
+        assert!(!client.negotiated().stateless);
+        assert_eq!(client.version(), ProtocolVersion::V20250618);
+        assert!(initialized.load(std::sync::atomic::Ordering::SeqCst));
+        let tools = client.list_tools().await.unwrap();
+        assert_eq!(tools.len(), 1);
+
+        let order: Vec<String> = tr.call_log().await.into_iter().map(|(m, _)| m).collect();
+        let pos = |m: &str| order.iter().position(|x| x == m).unwrap();
+        assert!(pos("initialize") < pos("notifications/initialized"), "{order:?}");
+        assert!(pos("notifications/initialized") < pos("tools/list"), "{order:?}");
+        assert!(!looks_like_discovery(&json!({})), "réponse vide");
+        assert!(looks_like_discovery(&json!({"protocolVersion": "2026-07-28"})));
     }
 
     /// Un serveur stdio qui ignore `server/discover` (la sonde expire) passe quand même

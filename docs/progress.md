@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1138 tests verts**, tous hors réseau.
+- **1139 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -295,6 +295,13 @@ Les huit issues ouvertes sur le dépôt, corrigées :
   (`min(fenêtre × part, large_payload_tokens)`) ; `http_fetch` rend une page HTML en texte
   lisible, le brut en artefact ; une longue liste `fs_list` part en artefact avec un
   résumé par dossier.
+
+### 0.3.3
+
+- #9 **Sonde `server/discover`** : une réponse qui n'est pas une découverte (ni version, ni
+  identité, ni capacités, ou un résultat `isError`) déclenche le handshake historique au
+  lieu du mode sans état. Le pont MCP de Xcode (`xcrun mcpbridge`), qui signale ainsi une
+  méthode inconnue, négocie en 2025-06-18 et ses outils répondent.
 
 ### Routine de livraison
 
