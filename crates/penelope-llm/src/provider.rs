@@ -462,13 +462,14 @@ pub fn to_openai_body(req: &ChatRequest) -> Value {
         .enumerate()
         .map(|(i, m)| {
             let mut v = message_to_json(m);
-            if i >= current_turn && m.role == Role::Assistant {
-                if let Some(o) = v.as_object_mut() {
-                    if let Some(d) = &m.reasoning_details {
-                        o.insert("reasoning_details".into(), d.clone());
-                    } else if let Some(r) = &m.reasoning {
-                        o.insert("reasoning".into(), json!(r));
-                    }
+            if i >= current_turn
+                && m.role == Role::Assistant
+                && let Some(o) = v.as_object_mut()
+            {
+                if let Some(d) = &m.reasoning_details {
+                    o.insert("reasoning_details".into(), d.clone());
+                } else if let Some(r) = &m.reasoning {
+                    o.insert("reasoning".into(), json!(r));
                 }
             }
             v
@@ -594,10 +595,10 @@ fn message_to_json(m: &ChatMessage) -> Value {
     if let Some(id) = &m.tool_call_id {
         obj.insert("tool_call_id".into(), json!(id));
     }
-    if let Some(n) = &m.name {
-        if m.role == Role::Tool {
-            obj.insert("name".into(), json!(n));
-        }
+    if let Some(n) = &m.name
+        && m.role == Role::Tool
+    {
+        obj.insert("name".into(), json!(n));
     }
     o
 }

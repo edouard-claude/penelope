@@ -77,13 +77,13 @@ impl LoopDetector {
         }
 
         // 2. Va-et-vient A/B.
-        if let Some(n) = self.alternation_length() {
-            if n >= self.repeats_threshold {
-                return self.escalate(format!(
-                    "alternance détectée entre deux appels, répétée {n} fois. Arrête de \
+        if let Some(n) = self.alternation_length()
+            && n >= self.repeats_threshold
+        {
+            return self.escalate(format!(
+                "alternance détectée entre deux appels, répétée {n} fois. Arrête de \
                      faire l'aller-retour et tranche."
-                ));
-            }
+            ));
         }
         LoopVerdict::Ok
     }

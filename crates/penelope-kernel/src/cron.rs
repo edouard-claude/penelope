@@ -208,10 +208,9 @@ fn parse_one(s: &str, names: &[(&str, u32)], min: u32, max: u32) -> Result<u32> 
     if let Some((_, v)) = names
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case(&s[..s.len().min(3)]))
+        && s.len() == 3
     {
-        if s.len() == 3 {
-            return Ok(*v);
-        }
+        return Ok(*v);
     }
     let v: u32 = s
         .parse()

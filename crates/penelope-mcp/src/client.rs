@@ -156,24 +156,24 @@ impl McpClient {
             .await?;
         let result = ToolResult::parse(&v);
 
-        if let (Some(schema), Some(structured)) = (output_schema, &result.structured) {
-            if let Err(e) = penelope_kernel::schema::validate_ok(schema, structured) {
-                // Le résultat n'est pas jeté : l'écart est signalé au modèle, qui peut
-                // se corriger (§8.4, « erreurs d'exécution renvoyées au modèle »).
-                tracing::warn!(
-                    server = %self.name, tool, error = %e,
-                    "structuredContent non conforme à outputSchema"
-                );
-                let mut r = result;
-                r.is_error = true;
-                r.content.push(ContentBlock::Text {
-                    text: format!(
-                        "[avertissement du harnais : la sortie structurée ne respecte pas \
+        if let (Some(schema), Some(structured)) = (output_schema, &result.structured)
+            && let Err(e) = penelope_kernel::schema::validate_ok(schema, structured)
+        {
+            // Le résultat n'est pas jeté : l'écart est signalé au modèle, qui peut
+            // se corriger (§8.4, « erreurs d'exécution renvoyées au modèle »).
+            tracing::warn!(
+                server = %self.name, tool, error = %e,
+                "structuredContent non conforme à outputSchema"
+            );
+            let mut r = result;
+            r.is_error = true;
+            r.content.push(ContentBlock::Text {
+                text: format!(
+                    "[avertissement du harnais : la sortie structurée ne respecte pas \
                          outputSchema — {e}]"
-                    ),
-                });
-                return Ok(r);
-            }
+                ),
+            });
+            return Ok(r);
         }
         Ok(result)
     }

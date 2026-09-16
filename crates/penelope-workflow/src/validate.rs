@@ -269,10 +269,10 @@ fn validate_step(
             if s.prompt.trim().is_empty() {
                 r.error(format!("{path}/prompt"), "prompt vide");
             }
-            if let Some(schema) = &s.output_schema {
-                if schema.get("type").is_none() {
-                    r.error(format!("{path}/outputSchema"), "schéma sans `type`");
-                }
+            if let Some(schema) = &s.output_schema
+                && schema.get("type").is_none()
+            {
+                r.error(format!("{path}/outputSchema"), "schéma sans `type`");
             }
         }
         "shell" => {
@@ -371,10 +371,10 @@ fn validate_step(
                     "attendu `event`, `cron`, `duration_ms` ou `mcp_task`",
                 );
             }
-            if let Some(c) = s.on.get("cron").and_then(|v| v.as_str()) {
-                if let Err(e) = penelope_kernel::cron::Cron::parse(c) {
-                    r.error(format!("{path}/on/cron"), e.to_string());
-                }
+            if let Some(c) = s.on.get("cron").and_then(|v| v.as_str())
+                && let Err(e) = penelope_kernel::cron::Cron::parse(c)
+            {
+                r.error(format!("{path}/on/cron"), e.to_string());
             }
         }
         "verify" if s.verifier.is_empty() && s.checks.is_empty() => {
@@ -459,14 +459,14 @@ fn validate_transitions(r: &mut Report, s: &Step, path: &str, w: &Workflow) {
         .map(|(i, _)| i)
         .collect();
 
-    if let Some(&first) = always_positions.first() {
-        if first != s.transitions.len() - 1 {
-            r.error(
-                format!("{path}/transitions/{first}"),
-                "une transition `always` doit être la dernière : celles qui suivent sont \
+    if let Some(&first) = always_positions.first()
+        && first != s.transitions.len() - 1
+    {
+        r.error(
+            format!("{path}/transitions/{first}"),
+            "une transition `always` doit être la dernière : celles qui suivent sont \
                  inatteignables",
-            );
-        }
+        );
     }
 
     if !last_is_always {

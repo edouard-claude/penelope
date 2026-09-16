@@ -460,10 +460,11 @@ impl AgentLoop {
 
             let mut response = response;
             // Un refus explicite est une réponse : on la montre telle quelle.
-            if response.message.tool_calls.is_empty() && response.message.text().trim().is_empty() {
-                if let Some(refusal) = response.refusal.clone().filter(|r| !r.trim().is_empty()) {
-                    response.message.content = vec![penelope_llm::types::Content::text(refusal)];
-                }
+            if response.message.tool_calls.is_empty()
+                && response.message.text().trim().is_empty()
+                && let Some(refusal) = response.refusal.clone().filter(|r| !r.trim().is_empty())
+            {
+                response.message.content = vec![penelope_llm::types::Content::text(refusal)];
             }
 
             // Ni texte ni appel d'outil : on ne livre jamais une réponse vide en silence.
@@ -606,7 +607,7 @@ impl AgentLoop {
             let model_id = &candidates[attempt];
             let request = ChatRequest {
                 model: model_id.clone(),
-                messages: messages.clone(),
+                messages: fit_modalities(&messages, &s.catalog, model_id),
                 tools: spec.tools.clone(),
                 tool_choice: if spec.tools.is_empty() {
                     None
@@ -650,15 +651,16 @@ impl AgentLoop {
                         .await?;
                     last_error = CallFailure::from_llm(&e);
                     // `Retry-After` court : une seule attente, puis le même modèle.
-                    if let Some(secs) = e.retry_after.filter(|s| *s <= RETRY_AFTER_MAX_SECS) {
-                        if !waited && penelope_llm::Router::should_fallback(&e) {
-                            waited = true;
-                            tracing::warn!(model = %model_id, secs, "limite de débit : nouvel essai");
-                            if !sleep_unless_cancelled(&spec.cancel, secs).await {
-                                return Ok(Err(CallFailure::plain("arrêt demandé")));
-                            }
-                            continue;
+                    if let Some(secs) = e.retry_after.filter(|s| *s <= RETRY_AFTER_MAX_SECS)
+                        && !waited
+                        && penelope_llm::Router::should_fallback(&e)
+                    {
+                        waited = true;
+                        tracing::warn!(model = %model_id, secs, "limite de débit : nouvel essai");
+                        if !sleep_unless_cancelled(&spec.cancel, secs).await {
+                            return Ok(Err(CallFailure::plain("arrêt demandé")));
                         }
+                        continue;
                     }
                     let more = attempt + 1 < candidates.len();
                     if more && penelope_llm::Router::should_fallback(&e) {
@@ -850,14 +852,14 @@ impl AgentLoop {
                         .await?;
                     // La déclaration du serveur MCP peut imposer sa politique à un outil :
                     // un refus l'emporte toujours, le reste cède à une règle du propriétaire.
-                    if let Some(forced) = info.policy {
-                        if forced == PolicyDecision::Deny || verdict.rule_id.is_none() {
-                            verdict.decision = forced;
-                            verdict.reason = format!(
-                                "politique de la déclaration du serveur : `{}`",
-                                forced.as_str()
-                            );
-                        }
+                    if let Some(forced) = info.policy
+                        && (forced == PolicyDecision::Deny || verdict.rule_id.is_none())
+                    {
+                        verdict.decision = forced;
+                        verdict.reason = format!(
+                            "politique de la déclaration du serveur : `{}`",
+                            forced.as_str()
+                        );
                     }
                     // Une règle « toujours » posée pour `config_set` vaut pour les réglages
                     // ordinaires, jamais pour le bac à sable, les providers ou Telegram.
@@ -1146,6 +1148,45 @@ async fn sleep_unless_cancelled(cancel: &CancelToken, secs: u64) -> bool {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
     !cancel.is_cancelled()
+}
+
+/// Un modèle qui ne lit pas les images reçoit une mention à leur place : une photo
+/// envoyée plus tôt ne doit pas faire échouer la conversation après un changement de
+/// modèle ou un repli.
+pub(crate) fn fit_modalities(
+    messages: &[ChatMessage],
+    catalog: &penelope_llm::catalog::Catalog,
+    model_id: &str,
+) -> Vec<ChatMessage> {
+    let blind = catalog
+        .get(penelope_llm::catalog::strip_provider(model_id))
+        .map(|i| !i.accepts_images())
+        .unwrap_or(false);
+    let has_images = messages.iter().any(|m| {
+        m.content
+            .iter()
+            .any(|c| matches!(c, Content::ImageUrl { .. }))
+    });
+    if !blind || !has_images {
+        return messages.to_vec();
+    }
+    messages
+        .iter()
+        .map(|m| {
+            let mut m = m.clone();
+            m.content = m
+                .content
+                .into_iter()
+                .map(|c| match c {
+                    Content::ImageUrl { .. } => {
+                        Content::text("[image non transmise : ce modèle ne lit pas les images]")
+                    }
+                    other => other,
+                })
+                .collect();
+            m
+        })
+        .collect()
 }
 
 fn humanise_llm_error(e: &LlmError) -> String {
@@ -1807,5 +1848,38 @@ mod tests {
         assert_eq!(effect_kind("send_message"), EffectKind::Telegram);
         assert_eq!(server_of("mcp__forge__create_pr").as_deref(), Some("forge"));
         assert!(server_of("fs_read").is_none());
+    }
+
+    #[test]
+    fn blind_models_get_a_mention_instead_of_images() {
+        let catalog = penelope_llm::catalog::Catalog::new();
+        let mut seeing = penelope_llm::catalog::ModelInfo::minimal("v/voit", "v", 32_000);
+        seeing.input_modalities = vec!["text".into(), "image".into()];
+        catalog.upsert(vec![
+            seeing,
+            penelope_llm::catalog::ModelInfo::minimal("t/texte", "t", 32_000),
+        ]);
+        let photo = ChatMessage {
+            content: vec![
+                Content::text("regarde"),
+                Content::ImageUrl {
+                    url: "data:image/jpeg;base64,AA".into(),
+                    detail: None,
+                },
+            ],
+            ..ChatMessage::user("")
+        };
+        let msgs = vec![photo];
+        let blind = fit_modalities(&msgs, &catalog, "openrouter:t/texte");
+        assert!(
+            matches!(&blind[0].content[1], Content::Text { text } if text.contains("image non transmise"))
+        );
+        let seen = fit_modalities(&msgs, &catalog, "openrouter:v/voit");
+        assert!(matches!(seen[0].content[1], Content::ImageUrl { .. }));
+        let unknown = fit_modalities(&msgs, &catalog, "openrouter:inconnu/x");
+        assert!(
+            matches!(unknown[0].content[1], Content::ImageUrl { .. }),
+            "sans catalogue, on ne retire rien"
+        );
     }
 }

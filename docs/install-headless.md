@@ -476,6 +476,29 @@ Une « intention » est l'autre mémoire prospective : « quand on reparle du d�
 rappelle-moi le changelog » reste armée et revient dans le contexte du premier message
 qui en parle (trois fois au plus, une fois par jour au plus).
 
+### Photos et documents
+
+Une photo part dans la conversation. Si le modèle de la session lit les images, il la
+voit ; sinon le modèle de l'alias `vision` la décrit (texte visible recopié) et la
+description rejoint le message. Plusieurs photos envoyées d'un coup forment un seul
+message.
+
+Un document PDF, DOCX, HTML, Markdown ou texte est ingéré : son texte devient une fiche
+`vault/sources/<nom>.md`, découpée en passages que `mem_search` retrouve, et un résumé
+revient sur Telegram. Le contenu d'un document est traité comme non fiable : jamais
+rappelé automatiquement, toujours encadré quand Pénélope le lit. Une légende commençant
+par `/mien` déclare un document rédigé par soi. Toute autre légende est une demande :
+« quand expire ce contrat ? » part avec le document.
+
+Pénélope propose au plus cinq faits à retenir ; rien n'entre en mémoire sans « Tout » sur
+la carte (ou `penelope approve <id>`). Les autres fichiers sont rangés : un fichier texte
+(CSV, JSON, log) devient un artefact lisible par `artifact_read`, un binaire est déposé
+dans `<workspace>/telegram/`.
+
+Déposer un fichier dans `vault/inbox/` en SSH fait la même chose : il est ingéré, le
+bilan arrive sur Telegram et la boîte est vidée (un format refusé part dans
+`inbox/refusés/`). Un PDF scanné sans couche texte n'est pas lu : il n'y a pas d'OCR.
+
 ### Longues conversations
 
 Quand une conversation approche le seuil de sa fenêtre (70 % par défaut, moins une marge
@@ -582,6 +605,7 @@ questions plutôt que des relances. `penelope approvals` montre ce qui attend un
 ## 11. Ce qui n'est pas encore branché
 
 Conversation (CLI et Telegram), approbations, catalogue de modèles, vocaux et serveurs
-MCP, rappels et déclencheurs, résumé des longues conversations fonctionnent. Le moteur de workflows, le rêve nocturne et
+MCP, rappels et déclencheurs, résumé des longues conversations, photos et documents
+fonctionnent. Le moteur de workflows, le rêve nocturne et
 l'OAuth des serveurs MCP ne sont pas encore lancés par le daemon. Voir [progress.md](progress.md) pour
 l'état exact.

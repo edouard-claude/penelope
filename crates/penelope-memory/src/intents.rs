@@ -69,15 +69,15 @@ impl Intent {
         if self.tirs >= self.budget_tirs {
             return false;
         }
-        if let Some(exp) = &self.expire_at {
-            if rfc3339_ms(exp) <= now_ms {
-                return false;
-            }
+        if let Some(exp) = &self.expire_at
+            && rfc3339_ms(exp) <= now_ms
+        {
+            return false;
         }
-        if let Some(last) = &self.last_fired {
-            if now_ms - rfc3339_ms(last) < self.cooldown_ms {
-                return false;
-            }
+        if let Some(last) = &self.last_fired
+            && now_ms - rfc3339_ms(last) < self.cooldown_ms
+        {
+            return false;
         }
         true
     }

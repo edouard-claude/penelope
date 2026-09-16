@@ -72,20 +72,20 @@ pub struct PolicyRule {
 impl PolicyRule {
     /// Vrai si la règle s'applique à cet appel.
     pub fn matches(&self, tool: &str, server: Option<&str>, args: &Value) -> bool {
-        if let Some(t) = &self.tool {
-            if t != tool {
-                return false;
-            }
+        if let Some(t) = &self.tool
+            && t != tool
+        {
+            return false;
         }
-        if let Some(s) = &self.server {
-            if Some(s.as_str()) != server {
-                return false;
-            }
+        if let Some(s) = &self.server
+            && Some(s.as_str()) != server
+        {
+            return false;
         }
-        if let Some(pattern) = &self.arg_match {
-            if !args_match(pattern, args) {
-                return false;
-            }
+        if let Some(pattern) = &self.arg_match
+            && !args_match(pattern, args)
+        {
+            return false;
         }
         true
     }

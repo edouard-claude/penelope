@@ -337,11 +337,11 @@ pub async fn compact(
             report.deferred = true;
             report.model = Some(model.clone());
             // Le tour a pu se terminer pendant l'écriture : sa frontière est passée.
-            if !d.bus.is_active(session_id) {
-                if let Some(p) = load_pending(d, session_id).await? {
-                    report.deferred = false;
-                    publish_saved(d, session_id, p, trigger, &mut report).await;
-                }
+            if !d.bus.is_active(session_id)
+                && let Some(p) = load_pending(d, session_id).await?
+            {
+                report.deferred = false;
+                publish_saved(d, session_id, p, trigger, &mut report).await;
             }
             break;
         }

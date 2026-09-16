@@ -81,11 +81,11 @@ pub async fn process(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> T
 impl Daemon {
     /// Livre l'issue d'un tour à son canal, par le chemin durable.
     pub async fn deliver(&self, turn: &Turn, origin: &Origin, outcome: &TurnOutcome) {
-        if let Origin::Telegram { .. } = origin {
-            if let Some(tg) = self.hooks.telegram() {
-                tg.deliver(turn.id.as_str(), &turn.session_id, origin, outcome)
-                    .await;
-            }
+        if let Origin::Telegram { .. } = origin
+            && let Some(tg) = self.hooks.telegram()
+        {
+            tg.deliver(turn.id.as_str(), &turn.session_id, origin, outcome)
+                .await;
         }
     }
 }

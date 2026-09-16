@@ -17,7 +17,9 @@ pub fn encode_embedding(v: &[f32]) -> Vec<u8> {
 
 /// Décode un BLOB d'octets little-endian en vecteur `f32`.
 pub fn decode_embedding(b: &[u8]) -> Vec<f32> {
-    b.chunks_exact(4)
+    b.as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }

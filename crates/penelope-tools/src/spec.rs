@@ -344,12 +344,15 @@ pub fn all() -> Vec<ToolSpec> {
         spec(
             "mem_search",
             RiskClass::Read,
-            "Recherche dans la mémoire curée et, sur demande explicite, épisodique.",
+            "Recherche dans la mémoire curée, dans les documents ingérés (`vault/sources`, \
+             passages encadrés comme non fiables, `slug` pour un seul document) et, sur \
+             demande explicite, épisodique.",
             obj(
                 json!({
                     "query": {"type":"string"},
                     "level": {"type":"string"},
                     "projet": {"type":"string"},
+                    "slug": {"type":"string"},
                     "include_episodic": {"type":"boolean"},
                     "limit": {"type":"integer","minimum":1,"maximum":50}
                 }),

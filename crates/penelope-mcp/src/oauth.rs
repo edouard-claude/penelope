@@ -341,13 +341,13 @@ pub fn validate_callback(req: &AuthRequest, cb: &CallbackParams) -> Result<Strin
             "`state` invalide : la demande ne correspond pas".into(),
         ));
     }
-    if let Some(iss) = &cb.iss {
-        if normalise_issuer(iss) != normalise_issuer(&req.issuer) {
-            return Err(McpError::OAuth(format!(
-                "`iss` inattendu : {iss} au lieu de {}",
-                req.issuer
-            )));
-        }
+    if let Some(iss) = &cb.iss
+        && normalise_issuer(iss) != normalise_issuer(&req.issuer)
+    {
+        return Err(McpError::OAuth(format!(
+            "`iss` inattendu : {iss} au lieu de {}",
+            req.issuer
+        )));
     }
     cb.code
         .clone()

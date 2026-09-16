@@ -151,10 +151,10 @@ pub async fn status(
         }
     }
 
-    if all || section == "config" {
-        if let Some(a) = admin {
-            out.insert("mcp_servers".into(), a.mcp_servers().await);
-        }
+    if (all || section == "config")
+        && let Some(a) = admin
+    {
+        out.insert("mcp_servers".into(), a.mcp_servers().await);
     }
 
     if all || section == "costs" {
@@ -289,10 +289,10 @@ pub fn parse_scalar(raw: &str) -> Value {
     if let Ok(f) = t.parse::<f64>() {
         return json!(f);
     }
-    if (t.starts_with('{') && t.ends_with('}')) || (t.starts_with('[') && t.ends_with(']')) {
-        if let Ok(v) = serde_json::from_str::<Value>(t) {
-            return v;
-        }
+    if ((t.starts_with('{') && t.ends_with('}')) || (t.starts_with('[') && t.ends_with(']')))
+        && let Ok(v) = serde_json::from_str::<Value>(t)
+    {
+        return v;
     }
     Value::String(raw.to_string())
 }

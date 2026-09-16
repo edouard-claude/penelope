@@ -234,12 +234,12 @@ pub fn matches_glob(name: &str, glob: Option<&str>) -> bool {
             None => return false,
         }
     }
-    if !g.ends_with('*') {
-        if let Some(last) = parts.last() {
-            if !last.is_empty() && !name.ends_with(last) {
-                return false;
-            }
-        }
+    if !g.ends_with('*')
+        && let Some(last) = parts.last()
+        && !last.is_empty()
+        && !name.ends_with(last)
+    {
+        return false;
     }
     true
 }

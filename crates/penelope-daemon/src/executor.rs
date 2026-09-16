@@ -23,6 +23,10 @@ pub trait Messenger: Send + Sync {
         path: &Path,
         caption: Option<&str>,
     ) -> Result<(), String>;
+    /// Carte d'approbation avec ses boutons, sur les canaux qui savent l'afficher.
+    async fn send_approval(&self, _origin: &Origin, _approval_id: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Accès aux serveurs MCP vivants.
@@ -456,6 +460,9 @@ impl NativeToolExecutor {
                         .and_then(|v| v.as_str())
                         .map(String::from),
                     include_episodic: b_arg(args, "include_episodic").unwrap_or(false),
+                    // Recherche explicite : les documents ingérés en font partie, encadrés.
+                    include_untrusted: true,
+                    slug: args.get("slug").and_then(|v| v.as_str()).map(String::from),
                     limit: u_arg(args, "limit").unwrap_or(10),
                     ..Default::default()
                 };
@@ -463,22 +470,49 @@ impl NativeToolExecutor {
                     .memory
                     .search(&str_arg(args, "query")?, None, &filter, &[])
                     .await?;
-                json!(
-                    hits.iter()
-                        .map(|h| json!({
-                            "uid": h.entry.uid, "texte": h.entry.text,
-                            "niveau": h.entry.level.as_str(), "fichier": h.entry.file,
-                            "score": (h.score * 1000.0).round() / 1000.0,
-                        }))
-                        .collect::<Vec<_>>()
-                )
+                let mut out = Vec::new();
+                for h in &hits {
+                    let untrusted = h.entry.etype == penelope_memory::ingest::SOURCE_ETYPE
+                        && s.memory.origin_of(&h.entry.uid).await?
+                            != Some(penelope_memory::Origin::Owner);
+                    let texte = if untrusted {
+                        penelope_memory::provenance::frame_untrusted(&h.entry.text, &h.entry.file)
+                    } else {
+                        h.entry.text.clone()
+                    };
+                    out.push(json!({
+                        "uid": h.entry.uid, "texte": texte,
+                        "niveau": h.entry.level.as_str(), "fichier": h.entry.file,
+                        "type": h.entry.etype,
+                        "score": (h.score * 1000.0).round() / 1000.0,
+                    }));
+                }
+                json!(out)
             }
             "mem_get" => {
-                if let Some(uid) = args.get("uid").and_then(|v| v.as_str()) {
-                    serde_json::to_value(s.memory.get(uid).await?).unwrap_or_default()
+                let mut entries = match args.get("uid").and_then(|v| v.as_str()) {
+                    Some(uid) => s.memory.get(uid).await?.into_iter().collect(),
+                    None => s.memory.by_slug(&str_arg(args, "slug")?).await?,
+                };
+                // Un document ingéré se lit par passages, encadrés s'ils ne sont pas fiables.
+                const MAX_PASSAGES: usize = 40;
+                let total = entries.len();
+                entries.truncate(MAX_PASSAGES);
+                for e in entries.iter_mut() {
+                    if e.etype == penelope_memory::ingest::SOURCE_ETYPE
+                        && s.memory.origin_of(&e.uid).await? != Some(penelope_memory::Origin::Owner)
+                    {
+                        e.text = penelope_memory::provenance::frame_untrusted(&e.text, &e.file);
+                    }
+                }
+                if args.get("uid").is_some() {
+                    serde_json::to_value(entries.into_iter().next()).unwrap_or_default()
                 } else {
-                    let slug = str_arg(args, "slug")?;
-                    serde_json::to_value(s.memory.by_slug(&slug).await?).unwrap_or_default()
+                    json!({
+                        "entrees": entries,
+                        "total": total,
+                        "tronque": total > MAX_PASSAGES,
+                    })
                 }
             }
             "mem_note" => {

@@ -659,27 +659,31 @@ impl SearchFilter {
     }
 
     fn accepts(&self, e: &IndexedEntry) -> bool {
-        if let Some(l) = self.level {
-            if e.level != l {
-                return false;
-            }
+        if let Some(l) = self.level
+            && e.level != l
+        {
+            return false;
         }
-        if let Some(t) = &self.etype {
-            if &e.etype != t {
-                return false;
-            }
+        if let Some(t) = &self.etype
+            && &e.etype != t
+        {
+            return false;
         }
-        if let Some(p) = &self.projet {
-            if e.projet.as_deref() != Some(p.as_str()) {
-                return false;
-            }
+        if let Some(p) = &self.projet
+            && e.projet.as_deref() != Some(p.as_str())
+        {
+            return false;
         }
-        if let Some(s) = &self.slug {
-            if e.slug.as_deref() != Some(s.as_str()) {
-                return false;
-            }
+        if let Some(s) = &self.slug
+            && e.slug.as_deref() != Some(s.as_str())
+        {
+            return false;
         }
         if !self.include_episodic && e.level == Level::Episodic {
+            return false;
+        }
+        // Passages de documents ingérés : non fiables, jamais rappelés sans demande.
+        if !self.include_untrusted && e.etype == crate::ingest::SOURCE_ETYPE {
             return false;
         }
         true

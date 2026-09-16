@@ -153,11 +153,12 @@ impl StreamAccumulator {
             });
         }
 
-        if let Some(p) = v.get("provider").and_then(|p| p.as_str()) {
-            if !p.is_empty() && self.upstream.as_deref() != Some(p) {
-                self.upstream = Some(p.to_string());
-                out.push(self.meta());
-            }
+        if let Some(p) = v.get("provider").and_then(|p| p.as_str())
+            && !p.is_empty()
+            && self.upstream.as_deref() != Some(p)
+        {
+            self.upstream = Some(p.to_string());
+            out.push(self.meta());
         }
 
         if let Some(u) = v.get("usage").filter(|u| u.is_object()) {
@@ -173,21 +174,22 @@ impl StreamAccumulator {
             if let Some(fr) = choice.get("finish_reason").and_then(|f| f.as_str()) {
                 self.finish = Some(FinishReason::parse(fr));
             }
-            if let Some(n) = choice.get("native_finish_reason").and_then(|f| f.as_str()) {
-                if !n.is_empty() && self.native_finish.as_deref() != Some(n) {
-                    self.native_finish = Some(n.to_string());
-                    out.push(self.meta());
-                }
+            if let Some(n) = choice.get("native_finish_reason").and_then(|f| f.as_str())
+                && !n.is_empty()
+                && self.native_finish.as_deref() != Some(n)
+            {
+                self.native_finish = Some(n.to_string());
+                out.push(self.meta());
             }
             let Some(delta) = choice.get("delta").or_else(|| choice.get("message")) else {
                 continue;
             };
 
-            if let Some(t) = delta.get("content").and_then(|c| c.as_str()) {
-                if !t.is_empty() {
-                    self.text.push_str(t);
-                    out.push(StreamChunk::Delta { text: t.into() });
-                }
+            if let Some(t) = delta.get("content").and_then(|c| c.as_str())
+                && !t.is_empty()
+            {
+                self.text.push_str(t);
+                out.push(StreamChunk::Delta { text: t.into() });
             }
             // Certains modèles exposent le raisonnement séparément. OpenRouter envoie le
             // même texte en `reasoning` et en `reasoning_content` : on n'en lit qu'un.
@@ -195,38 +197,37 @@ impl StreamAccumulator {
                 .get("reasoning")
                 .and_then(|c| c.as_str())
                 .or_else(|| delta.get("reasoning_content").and_then(|c| c.as_str()))
+                && !t.is_empty()
             {
-                if !t.is_empty() {
-                    self.reasoning.push_str(t);
-                    out.push(StreamChunk::Reasoning { text: t.into() });
-                }
+                self.reasoning.push_str(t);
+                out.push(StreamChunk::Reasoning { text: t.into() });
             }
-            if let Some(t) = delta.get("refusal").and_then(|r| r.as_str()) {
-                if !t.is_empty() {
-                    self.refusal.push_str(t);
-                    out.push(StreamChunk::Refusal { text: t.into() });
-                }
+            if let Some(t) = delta.get("refusal").and_then(|r| r.as_str())
+                && !t.is_empty()
+            {
+                self.refusal.push_str(t);
+                out.push(StreamChunk::Refusal { text: t.into() });
             }
-            if let Some(details) = delta.get("reasoning_details") {
-                if details.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
-                    out.push(StreamChunk::ReasoningDetails(details.clone()));
-                }
+            if let Some(details) = delta.get("reasoning_details")
+                && details.as_array().map(|a| !a.is_empty()).unwrap_or(false)
+            {
+                out.push(StreamChunk::ReasoningDetails(details.clone()));
             }
 
             if let Some(calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
                 for call in calls {
                     let idx = call.get("index").and_then(|i| i.as_i64()).unwrap_or(0);
                     let entry = self.partial_calls.entry(idx).or_default();
-                    if let Some(id) = call.get("id").and_then(|i| i.as_str()) {
-                        if !id.is_empty() {
-                            entry.id = id.to_string();
-                        }
+                    if let Some(id) = call.get("id").and_then(|i| i.as_str())
+                        && !id.is_empty()
+                    {
+                        entry.id = id.to_string();
                     }
                     if let Some(f) = call.get("function") {
-                        if let Some(n) = f.get("name").and_then(|n| n.as_str()) {
-                            if !n.is_empty() {
-                                entry.name.push_str(n);
-                            }
+                        if let Some(n) = f.get("name").and_then(|n| n.as_str())
+                            && !n.is_empty()
+                        {
+                            entry.name.push_str(n);
                         }
                         if let Some(a) = f.get("arguments").and_then(|a| a.as_str()) {
                             entry.args.push_str(a);

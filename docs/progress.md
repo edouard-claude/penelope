@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1066 tests verts**, tous hors réseau.
+- **1087 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -143,13 +143,34 @@ Dernière mise à jour : 16 septembre 2026.
 - Coût attribué au tour déclencheur (rôle `compaction`), événements `context.compacted`
   et `context.compaction_failed`, métrique `penelope_compactions_total`.
 
+### 0.2.7
+
+- **Photos** (§10.4, §14.4) : montrées au modèle de la session s'il lit les images, sinon
+  décrites par le rôle `image_describe` et jointes en texte ; album regroupé sur 1,5 s ;
+  un modèle sans vision (repli, changement de modèle) reçoit une mention à la place des
+  images de l'historique.
+- **Ingestion de documents** (§6.13) : PDF (`lopdf`, décompression bornée par page,
+  panique rattrapée), DOCX (`zip`), HTML, Markdown, texte ; fiche
+  `vault/sources/<slug>.md` d'origine `untrusted` (sauf `/mien`), secrets et numéros de
+  carte masqués, original conservé sous `{data}/media/documents`, passages indexés en
+  type `source`, exclus du rappel automatique et encadrés à la lecture (`mem_search`,
+  `mem_get`). Même contenu reçu deux fois : fiche reprise. La réindexation garde la
+  provenance déclarée par la fiche.
+- **Résumé et propositions** : rôle `memory_review`, au plus cinq faits passés au filtre
+  d'écriture de la mémoire, approbation `memory_proposal` (carte « Tout » / « Rien »,
+  `penelope approve`) ; un fait accepté rejoint `notes.md` avec le document en
+  provenance, une seule fois.
+- **Boîte de dépôt** `vault/inbox/` scrutée à côté de l'ordonnanceur ; autres pièces
+  jointes rangées en artefact (texte) ou dans `<workspace>/telegram/` (binaire).
+- Version minimale de Rust portée à 1.88 (exigée par `lopdf` et `zip`), lints clippy
+  associés appliqués.
+
 ### Encore à brancher
 
 1. **OAuth des serveurs MCP** : flux `paste_back` depuis Telegram, `mcp.auth`.
 2. **Moteur de workflows** : exécuter les runs étape par étape (`wf.run`,
    `workflow_start`, sous-agents, étapes `user` et `wait`).
 3. **Rêve nocturne et digest** : consolidation des candidats, méthodes `mem.*`.
-4. **Pièces jointes Telegram** : photos (vision) et documents ; les vocaux sont branchés.
 
 ### Méthodes RPC déclarées mais non servies
 
@@ -167,6 +188,8 @@ import.hermes  export  restore  store.rebuild  eval.run  upgrade
 
 ### Autres manques
 
+- Pas d'OCR : un PDF scanné sans couche texte est signalé, pas lu. L'extraction PDF de
+  `lopdf` ignore la mise en page (colonnes, tableaux) et les polices sans table Unicode.
 - `penelope import hermes` (§20.2, point 3) : non implémenté.
 - `penelope upgrade` : non implémenté.
 - Les captures d'écran de [telegram.md](telegram.md) sont des maquettes ASCII.

@@ -238,16 +238,16 @@ pub async fn mcp_checks(s: &Services, sup: &crate::mcp::McpSupervisor) -> Vec<Do
     for st in sup.statuses().await {
         let id = format!("mcp.{}", st.name);
         let label = format!("Serveur MCP `{}`", st.name);
-        if let Some(cfg) = sup.config_of(&st.name).await {
-            if let Err(e) = cfg.resolve_secrets(s.platform.secrets.as_ref()) {
-                out.push(DoctorCheck::fail(
-                    &id,
-                    &label,
-                    e.to_string(),
-                    Some("penelope secret set <nom du secret>".into()),
-                ));
-                continue;
-            }
+        if let Some(cfg) = sup.config_of(&st.name).await
+            && let Err(e) = cfg.resolve_secrets(s.platform.secrets.as_ref())
+        {
+            out.push(DoctorCheck::fail(
+                &id,
+                &label,
+                e.to_string(),
+                Some("penelope secret set <nom du secret>".into()),
+            ));
+            continue;
         }
         use penelope_mcp::ServerState::*;
         out.push(match st.state {

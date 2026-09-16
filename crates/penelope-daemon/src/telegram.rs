@@ -39,7 +39,20 @@ pub struct TelegramGateway {
     draft_interval: Duration,
     poll_timeout_s: u64,
     outbox_wake: Notify,
+    /// Albums en cours de réception, par `media_group_id`.
+    albums: Arc<std::sync::Mutex<HashMap<String, Album>>>,
 }
+
+/// Photos d'un même album, regroupées en un seul tour (§14.4).
+struct Album {
+    origin: Origin,
+    images: Vec<std::path::PathBuf>,
+    caption: Option<String>,
+    update_id: i64,
+}
+
+/// Fenêtre de regroupement d'un album : Telegram envoie ses photos une par une.
+const ALBUM_WINDOW: Duration = Duration::from_millis(1_500);
 
 impl TelegramGateway {
     /// Construit la passerelle depuis la configuration. `Ok(None)` : Telegram n'est
@@ -75,6 +88,7 @@ impl TelegramGateway {
             draft_interval: Duration::from_millis(cfg.telegram.draft_interval_ms.max(300)),
             poll_timeout_s: cfg.telegram.poll_timeout_s,
             outbox_wake: Notify::new(),
+            albums: Arc::new(std::sync::Mutex::new(HashMap::new())),
             daemon,
             bot,
         })
@@ -209,14 +223,14 @@ impl TelegramGateway {
             } => {
                 // Une raison de refus était attendue : ce message la donne.
                 let reason_key = format!("tg.await_reason.{chat_id}");
-                if let Some(approval_id) = self.daemon.kv_get(&reason_key).await? {
-                    if !approval_id.is_empty() {
-                        self.daemon.kv_set(&reason_key, "").await?;
-                        let d = Decision::deny("telegram", Some(text.clone()));
-                        self.finalize_decision(&approval_id, &d, chat_id, topic_id)
-                            .await?;
-                        return Ok(());
-                    }
+                if let Some(approval_id) = self.daemon.kv_get(&reason_key).await?
+                    && !approval_id.is_empty()
+                {
+                    self.daemon.kv_set(&reason_key, "").await?;
+                    let d = Decision::deny("telegram", Some(text.clone()));
+                    self.finalize_decision(&approval_id, &d, chat_id, topic_id)
+                        .await?;
+                    return Ok(());
                 }
 
                 let origin = Origin::Telegram {
@@ -285,25 +299,8 @@ impl TelegramGateway {
                 )
                 .await?;
             }
-            Incoming::Photo {
-                chat_id,
-                message_id,
-                ..
-            }
-            | Incoming::Document {
-                chat_id,
-                message_id,
-                ..
-            } => {
-                self.reply(
-                    chat_id,
-                    None,
-                    Some(message_id),
-                    "Les photos et documents ne sont pas encore pris en charge. Envoie le \
-                     contenu en texte, ou dépose le fichier dans le workspace.",
-                )
-                .await?;
-            }
+            photo @ Incoming::Photo { .. } => self.photo(photo).await?,
+            document @ Incoming::Document { .. } => self.document(document).await?,
             Incoming::OAuthCallback { chat_id, .. } => {
                 self.reply(
                     chat_id,
@@ -817,6 +814,227 @@ impl TelegramGateway {
 
     /// Vocal ou fichier audio (§14.4) : téléchargement, transcription par le rôle `stt`,
     /// texte montré en citation, puis traité comme un message tapé.
+    /// Photo : enregistrée, puis confiée au tour (vision, §10.4). Les photos d'un album
+    /// attendent leurs voisines pendant [`ALBUM_WINDOW`] et partent ensemble.
+    async fn photo(&self, incoming: Incoming) -> anyhow::Result<()> {
+        let Incoming::Photo {
+            update_id,
+            chat_id,
+            message_id,
+            topic_id,
+            file_ids,
+            file_size,
+            media_group,
+            caption,
+            ..
+        } = incoming
+        else {
+            return Ok(());
+        };
+        let reply_to = Some(message_id);
+        let Some(file_id) = file_ids.last() else {
+            return Ok(());
+        };
+        if file_size.unwrap_or(0) as usize > crate::media::IMAGE_MAX_BYTES {
+            return self
+                .reply(
+                    chat_id,
+                    topic_id,
+                    reply_to,
+                    "📷 Photo trop lourde (10 Mo au plus).",
+                )
+                .await;
+        }
+        self.react(chat_id, message_id, reaction::RECEIVED);
+        let saved = match self.bot.download_file(file_id).await {
+            Ok((bytes, _)) => crate::media::save_photo(&self.daemon.services, &bytes),
+            Err(e) => Err(format!("téléchargement impossible : {e}")),
+        };
+        let path = match saved {
+            Ok(p) => p,
+            Err(e) => {
+                return self
+                    .reply(
+                        chat_id,
+                        topic_id,
+                        reply_to,
+                        &format!("📷 Photo ignorée : {e}"),
+                    )
+                    .await;
+            }
+        };
+        let origin = Origin::Telegram {
+            chat_id,
+            topic_id,
+            message_id: Some(message_id),
+        };
+        let Some(group) = media_group else {
+            return enqueue_photos(&self.daemon, &origin, vec![path], caption, update_id).await;
+        };
+        let first = {
+            let mut albums = self
+                .albums
+                .lock()
+                .map_err(|_| anyhow::anyhow!("albums verrouillés"))?;
+            match albums.get_mut(&group) {
+                Some(album) => {
+                    album.images.push(path);
+                    if album.caption.is_none() {
+                        album.caption = caption;
+                    }
+                    false
+                }
+                None => {
+                    albums.insert(
+                        group.clone(),
+                        Album {
+                            origin,
+                            images: vec![path],
+                            caption,
+                            update_id,
+                        },
+                    );
+                    true
+                }
+            }
+        };
+        if first {
+            let (daemon, albums) = (self.daemon.clone(), self.albums.clone());
+            tokio::spawn(async move {
+                tokio::time::sleep(ALBUM_WINDOW).await;
+                let album = albums.lock().ok().and_then(|mut g| g.remove(&group));
+                if let Some(a) = album
+                    && let Err(e) =
+                        enqueue_photos(&daemon, &a.origin, a.images, a.caption, a.update_id).await
+                {
+                    tracing::warn!(error = %e, "album Telegram non transmis");
+                }
+            });
+        }
+        Ok(())
+    }
+
+    /// Document : ingéré dans le vault s'il est lisible (§6.13), sinon rangé comme pièce
+    /// jointe. Une légende est une demande : elle part en tour, document joint. `/mien` en
+    /// tête de légende déclare un document rédigé par le propriétaire.
+    async fn document(&self, incoming: Incoming) -> anyhow::Result<()> {
+        let Incoming::Document {
+            update_id,
+            chat_id,
+            message_id,
+            topic_id,
+            file_id,
+            file_name,
+            file_size,
+            caption,
+            ..
+        } = incoming
+        else {
+            return Ok(());
+        };
+        let reply_to = Some(message_id);
+        if file_size.unwrap_or(0) as usize > penelope_telegram::api::DOWNLOAD_MAX_BYTES {
+            return self
+                .reply(
+                    chat_id,
+                    topic_id,
+                    reply_to,
+                    "📄 Fichier trop gros : un bot Telegram ne télécharge pas plus de 20 Mo. \
+                     Le déposer dans `vault/inbox/` fonctionne aussi.",
+                )
+                .await;
+        }
+        self.react(chat_id, message_id, reaction::RECEIVED);
+        let bytes = match self.bot.download_file(&file_id).await {
+            Ok((b, _)) => b,
+            Err(e) => {
+                return self
+                    .reply(
+                        chat_id,
+                        topic_id,
+                        reply_to,
+                        &format!("📄 Téléchargement impossible : {e}"),
+                    )
+                    .await;
+            }
+        };
+        let origin = Origin::Telegram {
+            chat_id,
+            topic_id,
+            message_id: Some(message_id),
+        };
+        let session = self.daemon.chat_session_for(&origin).await?;
+        let caption = caption.unwrap_or_default();
+        let caption = caption.trim();
+        let (owner, request) = match caption.strip_prefix("/mien") {
+            Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => {
+                (true, rest.trim().to_string())
+            }
+            _ => (false, caption.to_string()),
+        };
+        // L'ingestion appelle le modèle : la file des updates n'attend pas.
+        let daemon = self.daemon.clone();
+        tokio::spawn(async move {
+            let dedup = Some(format!("tg:{update_id}"));
+            let messenger = daemon.hooks.messenger();
+            let say = |text: String| {
+                let (m, o) = (messenger.clone(), origin.clone());
+                async move {
+                    if let Some(m) = m {
+                        let _ = m.send_text(&o, &text).await;
+                    }
+                }
+            };
+            if penelope_memory::ingest::is_ingestible(&file_name) {
+                let trust = if owner {
+                    penelope_memory::Origin::Owner
+                } else {
+                    penelope_memory::Origin::Untrusted
+                };
+                match crate::ingest::ingest(
+                    &daemon,
+                    &file_name,
+                    bytes,
+                    "telegram",
+                    trust,
+                    Some(&session),
+                )
+                .await
+                {
+                    Ok(doc) => {
+                        say(doc.report()).await;
+                        if let (Some(m), Some(id)) = (&messenger, &doc.approval_id) {
+                            let _ = m.send_approval(&origin, id).await;
+                        }
+                        if !request.is_empty() {
+                            let text = doc.turn_text(&request);
+                            if let Err(e) = daemon
+                                .enqueue_message(&session, &text, &origin, dedup)
+                                .await
+                            {
+                                tracing::warn!(error = %e, "demande sur document non transmise");
+                            }
+                        }
+                    }
+                    Err(e) => say(format!("📄 `{file_name}` non ingéré : {e}")).await,
+                }
+                return;
+            }
+            let (note, joined) = store_attachment(&daemon, &session, &file_name, &bytes).await;
+            say(note).await;
+            if let (false, Some(joined)) = (request.is_empty(), joined) {
+                let text = format!("{request}\n\n{joined}");
+                if let Err(e) = daemon
+                    .enqueue_message(&session, &text, &origin, dedup)
+                    .await
+                {
+                    tracing::warn!(error = %e, "demande sur pièce jointe non transmise");
+                }
+            }
+        });
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn voice(
         &self,
@@ -1000,12 +1218,12 @@ impl TelegramGateway {
     ) -> anyhow::Result<()> {
         let s = &self.daemon.services;
         let outcome = s.actions.click(data, from_id).await?;
-        if let ClickOutcome::Accepted(action) = &outcome {
-            if action.action == k::MODEL_PIN {
-                return self
-                    .model_pin_clicked(callback_id, action, chat_id, message_id)
-                    .await;
-            }
+        if let ClickOutcome::Accepted(action) = &outcome
+            && action.action == k::MODEL_PIN
+        {
+            return self
+                .model_pin_clicked(callback_id, action, chat_id, message_id)
+                .await;
         }
         // `answerCallbackQuery` d'abord : Telegram attend une réponse sous une seconde.
         let notice = match &outcome {
@@ -1081,6 +1299,34 @@ impl TelegramGateway {
                 )
                 .await?;
             }
+            k::MEMORY_ACCEPT | k::MEMORY_REJECT => {
+                let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+                let accept = action.action == k::MEMORY_ACCEPT;
+                let decision = if accept {
+                    Decision {
+                        choice: "Tout".into(),
+                        ..Decision::approve_once("telegram")
+                    }
+                } else {
+                    Decision {
+                        choice: "Rien".into(),
+                        ..Decision::deny("telegram", None)
+                    }
+                };
+                let won = decide_approval(s, &approval_id, &decision).await?;
+                let note = match (accept, won) {
+                    (false, _) => "🗑 Propositions écartées : rien n'entre en mémoire.".to_string(),
+                    (true, true) => {
+                        match crate::ingest::apply_memory_proposal(&self.daemon, &approval_id).await
+                        {
+                            Ok(n) => format!("🧠 {n} fait(s) ajouté(s) à `notes.md`."),
+                            Err(e) => format!("❌ {e}"),
+                        }
+                    }
+                    (true, false) => "ℹ️ Déjà tranché.".to_string(),
+                };
+                self.reply(chat_id, topic_id, None, &note).await?;
+            }
             k::DENY_REASON => {
                 let _ = self.bot.edit_markup(chat_id, message_id, None).await;
                 self.daemon
@@ -1127,17 +1373,15 @@ impl TelegramGateway {
         };
         self.reply(chat_id, topic_id, None, &note).await?;
 
-        if first {
-            if let Some(session) = &a.session_id {
-                let origin = Origin::Telegram {
-                    chat_id,
-                    topic_id,
-                    message_id: None,
-                };
-                self.daemon
-                    .enqueue_resume(session, approval_id, &origin)
-                    .await?;
-            }
+        if first && let Some(session) = &a.session_id {
+            let origin = Origin::Telegram {
+                chat_id,
+                topic_id,
+                message_id: None,
+            };
+            self.daemon
+                .enqueue_resume(session, approval_id, &origin)
+                .await?;
         }
         Ok(())
     }
@@ -1162,6 +1406,9 @@ impl TelegramGateway {
         topic_id: Option<i64>,
         a: &ApprovalRequest,
     ) -> anyhow::Result<()> {
+        if a.kind == penelope_hitl::ApprovalKind::MemoryProposal {
+            return self.send_memory_card(chat_id, topic_id, a).await;
+        }
         let s = &self.daemon.services;
         let args = serde_json::to_string_pretty(&a.payload["arguments"])
             .unwrap_or_default()
@@ -1228,6 +1475,74 @@ impl TelegramGateway {
                     })
                     .collect()
             })
+            .collect();
+        let html = markdown_to_html(&substitute(&tpl.body, &vars));
+        self.outbox_push(
+            chat_id,
+            topic_id,
+            "sendMessage",
+            json!({
+                "chat_id": chat_id,
+                "text": html,
+                "parse_mode": "HTML",
+                "reply_markup": inline_keyboard(&buttons),
+                "message_thread_id": topic_id,
+            }),
+        )
+        .await
+    }
+
+    /// Carte `memory_proposal` : les faits proposés, « Tout » ou « Rien ».
+    async fn send_memory_card(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        a: &ApprovalRequest,
+    ) -> anyhow::Result<()> {
+        let s = &self.daemon.services;
+        let items: Vec<String> = a.payload["items"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|i| i.as_str().map(|t| format!("- {t}")))
+            .collect();
+        let mut vars = BTreeMap::new();
+        vars.insert(
+            "items".into(),
+            format!(
+                "{}\n\nSource : `{}`",
+                items.join("\n"),
+                a.payload["source"].as_str().unwrap_or("?")
+            ),
+        );
+        let ttl = 7 * 24 * 3_600_000;
+        let mut tokens = BTreeMap::new();
+        for action in [k::MEMORY_ACCEPT, k::MEMORY_AS_EXCEPTION, k::MEMORY_REJECT] {
+            let t = s
+                .actions
+                .create(action, a.id.as_str(), json!({}), ttl, true)
+                .await?;
+            tokens.insert(action.to_string(), t.token);
+        }
+        let tpl = s
+            .templates
+            .get("memory_proposal")
+            .ok_or_else(|| anyhow::anyhow!("gabarit memory_proposal absent"))?;
+        let rendered = tpl
+            .render(&vars, &tokens, &[])
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        // Un fait tiré d'un document n'a pas de contexte d'exception : « Tout » ou « Rien ».
+        let buttons: Vec<Vec<ButtonSpec>> = rendered
+            .buttons
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .filter(|b| !b.label.contains("exception"))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .filter(|row| !row.is_empty())
             .collect();
         let html = markdown_to_html(&substitute(&tpl.body, &vars));
         self.outbox_push(
@@ -1662,6 +1977,87 @@ impl Messenger for TelegramGateway {
             .await
             .map(|_| ())
             .map_err(|e| e.to_string())
+    }
+
+    async fn send_approval(&self, origin: &Origin, approval_id: &str) -> Result<(), String> {
+        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or((self.owner_id, None));
+        let a = self
+            .daemon
+            .services
+            .approvals
+            .get(approval_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("demande {approval_id} introuvable"))?;
+        self.send_approval_card(chat_id, topic_id, &a)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Met les photos reçues en file, dans la session de la conversation.
+async fn enqueue_photos(
+    daemon: &Arc<Daemon>,
+    origin: &Origin,
+    images: Vec<std::path::PathBuf>,
+    caption: Option<String>,
+    update_id: i64,
+) -> anyhow::Result<()> {
+    let session = daemon.chat_session_for(origin).await?;
+    daemon
+        .enqueue_message_with_images(
+            &session,
+            caption.as_deref().unwrap_or_default(),
+            &images,
+            origin,
+            Some(format!("tg:{update_id}")),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Range une pièce jointe non ingérable. Texte : artefact lisible par `artifact_read` ;
+/// binaire : fichier dans le workspace. Renvoie le bilan et la mention à joindre au tour.
+async fn store_attachment(
+    daemon: &Arc<Daemon>,
+    session: &str,
+    name: &str,
+    bytes: &[u8],
+) -> (String, Option<String>) {
+    let s = &daemon.services;
+    let text = std::str::from_utf8(bytes)
+        .ok()
+        .filter(|t| bytes.len() <= 1024 * 1024 && !t.contains('\0'));
+    if let Some(text) = text {
+        let kind = penelope_context::store::guess_kind(text);
+        let stored = s
+            .context
+            .history
+            .put_artifact(Some(session), None, kind, Some(name), text)
+            .await;
+        return match stored {
+            Ok(a) => (
+                format!("📎 `{name}` enregistré comme artefact `{}`.", a.id),
+                Some(format!(
+                    "[Fichier joint : `{name}`, artefact `{}` ({} caractères) : `artifact_read` \
+                     pour le lire. Contenu non vérifié.]",
+                    a.id,
+                    text.chars().count()
+                )),
+            ),
+            Err(e) => (format!("📎 `{name}` non enregistré : {e}"), None),
+        };
+    }
+    match crate::media::save_attachment(s, name, bytes) {
+        Ok(path) => (
+            format!("📎 `{name}` déposé dans `{}`.", path.display()),
+            Some(format!(
+                "[Fichier joint : `{name}`, déposé dans `{}` ({} octets).]",
+                path.display(),
+                bytes.len()
+            )),
+        ),
+        Err(e) => (format!("📎 `{name}` non enregistré : {e}"), None),
     }
 }
 
@@ -2432,6 +2828,316 @@ mod tests {
             "{out:?}"
         );
         assert!(out.last().unwrap().contains("alias inconnu"), "{out:?}");
+    }
+
+    /// Octets d'un JPEG : l'en-tête suffit à la reconnaissance.
+    const JPEG: &[u8] = &[
+        0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F', 0x00,
+    ];
+
+    fn photo_update(
+        update_id: i64,
+        file_id: &str,
+        group: Option<&str>,
+        caption: Option<&str>,
+    ) -> Value {
+        let mut u = updates::photo(update_id, OWNER, OWNER, group);
+        u["message"]["photo"][0]["file_id"] = json!(file_id);
+        if let Some(c) = caption {
+            u["message"]["caption"] = json!(c);
+        }
+        u
+    }
+
+    fn document_update(update_id: i64, file_id: &str, name: &str, caption: Option<&str>) -> Value {
+        let mut u = updates::document(update_id, OWNER, OWNER, name);
+        u["message"]["document"]["file_id"] = json!(file_id);
+        if let Some(c) = caption {
+            u["message"]["caption"] = json!(c);
+        }
+        u
+    }
+
+    /// Attend qu'une condition asynchrone devienne vraie (tâches lancées en fond).
+    async fn eventually<F, Fut>(mut f: F) -> bool
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        for _ in 0..150 {
+            if f().await {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        false
+    }
+
+    #[tokio::test]
+    async fn a_photo_is_described_for_a_model_that_cannot_see() {
+        let (_d, g, t, p) = gateway().await;
+        t.set_file("ph1", JPEG).await;
+        p.reply(r#"{"complexity":"medium"}"#);
+        p.reply("Un reçu de pharmacie : total 23,40 €, daté du 12 septembre.");
+        p.reply("Tu as dépensé 23,40 € à la pharmacie.");
+        g.process_update(&photo_update(70, "ph1", None, Some("combien ?")))
+            .await
+            .unwrap();
+        drain(&g).await;
+
+        let requests = p.requests();
+        let vision = requests
+            .iter()
+            .find(|r| r.messages[0].text().contains("Tu décris des images"))
+            .expect("appel au modèle de vision");
+        let cfg = g.daemon.services.config.config();
+        assert_eq!(vision.model, cfg.alias_model("vision").unwrap());
+        assert!(vision.messages[1].content.iter().any(|c| matches!(
+            c,
+            penelope_llm::types::Content::ImageUrl { url, .. } if url.starts_with("data:image/jpeg;base64,")
+        )));
+        let chat = requests.last().unwrap();
+        assert!(
+            chat.messages.iter().all(|m| m
+                .content
+                .iter()
+                .all(|c| !matches!(c, penelope_llm::types::Content::ImageUrl { .. }))),
+            "le modèle de la conversation ne reçoit que du texte"
+        );
+        assert!(chat.messages.iter().any(|m| {
+            let t = m.text();
+            // Le contexte volatil (T4) précède le texte du dernier message utilisateur.
+            t.contains("combien ?") && t.contains("23,40 €") && t.contains("modèle de vision")
+        }));
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            sent.iter().any(|m| m.contains("23,40 € à la pharmacie")),
+            "{sent:?}"
+        );
+        let roles = g
+            .daemon
+            .services
+            .budget
+            .report("role", None, None, 10)
+            .await
+            .unwrap();
+        assert!(roles.iter().any(|r| r.key == "image_describe"), "{roles:?}");
+    }
+
+    #[tokio::test]
+    async fn a_multimodal_model_sees_the_album_in_one_turn() {
+        let (_d, g, t, p) = gateway().await;
+        let cfg = g.daemon.services.config.config();
+        let main =
+            penelope_llm::catalog::strip_provider(cfg.alias_model("main").unwrap()).to_string();
+        let mut info = penelope_llm::catalog::ModelInfo::minimal(&main, "deepseek", 128_000);
+        info.input_modalities = vec!["text".into(), "image".into()];
+        g.daemon.services.catalog.upsert(vec![info]);
+        t.set_file("a1", JPEG).await;
+        t.set_file("a2", JPEG).await;
+        p.reply(r#"{"complexity":"medium"}"#);
+        p.reply("Deux vues du même salon.");
+
+        g.process_update(&photo_update(80, "a1", Some("album-1"), Some("compare")))
+            .await
+            .unwrap();
+        g.process_update(&photo_update(81, "a2", Some("album-1"), None))
+            .await
+            .unwrap();
+        assert!(
+            g.daemon
+                .services
+                .turns
+                .claim("test")
+                .await
+                .unwrap()
+                .is_none(),
+            "l'album attend ses photos avant de partir"
+        );
+        tokio::time::sleep(ALBUM_WINDOW + Duration::from_millis(300)).await;
+        drain(&g).await;
+
+        let requests = p.requests();
+        assert_eq!(
+            requests.len(),
+            2,
+            "un classifieur et une réponse, pas de vision"
+        );
+        let images: usize = requests[1]
+            .messages
+            .iter()
+            .map(|m| {
+                m.content
+                    .iter()
+                    .filter(|c| matches!(c, penelope_llm::types::Content::ImageUrl { .. }))
+                    .count()
+            })
+            .sum();
+        assert_eq!(images, 2, "les deux photos dans le même tour");
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(sent.iter().any(|m| m.contains("même salon")), "{sent:?}");
+    }
+
+    #[tokio::test]
+    async fn a_document_is_ingested_proposed_and_answered() {
+        let (_d, g, t, p) = gateway().await;
+        let body = "Contrat de maintenance ACME\n\nLe contrat court jusqu'au 31 mars 2027.\n\n\
+                    Carte de test : 4111 1111 1111 1111\n\nContact : Paul Martin.";
+        t.set_file("doc1", body.as_bytes()).await;
+        p.reply(
+            r#"{"resume": "Contrat de maintenance avec ACME jusqu'en mars 2027.",
+                "faits": ["Le contrat de maintenance ACME court jusqu'au 31 mars 2027."]}"#,
+        );
+        p.reply(r#"{"complexity":"medium"}"#);
+        p.reply("Il expire le 31 mars 2027.");
+        g.process_update(&document_update(
+            90,
+            "doc1",
+            "Contrat ACME.txt",
+            Some("quand expire-t-il ?"),
+        ))
+        .await
+        .unwrap();
+
+        let vault = crate::conversation::vault_dir(&g.daemon.services);
+        let source = vault.join("sources/contrat-acme.md");
+        assert!(
+            eventually(|| async { source.exists() }).await,
+            "fiche écrite"
+        );
+        assert!(
+            eventually(|| async {
+                g.flush_outbox().await.unwrap();
+                texts(&t.calls_to(tg::SEND_MESSAGE).await)
+                    .iter()
+                    .any(|m| m.contains("Propositions de mémoire"))
+            })
+            .await
+        );
+        drain(&g).await;
+
+        let raw = std::fs::read_to_string(&source).unwrap();
+        let parsed = penelope_memory::ingest::parse_source(&raw).unwrap();
+        assert_eq!(parsed.origine, penelope_memory::Origin::Untrusted);
+        assert!(
+            !raw.contains("4111"),
+            "un numéro de carte n'entre pas dans le vault"
+        );
+        assert!(raw.contains("## Résumé"));
+
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            sent.iter().any(|m| m.contains("sources/contrat-acme.md")),
+            "{sent:?}"
+        );
+        assert!(sent.iter().any(|m| m.contains("31 mars 2027")), "{sent:?}");
+        let chat = p.requests().last().unwrap().clone();
+        let asked = chat
+            .messages
+            .iter()
+            .map(|m| m.text())
+            .find(|t| t.contains("quand expire-t-il ?"))
+            .expect("la légende part en tour");
+        assert!(asked.contains("contenu non fiable"), "{asked}");
+        assert!(asked.contains("Paul Martin"));
+
+        // Les passages se retrouvent par recherche explicite, jamais par rappel automatique.
+        let s = &g.daemon.services;
+        let explicit = penelope_memory::SearchFilter::explicit();
+        let hits = s.memory.search("ACME", None, &explicit, &[]).await.unwrap();
+        assert!(hits.iter().any(|h| h.entry.etype == "source"));
+        let auto = s
+            .memory
+            .search("ACME", None, &penelope_memory::SearchFilter::default(), &[])
+            .await
+            .unwrap();
+        assert!(auto.iter().all(|h| h.entry.etype != "source"));
+
+        // « Tout » : le fait rejoint notes.md, avec le document en provenance.
+        let pending = s.approvals.pending(10).await.unwrap();
+        let proposal = pending
+            .iter()
+            .find(|a| a.kind == penelope_hitl::ApprovalKind::MemoryProposal)
+            .expect("proposition en attente");
+        let token = s
+            .actions
+            .create(
+                k::MEMORY_ACCEPT,
+                proposal.id.as_str(),
+                json!({}),
+                60_000,
+                true,
+            )
+            .await
+            .unwrap()
+            .token;
+        g.process_update(&updates::callback(91, OWNER, &token, 900))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let notes = std::fs::read_to_string(vault.join("notes.md")).unwrap();
+        assert!(notes.contains("31 mars 2027"), "{notes}");
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            sent.iter().any(|m| m.contains("1 fait(s) ajouté(s)")),
+            "{sent:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mien_marks_a_document_as_written_by_the_owner() {
+        let (_d, g, t, p) = gateway().await;
+        t.set_file(
+            "doc2",
+            b"# Mes principes\n\nToujours relire avant d'envoyer.",
+        )
+        .await;
+        p.reply(r#"{"resume": "Principes de travail.", "faits": []}"#);
+        g.process_update(&document_update(95, "doc2", "principes.md", Some("/mien")))
+            .await
+            .unwrap();
+        let source =
+            crate::conversation::vault_dir(&g.daemon.services).join("sources/principes.md");
+        assert!(eventually(|| async { source.exists() }).await);
+        let raw = std::fs::read_to_string(&source).unwrap();
+        assert_eq!(
+            penelope_memory::ingest::parse_source(&raw).unwrap().origine,
+            penelope_memory::Origin::Owner
+        );
+        assert!(
+            g.daemon
+                .services
+                .turns
+                .claim("test")
+                .await
+                .unwrap()
+                .is_none(),
+            "`/mien` seul n'est pas une demande"
+        );
+    }
+
+    #[tokio::test]
+    async fn other_files_become_attachments_the_agent_can_reach() {
+        let (_d, g, t, _p) = gateway().await;
+        t.set_file("csv1", b"date,montant\n2026-09-01,12\n").await;
+        t.set_file("bin1", &[0u8, 159, 146, 150, 0, 1]).await;
+        g.process_update(&document_update(96, "csv1", "depenses.csv", None))
+            .await
+            .unwrap();
+        g.process_update(&document_update(97, "bin1", "../archive.bin", None))
+            .await
+            .unwrap();
+        assert!(
+            eventually(|| async {
+                g.flush_outbox().await.unwrap();
+                let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+                sent.iter().any(|m| m.contains("artefact"))
+                    && sent.iter().any(|m| m.contains("archive.bin"))
+            })
+            .await
+        );
+        let workspace = crate::executor::default_workspaces(&g.daemon.services)[0].clone();
+        assert!(workspace.join("telegram/archive.bin").exists());
     }
 
     #[tokio::test]

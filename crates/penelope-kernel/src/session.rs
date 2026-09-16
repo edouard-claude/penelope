@@ -380,17 +380,16 @@ impl SessionStore {
                     MetadataOp::Update => {
                         // Met à jour l'élément dont le champ `id` correspond.
                         let target_id = entry.get("id").cloned();
-                        if let Some(Value::Array(a)) = obj.get_mut(&key) {
-                            if let Some(tid) = target_id {
-                                for item in a.iter_mut() {
-                                    if item.get("id") == Some(&tid) {
-                                        if let (Some(dst), Some(src)) =
-                                            (item.as_object_mut(), entry.as_object())
-                                        {
-                                            for (k, v) in src {
-                                                dst.insert(k.clone(), v.clone());
-                                            }
-                                        }
+                        if let Some(Value::Array(a)) = obj.get_mut(&key)
+                            && let Some(tid) = target_id
+                        {
+                            for item in a.iter_mut() {
+                                if item.get("id") == Some(&tid)
+                                    && let (Some(dst), Some(src)) =
+                                        (item.as_object_mut(), entry.as_object())
+                                {
+                                    for (k, v) in src {
+                                        dst.insert(k.clone(), v.clone());
                                     }
                                 }
                             }

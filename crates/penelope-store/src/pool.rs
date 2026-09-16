@@ -76,11 +76,11 @@ impl ReadPool {
     }
 
     fn release(&self, conn: Connection) {
-        if let Ok(mut guard) = self.inner.free.lock() {
-            if guard.len() < self.inner.capacity {
-                guard.push(conn);
-                self.inner.available.notify_one();
-            }
+        if let Ok(mut guard) = self.inner.free.lock()
+            && guard.len() < self.inner.capacity
+        {
+            guard.push(conn);
+            self.inner.available.notify_one();
         }
     }
 }

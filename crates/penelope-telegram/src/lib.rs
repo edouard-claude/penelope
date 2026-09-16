@@ -52,7 +52,11 @@ pub enum Incoming {
         chat_id: i64,
         from_id: i64,
         message_id: i64,
+        topic_id: Option<i64>,
+        /// Tailles de la photo, de la plus petite à la plus grande.
         file_ids: Vec<String>,
+        /// Poids de la plus grande taille, s'il est annoncé.
+        file_size: Option<i64>,
         media_group: Option<String>,
         caption: Option<String>,
     },
@@ -61,8 +65,12 @@ pub enum Incoming {
         chat_id: i64,
         from_id: i64,
         message_id: i64,
+        topic_id: Option<i64>,
         file_id: String,
         file_name: String,
+        mime_type: Option<String>,
+        file_size: Option<i64>,
+        caption: Option<String>,
     },
     Voice {
         update_id: i64,
@@ -265,10 +273,15 @@ pub fn classify(update: &Value, owner_id: i64, allow_groups: bool) -> Incoming {
             chat_id,
             from_id,
             message_id,
+            topic_id,
             file_ids: photos
                 .iter()
                 .filter_map(|p| p.get("file_id").and_then(|v| v.as_str()).map(String::from))
                 .collect(),
+            file_size: photos
+                .last()
+                .and_then(|p| p.get("file_size"))
+                .and_then(|v| v.as_i64()),
             media_group: msg
                 .get("media_group_id")
                 .and_then(|v| v.as_str())
@@ -282,6 +295,7 @@ pub fn classify(update: &Value, owner_id: i64, allow_groups: bool) -> Incoming {
             chat_id,
             from_id,
             message_id,
+            topic_id,
             file_id: d
                 .get("file_id")
                 .and_then(|v| v.as_str())
@@ -292,6 +306,12 @@ pub fn classify(update: &Value, owner_id: i64, allow_groups: bool) -> Incoming {
                 .and_then(|v| v.as_str())
                 .unwrap_or("fichier")
                 .to_string(),
+            mime_type: d
+                .get("mime_type")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            file_size: d.get("file_size").and_then(|v| v.as_i64()),
+            caption: (!text.is_empty()).then(|| text.clone()),
         };
     }
     if let Some(v) = msg.get("voice").or_else(|| msg.get("audio")) {

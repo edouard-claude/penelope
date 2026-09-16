@@ -1097,20 +1097,20 @@ impl ConfigStore {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
-        if let Some(existing) = guard.get(subsystem) {
-            if existing.generation() > result.generation() {
-                return false;
-            }
+        if let Some(existing) = guard.get(subsystem)
+            && existing.generation() > result.generation()
+        {
+            return false;
         }
-        if let ApplyResult::RequiresRestart { generation, reason } = &result {
-            if !restart_allowed(reason) {
-                tracing::warn!(
-                    subsystem,
-                    generation,
-                    reason,
-                    "RequiresRestart refusé : ce chemin doit s'appliquer à chaud"
-                );
-            }
+        if let ApplyResult::RequiresRestart { generation, reason } = &result
+            && !restart_allowed(reason)
+        {
+            tracing::warn!(
+                subsystem,
+                generation,
+                reason,
+                "RequiresRestart refusé : ce chemin doit s'appliquer à chaud"
+            );
         }
         if let Some(store) = &self.store {
             let sub = subsystem.to_string();

@@ -66,10 +66,10 @@ pub fn register_secret(value: &str) {
     if value.len() < 6 {
         return;
     }
-    if let Ok(mut g) = known().write() {
-        if !g.iter().any(|v| &**v == value) {
-            g.push(Arc::from(value));
-        }
+    if let Ok(mut g) = known().write()
+        && !g.iter().any(|v| &**v == value)
+    {
+        g.push(Arc::from(value));
     }
 }
 
@@ -138,16 +138,16 @@ pub fn luhn(digits: &str) -> bool {
         sum += v;
         double = !double;
     }
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 /// Vrai si le texte contient quelque chose qui ressemble à un secret. Utilisé par le
 /// filtre d'écriture mémoire (§6.10), qui **refuse** l'écriture au lieu de masquer.
 pub fn contains_secret(input: &str) -> bool {
-    if let Ok(g) = known().read() {
-        if g.iter().any(|v| input.contains(&**v)) {
-            return true;
-        }
+    if let Ok(g) = known().read()
+        && g.iter().any(|v| input.contains(&**v))
+    {
+        return true;
     }
     if patterns().rules.iter().any(|(re, _)| re.is_match(input)) {
         return true;

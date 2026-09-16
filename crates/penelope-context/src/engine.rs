@@ -327,12 +327,12 @@ impl ContextEngine {
 
         // Reprise : un nœud publié juste avant un arrêt brutal, sans que ses messages
         // aient été marqués. Le marquage est idempotent.
-        if let Some(first) = active.iter().filter_map(|n| n.from_seq).min() {
-            if entries.iter().any(|e| e.seq <= covered_to && !e.compacted) {
-                self.history
-                    .mark_compacted(session_id, first, covered_to)
-                    .await?;
-            }
+        if let Some(first) = active.iter().filter_map(|n| n.from_seq).min()
+            && entries.iter().any(|e| e.seq <= covered_to && !e.compacted)
+        {
+            self.history
+                .mark_compacted(session_id, first, covered_to)
+                .await?;
         }
 
         let fresh: Vec<Entry> = entries
@@ -600,12 +600,12 @@ fn plan_batches(entries: &[Entry], sizes: &[u64], budget: u64) -> Vec<(i64, i64)
     for g in crate::transcript::group(entries) {
         let g_tokens: u64 = sizes[g.range.clone()].iter().sum();
         let (g_from, g_to) = (entries[g.range.start].seq, entries[g.range.end - 1].seq);
-        if let Some(s) = start {
-            if acc + g_tokens > budget {
-                out.push((s, end));
-                start = None;
-                acc = 0;
-            }
+        if let Some(s) = start
+            && acc + g_tokens > budget
+        {
+            out.push((s, end));
+            start = None;
+            acc = 0;
         }
         start.get_or_insert(g_from);
         end = g_to;

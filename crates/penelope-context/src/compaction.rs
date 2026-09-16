@@ -262,11 +262,12 @@ pub fn split_for_summary(entries: &[Entry], params: &CompactionParams) -> (usize
     let (mut boundary, mut tail_tokens) = natural_split(entries, params);
 
     // Toujours laisser quelque chose à résumer, sinon la compaction ne sert à rien.
-    if boundary == 0 && entries.len() > 2 {
-        if let Some(g) = group(entries).first() {
-            boundary = g.range.end;
-            tail_tokens = entries[boundary..].iter().map(|e| e.tokens).sum();
-        }
+    if boundary == 0
+        && entries.len() > 2
+        && let Some(g) = group(entries).first()
+    {
+        boundary = g.range.end;
+        tail_tokens = entries[boundary..].iter().map(|e| e.tokens).sum();
     }
     (boundary, tail_tokens)
 }
@@ -454,10 +455,10 @@ pub fn render_summary(v: &serde_json::Value, anchors: &str, verbatim_users: &[St
     let mut s = format!("{SUMMARY_HEADER}\n");
     for section in SUMMARY_SECTIONS {
         let key = section_key(section);
-        if let Some(t) = v.get(&key).and_then(|x| x.as_str()) {
-            if !t.trim().is_empty() {
-                s.push_str(&format!("\n### {section}\n{}\n", t.trim()));
-            }
+        if let Some(t) = v.get(&key).and_then(|x| x.as_str())
+            && !t.trim().is_empty()
+        {
+            s.push_str(&format!("\n### {section}\n{}\n", t.trim()));
         }
     }
     if !verbatim_users.is_empty() {

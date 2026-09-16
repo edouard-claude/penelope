@@ -30,10 +30,10 @@ impl CurrentContext {
     pub fn predicates(&self) -> BTreeMap<String, String> {
         let mut m = BTreeMap::new();
         let mut put = |k: &str, v: &Option<String>| {
-            if let Some(v) = v {
-                if !v.is_empty() {
-                    m.insert(k.to_string(), v.to_lowercase());
-                }
+            if let Some(v) = v
+                && !v.is_empty()
+            {
+                m.insert(k.to_string(), v.to_lowercase());
             }
         };
         put("projet", &self.projet);

@@ -112,10 +112,10 @@ impl DailyFile {
             else {
                 continue;
             };
-            if let Ok(d) = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d") {
-                if d < cutoff.date_naive() {
-                    let _ = std::fs::remove_file(e.path());
-                }
+            if let Ok(d) = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
+                && d < cutoff.date_naive()
+            {
+                let _ = std::fs::remove_file(e.path());
             }
         }
     }

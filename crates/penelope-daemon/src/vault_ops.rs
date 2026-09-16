@@ -60,6 +60,18 @@ pub async fn remember(
     text: &str,
     session_id: &str,
 ) -> Result<String, String> {
+    let prov = Provenance::owner(session_id, "interactive", &s.clock.now_rfc3339());
+    remember_with(s, vault, level, text, prov).await
+}
+
+/// Comme [`remember`], avec une provenance donnée (fait tiré d'un document, par exemple).
+pub async fn remember_with(
+    s: &Services,
+    vault: &Path,
+    level: Level,
+    text: &str,
+    prov: Provenance,
+) -> Result<String, String> {
     write_filter(text)?;
     let day = today(s);
     let rel = file_for(level, &day);
@@ -71,7 +83,6 @@ pub async fn remember(
 
     let mut entry: IndexedEntry = simple_entry(&uid, text.trim(), level, &day);
     entry.file = rel;
-    let prov = Provenance::owner(session_id, "interactive", &s.clock.now_rfc3339());
     s.memory
         .upsert(&entry, &prov)
         .await
@@ -111,6 +122,28 @@ pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
         let Ok(raw) = std::fs::read_to_string(&path) else {
             continue;
         };
+        // Documents ingérés : leurs passages gardent la provenance déclarée par la fiche
+        // (non fiable sauf `/mien`) ; un tiret dans le texte n'est pas une entrée.
+        if let Some(slug) = rel
+            .strip_prefix(&format!("{}/", penelope_memory::ingest::SOURCES_DIR))
+            .and_then(|f| f.strip_suffix(".md"))
+        {
+            if let Some(src) = penelope_memory::ingest::parse_source(&raw) {
+                n += crate::ingest::index_source(
+                    s,
+                    slug,
+                    &src.text,
+                    src.origine,
+                    &format!("vault:{rel}"),
+                    None,
+                )
+                .await?;
+            }
+            continue;
+        }
+        if rel.starts_with(&format!("{}/", penelope_memory::ingest::INBOX_DIR)) {
+            continue;
+        }
         let (entries, rewritten) = penelope_memory::vault::parse_entries(&raw);
         if let Some(body) = rewritten {
             penelope_kernel::config::atomic_write(&path, body.as_bytes())
@@ -146,10 +179,10 @@ fn collect_markdown(root: &Path, dir: &Path, out: &mut Vec<String>) {
         }
         if p.is_dir() {
             collect_markdown(root, &p, out);
-        } else if name.ends_with(".md") {
-            if let Ok(rel) = p.strip_prefix(root) {
-                out.push(rel.to_string_lossy().replace('\\', "/"));
-            }
+        } else if name.ends_with(".md")
+            && let Ok(rel) = p.strip_prefix(root)
+        {
+            out.push(rel.to_string_lossy().replace('\\', "/"));
         }
     }
 }

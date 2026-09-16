@@ -39,7 +39,21 @@ pub struct TickReport {
 
 /// Boucle de l'ordonnanceur, jusqu'à l'arrêt du daemon.
 pub async fn scheduler_loop(d: Arc<Daemon>) {
+    // La boîte de dépôt du vault passe à côté : une ingestion (résumé compris) ne doit pas
+    // retarder un rappel.
+    let inbox_busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
     while !d.handle.is_shutting_down() {
+        if !inbox_busy.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let (d2, busy) = (d.clone(), inbox_busy.clone());
+            tokio::spawn(async move {
+                match crate::ingest::scan_inbox(&d2).await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!(fichiers = n, "boîte de dépôt du vault traitée"),
+                    Err(e) => tracing::warn!(error = %e, "boîte de dépôt du vault"),
+                }
+                busy.store(false, std::sync::atomic::Ordering::SeqCst);
+            });
+        }
         match tick(&d).await {
             Ok(r) if !r.fired.is_empty() || !r.errors.is_empty() => {
                 tracing::info!(?r, "ordonnanceur")
@@ -323,16 +337,16 @@ async fn fire(
     vars.insert("schedule".into(), sched.id.clone());
     vars.insert("count".into(), items.len().to_string());
     vars.insert("items".into(), items_lines(items));
-    if let Some(first) = items.first() {
-        if let Some(o) = first.value.as_object() {
-            for (k, v) in o {
-                let text = match v {
-                    Value::String(s) => s.clone(),
-                    Value::Object(_) | Value::Array(_) => continue,
-                    other => other.to_string(),
-                };
-                vars.entry(k.clone()).or_insert(text);
-            }
+    if let Some(first) = items.first()
+        && let Some(o) = first.value.as_object()
+    {
+        for (k, v) in o {
+            let text = match v {
+                Value::String(s) => s.clone(),
+                Value::Object(_) | Value::Array(_) => continue,
+                other => other.to_string(),
+            };
+            vars.entry(k.clone()).or_insert(text);
         }
     }
     let origin = target_origin(d, sched);
@@ -431,6 +445,16 @@ fn target_origin(d: &Daemon, sched: &Schedule) -> Origin {
             return origin;
         }
     }
+    match owner_origin(d) {
+        Origin::Internal { .. } => Origin::Internal {
+            source: format!("schedule {}", sched.id),
+        },
+        telegram => telegram,
+    }
+}
+
+/// Conversation privée du propriétaire sur Telegram, s'il est configuré.
+pub(crate) fn owner_origin(d: &Daemon) -> Origin {
     let owner = d.services.config.config().owner.telegram_user_id;
     if owner != 0 {
         Origin::Telegram {
@@ -440,7 +464,7 @@ fn target_origin(d: &Daemon, sched: &Schedule) -> Origin {
         }
     } else {
         Origin::Internal {
-            source: format!("schedule {}", sched.id),
+            source: "daemon".into(),
         }
     }
 }

@@ -158,10 +158,10 @@ impl BotTransport for MockTransport {
                 }),
             });
         }
-        if let Some(q) = g.replies.get_mut(method) {
-            if let Some(v) = q.pop_front() {
-                return Ok(ok(v));
-            }
+        if let Some(q) = g.replies.get_mut(method)
+            && let Some(v) = q.pop_front()
+        {
+            return Ok(ok(v));
         }
 
         // Réponses par défaut, réalistes.

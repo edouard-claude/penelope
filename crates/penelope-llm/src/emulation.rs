@@ -82,12 +82,11 @@ pub fn extract_json(text: &str) -> Option<Value> {
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'{' {
-            if let Some(end) = balanced_end(text, i) {
-                if let Some(v) = parse_tolerant(&text[i..=end]) {
-                    return Some(v);
-                }
-            }
+        if bytes[i] == b'{'
+            && let Some(end) = balanced_end(text, i)
+            && let Some(v) = parse_tolerant(&text[i..=end])
+        {
+            return Some(v);
         }
         i += 1;
     }
@@ -191,12 +190,12 @@ fn strip_json_block(text: &str) -> String {
         }
         return out[..i].trim().to_string();
     }
-    if let Some(start) = out.find('{') {
-        if let Some(end) = balanced_end(&out, start) {
-            let before = out[..start].to_string();
-            let after = out[end + 1..].to_string();
-            return format!("{before}{after}").trim().to_string();
-        }
+    if let Some(start) = out.find('{')
+        && let Some(end) = balanced_end(&out, start)
+    {
+        let before = out[..start].to_string();
+        let after = out[end + 1..].to_string();
+        return format!("{before}{after}").trim().to_string();
     }
     out.trim().to_string()
 }

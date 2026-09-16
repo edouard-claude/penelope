@@ -221,12 +221,12 @@ fn salt_path(secrets: &Path) -> PathBuf {
 
 fn load_or_create_salt(secrets: &Path) -> Result<[u8; 16]> {
     let p = salt_path(secrets);
-    if let Ok(raw) = std::fs::read(&p) {
-        if raw.len() == 16 {
-            let mut s = [0u8; 16];
-            s.copy_from_slice(&raw);
-            return Ok(s);
-        }
+    if let Ok(raw) = std::fs::read(&p)
+        && raw.len() == 16
+    {
+        let mut s = [0u8; 16];
+        s.copy_from_slice(&raw);
+        return Ok(s);
     }
     let mut s = [0u8; 16];
     getrandom::getrandom(&mut s)

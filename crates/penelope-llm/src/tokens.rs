@@ -226,10 +226,10 @@ impl UsageState {
 
     /// Invalide l'ancre : le transcript a changé sous elle (rewind, compaction).
     pub fn invalidate_if_fingerprint_changed(&mut self, current: &str) {
-        if let Some(a) = &self.anchor {
-            if a.fingerprint != current {
-                self.anchor = None;
-            }
+        if let Some(a) = &self.anchor
+            && a.fingerprint != current
+        {
+            self.anchor = None;
         }
     }
 }

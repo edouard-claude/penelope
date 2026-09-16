@@ -684,6 +684,16 @@ impl Rpc {
                 a.decided_via.clone().unwrap_or_default()
             );
         }
+        // Propositions de mémoire : la décision s'applique ici, aucun tour à reprendre.
+        if a.kind == penelope_hitl::ApprovalKind::MemoryProposal {
+            if a.state == penelope_hitl::ApprovalState::Approved {
+                let written = crate::ingest::apply_memory_proposal(&self.daemon, id).await?;
+                let mut v = serde_json::to_value(&a)?;
+                v["written"] = json!(written);
+                return Ok(v);
+            }
+            return Ok(serde_json::to_value(a)?);
+        }
         if let Some(sid) = &a.session_id {
             let origin = match s.sessions.get(sid).await? {
                 Some(sess) if sess.tg_chat_id.is_some() => Origin::Telegram {
@@ -732,11 +742,10 @@ impl Rpc {
                         outcome = &mut done => {
                             // Les derniers fragments éventuels, puis la réponse.
                             while let Ok(ev) = rx.try_recv() {
-                                if ev.turn_id == id.as_str() {
-                                    if let Some(se) = to_stream_event(&ev) {
+                                if ev.turn_id == id.as_str()
+                                    && let Some(se) = to_stream_event(&ev) {
                                         write_line(out, &notification(&se)).await?;
                                     }
-                                }
                             }
                             let outcome = outcome?;
                             let resp = RpcResponse::ok(req.id.clone(), outcome_json(&sid, id.as_str(), &outcome));
@@ -1239,10 +1248,10 @@ mod tests {
         let mut unimplemented = Vec::new();
         for m in method::ALL {
             let resp = call(&r, m, json!({})).await;
-            if let Some(e) = resp.error {
-                if e.code == METHOD_NOT_FOUND {
-                    unimplemented.push(*m);
-                }
+            if let Some(e) = resp.error
+                && e.code == METHOD_NOT_FOUND
+            {
+                unimplemented.push(*m);
             }
         }
         // Les méthodes non encore servies sont connues et listées : elles ne doivent pas

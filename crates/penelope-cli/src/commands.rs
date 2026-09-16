@@ -609,11 +609,11 @@ fn parse_scalar(raw: &str) -> Value {
     if let Ok(f) = raw.parse::<f64>() {
         return json!(f);
     }
-    if (raw.starts_with('{') && raw.ends_with('}')) || (raw.starts_with('[') && raw.ends_with(']'))
+    if ((raw.starts_with('{') && raw.ends_with('}'))
+        || (raw.starts_with('[') && raw.ends_with(']')))
+        && let Ok(v) = serde_json::from_str::<Value>(raw)
     {
-        if let Ok(v) = serde_json::from_str::<Value>(raw) {
-            return v;
-        }
+        return v;
     }
     Value::String(raw.to_string())
 }

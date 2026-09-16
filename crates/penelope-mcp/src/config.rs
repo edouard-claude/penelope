@@ -258,19 +258,19 @@ pub fn parse_file(raw: &str, default_name: &str) -> Result<Vec<ServerConfig>> {
         servers: BTreeMap<String, ServerConfig>,
     }
 
-    if let Ok(m) = toml::from_str::<Multi>(raw) {
-        if !m.servers.is_empty() {
-            return Ok(m
-                .servers
-                .into_iter()
-                .map(|(name, mut c)| {
-                    if c.name.is_empty() {
-                        c.name = name;
-                    }
-                    c
-                })
-                .collect());
-        }
+    if let Ok(m) = toml::from_str::<Multi>(raw)
+        && !m.servers.is_empty()
+    {
+        return Ok(m
+            .servers
+            .into_iter()
+            .map(|(name, mut c)| {
+                if c.name.is_empty() {
+                    c.name = name;
+                }
+                c
+            })
+            .collect());
     }
     let mut c: ServerConfig = toml::from_str(raw).map_err(|e| McpError::Config {
         server: default_name.to_string(),

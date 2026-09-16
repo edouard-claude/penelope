@@ -123,10 +123,10 @@ impl When {
     /// commune (§6.8, promotion d'un écart en exception).
     pub fn compatible_with(&self, other: &When) -> bool {
         for (k, a) in &self.clauses {
-            if let Some(b) = other.clauses.get(k) {
-                if !a.iter().any(|x| b.contains(x)) {
-                    return false;
-                }
+            if let Some(b) = other.clauses.get(k)
+                && !a.iter().any(|x| b.contains(x))
+            {
+                return false;
             }
         }
         true

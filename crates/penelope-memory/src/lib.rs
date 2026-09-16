@@ -13,6 +13,7 @@
 pub mod candidates;
 pub mod consolidation;
 pub mod index;
+pub mod ingest;
 pub mod intents;
 pub mod provenance;
 pub mod recall;

@@ -150,22 +150,21 @@ impl Router {
                 reason: RouteReason::StepModel,
             });
         }
-        if input.has_image_attachment {
-            if let Some(d) = self.by_role(cfg, "image_describe", RouteReason::Vision) {
-                return Some(d);
-            }
+        if input.has_image_attachment
+            && let Some(d) = self.by_role(cfg, "image_describe", RouteReason::Vision)
+        {
+            return Some(d);
         }
-        if input.wants_image_generation || looks_like_image_request(&input.message) {
-            if let Some(d) = self.by_role(cfg, "image_generate", RouteReason::ImageGeneration) {
-                return Some(d);
-            }
+        if (input.wants_image_generation || looks_like_image_request(&input.message))
+            && let Some(d) = self.by_role(cfg, "image_generate", RouteReason::ImageGeneration)
+        {
+            return Some(d);
         }
-        if let Some(role) = &input.role {
-            if role != "chat_default" {
-                if let Some(d) = self.by_role(cfg, role, RouteReason::Role) {
-                    return Some(d);
-                }
-            }
+        if let Some(role) = &input.role
+            && role != "chat_default"
+            && let Some(d) = self.by_role(cfg, role, RouteReason::Role)
+        {
+            return Some(d);
         }
         // Choix explicite du propriétaire pour cette session.
         if let Some(p) = &input.pinned {
@@ -176,14 +175,15 @@ impl Router {
             });
         }
         // Sticky : hors frontière, on ne change pas de modèle (préservation du cache).
-        if let Some(s) = &input.sticky {
-            if cfg.models.routing.sticky && !input.at_boundary {
-                return Some(Decision {
-                    alias: s.alias.clone(),
-                    model_id: s.model_id.clone(),
-                    reason: RouteReason::Sticky,
-                });
-            }
+        if let Some(s) = &input.sticky
+            && cfg.models.routing.sticky
+            && !input.at_boundary
+        {
+            return Some(Decision {
+                alias: s.alias.clone(),
+                model_id: s.model_id.clone(),
+                reason: RouteReason::Sticky,
+            });
         }
         if !cfg.models.routing.classifier {
             return Some(self.default_decision(cfg));

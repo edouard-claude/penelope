@@ -386,11 +386,11 @@ pub fn validate(
             | Operation::UpdateDefault { practice, .. } => Some(practice.clone()),
             _ => None,
         };
-        if let Some(p) = practice {
-            if !ctx.known_practices.contains(&p) {
-                v.rejected.push((op, format!("pratique inconnue : {p}")));
-                continue;
-            }
+        if let Some(p) = practice
+            && !ctx.known_practices.contains(&p)
+        {
+            v.rejected.push((op, format!("pratique inconnue : {p}")));
+            continue;
         }
 
         // 4. Prédicat `quand` valide : une exception sans `quand` valide est invalide.

@@ -86,10 +86,10 @@ pub fn render(v: &Value) -> String {
         Value::Object(o) => {
             // Cas fréquents : on privilégie le champ le plus parlant.
             for k in ["content", "stdout", "body", "text"] {
-                if let Some(Value::String(s)) = o.get(k) {
-                    if !s.is_empty() {
-                        return s.clone();
-                    }
+                if let Some(Value::String(s)) = o.get(k)
+                    && !s.is_empty()
+                {
+                    return s.clone();
                 }
             }
             serde_json::to_string_pretty(v).unwrap_or_else(|_| v.to_string())

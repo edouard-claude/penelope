@@ -519,12 +519,10 @@ pub fn rss_mb() -> f64 {
         if let Ok(out) = std::process::Command::new("/bin/ps")
             .args(["-o", "rss=", "-p", &std::process::id().to_string()])
             .output()
+            && let Ok(s) = String::from_utf8(out.stdout)
+            && let Ok(kb) = s.trim().parse::<f64>()
         {
-            if let Ok(s) = String::from_utf8(out.stdout) {
-                if let Ok(kb) = s.trim().parse::<f64>() {
-                    return kb / 1024.0;
-                }
-            }
+            return kb / 1024.0;
         }
     }
     #[cfg(target_os = "linux")]

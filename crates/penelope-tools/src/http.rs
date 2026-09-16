@@ -84,12 +84,12 @@ pub fn check_url(raw: &str, allowlist: &[String]) -> ToolResult<url::Url> {
     // `host_str()` rend une IPv6 entre crochets (`[::1]`) : les retirer avant de
     // parser, sinon la boucle locale v6 passe à travers le filtre.
     let bare = host.trim_start_matches('[').trim_end_matches(']');
-    if let Ok(ip) = bare.parse::<IpAddr>() {
-        if is_blocked_ip(&ip) {
-            return Err(ToolError::Denied(format!(
-                "adresse privée ou réservée refusée : {ip}"
-            )));
-        }
+    if let Ok(ip) = bare.parse::<IpAddr>()
+        && is_blocked_ip(&ip)
+    {
+        return Err(ToolError::Denied(format!(
+            "adresse privée ou réservée refusée : {ip}"
+        )));
     }
     if !allowlist.is_empty() && !host_allowed(&host, allowlist) {
         return Err(ToolError::Denied(format!(

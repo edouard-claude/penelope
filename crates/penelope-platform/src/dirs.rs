@@ -117,10 +117,10 @@ pub trait Directories: Send + Sync {
                 s = s.replace(&token, &self.resolve(d).to_string_lossy());
             }
         }
-        if let Some(rest) = s.strip_prefix("~/") {
-            if let Some(home) = home_dir() {
-                return home.join(rest);
-            }
+        if let Some(rest) = s.strip_prefix("~/")
+            && let Some(home) = home_dir()
+        {
+            return home.join(rest);
         }
         PathBuf::from(s)
     }

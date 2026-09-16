@@ -142,24 +142,24 @@ fn check(ctx: &mut Ctx<'_>, schema: &Value, inst: &Value, path: &str) {
     if let Some(t) = obj.get("type") {
         check_type(ctx, t, inst, path);
     }
-    if let Some(Value::Array(vals)) = obj.get("enum") {
-        if !vals.iter().any(|v| v == inst) {
-            ctx.err(
-                path,
-                format!(
-                    "valeur hors énumération ; attendu l'un de {}",
-                    vals.iter()
-                        .map(|v| v.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            );
-        }
+    if let Some(Value::Array(vals)) = obj.get("enum")
+        && !vals.iter().any(|v| v == inst)
+    {
+        ctx.err(
+            path,
+            format!(
+                "valeur hors énumération ; attendu l'un de {}",
+                vals.iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        );
     }
-    if let Some(c) = obj.get("const") {
-        if c != inst {
-            ctx.err(path, format!("attendu la constante {c}"));
-        }
+    if let Some(c) = obj.get("const")
+        && c != inst
+    {
+        ctx.err(path, format!("attendu la constante {c}"));
     }
 
     match inst {
@@ -265,15 +265,15 @@ fn check_object(ctx: &mut Ctx<'_>, obj: &serde_json::Map<String, Value>, inst: &
         }
     }
 
-    if let Some(n) = obj.get("minProperties").and_then(|v| v.as_u64()) {
-        if (map.len() as u64) < n {
-            ctx.err(path, format!("au moins {n} propriétés attendues"));
-        }
+    if let Some(n) = obj.get("minProperties").and_then(|v| v.as_u64())
+        && (map.len() as u64) < n
+    {
+        ctx.err(path, format!("au moins {n} propriétés attendues"));
     }
-    if let Some(n) = obj.get("maxProperties").and_then(|v| v.as_u64()) {
-        if (map.len() as u64) > n {
-            ctx.err(path, format!("au plus {n} propriétés attendues"));
-        }
+    if let Some(n) = obj.get("maxProperties").and_then(|v| v.as_u64())
+        && (map.len() as u64) > n
+    {
+        ctx.err(path, format!("au plus {n} propriétés attendues"));
     }
 }
 
@@ -294,15 +294,15 @@ fn check_array(ctx: &mut Ctx<'_>, obj: &serde_json::Map<String, Value>, inst: &V
             check(ctx, items, v, &format!("{path}/{i}"));
         }
     }
-    if let Some(n) = obj.get("minItems").and_then(|v| v.as_u64()) {
-        if (arr.len() as u64) < n {
-            ctx.err(path, format!("au moins {n} éléments attendus"));
-        }
+    if let Some(n) = obj.get("minItems").and_then(|v| v.as_u64())
+        && (arr.len() as u64) < n
+    {
+        ctx.err(path, format!("au moins {n} éléments attendus"));
     }
-    if let Some(n) = obj.get("maxItems").and_then(|v| v.as_u64()) {
-        if (arr.len() as u64) > n {
-            ctx.err(path, format!("au plus {n} éléments attendus"));
-        }
+    if let Some(n) = obj.get("maxItems").and_then(|v| v.as_u64())
+        && (arr.len() as u64) > n
+    {
+        ctx.err(path, format!("au plus {n} éléments attendus"));
     }
     if obj.get("uniqueItems").and_then(|v| v.as_bool()) == Some(true) {
         for i in 0..arr.len() {
@@ -318,15 +318,15 @@ fn check_array(ctx: &mut Ctx<'_>, obj: &serde_json::Map<String, Value>, inst: &V
 
 fn check_string(ctx: &mut Ctx<'_>, obj: &serde_json::Map<String, Value>, s: &str, path: &str) {
     let len = s.chars().count() as u64;
-    if let Some(n) = obj.get("minLength").and_then(|v| v.as_u64()) {
-        if len < n {
-            ctx.err(path, format!("longueur minimale {n} (reçu {len})"));
-        }
+    if let Some(n) = obj.get("minLength").and_then(|v| v.as_u64())
+        && len < n
+    {
+        ctx.err(path, format!("longueur minimale {n} (reçu {len})"));
     }
-    if let Some(n) = obj.get("maxLength").and_then(|v| v.as_u64()) {
-        if len > n {
-            ctx.err(path, format!("longueur maximale {n} (reçu {len})"));
-        }
+    if let Some(n) = obj.get("maxLength").and_then(|v| v.as_u64())
+        && len > n
+    {
+        ctx.err(path, format!("longueur maximale {n} (reçu {len})"));
     }
     if let Some(p) = obj.get("pattern").and_then(|v| v.as_str()) {
         match regex::Regex::new(p) {
@@ -342,30 +342,31 @@ fn check_string(ctx: &mut Ctx<'_>, obj: &serde_json::Map<String, Value>, s: &str
 
 fn check_number(ctx: &mut Ctx<'_>, obj: &serde_json::Map<String, Value>, inst: &Value, path: &str) {
     let Some(x) = inst.as_f64() else { return };
-    if let Some(m) = obj.get("minimum").and_then(|v| v.as_f64()) {
-        if x < m {
-            ctx.err(path, format!("minimum {m}"));
-        }
+    if let Some(m) = obj.get("minimum").and_then(|v| v.as_f64())
+        && x < m
+    {
+        ctx.err(path, format!("minimum {m}"));
     }
-    if let Some(m) = obj.get("maximum").and_then(|v| v.as_f64()) {
-        if x > m {
-            ctx.err(path, format!("maximum {m}"));
-        }
+    if let Some(m) = obj.get("maximum").and_then(|v| v.as_f64())
+        && x > m
+    {
+        ctx.err(path, format!("maximum {m}"));
     }
-    if let Some(m) = obj.get("exclusiveMinimum").and_then(|v| v.as_f64()) {
-        if x <= m {
-            ctx.err(path, format!("strictement supérieur à {m}"));
-        }
+    if let Some(m) = obj.get("exclusiveMinimum").and_then(|v| v.as_f64())
+        && x <= m
+    {
+        ctx.err(path, format!("strictement supérieur à {m}"));
     }
-    if let Some(m) = obj.get("exclusiveMaximum").and_then(|v| v.as_f64()) {
-        if x >= m {
-            ctx.err(path, format!("strictement inférieur à {m}"));
-        }
+    if let Some(m) = obj.get("exclusiveMaximum").and_then(|v| v.as_f64())
+        && x >= m
+    {
+        ctx.err(path, format!("strictement inférieur à {m}"));
     }
-    if let Some(m) = obj.get("multipleOf").and_then(|v| v.as_f64()) {
-        if m > 0.0 && (x / m).fract().abs() > 1e-9 {
-            ctx.err(path, format!("doit être un multiple de {m}"));
-        }
+    if let Some(m) = obj.get("multipleOf").and_then(|v| v.as_f64())
+        && m > 0.0
+        && (x / m).fract().abs() > 1e-9
+    {
+        ctx.err(path, format!("doit être un multiple de {m}"));
     }
 }
 
@@ -395,10 +396,10 @@ fn check_combinators(
             );
         }
     }
-    if let Some(not) = obj.get("not") {
-        if sub_valid(ctx.root, not, inst) {
-            ctx.err(path, "ne doit pas satisfaire le schéma `not`");
-        }
+    if let Some(not) = obj.get("not")
+        && sub_valid(ctx.root, not, inst)
+    {
+        ctx.err(path, "ne doit pas satisfaire le schéma `not`");
     }
 }
 

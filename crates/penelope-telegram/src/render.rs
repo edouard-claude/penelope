@@ -220,10 +220,8 @@ pub fn to_blocks(markdown: &str) -> Vec<Block> {
             }
             Event::Start(Tag::TableRow) => row.clear(),
             Event::End(TagEnd::TableRow) => {
-                if !in_header {
-                    if let Some((_, rows)) = table.as_mut() {
-                        rows.push(std::mem::take(&mut row));
-                    }
+                if !in_header && let Some((_, rows)) = table.as_mut() {
+                    rows.push(std::mem::take(&mut row));
                 }
             }
             Event::Start(Tag::TableCell) => text.clear(),
