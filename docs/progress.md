@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1112 tests verts**, tous hors réseau.
+- **1113 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -225,6 +225,11 @@ Dernière mise à jour : 16 septembre 2026.
   en boucle locale exacte ; l'hôte est lu par un analyseur d'URL (les formes
   `localhost.exemple.org` ou `localhost@exemple.org` sont refusées), une URL portant des
   identifiants aussi.
+- Correctif : la vérification de la chaîne d'audit signalait un « hash altéré » sur un
+  événement intact dès que son payload portait un flottant que `serde_json` ne relit pas
+  à l'identique (`123456789.12345679`, par exemple). Le hash est désormais recalculé sur
+  le texte canonique stocké, jamais relu puis réécrit ; les chaînes existantes se
+  vérifient sans migration.
 
 ### Encore à brancher
 

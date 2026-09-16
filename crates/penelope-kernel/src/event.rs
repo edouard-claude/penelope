@@ -94,6 +94,40 @@ pub fn compute_hash(
     sha256_hex(data.as_bytes())
 }
 
+/// Même hash que [`compute_hash`], calculé à partir du **texte** canonique du payload tel
+/// qu'il est stocké, sans le relire en JSON.
+///
+/// Relire puis re-sérialiser n'est pas neutre : l'analyseur de `serde_json` arrondit
+/// certains flottants (`123456789.12345679` redevient `123456789.1234568`) et refuse un
+/// entier de plus de 20 chiffres. La vérification signalait alors un « hash altéré » sur
+/// un événement intact. Le corps canonique est donc reconstruit octet pour octet : clés
+/// triées (`kind`, `payload`, `run_id`, `seq`, `session_id`, `ts`), payload inséré tel quel.
+pub fn compute_hash_from_text(
+    prev_hash: &str,
+    session_id: Option<&str>,
+    run_id: Option<&str>,
+    seq: i64,
+    ts: &str,
+    kind: &str,
+    payload_canonical: &str,
+) -> String {
+    let text = |v: Option<&str>| match v {
+        Some(s) => canonical_json(&Value::String(s.to_string())),
+        None => "null".to_string(),
+    };
+    let body = format!(
+        "{{\"kind\":{},\"payload\":{payload_canonical},\"run_id\":{},\"seq\":{seq},\"session_id\":{},\"ts\":{}}}",
+        text(Some(kind)),
+        text(run_id),
+        text(session_id),
+        text(Some(ts)),
+    );
+    let mut data = String::with_capacity(prev_hash.len() + body.len());
+    data.push_str(prev_hash);
+    data.push_str(&body);
+    sha256_hex(data.as_bytes())
+}
+
 #[derive(Clone)]
 pub struct EventLog {
     store: Store,
@@ -259,6 +293,8 @@ impl EventLog {
 
                 while let Some(row) = rows.next()? {
                     let ev = row_to_event(row)?;
+                    // Le texte stocké fait foi : il n'est jamais relu puis réécrit.
+                    let payload_text: String = row.get(6)?;
                     report.checked += 1;
 
                     if ev.prev_hash != prev {
@@ -276,14 +312,14 @@ impl EventLog {
                             report.purged += 1;
                             original.clone()
                         }
-                        None => compute_hash(
+                        None => compute_hash_from_text(
                             &ev.prev_hash,
                             ev.session_id.as_deref(),
                             ev.run_id.as_deref(),
                             ev.seq,
                             &ev.ts,
                             &ev.kind,
-                            &ev.payload,
+                            &payload_text,
                         ),
                     };
 
@@ -483,5 +519,54 @@ mod tests {
         let r = l.verify().await.unwrap();
         assert!(r.ok, "{r:?}");
         assert_eq!(r.checked, 40);
+    }
+}
+
+#[cfg(test)]
+mod float_payloads {
+    use super::*;
+    use crate::clock::TestClock;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    /// Des flottants que `serde_json` n'aurait pas relus à l'identique ne cassent plus la
+    /// vérification de la chaîne (régression constatée en production).
+    #[tokio::test]
+    async fn events_with_any_float_verify_after_storage() {
+        let payloads = [
+            json!({"cost_usd": 0.000123, "x": 0.1 + 0.2}),
+            json!({"f": 123_456_789.123_456_79, "neg": -0.0, "odd": 9_007_199_254_740_992.0}),
+            json!({"near": 999999999999999.9, "tiny": 1e-300, "max": f64::MAX}),
+            json!({"s": "émoji 🧠 «guillemets» \u{7f} \u{2028}", "u": u64::MAX, "i": i64::MIN}),
+            json!({"arr": [1, 2.5, "x", null, {"b": 1, "a": 2}]}),
+        ];
+        let log = EventLog::new(
+            Store::open_memory().unwrap(),
+            Arc::new(TestClock::default()),
+        );
+        for (i, p) in payloads.iter().enumerate() {
+            let draft = if i % 2 == 0 {
+                EventDraft::new("probe", p.clone()).session("s1")
+            } else {
+                EventDraft::new("probe", p.clone()).run("r1")
+            };
+            let ev = log.append(draft).await.unwrap();
+            assert_eq!(
+                ev.hash,
+                compute_hash_from_text(
+                    &ev.prev_hash,
+                    ev.session_id.as_deref(),
+                    ev.run_id.as_deref(),
+                    ev.seq,
+                    &ev.ts,
+                    &ev.kind,
+                    &canonical_json(p),
+                ),
+                "le hash depuis le texte est celui de l'écriture"
+            );
+        }
+        let report = log.verify().await.unwrap();
+        assert!(report.ok, "{:?}", report.detail);
+        assert_eq!(report.checked, payloads.len() as u64);
     }
 }
