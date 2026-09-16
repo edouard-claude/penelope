@@ -31,7 +31,7 @@ lint local ne dit pas la même chose que le lint distant.
 Sur un tag `vX.Y.Z`, ou à la main avec le tag en paramètre.
 
 ```
-tag v1.0.1
+tag v0.1.1
    │
    ├── verification   fmt + clippy + tests            (on ne publie pas du rouge)
    │
@@ -53,8 +53,9 @@ n'est pas en place.
 ## Poser un tag
 
 ```bash
-git tag -a v1.0.1 -m "Pénélope 1.0.1" && git push origin v1.0.1
+git tag -a v0.1.1 -m "Pénélope 0.1.1" && git push origin v0.1.1
 ```
 
-La version du `Cargo.toml` du workspace doit correspondre au tag : rien ne le vérifie
-automatiquement pour l'instant.
+La version du `Cargo.toml` du workspace doit correspondre au tag : le job de vérification
+refuse de publier sinon. Une version `0.x` ou suffixée (`-rc.1`) est publiée comme
+pré-release.

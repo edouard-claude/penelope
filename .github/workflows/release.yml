@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag à publier (par exemple v1.0.0)"
+        description: "Tag à publier (par exemple v0.1.0)"
         required: true
         type: string
 
@@ -31,6 +31,19 @@ jobs:
         run: |
           rustup toolchain install
           rustc --version
+      # Le tag et la version du workspace doivent dire la même chose, sinon
+      # `penelope --version` mentirait sur l'archive téléchargée.
+      - name: Le tag correspond à la version du workspace
+        env:
+          VERSION: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          crate=$(cargo pkgid -p penelope-cli | sed -E 's/.*[@#]([0-9][^@#]*)$/\1/')
+          echo "tag : ${VERSION}  workspace : ${crate}"
+          if [ "${VERSION#v}" != "$crate" ]; then
+            echo "::error::le tag ${VERSION} ne correspond pas à la version ${crate} du workspace"
+            exit 1
+          fi
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
@@ -152,9 +165,16 @@ jobs:
           VERSION: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
+          # Avant 1.0, ou avec un suffixe (`-rc.1`), c'est une pré-release.
+          prerelease=false
+          case "$VERSION" in
+            v0.*|*-*) prerelease=true ;;
+          esac
           if gh release view "$VERSION" >/dev/null 2>&1; then
-            gh release edit "$VERSION" --title "Pénélope $VERSION" --notes-file notes.md
+            gh release edit "$VERSION" --title "Pénélope $VERSION" --notes-file notes.md \
+              --prerelease="$prerelease"
           else
-            gh release create "$VERSION" --title "Pénélope $VERSION" --notes-file notes.md
+            gh release create "$VERSION" --title "Pénélope $VERSION" --notes-file notes.md \
+              --prerelease="$prerelease"
           fi
           gh release upload "$VERSION" dist/* --clobber

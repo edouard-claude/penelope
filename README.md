@@ -121,7 +121,7 @@ vérifie, construit `aarch64-apple-darwin` et `x86_64-apple-darwin`, fusionne le
 un binaire universel, et publie trois archives avec leurs sommes de contrôle.
 
 ```bash
-git tag -a v1.0.1 -m "Pénélope 1.0.1" && git push origin v1.0.1
+git tag -a v0.1.1 -m "Pénélope 0.1.1" && git push origin v0.1.1
 ```
 
 Détails dans [.github/workflows/README.md](.github/workflows/README.md).
