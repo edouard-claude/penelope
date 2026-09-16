@@ -14,6 +14,7 @@ pub mod backend;
 pub mod dirs;
 pub mod host;
 pub mod ipc;
+pub mod ocr;
 pub mod power;
 pub mod process;
 pub mod sandbox;

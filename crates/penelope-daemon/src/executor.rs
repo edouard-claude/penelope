@@ -29,6 +29,7 @@ pub trait Messenger: Send + Sync {
     }
     /// Question d'une étape `user` : un bouton par choix. Sans boutons, le texte dit
     /// comment répondre en ligne de commande.
+    #[allow(clippy::too_many_arguments)]
     async fn send_question(
         &self,
         origin: &Origin,
@@ -37,6 +38,7 @@ pub trait Messenger: Send + Sync {
         visit: &str,
         choices: &[String],
         wants_input: bool,
+        form: Option<&Value>,
     ) -> Result<(), String> {
         let _ = (visit, wants_input);
         let mut text = markdown.to_string();
@@ -45,6 +47,9 @@ pub trait Messenger: Send + Sync {
                 "\n\nRépondre : `penelope wf control {run_id} answer --choice <{}>`",
                 choices.join("|")
             ));
+        }
+        if form.is_some() {
+            text.push_str(" `--input '<objet JSON conforme au formulaire>'`");
         }
         self.send_text(origin, &text).await
     }

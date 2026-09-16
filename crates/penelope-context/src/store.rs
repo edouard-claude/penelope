@@ -152,6 +152,28 @@ const STOPWORDS: &[&str] = &[
     "retrouver",
     "souviens",
     "rappelle",
+    "vers",
+    "pendant",
+    "faut",
+    "fait",
+    "faire",
+    "doit",
+    "doivent",
+    "peut",
+    "peux",
+    "bien",
+    "aussi",
+    "alors",
+    "encore",
+    "très",
+    "tout",
+    "tous",
+    "toute",
+    "toutes",
+    "rien",
+    "oui",
+    "non",
+    "merci",
     "the",
     "a",
     "an",
@@ -296,6 +318,30 @@ impl HistoryStore {
                      FROM messages WHERE session_id = ?1 AND seq >= ?2 ORDER BY seq",
                 )?;
                 let rows = st.query_map(params![sid, from_seq], row_to_entry)?;
+                let mut out = Vec::new();
+                for r in rows {
+                    out.push(r?);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
+    /// Messages d'un épisode, dans l'ordre.
+    pub async fn load_episode(
+        &self,
+        session_id: &str,
+        episode: i64,
+    ) -> penelope_store::Result<Vec<Entry>> {
+        let sid = session_id.to_string();
+        self.store
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT seq, role, content, tool_call_id, tool_name, tokens_est, episode,
+                            eager, artifact_id, compacted
+                     FROM messages WHERE session_id = ?1 AND episode = ?2 ORDER BY seq",
+                )?;
+                let rows = st.query_map(params![sid, episode], row_to_entry)?;
                 let mut out = Vec::new();
                 for r in rows {
                     out.push(r?);

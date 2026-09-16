@@ -849,13 +849,18 @@ async fn upgrade(cli: &Cli) -> CliResult<()> {
 
 async fn upgrade_offline(cli: &Cli, p: &Value) -> CliResult<Value> {
     use penelope_daemon::upgrade as up;
-    let source = up::Source::from_env();
+    let dirs = penelope_platform::resolve_directories(cli.home.clone())
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    // Sans daemon, la configuration est lue sur disque (clé minisign, adresse des releases).
+    let cfg = std::fs::read_to_string(dirs.config_file())
+        .ok()
+        .and_then(|raw| penelope_kernel::config::Config::from_toml(&raw).ok())
+        .unwrap_or_default();
+    let source = up::Source::from_config(&cfg);
     if p["check"].as_bool().unwrap_or(false) {
         return up::check(&source).await.map_err(CliError::Io);
     }
     let binary = up::installed_binary().map_err(CliError::Usage)?;
-    let dirs = penelope_platform::resolve_directories(cli.home.clone())
-        .map_err(|e| CliError::Io(e.to_string()))?;
     let state = dirs.state();
     if p["rollback"].as_bool().unwrap_or(false) {
         return up::manual_rollback(&binary, &state).map_err(CliError::Io);
@@ -875,15 +880,34 @@ async fn upgrade_offline(cli: &Cli, p: &Value) -> CliResult<Value> {
 /// Suite d'évaluation depuis les sources : `cargo test` avec le filtre de la suite.
 async fn eval_local(suite: &str) -> CliResult<()> {
     let Some((sub, args)) = penelope_evals::suites::cargo_filter(suite) else {
-        let known: Vec<String> = penelope_evals::suites::offline_suites()
+        let known: Vec<String> = penelope_evals::suites::all_suites()
             .into_iter()
             .map(|s| s.name.to_string())
             .collect();
         return Err(CliError::Usage(format!(
-            "suite inconnue ou en réseau : `{suite}` (hors ligne : {})",
+            "suite inconnue : `{suite}` (suites : {})",
             known.join(", ")
         )));
     };
+    let needed = penelope_evals::suites::required_env(suite);
+    if !needed.is_empty() {
+        let missing: Vec<&str> = needed
+            .iter()
+            .copied()
+            .filter(|v| {
+                std::env::var(v)
+                    .map(|x| x.trim().is_empty())
+                    .unwrap_or(true)
+            })
+            .collect();
+        if !missing.is_empty() {
+            return Err(CliError::Usage(format!(
+                "suite réseau `{suite}` : variable(s) à exporter d'abord : {}",
+                missing.join(", ")
+            )));
+        }
+        eprintln!("⚠️ suite réseau `{suite}` : services réels, appels facturés.");
+    }
     let root = std::env::var("PENELOPE_SOURCE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());

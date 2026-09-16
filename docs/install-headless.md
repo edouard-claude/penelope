@@ -536,7 +536,9 @@ dans `<workspace>/telegram/`.
 
 Déposer un fichier dans `vault/inbox/` en SSH fait la même chose : il est ingéré, le
 bilan arrive sur Telegram et la boîte est vidée (un format refusé part dans
-`inbox/refusés/`). Un PDF scanné sans couche texte n'est pas lu : il n'y a pas d'OCR.
+`inbox/refusés/`). Un PDF scanné, sans couche texte, est lu par l'OCR de macOS
+(Vision) : la première fois, le petit lecteur est compilé en quelques secondes, ce qui
+demande les outils de développement Xcode (`xcode-select --install`) ; 50 pages au plus.
 
 ### Mémoire qui apprend
 
@@ -544,6 +546,13 @@ Après un échange qui en vaut la peine (message un peu long, correction, règle
 le modèle de l'alias du rôle `memory_review` note au plus cinq candidats : préférence,
 correction, décision, fait, écart. Rien n'est écrit dans le profil ni la mémoire à ce
 moment-là : les candidats vont dans le journal du jour.
+
+Une conversation Telegram ne se ferme jamais : Pénélope la découpe en **épisodes**. Un
+épisode se clôt après 2 h sans message, quand trois messages de suite s'éloignent du
+sujet, ou sur `/new`. L'épisode clos est relu une fois en entier : un résumé rejoint le
+journal du jour, et ce qui mérite d'être retenu devient des candidats. Le profil et la
+mémoire de fond que voit le modèle sont figés pendant un épisode : ce qui est appris
+apparaît à l'épisode suivant, sans casser le cache du provider en cours de route.
 
 Chaque nuit (03:30, `memory.dreaming_cron`), la consolidation les passe à des règles
 fixes : une préférence doit venir de toi et être formulée comme une règle (« toujours »,
@@ -723,7 +732,28 @@ L'archive est vérifiée (somme SHA-256), le binaire courant gardé en
 `<binaire>.previous`, puis le daemon redémarre sur la nouvelle version. S'il ne confirme
 pas sa santé dans la minute, l'ancien binaire revient tout seul et Telegram le signale.
 `penelope upgrade --check` indique seulement la dernière version, `--tag v0.3.1` en
-choisit une, `--rollback` revient au binaire précédent. Le répertoire du binaire doit
+choisit une, `--rollback` revient au binaire précédent.
+
+Signature : quand les releases sont signées, `penelope upgrade` vérifie `SHA256SUMS`
+avec minisign avant de faire confiance aux sommes. La clé publique vient de
+`upgrade.minisign_pubkey`, sinon de celle intégrée au binaire de release ; dès qu'une clé
+est connue, une release non signée est refusée. Pour signer les releases du dépôt, une
+fois :
+
+```bash
+minisign -G -W -p minisign.pub -s minisign.key
+```
+
+```bash
+gh secret set MINISIGN_SECRET_KEY < minisign.key
+```
+
+```bash
+gh variable set MINISIGN_PUBLIC_KEY --body "$(tail -n 1 minisign.pub)"
+```
+
+puis ranger `minisign.key` hors de la machine. Les binaires publiés ensuite portent la
+clé publique et n'acceptent plus que des releases signées. Le répertoire du binaire doit
 être inscriptible par l'utilisateur du service ; sinon, ou pour une version pas encore
 publiée, depuis le dépôt cloné sur la machine :
 
@@ -742,8 +772,7 @@ questions plutôt que des relances. `penelope approvals` montre ce qui attend un
 
 ## 11. Ce qui n'est pas encore branché
 
-Tout ce que décrit ce guide fonctionne. Restent : les frontières d'épisode de la mémoire
-(la revue se fait tour par tour), la signature minisign des releases (seule la somme
-SHA-256 est vérifiée), le mode webhook de Telegram, l'OCR des PDF scannés, et côté
-workflows les sous-groupes, la saisie `form:<schema>` et l'attente `mcp_task`. Voir
+Tout ce que décrit ce guide fonctionne. Restent : le mode webhook de Telegram,
+l'interprétation de `.penelope/deploy.toml` (le déploiement passe par les cibles `make`),
+et l'OCR des pages scannées d'un PDF qui a aussi du texte. Voir
 [progress.md](progress.md) pour l'état exact.

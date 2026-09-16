@@ -308,6 +308,12 @@ impl McpClient {
             .await
     }
 
+    /// Résultat d'une tâche terminée (`tasks/result`).
+    pub async fn task_result(&self, task_ref: &str) -> Result<Value> {
+        self.call("tasks/result", json!({ "taskId": task_ref }), None)
+            .await
+    }
+
     pub async fn close(&self) -> Result<()> {
         self.transport.close().await
     }

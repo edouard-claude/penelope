@@ -30,6 +30,11 @@ use tokio::sync::Notify;
 /// Longueur d'un fragment Markdown avant conversion HTML : marge pour les balises.
 const FRAGMENT_CHARS: usize = 3_500;
 const MAX_ATTEMPTS: i64 = 6;
+/// Formulaire d'étape `user` en cours dans un chat.
+fn form_key(chat_id: i64) -> String {
+    format!("tg.form.{chat_id}")
+}
+
 /// Durée de validité du bouton « Réessayer » d'un tour échoué.
 const RETRY_TTL_MS: i64 = 24 * 3600 * 1000;
 
@@ -223,6 +228,12 @@ impl TelegramGateway {
                 forwarded,
                 ..
             } => {
+                // Un formulaire d'étape `user` est en cours : ce message remplit le champ.
+                if let Some(raw) = self.daemon.kv_get(&form_key(chat_id)).await?
+                    && !raw.is_empty()
+                {
+                    return self.form_input(chat_id, &raw, Some(&text)).await;
+                }
                 // Une saisie était attendue par une étape `user` de workflow.
                 let input_key = format!("tg.await_input.{chat_id}");
                 if let Some(raw) = self.daemon.kv_get(&input_key).await?
@@ -378,6 +389,13 @@ impl TelegramGateway {
             "new" => {
                 if let Some(old) = s.sessions.find_by_topic(chat_id, topic_id).await? {
                     s.sessions.set_state(old.id.as_str(), "closed").await?;
+                    // `/new` clôt aussi l'épisode en cours : il est relu (§6.6).
+                    crate::episodes::spawn_ingest(
+                        d.clone(),
+                        old.id.to_string(),
+                        old.episode_seq,
+                        crate::episodes::Boundary::NewSession,
+                    );
                 }
                 let title = (!args.is_empty())
                     .then(|| crate::titles::clean(args))
@@ -1087,6 +1105,27 @@ impl TelegramGateway {
             .answer_callback(callback_id, Some(choice), false)
             .await;
         let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+        if action.args["form"].as_bool().unwrap_or(false) {
+            let Some(schema) = crate::workflow::form_of(&self.daemon, run, visit).await else {
+                return self
+                    .reply(
+                        chat_id,
+                        None,
+                        None,
+                        "ℹ️ cette question n'est plus d'actualité",
+                    )
+                    .await;
+            };
+            let state = match penelope_telegram::forms::FormState::new(visit, schema) {
+                Ok(st) => st,
+                Err(e) => return self.reply(chat_id, None, None, &format!("❌ {e}")).await,
+            };
+            let pending = json!({"run": run, "visit": visit, "choice": choice, "state": state});
+            self.daemon
+                .kv_set(&form_key(chat_id), &pending.to_string())
+                .await?;
+            return self.send_form_step(chat_id, &pending).await;
+        }
         let note = if wants_input {
             self.daemon
                 .kv_set(
@@ -1578,6 +1617,16 @@ impl TelegramGateway {
                 .await;
         }
         if let ClickOutcome::Accepted(action) = &outcome
+            && matches!(
+                action.action.as_str(),
+                k::FORM_NEXT | k::FORM_PREV | k::FORM_SUBMIT | k::FORM_DECLINE
+            )
+        {
+            let _ = self.bot.answer_callback(callback_id, None, false).await;
+            let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+            return self.form_clicked(action, chat_id).await;
+        }
+        if let ClickOutcome::Accepted(action) = &outcome
             && action.action == k::REGENERATE
         {
             let _ = self.bot.answer_callback(callback_id, None, false).await;
@@ -1857,6 +1906,190 @@ impl TelegramGateway {
             }),
         )
         .await
+    }
+
+    /// Écran courant d'un formulaire : le champ à remplir, ou le récapitulatif à envoyer.
+    async fn send_form_step(&self, chat_id: i64, pending: &Value) -> anyhow::Result<()> {
+        use penelope_telegram::forms::{FieldKind, FormState};
+        let state: FormState = serde_json::from_value(pending["state"].clone())?;
+        let s = &self.daemon.services;
+        let ttl = 24 * 3_600_000;
+        let target = chat_id.to_string();
+        let button = |label: &str, action: &str, args: Value| {
+            let (label, action, target) = (label.to_string(), action.to_string(), target.clone());
+            async move {
+                s.actions
+                    .create(&action, &target, args, ttl, true)
+                    .await
+                    .map(|t| ButtonSpec::callback(&label, &t.token, ""))
+            }
+        };
+        let mut rows: Vec<Vec<ButtonSpec>> = Vec::new();
+        let text = if state.done {
+            rows.push(vec![
+                button("✅ Envoyer", k::FORM_SUBMIT, json!({})).await?,
+                button("↩️ Modifier", k::FORM_PREV, json!({})).await?,
+            ]);
+            rows.push(vec![
+                button("✖️ Abandonner", k::FORM_DECLINE, json!({})).await?,
+            ]);
+            format!(
+                "📝 « {} »\n\n{}",
+                pending["choice"].as_str().unwrap_or_default(),
+                state.summary()
+            )
+        } else {
+            let Some(field) = state.current() else {
+                return Ok(());
+            };
+            for label in field.button_labels() {
+                rows.push(vec![
+                    button(&label, k::FORM_NEXT, json!({"answer": label})).await?,
+                ]);
+            }
+            let mut nav = Vec::new();
+            if state.cursor > 0 {
+                nav.push(button("↩️ Précédent", k::FORM_PREV, json!({})).await?);
+            }
+            if !field.required || state.values.contains_key(&field.name) {
+                nav.push(button("⏭ Passer", k::FORM_NEXT, json!({})).await?);
+            }
+            nav.push(button("✖️ Abandonner", k::FORM_DECLINE, json!({})).await?);
+            rows.push(nav);
+            let hint = match &field.kind {
+                FieldKind::Enum { multi: true, .. } => {
+                    "Un bouton, ou plusieurs options séparées par des virgules."
+                }
+                FieldKind::Enum { .. } | FieldKind::Boolean => "Un bouton.",
+                FieldKind::Number { integer: true } => "Un nombre entier, en un message.",
+                FieldKind::Number { .. } => "Un nombre, en un message.",
+                FieldKind::Text { .. } => "En un message.",
+            };
+            let current = state
+                .values
+                .get(&field.name)
+                .map(|v| {
+                    format!(
+                        "\nValeur actuelle : `{}`",
+                        v.as_str()
+                            .map(String::from)
+                            .unwrap_or_else(|| v.to_string())
+                    )
+                })
+                .unwrap_or_default();
+            format!(
+                "📝 {} · **{}**{}\n{}{}{current}",
+                state.progress(),
+                field.title,
+                if field.required { " *" } else { "" },
+                if field.description.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}\n", field.description)
+                },
+                hint
+            )
+        };
+        self.bot
+            .send_text(
+                chat_id,
+                None,
+                &markdown_to_html(&text),
+                Some(inline_keyboard(&rows)),
+                None,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!(e.to_string()))
+    }
+
+    /// Une réponse au champ courant (message ou bouton ; `None` : passer le champ).
+    async fn form_input(
+        &self,
+        chat_id: i64,
+        raw: &str,
+        answer: Option<&str>,
+    ) -> anyhow::Result<()> {
+        use penelope_telegram::forms::FormState;
+        let mut pending: Value = serde_json::from_str(raw)?;
+        let mut state: FormState = serde_json::from_value(pending["state"].clone())?;
+        let applied = match answer {
+            Some(a) => state.answer(a),
+            None => state.skip(),
+        };
+        if let Err(e) = applied {
+            self.reply(chat_id, None, None, &format!("⚠️ {e}")).await?;
+            return self.send_form_step(chat_id, &pending).await;
+        }
+        pending["state"] = serde_json::to_value(&state)?;
+        self.daemon
+            .kv_set(&form_key(chat_id), &pending.to_string())
+            .await?;
+        self.send_form_step(chat_id, &pending).await
+    }
+
+    /// Boutons d'un formulaire : passer, revenir, envoyer, abandonner.
+    async fn form_clicked(&self, action: &Action, chat_id: i64) -> anyhow::Result<()> {
+        use penelope_telegram::forms::FormState;
+        let d = &self.daemon;
+        let Some(raw) = d
+            .kv_get(&form_key(chat_id))
+            .await?
+            .filter(|r| !r.is_empty())
+        else {
+            return self
+                .reply(chat_id, None, None, "ℹ️ aucun formulaire en cours")
+                .await;
+        };
+        let mut pending: Value = serde_json::from_str(&raw)?;
+        let mut state: FormState = serde_json::from_value(pending["state"].clone())?;
+        match action.action.as_str() {
+            k::FORM_NEXT => {
+                return self
+                    .form_input(chat_id, &raw, action.args["answer"].as_str())
+                    .await;
+            }
+            k::FORM_PREV => {
+                state.prev();
+                pending["state"] = serde_json::to_value(&state)?;
+                d.kv_set(&form_key(chat_id), &pending.to_string()).await?;
+                self.send_form_step(chat_id, &pending).await
+            }
+            k::FORM_DECLINE => {
+                d.kv_set(&form_key(chat_id), "").await?;
+                self.reply(
+                    chat_id,
+                    None,
+                    None,
+                    "✖️ Formulaire abandonné : la question du workflow reste ouverte \
+                     (`/runs`).",
+                )
+                .await
+            }
+            _ => {
+                let values = match state.submit() {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.reply(chat_id, None, None, &format!("⚠️ {e}")).await?;
+                        return self.send_form_step(chat_id, &pending).await;
+                    }
+                };
+                d.kv_set(&form_key(chat_id), "").await?;
+                let note = match crate::workflow::answer(
+                    d,
+                    pending["run"].as_str().unwrap_or_default(),
+                    pending["visit"].as_str().unwrap_or_default(),
+                    pending["choice"].as_str().unwrap_or_default(),
+                    Some(&values.to_string()),
+                )
+                .await
+                {
+                    Ok(()) => "✔️ Formulaire transmis au workflow.".to_string(),
+                    Err(e) => format!("ℹ️ {e}"),
+                };
+                self.reply(chat_id, None, None, &note).await
+            }
+        }
     }
 
     /// Échec d'un tour, avec un bouton « Réessayer » qui relance la réponse sur le même
@@ -2541,6 +2774,7 @@ impl Messenger for TelegramGateway {
         visit: &str,
         choices: &[String],
         wants_input: bool,
+        form: Option<&Value>,
     ) -> Result<(), String> {
         let (chat_id, topic_id) = origin.telegram_chat().unwrap_or((self.owner_id, None));
         let s = &self.daemon.services;
@@ -2564,7 +2798,12 @@ impl Messenger for TelegramGateway {
                 .create(
                     k::CHOICE,
                     run_id,
-                    json!({"visit": visit, "choice": label, "input": wants_input}),
+                    json!({
+                        "visit": visit,
+                        "choice": label,
+                        "input": wants_input,
+                        "form": form.is_some(),
+                    }),
                     ttl,
                     true,
                 )
@@ -4204,6 +4443,146 @@ mod tests {
             .unwrap();
         let second = g.daemon.chat_session_for(&origin).await.unwrap();
         assert_ne!(first, second);
+    }
+
+    /// Étape `user` avec `input: "form:<id>"` : le choix ouvre le formulaire, un champ par
+    /// écran (boutons ou message), récapitulatif, puis la saisie validée part au workflow.
+    #[tokio::test]
+    async fn a_workflow_form_is_filled_field_by_field() {
+        let (_d, g, t, _p) = gateway().await;
+        let d = g.daemon.clone();
+        let raw = json!({
+            "metadata": {"id": "deploiement-form", "name": "Déploiement", "parameters": []},
+            "entryStep": "parametres",
+            "settings": {
+                "maxIterations": 5,
+                "budget": {"maxUsd": 1.0, "maxTokens": 1000, "maxWallMs": 60000},
+                "forms": {"deploy": {
+                    "type": "object",
+                    "required": ["environnement", "version"],
+                    "properties": {
+                        "environnement": {"type": "string", "title": "Environnement",
+                            "enum": ["prod", "staging"], "enumNames": ["Production", "Pré-production"]},
+                        "version": {"type": "string", "title": "Version", "minLength": 1},
+                        "notifier": {"type": "boolean", "title": "Prévenir l'équipe"}
+                    }
+                }}
+            },
+            "steps": [
+                {"id": "parametres", "type": "user", "template": "question",
+                 "choices": ["Déployer", "Annuler"], "input": "form:deploy",
+                 "transitions": [{"goto": "$done"}]}
+            ]
+        });
+        let s = &d.services;
+        let wf = penelope_workflow::model::Workflow::from_json(&raw.to_string()).unwrap();
+        let known =
+            crate::runtime::workflow_known_with(&s.config.config(), &s.mcp_tools, &s.workflows)
+                .await;
+        let dir = s.platform.dirs.workflows();
+        std::fs::create_dir_all(&dir).unwrap();
+        s.workflows
+            .write(&dir, &wf, &known)
+            .expect("workflow valide");
+        s.workflows
+            .load_dir(&dir, penelope_workflow::registry::Scope::User, &known);
+
+        let origin = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: None,
+        };
+        let run = crate::workflow::start_run(&d, "deploiement-form", json!({}), &origin, None, 0)
+            .await
+            .unwrap();
+        crate::workflow::drive(&d, &run.id).await.unwrap();
+
+        let button = |calls: &[Value], label: &str| -> String {
+            calls
+                .iter()
+                .rev()
+                .find_map(|c| {
+                    c["reply_markup"]["inline_keyboard"]
+                        .as_array()?
+                        .iter()
+                        .find_map(|row| {
+                            row.as_array()?.iter().find_map(|b| {
+                                (b["text"].as_str()? == label)
+                                    .then(|| b["callback_data"].as_str().map(String::from))
+                                    .flatten()
+                            })
+                        })
+                })
+                .unwrap_or_else(|| panic!("bouton « {label} » absent"))
+        };
+        let mut update = 500;
+        let mut click = |label: &str, calls: Vec<Value>| {
+            update += 1;
+            (update, button(&calls, label))
+        };
+
+        let (u, token) = click("Déployer", t.calls_to(tg::SEND_MESSAGE).await);
+        g.process_update(&updates::callback(u, OWNER, &token, 900))
+            .await
+            .unwrap();
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        assert!(
+            sent.last().unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .contains("Environnement"),
+            "{sent:?}"
+        );
+
+        let (u, token) = click("Production", sent);
+        g.process_update(&updates::callback(u, OWNER, &token, 901))
+            .await
+            .unwrap();
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        assert!(
+            sent.last().unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .contains("Version")
+        );
+
+        g.process_update(&updates::text_message(600, OWNER, OWNER, "1.4.2"))
+            .await
+            .unwrap();
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        assert!(
+            sent.last().unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .contains("Prévenir")
+        );
+
+        let (u, token) = click("Oui", sent);
+        g.process_update(&updates::callback(u, OWNER, &token, 902))
+            .await
+            .unwrap();
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        let summary = sent.last().unwrap()["text"].as_str().unwrap().to_string();
+        assert!(
+            summary.contains("Récapitulatif") && summary.contains("1.4.2"),
+            "{summary}"
+        );
+
+        let (u, token) = click("✅ Envoyer", sent);
+        g.process_update(&updates::callback(u, OWNER, &token, 903))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        assert_eq!(
+            crate::workflow::drive(&d, &run.id).await.unwrap(),
+            penelope_workflow::runs::RunState::Done
+        );
+        let done = d.services.runs.get(&run.id).await.unwrap().unwrap();
+        assert_eq!(
+            done.step_outputs["parametres"]["input"],
+            json!({"environnement": "prod", "version": "1.4.2", "notifier": true})
+        );
+        assert_eq!(done.step_outputs["parametres"]["choice"], "Déployer");
     }
 
     /// Issue #2 : une session reçoit un titre lisible après son premier échange ; il

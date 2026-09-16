@@ -159,10 +159,13 @@ pub fn deploy_generic() -> Workflow {
                 },
                 Parameter {
                     id: "repo".into(),
-                    label: "Dépôt".into(),
+                    label: "Répertoire du dépôt".into(),
                     kind: "string".into(),
                     required: false,
-                    ..Default::default()
+                    default: Some(json!(".")),
+                    description: "Chemin du dépôt cloné ; relatif à l'espace de travail du \
+                                  run, qu'un sous-workflow partage avec son parent."
+                        .into(),
                 },
             ],
             ..Default::default()
@@ -173,7 +176,7 @@ pub fn deploy_generic() -> Workflow {
         steps: vec![
             Step {
                 tool: "fs_read".into(),
-                args: json!({"path":"{{workdir}}/.penelope/deploy.toml"}),
+                args: json!({"path":"{{repo}}/.penelope/deploy.toml"}),
                 transitions: vec![
                     Transition::on_result("deployer", "success"),
                     Transition::always(BLOCKED),
@@ -185,6 +188,7 @@ pub fn deploy_generic() -> Workflow {
                     "unix":"make deploy ENV={{environnement}}",
                     "windows":"make deploy ENV={{environnement}}"
                 }),
+                cwd: "{{repo}}".into(),
                 transitions: vec![
                     Transition::on_result("verifier", "success"),
                     Transition::always("rollback"),
@@ -196,6 +200,7 @@ pub fn deploy_generic() -> Workflow {
                     "unix":"make smoke ENV={{environnement}}",
                     "windows":"make smoke ENV={{environnement}}"
                 }),
+                cwd: "{{repo}}".into(),
                 transitions: vec![
                     Transition::on_result(DONE, "success"),
                     Transition::always("rollback"),
@@ -207,12 +212,28 @@ pub fn deploy_generic() -> Workflow {
                     "unix":"make rollback ENV={{environnement}}",
                     "windows":"make rollback ENV={{environnement}}"
                 }),
+                cwd: "{{repo}}".into(),
                 transitions: vec![Transition::always(BLOCKED)],
                 ..step("rollback", "shell", Phase::Deploy)
             },
         ],
     }
 }
+
+/// Tests du dépôt : cible `test` du Makefile, sinon l'outil de l'écosystème détecté.
+pub const TEST_COMMAND: &str = "if [ -f Makefile ] && grep -q '^test:' Makefile; then make test; \
+elif [ -f Cargo.toml ]; then cargo test; \
+elif [ -f package.json ]; then npm test; \
+elif [ -f go.mod ]; then go test ./...; \
+else echo 'aucune commande de test reconnue (Makefile, Cargo.toml, package.json, go.mod)' >&2; exit 1; fi";
+
+/// Lint du dépôt : cible `lint` du Makefile, sinon l'outil de l'écosystème ; rien à lancer
+/// n'est pas une erreur.
+pub const LINT_COMMAND: &str = "if [ -f Makefile ] && grep -q '^lint:' Makefile; then make lint; \
+elif [ -f Cargo.toml ]; then cargo clippy -- -D warnings; \
+elif [ -f package.json ]; then npm run lint --if-present; \
+elif [ -f go.mod ]; then go vet ./...; \
+else echo 'aucun lint reconnu'; fi";
 
 /// `ticket-to-deploy` : scénario de référence du §12.10.
 pub fn ticket_to_deploy() -> Workflow {
@@ -297,9 +318,9 @@ pub fn ticket_to_deploy() -> Workflow {
             // 3
             Step {
                 command: json!({
-                    "unix":"git clone --depth 50 {{steps.resolve_repo.repo}} {{workdir}}/repo && \
+                    "unix":"git clone --depth 50 {{steps.resolve_repo.data.repo}} {{workdir}}/repo && \
                             cd {{workdir}}/repo && git checkout -b penelope/{{ticket_id}}",
-                    "windows":"git clone --depth 50 {{steps.resolve_repo.repo}} {{workdir}}/repo"
+                    "windows":"git clone --depth 50 {{steps.resolve_repo.data.repo}} {{workdir}}/repo"
                 }),
                 transitions: vec![
                     Transition::on_result("analyze", "success"),
@@ -352,15 +373,12 @@ pub fn ticket_to_deploy() -> Workflow {
             Step {
                 children: vec![
                     Step {
-                        command: json!({"unix":"cargo test","windows":"cargo test"}),
+                        command: json!({"unix": TEST_COMMAND, "windows": "cargo test"}),
                         cwd: "{{workdir}}/repo".into(),
                         ..step("tests", "shell", Phase::Verification)
                     },
                     Step {
-                        command: json!({
-                            "unix":"cargo clippy -- -D warnings",
-                            "windows":"cargo clippy -- -D warnings"
-                        }),
+                        command: json!({"unix": LINT_COMMAND, "windows": "cargo clippy -- -D warnings"}),
                         cwd: "{{workdir}}/repo".into(),
                         ..step("lint", "shell", Phase::Verification)
                     },
@@ -391,10 +409,26 @@ pub fn ticket_to_deploy() -> Workflow {
                     "branch":"penelope/{{ticket_id}}"
                 }),
                 transitions: vec![
-                    Transition::on_result("approve_deploy", "success"),
+                    Transition::on_result("create_pr", "success"),
                     Transition::always(BLOCKED),
                 ],
                 ..step("open_pr", "tool", Phase::Verification)
+            },
+            // 8b : la PR (ou MR) via le MCP de la forge, liée au ticket.
+            Step {
+                tool: "mcp__github__create_pull_request".into(),
+                args: json!({
+                    "repo": "{{steps.resolve_repo.data.repo}}",
+                    "head": "penelope/{{ticket_id}}",
+                    "base": "{{steps.resolve_repo.data.base_branch}}",
+                    "title": "Correctif du ticket {{ticket_id}}",
+                    "body": "Ticket : {{ticket_url}}\n\n{{steps.analyze.content}}"
+                }),
+                transitions: vec![
+                    Transition::on_result("approve_deploy", "success"),
+                    Transition::always(BLOCKED),
+                ],
+                ..step("create_pr", "tool", Phase::Verification)
             },
             // 9
             Step {
@@ -420,7 +454,7 @@ pub fn ticket_to_deploy() -> Workflow {
             // 10
             Step {
                 workflow_id: "deploy-generic".into(),
-                params: json!({"environnement":"prod","repo":"{{steps.resolve_repo.repo}}"}),
+                params: json!({"environnement":"prod","repo":"{{workdir}}/repo"}),
                 transitions: vec![
                     Transition::on_result("update_ticket", "success"),
                     Transition::always("deploy_failed"),
@@ -544,6 +578,10 @@ mod tests {
         }
         // Le push est un outil `external` : il sera soumis à approbation par la politique.
         assert_eq!(w.step("open_pr").unwrap().tool, "git_push");
+        assert_eq!(
+            w.step("create_pr").unwrap().tool,
+            "mcp__github__create_pull_request"
+        );
         // Le déploiement délègue au sous-workflow.
         assert_eq!(w.step("deploy").unwrap().workflow_id, "deploy-generic");
     }

@@ -138,9 +138,29 @@ pub async fn review(
         })
         .await;
 
+    record_candidates(
+        s,
+        &response.message.text(),
+        session_id,
+        &format!("turn:{turn_id}"),
+        looks_like_correction(user_text),
+        max,
+    )
+    .await
+}
+
+/// Enregistre les candidats d'une relecture (tour ou épisode) : une ligne dans le journal
+/// du jour et `mem_candidates`. Renvoie le nombre retenu.
+pub(crate) async fn record_candidates(
+    s: &crate::runtime::Services,
+    raw: &str,
+    session_id: &str,
+    source_ref: &str,
+    correction: bool,
+    max: usize,
+) -> anyhow::Result<usize> {
     let now = s.clock.now_rfc3339();
-    let correction = looks_like_correction(user_text);
-    let candidates = parse_candidates(&response.message.text(), max)
+    let candidates = parse_candidates(raw, max)
         .into_iter()
         .map(|(ctype, text, importance, when)| {
             // Ce que le propriétaire a dit lui appartient ; ce que l'agent en déduit, non.
@@ -161,7 +181,7 @@ pub async fn review(
             if let Some(w) = when {
                 c = c.with_when(w);
             }
-            c.source_ref = Some(format!("turn:{turn_id}"));
+            c.source_ref = Some(source_ref.to_string());
             c
         })
         .collect::<Vec<_>>();
@@ -176,7 +196,7 @@ pub async fn review(
             session_kind: "review".into(),
             observed_at: now.clone(),
             supersedes_uid: None,
-            source_ref: Some(format!("turn:{turn_id}")),
+            source_ref: Some(source_ref.to_string()),
             session_id: Some(session_id.to_string()),
         };
         let line = format!("Candidat ({}) : {}", c.ctype.as_str(), c.text);

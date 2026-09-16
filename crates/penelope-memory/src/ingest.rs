@@ -103,7 +103,7 @@ pub fn extract(name: &str, bytes: &[u8]) -> Result<Extracted, String> {
     }
     if text.trim().is_empty() {
         return Err(match raw.format {
-            "pdf" => "aucun texte lisible dans ce PDF (document scanné ?)".into(),
+            "pdf" => SCANNED_PDF.into(),
             _ => "le document ne contient aucun texte".into(),
         });
     }
@@ -111,6 +111,29 @@ pub fn extract(name: &str, bytes: &[u8]) -> Result<Extracted, String> {
         text,
         truncated,
         ..raw
+    })
+}
+
+/// Message d'un PDF sans couche texte : l'appelant peut tenter l'OCR.
+pub const SCANNED_PDF: &str = "aucun texte lisible dans ce PDF (document scanné ?)";
+
+/// Texte reconnu par OCR, normalisé et borné comme une extraction.
+pub fn from_ocr(text: &str, pages: usize) -> Result<Extracted, String> {
+    let mut text = normalise(text);
+    let mut truncated = false;
+    if text.chars().count() > MAX_TEXT_CHARS {
+        text = text.chars().take(MAX_TEXT_CHARS).collect();
+        truncated = true;
+    }
+    if text.trim().is_empty() {
+        return Err("aucun texte reconnu dans ce PDF, même par OCR".into());
+    }
+    Ok(Extracted {
+        format: "pdf (OCR)",
+        text,
+        pages: Some(pages),
+        unreadable_pages: 0,
+        truncated,
     })
 }
 

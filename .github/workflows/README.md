@@ -39,16 +39,22 @@ tag v0.1.1
    │                  x86_64-apple-darwin   ─┤
    │                                         │
    └── publier        lipo ──► binaire universel
-                      3 archives .tar.gz + SHA256SUMS
+                      3 archives .tar.gz + SHA256SUMS (+ .minisig)
                       gh release create
 ```
 
 Trois archives sont publiées : `macos-universal` (celle à recommander),
 `macos-aarch64` et `macos-x86_64`, plus un fichier `SHA256SUMS`.
 
-Rien n'est signé ni notarisé : au premier lancement, Gatekeeper demandera confirmation.
-Le faire proprement suppose un compte développeur Apple et deux secrets de dépôt, ce qui
-n'est pas en place.
+`SHA256SUMS` est signé avec minisign dès que le secret `MINISIGN_SECRET_KEY` existe ;
+la variable de dépôt `MINISIGN_PUBLIC_KEY` est alors intégrée aux binaires, qui refusent
+ensuite toute mise à jour non signée. Une clé publique sans secret fait échouer la
+release plutôt que de publier des binaires qui ne pourraient plus se mettre à jour.
+Création des clés : `docs/install-headless.md`, section « Mise à jour ».
+
+Les binaires ne sont ni signés par Apple ni notarisés : au premier lancement, Gatekeeper
+demandera confirmation. Le faire proprement suppose un compte développeur Apple et deux
+secrets de dépôt, ce qui n'est pas en place.
 
 ## Poser un tag
 

@@ -178,7 +178,11 @@ pub fn cargo_filter(suite: &str) -> Option<(&'static str, Vec<String>)> {
         ),
         "telegram" => ("test", args(vec!["-p", "penelope-telegram"])),
         "hitl" => ("test", args(vec!["-p", "penelope-hitl"])),
-        "workflow" => ("test", args(vec!["-p", "penelope-workflow"])),
+        // Le moteur, plus `ticket-to-deploy` de bout en bout (CA 12) côté daemon.
+        "workflow" => (
+            "test",
+            args(vec!["-p", "penelope-workflow", "-p", "penelope-daemon"]),
+        ),
         "hot-reload" => (
             "test",
             args(vec!["-p", "penelope-evals", "--test", "hot_reload"]),
@@ -191,8 +195,45 @@ pub fn cargo_filter(suite: &str) -> Option<(&'static str, Vec<String>)> {
             "test",
             args(vec!["-p", "penelope-evals", "--test", "security"]),
         ),
+        // Suites réseau : tests ignorés par défaut, lancés explicitement.
+        "ctx-recall" => live("ctx_recall"),
+        "mem-longitudinal" => live("mem_longitudinal"),
+        "live-openrouter" => live("live_openrouter"),
+        "live-telegram" => live("live_telegram"),
+        "ab-hermes" => live("ab_hermes"),
         _ => return None,
     })
+}
+
+fn live(test: &str) -> (&'static str, Vec<String>) {
+    (
+        "test",
+        [
+            "-p",
+            "penelope-evals",
+            "--test",
+            test,
+            "--",
+            "--ignored",
+            "--nocapture",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
+    )
+}
+
+/// Variables d'environnement qu'une suite réseau exige.
+pub fn required_env(suite: &str) -> &'static [&'static str] {
+    match suite {
+        "ctx-recall" | "mem-longitudinal" | "live-openrouter" => &["OPENROUTER_API_KEY"],
+        "live-telegram" => &[
+            "PENELOPE_LIVE_TELEGRAM_TOKEN",
+            "PENELOPE_LIVE_TELEGRAM_CHAT",
+        ],
+        "ab-hermes" => &["PENELOPE_AB_HERMES_CMD"],
+        _ => &[],
+    }
 }
 
 #[cfg(test)]
@@ -241,12 +282,20 @@ mod tests {
     }
 
     #[test]
-    fn every_offline_suite_has_a_runnable_command() {
-        for s in offline_suites() {
+    fn every_suite_has_a_runnable_command() {
+        for s in all_suites() {
             let cmd = cargo_filter(s.name);
             assert!(cmd.is_some(), "suite sans commande : {}", s.name);
+            let (_, args) = cmd.unwrap();
+            assert_eq!(
+                args.contains(&"--ignored".to_string()),
+                s.network,
+                "{} : seules les suites réseau lancent les tests ignorés",
+                s.name
+            );
+            assert_eq!(required_env(s.name).is_empty(), !s.network, "{}", s.name);
         }
-        assert!(cargo_filter("live-openrouter").is_none());
+        assert!(cargo_filter("inconnue").is_none());
     }
 
     #[test]

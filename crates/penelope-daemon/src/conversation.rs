@@ -175,12 +175,24 @@ impl Conversation for SessionConversation {
     }
 }
 
-/// Assemble les tuiles du prompt d'une session.
+/// Assemble les tuiles du prompt d'une session, instantanés mémoire recalculés.
 pub async fn build_tiers(
     s: &Services,
     user_text: &str,
     mcp_lines: &[String],
     run_state: Option<&str>,
+) -> Tiers {
+    build_tiers_in(s, user_text, mcp_lines, run_state, None).await
+}
+
+/// Comme [`build_tiers`], avec les instantanés T2 figés pour l'épisode `(session, n)` :
+/// une écriture de profil n'altère pas le préfixe avant l'épisode suivant (§6.6, CA 6).
+pub async fn build_tiers_in(
+    s: &Services,
+    user_text: &str,
+    mcp_lines: &[String],
+    run_state: Option<&str>,
+    episode: Option<(&str, i64)>,
 ) -> Tiers {
     let cfg = s.config.config();
     let vault = vault_dir(s);
@@ -206,30 +218,12 @@ pub async fn build_tiers(
         b = b.skill(sk.name.clone(), sk.description.clone());
     }
 
-    // T2 : instantanés mémoire, figés tant que le vault ne bouge pas.
-    let block = |entries: &[penelope_memory::IndexedEntry], budget: usize| {
-        penelope_memory::recall::Snapshots::build_block(entries, budget as u64)
+    // T2 : instantanés mémoire, figés par épisode quand il y en a un.
+    let [profile, core, project] = match episode {
+        Some((session_id, n)) => frozen_snapshot(s, session_id, n).await,
+        None => fresh_snapshot(s).await,
     };
-    let profile = s
-        .memory
-        .by_level(penelope_memory::Level::Profil)
-        .await
-        .unwrap_or_default();
-    let core = s
-        .memory
-        .by_level(penelope_memory::Level::Coeur)
-        .await
-        .unwrap_or_default();
-    let project = s
-        .memory
-        .by_level(penelope_memory::Level::Projet)
-        .await
-        .unwrap_or_default();
-    b = b.memory_snapshot(
-        block(&profile, cfg.memory.profile_budget_tokens),
-        block(&core, cfg.memory.core_budget_tokens),
-        block(&project, cfg.memory.project_budget_tokens),
-    );
+    b = b.memory_snapshot(profile, core, project);
 
     // T4 : date locale, état du run, rappel mémoire déclenché par le message.
     b = b.volatile(volatile_header(
@@ -250,6 +244,67 @@ pub async fn build_tiers(
         }
     }
     b.build()
+}
+
+/// Profil, cœur et projets tels que l'index les donne maintenant.
+async fn fresh_snapshot(s: &Services) -> [String; 3] {
+    let cfg = s.config.config();
+    let mut out: [String; 3] = Default::default();
+    for (i, (level, budget)) in [
+        (
+            penelope_memory::Level::Profil,
+            cfg.memory.profile_budget_tokens,
+        ),
+        (penelope_memory::Level::Coeur, cfg.memory.core_budget_tokens),
+        (
+            penelope_memory::Level::Projet,
+            cfg.memory.project_budget_tokens,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let entries = s.memory.by_level(level).await.unwrap_or_default();
+        out[i] = penelope_memory::recall::Snapshots::build_block(&entries, budget as u64);
+    }
+    out
+}
+
+/// Instantané de l'épisode : calculé au premier tour, relu ensuite.
+async fn frozen_snapshot(s: &Services, session_id: &str, episode: i64) -> [String; 3] {
+    let key = crate::episodes::snapshot_key(session_id, episode);
+    let k = key.clone();
+    let stored: Option<String> = s
+        .store
+        .read(move |c| {
+            let mut st = c.prepare("SELECT v FROM kv WHERE k = ?1")?;
+            let mut rows = st.query([&k])?;
+            Ok(match rows.next()? {
+                Some(r) => Some(r.get::<_, String>(0)?),
+                None => None,
+            })
+        })
+        .await
+        .ok()
+        .flatten();
+    if let Some(blocks) = stored.and_then(|raw| serde_json::from_str::<[String; 3]>(&raw).ok()) {
+        return blocks;
+    }
+    let blocks = fresh_snapshot(s).await;
+    if let Ok(raw) = serde_json::to_string(&blocks) {
+        let _ = s
+            .store
+            .write(move |tx| {
+                tx.execute(
+                    "INSERT INTO kv(k, v) VALUES(?1, ?2)
+                     ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                    penelope_store::rusqlite::params![key, raw],
+                )?;
+                Ok(())
+            })
+            .await;
+    }
+    blocks
 }
 
 /// Répertoire du vault, placeholders développés.

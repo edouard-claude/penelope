@@ -9,6 +9,7 @@ pub mod conversation;
 pub mod doctor;
 pub mod dream;
 pub mod engine;
+pub mod episodes;
 pub mod executor;
 pub mod hermes;
 pub mod images;
@@ -25,6 +26,8 @@ pub mod selfknow;
 pub mod session_ops;
 pub mod supervisor;
 pub mod telegram;
+#[cfg(test)]
+mod ticket_to_deploy_e2e;
 pub mod titles;
 pub mod upgrade;
 pub mod vault_ops;

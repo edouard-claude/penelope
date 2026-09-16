@@ -198,6 +198,11 @@ les sources du vault.
 Une adresse de retour OAuth collée (`code=` et `state=`, avec ou sans `http://`) termine
 l'autorisation en attente et ne part jamais vers le modèle.
 
+Une question de workflow qui attend un formulaire (`input: "form:<id>"`) s'ouvre au
+clic sur le choix : un champ par écran, boutons pour une énumération ou un booléen, un
+message pour le reste, « Précédent » et « Passer », récapitulatif puis « Envoyer ». La
+saisie est validée contre son schéma avant de repartir au workflow.
+
 ## Sujets
 
 Dans un groupe avec sujets activés, chaque run ou session longue peut recevoir son propre
@@ -224,6 +229,7 @@ Il sert aussi aux suites transverses, par exemple pour dérouler le flux OAuth
 ## Limites actuelles
 
 - Seul le long polling est lancé : `telegram.mode = "webhook"` n'est pas servi.
-- Pas d'OCR : un PDF scanné sans couche texte est signalé, pas lu.
+- Un PDF scanné est lu par OCR sur macOS seulement, et seulement s'il n'a aucune couche
+  texte.
 
 Voir [progress.md](progress.md).

@@ -79,9 +79,12 @@ jobs:
             ~/.cargo/git/db
           key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
+      # La clé publique minisign (variable du dépôt, pas un secret) est intégrée au
+      # binaire : il refusera ensuite toute mise à jour dont les sommes ne sont pas signées.
       - name: Construire
         env:
           TARGET: ${{ matrix.target }}
+          PENELOPE_MINISIGN_PUBKEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
         run: cargo build --release --locked -p penelope-cli --target "$TARGET"
 
       # Seul l'hôte arm64 exécute son propre binaire sans Rosetta.
@@ -135,9 +138,38 @@ jobs:
           shasum -a 256 ./*.tar.gz > SHA256SUMS
           cat SHA256SUMS
 
+      # Signature de SHA256SUMS (`penelope upgrade` la vérifie). Clé créée sans mot de
+      # passe (`minisign -G -W`) : c'est le secret du dépôt qui la protège.
+      - name: Signer les sommes
+        env:
+          VERSION: ${{ inputs.tag || github.ref_name }}
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_SECRET_KEY}" ]; then
+            if [ -n "${MINISIGN_PUBLIC_KEY}" ]; then
+              echo "::error::clé publique configurée sans MINISIGN_SECRET_KEY : les binaires refuseraient cette release"
+              exit 1
+            fi
+            echo "::warning::MINISIGN_SECRET_KEY absent : release non signée"
+            exit 0
+          fi
+          brew install minisign
+          umask 077
+          key="${RUNNER_TEMP}/minisign.key"
+          printf '%s\n' "${MINISIGN_SECRET_KEY}" > "$key"
+          minisign -S -s "$key" -m dist/SHA256SUMS -t "penelope ${VERSION}" < /dev/null
+          rm -f "$key"
+          if [ -n "${MINISIGN_PUBLIC_KEY}" ]; then
+            minisign -V -P "${MINISIGN_PUBLIC_KEY}" -m dist/SHA256SUMS
+          fi
+          cat dist/SHA256SUMS.minisig
+
       - name: Rédiger les notes
         env:
           VERSION: ${{ inputs.tag || github.ref_name }}
+          MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
         run: |
           set -euo pipefail
           {
@@ -149,6 +181,14 @@ jobs:
             echo '```bash'
             echo "shasum -a 256 -c SHA256SUMS --ignore-missing"
             echo '```'
+            if [ -f dist/SHA256SUMS.minisig ]; then
+              echo
+              echo "Les sommes sont signées (minisign) :"
+              echo
+              echo '```bash'
+              echo "minisign -V -P ${MINISIGN_PUBLIC_KEY:-<clé publique>} -m SHA256SUMS"
+              echo '```'
+            fi
             echo
             echo '```bash'
             echo "tar -xzf penelope-${VERSION}-macos-universal.tar.gz"

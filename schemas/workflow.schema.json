@@ -111,7 +111,16 @@
           "default": "ephemeral"
         },
         "tracker": { "type": "string" },
-        "deploy_workflow": { "type": "string" }
+        "deploy_workflow": { "type": "string" },
+        "forms": {
+          "type": "object",
+          "description": "Formulaires des étapes `user` (`input: \"form:<id>\"`) : un JSON Schema d'objet par identifiant, présenté champ par champ sur Telegram, la saisie validée arrivant dans `stepOutput.input`.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["type", "properties"],
+            "properties": { "type": { "const": "object" } }
+          }
+        }
       }
     },
 
@@ -184,7 +193,7 @@
         "condition": { "$ref": "#/$defs/condition" },
         "tag": {
           "type": "string",
-          "description": "Marque d'échappement d'un sous-groupe (§12.7)."
+          "description": "Marque d'échappement d'un sous-groupe (§12.7) : obligatoire sur toute transition qui sort du sous-groupe de son étape (vers une autre étape ou `$done`), sans effet ailleurs."
         }
       }
     },
@@ -213,7 +222,10 @@
           "enum": ["plan", "build", "verification", "waiting", "deploy", "done"],
           "default": "build"
         },
-        "subGroup": { "type": "string" },
+        "subGroup": {
+          "type": "string",
+          "description": "Boucle à laquelle appartient l'étape : on ne la quitte que par une transition taguée."
+        },
         "transitions": {
           "type": "array",
           "items": { "$ref": "#/$defs/transition" }
@@ -279,7 +291,17 @@
             "event": { "type": "string" },
             "cron": { "type": "string", "description": "Expression cron à 5 champs, validée au chargement." },
             "duration_ms": { "type": "integer", "minimum": 1 },
-            "mcp_task": { "type": "string" }
+            "mcp_task": {
+              "description": "Tâche MCP longue : `serveur:tâche`, ou `{server, task}` (gabarits acceptés). Déclenchée quand la tâche se termine, `status` et `result` en sortie.",
+              "oneOf": [
+                { "type": "string" },
+                {
+                  "type": "object",
+                  "required": ["server", "task"],
+                  "properties": { "server": { "type": "string" }, "task": { "type": "string" } }
+                }
+              ]
+            }
           }
         },
 

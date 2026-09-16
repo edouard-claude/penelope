@@ -18,6 +18,28 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Pages lues par OCR au plus, et délai total.
+const OCR_MAX_PAGES: usize = 50;
+const OCR_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// OCR d'un PDF scanné, dans le cache, hors du fil asynchrone.
+async fn ocr(s: &Services, sha: &str, bytes: &[u8]) -> Result<doc::Extracted, String> {
+    let cache = s.platform.dirs.cache();
+    let dir = cache.join("ocr");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let pdf = dir.join(format!("in-{}.pdf", &sha[..16.min(sha.len())]));
+    std::fs::write(&pdf, bytes).map_err(|e| e.to_string())?;
+    let path = pdf.clone();
+    let read = tokio::task::spawn_blocking(move || {
+        penelope_platform::ocr::pdf_text(&path, &cache, OCR_MAX_PAGES, OCR_TIMEOUT)
+    })
+    .await
+    .map_err(|_| "OCR interrompu".to_string());
+    let _ = std::fs::remove_file(&pdf);
+    let o = read?.map_err(|e| e.to_string())?;
+    doc::from_ocr(&o.text, o.pages)
+}
+
 /// Texte du document confié au résumeur, en caractères.
 const SUMMARY_INPUT_CHARS: usize = 24_000;
 /// Texte du document joint à un tour de conversation, en caractères.
@@ -145,7 +167,13 @@ pub async fn ingest(
         tokio::task::spawn_blocking(move || (doc::extract(&owned, &bytes), bytes))
             .await
             .map_err(|_| "extraction interrompue".to_string())?;
-    let extracted = extracted?;
+    let extracted = match extracted {
+        // Document scanné : la couche texte manque, Vision lit les pages.
+        Err(e) if e == doc::SCANNED_PDF => ocr(s, &sha, &bytes)
+            .await
+            .map_err(|o| format!("{e} ; lecture par OCR impossible : {o}"))?,
+        other => other?,
+    };
     // Un secret ou un numéro de carte n'entre jamais dans le vault (§6.10).
     let text = penelope_observe::redact::redact(&extracted.text);
     let chars = text.chars().count();
@@ -718,6 +746,25 @@ mod tests {
                 .unwrap()
                 .contains("déjà dans le vault")
         );
+    }
+
+    /// Un PDF scanné, sans couche texte, est lu par OCR (Vision). Lent la première fois
+    /// (compilation du lecteur) : `cargo test -p penelope-daemon ocr -- --ignored`.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore]
+    async fn a_scanned_pdf_is_read_by_ocr() {
+        let (_dir, d, p, _r) = daemon().await;
+        p.reply(r#"{"resume": "Page de test OCR.", "faits": []}"#);
+        let scan = include_bytes!("../../penelope-platform/tests/fixtures/scan.pdf").to_vec();
+        let doc = ingest(&d, "scan.pdf", scan, "telegram", Origin::Owner, None)
+            .await
+            .unwrap();
+        assert_eq!(doc.format, "pdf (OCR)");
+        let vault = crate::conversation::vault_dir(&d.services);
+        let fiche =
+            std::fs::read_to_string(vault.join(format!("sources/{}.md", doc.slug))).unwrap();
+        assert!(fiche.to_uppercase().contains("PENELOPE"), "{fiche}");
     }
 
     #[tokio::test]

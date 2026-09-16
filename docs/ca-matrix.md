@@ -9,7 +9,7 @@ Pour le régénérer après avoir ajouté un test :
 UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 ```
 
-66 tests d'acceptation, 14 sections couvertes.
+69 tests d'acceptation, 14 sections couvertes.
 
 ## §2. Plateformes, portabilité et exploitation headless
 
@@ -60,6 +60,8 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 | CA 6.11 | Empty pass is a noop | `crates/penelope-memory/src/consolidation.rs` |
 | CA 6.12 | Recall never blocks | `crates/penelope-memory/src/recall.rs` |
 | CA 6.13 | Forbidden content is blocked in consolidation | `crates/penelope-memory/src/consolidation.rs` |
+| CA 6.14 | A profile write waits for the next episode | `crates/penelope-daemon/src/episodes.rs` |
+| CA 6.15 | Two idle hours close the episode and ingest it | `crates/penelope-daemon/src/episodes.rs` |
 
 ## §7. Skills
 
@@ -105,6 +107,7 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 
 | CA | Test | Fichier |
 |---|---|---|
+| CA 12.1 | Ticket to deploy runs end to end and survives restarts | `crates/penelope-daemon/src/ticket_to_deploy_e2e.rs` |
 | CA 12.2 | Runs are recovered at their current step | `crates/penelope-workflow/src/runs.rs` |
 | CA 12.3 | Invalid file is rejected and previous stays | `crates/penelope-workflow/src/registry.rs` |
 | CA 12.4 | Poll fires once per item | `crates/penelope-workflow/src/schedules.rs` |

@@ -239,14 +239,24 @@ pub async fn start_run(
         .create(&wf, session.id.as_str(), params, None, parent, depth)
         .await
         .map_err(|e| e.to_string())?;
-    let workdir = match wf.settings.workspace.strip_prefix("persistent:") {
-        Some(name) => s
+    // Un sous-workflow travaille dans l'espace de son parent (le dépôt cloné, par exemple),
+    // sauf s'il demande son propre espace persistant.
+    let parent_workdir = match parent {
+        Some(p) => s.runs.get(p).await.ok().flatten().and_then(|r| r.workdir),
+        None => None,
+    };
+    let workdir = match (
+        wf.settings.workspace.strip_prefix("persistent:"),
+        parent_workdir,
+    ) {
+        (Some(name), _) => s
             .platform
             .dirs
             .data()
             .join("workspaces")
             .join(penelope_platform::slugify(name)),
-        None => s.platform.dirs.state().join("runs").join(&run.id),
+        (None, Some(dir)) => std::path::PathBuf::from(dir),
+        (None, None) => s.platform.dirs.state().join("runs").join(&run.id),
     };
     std::fs::create_dir_all(&workdir).map_err(|e| format!("{}: {e}", workdir.display()))?;
     s.runs
@@ -467,6 +477,19 @@ async fn drive_claimed(
                 metadata: &metadata,
             },
         );
+        // Sortie d'un sous-groupe par sa transition taguée : la boucle s'arrête là.
+        if let Some(tag) = penelope_workflow::validate::escape_tag(&wf, &step, &next) {
+            let _ = s
+                .events
+                .append(
+                    EventDraft::new(
+                        "workflow.subgroup_exited",
+                        json!({"run": run.id, "group": step.sub_group, "tag": tag, "from": step.id, "to": next}),
+                    )
+                    .session(&run.session_id),
+                )
+                .await;
+        }
         let phase = wf.step(&next).map(|n| n.phase.as_str());
         let run = s
             .runs
@@ -729,6 +752,24 @@ pub async fn answer(
             def.choices.join(", ")
         );
     }
+    // Un formulaire arrive en objet JSON, validé contre son schéma : l'étape suivante lit
+    // `stepOutput.input.<champ>`.
+    let input: Value = match def.input.strip_prefix("form:") {
+        Some(id) => {
+            let schema = wf
+                .settings
+                .forms
+                .get(id)
+                .ok_or_else(|| anyhow::anyhow!("formulaire `{id}` absent du workflow"))?;
+            let raw = input.ok_or_else(|| anyhow::anyhow!("formulaire `{id}` non rempli"))?;
+            let v: Value = serde_json::from_str(raw)
+                .map_err(|e| anyhow::anyhow!("formulaire `{id}` : JSON illisible ({e})"))?;
+            penelope_kernel::schema::validate_ok(schema, &v)
+                .map_err(|e| anyhow::anyhow!("formulaire `{id}` : {e}"))?;
+            v
+        }
+        None => input.map(|t| json!(t)).unwrap_or(Value::Null),
+    };
     kv_set(
         s,
         &visit_key("answer", &run, &step),
@@ -737,6 +778,19 @@ pub async fn answer(
     .await?;
     d.workflows.wake();
     Ok(())
+}
+
+/// Schéma du formulaire qu'attend la question `visit` d'un run, s'il y en a un.
+pub async fn form_of(d: &Daemon, run_id: &str, visit: &str) -> Option<Value> {
+    let s = &d.services;
+    let run = s.runs.get(run_id).await.ok()??;
+    let step = run.current_step.clone()?;
+    if visit != format!("{step}.{}", run.iterations) {
+        return None;
+    }
+    let wf = s.workflows.get(&run.workflow_id)?;
+    let id = wf.step(&step)?.input.strip_prefix("form:")?.to_string();
+    wf.settings.forms.get(&id).cloned()
 }
 
 // ------------------------------------------------------------------ étapes
@@ -1529,11 +1583,23 @@ async fn user_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         let text = question_text(ctx).await;
         let visit = format!("{}.{}", step.id, run.iterations);
         let wants_input = step.input != "none" && !step.input.is_empty();
+        let form = step
+            .input
+            .strip_prefix("form:")
+            .and_then(|id| ctx.wf.settings.forms.get(id));
         let origin = origin_of(ctx.d, &run.id).await;
         if let Some(m) = ctx.d.hooks.messenger() {
-            m.send_question(&origin, &text, &run.id, &visit, &step.choices, wants_input)
-                .await
-                .map_err(anyhow::Error::msg)?;
+            m.send_question(
+                &origin,
+                &text,
+                &run.id,
+                &visit,
+                &step.choices,
+                wants_input,
+                form,
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
         }
         kv_set(s, &asked_key, "1").await?;
         let _ = s
@@ -1771,6 +1837,8 @@ async fn wait_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
                 ));
             }
         }
+    } else if let Some(spec) = on.get("mcp_task") {
+        return mcp_task_wait(ctx, spec, &state, elapsed).await;
     } else if step.timeout_ms.is_none() {
         return Ok(done(
             StepResult::Timeout,
@@ -1778,6 +1846,144 @@ async fn wait_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         ));
     }
     Ok(StepOutcome::Waiting("attente".into()))
+}
+
+/// `wait` sur une tâche MCP longue : `{"mcp_task": "serveur:tâche"}` ou
+/// `{"mcp_task": {"server": "…", "task": "{{steps.lancer.data.task.taskId}}"}}`. La tâche est
+/// suivie dans `mcp_tasks` (elle survit à un redémarrage) et sondée à intervalle croissant ;
+/// l'étape se déclenche quand elle se termine, quel que soit son sort (`status` en sortie).
+async fn mcp_task_wait(
+    ctx: &StepCtx<'_>,
+    spec: &Value,
+    state: &Value,
+    elapsed: i64,
+) -> anyhow::Result<StepOutcome> {
+    use penelope_mcp::tasks::{TaskState, TaskStore};
+    let s = ctx.s();
+    let (run, step) = (ctx.run, ctx.step);
+    let (server, reference) = match spec {
+        Value::String(raw) => {
+            let raw = ctx.render(raw).await;
+            match raw.split_once(':') {
+                Some((a, b)) => (a.trim().to_string(), b.trim().to_string()),
+                None => (String::new(), raw),
+            }
+        }
+        Value::Object(_) => (
+            ctx.render(spec["server"].as_str().unwrap_or_default())
+                .await,
+            ctx.render(
+                spec["task"]
+                    .as_str()
+                    .or_else(|| spec["taskId"].as_str())
+                    .unwrap_or_default(),
+            )
+            .await,
+        ),
+        _ => (String::new(), String::new()),
+    };
+    if server.is_empty() || reference.is_empty() {
+        return Ok(done(
+            StepResult::Error,
+            json!({"error": "mcp_task : serveur ou tâche absent (\"serveur:tâche\")"}),
+        ));
+    }
+    let tasks = TaskStore::new(s.store.clone(), s.clock.clone());
+    let key = visit_key("mcp_task", run, &step.id);
+    let task_id = match kv_get(s, &key).await? {
+        Some(id) => id,
+        None => {
+            let t = tasks
+                .create(
+                    &server,
+                    &reference,
+                    Some(&run.session_id),
+                    Some(&run.id),
+                    &json!({"step": step.id}),
+                )
+                .await?;
+            kv_set(s, &key, &t.id).await?;
+            t.id
+        }
+    };
+    let Some(task) = tasks.get(&task_id).await? else {
+        return Ok(done(
+            StepResult::Error,
+            json!({"error": format!("tâche {task_id} perdue")}),
+        ));
+    };
+    let fired = |state: TaskState, result: Option<Value>| {
+        done(
+            StepResult::Fired,
+            json!({
+                "server": server,
+                "task": reference,
+                "status": state.as_str(),
+                "result": result.unwrap_or(Value::Null),
+                "waited_ms": elapsed,
+            }),
+        )
+    };
+    if task.state.is_terminal() {
+        return Ok(fired(task.state, task.result));
+    }
+    let now = s.clock.now_ms();
+    let due = task
+        .poll_at
+        .as_deref()
+        .and_then(|p| chrono::DateTime::parse_from_rfc3339(p).ok())
+        .is_none_or(|at| at.timestamp_millis() <= now);
+    if !due {
+        return Ok(StepOutcome::Waiting("tâche MCP en cours".into()));
+    }
+    let Some(sup) = ctx.d.hooks.mcp_supervisor() else {
+        return Ok(StepOutcome::Waiting("superviseur MCP non démarré".into()));
+    };
+    let attempts = state["mcp_polls"].as_u64().unwrap_or(0) as u32;
+    let mut next = state.clone();
+    next["mcp_polls"] = json!(attempts + 1);
+    kv_set(s, &visit_key("wait", run, &step.id), &next.to_string()).await?;
+    match sup.task_status(&server, &reference).await {
+        Ok(v) => {
+            let status = TaskState::parse(v["status"].as_str().unwrap_or_default())
+                .unwrap_or(TaskState::Working);
+            if status.is_terminal() {
+                let result = Some(v["result"].clone()).filter(|r| !r.is_null());
+                tasks.update(&task_id, status, result.clone(), None).await?;
+                let _ = s
+                    .events
+                    .append(
+                        EventDraft::new(
+                            "mcp.task.completed",
+                            json!({"server": server, "task": reference, "status": status.as_str(), "run": run.id}),
+                        )
+                        .session(&run.session_id),
+                    )
+                    .await;
+                return Ok(fired(status, result));
+            }
+            tasks
+                .update(
+                    &task_id,
+                    status,
+                    None,
+                    Some(TaskStore::poll_interval_ms(attempts)),
+                )
+                .await?;
+        }
+        Err(e) => {
+            tracing::warn!(run = %run.id, step = %step.id, error = %e, "sondage de tâche MCP");
+            tasks
+                .update(
+                    &task_id,
+                    TaskState::Working,
+                    None,
+                    Some(TaskStore::poll_interval_ms(attempts)),
+                )
+                .await?;
+        }
+    }
+    Ok(StepOutcome::Waiting("tâche MCP en cours".into()))
 }
 
 async fn last_event_id(s: &Services) -> anyhow::Result<i64> {
@@ -2104,6 +2310,7 @@ mod tests {
             visit: &str,
             choices: &[String],
             _: bool,
+            _: Option<&Value>,
         ) -> Result<(), String> {
             self.questions.lock().unwrap().push((
                 format!("{run_id}|{visit}"),
@@ -2187,6 +2394,90 @@ mod tests {
             topic_id: None,
             message_id: None,
         }
+    }
+
+    /// `wait` sur une tâche MCP longue : suivie dans `mcp_tasks`, sondée jusqu'à la fin,
+    /// son résultat passe dans la sortie de l'étape.
+    #[tokio::test]
+    async fn a_long_mcp_task_is_awaited_until_it_completes() {
+        use crate::mcp::testing::{FakeConnector, server, tool};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let e = env().await;
+        let fake = Arc::new(FakeConnector::default());
+        let base = server(Arc::new(std::sync::Mutex::new(vec![tool(
+            "build",
+            json!({}),
+        )])));
+        let polls = Arc::new(AtomicUsize::new(0));
+        let seen = polls.clone();
+        fake.serve(
+            "forge",
+            Arc::new(move |m, params| match m {
+                "tasks/get" => {
+                    let n = seen.fetch_add(1, Ordering::SeqCst);
+                    Ok(json!({"task": {
+                        "taskId": params["taskId"],
+                        "status": if n == 0 { "working" } else { "completed" }
+                    }}))
+                }
+                "tasks/result" => Ok(json!({
+                    "content": [{"type": "text", "text": "build vert"}],
+                    "isError": false
+                })),
+                other => base(other, params),
+            }),
+        );
+        let sup = crate::mcp::McpSupervisor::new(e.d.services.clone(), fake.clone());
+        e.d.hooks.set_mcp(sup.clone());
+        sup.add(
+            penelope_mcp::config::ServerConfig::stdio("forge", "/opt/mcp/forge", &[]),
+            false,
+        )
+        .await
+        .unwrap();
+
+        install(
+            &e.d,
+            wf(
+                "attente-tache",
+                "attendre",
+                json!([{
+                    "id": "attendre", "type": "wait", "timeoutMs": 600000,
+                    "on": {"mcp_task": "forge:task-7"},
+                    "transitions": [
+                        {"goto": "$done", "condition": {"type": "output_match", "path": "status", "equals": "completed"}},
+                        {"goto": "$blocked"}
+                    ]
+                }]),
+            ),
+        )
+        .await;
+        let run = start_run(&e.d, "attente-tache", json!({}), &owner(), None, 0)
+            .await
+            .unwrap();
+        assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Running);
+        assert_eq!(
+            polls.load(Ordering::SeqCst),
+            1,
+            "premier sondage : en cours"
+        );
+        assert_eq!(
+            drive(&e.d, &run.id).await.unwrap(),
+            RunState::Running,
+            "pas de nouveau sondage avant l'échéance"
+        );
+        assert_eq!(polls.load(Ordering::SeqCst), 1);
+
+        e.clock.advance_secs(3);
+        assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Done);
+        let done = e.d.services.runs.get(&run.id).await.unwrap().unwrap();
+        let out = &done.step_outputs["attendre"];
+        assert_eq!(out["status"], "completed");
+        assert_eq!(out["result"]["content"][0]["text"], "build vert");
+        let task_id = kv_get(&e.d.services, &format!("wf.mcp_task.{}.attendre.0", run.id))
+            .await
+            .unwrap();
+        assert!(task_id.is_some(), "tâche suivie dans mcp_tasks");
     }
 
     #[tokio::test]

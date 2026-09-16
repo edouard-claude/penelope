@@ -8,13 +8,13 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1139 tests verts**, tous hors réseau.
+- **1151 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
 - CI GitHub Actions (format, lint, tests, binaire, dépendances) et workflow de release
   sur tag `vX.Y.Z` avec binaire universel macOS.
-- 66 tests d'acceptation nommés `ca_<section>_<n>_<nom>`, couvrant 14 sections du PRD,
+- 69 tests d'acceptation nommés `ca_<section>_<n>_<nom>`, couvrant 14 sections du PRD,
   indexés dans [ca-matrix.md](ca-matrix.md), qui est généré depuis les sources.
 
 ## Étapes du §21
@@ -30,7 +30,7 @@ Dernière mise à jour : 16 septembre 2026.
 | 7 | `memory` + `skills` | fait | 97 memory, 12 skills |
 | 8 | `workflow` + déclencheurs + workflows livrés | fait, ordonnanceur et pilote des runs lancés | 74 |
 | 9 | Routage par complexité, budgets, images, STT | fait, alimenté par Telegram (vocaux, photos, documents) | inclus en llm |
-| 10 | `resilience`, `upgrade`, `backup`, suites live, `ab-hermes` | résilience, sauvegarde et `upgrade` faits ; suites live et A/B non faits | 10 resilience, 5 upgrade |
+| 10 | `resilience`, `upgrade`, `backup`, suites live, `ab-hermes` | fait ; suites live et A/B écrites, pas encore lancées (clés, bot de test et instance Hermes requis) | 10 resilience, 6 upgrade |
 
 ## Suites du §20.1
 
@@ -43,11 +43,11 @@ Dernière mise à jour : 16 septembre 2026.
 | `mcp-conformance` | non | verte, 19 tests sur la matrice versions × transports |
 | `telegram` | non | verte |
 | `hitl` | non | verte |
-| `workflow` | non | verte |
+| `workflow` | non | verte, dont `ticket-to-deploy` de bout en bout sur mocks avec redémarrage du daemon entre chaque passage (CA 12) |
 | `hot-reload` | non | verte, 14 tests |
 | `resilience` | non | verte, 10 tests |
 | `security` | non | verte, 11 tests |
-| `ctx-recall`, `mem-longitudinal`, `live-openrouter`, `live-telegram`, `ab-hermes` | oui | **non écrites** : elles exigent un modèle réel, un bot réel et l'instance Hermes |
+| `ctx-recall`, `mem-longitudinal`, `live-openrouter`, `live-telegram`, `ab-hermes` | oui | **écrites, pas encore lancées** : `penelope eval <suite>` avec `OPENROUTER_API_KEY`, un bot de test ou `PENELOPE_AB_HERMES_CMD` |
 
 ## Ce qui reste à faire
 
@@ -303,6 +303,42 @@ Les huit issues ouvertes sur le dépôt, corrigées :
   lieu du mode sans état. Le pont MCP de Xcode (`xcrun mcpbridge`), qui signale ainsi une
   méthode inconnue, négocie en 2025-06-18 et ses outils répondent.
 
+### 0.4.0
+
+- **Frontières d'épisode** (§6.6) : un épisode se clôt sur 2 h d'inactivité, sur trois
+  messages consécutifs hors du sujet de l'épisode (similarité lexicale, voir
+  [décision 0006](decisions/0006-changement-de-sujet-lexical.md)) ou sur `/new` ; il est
+  relu une fois par le rôle `memory_review` : résumé dans le journal du jour, candidats de
+  mémoire. Les instantanés T2 (profil, cœur, projets) sont figés par épisode : une
+  écriture de profil n'altère plus le préfixe avant l'épisode suivant ou une compaction
+  (CA 6 : instantané, frontière automatique).
+- **Workflows** (§12) : attente `mcp_task` (tâche MCP longue suivie dans `mcp_tasks`,
+  sondée par `tasks/get` puis `tasks/result`, survit au redémarrage) ; saisie
+  `form:<id>` des étapes `user` (JSON Schema dans `settings.forms`, un champ par écran sur
+  Telegram, récapitulatif, saisie validée dans `stepOutput.input`) ; sous-groupes
+  (on ne quitte une boucle que par une transition taguée, vérifié au chargement, sortie
+  tracée `workflow.subgroup_exited`). Un sous-workflow travaille dans l'espace de son
+  parent, que le nettoyage ne supprime plus avant lui.
+- **`ticket-to-deploy` exécutable** et testé de bout en bout (CA 12) : dépôt git local,
+  tracker et forge MCP simulés, approbations et choix par le mock Telegram, daemon
+  reconstruit entre chaque passage ; un seul push, une seule PR, un seul commentaire, un
+  seul déploiement. Corrections trouvées par le test : chemins `steps.resolve_repo.data.*`,
+  étape `create_pr` ajoutée (PRD, étape 8), `deploy-generic` lancé dans le dépôt cloné,
+  tests et lint détectés (`make`, `cargo`, `npm`, `go`, voir
+  [décision 0007](decisions/0007-deploiement-par-makefile.md)).
+- **Signature minisign** (§2.12) : `penelope upgrade` vérifie `SHA256SUMS.minisig` dès
+  qu'une clé publique est connue (`upgrade.minisign_pubkey`, ou intégrée au binaire de
+  release par la variable de dépôt `MINISIGN_PUBLIC_KEY`) et refuse alors une release non
+  signée. Le workflow de release signe si le secret `MINISIGN_SECRET_KEY` existe et échoue
+  si la clé publique est posée sans lui. `upgrade.base_url` est honoré.
+- **OCR des PDF scannés** : un PDF sans couche texte est lu par Vision (PDFKit + Vision,
+  programme Swift compilé une fois dans le cache), 50 pages au plus.
+- **Suites réseau** (§20.1) écrites : `live-openrouter` (streaming, outils,
+  raisonnement, image, catalogue), `live-telegram` (envoi, édition, réaction, document,
+  découpe), `ctx-recall` (faits retrouvés après compaction), `mem-longitudinal` (14 jours
+  simulés, score ≥ 85 %, aucune promotion non fiable), `ab-hermes` (30 tâches vérifiables,
+  rapport Markdown, critère réussite ≥ Hermes et coût ≤ Hermes).
+
 ### Routine de livraison
 
 Avant chaque tag :
@@ -320,8 +356,9 @@ Avant chaque tag :
 
 ### Encore à brancher
 
-1. **Frontières d'épisode** (§6.6) : clôture sur inactivité ou changement de sujet,
-   ingestion du transcript de l'épisode ; aujourd'hui la revue se fait tour par tour.
+Rien de ce que décrit le PRD n'est déclaré sans implémentation. Restent à **exécuter**,
+avec des ressources réelles : les suites réseau, `ab-hermes` contre l'instance Hermes, et
+`penelope import hermes` sur cette instance (§20.2, points 3 et 4).
 
 ### Méthodes RPC déclarées mais non servies
 
@@ -330,16 +367,18 @@ déclarée sans être servie le fait échouer.
 
 ### Autres manques
 
-- Workflows : sémantique des sous-groupes (échappement par transition taguée), saisie
-  `form:<schema>` des étapes `user` et attente `mcp_task` non implémentées ; le scénario
-  `ticket-to-deploy` de bout en bout contre des mocks (CA 12) reste à écrire.
-- Pas d'OCR : un PDF scanné sans couche texte est signalé, pas lu. L'extraction PDF de
-  `lopdf` ignore la mise en page (colonnes, tableaux) et les polices sans table Unicode.
+- L'OCR ne tourne que sur macOS (Vision) et s'active seulement quand un PDF n'a aucune
+  couche texte ; un PDF mixte garde ses pages scannées illisibles. L'extraction de `lopdf`
+  ignore la mise en page (colonnes, tableaux) et les polices sans table Unicode.
+- `.penelope/deploy.toml` n'est pas encore interprété : `deploy-generic` passe par les
+  cibles `make` du dépôt ([décision 0007](decisions/0007-deploiement-par-makefile.md)).
+- Telegram : seul le long polling est servi (`telegram.mode = "webhook"` non).
 - `penelope import hermes` n'a pas encore tourné sur l'instance réelle (§20.2, point 3) :
   le format suit la documentation d'Hermes, l'importeur reste tolérant. Les filtres
   `tools` et les réglages TLS d'un serveur Hermes n'ont pas d'équivalent (signalés).
-- `penelope upgrade` vérifie la somme SHA-256 mais pas encore de signature minisign
-  (§2.12) : il faut d'abord une clé de signature dans le workflow de release.
+- Signature des releases : le code est prêt, la clé reste à créer et à poser dans le
+  dépôt (`docs/install-headless.md`, section « Mise à jour ») ; d'ici là, seule la somme
+  SHA-256 est vérifiée.
 - Les captures d'écran de [telegram.md](telegram.md) sont des maquettes ASCII.
 
 ## Décisions
@@ -353,6 +392,8 @@ Les écarts assumés par rapport à un « DEVRAIT » du PRD sont documentés un 
 | [0003](decisions/0003-validateur-json-schema-local.md) | Validateur JSON Schema maison | `$ref` borné (contenu non fiable) et annotations exposées au moteur de formulaires |
 | [0004](decisions/0004-ipc-tokio-unix-socket.md) | `tokio::net::UnixListener` direct | Seul macOS est livré ; permissions `0600` explicites |
 | [0005](decisions/0005-watcher-par-scrutation.md) | Surveillance par scrutation | La resynchronisation périodique est déjà le mécanisme de vérité, et elle est testable |
+| [0006](decisions/0006-changement-de-sujet-lexical.md) | Changement de sujet mesuré sans modèle | Aucun appel de plus par message ; une fausse frontière ne perd rien |
+| [0007](decisions/0007-deploiement-par-makefile.md) | `deploy-generic` par cibles `make` | Pas de commande arbitraire lue dans le dépôt ; convention lisible en SSH |
 
 ## Deux failles corrigées en écrivant la suite `security`
 

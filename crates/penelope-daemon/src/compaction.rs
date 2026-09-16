@@ -470,6 +470,10 @@ async fn publish(
         .map(|n| n.tokens_self)
         .unwrap_or(0);
 
+    // Frontière sûre pour le cache : le préfixe change de toute façon, les instantanés
+    // mémoire T2 se rafraîchissent au tour suivant (§6.6).
+    crate::episodes::refresh_snapshot(d, s, session_id).await;
+
     report.published += 1;
     report.messages += job.messages();
     report.node = Some(node_id.clone());

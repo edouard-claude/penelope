@@ -98,7 +98,11 @@ Un workflow sans plafond est un workflow qui peut coûter n'importe quoi.
 | `drop` | Il est abandonné |
 
 `workspace` vaut `ephemeral` (répertoire jeté à la fin) ou `persistent:<nom>` (répertoire
-réutilisé d'un run à l'autre, purgé selon la rétention configurée).
+réutilisé d'un run à l'autre, purgé selon la rétention configurée). Un sous-workflow
+travaille dans l'espace de son parent, sauf s'il demande un espace persistant.
+
+`forms` déclare les formulaires des étapes `user` (voir plus bas) : un JSON Schema d'objet
+par identifiant.
 
 ## Les neuf types d'étapes
 
@@ -135,8 +139,40 @@ Une étape `wait` attend exactement une chose :
 "on": { "cron": "0 8 * * 1" }
 "on": { "duration_ms": 900000 }
 "on": { "event": "pr.merged" }
-"on": { "mcp_task": "{{tache}}" }
+"on": { "mcp_task": "forge:{{steps.lancer.structuredContent.taskId}}" }
+"on": { "mcp_task": { "server": "forge", "task": "{{params.tache}}" } }
 ```
+
+`mcp_task` suit une tâche MCP longue (extension Tasks) : elle est enregistrée dans
+`mcp_tasks`, sondée par `tasks/get` à intervalle croissant (2 s à 1 min) et survit à un
+redémarrage du daemon. L'étape se déclenche (`fired`) quand la tâche se termine, quel que
+soit son sort : la sortie porte `status` (`completed`, `failed`, `cancelled`) et `result`
+(lu par `tasks/result`). `timeoutMs` borne l'attente (`timeout`).
+
+Une étape `user` peut demander une saisie : `"input": "text"` (un message libre après le
+choix) ou `"input": "form:<id>"`, qui renvoie à `settings.forms` :
+
+```json
+"settings": {
+  "forms": {
+    "deploy": {
+      "type": "object",
+      "required": ["environnement", "version"],
+      "properties": {
+        "environnement": { "type": "string", "title": "Environnement", "enum": ["prod", "staging"] },
+        "version": { "type": "string", "title": "Version" },
+        "notifier": { "type": "boolean", "title": "Prévenir l'équipe" }
+      }
+    }
+  }
+}
+```
+
+Sur Telegram, le choix ouvre le formulaire : un champ par écran (boutons pour une
+énumération ou un booléen, un message pour le reste), « Précédent », « Passer » pour un
+champ facultatif, récapitulatif puis « Envoyer ». La saisie est validée contre le schéma
+et arrive en objet dans `stepOutput.input`. En ligne de commande :
+`penelope wf control <run> answer --choice Déployer --input '{"environnement": "prod", "version": "1.4.2"}'`.
 
 ## Transitions
 
@@ -180,9 +216,24 @@ porter un identifiant commençant par `$`.
 
 ## Sous-groupes
 
-`subGroup` marque un ensemble d'étapes qui forment une boucle logique. Le champ est lu et
-validé, mais la sortie par transition taguée (sémantique OpenFox du §12.7) n'est pas
-encore appliquée : les transitions d'un sous-groupe se suivent comme les autres.
+`subGroup` marque les étapes d'une même boucle (une tranche, sémantique OpenFox du
+§12.7). Une boucle ne se quitte que par une transition **taguée** : toute transition d'une
+étape du groupe vers une étape hors du groupe, ou vers `$done`, porte un `tag` qui dit
+pourquoi la boucle s'arrête. `$blocked` reste l'issue d'échec implicite.
+
+```json
+{ "id": "verifier", "type": "shell", "subGroup": "correctif",
+  "command": "make test",
+  "transitions": [
+    { "goto": "livrer", "tag": "vert", "condition": { "type": "step_result", "result": "success" } },
+    { "goto": "corriger" }
+  ] }
+```
+
+Au chargement : une sortie sans tag est une erreur, un groupe sans aucune sortie taguée
+aussi (il ne pourrait que boucler), un tag sur une transition qui reste dans le groupe est
+signalé comme sans effet. À l'exécution, la sortie est tracée par l'événement
+`workflow.subgroup_exited` (groupe, tag, étapes de départ et d'arrivée).
 
 ## Cycle de vie d'un run
 
@@ -232,10 +283,42 @@ cargo test -p penelope-evals --test resilience
 | `build-verify` | Planifier, implémenter, vérifier, boucler tant que les critères ne sont pas remplis |
 | `review` | Lint, tests et relecture en parallèle, résultats dans `review_findings` |
 | `ticket-to-deploy` | Scénario de référence du §12.10 : du ticket au déploiement, avec portes humaines |
-| `deploy-generic` | Déploiement paramétrable, appelé en sous-workflow |
+| `deploy-generic` | Déploiement du dépôt cloné, appelé en sous-workflow |
 
 Ils sont validés au chargement comme n'importe quel fichier utilisateur : un workflow
 livré qui deviendrait invalide ferait échouer les tests plutôt que de se charger à moitié.
+Un workflow utilisateur de même identifiant remplace celui livré.
+
+`ticket-to-deploy` enchaîne : lecture du ticket (`mcp__redmine__get_issue`), dépôt
+résolu par un sous-agent (question si besoin), clone dans l'espace du run sur la branche
+`penelope/<ticket>`, analyse et plan (agent), proposition au propriétaire, implémentation
+jusqu'aux critères remplis, vérification parallèle (tests, lint, relecture, vérificateur),
+push puis PR (`mcp__github__create_pull_request`), porte de déploiement, déploiement,
+commentaire de clôture sur le ticket. Tests et lint prennent la cible `make test` /
+`make lint` du dépôt, sinon `cargo`, `npm` ou `go`.
+
+`deploy-generic` exige `.penelope/deploy.toml` dans le dépôt et lance `make deploy`,
+`make smoke`, puis `make rollback` en cas d'échec, avec `ENV=<environnement>`
+([décision 0007](decisions/0007-deploiement-par-makefile.md)). Un dépôt minimal :
+
+```make
+test:
+	cargo test
+deploy:
+	./scripts/deploy.sh $(ENV)
+smoke:
+	curl -fsS https://service.exemple.fr/health
+rollback:
+	./scripts/rollback.sh $(ENV)
+```
+
+Le scénario complet tourne dans la suite `workflow` contre des mocks (tracker et forge
+MCP, dépôt git local, déploiement `make`), avec approbations par le mock Telegram et un
+redémarrage du daemon entre chaque passage :
+
+```bash
+cargo test -p penelope-daemon ca_12_1
+```
 
 ## Lancer, planifier, suivre
 
@@ -247,9 +330,9 @@ Telegram ; les questions d'une étape `user` arrivent avec leurs boutons.
 
 ## Limites actuelles
 
-- Sous-groupes : voir plus haut, la sortie par transition taguée n'est pas appliquée.
-- La saisie `form:<schema>` d'une étape `user` et l'attente `mcp_task` ne sont pas
-  implémentées.
-- Le scénario `ticket-to-deploy` de bout en bout contre des mocks (CA 12) reste à écrire.
+- Le contenu de `.penelope/deploy.toml` n'est pas encore interprété : c'est un marqueur,
+  les commandes viennent des cibles `make`.
+- Une tâche MCP n'est suivie qu'une fois connue de l'étape `wait` : un appel d'outil qui
+  rend une tâche n'enregistre rien tout seul.
 
 Voir [progress.md](progress.md).

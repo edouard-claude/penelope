@@ -209,12 +209,14 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     }
 
     // Workspaces éphémères des runs terminés depuis longtemps (§12.7). Un workspace
-    // persistant n'est jamais effacé.
+    // persistant n'est jamais effacé, ni celui qu'un sous-run partage avec son parent :
+    // seul le propriétaire du répertoire (`runs/<son id>`) le supprime.
     let retention = s.config.config().workflows.workspace_retention_days.max(1);
     let ephemeral_root = s.platform.dirs.state().join("runs");
     for (run_id, workdir) in s.runs.expired_workspaces(retention).await? {
         let path = std::path::PathBuf::from(&workdir);
         if path.starts_with(&ephemeral_root)
+            && path.file_name().is_some_and(|n| n == run_id.as_str())
             && path.exists()
             && let Err(e) = std::fs::remove_dir_all(&path)
         {

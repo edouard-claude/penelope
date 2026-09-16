@@ -81,7 +81,7 @@ penelope-platform            penelope-observe ├──► penelope-mcp     ├�
 cargo test --workspace
 ```
 
-1139 tests, tous hors réseau. Les suites nommées du PRD §20.1 sont des filtres sur cette
+1151 tests, tous hors réseau. Les suites nommées du PRD §20.1 sont des filtres sur cette
 même commande, ce qui évite qu'un chemin de test diverge de l'autre :
 
 ```bash
@@ -91,6 +91,17 @@ cargo test -p penelope-evals --test mcp_conformance
 ```bash
 cargo test -p penelope-evals --test resilience --test security --test hot_reload
 ```
+
+Les suites réseau (`live-openrouter`, `live-telegram`, `ctx-recall`, `mem-longitudinal`,
+`ab-hermes`) parlent à de vrais services : ignorées par la CI, elles se lancent depuis le
+dépôt avec leurs variables d'environnement (clé OpenRouter, bot de test, commande Hermes) :
+
+```bash
+OPENROUTER_API_KEY=… penelope eval live-openrouter
+```
+
+`ab-hermes` rejoue 30 tâches vérifiables sur Hermes et Pénélope et écrit
+`target/ab-hermes.md` (réussite, latence, tokens, coût).
 
 La matrice des critères d'acceptation, [docs/ca-matrix.md](docs/ca-matrix.md), est
 **générée** depuis les sources : tout test nommé `ca_<section>_<n>_<nom>` y entre

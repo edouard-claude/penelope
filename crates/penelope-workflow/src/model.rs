@@ -90,6 +90,9 @@ pub struct Settings {
     /// Outil du tracker, pour les workflows livrés (§12.10).
     pub tracker: String,
     pub deploy_workflow: String,
+    /// Formulaires des étapes `user` (`input: "form:<id>"`) : JSON Schema d'objet, un champ
+    /// par écran sur Telegram.
+    pub forms: std::collections::BTreeMap<String, Value>,
 }
 
 impl Default for Settings {
@@ -101,6 +104,7 @@ impl Default for Settings {
             workspace: "ephemeral".into(),
             tracker: String::new(),
             deploy_workflow: String::new(),
+            forms: Default::default(),
         }
     }
 }

@@ -225,6 +225,9 @@ pub fn validate(w: &Workflow, file_stem: Option<&str>, known: &Known) -> Report 
     // --- sous-workflows : existence et absence de cycle ---
     check_subworkflows(&mut r, w, known);
 
+    // --- sous-groupes : on ne quitte une boucle que par une transition taguée ---
+    check_subgroups(&mut r, w);
+
     // --- clés de métadonnées jamais écrites ---
     check_metadata_keys(&mut r, w);
 
@@ -323,7 +326,29 @@ fn validate_step(
                     "une étape `user` doit offrir des choix",
                 );
             }
-            if !(s.input == "none" || s.input == "text" || s.input.starts_with("form:")) {
+            if let Some(id) = s.input.strip_prefix("form:") {
+                match w.settings.forms.get(id) {
+                    None => r.error(
+                        format!("{path}/input"),
+                        format!("formulaire `{id}` absent de `settings.forms`"),
+                    ),
+                    Some(schema) => {
+                        let fields = schema
+                            .get("properties")
+                            .and_then(|p| p.as_object())
+                            .map(|p| p.len())
+                            .unwrap_or(0);
+                        if schema.get("type").and_then(|t| t.as_str()) != Some("object")
+                            || fields == 0
+                        {
+                            r.error(
+                                format!("/settings/forms/{id}"),
+                                "un formulaire est un schéma `object` avec au moins une propriété",
+                            );
+                        }
+                    }
+                }
+            } else if !(s.input == "none" || s.input == "text") {
                 r.error(
                     format!("{path}/input"),
                     format!(
@@ -496,6 +521,82 @@ fn validate_transitions(r: &mut Report, s: &Step, path: &str, w: &Workflow) {
             );
         }
     }
+}
+
+/// Sous-groupes (§12.7, sémantique OpenFox) : les étapes d'un même `subGroup` forment une
+/// tranche qui boucle. Une transition qui en sort (vers une étape d'un autre groupe ou vers
+/// `$done`) porte un `tag` qui dit pourquoi la boucle s'arrête ; `$blocked` reste l'issue
+/// d'échec implicite. Chaque sous-groupe a au moins une sortie taguée.
+pub fn check_subgroups(r: &mut Report, w: &Workflow) {
+    let group_of: BTreeMap<&str, &str> = w
+        .steps
+        .iter()
+        .filter(|s| !s.sub_group.is_empty())
+        .map(|s| (s.id.as_str(), s.sub_group.as_str()))
+        .collect();
+    let mut escapes: BTreeMap<&str, usize> = BTreeMap::new();
+    for (i, s) in w.steps.iter().enumerate() {
+        if s.sub_group.is_empty() {
+            continue;
+        }
+        escapes.entry(s.sub_group.as_str()).or_insert(0);
+        for (j, t) in s.transitions.iter().enumerate() {
+            let path = format!("/steps/{i}/transitions/{j}");
+            let leaving = t.goto != BLOCKED
+                && group_of.get(t.goto.as_str()).copied() != Some(s.sub_group.as_str());
+            match (leaving, t.tag.is_empty()) {
+                (true, true) => r.error(
+                    format!("{path}/tag"),
+                    format!(
+                        "la transition vers `{}` sort du sous-groupe `{}` sans `tag` : une \
+                         boucle ne se quitte que par une transition taguée",
+                        t.goto, s.sub_group
+                    ),
+                ),
+                (true, false) => {
+                    *escapes.entry(s.sub_group.as_str()).or_insert(0) += 1;
+                }
+                (false, false) => r.warn(
+                    format!("{path}/tag"),
+                    format!(
+                        "`tag` sans effet : `{}` reste dans le sous-groupe `{}`",
+                        t.goto, s.sub_group
+                    ),
+                ),
+                (false, true) => {}
+            }
+        }
+    }
+    for (group, n) in escapes {
+        if n == 0 {
+            r.error(
+                "/steps",
+                format!(
+                    "le sous-groupe `{group}` n'a aucune sortie taguée : il ne peut que boucler"
+                ),
+            );
+        }
+    }
+}
+
+/// Tag de la transition qui fait sortir `from` de son sous-groupe vers `next`, s'il y en a
+/// une.
+pub fn escape_tag<'a>(
+    w: &'a Workflow,
+    from: &'a crate::model::Step,
+    next: &str,
+) -> Option<&'a str> {
+    if from.sub_group.is_empty() || next == BLOCKED {
+        return None;
+    }
+    let same = w.step(next).is_some_and(|n| n.sub_group == from.sub_group);
+    if same {
+        return None;
+    }
+    from.transitions
+        .iter()
+        .find(|t| t.goto == next && !t.tag.is_empty())
+        .map(|t| t.tag.as_str())
 }
 
 fn check_vars(r: &mut Report, path: &str, text: &str, declared_params: &BTreeSet<String>) {
@@ -694,6 +795,50 @@ mod tests {
                 },
             ],
         }
+    }
+
+    /// Sous-groupes : une boucle ne se quitte que par une transition taguée.
+    #[test]
+    fn a_subgroup_is_left_only_through_a_tagged_transition() {
+        let mut w = base();
+        w.steps[0].sub_group = "boucle".into();
+        w.steps[1].sub_group = "boucle".into();
+        w.steps[1].transitions = vec![
+            Transition {
+                tag: "vert".into(),
+                ..Transition::on_result(DONE, "success")
+            },
+            Transition::always("un"),
+        ];
+        let r = validate(&w, Some("demo"), &known());
+        assert!(r.is_valid(), "{}", r.render());
+        assert_eq!(escape_tag(&w, &w.steps[1], DONE), Some("vert"));
+        assert_eq!(
+            escape_tag(&w, &w.steps[1], "un"),
+            None,
+            "reste dans la boucle"
+        );
+
+        let mut untagged = w.clone();
+        untagged.steps[1].transitions[0].tag.clear();
+        let r = validate(&untagged, Some("demo"), &known());
+        let text = r.render();
+        assert!(text.contains("sans `tag`"), "{text}");
+        assert!(text.contains("aucune sortie taguée"), "{text}");
+
+        let mut useless = w.clone();
+        useless.steps[1].transitions[1].tag = "encore".into();
+        let r = validate(&useless, Some("demo"), &known());
+        assert!(r.is_valid(), "{}", r.render());
+        assert!(r.render().contains("sans effet"));
+
+        // `$blocked` reste une issue implicite, sans tag.
+        let mut blocked = w.clone();
+        blocked.steps[0].transitions = vec![
+            Transition::on_result(BLOCKED, "failure"),
+            Transition::always("deux"),
+        ];
+        assert!(validate(&blocked, Some("demo"), &known()).is_valid());
     }
 
     #[test]

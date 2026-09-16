@@ -6,7 +6,7 @@
 
 use crate::agent::{AgentLoop, TurnEvent, TurnOutcome, TurnSink, TurnSpec};
 use crate::bus::{Bus, BusEvent, BusKind, Origin};
-use crate::conversation::{SessionConversation, build_tiers};
+use crate::conversation::SessionConversation;
 use crate::executor::{NativeToolExecutor, ToolEnv, default_workspaces, tool_defs};
 use crate::runtime::Daemon;
 use penelope_kernel::ids::TurnId;
@@ -330,6 +330,18 @@ impl Daemon {
             })
             .unwrap_or_default();
 
+        // 0. Frontière d'épisode (§6.6) : inactivité ou changement de sujet, vérifiés une
+        // seule fois par message, avant qu'il soit écrit.
+        let mut episode = session.episode_seq;
+        if turn.kind == TurnKind::Message
+            && self
+                .kv_get(&format!("turn.recorded.{}", turn.id))
+                .await?
+                .is_none()
+        {
+            episode = crate::episodes::before_message(self, &session, &text).await?;
+        }
+
         // 1. Le message utilisateur, écrit une seule fois même si le tour est rejoué. Avec
         // des photos, il attend le choix du modèle : lui les montrer ou les faire décrire.
         if turn.kind != TurnKind::Resume && !text.trim().is_empty() && images.is_empty() {
@@ -347,7 +359,7 @@ impl Daemon {
                         &turn.session_id,
                         &ChatMessage::user(content),
                         tokens,
-                        session.episode_seq,
+                        episode,
                         false,
                         None,
                     )
@@ -394,14 +406,7 @@ impl Daemon {
                 let tokens = s.context.estimator.message_tokens(&model_id, &message);
                 s.context
                     .history
-                    .append(
-                        &turn.session_id,
-                        &message,
-                        tokens,
-                        session.episode_seq,
-                        false,
-                        None,
-                    )
+                    .append(&turn.session_id, &message, tokens, episode, false, None)
                     .await?;
                 self.kv_set(&flag, "1").await?;
             }
@@ -418,7 +423,14 @@ impl Daemon {
             Some(m) => m.server_lines().await,
             None => Vec::new(),
         };
-        let mut tiers = build_tiers(&s, &text, &mcp_lines, None).await;
+        let mut tiers = crate::conversation::build_tiers_in(
+            &s,
+            &text,
+            &mcp_lines,
+            None,
+            (session.kind == SessionKind::Chat).then_some((turn.session_id.as_str(), episode)),
+        )
+        .await;
         if let Some(block) = self.intents_block(turn, &text).await? {
             tiers.volatile.push_str("\n\n");
             tiers.volatile.push_str(&block);
@@ -428,17 +440,11 @@ impl Daemon {
         if let Err(e) = crate::compaction::publish_pending(self, &turn.session_id).await {
             tracing::warn!(session = %turn.session_id, error = %e, "résumé en attente non publié");
         }
-        let conv = SessionConversation::new(
-            s.clone(),
-            &turn.session_id,
-            &model_id,
-            tiers,
-            session.episode_seq,
-        )
-        .with_compactor(Arc::new(crate::compaction::OverflowCompactor {
-            daemon: self.clone(),
-            turn_id: Some(origin_turn.clone()),
-        }));
+        let conv = SessionConversation::new(s.clone(), &turn.session_id, &model_id, tiers, episode)
+            .with_compactor(Arc::new(crate::compaction::OverflowCompactor {
+                daemon: self.clone(),
+                turn_id: Some(origin_turn.clone()),
+            }));
 
         // 5. Outils.
         let mut exec = NativeToolExecutor::new(

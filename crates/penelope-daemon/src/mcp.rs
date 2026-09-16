@@ -810,6 +810,42 @@ impl McpSupervisor {
         }
     }
 
+    /// État d'une tâche MCP (`tasks/get`) et, une fois terminée, son résultat
+    /// (`tasks/result`, sinon celui que porte la tâche). `{status, task, result}`.
+    pub async fn task_status(&self, server: &str, task_ref: &str) -> Result<Value, String> {
+        let slot = self
+            .slot(server)
+            .await
+            .ok_or_else(|| format!("serveur MCP inconnu : `{server}`"))?;
+        let client = self.ensure_live(&slot).await?;
+        let v = client
+            .task_get(task_ref)
+            .await
+            .map_err(|e| format!("tasks/get `{task_ref}` : {e}"))?;
+        let task = v.get("task").cloned().unwrap_or(v);
+        let status = task["status"]
+            .as_str()
+            .or_else(|| task["state"].as_str())
+            .unwrap_or("working")
+            .to_string();
+        let terminal =
+            penelope_mcp::tasks::TaskState::parse(&status).is_some_and(|s| s.is_terminal());
+        let result = if terminal && status != "cancelled" && status != "canceled" {
+            match client.task_result(task_ref).await {
+                Ok(r) => r,
+                Err(McpError::Rpc { code, .. })
+                    if code == penelope_mcp::protocol::METHOD_NOT_FOUND =>
+                {
+                    task.get("result").cloned().unwrap_or(Value::Null)
+                }
+                Err(e) => return Err(format!("tasks/result `{task_ref}` : {e}")),
+            }
+        } else {
+            Value::Null
+        };
+        Ok(json!({"status": status, "task": task, "result": result}))
+    }
+
     // -------------------------------------------------------------- entretien
 
     /// Rechargement si `mcp.d` a changé, arrêt des inactifs, santé, reconnexions.

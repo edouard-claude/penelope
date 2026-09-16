@@ -43,23 +43,57 @@ const FIRST_SELF_UPGRADING: (u64, u64, u64) = (0, 3, 1);
 static CONFIRMED: AtomicBool = AtomicBool::new(false);
 static IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
-/// D'où viennent les releases.
+/// Clé publique minisign intégrée au binaire de release (`PENELOPE_MINISIGN_PUBKEY` à la
+/// compilation). Un binaire qui la porte exige une signature valide pour se mettre à jour.
+pub const BUILT_IN_PUBKEY: Option<&str> = option_env!("PENELOPE_MINISIGN_PUBKEY");
+
+/// D'où viennent les releases, et avec quelle clé elles se vérifient.
 #[derive(Debug, Clone)]
 pub struct Source {
     pub releases_url: String,
     pub os: String,
+    /// Clé publique minisign ; `None` : somme SHA-256 seule.
+    pub pubkey: Option<String>,
 }
 
 impl Source {
-    pub fn from_env() -> Source {
+    /// `PENELOPE_RELEASES_URL`, sinon `upgrade.base_url`, sinon GitHub ; clé de
+    /// `upgrade.minisign_pubkey`, sinon celle du binaire.
+    pub fn from_config(cfg: &penelope_kernel::config::Config) -> Source {
+        let releases_url = std::env::var("PENELOPE_RELEASES_URL")
+            .ok()
+            .filter(|u| !u.trim().is_empty())
+            .or_else(|| Some(cfg.upgrade.base_url.trim().to_string()).filter(|u| !u.is_empty()))
+            .unwrap_or_else(|| RELEASES_URL.to_string());
         Source {
-            releases_url: std::env::var("PENELOPE_RELEASES_URL")
-                .ok()
-                .filter(|u| !u.trim().is_empty())
-                .unwrap_or_else(|| RELEASES_URL.to_string()),
+            releases_url,
             os: std::env::consts::OS.to_string(),
+            pubkey: release_pubkey(&cfg.upgrade.minisign_pubkey),
         }
     }
+}
+
+/// Clé à exiger : celle de la configuration, sinon celle du binaire.
+pub fn release_pubkey(configured: &str) -> Option<String> {
+    Some(configured.trim())
+        .filter(|k| !k.is_empty())
+        .or(BUILT_IN_PUBKEY.map(str::trim).filter(|k| !k.is_empty()))
+        .map(String::from)
+}
+
+/// Vérifie la signature minisign de `SHA256SUMS`. La clé s'écrit en base64
+/// (`RWQ…`) ou comme le contenu de `minisign.pub`.
+pub fn verify_signature(data: &[u8], minisig: &str, pubkey: &str) -> Result<(), String> {
+    let key = if pubkey.contains("untrusted comment") {
+        minisign_verify::PublicKey::decode(pubkey)
+    } else {
+        minisign_verify::PublicKey::from_base64(pubkey.trim())
+    }
+    .map_err(|e| format!("clé publique minisign illisible : {e}"))?;
+    let signature = minisign_verify::Signature::decode(minisig.trim())
+        .map_err(|e| format!("signature illisible : {e}"))?;
+    key.verify(data, &signature, false)
+        .map_err(|e| format!("signature minisign invalide : {e}"))
 }
 
 /// Release résolue.
@@ -70,6 +104,8 @@ pub struct Release {
     pub archive_name: String,
     pub archive_url: String,
     pub sums_url: String,
+    /// `SHA256SUMS.minisig`, si la release est signée.
+    pub signature_url: Option<String>,
 }
 
 /// Nom de l'archive publiée pour un OS.
@@ -196,6 +232,7 @@ pub async fn release(
         archive_url: url_of(&archive_name)
             .ok_or_else(|| format!("archive `{archive_name}` absente de {tag}"))?,
         sums_url: url_of("SHA256SUMS").ok_or_else(|| format!("SHA256SUMS absent de {tag}"))?,
+        signature_url: url_of("SHA256SUMS.minisig"),
         tag,
         version,
         archive_name,
@@ -263,8 +300,24 @@ pub async fn install(opts: Install<'_>) -> Result<Value, String> {
     let dir = opts.binary.parent().ok_or("binaire sans répertoire")?;
     preflight_writable(dir)?;
 
-    let sums = String::from_utf8(fetch(&client, &r.sums_url, 64 * 1024).await?)
-        .map_err(|_| "SHA256SUMS illisible".to_string())?;
+    let sums_bytes = fetch(&client, &r.sums_url, 64 * 1024).await?;
+    let signature = match &opts.source.pubkey {
+        Some(key) => {
+            let url = r.signature_url.as_deref().ok_or_else(|| {
+                format!(
+                    "{} n'est pas signée (SHA256SUMS.minisig absent) alors qu'une clé publique \
+                     est configurée : mise à jour refusée",
+                    r.tag
+                )
+            })?;
+            let minisig = String::from_utf8(fetch(&client, url, 16 * 1024).await?)
+                .map_err(|_| "SHA256SUMS.minisig illisible".to_string())?;
+            verify_signature(&sums_bytes, &minisig, key)?;
+            "vérifiée"
+        }
+        None => "non vérifiée (aucune clé publique)",
+    };
+    let sums = String::from_utf8(sums_bytes).map_err(|_| "SHA256SUMS illisible".to_string())?;
     let expected = expected_sum(&sums, &r.archive_name)
         .ok_or_else(|| format!("aucune somme pour {}", r.archive_name))?;
     let archive = fetch(&client, &r.archive_url, ARCHIVE_MAX_BYTES).await?;
@@ -313,6 +366,7 @@ pub async fn install(opts: Install<'_>) -> Result<Value, String> {
         "from": crate::VERSION,
         "binary": opts.binary,
         "previous": pending.previous,
+        "signature": signature,
     }))
 }
 
@@ -615,7 +669,7 @@ pub fn manual_rollback(binary: &Path, state_dir: &Path) -> Result<Value, String>
 /// Méthode RPC `upgrade` : `check`, `rollback`, ou installation (`tag`, `force`). Une
 /// installation ou un retour arrière réussi redémarre le daemon juste après la réponse.
 pub async fn rpc(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
-    let source = Source::from_env();
+    let source = Source::from_config(&d.services.config.config());
     if p["check"].as_bool().unwrap_or(false) {
         return check(&source).await.map_err(anyhow::Error::msg);
     }
@@ -667,9 +721,10 @@ async fn change(d: &Arc<Daemon>, source: &Source, p: &Value) -> Result<Value, St
 pub fn render(v: &Value) -> String {
     if let Some(to) = v["installed"].as_str() {
         return format!(
-            "⬆️ {to} installée (depuis {}). Au redémarrage, retour automatique à l'ancienne \
-             version si la nouvelle ne démarre pas.",
-            v["from"].as_str().unwrap_or("?")
+            "⬆️ {to} installée (depuis {}, signature {}). Au redémarrage, retour automatique \
+             à l'ancienne version si la nouvelle ne démarre pas.",
+            v["from"].as_str().unwrap_or("?"),
+            v["signature"].as_str().unwrap_or("non vérifiée")
         );
     }
     if v["rolled_back"].as_bool() == Some(true) {
@@ -928,6 +983,7 @@ mod tests {
         let source = |prefix: &str| Source {
             releases_url: format!("{server}/{prefix}"),
             os: "macos".into(),
+            pubkey: None,
         };
 
         let bad = source("bad");
@@ -962,6 +1018,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(v["installed"], "9.9.9");
+        assert_eq!(v["signature"], "non vérifiée (aucune clé publique)");
         assert!(std::fs::read_to_string(&bin).unwrap().contains("9.9.9"));
         assert!(
             std::fs::read_to_string(previous_path(&bin))
@@ -974,5 +1031,42 @@ mod tests {
             (crate::VERSION, "9.9.9")
         );
         assert_eq!(on_boot(&state, "9.9.9", 0), Boot::Trial { attempt: 1 });
+
+        // Clé publique configurée : une release sans signature est refusée, rien n'est
+        // téléchargé au-delà des sommes.
+        let _ = std::fs::remove_file(state.join("upgrade.json"));
+        let mut signed_only = source("good");
+        signed_only.pubkey = Some(TEST_PUBKEY.into());
+        let err = install(Install {
+            source: &signed_only,
+            tag: None,
+            force: true,
+            binary: &bin,
+            state_dir: &state,
+            now: "t".into(),
+        })
+        .await
+        .unwrap_err();
+        assert!(err.contains("pas signée"), "{err}");
+        assert!(pending(&state).is_none());
+    }
+
+    /// Vecteur de la crate `minisign-verify` : « test » signé par sa clé de test.
+    const TEST_PUBKEY: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+    const TEST_SIGNATURE: &str = "untrusted comment: signature from minisign secret key
+RUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=
+trusted comment: timestamp:1556193335\tfile:test
+y/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+bHwhEBg==";
+
+    #[test]
+    fn release_sums_are_checked_against_the_minisign_key() {
+        verify_signature(b"test", TEST_SIGNATURE, TEST_PUBKEY).unwrap();
+        let file_form =
+            format!("untrusted comment: minisign public key E7620F1842B4E81F\n{TEST_PUBKEY}");
+        verify_signature(b"test", TEST_SIGNATURE, &file_form).unwrap();
+        let tampered = verify_signature(b"Test", TEST_SIGNATURE, TEST_PUBKEY).unwrap_err();
+        assert!(tampered.contains("invalide"), "{tampered}");
+        assert!(verify_signature(b"test", "n'importe quoi", TEST_PUBKEY).is_err());
+        assert_eq!(release_pubkey("  RWQx  ").as_deref(), Some("RWQx"));
     }
 }

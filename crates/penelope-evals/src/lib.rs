@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ca_matrix;
+pub mod live;
 pub mod mcp_servers;
 pub mod suites;
 
