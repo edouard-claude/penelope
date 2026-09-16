@@ -125,14 +125,23 @@ impl Connector for ProcessConnector {
                 }
                 .map_err(|e| e.to_string())?;
                 let mut extra = Vec::new();
+                let mut static_auth = false;
                 for (k, v) in &resolved.headers {
                     if k.eq_ignore_ascii_case("authorization") {
                         t.set_authorization(Some(v.clone())).await;
+                        static_auth = true;
                     } else {
                         extra.push((k.clone(), v.clone()));
                     }
                 }
                 t.set_extra_headers(extra).await;
+                // Autorisation OAuth obtenue par `mcp auth` : jeton rafraîchi au besoin.
+                if !static_auth
+                    && let Some(header) =
+                        crate::mcp_auth::authorization_header(s, &cfg.name, &resolved.url).await?
+                {
+                    t.set_authorization(Some(header)).await;
+                }
                 Ok(t as Arc<dyn Transport>)
             }
             other => Err(format!("transport inconnu : `{other}`")),
@@ -532,7 +541,9 @@ impl McpSupervisor {
                 let _ = transport.close().await;
                 return Err((
                     format!(
-                        "{e} : l'autorisation OAuth des serveurs MCP n'est pas encore branchée"
+                        "{e} : autorisation requise, `/mcp auth {name}` sur Telegram ou \
+                         `penelope mcp auth {name}`",
+                        name = cfg.name
                     ),
                     Vec::new(),
                     true,

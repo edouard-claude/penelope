@@ -323,15 +323,20 @@ impl TelegramGateway {
             }
             photo @ Incoming::Photo { .. } => self.photo(photo).await?,
             document @ Incoming::Document { .. } => self.document(document).await?,
-            Incoming::OAuthCallback { chat_id, .. } => {
-                self.reply(
-                    chat_id,
-                    None,
-                    None,
-                    "URL d'autorisation reçue, mais le flux OAuth MCP n'est pas encore branché \
-                     dans ce daemon.",
-                )
-                .await?;
+            Incoming::OAuthCallback { chat_id, url, .. } => {
+                // Adresse de retour collée (§8.5, `paste_back`) : elle ne sert qu'une fois.
+                match crate::mcp_auth::complete(&self.daemon, &url).await {
+                    Ok(server) => crate::mcp_auth::reconnect_and_tell(&self.daemon, &server).await,
+                    Err(e) => {
+                        self.reply(
+                            chat_id,
+                            None,
+                            None,
+                            &format!("🔐 Autorisation impossible : {e}"),
+                        )
+                        .await?
+                    }
+                }
             }
             Incoming::Edited { .. } => {}
             Incoming::Unauthorized { from_id, .. } => {
@@ -548,6 +553,9 @@ impl TelegramGateway {
                         Ok(v) => mcp_list_text(&v),
                         Err(e) => format!("❌ {e}"),
                     },
+                    ["auth", name] => {
+                        return self.send_oauth_card(chat_id, topic_id, name).await;
+                    }
                     ["restart", name] => match call(m::MCP_RESTART, name).await {
                         Ok(v) => format!(
                             "🔄 `{name}` redémarré : {} outil(s), état {}.",
@@ -1386,6 +1394,24 @@ impl TelegramGateway {
                 .await;
         }
         if let ClickOutcome::Accepted(action) = &outcome
+            && (action.action == k::OAUTH_RETRY || action.action == k::OAUTH_PASTED)
+        {
+            let _ = self.bot.answer_callback(callback_id, None, false).await;
+            if action.action == k::OAUTH_RETRY {
+                let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+                return self.send_oauth_card(chat_id, None, &action.target).await;
+            }
+            return self
+                .reply(
+                    chat_id,
+                    None,
+                    None,
+                    "📋 Colle ici l'adresse complète affichée par le navigateur après \
+                     l'autorisation (elle contient `code=` et `state=`).",
+                )
+                .await;
+        }
+        if let ClickOutcome::Accepted(action) = &outcome
             && action.action == k::CHOICE
             && action.args.get("visit").is_some()
         {
@@ -1654,6 +1680,92 @@ impl TelegramGateway {
                 "text": html,
                 "parse_mode": "HTML",
                 "reply_markup": inline_keyboard(&buttons),
+                "message_thread_id": topic_id,
+            }),
+        )
+        .await
+    }
+
+    /// Carte `mcp_oauth_required` : bouton d'autorisation, collage, relance (§8.5).
+    async fn send_oauth_card(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        server: &str,
+    ) -> anyhow::Result<()> {
+        let d = &self.daemon;
+        let s = &d.services;
+        let Some(cfg) = (match d.hooks.mcp_supervisor() {
+            Some(sup) => sup.config_of(server).await,
+            None => None,
+        }) else {
+            return self
+                .reply(
+                    chat_id,
+                    topic_id,
+                    None,
+                    &format!("Serveur MCP `{server}` inconnu (`/mcp`)."),
+                )
+                .await;
+        };
+        let start = match crate::mcp_auth::start(d, &cfg, None).await {
+            Ok(st) => st,
+            Err(e) => {
+                return self
+                    .reply(
+                        chat_id,
+                        topic_id,
+                        None,
+                        &format!("🔐 Autorisation impossible : {e}"),
+                    )
+                    .await;
+            }
+        };
+        let ttl = crate::mcp_auth::REQUEST_TTL_MS;
+        let mut tokens = BTreeMap::new();
+        for action in [k::OAUTH_PASTED, k::OAUTH_RETRY] {
+            let t = s
+                .actions
+                .create(action, server, json!({}), ttl, true)
+                .await?;
+            tokens.insert(action.to_string(), t.token);
+        }
+        let mut vars = BTreeMap::new();
+        vars.insert("serveur".into(), server.to_string());
+        vars.insert(
+            "scopes".into(),
+            if start.scopes.is_empty() {
+                "par défaut".into()
+            } else {
+                start.scopes.join(" ")
+            },
+        );
+        vars.insert(
+            "mode".into(),
+            if start.mode == "paste_back" {
+                "si la page finit sur une erreur 127.0.0.1, colle son adresse ici (10 min)".into()
+            } else {
+                "retour automatique".into()
+            },
+        );
+        vars.insert("url".into(), start.url.clone());
+        let tpl = s
+            .templates
+            .get("mcp_oauth_required")
+            .ok_or_else(|| anyhow::anyhow!("gabarit mcp_oauth_required absent"))?;
+        let rendered = tpl
+            .render(&vars, &tokens, &[])
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let html = markdown_to_html(&substitute(&tpl.body, &vars));
+        self.outbox_push(
+            chat_id,
+            topic_id,
+            "sendMessage",
+            json!({
+                "chat_id": chat_id,
+                "text": html,
+                "parse_mode": "HTML",
+                "reply_markup": inline_keyboard(&rendered.buttons),
                 "message_thread_id": topic_id,
             }),
         )

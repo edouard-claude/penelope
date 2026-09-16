@@ -447,9 +447,21 @@ essaie une connexion à blanc ; `logs <nom>` donne le stderr du serveur ; `add <
 `edit <nom> <champ> <valeur>`, `enable`, `disable` et `rm` modifient `mcp.d` ; `penelope
 doctor` signale les serveurs en panne et les secrets manquants.
 
-Pas encore branché : l'autorisation OAuth des serveurs HTTP (ils restent en
-« autorisation requise »), le sampling (refusé) et les formulaires d'elicitation
-(déclinés).
+Un serveur HTTP protégé par OAuth passe en « autorisation requise » : Pénélope envoie
+le lien sur Telegram (une fois par jour au plus), ou `/mcp auth <nom>` le redemande.
+Après l'autorisation, le navigateur du téléphone tombe sur une page `127.0.0.1` en
+erreur : copier l'adresse complète de la barre et la coller dans la conversation suffit
+(valable 10 minutes, une seule fois). Par un tunnel SSH `-L 8765:127.0.0.1:8765`, le
+retour est reçu directement. Sans Telegram :
+
+```bash
+penelope mcp auth <nom>
+```
+
+puis `penelope mcp auth <nom> --callback '<adresse collée>'`. Les jetons sont rangés
+dans le SecretStore et rafraîchis avant chaque connexion ; ils ne partent que vers un
+serveur en HTTPS (ou en boucle locale). Le sampling reste refusé et les formulaires
+d'elicitation déclinés.
 
 ### Rappels et tâches planifiées
 
@@ -674,6 +686,6 @@ questions plutôt que des relances. `penelope approvals` montre ce qui attend un
 
 Conversation (CLI et Telegram), approbations, catalogue de modèles, vocaux et serveurs
 MCP, rappels et déclencheurs, résumé des longues conversations, photos et documents,
-workflows, génération d'images et consolidation nocturne de la mémoire fonctionnent.
-L'OAuth des serveurs MCP n'est pas encore branché. Voir [progress.md](progress.md) pour
+workflows, génération d'images, consolidation nocturne de la mémoire et autorisation
+OAuth des serveurs MCP fonctionnent. Voir [progress.md](progress.md) pour
 l'état exact.

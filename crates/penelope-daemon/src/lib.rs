@@ -13,6 +13,7 @@ pub mod executor;
 pub mod images;
 pub mod ingest;
 pub mod mcp;
+pub mod mcp_auth;
 pub mod media;
 pub mod review;
 pub mod rpc;

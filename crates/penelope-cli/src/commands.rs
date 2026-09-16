@@ -239,6 +239,13 @@ pub enum McpCmd {
     Restart {
         name: String,
     },
+    /// Autorisation OAuth d'un serveur HTTP : sans option, l'URL à ouvrir ; avec
+    /// `--callback`, l'adresse affichée par le navigateur après l'autorisation.
+    Auth {
+        name: String,
+        #[arg(long)]
+        callback: Option<String>,
+    },
     /// Essai à blanc : connexion, négociation, liste des outils.
     Test {
         /// Serveur déclaré à essayer.
@@ -563,6 +570,9 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Model(ModelCmd::List { filter }) => (m::MODEL_LIST, json!({"filter": filter})),
         Command::Mcp(McpCmd::List) => (m::MCP_LIST, json!({})),
         Command::Mcp(McpCmd::Show { name }) => (m::MCP_SHOW, json!({"name": name})),
+        Command::Mcp(McpCmd::Auth { name, callback }) => {
+            (m::MCP_AUTH, json!({"name": name, "callback": callback}))
+        }
         Command::Mcp(McpCmd::Add { file, name }) => {
             (m::MCP_ADD, json!({"toml": read_toml(file)?, "name": name}))
         }
@@ -1210,6 +1220,7 @@ mod tests {
             (vec!["mcp", "enable", "redmine"], m::MCP_ENABLE),
             (vec!["mcp", "disable", "redmine"], m::MCP_DISABLE),
             (vec!["mcp", "restart", "redmine"], m::MCP_RESTART),
+            (vec!["mcp", "auth", "github"], m::MCP_AUTH),
             (vec!["mcp", "test", "redmine"], m::MCP_TEST),
             (vec!["mcp", "logs", "redmine"], m::MCP_LOGS),
             (

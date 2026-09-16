@@ -438,6 +438,41 @@ impl Rpc {
                 let uid = required_str(p, "uid")?;
                 Ok(serde_json::to_value(s.memory.get(&uid).await?)?)
             }
+            method::MCP_AUTH => {
+                let name = required_str(p, "name")?;
+                if let Some(callback) = p.get("callback").and_then(|c| c.as_str()) {
+                    let server = crate::mcp_auth::complete(&self.daemon, callback)
+                        .await
+                        .map_err(anyhow::Error::msg)?;
+                    if server != name {
+                        anyhow::bail!("cette adresse autorise `{server}`, pas `{name}`");
+                    }
+                    let status = match self.daemon.hooks.mcp_supervisor() {
+                        Some(sup) => sup
+                            .restart(&server)
+                            .await
+                            .map(|st| serde_json::to_value(st).unwrap_or_default())
+                            .unwrap_or_else(|e| json!({"error": e})),
+                        None => Value::Null,
+                    };
+                    return Ok(json!({"server": server, "authorized": true, "status": status}));
+                }
+                let sup = self
+                    .daemon
+                    .hooks
+                    .mcp_supervisor()
+                    .ok_or_else(|| anyhow::anyhow!("superviseur MCP indisponible"))?;
+                let cfg = sup
+                    .config_of(&name)
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("serveur MCP `{name}` inconnu"))?;
+                let start = crate::mcp_auth::start(&self.daemon, &cfg, None)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                let mut v = serde_json::to_value(&start)?;
+                v["text"] = json!(crate::mcp_auth::prompt_text(&start));
+                Ok(v)
+            }
             method::MEM_HISTORY => {
                 crate::dream::history(
                     s,
@@ -1353,7 +1388,6 @@ mod tests {
         let expected: std::collections::BTreeSet<&str> = [
             "session.fork",
             "session.rewind",
-            "mcp.auth",
             "skill.rollback",
             "import.hermes",
             "export",

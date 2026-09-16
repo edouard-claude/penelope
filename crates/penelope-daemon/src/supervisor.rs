@@ -48,6 +48,7 @@ impl Daemon {
             tokio::spawn(catalog_loop(self.clone())),
             tokio::spawn(crate::scheduler::scheduler_loop(self.clone())),
             tokio::spawn(crate::workflow::driver_loop(self.clone())),
+            tokio::spawn(crate::mcp_auth::callback_server(self.clone())),
         ];
 
         // Serveurs MCP de `mcp.d/` : chargés en fond, pour ne pas retarder le démarrage.
@@ -170,6 +171,41 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
         d.enqueue_resume(sid, a.id.as_str(), &origin).await?;
     }
     s.actions.purge_expired().await?;
+
+    // Serveurs MCP qui attendent une autorisation : le propriétaire reçoit le lien, une
+    // fois par jour au plus (§8.5).
+    if let Some(sup) = d.hooks.mcp_supervisor() {
+        for st in sup.statuses().await {
+            if st.state != penelope_mcp::ServerState::AuthRequired {
+                continue;
+            }
+            let key = format!("mcp.oauth.notified.{}", st.name);
+            let now = s.clock.now_ms();
+            let recent = d
+                .kv_get(&key)
+                .await?
+                .and_then(|v| v.parse::<i64>().ok())
+                .is_some_and(|t| now - t < 24 * 3_600_000);
+            if recent {
+                continue;
+            }
+            d.kv_set(&key, &now.to_string()).await?;
+            let Some(cfg) = sup.config_of(&st.name).await else {
+                continue;
+            };
+            match crate::mcp_auth::start(d, &cfg, None).await {
+                Ok(start) => {
+                    if let Some(m) = d.hooks.messenger() {
+                        let origin = crate::scheduler::owner_origin(d);
+                        let _ = m
+                            .send_text(&origin, &crate::mcp_auth::prompt_text(&start))
+                            .await;
+                    }
+                }
+                Err(e) => tracing::warn!(server = %st.name, error = %e, "autorisation MCP"),
+            }
+        }
+    }
 
     // Workspaces éphémères des runs terminés depuis longtemps (§12.7). Un workspace
     // persistant n'est jamais effacé.

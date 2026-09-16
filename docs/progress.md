@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1110 tests verts**, tous hors réseau.
+- **1112 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -211,11 +211,27 @@ Dernière mise à jour : 16 septembre 2026.
   `penelope vault …` ; `/dream`, `/appris`, `/pratique`.
 - Correctif : une pratique réécrite perdait son défaut à la relecture (puce manquante).
 
+### 0.3.0
+
+- **OAuth des serveurs MCP** (§8.5) : découverte (ressource protégée RFC 9728, puis
+  RFC 8414 / OpenID), client CIMD, configuré ou enregistré dynamiquement (indexé par
+  issuer), PKCE S256, `resource` systématique, `iss` vérifié (RFC 9207), consentement
+  incrémental sur `WWW-Authenticate`. Demande valable 10 minutes et à usage unique ;
+  adresse de retour collée dans Telegram ou reçue par le serveur local `127.0.0.1`
+  (qui sert aussi le document CIMD). Jetons dans le SecretStore, rafraîchis avant chaque
+  connexion, rotation gérée. `mcp.auth`, `penelope mcp auth`, `/mcp auth`, carte
+  `mcp_oauth_required`, rappel quotidien des serveurs en attente.
+- Transport chiffré exigé : points d'accès OAuth, métadonnées et serveur MCP en HTTPS ou
+  en boucle locale exacte ; l'hôte est lu par un analyseur d'URL (les formes
+  `localhost.exemple.org` ou `localhost@exemple.org` sont refusées), une URL portant des
+  identifiants aussi.
+
 ### Encore à brancher
 
-1. **OAuth des serveurs MCP** : flux `paste_back` depuis Telegram, `mcp.auth`.
-2. **Frontières d'épisode** (§6.6) : clôture sur inactivité ou changement de sujet,
+1. **Frontières d'épisode** (§6.6) : clôture sur inactivité ou changement de sujet,
    ingestion du transcript de l'épisode ; aujourd'hui la revue se fait tour par tour.
+2. **Commandes secondaires** : `session.fork`, `session.rewind`, `export`, `restore`,
+   `upgrade`, `import.hermes`, `skill.rollback`, `store.rebuild`, `eval.run`.
 
 ### Méthodes RPC déclarées mais non servies
 
@@ -224,7 +240,6 @@ silence.
 
 ```
 session.fork  session.rewind
-mcp.auth
 skill.rollback
 import.hermes  export  restore  store.rebuild  eval.run  upgrade
 ```
