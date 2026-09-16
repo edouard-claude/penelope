@@ -153,6 +153,9 @@ pub enum SecretCmd {
     /// En SSH, coller la valeur à l'invite : `pbpaste` lirait le presse-papiers distant.
     Set {
         name: String,
+        /// Refusé : une valeur en argument reste dans l'historique du shell.
+        #[arg(hide = true)]
+        value: Option<String>,
     },
     Rm {
         name: String,
@@ -220,7 +223,19 @@ pub async fn run(cli: Cli) -> CliResult<()> {
             return validate_config(&cli, file.clone());
         }
         Command::Wf(WfCmd::Validate { file }) => return validate_workflow(&cli, file.clone()),
-        Command::Secret(SecretCmd::Set { name }) => return set_secret(&cli, name.clone()),
+        Command::Secret(SecretCmd::Set { name, value }) => {
+            if value.is_some() {
+                return Err(CliError::Usage(format!(
+                    "la valeur d'un secret ne se passe jamais en argument : elle reste dans \
+                     l'historique du shell et apparaît dans `ps`. Rien n'a été enregistré.\n\
+                     → relancer sans valeur : `penelope secret set {name}`, puis coller la \
+                     valeur à l'invite\n\
+                     → si la vraie valeur a été tapée, la considérer comme exposée : en \
+                     générer une nouvelle (pour un bot : /revoke chez @BotFather)"
+                )));
+            }
+            return set_secret(&cli, name.clone());
+        }
         Command::Install | Command::Uninstall | Command::Start | Command::Stop => {
             return service(&cli);
         }
@@ -920,11 +935,27 @@ mod tests {
         assert!(route(&parse(&["secret", "rm", "x"]).command).is_ok());
     }
 
+    #[tokio::test]
+    async fn a_secret_value_on_the_command_line_is_refused_with_guidance() {
+        let cli = parse(&["secret", "set", "telegram_bot_token", "123:AAH-secret"]);
+        let e = run(cli).await.unwrap_err();
+        let msg = e.to_string();
+        assert!(msg.contains("jamais en argument"), "{msg}");
+        assert!(
+            msg.contains("penelope secret set telegram_bot_token"),
+            "{msg}"
+        );
+        assert!(
+            !msg.contains("123:AAH-secret"),
+            "la valeur ne doit pas être réaffichée"
+        );
+    }
+
     #[test]
     fn a_secret_name_must_be_a_slug() {
         let cli = parse(&["--home", "/srv/pen", "secret", "set", "pas un nom"]);
         let name = match &cli.command {
-            Command::Secret(SecretCmd::Set { name }) => name.clone(),
+            Command::Secret(SecretCmd::Set { name, .. }) => name.clone(),
             other => panic!("{other:?}"),
         };
         let e = set_secret(&cli, name).unwrap_err();
