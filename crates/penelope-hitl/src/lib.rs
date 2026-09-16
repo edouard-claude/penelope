@@ -357,6 +357,32 @@ impl ApprovalStore {
             .await?)
     }
 
+    /// Dernière demande liée à un appel d'outil précis d'une session.
+    ///
+    /// C'est ce qui permet de **reprendre** un tour suspendu : l'appel reste dans
+    /// l'historique, et la décision est retrouvée par l'identifiant de l'appel.
+    pub async fn find_for_call(
+        &self,
+        session_id: &str,
+        call_id: &str,
+    ) -> Result<Option<ApprovalRequest>> {
+        let (sid, cid) = (session_id.to_string(), call_id.to_string());
+        Ok(self
+            .store
+            .read(move |c| {
+                let mut st = c.prepare(&format!(
+                    "{SELECT} WHERE session_id = ?1 AND json_extract(payload, '$.call_id') = ?2
+                     ORDER BY created_at DESC LIMIT 1"
+                ))?;
+                let mut rows = st.query(params![sid, cid])?;
+                match rows.next()? {
+                    Some(r) => Ok(Some(row_to_request(r)?)),
+                    None => Ok(None),
+                }
+            })
+            .await?)
+    }
+
     pub async fn pending(&self, limit: i64) -> Result<Vec<ApprovalRequest>> {
         Ok(self
             .store

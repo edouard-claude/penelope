@@ -37,6 +37,20 @@ pub struct ResponseParameters {
 #[async_trait::async_trait]
 pub trait BotTransport: Send + Sync {
     async fn call(&self, method: &str, body: Value) -> TgResult<ApiResponse>;
+
+    /// Envoi `multipart/form-data` d'un fichier local (`sendDocument`, `sendPhoto`).
+    async fn upload(
+        &self,
+        method: &str,
+        fields: Vec<(String, String)>,
+        file_field: &str,
+        path: &std::path::Path,
+    ) -> TgResult<ApiResponse> {
+        let _ = (method, fields, file_field, path);
+        Err(TgError::Transport(
+            "ce transport ne sait pas envoyer de fichier".into(),
+        ))
+    }
 }
 
 /// Transport HTTP réel.
@@ -74,6 +88,41 @@ impl BotTransport for HttpTransport {
             .await
             .map_err(|e| TgError::Transport(format!("réponse illisible ({status}) : {e}")))?;
         Ok(parsed)
+    }
+
+    async fn upload(
+        &self,
+        method: &str,
+        fields: Vec<(String, String)>,
+        file_field: &str,
+        path: &std::path::Path,
+    ) -> TgResult<ApiResponse> {
+        let bytes = tokio::fs::read(path)
+            .await
+            .map_err(|e| TgError::Transport(format!("{} : {e}", path.display())))?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "fichier".into());
+        let mut form = reqwest::multipart::Form::new();
+        for (k, v) in fields {
+            form = form.text(k, v);
+        }
+        form = form.part(
+            file_field.to_string(),
+            reqwest::multipart::Part::bytes(bytes).file_name(name),
+        );
+        let resp = self
+            .client
+            .post(format!("{}/{method}", self.base))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| TgError::Transport(e.to_string()))?;
+        let status = resp.status().as_u16();
+        resp.json()
+            .await
+            .map_err(|e| TgError::Transport(format!("réponse illisible ({status}) : {e}")))
     }
 }
 
@@ -260,17 +309,21 @@ impl Bot {
     }
 
     /// `sendRichMessage` (Bot API ≥ 10.1).
+    ///
+    /// `InputRichMessage` accepte `blocks`, `html` **ou** `markdown`. On envoie le Markdown
+    /// tel quel : c'est Telegram qui le met en blocs, ce qui évite de maintenir une
+    /// correspondance fragile avec la trentaine de types `InputRichBlock*`.
     pub async fn send_rich(
         &self,
         chat_id: i64,
         topic_id: Option<i64>,
-        blocks: Value,
+        markdown: &str,
         markup: Option<Value>,
         reply_to: Option<i64>,
     ) -> TgResult<Value> {
         let mut body = json!({
             "chat_id": chat_id,
-            "rich_message": {"blocks": blocks},
+            "rich_message": {"markdown": markdown},
         });
         decorate(&mut body, topic_id, markup, reply_to);
         self.call(method::SEND_RICH_MESSAGE, Some(chat_id), body)
@@ -278,11 +331,14 @@ impl Bot {
     }
 
     /// Aperçu de frappe (§14.2) : `draft_id` stable par réponse, `can_stop`.
+    ///
+    /// Dans l'API réelle, `draft_id` est un **entier non nul**, et le brouillon n'est
+    /// qu'un aperçu de 30 s : la réponse finale doit être envoyée par `sendMessage`.
     pub async fn send_draft(
         &self,
         chat_id: i64,
         topic_id: Option<i64>,
-        draft_id: &str,
+        draft_id: i64,
         text: &str,
     ) -> TgResult<Value> {
         let mut body = json!({
@@ -371,6 +427,50 @@ impl Bot {
             }),
         )
         .await
+    }
+
+    /// Envoie un fichier local en document (≤ 50 Mo côté Bot API).
+    pub async fn send_document(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        path: &std::path::Path,
+        caption: Option<&str>,
+    ) -> TgResult<Value> {
+        let mut fields = vec![("chat_id".to_string(), chat_id.to_string())];
+        if let Some(t) = topic_id {
+            fields.push(("message_thread_id".into(), t.to_string()));
+        }
+        if let Some(c) = caption {
+            fields.push(("caption".into(), c.chars().take(1024).collect()));
+        }
+        let wait = self.limiter.delay_for(chat_id, self.clock.now_ms()).await;
+        if wait > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(wait as u64)).await;
+        }
+        let resp = self
+            .transport
+            .upload(method::SEND_DOCUMENT, fields, "document", path)
+            .await?;
+        if resp.ok {
+            Ok(resp.result.unwrap_or(Value::Null))
+        } else {
+            Err(TgError::Api {
+                code: resp.error_code.unwrap_or(0),
+                description: resp.description.unwrap_or_default(),
+            })
+        }
+    }
+
+    /// Télécharge un fichier reçu (`getFile` puis URL de fichier).
+    pub async fn file_path(&self, file_id: &str) -> TgResult<String> {
+        let v = self
+            .call(method::GET_FILE, None, json!({"file_id": file_id}))
+            .await?;
+        v.get("file_path")
+            .and_then(|p| p.as_str())
+            .map(String::from)
+            .ok_or_else(|| TgError::Transport("getFile sans file_path".into()))
     }
 
     pub async fn create_topic(&self, chat_id: i64, name: &str) -> TgResult<Value> {

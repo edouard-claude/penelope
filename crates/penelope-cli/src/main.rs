@@ -14,7 +14,10 @@ use penelope_kernel::api::exit_code;
 #[tokio::main]
 async fn main() {
     let cli = commands::Cli::parse();
-    penelope_observe::init_test();
+    // Le daemon installe sa propre journalisation (fichiers journaliers + stderr).
+    if !matches!(cli.command, commands::Command::Daemon) {
+        penelope_observe::init_test();
+    }
 
     let code = match commands::run(cli).await {
         Ok(()) => exit_code::OK,

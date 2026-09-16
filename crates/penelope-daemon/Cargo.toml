@@ -31,6 +31,7 @@ penelope-hitl.workspace = true
 penelope-telegram.workspace = true
 penelope-workflow.workspace = true
 async-trait.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

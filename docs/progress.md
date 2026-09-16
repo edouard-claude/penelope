@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **924 tests verts**, tous hors réseau.
+- **978 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -51,61 +51,59 @@ Dernière mise à jour : 16 septembre 2026.
 
 ## Ce qui reste à faire
 
-### Boucles de fond du daemon
+### Branché depuis la 0.1.0
 
-C'est le manque principal. `Daemon::recover()` et le serveur RPC tournent ; rien d'autre
-ne tourne en continu. Il manque, dans `penelope-daemon` :
+- **Conversation** : boucle d'agent sur l'historique persistant, prompt T0 à T4 (âme,
+  skills, instantanés mémoire, rappel), alias collant et classifieur de complexité, repli
+  de modèle sur panne, streaming.
+- **Exécuteur d'outils natifs** : fichiers, shell sous bac à sable, git, HTTP (contenu
+  encadré comme non fiable), mémoire (écriture dans le vault), intentions, planification,
+  historique, artefacts, skills, workflows (description, contrôle, écriture).
+- **Approbations** : suspension du tour, reprise par un tour `resume` qui exécute l'appel
+  approuvé sans redemander, refus transmis au modèle, fenêtres « session » et « toujours ».
+- **Pool de runners**, bus d'événements, attente des issues sans perte.
+- **Passerelle Telegram** : long polling persistant et dédupliqué, commandes, cartes
+  d'approbation à boutons (double confirmation des actions destructives, refus motivé),
+  brouillons `sendMessageDraft`, file d'envoi durable avec repli en texte brut, envoi de
+  fichiers. Conforme à la Bot API 10.3 réelle (`draft_id` entier, `rich_message.markdown`).
+- **RPC** : `chat.send`, `chat.stream`, `chat.stop`, `session.switch`, `secret.set`,
+  `model.route_test`, `quiet`, `tail` ; `approve` et `deny` relancent le tour.
+- **CLI** : `penelope chat` (ponctuel ou interactif), `penelope secret set`.
+- **Catalogue de modèles** chargé au démarrage puis toutes les 6 h ; `model list` montre
+  les alias et cherche dans le catalogue.
 
-1. **Scrutation Telegram et file d'envoi.** Le client, le rendu, les gabarits, les CTA et
-   les formulaires sont complets et testés contre le mock ; aucune tâche ne les appelle en
-   boucle.
-2. **Superviseur MCP.** Démarrage paresseux, backoff, éviction LRU et extinction sur
-   inactivité sont implémentés et testés unitairement, mais aucun n'est piloté par une
-   tâche de fond.
-3. **Ordonnanceur.** Cron, `mcp_poll` et déclencheurs d'événements sont implémentés ;
-   personne ne les fait battre.
-4. **Pool de runners.** `TurnQueue` réclame, renouvelle et libère les leases ; il n'y a
-   pas de tâche qui boucle dessus, donc pas d'exécution concurrente réelle en production
-   (elle l'est en test).
-5. **Rêve nocturne et digest.** La consolidation est complète et testée ; son cron n'est
-   pas armé.
+### Encore à brancher
+
+1. **Superviseur MCP** : démarrer les serveurs de `mcp.d/`, remplir le registre, servir
+   `tool_call`, flux OAuth `paste_back` depuis Telegram, méthodes `mcp.*`.
+2. **Ordonnanceur** : faire battre les schedules (cron, intervalle, `mcp_poll`) et les
+   intentions.
+3. **Moteur de workflows** : exécuter les runs étape par étape (`wf.run`,
+   `workflow_start`, sous-agents, étapes `user` et `wait`).
+4. **Rêve nocturne et digest** : consolidation des candidats, méthodes `mem.*`.
+5. **Pièces jointes Telegram** : photos (vision), vocaux (transcription), documents.
+6. **Compaction de niveau 3** (résumés LCM) déclenchée en fond pendant les longues sessions.
 
 ### Méthodes RPC déclarées mais non servies
 
 Un test (`penelope-daemon`, `rpc.rs`) fixe cette liste : elle ne peut pas s'allonger en
-silence. En sont membres aujourd'hui :
+silence.
 
 ```
-chat.send  chat.stream  chat.stop
-session.switch  session.fork  session.rewind  session.compact
-secret.set  model.route_test
+session.fork  session.rewind  session.compact
 mcp.list  mcp.show  mcp.add  mcp.edit  mcp.rm  mcp.enable  mcp.disable
 mcp.restart  mcp.test  mcp.auth  mcp.logs
-skill.rollback  wf.run  schedule.add  schedule.run_now  quiet
+skill.rollback  wf.run  schedule.add  schedule.run_now
 mem.history  mem.restore  mem.reindex  mem.forget  mem.candidates
 mem.dream  mem.learned  vault.sync  vault.check
-import.hermes  export  restore  store.rebuild  tail  eval.run  upgrade
+import.hermes  export  restore  store.rebuild  eval.run  upgrade
 ```
-
-Pour presque toutes, la fonctionnalité existe déjà dans la bibliothèque correspondante et
-ce qui manque est le câblage dans `rpc.rs`. Deux font exception et ne sont implémentées
-nulle part : `import.hermes` et `upgrade`.
 
 ### Autres manques
 
-- `penelope import hermes` (§20.2, point 3) : non implémenté, donc aucun rapport joint.
-- Entrée image (`Content::ImageUrl`) et transcription (`Provider::transcribe`) existent
-  et sont testées, mais rien ne les alimente : c'est la boucle Telegram qui reçoit les
-  photos et les messages vocaux, et elle ne tourne pas.
+- `penelope import hermes` (§20.2, point 3) : non implémenté.
 - `penelope upgrade` : non implémenté.
-- `penelope model list` reste vide : le catalogue OpenRouter est rafraîchi par une tâche
-  de fond non lancée. Et `model set` ne vérifie pas que l'identifiant existe chez le
-  provider.
-- `penelope secret set` écrit en local, sans passer par le daemon (voulu : une
-  installation neuve se configure avant le premier démarrage). La méthode RPC
-  `secret.set` reste donc non servie.
-- Les captures d'écran de [telegram.md](telegram.md) sont des maquettes ASCII, pas des
-  captures réelles : il faut un bot de test pour les produire.
+- Les captures d'écran de [telegram.md](telegram.md) sont des maquettes ASCII.
 
 ## Décisions
 

@@ -7,6 +7,7 @@ pub mod api;
 pub mod commands;
 pub mod error;
 pub mod forms;
+pub mod html;
 pub mod mock;
 pub mod render;
 pub mod templates;
@@ -15,6 +16,7 @@ pub mod topics;
 pub use actions::{Action, ActionStore, ClickOutcome};
 pub use api::{Bot, BotTransport, RenderMode};
 pub use error::{TgError, TgResult};
+pub use html::{html_to_plain, markdown_to_html};
 pub use render::{Block, ButtonSpec, split_message, to_blocks, to_html};
 pub use templates::{Template, TemplateRegistry};
 
@@ -94,7 +96,8 @@ pub enum Incoming {
     StoppedGeneration {
         update_id: i64,
         chat_id: i64,
-        draft_id: String,
+        /// Entier dans l'API réelle (`MessageGenerationStopped.draft_id`).
+        draft_id: i64,
     },
     /// Update d'un utilisateur non autorisé : ignoré, journalisé, alerte au propriétaire.
     Unauthorized {
@@ -191,11 +194,7 @@ pub fn classify(update: &Value, owner_id: i64, allow_groups: bool) -> Incoming {
                 .and_then(|c| c.get("id"))
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0),
-            draft_id: s
-                .get("draft_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
+            draft_id: s.get("draft_id").and_then(|v| v.as_i64()).unwrap_or(0),
         };
     }
 
@@ -501,7 +500,7 @@ mod tests {
             Incoming::Edited { .. }
         ));
         assert!(matches!(
-            classify(&updates::stopped_generation(2, OWNER, "d1"), OWNER, false),
+            classify(&updates::stopped_generation(2, OWNER, 71), OWNER, false),
             Incoming::StoppedGeneration { .. }
         ));
     }

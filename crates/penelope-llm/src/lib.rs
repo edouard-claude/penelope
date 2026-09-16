@@ -15,7 +15,7 @@ pub mod types;
 pub use catalog::{Catalog, ModelInfo};
 pub use provider::{
     CancelToken, ChunkStream, OpenAiCompatProvider, OpenRouterProvider, Provider, ProviderSet,
-    collect_stream,
+    collect_stream, collect_stream_observed,
 };
 pub use router::{
     Classification, Complexity, Decision, RouteInput, RouteReason, Router, StickyModel,

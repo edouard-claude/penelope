@@ -213,12 +213,41 @@ session_usd = 5.0
 alert_ratio = 0.8
 ```
 
-Deux limites à connaître. `penelope model list` reste vide : le catalogue OpenRouter est
-rafraîchi par une tâche de fond qui n'est pas encore lancée. Et `model set` ne vérifie pas
-que l'identifiant existe chez le provider : une faute de frappe ne se verra qu'au premier
-appel.
+`model set` signale un identifiant absent du catalogue (`known: false`) quand le catalogue
+est chargé ; sinon, une faute de frappe ne se verra qu'au premier appel.
 
-## 7. Démarrer et surveiller
+## 7. Premier essai en CLI
+
+Dans un premier terminal, le daemon au premier plan (les journaux s'affichent) :
+
+```bash
+penelope daemon
+```
+
+Dans un second terminal, une question ponctuelle :
+
+```bash
+penelope chat "Bonjour, qui es-tu ?"
+```
+
+Ou une conversation interactive, avec approbation des outils sur place :
+
+```bash
+penelope chat
+```
+
+Dans ce mode, `/new` ouvre une nouvelle session, `/stop` arrête la génération, Ctrl-D
+quitte. Quand un outil demande une autorisation (écrire un fichier, lancer une commande),
+la CLI pose la question et affiche la suite du tour une fois la décision prise.
+
+`penelope model list` affiche d'abord tes alias, puis la taille du catalogue OpenRouter,
+chargé par le daemon au démarrage. Pour chercher dedans :
+
+```bash
+penelope model list --filter glm
+```
+
+## 8. Démarrer et surveiller
 
 ```bash
 penelope start
@@ -235,7 +264,7 @@ penelope stop
 `penelope daemon` lance le processus au premier plan : c'est la forme utile pour déboguer
 en SSH, puisque les journaux partent alors sur le terminal.
 
-## 8. Sauvegarde et audit
+## 9. Sauvegarde et audit
 
 ```bash
 penelope backup
@@ -252,7 +281,7 @@ Recalcule la chaîne de hachage du journal d'événements et nomme le premier ma
 s'il y en a un. Une purge RGPD conserve le hachage d'origine : purger n'invalide pas la
 chaîne.
 
-## 9. Mise à jour
+## 10. Mise à jour
 
 ```bash
 cargo build --release && sudo cp target/release/penelope /usr/local/bin/penelope && penelope restart
@@ -262,8 +291,8 @@ Au démarrage suivant, la reprise (§17) s'exécute : les tours interrompus sont
 file, les runs repartent à leur étape courante, les effets restés en vol deviennent des
 questions plutôt que des relances. `penelope approvals` montre ce qui attend une réponse.
 
-## 10. Ce qui n'est pas encore branché
+## 11. Ce qui n'est pas encore branché
 
-Le daemon sert le RPC et exécute la reprise au démarrage, mais les boucles de fond
-(scrutation Telegram, superviseur MCP, ordonnanceur, pool de runners, rêve nocturne) ne
-sont pas encore lancées. Voir [progress.md](progress.md) pour l'état exact.
+Conversation (CLI et Telegram), approbations et catalogue de modèles fonctionnent. Le
+superviseur MCP, l'ordonnanceur, le moteur de workflows et le rêve nocturne ne sont pas
+encore lancés par le daemon. Voir [progress.md](progress.md) pour l'état exact.

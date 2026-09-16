@@ -95,6 +95,24 @@ impl MockTransport {
 
 #[async_trait::async_trait]
 impl BotTransport for MockTransport {
+    async fn upload(
+        &self,
+        method: &str,
+        fields: Vec<(String, String)>,
+        file_field: &str,
+        path: &std::path::Path,
+    ) -> TgResult<ApiResponse> {
+        let mut body = serde_json::Map::new();
+        for (k, v) in fields {
+            body.insert(k, json!(v));
+        }
+        body.insert(
+            file_field.to_string(),
+            json!(path.file_name().map(|n| n.to_string_lossy().to_string())),
+        );
+        self.call(method, Value::Object(body)).await
+    }
+
     async fn call(&self, method: &str, body: Value) -> TgResult<ApiResponse> {
         let mut g = self.state.lock().await;
         g.calls.push((method.to_string(), body.clone()));
@@ -150,7 +168,8 @@ impl BotTransport for MockTransport {
             }
             crate::api::method::SEND_MESSAGE_DRAFT
             | crate::api::method::SEND_RICH_MESSAGE_DRAFT => {
-                json!({"draft_id": body.get("draft_id").cloned().unwrap_or(json!("d"))})
+                // L'API réelle renvoie `True`.
+                json!(true)
             }
             crate::api::method::CREATE_FORUM_TOPIC => {
                 g.next_message_id += 1;
@@ -277,7 +296,7 @@ pub mod updates {
         })
     }
 
-    pub fn stopped_generation(update_id: i64, chat_id: i64, draft_id: &str) -> Value {
+    pub fn stopped_generation(update_id: i64, chat_id: i64, draft_id: i64) -> Value {
         json!({
             "update_id": update_id,
             "stopped_message_generation": {
@@ -340,8 +359,8 @@ mod tests {
         let e = updates::edited(5, 42, 42, "corrigé");
         assert!(e["edited_message"].is_object());
 
-        let s = updates::stopped_generation(6, 42, "d1");
-        assert_eq!(s["stopped_message_generation"]["draft_id"], "d1");
+        let s = updates::stopped_generation(6, 42, 71);
+        assert_eq!(s["stopped_message_generation"]["draft_id"], 71);
     }
 
     #[tokio::test]

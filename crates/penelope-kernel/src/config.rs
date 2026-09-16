@@ -158,7 +158,9 @@ impl Default for Telegram {
             token: "${SECRET:telegram_bot_token}".into(),
             mode: "polling".into(),
             topics: true,
-            rich_messages: true,
+            // HTML par défaut : `sendMessage` + `parse_mode` marche sur toutes les versions
+            // de la Bot API. Le rendu riche natif est une option à activer.
+            rich_messages: false,
             quiet_hours: "22:00-07:00".into(),
             api_base: "https://api.telegram.org".into(),
             poll_timeout_s: 50,

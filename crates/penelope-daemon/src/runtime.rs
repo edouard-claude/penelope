@@ -250,6 +250,38 @@ impl DaemonHandle {
 pub struct Daemon {
     pub services: Arc<Services>,
     pub handle: DaemonHandle,
+    /// Événements des tours, attentes de réponse, tours actifs.
+    pub bus: Arc<crate::bus::Bus>,
+    /// Branchements optionnels : canal de message, MCP, orchestration.
+    pub hooks: Hooks,
+    /// Providers construits à la demande (la clé peut arriver après le démarrage).
+    providers: tokio::sync::Mutex<Option<Arc<penelope_llm::ProviderSet>>>,
+    /// Provider imposé, pour les tests et les suites sans réseau.
+    provider_override: std::sync::RwLock<Option<Arc<dyn penelope_llm::Provider>>>,
+}
+
+/// Points de branchement des sous-systèmes qui démarrent après le daemon.
+#[derive(Default)]
+pub struct Hooks {
+    pub messenger: std::sync::RwLock<Option<Arc<dyn crate::executor::Messenger>>>,
+    pub mcp: std::sync::RwLock<Option<Arc<dyn crate::executor::McpGateway>>>,
+    pub orchestrator: std::sync::RwLock<Option<Arc<dyn crate::executor::Orchestrator>>>,
+    pub telegram: std::sync::RwLock<Option<Arc<dyn crate::bus::ChannelDelivery>>>,
+}
+
+impl Hooks {
+    pub fn messenger(&self) -> Option<Arc<dyn crate::executor::Messenger>> {
+        self.messenger.read().ok().and_then(|g| g.clone())
+    }
+    pub fn mcp(&self) -> Option<Arc<dyn crate::executor::McpGateway>> {
+        self.mcp.read().ok().and_then(|g| g.clone())
+    }
+    pub fn orchestrator(&self) -> Option<Arc<dyn crate::executor::Orchestrator>> {
+        self.orchestrator.read().ok().and_then(|g| g.clone())
+    }
+    pub fn telegram(&self) -> Option<Arc<dyn crate::bus::ChannelDelivery>> {
+        self.telegram.read().ok().and_then(|g| g.clone())
+    }
 }
 
 impl Daemon {
@@ -269,7 +301,52 @@ impl Daemon {
                 started_at_ms,
                 turns_done: Arc::new(AtomicU64::new(0)),
             },
+            bus: Arc::new(crate::bus::Bus::new()),
+            hooks: Hooks::default(),
+            providers: tokio::sync::Mutex::new(None),
+            provider_override: std::sync::RwLock::new(None),
         }
+    }
+
+    /// Impose un provider pour tous les modèles (tests, suites sans réseau).
+    pub fn set_provider_override(&self, p: Arc<dyn penelope_llm::Provider>) {
+        if let Ok(mut g) = self.provider_override.write() {
+            *g = Some(p);
+        }
+    }
+
+    /// Oublie les providers construits : la prochaine demande les reconstruit avec la
+    /// configuration et les secrets du moment.
+    pub async fn invalidate_providers(&self) {
+        *self.providers.lock().await = None;
+    }
+
+    /// Provider d'un modèle. La construction est retentée tant qu'elle échoue : une clé
+    /// posée après le démarrage est prise en compte au tour suivant, sans redémarrage.
+    pub async fn provider_for(
+        &self,
+        model_id: &str,
+    ) -> Result<Arc<dyn penelope_llm::Provider>, String> {
+        if let Some(p) = self.provider_override.read().ok().and_then(|g| g.clone()) {
+            return Ok(p);
+        }
+        let mut guard = self.providers.lock().await;
+        if guard.is_none() {
+            let s = &self.services;
+            let cfg = s.config.config();
+            let set =
+                penelope_llm::build_providers(&cfg, s.platform.secrets.as_ref(), s.catalog.clone())
+                    .map_err(|e| {
+                        format!(
+                            "aucun provider utilisable : {e}. Poser la clé avec \
+                         `pbpaste | penelope secret set openrouter_api_key`"
+                        )
+                    })?;
+            *guard = Some(Arc::new(set));
+        }
+        let set = guard.as_ref().expect("providers construits");
+        set.get(model_id)
+            .ok_or_else(|| format!("aucun provider configuré pour `{model_id}`"))
     }
 
     /// Reprise au démarrage (§17) : leases, effets, requêtes LLM, tâches MCP, runs.

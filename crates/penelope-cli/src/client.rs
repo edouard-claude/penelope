@@ -100,6 +100,58 @@ pub async fn call(socket: &Path, method: &str, params: Value) -> CliResult<Value
     }
 }
 
+/// Appelle une méthode en flux : chaque notification est passée à `on_event`, la
+/// réponse finale est renvoyée.
+pub async fn call_stream(
+    socket: &Path,
+    method: &str,
+    params: Value,
+    mut on_event: impl FnMut(&Value),
+) -> CliResult<Value> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let stream = penelope_platform::ipc::connect(socket)
+        .await
+        .map_err(|e| CliError::DaemonUnreachable(e.to_string()))?;
+    let (read, mut write) = stream.into_split();
+    let req = RpcRequest::new(1, method, params);
+    let mut body = serde_json::to_string(&req).map_err(|e| CliError::Io(e.to_string()))?;
+    body.push('\n');
+    write
+        .write_all(body.as_bytes())
+        .await
+        .map_err(|e| CliError::DaemonUnreachable(e.to_string()))?;
+
+    let mut lines = BufReader::new(read).lines();
+    while let Some(line) = lines
+        .next_line()
+        .await
+        .map_err(|e| CliError::DaemonUnreachable(e.to_string()))?
+    {
+        let v: Value = serde_json::from_str(&line)
+            .map_err(|e| CliError::Io(format!("réponse illisible : {e}")))?;
+        if v.get("id").is_none() || v["id"].is_null() {
+            if let Some(p) = v.get("params") {
+                on_event(p);
+            }
+            continue;
+        }
+        let resp: RpcResponse = serde_json::from_value(v)
+            .map_err(|e| CliError::Io(format!("réponse illisible : {e}")))?;
+        return match (resp.result, resp.error) {
+            (Some(v), None) => Ok(v),
+            (_, Some(e)) => Err(CliError::Rpc {
+                code: e.code,
+                message: e.message,
+            }),
+            _ => Ok(Value::Null),
+        };
+    }
+    Err(CliError::DaemonUnreachable(
+        "connexion fermée avant la réponse".into(),
+    ))
+}
+
 /// Résout le chemin de la socket : `--home`, `PENELOPE_HOME`, ou le backend de l'OS.
 pub fn socket_path(home: Option<std::path::PathBuf>) -> CliResult<std::path::PathBuf> {
     let dirs =

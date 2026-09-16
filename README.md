@@ -20,8 +20,10 @@ vivent dans `docs/`.
 | HITL, politiques, bac à sable, outils natifs | complet |
 | Telegram : rendu, gabarits, CTA, formulaires, mock Bot API | complet |
 | Workflows : 9 types d'étapes, conditions, reprise, workflows livrés | complet |
-| CLI et RPC sur socket Unix | partiel, voir `docs/progress.md` |
-| Boucles de fond du daemon (polling Telegram, superviseur MCP, ordonnanceur, rêve) | à faire, voir `docs/progress.md` |
+| Conversation : `penelope chat`, pool de runners, reprise après approbation | branché |
+| Passerelle Telegram : réception, commandes, cartes d'approbation, brouillons, file d'envoi | branchée |
+| Catalogue de modèles OpenRouter, rafraîchi par le daemon | branché |
+| Superviseur MCP, ordonnanceur, moteur de workflows, rêve nocturne | à brancher, voir `docs/progress.md` |
 
 `docs/progress.md` tient la liste exacte de ce qui reste, y compris les méthodes RPC
 déclarées mais pas encore servies.
@@ -78,7 +80,7 @@ penelope-platform            penelope-observe ├──► penelope-mcp     ├�
 cargo test --workspace
 ```
 
-924 tests, tous hors réseau. Les suites nommées du PRD §20.1 sont des filtres sur cette
+978 tests, tous hors réseau. Les suites nommées du PRD §20.1 sont des filtres sur cette
 même commande, ce qui évite qu'un chemin de test diverge de l'autre :
 
 ```bash

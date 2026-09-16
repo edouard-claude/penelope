@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -12,7 +12,7 @@ repository = "https://github.com/edouard-claude/penelope"
 
 [workspace.dependencies]
 # --- core async / serde ---
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "process", "net", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "process", "net", "signal", "io-std"] }
 futures = "0.3"
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
@@ -50,21 +50,21 @@ libc = "0.2"
 tempfile = "3"
 
 # --- internal ---
-penelope-platform = { path = "crates/penelope-platform", version = "0.1.0" }
-penelope-store    = { path = "crates/penelope-store", version = "0.1.0" }
-penelope-kernel   = { path = "crates/penelope-kernel", version = "0.1.0" }
-penelope-observe  = { path = "crates/penelope-observe", version = "0.1.0" }
-penelope-llm      = { path = "crates/penelope-llm", version = "0.1.0" }
-penelope-context  = { path = "crates/penelope-context", version = "0.1.0" }
-penelope-memory   = { path = "crates/penelope-memory", version = "0.1.0" }
-penelope-mcp      = { path = "crates/penelope-mcp", version = "0.1.0" }
-penelope-skills   = { path = "crates/penelope-skills", version = "0.1.0" }
-penelope-tools    = { path = "crates/penelope-tools", version = "0.1.0" }
-penelope-hitl     = { path = "crates/penelope-hitl", version = "0.1.0" }
-penelope-telegram = { path = "crates/penelope-telegram", version = "0.1.0" }
-penelope-workflow = { path = "crates/penelope-workflow", version = "0.1.0" }
-penelope-evals    = { path = "crates/penelope-evals", version = "0.1.0" }
-penelope-daemon   = { path = "crates/penelope-daemon", version = "0.1.0" }
+penelope-platform = { path = "crates/penelope-platform", version = "0.2.0" }
+penelope-store    = { path = "crates/penelope-store", version = "0.2.0" }
+penelope-kernel   = { path = "crates/penelope-kernel", version = "0.2.0" }
+penelope-observe  = { path = "crates/penelope-observe", version = "0.2.0" }
+penelope-llm      = { path = "crates/penelope-llm", version = "0.2.0" }
+penelope-context  = { path = "crates/penelope-context", version = "0.2.0" }
+penelope-memory   = { path = "crates/penelope-memory", version = "0.2.0" }
+penelope-mcp      = { path = "crates/penelope-mcp", version = "0.2.0" }
+penelope-skills   = { path = "crates/penelope-skills", version = "0.2.0" }
+penelope-tools    = { path = "crates/penelope-tools", version = "0.2.0" }
+penelope-hitl     = { path = "crates/penelope-hitl", version = "0.2.0" }
+penelope-telegram = { path = "crates/penelope-telegram", version = "0.2.0" }
+penelope-workflow = { path = "crates/penelope-workflow", version = "0.2.0" }
+penelope-evals    = { path = "crates/penelope-evals", version = "0.2.0" }
+penelope-daemon   = { path = "crates/penelope-daemon", version = "0.2.0" }
 
 [profile.release]
 opt-level = 3

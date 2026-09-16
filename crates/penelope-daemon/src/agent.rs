@@ -2,20 +2,26 @@
 //!
 //! Invariants :
 //! - tout effet non `readOnly` est **planifié dans le ledger avant** exécution ;
-//! - un outil qui exige une approbation suspend **ce run seulement** ;
+//! - un outil qui exige une approbation suspend **ce tour seulement**, et l'appel reste
+//!   dans le transcript : la reprise le retrouve par son identifiant ;
 //! - le détecteur de boucles arrête le tour plutôt que de laisser tourner ;
 //! - une erreur d'outil est renvoyée au modèle, pas au harnais.
+//!
+//! Une itération commence **toujours** par résoudre les appels d'outils en attente à la
+//! fin du transcript, puis appelle le modèle. Un premier passage et une reprise après
+//! approbation suivent donc exactement le même chemin.
 
 use crate::runtime::Services;
-use penelope_hitl::{ApprovalKind, Decision};
+use penelope_hitl::{ApprovalKind, ApprovalState, Decision};
 use penelope_kernel::effects::{EffectKind, EffectSpec, Planned};
 use penelope_kernel::event::EventDraft;
-use penelope_kernel::risk::{PolicyDecision, RiskClass};
-use penelope_llm::provider::{CancelToken, Provider, collect_stream};
+use penelope_kernel::risk::{PolicyDecision, PolicyWindow, RiskClass};
+use penelope_llm::provider::{CancelToken, Provider, collect_stream_observed};
 use penelope_llm::types::*;
 use penelope_tools::{LoopDetector, LoopVerdict, ToolOutcome};
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 
 /// Issue d'un tour.
 #[derive(Debug, Clone, PartialEq)]
@@ -45,14 +51,175 @@ pub enum TurnOutcome {
     },
 }
 
-/// Un exécuteur de tour.
-pub struct AgentLoop {
-    pub services: Arc<Services>,
-    pub provider: Arc<dyn Provider>,
-    pub max_iterations: u32,
+/// Ce que le tour montre pendant qu'il se déroule.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TurnEvent {
+    /// Fragment de réponse en cours d'écriture.
+    Delta(String),
+    /// Fragment de raisonnement (affiché seulement si l'interface le demande).
+    Reasoning(String),
+    ToolCall {
+        name: String,
+        args: Value,
+    },
+    ToolResult {
+        name: String,
+        ok: bool,
+        preview: String,
+    },
+    /// Une approbation est demandée : c'est au canal de la présenter.
+    Approval {
+        id: String,
+        tool: String,
+        risk: RiskClass,
+        arguments: Value,
+        reason: String,
+        double: bool,
+    },
+    /// Le modèle réellement utilisé, après routage et repli éventuel.
+    Model {
+        model_id: String,
+    },
 }
 
-/// Ce dont un tour a besoin pour démarrer.
+/// Destinataire des événements d'un tour. Synchrone : un canal derrière suffit.
+pub trait TurnSink: Send + Sync {
+    fn emit(&self, event: TurnEvent);
+}
+
+/// Sink qui ignore tout.
+pub struct NullSink;
+
+impl TurnSink for NullSink {
+    fn emit(&self, _event: TurnEvent) {}
+}
+
+/// Sink qui garde tout, pour les tests et la collecte.
+#[derive(Default)]
+pub struct RecordingSink {
+    events: Mutex<Vec<TurnEvent>>,
+}
+
+impl RecordingSink {
+    pub fn events(&self) -> Vec<TurnEvent> {
+        self.events
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+}
+
+impl TurnSink for RecordingSink {
+    fn emit(&self, event: TurnEvent) {
+        self.events
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(event);
+    }
+}
+
+/// Le transcript sur lequel travaille un tour.
+#[async_trait::async_trait]
+pub trait Conversation: Send + Sync {
+    /// Messages à envoyer au modèle pour la prochaine itération (projection complète,
+    /// prompt système compris).
+    async fn request_messages(&self) -> anyhow::Result<Vec<ChatMessage>>;
+    /// Ajoute un message au transcript.
+    async fn record(&self, message: &ChatMessage, eager: bool) -> anyhow::Result<()>;
+    /// Queue du transcript, sans prompt système : sert à retrouver les appels en attente.
+    async fn tail(&self) -> anyhow::Result<Vec<ChatMessage>>;
+}
+
+/// Transcript en mémoire : sous-agents, tests, appels ponctuels.
+pub struct MemoryConversation {
+    system: String,
+    messages: Mutex<Vec<ChatMessage>>,
+}
+
+impl MemoryConversation {
+    pub fn new(system: impl Into<String>, user: impl Into<String>) -> Self {
+        MemoryConversation {
+            system: system.into(),
+            messages: Mutex::new(vec![ChatMessage::user(user.into())]),
+        }
+    }
+
+    pub fn messages(&self) -> Vec<ChatMessage> {
+        self.messages
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl Conversation for MemoryConversation {
+    async fn request_messages(&self) -> anyhow::Result<Vec<ChatMessage>> {
+        let mut v = vec![ChatMessage::system(self.system.clone())];
+        v.extend(self.messages());
+        Ok(v)
+    }
+
+    async fn record(&self, message: &ChatMessage, _eager: bool) -> anyhow::Result<()> {
+        self.messages
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(message.clone());
+        Ok(())
+    }
+
+    async fn tail(&self) -> anyhow::Result<Vec<ChatMessage>> {
+        Ok(self.messages())
+    }
+}
+
+/// Ce qu'il faut savoir d'un appel avant de l'autoriser.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallInfo {
+    /// Nom sur lequel portent la politique et le ledger : pour `tool_call`, c'est
+    /// l'outil MCP visé, pas le méta-outil.
+    pub effective_name: String,
+    pub risk: RiskClass,
+    pub idempotent: bool,
+}
+
+/// Exécution concrète d'un outil, fournie par le daemon (ou simulée en test).
+#[async_trait::async_trait]
+pub trait ToolExecutor {
+    async fn execute(
+        &self,
+        name: &str,
+        args: &Value,
+    ) -> Result<ToolOutcome, penelope_tools::ToolError>;
+
+    /// Risque et nom effectif d'un appel. Par défaut : le catalogue natif.
+    async fn describe_call(&self, name: &str, args: &Value) -> CallInfo {
+        let _ = args;
+        CallInfo {
+            effective_name: name.to_string(),
+            risk: penelope_tools::effective_risk(name, &Default::default()),
+            idempotent: penelope_tools::tool_spec(name)
+                .map(|s| s.idempotent)
+                .unwrap_or(false),
+        }
+    }
+}
+
+/// Paramètres d'un tour.
+#[derive(Clone)]
+pub struct TurnSpec {
+    pub session_id: String,
+    pub run_id: Option<String>,
+    pub model_id: String,
+    /// Modèles de repli, dans l'ordre, si le principal est en panne (§10.3 point 5).
+    pub fallback_models: Vec<String>,
+    pub tools: Vec<ToolDef>,
+    /// Outils autorisés (liste blanche d'étape ou de skill) ; vide = tous.
+    pub allowed_tools: Vec<String>,
+    pub cancel: CancelToken,
+}
+
+/// Forme historique d'une requête : prompt système et message utilisateur en mémoire.
 pub struct TurnRequest {
     pub session_id: String,
     pub run_id: Option<String>,
@@ -60,9 +227,22 @@ pub struct TurnRequest {
     pub model_id: String,
     pub tools: Vec<ToolDef>,
     pub system_prompt: String,
-    /// Outils autorisés (liste blanche d'étape ou de skill) ; vide = tous.
     pub allowed_tools: Vec<String>,
     pub cancel: CancelToken,
+}
+
+/// Un exécuteur de tour.
+pub struct AgentLoop {
+    pub services: Arc<Services>,
+    pub provider: Arc<dyn Provider>,
+    pub max_iterations: u32,
+}
+
+/// Résolution des appels en attente.
+enum Pending {
+    Nothing,
+    Resolved,
+    Stop(TurnOutcome),
 }
 
 impl AgentLoop {
@@ -74,41 +254,70 @@ impl AgentLoop {
         }
     }
 
-    /// Exécute un tour complet.
+    /// Exécute un tour sur un transcript en mémoire.
     pub async fn run(
         &self,
         req: TurnRequest,
         execute: &(dyn ToolExecutor + Send + Sync),
     ) -> anyhow::Result<TurnOutcome> {
+        let conv = MemoryConversation::new(req.system_prompt, req.user_text);
+        let spec = TurnSpec {
+            session_id: req.session_id,
+            run_id: req.run_id,
+            model_id: req.model_id,
+            fallback_models: Vec::new(),
+            tools: req.tools,
+            allowed_tools: req.allowed_tools,
+            cancel: req.cancel,
+        };
+        self.run_conversation(&spec, &conv, execute, &NullSink)
+            .await
+    }
+
+    /// Exécute (ou reprend) un tour sur un transcript quelconque.
+    pub async fn run_conversation(
+        &self,
+        spec: &TurnSpec,
+        conv: &dyn Conversation,
+        execute: &(dyn ToolExecutor + Send + Sync),
+        sink: &dyn TurnSink,
+    ) -> anyhow::Result<TurnOutcome> {
         let s = &self.services;
         let cfg = s.config.config();
         let mut detector = LoopDetector::new(cfg.tools.loop_detector_repeats);
-        let mut messages = vec![
-            ChatMessage::system(req.system_prompt.clone()),
-            ChatMessage::user(req.user_text.clone()),
-        ];
         let mut cost = 0.0f64;
 
         s.events
             .append(
-                EventDraft::new("turn.started", json!({"model": req.model_id}))
-                    .session(&req.session_id),
+                EventDraft::new("turn.started", json!({"model": spec.model_id}))
+                    .session(&spec.session_id),
             )
             .await?;
 
         for iteration in 0..self.max_iterations {
-            if req.cancel.is_cancelled() {
+            if spec.cancel.is_cancelled() {
                 return Ok(TurnOutcome::Cancelled);
             }
 
-            // Budget : vérifié **avant** chaque appel, pas après coup.
+            // 1. Appels en attente : premier passage ou reprise, même chemin.
+            match self
+                .resolve_pending(spec, conv, execute, sink, &mut detector)
+                .await?
+            {
+                Pending::Stop(outcome) => return Ok(outcome),
+                Pending::Nothing | Pending::Resolved => {}
+            }
+            if spec.cancel.is_cancelled() {
+                return Ok(TurnOutcome::Cancelled);
+            }
+
+            // 2. Budget : vérifié **avant** chaque appel, pas après coup.
             let statuses = s
                 .budget
-                .status(&cfg.budget, Some(&req.session_id), req.run_id.as_deref())
+                .status(&cfg.budget, Some(&spec.session_id), spec.run_id.as_deref())
                 .await?;
             if let Some(exceeded) = statuses.iter().find(|b| b.exceeded) {
-                let a = s
-                    .approvals
+                s.approvals
                     .create(
                         ApprovalKind::BudgetExceeded,
                         exceeded.scope.as_str(),
@@ -119,74 +328,28 @@ impl AgentLoop {
                             "limit": exceeded.limit_usd,
                         }),
                         vec!["+50 %".into(), "Arrêter".into()],
-                        Some(&req.session_id),
-                        req.run_id.as_deref(),
+                        Some(&spec.session_id),
+                        spec.run_id.as_deref(),
                         false,
                     )
                     .await?;
-                let _ = a;
                 return Ok(TurnOutcome::BudgetExceeded {
                     scope: exceeded.scope.as_str().to_string(),
                 });
             }
 
-            let request = ChatRequest {
-                model: req.model_id.clone(),
-                messages: messages.clone(),
-                tools: req.tools.clone(),
-                tool_choice: Some(ToolChoice::Auto),
-                stream: true,
-                ..Default::default()
+            // 3. Appel du modèle, avec repli sur panne transitoire.
+            let messages = conv.request_messages().await?;
+            let response = match self.call_model(spec, messages, sink).await? {
+                Ok(r) => r,
+                Err(error) => return Ok(TurnOutcome::Failed { error }),
             };
-
-            // Machine d'état des appels LLM (§4.3).
-            let llm_id = format!("q_{}", penelope_kernel::ids::Ulid::new());
-            let body = serde_json::to_value(&request).unwrap_or(Value::Null);
-            s.llm_state
-                .plan(
-                    &llm_id,
-                    Some(&req.session_id),
-                    req.run_id.as_deref(),
-                    &req.model_id,
-                    self.provider.name(),
-                    &body,
-                )
-                .await?;
-            s.llm_state.dispatching(&llm_id).await?;
-
-            let stream = match self.provider.chat_stream(request, req.cancel.clone()).await {
-                Ok(st) => st,
-                Err(e) => {
-                    s.llm_state
-                        .failed(&llm_id, &e.to_string(), e.maybe_billed)
-                        .await?;
-                    return Ok(TurnOutcome::Failed {
-                        error: e.to_string(),
-                    });
-                }
-            };
-            s.llm_state.response_started(&llm_id).await?;
-
-            let response =
-                match collect_stream(stream, &req.model_id, self.provider.name(), &s.catalog).await
-                {
-                    Ok(r) => r,
-                    Err(e) => {
-                        s.llm_state
-                            .failed(&llm_id, &e.to_string(), e.maybe_billed)
-                            .await?;
-                        return Ok(TurnOutcome::Failed {
-                            error: e.to_string(),
-                        });
-                    }
-                };
-            s.llm_state.completed(&llm_id).await?;
 
             cost += response.cost_usd;
             s.budget
                 .record(penelope_kernel::budget::UsageRecord {
-                    session_id: Some(req.session_id.clone()),
-                    run_id: req.run_id.clone(),
+                    session_id: Some(spec.session_id.clone()),
+                    run_id: spec.run_id.clone(),
                     model: response.model.clone(),
                     provider: response.provider.clone(),
                     prompt: response.usage.prompt,
@@ -200,10 +363,16 @@ impl AgentLoop {
                 .await?;
 
             if response.finish == FinishReason::Cancelled {
+                // Ce qui a été écrit avant l'arrêt reste dans le transcript.
+                if !response.message.text().is_empty() {
+                    conv.record(&response.message, false).await?;
+                }
                 return Ok(TurnOutcome::Cancelled);
             }
 
-            // Pas d'appel d'outil : c'est la réponse finale.
+            conv.record(&response.message, false).await?;
+
+            // 4. Pas d'appel d'outil : c'est la réponse finale.
             if response.message.tool_calls.is_empty() {
                 let text = response.message.text();
                 s.events
@@ -212,7 +381,7 @@ impl AgentLoop {
                             "turn.finished",
                             json!({"iterations": iteration + 1, "cost_usd": cost}),
                         )
-                        .session(&req.session_id),
+                        .session(&spec.session_id),
                     )
                     .await?;
                 return Ok(TurnOutcome::Answered {
@@ -221,179 +390,7 @@ impl AgentLoop {
                     cost_usd: cost,
                 });
             }
-
-            messages.push(response.message.clone());
-
-            for call in &response.message.tool_calls {
-                // 1. Liste blanche de l'étape ou de la skill.
-                if !penelope_tools::is_allowed(&call.name, &req.allowed_tools) {
-                    messages.push(ChatMessage::tool_result(
-                        &call.id,
-                        &call.name,
-                        format!("Refusé : `{}` n'est pas autorisé ici.", call.name),
-                    ));
-                    continue;
-                }
-
-                // 2. Détecteur de boucles.
-                match detector.observe(&call.name, &call.arguments) {
-                    LoopVerdict::Ok => {}
-                    LoopVerdict::Warn(m) => {
-                        messages.push(ChatMessage::tool_result(
-                            &call.id,
-                            &call.name,
-                            format!("[avertissement du harnais] {m}"),
-                        ));
-                        continue;
-                    }
-                    LoopVerdict::Abort(m) => {
-                        let report = format!("{m}\n\n{}", detector.report());
-                        s.events
-                            .append(
-                                EventDraft::new("turn.loop_aborted", json!({"report": report}))
-                                    .session(&req.session_id),
-                            )
-                            .await?;
-                        return Ok(TurnOutcome::LoopAborted { report });
-                    }
-                }
-
-                // 3. Politique et approbation.
-                let risk = penelope_tools::effective_risk(&call.name, &Default::default());
-                let verdict = s
-                    .policies
-                    .evaluate(
-                        &cfg.mcp.policy,
-                        &call.name,
-                        server_of(&call.name).as_deref(),
-                        &call.arguments,
-                        risk,
-                        req.run_id.as_deref(),
-                        Some(&req.session_id),
-                    )
-                    .await?;
-
-                match verdict.decision {
-                    PolicyDecision::Deny => {
-                        messages.push(ChatMessage::tool_result(
-                            &call.id,
-                            &call.name,
-                            format!("Refusé par la politique : {}", verdict.reason),
-                        ));
-                        continue;
-                    }
-                    PolicyDecision::Ask | PolicyDecision::AskTwice => {
-                        let approval = s
-                            .approvals
-                            .create(
-                                ApprovalKind::ToolCall,
-                                &call.name,
-                                risk,
-                                json!({
-                                    "tool": call.name,
-                                    "arguments": penelope_observe::redact_json(&call.arguments),
-                                    "reason": verdict.reason,
-                                    "double": verdict.decision == PolicyDecision::AskTwice,
-                                }),
-                                vec![
-                                    "Autoriser".into(),
-                                    "Pour ce run".into(),
-                                    "Toujours".into(),
-                                    "Refuser".into(),
-                                ],
-                                Some(&req.session_id),
-                                req.run_id.as_deref(),
-                                false,
-                            )
-                            .await?;
-                        return Ok(TurnOutcome::AwaitingApproval {
-                            approval_id: approval.id.0,
-                        });
-                    }
-                    PolicyDecision::Auto => {}
-                }
-
-                // 4. Ledger d'effets **avant** exécution.
-                let spec = EffectSpec::new(
-                    effect_kind(&call.name),
-                    call.name.clone(),
-                    call.arguments.clone(),
-                )
-                .session(&req.session_id)
-                .idempotent(
-                    penelope_tools::tool_spec(&call.name)
-                        .map(|s| s.idempotent)
-                        .unwrap_or(false),
-                );
-                let spec = match &req.run_id {
-                    Some(r) => spec.run(r),
-                    None => spec,
-                };
-
-                let outcome = match s.effects.plan(spec).await? {
-                    Planned::Replayed(v) => {
-                        // Rejoué depuis le ledger : **jamais** ré-exécuté.
-                        ToolOutcome::ok(v)
-                    }
-                    Planned::NeedsDecision(id) => {
-                        messages.push(ChatMessage::tool_result(
-                            &call.id,
-                            &call.name,
-                            format!(
-                                "Cet appel a peut-être déjà eu lieu (effet {id}). \
-                                 Une décision du propriétaire est requise avant de relancer."
-                            ),
-                        ));
-                        continue;
-                    }
-                    Planned::InFlight(_) => {
-                        messages.push(ChatMessage::tool_result(
-                            &call.id,
-                            &call.name,
-                            "Appel déjà en cours.",
-                        ));
-                        continue;
-                    }
-                    Planned::Fresh(id) => {
-                        s.effects.dispatching(&id).await?;
-                        let result = execute.execute(&call.name, &call.arguments).await;
-                        match &result {
-                            Ok(o) if !o.is_error => {
-                                s.effects.complete(&id, o.value.clone()).await?;
-                            }
-                            Ok(o) => {
-                                s.effects.fail(&id, o.text.clone()).await?;
-                            }
-                            Err(e) => {
-                                s.effects.fail(&id, e.to_string()).await?;
-                            }
-                        }
-                        match result {
-                            Ok(o) => o,
-                            Err(e) => ToolOutcome::error(&e),
-                        }
-                    }
-                };
-
-                s.events
-                    .append(
-                        EventDraft::new(
-                            "tool.result",
-                            json!({
-                                "tool": call.name,
-                                "ok": !outcome.is_error,
-                            }),
-                        )
-                        .session(&req.session_id),
-                    )
-                    .await?;
-
-                messages.push(ChatMessage::tool_result(
-                    &call.id,
-                    &call.name,
-                    outcome.text.clone(),
-                ));
-            }
+            // Sinon, l'itération suivante résout les appels qui viennent d'être écrits.
         }
 
         Ok(TurnOutcome::Failed {
@@ -404,66 +401,506 @@ impl AgentLoop {
         })
     }
 
-    /// Reprend un tour après une décision d'approbation (§9.2).
+    /// Appelle le modèle en diffusant les fragments ; essaie les replis sur panne.
+    async fn call_model(
+        &self,
+        spec: &TurnSpec,
+        messages: Vec<ChatMessage>,
+        sink: &dyn TurnSink,
+    ) -> anyhow::Result<Result<ChatResponse, String>> {
+        let s = &self.services;
+        let mut candidates = vec![spec.model_id.clone()];
+        candidates.extend(
+            spec.fallback_models
+                .iter()
+                .filter(|m| **m != spec.model_id)
+                .cloned(),
+        );
+        let mut last_error = String::new();
+
+        for (attempt, model_id) in candidates.iter().enumerate() {
+            let request = ChatRequest {
+                model: model_id.clone(),
+                messages: messages.clone(),
+                tools: spec.tools.clone(),
+                tool_choice: if spec.tools.is_empty() {
+                    None
+                } else {
+                    Some(ToolChoice::Auto)
+                },
+                stream: true,
+                ..Default::default()
+            };
+
+            // Machine d'état des appels LLM (§4.3).
+            let llm_id = format!("q_{}", penelope_kernel::ids::Ulid::new());
+            let body = serde_json::to_value(&request).unwrap_or(Value::Null);
+            s.llm_state
+                .plan(
+                    &llm_id,
+                    Some(&spec.session_id),
+                    spec.run_id.as_deref(),
+                    model_id,
+                    self.provider.name(),
+                    &body,
+                )
+                .await?;
+            s.llm_state.dispatching(&llm_id).await?;
+
+            let stream = match self
+                .provider
+                .chat_stream(request, spec.cancel.clone())
+                .await
+            {
+                Ok(st) => st,
+                Err(e) => {
+                    s.llm_state
+                        .failed(&llm_id, &e.to_string(), e.maybe_billed)
+                        .await?;
+                    last_error = e.to_string();
+                    let more = attempt + 1 < candidates.len();
+                    if more && penelope_llm::Router::should_fallback(&e) {
+                        tracing::warn!(model = %model_id, error = %e, "repli sur le modèle suivant");
+                        continue;
+                    }
+                    return Ok(Err(humanise_llm_error(&e)));
+                }
+            };
+            s.llm_state.response_started(&llm_id).await?;
+            sink.emit(TurnEvent::Model {
+                model_id: model_id.clone(),
+            });
+
+            let observe = |chunk: &StreamChunk| match chunk {
+                StreamChunk::Delta { text } => sink.emit(TurnEvent::Delta(text.clone())),
+                StreamChunk::Reasoning { text } => sink.emit(TurnEvent::Reasoning(text.clone())),
+                _ => {}
+            };
+            match collect_stream_observed(
+                stream,
+                model_id,
+                self.provider.name(),
+                &s.catalog,
+                &observe,
+            )
+            .await
+            {
+                Ok(r) => {
+                    s.llm_state.completed(&llm_id).await?;
+                    return Ok(Ok(r));
+                }
+                Err(e) => {
+                    s.llm_state
+                        .failed(&llm_id, &e.to_string(), e.maybe_billed)
+                        .await?;
+                    // Des fragments sont peut-être déjà partis : pas de repli silencieux.
+                    return Ok(Err(humanise_llm_error(&e)));
+                }
+            }
+        }
+        Ok(Err(last_error))
+    }
+
+    /// Résout les appels d'outils sans résultat à la fin du transcript.
+    async fn resolve_pending(
+        &self,
+        spec: &TurnSpec,
+        conv: &dyn Conversation,
+        execute: &(dyn ToolExecutor + Send + Sync),
+        sink: &dyn TurnSink,
+        detector: &mut LoopDetector,
+    ) -> anyhow::Result<Pending> {
+        let s = &self.services;
+        let cfg = s.config.config();
+        let tail = conv.tail().await?;
+        let pending = pending_calls(&tail);
+        if pending.is_empty() {
+            return Ok(Pending::Nothing);
+        }
+
+        for call in pending {
+            if spec.cancel.is_cancelled() {
+                return Ok(Pending::Stop(TurnOutcome::Cancelled));
+            }
+            let info = execute.describe_call(&call.name, &call.arguments).await;
+
+            // 1. Liste blanche de l'étape ou de la skill.
+            if !penelope_tools::is_allowed(&call.name, &spec.allowed_tools) {
+                self.record_result(
+                    conv,
+                    sink,
+                    &call,
+                    false,
+                    format!("Refusé : `{}` n'est pas autorisé ici.", call.name),
+                    false,
+                )
+                .await?;
+                continue;
+            }
+
+            // 2. Une décision a-t-elle déjà été prise pour cet appel précis ?
+            let prior = s
+                .approvals
+                .find_for_call(&spec.session_id, &call.id)
+                .await?;
+            let decided = match &prior {
+                Some(a) => match a.state {
+                    ApprovalState::Pending => {
+                        return Ok(Pending::Stop(TurnOutcome::AwaitingApproval {
+                            approval_id: a.id.0.clone(),
+                        }));
+                    }
+                    ApprovalState::Approved => Some(true),
+                    _ => Some(false),
+                },
+                None => None,
+            };
+
+            match decided {
+                Some(false) => {
+                    let a = prior.as_ref().expect("décision sans demande");
+                    let why = match a.state {
+                        ApprovalState::Expired => "la demande a expiré sans réponse".to_string(),
+                        _ => a
+                            .reason
+                            .clone()
+                            .map(|r| format!("le propriétaire a refusé : {r}"))
+                            .unwrap_or_else(|| "le propriétaire a refusé".to_string()),
+                    };
+                    self.record_result(
+                        conv,
+                        sink,
+                        &call,
+                        false,
+                        format!("Non exécuté : {why}. Propose une autre approche ou demande."),
+                        false,
+                    )
+                    .await?;
+                    continue;
+                }
+                Some(true) => {
+                    // Approuvé : on exécute, sans redemander.
+                    let _ = detector.observe(&call.name, &call.arguments);
+                }
+                None => {
+                    // 3. Détecteur de boucles.
+                    match detector.observe(&call.name, &call.arguments) {
+                        LoopVerdict::Ok => {}
+                        LoopVerdict::Warn(m) => {
+                            self.record_result(
+                                conv,
+                                sink,
+                                &call,
+                                false,
+                                format!("[avertissement du harnais] {m}"),
+                                false,
+                            )
+                            .await?;
+                            continue;
+                        }
+                        LoopVerdict::Abort(m) => {
+                            let report = format!("{m}\n\n{}", detector.report());
+                            s.events
+                                .append(
+                                    EventDraft::new("turn.loop_aborted", json!({"report": report}))
+                                        .session(&spec.session_id),
+                                )
+                                .await?;
+                            return Ok(Pending::Stop(TurnOutcome::LoopAborted { report }));
+                        }
+                    }
+
+                    // 4. Politique et approbation.
+                    let verdict = s
+                        .policies
+                        .evaluate(
+                            &cfg.mcp.policy,
+                            &info.effective_name,
+                            server_of(&info.effective_name).as_deref(),
+                            &call.arguments,
+                            info.risk,
+                            spec.run_id.as_deref(),
+                            Some(&spec.session_id),
+                        )
+                        .await?;
+
+                    match verdict.decision {
+                        PolicyDecision::Deny => {
+                            self.record_result(
+                                conv,
+                                sink,
+                                &call,
+                                false,
+                                format!("Refusé par la politique : {}", verdict.reason),
+                                false,
+                            )
+                            .await?;
+                            continue;
+                        }
+                        PolicyDecision::Ask | PolicyDecision::AskTwice => {
+                            let double = verdict.decision == PolicyDecision::AskTwice;
+                            let arguments = penelope_observe::redact_json(&call.arguments);
+                            let approval = s
+                                .approvals
+                                .create(
+                                    ApprovalKind::ToolCall,
+                                    &info.effective_name,
+                                    info.risk,
+                                    json!({
+                                        "tool": info.effective_name,
+                                        "arguments": arguments,
+                                        "reason": verdict.reason,
+                                        "double": double,
+                                        "call_id": call.id,
+                                    }),
+                                    vec![
+                                        "Autoriser".into(),
+                                        "Pour cette session".into(),
+                                        "Toujours".into(),
+                                        "Refuser".into(),
+                                    ],
+                                    Some(&spec.session_id),
+                                    spec.run_id.as_deref(),
+                                    false,
+                                )
+                                .await?;
+                            sink.emit(TurnEvent::Approval {
+                                id: approval.id.0.clone(),
+                                tool: info.effective_name.clone(),
+                                risk: info.risk,
+                                arguments,
+                                reason: verdict.reason.clone(),
+                                double,
+                            });
+                            return Ok(Pending::Stop(TurnOutcome::AwaitingApproval {
+                                approval_id: approval.id.0,
+                            }));
+                        }
+                        PolicyDecision::Auto => {}
+                    }
+                }
+            }
+
+            // 5. Ledger d'effets **avant** exécution.
+            sink.emit(TurnEvent::ToolCall {
+                name: call.name.clone(),
+                args: penelope_observe::redact_json(&call.arguments),
+            });
+            let spec_effect = EffectSpec::new(
+                effect_kind(&info.effective_name),
+                info.effective_name.clone(),
+                call.arguments.clone(),
+            )
+            .session(&spec.session_id)
+            .step(&call.id)
+            .idempotent(info.idempotent);
+            let spec_effect = match &spec.run_id {
+                Some(r) => spec_effect.run(r),
+                None => spec_effect,
+            };
+
+            let outcome = match s.effects.plan(spec_effect).await? {
+                // Rejoué depuis le ledger : **jamais** ré-exécuté.
+                Planned::Replayed(v) => ToolOutcome::ok(v),
+                Planned::NeedsDecision(id) => ToolOutcome {
+                    value: json!({"effect": id.as_str(), "state": "unknown"}),
+                    is_error: true,
+                    text: format!(
+                        "Cet appel a peut-être déjà eu lieu (effet {id}). Une décision du \
+                         propriétaire est requise avant de relancer."
+                    ),
+                    eager: false,
+                },
+                Planned::InFlight(_) => ToolOutcome {
+                    value: json!({"state": "in_flight"}),
+                    is_error: true,
+                    text: "Appel déjà en cours.".into(),
+                    eager: false,
+                },
+                Planned::Fresh(id) => {
+                    s.effects.dispatching(&id).await?;
+                    let result = execute.execute(&call.name, &call.arguments).await;
+                    match &result {
+                        Ok(o) if !o.is_error => s.effects.complete(&id, o.value.clone()).await?,
+                        Ok(o) => s.effects.fail(&id, o.text.clone()).await?,
+                        Err(e) => s.effects.fail(&id, e.to_string()).await?,
+                    }
+                    match result {
+                        Ok(o) => o,
+                        Err(e) => ToolOutcome::error(&e),
+                    }
+                }
+            };
+
+            s.events
+                .append(
+                    EventDraft::new(
+                        "tool.result",
+                        json!({"tool": info.effective_name, "ok": !outcome.is_error}),
+                    )
+                    .session(&spec.session_id),
+                )
+                .await?;
+            self.record_result(
+                conv,
+                sink,
+                &call,
+                !outcome.is_error,
+                outcome.text.clone(),
+                outcome.eager,
+            )
+            .await?;
+        }
+        Ok(Pending::Resolved)
+    }
+
+    async fn record_result(
+        &self,
+        conv: &dyn Conversation,
+        sink: &dyn TurnSink,
+        call: &ToolCall,
+        ok: bool,
+        text: String,
+        eager: bool,
+    ) -> anyhow::Result<()> {
+        let preview: String = text.chars().take(200).collect();
+        conv.record(&ChatMessage::tool_result(&call.id, &call.name, text), eager)
+            .await?;
+        sink.emit(TurnEvent::ToolResult {
+            name: call.name.clone(),
+            ok,
+            preview,
+        });
+        Ok(())
+    }
+
+    /// Tranche une approbation et crée la règle éventuelle (§9.2). Ne relance pas le
+    /// tour : c'est au canal de remettre un tour `resume` en file.
+    pub async fn decide_approval(
+        &self,
+        approval_id: &str,
+        decision: &Decision,
+    ) -> anyhow::Result<bool> {
+        decide_approval(&self.services, approval_id, decision).await
+    }
+
+    /// Ancien nom, conservé pour les appelants existants.
     pub async fn resume_after_approval(
         &self,
         approval_id: &str,
         decision: &Decision,
     ) -> anyhow::Result<bool> {
-        let s = &self.services;
-        let approved = s.approvals.decide(approval_id, decision).await;
-        match approved {
-            Ok(a) => {
-                // Une fenêtre « toujours » crée une règle visible et révocable.
-                if decision.window.creates_rule() {
-                    let tool = a.subject.clone();
-                    s.policies
-                        .create_rule(
-                            penelope_hitl::RuleScope::Tool,
-                            Some(&tool),
-                            server_of(&tool).as_deref(),
-                            None,
-                            if decision.approved {
-                                PolicyDecision::Auto
-                            } else {
-                                PolicyDecision::Deny
-                            },
-                            decision.window,
-                            None,
-                        )
-                        .await?;
-                }
-                s.events
-                    .append(EventDraft::new(
-                        "approval.decided",
-                        json!({
-                            "id": approval_id,
-                            "approved": decision.approved,
-                            "via": decision.via,
-                            "window": decision.window.as_str(),
-                        }),
-                    ))
-                    .await?;
-                Ok(decision.approved)
-            }
-            // Déjà tranché par l'autre canal : la première décision gagne.
-            Err(penelope_hitl::HitlError::AlreadyDecided { .. }) => Ok(false),
-            Err(e) => Err(e.into()),
-        }
+        self.decide_approval(approval_id, decision).await
     }
 }
 
-/// Exécution concrète d'un outil, fournie par le daemon (ou simulée en test).
-#[async_trait::async_trait]
-pub trait ToolExecutor {
-    async fn execute(
-        &self,
-        name: &str,
-        args: &Value,
-    ) -> Result<ToolOutcome, penelope_tools::ToolError>;
+/// Tranche une approbation : la première décision gagne, une fenêtre crée une règle.
+pub async fn decide_approval(
+    s: &Services,
+    approval_id: &str,
+    decision: &Decision,
+) -> anyhow::Result<bool> {
+    match s.approvals.decide(approval_id, decision).await {
+        Ok(a) => {
+            // « Toujours », « pour ce run », « pour cette session » : règle visible et
+            // révocable dans `/policies`.
+            let window_ref = match decision.window {
+                PolicyWindow::Run => a.run_id.clone().or_else(|| a.session_id.clone()),
+                PolicyWindow::Session => a.session_id.clone(),
+                _ => None,
+            };
+            if decision.approved && decision.window != PolicyWindow::Once {
+                let window = if decision.window == PolicyWindow::Run && a.run_id.is_none() {
+                    PolicyWindow::Session
+                } else {
+                    decision.window
+                };
+                s.policies
+                    .create_rule(
+                        penelope_hitl::RuleScope::Tool,
+                        Some(&a.subject),
+                        server_of(&a.subject).as_deref(),
+                        None,
+                        PolicyDecision::Auto,
+                        window,
+                        window_ref.as_deref(),
+                    )
+                    .await?;
+            } else if !decision.approved && decision.window.creates_rule() {
+                s.policies
+                    .create_rule(
+                        penelope_hitl::RuleScope::Tool,
+                        Some(&a.subject),
+                        server_of(&a.subject).as_deref(),
+                        None,
+                        PolicyDecision::Deny,
+                        decision.window,
+                        None,
+                    )
+                    .await?;
+            }
+            s.events
+                .append(EventDraft::new(
+                    "approval.decided",
+                    json!({
+                        "id": approval_id,
+                        "approved": decision.approved,
+                        "via": decision.via,
+                        "window": decision.window.as_str(),
+                    }),
+                ))
+                .await?;
+            Ok(decision.approved)
+        }
+        // Déjà tranché par l'autre canal : la première décision gagne.
+        Err(penelope_hitl::HitlError::AlreadyDecided { .. }) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
 }
 
-fn server_of(tool: &str) -> Option<String> {
+/// Appels du dernier message assistant qui n'ont pas encore de résultat.
+///
+/// Si un message utilisateur est arrivé depuis, les appels sont abandonnés : la
+/// conversation a repris ailleurs, et ils ne doivent pas bloquer la nouvelle demande.
+pub fn pending_calls(tail: &[ChatMessage]) -> Vec<ToolCall> {
+    let Some(idx) = tail
+        .iter()
+        .rposition(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+    else {
+        return Vec::new();
+    };
+    let after = &tail[idx + 1..];
+    if after.iter().any(|m| m.role != Role::Tool) {
+        return Vec::new();
+    }
+    let answered: BTreeSet<&str> = after
+        .iter()
+        .filter_map(|m| m.tool_call_id.as_deref())
+        .collect();
+    tail[idx]
+        .tool_calls
+        .iter()
+        .filter(|c| !answered.contains(c.id.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Message d'erreur lisible pour le propriétaire.
+fn humanise_llm_error(e: &LlmError) -> String {
+    match e.kind {
+        LlmErrorKind::Auth => format!(
+            "le provider refuse la clé ({e}). Vérifier la clé : \
+             `pbpaste | penelope secret set openrouter_api_key`"
+        ),
+        LlmErrorKind::UnknownModel => format!(
+            "modèle inconnu du provider ({e}). Changer de modèle : \
+             `penelope model set main openrouter:<identifiant>`"
+        ),
+        _ => e.to_string(),
+    }
+}
+
+pub(crate) fn server_of(tool: &str) -> Option<String> {
     tool.strip_prefix("mcp__")
         .and_then(|rest| rest.split("__").next())
         .map(String::from)
@@ -510,6 +947,13 @@ mod tests {
         }
     }
 
+    fn exec(fail: bool) -> CountingExecutor {
+        CountingExecutor {
+            calls: AtomicUsize::new(0),
+            fail,
+        }
+    }
+
     async fn setup() -> (tempfile::TempDir, Arc<Services>, Arc<MockProvider>) {
         let dir = tempfile::tempdir().unwrap();
         let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
@@ -535,6 +979,26 @@ mod tests {
         }
     }
 
+    fn spec(session_id: &str) -> TurnSpec {
+        TurnSpec {
+            session_id: session_id.to_string(),
+            run_id: None,
+            model_id: "mock/model".into(),
+            fallback_models: vec![],
+            tools: vec![ToolDef::new("fs_read", "lire", json!({"type":"object"}))],
+            allowed_tools: vec![],
+            cancel: CancelToken::new(),
+        }
+    }
+
+    fn call(id: &str, name: &str, args: Value) -> ToolCall {
+        ToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments: args,
+        }
+    }
+
     async fn session(s: &Services) -> String {
         s.sessions
             .create(penelope_kernel::session::SessionKind::Chat, None)
@@ -550,11 +1014,8 @@ mod tests {
         p.reply("voici la réponse");
         let sid = session(&s).await;
         let loop_ = AgentLoop::new(s.clone(), p.clone());
-        let exec = CountingExecutor {
-            calls: AtomicUsize::new(0),
-            fail: false,
-        };
-        match loop_.run(request(&sid), &exec).await.unwrap() {
+        let e = exec(false);
+        match loop_.run(request(&sid), &e).await.unwrap() {
             TurnOutcome::Answered {
                 text, iterations, ..
             } => {
@@ -563,7 +1024,7 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        assert_eq!(exec.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(e.calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
@@ -571,24 +1032,17 @@ mod tests {
         let (_d, s, p) = setup().await;
         p.push(Scripted::ToolCalls(
             String::new(),
-            vec![ToolCall {
-                id: "c1".into(),
-                name: "fs_read".into(),
-                arguments: json!({"path":"a.rs"}),
-            }],
+            vec![call("c1", "fs_read", json!({"path":"a.rs"}))],
         ));
         p.reply("j'ai lu le fichier");
         let sid = session(&s).await;
-        let exec = CountingExecutor {
-            calls: AtomicUsize::new(0),
-            fail: false,
-        };
+        let e = exec(false);
         let out = AgentLoop::new(s.clone(), p.clone())
-            .run(request(&sid), &exec)
+            .run(request(&sid), &e)
             .await
             .unwrap();
         assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
-        assert_eq!(exec.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(e.calls.load(Ordering::SeqCst), 1);
     }
 
     /// §9 : un outil `write` suspend le tour et crée une demande d'approbation.
@@ -597,19 +1051,12 @@ mod tests {
         let (_d, s, p) = setup().await;
         p.push(Scripted::ToolCalls(
             String::new(),
-            vec![ToolCall {
-                id: "c1".into(),
-                name: "shell_exec".into(),
-                arguments: json!({"command":"cargo build"}),
-            }],
+            vec![call("c1", "shell_exec", json!({"command":"cargo build"}))],
         ));
         let sid = session(&s).await;
-        let exec = CountingExecutor {
-            calls: AtomicUsize::new(0),
-            fail: false,
-        };
+        let e = exec(false);
         let out = AgentLoop::new(s.clone(), p.clone())
-            .run(request(&sid), &exec)
+            .run(request(&sid), &e)
             .await
             .unwrap();
         let id = match out {
@@ -617,13 +1064,116 @@ mod tests {
             other => panic!("{other:?}"),
         };
         assert_eq!(
-            exec.calls.load(Ordering::SeqCst),
+            e.calls.load(Ordering::SeqCst),
             0,
             "aucun effet avant approbation"
         );
         let pending = s.approvals.pending(10).await.unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].id.0, id);
+        assert_eq!(pending[0].payload["call_id"], "c1");
+    }
+
+    /// §9.2 : après approbation, la reprise exécute l'appel **sans redemander**, puis
+    /// rend la main au modèle.
+    #[tokio::test]
+    async fn an_approved_call_runs_on_resume_without_asking_again() {
+        let (_d, s, p) = setup().await;
+        let sid = session(&s).await;
+        let conv = MemoryConversation::new("Tu es Pénélope.", "compile");
+        let e = exec(false);
+        let loop_ = AgentLoop::new(s.clone(), p.clone());
+        let sink = RecordingSink::default();
+
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![call("c1", "shell_exec", json!({"command":"cargo build"}))],
+        ));
+        let id = match loop_
+            .run_conversation(&spec(&sid), &conv, &e, &sink)
+            .await
+            .unwrap()
+        {
+            TurnOutcome::AwaitingApproval { approval_id } => approval_id,
+            other => panic!("{other:?}"),
+        };
+        assert!(
+            sink.events()
+                .iter()
+                .any(|ev| matches!(ev, TurnEvent::Approval { double: false, .. }))
+        );
+
+        // Reprise avant décision : on attend toujours, sans créer de doublon.
+        let again = loop_
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap();
+        assert_eq!(
+            again,
+            TurnOutcome::AwaitingApproval {
+                approval_id: id.clone()
+            }
+        );
+        assert_eq!(s.approvals.pending(10).await.unwrap().len(), 1);
+
+        assert!(
+            loop_
+                .decide_approval(&id, &Decision::approve_once("telegram"))
+                .await
+                .unwrap()
+        );
+        p.reply("compilé");
+        let out = loop_
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap();
+        assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
+        assert_eq!(e.calls.load(Ordering::SeqCst), 1);
+
+        // Le transcript est protocolairement complet : appel, résultat, réponse.
+        let msgs = conv.messages();
+        assert_eq!(msgs[1].tool_calls[0].id, "c1");
+        assert_eq!(msgs[2].tool_call_id.as_deref(), Some("c1"));
+        assert_eq!(msgs[3].text(), "compilé");
+    }
+
+    #[tokio::test]
+    async fn a_denied_call_is_reported_to_the_model() {
+        let (_d, s, p) = setup().await;
+        let sid = session(&s).await;
+        let conv = MemoryConversation::new("Tu es Pénélope.", "supprime");
+        let e = exec(false);
+        let loop_ = AgentLoop::new(s.clone(), p.clone());
+
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![call("c1", "shell_exec", json!({"command":"rm -rf target"}))],
+        ));
+        let id = match loop_
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap()
+        {
+            TurnOutcome::AwaitingApproval { approval_id } => approval_id,
+            other => panic!("{other:?}"),
+        };
+        loop_
+            .decide_approval(&id, &Decision::deny("cli", Some("pas maintenant".into())))
+            .await
+            .unwrap();
+        p.reply("d'accord, je n'y touche pas");
+        let out = loop_
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap();
+        assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
+        assert_eq!(e.calls.load(Ordering::SeqCst), 0);
+        let refusal = &conv.messages()[2];
+        assert!(
+            refusal.text().contains("pas maintenant"),
+            "{}",
+            refusal.text()
+        );
     }
 
     #[tokio::test]
@@ -631,19 +1181,12 @@ mod tests {
         let (_d, s, p) = setup().await;
         p.push(Scripted::ToolCalls(
             String::new(),
-            vec![ToolCall {
-                id: "c1".into(),
-                name: "shell_exec".into(),
-                arguments: json!({"command":"cargo build"}),
-            }],
+            vec![call("c1", "shell_exec", json!({"command":"cargo build"}))],
         ));
         let sid = session(&s).await;
-        let exec = CountingExecutor {
-            calls: AtomicUsize::new(0),
-            fail: false,
-        };
+        let e = exec(false);
         let loop_ = AgentLoop::new(s.clone(), p.clone());
-        let id = match loop_.run(request(&sid), &exec).await.unwrap() {
+        let id = match loop_.run(request(&sid), &e).await.unwrap() {
             TurnOutcome::AwaitingApproval { approval_id } => approval_id,
             other => panic!("{other:?}"),
         };
@@ -661,23 +1204,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_session_window_creates_a_rule_bound_to_the_session() {
+        let (_d, s, p) = setup().await;
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![call("c1", "shell_exec", json!({"command":"cargo build"}))],
+        ));
+        let sid = session(&s).await;
+        let e = exec(false);
+        let loop_ = AgentLoop::new(s.clone(), p.clone());
+        let id = match loop_.run(request(&sid), &e).await.unwrap() {
+            TurnOutcome::AwaitingApproval { approval_id } => approval_id,
+            other => panic!("{other:?}"),
+        };
+        let d = Decision {
+            window: PolicyWindow::Session,
+            choice: "Pour cette session".into(),
+            ..Decision::approve_once("telegram")
+        };
+        loop_.decide_approval(&id, &d).await.unwrap();
+        let rules = s.policies.active_rules().await.unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].window, PolicyWindow::Session);
+        assert_eq!(rules[0].window_ref.as_deref(), Some(sid.as_str()));
+    }
+
+    #[tokio::test]
     async fn a_second_decision_does_not_win() {
         let (_d, s, p) = setup().await;
         p.push(Scripted::ToolCalls(
             String::new(),
-            vec![ToolCall {
-                id: "c1".into(),
-                name: "shell_exec".into(),
-                arguments: json!({"command":"x"}),
-            }],
+            vec![call("c1", "shell_exec", json!({"command":"x"}))],
         ));
         let sid = session(&s).await;
-        let exec = CountingExecutor {
-            calls: AtomicUsize::new(0),
-            fail: false,
-        };
+        let e = exec(false);
         let loop_ = AgentLoop::new(s.clone(), p.clone());
-        let id = match loop_.run(request(&sid), &exec).await.unwrap() {
+        let id = match loop_.run(request(&sid), &e).await.unwrap() {
             TurnOutcome::AwaitingApproval { approval_id } => approval_id,
             other => panic!("{other:?}"),
         };
@@ -702,42 +1264,29 @@ mod tests {
         let (_d, s, p) = setup().await;
         let sid = session(&s).await;
 
-        // Premier tour : l'outil s'exécute.
         p.push(Scripted::ToolCalls(
             String::new(),
-            vec![ToolCall {
-                id: "c1".into(),
-                name: "fs_read".into(),
-                arguments: json!({"path":"a.rs"}),
-            }],
+            vec![call("c1", "fs_read", json!({"path":"a.rs"}))],
         ));
         p.reply("lu");
-        let exec = CountingExecutor {
-            calls: AtomicUsize::new(0),
-            fail: false,
-        };
+        let e = exec(false);
         AgentLoop::new(s.clone(), p.clone())
-            .run(request(&sid), &exec)
+            .run(request(&sid), &e)
             .await
             .unwrap();
-        assert_eq!(exec.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(e.calls.load(Ordering::SeqCst), 1);
 
-        // Second tour identique : l'effet est rejoué depuis le ledger.
         p.push(Scripted::ToolCalls(
             String::new(),
-            vec![ToolCall {
-                id: "c1".into(),
-                name: "fs_read".into(),
-                arguments: json!({"path":"a.rs"}),
-            }],
+            vec![call("c1", "fs_read", json!({"path":"a.rs"}))],
         ));
         p.reply("relu");
         AgentLoop::new(s.clone(), p.clone())
-            .run(request(&sid), &exec)
+            .run(request(&sid), &e)
             .await
             .unwrap();
         assert_eq!(
-            exec.calls.load(Ordering::SeqCst),
+            e.calls.load(Ordering::SeqCst),
             1,
             "aucune seconde exécution"
         );
@@ -748,27 +1297,19 @@ mod tests {
         let (_d, s, p) = setup().await;
         p.push(Scripted::ToolCalls(
             String::new(),
-            vec![ToolCall {
-                id: "c1".into(),
-                name: "fs_read".into(),
-                arguments: json!({"path":"a.rs"}),
-            }],
+            vec![call("c1", "fs_read", json!({"path":"a.rs"}))],
         ));
         p.reply("je vois l'erreur, je change d'approche");
         let sid = session(&s).await;
-        let exec = CountingExecutor {
-            calls: AtomicUsize::new(0),
-            fail: true,
-        };
+        let e = exec(true);
         let out = AgentLoop::new(s.clone(), p.clone())
-            .run(request(&sid), &exec)
+            .run(request(&sid), &e)
             .await
             .unwrap();
         match out {
             TurnOutcome::Answered { text, .. } => assert!(text.contains("change d'approche")),
             other => panic!("le tour doit continuer malgré l'erreur : {other:?}"),
         }
-        // L'effet est marqué en échec, pas complété.
         assert_eq!(
             s.effects
                 .count_by_state(penelope_kernel::effects::EffectState::Failed)
@@ -781,23 +1322,16 @@ mod tests {
     #[tokio::test]
     async fn loop_detector_aborts_the_turn() {
         let (_d, s, p) = setup().await;
-        for _ in 0..6 {
+        for i in 0..8 {
             p.push(Scripted::ToolCalls(
                 String::new(),
-                vec![ToolCall {
-                    id: "c1".into(),
-                    name: "fs_read".into(),
-                    arguments: json!({"path":"a.rs"}),
-                }],
+                vec![call(&format!("c{i}"), "fs_read", json!({"path":"a.rs"}))],
             ));
         }
         let sid = session(&s).await;
-        let exec = CountingExecutor {
-            calls: AtomicUsize::new(0),
-            fail: false,
-        };
+        let e = exec(false);
         let out = AgentLoop::new(s.clone(), p.clone())
-            .run(request(&sid), &exec)
+            .run(request(&sid), &e)
             .await
             .unwrap();
         match out {
@@ -816,13 +1350,10 @@ mod tests {
         let sid = session(&s).await;
         let req = request(&sid);
         req.cancel.cancel();
-        let exec = CountingExecutor {
-            calls: AtomicUsize::new(0),
-            fail: false,
-        };
+        let e = exec(false);
         assert_eq!(
             AgentLoop::new(s.clone(), p.clone())
-                .run(req, &exec)
+                .run(req, &e)
                 .await
                 .unwrap(),
             TurnOutcome::Cancelled
@@ -842,12 +1373,9 @@ mod tests {
             .await
             .unwrap();
         let sid = session(&s).await;
-        let exec = CountingExecutor {
-            calls: AtomicUsize::new(0),
-            fail: false,
-        };
+        let e = exec(false);
         let out = AgentLoop::new(s.clone(), p.clone())
-            .run(request(&sid), &exec)
+            .run(request(&sid), &e)
             .await
             .unwrap();
         assert!(matches!(out, TurnOutcome::BudgetExceeded { .. }), "{out:?}");
@@ -860,31 +1388,85 @@ mod tests {
         let (_d, s, p) = setup().await;
         p.push(Scripted::ToolCalls(
             String::new(),
-            vec![ToolCall {
-                id: "c1".into(),
-                name: "shell_exec".into(),
-                arguments: json!({"command":"x"}),
-            }],
+            vec![call("c1", "shell_exec", json!({"command":"x"}))],
         ));
         p.reply("compris");
         let sid = session(&s).await;
         let mut req = request(&sid);
         req.allowed_tools = vec!["fs_*".into()];
-        let exec = CountingExecutor {
-            calls: AtomicUsize::new(0),
-            fail: false,
-        };
+        let e = exec(false);
         let out = AgentLoop::new(s.clone(), p.clone())
-            .run(req, &exec)
+            .run(req, &e)
             .await
             .unwrap();
         assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
-        assert_eq!(exec.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(e.calls.load(Ordering::SeqCst), 0);
         assert_eq!(
             s.approvals.pending(10).await.unwrap().len(),
             0,
             "un outil hors liste blanche ne demande même pas d'approbation"
         );
+    }
+
+    #[tokio::test]
+    async fn deltas_are_streamed_to_the_sink() {
+        let (_d, s, p) = setup().await;
+        p.reply("bonjour à toi");
+        let sid = session(&s).await;
+        let conv = MemoryConversation::new("Tu es Pénélope.", "salut");
+        let sink = RecordingSink::default();
+        AgentLoop::new(s.clone(), p.clone())
+            .run_conversation(&spec(&sid), &conv, &exec(false), &sink)
+            .await
+            .unwrap();
+        let streamed: String = sink
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                TurnEvent::Delta(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(streamed, "bonjour à toi");
+        assert_eq!(conv.messages().last().unwrap().text(), "bonjour à toi");
+    }
+
+    #[tokio::test]
+    async fn a_transient_failure_falls_back_to_the_next_model() {
+        let (_d, s, p) = setup().await;
+        p.push(Scripted::Error(LlmErrorKind::Transient, "503".into()));
+        p.reply("réponse du repli");
+        let sid = session(&s).await;
+        let conv = MemoryConversation::new("Tu es Pénélope.", "salut");
+        let mut sp = spec(&sid);
+        sp.fallback_models = vec!["mock/repli".into()];
+        let out = AgentLoop::new(s.clone(), p.clone())
+            .run_conversation(&sp, &conv, &exec(false), &NullSink)
+            .await
+            .unwrap();
+        assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
+        let models: Vec<String> = p.requests().iter().map(|r| r.model.clone()).collect();
+        assert_eq!(models, vec!["mock/model", "mock/repli"]);
+    }
+
+    #[test]
+    fn pending_calls_ignore_answered_and_abandoned_ones() {
+        let assistant = ChatMessage {
+            tool_calls: vec![
+                call("a", "fs_read", json!({})),
+                call("b", "fs_read", json!({})),
+            ],
+            ..ChatMessage::assistant("")
+        };
+        let mut t = vec![ChatMessage::user("x"), assistant.clone()];
+        assert_eq!(pending_calls(&t).len(), 2);
+        t.push(ChatMessage::tool_result("a", "fs_read", "ok"));
+        let p = pending_calls(&t);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].id, "b");
+        // Un nouveau message utilisateur abandonne l'appel restant.
+        t.push(ChatMessage::user("laisse tomber"));
+        assert!(pending_calls(&t).is_empty());
     }
 
     #[test]

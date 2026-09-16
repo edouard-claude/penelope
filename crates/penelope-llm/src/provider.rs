@@ -86,7 +86,7 @@ impl OpenRouterProvider {
             http,
             base_url: base_url.into().trim_end_matches('/').to_string(),
             api_key: api_key.into(),
-            referer: "https://github.com/penelope-agent/penelope".into(),
+            referer: "https://github.com/edouard-claude/penelope".into(),
             title: "Penelope".into(),
             routing: Value::Null,
             catalog,
@@ -522,10 +522,23 @@ async fn stream_from_response(
 ///
 /// Utilisé par les appels non interactifs (classifieur, résumé, sub-agents).
 pub async fn collect_stream(
+    rx: ChunkStream,
+    model: &str,
+    provider: &str,
+    catalog: &Catalog,
+) -> Result<ChatResponse> {
+    collect_stream_observed(rx, model, provider, catalog, &|_| {}).await
+}
+
+/// Comme [`collect_stream`], mais chaque fragment est aussi présenté à `observe` au
+/// moment où il arrive : c'est ce qui permet d'afficher la réponse pendant qu'elle
+/// s'écrit (brouillons Telegram, `penelope chat`) sans lire le flux deux fois.
+pub async fn collect_stream_observed(
     mut rx: ChunkStream,
     model: &str,
     provider: &str,
     catalog: &Catalog,
+    observe: &(dyn Fn(&StreamChunk) + Send + Sync),
 ) -> Result<ChatResponse> {
     let mut text = String::new();
     let mut reasoning = String::new();
@@ -537,6 +550,7 @@ pub async fn collect_stream(
     let mut usage_seen = false;
 
     while let Some(c) = rx.recv().await {
+        observe(&c);
         match c {
             StreamChunk::Started { id: i, model: m } => {
                 id = i;

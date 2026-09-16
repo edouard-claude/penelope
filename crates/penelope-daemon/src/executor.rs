@@ -1,0 +1,1111 @@
+//! Exécution réelle des outils natifs et des méta-outils MCP (§8.9, §11).
+//!
+//! Le harnais a déjà fait son travail quand on arrive ici : liste blanche, détecteur de
+//! boucles, politique, approbation, ledger. Ce module ne fait qu'exécuter, en validant
+//! les arguments contre le schéma de l'outil et en restant dans les workspaces.
+
+use crate::agent::{CallInfo, ToolExecutor};
+use crate::bus::Origin;
+use crate::runtime::Services;
+use penelope_kernel::risk::RiskClass;
+use penelope_tools::{ToolError, ToolOutcome, ToolResult};
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// Envoi d'un message au propriétaire, par le canal d'origine du tour.
+#[async_trait::async_trait]
+pub trait Messenger: Send + Sync {
+    async fn send_text(&self, origin: &Origin, markdown: &str) -> Result<(), String>;
+    async fn send_file(
+        &self,
+        origin: &Origin,
+        path: &Path,
+        caption: Option<&str>,
+    ) -> Result<(), String>;
+}
+
+/// Accès aux serveurs MCP vivants.
+#[async_trait::async_trait]
+pub trait McpGateway: Send + Sync {
+    /// Appelle un outil par son nom qualifié `mcp__<serveur>__<outil>`.
+    async fn call_tool(&self, qualified: &str, args: &Value) -> Result<Value, String>;
+    /// Une ligne par serveur prêt, pour la tuile T1.
+    async fn server_lines(&self) -> Vec<String>;
+}
+
+/// Capacités qui dépendent du moteur de workflows et des sous-agents.
+#[async_trait::async_trait]
+pub trait Orchestrator: Send + Sync {
+    async fn start_workflow(
+        &self,
+        id: &str,
+        params: Value,
+        session_id: &str,
+        origin: &Origin,
+    ) -> Result<Value, String>;
+    async fn spawn_sub_agent(
+        &self,
+        session_id: &str,
+        prompt: &str,
+        model: Option<&str>,
+        tools: Vec<String>,
+    ) -> Result<Value, String>;
+    async fn generate_image(&self, prompt: &str, size: Option<&str>) -> Result<Value, String>;
+}
+
+/// Contexte d'un appel.
+#[derive(Clone)]
+pub struct ToolEnv {
+    pub session_id: String,
+    pub run_id: Option<String>,
+    pub origin: Origin,
+    pub workspaces: Vec<PathBuf>,
+    pub in_workflow: bool,
+}
+
+/// L'exécuteur du daemon.
+pub struct NativeToolExecutor {
+    pub services: Arc<Services>,
+    pub env: ToolEnv,
+    pub http: reqwest::Client,
+    pub locks: Arc<penelope_tools::fs::FileLocks>,
+    pub messenger: Option<Arc<dyn Messenger>>,
+    pub mcp: Option<Arc<dyn McpGateway>>,
+    pub orchestrator: Option<Arc<dyn Orchestrator>>,
+}
+
+/// Workspaces autorisés : configuration, sinon `{data}/workspace`.
+pub fn default_workspaces(s: &Services) -> Vec<PathBuf> {
+    let cfg = s.config.config();
+    let mut v: Vec<PathBuf> = cfg
+        .sandbox
+        .workspaces
+        .iter()
+        .map(|w| s.platform.dirs.expand(w))
+        .collect();
+    if v.is_empty() {
+        let ws = s.platform.dirs.data().join("workspace");
+        let _ = std::fs::create_dir_all(&ws);
+        v.push(ws);
+    }
+    v.into_iter()
+        .map(|p| penelope_platform::sandbox::normalise(&p))
+        .collect()
+}
+
+impl NativeToolExecutor {
+    pub fn new(services: Arc<Services>, env: ToolEnv) -> Self {
+        NativeToolExecutor {
+            services,
+            env,
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .redirect(reqwest::redirect::Policy::limited(5))
+                .build()
+                .unwrap_or_default(),
+            locks: Arc::new(penelope_tools::fs::FileLocks::new()),
+            messenger: None,
+            mcp: None,
+            orchestrator: None,
+        }
+    }
+
+    fn workspace(&self) -> PathBuf {
+        self.env
+            .workspaces
+            .first()
+            .cloned()
+            .unwrap_or_else(std::env::temp_dir)
+    }
+
+    fn path_arg(&self, args: &Value, key: &str) -> ToolResult<PathBuf> {
+        let raw = str_arg(args, key)?;
+        penelope_tools::fs::resolve(&raw, &self.env.workspaces)
+    }
+
+    fn cwd_arg(&self, args: &Value) -> ToolResult<PathBuf> {
+        match args.get("cwd").and_then(|v| v.as_str()) {
+            Some(c) if !c.is_empty() => penelope_tools::fs::resolve(c, &self.env.workspaces),
+            _ => Ok(self.workspace()),
+        }
+    }
+
+    async fn dispatch(&self, name: &str, args: &Value) -> ToolResult<ToolOutcome> {
+        let s = &self.services;
+        let cfg = s.config.config();
+
+        // Les méta-outils MCP n'ont pas de spécification native.
+        match name {
+            "tool_search" => return self.tool_search(args).await,
+            "tool_describe" => return self.tool_describe(args).await,
+            "tool_call" => return self.tool_call(args).await,
+            _ => {}
+        }
+        if name.starts_with("mcp__") {
+            // Outil promu dans l'ensemble collant : appel direct.
+            return self.mcp_call(name, args).await;
+        }
+
+        let spec =
+            penelope_tools::tool_spec(name).ok_or_else(|| ToolError::Unknown(name.into()))?;
+        if spec.workflow_only && !self.env.in_workflow {
+            return Err(ToolError::Denied(format!(
+                "`{name}` n'est disponible que dans un run de workflow"
+            )));
+        }
+        penelope_tools::validate_args(name, args)?;
+
+        let v = match name {
+            // -------------------------------------------------------- fichiers
+            "fs_read" => {
+                let p = self.path_arg(args, "path")?;
+                let offset = u_arg(args, "offset").unwrap_or(0);
+                let limit = u_arg(args, "limit").unwrap_or(400);
+                return Ok(ToolOutcome::ok(penelope_tools::fs::read(&p, offset, limit)?).eager());
+            }
+            "fs_list" => {
+                let p = self.path_arg(args, "path")?;
+                let rec = b_arg(args, "recursive").unwrap_or(false);
+                let max = u_arg(args, "max_entries").unwrap_or(500);
+                return Ok(ToolOutcome::ok(penelope_tools::fs::list(&p, rec, max)?).eager());
+            }
+            "fs_search" => {
+                let root = match args.get("path").and_then(|v| v.as_str()) {
+                    Some(p) if !p.is_empty() => {
+                        penelope_tools::fs::resolve(p, &self.env.workspaces)?
+                    }
+                    _ => self.workspace(),
+                };
+                let pattern = str_arg(args, "pattern")?;
+                let glob = args.get("glob").and_then(|v| v.as_str());
+                let max = u_arg(args, "max_results").unwrap_or(100);
+                return Ok(ToolOutcome::ok(penelope_tools::fs::search(
+                    &root, &pattern, glob, max,
+                )?)
+                .eager());
+            }
+            "fs_write" => {
+                let p = self.path_arg(args, "path")?;
+                let lock = self.locks.for_path(&p);
+                let _g = lock.lock().await;
+                penelope_tools::fs::write(&p, &str_arg(args, "content")?)?
+            }
+            "fs_edit" => {
+                let p = self.path_arg(args, "path")?;
+                let lock = self.locks.for_path(&p);
+                let _g = lock.lock().await;
+                penelope_tools::fs::edit(
+                    &p,
+                    &str_arg(args, "old")?,
+                    &str_arg(args, "new")?,
+                    b_arg(args, "replace_all").unwrap_or(false),
+                )?
+            }
+
+            // -------------------------------------------------------- shell
+            "shell_exec" => {
+                let command = str_arg(args, "command")?;
+                let cwd = self.cwd_arg(args)?;
+                let default_timeout =
+                    penelope_kernel::config::parse_duration(&cfg.tools.shell_timeout)
+                        .unwrap_or(std::time::Duration::from_secs(120));
+                let timeout = u_arg(args, "timeout_ms")
+                    .map(|ms| std::time::Duration::from_millis(ms as u64))
+                    .unwrap_or(default_timeout)
+                    .min(std::time::Duration::from_secs(1800));
+                let profile =
+                    penelope_tools::shell::profile_for(&cfg.sandbox.default_profile, &cwd, false);
+                let shell = shell_override(&cfg.tools.shell);
+                let out = penelope_tools::shell::exec(
+                    &s.platform.processes,
+                    Some(&profile),
+                    &command,
+                    Some(&cwd),
+                    timeout,
+                    cfg.tools.max_output_bytes,
+                    shell,
+                )
+                .await?;
+                let mut o = ToolOutcome::ok(out.to_json());
+                if out.exit_code != 0 {
+                    o.text = format!(
+                        "Code de sortie {}.\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                        out.exit_code, out.stdout, out.stderr
+                    );
+                }
+                return Ok(o.eager());
+            }
+
+            // -------------------------------------------------------- git
+            "git_status" => penelope_tools::git::status(&self.cwd_arg(args)?).await?,
+            "git_diff" => {
+                penelope_tools::git::diff(
+                    &self.cwd_arg(args)?,
+                    args.get("against").and_then(|v| v.as_str()),
+                    b_arg(args, "staged").unwrap_or(false),
+                )
+                .await?
+            }
+            "git_branch" => {
+                penelope_tools::git::branch(
+                    &self.cwd_arg(args)?,
+                    &str_arg(args, "name")?,
+                    b_arg(args, "create").unwrap_or(true),
+                )
+                .await?
+            }
+            "git_commit" => {
+                penelope_tools::git::commit(
+                    &self.cwd_arg(args)?,
+                    &str_arg(args, "message")?,
+                    b_arg(args, "all").unwrap_or(true),
+                )
+                .await?
+            }
+            "git_clone" => {
+                let dest = self.path_arg(args, "dest")?;
+                penelope_tools::git::clone(
+                    &str_arg(args, "url")?,
+                    &dest,
+                    u_arg(args, "depth").map(|d| d as u32),
+                )
+                .await?
+            }
+            "git_push" => {
+                penelope_tools::git::push(
+                    &self.cwd_arg(args)?,
+                    args.get("remote")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("origin"),
+                    &str_arg(args, "branch")?,
+                )
+                .await?
+            }
+
+            // -------------------------------------------------------- réseau
+            "http_fetch" => {
+                let headers: Vec<(String, String)> = args
+                    .get("headers")
+                    .and_then(|h| h.as_object())
+                    .map(|o| {
+                        o.iter()
+                            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let v = penelope_tools::http::fetch(
+                    &self.http,
+                    &str_arg(args, "url")?,
+                    args.get("method").and_then(|v| v.as_str()).unwrap_or("GET"),
+                    &headers,
+                    args.get("body").and_then(|v| v.as_str()),
+                    &cfg.tools.http_allowlist,
+                    u_arg(args, "max_bytes").unwrap_or(512 * 1024),
+                    cfg.tools.http_block_private_ips,
+                )
+                .await?;
+                // Le contenu web est une donnée non fiable : on l'encadre (§13.3).
+                let mut o = ToolOutcome::ok(v.clone());
+                o.text = penelope_observe::injection::wrap_untrusted(
+                    &format!("http_fetch {}", str_arg(args, "url")?),
+                    &penelope_tools::render(&v),
+                );
+                return Ok(o.eager());
+            }
+
+            "time_now" => {
+                let tz = args
+                    .get("timezone")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&cfg.owner.timezone)
+                    .to_string();
+                let utc =
+                    chrono::DateTime::from_timestamp_millis(s.clock.now_ms()).unwrap_or_default();
+                match tz.parse::<chrono_tz::Tz>() {
+                    Ok(t) => {
+                        let local = utc.with_timezone(&t);
+                        json!({"iso": local.to_rfc3339(), "timezone": tz,
+                               "lisible": local.format("%A %d %B %Y, %H:%M").to_string()})
+                    }
+                    Err(_) => {
+                        return Err(ToolError::Invalid(format!("fuseau inconnu : {tz}")));
+                    }
+                }
+            }
+
+            // -------------------------------------------------------- planification
+            "schedule_create" => {
+                let kind = penelope_workflow::TriggerKind::parse(&str_arg(args, "kind")?)
+                    .ok_or_else(|| ToolError::Invalid("kind inconnu".into()))?;
+                let mut target = args.get("target").cloned().unwrap_or(Value::Null);
+                // Le déclencheur revient dans cette session, par ce canal.
+                if let Some(o) = target.as_object_mut() {
+                    o.entry("session_id").or_insert(json!(self.env.session_id));
+                    o.entry("origin").or_insert(self.env.origin.to_value());
+                }
+                let sch = s
+                    .schedules
+                    .create(
+                        kind,
+                        args.get("spec").cloned().unwrap_or(Value::Null),
+                        target,
+                        args.get("dedup").cloned().unwrap_or(Value::Null),
+                    )
+                    .await
+                    .map_err(ToolError::Invalid)?;
+                serde_json::to_value(sch).unwrap_or_default()
+            }
+            "schedule_list" => serde_json::to_value(s.schedules.list().await?).unwrap_or_default(),
+            "schedule_delete" => {
+                s.schedules
+                    .set_state(&str_arg(args, "id")?, "deleted")
+                    .await?;
+                json!({"deleted": true})
+            }
+
+            // -------------------------------------------------------- messages
+            "send_message" => {
+                let m = self
+                    .messenger
+                    .as_ref()
+                    .ok_or_else(|| ToolError::Other("aucun canal de message disponible".into()))?;
+                m.send_text(&self.env.origin, &str_arg(args, "text")?)
+                    .await
+                    .map_err(ToolError::Network)?;
+                json!({"sent": true})
+            }
+            "send_file" => {
+                let p = self.path_arg(args, "path")?;
+                let m = self
+                    .messenger
+                    .as_ref()
+                    .ok_or_else(|| ToolError::Other("aucun canal de message disponible".into()))?;
+                m.send_file(
+                    &self.env.origin,
+                    &p,
+                    args.get("caption").and_then(|v| v.as_str()),
+                )
+                .await
+                .map_err(ToolError::Network)?;
+                json!({"sent": true, "path": p})
+            }
+
+            // -------------------------------------------------------- mémoire
+            "mem_search" => {
+                let filter = penelope_memory::SearchFilter {
+                    level: args
+                        .get("level")
+                        .and_then(|v| v.as_str())
+                        .and_then(penelope_memory::Level::parse),
+                    projet: args
+                        .get("projet")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    include_episodic: b_arg(args, "include_episodic").unwrap_or(false),
+                    limit: u_arg(args, "limit").unwrap_or(10),
+                    ..Default::default()
+                };
+                let hits = s
+                    .memory
+                    .search(&str_arg(args, "query")?, None, &filter, &[])
+                    .await?;
+                json!(
+                    hits.iter()
+                        .map(|h| json!({
+                            "uid": h.entry.uid, "texte": h.entry.text,
+                            "niveau": h.entry.level.as_str(), "fichier": h.entry.file,
+                            "score": (h.score * 1000.0).round() / 1000.0,
+                        }))
+                        .collect::<Vec<_>>()
+                )
+            }
+            "mem_get" => {
+                if let Some(uid) = args.get("uid").and_then(|v| v.as_str()) {
+                    serde_json::to_value(s.memory.get(uid).await?).unwrap_or_default()
+                } else {
+                    let slug = str_arg(args, "slug")?;
+                    serde_json::to_value(s.memory.by_slug(&slug).await?).unwrap_or_default()
+                }
+            }
+            "mem_note" => {
+                let ctype = penelope_memory::CandidateType::parse(&str_arg(args, "type")?)
+                    .ok_or_else(|| ToolError::Invalid("type inconnu".into()))?;
+                let texte = str_arg(args, "texte")?;
+                crate::vault_ops::write_filter(&texte).map_err(ToolError::Denied)?;
+                let mut c = penelope_memory::Candidate::new(
+                    ctype,
+                    &texte,
+                    penelope_memory::Origin::Agent,
+                    "interactive",
+                    &s.clock.now_rfc3339(),
+                )
+                .in_session(&self.env.session_id);
+                if let Some(i) = u_arg(args, "importance") {
+                    c = c.with_importance(i.clamp(1, 10) as u8);
+                }
+                if let Some(q) = args.get("quand").and_then(|v| v.as_str()) {
+                    let w = penelope_memory::When::parse(q).map_err(ToolError::Invalid)?;
+                    c = c.with_when(w);
+                }
+                let n = s
+                    .candidates
+                    .record(vec![c], cfg.memory.review_max_candidates.max(1))
+                    .await?;
+                json!({"noted": n == 1, "remarque": "consolidé lors du prochain rêve"})
+            }
+            "mem_remember" => {
+                let level = match str_arg(args, "niveau")?.as_str() {
+                    "profil" => penelope_memory::Level::Profil,
+                    "coeur" => penelope_memory::Level::Coeur,
+                    "projet" => penelope_memory::Level::Projet,
+                    _ => penelope_memory::Level::Cure,
+                };
+                let vault = crate::conversation::vault_dir(s);
+                let uid = crate::vault_ops::remember(
+                    s,
+                    &vault,
+                    level,
+                    &str_arg(args, "texte")?,
+                    &self.env.session_id,
+                )
+                .await
+                .map_err(ToolError::Denied)?;
+                json!({"uid": uid, "niveau": level.as_str()})
+            }
+            "mem_forget" => {
+                let vault = crate::conversation::vault_dir(s);
+                let done = crate::vault_ops::forget(s, &vault, &str_arg(args, "uid")?)
+                    .await
+                    .map_err(ToolError::Io)?;
+                json!({"forgotten": done})
+            }
+            "intent_create" => {
+                let texte = str_arg(args, "texte")?;
+                let mut triggers: Vec<String> = args
+                    .get("declencheurs")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if triggers.is_empty() {
+                    triggers = penelope_memory::intents::extract_triggers(&texte);
+                }
+                let ms = |d: &str| {
+                    penelope_kernel::config::parse_duration(d)
+                        .map(|x| x.as_millis() as i64)
+                        .ok()
+                };
+                let i = s
+                    .intents
+                    .create(
+                        &texte,
+                        triggers,
+                        None,
+                        ms(&cfg.memory.intents.cooldown).unwrap_or(86_400_000),
+                        cfg.memory.intents.fire_budget,
+                        ms(&cfg.memory.intents.expiry),
+                    )
+                    .await?;
+                serde_json::to_value(i).unwrap_or_default()
+            }
+            "intent_list" => serde_json::to_value(s.intents.all().await?).unwrap_or_default(),
+            "intent_cancel" => json!({"cancelled": s.intents.cancel(&str_arg(args, "id")?).await?}),
+
+            // -------------------------------------------------------- historique
+            "history_grep" => {
+                let scope = args
+                    .get("scope")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("session");
+                let session = (scope != "all").then_some(self.env.session_id.as_str());
+                let hits = s
+                    .context
+                    .history
+                    .grep(&str_arg(args, "query")?, session, 20)
+                    .await?;
+                serde_json::to_value(hits).unwrap_or_default()
+            }
+            "history_describe" => {
+                let m = s.context.lcm.describe(&str_arg(args, "node_id")?).await?;
+                serde_json::to_value(m).unwrap_or_default()
+            }
+            "history_expand" => {
+                let node = s
+                    .context
+                    .lcm
+                    .get(&str_arg(args, "node_id")?)
+                    .await?
+                    .ok_or_else(|| ToolError::Invalid("nœud introuvable".into()))?;
+                let (from, to) = (node.from_seq.unwrap_or(0), node.to_seq.unwrap_or(i64::MAX));
+                let page = u_arg(args, "page").unwrap_or(0);
+                let entries = s.context.history.load(&node.session_id, from).await?;
+                let msgs: Vec<Value> = entries
+                    .iter()
+                    .filter(|e| e.seq <= to)
+                    .skip(page * 20)
+                    .take(20)
+                    .map(|e| json!({"seq": e.seq, "role": e.message.role.as_str(), "texte": e.message.text()}))
+                    .collect();
+                json!({"node": node.id, "page": page, "messages": msgs})
+            }
+            "history_expand_query" => {
+                let q = str_arg(args, "question")?;
+                let hits = s
+                    .context
+                    .history
+                    .grep(&q, Some(&self.env.session_id), 30)
+                    .await?;
+                json!({"question": q, "extraits": hits})
+            }
+            "artifact_read" => {
+                let cursor = u_arg(args, "cursor").unwrap_or(0) as u64;
+                let v = s
+                    .context
+                    .history
+                    .read_artifact(&str_arg(args, "id")?, cursor, 16_000)
+                    .await?;
+                serde_json::to_value(v).unwrap_or_default()
+            }
+
+            // -------------------------------------------------------- skills
+            "skill_search" => {
+                let hits = s
+                    .skills
+                    .search(&str_arg(args, "query")?, u_arg(args, "limit").unwrap_or(5));
+                json!(
+                    hits.iter()
+                        .map(|(k, score)| json!({"name": k.name, "description": k.description, "score": score}))
+                        .collect::<Vec<_>>()
+                )
+            }
+            "skill_load" => {
+                let name = str_arg(args, "name")?;
+                let sk = s
+                    .skills
+                    .get(&name)
+                    .ok_or_else(|| ToolError::Invalid(format!("skill `{name}` introuvable")))?;
+                json!({"name": sk.name, "allowed_tools": sk.allowed_tools, "content": sk.body})
+            }
+            "skill_propose" | "skill_patch" => {
+                let skill_name = str_arg(args, "name")?;
+                let existing = s.skills.get(&skill_name);
+                let proposal = penelope_skills::SkillProposal {
+                    name: skill_name.clone(),
+                    description: args
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                        .or_else(|| existing.as_ref().map(|k| k.description.clone()))
+                        .unwrap_or_default(),
+                    body: str_arg(args, "body")?,
+                    allowed_tools: args
+                        .get("allowed_tools")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str().map(String::from))
+                                .collect()
+                        })
+                        .or_else(|| existing.as_ref().map(|k| k.allowed_tools.clone()))
+                        .unwrap_or_default(),
+                    kind: if name == "skill_patch" {
+                        "patch"
+                    } else {
+                        "create"
+                    }
+                    .into(),
+                    diff: String::new(),
+                    rationale: String::new(),
+                };
+                proposal.validate().map_err(ToolError::Invalid)?;
+                let root = s.platform.dirs.skills();
+                let path = penelope_skills::write_skill(&root, &proposal).map_err(ToolError::Io)?;
+                s.skills.reload(None, &root, None).await?;
+                json!({"written": path, "name": proposal.name})
+            }
+
+            // -------------------------------------------------------- workflows
+            "workflow_list" => {
+                json!(
+                s.workflows
+                    .all()
+                    .iter()
+                    .map(|e| json!({"id": e.workflow.metadata.id, "name": e.workflow.metadata.name,
+                                    "description": e.workflow.metadata.description}))
+                    .collect::<Vec<_>>()
+            )
+            }
+            "workflow_describe" => {
+                let id = str_arg(args, "id")?;
+                let w = s
+                    .workflows
+                    .get(&id)
+                    .ok_or_else(|| ToolError::Invalid(format!("workflow `{id}` introuvable")))?;
+                json!({"definition": w, "graphe": w.render_graph()})
+            }
+            "workflow_start" => {
+                let o = self
+                    .orchestrator
+                    .as_ref()
+                    .ok_or_else(|| ToolError::Other("moteur de workflows indisponible".into()))?;
+                o.start_workflow(
+                    &str_arg(args, "id")?,
+                    args.get("params").cloned().unwrap_or(json!({})),
+                    &self.env.session_id,
+                    &self.env.origin,
+                )
+                .await
+                .map_err(ToolError::Other)?
+            }
+            "workflow_status" => serde_json::to_value(s.runs.get(&str_arg(args, "run_id")?).await?)
+                .unwrap_or_default(),
+            "workflow_control" => {
+                let op = str_arg(args, "op")?;
+                let control = penelope_workflow::Control::parse(&op)
+                    .ok_or_else(|| ToolError::Invalid(format!("opération inconnue : {op}")))?;
+                let st = s.runs.control(&str_arg(args, "run_id")?, &control).await?;
+                json!({"state": st.as_str()})
+            }
+            "workflow_author" => {
+                let draft = args.get("draft").cloned().unwrap_or(Value::Null);
+                let raw = match &draft {
+                    Value::String(t) => t.clone(),
+                    other => other.to_string(),
+                };
+                let w = penelope_workflow::Workflow::from_json(&raw)
+                    .map_err(|e| ToolError::Invalid(format!("JSON invalide : {e}")))?;
+                let known = crate::runtime::workflow_known(&cfg, &s.mcp_tools).await;
+                let dir = s.platform.dirs.workflows();
+                let path = s
+                    .workflows
+                    .write(&dir, &w, &known)
+                    .map_err(ToolError::Invalid)?;
+                s.workflows
+                    .load_dir(&dir, penelope_workflow::registry::Scope::User, &known);
+                json!({"written": path, "id": w.metadata.id})
+            }
+            "sub_agent_spawn" => {
+                let o = self
+                    .orchestrator
+                    .as_ref()
+                    .ok_or_else(|| ToolError::Other("sous-agents indisponibles".into()))?;
+                o.spawn_sub_agent(
+                    &self.env.session_id,
+                    &str_arg(args, "prompt")?,
+                    args.get("model").and_then(|v| v.as_str()),
+                    args.get("tools")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                )
+                .await
+                .map_err(ToolError::Other)?
+            }
+            "session_metadata" => {
+                let op = penelope_kernel::session::MetadataOp::parse(&str_arg(args, "op")?)
+                    .ok_or_else(|| ToolError::Invalid("op inconnue".into()))?;
+                s.sessions
+                    .metadata(
+                        &self.env.session_id,
+                        op,
+                        &str_arg(args, "key")?,
+                        args.get("entry").cloned().unwrap_or(Value::Null),
+                    )
+                    .await
+                    .map_err(|e| ToolError::Other(e.to_string()))?
+            }
+            "ask_user" => {
+                let q = str_arg(args, "question")?;
+                let choices: Vec<String> = args
+                    .get("choices")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mut text = format!("❓ {q}");
+                if !choices.is_empty() {
+                    text.push_str("\n\n");
+                    for c in &choices {
+                        text.push_str(&format!("- {c}\n"));
+                    }
+                }
+                if let Some(m) = &self.messenger {
+                    m.send_text(&self.env.origin, &text)
+                        .await
+                        .map_err(ToolError::Network)?;
+                }
+                json!({"asked": true, "remarque": "la réponse arrivera comme un nouveau message"})
+            }
+            "step_done" | "return_value" => {
+                return Err(ToolError::Denied(format!(
+                    "`{name}` n'a de sens que dans une étape de workflow"
+                )));
+            }
+            "image_generate" => {
+                let o = self
+                    .orchestrator
+                    .as_ref()
+                    .ok_or_else(|| ToolError::Other("génération d'image indisponible".into()))?;
+                o.generate_image(
+                    &str_arg(args, "prompt")?,
+                    args.get("size").and_then(|v| v.as_str()),
+                )
+                .await
+                .map_err(ToolError::Other)?
+            }
+            other => return Err(ToolError::Unknown(other.to_string())),
+        };
+        Ok(ToolOutcome::ok(v))
+    }
+
+    async fn tool_search(&self, args: &Value) -> ToolResult<ToolOutcome> {
+        let q = str_arg(args, "query")?;
+        let hits = self
+            .services
+            .mcp_tools
+            .search(
+                &q,
+                args.get("server").and_then(|v| v.as_str()),
+                u_arg(args, "limit").unwrap_or(10),
+            )
+            .await?;
+        if hits.is_empty() {
+            return Ok(ToolOutcome::ok(json!({
+                "résultats": [],
+                "remarque": "aucun outil MCP ne correspond ; vérifier les serveurs avec /mcp",
+            })));
+        }
+        Ok(ToolOutcome::ok(json!(
+            hits.iter().map(|h| h.tool.short()).collect::<Vec<_>>()
+        )))
+    }
+
+    async fn tool_describe(&self, args: &Value) -> ToolResult<ToolOutcome> {
+        let names: Vec<String> = args
+            .get("names")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if names.is_empty() {
+            return Err(ToolError::Invalid("`names` est vide".into()));
+        }
+        let v = self.services.mcp_tools.describe(&names).await?;
+        Ok(ToolOutcome::ok(json!(v)))
+    }
+
+    async fn tool_call(&self, args: &Value) -> ToolResult<ToolOutcome> {
+        let name = str_arg(args, "name")?;
+        let inner = args.get("args").cloned().unwrap_or(json!({}));
+        self.mcp_call(&name, &inner).await
+    }
+
+    async fn mcp_call(&self, qualified: &str, args: &Value) -> ToolResult<ToolOutcome> {
+        let s = &self.services;
+        s.mcp_tools
+            .validate_args(qualified, args)
+            .await
+            .map_err(|e| ToolError::Invalid(e.to_string()))?;
+        s.mcp_tools.mark_for_promotion(&[qualified.to_string()]);
+        let gw = self
+            .mcp
+            .as_ref()
+            .ok_or_else(|| ToolError::Other("aucun serveur MCP n'est démarré".into()))?;
+        let v = gw
+            .call_tool(qualified, args)
+            .await
+            .map_err(ToolError::Other)?;
+        let is_error = v.get("isError").and_then(|b| b.as_bool()).unwrap_or(false);
+        let text = penelope_observe::injection::wrap_untrusted(qualified, &render_mcp_result(&v));
+        Ok(ToolOutcome {
+            value: v,
+            is_error,
+            text,
+            eager: true,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolExecutor for NativeToolExecutor {
+    async fn execute(&self, name: &str, args: &Value) -> Result<ToolOutcome, ToolError> {
+        self.dispatch(name, args).await
+    }
+
+    async fn describe_call(&self, name: &str, args: &Value) -> CallInfo {
+        let s = &self.services;
+        let registry_risk = |q: String| async move {
+            match s.mcp_tools.get(&q).await {
+                Ok(Some(t)) => (q, t.risk),
+                _ => (q, RiskClass::Unknown),
+            }
+        };
+        match name {
+            "tool_search" | "tool_describe" => CallInfo {
+                effective_name: name.to_string(),
+                risk: RiskClass::Read,
+                idempotent: true,
+            },
+            "tool_call" => {
+                let q = args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("tool_call")
+                    .to_string();
+                let (effective_name, risk) = registry_risk(q).await;
+                CallInfo {
+                    effective_name,
+                    idempotent: risk == RiskClass::Read,
+                    risk,
+                }
+            }
+            n if n.starts_with("mcp__") => {
+                let (effective_name, risk) = registry_risk(n.to_string()).await;
+                CallInfo {
+                    effective_name,
+                    idempotent: risk == RiskClass::Read,
+                    risk,
+                }
+            }
+            _ => CallInfo {
+                effective_name: name.to_string(),
+                risk: penelope_tools::effective_risk(name, &Default::default()),
+                idempotent: penelope_tools::tool_spec(name)
+                    .map(|t| t.idempotent)
+                    .unwrap_or(false),
+            },
+        }
+    }
+}
+
+/// Définitions d'outils offertes au modèle pour une session.
+pub fn tool_defs(in_workflow: bool, with_mcp: bool) -> Vec<penelope_llm::ToolDef> {
+    let mut v: Vec<penelope_llm::ToolDef> = penelope_tools::all_tools()
+        .into_iter()
+        .filter(|t| in_workflow || !t.workflow_only)
+        .map(|t| penelope_llm::ToolDef::new(t.name, t.description, t.schema))
+        .collect();
+    if with_mcp {
+        for (name, desc, schema) in penelope_mcp::registry::ToolRegistry::meta_tools() {
+            v.push(penelope_llm::ToolDef::new(name, desc, schema));
+        }
+    }
+    v
+}
+
+/// Rendu d'un résultat d'outil MCP : texte des blocs, sinon contenu structuré.
+pub fn render_mcp_result(v: &Value) -> String {
+    let mut out = String::new();
+    if let Some(blocks) = v.get("content").and_then(|c| c.as_array()) {
+        for b in blocks {
+            if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
+                out.push_str(t);
+                out.push('\n');
+            } else if let Some(uri) = b.get("uri").and_then(|u| u.as_str()) {
+                out.push_str(&format!("[ressource {uri}]\n"));
+            }
+        }
+    }
+    if out.trim().is_empty() {
+        if let Some(sc) = v.get("structuredContent") {
+            return serde_json::to_string_pretty(sc).unwrap_or_default();
+        }
+        return serde_json::to_string_pretty(v).unwrap_or_default();
+    }
+    out
+}
+
+fn shell_override(raw: &str) -> Option<(String, Vec<String>)> {
+    let mut parts = raw.split_whitespace();
+    let program = parts.next()?.to_string();
+    let mut args: Vec<String> = parts.map(String::from).collect();
+    if args.is_empty() {
+        args.push("-c".into());
+    }
+    Some((program, args))
+}
+
+fn str_arg(args: &Value, key: &str) -> ToolResult<String> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| ToolError::Invalid(format!("`{key}` manquant")))
+}
+
+fn u_arg(args: &Value, key: &str) -> Option<usize> {
+    args.get(key).and_then(|v| v.as_u64()).map(|n| n as usize)
+}
+
+fn b_arg(args: &Value, key: &str) -> Option<bool> {
+    args.get(key).and_then(|v| v.as_bool())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use penelope_kernel::clock::TestClock;
+
+    async fn executor() -> (tempfile::TempDir, NativeToolExecutor) {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
+        let s = Arc::new(
+            Services::for_tests(dir.path().to_path_buf(), clock)
+                .await
+                .unwrap(),
+        );
+        let ws = dir.path().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let env = ToolEnv {
+            session_id: "s1".into(),
+            run_id: None,
+            origin: Origin::Cli,
+            workspaces: vec![penelope_platform::sandbox::normalise(&ws)],
+            in_workflow: false,
+        };
+        (dir, NativeToolExecutor::new(s, env))
+    }
+
+    #[tokio::test]
+    async fn files_are_written_edited_and_read_inside_the_workspace() {
+        let (_d, x) = executor().await;
+        x.execute(
+            "fs_write",
+            &json!({"path":"notes/a.txt","content":"bonjour\nmonde\n"}),
+        )
+        .await
+        .unwrap();
+        x.execute(
+            "fs_edit",
+            &json!({"path":"notes/a.txt","old":"monde","new":"Pénélope"}),
+        )
+        .await
+        .unwrap();
+        let r = x
+            .execute("fs_read", &json!({"path":"notes/a.txt"}))
+            .await
+            .unwrap();
+        assert!(r.text.contains("Pénélope"), "{}", r.text);
+        assert!(r.eager, "une lecture est un résultat volatil");
+
+        let e = x
+            .execute("fs_read", &json!({"path":"/etc/passwd"}))
+            .await
+            .unwrap_err();
+        assert!(matches!(e, ToolError::Denied(_)), "{e}");
+    }
+
+    #[tokio::test]
+    async fn invalid_arguments_are_rejected_before_running() {
+        let (_d, x) = executor().await;
+        let e = x
+            .execute("fs_write", &json!({"path": "a.txt"}))
+            .await
+            .unwrap_err();
+        assert!(matches!(e, ToolError::Invalid(_)), "{e}");
+    }
+
+    #[tokio::test]
+    async fn memory_tools_write_through_the_vault() {
+        let (_d, x) = executor().await;
+        let r = x
+            .execute(
+                "mem_remember",
+                &json!({"niveau":"profil","texte":"Préférer le tutoiement"}),
+            )
+            .await
+            .unwrap();
+        let uid = r.value["uid"].as_str().unwrap().to_string();
+        let found = x
+            .execute("mem_search", &json!({"query":"tutoiement"}))
+            .await
+            .unwrap();
+        assert!(found.text.contains(&uid), "{}", found.text);
+        let gone = x.execute("mem_forget", &json!({"uid": uid})).await.unwrap();
+        assert_eq!(gone.value["forgotten"], true);
+    }
+
+    #[tokio::test]
+    async fn workflow_only_tools_are_refused_in_chat() {
+        let (_d, x) = executor().await;
+        let e = x.execute("step_done", &json!({})).await.unwrap_err();
+        assert!(matches!(e, ToolError::Denied(_)), "{e}");
+    }
+
+    #[tokio::test]
+    async fn mcp_meta_tools_are_read_only_but_calls_carry_the_target_risk() {
+        let (_d, x) = executor().await;
+        let d = penelope_mcp::protocol::ToolDescriptor::parse(&json!({
+            "name": "delete_repo", "description": "Supprime un dépôt",
+            "inputSchema": {"type":"object"},
+            "annotations": {"destructiveHint": true, "readOnlyHint": false}
+        }))
+        .unwrap();
+        x.services
+            .mcp_tools
+            .replace_server_tools(
+                "forge",
+                vec![penelope_mcp::registry::RegisteredTool::from_descriptor(
+                    "forge", &d,
+                )],
+                "2026-09-16T10:00:00Z",
+            )
+            .await
+            .unwrap();
+
+        let search = x.describe_call("tool_search", &json!({"query":"x"})).await;
+        assert_eq!(search.risk, RiskClass::Read);
+
+        let call = x
+            .describe_call(
+                "tool_call",
+                &json!({"name":"mcp__forge__delete_repo","args":{}}),
+            )
+            .await;
+        assert_eq!(call.effective_name, "mcp__forge__delete_repo");
+        assert_eq!(call.risk, RiskClass::Destructive);
+
+        // Sans passerelle MCP, l'appel échoue proprement.
+        let e = x
+            .execute(
+                "tool_call",
+                &json!({"name":"mcp__forge__delete_repo","args":{}}),
+            )
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("MCP"), "{e}");
+    }
+
+    #[test]
+    fn tool_definitions_hide_workflow_only_tools_in_chat() {
+        let chat = tool_defs(false, false);
+        assert!(chat.iter().any(|t| t.name == "fs_read"));
+        assert!(!chat.iter().any(|t| t.name == "step_done"));
+        assert!(!chat.iter().any(|t| t.name == "tool_search"));
+        let wf = tool_defs(true, true);
+        assert!(wf.iter().any(|t| t.name == "step_done"));
+        assert!(wf.iter().any(|t| t.name == "tool_call"));
+    }
+
+    #[test]
+    fn mcp_results_render_their_text_blocks() {
+        let v =
+            json!({"content":[{"type":"text","text":"ligne 1"},{"type":"text","text":"ligne 2"}]});
+        assert_eq!(render_mcp_result(&v), "ligne 1\nligne 2\n");
+        let v = json!({"content":[], "structuredContent":{"total": 3}});
+        assert!(render_mcp_result(&v).contains("\"total\": 3"));
+    }
+}

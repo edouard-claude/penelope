@@ -3,9 +3,17 @@
 #![forbid(unsafe_code)]
 
 pub mod agent;
+pub mod bus;
+pub mod conversation;
 pub mod doctor;
+pub mod engine;
+pub mod executor;
 pub mod rpc;
+pub mod runner;
 pub mod runtime;
+pub mod supervisor;
+pub mod telegram;
+pub mod vault_ops;
 
 pub use agent::{AgentLoop, TurnOutcome};
 pub use runtime::{Daemon, DaemonHandle, Services};
