@@ -92,6 +92,14 @@ pub struct ChatMessage {
     /// Marqueur de cache (`cache_control`) pour les modèles Anthropic via OpenRouter.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cache_marker: bool,
+    /// Raisonnement en clair d'un message assistant (champ `reasoning`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    /// Blocs de raisonnement structurés (`reasoning_details`), à renvoyer **tels quels**
+    /// avec les résultats d'outils : sans eux, un modèle qui raisonne perd le fil entre
+    /// l'appel et la suite, et répond souvent à vide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_details: Option<serde_json::Value>,
 }
 
 impl ChatMessage {
@@ -113,6 +121,8 @@ impl ChatMessage {
             tool_call_id: None,
             name: None,
             cache_marker: false,
+            reasoning: None,
+            reasoning_details: None,
         }
     }
 
@@ -128,6 +138,8 @@ impl ChatMessage {
             tool_call_id: Some(call_id.into()),
             name: Some(name.into()),
             cache_marker: false,
+            reasoning: None,
+            reasoning_details: None,
         }
     }
 
@@ -207,6 +219,15 @@ pub struct ChatRequest {
     pub response_format: Option<Value>,
     #[serde(default)]
     pub stream: bool,
+    /// Clé de regroupement OpenRouter (`session_id`) : les appels d'une même session
+    /// restent sur le même provider amont, donc sur un cache de préfixe chaud, et sont
+    /// regroupés dans les journaux OpenRouter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Modèles de repli essayés par OpenRouter lui-même (`models`), avant le premier
+    /// jeton : une panne en début de flux bascule sans erreur côté client.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,18 +248,26 @@ impl FinishReason {
             "length" | "max_tokens" => FinishReason::Length,
             "tool_calls" | "tool_use" | "function_call" => FinishReason::ToolCalls,
             "content_filter" => FinishReason::ContentFilter,
+            "error" => FinishReason::Error,
             _ => FinishReason::Stop,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub struct Usage {
     pub prompt: u64,
     pub completion: u64,
     /// Tokens servis depuis le cache de préfixe du provider.
     pub cached: u64,
+    /// Tokens écrits dans le cache (modèles à cache explicite, facturés à part).
+    #[serde(default)]
+    pub cache_write: u64,
     pub reasoning: u64,
+    /// Coût facturé, tel qu'annoncé par OpenRouter (`usage.cost`, en USD). Absent chez
+    /// les endpoints qui ne le donnent pas : le coût est alors estimé du catalogue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 }
 
 impl Usage {
@@ -261,6 +290,15 @@ pub struct ChatResponse {
     /// Texte de raisonnement, quand il est exposé séparément.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reasoning: String,
+    /// Provider amont qui a servi la réponse (`provider` des fragments OpenRouter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    /// Raison d'arrêt brute du provider amont (`native_finish_reason`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_finish: Option<String>,
+    /// Refus explicite du modèle (`refusal`), à montrer tel quel plutôt qu'un vide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
 }
 
 /// Fragment reçu en streaming SSE.
@@ -278,6 +316,19 @@ pub enum StreamChunk {
     Reasoning {
         text: String,
     },
+    /// Fragment de `reasoning_details` : blocs partiels, fusionnés par `index`.
+    ReasoningDetails(serde_json::Value),
+    /// Refus du modèle (`delta.refusal`).
+    Refusal {
+        text: String,
+    },
+    /// Provider amont et raison d'arrêt brute, dès qu'ils sont connus.
+    Meta {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        upstream: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native_finish: Option<String>,
+    },
     /// Un appel d'outil complet, reconstitué à partir des fragments.
     ToolCall(ToolCall),
     Usage(Usage),
@@ -287,6 +338,9 @@ pub enum StreamChunk {
     Error {
         message: String,
         retryable: bool,
+        /// Type d'erreur canonique d'OpenRouter (`error.metadata.error_type`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_type: Option<String>,
     },
 }
 
@@ -305,6 +359,10 @@ pub enum LlmErrorKind {
     BadRequest,
     /// Modèle inconnu du catalogue.
     UnknownModel,
+    /// 402 : crédits épuisés ou plafond de la clé atteint.
+    PaymentRequired,
+    /// Refus du modèle ou filtre de contenu (`refusal`, `content_policy_violation`).
+    ContentFilter,
     Cancelled,
     Other,
 }
@@ -323,6 +381,10 @@ pub struct LlmError {
     pub status: Option<u16>,
     /// Vrai si le provider a pu facturer l'appel malgré l'erreur (§4.3).
     pub maybe_billed: bool,
+    /// Type d'erreur canonique d'OpenRouter, quand il est fourni.
+    pub error_type: Option<String>,
+    /// Délai demandé par `Retry-After`, en secondes (429, 503).
+    pub retry_after: Option<u64>,
 }
 
 impl LlmError {
@@ -332,6 +394,8 @@ impl LlmError {
             message: message.into(),
             status: None,
             maybe_billed: false,
+            error_type: None,
+            retry_after: None,
         }
     }
     pub fn transient(m: impl Into<String>) -> Self {
@@ -350,32 +414,133 @@ impl LlmError {
     }
 
     /// Classe une réponse HTTP.
+    ///
+    /// OpenRouter renvoie `{"error": {"code", "message", "metadata": {"error_type",
+    /// "provider_name", "raw"}}}` : le type canonique prime sur le code HTTP, et le
+    /// message amont (`raw`) est gardé quand le message principal est générique.
     pub fn from_status(status: u16, body: &str) -> Self {
-        let lower = body.to_lowercase();
-        let kind = if lower.contains("context length")
-            || lower.contains("context_length")
-            || lower.contains("maximum context")
-            || lower.contains("too many tokens")
-            || lower.contains("prompt is too long")
-        {
-            LlmErrorKind::ContextLength
-        } else {
-            match status {
-                401 | 403 => LlmErrorKind::Auth,
-                404 => LlmErrorKind::UnknownModel,
-                429 => LlmErrorKind::RateLimited,
-                400 | 422 => LlmErrorKind::BadRequest,
-                s if s >= 500 => LlmErrorKind::Transient,
-                _ => LlmErrorKind::Other,
+        let parsed = serde_json::from_str::<Value>(body).ok();
+        let err = parsed.as_ref().and_then(|v| v.get("error"));
+        let error_type = err
+            .and_then(|e| e.get("metadata"))
+            .and_then(|m| m.get("error_type"))
+            .and_then(|t| t.as_str())
+            .map(String::from);
+
+        let message = match err {
+            Some(e) => {
+                let mut m = e
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("erreur du provider")
+                    .to_string();
+                let meta = e.get("metadata");
+                if let Some(p) = meta
+                    .and_then(|m| m.get("provider_name"))
+                    .and_then(|p| p.as_str())
+                {
+                    m.push_str(&format!(" ({p})"));
+                }
+                if let Some(raw) = meta.and_then(|m| m.get("raw")) {
+                    let raw = match raw {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    if !raw.is_empty() {
+                        m.push_str(" : ");
+                        m.push_str(&raw.chars().take(300).collect::<String>());
+                    }
+                }
+                m
             }
+            None => body.chars().take(400).collect(),
         };
+
+        let lower = body.to_lowercase();
+        let kind = error_type
+            .as_deref()
+            .and_then(kind_for_error_type)
+            .unwrap_or_else(|| {
+                if lower.contains("context length")
+                    || lower.contains("context_length")
+                    || lower.contains("maximum context")
+                    || lower.contains("too many tokens")
+                    || lower.contains("prompt is too long")
+                {
+                    LlmErrorKind::ContextLength
+                } else {
+                    match status {
+                        401 | 403 => LlmErrorKind::Auth,
+                        402 => LlmErrorKind::PaymentRequired,
+                        404 => LlmErrorKind::UnknownModel,
+                        408 => LlmErrorKind::Transient,
+                        413 => LlmErrorKind::ContextLength,
+                        429 => LlmErrorKind::RateLimited,
+                        400 | 422 => LlmErrorKind::BadRequest,
+                        s if s >= 500 => LlmErrorKind::Transient,
+                        _ => LlmErrorKind::Other,
+                    }
+                }
+            });
         LlmError {
             kind,
-            message: body.chars().take(400).collect(),
+            message,
             status: Some(status),
             maybe_billed: false,
+            error_type,
+            retry_after: None,
         }
     }
+
+    /// Erreur survenue au milieu d'un flux (HTTP 200 déjà envoyé).
+    pub fn mid_stream(message: String, retryable: bool, error_type: Option<String>) -> Self {
+        let kind = error_type
+            .as_deref()
+            .and_then(kind_for_error_type)
+            .unwrap_or(if retryable {
+                LlmErrorKind::Transient
+            } else {
+                LlmErrorKind::Other
+            });
+        LlmError {
+            kind,
+            message,
+            status: None,
+            maybe_billed: true,
+            error_type,
+            retry_after: None,
+        }
+    }
+}
+
+/// Correspondance des types d'erreur canoniques d'OpenRouter (stables sur tous ses
+/// formats d'API) vers nos catégories.
+pub fn kind_for_error_type(t: &str) -> Option<LlmErrorKind> {
+    Some(match t {
+        "context_length_exceeded" | "string_too_long" | "payload_too_large" => {
+            LlmErrorKind::ContextLength
+        }
+        "authentication" | "permission_denied" => LlmErrorKind::Auth,
+        "payment_required" | "token_limit_exceeded" => LlmErrorKind::PaymentRequired,
+        "rate_limit_exceeded" => LlmErrorKind::RateLimited,
+        "provider_overloaded" | "provider_unavailable" | "timeout" | "server" | "unmapped" => {
+            LlmErrorKind::Transient
+        }
+        "not_found" => LlmErrorKind::UnknownModel,
+        "content_policy_violation" | "refusal" => LlmErrorKind::ContentFilter,
+        "invalid_request"
+        | "invalid_prompt"
+        | "precondition_failed"
+        | "unprocessable"
+        | "max_tokens_exceeded"
+        | "invalid_image"
+        | "image_too_large"
+        | "image_too_small"
+        | "unsupported_image_format"
+        | "image_not_found"
+        | "image_download_failed" => LlmErrorKind::BadRequest,
+        _ => return None,
+    })
 }
 
 pub type Result<T, E = LlmError> = std::result::Result<T, E>;
@@ -394,6 +559,8 @@ mod tests {
             tool_call_id: None,
             name: None,
             cache_marker: false,
+            reasoning: None,
+            reasoning_details: None,
         };
         assert_eq!(m.text(), "bonjour");
     }
@@ -454,7 +621,52 @@ mod tests {
             completion: 20,
             cached: 80,
             reasoning: 5,
+            ..Default::default()
         };
         assert_eq!(u.total(), 120);
+    }
+
+    #[test]
+    fn openrouter_error_bodies_are_classified_by_their_canonical_type() {
+        let body = json!({"error": {
+            "code": 400,
+            "message": "Provider returned error",
+            "metadata": {
+                "error_type": "context_length_exceeded",
+                "provider_name": "DeepInfra",
+                "raw": "maximum context length is 131072 tokens"
+            }
+        }})
+        .to_string();
+        let e = LlmError::from_status(400, &body);
+        assert_eq!(e.kind, LlmErrorKind::ContextLength);
+        assert_eq!(e.error_type.as_deref(), Some("context_length_exceeded"));
+        assert!(e.message.contains("DeepInfra"), "{}", e.message);
+        assert!(e.message.contains("131072"), "{}", e.message);
+
+        let credits = json!({"error": {"code": 402, "message": "Insufficient credits"}});
+        let e = LlmError::from_status(402, &credits.to_string());
+        assert_eq!(e.kind, LlmErrorKind::PaymentRequired);
+        assert_eq!(e.message, "Insufficient credits");
+
+        // Le type canonique l'emporte sur le code HTTP.
+        let refusal = json!({"error": {"code": 403, "message": "refused",
+            "metadata": {"error_type": "refusal"}}});
+        let e = LlmError::from_status(403, &refusal.to_string());
+        assert_eq!(e.kind, LlmErrorKind::ContentFilter);
+    }
+
+    #[test]
+    fn mid_stream_errors_keep_their_type() {
+        let e = LlmError::mid_stream(
+            "Rate limit exceeded".into(),
+            true,
+            Some("rate_limit_exceeded".into()),
+        );
+        assert_eq!(e.kind, LlmErrorKind::RateLimited);
+        assert!(e.maybe_billed);
+        let e = LlmError::mid_stream("boom".into(), true, None);
+        assert_eq!(e.kind, LlmErrorKind::Transient);
+        assert_eq!(FinishReason::parse("error"), FinishReason::Error);
     }
 }

@@ -67,9 +67,15 @@ pub struct OpenRouterProvider {
     api_key: String,
     referer: String,
     title: String,
+    categories: String,
     routing: Value,
     catalog: Catalog,
 }
+
+/// Longueur maximale d'un `session_id` accepté par OpenRouter.
+const SESSION_ID_MAX: usize = 256;
+/// Nombre de modèles de repli transmis dans `models`.
+const MAX_FALLBACK_MODELS: usize = 3;
 
 impl OpenRouterProvider {
     pub fn new(
@@ -88,6 +94,7 @@ impl OpenRouterProvider {
             api_key: api_key.into(),
             referer: "https://github.com/edouard-claude/penelope".into(),
             title: "Penelope".into(),
+            categories: "personal-agent".into(),
             routing: Value::Null,
             catalog,
         })
@@ -104,13 +111,43 @@ impl OpenRouterProvider {
         self
     }
 
+    pub fn with_categories(mut self, categories: impl Into<String>) -> Self {
+        self.categories = categories.into();
+        self
+    }
+
+    /// Corps OpenRouter : le corps commun, plus les champs propres à OpenRouter.
+    ///
+    /// L'usage (coût compris) arrive toujours dans le dernier fragment : rien à demander.
     fn body(&self, req: &ChatRequest) -> Value {
         let mut b = to_openai_body(req);
-        if let Some(obj) = b.as_object_mut() {
-            obj.insert("usage".into(), json!({"include": true}));
-            if !self.routing.is_null() {
-                obj.insert("provider".into(), self.routing.clone());
+        let Some(obj) = b.as_object_mut() else {
+            return b;
+        };
+        if !self.routing.is_null() {
+            obj.insert("provider".into(), self.routing.clone());
+        }
+        if let Some(sid) = req.session_id.as_deref().filter(|s| !s.is_empty()) {
+            obj.insert(
+                "session_id".into(),
+                json!(sid.chars().take(SESSION_ID_MAX).collect::<String>()),
+            );
+        }
+        // Replis tentés par OpenRouter avant le premier jeton, dans l'ordre.
+        let primary = strip_provider(&req.model).to_string();
+        let mut models: Vec<String> = Vec::new();
+        for m in &req.fallback_models {
+            if crate::catalog::provider_of(m) != "openrouter" {
+                continue;
             }
+            let id = strip_provider(m).to_string();
+            if id != primary && !models.contains(&id) {
+                models.push(id);
+            }
+        }
+        models.truncate(MAX_FALLBACK_MODELS);
+        if !models.is_empty() {
+            obj.insert("models".into(), json!(models));
         }
         b
     }
@@ -130,7 +167,8 @@ impl Provider for OpenRouterProvider {
             .post(&url)
             .bearer_auth(&self.api_key)
             .header("HTTP-Referer", &self.referer)
-            .header("X-Title", &self.title)
+            .header("X-OpenRouter-Title", &self.title)
+            .header("X-OpenRouter-Categories", &self.categories)
             .header("Accept", "text/event-stream")
             .json(&body)
             .send()
@@ -315,7 +353,33 @@ impl Provider for OpenAiCompatProvider {
 
 /// Convertit une requête interne en corps « chat completions ».
 pub fn to_openai_body(req: &ChatRequest) -> Value {
-    let messages: Vec<Value> = req.messages.iter().map(message_to_json).collect();
+    // Le raisonnement n'est renvoyé que pour le tour en cours (après le dernier message
+    // utilisateur) : c'est là qu'il sert à enchaîner un appel d'outil et sa suite. Le
+    // renvoyer pour tout l'historique coûterait cher sans rien apporter.
+    let current_turn = req
+        .messages
+        .iter()
+        .rposition(|m| m.role == Role::User)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let messages: Vec<Value> = req
+        .messages
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let mut v = message_to_json(m);
+            if i >= current_turn && m.role == Role::Assistant {
+                if let Some(o) = v.as_object_mut() {
+                    if let Some(d) = &m.reasoning_details {
+                        o.insert("reasoning_details".into(), d.clone());
+                    } else if let Some(r) = &m.reasoning {
+                        o.insert("reasoning".into(), json!(r));
+                    }
+                }
+            }
+            v
+        })
+        .collect();
     let mut b = json!({
         "model": strip_provider(&req.model),
         "messages": messages,
@@ -371,7 +435,15 @@ pub fn to_openai_body(req: &ChatRequest) -> Value {
 }
 
 fn message_to_json(m: &ChatMessage) -> Value {
-    let content: Value = if m.content.len() == 1 && matches!(m.content[0], Content::Text { .. }) {
+    let content: Value = if m.content.is_empty() {
+        // `content: []` est refusé ou mal lu par plusieurs providers : un message
+        // d'appel d'outil sans texte porte `null`, les autres une chaîne vide.
+        if m.tool_calls.is_empty() {
+            Value::String(String::new())
+        } else {
+            Value::Null
+        }
+    } else if m.content.len() == 1 && matches!(m.content[0], Content::Text { .. }) {
         let text = m.content[0].as_text().unwrap_or("").to_string();
         if m.cache_marker {
             // Forme « parties » avec `cache_control`, comprise par Anthropic via
@@ -446,6 +518,9 @@ fn map_reqwest_error(e: reqwest::Error) -> LlmError {
     LlmError::new(kind, e.to_string())
 }
 
+/// Intervalle de vérification de l'annulation pendant un flux silencieux.
+const CANCEL_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// Transforme une réponse HTTP en flux de fragments.
 ///
 /// Les en-têtes sont déjà reçus à ce stade : l'appel passe en `response_started` (§4.3).
@@ -456,8 +531,15 @@ async fn stream_from_response(
 ) -> Result<ChunkStream> {
     let status = resp.status().as_u16();
     if status >= 400 {
+        // 429 et 503 peuvent porter `Retry-After` (secondes).
+        let retry_after = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok());
         let body = resp.text().await.unwrap_or_default();
         let mut e = LlmError::from_status(status, &body);
+        e.retry_after = retry_after;
         // Un 5xx après envoi complet peut avoir été facturé.
         if status >= 500 {
             e = e.billed();
@@ -472,7 +554,25 @@ async fn stream_from_response(
         let mut bytes = resp.bytes_stream();
         let mut finished = false;
 
-        while let Some(next) = bytes.next().await {
+        loop {
+            // L'annulation est vérifiée même quand rien n'arrive (modèle qui réfléchit) :
+            // couper la connexion arrête la génération, et sa facturation, chez les
+            // providers qui le supportent.
+            let next = match tokio::time::timeout(CANCEL_POLL, bytes.next()).await {
+                Err(_) => {
+                    if cancel.is_cancelled() {
+                        let _ = tx
+                            .send(StreamChunk::Done {
+                                finish: FinishReason::Cancelled,
+                            })
+                            .await;
+                        return;
+                    }
+                    continue;
+                }
+                Ok(None) => break,
+                Ok(Some(next)) => next,
+            };
             if cancel.is_cancelled() {
                 let _ = tx
                     .send(StreamChunk::Done {
@@ -488,6 +588,7 @@ async fn stream_from_response(
                         .send(StreamChunk::Error {
                             message: format!("flux interrompu ({provider}) : {e}"),
                             retryable: true,
+                            error_type: None,
                         })
                         .await;
                     return;
@@ -542,12 +643,15 @@ pub async fn collect_stream_observed(
 ) -> Result<ChatResponse> {
     let mut text = String::new();
     let mut reasoning = String::new();
+    let mut reasoning_parts: Vec<Value> = Vec::new();
+    let mut refusal = String::new();
     let mut calls = Vec::new();
     let mut usage = Usage::default();
     let mut finish = FinishReason::Stop;
     let mut id = String::new();
     let mut actual_model = model.to_string();
-    let mut usage_seen = false;
+    let mut upstream = None;
+    let mut native_finish = None;
 
     while let Some(c) = rx.recv().await {
         observe(&c);
@@ -560,25 +664,39 @@ pub async fn collect_stream_observed(
             }
             StreamChunk::Delta { text: t } => text.push_str(&t),
             StreamChunk::Reasoning { text: t } => reasoning.push_str(&t),
-            StreamChunk::ToolCall(tc) => calls.push(tc),
-            StreamChunk::Usage(u) => {
-                usage = u;
-                usage_seen = true;
+            StreamChunk::ReasoningDetails(v) => reasoning_parts.push(v),
+            StreamChunk::Refusal { text: t } => refusal.push_str(&t),
+            StreamChunk::Meta {
+                upstream: u,
+                native_finish: n,
+            } => {
+                upstream = u.or(upstream);
+                native_finish = n.or(native_finish);
             }
+            StreamChunk::ToolCall(tc) => calls.push(tc),
+            StreamChunk::Usage(u) => usage = u,
             StreamChunk::Done { finish: f } => finish = f,
-            StreamChunk::Error { message, retryable } => {
-                let kind = if retryable {
-                    LlmErrorKind::Transient
-                } else {
-                    LlmErrorKind::Other
-                };
-                return Err(LlmError::new(kind, message).billed());
+            StreamChunk::Error {
+                message,
+                retryable,
+                error_type,
+            } => {
+                return Err(LlmError::mid_stream(message, retryable, error_type));
             }
         }
     }
 
-    let info = catalog.get(&actual_model);
-    let cost = info.as_ref().map(|i| i.cost(&usage)).unwrap_or(0.0);
+    // Le coût facturé par OpenRouter fait foi ; à défaut, estimation du catalogue.
+    let (cost, cost_estimated) = match usage.cost_usd {
+        Some(c) => (c, false),
+        None => (
+            catalog
+                .get(&actual_model)
+                .map(|i| i.cost(&usage))
+                .unwrap_or(0.0),
+            true,
+        ),
+    };
     let message = ChatMessage {
         role: Role::Assistant,
         content: if text.is_empty() {
@@ -590,6 +708,8 @@ pub async fn collect_stream_observed(
         tool_call_id: None,
         name: None,
         cache_marker: false,
+        reasoning: (!reasoning.is_empty()).then(|| reasoning.clone()),
+        reasoning_details: crate::sse::merge_reasoning_details(&reasoning_parts),
     };
 
     Ok(ChatResponse {
@@ -600,8 +720,11 @@ pub async fn collect_stream_observed(
         finish,
         usage,
         cost_usd: cost,
-        cost_estimated: !usage_seen || info.is_none(),
+        cost_estimated,
         reasoning,
+        upstream,
+        native_finish,
+        refusal: (!refusal.is_empty()).then_some(refusal),
     })
 }
 
@@ -632,6 +755,71 @@ impl ProviderSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reasoning_goes_back_only_for_the_current_turn() {
+        let with_reasoning = |text: &str| ChatMessage {
+            reasoning: Some(format!("pensée {text}")),
+            reasoning_details: Some(json!([{"type":"reasoning.text","text":text,"index":0}])),
+            ..ChatMessage::assistant(text)
+        };
+        let req = ChatRequest {
+            model: "openrouter:a/b".into(),
+            messages: vec![
+                ChatMessage::user("ancien"),
+                with_reasoning("ancienne réponse"),
+                ChatMessage::user("nouveau"),
+                ChatMessage {
+                    tool_calls: vec![ToolCall {
+                        id: "c1".into(),
+                        name: "fs_read".into(),
+                        arguments: json!({}),
+                    }],
+                    content: vec![],
+                    ..with_reasoning("appel")
+                },
+                ChatMessage::tool_result("c1", "fs_read", "contenu"),
+            ],
+            ..Default::default()
+        };
+        let b = to_openai_body(&req);
+        assert!(
+            b["messages"][1].get("reasoning_details").is_none(),
+            "tour précédent : rien"
+        );
+        assert_eq!(b["messages"][3]["reasoning_details"][0]["text"], "appel");
+        assert!(
+            b["messages"][3].get("reasoning").is_none(),
+            "les blocs priment sur le texte"
+        );
+    }
+
+    #[test]
+    fn empty_content_is_never_an_empty_array() {
+        let call = ChatMessage {
+            tool_calls: vec![ToolCall {
+                id: "c1".into(),
+                name: "fs_read".into(),
+                arguments: json!({}),
+            }],
+            content: vec![],
+            ..ChatMessage::assistant("")
+        };
+        let req = ChatRequest {
+            model: "openrouter:a/b".into(),
+            messages: vec![
+                call,
+                ChatMessage {
+                    content: vec![],
+                    ..ChatMessage::user("")
+                },
+            ],
+            ..Default::default()
+        };
+        let b = to_openai_body(&req);
+        assert!(b["messages"][0]["content"].is_null(), "{b}");
+        assert_eq!(b["messages"][1]["content"], "");
+    }
 
     #[test]
     fn body_uses_string_content_for_plain_text() {
@@ -700,6 +888,8 @@ mod tests {
             tool_call_id: None,
             name: None,
             cache_marker: false,
+            reasoning: None,
+            reasoning_details: None,
         };
         let v = message_to_json(&m);
         assert_eq!(v["content"][0]["type"], "text");
@@ -752,8 +942,7 @@ mod tests {
             tx.send(StreamChunk::Usage(Usage {
                 prompt: 1000,
                 completion: 10,
-                cached: 0,
-                reasoning: 0,
+                ..Default::default()
             }))
             .await
             .unwrap();
@@ -769,7 +958,207 @@ mod tests {
         assert_eq!(r.message.text(), "bonjour");
         assert_eq!(r.usage.prompt, 1000);
         assert!((r.cost_usd - (1000.0 * 1e-6 + 10.0 * 2e-6)).abs() < 1e-12);
+        assert!(
+            r.cost_estimated,
+            "sans `usage.cost`, le coût vient du catalogue"
+        );
+    }
+
+    #[tokio::test]
+    async fn billed_cost_wins_over_the_catalog() {
+        let (tx, rx) = mpsc::channel(8);
+        let catalog = Catalog::new();
+        catalog.upsert(vec![{
+            let mut m = ModelInfo::minimal("a/b", "openrouter", 128_000);
+            m.price_prompt = 1e-6;
+            m
+        }]);
+        tokio::spawn(async move {
+            for c in [
+                StreamChunk::Started {
+                    id: "gen-1".into(),
+                    model: "a/b".into(),
+                },
+                StreamChunk::Meta {
+                    upstream: Some("Z.AI".into()),
+                    native_finish: None,
+                },
+                StreamChunk::Refusal { text: "non".into() },
+                StreamChunk::Meta {
+                    upstream: None,
+                    native_finish: Some("refusal".into()),
+                },
+                StreamChunk::Usage(Usage {
+                    prompt: 1000,
+                    completion: 10,
+                    cost_usd: Some(0.5),
+                    ..Default::default()
+                }),
+                StreamChunk::Done {
+                    finish: FinishReason::ContentFilter,
+                },
+            ] {
+                tx.send(c).await.unwrap();
+            }
+        });
+        let r = collect_stream(rx, "a/b", "openrouter", &catalog)
+            .await
+            .unwrap();
+        assert_eq!(r.cost_usd, 0.5);
         assert!(!r.cost_estimated);
+        assert_eq!(r.upstream.as_deref(), Some("Z.AI"));
+        assert_eq!(r.native_finish.as_deref(), Some("refusal"));
+        assert_eq!(r.refusal.as_deref(), Some("non"));
+    }
+
+    fn openrouter() -> OpenRouterProvider {
+        OpenRouterProvider::new("http://127.0.0.1:9/api/v1", "sk-or-v1-test", Catalog::new())
+            .unwrap()
+    }
+
+    #[test]
+    fn openrouter_body_carries_session_and_fallbacks() {
+        let req = ChatRequest {
+            model: "openrouter:z-ai/glm-5.3".into(),
+            messages: vec![ChatMessage::user("salut")],
+            session_id: Some("01J9SESSION".into()),
+            fallback_models: vec![
+                "openrouter:z-ai/glm-5.3".into(),
+                "openrouter:deepseek/deepseek-v4-flash".into(),
+                "openai_compat:local".into(),
+                "openrouter:deepseek/deepseek-v4-flash".into(),
+            ],
+            ..Default::default()
+        };
+        let b = openrouter().body(&req);
+        assert_eq!(b["model"], "z-ai/glm-5.3");
+        assert_eq!(b["session_id"], "01J9SESSION");
+        assert_eq!(b["models"], json!(["deepseek/deepseek-v4-flash"]));
+        assert!(
+            b.get("usage").is_none(),
+            "l'usage arrive toujours, rien à demander"
+        );
+        assert!(b.get("provider").is_none(), "pas de préférences par défaut");
+
+        let long = ChatRequest {
+            model: "a/b".into(),
+            session_id: Some("x".repeat(400)),
+            ..Default::default()
+        };
+        let b = openrouter().body(&long);
+        assert_eq!(b["session_id"].as_str().unwrap().len(), 256);
+        assert!(b.get("models").is_none());
+    }
+
+    /// Faux serveur HTTP : répond une fois avec les octets fournis, puis garde la
+    /// connexion ouverte le temps indiqué.
+    async fn one_shot_server(response: String, hold: std::time::Duration) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 65536];
+            let _ = sock.read(&mut buf).await;
+            sock.write_all(response.as_bytes()).await.unwrap();
+            sock.flush().await.unwrap();
+            tokio::time::sleep(hold).await;
+        });
+        format!("http://{addr}/api/v1")
+    }
+
+    #[tokio::test]
+    async fn rate_limits_keep_the_retry_after_hint() {
+        let body = r#"{"error":{"code":429,"message":"Rate limit exceeded","metadata":{"error_type":"rate_limit_exceeded"}}}"#;
+        let resp = format!(
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let url = one_shot_server(resp, std::time::Duration::from_millis(10)).await;
+        let p = OpenRouterProvider::new(url, "sk-or-v1-test", Catalog::new()).unwrap();
+        let err = p
+            .chat_stream(
+                ChatRequest {
+                    model: "a/b".into(),
+                    messages: vec![ChatMessage::user("x")],
+                    ..Default::default()
+                },
+                CancelToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, LlmErrorKind::RateLimited);
+        assert_eq!(err.retry_after, Some(7));
+    }
+
+    #[tokio::test]
+    async fn a_documented_stream_is_decoded_end_to_end() {
+        let events = [
+            ": OPENROUTER PROCESSING",
+            r#"data: {"id":"gen-1","object":"chat.completion.chunk","created":1,"model":"z-ai/glm-5.3","provider":"Z.AI","choices":[{"index":0,"delta":{"role":"assistant","content":"Bon"},"finish_reason":null}]}"#,
+            r#"data: {"id":"gen-1","object":"chat.completion.chunk","created":1,"model":"z-ai/glm-5.3","provider":"Z.AI","choices":[{"index":0,"delta":{"content":"jour"},"finish_reason":"stop","native_finish_reason":"stop"}]}"#,
+            r#"data: {"id":"gen-1","object":"chat.completion.chunk","created":1,"model":"z-ai/glm-5.3","provider":"Z.AI","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15,"cost":0.00042}}"#,
+            "data: [DONE]",
+        ];
+        let sse: String = events.iter().map(|e| format!("{e}\n\n")).collect();
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{sse}"
+        );
+        let url = one_shot_server(resp, std::time::Duration::from_millis(10)).await;
+        let p = OpenRouterProvider::new(url, "sk-or-v1-test", Catalog::new()).unwrap();
+        let rx = p
+            .chat_stream(
+                ChatRequest {
+                    model: "openrouter:z-ai/glm-5.3".into(),
+                    messages: vec![ChatMessage::user("x")],
+                    ..Default::default()
+                },
+                CancelToken::new(),
+            )
+            .await
+            .unwrap();
+        let r = collect_stream(rx, "z-ai/glm-5.3", "openrouter", &Catalog::new())
+            .await
+            .unwrap();
+        assert_eq!(r.message.text(), "Bonjour");
+        assert_eq!(r.id, "gen-1");
+        assert_eq!(r.cost_usd, 0.00042);
+        assert!(!r.cost_estimated);
+        assert_eq!(r.upstream.as_deref(), Some("Z.AI"));
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_silent_stream_does_not_wait_for_the_next_byte() {
+        // Le serveur n'envoie que les en-têtes puis se tait (modèle qui réfléchit).
+        let resp =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n: OPENROUTER PROCESSING\n\n"
+                .to_string();
+        let url = one_shot_server(resp, std::time::Duration::from_secs(30)).await;
+        let p = OpenRouterProvider::new(url, "sk-or-v1-test", Catalog::new()).unwrap();
+        let cancel = CancelToken::new();
+        let mut rx = p
+            .chat_stream(
+                ChatRequest {
+                    model: "a/b".into(),
+                    messages: vec![ChatMessage::user("x")],
+                    ..Default::default()
+                },
+                cancel.clone(),
+            )
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        cancel.cancel();
+        let last = tokio::time::timeout(std::time::Duration::from_secs(3), rx.recv())
+            .await
+            .expect("l'annulation doit clore le flux sans attendre le serveur");
+        assert!(matches!(
+            last,
+            Some(StreamChunk::Done {
+                finish: FinishReason::Cancelled
+            })
+        ));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 
     #[tokio::test]
@@ -779,6 +1168,7 @@ mod tests {
             tx.send(StreamChunk::Error {
                 message: "surcharge".into(),
                 retryable: true,
+                error_type: None,
             })
             .await
             .unwrap();

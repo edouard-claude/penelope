@@ -109,8 +109,8 @@ pub fn all() -> Vec<Command> {
         c(
             "budget",
             "Modèles",
-            "Consommation et plafonds",
-            "/budget",
+            "Coûts : jour, session, requêtes les plus chères",
+            "/budget sessions",
             m::USAGE,
         ),
         // Mémoire

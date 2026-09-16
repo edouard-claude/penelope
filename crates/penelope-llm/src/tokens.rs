@@ -338,6 +338,8 @@ mod tests {
             tool_call_id: None,
             name: None,
             cache_marker: false,
+            reasoning: None,
+            reasoning_details: None,
         };
         let before = e.message_tokens("m", &m);
         e.set_image_tokens("m", 2000.0);

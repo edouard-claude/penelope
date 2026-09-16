@@ -61,6 +61,20 @@ impl ShellOutput {
     }
 }
 
+/// Variables héritées en plus par le shell du propriétaire : emplacements de
+/// configuration et agent SSH, pour que `gh`, `git` ou `ssh` retrouvent ceux du terminal.
+/// Jamais de jeton (`GH_TOKEN`, `GITHUB_TOKEN`…) : un `env` le montrerait au modèle.
+pub const SHELL_EXTRA_ENV: &[&str] = &[
+    "LOGNAME",
+    "SSH_AUTH_SOCK",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_STATE_HOME",
+    "GH_CONFIG_DIR",
+    "GIT_CONFIG_GLOBAL",
+];
+
 /// Exécute une commande sous le profil de bac à sable donné.
 pub async fn exec(
     host: &penelope_platform::UnixProcessHost,
@@ -78,6 +92,8 @@ pub async fn exec(
     args.push(command.to_string());
 
     let mut spec = penelope_platform::ProcessSpec::new(program).args(args);
+    spec.inherit_env
+        .extend(SHELL_EXTRA_ENV.iter().map(|k| k.to_string()));
     spec.stdin = false;
     if let Some(d) = cwd {
         spec = spec.cwd(d);
@@ -171,6 +187,18 @@ pub fn default_workspaces(state_dir: &Path, extra: &[String]) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shell_env_never_carries_tokens() {
+        for k in SHELL_EXTRA_ENV {
+            let u = k.to_uppercase();
+            assert!(
+                !u.contains("TOKEN") && !u.contains("KEY") && !u.contains("SECRET"),
+                "{k}"
+            );
+        }
+        assert!(profile_for("workspace-write", Path::new("/w"), true).allow_network);
+    }
 
     #[test]
     fn forbidden_commands_are_refused() {

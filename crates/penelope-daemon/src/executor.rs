@@ -214,8 +214,11 @@ impl NativeToolExecutor {
                     .map(|ms| std::time::Duration::from_millis(ms as u64))
                     .unwrap_or(default_timeout)
                     .min(std::time::Duration::from_secs(1800));
-                let profile =
-                    penelope_tools::shell::profile_for(&cfg.sandbox.default_profile, &cwd, false);
+                let profile = penelope_tools::shell::profile_for(
+                    &cfg.sandbox.default_profile,
+                    &cwd,
+                    cfg.sandbox.shell_network,
+                );
                 let shell = shell_override(&cfg.tools.shell);
                 let out = penelope_tools::shell::exec(
                     &s.platform.processes,

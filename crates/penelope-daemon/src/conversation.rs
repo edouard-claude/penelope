@@ -291,10 +291,12 @@ mod tests {
         assert_eq!(msgs[0].role, Role::System, "le préfixe vient en tête");
         assert!(msgs[0].text().contains("Tu es Pénélope"));
         let texts: Vec<String> = msgs.iter().map(|m| m.text()).collect();
-        assert!(texts.contains(&"bonjour".to_string()));
+        assert!(texts.iter().any(|t| t.ends_with("bonjour")));
         assert!(texts.contains(&"salut !".to_string()));
-        // T4 en dernier : la date locale.
-        assert!(msgs.last().unwrap().text().contains("Date et heure"));
+        // T4 en tête du dernier message utilisateur : la date locale.
+        let last_user = msgs.iter().rev().find(|m| m.role == Role::User).unwrap();
+        assert!(last_user.text().starts_with("<contexte>"));
+        assert!(last_user.text().contains("Date et heure"));
 
         // Relu depuis la base, par une autre instance : rien n'était en mémoire.
         let tiers = build_tiers(&s, "", &[], None).await;

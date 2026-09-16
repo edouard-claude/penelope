@@ -210,6 +210,8 @@ pub trait ToolExecutor {
 pub struct TurnSpec {
     pub session_id: String,
     pub run_id: Option<String>,
+    /// Tour d'origine, pour attribuer les coûts à la requête du propriétaire.
+    pub turn_id: Option<String>,
     pub model_id: String,
     /// Modèles de repli, dans l'ordre, si le principal est en panne (§10.3 point 5).
     pub fallback_models: Vec<String>,
@@ -264,6 +266,7 @@ impl AgentLoop {
         let spec = TurnSpec {
             session_id: req.session_id,
             run_id: req.run_id,
+            turn_id: None,
             model_id: req.model_id,
             fallback_models: Vec::new(),
             tools: req.tools,
@@ -286,6 +289,8 @@ impl AgentLoop {
         let cfg = s.config.config();
         let mut detector = LoopDetector::new(cfg.tools.loop_detector_repeats);
         let mut cost = 0.0f64;
+        // Une réponse vide a droit à une seule relance, puis devient une erreur explicite.
+        let mut empty_retry = false;
 
         s.events
             .append(
@@ -339,7 +344,14 @@ impl AgentLoop {
             }
 
             // 3. Appel du modèle, avec repli sur panne transitoire.
-            let messages = conv.request_messages().await?;
+            let mut messages = conv.request_messages().await?;
+            if empty_retry {
+                // Relance vue du modèle seulement : rien n'est écrit dans l'historique.
+                messages.push(ChatMessage::user(
+                    "(Relance automatique : ta réponse précédente était vide. Réponds \
+                     maintenant, en texte, au dernier message.)",
+                ));
+            }
             let response = match self.call_model(spec, messages, sink).await? {
                 Ok(r) => r,
                 Err(error) => return Ok(TurnOutcome::Failed { error }),
@@ -350,11 +362,17 @@ impl AgentLoop {
                 .record(penelope_kernel::budget::UsageRecord {
                     session_id: Some(spec.session_id.clone()),
                     run_id: spec.run_id.clone(),
+                    turn_id: spec.turn_id.clone(),
                     model: response.model.clone(),
                     provider: response.provider.clone(),
+                    role: Some("chat".into()),
+                    generation_id: (!response.id.is_empty()).then(|| response.id.clone()),
+                    upstream: response.upstream.clone(),
+                    finish: Some(format!("{:?}", response.finish).to_lowercase()),
                     prompt: response.usage.prompt,
                     completion: response.usage.completion,
                     cached: response.usage.cached,
+                    cache_write: response.usage.cache_write,
                     reasoning: response.usage.reasoning,
                     cost_usd: response.cost_usd,
                     estimated: response.cost_estimated,
@@ -368,6 +386,93 @@ impl AgentLoop {
                     conv.record(&response.message, false).await?;
                 }
                 return Ok(TurnOutcome::Cancelled);
+            }
+
+            let mut response = response;
+            // Un refus explicite est une réponse : on la montre telle quelle.
+            if response.message.tool_calls.is_empty() && response.message.text().trim().is_empty() {
+                if let Some(refusal) = response.refusal.clone().filter(|r| !r.trim().is_empty()) {
+                    response.message.content = vec![penelope_llm::types::Content::text(refusal)];
+                }
+            }
+
+            // Ni texte ni appel d'outil : on ne livre jamais une réponse vide en silence.
+            if response.message.tool_calls.is_empty() && response.message.text().trim().is_empty() {
+                // Budget de sortie mangé par le raisonnement : relancer ne changerait rien.
+                let reasoning_ate_budget = response.finish == FinishReason::Length
+                    && response.usage.reasoning > 0
+                    && response
+                        .usage
+                        .completion
+                        .saturating_sub(response.usage.reasoning)
+                        <= 2;
+                tracing::warn!(
+                    session = %spec.session_id,
+                    model = %response.model,
+                    upstream = ?response.upstream,
+                    finish = ?response.finish,
+                    native_finish = ?response.native_finish,
+                    prompt_tokens = response.usage.prompt,
+                    completion_tokens = response.usage.completion,
+                    reasoning_tokens = response.usage.reasoning,
+                    reasoning_chars = response.reasoning.chars().count(),
+                    retried = empty_retry,
+                    "réponse vide du modèle"
+                );
+                s.events
+                    .append(
+                        EventDraft::new(
+                            "turn.empty_answer",
+                            json!({
+                                "model": response.model,
+                                "upstream": response.upstream,
+                                "generation_id": response.id,
+                                "finish": format!("{:?}", response.finish),
+                                "native_finish": response.native_finish,
+                                "completion_tokens": response.usage.completion,
+                                "reasoning_tokens": response.usage.reasoning,
+                                "retried": empty_retry,
+                            }),
+                        )
+                        .session(&spec.session_id),
+                    )
+                    .await?;
+                if !empty_retry && !reasoning_ate_budget {
+                    empty_retry = true;
+                    continue;
+                }
+                let upstream = response
+                    .upstream
+                    .as_deref()
+                    .map(|u| format!(" chez {u}"))
+                    .unwrap_or_default();
+                let cause = if reasoning_ate_budget {
+                    format!(
+                        "le raisonnement a consommé tout le budget de sortie ({} tokens sur {})",
+                        response.usage.reasoning, response.usage.completion
+                    )
+                } else {
+                    format!(
+                        "aucun texte, deux fois (fin : {:?}{} ; {} tokens produits dont {} de \
+                         raisonnement)",
+                        response.finish,
+                        response
+                            .native_finish
+                            .as_deref()
+                            .map(|n| format!(", amont : {n}"))
+                            .unwrap_or_default(),
+                        response.usage.completion,
+                        response.usage.reasoning
+                    )
+                };
+                return Ok(TurnOutcome::Failed {
+                    error: format!(
+                        "le modèle `{}`{upstream} n'a pas répondu : {cause}. Essayer un autre \
+                         modèle (`/model main openrouter:<identifiant>`) ; `/models` montre le \
+                         routage en vigueur",
+                        response.model
+                    ),
+                });
             }
 
             conv.record(&response.message, false).await?;
@@ -402,6 +507,10 @@ impl AgentLoop {
     }
 
     /// Appelle le modèle en diffusant les fragments ; essaie les replis sur panne.
+    ///
+    /// Chez OpenRouter, les replis partent dans la requête (`models`) : OpenRouter bascule
+    /// lui-même avant le premier jeton, y compris quand la panne survient après le 200.
+    /// Ailleurs, ils sont essayés ici, sur les erreurs d'avant flux.
     async fn call_model(
         &self,
         spec: &TurnSpec,
@@ -409,16 +518,22 @@ impl AgentLoop {
         sink: &dyn TurnSink,
     ) -> anyhow::Result<Result<ChatResponse, String>> {
         let s = &self.services;
+        let server_side_fallback = self.provider.name() == "openrouter";
         let mut candidates = vec![spec.model_id.clone()];
-        candidates.extend(
-            spec.fallback_models
-                .iter()
-                .filter(|m| **m != spec.model_id)
-                .cloned(),
-        );
+        if !server_side_fallback {
+            candidates.extend(
+                spec.fallback_models
+                    .iter()
+                    .filter(|m| **m != spec.model_id)
+                    .cloned(),
+            );
+        }
         let mut last_error = String::new();
+        let mut waited = false;
 
-        for (attempt, model_id) in candidates.iter().enumerate() {
+        let mut attempt = 0;
+        while attempt < candidates.len() {
+            let model_id = &candidates[attempt];
             let request = ChatRequest {
                 model: model_id.clone(),
                 messages: messages.clone(),
@@ -429,6 +544,12 @@ impl AgentLoop {
                     Some(ToolChoice::Auto)
                 },
                 stream: true,
+                session_id: Some(spec.session_id.clone()),
+                fallback_models: if server_side_fallback {
+                    spec.fallback_models.clone()
+                } else {
+                    Vec::new()
+                },
                 ..Default::default()
             };
 
@@ -457,13 +578,25 @@ impl AgentLoop {
                     s.llm_state
                         .failed(&llm_id, &e.to_string(), e.maybe_billed)
                         .await?;
-                    last_error = e.to_string();
+                    last_error = humanise_llm_error(&e);
+                    // `Retry-After` court : une seule attente, puis le même modèle.
+                    if let Some(secs) = e.retry_after.filter(|s| *s <= RETRY_AFTER_MAX_SECS) {
+                        if !waited && penelope_llm::Router::should_fallback(&e) {
+                            waited = true;
+                            tracing::warn!(model = %model_id, secs, "limite de débit : nouvel essai");
+                            if !sleep_unless_cancelled(&spec.cancel, secs).await {
+                                return Ok(Err("arrêt demandé".into()));
+                            }
+                            continue;
+                        }
+                    }
                     let more = attempt + 1 < candidates.len();
                     if more && penelope_llm::Router::should_fallback(&e) {
                         tracing::warn!(model = %model_id, error = %e, "repli sur le modèle suivant");
+                        attempt += 1;
                         continue;
                     }
-                    return Ok(Err(humanise_llm_error(&e)));
+                    return Ok(Err(last_error));
                 }
             };
             s.llm_state.response_started(&llm_id).await?;
@@ -487,6 +620,28 @@ impl AgentLoop {
             {
                 Ok(r) => {
                     s.llm_state.completed(&llm_id).await?;
+                    let requested = penelope_llm::catalog::strip_provider(model_id);
+                    if !r.model.is_empty() && r.model != requested {
+                        // Repli fait par OpenRouter : on le dit, rien n'est silencieux.
+                        tracing::warn!(
+                            session = %spec.session_id,
+                            requested = %requested,
+                            served = %r.model,
+                            "réponse servie par un modèle de repli"
+                        );
+                        s.events
+                            .append(
+                                EventDraft::new(
+                                    "llm.fallback_used",
+                                    json!({"requested": requested, "served": r.model}),
+                                )
+                                .session(&spec.session_id),
+                            )
+                            .await?;
+                        sink.emit(TurnEvent::Model {
+                            model_id: r.model.clone(),
+                        });
+                    }
                     return Ok(Ok(r));
                 }
                 Err(e) => {
@@ -652,6 +807,7 @@ impl AgentLoop {
                                         "reason": verdict.reason,
                                         "double": double,
                                         "call_id": call.id,
+                                        "turn_id": spec.turn_id,
                                     }),
                                     vec![
                                         "Autoriser".into(),
@@ -886,16 +1042,48 @@ pub fn pending_calls(tail: &[ChatMessage]) -> Vec<ToolCall> {
 }
 
 /// Message d'erreur lisible pour le propriétaire.
+/// Attente maximale honorée pour un `Retry-After`.
+const RETRY_AFTER_MAX_SECS: u64 = 20;
+
+/// Dort `secs` secondes, sauf annulation. Vrai si l'attente est allée au bout.
+async fn sleep_unless_cancelled(cancel: &CancelToken, secs: u64) -> bool {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(secs);
+    while tokio::time::Instant::now() < deadline {
+        if cancel.is_cancelled() {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    !cancel.is_cancelled()
+}
+
 fn humanise_llm_error(e: &LlmError) -> String {
+    let msg = &e.message;
     match e.kind {
         LlmErrorKind::Auth => format!(
-            "le provider refuse la clé ({e}). Vérifier la clé : \
+            "le provider refuse la clé ou la demande ({msg}). Vérifier la clé : \
              `penelope secret set openrouter_api_key`"
         ),
         LlmErrorKind::UnknownModel => format!(
-            "modèle inconnu du provider ({e}). Changer de modèle : \
+            "modèle inconnu du provider ({msg}). Changer de modèle : \
              `penelope model set main openrouter:<identifiant>`"
         ),
+        LlmErrorKind::PaymentRequired => format!(
+            "crédits OpenRouter épuisés ou plafond de la clé atteint ({msg}). \
+             Recharger : https://openrouter.ai/settings/credits"
+        ),
+        LlmErrorKind::RateLimited => match e.retry_after {
+            Some(s) => format!("limite de débit du provider ({msg}), réessayer dans {s} s"),
+            None => format!("limite de débit du provider ({msg}), réessayer dans un instant"),
+        },
+        LlmErrorKind::ContentFilter => {
+            format!("le provider a refusé la demande (filtre de contenu : {msg})")
+        }
+        LlmErrorKind::ContextLength => format!(
+            "la conversation dépasse la fenêtre du modèle ({msg}). `/new` repart d'une \
+             session vide"
+        ),
+        LlmErrorKind::Transient => format!("provider indisponible pour l'instant ({msg})"),
         _ => e.to_string(),
     }
 }
@@ -983,6 +1171,7 @@ mod tests {
         TurnSpec {
             session_id: session_id.to_string(),
             run_id: None,
+            turn_id: Some("t_test".into()),
             model_id: "mock/model".into(),
             fallback_models: vec![],
             tools: vec![ToolDef::new("fs_read", "lire", json!({"type":"object"}))],
@@ -1447,6 +1636,55 @@ mod tests {
         assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
         let models: Vec<String> = p.requests().iter().map(|r| r.model.clone()).collect();
         assert_eq!(models, vec!["mock/model", "mock/repli"]);
+    }
+
+    #[tokio::test]
+    async fn an_empty_answer_is_retried_once_then_reported() {
+        let (_d, s, p) = setup().await;
+        let sid = session(&s).await;
+
+        // Vide puis correcte : la relance suffit, rien de vide dans le transcript.
+        p.reply("");
+        p.reply("Bonjour !");
+        let conv = MemoryConversation::new("Tu es Pénélope.", "salut");
+        let out = AgentLoop::new(s.clone(), p.clone())
+            .run_conversation(&spec(&sid), &conv, &exec(false), &NullSink)
+            .await
+            .unwrap();
+        assert!(
+            matches!(out, TurnOutcome::Answered { ref text, .. } if text == "Bonjour !"),
+            "{out:?}"
+        );
+        assert_eq!(
+            conv.messages().len(),
+            2,
+            "la réponse vide n'est pas enregistrée"
+        );
+        let last_request = p.requests().last().unwrap().clone();
+        assert!(
+            last_request
+                .messages
+                .last()
+                .unwrap()
+                .text()
+                .contains("Relance automatique")
+        );
+
+        // Vide deux fois : erreur explicite, qui nomme le modèle.
+        p.reply("");
+        p.reply("   ");
+        let conv = MemoryConversation::new("Tu es Pénélope.", "salut");
+        let out = AgentLoop::new(s.clone(), p.clone())
+            .run_conversation(&spec(&sid), &conv, &exec(false), &NullSink)
+            .await
+            .unwrap();
+        match out {
+            TurnOutcome::Failed { error } => {
+                assert!(error.contains("aucun texte"), "{error}");
+                assert!(error.contains("mock/model"), "{error}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

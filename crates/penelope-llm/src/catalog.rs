@@ -29,9 +29,41 @@ pub struct ModelInfo {
     pub input_modalities: Vec<String>,
     pub output_modalities: Vec<String>,
     pub supported_parameters: Vec<String>,
+    /// Prix d'écriture dans le cache, par token (`input_cache_write`), 0 si inconnu.
+    #[serde(default)]
+    pub price_cache_write: f64,
+    /// Efforts de raisonnement acceptés, du plus fort au plus faible
+    /// (`reasoning.supported_efforts`). `None` : aucun réglage exposé ; liste vide :
+    /// toutes les valeurs sont acceptées.
+    #[serde(default)]
+    pub reasoning_efforts: Option<Vec<String>>,
+    /// Raisonnement obligatoire : `effort: "none"` serait refusé par le modèle.
+    #[serde(default)]
+    pub reasoning_mandatory: bool,
 }
 
 impl ModelInfo {
+    /// Effort le plus léger pour un appel utilitaire (classifieur) : `none` quand le
+    /// raisonnement peut être coupé, sinon le plus faible accepté. `None` si le modèle
+    /// n'expose aucun réglage : rien n'est alors envoyé.
+    pub fn lightest_effort(&self) -> Option<String> {
+        let efforts = self.reasoning_efforts.as_ref()?;
+        if efforts.is_empty() {
+            return Some(
+                if self.reasoning_mandatory {
+                    "minimal"
+                } else {
+                    "none"
+                }
+                .into(),
+            );
+        }
+        if !self.reasoning_mandatory && efforts.iter().any(|e| e == "none") {
+            return Some("none".into());
+        }
+        efforts.iter().rev().find(|e| *e != "none").cloned()
+    }
+
     pub fn supports_tools(&self) -> bool {
         self.supported_parameters
             .iter()
@@ -56,9 +88,15 @@ impl ModelInfo {
 
     /// Coût d'un appel, à partir de l'usage.
     pub fn cost(&self, u: &crate::types::Usage) -> f64 {
-        let fresh_prompt = u.prompt.saturating_sub(u.cached) as f64;
+        let fresh_prompt = u.prompt.saturating_sub(u.cached + u.cache_write) as f64;
+        let write_price = if self.price_cache_write > 0.0 {
+            self.price_cache_write
+        } else {
+            self.price_prompt
+        };
         fresh_prompt * self.price_prompt
             + u.cached as f64 * self.price_cached_read
+            + u.cache_write as f64 * write_price
             + u.completion as f64 * self.price_completion
     }
 
@@ -77,6 +115,9 @@ impl ModelInfo {
             input_modalities: vec!["text".into()],
             output_modalities: vec!["text".into()],
             supported_parameters: vec!["tools".into(), "tool_choice".into()],
+            price_cache_write: 0.0,
+            reasoning_efforts: None,
+            reasoning_mandatory: false,
         }
     }
 }
@@ -270,6 +311,24 @@ fn parse_one(m: &Value) -> Option<ModelInfo> {
                     .collect()
             })
             .unwrap_or_default(),
+        price_cache_write: price("input_cache_write"),
+        // `supported_efforts` : absent = pas de réglage, `null` = toutes les valeurs.
+        reasoning_efforts: m
+            .get("reasoning")
+            .and_then(|r| match r.get("supported_efforts") {
+                None => None,
+                Some(Value::Array(a)) => Some(
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect(),
+                ),
+                Some(_) => Some(Vec::new()),
+            }),
+        reasoning_mandatory: m
+            .get("reasoning")
+            .and_then(|r| r.get("mandatory"))
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false),
         id,
     })
 }
@@ -290,8 +349,10 @@ mod tests {
                             "input_cache_read":"0.00000004","image":"0"},
                 "architecture": {"input_modalities":["text","image"],
                                  "output_modalities":["text"]},
-                "supported_parameters":["tools","tool_choice","response_format"],
-                "top_provider": {"max_completion_tokens": 32000}
+                "supported_parameters":["tools","tool_choice","response_format","reasoning"],
+                "top_provider": {"max_completion_tokens": 32000},
+                "reasoning": {"supported_efforts": ["high","medium","low","none"],
+                              "default_effort": "medium", "mandatory": false}
             },
             {
                 "id":"vieux/modele-sans-outils",
@@ -330,17 +391,29 @@ mod tests {
         let full = m.cost(&Usage {
             prompt: 100_000,
             completion: 1_000,
-            cached: 0,
-            reasoning: 0,
+            ..Default::default()
         });
         let cached = m.cost(&Usage {
             prompt: 100_000,
             completion: 1_000,
             cached: 90_000,
-            reasoning: 0,
+            ..Default::default()
         });
         assert!(cached < full, "le cache doit réduire le coût");
         assert!(cached > 0.0);
+    }
+
+    #[test]
+    fn lightest_reasoning_effort_respects_the_model_capabilities() {
+        let models = parse_openrouter_models(&sample_body());
+        assert_eq!(models[0].lightest_effort().as_deref(), Some("none"));
+        assert_eq!(models[1].lightest_effort(), None, "aucun réglage exposé");
+
+        let mut m = models[0].clone();
+        m.reasoning_mandatory = true;
+        assert_eq!(m.lightest_effort().as_deref(), Some("low"));
+        m.reasoning_efforts = Some(Vec::new());
+        assert_eq!(m.lightest_effort().as_deref(), Some("minimal"));
     }
 
     #[test]

@@ -66,7 +66,12 @@ impl Tiers {
     ///
     /// - le préfixe devient **un seul** message système, pour ne jamais fragmenter le
     ///   cache de préfixe ;
-    /// - T4 est ajouté après l'historique, en dernier message système ;
+    /// - T4 est placé **en tête du dernier message utilisateur**, dans un bloc
+    ///   `<contexte>` : un message système en fin de conversation fait répondre à vide
+    ///   certains modèles (le gabarit de chat attend un tour utilisateur en dernier), et
+    ///   certains providers remontent les messages système dans le prompt système, ce
+    ///   qui casserait le cache à chaque minute. Seule la projection est modifiée,
+    ///   jamais l'historique canonique ;
     /// - `cache_control` est posé en fin de T2 et sur les 3 derniers messages
     ///   (stratégie « system + 3 » pour Anthropic via OpenRouter).
     pub fn assemble(&self, history: Vec<ChatMessage>, anthropic_cache: bool) -> Vec<ChatMessage> {
@@ -78,14 +83,30 @@ impl Tiers {
         out.push(sys);
         out.extend(history);
         if !self.volatile.is_empty() {
-            out.push(ChatMessage {
-                role: Role::System,
-                content: vec![Content::text(self.volatile.clone())],
-                tool_calls: Vec::new(),
-                tool_call_id: None,
-                name: None,
-                cache_marker: false,
-            });
+            let block = format!("<contexte>\n{}\n</contexte>\n\n", self.volatile.trim());
+            match out.iter().rposition(|m| m.role == Role::User) {
+                Some(i) => {
+                    let m = &mut out[i];
+                    match m.content.iter_mut().find_map(|c| match c {
+                        Content::Text { text } => Some(text),
+                        _ => None,
+                    }) {
+                        Some(text) => text.insert_str(0, &block),
+                        None => m.content.insert(0, Content::text(block)),
+                    }
+                }
+                // Pas encore de message utilisateur : repli en message système final.
+                None => out.push(ChatMessage {
+                    role: Role::System,
+                    content: vec![Content::text(self.volatile.clone())],
+                    tool_calls: Vec::new(),
+                    tool_call_id: None,
+                    name: None,
+                    cache_marker: false,
+                    reasoning: None,
+                    reasoning_details: None,
+                }),
+            }
         }
         if anthropic_cache {
             mark_last_three(&mut out);
@@ -340,21 +361,52 @@ mod tests {
     }
 
     #[test]
-    fn assemble_puts_volatile_at_the_very_end() {
+    fn assemble_puts_volatile_into_the_last_user_message() {
         let t = builder()
             .volatile("Rappel : la dette technique du module X")
             .build();
         let msgs = t.assemble(
             vec![
-                ChatMessage::user("salut"),
+                ChatMessage::user("premier"),
                 ChatMessage::assistant("bonjour"),
+                ChatMessage::user("dernier"),
             ],
             false,
         );
-        assert_eq!(msgs[0].role, Role::System);
-        assert_eq!(msgs.len(), 4);
-        assert_eq!(msgs[3].role, Role::System);
-        assert!(msgs[3].text().contains("dette technique"));
+        assert_eq!(msgs.len(), 4, "aucun message ajouté");
+        assert_eq!(
+            msgs[3].role,
+            Role::User,
+            "la conversation finit par l'utilisateur"
+        );
+        assert!(
+            msgs[3]
+                .text()
+                .starts_with("<contexte>\nRappel : la dette technique")
+        );
+        assert!(msgs[3].text().ends_with("dernier"));
+        assert_eq!(
+            msgs[1].text(),
+            "premier",
+            "les anciens messages ne bougent pas"
+        );
+        let systems = msgs.iter().filter(|m| m.role == Role::System).count();
+        assert_eq!(systems, 1);
+    }
+
+    #[test]
+    fn volatile_stays_with_the_user_message_during_tool_iterations() {
+        let t = builder().volatile("Date : lundi").build();
+        let msgs = t.assemble(
+            vec![
+                ChatMessage::user("lis a.rs"),
+                ChatMessage::assistant("appel"),
+                ChatMessage::tool_result("c1", "fs_read", "contenu"),
+            ],
+            false,
+        );
+        assert!(msgs[1].text().starts_with("<contexte>"));
+        assert_eq!(msgs.last().unwrap().role, Role::Tool);
     }
 
     #[test]

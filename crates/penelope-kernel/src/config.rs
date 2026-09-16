@@ -190,8 +190,10 @@ pub struct OpenRouter {
     pub api_key: String,
     pub base_url: String,
     pub catalog_refresh: String,
+    /// Attribution (`HTTP-Referer`, `X-OpenRouter-Title`, `X-OpenRouter-Categories`).
     pub referer: String,
     pub title: String,
+    pub categories: String,
     pub routing: OpenRouterRouting,
     pub enabled: bool,
 }
@@ -204,6 +206,7 @@ impl Default for OpenRouter {
             catalog_refresh: "6h".into(),
             referer: "https://github.com/edouard-claude/penelope".into(),
             title: "Penelope".into(),
+            categories: "personal-agent".into(),
             routing: OpenRouterRouting::default(),
             enabled: true,
         }
@@ -214,9 +217,20 @@ impl Default for OpenRouter {
 #[serde(default, deny_unknown_fields)]
 pub struct OpenRouterRouting {
     pub allow_fallbacks: bool,
+    /// Ordre imposé des providers. Attention : il désactive le routage collant, donc le
+    /// cache de préfixe entre deux tours.
     pub order: Vec<String>,
+    /// `deny` : uniquement des providers qui ne conservent pas les données.
     pub data_collection: String,
     pub require_parameters: bool,
+    /// Uniquement des endpoints à rétention nulle (ZDR).
+    pub zdr: bool,
+    /// `price`, `throughput` ou `latency` ; vide = répartition par défaut d'OpenRouter.
+    pub sort: String,
+    pub only: Vec<String>,
+    pub ignore: Vec<String>,
+    /// Quantifications acceptées (`fp8`, `bf16`…) ; vide = toutes.
+    pub quantizations: Vec<String>,
 }
 
 impl Default for OpenRouterRouting {
@@ -226,6 +240,11 @@ impl Default for OpenRouterRouting {
             order: Vec::new(),
             data_collection: "allow".into(),
             require_parameters: false,
+            zdr: false,
+            sort: String::new(),
+            only: Vec::new(),
+            ignore: Vec::new(),
+            quantizations: Vec::new(),
         }
     }
 }
@@ -578,6 +597,9 @@ pub struct Sandbox {
     pub default_profile: String,
     pub allow_full_for: Vec<String>,
     pub workspaces: Vec<String>,
+    /// Réseau pour `shell_exec`. Sans lui, `gh`, `git push`, `curl` ou `npm` échouent,
+    /// et `gh auth status` croit le jeton invalide faute de pouvoir le vérifier.
+    pub shell_network: bool,
 }
 
 impl Default for Sandbox {
@@ -586,6 +608,7 @@ impl Default for Sandbox {
             default_profile: "workspace-write".into(),
             allow_full_for: Vec::new(),
             workspaces: Vec::new(),
+            shell_network: true,
         }
     }
 }

@@ -103,10 +103,19 @@ pub enum Command {
     /// Règles d'autorisation.
     Policies,
 
-    /// Consommation et coûts.
+    /// Consommation et coûts, du plus cher au moins cher.
     Usage {
-        #[arg(long, default_value = "model")]
+        /// Regroupement : session, turn (requête), model, day, role, provider, upstream, run.
+        #[arg(long, default_value = "session")]
         by: String,
+        /// Limite à une session.
+        #[arg(long)]
+        session: Option<String>,
+        /// Depuis une date (AAAA-MM-JJ).
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: i64,
     },
     /// Vérifie la chaîne d'audit.
     #[command(name = "audit-verify")]
@@ -265,9 +274,65 @@ pub async fn run(cli: Cli) -> CliResult<()> {
                 ));
             }
         }
+        Command::Model(ModelCmd::List { .. }) if !cli.json => {
+            println!("{}", render_model_list(&value));
+        }
         _ => output::print(&value, cli.json),
     }
     Ok(())
+}
+
+/// `penelope model list` : alias, routage en vigueur, puis recherche au catalogue.
+fn render_model_list(v: &Value) -> String {
+    let mut out = String::from("Alias\n");
+    if let Some(a) = v["aliases"].as_array() {
+        out.push_str(&output::table(a));
+    }
+    let r = &v["routing"];
+    if r.is_object() {
+        let step = |k: &str| {
+            format!(
+                "{} ({})",
+                r[k]["alias"].as_str().unwrap_or("?"),
+                r[k]["model"].as_str().unwrap_or("?")
+            )
+        };
+        out.push_str("\n\nRoutage\n");
+        if r["classifier"].as_bool().unwrap_or(false) {
+            out.push_str(&format!(
+                "adaptatif, classifieur {}\n  simple    → {}\n  ordinaire → {}\n  difficile → {}\n",
+                r["classifier_model"].as_str().unwrap_or("?"),
+                step("low"),
+                step("medium"),
+                step("high")
+            ));
+            out.push_str("tout sur main : penelope config set models.routing.classifier false");
+        } else {
+            out.push_str(&format!(
+                "fixe : tout passe par {}\nadaptatif : penelope config set models.routing.classifier true",
+                step("default")
+            ));
+        }
+        if let Some(fb) = r["fallback"].as_object().filter(|f| !f.is_empty()) {
+            out.push_str("\nreplis sur panne :");
+            for (from, to) in fb {
+                let to: Vec<&str> = to
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
+                    .unwrap_or_default();
+                out.push_str(&format!(" {from} → {} ;", to.join(", ")));
+            }
+            out.pop();
+        }
+    }
+    if let Some(m) = v["models"].as_array().filter(|m| !m.is_empty()) {
+        out.push_str("\n\nCatalogue\n");
+        out.push_str(&output::table(m));
+    }
+    if let Some(note) = v["note"].as_str().filter(|n| !n.is_empty()) {
+        out.push_str(&format!("\n\n{note}"));
+    }
+    out
 }
 
 /// Associe une commande à sa méthode RPC (CA 15 : parité Telegram ↔ CLI).
@@ -322,7 +387,15 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Deny { id, reason } => (m::DENY, json!({"id": id, "reason": reason})),
         Command::Policies => (m::POLICIES, json!({})),
 
-        Command::Usage { by } => (m::USAGE, json!({"by": by})),
+        Command::Usage {
+            by,
+            session,
+            since,
+            limit,
+        } => (
+            m::USAGE,
+            json!({"by": by, "session": session, "since": since, "limit": limit}),
+        ),
         Command::AuditVerify => (m::AUDIT_VERIFY, json!({})),
         Command::Backup => (m::BACKUP, json!({})),
         Command::Eval { suite } => (m::EVAL_RUN, json!({"suite": suite})),
@@ -783,6 +856,32 @@ async fn follow_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_list_shows_the_routing_in_force() {
+        let v = json!({
+            "aliases": [{"alias": "main", "model": "openrouter:z-ai/glm-5.3"},
+                        {"alias": "fast", "model": "openrouter:deepseek/deepseek-v4-flash"}],
+            "routing": {
+                "classifier": true,
+                "default": {"alias": "main", "model": "openrouter:z-ai/glm-5.3"},
+                "low": {"alias": "fast", "model": "openrouter:deepseek/deepseek-v4-flash"},
+                "medium": {"alias": "main", "model": "openrouter:z-ai/glm-5.3"},
+                "high": {"alias": "reasoning", "model": "openrouter:z-ai/glm-5.2"},
+                "classifier_model": "openrouter:deepseek/deepseek-v4-flash",
+                "fallback": {"main": ["fast"]}
+            },
+            "models": [],
+            "note": ""
+        });
+        let out = render_model_list(&v);
+        assert!(
+            out.contains("simple    → fast (openrouter:deepseek/deepseek-v4-flash)"),
+            "{out}"
+        );
+        assert!(out.contains("models.routing.classifier false"), "{out}");
+        assert!(out.contains("main → fast"), "{out}");
+    }
     use clap::CommandFactory;
 
     fn parse(args: &[&str]) -> Cli {

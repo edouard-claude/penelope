@@ -203,6 +203,8 @@ pub fn stub_message(m: &ChatMessage, note: &str) -> ChatMessage {
         tool_call_id: m.tool_call_id.clone(),
         name: m.name.clone(),
         cache_marker: false,
+        reasoning: None,
+        reasoning_details: None,
     }
 }
 

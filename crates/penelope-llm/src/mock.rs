@@ -37,8 +37,7 @@ impl MockProvider {
             usage: Arc::new(Mutex::new(Usage {
                 prompt: 1000,
                 completion: 50,
-                cached: 0,
-                reasoning: 0,
+                ..Default::default()
             })),
             models: Arc::new(Mutex::new(vec![ModelInfo::minimal(
                 "mock/model",

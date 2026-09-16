@@ -27,6 +27,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0003_event_purges",
         sql: SQL_0003,
     },
+    Migration {
+        version: "0004_usage_attribution",
+        sql: SQL_0004,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -756,6 +760,17 @@ CREATE TABLE event_purges(
   original_hash TEXT NOT NULL,
   reason        TEXT NOT NULL DEFAULT ''
 );
+"#;
+
+/// Coûts attribuables : à quel tour (requête du propriétaire) appartient un appel, quelle
+/// génération OpenRouter le porte, quel provider amont l'a servi.
+const SQL_0004: &str = r#"
+ALTER TABLE usage ADD COLUMN turn_id TEXT;
+ALTER TABLE usage ADD COLUMN generation_id TEXT;
+ALTER TABLE usage ADD COLUMN upstream TEXT;
+ALTER TABLE usage ADD COLUMN finish TEXT;
+ALTER TABLE usage ADD COLUMN cache_write INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX usage_turn ON usage(turn_id);
 "#;
 
 #[cfg(test)]

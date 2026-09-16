@@ -195,8 +195,23 @@ impl Rpc {
                         .collect(),
                     None => Vec::new(),
                 };
+                let routing = &cfg.models.routing;
+                let model_of = |alias: &str| cfg.alias_model(alias).unwrap_or("?").to_string();
+                let routing_view = json!({
+                    "classifier": routing.classifier,
+                    "default": {
+                        "alias": cfg.role_alias("chat_default"),
+                        "model": model_of(&cfg.role_alias("chat_default")),
+                    },
+                    "low": {"alias": routing.low, "model": model_of(&routing.low)},
+                    "medium": {"alias": routing.medium, "model": model_of(&routing.medium)},
+                    "high": {"alias": routing.high, "model": model_of(&routing.high)},
+                    "classifier_model": model_of(&cfg.role_alias("classifier")),
+                    "fallback": routing.fallback,
+                });
                 Ok(json!({
                     "aliases": aliases,
+                    "routing": routing_view,
                     "catalog_size": s.catalog.len(),
                     "models": models,
                     "note": if s.catalog.is_empty() {
@@ -393,13 +408,32 @@ impl Rpc {
             // ------------------------------------------------------------ données
             method::AUDIT_VERIFY => Ok(serde_json::to_value(s.events.verify().await?)?),
             method::USAGE => {
-                let by = p.get("by").and_then(|b| b.as_str()).unwrap_or("model");
-                let rows = s.budget.breakdown(by, 50).await?;
+                let by = p.get("by").and_then(|b| b.as_str()).unwrap_or("session");
+                if !penelope_kernel::budget::USAGE_AXES.contains(&by) {
+                    anyhow::bail!(
+                        "axe inconnu `{by}` : {}",
+                        penelope_kernel::budget::USAGE_AXES.join(", ")
+                    );
+                }
+                let session = p.get("session").and_then(|v| v.as_str());
+                let since = p.get("since").and_then(|v| v.as_str());
+                let limit = p
+                    .get("limit")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(20)
+                    .clamp(1, 500);
+                let rows = s.budget.report(by, session, since, limit).await?;
                 Ok(json!(
                     rows.into_iter()
-                        .map(
-                            |(k, cost, tokens)| json!({"key": k, "costUsd": cost, "tokens": tokens})
-                        )
+                        .map(|r| json!({
+                            "key": r.key,
+                            "label": r.label,
+                            "costUsd": round_usd(r.cost_usd),
+                            "tokens": r.tokens,
+                            "calls": r.calls,
+                            "estimated": r.estimated,
+                            "last": r.last_ts,
+                        }))
                         .collect::<Vec<_>>()
                 ))
             }
@@ -415,6 +449,11 @@ impl Rpc {
             other => Err(anyhow::anyhow!("méthode inconnue : {other}")),
         }
     }
+}
+
+/// Montant lisible : six décimales suffisent à distinguer un appel d'un autre.
+pub fn round_usd(x: f64) -> f64 {
+    (x * 1_000_000.0).round() / 1_000_000.0
 }
 
 impl Rpc {

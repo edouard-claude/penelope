@@ -84,7 +84,9 @@ async fn chat_stream_sends_deltas_then_the_final_answer() {
     assert_eq!(last["result"]["outcome"], "answered");
     assert_eq!(last["result"]["text"], "Bonjour depuis la socket.");
 
-    // `chat.send` sur la même session courante : l'historique suit.
+    // `chat.send` sur la même session courante : l'historique suit. Le premier message
+    // était « simple », rien n'est collant : le second repasse par le classifieur.
+    p.reply(r#"{"complexity":"medium"}"#);
     p.reply("Toujours là.");
     let lines = exchange(
         &d,

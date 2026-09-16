@@ -4,7 +4,7 @@
 //! (`index`, `id`, `function.name`, `function.arguments` par morceaux) : ils sont
 //! réassemblés ici, et les arguments ne sont décodés qu'une fois le fragment terminé.
 
-use crate::types::{FinishReason, StreamChunk, ToolCall, Usage};
+use crate::types::{FinishReason, StreamChunk, ToolCall, Usage, kind_for_error_type};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -72,6 +72,11 @@ pub struct StreamAccumulator {
     pub reasoning: String,
     pub finish: Option<FinishReason>,
     pub usage: Option<Usage>,
+    /// Provider amont (`provider`) et raison d'arrêt brute (`native_finish_reason`).
+    pub upstream: Option<String>,
+    pub native_finish: Option<String>,
+    /// Refus explicite du modèle (`delta.refusal`).
+    pub refusal: String,
     started: bool,
     partial_calls: BTreeMap<i64, PartialCall>,
 }
@@ -101,17 +106,31 @@ impl StreamAccumulator {
             return vec![];
         };
 
-        // OpenRouter transmet parfois une erreur au milieu du flux.
+        // Erreur au milieu du flux : le 200 est déjà parti, l'erreur arrive en fragment,
+        // au premier niveau, avec `finish_reason: "error"` dans `choices`.
         if let Some(err) = v.get("error") {
-            let msg = err
+            let mut message = err
                 .get("message")
                 .and_then(|m| m.as_str())
                 .unwrap_or("erreur du provider")
                 .to_string();
+            if let Some(p) = v.get("provider").and_then(|p| p.as_str()) {
+                message.push_str(&format!(" ({p})"));
+            }
             let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+            let error_type = err
+                .get("metadata")
+                .and_then(|m| m.get("error_type"))
+                .and_then(|t| t.as_str())
+                .map(String::from);
+            let retryable = match error_type.as_deref().and_then(kind_for_error_type) {
+                Some(kind) => kind.is_retryable(),
+                None => code >= 500 || code == 429,
+            };
             return vec![StreamChunk::Error {
-                message: msg,
-                retryable: code >= 500 || code == 429,
+                message,
+                retryable,
+                error_type,
             }];
         }
 
@@ -134,7 +153,14 @@ impl StreamAccumulator {
             });
         }
 
-        if let Some(u) = v.get("usage") {
+        if let Some(p) = v.get("provider").and_then(|p| p.as_str()) {
+            if !p.is_empty() && self.upstream.as_deref() != Some(p) {
+                self.upstream = Some(p.to_string());
+                out.push(self.meta());
+            }
+        }
+
+        if let Some(u) = v.get("usage").filter(|u| u.is_object()) {
             let usage = parse_usage(u);
             self.usage = Some(usage);
             out.push(StreamChunk::Usage(usage));
@@ -147,6 +173,12 @@ impl StreamAccumulator {
             if let Some(fr) = choice.get("finish_reason").and_then(|f| f.as_str()) {
                 self.finish = Some(FinishReason::parse(fr));
             }
+            if let Some(n) = choice.get("native_finish_reason").and_then(|f| f.as_str()) {
+                if !n.is_empty() && self.native_finish.as_deref() != Some(n) {
+                    self.native_finish = Some(n.to_string());
+                    out.push(self.meta());
+                }
+            }
             let Some(delta) = choice.get("delta").or_else(|| choice.get("message")) else {
                 continue;
             };
@@ -157,13 +189,27 @@ impl StreamAccumulator {
                     out.push(StreamChunk::Delta { text: t.into() });
                 }
             }
-            // Certains modèles exposent le raisonnement séparément.
-            for key in ["reasoning", "reasoning_content"] {
-                if let Some(t) = delta.get(key).and_then(|c| c.as_str()) {
-                    if !t.is_empty() {
-                        self.reasoning.push_str(t);
-                        out.push(StreamChunk::Reasoning { text: t.into() });
-                    }
+            // Certains modèles exposent le raisonnement séparément. OpenRouter envoie le
+            // même texte en `reasoning` et en `reasoning_content` : on n'en lit qu'un.
+            if let Some(t) = delta
+                .get("reasoning")
+                .and_then(|c| c.as_str())
+                .or_else(|| delta.get("reasoning_content").and_then(|c| c.as_str()))
+            {
+                if !t.is_empty() {
+                    self.reasoning.push_str(t);
+                    out.push(StreamChunk::Reasoning { text: t.into() });
+                }
+            }
+            if let Some(t) = delta.get("refusal").and_then(|r| r.as_str()) {
+                if !t.is_empty() {
+                    self.refusal.push_str(t);
+                    out.push(StreamChunk::Refusal { text: t.into() });
+                }
+            }
+            if let Some(details) = delta.get("reasoning_details") {
+                if details.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+                    out.push(StreamChunk::ReasoningDetails(details.clone()));
                 }
             }
 
@@ -197,6 +243,13 @@ impl StreamAccumulator {
         out
     }
 
+    fn meta(&self) -> StreamChunk {
+        StreamChunk::Meta {
+            upstream: self.upstream.clone(),
+            native_finish: self.native_finish.clone(),
+        }
+    }
+
     /// Publie les appels d'outils accumulés, une seule fois.
     fn flush_tool_calls(&mut self) -> Vec<StreamChunk> {
         let mut out = Vec::new();
@@ -223,6 +276,60 @@ impl StreamAccumulator {
     }
 }
 
+/// Fusionne les fragments de `reasoning_details` reçus en streaming.
+///
+/// Les blocs arrivent morceau par morceau, repérés par `index` : les champs textuels
+/// (`text`, `summary`, `data`) se concatènent, les autres (`type`, `id`, `format`,
+/// `signature`) prennent la dernière valeur non nulle. L'ordre des blocs est conservé,
+/// comme l'exige OpenRouter au renvoi.
+pub fn merge_reasoning_details(parts: &[Value]) -> Option<Value> {
+    let mut merged: BTreeMap<i64, serde_json::Map<String, Value>> = BTreeMap::new();
+    let mut next_index = 0i64;
+    for part in parts {
+        let items: Vec<&Value> = match part {
+            Value::Array(a) => a.iter().collect(),
+            other => vec![other],
+        };
+        for item in items {
+            let Some(obj) = item.as_object() else {
+                continue;
+            };
+            let idx = obj
+                .get("index")
+                .and_then(|i| i.as_i64())
+                .unwrap_or_else(|| {
+                    next_index += 1;
+                    next_index - 1
+                });
+            let slot = merged.entry(idx).or_default();
+            for (k, v) in obj {
+                match (k.as_str(), v) {
+                    ("text" | "summary" | "data", Value::String(s)) => {
+                        let current = slot
+                            .get(k)
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        slot.insert(k.clone(), Value::String(current + s));
+                    }
+                    (_, Value::Null) => {
+                        slot.entry(k.clone()).or_insert(Value::Null);
+                    }
+                    _ => {
+                        slot.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+    }
+    if merged.is_empty() {
+        return None;
+    }
+    Some(Value::Array(
+        merged.into_values().map(Value::Object).collect(),
+    ))
+}
+
 /// Décode les arguments d'un appel d'outil. Un JSON invalide est conservé brut : le
 /// harnais renvoie l'erreur au modèle pour qu'il se corrige plutôt que d'échouer le tour.
 pub fn parse_arguments(raw: &str) -> Value {
@@ -242,22 +349,43 @@ pub fn parse_arguments(raw: &str) -> Value {
 
 fn parse_usage(u: &Value) -> Usage {
     let get = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-    let cached = u
-        .get("prompt_tokens_details")
+    let prompt_details = u.get("prompt_tokens_details");
+    let cached = prompt_details
         .and_then(|d| d.get("cached_tokens"))
         .and_then(|x| x.as_u64())
         .or_else(|| u.get("cache_read_input_tokens").and_then(|x| x.as_u64()))
+        .unwrap_or(0);
+    let cache_write = prompt_details
+        .and_then(|d| d.get("cache_write_tokens"))
+        .and_then(|x| x.as_u64())
+        .or_else(|| {
+            u.get("cache_creation_input_tokens")
+                .and_then(|x| x.as_u64())
+        })
         .unwrap_or(0);
     let reasoning = u
         .get("completion_tokens_details")
         .and_then(|d| d.get("reasoning_tokens"))
         .and_then(|x| x.as_u64())
         .unwrap_or(0);
+    // `cost` est ce qu'OpenRouter débite. En BYOK, l'inférence est payée au provider
+    // à part (`cost_details.upstream_inference_cost`) : on l'ajoute pour le vrai total.
+    let cost_usd = u.get("cost").and_then(|c| c.as_f64()).map(|cost| {
+        let byok = u.get("is_byok").and_then(|b| b.as_bool()).unwrap_or(false);
+        let upstream = u
+            .get("cost_details")
+            .and_then(|d| d.get("upstream_inference_cost"))
+            .and_then(|x| x.as_f64())
+            .unwrap_or(0.0);
+        if byok { cost + upstream } else { cost }
+    });
     Usage {
         prompt: get("prompt_tokens"),
         completion: get("completion_tokens"),
         cached,
+        cache_write,
         reasoning,
+        cost_usd,
     }
 }
 
@@ -323,6 +451,38 @@ mod tests {
         assert_eq!(call.id, "call_a");
         assert_eq!(call.name, "fs_read");
         assert_eq!(call.arguments, serde_json::json!({"path":"a.rs"}));
+    }
+
+    #[test]
+    fn reasoning_details_are_merged_by_index_in_order() {
+        let parts = vec![
+            serde_json::json!([{"type":"reasoning.text","text":"Je ","index":0,"format":"x","signature":null}]),
+            serde_json::json!([{"type":"reasoning.text","text":"réfléchis","index":0,"signature":"sig"}]),
+            serde_json::json!([{"type":"reasoning.encrypted","data":"AB","index":1}]),
+            serde_json::json!([{"type":"reasoning.encrypted","data":"CD","index":1}]),
+        ];
+        let merged = merge_reasoning_details(&parts).unwrap();
+        assert_eq!(merged[0]["text"], "Je réfléchis");
+        assert_eq!(merged[0]["signature"], "sig");
+        assert_eq!(merged[0]["format"], "x");
+        assert_eq!(merged[1]["data"], "ABCD");
+        assert!(merge_reasoning_details(&[]).is_none());
+    }
+
+    #[test]
+    fn openrouter_reasoning_is_read_once_not_twice() {
+        let mut acc = StreamAccumulator::new();
+        let chunk = serde_json::json!({
+            "id":"g","model":"m",
+            "choices":[{"delta":{"reasoning":"abc","reasoning_content":"abc",
+                "reasoning_details":[{"type":"reasoning.text","text":"abc","index":0}]}}]
+        });
+        let out = acc.push_payload(&chunk.to_string());
+        assert_eq!(acc.reasoning, "abc");
+        assert!(
+            out.iter()
+                .any(|c| matches!(c, StreamChunk::ReasoningDetails(_)))
+        );
     }
 
     #[test]
@@ -395,11 +555,121 @@ mod tests {
         let mut a = StreamAccumulator::new();
         let out = a.push_payload(r#"{"error":{"message":"surcharge","code":503}}"#);
         match &out[0] {
-            StreamChunk::Error { message, retryable } => {
+            StreamChunk::Error {
+                message, retryable, ..
+            } => {
                 assert_eq!(message, "surcharge");
                 assert!(*retryable);
             }
             other => panic!("attendu une erreur, obtenu {other:?}"),
         }
+    }
+
+    #[test]
+    fn documented_mid_stream_error_chunk_keeps_type_and_provider() {
+        // Forme exacte de la documentation OpenRouter (erreurs en cours de flux).
+        let mut a = StreamAccumulator::new();
+        let out = a.push_payload(
+            r#"{"id":"gen-abc123","object":"chat.completion.chunk","created":1234567890,
+               "model":"openai/gpt-4o","provider":"OpenAI",
+               "error":{"code":429,"message":"Rate limit exceeded",
+                        "metadata":{"error_type":"rate_limit_exceeded"}},
+               "choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}"#,
+        );
+        match &out[0] {
+            StreamChunk::Error {
+                message,
+                retryable,
+                error_type,
+            } => {
+                assert_eq!(message, "Rate limit exceeded (OpenAI)");
+                assert!(*retryable);
+                assert_eq!(error_type.as_deref(), Some("rate_limit_exceeded"));
+            }
+            other => panic!("attendu une erreur, obtenu {other:?}"),
+        }
+        let mut a = StreamAccumulator::new();
+        let out = a.push_payload(
+            r#"{"error":{"code":403,"message":"refused","metadata":{"error_type":"refusal"}}}"#,
+        );
+        assert!(matches!(
+            &out[0],
+            StreamChunk::Error {
+                retryable: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn usage_chunk_carries_the_billed_cost() {
+        // Dernier fragment documenté : `finish_reason` répété, usage complet avec `cost`.
+        let mut a = StreamAccumulator::new();
+        a.push_payload(r#"{"id":"gen-1","model":"z-ai/glm-5.3","provider":"Z.AI","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop","native_finish_reason":"stop"}]}"#);
+        let out = a.push_payload(
+            r#"{"id":"gen-1","model":"z-ai/glm-5.3","provider":"Z.AI",
+               "choices":[{"index":0,"delta":{"content":"","role":"assistant"},
+                           "finish_reason":"stop","native_finish_reason":"stop"}],
+               "usage":{"prompt_tokens":10339,"completion_tokens":60,"total_tokens":10399,
+                        "prompt_tokens_details":{"cached_tokens":10318,"cache_write_tokens":0},
+                        "cost":0.0012,"is_byok":false,
+                        "cost_details":{"upstream_inference_cost":null,
+                                        "upstream_inference_prompt_cost":0.0008,
+                                        "upstream_inference_completions_cost":0.0004}}}"#,
+        );
+        let u = out
+            .iter()
+            .find_map(|c| match c {
+                StreamChunk::Usage(u) => Some(*u),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(u.cost_usd, Some(0.0012));
+        assert_eq!(u.cached, 10318);
+        assert_eq!(a.upstream.as_deref(), Some("Z.AI"));
+        assert_eq!(a.native_finish.as_deref(), Some("stop"));
+        assert_eq!(a.finish, Some(FinishReason::Stop));
+        assert_eq!(a.text, "ok");
+    }
+
+    #[test]
+    fn byok_cost_adds_the_upstream_inference() {
+        let u = parse_usage(&serde_json::json!({
+            "prompt_tokens": 10, "completion_tokens": 5, "cost": 0.0001, "is_byok": true,
+            "cost_details": {"upstream_inference_cost": 0.002,
+                             "upstream_inference_prompt_cost": 0.001,
+                             "upstream_inference_completions_cost": 0.001},
+            "prompt_tokens_details": {"cache_write_tokens": 4}
+        }));
+        assert!((u.cost_usd.unwrap() - 0.0021).abs() < 1e-12);
+        assert_eq!(u.cache_write, 4);
+        assert_eq!(
+            parse_usage(&serde_json::json!({"prompt_tokens": 1})).cost_usd,
+            None
+        );
+    }
+
+    #[test]
+    fn refusals_are_not_silent() {
+        let mut a = StreamAccumulator::new();
+        let out = a.push_payload(
+            r#"{"id":"1","model":"m","choices":[{"delta":{"refusal":"Je ne peux pas aider."},
+               "finish_reason":"content_filter"}]}"#,
+        );
+        assert!(out.iter().any(|c| matches!(c, StreamChunk::Refusal { .. })));
+        assert_eq!(a.refusal, "Je ne peux pas aider.");
+        assert_eq!(a.finish, Some(FinishReason::ContentFilter));
+    }
+
+    #[test]
+    fn debug_and_usage_frames_with_empty_choices_are_harmless() {
+        let mut a = StreamAccumulator::new();
+        let out = a.push_payload(
+            r#"{"id":"gen-x","provider":"Anthropic","model":"anthropic/claude-haiku-4.5",
+               "object":"chat.completion.chunk","created":1,"choices":[],
+               "debug":{"echo_upstream_body":{"max_tokens":64000}}}"#,
+        );
+        assert!(matches!(out[0], StreamChunk::Started { .. }));
+        assert!(a.text.is_empty() && a.finish.is_none());
     }
 }

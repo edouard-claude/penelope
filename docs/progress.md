@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **982 tests verts**, tous hors réseau.
+- **1008 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -71,6 +71,27 @@ Dernière mise à jour : 16 septembre 2026.
 - **CLI** : `penelope chat` (ponctuel ou interactif), `penelope secret set`.
 - **Catalogue de modèles** chargé au démarrage puis toutes les 6 h ; `model list` montre
   les alias et cherche dans le catalogue.
+
+### Depuis la 0.2.1
+
+- **OpenRouter aligné sur sa documentation** : coût facturé (`usage.cost`, BYOK compris)
+  plutôt qu'estimé ; `session_id` pour le routage collant et le cache ; replis de modèle
+  confiés à OpenRouter (`models`), visibles (`llm.fallback_used`) ; erreurs typées
+  (`error_type`, en-tête `Retry-After` honoré une fois) ; refus (`refusal`) et provider
+  amont conservés ; annulation qui coupe la connexion même pendant un silence ; en-têtes
+  `X-OpenRouter-Title` et `X-OpenRouter-Categories` ; préférences de provider complètes
+  (`zdr`, `sort`, `only`, `ignore`, `quantizations`).
+- **Réponses vides** : raisonnement renvoyé pendant les enchaînements d'outils,
+  contexte volatil dans le dernier message utilisateur, une relance puis un diagnostic
+  (fin brute, provider amont, budget de sortie mangé par le raisonnement).
+- **Routage lisible** : `model list` et `/models` montrent classifieur, étages et replis ;
+  `/model auto on|off` ; l'alias `low` ne colle plus à une session ; le classifieur
+  réduit son raisonnement et demande une sortie structurée quand le modèle le permet.
+- **Coûts attribués** : chaque appel porte sa requête d'origine, son rôle, sa génération
+  et son provider amont ; `penelope usage --by session|turn|model|day|role|upstream`,
+  `/budget`.
+- **Shell** : réseau autorisé par défaut (`sandbox.shell_network`), agent SSH et
+  emplacements de configuration transmis ; `Makefile` (`make deploy`).
 
 ### Encore à brancher
 

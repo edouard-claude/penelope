@@ -47,6 +47,7 @@ pub fn build_providers(
                     cfg.providers.openrouter.referer.clone(),
                     cfg.providers.openrouter.title.clone(),
                 )
+                .with_categories(cfg.providers.openrouter.categories.clone())
                 .with_routing(routing_value(&cfg.providers.openrouter.routing)),
         ))
     } else {
@@ -76,33 +77,44 @@ pub fn build_providers(
     })
 }
 
+/// Préférences de provider OpenRouter (`provider`). Seuls les écarts au comportement
+/// par défaut sont envoyés ; sans écart, pas d'objet du tout.
 fn routing_value(r: &penelope_kernel::config::OpenRouterRouting) -> serde_json::Value {
+    use serde_json::{Value, json};
+    let list = |v: &[String]| Value::Array(v.iter().map(|s| json!(s)).collect());
     let mut v = serde_json::Map::new();
-    v.insert(
-        "allow_fallbacks".into(),
-        serde_json::Value::Bool(r.allow_fallbacks),
-    );
-    if !r.order.is_empty() {
-        v.insert(
-            "order".into(),
-            serde_json::Value::Array(
-                r.order
-                    .iter()
-                    .map(|s| serde_json::Value::String(s.clone()))
-                    .collect(),
-            ),
-        );
+    if !r.allow_fallbacks {
+        v.insert("allow_fallbacks".into(), json!(false));
     }
-    if r.data_collection != "allow" {
-        v.insert(
-            "data_collection".into(),
-            serde_json::Value::String(r.data_collection.clone()),
-        );
+    if !r.order.is_empty() {
+        v.insert("order".into(), list(&r.order));
+    }
+    if !r.data_collection.is_empty() && r.data_collection != "allow" {
+        v.insert("data_collection".into(), json!(r.data_collection));
     }
     if r.require_parameters {
-        v.insert("require_parameters".into(), serde_json::Value::Bool(true));
+        v.insert("require_parameters".into(), json!(true));
     }
-    serde_json::Value::Object(v)
+    if r.zdr {
+        v.insert("zdr".into(), json!(true));
+    }
+    if !r.sort.is_empty() {
+        v.insert("sort".into(), json!(r.sort));
+    }
+    if !r.only.is_empty() {
+        v.insert("only".into(), list(&r.only));
+    }
+    if !r.ignore.is_empty() {
+        v.insert("ignore".into(), list(&r.ignore));
+    }
+    if !r.quantizations.is_empty() {
+        v.insert("quantizations".into(), list(&r.quantizations));
+    }
+    if v.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(v)
+    }
 }
 
 #[cfg(test)]
@@ -138,10 +150,22 @@ mod tests {
     #[test]
     fn routing_value_is_minimal_by_default() {
         let r = penelope_kernel::config::OpenRouterRouting::default();
+        assert!(routing_value(&r).is_null(), "rien à envoyer par défaut");
+
+        let r = penelope_kernel::config::OpenRouterRouting {
+            data_collection: "deny".into(),
+            zdr: true,
+            sort: "throughput".into(),
+            ignore: vec!["deepinfra".into()],
+            ..Default::default()
+        };
         let v = routing_value(&r);
-        assert_eq!(v["allow_fallbacks"], true);
+        assert_eq!(v["data_collection"], "deny");
+        assert_eq!(v["zdr"], true);
+        assert_eq!(v["sort"], "throughput");
+        assert_eq!(v["ignore"][0], "deepinfra");
+        assert!(v.get("allow_fallbacks").is_none());
         assert!(v.get("order").is_none());
-        assert!(v.get("data_collection").is_none());
     }
 
     #[test]

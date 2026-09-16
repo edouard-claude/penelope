@@ -56,17 +56,47 @@ impl BudgetStatus {
 pub struct UsageRecord {
     pub session_id: Option<String>,
     pub run_id: Option<String>,
+    /// Tour d'origine : la requête du propriétaire à laquelle l'appel répond, reprises
+    /// après approbation comprises.
+    pub turn_id: Option<String>,
     pub model: String,
     pub provider: String,
+    /// Usage de l'appel : `chat`, `classifier`, `compaction`…
     pub role: Option<String>,
+    /// Identifiant de génération du provider (`gen-…` chez OpenRouter).
+    pub generation_id: Option<String>,
+    /// Provider amont qui a servi l'appel.
+    pub upstream: Option<String>,
+    pub finish: Option<String>,
     pub prompt: u64,
     pub completion: u64,
     pub cached: u64,
+    pub cache_write: u64,
     pub reasoning: u64,
     pub cost_usd: f64,
+    /// Coût calculé du catalogue faute de coût facturé annoncé.
     pub estimated: bool,
     pub maybe_duplicate: bool,
 }
+
+/// Une ligne de rapport de consommation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageRow {
+    pub key: String,
+    /// Libellé lisible : titre ou premier message d'une session, texte d'une requête.
+    pub label: Option<String>,
+    pub cost_usd: f64,
+    pub tokens: i64,
+    pub calls: i64,
+    /// Appels dont le coût est estimé, non facturé tel quel.
+    pub estimated: i64,
+    pub last_ts: String,
+}
+
+/// Axes de regroupement acceptés par [`BudgetLedger::report`].
+pub const USAGE_AXES: &[&str] = &[
+    "session", "turn", "model", "day", "role", "provider", "upstream", "run",
+];
 
 #[derive(Clone)]
 pub struct BudgetLedger {
@@ -86,8 +116,9 @@ impl BudgetLedger {
             .write(move |tx| {
                 tx.execute(
                     "INSERT INTO usage(ts, day, session_id, run_id, model, provider, role,
-                        prompt, completion, cached, reasoning, cost_usd, estimated, maybe_dup)
-                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                        prompt, completion, cached, reasoning, cost_usd, estimated, maybe_dup,
+                        turn_id, generation_id, upstream, finish, cache_write)
+                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
                     params![
                         ts,
                         day,
@@ -102,7 +133,12 @@ impl BudgetLedger {
                         u.reasoning as i64,
                         u.cost_usd,
                         u.estimated as i64,
-                        u.maybe_duplicate as i64
+                        u.maybe_duplicate as i64,
+                        u.turn_id,
+                        u.generation_id,
+                        u.upstream,
+                        u.finish,
+                        u.cache_write as i64
                     ],
                 )?;
                 if let Some(sid) = &u.session_id {
@@ -205,36 +241,138 @@ impl BudgetLedger {
 
     /// Répartition des coûts (`penelope usage --by model|day|run`).
     pub async fn breakdown(&self, by: &str, limit: i64) -> Result<Vec<(String, f64, i64)>> {
+        Ok(self
+            .report(by, None, None, limit)
+            .await?
+            .into_iter()
+            .map(|r| (r.key, r.cost_usd, r.tokens))
+            .collect())
+    }
+
+    /// Rapport de consommation, du plus cher au moins cher.
+    ///
+    /// `by` : un des [`USAGE_AXES`]. `session` restreint à une session, `since` (date
+    /// `AAAA-MM-JJ`) aux jours suivants. Sessions et requêtes reçoivent un libellé.
+    pub async fn report(
+        &self,
+        by: &str,
+        session: Option<&str>,
+        since: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<UsageRow>> {
+        // Colonnes fixes : jamais d'entrée utilisateur dans le SQL.
         let column = match by {
-            "model" => "model",
-            "day" => "day",
-            "run" => "COALESCE(run_id, '')",
             "session" => "COALESCE(session_id, '')",
+            "turn" => "COALESCE(turn_id, '')",
+            "day" => "day",
+            "role" => "COALESCE(role, '')",
             "provider" => "provider",
+            "upstream" => "COALESCE(upstream, '')",
+            "run" => "COALESCE(run_id, '')",
             _ => "model",
         };
+        let by = by.to_string();
         let sql = format!(
-            "SELECT {column} AS k, SUM(cost_usd), SUM(prompt + completion)
-             FROM usage GROUP BY k ORDER BY SUM(cost_usd) DESC LIMIT ?1"
+            "SELECT {column} AS k, SUM(cost_usd), SUM(prompt + completion), COUNT(*),
+                    SUM(estimated), MAX(ts)
+             FROM usage
+             WHERE (?1 IS NULL OR session_id = ?1) AND (?2 IS NULL OR day >= ?2)
+             GROUP BY k ORDER BY SUM(cost_usd) DESC, MAX(ts) DESC LIMIT ?3"
         );
+        let session = session.map(String::from);
+        let since = since.map(String::from);
         Ok(self
             .store
             .read(move |c| {
-                let mut st = c.prepare(&sql)?;
-                let rows = st.query_map([limit], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, f64>(1)?,
-                        r.get::<_, i64>(2)?,
-                    ))
-                })?;
-                let mut v = Vec::new();
-                for row in rows {
-                    v.push(row?);
+                let mut rows = Vec::new();
+                {
+                    let mut st = c.prepare(&sql)?;
+                    let it = st.query_map(params![session, since, limit], |r| {
+                        Ok(UsageRow {
+                            key: r.get::<_, String>(0)?,
+                            label: None,
+                            cost_usd: r.get::<_, f64>(1)?,
+                            tokens: r.get::<_, i64>(2)?,
+                            calls: r.get::<_, i64>(3)?,
+                            estimated: r.get::<_, i64>(4)?,
+                            last_ts: r.get::<_, String>(5)?,
+                        })
+                    })?;
+                    for row in it {
+                        rows.push(row?);
+                    }
                 }
-                Ok(v)
+                for row in &mut rows {
+                    row.label = match by.as_str() {
+                        "session" => session_label(c, &row.key),
+                        "turn" => turn_label(c, &row.key),
+                        _ => None,
+                    };
+                }
+                Ok(rows)
             })
             .await?)
+    }
+}
+
+/// Titre d'une session, sinon son premier message.
+fn session_label(c: &penelope_store::rusqlite::Connection, id: &str) -> Option<String> {
+    use penelope_store::rusqlite::OptionalExtension;
+    if id.is_empty() {
+        return Some("(hors session)".into());
+    }
+    let title: Option<String> = c
+        .query_row("SELECT title FROM sessions WHERE id = ?1", [id], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .optional()
+        .ok()
+        .flatten()
+        .flatten()
+        .filter(|t| !t.trim().is_empty());
+    if title.is_some() {
+        return title.map(|t| short_label(&t));
+    }
+    c.query_row(
+        "SELECT json_extract(content, '$.blocks[0].text') FROM messages
+         WHERE session_id = ?1 AND role = 'user' ORDER BY seq LIMIT 1",
+        [id],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .flatten()
+    .map(|t| short_label(&t))
+}
+
+/// Texte de la requête qui a ouvert un tour.
+fn turn_label(c: &penelope_store::rusqlite::Connection, id: &str) -> Option<String> {
+    use penelope_store::rusqlite::OptionalExtension;
+    if id.is_empty() {
+        return Some("(hors tour)".into());
+    }
+    c.query_row(
+        "SELECT kind, json_extract(payload, '$.text') FROM turn_queue WHERE id = ?1",
+        [id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .map(|(kind, text)| match text.filter(|t| !t.trim().is_empty()) {
+        Some(t) => short_label(&t),
+        None => format!("({kind})"),
+    })
+}
+
+/// Une ligne, 60 caractères au plus.
+fn short_label(t: &str) -> String {
+    let one_line = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() > 60 {
+        format!("{}…", one_line.chars().take(59).collect::<String>())
+    } else {
+        one_line
     }
 }
 
@@ -284,6 +422,96 @@ mod tests {
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].0, "m");
         assert_eq!(b[0].2, 330);
+    }
+
+    #[tokio::test]
+    async fn costs_are_attributed_to_sessions_and_requests() {
+        let store = Store::open_memory().unwrap();
+        let clock = Arc::new(TestClock::default());
+        let l = BudgetLedger::new(store.clone(), clock.clone());
+        store
+            .write(|tx| {
+                tx.execute(
+                    "INSERT INTO sessions(id, kind, title, created_at, updated_at)
+                     VALUES('s1', 'chat', NULL, 'x', 'x'), ('s2', 'chat', 'Refonte', 'x', 'x')",
+                    [],
+                )?;
+                tx.execute(
+                    "INSERT INTO messages(session_id, seq, role, content, ts)
+                     VALUES('s1', 1, 'user', '{\"blocks\":[{\"type\":\"text\",\"text\":\"Liste mes repo  qui contiennent mcp\"}]}', 'x')",
+                    [],
+                )?;
+                tx.execute(
+                    "INSERT INTO turn_queue(id, session_id, kind, payload, state, enqueued_at)
+                     VALUES('t1', 's1', 'message', '{\"text\":\"Liste mes repo qui contiennent mcp\"}', 'done', 'x'),
+                           ('t2', 's1', 'resume', '{\"approval_id\":\"a1\"}', 'done', 'x')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let call =
+            |session: &str, turn: &str, role: &str, cost: f64, estimated: bool| UsageRecord {
+                session_id: Some(session.into()),
+                turn_id: Some(turn.into()),
+                role: Some(role.into()),
+                model: "z-ai/glm-5.3".into(),
+                provider: "openrouter".into(),
+                generation_id: Some("gen-1".into()),
+                upstream: Some("Z.AI".into()),
+                prompt: 1000,
+                completion: 100,
+                cost_usd: cost,
+                estimated,
+                ..Default::default()
+            };
+        l.record(call("s1", "t1", "classifier", 0.0001, false))
+            .await
+            .unwrap();
+        l.record(call("s1", "t1", "chat", 0.03, false))
+            .await
+            .unwrap();
+        l.record(call("s1", "t1", "chat", 0.02, true))
+            .await
+            .unwrap();
+        l.record(call("s2", "t3", "chat", 0.01, false))
+            .await
+            .unwrap();
+
+        let by_session = l.report("session", None, None, 10).await.unwrap();
+        assert_eq!(by_session[0].key, "s1");
+        assert_eq!(by_session[0].calls, 3);
+        assert_eq!(by_session[0].estimated, 1);
+        assert_eq!(
+            by_session[0].label.as_deref(),
+            Some("Liste mes repo qui contiennent mcp")
+        );
+        assert_eq!(by_session[1].label.as_deref(), Some("Refonte"));
+
+        let by_turn = l.report("turn", Some("s1"), None, 10).await.unwrap();
+        assert_eq!(
+            by_turn.len(),
+            1,
+            "la reprise est rattachée au tour d'origine"
+        );
+        assert!((by_turn[0].cost_usd - 0.0501).abs() < 1e-9);
+        assert_eq!(
+            by_turn[0].label.as_deref(),
+            Some("Liste mes repo qui contiennent mcp")
+        );
+
+        let by_role = l
+            .report("role", None, Some("1970-01-01"), 10)
+            .await
+            .unwrap();
+        assert_eq!(by_role[0].key, "chat");
+        assert!(
+            l.report("day", None, Some("2999-01-01"), 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// CA 10 : le budget journalier dépassé déclenche la demande HITL.

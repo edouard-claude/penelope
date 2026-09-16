@@ -366,12 +366,33 @@ impl TelegramGateway {
             }
             "model" => {
                 let parts: Vec<&str> = args.split_whitespace().collect();
-                if parts.len() < 2 {
-                    let cfg = s.config.config();
-                    let mut t = String::from("**Alias de modèles**\n\n");
-                    for (alias, model) in &cfg.models.aliases {
-                        t.push_str(&format!("- `{alias}` → `{model}`\n"));
+                if let ["auto", switch] = parts.as_slice() {
+                    let on = match *switch {
+                        "on" | "oui" => Some(true),
+                        "off" | "non" => Some(false),
+                        _ => None,
+                    };
+                    match on {
+                        None => "Usage : `/model auto on` ou `/model auto off`".into(),
+                        Some(on) => {
+                            rpc.call(
+                                m::CONFIG_SET,
+                                json!({"path": "models.routing.classifier", "value": on}),
+                            )
+                            .await?;
+                            if on {
+                                "🔀 Routage adaptatif activé : le classifieur choisit l'alias à chaque message.".into()
+                            } else {
+                                "📌 Routage fixe : tous les messages passent par `main`.".into()
+                            }
+                        }
                     }
+                } else if parts.len() < 2 {
+                    let v = rpc
+                        .call(m::MODEL_LIST, json!({}))
+                        .await
+                        .unwrap_or(json!({}));
+                    let mut t = routing_text(&v);
                     t.push_str("\nChanger : `/model main openrouter:<identifiant>`");
                     t
                 } else {
@@ -393,14 +414,7 @@ impl TelegramGateway {
                     .call(m::MODEL_LIST, json!({"filter": args}))
                     .await
                     .unwrap_or(json!({}));
-                let mut t = String::from("**Alias**\n\n");
-                for a in v["aliases"].as_array().cloned().unwrap_or_default() {
-                    t.push_str(&format!(
-                        "- `{}` → `{}`\n",
-                        a["alias"].as_str().unwrap_or("?"),
-                        a["model"].as_str().unwrap_or("?")
-                    ));
-                }
+                let mut t = routing_text(&v);
                 let models = v["models"].as_array().cloned().unwrap_or_default();
                 if !models.is_empty() {
                     t.push_str(&format!(
@@ -421,6 +435,10 @@ impl TelegramGateway {
                     ));
                 }
                 t
+            }
+            "budget" => {
+                let session = d.chat_session_for(&origin).await?;
+                self.budget_text(&session, args).await?
             }
             "retiens" => {
                 if args.is_empty() {
@@ -517,6 +535,92 @@ impl TelegramGateway {
             }
         };
         self.reply(chat_id, topic_id, reply_to, &text).await
+    }
+
+    /// `/budget` : dépense du jour et de la session, requêtes les plus chères.
+    /// `/budget sessions|requêtes|modèles|jours` : un regroupement précis.
+    async fn budget_text(&self, session: &str, args: &str) -> anyhow::Result<String> {
+        let s = &self.daemon.services;
+        let cfg = s.config.config();
+        let usd = |x: f64| format!("{:.4} $", x).replace('.', ",");
+        let axis = match args.trim() {
+            "" => None,
+            "sessions" | "session" => Some(("session", None, "Sessions les plus chères")),
+            "requêtes" | "requetes" | "tours" | "turn" => {
+                Some(("turn", Some(session), "Requêtes les plus chères (session)"))
+            }
+            "modèles" | "modeles" | "model" => Some(("model", None, "Par modèle")),
+            "jours" | "day" => Some(("day", None, "Par jour")),
+            "rôles" | "roles" | "role" => Some(("role", None, "Par usage")),
+            other => {
+                return Ok(format!(
+                    "Regroupement inconnu `{other}`. Choix : sessions, requêtes, modèles, jours, rôles."
+                ));
+            }
+        };
+
+        let row_line = |r: &penelope_kernel::budget::UsageRow| {
+            let label = r
+                .label
+                .as_deref()
+                .map(|l| format!(" « {l} »"))
+                .unwrap_or_default();
+            let key = if r.key.is_empty() {
+                "?"
+            } else {
+                r.key.as_str()
+            };
+            let est = if r.estimated > 0 { " (estimé)" } else { "" };
+            format!(
+                "- {}{est} · `{key}`{label} · {} appel(s)\n",
+                usd(r.cost_usd),
+                r.calls
+            )
+        };
+
+        if let Some((by, scope, title)) = axis {
+            let rows = s.budget.report(by, scope, None, 15).await?;
+            if rows.is_empty() {
+                return Ok("Aucune consommation enregistrée.".into());
+            }
+            let mut t = format!("**{title}**\n\n");
+            for r in &rows {
+                t.push_str(&row_line(r));
+            }
+            return Ok(t);
+        }
+
+        let today = s.budget.spent_today().await?;
+        let in_session = s.budget.spent_session(session).await?;
+        let mut t = format!(
+            "💶 Aujourd'hui : {} sur {} · session : {} sur {}\n",
+            usd(today),
+            usd(cfg.budget.daily_usd),
+            usd(in_session),
+            usd(cfg.budget.session_usd)
+        );
+        let turns = s.budget.report("turn", Some(session), None, 5).await?;
+        if !turns.is_empty() {
+            t.push_str("\n**Requêtes les plus chères de la session**\n\n");
+            for r in &turns {
+                t.push_str(&row_line(r));
+            }
+        }
+        let today_day = s.clock.now_rfc3339().chars().take(10).collect::<String>();
+        let models = s.budget.report("model", None, Some(&today_day), 5).await?;
+        if !models.is_empty() {
+            t.push_str("\n**Par modèle, aujourd'hui**\n\n");
+            for r in &models {
+                t.push_str(&format!(
+                    "- {} · `{}` · {} appel(s)\n",
+                    usd(r.cost_usd),
+                    r.key,
+                    r.calls
+                ));
+            }
+        }
+        t.push_str("\nDétail : `/budget sessions`, `/budget requêtes`, `/budget modèles`");
+        Ok(t)
     }
 
     // ================================================================ boutons
@@ -1225,6 +1329,58 @@ fn substitute(body: &str, vars: &BTreeMap<String, String>) -> String {
     out
 }
 
+/// Alias et routage, tels que `model.list` les décrit.
+fn routing_text(v: &Value) -> String {
+    let mut t = String::from("**Alias**\n\n");
+    for a in v["aliases"].as_array().cloned().unwrap_or_default() {
+        t.push_str(&format!(
+            "- `{}` → `{}`\n",
+            a["alias"].as_str().unwrap_or("?"),
+            a["model"].as_str().unwrap_or("?")
+        ));
+    }
+    let r = &v["routing"];
+    if r.is_object() {
+        let step = |k: &str| {
+            format!(
+                "`{}` (`{}`)",
+                r[k]["alias"].as_str().unwrap_or("?"),
+                r[k]["model"].as_str().unwrap_or("?")
+            )
+        };
+        t.push_str("\n**Routage**\n\n");
+        if r["classifier"].as_bool().unwrap_or(false) {
+            t.push_str(&format!(
+                "Adaptatif (classifieur `{}`) :\n- simple → {}\n- ordinaire → {}\n- difficile → {}\n",
+                r["classifier_model"].as_str().unwrap_or("?"),
+                step("low"),
+                step("medium"),
+                step("high"),
+            ));
+            t.push_str("Tout sur `main` : `/model auto off`\n");
+        } else {
+            t.push_str(&format!(
+                "Fixe : tout passe par {} (adaptatif : `/model auto on`)\n",
+                step("default")
+            ));
+        }
+        if let Some(fb) = r["fallback"].as_object().filter(|f| !f.is_empty()) {
+            let chains: Vec<String> = fb
+                .iter()
+                .map(|(from, to)| {
+                    let to: Vec<&str> = to
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
+                        .unwrap_or_default();
+                    format!("`{from}` → `{}`", to.join("`, `"))
+                })
+                .collect();
+            t.push_str(&format!("Replis sur panne : {}\n", chains.join(" ; ")));
+        }
+    }
+    t
+}
+
 /// Rend une valeur RPC en Markdown lisible dans une conversation.
 pub fn render_value(v: &Value) -> String {
     fn scalar(v: &Value) -> String {
@@ -1517,6 +1673,59 @@ mod tests {
         assert!(out[2].contains("jamais"), "{out:?}");
         let cfg = g.daemon.services.config.config();
         assert_eq!(cfg.alias_model("main"), Some("openrouter:z-ai/glm-5.3"));
+    }
+
+    #[tokio::test]
+    async fn routing_and_costs_are_readable_from_telegram() {
+        let (_d, g, t, p) = gateway().await;
+        g.process_update(&updates::text_message(40, OWNER, OWNER, "/models"))
+            .await
+            .unwrap();
+        g.process_update(&updates::text_message(41, OWNER, OWNER, "/model auto off"))
+            .await
+            .unwrap();
+        g.process_update(&updates::text_message(42, OWNER, OWNER, "/model"))
+            .await
+            .unwrap();
+
+        let origin = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: None,
+        };
+        let sid = g.daemon.chat_session_for(&origin).await.unwrap();
+        g.daemon
+            .services
+            .budget
+            .record(penelope_kernel::budget::UsageRecord {
+                session_id: Some(sid.clone()),
+                turn_id: Some("t_x".into()),
+                role: Some("chat".into()),
+                model: "z-ai/glm-5.3".into(),
+                provider: "openrouter".into(),
+                cost_usd: 0.0123,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        g.process_update(&updates::text_message(43, OWNER, OWNER, "/budget"))
+            .await
+            .unwrap();
+        g.process_update(&updates::text_message(44, OWNER, OWNER, "/budget sessions"))
+            .await
+            .unwrap();
+        drain(&g).await;
+        assert_eq!(p.call_count(), 0);
+
+        let out = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(out[0].contains("Adaptatif"), "{out:?}");
+        assert!(out[0].contains("simple"), "{out:?}");
+        assert!(out[1].contains("Routage fixe"), "{out:?}");
+        assert!(out[2].contains("Fixe : tout passe par"), "{out:?}");
+        assert!(!g.daemon.services.config.config().models.routing.classifier);
+        assert!(out[3].contains("0,0123 $"), "{out:?}");
+        assert!(out[3].contains("t_x"), "{out:?}");
+        assert!(out[4].contains(&sid), "{out:?}");
     }
 
     #[tokio::test]

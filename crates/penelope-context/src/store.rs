@@ -463,7 +463,14 @@ fn serialise_content(m: &ChatMessage) -> penelope_store::Result<String> {
         .iter()
         .map(|t| json!({"id":t.id,"name":t.name,"arguments":t.arguments}))
         .collect();
-    Ok(json!({"blocks": blocks, "tool_calls": calls}).to_string())
+    let mut v = json!({"blocks": blocks, "tool_calls": calls});
+    if let Some(r) = &m.reasoning {
+        v["reasoning"] = json!(r);
+    }
+    if let Some(d) = &m.reasoning_details {
+        v["reasoning_details"] = d.clone();
+    }
+    Ok(v.to_string())
 }
 
 fn deserialise_content(
@@ -531,6 +538,11 @@ fn deserialise_content(
         tool_call_id,
         name,
         cache_marker: false,
+        reasoning: v
+            .get("reasoning")
+            .and_then(|r| r.as_str())
+            .map(String::from),
+        reasoning_details: v.get("reasoning_details").filter(|d| !d.is_null()).cloned(),
     }
 }
 
@@ -616,6 +628,29 @@ mod tests {
             .await
             .unwrap();
         HistoryStore::new(store, Arc::new(TestClock::default()))
+    }
+
+    #[tokio::test]
+    async fn reasoning_survives_a_reload() {
+        let h = hs().await;
+        let m = ChatMessage {
+            reasoning: Some("je dois lire le fichier".into()),
+            reasoning_details: Some(json!([{"type":"reasoning.text","text":"je dois","index":0}])),
+            ..ChatMessage::assistant("")
+        }
+        .with_tool_calls(vec![ToolCall {
+            id: "c1".into(),
+            name: "fs_read".into(),
+            arguments: json!({"path":"a.rs"}),
+        }]);
+        h.append("s1", &m, 10, 0, false, None).await.unwrap();
+        let back = &h.load("s1", 0).await.unwrap()[0].message;
+        assert_eq!(back.reasoning.as_deref(), Some("je dois lire le fichier"));
+        assert_eq!(
+            back.reasoning_details.as_ref().unwrap()[0]["text"],
+            "je dois"
+        );
+        assert_eq!(back.tool_calls[0].id, "c1");
     }
 
     #[tokio::test]

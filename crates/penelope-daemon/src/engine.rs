@@ -183,8 +183,27 @@ impl Daemon {
             }
         }
 
+        // Tour d'origine : une reprise après approbation compte pour la requête initiale.
+        let origin_turn = match turn.kind {
+            TurnKind::Resume => {
+                let approval = match turn.payload.get("approval_id").and_then(|a| a.as_str()) {
+                    Some(id) => s.approvals.get(id).await?,
+                    None => None,
+                };
+                approval
+                    .and_then(|a| {
+                        a.payload
+                            .get("turn_id")
+                            .and_then(|t| t.as_str())
+                            .map(String::from)
+                    })
+                    .unwrap_or_else(|| turn.id.to_string())
+            }
+            _ => turn.id.to_string(),
+        };
+
         // 2. Modèle : alias collant, sinon routage.
-        let (alias, model_id) = self.select_model(&session, &text).await;
+        let (alias, model_id) = self.select_model(&session, &text, &origin_turn).await;
 
         // 3. Provider.
         let provider = match self.provider_for(&model_id).await {
@@ -225,6 +244,7 @@ impl Daemon {
         let spec = TurnSpec {
             session_id: turn.session_id.clone(),
             run_id: None,
+            turn_id: Some(origin_turn),
             model_id: model_id.clone(),
             fallback_models: router
                 .fallback_chain(&cfg, &alias)
@@ -249,17 +269,28 @@ impl Daemon {
         &self,
         session: &penelope_kernel::session::Session,
         text: &str,
+        turn_id: &str,
     ) -> (String, String) {
         let s = &self.services;
         let cfg = s.config.config();
         let router = Router::new(s.catalog.clone());
+        let routing = &cfg.models.routing;
 
-        let sticky = session.model_alias.as_ref().and_then(|a| {
-            cfg.alias_model(a).map(|id| StickyModel {
-                alias: a.clone(),
-                model_id: id.to_string(),
-            })
-        });
+        // Sans classifieur, pas d'alias collant : `main` (rôle `chat_default`) s'applique
+        // aussitôt à toutes les sessions, y compris celles routées avant le changement.
+        // Avec lui, l'alias « léger » (`low`) ne colle jamais : un « bonjour » ne doit pas
+        // enfermer la session sur le petit modèle, le message suivant est reclassé.
+        let sticky = session
+            .model_alias
+            .as_ref()
+            .filter(|_| routing.classifier)
+            .filter(|a| **a != routing.low)
+            .and_then(|a| {
+                cfg.alias_model(a).map(|id| StickyModel {
+                    alias: a.clone(),
+                    model_id: id.to_string(),
+                })
+            });
         let input = RouteInput {
             message: text.to_string(),
             sticky,
@@ -268,19 +299,27 @@ impl Daemon {
 
         let decision = match router.route_deterministic(&cfg, &input) {
             Some(d) => d,
-            None => match self.classify(text).await {
+            None => match self.classify(text, session.id.as_str(), turn_id).await {
                 Some(c) => router.route_with_classification(&cfg, &c),
                 None => router.default_decision(&cfg),
             },
         };
 
+        tracing::info!(
+            session = %session.id,
+            alias = %decision.alias,
+            model = %decision.model_id,
+            reason = ?decision.reason,
+            "modèle choisi"
+        );
         // Seul le choix « de conversation » devient collant, pas un détour ponctuel
-        // (image, vision).
-        if matches!(
-            decision.reason,
-            RouteReason::Default | RouteReason::Classifier
-        ) && session.model_alias.as_deref() != Some(decision.alias.as_str())
-        {
+        // (image, vision) ni le petit modèle.
+        let persist = match decision.reason {
+            RouteReason::Default => true,
+            RouteReason::Classifier => decision.alias != routing.low,
+            _ => false,
+        };
+        if persist && session.model_alias.as_deref() != Some(decision.alias.as_str()) {
             let _ = s
                 .sessions
                 .set_model(session.id.as_str(), &decision.alias, &decision.model_id)
@@ -290,7 +329,15 @@ impl Daemon {
     }
 
     /// Classifieur de complexité : un petit modèle, une réponse JSON, 8 s au plus.
-    async fn classify(&self, text: &str) -> Option<Classification> {
+    ///
+    /// Raisonnement réduit au minimum que le modèle accepte, sortie structurée quand le
+    /// modèle la supporte, et coût enregistré comme celui de la conversation.
+    async fn classify(
+        &self,
+        text: &str,
+        session_id: &str,
+        turn_id: &str,
+    ) -> Option<Classification> {
         if text.trim().is_empty() {
             return None;
         }
@@ -299,6 +346,14 @@ impl Daemon {
         let alias = cfg.role_alias("classifier");
         let model_id = cfg.alias_model(&alias)?.to_string();
         let provider = self.provider_for(&model_id).await.ok()?;
+        let info = s
+            .catalog
+            .get(penelope_llm::catalog::strip_provider(&model_id));
+        let effort = info.as_ref().and_then(|i| i.lightest_effort());
+        let structured = info
+            .as_ref()
+            .map(|i| i.supports_structured_output())
+            .unwrap_or(false);
         let req = ChatRequest {
             model: model_id.clone(),
             messages: vec![
@@ -306,20 +361,50 @@ impl Daemon {
                 ChatMessage::user(text.chars().take(2_000).collect::<String>()),
             ],
             stream: true,
-            max_tokens: Some(200),
+            // Sans raisonnement, 300 tokens suffisent ; avec, il lui faut de la marge
+            // pour ne pas finir à vide (`finish_reason: length`).
+            max_tokens: Some(if effort.as_deref() == Some("none") {
+                300
+            } else {
+                2_000
+            }),
+            reasoning_effort: effort,
+            response_format: structured.then(classification_schema),
+            session_id: Some(session_id.to_string()),
             ..Default::default()
         };
         let call = async {
             let rx = provider.chat_stream(req, CancelToken::new()).await.ok()?;
-            let r = collect_stream(rx, &model_id, provider.name(), &s.catalog)
+            collect_stream(rx, &model_id, provider.name(), &s.catalog)
                 .await
-                .ok()?;
-            parse_classification(&r.message.text())
+                .ok()
         };
-        tokio::time::timeout(std::time::Duration::from_secs(8), call)
+        let response = tokio::time::timeout(std::time::Duration::from_secs(8), call)
             .await
             .ok()
-            .flatten()
+            .flatten()?;
+        let _ = s
+            .budget
+            .record(penelope_kernel::budget::UsageRecord {
+                session_id: Some(session_id.to_string()),
+                turn_id: Some(turn_id.to_string()),
+                model: response.model.clone(),
+                provider: response.provider.clone(),
+                role: Some("classifier".into()),
+                generation_id: (!response.id.is_empty()).then(|| response.id.clone()),
+                upstream: response.upstream.clone(),
+                finish: Some(format!("{:?}", response.finish).to_lowercase()),
+                prompt: response.usage.prompt,
+                completion: response.usage.completion,
+                cached: response.usage.cached,
+                cache_write: response.usage.cache_write,
+                reasoning: response.usage.reasoning,
+                cost_usd: response.cost_usd,
+                estimated: response.cost_estimated,
+                ..Default::default()
+            })
+            .await;
+        parse_classification(&response.message.text())
     }
 
     pub async fn kv_get(&self, key: &str) -> anyhow::Result<Option<String>> {
@@ -356,10 +441,39 @@ impl Daemon {
 }
 
 /// Extrait la classification d'une réponse, même entourée de texte.
+/// `response_format` du classifieur : schéma strict (toutes les propriétés requises,
+/// aucune autre admise), comme l'exigent les providers à sortie structurée stricte.
+fn classification_schema() -> Value {
+    json!({
+        "type": "json_schema",
+        "json_schema": {
+            "name": "classification",
+            "strict": true,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "complexity": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "needs_tools": {"type": "boolean"},
+                    "domain": {"type": "string"}
+                },
+                "required": ["complexity", "needs_tools", "domain"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 pub fn parse_classification(text: &str) -> Option<Classification> {
     let start = text.find('{')?;
     let end = text.rfind('}')?;
-    let v: Value = serde_json::from_str(&text[start..=end]).ok()?;
+    let mut v: Value = serde_json::from_str(&text[start..=end]).ok()?;
+    // Un domaine trop bavard ne doit pas invalider la complexité.
+    if let Some(d) = v.get("domain").and_then(|d| d.as_str()) {
+        if d.chars().count() > 40 {
+            let short: String = d.chars().take(40).collect();
+            v["domain"] = json!(short);
+        }
+    }
     let errors = penelope_kernel::schema::validate(&penelope_llm::router::classifier_schema(), &v);
     if !errors.is_empty() {
         return None;
@@ -415,22 +529,69 @@ mod tests {
         let texts: Vec<String> = history.iter().map(|e| e.message.text()).collect();
         assert_eq!(texts, vec!["bonjour", "Bonjour ! Que puis-je faire ?"]);
 
-        // Le classifieur a choisi `fast` : l'alias devient collant.
+        // Le classifieur a choisi `fast` pour ce message, sans le rendre collant : un
+        // « bonjour » ne doit pas enfermer la session sur le petit modèle.
+        let cfg = d.services.config.config();
+        let fast = cfg.alias_model("fast").unwrap().to_string();
+        let main = cfg.alias_model("main").unwrap().to_string();
+        assert_eq!(p.requests()[1].model, fast);
         let sess = d.services.sessions.require(&sid).await.unwrap();
-        assert_eq!(sess.model_alias.as_deref(), Some("fast"));
+        assert_eq!(sess.model_alias, None);
 
-        // Le second tour voit tout l'historique, sans reclassifier.
+        // Les deux appels du tour (classifieur et réponse) sont attribués à la requête.
+        let by_turn = d
+            .services
+            .budget
+            .report("turn", Some(&sid), None, 10)
+            .await
+            .unwrap();
+        assert_eq!(by_turn.len(), 1);
+        assert_eq!(by_turn[0].key, turn.id.to_string());
+        assert_eq!(by_turn[0].calls, 2);
+        assert_eq!(by_turn[0].label.as_deref(), Some("bonjour"));
+        let by_role = d
+            .services
+            .budget
+            .report("role", Some(&sid), None, 10)
+            .await
+            .unwrap();
+        let mut roles: Vec<&str> = by_role.iter().map(|r| r.key.as_str()).collect();
+        roles.sort_unstable();
+        assert_eq!(roles, vec!["chat", "classifier"]);
+
+        // Le second message est reclassé ; `medium` part sur `main`, qui, lui, colle.
+        p.reply(r#"{"complexity":"medium"}"#);
         p.reply("Toujours là.");
         d.enqueue_message(&sid, "tu es là ?", &Origin::Cli, None)
             .await
             .unwrap();
         let turn = claim(&d).await;
         d.run_turn(&turn).await;
+        d.services.turns.complete(&turn).await.unwrap();
         let last = p.requests().last().unwrap().clone();
+        assert_eq!(last.model, main);
+        assert_eq!(last.session_id.as_deref(), Some(sid.as_str()));
         let seen: Vec<String> = last.messages.iter().map(|m| m.text()).collect();
-        assert!(seen.iter().any(|t| t == "bonjour"));
-        assert!(seen.iter().any(|t| t == "tu es là ?"));
-        assert_eq!(p.call_count(), 3, "un seul appel de classifieur");
+        assert!(
+            seen.iter().any(|t| t == "bonjour"),
+            "l'ancien message reste intact"
+        );
+        assert!(
+            seen.iter().any(|t| t.ends_with("tu es là ?")),
+            "le dernier porte le contexte volatil en tête"
+        );
+        let sess = d.services.sessions.require(&sid).await.unwrap();
+        assert_eq!(sess.model_alias.as_deref(), Some("main"));
+        assert_eq!(p.call_count(), 4);
+
+        // Troisième message : `main` est collant, pas de nouvel appel au classifieur.
+        p.reply("Encore là.");
+        d.enqueue_message(&sid, "et maintenant ?", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        d.run_turn(&turn).await;
+        assert_eq!(p.call_count(), 5, "un seul appel de plus : la réponse");
     }
 
     #[tokio::test]
@@ -562,6 +723,41 @@ mod tests {
         );
         let sb = d.chat_session_for(&b).await.unwrap();
         assert_ne!(sa, sb, "un sujet a sa propre session");
+    }
+
+    #[tokio::test]
+    async fn disabling_the_classifier_brings_every_session_back_to_main() {
+        let (_dir, d, p) = daemon().await;
+        p.reply(r#"{"complexity":"low"}"#);
+        p.reply("réponse rapide");
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.enqueue_message(&sid, "salut", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        d.run_turn(&turn).await;
+        d.services.turns.complete(&turn).await.unwrap();
+        assert_eq!(
+            p.requests().last().unwrap().model,
+            d.services.config.config().alias_model("fast").unwrap()
+        );
+
+        d.publish_config("test", |c| {
+            c.models.routing.classifier = false;
+            Ok(vec!["models.routing.classifier".into()])
+        })
+        .unwrap();
+        p.reply("réponse de main");
+        d.enqueue_message(&sid, "encore", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        d.run_turn(&turn).await;
+        assert_eq!(
+            p.requests().last().unwrap().model,
+            d.services.config.config().alias_model("main").unwrap(),
+            "la session routée vers `fast` repasse sur `main`"
+        );
     }
 
     #[test]

@@ -224,8 +224,76 @@ sticky = true          # une session garde son modèle jusqu'à la prochaine com
 fallback = { main = ["fast"], reasoning = ["main"] }
 ```
 
+### Qui répond à un message
+
+```
+classifier = true (défaut)
+  message ─► classifieur (alias fast) ─┬─ simple    ─► low    (fast)
+                                       ├─ ordinaire ─► medium (main)
+                                       └─ difficile ─► high   (reasoning)
+classifier = false
+  message ─────────────────────────────────────────► main
+panne avant le premier jeton
+  main ─► fast ; reasoning ─► main       (fallback, fait par OpenRouter)
+```
+
+Conséquence directe : `penelope model set main …` ne suffit pas à tout faire passer par
+ce modèle tant que le classifieur est actif, puisque `fast` et `reasoning` gardent leurs
+valeurs. Deux façons de décider soi-même :
+
+```bash
+penelope config set models.routing.classifier false
+```
+
+(tout passe par `main` ; sur Telegram : `/model auto off`), ou garder l'adaptatif en
+réglant chaque étage :
+
+```bash
+penelope model set reasoning openrouter:z-ai/glm-5.3
+```
+
+`penelope model list` (ou `/models` sur Telegram) affiche le routage en vigueur, alias et
+modèles réels compris.
+
 `sticky` compte plus qu'il n'y paraît : changer de modèle en pleine session casserait le
-cache du provider et ferait payer tout le contexte une seconde fois.
+cache du provider et ferait payer tout le contexte une seconde fois. Seul le petit modèle
+(`low`) ne colle jamais : un « bonjour » n'enferme pas la session sur `fast`, le message
+suivant est reclassé. Un repli fait par OpenRouter est journalisé
+(`llm.fallback_used`) et le modèle qui a réellement répondu est celui enregistré.
+
+### OpenRouter
+
+Chaque appel porte l'identifiant de session (`session_id`) : OpenRouter garde la session
+sur le même provider amont, ce qui garde le cache de préfixe chaud, et regroupe les appels
+dans ses journaux (onglet Sessions). Préférences de provider, envoyées seulement si elles
+diffèrent du défaut :
+
+```toml
+[providers.openrouter.routing]
+data_collection = "deny"   # uniquement des providers qui ne conservent pas les données
+zdr = false                # true : uniquement des endpoints à rétention nulle
+sort = ""                  # "price", "throughput" ou "latency"
+ignore = []                # providers à éviter, par exemple ["deepinfra"]
+quantizations = []         # par exemple ["fp8", "bf16"]
+order = []                 # à éviter : un ordre imposé désactive le routage collant
+```
+
+### Coûts
+
+Chaque appel au modèle est enregistré avec le coût **facturé** annoncé par OpenRouter
+(`usage.cost`), les tokens (dont cache et raisonnement), le provider amont, et la requête
+d'origine : une reprise après approbation compte pour la demande initiale, et le
+classifieur est compté avec elle.
+
+```bash
+penelope usage
+```
+
+Par défaut, les sessions les plus chères, avec leur titre ou leur premier message. Autres
+regroupements : `--by turn` (requêtes), `--by model`, `--by day`, `--by role`
+(conversation ou classifieur), `--by upstream` ; filtres `--session <id>` et
+`--since AAAA-MM-JJ`. Sur Telegram, `/budget` résume le jour, la session et ses requêtes
+les plus chères ; `/budget sessions`, `/budget requêtes`, `/budget modèles` détaillent.
 
 Le budget se règle à côté, en dollars :
 
@@ -238,6 +306,22 @@ alert_ratio = 0.8
 
 `model set` signale un identifiant absent du catalogue (`known: false`) quand le catalogue
 est chargé ; sinon, une faute de frappe ne se verra qu'au premier appel.
+
+### Shell et bac à sable
+
+`shell_exec` tourne sous Seatbelt : écriture limitée au workspace et au répertoire
+temporaire, réseau autorisé (`sandbox.shell_network`, vrai par défaut ; sans réseau,
+`gh auth status` croit le jeton invalide faute de pouvoir le vérifier). L'environnement
+reste filtré : `PATH`, `HOME`, la langue, l'agent SSH et les emplacements de configuration,
+jamais de jeton. Sur une machine dédiée à Pénélope, le bac à sable peut être levé pour le
+shell :
+
+```bash
+penelope config set sandbox.default_profile full
+```
+
+Les approbations restent en place : c'est la carte `shell_exec` (« Toujours » compris) qui
+décide.
 
 ## 7. Premier essai en CLI
 
@@ -306,9 +390,16 @@ chaîne.
 
 ## 10. Mise à jour
 
+Depuis le dépôt cloné sur la machine :
+
 ```bash
-cargo build --release && sudo cp target/release/penelope /usr/local/bin/penelope && penelope restart
+make deploy
 ```
+
+`deploy` enchaîne `git pull --ff-only`, `cargo build --release`, remplace le binaire que
+trouve le PATH (sudo seulement si son répertoire n'est pas inscriptible) et lance
+`penelope restart`. `make update` s'arrête après la compilation, `make clean` libère les
+Go de `target/`.
 
 Au démarrage suivant, la reprise (§17) s'exécute : les tours interrompus sont remis en
 file, les runs repartent à leur étape courante, les effets restés en vol deviennent des
