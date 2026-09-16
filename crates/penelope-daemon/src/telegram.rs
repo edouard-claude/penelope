@@ -411,6 +411,59 @@ impl TelegramGateway {
                 });
                 return Ok(());
             }
+            "fork" => {
+                let session = d.chat_session_for(&origin).await?;
+                let title = (!args.is_empty()).then(|| args.to_string());
+                match crate::session_ops::fork(d, &session, title).await {
+                    Ok(v) => {
+                        let fork = v["session"].as_str().unwrap_or_default().to_string();
+                        s.sessions.bind_telegram(&fork, chat_id, topic_id).await?;
+                        s.sessions.touch(&fork).await?;
+                        format!(
+                            "🍴 Session dupliquée ({} messages) : la suite se passe dans `{fork}`. \
+                             `/switch {session}` pour revenir à l'original.",
+                            v["messages"]
+                        )
+                    }
+                    Err(e) => format!("❌ {e}"),
+                }
+            }
+            "rewind" => {
+                let session = d.chat_session_for(&origin).await?;
+                let turns = args.trim().parse::<usize>().unwrap_or(1);
+                match crate::session_ops::rewind(d, &session, turns).await {
+                    Ok(v) => format!(
+                        "⏪ {turns} échange(s) défait(s) ({} messages mis de côté dans `{}`).",
+                        v["removed"],
+                        v["archive"].as_str().unwrap_or("?")
+                    ),
+                    Err(e) => format!("❌ {e}"),
+                }
+            }
+            "export" => {
+                let session = if args.is_empty() {
+                    d.chat_session_for(&origin).await?
+                } else {
+                    args.to_string()
+                };
+                match crate::session_ops::export(d, "session", Some(&session)).await {
+                    Ok(v) => {
+                        let path = std::path::PathBuf::from(v["path"].as_str().unwrap_or_default());
+                        match self
+                            .bot
+                            .send_document(chat_id, topic_id, &path, Some("Export JSONL"))
+                            .await
+                        {
+                            Ok(_) => return Ok(()),
+                            Err(e) => format!(
+                                "📦 Export écrit dans `{}`, envoi impossible : {e}",
+                                path.display()
+                            ),
+                        }
+                    }
+                    Err(e) => format!("❌ {e}"),
+                }
+            }
             "stop" => {
                 let session = d.chat_session_for(&origin).await?;
                 if d.bus.cancel_session(&session) {

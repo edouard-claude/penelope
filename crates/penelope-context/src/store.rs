@@ -133,6 +133,93 @@ impl HistoryStore {
             .await
     }
 
+    /// Copie l'historique d'une session vers une autre, numéros et état de compaction
+    /// compris, index plein texte avec (fork, archive d'un rewind).
+    pub async fn copy_messages(
+        &self,
+        from: &str,
+        to: &str,
+        from_seq: i64,
+        to_seq: Option<i64>,
+    ) -> penelope_store::Result<usize> {
+        let (from, to) = (from.to_string(), to.to_string());
+        self.store
+            .write(move |tx| {
+                let n = tx.execute(
+                    "INSERT INTO messages(session_id, seq, role, content, tool_call_id, tool_name,
+                        tokens_est, ts, episode, eager, artifact_id, compacted)
+                     SELECT ?2, seq, role, content, tool_call_id, tool_name, tokens_est, ts,
+                        episode, eager, artifact_id, compacted
+                     FROM messages
+                     WHERE session_id = ?1 AND seq >= ?3 AND (?4 IS NULL OR seq <= ?4)
+                     ORDER BY seq",
+                    params![from, to, from_seq, to_seq],
+                )?;
+                tx.execute(
+                    "INSERT INTO messages_fts(content, session_id, msg_id)
+                     SELECT f.content, ?2, dst.id
+                     FROM messages dst
+                     JOIN messages src ON src.session_id = ?1 AND src.seq = dst.seq
+                     JOIN messages_fts f ON f.msg_id = src.id
+                     WHERE dst.session_id = ?2 AND dst.seq >= ?3 AND (?4 IS NULL OR dst.seq <= ?4)",
+                    params![from, to, from_seq, to_seq],
+                )?;
+                Ok(n)
+            })
+            .await
+    }
+
+    /// Retire les messages d'une session à partir d'une séquence (incluse).
+    pub async fn truncate_from(
+        &self,
+        session_id: &str,
+        from_seq: i64,
+    ) -> penelope_store::Result<usize> {
+        let sid = session_id.to_string();
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "DELETE FROM messages_fts WHERE msg_id IN
+                        (SELECT id FROM messages WHERE session_id = ?1 AND seq >= ?2)",
+                    params![sid, from_seq],
+                )?;
+                Ok(tx.execute(
+                    "DELETE FROM messages WHERE session_id = ?1 AND seq >= ?2",
+                    params![sid, from_seq],
+                )?)
+            })
+            .await
+    }
+
+    /// Reconstruit l'index plein texte des messages depuis l'historique canonique.
+    pub async fn rebuild_fts(&self) -> penelope_store::Result<usize> {
+        self.store
+            .write(|tx| {
+                tx.execute("DELETE FROM messages_fts", [])?;
+                let mut st = tx.prepare("SELECT id, session_id, role, content FROM messages")?;
+                let rows: Vec<(i64, String, String, String)> = st
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                    .collect::<Result<_, _>>()?;
+                drop(st);
+                let mut n = 0;
+                for (id, sid, role, content) in rows {
+                    let message = deserialise_content(
+                        Role::parse(&role).unwrap_or(Role::User),
+                        &content,
+                        None,
+                        None,
+                    );
+                    tx.execute(
+                        "INSERT INTO messages_fts(content, session_id, msg_id) VALUES(?1,?2,?3)",
+                        params![message.text(), sid, id],
+                    )?;
+                    n += 1;
+                }
+                Ok(n)
+            })
+            .await
+    }
+
     /// Marque une plage de séquences comme couverte par un nœud de résumé.
     pub async fn mark_compacted(
         &self,

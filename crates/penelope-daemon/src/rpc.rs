@@ -127,6 +127,47 @@ impl Rpc {
                 v["text"] = json!(crate::compaction::report_text(&report));
                 Ok(v)
             }
+            method::SESSION_FORK => {
+                let sid = self.session_param(p).await?;
+                let title = p.get("title").and_then(|t| t.as_str()).map(String::from);
+                crate::session_ops::fork(&self.daemon, &sid, title).await
+            }
+            method::SESSION_REWIND => {
+                let sid = self.session_param(p).await?;
+                let turns = p
+                    .get("turns")
+                    .and_then(|v| {
+                        v.as_u64()
+                            .or_else(|| v.as_str().and_then(|x| x.parse().ok()))
+                    })
+                    .unwrap_or(1) as usize;
+                crate::session_ops::rewind(&self.daemon, &sid, turns).await
+            }
+            method::EXPORT => {
+                let what = p.get("what").and_then(|w| w.as_str()).unwrap_or("session");
+                let id = match (what, p.get("id").and_then(|i| i.as_str())) {
+                    ("session", None) => Some(self.session_param(p).await?),
+                    (_, id) => id.map(String::from),
+                };
+                crate::session_ops::export(&self.daemon, what, id.as_deref()).await
+            }
+            method::STORE_REBUILD => crate::session_ops::rebuild(&self.daemon).await,
+            method::SKILL_ROLLBACK => {
+                let name = required_str(p, "name")?;
+                let root = s.platform.dirs.skills();
+                let path =
+                    penelope_skills::rollback_skill(&root, &name).map_err(anyhow::Error::msg)?;
+                s.skills.reload(None, &root, None).await?;
+                Ok(json!({"name": name, "restored": path}))
+            }
+            method::RESTORE => anyhow::bail!(
+                "une restauration remplace la base : elle se fait daemon arrêté, `penelope stop` \
+                 puis `penelope restore <sauvegarde>`"
+            ),
+            method::EVAL_RUN => anyhow::bail!(
+                "les suites d'évaluation tournent depuis les sources : `penelope eval <suite>` \
+                 dans le dépôt"
+            ),
             method::SESSION_EXPORT => {
                 let sid = required_str(p, "session")?;
                 let entries = s.context.history.load(&sid, 0).await?;
@@ -1385,19 +1426,8 @@ mod tests {
         }
         // Les méthodes non encore servies sont connues et listées : elles ne doivent pas
         // apparaître silencieusement.
-        let expected: std::collections::BTreeSet<&str> = [
-            "session.fork",
-            "session.rewind",
-            "skill.rollback",
-            "import.hermes",
-            "export",
-            "restore",
-            "store.rebuild",
-            "eval.run",
-            "upgrade",
-        ]
-        .into_iter()
-        .collect();
+        let expected: std::collections::BTreeSet<&str> =
+            ["import.hermes", "upgrade"].into_iter().collect();
         let actual: std::collections::BTreeSet<&str> = unimplemented.into_iter().collect();
         assert_eq!(
             actual, expected,

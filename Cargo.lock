@@ -1281,6 +1281,7 @@ dependencies = [
  "clap",
  "futures",
  "penelope-daemon",
+ "penelope-evals",
  "penelope-kernel",
  "penelope-observe",
  "penelope-platform",

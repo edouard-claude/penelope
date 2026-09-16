@@ -27,6 +27,7 @@ penelope-store.workspace = true
 penelope-workflow.workspace = true
 penelope-tools.workspace = true
 penelope-telegram.workspace = true
+penelope-evals.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

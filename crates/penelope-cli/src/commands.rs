@@ -128,8 +128,21 @@ pub enum Command {
     AuditVerify,
     /// Sauvegarde cohérente.
     Backup,
-    /// Lance une suite d'évaluation.
+    /// Restaure une sauvegarde, daemon arrêté (la base actuelle est d'abord mise de côté).
+    Restore { file: PathBuf },
+    /// Exporte en JSONL : `session [id]`, `run <id>` ou `all`.
+    Export { what: String, id: Option<String> },
+    /// Stockage : reconstruction des index dérivés.
+    #[command(subcommand)]
+    Store(StoreCmd),
+    /// Lance une suite d'évaluation depuis les sources (`cargo test`), sans daemon.
     Eval { suite: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum StoreCmd {
+    /// Reconstruit l'index plein texte et l'index mémoire, vérifie l'audit.
+    Rebuild,
 }
 
 #[derive(Subcommand, Debug)]
@@ -140,6 +153,20 @@ pub enum SessionCmd {
     },
     Export {
         session: String,
+    },
+    /// Duplique une session (transcript, métadonnées, résumés).
+    Fork {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        title: Option<String>,
+    },
+    /// Défait les derniers échanges (mis de côté dans une session d'archive).
+    Rewind {
+        #[arg(default_value_t = 1)]
+        turns: usize,
+        #[arg(long)]
+        session: Option<String>,
     },
     /// Modèle de la session : sans argument l'état, sinon un alias à épingler ou `auto`.
     Model {
@@ -372,7 +399,13 @@ pub enum VaultCmd {
 #[derive(Subcommand, Debug)]
 pub enum SkillCmd {
     List,
-    Show { name: String },
+    Show {
+        name: String,
+    },
+    /// Restaure la version précédente d'une skill.
+    Rollback {
+        name: String,
+    },
 }
 
 /// Exécute la commande.
@@ -384,6 +417,8 @@ pub async fn run(cli: Cli) -> CliResult<()> {
             return validate_config(&cli, file.clone());
         }
         Command::Wf(WfCmd::Validate { file }) => return validate_workflow(&cli, file.clone()),
+        Command::Eval { suite } => return eval_local(suite).await,
+        Command::Restore { file } => return restore_offline(&cli, file).await,
         Command::Secret(SecretCmd::Set { name, value }) => {
             if value.is_some() {
                 return Err(CliError::Usage(format!(
@@ -658,6 +693,7 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
 
         Command::Skill(SkillCmd::List) => (m::SKILL_LIST, json!({})),
         Command::Skill(SkillCmd::Show { name }) => (m::SKILL_SHOW, json!({"name": name})),
+        Command::Skill(SkillCmd::Rollback { name }) => (m::SKILL_ROLLBACK, json!({"name": name})),
 
         Command::Approvals => (m::APPROVALS, json!({})),
         Command::Approve { id, always } => (m::APPROVE, json!({"id": id, "always": always})),
@@ -675,12 +711,96 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         ),
         Command::AuditVerify => (m::AUDIT_VERIFY, json!({})),
         Command::Backup => (m::BACKUP, json!({})),
-        Command::Eval { suite } => (m::EVAL_RUN, json!({"suite": suite})),
+        Command::Export { what, id } => (m::EXPORT, json!({"what": what, "id": id})),
+        Command::Store(StoreCmd::Rebuild) => (m::STORE_REBUILD, json!({})),
+        Command::Session(SessionCmd::Fork { session, title }) => {
+            (m::SESSION_FORK, json!({"session": session, "title": title}))
+        }
+        Command::Session(SessionCmd::Rewind { turns, session }) => (
+            m::SESSION_REWIND,
+            json!({"session": session, "turns": turns}),
+        ),
 
         other => {
             return Err(CliError::Usage(format!("commande non routée : {other:?}")));
         }
     })
+}
+
+/// Suite d'évaluation depuis les sources : `cargo test` avec le filtre de la suite.
+async fn eval_local(suite: &str) -> CliResult<()> {
+    let Some((sub, args)) = penelope_evals::suites::cargo_filter(suite) else {
+        let known: Vec<String> = penelope_evals::suites::offline_suites()
+            .into_iter()
+            .map(|s| s.name.to_string())
+            .collect();
+        return Err(CliError::Usage(format!(
+            "suite inconnue ou en réseau : `{suite}` (hors ligne : {})",
+            known.join(", ")
+        )));
+    };
+    let root = std::env::var("PENELOPE_SOURCE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
+    if !manifest.contains("[workspace]") || !root.join("crates/penelope-evals").exists() {
+        return Err(CliError::Usage(
+            "à lancer depuis le dépôt de Pénélope (ou `PENELOPE_SOURCE_DIR`)".into(),
+        ));
+    }
+    let status = tokio::process::Command::new("cargo")
+        .arg(sub)
+        .args(&args)
+        .current_dir(&root)
+        .status()
+        .await
+        .map_err(|e| CliError::Io(format!("cargo : {e}")))?;
+    if status.success() {
+        println!("✅ suite `{suite}` verte");
+        Ok(())
+    } else {
+        Err(CliError::Validation(format!("suite `{suite}` en échec")))
+    }
+}
+
+/// Restauration hors ligne : refusée daemon en marche, base actuelle mise de côté.
+async fn restore_offline(cli: &Cli, file: &std::path::Path) -> CliResult<()> {
+    let socket = socket_path(cli.home.clone())?;
+    if call(&socket, m::STATUS, json!({})).await.is_ok() {
+        return Err(CliError::Usage(
+            "le daemon tourne : `penelope stop` d'abord, puis relancer la restauration".into(),
+        ));
+    }
+    let raw = std::fs::read(file).map_err(|e| CliError::Io(format!("{} : {e}", file.display())))?;
+    if !raw.starts_with(b"SQLite format 3\0") {
+        return Err(CliError::Validation(format!(
+            "{} n'est pas une base SQLite (sauvegarde `penelope backup` attendue)",
+            file.display()
+        )));
+    }
+    let dirs = penelope_platform::resolve_directories(cli.home.clone())
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    let db = dirs.db_path();
+    if db.exists() {
+        let aside = dirs.data().join("backups").join(format!(
+            "avant-restauration-{}.db",
+            chrono::Utc::now().format("%Y%m%dT%H%M%S")
+        ));
+        std::fs::create_dir_all(aside.parent().unwrap_or(std::path::Path::new(".")))
+            .map_err(|e| CliError::Io(e.to_string()))?;
+        std::fs::copy(&db, &aside).map_err(|e| CliError::Io(e.to_string()))?;
+        println!("Base actuelle mise de côté : {}", aside.display());
+    }
+    for suffix in ["-wal", "-shm"] {
+        let side = PathBuf::from(format!("{}{suffix}", db.display()));
+        let _ = std::fs::remove_file(side);
+    }
+    std::fs::write(&db, &raw).map_err(|e| CliError::Io(e.to_string()))?;
+    println!(
+        "✅ Restauré depuis {} : `penelope start` pour relancer.",
+        file.display()
+    );
+    Ok(())
 }
 
 /// Contenu d'un fichier de déclaration MCP.
@@ -1197,6 +1317,11 @@ mod tests {
             (vec!["session", "list"], m::SESSION_LIST),
             (vec!["session", "model", "main"], m::SESSION_MODEL),
             (vec!["session", "compact"], m::SESSION_COMPACT),
+            (vec!["session", "fork"], m::SESSION_FORK),
+            (vec!["session", "rewind", "2"], m::SESSION_REWIND),
+            (vec!["export", "run", "r_1"], m::EXPORT),
+            (vec!["store", "rebuild"], m::STORE_REBUILD),
+            (vec!["skill", "rollback", "revue"], m::SKILL_ROLLBACK),
             (
                 vec!["wf", "run", "build-verify", "--param", "objectif=x"],
                 m::WF_RUN,
@@ -1257,7 +1382,6 @@ mod tests {
             vec!["usage"],
             vec!["audit-verify"],
             vec!["backup"],
-            vec!["eval", "unit"],
             vec!["session", "list"],
             vec!["session", "new"],
             vec!["session", "export", "s_1"],

@@ -21,6 +21,7 @@ pub mod runner;
 pub mod runtime;
 pub mod scheduler;
 pub mod selfknow;
+pub mod session_ops;
 pub mod supervisor;
 pub mod telegram;
 pub mod vault_ops;
