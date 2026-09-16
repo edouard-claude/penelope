@@ -19,6 +19,52 @@ use penelope_store::rusqlite::params;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+fn pin_key(session_id: &str) -> String {
+    format!("session.model_pin.{session_id}")
+}
+
+fn last_model_key(session_id: &str) -> String {
+    format!("session.model_last.{session_id}")
+}
+
+/// Alias proposés pour la conversation : les étages du routage et le rôle
+/// `chat_default`, puis les alias ajoutés à la main, jamais ceux réservés à la
+/// compaction, aux images, aux embeddings ou à la transcription.
+pub fn conversation_aliases(cfg: &penelope_kernel::config::Config) -> Vec<String> {
+    const NOT_CHAT: &[&str] = &[
+        "compaction",
+        "image_generate",
+        "image_describe",
+        "embedding",
+        "stt",
+    ];
+    let reserved: std::collections::BTreeSet<&str> = cfg
+        .models
+        .roles
+        .iter()
+        .filter(|(role, _)| NOT_CHAT.contains(&role.as_str()))
+        .map(|(_, alias)| alias.as_str())
+        .collect();
+    let routing = &cfg.models.routing;
+    let mut out: Vec<String> = Vec::new();
+    for a in [
+        routing.low.clone(),
+        routing.medium.clone(),
+        routing.high.clone(),
+        cfg.role_alias("chat_default"),
+    ] {
+        if cfg.alias_model(&a).is_some() && !out.contains(&a) {
+            out.push(a);
+        }
+    }
+    for a in cfg.models.aliases.keys() {
+        if !reserved.contains(a.as_str()) && !out.contains(a) {
+            out.push(a.clone());
+        }
+    }
+    out
+}
+
 /// Sink qui publie les événements d'un tour sur le bus.
 pub struct BusSink {
     pub bus: Arc<Bus>,
@@ -291,8 +337,10 @@ impl Daemon {
                     model_id: id.to_string(),
                 })
             });
+        let pinned = self.pinned_model(session.id.as_str()).await;
         let input = RouteInput {
             message: text.to_string(),
+            pinned,
             sticky,
             ..Default::default()
         };
@@ -325,7 +373,71 @@ impl Daemon {
                 .set_model(session.id.as_str(), &decision.alias, &decision.model_id)
                 .await;
         }
+        // Dernier choix, pour que `/model` dise qui a répondu en dernier.
+        let _ = self
+            .kv_set(&last_model_key(session.id.as_str()), &decision.alias)
+            .await;
         (decision.alias, decision.model_id)
+    }
+
+    /// Alias épinglé sur une session, s'il existe encore dans la configuration.
+    pub async fn pinned_model(&self, session_id: &str) -> Option<StickyModel> {
+        let alias = self
+            .kv_get(&pin_key(session_id))
+            .await
+            .ok()
+            .flatten()
+            .filter(|a| !a.is_empty())?;
+        let cfg = self.services.config.config();
+        match cfg.alias_model(&alias) {
+            Some(id) => Some(StickyModel {
+                alias,
+                model_id: id.to_string(),
+            }),
+            None => {
+                tracing::warn!(session = session_id, alias = %alias, "alias épinglé disparu de la configuration");
+                None
+            }
+        }
+    }
+
+    /// Épingle un alias sur une session, ou revient à l'automatique (`None`).
+    pub async fn pin_model(&self, session_id: &str, alias: Option<&str>) -> anyhow::Result<()> {
+        if let Some(a) = alias {
+            let cfg = self.services.config.config();
+            if cfg.alias_model(a).is_none() {
+                anyhow::bail!(
+                    "alias inconnu `{a}` ; alias disponibles : {}",
+                    conversation_aliases(&cfg).join(", ")
+                );
+            }
+        }
+        self.kv_set(&pin_key(session_id), alias.unwrap_or("")).await
+    }
+
+    /// État du modèle d'une session : épinglé ou automatique, dernier alias utilisé, choix.
+    pub async fn session_model_view(&self, session_id: &str) -> anyhow::Result<Value> {
+        let cfg = self.services.config.config();
+        let model_of = |a: &str| cfg.alias_model(a).map(String::from);
+        let pinned = self.pinned_model(session_id).await;
+        let last = self
+            .kv_get(&last_model_key(session_id))
+            .await?
+            .filter(|a| !a.is_empty());
+        let choices: Vec<Value> = conversation_aliases(&cfg)
+            .into_iter()
+            .map(|a| json!({"alias": a, "model": model_of(&a)}))
+            .collect();
+        Ok(json!({
+            "session": session_id,
+            "mode": if pinned.is_some() { "épinglé" } else { "automatique" },
+            "pinned": pinned.as_ref().map(|p| p.alias.clone()),
+            "pinned_model": pinned.as_ref().map(|p| p.model_id.clone()),
+            "last_alias": last,
+            "last_model": last.as_deref().and_then(model_of),
+            "classifier": cfg.models.routing.classifier,
+            "choices": choices,
+        }))
     }
 
     /// Classifieur de complexité : un petit modèle, une réponse JSON, 8 s au plus.

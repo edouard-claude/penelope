@@ -255,6 +255,23 @@ penelope model set reasoning openrouter:z-ai/glm-5.3
 `penelope model list` (ou `/models` sur Telegram) affiche le routage en vigueur, alias et
 modèles réels compris.
 
+### Choisir le modèle d'une session
+
+Sur Telegram, `/model` répond par l'état de la session (épinglée, ou automatique avec le
+modèle du dernier message) et un bouton par modèle de conversation, plus « Automatique ».
+Un clic épingle l'alias sur la session : tous ses messages l'utilisent, sans classifieur,
+jusqu'au retour à « Automatique ». Les autres sessions ne sont pas touchées. En texte,
+`/model reasoning` épingle et `/model auto` rend la main au routeur ; `/model main
+openrouter:<id>` change, lui, ce que vise l'alias partout. En ligne de commande :
+
+```bash
+penelope session model reasoning
+```
+
+(`penelope session model` seul affiche l'état, `auto` revient à l'automatique, `--session`
+vise une autre session que la courante). Une photo ou une demande d'image passe toujours
+par `vision` ou `image`, même sur une session épinglée.
+
 `sticky` compte plus qu'il n'y paraît : changer de modèle en pleine session casserait le
 cache du provider et ferait payer tout le contexte une seconde fois. Seul le petit modèle
 (`low`) ne colle jamais : un « bonjour » n'enferme pas la session sur `fast`, le message

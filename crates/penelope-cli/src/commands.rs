@@ -129,8 +129,18 @@ pub enum Command {
 #[derive(Subcommand, Debug)]
 pub enum SessionCmd {
     List,
-    New { title: Option<String> },
-    Export { session: String },
+    New {
+        title: Option<String>,
+    },
+    Export {
+        session: String,
+    },
+    /// Modèle de la session : sans argument l'état, sinon un alias à épingler ou `auto`.
+    Model {
+        alias: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -344,6 +354,10 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
 
         Command::Session(SessionCmd::List) => (m::SESSION_LIST, json!({})),
         Command::Session(SessionCmd::New { title }) => (m::SESSION_NEW, json!({"title": title})),
+        Command::Session(SessionCmd::Model { alias, session }) => (
+            m::SESSION_MODEL,
+            json!({"alias": alias, "session": session}),
+        ),
         Command::Session(SessionCmd::Export { session }) => {
             (m::SESSION_EXPORT, json!({"session": session}))
         }
@@ -913,6 +927,7 @@ mod tests {
             (vec!["audit-verify"], m::AUDIT_VERIFY),
             (vec!["backup"], m::BACKUP),
             (vec!["session", "list"], m::SESSION_LIST),
+            (vec!["session", "model", "main"], m::SESSION_MODEL),
             (vec!["config", "get"], m::CONFIG_GET),
             (vec!["secret", "list"], m::SECRET_LIST),
             (vec!["model", "list"], m::MODEL_LIST),

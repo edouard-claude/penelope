@@ -22,6 +22,9 @@ pub struct RouteInput {
     pub step_model: Option<String>,
     /// Rôle de l'étape ou du sous-système (`code`, `compaction`, `classifier`…).
     pub role: Option<String>,
+    /// Modèle épinglé sur la session par le propriétaire (`/model`) : il prime sur le
+    /// collant et sur le classifieur, pas sur les règles d'image.
+    pub pinned: Option<StickyModel>,
     /// Modèle collant de la session, s'il y en a un.
     pub sticky: Option<StickyModel>,
     /// Vrai aux frontières où le modèle peut changer (nouvelle session, compaction
@@ -53,6 +56,8 @@ pub enum RouteReason {
     StepModel,
     /// Rôle d'étape ou de sous-système.
     Role,
+    /// Modèle épinglé sur la session par le propriétaire.
+    Pinned,
     /// Modèle collant de la session.
     Sticky,
     /// Sortie du classifieur.
@@ -161,6 +166,14 @@ impl Router {
                     return Some(d);
                 }
             }
+        }
+        // Choix explicite du propriétaire pour cette session.
+        if let Some(p) = &input.pinned {
+            return Some(Decision {
+                alias: p.alias.clone(),
+                model_id: p.model_id.clone(),
+                reason: RouteReason::Pinned,
+            });
         }
         // Sticky : hors frontière, on ne change pas de modèle (préservation du cache).
         if let Some(s) = &input.sticky {
@@ -380,6 +393,40 @@ mod tests {
             .unwrap();
         assert_eq!(d.alias, "reasoning");
         assert_eq!(d.reason, RouteReason::Role);
+    }
+
+    #[test]
+    fn a_pinned_model_beats_sticky_and_classifier_but_not_images() {
+        let pinned = StickyModel {
+            alias: "reasoning".into(),
+            model_id: "openrouter:z-ai/glm-5.2".into(),
+        };
+        let input = RouteInput {
+            message: "ok vas-y".into(),
+            pinned: Some(pinned.clone()),
+            sticky: Some(StickyModel {
+                alias: "main".into(),
+                model_id: "openrouter:deepseek/deepseek-v4-pro".into(),
+            }),
+            ..Default::default()
+        };
+        let d = router().route_deterministic(&cfg(), &input).unwrap();
+        assert_eq!(d.reason, RouteReason::Pinned);
+        assert_eq!(d.alias, "reasoning");
+
+        let mut no_classifier = cfg();
+        no_classifier.models.routing.classifier = false;
+        let d = router()
+            .route_deterministic(&no_classifier, &input)
+            .unwrap();
+        assert_eq!(d.reason, RouteReason::Pinned);
+
+        let image = RouteInput {
+            message: "dessine un phare au crépuscule".into(),
+            ..input
+        };
+        let d = router().route_deterministic(&cfg(), &image).unwrap();
+        assert_eq!(d.reason, RouteReason::ImageGeneration);
     }
 
     /// CA 10 : le modèle est collant, un changement n'a lieu qu'aux frontières.

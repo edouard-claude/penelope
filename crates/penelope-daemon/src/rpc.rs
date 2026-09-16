@@ -153,6 +153,15 @@ impl Rpc {
             }
 
             // ------------------------------------------------------------ modèles
+            method::SESSION_MODEL => {
+                let sid = self.session_param(p).await?;
+                match p.get("alias").and_then(|a| a.as_str()) {
+                    None | Some("") => {}
+                    Some("auto") => self.daemon.pin_model(&sid, None).await?,
+                    Some(alias) => self.daemon.pin_model(&sid, Some(alias)).await?,
+                }
+                self.daemon.session_model_view(&sid).await
+            }
             method::MODEL_LIST => {
                 // D'abord ce que l'utilisateur a configuré, ensuite le catalogue du provider.
                 let filter = p

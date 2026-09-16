@@ -366,46 +366,60 @@ impl TelegramGateway {
             }
             "model" => {
                 let parts: Vec<&str> = args.split_whitespace().collect();
-                if let ["auto", switch] = parts.as_slice() {
-                    let on = match *switch {
-                        "on" | "oui" => Some(true),
-                        "off" | "non" => Some(false),
-                        _ => None,
-                    };
-                    match on {
-                        None => "Usage : `/model auto on` ou `/model auto off`".into(),
-                        Some(on) => {
-                            rpc.call(
-                                m::CONFIG_SET,
-                                json!({"path": "models.routing.classifier", "value": on}),
-                            )
-                            .await?;
-                            if on {
-                                "🔀 Routage adaptatif activé : le classifieur choisit l'alias à chaque message.".into()
-                            } else {
-                                "📌 Routage fixe : tous les messages passent par `main`.".into()
+                let session = d.chat_session_for(&origin).await?;
+                match parts.as_slice() {
+                    // Sans argument : l'état de la session et un bouton par modèle.
+                    [] => {
+                        return self
+                            .send_model_menu(chat_id, topic_id, reply_to, &session)
+                            .await;
+                    }
+                    ["auto", switch] => {
+                        let on = match *switch {
+                            "on" | "oui" => Some(true),
+                            "off" | "non" => Some(false),
+                            _ => None,
+                        };
+                        match on {
+                            None => "Usage : `/model auto on` ou `/model auto off`".into(),
+                            Some(on) => {
+                                rpc.call(
+                                    m::CONFIG_SET,
+                                    json!({"path": "models.routing.classifier", "value": on}),
+                                )
+                                .await?;
+                                if on {
+                                    "🔀 Routage adaptatif activé : le classifieur choisit l'alias à chaque message.".into()
+                                } else {
+                                    "📌 Routage fixe : les sessions non épinglées passent par `main`.".into()
+                                }
                             }
                         }
                     }
-                } else if parts.len() < 2 {
-                    let v = rpc
-                        .call(m::MODEL_LIST, json!({}))
-                        .await
-                        .unwrap_or(json!({}));
-                    let mut t = routing_text(&v);
-                    t.push_str("\nChanger : `/model main openrouter:<identifiant>`");
-                    t
-                } else {
-                    let model = normalise_model_id(parts[1]);
-                    match rpc
-                        .call(m::MODEL_SET, json!({"alias": parts[0], "model": model}))
+                    // Un alias seul : l'épingler sur la session, `auto` pour revenir.
+                    [alias] => match rpc
+                        .call(
+                            m::SESSION_MODEL,
+                            json!({"session": session, "alias": alias}),
+                        )
                         .await
                     {
-                        Ok(v) => format!(
-                            "✅ `{}` → `{model}` (génération {}).",
-                            parts[0], v["generation"]
-                        ),
+                        Ok(v) => model_pin_notice(&v),
                         Err(e) => format!("❌ {e}"),
+                    },
+                    // Un alias et un modèle : changer ce que vise l'alias, partout.
+                    [alias, model, ..] => {
+                        let model = normalise_model_id(model);
+                        match rpc
+                            .call(m::MODEL_SET, json!({"alias": alias, "model": model}))
+                            .await
+                        {
+                            Ok(v) => format!(
+                                "✅ `{alias}` → `{model}` (génération {}).",
+                                v["generation"]
+                            ),
+                            Err(e) => format!("❌ {e}"),
+                        }
                     }
                 }
             }
@@ -537,7 +551,133 @@ impl TelegramGateway {
         self.reply(chat_id, topic_id, reply_to, &text).await
     }
 
-    /// `/budget` : dépense du jour et de la session, requêtes les plus chères.
+    /// Menu `/model` : état du modèle de la session et un bouton par choix.
+    async fn send_model_menu(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        reply_to: Option<i64>,
+        session: &str,
+    ) -> anyhow::Result<()> {
+        let view = self.daemon.session_model_view(session).await?;
+        let (html, keyboard) = self.model_menu(&view).await?;
+        let mut payload = json!({
+            "chat_id": chat_id,
+            "text": html,
+            "parse_mode": "HTML",
+            "reply_markup": keyboard,
+            "message_thread_id": topic_id,
+        });
+        if let Some(r) = reply_to {
+            payload["reply_parameters"] =
+                json!({"message_id": r, "allow_sending_without_reply": true});
+        }
+        self.outbox_push(chat_id, topic_id, "sendMessage", payload)
+            .await
+    }
+
+    /// Texte et boutons du menu. Les jetons sont réutilisables : on peut changer d'avis
+    /// depuis le même message pendant une semaine.
+    async fn model_menu(&self, view: &Value) -> anyhow::Result<(String, Value)> {
+        let s = &self.daemon.services;
+        let session = view["session"].as_str().unwrap_or_default();
+        let pinned = view["pinned"].as_str();
+        let ttl = 7 * 24 * 3_600_000;
+
+        let mut rows: Vec<Vec<ButtonSpec>> = Vec::new();
+        for c in view["choices"].as_array().cloned().unwrap_or_default() {
+            let alias = c["alias"].as_str().unwrap_or("?");
+            let model = short_model(c["model"].as_str().unwrap_or("?"));
+            let token = s
+                .actions
+                .create(k::MODEL_PIN, session, json!({"alias": alias}), ttl, false)
+                .await?;
+            let mark = if pinned == Some(alias) { "✅ " } else { "" };
+            rows.push(vec![ButtonSpec::callback(
+                &format!("{mark}{alias} · {model}"),
+                &token.token,
+                "",
+            )]);
+        }
+        let auto = s
+            .actions
+            .create(k::MODEL_PIN, session, json!({"alias": null}), ttl, false)
+            .await?;
+        let mark = if pinned.is_none() { "✅ " } else { "" };
+        rows.push(vec![ButtonSpec::callback(
+            &format!("{mark}🔀 Automatique"),
+            &auto.token,
+            "",
+        )]);
+
+        let state = match pinned {
+            Some(alias) => format!(
+                "Épinglé sur `{alias}` · `{}` : tous les messages de la session l'utilisent.",
+                short_model(view["pinned_model"].as_str().unwrap_or("?"))
+            ),
+            None => {
+                let how = if view["classifier"].as_bool().unwrap_or(false) {
+                    "le classifieur choisit à chaque message"
+                } else {
+                    "tout passe par `main`"
+                };
+                match view["last_alias"].as_str() {
+                    Some(last) => format!(
+                        "Automatique ({how}). Dernier message : `{last}` · `{}`.",
+                        short_model(view["last_model"].as_str().unwrap_or("?"))
+                    ),
+                    None => format!("Automatique ({how})."),
+                }
+            }
+        };
+        let markdown = format!("**Modèle de cette session**\n\n{state}");
+        Ok((markdown_to_html(&markdown), inline_keyboard(&rows)))
+    }
+
+    /// Clic sur un bouton du menu `/model`.
+    async fn model_pin_clicked(
+        &self,
+        callback_id: &str,
+        action: &penelope_telegram::actions::Action,
+        chat_id: i64,
+        message_id: i64,
+    ) -> anyhow::Result<()> {
+        let session = action.target.as_str();
+        let alias = action.args.get("alias").and_then(|a| a.as_str());
+        let rpc = crate::rpc::Rpc::new(self.daemon.clone());
+        let result = rpc
+            .call(
+                m::SESSION_MODEL,
+                json!({"session": session, "alias": alias.unwrap_or("auto")}),
+            )
+            .await;
+        match result {
+            Ok(view) => {
+                let toast = match alias {
+                    Some(a) => format!("Session épinglée sur {a}"),
+                    None => "Session en automatique".to_string(),
+                };
+                let _ = self
+                    .bot
+                    .answer_callback(callback_id, Some(&toast), false)
+                    .await;
+                let (html, keyboard) = self.model_menu(&view).await?;
+                let _ = self
+                    .bot
+                    .edit_text(chat_id, message_id, &html, Some(keyboard))
+                    .await;
+            }
+            Err(e) => {
+                let _ = self
+                    .bot
+                    .answer_callback(callback_id, Some(&e.to_string()), true)
+                    .await;
+            }
+        }
+        Ok(())
+    }
+
+    /// `/budget` : dépense du jour et de la session, requêtes les plus chères.    /// `/budget` : dépense du jour et de la session, requêtes les plus chères.
     /// `/budget sessions|requêtes|modèles|jours` : un regroupement précis.
     async fn budget_text(&self, session: &str, args: &str) -> anyhow::Result<String> {
         let s = &self.daemon.services;
@@ -635,6 +775,13 @@ impl TelegramGateway {
     ) -> anyhow::Result<()> {
         let s = &self.daemon.services;
         let outcome = s.actions.click(data, from_id).await?;
+        if let ClickOutcome::Accepted(action) = &outcome {
+            if action.action == k::MODEL_PIN {
+                return self
+                    .model_pin_clicked(callback_id, action, chat_id, message_id)
+                    .await;
+            }
+        }
         // `answerCallbackQuery` d'abord : Telegram attend une réponse sous une seconde.
         let notice = match &outcome {
             ClickOutcome::Accepted(_) => None,
@@ -1329,6 +1476,26 @@ fn substitute(body: &str, vars: &BTreeMap<String, String>) -> String {
     out
 }
 
+/// `openrouter:z-ai/glm-5.3` devient `glm-5.3` : assez pour reconnaître un modèle.
+fn short_model(id: &str) -> String {
+    penelope_llm::catalog::strip_provider(id)
+        .rsplit('/')
+        .next()
+        .unwrap_or(id)
+        .to_string()
+}
+
+/// Réponse à `/model <alias>` ou `/model auto`.
+fn model_pin_notice(view: &Value) -> String {
+    match view["pinned"].as_str() {
+        Some(alias) => format!(
+            "📌 Session épinglée sur `{alias}` · `{}`. Retour à l'automatique : `/model auto`.",
+            short_model(view["pinned_model"].as_str().unwrap_or("?"))
+        ),
+        None => "🔀 Session en automatique.".into(),
+    }
+}
+
 /// Alias et routage, tels que `model.list` les décrit.
 fn routing_text(v: &Value) -> String {
     let mut t = String::from("**Alias**\n\n");
@@ -1721,11 +1888,146 @@ mod tests {
         assert!(out[0].contains("Adaptatif"), "{out:?}");
         assert!(out[0].contains("simple"), "{out:?}");
         assert!(out[1].contains("Routage fixe"), "{out:?}");
-        assert!(out[2].contains("Fixe : tout passe par"), "{out:?}");
+        assert!(out[2].contains("Modèle de cette session"), "{out:?}");
+        assert!(out[2].contains("tout passe par"), "{out:?}");
         assert!(!g.daemon.services.config.config().models.routing.classifier);
         assert!(out[3].contains("0,0123 $"), "{out:?}");
         assert!(out[3].contains("t_x"), "{out:?}");
         assert!(out[4].contains(&sid), "{out:?}");
+    }
+
+    /// Boutons du dernier menu `/model` envoyé : (libellé, jeton).
+    async fn model_buttons(t: &MockTransport) -> Vec<(String, String)> {
+        let menu = t
+            .calls_to(tg::SEND_MESSAGE)
+            .await
+            .into_iter()
+            .rev()
+            .find(|c| {
+                c["text"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("Modèle de cette session")
+            })
+            .expect("menu /model envoyé");
+        menu["reply_markup"]["inline_keyboard"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row[0]["text"].as_str().unwrap().to_string(),
+                    row[0]["callback_data"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn model_buttons_pin_the_session_then_give_it_back_to_the_router() {
+        let (_d, g, t, p) = gateway().await;
+        let origin = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: None,
+        };
+        let sid = g.daemon.chat_session_for(&origin).await.unwrap();
+        let cfg = g.daemon.services.config.config();
+        let main = cfg.alias_model("main").unwrap().to_string();
+        let reasoning = cfg.alias_model("reasoning").unwrap().to_string();
+
+        g.process_update(&updates::text_message(70, OWNER, OWNER, "/model"))
+            .await
+            .unwrap();
+        drain(&g).await;
+        let buttons = model_buttons(&t).await;
+        let labels: Vec<&str> = buttons.iter().map(|(l, _)| l.as_str()).collect();
+        assert!(labels[0].starts_with("fast · "), "{labels:?}");
+        assert!(labels[1].starts_with("main · "), "{labels:?}");
+        assert!(labels[2].starts_with("reasoning · "), "{labels:?}");
+        assert_eq!(labels.last(), Some(&"✅ 🔀 Automatique"));
+        assert!(
+            !labels
+                .iter()
+                .any(|l| l.contains("embedding") || l.contains("stt")),
+            "{labels:?}"
+        );
+
+        // Clic sur `main` : la session est épinglée, le menu se met à jour.
+        let main_token = buttons[1].1.clone();
+        g.process_update(&updates::callback(71, OWNER, &main_token, 700))
+            .await
+            .unwrap();
+        let answers = t.calls_to(tg::ANSWER_CALLBACK_QUERY).await;
+        assert_eq!(answers.last().unwrap()["text"], "Session épinglée sur main");
+        let edited = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
+        let edited = edited.last().unwrap();
+        assert!(
+            edited["text"].as_str().unwrap().contains("Épinglé sur"),
+            "{edited}"
+        );
+        assert!(
+            edited["reply_markup"]["inline_keyboard"][1][0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("✅ main"),
+            "{edited}"
+        );
+
+        // Le message suivant part sur `main`, sans appel au classifieur.
+        p.reply("Réponse de main.");
+        g.process_update(&updates::text_message(72, OWNER, OWNER, "ok"))
+            .await
+            .unwrap();
+        drain(&g).await;
+        assert_eq!(
+            p.call_count(),
+            1,
+            "pas de classifieur quand la session est épinglée"
+        );
+        assert_eq!(p.requests()[0].model, main);
+
+        // Le même bouton sert encore : un jeton de menu n'est pas à usage unique.
+        g.process_update(&updates::callback(73, OWNER, &main_token, 700))
+            .await
+            .unwrap();
+        assert_eq!(
+            t.calls_to(tg::ANSWER_CALLBACK_QUERY).await.last().unwrap()["text"],
+            "Session épinglée sur main"
+        );
+
+        // En texte : `/model reasoning` épingle, `/model auto` rend la main au routeur.
+        g.process_update(&updates::text_message(74, OWNER, OWNER, "/model reasoning"))
+            .await
+            .unwrap();
+        p.reply("Réponse de reasoning.");
+        g.process_update(&updates::text_message(75, OWNER, OWNER, "et là ?"))
+            .await
+            .unwrap();
+        drain(&g).await;
+        assert_eq!(p.requests().last().unwrap().model, reasoning);
+
+        let auto_token = model_buttons(&t).await.last().unwrap().1.clone();
+        g.process_update(&updates::callback(76, OWNER, &auto_token, 701))
+            .await
+            .unwrap();
+        assert_eq!(
+            t.calls_to(tg::ANSWER_CALLBACK_QUERY).await.last().unwrap()["text"],
+            "Session en automatique"
+        );
+        assert!(g.daemon.pinned_model(&sid).await.is_none());
+
+        g.process_update(&updates::text_message(77, OWNER, OWNER, "/model inconnu"))
+            .await
+            .unwrap();
+        drain(&g).await;
+        let out = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            out.iter()
+                .any(|m| m.contains("reasoning") && m.contains("📌")),
+            "{out:?}"
+        );
+        assert!(out.last().unwrap().contains("alias inconnu"), "{out:?}");
     }
 
     #[tokio::test]

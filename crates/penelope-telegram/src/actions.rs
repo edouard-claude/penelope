@@ -235,6 +235,8 @@ pub mod kind {
     pub const MEMORY_ACCEPT: &str = "memory_accept";
     pub const MEMORY_AS_EXCEPTION: &str = "memory_as_exception";
     pub const MEMORY_REJECT: &str = "memory_reject";
+    /// Épingle un alias sur une session (`args.alias`), ou revient à l'automatique.
+    pub const MODEL_PIN: &str = "model_pin";
     pub const BUDGET_RAISE: &str = "budget_raise";
     pub const BUDGET_STOP: &str = "budget_stop";
     pub const STOP_RESUME: &str = "stop_resume";

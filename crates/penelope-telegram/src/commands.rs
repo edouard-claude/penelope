@@ -95,9 +95,9 @@ pub fn all() -> Vec<Command> {
         c(
             "model",
             "Modèles",
-            "Change le modèle d'un alias",
-            "/model main deepseek/v4",
-            m::MODEL_SET,
+            "Modèle de la session, à choisir en un bouton",
+            "/model",
+            m::SESSION_MODEL,
         ),
         c(
             "models",

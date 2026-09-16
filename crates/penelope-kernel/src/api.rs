@@ -112,6 +112,8 @@ pub mod method {
     pub const SESSION_REWIND: &str = "session.rewind";
     pub const SESSION_COMPACT: &str = "session.compact";
     pub const SESSION_EXPORT: &str = "session.export";
+    /// Modèle d'une session : lecture, épinglage d'un alias, retour à l'automatique.
+    pub const SESSION_MODEL: &str = "session.model";
 
     pub const CONFIG_GET: &str = "config.get";
     pub const CONFIG_SET: &str = "config.set";
@@ -207,6 +209,7 @@ pub mod method {
         SESSION_REWIND,
         SESSION_COMPACT,
         SESSION_EXPORT,
+        SESSION_MODEL,
         CONFIG_GET,
         CONFIG_SET,
         CONFIG_STATUS,

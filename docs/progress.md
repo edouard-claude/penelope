@@ -8,7 +8,7 @@ Dernière mise à jour : 16 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1008 tests verts**, tous hors réseau.
+- **1010 tests verts**, tous hors réseau.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -85,7 +85,9 @@ Dernière mise à jour : 16 septembre 2026.
   contexte volatil dans le dernier message utilisateur, une relance puis un diagnostic
   (fin brute, provider amont, budget de sortie mangé par le raisonnement).
 - **Routage lisible** : `model list` et `/models` montrent classifieur, étages et replis ;
-  `/model auto on|off` ; l'alias `low` ne colle plus à une session ; le classifieur
+  `/model` répond par des boutons qui épinglent un modèle sur la session
+  (`penelope session model`) ; `/model auto on|off` ; l'alias `low` ne colle plus à une
+  session ; le classifieur
   réduit son raisonnement et demande une sortie structurée quand le modèle le permet.
 - **Coûts attribués** : chaque appel porte sa requête d'origine, son rôle, sa génération
   et son provider amont ; `penelope usage --by session|turn|model|day|role|upstream`,
