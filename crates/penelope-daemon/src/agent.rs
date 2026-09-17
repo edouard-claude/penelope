@@ -139,6 +139,12 @@ pub trait Conversation: Send + Sync {
     async fn compact_for_overflow(&self) -> anyhow::Result<bool> {
         Ok(false)
     }
+    /// Applique le budget d'admission (§5.4 niveau 1) aux `count` derniers résultats
+    /// d'outils **ensemble** : cinq résultats de 20 k tokens ne passent pas parce
+    /// qu'aucun ne dépasse le seuil à lui seul (issue #52).
+    async fn admit_tool_results(&self, _count: usize) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 /// Compaction à la demande d'une session (§5.4 : une tentative bornée sur dépassement).
@@ -1128,6 +1134,8 @@ impl AgentLoop {
             return Ok(Pending::Nothing);
         }
         let mut nudge = self.delegation_nudge(spec).await?;
+        // Les résultats de ce groupe d'appels sont admis ensemble à la fin (issue #52).
+        let mut recorded = 0usize;
 
         for call in pending {
             if spec.cancel.is_cancelled() {
@@ -1146,6 +1154,7 @@ impl AgentLoop {
                     false,
                 )
                 .await?;
+                recorded += 1;
                 continue;
             }
 
@@ -1416,7 +1425,9 @@ impl AgentLoop {
             }
             self.record_result(conv, sink, &call, !outcome.is_error, text, outcome.eager)
                 .await?;
+            recorded += 1;
         }
+        conv.admit_tool_results(recorded).await?;
         Ok(Pending::Resolved)
     }
 

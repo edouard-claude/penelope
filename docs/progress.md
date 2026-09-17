@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1307 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1309 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -646,7 +646,7 @@ Verrou de session à jeton de clôture (#43), écrivain à l'épreuve des paniqu
 mutations de configuration sérialisées (#45), purge RGPD et rétention (#46), journal
 d'audit sans faux positif (#47), listes de frontmatter lues correctement (#48), rafales de
 messages regroupées (#49), nouvelles tentatives avant le flux (#50), flux muet coupé sur
-son inactivité (#51).
+son inactivité (#51), résultats d'outils parallèles admis en groupe (#52).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -705,6 +705,11 @@ son inactivité (#51).
   SSE compris, remet le compteur à zéro ; le délai global passe à 30 minutes, donc une
   longue réponse qui progresse n'est plus coupée, et le client OpenAI-compatible a
   désormais un délai de connexion.
+- **Résultats d'outils parallèles** : le budget d'admission (§5.4 niveau 1, 25 k tokens)
+  s'applique au **groupe** d'appels d'une itération, plus seulement à un résultat isolé.
+  Cinq `fs_read` de 20 k tokens entraient entiers (100 k tokens dans le canonique, renvoyés
+  à chaque appel) ; ils sont maintenant répartis sous le budget, les petits gardés entiers,
+  les gros externalisés en artefacts relisibles. L'admission reste idempotente.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

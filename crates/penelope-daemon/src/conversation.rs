@@ -174,6 +174,35 @@ impl Conversation for SessionConversation {
         Ok(())
     }
 
+    /// Le groupe d'appels parallèles est admis d'un bloc : le budget se répartit entre
+    /// les résultats, les petits restent entiers, les gros partent en artefact (#52).
+    async fn admit_tool_results(&self, count: usize) -> anyhow::Result<()> {
+        if count < 2 {
+            return Ok(());
+        }
+        let s = &self.services;
+        let results = s
+            .context
+            .history
+            .recent_tool_results(&self.session_id, count)
+            .await?;
+        if results.len() < 2 {
+            return Ok(());
+        }
+        let params = self.params();
+        let total: u64 = results
+            .iter()
+            .map(|(_, text)| s.context.estimator.text_tokens(&self.model_id, text))
+            .sum();
+        if total <= params.tool_group_budget() {
+            return Ok(());
+        }
+        s.context
+            .admit_tool_group(&self.session_id, &results, &params, &self.model_id)
+            .await?;
+        Ok(())
+    }
+
     async fn compact_for_overflow(&self) -> anyhow::Result<bool> {
         match &self.compactor {
             Some(c) => c.compact_now(&self.session_id).await,
@@ -405,6 +434,95 @@ mod tests {
             .unwrap()
             .id
             .to_string()
+    }
+
+    /// #52 : cinq résultats d'outils parallèles de 20 k tokens chacun ne passent pas
+    /// entiers parce qu'aucun ne dépasse le seuil à lui seul : le groupe est admis sous le
+    /// budget, têtes et queues gardées, le reste lisible en artefact.
+    #[tokio::test]
+    async fn parallel_tool_results_are_admitted_as_one_group() {
+        let (_d, s) = services().await;
+        let sid = session(&s).await;
+        let tiers = build_tiers(&s, "lis ces fichiers", &[], None).await;
+        let conv = SessionConversation::new(s.clone(), &sid, "openrouter:mock/model", tiers, 0);
+        let params = conv.params();
+        let budget = params.tool_group_budget();
+
+        // ~20 k tokens chacun : sous le seuil d'un résultat isolé, cinq fois trop à cinq.
+        let body = "donnée ".repeat(12_000);
+        for i in 0..5 {
+            conv.record(
+                &ChatMessage::tool_result(format!("c{i}"), "fs_read", &body),
+                false,
+            )
+            .await
+            .unwrap();
+        }
+        conv.admit_tool_results(5).await.unwrap();
+
+        let entries = s.context.history.load(&sid, 0).await.unwrap();
+        let tools: Vec<_> = entries
+            .iter()
+            .filter(|e| e.message.role == Role::Tool)
+            .collect();
+        assert_eq!(tools.len(), 5);
+        let externalised = tools.iter().filter(|e| e.artifact_id.is_some()).count();
+        assert!(externalised > 0, "le groupe doit être admis sous budget");
+        let total: u64 = tools
+            .iter()
+            .map(|e| {
+                s.context
+                    .estimator
+                    .text_tokens("openrouter:mock/model", &e.message.text())
+            })
+            .sum();
+        // La découpe se fait en caractères (~3,6 par token) : on vise le budget à 20 %
+        // près, loin des 100 k tokens qui entraient avant.
+        assert!(
+            total <= budget + budget / 5,
+            "{total} tokens admis pour un budget de {budget}"
+        );
+        let first = tools.iter().find(|e| e.artifact_id.is_some()).unwrap();
+        assert!(first.message.text().contains("artifact_read"));
+        let id = first.artifact_id.clone().unwrap();
+        let (chunk, _, _) = s
+            .context
+            .history
+            .read_artifact(&id, 0, 50)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(chunk.len(), 50, "le contenu complet reste lisible");
+
+        // Idempotent : une seconde passe ne réexternalise rien.
+        conv.admit_tool_results(5).await.unwrap();
+        let after = s.context.history.load(&sid, 0).await.unwrap();
+        let again = after
+            .iter()
+            .filter(|e| e.message.role == Role::Tool && e.artifact_id.is_some())
+            .count();
+        assert_eq!(again, externalised, "admission déjà faite, rien ne bouge");
+    }
+
+    /// #52 : un résultat seul, même gros, reste entier tant qu'il tient dans le budget.
+    #[tokio::test]
+    async fn a_lone_tool_result_is_left_whole() {
+        let (_d, s) = services().await;
+        let sid = session(&s).await;
+        let tiers = build_tiers(&s, "lis ce fichier", &[], None).await;
+        let conv = SessionConversation::new(s.clone(), &sid, "openrouter:mock/model", tiers, 0);
+        conv.record(
+            &ChatMessage::tool_result("c1", "fs_read", "donnée ".repeat(12_000)),
+            false,
+        )
+        .await
+        .unwrap();
+        conv.admit_tool_results(1).await.unwrap();
+        let entries = s.context.history.load(&sid, 0).await.unwrap();
+        assert!(
+            entries.iter().all(|e| e.artifact_id.is_none()),
+            "un résultat isolé sous le seuil reste entier"
+        );
     }
 
     #[tokio::test]

@@ -327,6 +327,45 @@ impl HistoryStore {
             .await
     }
 
+    /// Derniers résultats d'outils encore entiers d'une session, du plus ancien au plus
+    /// récent : ce qu'un groupe d'appels parallèles vient d'écrire (issue #52). Un
+    /// résultat déjà externalisé (`artifact_id`) est laissé de côté : l'admission reste
+    /// idempotente.
+    pub async fn recent_tool_results(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> penelope_store::Result<Vec<(i64, String)>> {
+        let sid = session_id.to_string();
+        self.store
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT seq, role, content, tool_call_id, tool_name
+                     FROM messages
+                     WHERE session_id = ?1 AND role = 'tool' AND artifact_id IS NULL
+                     ORDER BY seq DESC LIMIT ?2",
+                )?;
+                let rows = st.query_map(params![sid, limit as i64], |r| {
+                    let role: String = r.get(1)?;
+                    let content: String = r.get(2)?;
+                    let message = deserialise_content(
+                        Role::parse(&role).unwrap_or(Role::Tool),
+                        &content,
+                        r.get::<_, Option<String>>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                    );
+                    Ok((r.get::<_, i64>(0)?, message.text()))
+                })?;
+                let mut out = Vec::new();
+                for r in rows {
+                    out.push(r?);
+                }
+                out.reverse();
+                Ok(out)
+            })
+            .await
+    }
+
     /// Fige le contexte volatil (T4) d'un message utilisateur : il l'accompagnera dans
     /// toutes les requêtes suivantes, pour que le préfixe ne change plus (issue #17).
     /// Sans effet s'il est déjà figé.
