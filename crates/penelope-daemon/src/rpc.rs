@@ -336,6 +336,29 @@ impl Rpc {
                     .map_err(anyhow::Error::msg)?;
                 Ok(json!({"name": name, "lines": lines}))
             }
+            method::SESSION_BUDGET => {
+                let query = required_str(p, "session")?;
+                let sess = crate::session_ops::resolve(s, &query)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                let id = sess.id.to_string();
+                if let Some(v) = p.get("usd").filter(|v| !v.is_null()) {
+                    let usd = v
+                        .as_f64()
+                        .or_else(|| v.as_str().and_then(|x| x.replace(',', ".").parse().ok()))
+                        .filter(|u| *u > 0.0);
+                    s.sessions.set_budget(&id, usd).await?;
+                }
+                let cfg = s.config.config();
+                let (daily, limit, _) = s.budget.limits(&cfg.budget, Some(&id), None).await?;
+                Ok(json!({
+                    "session": id,
+                    "budget_usd": s.sessions.get(&id).await?.and_then(|x| x.budget_usd),
+                    "limit_usd": limit,
+                    "spent_usd": s.budget.spent_session(&id).await?,
+                    "daily_limit_usd": daily,
+                }))
+            }
             method::SESSION_MODEL => {
                 let sid = self.session_param(p).await?;
                 match p.get("alias").and_then(|a| a.as_str()) {

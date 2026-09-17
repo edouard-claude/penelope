@@ -65,7 +65,11 @@ pub async fn fork(
         }
     }
     if let Some(obj) = source.metadata.as_object() {
-        for (k, v) in obj {
+        // Le fichier de notes n'est pas partagé : le fork reçoit sa propre copie.
+        for (k, v) in obj
+            .iter()
+            .filter(|(k, _)| k.as_str() != crate::session_notes::META_KEY)
+        {
             s.sessions
                 .metadata(
                     &fork_id,
@@ -75,6 +79,10 @@ pub async fn fork(
                 )
                 .await?;
         }
+    }
+    crate::session_notes::copy(s, session_id, &fork_id).await?;
+    if let Some(budget) = source.budget_usd {
+        s.sessions.set_budget(&fork_id, Some(budget)).await?;
     }
     s.events
         .append(

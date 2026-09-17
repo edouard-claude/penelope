@@ -1078,6 +1078,18 @@ async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
                 return Ok(done(StepResult::Error, json!({"error": error})));
             }
             TurnOutcome::BudgetExceeded { scope, .. } => {
+                // La carte « continuer ? » part au propriétaire : relever le plafond reprend
+                // le run (issue #32).
+                if let Some(m) = ctx.d.hooks.messenger()
+                    && let Some(a) = s.approvals.pending(50).await?.into_iter().find(|a| {
+                        a.kind == penelope_hitl::ApprovalKind::BudgetExceeded
+                            && a.run_id.as_deref() == Some(run.id.as_str())
+                            && a.payload["budget"].as_bool() == Some(true)
+                    })
+                {
+                    let origin = crate::scheduler::owner_origin(ctx.d);
+                    let _ = m.send_approval(&origin, a.id.as_str()).await;
+                }
                 return Ok(done(
                     StepResult::Error,
                     json!({"error": format!("budget {scope} atteint")}),

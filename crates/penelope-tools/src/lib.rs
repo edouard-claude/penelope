@@ -14,6 +14,7 @@ pub mod http;
 pub mod loops;
 pub mod shell;
 pub mod spec;
+pub mod test_output;
 
 pub use error::{ToolError, ToolResult};
 pub use loops::{LoopDetector, LoopVerdict};

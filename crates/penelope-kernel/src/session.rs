@@ -77,6 +77,9 @@ pub struct Session {
     pub state: String,
     pub episode_seq: i64,
     pub last_activity: Option<String>,
+    /// Plafond propre à la session (issue #32) ; `None` : `budget.session_usd`.
+    #[serde(default)]
+    pub budget_usd: Option<f64>,
 }
 
 #[derive(Clone)]
@@ -142,6 +145,7 @@ impl SessionStore {
             state: "active".into(),
             episode_seq: 0,
             last_activity: Some(now),
+            budget_usd: None,
         };
         let row = s.clone();
         self.store
@@ -252,6 +256,22 @@ impl SessionStore {
     /// Donne un titre lisible. Avec `only_if_untitled`, un titre déjà posé (à la main ou
     /// par `/new`) est gardé ; `CLI` compte comme absence de titre. Renvoie vrai si le
     /// titre a changé.
+    /// Plafond propre à la session ; `None` ou 0 revient au plafond de la configuration.
+    pub async fn set_budget(&self, id: &str, usd: Option<f64>) -> Result<bool> {
+        let id = id.to_string();
+        let usd = usd.filter(|u| *u > 0.0);
+        let changed = self
+            .store
+            .write(move |tx| {
+                Ok(tx.execute(
+                    "UPDATE sessions SET budget_usd=?2 WHERE id=?1",
+                    params![id, usd],
+                )?)
+            })
+            .await?;
+        Ok(changed > 0)
+    }
+
     pub async fn set_title(&self, id: &str, title: &str, only_if_untitled: bool) -> Result<bool> {
         let (id, title) = (id.to_string(), title.trim().to_string());
         let changed = self
@@ -489,11 +509,11 @@ impl SessionStore {
 
 const SELECT_SESSION_BASE: &str = "SELECT id, kind, title, model_alias, model_id, created_at,
      updated_at, closed_at, parent_id, tg_chat_id, tg_topic_id, workspace, metadata,
-     usage_anchor, spent_usd, state, episode_seq, last_activity FROM sessions";
+     usage_anchor, spent_usd, state, episode_seq, last_activity, budget_usd FROM sessions";
 
 const SELECT_SESSION: &str = "SELECT id, kind, title, model_alias, model_id, created_at,
      updated_at, closed_at, parent_id, tg_chat_id, tg_topic_id, workspace, metadata,
-     usage_anchor, spent_usd, state, episode_seq, last_activity FROM sessions WHERE id = ?1";
+     usage_anchor, spent_usd, state, episode_seq, last_activity, budget_usd FROM sessions WHERE id = ?1";
 
 fn row_to_session(r: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
     let kind: String = r.get(1)?;
@@ -518,6 +538,7 @@ fn row_to_session(r: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         state: r.get(15)?,
         episode_seq: r.get(16)?,
         last_activity: r.get(17)?,
+        budget_usd: r.get(18)?,
     })
 }
 

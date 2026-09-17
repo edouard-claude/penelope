@@ -354,7 +354,24 @@ delegate_after_calls = 10   # rappel de regrouper ou de déléguer tous les 10 a
 ```
 
 À 80 % d'un plafond (jour, session ou run), une seule notification arrive avec les trois
-plus gros postes et leur part de cache ; à 100 %, le tour est suspendu. Un tour qui
+plus gros postes et leur part de cache. À 100 %, une carte demande « 5,02 $ dépensés sur
+5 $ dans « Titre » : continuer ? » avec « +5 $ », « +20 $ » et « Arrêter » :
+
+- pour une session ouverte par toi, le tour est suspendu et reprend là où il s'était arrêté
+  une fois le plafond relevé ;
+- le plafond du jour reste un arrêt ferme ; le relever vaut pour la journée, et la
+  demande se renvoie ;
+- un run de workflow reçoit la même carte, et il reprend après relèvement.
+
+Une session de travail longue a son propre plafond, sans toucher aux autres ni au
+garde-fou du jour :
+
+```bash
+penelope session budget <session> 20
+```
+
+sur Telegram `/budget session 20` (`off` pour revenir à `session_usd`) ; `/budget` et
+`/status` l'affichent, et `/fork` le recopie. Un tour qui
 enchaîne les appels d'outils paie tout le contexte à chaque appel : au-delà de
 `turn_checkpoint_usd`, Pénélope demande si elle continue (▶️ Continuer, ⏹ Arrêter), et
 le plafond de 24 appels au modèle compte les reprises après approbation.
@@ -387,6 +404,13 @@ penelope config set sandbox.default_profile full
 
 Les approbations restent en place : c'est la carte `shell_exec` (« Toujours » compris) qui
 décide.
+
+Une suite de tests (`cargo test`, `go test`, `npm|pnpm|yarn test`, Jest, Vitest, `pytest`,
+`make test`) ne renvoie au modèle que le résumé et les sections d'échec (nom, assertion,
+pile courte) ; une autre commande en échec à longue sortie, sa tête, sa queue et ses
+lignes d'erreur. La sortie complète part en artefact, relisible par pages avec
+`artifact_read`. `output: "full"` dans l'appel rend la sortie brute : échouer sur 3 tests
+sur 1 200 ne fait plus entrer 1 197 lignes de succès dans le contexte.
 
 ### Messages vocaux
 
@@ -825,6 +849,15 @@ donnent la taille du contexte au dernier appel et le seuil de compaction. La con
 (chemins, tickets, SHA, URLs) sont conservés tels quels, et un résumé existant est mis à
 jour plutôt que refait. Rien n'est effacé : les échanges résumés restent consultables par
 `history_grep` et `history_expand`.
+
+**Notes de travail.** Pour une tâche longue, le modèle tient les notes de la session avec
+l'outil `session_notes` : objectif, plan, décisions, fichiers touchés, points ouverts,
+prochaine étape. Elles vivent dans `vault/notes/<titre>-<id>.md` (propriété `type:
+session`), sont injectées, bornées à environ 1 500 tokens, en fin de prompt à chaque tour,
+et survivent donc aux compactions ; le harnais rappelle de les mettre à jour après une
+délégation ou une compaction. `/fork` en fait une copie propre, `/new <titre>` propose les
+notes d'une session au titre proche, et le rêve relève les décisions nouvelles en
+candidats sans réécrire le fichier.
 
 `/compact` sur Telegram force un résumé tout de suite. En ligne de commande :
 

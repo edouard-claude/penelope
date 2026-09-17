@@ -45,6 +45,7 @@ pub fn excluded(rel: &str) -> Option<&'static str> {
         "inbox" => Some("en attente d'ingestion"),
         "accueil" | "audits" => Some("compte rendu, repris dans le profil ou le digest"),
         "archive" => Some("archivé"),
+        crate::session_notes::DIR => Some("notes de travail, injectées dans leur session"),
         penelope_memory::wiki::ATTACHMENTS_DIR => {
             Some("original immuable, indexé par sa fiche source")
         }

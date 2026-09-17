@@ -1328,6 +1328,23 @@ impl TelegramGateway {
 
             "status" => {
                 let st = d.status().await?;
+                let origin = Origin::Telegram {
+                    chat_id,
+                    topic_id,
+                    message_id: None,
+                };
+                let session_line = match d.chat_session_for(&origin).await {
+                    Ok(sid) => {
+                        let cfg = s.config.config();
+                        let (_, limit, _) = s.budget.limits(&cfg.budget, Some(&sid), None).await?;
+                        format!(
+                            "\n- Session : {:.2} $ sur {:.2} $",
+                            s.budget.spent_session(&sid).await?,
+                            limit
+                        )
+                    }
+                    Err(_) => String::new(),
+                };
                 let up = st.uptime_s;
                 let mut sc = Screen::new(format!(
                     "**Pénélope** · version {} · en route depuis {} h {:02} min\n\
@@ -1347,6 +1364,7 @@ impl TelegramGateway {
                     st.rss_mb,
                     st.telegram
                 ));
+                sc.text.push_str(&session_line);
                 let mut row = Vec::new();
                 if st.approvals_pending > 0 {
                     row.push(
@@ -2110,6 +2128,14 @@ impl TelegramGateway {
                         .map_err(anyhow::Error::msg)?;
                 }
                 Done::toast(format!("🧹 {} entrée(s) oubliée(s)", uids.len()))
+            }
+            "notes.adopt" => {
+                let copied = crate::session_notes::copy(s, &str_of("from"), &str_of("to")).await?;
+                Done::quiet(if copied {
+                    "📓 Notes reprises"
+                } else {
+                    "Aucune note à reprendre"
+                })
             }
             "noop" => Done::quiet("Annulé"),
             other => Done::quiet(format!("Opération inconnue : {other}")),

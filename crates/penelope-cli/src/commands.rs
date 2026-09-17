@@ -217,6 +217,12 @@ pub enum SessionCmd {
         #[arg(long)]
         session: Option<String>,
     },
+    /// Plafond de dépense propre à une session : sans montant l'état, `off` pour revenir au
+    /// plafond de la configuration.
+    Budget {
+        session: String,
+        usd: Option<String>,
+    },
     /// Modèle de la session : sans argument l'état, sinon un alias à épingler ou `auto`.
     Model {
         alias: Option<String>,
@@ -707,6 +713,17 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Session(SessionCmd::Title { session, title }) => (
             m::SESSION_TITLE,
             json!({"session": session, "title": title.join(" ")}),
+        ),
+        Command::Session(SessionCmd::Budget { session, usd }) => (
+            m::SESSION_BUDGET,
+            json!({
+                "session": session,
+                "usd": match usd.as_deref() {
+                    None => Value::Null,
+                    Some("off") => json!(0),
+                    Some(x) => json!(x),
+                },
+            }),
         ),
         Command::Session(SessionCmd::Model { alias, session }) => (
             m::SESSION_MODEL,
@@ -1643,6 +1660,7 @@ mod tests {
             (vec!["audit-verify"], m::AUDIT_VERIFY),
             (vec!["backup"], m::BACKUP),
             (vec!["session", "list"], m::SESSION_LIST),
+            (vec!["session", "budget", "s_01", "20"], m::SESSION_BUDGET),
             (vec!["session", "model", "main"], m::SESSION_MODEL),
             (vec!["session", "compact"], m::SESSION_COMPACT),
             (vec!["session", "fork"], m::SESSION_FORK),

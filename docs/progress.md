@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1219 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1227 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -489,6 +489,25 @@ Telegram cliquable et boucles d'outils qui répondent.
   et propose deux ou trois suites en boutons, qui arrivent dans la session comme des
   messages ; repli lisible si cet appel échoue ; le rapport technique reste dans les
   événements et les journaux.
+
+### 0.11.0
+
+Sessions de travail longues (#32).
+
+- **Budget par session** : `penelope session budget` et `/budget session <montant>`,
+  plafond stocké avec la session, affiché par `/budget` et `/status`, recopié par `/fork`.
+  Au plafond, carte « continuer ? » (+5 $, +20 $, Arrêter) : la session du propriétaire
+  reprend son tour suspendu, le jour reste un arrêt ferme relevable pour la journée, un
+  run reprend après relèvement. Une demande en attente n'est plus dupliquée à chaque
+  tentative.
+- **Sorties de tests filtrées** : `shell_exec` reconnaît cargo, go, npm/pnpm/yarn, Jest,
+  Vitest, pytest et `make test`, ne rend que résumé et échecs, et garde la sortie complète
+  en artefact ; même règle (tête, queue, lignes d'erreur) pour toute commande en échec à
+  longue sortie ; `output: "full"` pour la sortie brute.
+- **Notes de travail** : outil `session_notes`, fichier `notes/<titre>-<id>.md` à sections
+  fixes, bloc borné en fin de prompt à chaque tour, rappel après délégation ou
+  compaction, copie au fork, proposition à `/new` sur un sujet proche, décisions relevées
+  par le rêve.
 
 ### Routine de livraison
 

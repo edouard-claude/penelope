@@ -43,6 +43,7 @@ pub fn note_type(rel: &str) -> Option<&'static str> {
         ("audits", _) => "audit",
         ("entites", _) => "entite",
         ("pratiques", _) => "pratique",
+        ("notes", _) => "session",
         _ => return None,
     })
 }

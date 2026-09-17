@@ -51,6 +51,13 @@ pub async fn deep_link(d: &Daemon, payload: &str) -> Option<String> {
     (!bot.is_empty() && bot != "?").then(|| penelope_telegram::render::deep_link(&bot, payload))
 }
 
+/// Montant en dollars à la française : `5,02`, `20`.
+fn fmt_usd(x: f64) -> String {
+    let s = format!("{x:.2}");
+    let s = s.trim_end_matches('0').trim_end_matches('.').to_string();
+    s.replace('.', ",")
+}
+
 fn form_key(chat_id: i64) -> String {
     format!("tg.form.{chat_id}")
 }
@@ -530,7 +537,48 @@ impl TelegramGateway {
                     .bind_telegram(sess.id.as_str(), chat_id, topic_id)
                     .await?;
                 if let Some(title) = title {
-                    format!("🆕 Nouvelle session « {title} » (`{}`).", sess.id)
+                    // Notes d'une session sur le même sujet : proposées (issue #32).
+                    let similar = crate::session_notes::similar(s, sess.id.as_str(), &title).await;
+                    let text = format!("🆕 Nouvelle session « {title} » (`{}`).", sess.id);
+                    if similar.is_empty() {
+                        text
+                    } else {
+                        let mut rows = Vec::new();
+                        for (from, label) in &similar {
+                            let t = s
+                                .actions
+                                .create(
+                                    k::SCREEN_DO,
+                                    "notes.adopt",
+                                    json!({"params": {"from": from, "to": sess.id.to_string()}, "back": null}),
+                                    24 * 3_600_000,
+                                    true,
+                                )
+                                .await?;
+                            rows.push(vec![ButtonSpec::callback(
+                                &format!(
+                                    "📓 Reprendre les notes de « {} »",
+                                    label.chars().take(40).collect::<String>()
+                                ),
+                                &t.token,
+                                "",
+                            )]);
+                        }
+                        return self
+                            .send_screen(
+                                chat_id,
+                                topic_id,
+                                reply_to,
+                                screens::Screen {
+                                    text: format!(
+                                        "{text}\nDes notes de travail existent sur un sujet proche."
+                                    ),
+                                    rows,
+                                },
+                                None,
+                            )
+                            .await;
+                    }
                 } else {
                     // Sans titre : le message sera complété quand le titre automatique arrive.
                     let text = format!(
@@ -1002,7 +1050,63 @@ impl TelegramGateway {
             }
             "budget" => {
                 let session = d.chat_session_for(&origin).await?;
-                self.budget_text(&session, args).await?
+                match args.split_whitespace().collect::<Vec<_>>().as_slice() {
+                    // Plafond propre à la session de travail (issue #32).
+                    ["session", amount] => {
+                        let usd = match *amount {
+                            "off" | "défaut" | "defaut" | "0" => None,
+                            raw => match raw.trim_end_matches('$').replace(',', ".").parse::<f64>()
+                            {
+                                Ok(v) if v > 0.0 => Some(v),
+                                _ => {
+                                    return self
+                                        .send_screen(
+                                            chat_id,
+                                            topic_id,
+                                            reply_to,
+                                            Self::typed_screen(
+                                                &format!("Montant illisible : `{raw}`. Un nombre de dollars, ou `off`."),
+                                                "✏️ Écrire le plafond",
+                                                "/budget session ",
+                                            ),
+                                            None,
+                                        )
+                                        .await;
+                                }
+                            },
+                        };
+                        s.sessions.set_budget(&session, usd).await?;
+                        let cfg = s.config.config();
+                        let (daily, limit, _) =
+                            s.budget.limits(&cfg.budget, Some(&session), None).await?;
+                        format!(
+                            "💰 Plafond de cette session : {} $ ({}). Le jour reste plafonné à {} $.",
+                            fmt_usd(limit),
+                            if usd.is_some() {
+                                "propre à la session"
+                            } else {
+                                "celui de la configuration"
+                            },
+                            fmt_usd(daily)
+                        )
+                    }
+                    ["session"] => {
+                        return self
+                            .send_screen(
+                                chat_id,
+                                topic_id,
+                                reply_to,
+                                Self::typed_screen(
+                                    "💰 **Plafond de la session** : `/budget session` suivi d'un montant en dollars (`off` pour revenir à la configuration).",
+                                    "✏️ Écrire le plafond",
+                                    "/budget session ",
+                                ),
+                                None,
+                            )
+                            .await;
+                    }
+                    _ => self.budget_text(&session, args).await?,
+                }
             }
             "usage" => {
                 let session = d.chat_session_for(&origin).await?;
@@ -2056,12 +2160,21 @@ impl TelegramGateway {
 
         let today = s.budget.spent_today().await?;
         let in_session = s.budget.spent_session(session).await?;
+        let (daily_limit, session_limit, _) =
+            s.budget.limits(&cfg.budget, Some(session), None).await?;
+        let own = s
+            .sessions
+            .get(session)
+            .await?
+            .and_then(|x| x.budget_usd)
+            .is_some();
         let mut t = format!(
-            "💶 Aujourd'hui : {} sur {} · session : {} sur {}\n",
+            "💶 Aujourd'hui : {} sur {} · session : {} sur {}{}\n",
             usd(today),
-            usd(cfg.budget.daily_usd),
+            usd(daily_limit),
             usd(in_session),
-            usd(cfg.budget.session_usd)
+            usd(session_limit),
+            if own { " (plafond propre)" } else { "" }
         );
         let view = crate::compaction::context_view(s, session, None).await?;
         if let Some(prompt) = view["last_prompt_tokens"].as_i64() {
@@ -2098,7 +2211,10 @@ impl TelegramGateway {
                 ));
             }
         }
-        t.push_str("\nDétail : `/budget sessions`, `/budget requêtes`, `/budget modèles`");
+        t.push_str(
+            "\nDétail : `/budget sessions`, `/budget requêtes`, `/budget modèles` · plafond de \
+             cette session : `/budget session 20`",
+        );
         Ok(t)
     }
 
@@ -2153,6 +2269,13 @@ impl TelegramGateway {
         {
             return self
                 .session_menu_clicked(callback_id, action, chat_id, topic_id, message_id)
+                .await;
+        }
+        if let ClickOutcome::Accepted(action) = &outcome
+            && (action.action == k::BUDGET_RAISE || action.action == k::BUDGET_STOP)
+        {
+            return self
+                .budget_clicked(callback_id, action, chat_id, message_id)
                 .await;
         }
         if let ClickOutcome::Accepted(action) = &outcome
@@ -2428,6 +2551,11 @@ impl TelegramGateway {
         topic_id: Option<i64>,
         a: &ApprovalRequest,
     ) -> anyhow::Result<()> {
+        if a.kind == penelope_hitl::ApprovalKind::BudgetExceeded
+            && a.payload["budget"].as_bool() == Some(true)
+        {
+            return self.send_budget_card(chat_id, topic_id, a).await;
+        }
         if a.kind == penelope_hitl::ApprovalKind::MemoryProposal {
             return self.send_memory_card(chat_id, topic_id, a).await;
         }
@@ -2544,6 +2672,183 @@ impl TelegramGateway {
             }),
         )
         .await
+    }
+
+    /// Carte « plafond atteint : continuer ? » (issue #32) : +5 $, +20 $ ou arrêter.
+    async fn send_budget_card(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        a: &ApprovalRequest,
+    ) -> anyhow::Result<()> {
+        let s = &self.daemon.services;
+        let scope = a.payload["scope"].as_str().unwrap_or("session");
+        let spent = a.payload["spent"].as_f64().unwrap_or(0.0);
+        let limit = a.payload["limit"].as_f64().unwrap_or(0.0);
+        let place = match scope {
+            "jour" => "aujourd'hui".to_string(),
+            "run" => format!(
+                "dans le run `{}`",
+                a.payload["run_id"]
+                    .as_str()
+                    .or(a.run_id.as_deref())
+                    .unwrap_or("?")
+            ),
+            _ => match a.session_id.as_deref() {
+                Some(sid) => match s.sessions.get(sid).await? {
+                    Some(sess) => format!("dans « {} »", crate::titles::label(&sess)),
+                    None => "dans cette session".into(),
+                },
+                None => "dans cette session".into(),
+            },
+        };
+        let hint = match scope {
+            "jour" => "\nLe relèvement vaut pour aujourd'hui seulement.",
+            "run" => "\nLe run reprend après relèvement.",
+            _ => "\nLe tour reprend là où il s'est arrêté.",
+        };
+        let ttl = 24 * 3_600_000;
+        let mut row = Vec::new();
+        for (label, action, amount) in [
+            ("+5 $", k::BUDGET_RAISE, 5.0),
+            ("+20 $", k::BUDGET_RAISE, 20.0),
+            ("⏹ Arrêter", k::BUDGET_STOP, 0.0),
+        ] {
+            let t = s
+                .actions
+                .create(action, a.id.as_str(), json!({"amount": amount}), ttl, true)
+                .await?;
+            row.push(ButtonSpec::callback(label, &t.token, ""));
+        }
+        let text = format!(
+            "💸 {} $ dépensés sur {} $ {place} : continuer ?{hint}",
+            fmt_usd(spent),
+            fmt_usd(limit)
+        );
+        self.outbox_push(
+            chat_id,
+            topic_id,
+            "sendMessage",
+            json!({
+                "chat_id": chat_id,
+                "text": markdown_to_html(&text),
+                "parse_mode": "HTML",
+                "reply_markup": inline_keyboard(&[row]),
+                "message_thread_id": topic_id,
+            }),
+        )
+        .await
+    }
+
+    /// Relève le plafond visé par une carte de budget et reprend le tour ou le run, ou
+    /// arrête.
+    async fn budget_clicked(
+        &self,
+        callback_id: &str,
+        action: &Action,
+        chat_id: i64,
+        message_id: i64,
+    ) -> anyhow::Result<()> {
+        let d = &self.daemon;
+        let s = &d.services;
+        let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+        let Some(a) = s.approvals.get(&action.target).await? else {
+            let _ = self
+                .bot
+                .answer_callback(callback_id, Some("Demande introuvable."), false)
+                .await;
+            return Ok(());
+        };
+        let topic_id = self.topic_of(&a).await;
+        let scope = a.payload["scope"].as_str().unwrap_or("session").to_string();
+        let spent = a.payload["spent"].as_f64().unwrap_or(0.0);
+        let limit = a.payload["limit"].as_f64().unwrap_or(0.0);
+        if action.action == k::BUDGET_STOP {
+            let _ = self
+                .bot
+                .answer_callback(callback_id, Some("Arrêté"), false)
+                .await;
+            decide_approval(s, a.id.as_str(), &Decision::deny("telegram", None)).await?;
+            return self
+                .reply(
+                    chat_id,
+                    topic_id,
+                    None,
+                    &format!("⏹ Arrêté : le plafond reste à {} $.", fmt_usd(limit)),
+                )
+                .await;
+        }
+        let amount = action.args["amount"].as_f64().unwrap_or(5.0);
+        let raised = spent.max(limit) + amount;
+        match scope.as_str() {
+            "jour" => s.budget.raise_daily(raised).await?,
+            "run" => {
+                if let Some(run) = a.payload["run_id"].as_str().or(a.run_id.as_deref()) {
+                    s.budget.raise_run(run, raised).await?;
+                }
+            }
+            _ => {
+                if let Some(sid) = a.session_id.as_deref() {
+                    s.sessions.set_budget(sid, Some(raised)).await?;
+                }
+            }
+        }
+        let won = decide_approval(
+            s,
+            a.id.as_str(),
+            &Decision {
+                choice: format!("+{} $", fmt_usd(amount)),
+                ..Decision::approve_once("telegram")
+            },
+        )
+        .await?;
+        let _ = self
+            .bot
+            .answer_callback(
+                callback_id,
+                Some(&format!("Plafond : {} $", fmt_usd(raised))),
+                false,
+            )
+            .await;
+        if !won {
+            return self
+                .reply(chat_id, topic_id, None, "ℹ️ Déjà tranché.")
+                .await;
+        }
+        let note = match scope.as_str() {
+            "jour" => format!(
+                "💰 Plafond du jour relevé à {} $ pour aujourd'hui. Renvoie ta demande pour \
+                 reprendre.",
+                fmt_usd(raised)
+            ),
+            "run" => {
+                if let Some(run) = a.payload["run_id"].as_str().or(a.run_id.as_deref())
+                    && let Err(e) =
+                        crate::workflow::control(d, run, &penelope_workflow::Control::Resume).await
+                {
+                    tracing::debug!(error = %e, "reprise du run après relèvement");
+                }
+                format!(
+                    "💰 Plafond du run relevé à {} $ : il reprend.",
+                    fmt_usd(raised)
+                )
+            }
+            _ => {
+                if let Some(sid) = a.session_id.as_deref() {
+                    let origin = Origin::Telegram {
+                        chat_id,
+                        topic_id,
+                        message_id: None,
+                    };
+                    d.enqueue_resume(sid, a.id.as_str(), &origin).await?;
+                }
+                format!(
+                    "💰 Plafond de la session relevé à {} $ : je reprends.",
+                    fmt_usd(raised)
+                )
+            }
+        };
+        self.reply(chat_id, topic_id, None, &note).await
     }
 
     /// Menu `/sessions` : un bouton par session (bascule), un « ⋯ » par session (forker,
@@ -4471,13 +4776,31 @@ impl ChannelDelivery for TelegramGateway {
                     spent_usd,
                     limit_usd,
                 } => {
-                    self.reply(
-                        chat_id,
-                        topic_id,
-                        message_id,
-                        &crate::agent::budget_exceeded_text(scope, *spent_usd, *limit_usd),
-                    )
-                    .await?;
+                    // Carte de relèvement si la demande est ouverte (issue #32), sinon le texte.
+                    let pending = self
+                        .daemon
+                        .services
+                        .approvals
+                        .pending(50)
+                        .await?
+                        .into_iter()
+                        .find(|a| {
+                            a.kind == penelope_hitl::ApprovalKind::BudgetExceeded
+                                && a.session_id.as_deref() == Some(session_id)
+                                && a.payload["budget"].as_bool() == Some(true)
+                        });
+                    match pending {
+                        Some(a) => self.send_budget_card(chat_id, topic_id, &a).await?,
+                        None => {
+                            self.reply(
+                                chat_id,
+                                topic_id,
+                                message_id,
+                                &crate::agent::budget_exceeded_text(scope, *spent_usd, *limit_usd),
+                            )
+                            .await?
+                        }
+                    }
                 }
                 TurnOutcome::Failed { error } => {
                     self.send_failure(chat_id, topic_id, message_id, session_id, error)
@@ -6306,6 +6629,111 @@ mod tests {
                 .iter()
                 .any(|a| a["text"].as_str().is_some_and(|x| x.contains("redmine"))),
             "{answers:?}"
+        );
+    }
+
+    /// Issue #32 : une session au plafond relevé à 20 $ n'est pas suspendue à 5 $ ; à 20 $,
+    /// la carte s'affiche, et « +5 $ » reprend le tour suspendu.
+    #[tokio::test]
+    async fn a_session_budget_is_raised_and_the_suspended_turn_resumes() {
+        let (_d, g, t, p) = gateway().await;
+        let d = g.daemon.clone();
+        d.publish_config("test", |c| {
+            c.models.routing.classifier = false;
+            // Le jour a de la marge : c'est le plafond de la session qui est testé.
+            c.budget.daily_usd = 100.0;
+            Ok(vec![
+                "models.routing.classifier".into(),
+                "budget.daily_usd".into(),
+            ])
+        })
+        .unwrap();
+        let chat = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: None,
+        };
+        let sid = d.chat_session_for(&chat).await.unwrap();
+        let spend = |usd: f64| {
+            let (d, sid) = (d.clone(), sid.clone());
+            async move {
+                d.services
+                    .budget
+                    .record(penelope_kernel::budget::UsageRecord {
+                        session_id: Some(sid),
+                        model: "mock/model".into(),
+                        provider: "mock".into(),
+                        role: Some("chat".into()),
+                        cost_usd: usd,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+            }
+        };
+        g.process_update(&updates::text_message(
+            700,
+            OWNER,
+            OWNER,
+            "/budget session 20",
+        ))
+        .await
+        .unwrap();
+        spend(6.0).await;
+        p.reply("première réponse");
+        g.process_update(&updates::text_message(701, OWNER, OWNER, "on avance"))
+            .await
+            .unwrap();
+        drain(&g).await;
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
+        assert!(sent.contains("Plafond de cette session : 20 $"), "{sent}");
+        assert!(
+            sent.contains("première réponse"),
+            "pas suspendue à 5 $ : {sent}"
+        );
+
+        spend(15.0).await;
+        let calls = p.call_count();
+        g.process_update(&updates::text_message(702, OWNER, OWNER, "et la suite ?"))
+            .await
+            .unwrap();
+        drain(&g).await;
+        assert_eq!(p.call_count(), calls, "suspendu avant l'appel au modèle");
+        let card = t
+            .calls_to(tg::SEND_MESSAGE)
+            .await
+            .into_iter()
+            .rev()
+            .find(|c| {
+                c["text"]
+                    .as_str()
+                    .is_some_and(|x| x.contains("dépensés sur 20 $"))
+            })
+            .expect("carte de budget");
+        assert!(card["text"].as_str().unwrap().contains("continuer ?"));
+        let raise = inline_buttons(&card)
+            .into_iter()
+            .find(|(l, _)| l == "+5 $")
+            .expect("bouton +5 $")
+            .1;
+
+        p.reply("je reprends la suite");
+        g.process_update(&updates::callback(703, OWNER, &raise, 704))
+            .await
+            .unwrap();
+        drain(&g).await;
+        let session = d.services.sessions.get(&sid).await.unwrap().unwrap();
+        assert_eq!(
+            session.budget_usd,
+            Some(26.0),
+            "21 $ dépensés + 5 $ : {:?} / {:?}",
+            t.calls_to(tg::ANSWER_CALLBACK_QUERY).await,
+            texts(&t.calls_to(tg::SEND_MESSAGE).await)
+        );
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
+        assert!(
+            sent.contains("je reprends la suite"),
+            "tour repris : {sent}"
         );
     }
 

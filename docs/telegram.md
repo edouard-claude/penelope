@@ -228,6 +228,7 @@ Workflows (4)
 | `/upgrade` | version installée et disponible, ⬆️ installer, ⏪ revenir (confirmés) |
 | `/quiet`, `/secret`, `/p` | plages proposées ; 🗑 par secret (confirmé) ; serveurs puis prompts MCP, arguments par formulaire |
 | `/retiens`, `/recall`, `/note`, `/title` | ✏️ bouton qui copie la commande à compléter |
+| `/budget session <montant>` | plafond propre à la session ; au plafond, carte « continuer ? » avec +5 $, +20 $, Arrêter |
 
 `/secret` liste ou supprime, jamais ne saisit : un secret ne transite pas par une
 conversation.

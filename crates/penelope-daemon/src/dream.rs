@@ -81,6 +81,28 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
 
     let outcome = async {
         // ---------------------------------------------------------------- Light
+        // Décisions des notes de travail : candidats, jamais réécrits (issue #32).
+        if !dry_run {
+            let now = s.clock.now_rfc3339();
+            let harvested: Vec<Candidate> = crate::session_notes::harvest(s)
+                .await?
+                .into_iter()
+                .map(|(session, text)| {
+                    Candidate::new(
+                        penelope_memory::CandidateType::Decision,
+                        &text,
+                        Origin::Agent,
+                        "notes",
+                        &now,
+                    )
+                    .in_session(&session)
+                    .with_importance(6)
+                })
+                .collect();
+            if !harvested.is_empty() {
+                s.candidates.record(harvested, 5).await?;
+            }
+        }
         let candidates = s.candidates.pending(None).await?;
         report.candidates_seen = candidates.len() as u32;
         let groups = group(candidates, cfg.memory.dedup_jaccard);

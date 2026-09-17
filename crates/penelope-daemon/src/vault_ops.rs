@@ -52,6 +52,17 @@ pub fn write_filter(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Comme [`write_filter`], pour un bloc de plusieurs lignes (notes de travail).
+pub fn write_filter_block(text: &str) -> Result<(), String> {
+    if let Some(kind) = penelope_observe::redact::secret_kind(text) {
+        return Err(format!("refusé : le texte contient un {kind}"));
+    }
+    if penelope_observe::is_suspicious(text) {
+        return Err("refusé : le texte ressemble à une consigne injectée".into());
+    }
+    Ok(())
+}
+
 /// Écrit une entrée dans le vault puis l'indexe. Renvoie son uid.
 pub async fn remember(
     s: &Services,

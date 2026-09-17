@@ -287,6 +287,89 @@ impl BudgetLedger {
             .await?)
     }
 
+    fn today(&self) -> String {
+        self.clock.now_rfc3339().chars().take(10).collect()
+    }
+
+    async fn kv_limit(&self, key: String) -> Result<Option<f64>> {
+        Ok(self
+            .store
+            .read(move |c| {
+                let mut st = c.prepare("SELECT v FROM kv WHERE k = ?1")?;
+                let mut rows = st.query([key])?;
+                Ok(match rows.next()? {
+                    Some(r) => r.get::<_, String>(0)?.parse::<f64>().ok(),
+                    None => None,
+                })
+            })
+            .await?)
+    }
+
+    async fn set_kv_limit(&self, key: String, usd: f64) -> Result<()> {
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "INSERT INTO kv(k, v) VALUES(?1, ?2) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                    params![key, usd.to_string()],
+                )?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Plafonds effectifs : relèvement du jour, plafond propre à la session, relèvement du
+    /// run, sinon la configuration (issue #32).
+    pub async fn limits(
+        &self,
+        cfg: &crate::config::Budget,
+        session_id: Option<&str>,
+        run_id: Option<&str>,
+    ) -> Result<(f64, f64, f64)> {
+        let daily = self
+            .kv_limit(format!("budget.daily.{}", self.today()))
+            .await?
+            .unwrap_or(cfg.daily_usd);
+        let session = match session_id {
+            Some(sid) => {
+                let sid = sid.to_string();
+                self.store
+                    .read(move |c| {
+                        Ok(c.query_row(
+                            "SELECT budget_usd FROM sessions WHERE id = ?1",
+                            [sid],
+                            |r| r.get::<_, Option<f64>>(0),
+                        )
+                        .ok()
+                        .flatten())
+                    })
+                    .await?
+                    .filter(|u| *u > 0.0)
+                    .unwrap_or(cfg.session_usd)
+            }
+            None => cfg.session_usd,
+        };
+        let run = match run_id {
+            Some(r) => self
+                .kv_limit(format!("budget.run.{r}"))
+                .await?
+                .unwrap_or(cfg.run_usd),
+            None => cfg.run_usd,
+        };
+        Ok((daily, session, run))
+    }
+
+    /// Relève le plafond du jour, pour aujourd'hui seulement.
+    pub async fn raise_daily(&self, usd: f64) -> Result<()> {
+        self.set_kv_limit(format!("budget.daily.{}", self.today()), usd)
+            .await
+    }
+
+    /// Relève le plafond d'un run.
+    pub async fn raise_run(&self, run_id: &str, usd: f64) -> Result<()> {
+        self.set_kv_limit(format!("budget.run.{run_id}"), usd).await
+    }
+
     /// Statuts de tous les périmètres pertinents pour un tour.
     pub async fn status(
         &self,
@@ -294,17 +377,18 @@ impl BudgetLedger {
         session_id: Option<&str>,
         run_id: Option<&str>,
     ) -> Result<Vec<BudgetStatus>> {
+        let (daily, session, run) = self.limits(cfg, session_id, run_id).await?;
         let mut out = vec![BudgetStatus::compute(
             BudgetScope::Daily,
             self.spent_today().await?,
-            cfg.daily_usd,
+            daily,
             cfg.alert_ratio,
         )];
         if let Some(s) = session_id {
             out.push(BudgetStatus::compute(
                 BudgetScope::Session,
                 self.spent_session(s).await?,
-                cfg.session_usd,
+                session,
                 cfg.alert_ratio,
             ));
         }
@@ -312,7 +396,7 @@ impl BudgetLedger {
             out.push(BudgetStatus::compute(
                 BudgetScope::Run,
                 self.spent_run(r).await?,
-                cfg.run_usd,
+                run,
                 cfg.alert_ratio,
             ));
         }

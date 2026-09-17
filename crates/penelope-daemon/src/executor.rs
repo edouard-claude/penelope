@@ -330,6 +330,43 @@ impl NativeToolExecutor {
                 )
                 .await?;
                 let mut o = ToolOutcome::ok(out.to_json());
+                // Suites de tests et longues sorties en échec : résumé et échecs pour le
+                // modèle, sortie complète en artefact (issue #32).
+                let full = args.get("output").and_then(|v| v.as_str()) == Some("full");
+                if !full
+                    && let Some(body) = penelope_tools::test_output::digest(
+                        &command,
+                        out.exit_code,
+                        &out.stdout,
+                        &out.stderr,
+                    )
+                {
+                    let log = format!(
+                        "$ {command}\nCode de sortie {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                        out.exit_code, out.stdout, out.stderr
+                    );
+                    let art = s
+                        .context
+                        .history
+                        .put_artifact(
+                            Some(&self.env.session_id),
+                            self.env.run_id.as_deref(),
+                            "log",
+                            Some("shell.log"),
+                            &log,
+                        )
+                        .await?;
+                    o.text = format!(
+                        "{body}\n\nSortie complète : artifact_read(\"{}\"){}",
+                        art.id,
+                        if out.truncated {
+                            " (déjà tronquée au plafond de sortie)"
+                        } else {
+                            ""
+                        }
+                    );
+                    return Ok(o.eager());
+                }
                 if out.exit_code != 0 {
                     o.text = format!(
                         "Code de sortie {}.\n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -952,6 +989,9 @@ impl NativeToolExecutor {
                 .await
                 .map_err(ToolError::Other)?
             }
+            "session_notes" => crate::session_notes::tool(s, &self.env.session_id, args)
+                .await
+                .map_err(ToolError::Invalid)?,
             "session_metadata" => {
                 let op = penelope_kernel::session::MetadataOp::parse(&str_arg(args, "op")?)
                     .ok_or_else(|| ToolError::Invalid("op inconnue".into()))?;
@@ -1474,6 +1514,63 @@ async fn with_session_labels(s: &Services, hits: &mut Value) {
 mod tests {
     use super::*;
     use penelope_kernel::clock::TestClock;
+
+    /// Issue #32 : `cargo test` avec 2 échecs sur 500 rend au modèle les 2 échecs et le
+    /// résumé, moins de 2 000 tokens, et la sortie complète part en artefact.
+    #[tokio::test]
+    async fn a_test_run_is_digested_and_its_full_output_kept_as_an_artifact() {
+        let (dir, e) = executor().await;
+        let ws = dir.path().join("ws");
+        let mut log = String::from("running 500 tests\n");
+        for i in 0..498 {
+            log.push_str(&format!("test tests::case_{i} ... ok\n"));
+        }
+        log.push_str(
+            "test tests::parses_dates ... FAILED\ntest tests::rounds_totals ... FAILED\n\nfailures:\n\n\
+             ---- tests::parses_dates stdout ----\nthread 'tests::parses_dates' panicked at src/dates.rs:42:9:\n\
+             assertion failed\n\n---- tests::rounds_totals stdout ----\n\
+             thread 'tests::rounds_totals' panicked at src/totals.rs:7:5:\nattendu 12.50, obtenu 12.49\n\n\
+             test result: FAILED. 498 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out\n",
+        );
+        std::fs::write(ws.join("sortie.txt"), &log).unwrap();
+        // La commande nomme `cargo test` : c'est elle qui décide du filtre.
+        let command = "cat sortie.txt; : cargo test; exit 101";
+        let out = e
+            .execute("shell_exec", &json!({"command": command}))
+            .await
+            .unwrap();
+        assert!(out.text.contains("498 passed; 2 failed"), "{}", out.text);
+        assert!(out.text.contains("src/dates.rs:42:9") && out.text.contains("12.49"));
+        assert!(
+            !out.text.contains("case_17 ... ok"),
+            "pas de lignes de succès"
+        );
+        assert!(out.text.chars().count() / 4 < 2_000);
+        let id = out
+            .text
+            .split("artifact_read(\"")
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .expect("référence d'artefact")
+            .to_string();
+        let page = e
+            .execute("artifact_read", &json!({"id": id}))
+            .await
+            .unwrap();
+        assert!(
+            page.text.contains("case_17 ... ok"),
+            "sortie complète en artefact"
+        );
+
+        let full = e
+            .execute("shell_exec", &json!({"command": command, "output": "full"}))
+            .await
+            .unwrap();
+        assert!(
+            full.text.contains("case_17 ... ok"),
+            "sortie brute sur demande"
+        );
+    }
 
     async fn executor() -> (tempfile::TempDir, NativeToolExecutor) {
         let dir = tempfile::tempdir().unwrap();

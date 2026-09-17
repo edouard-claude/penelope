@@ -250,6 +250,13 @@ pub async fn build_tiers_in(
         &cfg.owner.timezone,
         run_state,
     ));
+    // Notes de travail de la session, à jour à chaque tour : elles survivent aux
+    // compactions (issue #32).
+    if let Some((session_id, _)) = episode
+        && let Some(notes) = crate::session_notes::prompt_block(s, session_id).await
+    {
+        b = b.volatile(notes);
+    }
     if !user_text.trim().is_empty() {
         let recall = penelope_memory::Recall::new(
             &s.memory,

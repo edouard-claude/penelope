@@ -159,13 +159,16 @@ pub fn all() -> Vec<ToolSpec> {
         spec(
             "shell_exec",
             RiskClass::Write,
-            "Exécute une commande sous bac à sable, avec délai et sortie tronquée en \
-             artefact au-delà du plafond.",
+            "Exécute une commande sous bac à sable, avec délai. Une suite de tests (cargo, go, \
+             npm, pytest, make test) ou une commande en échec à longue sortie rend un résumé et \
+             les échecs seulement, la sortie complète en artefact (`artifact_read`) ; \
+             `output: \"full\"` rend la sortie brute.",
             obj(
                 json!({
                     "command": {"type":"string"},
                     "cwd": {"type":"string"},
-                    "timeout_ms": {"type":"integer","minimum":1000,"maximum":3600000}
+                    "timeout_ms": {"type":"integer","minimum":1000,"maximum":3600000},
+                    "output": {"type":"string","enum":["digest","full"]}
                 }),
                 &["command"],
             ),
@@ -689,6 +692,28 @@ pub fn all() -> Vec<ToolSpec> {
             false,
             false,
         ),
+        // Écrit seulement les notes de la session courante, dans le vault : sans effet hors de
+        // Pénélope, donc sans approbation à chaque étape (issue #32).
+        spec(
+            "session_notes",
+            RiskClass::Read,
+            "Notes de travail de la session, qui survivent aux compactions et au fork : \
+             objectif, plan, décisions, fichiers touchés, points ouverts, prochaine étape. \
+             `read` les relit, `update_section` remplace une section (ou la complète avec \
+             `mode: append`). À tenir à jour aux étapes clés d'une tâche longue.",
+            obj(
+                json!({
+                    "action": {"type":"string","enum":["read","update_section"]},
+                    "section": {"type":"string","enum":["Objectif","Plan","Décisions","Fichiers touchés","Points ouverts","Prochaine étape"]},
+                    "content": {"type":"string"},
+                    "mode": {"type":"string","enum":["replace","append"]}
+                }),
+                &["action"],
+            ),
+            true,
+            false,
+            false,
+        ),
         spec(
             "ask_user",
             RiskClass::Read,
@@ -840,6 +865,7 @@ mod tests {
             "mem_get",
             "mem_neighbors",
             "mem_note",
+            "session_notes",
             "mem_remember",
             "mem_forget",
             "intent_create",
