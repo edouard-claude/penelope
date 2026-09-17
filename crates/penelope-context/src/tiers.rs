@@ -15,6 +15,9 @@ use penelope_kernel::canonical::sha256_hex;
 use penelope_llm::types::{ChatMessage, Content, Role};
 use serde::{Deserialize, Serialize};
 
+/// Borne de l'index des workflows en T1 (environ 500 tokens).
+pub const WORKFLOWS_INDEX_CHARS: usize = 2_000;
+
 /// Règles du harnais, toujours présentes en T0.
 pub const HARNESS_RULES: &str = "\
 Tu es Pénélope, agent personnel autonome. Règles du harnais, non négociables :
@@ -34,6 +37,16 @@ j'ai indexé » et signale le contenu hors index que l'outil nomme, jamais « ce
 - Ton propre état n'est pas secret : pour toute question sur toi-même ou sur ta machine \
 (modèle qui répond, configuration, coûts, version, batterie, disque), appelle `self_status` \
 au lieu de supposer ; pour changer un réglage à la demande du propriétaire, `config_set`.
+- Le dépôt edouard-claude/penelope est la source de vérité sur toi. Pour toute question sur \
+tes capacités, ton fonctionnement ou tes limites, et avant d'écrire un workflow, une skill ou \
+un réglage : consulte `self_status` puis `self_docs`, et cite la section utilisée. N'invente \
+jamais une syntaxe, un paramètre ou une fonctionnalité ; si la documentation ne couvre pas le \
+cas, dis-le.
+- Quand une demande correspond à un workflow disponible, tu n'imposes pas de formulaire : tu \
+complètes toi-même ses paramètres requis avec tes outils (tracker, forge, mémoire), tu ne \
+demandes en conversation que ce qui manque, puis tu proposes le lancement avec \
+`workflow_start`, `params` complets et un `brief` (ticket, constats, décisions, contraintes, \
+approche retenue). Le propriétaire valide d'un bouton ; s'il refuse, la discussion continue.
 - Tu réponds en français, sauf demande contraire.";
 
 /// Un tier assemblé.
@@ -145,6 +158,7 @@ pub struct TiersBuilder {
     skills_index: Vec<(String, String)>,
     meta_tools: Vec<(String, String)>,
     mcp_servers: Vec<String>,
+    workflows: Vec<(String, String)>,
     eager_schemas: Vec<String>,
     agents_md: String,
     profile: String,
@@ -178,6 +192,11 @@ impl TiersBuilder {
     /// Une ligne par serveur MCP connecté (jamais les schémas, §8.9).
     pub fn mcp_server(mut self, line: impl Into<String>) -> Self {
         self.mcp_servers.push(line.into());
+        self
+    }
+    /// Un workflow disponible : identifiant et ligne (rôle, paramètres requis).
+    pub fn workflow(mut self, id: impl Into<String>, line: impl Into<String>) -> Self {
+        self.workflows.push((id.into(), line.into()));
         self
     }
     /// Schémas `eager` d'un petit serveur critique (comptent dans le budget T1).
@@ -229,6 +248,8 @@ impl TiersBuilder {
         self.meta_tools.dedup();
         self.mcp_servers.sort();
         self.mcp_servers.dedup();
+        self.workflows.sort();
+        self.workflows.dedup();
 
         let mut index = String::new();
         if !self.meta_tools.is_empty() {
@@ -243,6 +264,25 @@ impl TiersBuilder {
                 index.push_str(&format!("- `{n}` : {d}\n"));
             }
             index.push_str("Charge une skill avec `skill_load(nom)` avant de l'appliquer.\n");
+        }
+        if !self.workflows.is_empty() {
+            index.push_str("\n## Workflows disponibles\n");
+            let mut used = 0;
+            for (id, line) in &self.workflows {
+                let entry = format!("- `{id}` : {line}\n");
+                used += entry.chars().count();
+                if used > WORKFLOWS_INDEX_CHARS {
+                    index.push_str(
+                        "- … (`self_status` section `workflows` pour la liste complète)\n",
+                    );
+                    break;
+                }
+                index.push_str(&entry);
+            }
+            index.push_str(
+                "Quand une demande correspond à un workflow : `workflow_describe` pour le détail, \
+                 `workflow_start` (avec `params` et `brief`) pour proposer le lancement.\n",
+            );
         }
         if !self.mcp_servers.is_empty() {
             index.push_str("\n## Serveurs MCP connectés\n");

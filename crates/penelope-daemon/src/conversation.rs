@@ -236,6 +236,23 @@ pub async fn build_tiers_in(
     for sk in s.skills.all() {
         b = b.skill(sk.name.clone(), sk.description.clone());
     }
+    // Workflows : le modèle sait qu'ils existent et ce qu'ils attendent (issue #34).
+    for e in s.workflows.all() {
+        let m = &e.workflow.metadata;
+        let required: Vec<&str> = m
+            .parameters
+            .iter()
+            .filter(|p| p.required)
+            .map(|p| p.id.as_str())
+            .collect();
+        let role = m.description.lines().next().unwrap_or_default().trim();
+        let line = if required.is_empty() {
+            role.to_string()
+        } else {
+            format!("{role} (paramètres requis : {})", required.join(", "))
+        };
+        b = b.workflow(m.id.clone(), line);
+    }
 
     // T2 : instantanés mémoire, figés par épisode quand il y en a un.
     let [profile, core, project] = match episode {

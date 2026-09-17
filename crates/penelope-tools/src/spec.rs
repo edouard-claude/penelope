@@ -615,9 +615,16 @@ pub fn all() -> Vec<ToolSpec> {
         spec(
             "workflow_start",
             RiskClass::Write,
-            "Démarre un workflow avec ses paramètres.",
+            "Propose le lancement d'un workflow : le propriétaire valide d'un bouton. \
+             `params` : les paramètres requis, complétés par toi (outils, conversation). \
+             `brief` : résumé de la discussion (ticket, constats, décisions, contraintes, \
+             approche retenue), transmis à la première étape du run.",
             obj(
-                json!({"id": {"type":"string"}, "params": {"type":"object"}}),
+                json!({
+                    "id": {"type":"string"},
+                    "params": {"type":"object"},
+                    "brief": {"type":"string", "maxLength": 4000}
+                }),
                 &["id"],
             ),
             false,
@@ -651,7 +658,10 @@ pub fn all() -> Vec<ToolSpec> {
         spec(
             "workflow_author",
             RiskClass::Write,
-            "Rédige un workflow. Validation, aperçu, puis approbation avant écriture.",
+            "Rédige un workflow (format décrit dans `docs/workflows.md` : lis-le avec \
+             `self_docs` avant d'écrire, n'invente aucun type d'étape ni champ). Validation, \
+             aperçu, puis approbation avant écriture ; un brouillon invalide est refusé avec \
+             les erreurs et la section de documentation concernée.",
             obj(json!({"draft": {"type":"object"}}), &["draft"]),
             false,
             false,
@@ -782,11 +792,35 @@ pub fn all() -> Vec<ToolSpec> {
                 json!({
                     "section": {
                         "type": "string",
-                        "enum": ["all", "model", "config", "costs", "machine"],
-                        "description": "Partie voulue ; `all` par défaut."
+                        "enum": ["all", "model", "config", "costs", "machine", "inventory", "workflows", "skills", "tools", "mcp", "commands", "schedules", "install", "limits"],
+                        "description": "Partie voulue ; `all` par défaut. `workflows` : identifiants, rôles et paramètres requis ; `tools` : outils natifs et classe de risque ; `limits` : limites connues de la version ; `inventory` : tout l'inventaire."
                     }
                 }),
                 &[],
+            ),
+            true,
+            false,
+            false,
+        ),
+        spec(
+            "self_docs",
+            RiskClass::Read,
+            "Documentation de ta propre version, embarquée dans le binaire : le dépôt \
+             edouard-claude/penelope est la source de vérité sur toi. `list` (fichiers et \
+             sections), `search` (mots), `read` (fichier, section, par pages), `limits` \
+             (limites connues). Chaque résultat porte le lien GitHub de la section à la \
+             version exacte : cite-le. À consulter avant d'expliquer une capacité ou \
+             d'écrire un workflow, une skill ou un réglage.",
+            obj(
+                json!({
+                    "action": {"type":"string","enum":["list","search","read","limits"]},
+                    "query": {"type":"string"},
+                    "file": {"type":"string","description":"Chemin dans le dépôt, par exemple `docs/workflows.md`."},
+                    "section": {"type":"string"},
+                    "cursor": {"type":"integer","minimum":0},
+                    "limit": {"type":"integer","minimum":1,"maximum":20}
+                }),
+                &["action"],
             ),
             true,
             false,
@@ -893,6 +927,7 @@ mod tests {
             "ask_user",
             "image_generate",
             "self_status",
+            "self_docs",
             "config_set",
         ] {
             assert!(names.contains(&expected), "outil manquant : {expected}");

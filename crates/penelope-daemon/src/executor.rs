@@ -102,11 +102,12 @@ pub trait McpGateway: Send + Sync {
 /// Capacités qui dépendent du moteur de workflows et des sous-agents.
 #[async_trait::async_trait]
 pub trait Orchestrator: Send + Sync {
+    /// `brief` : résumé de la conversation qui décide du lancement (issue #35).
     async fn start_workflow(
         &self,
         id: &str,
         params: Value,
-        session_id: &str,
+        brief: Option<&str>,
         origin: &Origin,
     ) -> Result<Value, String>;
     async fn spawn_sub_agent(
@@ -467,6 +468,7 @@ impl NativeToolExecutor {
                 .await
                 .map_err(|e| ToolError::Io(e.to_string()))?
             }
+            "self_docs" => crate::selfdocs::tool(args).map_err(ToolError::Invalid)?,
             "config_set" => {
                 let path = str_arg(args, "path")?;
                 if let Some(why) = crate::selfknow::forbidden_path(&path) {
@@ -924,7 +926,7 @@ impl NativeToolExecutor {
                 o.start_workflow(
                     &str_arg(args, "id")?,
                     args.get("params").cloned().unwrap_or(json!({})),
-                    &self.env.session_id,
+                    args.get("brief").and_then(|v| v.as_str()),
                     &self.env.origin,
                 )
                 .await
@@ -955,15 +957,20 @@ impl NativeToolExecutor {
                     Value::String(t) => t.clone(),
                     other => other.to_string(),
                 };
+                // Un brouillon refusé renvoie à la section de la documentation (issue #34).
+                let with_doc = |e: String| {
+                    let (heading, link) = crate::selfdocs::workflow_doc_for(&e);
+                    ToolError::Invalid(format!(
+                        "{e}\nDocumentation : « {heading} », {link} (lire avec `self_docs` \
+                         action `read`, file `docs/workflows.md`, section « {heading} »)."
+                    ))
+                };
                 let w = penelope_workflow::Workflow::from_json(&raw)
-                    .map_err(|e| ToolError::Invalid(format!("JSON invalide : {e}")))?;
+                    .map_err(|e| with_doc(format!("JSON invalide : {e}")))?;
                 let known =
                     crate::runtime::workflow_known_with(&cfg, &s.mcp_tools, &s.workflows).await;
                 let dir = s.platform.dirs.workflows();
-                let path = s
-                    .workflows
-                    .write(&dir, &w, &known)
-                    .map_err(ToolError::Invalid)?;
+                let path = s.workflows.write(&dir, &w, &known).map_err(with_doc)?;
                 s.workflows
                     .load_dir(&dir, penelope_workflow::registry::Scope::User, &known);
                 json!({"written": path, "id": w.metadata.id})
@@ -1570,6 +1577,40 @@ mod tests {
             full.text.contains("case_17 ... ok"),
             "sortie brute sur demande"
         );
+    }
+
+    /// Issue #34 : un workflow à l'étape de type inconnu est refusé avec l'erreur et le lien
+    /// vers « Les neuf types d'étapes » de la version compilée.
+    #[tokio::test]
+    async fn an_invalid_workflow_draft_points_to_its_documentation() {
+        let (_dir, e) = executor().await;
+        let draft = json!({
+            "metadata": {"id": "essai", "name": "Essai"},
+            "entryStep": "a",
+            "steps": [{"id": "a", "name": "A", "type": "teleportation"}]
+        });
+        let err = e
+            .execute("workflow_author", &json!({"draft": draft}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("teleportation"), "{err}");
+        assert!(err.contains("« Les neuf types d'étapes »"), "{err}");
+        assert!(
+            err.contains(&format!(
+                "https://github.com/edouard-claude/penelope/blob/v{}/docs/workflows.md#les-neuf-types-détapes",
+                crate::VERSION
+            )),
+            "{err}"
+        );
+        let docs = e
+            .execute(
+                "self_docs",
+                &json!({"action": "search", "query": "sous-groupe"}),
+            )
+            .await
+            .unwrap();
+        assert!(docs.text.contains("docs/workflows.md"), "{}", docs.text);
     }
 
     async fn executor() -> (tempfile::TempDir, NativeToolExecutor) {

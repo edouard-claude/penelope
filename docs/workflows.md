@@ -72,7 +72,11 @@ tournait continue de tourner, même si on vient d'en écrire une version cassée
 | `config` | non | Configuration libre, lue par le workflow lui-même |
 
 Un `{{paramètre}}` employé dans un `prompt`, une `command`, un `cwd` ou des `args` doit
-être déclaré dans `parameters` : le validateur vérifie chaque variable.
+être déclaré dans `parameters` : le validateur vérifie chaque variable. Sont toujours
+disponibles : `{{workdir}}`, `{{run.id}}`, `{{now}}`, `{{os}}`, `{{arch}}`, `{{reason}}`
+(saisie ou erreur de l'étape précédente), `{{criteriaList}}`, `{{criteriaCount}}`,
+`{{pendingCount}}`, `{{modifiedFiles}}`, `{{stepOutput.…}}`, `{{steps.<étape>.…}}` et
+`{{brief}}`, le résumé de la conversation qui a lancé le run (vide sinon).
 
 ## Réglages
 
@@ -289,13 +293,22 @@ Ils sont validés au chargement comme n'importe quel fichier utilisateur : un wo
 livré qui deviendrait invalide ferait échouer les tests plutôt que de se charger à moitié.
 Un workflow utilisateur de même identifiant remplace celui livré.
 
-`ticket-to-deploy` enchaîne : lecture du ticket (`mcp__redmine__get_issue`), dépôt
-résolu par un sous-agent (question si besoin), clone dans l'espace du run sur la branche
-`penelope/<ticket>`, analyse et plan (agent), proposition au propriétaire, implémentation
+`ticket-to-deploy` enchaîne : lecture du ticket par un sous-agent dans son tracker,
+dépôt et forge résolus par un sous-agent (question si besoin, puis nouvelle résolution),
+clone dans l'espace du run sur la branche `penelope/<ticket>`, analyse et plan (agent,
+qui reçoit le ticket et `{{brief}}`), proposition au propriétaire, implémentation
 jusqu'aux critères remplis, vérification parallèle (tests, lint, relecture, vérificateur),
-push puis PR (`mcp__github__create_pull_request`), porte de déploiement, déploiement,
-commentaire de clôture sur le ticket. Tests et lint prennent la cible `make test` /
-`make lint` du dépôt, sinon `cargo`, `npm` ou `go`.
+push, demande de fusion, porte de déploiement, déploiement, commentaire de clôture sur le
+ticket. Tests et lint prennent la cible `make test` / `make lint` du dépôt, sinon
+`cargo`, `npm` ou `go`.
+
+Tracker et forge ne sont pas figés : les étapes qui les touchent (`fetch_ticket`,
+`create_pr`, `update_ticket`, `report`) n'ont que `tool_search`, `tool_describe` et
+`tool_call`, et trouvent à l'exécution l'outil du serveur MCP connecté (Redmine ou
+ClickUp pour le ticket, pull request GitHub ou merge request GitLab pour la forge). Le
+paramètre facultatif `tracker` nomme le serveur quand l'adresse du ticket ne suffit pas ;
+`repo` donne le dépôt s'il est connu. Les écritures passent par les approbations comme
+tout outil MCP.
 
 `deploy-generic` exige `.penelope/deploy.toml` dans le dépôt et lance `make deploy`,
 `make smoke`, puis `make rollback` en cas d'échec, avec `ENV=<environnement>`
@@ -327,6 +340,14 @@ Le daemon pilote les runs en tâche de fond et sert toutes les méthodes `wf.*` 
 (`penelope schedule add`, `/schedules`) qui lance un workflow sur un cron, un intervalle,
 un fichier surveillé ou un sondage MCP. Une carte de progression suit le run sur
 Telegram ; les questions d'une étape `user` arrivent avec leurs boutons.
+
+En conversation, Pénélope lance elle-même un workflow quand la demande y correspond : elle
+complète les paramètres requis avec ses outils, ne demande que ce qui manque, puis appelle
+`workflow_start` avec `params` et `brief`. Le propriétaire valide d'un bouton (« Lancer »
+ou « Pas encore »). Le brief est enregistré avec le run, placé avant la consigne de la
+première étape `agent` ou `sub_agent` visitée (sauf si elle emploie déjà `{{brief}}`) et
+affiché sur la carte de progression ; le run parle dans la conversation d'origine.
+`/run <id>` sans paramètres passe par ce même chemin, le formulaire restant à un bouton.
 
 ## Limites actuelles
 

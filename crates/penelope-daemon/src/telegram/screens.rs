@@ -1903,7 +1903,8 @@ impl TelegramGateway {
                         format!("▶️ Run `{}` lancé (« {title} »).", run.id),
                     )
                 } else {
-                    self.start_workflow_form(chat_id, &id, &title).await?;
+                    self.start_workflow_form(chat_id, topic_id, &id, &title)
+                        .await?;
                     Done::quiet(format!("Paramètres de « {title} »"))
                 }
             }
@@ -2254,6 +2255,7 @@ impl TelegramGateway {
     pub(super) async fn start_workflow_form(
         &self,
         chat_id: i64,
+        topic_id: Option<i64>,
         workflow: &str,
         title: &str,
     ) -> anyhow::Result<()> {
@@ -2266,7 +2268,9 @@ impl TelegramGateway {
         let schema = parameters_schema(&entry.metadata.parameters);
         let state = penelope_telegram::forms::FormState::new(workflow, schema)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        let pending = json!({"workflow": workflow, "choice": title, "state": state});
+        // Le sujet d'origine suit le formulaire : le run y parlera (issue #35).
+        let pending =
+            json!({"workflow": workflow, "choice": title, "state": state, "topic": topic_id});
         self.daemon
             .kv_set(&form_key(chat_id), &pending.to_string())
             .await?;

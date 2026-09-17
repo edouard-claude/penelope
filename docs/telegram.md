@@ -212,7 +212,7 @@ Workflows (4)
 | Commande | Écran |
 |---|---|
 | `/help` | familles, puis un bouton par commande |
-| `/wf`, `/run` | ▶️ lance (les paramètres déclarés sont demandés un par un), ℹ️ étapes et paramètres |
+| `/wf`, `/run` | ▶️ lance (les paramètres déclarés sont demandés un par un), ℹ️ étapes et paramètres ; `/run <workflow>` sans paramètres passe par la conversation, formulaire à un bouton |
 | `/runs`, `/resume` | état et étape de chaque run, ⏸ ▶️ ⏹ (confirmé), 🔎 détail ; `/resume` ne montre que les runs en pause ou bloqués |
 | `/schedules` | ⚡ déclencher, ⏸/▶️, 🗑 (confirmé) |
 | `/mcp` | par serveur : détail, 🔄 redémarrer, 🧪 tester ; le détail ajoute 📜 journal, ⏻ activer ou désactiver, 🔐 autoriser |
@@ -282,6 +282,22 @@ les sources du vault.
 
 Une adresse de retour OAuth collée (`code=` et `state=`, avec ou sans `http://`) termine
 l'autorisation en attente et ne part jamais vers le modèle.
+
+Un workflow proposé en conversation (`workflow_start`) arrive en carte dédiée : nom et
+rôle du workflow, paramètres complétés par Pénélope, brief de la discussion, et deux
+boutons seulement, « ▶️ Lancer » et « ⏸ Pas encore » (pas de « Toujours » : chaque
+lancement se valide). « Pas encore » rend la main à la conversation avec la raison du
+refus. Le run parle ensuite dans le même chat et le même sujet, formulaire compris.
+
+```
+▶️ Lancer « Ticket → correctif → déploiement » ? (ticket-to-deploy)
+Paramètres
+- ticket_id : 7647
+- ticket_url : https://…/issues/7647
+Brief
+Export CSV vide depuis la 2.3 ; piste : filtre de dates.
+[ ▶️ Lancer ] [ ⏸ Pas encore ]
+```
 
 Une question de workflow qui attend un formulaire (`input: "form:<id>"`) s'ouvre au
 clic sur le choix : un champ par écran, boutons pour une énumération ou un booléen, un

@@ -30,7 +30,120 @@ pub struct TurnModel {
     pub model_id: String,
 }
 
-/// Rapport d'état. `section` : `all`, `model`, `config`, `costs` ou `machine`.
+/// Workflows disponibles : identifiant, rôle, paramètres requis et facultatifs, portée.
+pub fn workflows_inventory(s: &Services) -> Value {
+    let mut all = s.workflows.all();
+    all.sort_by(|a, b| a.workflow.metadata.id.cmp(&b.workflow.metadata.id));
+    json!(
+        all.iter()
+            .map(|e| {
+                let m = &e.workflow.metadata;
+                let params = |required: bool| {
+                    m.parameters
+                        .iter()
+                        .filter(|p| p.required == required)
+                        .map(|p| json!({"id": p.id, "label": p.label, "type": p.kind}))
+                        .collect::<Vec<_>>()
+                };
+                json!({
+                    "id": m.id,
+                    "name": m.name,
+                    "role": m.description,
+                    "required": params(true),
+                    "optional": params(false),
+                    "scope": e.scope.as_str(),
+                    "steps": e.workflow.steps.len(),
+                    "runs_here": e.workflow.runs_on(s.platform.os_name()),
+                })
+            })
+            .collect::<Vec<_>>()
+    )
+}
+
+/// Parties de l'inventaire de soi (issue #34).
+pub const INVENTORY: [&str; 8] = [
+    "workflows",
+    "skills",
+    "tools",
+    "mcp",
+    "commands",
+    "schedules",
+    "install",
+    "limits",
+];
+
+async fn inventory_section(
+    s: &Services,
+    admin: Option<&dyn Admin>,
+    section: &str,
+) -> anyhow::Result<Option<Value>> {
+    Ok(Some(match section {
+        "workflows" => workflows_inventory(s),
+        "skills" => json!(
+            s.skills
+                .all()
+                .iter()
+                .map(|k| json!({"name": k.name, "description": k.description, "scope": k.scope.as_str()}))
+                .collect::<Vec<_>>()
+        ),
+        "tools" => json!(
+            penelope_tools::all_tools()
+                .iter()
+                .map(|t| json!({
+                    "name": t.name,
+                    "role": t.description,
+                    "risk": t.risk.as_str(),
+                    "workflow_only": t.workflow_only,
+                }))
+                .collect::<Vec<_>>()
+        ),
+        "mcp" => match admin {
+            Some(a) => a.mcp_servers().await,
+            None => Value::Null,
+        },
+        "commands" => json!(
+            penelope_telegram::commands::all()
+                .iter()
+                .map(|c| json!({
+                    "command": format!("/{}", c.name),
+                    "category": c.category,
+                    "description": c.description,
+                    "example": c.example,
+                }))
+                .collect::<Vec<_>>()
+        ),
+        "schedules" => json!({
+            "schedules": s.schedules.list().await?.iter().filter(|x| x.state != "deleted").map(|x| json!({
+                "id": x.id, "kind": x.kind.as_str(), "spec": x.spec, "state": x.state,
+                "target": x.target, "next_run": x.next_run,
+            })).collect::<Vec<_>>(),
+            "intents": s.intents.all().await?.iter().filter(|i| i.etat == penelope_memory::intents::IntentState::Armee).map(|i| json!({
+                "id": i.id, "text": i.texte, "triggers": i.declencheurs, "expires": i.expire_at,
+            })).collect::<Vec<_>>(),
+        }),
+        "install" => {
+            let exe = crate::upgrade::running_binary().ok();
+            json!({
+                "version": crate::VERSION,
+                "mode": match &exe {
+                    Some(b) if crate::upgrade::is_source_build(b) => "sources",
+                    Some(_) => "releases",
+                    None => "inconnu",
+                },
+                "binary": exe,
+                "service_launches": penelope_platform::service::launchd_plist_path()
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+                    .and_then(|raw| penelope_platform::service::launchd_program(&raw)),
+                "docs": crate::selfdocs::url("README.md", None),
+            })
+        }
+        "limits" => crate::selfdocs::known_limits(),
+        _ => return Ok(None),
+    }))
+}
+
+/// Rapport d'état. `section` : `all`, `model`, `config`, `costs`, `machine`, une partie de
+/// l'inventaire ([`INVENTORY`]), ou `inventory` pour tout l'inventaire.
 pub async fn status(
     s: &Services,
     session_id: &str,
@@ -41,6 +154,17 @@ pub async fn status(
     let cfg = s.config.config();
     let all = section == "all" || section.is_empty();
     let mut out = Map::new();
+
+    if section == "inventory" || INVENTORY.contains(&section) {
+        for part in INVENTORY {
+            if (section == "inventory" || section == part)
+                && let Some(v) = inventory_section(s, admin, part).await?
+            {
+                out.insert(part.into(), v);
+            }
+        }
+        return Ok(Value::Object(out));
+    }
 
     if all {
         let dirs = &s.platform.dirs;
@@ -198,6 +322,17 @@ pub async fn status(
                     "skills": s.skills.all().len(),
                 }),
             );
+            // Inventaire en résumé : le détail par `section` (issue #34).
+            out.insert(
+                "inventory".into(),
+                json!({
+                    "workflows": s.workflows.all().iter().map(|e| e.workflow.metadata.id.clone()).collect::<Vec<_>>(),
+                    "skills": s.skills.all().len(),
+                    "native_tools": penelope_tools::all_tools().len(),
+                    "telegram_commands": penelope_telegram::commands::all().len(),
+                    "detail": "self_status section=workflows|skills|tools|mcp|commands|schedules|install|limits, ou inventory ; documentation : self_docs",
+                }),
+            );
         }
     }
 
@@ -333,6 +468,73 @@ mod tests {
             .await
             .unwrap();
         (dir, Arc::new(s))
+    }
+
+    /// Issue #34 : l'inventaire liste `ticket-to-deploy` avec ses paramètres requis et
+    /// facultatifs, et le prompt d'un tour indexe les workflows sans bouger d'un octet.
+    #[tokio::test]
+    async fn the_inventory_and_the_prompt_know_the_workflows() {
+        let (_d, s) = services().await;
+        let v = status(&s, "s1", None, None, "workflows").await.unwrap();
+        let ttd = v["workflows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["id"] == "ticket-to-deploy")
+            .expect("ticket-to-deploy inventorié")
+            .clone();
+        let ids = |key: &str| -> Vec<String> {
+            ttd[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(ids("required"), vec!["ticket_url", "ticket_id"]);
+        assert_eq!(ids("optional"), vec!["repo", "tracker"]);
+        assert!(v.get("model").is_none(), "seule la section demandée");
+
+        let all = status(&s, "s1", None, None, "inventory").await.unwrap();
+        for part in INVENTORY {
+            assert!(all.get(part).is_some(), "{part}");
+        }
+        assert!(
+            all["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["name"] == "self_docs")
+        );
+        assert!(
+            all["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["command"] == "/run")
+        );
+        assert!(!all["limits"].as_array().unwrap().is_empty());
+
+        let first = crate::conversation::build_tiers(&s, "bonjour", &[], None).await;
+        assert!(
+            first.index.contains("## Workflows disponibles"),
+            "{}",
+            first.index
+        );
+        assert!(
+            first
+                .index
+                .contains("`ticket-to-deploy` : Du ticket au déploiement, avec approbations aux points sensibles. (paramètres requis : ticket_url, ticket_id)"),
+            "{}",
+            first.index
+        );
+        assert!(first.identity.contains("self_docs"), "règle du harnais");
+        let second = crate::conversation::build_tiers(&s, "autre message", &[], None).await;
+        assert_eq!(
+            first.prefix_hash(),
+            second.prefix_hash(),
+            "préfixe identique"
+        );
     }
 
     #[tokio::test]

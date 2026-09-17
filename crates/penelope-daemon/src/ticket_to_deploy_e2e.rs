@@ -112,6 +112,7 @@ impl World {
 
         let tracker = server(Arc::new(Mutex::new(vec![
             tool("get_issue", json!({"readOnlyHint": true})),
+            tool("search_issues", json!({"readOnlyHint": true})),
             tool(
                 "update_issue",
                 json!({"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true}),
@@ -121,6 +122,9 @@ impl World {
         fake.serve(
             "redmine",
             Arc::new(move |m, p| match (m, p["name"].as_str()) {
+                ("tools/call", Some("search_issues")) => Ok(json!({
+                    "content": [{"type": "text", "text": "#42 Le service renvoie 500 (Yobbu)\n#43 Export CSV lent (Yobbu)"}]
+                })),
                 ("tools/call", Some("get_issue")) => Ok(json!({
                     "content": [{"type": "text", "text": "#42 Le service renvoie 500"}],
                     "structuredContent": {"id": 42, "subject": "Le service renvoie 500"}
@@ -264,7 +268,20 @@ async fn ca_12_1_ticket_to_deploy_runs_end_to_end_and_survives_restarts() {
     let w = World::new();
     let origin = origin_repo(w._dir.path());
 
-    // Réponses du modèle, dans l'ordre où le workflow les demande.
+    // Réponses du modèle, dans l'ordre où le workflow les demande. Le tracker et la forge
+    // sont trouvés par leurs outils MCP (issue #35).
+    w.p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![call(
+            "t1",
+            "tool_call",
+            json!({"name": "mcp__redmine__get_issue", "args": {"url": "https://redmine.example/issues/42"}}),
+        )],
+    ));
+    w.p.reply(
+        "```json\n{\"tracker\": \"redmine\", \"title\": \"Le service renvoie 500\", \
+         \"description\": \"Erreur 500 sur /health\"}\n```",
+    );
     w.p.reply(&format!(
         "```json\n{{\"forge\": \"github\", \"repo\": \"{}\", \"base_branch\": \"main\"}}\n```",
         origin.display()
@@ -311,6 +328,46 @@ async fn ca_12_1_ticket_to_deploy_runs_end_to_end_and_survives_restarts() {
     w.p.reply("Correctif appliqué.");
     w.p.reply("RAS : critères remplis.");
     w.p.reply("RAS : critères remplis.");
+    // Demande de fusion sur la forge, puis clôture sur le tracker.
+    w.p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![call(
+            "p1",
+            "tool_call",
+            json!({"name": "mcp__github__create_pull_request", "args": {
+                "repo": origin.display().to_string(), "head": "penelope/42", "base": "main",
+                "title": "Correctif du ticket 42", "body": "https://redmine.example/issues/42"
+            }}),
+        )],
+    ));
+    w.p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![
+            call(
+                "p2",
+                "return_value",
+                json!({"result": "completed", "content": "PR #12"}),
+            ),
+            call("p3", "step_done", json!({})),
+        ],
+    ));
+    w.p.reply("PR ouverte.");
+    w.p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![call(
+            "u1",
+            "tool_call",
+            json!({"name": "mcp__redmine__update_issue", "args": {
+                "url": "https://redmine.example/issues/42",
+                "comment": "Correctif déployé par Pénélope.", "status": "resolved"
+            }}),
+        )],
+    ));
+    w.p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![call("u2", "step_done", json!({}))],
+    ));
+    w.p.reply("Ticket clôturé.");
 
     let (d, g) = w.boot().await;
     let chat = Origin::Telegram {
@@ -417,4 +474,165 @@ async fn ca_12_1_ticket_to_deploy_runs_end_to_end_and_survives_restarts() {
         .await
         .unwrap();
     assert_eq!(pushes, 1);
+}
+
+/// Exécute les tours de conversation en file, comme le pool de runners.
+async fn drain(d: &Arc<Daemon>, g: &TelegramGateway) {
+    while let Some(turn) = d.services.turns.claim("test").await.unwrap() {
+        crate::runner::process(d, turn, std::time::Duration::from_secs(30)).await;
+    }
+    g.flush_outbox().await.unwrap();
+}
+
+/// Issue #35 : « on traite des tickets Yobbu » en conversation. Pénélope cherche dans le
+/// tracker, un échange précise le ticket, puis « Lancer » démarre `ticket-to-deploy` avec
+/// `ticket_id` et `ticket_url` complétés par le modèle et le brief de la discussion, que
+/// l'étape d'analyse reçoit.
+#[tokio::test]
+async fn a_conversation_launches_ticket_to_deploy_with_its_brief() {
+    let w = World::new();
+    let origin = origin_repo(w._dir.path());
+    let (d, g) = w.boot().await;
+    d.kv_set("tg.onboard.proposed", "test").await.unwrap();
+
+    // 1. Le propriétaire parle ; Pénélope cherche ses tickets dans le tracker.
+    w.p.reply(r#"{"complexity":"medium"}"#);
+    w.p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![call(
+            "s1",
+            "tool_call",
+            json!({"name": "mcp__redmine__search_issues", "args": {"project": "yobbu", "assigned_to": "me"}}),
+        )],
+    ));
+    w.p.reply("Tes tickets ouverts sur Yobbu : #42 Le service renvoie 500, #43 Export CSV lent.");
+    g.process_update(&updates::text_message(
+        1,
+        OWNER,
+        OWNER,
+        "on traite quelques tickets Yobbu",
+    ))
+    .await
+    .unwrap();
+    drain(&d, &g).await;
+    let sent: Vec<String> =
+        w.t.calls()
+            .await
+            .iter()
+            .filter_map(|(_, b)| b["text"].as_str().map(String::from))
+            .collect();
+    assert!(sent.iter().any(|m| m.contains("#42")), "{sent:?}");
+
+    // 2. Un échange, puis la proposition de lancement.
+    let brief = "Ticket #42 (Yobbu) : le service renvoie 500 sur /health. Constat : la \
+                 sonde lit une variable absente. Décision : corriger sans toucher l'API.";
+    w.p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![call(
+            "w1",
+            "workflow_start",
+            json!({
+                "id": "ticket-to-deploy",
+                "params": {"ticket_id": "42", "ticket_url": "https://redmine.example/issues/42"},
+                "brief": brief
+            }),
+        )],
+    ));
+    g.process_update(&updates::text_message(
+        2,
+        OWNER,
+        OWNER,
+        "le 42, la 500 vient de la sonde, on corrige sans toucher l'API",
+    ))
+    .await
+    .unwrap();
+    drain(&d, &g).await;
+    assert!(
+        d.services.runs.list(None, 5).await.unwrap().is_empty(),
+        "rien ne démarre avant le bouton"
+    );
+
+    // 3. « Lancer ».
+    w.p.reply("C'est lancé, la suite arrive ici.");
+    let mut clicked = BTreeSet::new();
+    let mut update = 10;
+    assert!(click(&g, &w.t, "▶️ Lancer", &mut clicked, &mut update).await);
+    drain(&d, &g).await;
+    let run = d
+        .services
+        .runs
+        .list(None, 5)
+        .await
+        .unwrap()
+        .pop()
+        .expect("run lancé");
+    assert_eq!(run.params["ticket_id"], "42");
+    assert_eq!(
+        run.params["ticket_url"],
+        "https://redmine.example/issues/42"
+    );
+    assert_eq!(crate::workflow::brief_of(&d.services, &run.id).await, brief);
+
+    // 4. Le run avance jusqu'à la proposition de plan : l'analyse a reçu le brief.
+    w.p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![call(
+            "t1",
+            "tool_call",
+            json!({"name": "mcp__redmine__get_issue", "args": {"url": "https://redmine.example/issues/42"}}),
+        )],
+    ));
+    w.p.reply(r#"{"tracker": "redmine", "title": "Le service renvoie 500"}"#);
+    w.p.reply(&format!(
+        "{{\"forge\": \"github\", \"repo\": \"{}\", \"base_branch\": \"main\"}}",
+        origin.display()
+    ));
+    w.p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![
+            call(
+                "a1",
+                "return_value",
+                json!({"result": "completed", "content": "Corriger la sonde"}),
+            ),
+            call("a2", "step_done", json!({})),
+        ],
+    ));
+    w.p.reply("Plan prêt.");
+    for _ in 0..20 {
+        drive_everything(&d).await;
+        g.flush_outbox().await.unwrap();
+        let current = d.services.runs.get(&run.id).await.unwrap().unwrap();
+        if current.current_step.as_deref() == Some("propose") {
+            break;
+        }
+        while click(&g, &w.t, "✅ Autoriser", &mut clicked, &mut update).await {}
+    }
+    let current = d.services.runs.get(&run.id).await.unwrap().unwrap();
+    assert_eq!(
+        current.current_step.as_deref(),
+        Some("propose"),
+        "{current:?}"
+    );
+    let history = d
+        .services
+        .context
+        .history
+        .load(&current.session_id, 0)
+        .await
+        .unwrap();
+    let analysis = history
+        .iter()
+        .map(|h| h.message.text())
+        .find(|t| t.contains("étape `analyze`"))
+        .expect("consigne de l'analyse");
+    assert!(
+        analysis.contains("la sonde lit une variable absente"),
+        "{analysis}"
+    );
+    assert!(analysis.contains("Le service renvoie 500"), "{analysis}");
+    // Le run parle dans la conversation d'origine.
+    let run_origin = crate::workflow::origin_of(&d, &run.id).await;
+    assert_eq!(run_origin.telegram_chat(), Some((OWNER, None)));
+    kill(d, g);
 }

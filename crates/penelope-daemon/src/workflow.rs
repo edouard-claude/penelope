@@ -173,6 +173,46 @@ pub async fn origin_of(d: &Daemon, run_id: &str) -> Origin {
     }
 }
 
+/// Longueur maximale d'un brief, en caractères.
+pub const BRIEF_CHARS: usize = 4_000;
+/// Part du brief affichée sur la carte de progression.
+const BRIEF_CARD_CHARS: usize = 280;
+
+fn brief_key(run_id: &str) -> String {
+    format!("wf.brief.{run_id}")
+}
+
+/// Résumé de la conversation qui a lancé le run (issue #35) ; vide sinon.
+pub async fn brief_of(s: &Services, run_id: &str) -> String {
+    kv_get(s, &brief_key(run_id))
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// Le brief précède la consigne de la première étape `agent` ou `sub_agent` visitée, sauf
+/// si elle l'emploie déjà (`{{brief}}`). Rend la consigne à envoyer.
+async fn with_brief(ctx: &StepCtx<'_>, prompt: String) -> String {
+    let s = ctx.s();
+    let brief = brief_of(s, &ctx.run.id).await;
+    if brief.is_empty() {
+        return prompt;
+    }
+    let key = format!("wf.brief_step.{}", ctx.run.id);
+    let first = match kv_get(s, &key).await.ok().flatten() {
+        Some(step) => step == ctx.step.id,
+        None => {
+            let _ = kv_set(s, &key, &ctx.step.id).await;
+            true
+        }
+    };
+    if !first || ctx.step.prompt.contains("{{brief}}") {
+        return prompt;
+    }
+    format!("Brief de la conversation qui a lancé ce run :\n{brief}\n\n{prompt}")
+}
+
 // ------------------------------------------------------------------ démarrage
 
 /// Démarre un run. `Coalesce` rend le run déjà actif, `Hold` le met en file.
@@ -183,6 +223,19 @@ pub async fn start_run(
     origin: &Origin,
     parent: Option<&str>,
     depth: u32,
+) -> Result<Run, String> {
+    start_run_briefed(d, workflow_id, params, origin, parent, depth, None).await
+}
+
+/// [`start_run`] avec le résumé de la conversation qui décide du lancement (issue #35).
+pub async fn start_run_briefed(
+    d: &Arc<Daemon>,
+    workflow_id: &str,
+    params: Value,
+    origin: &Origin,
+    parent: Option<&str>,
+    depth: u32,
+    brief: Option<&str>,
 ) -> Result<Run, String> {
     let s = &d.services;
     let wf = s
@@ -264,6 +317,10 @@ pub async fn start_run(
         .await
         .map_err(|e| e.to_string())?;
     let _ = kv_set(s, &origin_key(&run.id), &origin.to_value().to_string()).await;
+    if let Some(brief) = brief.map(str::trim).filter(|b| !b.is_empty()) {
+        let brief: String = brief.chars().take(BRIEF_CHARS).collect();
+        let _ = kv_set(s, &brief_key(&run.id), &brief).await;
+    }
     if admission == Admission::Hold {
         s.runs
             .set_state(&run.id, RunState::Paused, Some("en attente d'admission"))
@@ -841,6 +898,7 @@ impl StepCtx<'_> {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string();
+        let brief = brief_of(self.s(), &self.run.id).await;
         let vars = TemplateVars {
             workdir: &workdir,
             reason: &reason,
@@ -853,6 +911,7 @@ impl StepCtx<'_> {
             steps: &self.run.step_outputs,
             metadata: &metadata,
             criteria_key: &self.step.criteria_key,
+            brief: &brief,
         };
         let (out, unknown) = substitute(template, &vars);
         if !unknown.is_empty() {
@@ -977,7 +1036,7 @@ async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
                     }
                 })
                 .await?;
-            let prompt = ctx.render(&step.prompt).await;
+            let prompt = with_brief(ctx, ctx.render(&step.prompt).await).await;
             let text = format!(
                 "[Workflow `{}`, étape `{}` : {}]\n\n{prompt}\n\nRépertoire de travail : `{}`. \
                  Quand l'étape est terminée, appelle `return_value` si un résultat est \
@@ -1171,9 +1230,13 @@ fn sub_agent_system(kind: &str) -> String {
     )
 }
 
-/// Outils d'un sous-agent : la liste de l'étape, sinon les outils natifs en lecture.
+/// Outils d'un sous-agent : la liste de l'étape, sinon les outils natifs en lecture. Une
+/// liste qui nomme `tool_search`, `tool_describe` ou `tool_call` ouvre les serveurs MCP.
 fn sub_agent_tools(step_tools: &[String]) -> (Vec<penelope_llm::ToolDef>, Vec<String>) {
-    let defs = crate::executor::tool_defs(false, false);
+    let with_mcp = step_tools
+        .iter()
+        .any(|t| matches!(t.as_str(), "tool_search" | "tool_describe" | "tool_call"));
+    let defs = crate::executor::tool_defs(false, with_mcp);
     if !step_tools.is_empty() {
         return (defs, step_tools.to_vec());
     }
@@ -1222,7 +1285,11 @@ pub async fn run_sub_agent(
         ToolEnv {
             session_id: session_id.to_string(),
             run_id: run_id.map(String::from),
-            origin: crate::scheduler::owner_origin(d),
+            // Le sous-agent d'un run parle dans la conversation du run (issue #35).
+            origin: match run_id {
+                Some(r) => origin_of(d, r).await,
+                None => crate::scheduler::owner_origin(d),
+            },
             workspaces,
             in_workflow: false,
             turn_model: None,
@@ -1289,8 +1356,7 @@ async fn sub_agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         Ok(m) => m,
         Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
     };
-    let base = ctx.render(&step.prompt).await;
-    let mut prompt = base.clone();
+    let mut prompt = with_brief(ctx, ctx.render(&step.prompt).await).await;
     if let Some(schema) = &step.output_schema {
         prompt.push_str(&format!(
             "\n\nRéponds uniquement par un JSON conforme à ce schéma :\n{}",
@@ -2184,6 +2250,16 @@ async fn progress(d: &Arc<Daemon>, run: &Run, wf: &Workflow, last: Option<(&Step
         "\nItérations : {}/{} · Coût : {:.2} $",
         run.iterations, run.max_iterations, run.spent_usd
     ));
+    let brief = brief_of(&d.services, &run.id).await;
+    if !brief.is_empty() {
+        let short: String = brief.chars().take(BRIEF_CARD_CHARS).collect();
+        let more = if brief.chars().count() > BRIEF_CARD_CHARS {
+            "…"
+        } else {
+            ""
+        };
+        text.push_str(&format!("\nBrief : {}{more}", short.replace('\n', " ")));
+    }
     if let Some((step, result)) = last {
         text.push_str(&format!(
             "\nDernière étape : `{}` → {}",
@@ -2222,10 +2298,10 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
         &self,
         id: &str,
         params: Value,
-        _session_id: &str,
+        brief: Option<&str>,
         origin: &Origin,
     ) -> Result<Value, String> {
-        let run = start_run(&self.daemon, id, params, origin, None, 0).await?;
+        let run = start_run_briefed(&self.daemon, id, params, origin, None, 0, brief).await?;
         Ok(json!({"run_id": run.id, "state": run.state.as_str(), "workflow": id}))
     }
 
@@ -2648,6 +2724,87 @@ mod tests {
         assert!(texts.iter().any(|t| t.starts_with("[relance du workflow]")));
     }
 
+    /// Issue #35 : le brief d'un lancement en conversation précède la consigne de la
+    /// première étape `agent` ou `sub_agent`, pas des suivantes, et paraît sur la carte.
+    #[tokio::test]
+    async fn a_brief_reaches_the_first_agent_step_and_the_progress_card() {
+        let e = env().await;
+        install(
+            &e.d,
+            wf(
+                "brief",
+                "tri",
+                json!([
+                    {"id": "tri", "type": "sub_agent", "prompt": "Trie le ticket.",
+                     "transitions": [{"goto": "analyser"}]},
+                    {"id": "analyser", "type": "agent", "prompt": "Analyse le ticket.",
+                     "transitions": [{"goto": "$done"}]}
+                ]),
+            ),
+        )
+        .await;
+        e.p.reply("Trié.");
+        e.p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "c1".into(),
+                name: "step_done".into(),
+                arguments: json!({}),
+            }],
+        ));
+        e.p.reply("Fait.");
+        let brief = "Ticket #7647 : le cache ne se vide pas. Vérifier Redis d'abord.";
+        let o = WorkflowOrchestrator {
+            daemon: e.d.clone(),
+        };
+        let started = crate::executor::Orchestrator::start_workflow(
+            &o,
+            "brief",
+            json!({}),
+            Some(brief),
+            &owner(),
+        )
+        .await
+        .unwrap();
+        let run_id = started["run_id"].as_str().unwrap().to_string();
+        assert_eq!(brief_of(&e.d.services, &run_id).await, brief);
+        assert_eq!(drive(&e.d, &run_id).await.unwrap(), RunState::Done);
+
+        let requests = e.p.requests();
+        let prompt_of = |i: usize| {
+            requests[i]
+                .messages
+                .iter()
+                .map(|m| m.text())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert!(
+            prompt_of(0).contains(brief),
+            "sous-agent : {}",
+            prompt_of(0)
+        );
+        let run = e.d.services.runs.get(&run_id).await.unwrap().unwrap();
+        let history =
+            e.d.services
+                .context
+                .history
+                .load(&run.session_id, 0)
+                .await
+                .unwrap();
+        assert!(
+            !history[0].message.text().contains(brief),
+            "seule la première étape reçoit le brief"
+        );
+        let cards = e.r.cards.lock().unwrap().clone();
+        assert!(
+            cards
+                .iter()
+                .any(|(_, c)| c.contains("Brief : Ticket #7647")),
+            "{cards:?}"
+        );
+    }
+
     #[tokio::test]
     async fn a_tool_step_waits_for_approval_and_runs_once() {
         let e = env().await;
@@ -2875,7 +3032,7 @@ mod tests {
         .await;
         let o = e.d.hooks.orchestrator().unwrap();
         let v = o
-            .start_workflow("rapide", json!({}), "s", &owner())
+            .start_workflow("rapide", json!({}), None, &owner())
             .await
             .unwrap();
         let run_id = v["run_id"].as_str().unwrap().to_string();

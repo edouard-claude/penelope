@@ -458,6 +458,21 @@ nom, jamais par leur valeur), coûts du jour et de la session, file de travail, 
 la machine : batterie et alimentation, disque, mémoire, charge, démarrage, système. Elle
 l'appelle d'elle-même dès qu'on lui pose une question sur elle ou sur l'ordinateur.
 
+Le même outil donne son inventaire, par section ou en entier (`inventory`) : workflows
+(identifiant, rôle, paramètres requis et facultatifs, s'ils tournent sur cette machine),
+skills, outils natifs et leur classe de risque, serveurs MCP et leurs outils, commandes
+Telegram, planifications, mode d'installation, limites connues. L'index des workflows
+figure aussi dans son prompt, borné à 2 000 caractères.
+
+Sa documentation fait foi : `README.md` et tout `docs/` sont embarqués dans le binaire,
+dans la version qui tourne. L'outil `self_docs` les liste (`list`), y cherche (`search`),
+lit une section par pages (`read`) et rassemble les limites connues (`limits`) ; chaque
+résultat porte le lien GitHub de la section au tag de la version. Avant d'écrire un
+workflow, une skill ou un réglage, ou pour répondre sur ses capacités, elle consulte
+`self_status` puis `self_docs` et cite la section ; elle dit quand la documentation ne
+couvre pas le cas. Un brouillon de workflow refusé par `workflow_author` renvoie à la
+section concernée de [workflows.md](workflows.md).
+
 Elle peut aussi changer un réglage à ta demande avec `config_set`, appliqué à chaud et
 toujours soumis à approbation. Le bac à sable, les providers, Telegram, les outils et les
 politiques exigent une double confirmation à chaque fois : une règle « Toujours » ne les
@@ -784,8 +799,18 @@ penelope wf list
 penelope wf run build-verify --param objectif="corriger le calcul de TVA"
 ```
 
-Sur Telegram : `/wf`, `/run build-verify objectif=…`, `/runs`, `/resume <run>`. Une
-question arrive avec ses boutons ; si l'étape attend une précision, le message suivant
+Le plus simple est d'en parler : « on traite quelques tickets Yobbu ». Pénélope repère
+le workflow adapté dans son index, cherche les données avec ses outils (tickets ouverts
+dans Redmine ou ClickUp, dépôt, forge), ne demande que ce qui manque, puis propose le
+lancement : une carte montre le workflow, les paramètres qu'elle a complétés et le brief
+de la discussion (ticket, constats, décisions, contraintes, approche retenue), avec
+« ▶️ Lancer » et « ⏸ Pas encore ». Le brief est transmis à la première étape `agent` ou
+`sub_agent` du run et paraît sur sa carte de progression ; questions et progression
+arrivent dans la même conversation (même sujet de forum).
+
+Sur Telegram : `/wf`, `/run build-verify objectif=…`, `/runs`, `/resume <run>`. `/run
+<workflow>` sans paramètres ne force plus de formulaire : la demande part en conversation,
+et « 📝 Remplir le formulaire » reste à un bouton. Une question arrive avec ses boutons ; si l'étape attend une précision, le message suivant
 la donne. Un outil soumis à approbation (écriture, push) envoie sa carte comme en
 conversation, et le run reprend après la décision. Un arrêt du daemon reprend chaque run
 à son étape courante sans refaire une commande ou un appel déjà passés.

@@ -423,12 +423,11 @@ async fn fire(
                 .orchestrator()
                 .ok_or_else(|| anyhow::anyhow!("moteur de workflows non démarré"))?;
             let params = template_params(&sched.target["params"], &vars, items.first());
-            let session = sched.target["session_id"].as_str().unwrap_or_default();
             orchestrator
                 .start_workflow(
                     sched.target["workflowId"].as_str().unwrap_or_default(),
                     params,
-                    session,
+                    None,
                     &origin,
                 )
                 .await

@@ -29,6 +29,7 @@ pub mod rpc;
 pub mod runner;
 pub mod runtime;
 pub mod scheduler;
+pub mod selfdocs;
 pub mod selfknow;
 pub mod session_notes;
 pub mod session_ops;

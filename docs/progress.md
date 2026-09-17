@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1231 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1240 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -525,6 +525,33 @@ Mise à jour à distance d'une installation source (#33).
   relancé.
 - `penelope doctor` : mode d'installation et programme lancé par le service ; `make deploy`
   revient aux sources.
+
+### 0.13.0
+
+Connaissance de soi (#34) et workflows lancés par la conversation (#35).
+
+- **Inventaire** : `self_status` sections `workflows` (rôle, paramètres requis et
+  facultatifs, machine), `skills`, `tools` (classe de risque), `mcp`, `commands`,
+  `schedules`, `install`, `limits`, ou `inventory` pour tout ; index des workflows dans le
+  prompt (T1, borné à 2 000 caractères).
+- **Documentation embarquée** : `README.md` et `docs/` compilés dans le binaire ; outil
+  `self_docs` (`list`, `search`, `read` paginé, `limits`), chaque résultat avec le lien
+  GitHub de la section au tag de la version. Règle du harnais : le dépôt fait foi, consulter
+  `self_status` puis `self_docs` avant d'écrire un workflow, une skill ou un réglage, citer
+  la section. Un brouillon refusé par `workflow_author` renvoie à la section concernée.
+- **Conversation vers workflow** : règle du harnais (paramètres complétés avec les outils,
+  questions limitées à ce qui manque, lancement proposé) ; `workflow_start` accepte
+  `brief`, enregistré avec le run, placé avant la consigne de la première étape `agent` ou
+  `sub_agent`, variable `{{brief}}`, affiché sur la carte de progression.
+- **Carte de lancement** Telegram : workflow, paramètres, brief, « ▶️ Lancer » ou
+  « ⏸ Pas encore » (refus motivé transmis au modèle), sans « Toujours ».
+- **`/run <workflow>` sans paramètres** : demande transmise à la conversation, formulaire
+  à un bouton. Formulaire, questions, approbations et sous-agents d'un run restent dans le
+  chat et le sujet d'origine.
+- **`ticket-to-deploy` indépendant du tracker et de la forge** : lecture du ticket, demande
+  de fusion et commentaires passent par `tool_search` / `tool_call` (Redmine ou ClickUp,
+  GitHub ou GitLab) ; paramètre facultatif `tracker` ; la réponse à « quel dépôt ? »
+  relance la résolution au lieu de laisser `checkout` sans dépôt.
 
 ### Routine de livraison
 

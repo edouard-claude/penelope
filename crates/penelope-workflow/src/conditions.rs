@@ -239,6 +239,8 @@ pub struct TemplateVars<'a> {
     pub steps: &'a Value,
     pub metadata: &'a Value,
     pub criteria_key: &'a str,
+    /// Résumé de la conversation qui a lancé le run (issue #35) ; vide sinon.
+    pub brief: &'a str,
 }
 
 impl TemplateVars<'_> {
@@ -250,6 +252,7 @@ impl TemplateVars<'_> {
             "now" => return Some(self.now.to_string()),
             "os" => return Some(self.os.to_string()),
             "arch" => return Some(self.arch.to_string()),
+            "brief" => return Some(self.brief.to_string()),
             "criteriaCount" => return Some(self.criteria(|_| true).len().to_string()),
             "pendingCount" => {
                 return Some(
@@ -352,6 +355,7 @@ pub fn known_static_vars() -> Vec<&'static str> {
         "now",
         "os",
         "arch",
+        "brief",
     ]
 }
 
@@ -543,6 +547,7 @@ mod tests {
             steps,
             metadata: meta,
             criteria_key: "criteria",
+            brief: "ticket 4312, cache à vider",
         }
     }
 
@@ -598,5 +603,10 @@ mod tests {
         assert!(is_dynamic_var("steps.a.b"));
         assert!(!is_dynamic_var("workdir"));
         assert!(known_static_vars().contains(&"criteriaList"));
+        assert!(known_static_vars().contains(&"brief"));
+        let (p, o, m, s) = (json!({}), json!({}), json!({}), json!({}));
+        let (out, unknown) = substitute("Brief : {{brief}}", &vars(&p, &o, &m, &s));
+        assert_eq!(out, "Brief : ticket 4312, cache à vider");
+        assert!(unknown.is_empty());
     }
 }

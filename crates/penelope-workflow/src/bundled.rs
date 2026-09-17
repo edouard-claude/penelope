@@ -235,7 +235,17 @@ elif [ -f package.json ]; then npm run lint --if-present; \
 elif [ -f go.mod ]; then go vet ./...; \
 else echo 'aucun lint reconnu'; fi";
 
-/// `ticket-to-deploy` : scénario de référence du §12.10.
+/// Outils d'une étape qui parle au tracker ou à la forge par leurs serveurs MCP.
+const MCP_TOOLS: [&str; 3] = ["tool_search", "tool_describe", "tool_call"];
+
+/// Lecture du ticket, quel que soit le tracker (issue #35).
+const TRACKER_READ: &str = "Lis le ticket {{ticket_id}} ({{ticket_url}}) dans son tracker. \
+Tracker indiqué : « {{tracker}} » ; sinon déduis-le de l'adresse (Redmine, ClickUp ou autre). \
+Trouve l'outil de lecture avec `tool_search`, appelle-le avec `tool_call`, puis rends le nom \
+du serveur MCP du tracker (`tracker`), le titre et la description du ticket.";
+
+/// `ticket-to-deploy` : scénario de référence du §12.10. Tracker et forge sont ceux du
+/// ticket et du dépôt : leurs outils MCP sont trouvés à l'exécution (issue #35).
 pub fn ticket_to_deploy() -> Workflow {
     Workflow {
         metadata: Metadata {
@@ -262,7 +272,18 @@ pub fn ticket_to_deploy() -> Workflow {
                     label: "Dépôt".into(),
                     kind: "string".into(),
                     required: false,
-                    ..Default::default()
+                    default: Some(json!("")),
+                    description: "Adresse du dépôt, si elle est connue.".into(),
+                },
+                Parameter {
+                    id: "tracker".into(),
+                    label: "Tracker".into(),
+                    kind: "string".into(),
+                    required: false,
+                    default: Some(json!("")),
+                    description: "Serveur MCP du tracker (redmine, clickup…) ; déduit de \
+                                  l'adresse du ticket sinon."
+                        .into(),
                 },
             ],
             ..Default::default()
@@ -270,27 +291,38 @@ pub fn ticket_to_deploy() -> Workflow {
         entry_step: "fetch_ticket".into(),
         settings: Settings {
             max_iterations: 60,
-            tracker: "mcp__redmine__get_issue".into(),
             ..Default::default()
         },
         start_condition: json!({"type":"always"}),
         steps: vec![
-            // 1
+            // 1 : le tracker est celui du ticket (Redmine, ClickUp…), trouvé par ses outils MCP.
             Step {
-                tool: "mcp__redmine__get_issue".into(),
-                args: json!({"url":"{{ticket_url}}"}),
+                sub_agent_type: "tracker".into(),
+                prompt: TRACKER_READ.into(),
+                tools: MCP_TOOLS.iter().map(|t| t.to_string()).collect(),
+                output_schema: Some(json!({
+                    "type":"object",
+                    "properties":{
+                        "tracker":{"type":"string"},
+                        "title":{"type":"string"},
+                        "description":{"type":"string"}
+                    },
+                    "required":["tracker","title"]
+                })),
                 transitions: vec![
                     Transition::on_result("resolve_repo", "success"),
                     Transition::always(BLOCKED),
                 ],
-                ..step("fetch_ticket", "tool", Phase::Plan)
+                ..step("fetch_ticket", "sub_agent", Phase::Plan)
             },
             // 2
             Step {
                 sub_agent_type: "repo_resolver".into(),
-                prompt: "À partir du ticket {{stepOutput.subject}}, détermine le dépôt : \
-                         champ du ticket, table `projects.toml`, sinon échoue pour qu'on \
-                         demande."
+                prompt: "À partir du ticket « {{steps.fetch_ticket.data.title}} » \
+                         ({{ticket_url}}), détermine le dépôt et sa forge (GitHub ou GitLab) : \
+                         dépôt indiqué « {{repo}} », réponse du propriétaire « {{reason}} », \
+                         champ du ticket, table `projects.toml` ; sinon échoue pour qu'on \
+                         demande.\n\nTicket :\n{{steps.fetch_ticket.data.description}}"
                     .into(),
                 output_schema: Some(json!({
                     "type":"object",
@@ -312,7 +344,8 @@ pub fn ticket_to_deploy() -> Workflow {
                 template: "question".into(),
                 choices: vec!["Répondu".into()],
                 input: "text".into(),
-                transitions: vec![Transition::always("checkout")],
+                // La réponse repasse par la résolution : `checkout` lit toujours sa sortie.
+                transitions: vec![Transition::always("resolve_repo")],
                 ..step("ask_repo", "user", Phase::Plan)
             },
             // 3
@@ -331,8 +364,10 @@ pub fn ticket_to_deploy() -> Workflow {
             // 4
             Step {
                 model: "reasoning".into(),
-                prompt: "Lis le code, localise le problème décrit par le ticket \
-                         {{ticket_url}}, écris les critères dans \
+                prompt: "Ticket {{ticket_id}} ({{ticket_url}}) : « {{steps.fetch_ticket.data.title}} »\n\
+                         {{steps.fetch_ticket.data.description}}\n\n\
+                         Brief de la conversation qui a lancé le run :\n{{brief}}\n\n\
+                         Lis le code, localise le problème, écris les critères dans \
                          `session_metadata.criteria`, puis propose un plan de correctif via \
                          `return_value`."
                     .into(),
@@ -414,21 +449,25 @@ pub fn ticket_to_deploy() -> Workflow {
                 ],
                 ..step("open_pr", "tool", Phase::Verification)
             },
-            // 8b : la PR (ou MR) via le MCP de la forge, liée au ticket.
+            // 8b : la PR (GitHub) ou MR (GitLab) via le MCP de la forge, liée au ticket.
             Step {
-                tool: "mcp__github__create_pull_request".into(),
-                args: json!({
-                    "repo": "{{steps.resolve_repo.data.repo}}",
-                    "head": "penelope/{{ticket_id}}",
-                    "base": "{{steps.resolve_repo.data.base_branch}}",
-                    "title": "Correctif du ticket {{ticket_id}}",
-                    "body": "Ticket : {{ticket_url}}\n\n{{steps.analyze.content}}"
-                }),
+                prompt: "Ouvre la demande de fusion de la branche `penelope/{{ticket_id}}` vers \
+                         `{{steps.resolve_repo.data.base_branch}}` du dépôt \
+                         {{steps.resolve_repo.data.repo}}, sur sa forge \
+                         ({{steps.resolve_repo.data.forge}} : pull request GitHub ou merge \
+                         request GitLab). Trouve l'outil de la forge avec `tool_search`, \
+                         appelle-le avec `tool_call`. Titre : « Correctif du ticket \
+                         {{ticket_id}} » ; corps : {{ticket_url}} puis le plan retenu.\n\n\
+                         {{steps.analyze.content}}\n\n\
+                         Rends l'adresse de la demande avec `return_value`, puis `step_done()`."
+                    .into(),
+                tools: MCP_TOOLS.iter().map(|t| t.to_string()).collect(),
                 transitions: vec![
+                    Transition::on_result("approve_deploy", "completed"),
                     Transition::on_result("approve_deploy", "success"),
                     Transition::always(BLOCKED),
                 ],
-                ..step("create_pr", "tool", Phase::Verification)
+                ..step("create_pr", "agent", Phase::Verification)
             },
             // 9
             Step {
@@ -474,24 +513,25 @@ pub fn ticket_to_deploy() -> Workflow {
             },
             // 11
             Step {
-                tool: "mcp__redmine__update_issue".into(),
-                args: json!({
-                    "url":"{{ticket_url}}",
-                    "comment":"Correctif déployé par Pénélope.",
-                    "status":"resolved"
-                }),
+                prompt: "Dans le tracker `{{steps.fetch_ticket.data.tracker}}`, commente le \
+                         ticket {{ticket_id}} ({{ticket_url}}) : « Correctif déployé par \
+                         Pénélope. » et passe-le à l'état résolu (ou son équivalent). Un seul \
+                         appel d'écriture si l'outil le permet : `tool_search` puis \
+                         `tool_call`. Puis `step_done()`."
+                    .into(),
+                tools: MCP_TOOLS.iter().map(|t| t.to_string()).collect(),
                 transitions: vec![Transition::always(DONE)],
-                ..step("update_ticket", "tool", Phase::Done)
+                ..step("update_ticket", "agent", Phase::Done)
             },
             // 12
             Step {
-                tool: "mcp__redmine__update_issue".into(),
-                args: json!({
-                    "url":"{{ticket_url}}",
-                    "comment":"Workflow interrompu : {{reason}}"
-                }),
+                prompt: "Dans le tracker du ticket {{ticket_id}} ({{ticket_url}}), ajoute ce \
+                         commentaire : « Workflow interrompu : {{reason}} ». Outils : \
+                         `tool_search` puis `tool_call`. Puis `step_done()`."
+                    .into(),
+                tools: MCP_TOOLS.iter().map(|t| t.to_string()).collect(),
                 transitions: vec![Transition::always(DONE)],
-                ..step("report", "tool", Phase::Done)
+                ..step("report", "agent", Phase::Done)
             },
         ],
     }
@@ -578,9 +618,17 @@ mod tests {
         }
         // Le push est un outil `external` : il sera soumis à approbation par la politique.
         assert_eq!(w.step("open_pr").unwrap().tool, "git_push");
+        // Tracker et forge ne sont pas figés : aucune étape ne nomme un outil MCP précis.
+        for id in ["fetch_ticket", "create_pr", "update_ticket", "report"] {
+            let s = w.step(id).unwrap();
+            assert!(s.tool.is_empty(), "{id}");
+            assert!(s.tools.iter().any(|t| t == "tool_call"), "{id}");
+        }
+        assert!(w.step("analyze").unwrap().prompt.contains("{{brief}}"));
+        // Après la question, le dépôt est résolu à nouveau : `checkout` a toujours sa sortie.
         assert_eq!(
-            w.step("create_pr").unwrap().tool,
-            "mcp__github__create_pull_request"
+            w.step("ask_repo").unwrap().transitions[0].goto,
+            "resolve_repo"
         );
         // Le déploiement délègue au sous-workflow.
         assert_eq!(w.step("deploy").unwrap().workflow_id, "deploy-generic");
