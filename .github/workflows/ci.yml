@@ -34,6 +34,8 @@ jobs:
           rustup toolchain install
           rustc --version && cargo --version
 
+      # Registre seulement : `target/` dépassait 7 Gio compressé et sa restauration saturait
+      # le disque du runner.
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -41,9 +43,8 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
 
       - name: Format
         run: cargo fmt --all --check
