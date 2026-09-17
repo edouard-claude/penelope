@@ -72,7 +72,7 @@ variables = ["outil", "serveur"]
 | `sampling_request` | Un serveur demande une génération (non annoncé, toujours refusé) | Autoriser, Refuser |
 | `effect_unknown` | Un effet est resté incertain après un crash | Vérifier, Relancer, Ignorer |
 | `skill_proposal` | Une skill est proposée | Accepter, Refuser |
-| `memory_proposal` | Des souvenirs sont proposés à la promotion, ou une règle notée sans citation est à confirmer (« Tu confirmes cette règle ? ») | Accepter, Modifier, Refuser |
+| `memory_proposal` | Des souvenirs sont proposés à la promotion (un changement de défaut de pratique, par exemple) | Accepter, Modifier, Refuser |
 | `learned` | Ce qui a été appris récemment | — |
 | `schedule_preview` | Un déclencheur planifié est proposé | Créer, Annuler |
 | `workflow_preview` | Un workflow est proposé | Enregistrer, Lancer une fois, Rejeter |

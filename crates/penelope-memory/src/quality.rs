@@ -1,7 +1,7 @@
 //! Porte de qualité avant promotion (issue #25) : une entrée de mémoire est un fait
 //! complet, court, au sujet identifiable ; un état passager part en projet avec une date
-//! d'expiration ; une donnée client, financière ou de sécurité est marquée sensible et
-//! n'est jamais injectée d'office. Les faits sur Pénélope elle-même ne sont pas retenus :
+//! d'expiration ; une donnée client, financière ou de sécurité est marquée sensible (un
+//! marqueur, pas un filtre : issue #37). Les faits sur Pénélope elle-même ne sont pas retenus :
 //! la configuration effective (`self_status`) fait foi.
 
 use regex::Regex;

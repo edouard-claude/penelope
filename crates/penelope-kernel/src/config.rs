@@ -486,8 +486,12 @@ pub struct Promotion {
     pub ecart_min_occurrences: u32,
     pub ecart_min_sessions: u32,
     pub ecart_min_days: u32,
+    /// Ignoré depuis 0.14.0 : faits, préférences, décisions et corrections passent par la
+    /// grille de tri (issue #37). Gardé pour qu'une configuration existante reste valide.
     pub fact_min_recalls: u32,
+    /// Ignoré depuis 0.14.0 (grille de tri, issue #37).
     pub fact_min_importance: u32,
+    /// Ignoré depuis 0.14.0 (grille de tri, issue #37).
     pub preference_min_sessions: u32,
     pub max_retire_ratio: f64,
     pub contested_confidence: f64,

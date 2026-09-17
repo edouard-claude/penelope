@@ -170,8 +170,10 @@ pub struct Annotations {
     pub revue: Option<String>,
     /// Date (`AAAA-MM-JJ`) après laquelle l'entrée n'est plus injectée d'office.
     pub expire: Option<String>,
-    /// Donnée client, financière ou de sécurité : jamais injectée d'office.
+    /// Donnée client, financière ou de sécurité : un marqueur, pas un filtre (issue #37).
     pub sensible: bool,
+    /// uid de l'entrée que celle-ci remplace (`supersede`, issue #37) ; la date est `depuis`.
+    pub remplace: Option<String>,
 }
 
 fn comment_re() -> &'static Regex {
@@ -259,6 +261,7 @@ impl Annotations {
                 "revue" => a.revue = Some(val),
                 "expire" => a.expire = Some(val),
                 "sensible" => a.sensible = matches!(val.as_str(), "oui" | "true" | "1"),
+                "remplace" => a.remplace = Some(val),
                 _ => {}
             }
         }
@@ -315,6 +318,9 @@ impl Annotations {
         }
         if let Some(d) = &self.depuis {
             parts.push(format!("<!-- depuis: {d} -->"));
+        }
+        if let Some(r) = &self.remplace {
+            parts.push(format!("<!-- remplace: {r} -->"));
         }
         if let Some(s) = &self.source {
             parts.push(format!("<!-- source: {s} -->"));

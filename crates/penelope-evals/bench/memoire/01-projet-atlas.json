@@ -1,0 +1,57 @@
+{
+  "id": "projet-atlas",
+  "titre": "Règle de push, base de dev corrigée, ticket du jour, propale non lue, clé de test",
+  "vault": {
+    "memoire.md": "# Mémoire de fond\n\n## Infrastructure\n- La base de données Atlas dev est à l'adresse 127.0.0.1 et non 10 <!-- depuis: 2026-06-01 --> ^01ATLASBASEOLD\n"
+  },
+  "echanges": [
+    {
+      "session": "s1",
+      "proprietaire": "On bosse sur Atlas, le ticket 4821, factures Stripe en anglais. Rappel : sur Atlas on pousse toujours sur dev d'abord, jamais de merge vers qa.",
+      "candidats": [
+        {"type": "preference", "texte": "Sur le projet Atlas, on pousse toujours sur la branche dev d'abord, jamais de merge vers qa", "importance": 8},
+        {"type": "fait", "texte": "Le propriétaire travaille sur le ticket 4821 des factures Stripe", "importance": 5},
+        {"type": "fait", "texte": "Le ticket 4821 des factures Stripe en anglais est corrigé en dev, commit a0af5de", "importance": 6}
+      ]
+    },
+    {
+      "session": "s2",
+      "proprietaire": "La base dev c'est 127.0.0.1:40000 via le tunnel, base atlas-dev. Au fait, je n'ai pas encore lu la propale Dupont. Le client Stripe de test c'est cus_AtlasBench, sa clé sk_test_AtlasBanc01234.",
+      "candidats": [
+        {"type": "fait", "texte": "La base de données dev d'Atlas écoute sur 127.0.0.1:40000 via le tunnel, base atlas-dev", "importance": 7},
+        {"type": "fait", "texte": "La proposition commerciale Dupont n'est pas encore lue par le propriétaire", "importance": 5},
+        {"type": "fait", "texte": "La clé Stripe de test du projet Atlas est sk_test_AtlasBanc01234", "importance": 6}
+      ]
+    }
+  ],
+  "simule": {
+    "tri": [
+      {"candidat": "pousse toujours sur la branche dev", "durable": true, "utile": true, "precis": true, "introuvable": true, "endosse": true, "justification": "règle de travail dite par le propriétaire"},
+      {"candidat": "travaille sur le ticket 4821", "durable": false, "utile": true, "precis": true, "introuvable": false, "endosse": true, "justification": "se retrouve dans le tracker et git"},
+      {"candidat": "corrigé en dev", "durable": false, "utile": true, "precis": true, "introuvable": true, "endosse": true, "justification": "vrai aujourd'hui, inutile dans un mois"},
+      {"candidat": "127.0.0.1:40000", "durable": true, "utile": true, "precis": true, "introuvable": true, "endosse": true, "justification": "corrige l'adresse de la base de dev"},
+      {"candidat": "proposition commerciale Dupont", "durable": false, "utile": true, "precis": true, "introuvable": true, "endosse": true, "justification": "document pas encore lu", "expire": "2026-09-30"},
+      {"candidat": "clé Stripe de test", "durable": true, "utile": true, "precis": true, "introuvable": true, "endosse": true, "justification": "accès de test, valeur rangée"}
+    ],
+    "operations": [
+      {"op": "add_entry", "candidat": "pousse toujours sur la branche dev", "file": "profil.md", "section": "Git", "text": "Sur le projet Atlas, toujours pousser sur la branche dev d'abord, jamais de merge vers qa", "importance": 8},
+      {"op": "add_entry", "candidat": "travaille sur le ticket 4821", "file": "projets.md", "text": "Le propriétaire travaille sur le ticket 4821"},
+      {"op": "add_entry", "candidat": "corrigé en dev", "file": "projets.md", "text": "Ticket 4821 (factures Stripe en anglais) corrigé en dev, commit a0af5de"},
+      {"op": "supersede_entry", "candidat": "127.0.0.1:40000", "uid": "01ATLASBASEOLD", "text": "La base de données dev d'Atlas écoute sur 127.0.0.1:40000 via le tunnel, base atlas-dev", "reason": "port et base précisés"},
+      {"op": "add_entry", "candidat": "clé Stripe de test", "file": "memoire.md", "section": "Accès", "text": "{{candidat}}"}
+    ]
+  },
+  "attendu": {
+    "garde": ["pousser sur la branche dev d'abord", "127.0.0.1:40000", "clé Stripe de test du projet Atlas"],
+    "journal": ["4821", "Dupont"],
+    "ignore": ["travaille sur le ticket"],
+    "secrets": ["sk_test_AtlasBanc01234"],
+    "perime": ["01ATLASBASEOLD"],
+    "perime_textes": ["et non 10"]
+  },
+  "questions": [
+    {"question": "Quelle est la règle de push sur le projet Atlas ?", "reponse": "dev d'abord"},
+    {"question": "Sur quel port écoute la base de données dev d'Atlas ?", "reponse": "40000"},
+    {"question": "Où trouver la clé Stripe de test d'Atlas ?", "reponse": "${SECRET:"}
+  ]
+}

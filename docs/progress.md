@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1251 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1258 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -40,6 +40,7 @@ Dernière mise à jour : 17 septembre 2026.
 | `arch` | non | verte |
 | `ctx-safety` | non | verte |
 | `mem-learning` | non | verte |
+| `mem-bench` | non | verte, banc d'essai du rêve sur 5 conversations, modèle simulé, rapport joint aux releases |
 | `mcp-conformance` | non | verte, 19 tests sur la matrice versions × transports |
 | `telegram` | non | verte |
 | `hitl` | non | verte |
@@ -47,7 +48,7 @@ Dernière mise à jour : 17 septembre 2026.
 | `hot-reload` | non | verte, 14 tests |
 | `resilience` | non | verte, 10 tests |
 | `security` | non | verte, 11 tests |
-| `ctx-recall`, `mem-longitudinal`, `live-openrouter`, `live-telegram`, `ab-hermes` | oui | **écrites, pas encore lancées** : `penelope eval <suite>` avec `OPENROUTER_API_KEY`, un bot de test ou `PENELOPE_AB_HERMES_CMD` |
+| `ctx-recall`, `mem-longitudinal`, `mem-bench-live`, `live-openrouter`, `live-telegram`, `ab-hermes` | oui | **écrites, pas encore lancées** : `penelope eval <suite>` avec `OPENROUTER_API_KEY`, un bot de test ou `PENELOPE_AB_HERMES_CMD` |
 
 ## Ce qui reste à faire
 
@@ -576,6 +577,38 @@ Mise à jour à distance qui laissait le service déchargé (#36).
   lent à s'arrêter charge le relais depuis son propre job ; le service repart sur le chemin
   stable, ou revient à l'ancien binaire si le nouveau ne démarre pas. Sans le correctif, le
   test reproduit l'échec de production.
+
+### 0.14.0
+
+Rêve nocturne trié par une grille explicite (#37).
+
+- **Grille de tri** : faits, préférences, décisions et corrections ne passent plus par des
+  comptages (`fact_min_recalls`, `fact_min_importance`, `preference_min_sessions`, gardés
+  mais ignorés) ni par une importance auto-attribuée. Le modèle juge cinq critères
+  (durable, utile, précis, introuvable ailleurs, endossé) avec une justification ; le code
+  décide : mémoire durable, journal ou ignoré. Le tri est écrit dans `DREAMS.md`. Plus de
+  confirmation manuelle pour une règle notée sans citation.
+- **Mettre à jour plutôt qu'empiler** : chaque candidat arrive avec ses souvenirs proches
+  (embeddings, sinon recherche lexicale). Opérations `replace_entry`, `supersede_entry`
+  (ancienne entrée retirée, `remplace: <uid>` et `depuis` sur la nouvelle, provenance
+  liée) et `noop`. Un texte déjà en mémoire n'est jamais ajouté deux fois ; une
+  contradiction non tranchée reste une question.
+- **Validité temporelle** : `depuis` sur chaque entrée écrite ; états passagers dans
+  `projets.md`, section « États en cours », avec `expire` (14 jours par défaut, 90 au
+  plus), retirés tout seuls après expiration.
+- **Secrets** : clés, jetons et mots de passe des candidats (relecture, épisodes,
+  `mem_note`) rangés dans le magasin de secrets sous un nom tiré du contexte ; la mémoire
+  ne garde que `${SECRET:nom}`, que la détection de secrets et la redaction laissent
+  passer. Clés Stripe reconnues.
+- **Retour d'usage** : rappels automatiques et `mem_search` comptés ; une entrée de
+  `memoire.md` ou `projets.md` jamais rappelée depuis 60 jours est proposée au retrait
+  dans le digest.
+- **`sensible`** n'empêche plus l'injection : un marqueur, le vault étant privé.
+- **Banc d'essai** : suites `mem-bench` (modèle simulé, en CI, seuils exacts) et
+  `mem-bench-live` (vrai modèle) ; précision, rappel, journal, faux souvenirs, périmés,
+  doublons, fuites de secrets, réponses aux questions ; rapport `banc-memoire.md` joint
+  aux releases. Il a trouvé deux défauts, corrigés : une référence `${SECRET:…}` prise
+  pour un secret, et un marqueur de masquage pris pour un mot de passe.
 
 ### Routine de livraison
 

@@ -98,7 +98,6 @@ fn untrusted_content_is_never_promotable() {
     let verdict = penelope_memory::consolidation::gate(
         &group[0],
         &penelope_memory::PromotionGates::default(),
-        99,
     );
     assert!(!verdict.is_promote());
     assert!(verdict.reason().unwrap().contains("non promouvable"));

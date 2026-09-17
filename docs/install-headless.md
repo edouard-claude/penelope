@@ -636,14 +636,51 @@ journal du jour, et ce qui mérite d'être retenu devient des candidats. Le prof
 mémoire de fond que voit le modèle sont figés pendant un épisode : ce qui est appris
 apparaît à l'épisode suivant, sans casser le cache du provider en cours de route.
 
-Chaque nuit (03:30, `memory.dreaming_cron`), la consolidation les passe à des règles
-fixes : une préférence doit venir de toi et être formulée comme une règle (« toujours »,
-« désormais ») ou revenir dans deux sessions, un fait doit être important ou rappelé,
-un écart doit se répéter sur plusieurs jours, un contenu non fiable n'est jamais retenu.
-Ce qui passe est confié au modèle, qui propose des modifications ligne par ligne,
-vérifiées avant écriture ; une contradiction avec ce qui est déjà retenu devient une
-question, un changement de défaut une proposition. Le digest du matin (08:00) résume la
-nuit, les demandes en attente, les runs et la dépense de la veille.
+Chaque nuit (03:30, `memory.dreaming_cron`), la consolidation trie les candidats par une
+**grille explicite**, sans rien te demander de valider. Un contenu non fiable n'atteint
+jamais le modèle, un écart doit se répéter sur plusieurs jours. Pour chaque fait,
+préférence, décision ou correction, le modèle répond à cinq questions, et le code en
+déduit la place :
+
+| Critère | Question |
+|---|---|
+| Durable | Encore vrai dans un mois ? |
+| Utile | Change-t-il ce que Pénélope fera plus tard ? |
+| Précis | Sujet identifiable (qui, quoi, où) et phrase complète ? |
+| Introuvable ailleurs | Absent du code, des docs, du tracker, de git et des outils ? |
+| Endossé | Dit ou confirmé par toi, ou constaté par un outil fiable ? |
+
+```
+introuvable, précis, endossé, utile : un « non » ─► ignoré
+durable : non ────────────────────────────────────► journal (expire)
+tout oui ─────────────────────────────────────────► mémoire durable
+```
+
+Une règle dite une seule fois, explicitement, passe donc dès la première nuit. Chaque
+candidat est comparé à ses souvenirs proches (par le sens si les embeddings répondent,
+sinon par les mots). Le modèle choisit : ajouter, mettre à jour, **remplacer**
+(`supersede` : l'ancienne entrée est retirée, la nouvelle porte `remplace: <uid>` et
+`depuis`) ou ne rien faire. Un texte déjà en mémoire n'est jamais ajouté une seconde fois ;
+une contradiction non tranchée devient une question, un changement de défaut une
+proposition. Chaque décision, avec ses critères et sa justification, est écrite dans la
+section « Tri » de `DREAMS.md`. Le digest du matin (08:00) résume la nuit, les demandes en
+attente, les runs et la dépense de la veille.
+
+**Journal des états en cours.** Ce qui est vrai aujourd'hui mais pas dans un mois (ticket
+corrigé en dev, document pas encore lu, rendez-vous) va dans `projets.md`, section « États
+en cours », avec `expire` (14 jours par défaut, 90 au plus). Il est injecté jusqu'à cette
+date, puis retiré tout seul la nuit suivante. Rien de passager n'entre dans `memoire.md`.
+
+**Secrets.** Une clé, un jeton ou un mot de passe que tu donnes en conversation part
+dans le magasin de secrets dès la relecture, sous un nom tiré du contexte (par exemple
+`cle-stripe-projet-atlas-1f2e3d4c`). La mémoire ne garde que la référence
+`${SECRET:cle-stripe-projet-atlas-1f2e3d4c}`, jamais la valeur. `DREAMS.md` liste les
+noms rangés. Un numéro de carte, lui, est refusé.
+
+**Retour d'usage.** Chaque souvenir servi au modèle (rappel automatique ou `mem_search`)
+est compté. Une entrée de `memoire.md` ou `projets.md` jamais rappelée depuis 60 jours est
+proposée au retrait dans le digest ; les préférences du profil, toujours appliquées, ne le
+sont pas.
 
 ```bash
 penelope mem dream --dry-run
@@ -659,12 +696,27 @@ penelope mem history --file profil.md
 puis `penelope mem restore <id>`. `penelope vault check` signale un frontmatter cassé ou
 un secret écrit à la main.
 
+La qualité du tri se mesure sur un banc d'essai : cinq conversations anonymisées, les
+souvenirs attendus (gardés, mis à jour, au journal, ignorés, rangés en secret) et des
+questions dont la réponse n'est que dans la mémoire. Il mesure la précision, le rappel,
+le journal, les faux souvenirs, les souvenirs périmés, les doublons, les fuites de secrets
+et l'exactitude des réponses. En CI, le modèle de consolidation est simulé ; le rapport est
+joint à chaque release (`banc-memoire.md`).
+
+```bash
+penelope eval mem-bench
+```
+
+```bash
+OPENROUTER_API_KEY=… penelope eval mem-bench-live
+```
+
 **Règles dictées.** Une règle que tu énonces et que Pénélope note avec `mem_note` porte ta
-citation exacte : retrouvée dans tes messages récents, elle compte comme venant de toi et
-passe la nuit. Notée sans citation (ou avec une citation absente de tes messages), elle
-n'est plus rejetée : la consolidation te demande « Tu confirmes cette règle ? » (bouton
-Telegram ou `penelope approvals`), et ta réponse la fait promouvoir au rêve suivant. Les
-règles rejetées par une version antérieure pour leur seule origine se remettent en file :
+citation exacte : retrouvée dans tes messages récents, elle compte comme venant de toi.
+Notée sans citation (ou avec une citation absente de tes messages), elle passe quand même
+la grille ; si rien ne montre que tu l'as dite ou confirmée, elle n'est pas endossée et
+reste écartée, sans question. Les règles rejetées par une version antérieure pour leur
+seule origine se remettent en file :
 
 ```bash
 penelope mem retry-rejected
@@ -675,8 +727,9 @@ penelope mem retry-rejected
 caractères, l'entrée est scindée en phrases, et une phrase inexploitable est écartée. Un
 état passager (« deal en cours », « propale non lue », « arbitrage ») part dans
 `projets.md` avec `expire: AAAA-MM-JJ` (30 jours) et n'est plus injecté après cette date.
-Une donnée client, financière ou de sécurité (montant, marge, faille, mot de passe) porte
-`sensible: oui` : jamais injectée d'office, toujours trouvable par `mem_search`. Un fait sur
+Une donnée client, financière ou de sécurité (montant, marge, faille) porte
+`sensible: oui` : un simple marqueur. Le vault est privé, une information client ou
+d'infrastructure utile se garde et s'injecte comme les autres. Un fait sur
 la configuration de Pénélope elle-même n'est pas retenu, `self_status` fait foi. Les deux
 annotations se posent aussi à la main et sont relues par `penelope mem reindex`. Quand le
 niveau Cœur (`memoire.md`) dépasse `memory.core_budget_tokens`, `DREAMS.md` le signale.

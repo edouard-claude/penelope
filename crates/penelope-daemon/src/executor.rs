@@ -611,6 +611,8 @@ impl NativeToolExecutor {
                 }
                 let mut out = Vec::new();
                 for h in &hits {
+                    // Retour d'usage (issue #37) : trouvé par une recherche, donc rappelé.
+                    let _ = s.memory.record_recall(&h.entry.uid, &query, true).await;
                     let untrusted = h.entry.etype == penelope_memory::ingest::SOURCE_ETYPE
                         && s.memory.origin_of(&h.entry.uid).await?
                             != Some(penelope_memory::Origin::Owner);
@@ -660,7 +662,10 @@ impl NativeToolExecutor {
             "mem_note" => {
                 let ctype = penelope_memory::CandidateType::parse(&str_arg(args, "type")?)
                     .ok_or_else(|| ToolError::Invalid("type inconnu".into()))?;
-                let texte = str_arg(args, "texte")?;
+                // Un secret part dans le magasin, la note n'en garde que la référence
+                // (issue #37).
+                let (texte, _) = crate::secret_shelf::shelve(s, &str_arg(args, "texte")?)
+                    .map_err(ToolError::Denied)?;
                 crate::vault_ops::write_filter(&texte).map_err(ToolError::Denied)?;
                 // Une règle dictée par le propriétaire compte comme la sienne, à condition
                 // d'en citer l'extrait mot pour mot (issue #24).

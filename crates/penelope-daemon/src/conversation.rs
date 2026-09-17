@@ -281,6 +281,10 @@ pub async fn build_tiers_in(
         )
         .path1(user_text, &Default::default(), query_vector, &[])
         .await;
+        // Retour d'usage (issue #37) : un souvenir servi au modèle compte comme rappelé.
+        for t in &recall.triggered {
+            let _ = s.memory.record_recall(&t.entry.uid, user_text, true).await;
+        }
         let rendered = recall.render();
         if !rendered.trim().is_empty() {
             b = b.volatile(rendered);
@@ -293,7 +297,8 @@ pub async fn build_tiers_in(
 pub(crate) async fn fresh_snapshot(s: &Services) -> [String; 3] {
     let cfg = s.config.config();
     let mut out: [String; 3] = Default::default();
-    // Entrées sensibles ou expirées : jamais injectées d'office (issue #25).
+    // Entrées expirées : jamais injectées d'office ; `sensible` n'est qu'un marqueur
+    // (issues #25 et #37).
     let hidden = s.memory.hidden_uids().await.unwrap_or_default();
     for (i, (level, budget)) in [
         (

@@ -209,9 +209,23 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
     .in_session(&sid)
     .with_importance(9);
     s.candidates.record(vec![c], 5).await.unwrap();
+    // Verdict de la grille (issue #37) rattaché au numéro du candidat soumis.
+    let n = crate::dream::submission_order(&s)
+        .await
+        .unwrap()
+        .iter()
+        .position(|t| t.contains("facture ses clients en Factur-X"))
+        .expect("candidat soumis")
+        + 1;
     p.reply(
-        r#"{"operations": [{"op": "add_entry", "file": "memoire.md", "section": "Facturation",
-            "text": "Le propriétaire facture ses clients en Factur-X", "importance": 8}]}"#,
+        &serde_json::json!({
+            "tri": [{"candidat": n, "durable": true, "utile": true, "precis": true,
+                     "introuvable": true, "endosse": true, "justification": "mode de facturation"}],
+            "operations": [{"op": "add_entry", "candidat": n, "file": "memoire.md",
+                            "section": "Facturation",
+                            "text": "Le propriétaire facture ses clients en Factur-X", "importance": 8}]
+        })
+        .to_string(),
     );
     let dream = crate::dream::run(&d, false).await.unwrap();
     assert!(dream.report.promoted >= 1, "{:?}", dream.report);

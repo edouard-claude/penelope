@@ -52,6 +52,17 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
+      # Banc d'essai de la mémoire (issue #37) : son rapport accompagne la release.
+      - name: Banc d'essai de la mémoire
+        env:
+          PENELOPE_BENCH_REPORT: ${{ github.workspace }}/banc-memoire.md
+        run: cargo test -p penelope-evals --test mem_bench
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rapport-memoire
+          path: banc-memoire.md
+          if-no-files-found: error
+
   construire:
     name: Construire (${{ matrix.target }})
     needs: verification
@@ -133,6 +144,9 @@ jobs:
             chmod +x "${src}/penelope"
             tar -czf "dist/penelope-${VERSION}-macos-${arch}.tar.gz" -C "$src" penelope
           done
+
+          # Rapport du banc d'essai de la mémoire, hors sommes : ce n'est pas un binaire.
+          cp binaires/rapport-memoire/banc-memoire.md dist/banc-memoire.md
 
           cd dist
           shasum -a 256 ./*.tar.gz > SHA256SUMS

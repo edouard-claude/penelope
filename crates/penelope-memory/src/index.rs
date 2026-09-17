@@ -103,7 +103,7 @@ pub struct SearchFilter {
     pub include_episodic: bool,
     pub include_untrusted: bool,
     pub limit: usize,
-    /// Injection d'office (rappel automatique) : sans entrées sensibles ni expirées.
+    /// Injection d'office (rappel automatique) : sans entrées expirées.
     pub automatic: bool,
 }
 
@@ -352,6 +352,45 @@ impl MemoryIndex {
             .await
     }
 
+    /// Entrées durables jamais rappelées depuis `cutoff` (`AAAA-MM-JJ`), ni récentes, ni
+    /// datées d'une expiration : candidates au retrait (retour d'usage, issue #37).
+    pub async fn unrecalled_since(
+        &self,
+        levels: &[Level],
+        cutoff: &str,
+    ) -> penelope_store::Result<Vec<IndexedEntry>> {
+        let levels: Vec<String> = levels.iter().map(|l| l.as_str().to_string()).collect();
+        let cutoff = cutoff.to_string();
+        self.store
+            .read(move |c| {
+                let marks = vec!["?"; levels.len()].join(",");
+                let mut st = c.prepare(&format!(
+                    "{SELECT_PREFIXED} FROM mem_entries e
+                     LEFT JOIN mem_signals g ON g.uid = e.uid
+                     LEFT JOIN mem_flags f ON f.uid = e.uid
+                     WHERE e.statut != 'retiree' AND e.retired_at IS NULL
+                       AND e.level IN ({marks})
+                       AND COALESCE(e.depuis, e.maj) < ?
+                       AND (g.last_recall IS NULL OR substr(g.last_recall, 1, 10) < ?)
+                       AND f.expire IS NULL
+                     ORDER BY COALESCE(e.depuis, e.maj), e.uid"
+                ))?;
+                let mut params: Vec<&dyn penelope_store::rusqlite::ToSql> = Vec::new();
+                for l in &levels {
+                    params.push(l);
+                }
+                params.push(&cutoff);
+                params.push(&cutoff);
+                let rows = st.query_map(params.as_slice(), row_to_entry)?;
+                let mut v = Vec::new();
+                for r in rows {
+                    v.push(r?);
+                }
+                Ok(v)
+            })
+            .await
+    }
+
     pub async fn origin_of(&self, uid: &str) -> penelope_store::Result<Option<Origin>> {
         let uid = uid.to_string();
         self.store
@@ -487,14 +526,16 @@ impl MemoryIndex {
             .await
     }
 
-    /// Entrées à ne pas injecter d'office : sensibles, ou expirées à ce jour.
+    /// Entrées à ne pas injecter d'office : expirées à ce jour. `sensible` n'est plus qu'un
+    /// marqueur : le vault est privé, une information client ou d'infrastructure utile se
+    /// garde et se sert (issue #37).
     pub async fn hidden_uids(&self) -> penelope_store::Result<std::collections::HashSet<String>> {
         let today: String = self.clock.now_rfc3339().chars().take(10).collect();
         self.store
             .read(move |c| {
                 let mut st = c.prepare(
                     "SELECT uid FROM mem_flags
-                     WHERE sensible = 1 OR (expire IS NOT NULL AND expire < ?1)",
+                     WHERE expire IS NOT NULL AND expire < ?1",
                 )?;
                 let rows = st.query_map([today], |r| r.get(0))?;
                 Ok(rows.collect::<Result<_, _>>()?)
@@ -543,7 +584,7 @@ impl MemoryIndex {
         let projects = active_projects.to_vec();
         let params_ = self.params;
         let now_ms = self.clock.now_ms();
-        // Rappel automatique : ni entrée sensible, ni entrée expirée (issue #25).
+        // Rappel automatique : pas d'entrée expirée (issues #25 et #37).
         let hidden = if filter.automatic {
             self.hidden_uids().await?
         } else {
@@ -859,6 +900,7 @@ pub fn annotations_of(e: &IndexedEntry) -> Annotations {
         revue: None,
         expire: None,
         sensible: false,
+        remplace: None,
     }
 }
 

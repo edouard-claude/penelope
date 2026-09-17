@@ -1,23 +1,23 @@
 //! Consolidation nocturne (§6.8) : Light → REM → Deep.
 //!
-//! **Portes déterministes, jugement du modèle à l'intérieur.** Les seuils, l'éligibilité,
-//! la provenance et le cycle de vie sont du code ; le modèle n'intervient que pour la
-//! langue, et sa sortie est validée structurellement avant écriture.
+//! **Portes déterministes, jugement du modèle à l'intérieur.** L'éligibilité, la
+//! provenance et le cycle de vie sont du code. Faits, préférences, décisions et corrections
+//! passent par la grille de tri ([`crate::grid`], issue #37) : le modèle juge chaque
+//! critère, le code en déduit la place. Sa sortie est validée structurellement avant
+//! écriture.
 
-use crate::candidates::{Candidate, CandidateGroup, CandidateType, stated_as_a_rule};
+use crate::candidates::{Candidate, CandidateGroup, CandidateType};
 use crate::provenance::Origin;
 use crate::vault::When;
 use serde::{Deserialize, Serialize};
 
-/// Seuils de promotion (§6.8), issus de la configuration.
+/// Seuils de promotion (§6.8), issus de la configuration. Les écarts gardent leurs
+/// seuils de répétition ; les autres types passent par la grille (issue #37).
 #[derive(Debug, Clone, Copy)]
 pub struct PromotionGates {
     pub ecart_min_occurrences: u32,
     pub ecart_min_sessions: u32,
     pub ecart_min_days: u32,
-    pub fact_min_recalls: u32,
-    pub fact_min_importance: u8,
-    pub preference_min_sessions: u32,
     pub max_retire_ratio: f64,
 }
 
@@ -27,9 +27,6 @@ impl Default for PromotionGates {
             ecart_min_occurrences: 3,
             ecart_min_sessions: 3,
             ecart_min_days: 2,
-            fact_min_recalls: 2,
-            fact_min_importance: 8,
-            preference_min_sessions: 2,
             max_retire_ratio: 0.20,
         }
     }
@@ -41,9 +38,6 @@ impl PromotionGates {
             ecart_min_occurrences: p.ecart_min_occurrences,
             ecart_min_sessions: p.ecart_min_sessions,
             ecart_min_days: p.ecart_min_days,
-            fact_min_recalls: p.fact_min_recalls,
-            fact_min_importance: p.fact_min_importance as u8,
-            preference_min_sessions: p.preference_min_sessions,
             max_retire_ratio: p.max_retire_ratio,
         }
     }
@@ -54,6 +48,8 @@ impl PromotionGates {
 pub enum Gate {
     /// Promotion directe autorisée.
     Promote,
+    /// À trier par la grille (issue #37) : fait, préférence, décision, correction.
+    Sort,
     /// À transformer en **proposition** HITL, jamais appliqué seul.
     Propose(String),
     /// Refusé, avec la raison (affichée dans le digest).
@@ -67,16 +63,13 @@ impl Gate {
     pub fn reason(&self) -> Option<&str> {
         match self {
             Gate::Propose(r) | Gate::Reject(r) => Some(r),
-            Gate::Promote => None,
+            Gate::Promote | Gate::Sort => None,
         }
     }
 }
 
-/// Applique la porte déterministe à un groupe de candidats (§6.8, tableau).
-///
-/// `useful_recalls` vient des signaux de l'entrée visée, pour les faits.
-/// Motif d'une règle notée par l'agent sans citation du propriétaire : elle lui est
-/// demandée plutôt que rejetée (issue #24).
+/// Motif d'une règle notée par l'agent sans citation du propriétaire, demandée avant la
+/// grille de tri (issue #24) ; gardé pour relire les demandes encore ouvertes.
 pub const CONFIRM_REASON: &str = "notée par l'agent sans citation du propriétaire : à confirmer";
 
 /// Anciens motifs de rejet d'une règle d'origine `agent`, rejouables.
@@ -86,7 +79,8 @@ pub const LEGACY_ORIGIN_REJECTIONS: &[&str] = &[
     "une décision doit être confirmée par le propriétaire",
 ];
 
-pub fn gate(g: &CandidateGroup, gates: &PromotionGates, useful_recalls: u32) -> Gate {
+/// Applique la porte déterministe à un groupe de candidats (§6.8, tableau ; issue #37).
+pub fn gate(g: &CandidateGroup, gates: &PromotionGates) -> Gate {
     // Les origines `untrusted` et `system` sont exclues **avant** toute construction de
     // prompt : elles ne doivent même pas atteindre le modèle de consolidation.
     if !g.origins.iter().any(|o| o.can_be_promoted()) {
@@ -94,54 +88,13 @@ pub fn gate(g: &CandidateGroup, gates: &PromotionGates, useful_recalls: u32) -> 
     }
 
     match g.ctype {
-        CandidateType::Preference => {
-            if !g.has_owner_origin() {
-                return Gate::Propose(CONFIRM_REASON.into());
-            }
-            // Une préférence passe si elle est formulée comme une règle, ou si elle a
-            // été observée dans assez de sessions distinctes.
-            if stated_as_a_rule(&g.representative.text)
-                || g.distinct_sessions >= gates.preference_min_sessions
-            {
-                Gate::Promote
-            } else {
-                Gate::Reject(format!(
-                    "préférence non formulée comme une règle et vue dans {} session(s) \
-                     (minimum {})",
-                    g.distinct_sessions, gates.preference_min_sessions
-                ))
-            }
-        }
-        CandidateType::Fait => {
-            if useful_recalls >= gates.fact_min_recalls
-                || g.max_importance >= gates.fact_min_importance
-            {
-                Gate::Promote
-            } else {
-                Gate::Reject(format!(
-                    "fait rappelé {useful_recalls} fois (minimum {}) et importance {} \
-                     (minimum {})",
-                    gates.fact_min_recalls, g.max_importance, gates.fact_min_importance
-                ))
-            }
-        }
-        CandidateType::Correction => {
-            if !g.has_owner_origin() {
-                return Gate::Propose(CONFIRM_REASON.into());
-            }
-            // 1 occurrence ⇒ exception candidate. ≥ 2 contextes différents ⇒ modification
-            // du défaut **proposée**, jamais automatique.
-            let distinct_contexts = distinct_signatures(&g.members);
-            if distinct_contexts >= 2 {
-                Gate::Propose(
-                    "correction observée dans plusieurs contextes : modification du défaut \
-                     proposée"
-                        .into(),
-                )
-            } else {
-                Gate::Promote
-            }
-        }
+        // Plus de comptage ni d'importance : une règle dite une fois, explicitement, passe
+        // la grille ; un état passager part au journal ; le propriétaire ne valide rien à
+        // la main.
+        CandidateType::Preference
+        | CandidateType::Fait
+        | CandidateType::Correction
+        | CandidateType::Decision => Gate::Sort,
         CandidateType::Ecart => {
             if g.occurrences < gates.ecart_min_occurrences
                 || g.distinct_sessions < gates.ecart_min_sessions
@@ -164,13 +117,6 @@ pub fn gate(g: &CandidateGroup, gates: &PromotionGates, useful_recalls: u32) -> 
                 }
             }
         }
-        CandidateType::Decision => {
-            if g.has_owner_origin() {
-                Gate::Promote
-            } else {
-                Gate::Propose(CONFIRM_REASON.into())
-            }
-        }
         CandidateType::ProcedureCandidate => {
             if g.occurrences >= 2 {
                 Gate::Propose("séquence réussie deux fois : skill proposée".into())
@@ -179,14 +125,6 @@ pub fn gate(g: &CandidateGroup, gates: &PromotionGates, useful_recalls: u32) -> 
             }
         }
     }
-}
-
-fn distinct_signatures(members: &[Candidate]) -> usize {
-    let mut set = std::collections::BTreeSet::new();
-    for m in members {
-        set.insert(m.context_signature());
-    }
-    set.len()
 }
 
 // ------------------------------------------------------------------ opérations
@@ -213,6 +151,14 @@ pub enum Operation {
     ReplaceEntry {
         uid: String,
         text: String,
+    },
+    /// L'ancienne entrée est retirée, la nouvelle la remplace avec un lien (`remplace`) et
+    /// une date (`depuis`) : un fait corrigé ne coexiste plus avec l'ancien (issue #37).
+    SupersedeEntry {
+        uid: String,
+        text: String,
+        #[serde(default)]
+        reason: Option<String>,
     },
     RetireEntry {
         uid: String,
@@ -257,6 +203,7 @@ impl Operation {
         match self {
             Operation::AddEntry { .. } => "add_entry",
             Operation::ReplaceEntry { .. } => "replace_entry",
+            Operation::SupersedeEntry { .. } => "supersede_entry",
             Operation::RetireEntry { .. } => "retire_entry",
             Operation::AddException { .. } => "add_exception",
             Operation::UpdateException { .. } => "update_exception",
@@ -277,6 +224,7 @@ impl Operation {
         match self {
             Operation::AddEntry { text, .. }
             | Operation::ReplaceEntry { text, .. }
+            | Operation::SupersedeEntry { text, .. }
             | Operation::AddException { text, .. }
             | Operation::RecordEcart { text, .. }
             | Operation::UpdateDefault { text, .. } => Some(text),
@@ -290,6 +238,7 @@ impl Operation {
     pub fn target_uid(&self) -> Option<&str> {
         match self {
             Operation::ReplaceEntry { uid, .. }
+            | Operation::SupersedeEntry { uid, .. }
             | Operation::RetireEntry { uid, .. }
             | Operation::UpdateException { uid, .. } => Some(uid),
             Operation::Link { from_uid, .. } => Some(from_uid),
@@ -310,7 +259,8 @@ pub fn operations_schema() -> serde_json::Value {
                     "type": "object",
                     "properties": {
                         "op": {"type": "string", "enum": [
-                            "add_entry","replace_entry","retire_entry","add_exception",
+                            "add_entry","replace_entry","supersede_entry","retire_entry",
+                            "add_exception",
                             "update_exception","record_ecart","update_default","link",
                             "create_entity"
                         ]}
@@ -339,6 +289,8 @@ pub struct ValidationContext<'a> {
     pub known_uids: &'a std::collections::BTreeSet<String>,
     /// Nombre d'entrées par fichier, pour le plafond de retrait.
     pub entries_per_file: &'a std::collections::BTreeMap<String, usize>,
+    /// Fichier de chaque uid, pour rattacher un retrait au bon fichier.
+    pub uid_files: &'a std::collections::BTreeMap<String, String>,
     /// uid modifiés à la main depuis le début de la passe : leur opération est **reportée**.
     pub manually_modified: &'a std::collections::BTreeSet<String>,
     /// Pratiques connues.
@@ -437,7 +389,15 @@ pub fn validate(
                         *sensible = Some(true);
                     }
                 }
-                Operation::ReplaceEntry { .. } => {
+                Operation::ReplaceEntry { .. } | Operation::SupersedeEntry { .. } => {
+                    if quality::is_about_penelope(t) {
+                        v.rejected.push((
+                            op,
+                            "fait sur Pénélope : la configuration effective fait foi (self_status)"
+                                .into(),
+                        ));
+                        continue;
+                    }
                     let why = match quality::check_text(t) {
                         Verdict::Keep => None,
                         Verdict::Reject(why) => Some(why),
@@ -534,12 +494,9 @@ pub fn validate(
 }
 
 fn uid_file(uid: &str, ctx: &ValidationContext<'_>) -> String {
-    // Le fichier est déterminé par le harnais, pas par le modèle ; à défaut d'information,
-    // on rattache au fichier unique connu ou à « inconnu ».
-    let _ = uid;
-    ctx.entries_per_file
-        .keys()
-        .next()
+    // Le fichier est déterminé par le harnais, pas par le modèle.
+    ctx.uid_files
+        .get(uid)
         .cloned()
         .unwrap_or_else(|| "inconnu".into())
 }
@@ -699,6 +656,22 @@ pub struct DreamReport {
     pub lint: Vec<String>,
     #[serde(default)]
     pub lint_problems: u32,
+    /// Tri de la grille : une ligne par candidat, décision, critères et justification
+    /// (issue #37).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sorted: Vec<String>,
+    /// États passagers mis au journal cette nuit.
+    #[serde(default)]
+    pub journal: u32,
+    /// États passagers expirés, retirés du journal.
+    #[serde(default)]
+    pub journal_expired: u32,
+    /// Secrets rangés dans le magasin, par nom.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<String>,
+    /// Entrées durables jamais rappelées depuis 60 jours, proposées au retrait.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unused: Vec<String>,
 }
 
 impl DreamReport {
@@ -727,6 +700,24 @@ impl DreamReport {
         }
         if !self.promoted_refs.is_empty() {
             s.push_str(&format!("\nEntrées : {}", self.promoted_refs.join(", ")));
+        }
+        if self.journal > 0 || self.journal_expired > 0 {
+            s.push_str(&format!(
+                "\nJournal : {} état(s) en cours ajouté(s), {} expiré(s) retiré(s).",
+                self.journal, self.journal_expired
+            ));
+        }
+        if !self.secrets.is_empty() {
+            s.push_str(&format!(
+                "\nSecrets rangés dans le magasin : {}",
+                self.secrets.join(", ")
+            ));
+        }
+        if !self.unused.is_empty() {
+            s.push_str("\nJamais rappelées depuis 60 jours, à retirer ?");
+            for u in &self.unused {
+                s.push_str(&format!("\n- {u}"));
+            }
         }
         if !self.lint.is_empty() {
             s.push_str("\nLint du wiki :");
@@ -779,7 +770,7 @@ mod tests {
             ],
             0.9,
         );
-        assert_eq!(gate(&three[0], &g, 0), Gate::Promote);
+        assert_eq!(gate(&three[0], &g), Gate::Promote);
 
         let two = group(
             vec![
@@ -788,7 +779,7 @@ mod tests {
             ],
             0.9,
         );
-        let verdict = gate(&two[0], &g, 0);
+        let verdict = gate(&two[0], &g);
         assert!(!verdict.is_promote());
         assert!(verdict.reason().unwrap().contains("minimum 3/3/2"));
     }
@@ -805,7 +796,7 @@ mod tests {
             0.9,
         );
         assert!(
-            !gate(&same_day[0], &g, 0).is_promote(),
+            !gate(&same_day[0], &g).is_promote(),
             "un seul jour ne suffit pas"
         );
     }
@@ -825,55 +816,21 @@ mod tests {
         c3.day = "2026-09-12".into();
 
         let groups = group(vec![c, c2, c3], 0.9);
-        let verdict = gate(&groups[0], &g, 0);
+        let verdict = gate(&groups[0], &g);
         assert!(!verdict.is_promote());
         assert!(verdict.reason().unwrap().contains("non promouvable"));
     }
-
-    #[test]
-    fn preference_stated_as_a_rule_passes_in_one_shot() {
-        let g = PromotionGates::default();
-        let c = Candidate::new(
-            CandidateType::Preference,
-            "Toujours répondre en français, sans fioritures.",
-            Origin::Owner,
-            "interactive",
-            "2026-09-16T10:00:00Z",
-        )
-        .in_session("s1");
-        let groups = group(vec![c], 0.9);
-        assert_eq!(gate(&groups[0], &g, 0), Gate::Promote);
-    }
-
-    #[test]
-    fn casual_preference_needs_two_sessions() {
-        let g = PromotionGates::default();
-        let mk = |s: &str, day: &str| {
-            Candidate::new(
-                CandidateType::Preference,
-                "je préfère les réponses courtes",
-                Origin::Owner,
-                "interactive",
-                &format!("{day}T10:00:00Z"),
-            )
-            .in_session(s)
-            .with_subject("reponses-courtes")
-        };
-        assert!(!gate(&group(vec![mk("s1", "2026-09-10")], 0.9)[0], &g, 0).is_promote());
-        let two = group(vec![mk("s1", "2026-09-10"), mk("s2", "2026-09-11")], 0.9);
-        assert_eq!(gate(&two[0], &g, 0), Gate::Promote);
-    }
-
-    /// CA 6 (correction) : une correction unique crée une exception ; répétée dans
-    /// 2 contextes différents, elle **propose** une modification du défaut.
+    /// CA 6 (correction), issue #37 : une correction, unique ou répétée dans plusieurs
+    /// contextes, passe par la grille de tri comme les faits, préférences et décisions ; la
+    /// modification d'un défaut reste une proposition (`update_default_is_always_a_proposal`).
     #[test]
     fn ca_6_3_correction_scoping() {
         let g = PromotionGates::default();
-        let mk = |when: &str, s: &str| {
+        let mk = |ctype: CandidateType, when: &str, s: &str, origin: Origin| {
             let mut c = Candidate::new(
-                CandidateType::Correction,
+                ctype,
                 "pour ce client on utilise X",
-                Origin::Owner,
+                origin,
                 "interactive",
                 "2026-09-16T10:00:00Z",
             )
@@ -882,17 +839,32 @@ mod tests {
             c.quand = When::parse(when).ok();
             c
         };
-
-        let one = group(vec![mk("client=client-x", "s1")], 0.9);
-        assert_eq!(
-            gate(&one[0], &g, 0),
-            Gate::Promote,
-            "une correction unique crée une exception scopée"
-        );
-
-        // Deux contextes distincts : deux groupes, mais la porte voit les signatures.
-        let mut members = vec![mk("client=client-x", "s1"), mk("client=client-y", "s2")];
-        members[1].subject_key = Some("langage-backend".into());
+        for ctype in [
+            CandidateType::Correction,
+            CandidateType::Preference,
+            CandidateType::Fait,
+            CandidateType::Decision,
+        ] {
+            // Une seule fois, d'origine agent ou propriétaire : trié, ni compté ni demandé.
+            for origin in [Origin::Owner, Origin::Agent] {
+                let one = group(vec![mk(ctype, "client=client-x", "s1", origin)], 0.9);
+                assert_eq!(gate(&one[0], &g), Gate::Sort, "{ctype:?} {origin:?}");
+            }
+        }
+        let members = vec![
+            mk(
+                CandidateType::Correction,
+                "client=client-x",
+                "s1",
+                Origin::Owner,
+            ),
+            mk(
+                CandidateType::Correction,
+                "client=client-y",
+                "s2",
+                Origin::Owner,
+            ),
+        ];
         let merged = CandidateGroup {
             key: "k".into(),
             ctype: CandidateType::Correction,
@@ -904,37 +876,7 @@ mod tests {
             origins: [Origin::Owner].into_iter().collect(),
             members,
         };
-        match gate(&merged, &g, 0) {
-            Gate::Propose(r) => assert!(r.contains("défaut")),
-            other => panic!("attendu une proposition, obtenu {other:?}"),
-        }
-    }
-
-    #[test]
-    fn fact_promotion_needs_recalls_or_importance() {
-        let g = PromotionGates::default();
-        let mk = |imp: u8| {
-            group(
-                vec![
-                    Candidate::new(
-                        CandidateType::Fait,
-                        "la base est en PostgreSQL 16",
-                        Origin::Agent,
-                        "interactive",
-                        "2026-09-16T10:00:00Z",
-                    )
-                    .with_importance(imp)
-                    .in_session("s1"),
-                ],
-                0.9,
-            )
-        };
-        assert!(!gate(&mk(5)[0], &g, 0).is_promote());
-        assert!(
-            gate(&mk(5)[0], &g, 2).is_promote(),
-            "2 rappels utiles suffisent"
-        );
-        assert!(gate(&mk(9)[0], &g, 0).is_promote(), "importance ≥ 8 suffit");
+        assert_eq!(gate(&merged, &g), Gate::Sort);
     }
 
     #[test]
@@ -952,9 +894,9 @@ mod tests {
             .with_subject("ticket-branche-tests")
         };
         let two = group(vec![mk("s1"), mk("s2")], 0.9);
-        assert!(matches!(gate(&two[0], &g, 0), Gate::Propose(_)));
+        assert!(matches!(gate(&two[0], &g), Gate::Propose(_)));
         let one = group(vec![mk("s1")], 0.9);
-        assert!(!gate(&one[0], &g, 0).is_promote());
+        assert!(!gate(&one[0], &g).is_promote());
     }
 
     fn ctx<'a>(
@@ -963,9 +905,15 @@ mod tests {
         modified: &'a BTreeSet<String>,
         practices: &'a BTreeSet<String>,
     ) -> ValidationContext<'a> {
+        // En test, chaque uid connu appartient au premier fichier déclaré.
+        let first = files.keys().next().cloned().unwrap_or_default();
+        let uid_files: &'a BTreeMap<String, String> = Box::leak(Box::new(
+            uids.iter().map(|u| (u.clone(), first.clone())).collect(),
+        ));
         ValidationContext {
             known_uids: uids,
             entries_per_file: files,
+            uid_files,
             manually_modified: modified,
             known_practices: practices,
             today: "2026-09-17",

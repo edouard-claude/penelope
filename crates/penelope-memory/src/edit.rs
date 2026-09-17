@@ -173,6 +173,23 @@ pub fn remove_entry(raw: &str, uid: &str) -> Option<String> {
     Some(rebuild(out, raw.ends_with('\n')))
 }
 
+/// Remplace une entrée entière (texte et annotations) par `line`, à la même place : une
+/// entrée qui en remplace une autre (`supersede`, issue #37).
+pub fn replace_entry_line(raw: &str, uid: &str, line: &str) -> Option<String> {
+    let lines: Vec<&str> = raw.lines().collect();
+    let i = find_line(&lines, uid)?;
+    let span = callout_span(&lines, i).unwrap_or(i..=i);
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    for (j, l) in lines.iter().enumerate() {
+        if j == *span.start() {
+            out.push(line.to_string());
+        } else if !span.contains(&j) {
+            out.push(l.to_string());
+        }
+    }
+    Some(rebuild(out, raw.ends_with('\n')))
+}
+
 /// Ajoute un lien `[[slug]]` au texte d'une entrée (idempotent).
 pub fn link_entry(raw: &str, uid: &str, slug: &str) -> Option<String> {
     let lines: Vec<&str> = raw.lines().collect();
@@ -284,5 +301,16 @@ mod tests {
                 .unwrap()
                 .contains("- après tout ^B")
         );
+    }
+
+    #[test]
+    fn a_whole_entry_is_replaced_in_place() {
+        let raw = "# M\n- avant <!-- importance: 5 --> ^01A\n- autre ^01B\n";
+        let out = replace_entry_line(raw, "01A", "- après <!-- remplace: 01A --> ^01C").unwrap();
+        assert_eq!(
+            out,
+            "# M\n- après <!-- remplace: 01A --> ^01C\n- autre ^01B\n"
+        );
+        assert!(replace_entry_line(raw, "01Z", "- x").is_none());
     }
 }

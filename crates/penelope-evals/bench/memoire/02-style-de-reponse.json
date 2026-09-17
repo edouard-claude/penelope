@@ -1,0 +1,44 @@
+{
+  "id": "style-de-reponse",
+  "titre": "Préférence remplacée, préférence nouvelle, déduction non endossée, humeur du jour",
+  "vault": {
+    "profil.md": "# Profil du propriétaire\n\n## Style\n- Toujours tutoyer le propriétaire <!-- depuis: 2026-05-02 --> ^01STYLETUTOI\n"
+  },
+  "echanges": [
+    {
+      "session": "s1",
+      "proprietaire": "Désormais vouvoie-moi dans tes réponses. Et fais court : pas d'emoji, en français. Je suis crevé aujourd'hui.",
+      "candidats": [
+        {"type": "preference", "texte": "Désormais, vouvoyer le propriétaire dans les réponses", "importance": 8},
+        {"type": "preference", "texte": "Réponses courtes, sans emoji, en français", "importance": 7},
+        {"type": "fait", "texte": "Le propriétaire semble préférer les listes à puces", "importance": 4},
+        {"type": "fait", "texte": "Le propriétaire est fatigué aujourd'hui", "importance": 3}
+      ]
+    }
+  ],
+  "simule": {
+    "tri": [
+      {"candidat": "vouvoyer le propriétaire", "durable": true, "utile": true, "precis": true, "introuvable": true, "endosse": true, "justification": "remplace le tutoiement, dit par le propriétaire"},
+      {"candidat": "Réponses courtes", "durable": true, "utile": true, "precis": true, "introuvable": true, "endosse": true, "justification": "préférence de style explicite"},
+      {"candidat": "listes à puces", "durable": true, "utile": true, "precis": true, "introuvable": true, "endosse": false, "justification": "supposition de l'agent"},
+      {"candidat": "fatigué aujourd'hui", "durable": false, "utile": false, "precis": true, "introuvable": true, "endosse": true, "justification": "sans effet sur la suite"}
+    ],
+    "operations": [
+      {"op": "supersede_entry", "candidat": "vouvoyer le propriétaire", "uid": "01STYLETUTOI", "text": "Toujours vouvoyer le propriétaire dans les réponses", "reason": "le propriétaire préfère désormais le vouvoiement"},
+      {"op": "add_entry", "candidat": "Réponses courtes", "file": "profil.md", "section": "Style", "text": "Réponses courtes, sans emoji, en français", "importance": 7},
+      {"op": "add_entry", "candidat": "listes à puces", "file": "profil.md", "section": "Style", "text": "Le propriétaire préfère les listes à puces"}
+    ]
+  },
+  "attendu": {
+    "garde": ["vouvoyer le propriétaire", "Réponses courtes, sans emoji"],
+    "journal": [],
+    "ignore": ["listes à puces", "fatigué"],
+    "secrets": [],
+    "perime": ["01STYLETUTOI"],
+    "perime_textes": ["tutoyer"]
+  },
+  "questions": [
+    {"question": "Faut-il tutoyer ou vouvoyer le propriétaire ?", "reponse": "vouvoyer"},
+    {"question": "Quel format de réponse le propriétaire préfère-t-il ?", "reponse": "courtes"}
+  ]
+}

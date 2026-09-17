@@ -1,0 +1,48 @@
+{
+  "id": "migration-infra",
+  "titre": "Hébergeur remplacé, délai de paiement mis à jour, dépôt retrouvable, incident passé, décision",
+  "vault": {
+    "memoire.md": "# Mémoire de fond\n\n## Infrastructure\n- La production Atlas est hébergée chez OVH <!-- depuis: 2026-03-10 --> ^01PRODOVH\n\n## Clients\n- Le client Martin règle ses factures à 30 jours <!-- depuis: 2026-04-01 --> ^01MARTINDELAI\n"
+  },
+  "echanges": [
+    {
+      "session": "s1",
+      "proprietaire": "On a migré la prod Atlas chez Scaleway en août. Martin paie désormais à 45 jours fin de mois. Le dépôt atlas-api est sur GitLab. Le déploiement du 12 septembre a planté puis on l'a relancé. On passe la rétention des sauvegardes de prod à 30 jours.",
+      "candidats": [
+        {"type": "fait", "texte": "La production Atlas a migré chez Scaleway en août 2026", "importance": 8},
+        {"type": "fait", "texte": "Le client Martin règle désormais ses factures à 45 jours fin de mois", "importance": 7},
+        {"type": "fait", "texte": "Le dépôt atlas-api est hébergé sur GitLab", "importance": 5},
+        {"type": "fait", "texte": "Le déploiement de la production Atlas du 12 septembre a échoué puis a été relancé", "importance": 5},
+        {"type": "decision", "texte": "Les sauvegardes de la production Atlas passent à une rétention de 30 jours", "importance": 7}
+      ]
+    }
+  ],
+  "simule": {
+    "tri": [
+      {"candidat": "Scaleway", "durable": true, "utile": true, "precis": true, "introuvable": true, "endosse": true, "justification": "l'hébergeur a changé"},
+      {"candidat": "45 jours", "durable": true, "utile": true, "precis": true, "introuvable": true, "endosse": true, "justification": "nouveau délai de paiement"},
+      {"candidat": "GitLab", "durable": true, "utile": true, "precis": true, "introuvable": false, "endosse": true, "justification": "visible dans le remote git"},
+      {"candidat": "12 septembre", "durable": false, "utile": false, "precis": true, "introuvable": true, "endosse": true, "justification": "incident clos"},
+      {"candidat": "rétention de 30 jours", "durable": true, "utile": true, "precis": true, "introuvable": true, "endosse": true, "justification": "décision d'exploitation"}
+    ],
+    "operations": [
+      {"op": "supersede_entry", "candidat": "Scaleway", "uid": "01PRODOVH", "text": "La production Atlas est hébergée chez Scaleway depuis août 2026", "reason": "migration"},
+      {"op": "replace_entry", "candidat": "45 jours", "uid": "01MARTINDELAI", "text": "Le client Martin règle ses factures à 45 jours fin de mois"},
+      {"op": "add_entry", "candidat": "rétention de 30 jours", "file": "memoire.md", "section": "Infrastructure", "text": "Les sauvegardes de la production Atlas sont gardées 30 jours", "importance": 7},
+      {"op": "add_entry", "candidat": "12 septembre", "file": "projets.md", "text": "Le déploiement de la production Atlas du 12 septembre a échoué puis a été relancé"}
+    ]
+  },
+  "attendu": {
+    "garde": ["Scaleway", "45 jours fin de mois", "gardées 30 jours"],
+    "journal": [],
+    "ignore": ["GitLab", "a échoué"],
+    "secrets": [],
+    "perime": ["01PRODOVH"],
+    "perime_textes": ["chez OVH", "factures à 30 jours"]
+  },
+  "questions": [
+    {"question": "Chez quel hébergeur est la production Atlas ?", "reponse": "Scaleway"},
+    {"question": "Quel est le délai de paiement du client Martin ?", "reponse": "45 jours"},
+    {"question": "Combien de temps sont gardées les sauvegardes de production ?", "reponse": "30 jours"}
+  ]
+}

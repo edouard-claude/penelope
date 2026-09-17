@@ -29,7 +29,10 @@ fn patterns() -> &'static Patterns {
             "clé privée",
         );
         // En-têtes d'autorisation.
-        add(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}", "bearer");
+        add(
+            r"(?i)\b(?:bearer|basic)\s+(?P<v>[A-Za-z0-9._~+/=-]{12,})",
+            "bearer",
+        );
         // JWT.
         add(
             r"\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b",
@@ -42,17 +45,40 @@ fn patterns() -> &'static Patterns {
         add(r"\bglpat-[A-Za-z0-9_-]{16,}\b", "jeton gitlab");
         add(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b", "jeton slack");
         add(r"\bAKIA[0-9A-Z]{16}\b", "clé aws");
+        // Clés secrètes et restreintes Stripe (`sk_test_…`, `rk_live_…`).
+        add(r"\b[sr]k_(?:test|live)_[A-Za-z0-9]{10,}\b", "clé stripe");
         // Jeton de bot Telegram : <digits>:<35 chars>.
         add(r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b", "jeton telegram");
         // Le même, collé au préfixe `bot` d'une URL de la Bot API (issue #26).
         add(r"bot\d{6,12}:[A-Za-z0-9_-]{30,}", "jeton telegram");
         // Affectation explicite d'un secret dans un texte de configuration.
         add(
-            r#"(?i)\b(api[_-]?key|secret|password|passwd|token|private[_-]?key)\b\s*[:=]\s*["']?[^\s"',]{8,}"#,
+            r#"(?i)\b(?:api[_-]?key|secret|password|passwd|token|private[_-]?key)\b\s*[:=]\s*["']?(?P<v>[^\s"',]{8,})"#,
             "affectation de secret",
         );
         Patterns { rules }
     })
+}
+
+/// Référence à un secret rangé, `${SECRET:nom}` : un nom, jamais une valeur.
+fn reference_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"\$\{SECRET:[A-Za-z0-9_.-]+\}").expect("motif de référence valide")
+    })
+}
+
+/// Le texte, références `${SECRET:nom}` blanchies à longueur égale : les positions restent
+/// valables et une référence n'est jamais prise pour un secret (issue #37).
+fn without_references(input: &str) -> std::borrow::Cow<'_, str> {
+    if !input.contains("${SECRET:") {
+        return std::borrow::Cow::Borrowed(input);
+    }
+    std::borrow::Cow::Owned(
+        reference_re()
+            .replace_all(input, |c: &regex::Captures<'_>| " ".repeat(c[0].len()))
+            .into_owned(),
+    )
 }
 
 /// Valeurs exactes à masquer, alimentées par le `SecretStore` au chargement.
@@ -87,6 +113,18 @@ pub fn registered_count() -> usize {
 
 /// Masque tout secret détecté. Idempotent : appliquer deux fois donne le même texte.
 pub fn redact(input: &str) -> String {
+    // Les références `${SECRET:nom}` traversent la redaction intactes.
+    if input.contains("${SECRET:") {
+        let mut out = String::with_capacity(input.len());
+        let mut last = 0;
+        for m in reference_re().find_iter(input) {
+            out.push_str(&redact(&input[last..m.start()]));
+            out.push_str(m.as_str());
+            last = m.end();
+        }
+        out.push_str(&redact(&input[last..]));
+        return out;
+    }
     let mut out = input.to_string();
 
     if let Ok(g) = known().read() {
@@ -146,6 +184,7 @@ pub fn luhn(digits: &str) -> bool {
 /// Vrai si le texte contient quelque chose qui ressemble à un secret. Utilisé par le
 /// filtre d'écriture mémoire (§6.10), qui **refuse** l'écriture au lieu de masquer.
 pub fn contains_secret(input: &str) -> bool {
+    let input = &*without_references(input);
     if let Ok(g) = known().read()
         && g.iter().any(|v| input.contains(&**v))
     {
@@ -161,6 +200,7 @@ pub fn contains_secret(input: &str) -> bool {
 /// Les affectations génériques (`token = …`) sont ignorées, trop fréquentes dans les
 /// traces légitimes.
 pub fn leaked_secret_kind(line: &str) -> Option<&'static str> {
+    let line = &*without_references(line);
     if let Ok(g) = known().read()
         && g.iter().any(|v| line.contains(&**v))
     {
@@ -174,8 +214,61 @@ pub fn leaked_secret_kind(line: &str) -> Option<&'static str> {
         .map(|(_, label)| *label)
 }
 
+/// Secret repéré dans un texte : position de la **valeur** (sans le mot-clé qui la
+/// précède) et nature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretSpan {
+    pub start: usize,
+    pub end: usize,
+    pub kind: &'static str,
+}
+
+/// Valeurs de secrets d'un texte, dans l'ordre, sans chevauchement (issue #37) : de quoi
+/// ranger chaque valeur dans le magasin et ne garder en mémoire qu'une référence. Les
+/// numéros de carte n'en font pas partie : ils ne se rangent pas, ils se refusent.
+pub fn secret_spans(input: &str) -> Vec<SecretSpan> {
+    let input = &*without_references(input);
+    let mut found: Vec<SecretSpan> = Vec::new();
+    // Motifs d'abord : à position égale, la nature reconnue l'emporte sur « secret
+    // enregistré » (le tri qui suit est stable).
+    for (re, label) in &patterns().rules {
+        for c in re.captures_iter(input) {
+            let m = c.name("v").or_else(|| c.get(0)).expect("capture complète");
+            found.push(SecretSpan {
+                start: m.start(),
+                end: m.end(),
+                kind: label,
+            });
+        }
+    }
+    if let Ok(g) = known().read() {
+        for v in g.iter() {
+            for (start, _) in input.match_indices(&**v) {
+                found.push(SecretSpan {
+                    start,
+                    end: start + v.len(),
+                    kind: "secret enregistré",
+                });
+            }
+        }
+    }
+    // Le plus long l'emporte à position égale ; un secret contenu dans un autre disparaît.
+    found.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+    let mut out: Vec<SecretSpan> = Vec::new();
+    for f in found {
+        match out.last_mut() {
+            Some(last) if f.start < last.end => {
+                last.end = last.end.max(f.end);
+            }
+            _ => out.push(f),
+        }
+    }
+    out
+}
+
 /// Nature du secret détecté, pour le message d'erreur du filtre d'écriture.
 pub fn secret_kind(input: &str) -> Option<&'static str> {
+    let input = &*without_references(input);
     for (re, label) in &patterns().rules {
         if re.is_match(input) {
             return Some(label);
@@ -325,5 +418,38 @@ mod tests {
         let out = serde_json::to_string(&redact_json(&event)).unwrap();
         assert!(!out.contains("deadbeef"), "{out}");
         forget_secret(secret);
+    }
+
+    #[test]
+    fn secret_spans_point_at_values_only() {
+        let t = "Stripe de test : sk_test_FauxCle0123456, et password: Hunter2Hunter2 ; \
+                 jeton ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.";
+        let spans = secret_spans(t);
+        let values: Vec<&str> = spans.iter().map(|s| &t[s.start..s.end]).collect();
+        assert_eq!(
+            values,
+            vec![
+                "sk_test_FauxCle0123456",
+                "Hunter2Hunter2",
+                "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ]
+        );
+        assert_eq!(spans[0].kind, "clé stripe");
+        // Clé OpenRouter : deux motifs, une seule valeur.
+        let k = "clé sk-or-v1-0123456789abcdef0123456789";
+        assert_eq!(secret_spans(k).len(), 1);
+        assert!(secret_spans("carte 4111 1111 1111 1111").is_empty());
+        assert!(secret_spans("client cus_NffrFeUfNV2Hib").is_empty());
+        // Une référence à un secret rangé n'est pas un secret, et survit à la redaction.
+        let r = "clé Stripe : ${SECRET:cle-stripe-test-1f2e3d4c}, password: Hunter2Hunter2";
+        assert_eq!(secret_kind("${SECRET:cle-stripe-test-1f2e3d4c}"), None);
+        assert!(!contains_secret("${SECRET:cle-stripe-test-1f2e3d4c}"));
+        let spans = secret_spans(r);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(&r[spans[0].start..spans[0].end], "Hunter2Hunter2");
+        assert_eq!(
+            redact(r),
+            format!("clé Stripe : ${{SECRET:cle-stripe-test-1f2e3d4c}}, {MASK}")
+        );
     }
 }

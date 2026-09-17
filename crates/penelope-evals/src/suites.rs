@@ -49,6 +49,12 @@ pub fn all_suites() -> Vec<Suite> {
             "§6",
         ),
         s(
+            "mem-bench",
+            false,
+            "Banc d'essai du rêve : tri, mises à jour, journal, secrets, questions (modèle simulé)",
+            "§6",
+        ),
+        s(
             "mcp-conformance",
             false,
             "Matrice versions × transports × fonctionnalités, OAuth mock",
@@ -100,6 +106,12 @@ pub fn all_suites() -> Vec<Suite> {
             "mem-longitudinal",
             true,
             "14 jours simulés de conversations",
+            "§6",
+        ),
+        s(
+            "mem-bench-live",
+            true,
+            "Banc d'essai du rêve avec le vrai modèle de consolidation",
             "§6",
         ),
         s(
@@ -172,6 +184,10 @@ pub fn cargo_filter(suite: &str) -> Option<(&'static str, Vec<String>)> {
         "arch" => ("test", args(vec!["-p", "penelope-archtest"])),
         "ctx-safety" => ("test", args(vec!["-p", "penelope-context", "ctx_safety"])),
         "mem-learning" => ("test", args(vec!["-p", "penelope-memory"])),
+        "mem-bench" => (
+            "test",
+            args(vec!["-p", "penelope-evals", "--test", "mem_bench"]),
+        ),
         "mcp-conformance" => (
             "test",
             args(vec!["-p", "penelope-evals", "--test", "mcp_conformance"]),
@@ -198,6 +214,7 @@ pub fn cargo_filter(suite: &str) -> Option<(&'static str, Vec<String>)> {
         // Suites réseau : tests ignorés par défaut, lancés explicitement.
         "ctx-recall" => live("ctx_recall"),
         "mem-longitudinal" => live("mem_longitudinal"),
+        "mem-bench-live" => live("mem_bench"),
         "live-openrouter" => live("live_openrouter"),
         "live-telegram" => live("live_telegram"),
         "ab-hermes" => live("ab_hermes"),
@@ -226,7 +243,9 @@ fn live(test: &str) -> (&'static str, Vec<String>) {
 /// Variables d'environnement qu'une suite réseau exige.
 pub fn required_env(suite: &str) -> &'static [&'static str] {
     match suite {
-        "ctx-recall" | "mem-longitudinal" | "live-openrouter" => &["OPENROUTER_API_KEY"],
+        "ctx-recall" | "mem-longitudinal" | "mem-bench-live" | "live-openrouter" => {
+            &["OPENROUTER_API_KEY"]
+        }
         "live-telegram" => &[
             "PENELOPE_LIVE_TELEGRAM_TOKEN",
             "PENELOPE_LIVE_TELEGRAM_CHAT",
@@ -260,10 +279,12 @@ mod tests {
             "live-openrouter",
             "live-telegram",
             "ab-hermes",
+            "mem-bench",
+            "mem-bench-live",
         ] {
             assert!(names.contains(&expected), "suite manquante : {expected}");
         }
-        assert_eq!(all_suites().len(), 16);
+        assert_eq!(all_suites().len(), 18);
     }
 
     #[test]
@@ -278,7 +299,7 @@ mod tests {
         ] {
             assert_eq!(requires_network(name), Some(network), "{name}");
         }
-        assert_eq!(offline_suites().len(), 11);
+        assert_eq!(offline_suites().len(), 12);
     }
 
     #[test]

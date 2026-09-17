@@ -1,0 +1,51 @@
+{
+  "id": "deja-connu",
+  "titre": "Fait déjà en mémoire, règle redite dans deux sessions, rendez-vous de la semaine",
+  "vault": {
+    "memoire.md": "# Mémoire de fond\n\n## Équipe\n- Les réunions d'équipe ont lieu le mardi à 9 h <!-- depuis: 2026-02-01 --> ^01REUNIONMARDI\n"
+  },
+  "echanges": [
+    {
+      "session": "s1",
+      "proprietaire": "Rappel, les réunions d'équipe c'est le mardi à 9 h. Après une réunion, propose toujours un résumé en trois points.",
+      "candidats": [
+        {"type": "fait", "texte": "Les réunions d'équipe ont lieu le mardi à 9 h", "importance": 6},
+        {"type": "preference", "texte": "Toujours proposer un résumé en trois points après une réunion", "importance": 7}
+      ]
+    },
+    {
+      "session": "s2",
+      "proprietaire": "Comme d'habitude, résumé en trois points après chaque réunion. J'ai un point avec le client Martin jeudi à 14 h.",
+      "candidats": [
+        {"type": "preference", "texte": "Après chaque réunion, toujours proposer un résumé en trois points", "importance": 7},
+        {"type": "fait", "texte": "Le propriétaire a un rendez-vous avec le client Martin jeudi à 14 h", "importance": 5}
+      ]
+    }
+  ],
+  "simule": {
+    "tri": [
+      {"candidat": "mardi à 9 h", "durable": true, "utile": true, "precis": true, "introuvable": true, "endosse": true, "justification": "déjà en mémoire"},
+      {"candidat": "Toujours proposer un résumé", "durable": true, "utile": true, "precis": true, "introuvable": true, "endosse": true, "justification": "règle de travail"},
+      {"candidat": "Après chaque réunion", "durable": true, "utile": true, "precis": true, "introuvable": true, "endosse": true, "justification": "même règle, redite"},
+      {"candidat": "jeudi à 14 h", "durable": false, "utile": true, "precis": true, "introuvable": true, "endosse": true, "justification": "rendez-vous de la semaine", "expire": "2026-09-18"}
+    ],
+    "operations": [
+      {"op": "noop", "candidat": "mardi à 9 h", "reason": "déjà en mémoire (01REUNIONMARDI)"},
+      {"op": "add_entry", "candidat": "Toujours proposer un résumé", "file": "profil.md", "section": "Réunions", "text": "Toujours proposer un résumé en trois points après une réunion"},
+      {"op": "add_entry", "candidat": "Après chaque réunion", "file": "profil.md", "section": "Réunions", "text": "Toujours proposer un résumé en trois points après une réunion"},
+      {"op": "add_entry", "candidat": "mardi à 9 h", "file": "memoire.md", "section": "Équipe", "text": "Les réunions d'équipe ont lieu le mardi à 9 h"}
+    ]
+  },
+  "attendu": {
+    "garde": ["résumé en trois points"],
+    "journal": ["jeudi à 14 h"],
+    "ignore": [],
+    "secrets": [],
+    "perime": [],
+    "perime_textes": []
+  },
+  "questions": [
+    {"question": "Quand ont lieu les réunions d'équipe ?", "reponse": "mardi"},
+    {"question": "Que faire après une réunion ?", "reponse": "trois points"}
+  ]
+}
