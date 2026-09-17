@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1286 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1287 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -642,7 +642,7 @@ compaction de fond sur la taille réelle du contexte (#40).
 
 ### 0.16.1
 
-Verrou de session à jeton de clôture (#43).
+Verrou de session à jeton de clôture (#43), écrivain à l'épreuve des paniques (#44).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -654,6 +654,11 @@ Verrou de session à jeton de clôture (#43).
   expiration puis `recover_on_boot`.
 - **Réglages** : `runners.heartbeat` doit valoir au plus la moitié de `runners.lease_ttl`,
   refusé par `penelope config validate` et par la table de cohérence.
+- **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
+  transaction (rien de commité), est journalisée en `error`, comptée
+  (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et
+  renvoyée au demandeur (`WriterPanic`, qui nomme la panique) au lieu de tuer le thread
+  écrivain. Un daemon qui lit mais n'écrit plus, sans alerte, n'est plus possible.
 
 ### 0.16.0
 

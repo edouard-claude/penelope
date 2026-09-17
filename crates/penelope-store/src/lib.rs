@@ -7,7 +7,10 @@
 //! Garanties :
 //! - un **seul** écrivain (thread dédié, file MPSC) : jamais de `SQLITE_BUSY` en écriture ;
 //! - lectures concurrentes sur un pool de connexions en lecture seule ;
-//! - toute écriture est une transaction : `kill -9` ne laisse jamais d'état partiel (§0.2).
+//! - toute écriture est une transaction : `kill -9` ne laisse jamais d'état partiel (§0.2) ;
+//! - une **panique** dans une closure d'écriture annule sa transaction, est journalisée et
+//!   comptée, puis renvoyée à son demandeur : l'écrivain survit et les écritures suivantes
+//!   passent (issue #44).
 
 #![forbid(unsafe_code)]
 
@@ -54,6 +57,9 @@ pub enum StoreError {
     #[error("l'acteur écrivain est arrêté")]
     WriterGone,
 
+    #[error("panique dans l'écrivain : {0}")]
+    WriterPanic(String),
+
     #[error("{0}")]
     Other(String),
 }
@@ -67,6 +73,44 @@ impl StoreError {
 }
 
 type WriteJob = Box<dyn FnOnce(&mut Connection) + Send>;
+
+/// Paniques survenues dans une closure d'écriture depuis le démarrage du processus
+/// (`penelope_store_writer_panics_total`, issue #44).
+static WRITER_PANICS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Compteur de paniques de l'écrivain : zéro attendu, contrôlé par `penelope doctor`.
+pub fn writer_panics() -> u64 {
+    WRITER_PANICS.load(Ordering::SeqCst)
+}
+
+/// Message d'une panique, tel que le thread l'aurait affiché.
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&'static str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panique sans message".into())
+}
+
+/// Exécute une écriture en filet : une panique annule la transaction (rollback au drop),
+/// est journalisée et comptée, et repart vers le demandeur au lieu de tuer l'écrivain.
+fn guarded<T, F>(conn: &mut Connection, f: F) -> Result<T>
+where
+    F: FnOnce(&Transaction<'_>) -> Result<T>,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_in_transaction(conn, f))) {
+        Ok(r) => r,
+        Err(payload) => {
+            let msg = panic_text(payload.as_ref());
+            WRITER_PANICS.fetch_add(1, Ordering::SeqCst);
+            tracing::error!(
+                panique = %msg,
+                "panique dans une écriture : transaction annulée, l'écrivain continue"
+            );
+            Err(StoreError::WriterPanic(msg))
+        }
+    }
+}
 
 /// Poignée clonable vers la base.
 #[derive(Clone)]
@@ -108,7 +152,17 @@ impl Store {
             .name("penelope-store-writer".into())
             .spawn(move || {
                 while let Some(job) = rx.blocking_recv() {
-                    job(&mut writer);
+                    // Second filet : une panique hors transaction (maintenance) ne doit
+                    // pas non plus emporter la file d'écriture (#44).
+                    if let Err(payload) =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&mut writer)))
+                    {
+                        WRITER_PANICS.fetch_add(1, Ordering::SeqCst);
+                        tracing::error!(
+                            panique = %panic_text(payload.as_ref()),
+                            "panique dans l'écrivain : travail abandonné, la file continue"
+                        );
+                    }
                 }
                 // Fermeture propre : checkpoint WAL pour laisser une base compacte.
                 let _ = writer.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
@@ -160,7 +214,7 @@ impl Store {
         }
         let (tx, rx) = oneshot::channel();
         let job: WriteJob = Box::new(move |conn| {
-            let res = run_in_transaction(conn, f);
+            let res = guarded(conn, f);
             let _ = tx.send(res);
         });
         self.inner
@@ -178,7 +232,7 @@ impl Store {
     {
         let (tx, rx) = std::sync::mpsc::channel();
         let job: WriteJob = Box::new(move |conn| {
-            let _ = tx.send(run_in_transaction(conn, f));
+            let _ = tx.send(guarded(conn, f));
         });
         self.inner
             .writer_tx
@@ -383,6 +437,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 32);
+    }
+
+    /// #44 : une panique dans une closure d'écriture ne tue plus l'écrivain. La
+    /// transaction est annulée, le demandeur reçoit la panique nommée, et l'écriture
+    /// suivante passe.
+    #[tokio::test]
+    async fn a_panicking_write_does_not_kill_the_writer() {
+        let s = Store::open_memory().unwrap();
+        s.write(|tx| kv_set(tx, "avant", "1")).await.unwrap();
+        let avant = writer_panics();
+
+        // La panique est attendue : pas de trace sur stderr pendant le test.
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let e = s
+            .write(|tx| {
+                kv_set(tx, "jamais", "2")?;
+                let v: Vec<u8> = Vec::new();
+                let _ = v[3];
+                Ok(())
+            })
+            .await
+            .unwrap_err();
+        std::panic::set_hook(hook);
+
+        let msg = e.to_string();
+        assert!(matches!(e, StoreError::WriterPanic(_)), "{msg}");
+        assert!(msg.contains("index out of bounds"), "{msg}");
+        assert_eq!(writer_panics(), avant + 1);
+
+        // L'écrivain est vivant, et le travail qui a paniqué n'a rien commité.
+        s.write(|tx| kv_set(tx, "apres", "3")).await.unwrap();
+        let (avant_v, apres_v, jamais): (String, String, i64) = s
+            .read(|c| {
+                Ok((
+                    c.query_row("SELECT v FROM kv WHERE k='avant'", [], |r| r.get(0))?,
+                    c.query_row("SELECT v FROM kv WHERE k='apres'", [], |r| r.get(0))?,
+                    c.query_row("SELECT count(*) FROM kv WHERE k='jamais'", [], |r| r.get(0))?,
+                ))
+            })
+            .await
+            .unwrap();
+        assert_eq!((avant_v.as_str(), apres_v.as_str(), jamais), ("1", "3", 0));
     }
 
     #[test]

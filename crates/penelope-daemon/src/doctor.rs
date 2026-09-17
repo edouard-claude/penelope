@@ -129,6 +129,9 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     // Horloge : une dérive fausse tous les schedules.
     checks.push(clock_check(s));
 
+    // Paniques de l'écrivain : la base a survécu, mais une écriture a été perdue (#44).
+    checks.push(writer_panics_check());
+
     // Effets en attente de décision.
     let unknown = s
         .effects
@@ -548,6 +551,25 @@ pub async fn embedding_check(d: &crate::runtime::Daemon) -> DoctorCheck {
             format!("`{model}` ne répond pas en 15 s : recherche lexicale seule"),
             fix,
         ),
+    }
+}
+
+/// #44 : une panique dans une closure d'écriture est rattrapée, mais elle dit qu'un
+/// chemin d'écriture est cassé. Le compteur remonte dans `doctor`.
+fn writer_panics_check() -> DoctorCheck {
+    let n = penelope_store::writer_panics();
+    if n == 0 {
+        DoctorCheck::ok("store.writer", "Écrivain de la base", "aucune panique")
+    } else {
+        DoctorCheck::fail(
+            "store.writer",
+            "Écrivain de la base",
+            format!(
+                "{n} panique(s) rattrapée(s) depuis le démarrage : l'écriture concernée a \
+                 été annulée, le journal la nomme en niveau `error`"
+            ),
+            None,
+        )
     }
 }
 
