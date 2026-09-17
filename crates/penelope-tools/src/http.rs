@@ -131,6 +131,35 @@ pub async fn check_resolved_addresses(host: &str, port: u16) -> ToolResult<()> {
     Ok(())
 }
 
+/// Taille annoncée au-delà de laquelle la réponse est refusée sans être lue : ce multiple
+/// de `max_bytes` sépare « une page un peu longue, tronquée » d'« un fichier qu'on ne veut
+/// pas » (issue #64).
+const OVERSIZE_FACTOR: u64 = 20;
+
+/// Lit le corps jusqu'à `max_bytes`, puis coupe la connexion : le second retour dit si
+/// quelque chose a été laissé (issue #64).
+async fn read_capped(resp: reqwest::Response, max_bytes: usize) -> ToolResult<(Vec<u8>, bool)> {
+    use futures::StreamExt;
+    let mut stream = resp.bytes_stream();
+    let mut out: Vec<u8> = Vec::new();
+    let mut truncated = false;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| ToolError::Network(e.to_string()))?;
+        if out.len() >= max_bytes {
+            truncated = true;
+            break;
+        }
+        let room = max_bytes - out.len();
+        if chunk.len() > room {
+            out.extend_from_slice(&chunk[..room]);
+            truncated = true;
+            break;
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok((out, truncated))
+}
+
 /// Exécute la requête. Les redirections sont **suivies manuellement** pour re-vérifier
 /// chaque saut.
 // Les garde-fous (liste blanche, IP privées, taille) sont des paramètres explicites :
@@ -209,13 +238,20 @@ pub async fn fetch(
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| ToolError::Network(e.to_string()))?;
-        let truncated = bytes.len() > max_bytes;
-        let slice = &bytes[..bytes.len().min(max_bytes)];
-        let text = String::from_utf8_lossy(slice).to_string();
+        // Taille annoncée absurde : refusée avant d'ouvrir le robinet (issue #64).
+        if let Some(len) = resp.content_length()
+            && len > (max_bytes as u64).saturating_mul(OVERSIZE_FACTOR)
+        {
+            return Err(ToolError::Denied(format!(
+                "réponse de {len} octets annoncée, au-delà de {} fois la limite de \
+                 {max_bytes} octets",
+                OVERSIZE_FACTOR
+            )));
+        }
+        // Lecture par morceaux : un corps de 200 Mo ne passe plus en mémoire pour être
+        // coupé ensuite à `max_bytes` (issue #64).
+        let (bytes, truncated) = read_capped(resp, max_bytes).await?;
+        let text = String::from_utf8_lossy(&bytes).to_string();
 
         return Ok(json!({
             "url": url.to_string(),
@@ -232,6 +268,142 @@ pub async fn fetch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Serveur minimal : rend `response` à chaque connexion. Renvoie son adresse.
+    async fn one_shot(response: Vec<u8>) -> std::net::SocketAddr {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let body = response.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let _ = sock.read(&mut buf).await;
+                    let _ = sock.write_all(&body).await;
+                    let _ = sock.flush().await;
+                });
+            }
+        });
+        addr
+    }
+
+    /// Client de test : aucune redirection suivie par lui-même (comme en production), et
+    /// `essai.test` épinglé sur le serveur local, pour partir d'un nom public.
+    fn client(addr: std::net::SocketAddr) -> reqwest::Client {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .resolve("essai.test", addr)
+            .build()
+            .unwrap()
+    }
+
+    fn url_of(addr: std::net::SocketAddr, path: &str) -> String {
+        format!("http://essai.test:{}{path}", addr.port())
+    }
+
+    /// #64 : une redirection vers la boucle locale est refusée, même quand le premier
+    /// saut est autorisé : c'est le scénario SSRF que le module dit couvrir.
+    #[tokio::test]
+    async fn a_redirect_to_a_private_address_is_refused() {
+        let secret = one_shot(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nSECRET".to_vec(),
+        )
+        .await;
+        let redirect = one_shot(
+            format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{}/final\r\n\
+                 Content-Length: 0\r\nConnection: close\r\n\r\n",
+                secret.port()
+            )
+            .into_bytes(),
+        )
+        .await;
+
+        let e = fetch(
+            &client(redirect),
+            &url_of(redirect, "/start"),
+            "GET",
+            &[],
+            None,
+            &[],
+            4096,
+            false,
+        )
+        .await
+        .unwrap_err();
+        let m = e.to_string();
+        assert!(m.contains("privée") || m.contains("réservée"), "{m}");
+    }
+
+    /// #64 : une redirection hors liste blanche est refusée.
+    #[tokio::test]
+    async fn a_redirect_outside_the_allowlist_is_refused() {
+        let redirect = one_shot(
+            b"HTTP/1.1 302 Found\r\nLocation: https://exfiltration.example/x\r\n\
+              Content-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_vec(),
+        )
+        .await;
+        let e = fetch(
+            &client(redirect),
+            &url_of(redirect, "/start"),
+            "GET",
+            &[],
+            None,
+            &["essai.test".to_string()],
+            4096,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(e.to_string().contains("liste"), "{e}");
+    }
+
+    /// #64 : un corps sans taille annoncée est coupé à `max_bytes` sans être lu en entier.
+    #[tokio::test]
+    async fn a_huge_body_is_read_up_to_the_cap_only() {
+        let mut body =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n".to_vec();
+        body.extend(std::iter::repeat_n(b'a', 4 * 1024 * 1024));
+        let addr = one_shot(body).await;
+        let v = fetch(
+            &client(addr),
+            &url_of(addr, "/gros"),
+            "GET",
+            &[],
+            None,
+            &[],
+            1024,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(v["truncated"], true, "{v}");
+        assert_eq!(v["body"].as_str().unwrap_or_default().len(), 1024);
+    }
+
+    /// #64 : une taille annoncée absurde est refusée avant lecture.
+    #[tokio::test]
+    async fn an_oversized_content_length_is_refused_before_reading() {
+        let addr = one_shot(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 100000000\r\nConnection: close\r\n\r\n".to_vec(),
+        )
+        .await;
+        let e = fetch(
+            &client(addr),
+            &url_of(addr, "/enorme"),
+            "GET",
+            &[],
+            None,
+            &[],
+            1024,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(e.to_string().contains("100000000"), "{e}");
+    }
 
     #[test]
     fn private_addresses_are_blocked() {

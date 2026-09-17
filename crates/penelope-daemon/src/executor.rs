@@ -195,7 +195,10 @@ impl NativeToolExecutor {
             env,
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(60))
-                .redirect(reqwest::redirect::Policy::limited(5))
+                // Aucune redirection suivie par le client : `http::fetch` les suit lui-même pour
+                // revérifier chaque saut (liste blanche, adresses privées), sinon la
+                // vérification ne s'exécute jamais (issue #64).
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap_or_default(),
             locks: Arc::new(penelope_tools::fs::FileLocks::new()),
