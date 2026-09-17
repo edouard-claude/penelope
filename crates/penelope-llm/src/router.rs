@@ -304,14 +304,10 @@ impl Router {
         Ok(())
     }
 
-    /// Faut-il émuler le tool calling pour ce modèle ? (§10.1)
-    pub fn needs_tool_emulation(&self, model_id: &str) -> bool {
-        match self.catalog.get(model_id) {
-            Some(info) => !info.supports_tools(),
-            // Modèle inconnu : on suppose le tool calling natif plutôt que de dégrader
-            // inutilement un modèle récent absent du catalogue.
-            None => false,
-        }
+    /// Ce modèle appelle-t-il des outils ? `None` : le catalogue ne le connaît pas, on ne
+    /// préjuge de rien (issue #54).
+    pub fn supports_tools(&self, model_id: &str) -> Option<bool> {
+        self.catalog.get(model_id).map(|i| i.supports_tools())
     }
 }
 
@@ -537,7 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_emulation_follows_the_catalog() {
+    fn tool_support_follows_the_catalog() {
         let c = Catalog::new();
         let mut sans = ModelInfo::minimal("vieux/modele", "openrouter", 8192);
         sans.supported_parameters.clear();
@@ -546,9 +542,9 @@ mod tests {
             sans,
         ]);
         let r = Router::new(c);
-        assert!(r.needs_tool_emulation("vieux/modele"));
-        assert!(!r.needs_tool_emulation("moderne/modele"));
-        assert!(!r.needs_tool_emulation("inconnu/modele"));
+        assert_eq!(r.supports_tools("vieux/modele"), Some(false));
+        assert_eq!(r.supports_tools("moderne/modele"), Some(true));
+        assert_eq!(r.supports_tools("inconnu/modele"), None);
     }
 
     #[test]

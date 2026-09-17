@@ -354,7 +354,7 @@ pub fn parse_arguments(raw: &str) -> Value {
     match serde_json::from_str::<Value>(trimmed) {
         Ok(v) if v.is_object() => v,
         Ok(v) => serde_json::json!({ "__value": v }),
-        Err(_) => match crate::emulation::extract_json(trimmed) {
+        Err(_) => match crate::json_scan::extract_json(trimmed) {
             Some(v) if v.is_object() => v,
             _ => serde_json::json!({ "__raw": trimmed }),
         },

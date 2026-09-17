@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod catalog;
-pub mod emulation;
+pub mod json_scan;
 pub mod mock;
 pub mod provider;
 pub mod router;

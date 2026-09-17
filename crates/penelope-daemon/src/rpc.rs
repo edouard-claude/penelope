@@ -457,6 +457,18 @@ impl Rpc {
             method::MODEL_SET => {
                 let alias = required_str(p, "alias")?;
                 let model = required_str(p, "model")?;
+                // Un alias qui sert un rôle à outils doit viser un modèle qui en appelle :
+                // l'émulation n'existe plus (issue #54, décision 0009).
+                let bare_new = penelope_llm::catalog::strip_provider(&model);
+                if s.catalog.get(bare_new).map(|i| i.supports_tools()) == Some(false)
+                    && crate::doctor::alias_needs_tools(&s.config.config(), &alias)
+                {
+                    anyhow::bail!(
+                        "`{model}` n'appelle pas d'outils : l'alias `{alias}` sert un rôle qui \
+                         en a besoin. Choisir un modèle avec tool calling, ou donner ce \
+                         modèle à un alias sans outils."
+                    );
+                }
                 let g = self.daemon.publish_config("cli", |c| {
                     c.models.aliases.insert(alias.clone(), model.clone());
                     Ok(vec![format!("models.aliases.{alias}")])
@@ -1343,6 +1355,55 @@ mod tests {
 
     async fn call(rpc: &Rpc, method: &str, params: Value) -> RpcResponse {
         rpc.handle(RpcRequest::new(1, method, params)).await
+    }
+
+    /// #54 : un modèle qui n'appelle pas d'outils est refusé pour un alias de
+    /// conversation, et accepté pour un rôle de service. `doctor` le signale ensuite.
+    #[tokio::test]
+    async fn a_model_without_tool_calling_is_refused_for_a_conversation_alias() {
+        let (_d, r) = rpc().await;
+        let s = &r.daemon.services;
+        let mut sans =
+            penelope_llm::catalog::ModelInfo::minimal("vieux/modele", "openrouter", 8192);
+        sans.supported_parameters.clear();
+        s.catalog.upsert(vec![
+            sans,
+            penelope_llm::catalog::ModelInfo::minimal("bon/modele", "openrouter", 128_000),
+        ]);
+
+        let refus = call(
+            &r,
+            method::MODEL_SET,
+            json!({"alias": "main", "model": "openrouter:vieux/modele"}),
+        )
+        .await;
+        let message = refus.error.expect("refus attendu").message;
+        assert!(message.contains("n'appelle pas d'outils"), "{message}");
+
+        // Un rôle de service n'appelle pas d'outils : le même modèle y est bienvenu.
+        let ok = call(
+            &r,
+            method::MODEL_SET,
+            json!({"alias": "stt", "model": "openrouter:vieux/modele"}),
+        )
+        .await;
+        assert!(ok.error.is_none(), "{:?}", ok.error);
+
+        // Configuration déjà en place : `doctor` le dit.
+        r.daemon
+            .publish_config("test", |c| {
+                c.models
+                    .aliases
+                    .insert("main".into(), "openrouter:vieux/modele".into());
+                Ok(vec!["models.aliases.main".into()])
+            })
+            .unwrap();
+        let checks = crate::doctor::run(s).await;
+        let tools = checks
+            .iter()
+            .find(|c| c.id == "models.tools")
+            .expect("contrôle des outils");
+        assert!(!tools.ok, "{tools:?}");
     }
 
     #[tokio::test]

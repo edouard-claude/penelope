@@ -132,6 +132,9 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     // Paniques de l'écrivain : la base a survécu, mais une écriture a été perdue (#44).
     checks.push(writer_panics_check());
 
+    // Un alias de conversation vers un modèle sans tool calling ne marchera pas (#54).
+    checks.push(tool_calling_check(s).await);
+
     // Effets en attente de décision.
     let unknown = s
         .effects
@@ -551,6 +554,72 @@ pub async fn embedding_check(d: &crate::runtime::Daemon) -> DoctorCheck {
             format!("`{model}` ne répond pas en 15 s : recherche lexicale seule"),
             fix,
         ),
+    }
+}
+
+/// Rôles qui appellent des outils : un alias qui les sert doit viser un modèle avec tool
+/// calling (issue #54). Les rôles de service (`stt`, `tts`, `embeddings`, `classifier`,
+/// `summarizer`, `titler`) n'en appellent pas.
+const TOOLLESS_ROLES: &[&str] = &[
+    "stt",
+    "tts",
+    "embeddings",
+    "classifier",
+    "summarizer",
+    "titler",
+    "vision",
+];
+
+/// Vrai si cet alias sert un rôle (ou un palier de routage) qui appelle des outils.
+pub fn alias_needs_tools(cfg: &penelope_kernel::config::Config, alias: &str) -> bool {
+    let routing = &cfg.models.routing;
+    if [&routing.low, &routing.medium, &routing.high]
+        .iter()
+        .any(|a| a.as_str() == alias)
+    {
+        return true;
+    }
+    cfg.models
+        .roles
+        .iter()
+        .any(|(role, a)| a == alias && !TOOLLESS_ROLES.contains(&role.as_str()))
+}
+
+/// #54 : un alias de conversation qui vise un modèle sans tool calling ne marchera pas,
+/// et rien ne l'émule.
+async fn tool_calling_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "models.tools";
+    const LABEL: &str = "Modèles et outils";
+    let cfg = s.config.config();
+    if s.catalog.is_empty() {
+        return DoctorCheck::ok(ID, LABEL, "catalogue pas encore chargé");
+    }
+    let mut sans: Vec<String> = Vec::new();
+    for (alias, model) in &cfg.models.aliases {
+        if !alias_needs_tools(&cfg, alias) {
+            continue;
+        }
+        let bare = penelope_llm::catalog::strip_provider(model);
+        if s.catalog.get(bare).map(|i| i.supports_tools()) == Some(false) {
+            sans.push(format!("`{alias}` → `{model}`"));
+        }
+    }
+    if sans.is_empty() {
+        DoctorCheck::ok(
+            ID,
+            LABEL,
+            "tous les alias de conversation appellent des outils",
+        )
+    } else {
+        DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!(
+                "{} n'appelle(nt) pas d'outils : ces alias servent un rôle qui en a besoin",
+                sans.join(", ")
+            ),
+            Some("penelope model set <alias> <modèle avec tool calling>".into()),
+        )
     }
 }
 
