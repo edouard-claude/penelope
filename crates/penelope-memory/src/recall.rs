@@ -23,6 +23,9 @@ pub struct CurrentContext {
     pub serveur_mcp: Option<String>,
     /// Jusqu'à 4 projets actifs par session, éviction LRU.
     pub active_projects: Vec<String>,
+    /// uid déjà servis d'office dans l'instantané (T2) : la voie 1 ne les répète pas
+    /// dans T4 (issue #62).
+    pub injected_uids: Vec<String>,
 }
 
 impl CurrentContext {
@@ -297,6 +300,10 @@ impl<'a> Recall<'a> {
             if h.entry.level == Level::Episodic {
                 continue;
             }
+            // Déjà dans l'instantané : le répéter coûterait deux fois (issue #62).
+            if ctx.injected_uids.contains(&h.entry.uid) {
+                continue;
+            }
             let cost = (h.entry.text.chars().count() as u64 / 4).max(1);
             if tokens_used + cost > self.params.budget_tokens {
                 break;
@@ -379,6 +386,15 @@ impl Snapshots {
     }
 
     pub fn build_block(entries: &[crate::index::IndexedEntry], budget_tokens: u64) -> String {
+        Self::build_block_with_uids(entries, budget_tokens).0
+    }
+
+    /// Bloc injecté **et** les uid qu'il contient : ce qui est servi d'office n'a pas
+    /// d'usage mesurable par entrée, et n'a pas à être rappelé une seconde fois (#62).
+    pub fn build_block_with_uids(
+        entries: &[crate::index::IndexedEntry],
+        budget_tokens: u64,
+    ) -> (String, Vec<String>) {
         let mut sorted: Vec<&crate::index::IndexedEntry> = entries.iter().collect();
         sorted.sort_by(|a, b| {
             b.importance
@@ -387,6 +403,7 @@ impl Snapshots {
                 .then_with(|| a.uid.cmp(&b.uid))
         });
         let mut out = String::new();
+        let mut uids = Vec::new();
         let mut used = 0u64;
         for e in sorted {
             let cost = (e.text.chars().count() as u64 / 4).max(1);
@@ -395,8 +412,9 @@ impl Snapshots {
             }
             used += cost;
             out.push_str(&format!("- {}\n", e.text));
+            uids.push(e.uid.clone());
         }
-        out
+        (out, uids)
     }
 }
 

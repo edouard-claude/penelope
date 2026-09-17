@@ -317,7 +317,8 @@ pub async fn build_tiers_in(
         // contexte du tour, sans quoi aucune règle défaisable n'est rappelée et le
         // facteur « projet actif » reste inopérant (issue #58).
         let practices = practices_of(&vault);
-        let ctx = current_context(s, user_text, episode.map(|(sid, _)| sid)).await;
+        let mut ctx = current_context(s, user_text, episode.map(|(sid, _)| sid)).await;
+        ctx.injected_uids = snapshot_uids(s).await;
         let recall = penelope_memory::Recall::new(
             &s.memory,
             penelope_memory::RecallParams::from_config(&cfg.memory),
@@ -402,6 +403,32 @@ async fn current_context(
         ctx.touch_project(&key);
     }
     ctx
+}
+
+/// uid servis d'office dans l'instantané T2 : ni rappelés une seconde fois, ni comptés
+/// « jamais rappelés » (issue #62).
+pub(crate) async fn snapshot_uids(s: &Services) -> Vec<String> {
+    let cfg = s.config.config();
+    let hidden = s.memory.hidden_uids().await.unwrap_or_default();
+    let mut out = Vec::new();
+    for (level, budget) in [
+        (
+            penelope_memory::Level::Profil,
+            cfg.memory.profile_budget_tokens,
+        ),
+        (penelope_memory::Level::Coeur, cfg.memory.core_budget_tokens),
+        (
+            penelope_memory::Level::Projet,
+            cfg.memory.project_budget_tokens,
+        ),
+    ] {
+        let mut entries = s.memory.by_level(level).await.unwrap_or_default();
+        entries.retain(|e| !hidden.contains(&e.uid));
+        let (_, uids) =
+            penelope_memory::recall::Snapshots::build_block_with_uids(&entries, budget as u64);
+        out.extend(uids);
+    }
+    out
 }
 
 /// Profil, cœur et projets tels que l'index les donne maintenant.
@@ -537,6 +564,32 @@ mod tests {
         ## Écarts observés\n\
         - 2026-09-12 · [[client-x]] : langage imposé par l'existant. <!-- uid: 01J9C --> \
           <!-- quand: client=client-x --> <!-- occurrences: 1 -->\n";
+
+    /// #62 : une entrée du Cœur servie d'office dans T2 n'est pas répétée dans T4 quand
+    /// le message la déclenche.
+    #[tokio::test]
+    async fn an_injected_entry_is_never_recalled_twice() {
+        let (_d, s) = services().await;
+        let vault = vault_dir(&s);
+        std::fs::create_dir_all(&vault).unwrap();
+        crate::vault_ops::remember(
+            &s,
+            &vault,
+            penelope_memory::Level::Coeur,
+            "Le centre de calcul de Gravelines héberge les sauvegardes",
+            "s1",
+        )
+        .await
+        .unwrap();
+
+        let tiers = build_tiers(&s, "où sont les sauvegardes de Gravelines ?", &[], None).await;
+        let whole = format!("{}\n{}", tiers.context, tiers.volatile);
+        assert_eq!(
+            whole.matches("Gravelines").count(),
+            1,
+            "une seule fois dans T2 + T4 : {whole}"
+        );
+    }
 
     /// #58 : une pratique est rappelée avec son défaut quand le message la déclenche, et
     /// son écart observé n'est jamais injecté d'office.

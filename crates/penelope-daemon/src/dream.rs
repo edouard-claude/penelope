@@ -750,13 +750,17 @@ async fn unused_entries(d: &Arc<Daemon>, day: &str) -> Vec<String> {
     let s = &d.services;
     let entries = s
         .memory
-        .unrecalled_since(&[Level::Coeur, Level::Projet], &cutoff)
+        .unrecalled_since(&[Level::Coeur, Level::Projet, Level::Cure], &cutoff)
         .await
         .unwrap_or_default();
+    // Ce qui est servi d'office dans l'instantané n'a pas d'usage mesurable par entrée :
+    // le proposer au retrait retirerait ce qui sert le plus (issue #62).
+    let injected = crate::conversation::snapshot_uids(s).await;
     let vault = crate::conversation::vault_dir(s);
     let resolver = penelope_memory::wiki::Resolver::scan(&vault);
     entries
         .iter()
+        .filter(|e| !injected.contains(&e.uid))
         .take(10)
         .map(|e| {
             format!(
@@ -2987,6 +2991,14 @@ mod tests {
             .record_recall("01MARTIN", "où est Martin ?", true)
             .await
             .unwrap();
+        // Le signal ne porte que sur ce qui n'est pas servi d'office : le budget de
+        // l'instantané est ramené à rien pour ce tour (issue #62).
+        d.publish_config("test", |c| {
+            c.memory.core_budget_tokens = 0;
+            c.memory.project_budget_tokens = 0;
+            Ok(vec!["memory.core_budget_tokens".into()])
+        })
+        .unwrap();
         let o = run(&d, false).await.unwrap();
         assert!(
             o.report
