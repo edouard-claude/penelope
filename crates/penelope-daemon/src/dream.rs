@@ -84,23 +84,43 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
         // Décisions des notes de travail : candidats, jamais réécrits (issue #32).
         if !dry_run {
             let now = s.clock.now_rfc3339();
-            let harvested: Vec<Candidate> = crate::session_notes::harvest(s)
-                .await?
-                .into_iter()
-                .map(|(session, text)| {
+            let mut harvested: Vec<Candidate> = Vec::new();
+            let mut sources: Vec<(String, String)> = Vec::new();
+            for (session, text) in crate::session_notes::harvest(s).await? {
+                // Genre de la session d'origine : une décision notée garde la provenance
+                // de la session où elle a été prise, sinon elle est filtrée sans un mot
+                // (issue #61).
+                let kind = s
+                    .sessions
+                    .get(&session)
+                    .await?
+                    .map(|x| x.kind.as_str().to_string())
+                    .unwrap_or_else(|| "interactive".into());
+                // Une session qui n'autorise pas de candidat (planifiée, sous-agent) ne
+                // passe pas par ce détour : la décision n'est ni enregistrée ni marquée.
+                if !penelope_memory::provenance::session_allows_candidate(&kind, "decision", true) {
+                    continue;
+                }
+                harvested.push(
                     Candidate::new(
                         penelope_memory::CandidateType::Decision,
                         &text,
                         Origin::Agent,
-                        "notes",
+                        &kind,
                         &now,
                     )
                     .in_session(&session)
-                    .with_importance(6)
-                })
-                .collect();
+                    .with_importance(6),
+                );
+                sources.push((session, text));
+            }
             if !harvested.is_empty() {
-                s.candidates.record(harvested, 5).await?;
+                // Pas de plafond de tour ici : ce sont les décisions de toute une journée.
+                let all = harvested.len();
+                s.candidates.record(harvested, all).await?;
+                for (session, text) in &sources {
+                    crate::session_notes::mark_harvested(s, session, text).await?;
+                }
             }
         }
         let candidates = s.candidates.pending(None).await?;
@@ -2110,6 +2130,95 @@ mod tests {
             .in_session(session)
             .with_importance(importance);
         s.candidates.record(vec![c], 5).await.unwrap();
+    }
+
+    /// #61 : une décision notée dans une session interactive devient un candidat, et sept
+    /// décisions dans deux sessions en donnent sept.
+    #[tokio::test]
+    async fn decisions_from_working_notes_become_candidates() {
+        let (_dir, d, p) = daemon().await;
+        let s = &d.services;
+        let mut sessions = Vec::new();
+        for _ in 0..2 {
+            sessions.push(
+                s.sessions
+                    .create(penelope_kernel::session::SessionKind::Chat, None)
+                    .await
+                    .unwrap()
+                    .id
+                    .to_string(),
+            );
+        }
+        let decisions = [
+            "Garder les montants en centimes entiers dans la base",
+            "Les migrations passent par sqlx et jamais à la main",
+            "Le cache de prompt prime sur la fraîcheur du contexte",
+            "Les alertes partent sur Telegram, pas par courriel",
+        ];
+        for (i, sid) in sessions.iter().enumerate() {
+            let take = if i == 0 { 4 } else { 3 };
+            let body = decisions
+                .iter()
+                .cycle()
+                .skip(i)
+                .take(take)
+                .enumerate()
+                .map(|(n, t)| format!("- {t} (session {i}, point {n})"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            crate::session_notes::update(s, sid, "Décisions", &body, false)
+                .await
+                .unwrap();
+        }
+        // Le modèle n'a rien à faire ici : on regarde la file de candidats.
+        p.reply(r#"{"tri": [], "operations": []}"#);
+        let _ = run(&d, false).await.unwrap();
+
+        let pending = s.candidates.pending(None).await.unwrap();
+        assert_eq!(
+            pending.len(),
+            7,
+            "sept décisions, sept candidats : {pending:?}"
+        );
+        assert!(
+            pending
+                .iter()
+                .all(|c| c.origin == Origin::Agent && c.session_kind == "chat"),
+            "{pending:?}"
+        );
+    }
+
+    /// #61 : une décision notée dans une session planifiée n'est ni enregistrée ni
+    /// marquée consommée : elle reste récoltable si la session change de nature.
+    #[tokio::test]
+    async fn a_decision_noted_in_a_scheduled_session_is_not_recorded() {
+        let (_dir, d, p) = daemon().await;
+        let s = &d.services;
+        let sid = s
+            .sessions
+            .create(penelope_kernel::session::SessionKind::Scheduled, None)
+            .await
+            .unwrap()
+            .id
+            .to_string();
+        crate::session_notes::update(
+            s,
+            &sid,
+            "Décisions",
+            "- Ne jamais relancer la veille avant 8 h du matin",
+            false,
+        )
+        .await
+        .unwrap();
+        p.reply(r#"{"tri": [], "operations": []}"#);
+        let _ = run(&d, false).await.unwrap();
+        assert!(s.candidates.pending(None).await.unwrap().is_empty());
+        let harvestable = crate::session_notes::harvest(s).await.unwrap();
+        assert_eq!(
+            harvestable.len(),
+            1,
+            "toujours récoltable : {harvestable:?}"
+        );
     }
 
     /// #60 : une opération qui vise un uid inconnu ne fait pas passer son candidat pour

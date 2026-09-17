@@ -259,6 +259,30 @@ pub async fn similar(s: &Services, session_id: &str, title: &str) -> Vec<(String
 }
 
 /// Décisions des notes modifiées depuis `since`, pas encore relevées : candidats du rêve.
+/// Marque une décision comme récoltée : à appeler seulement quand son candidat a été
+/// enregistré (issue #61).
+pub async fn mark_harvested(s: &Services, session: &str, text: &str) -> anyhow::Result<()> {
+    let key = harvest_key(session, text);
+    s.store
+        .write(move |tx| {
+            tx.execute(
+                "INSERT OR IGNORE INTO kv(k, v, ts)
+                 VALUES(?1, '1', strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+                [key],
+            )?;
+            Ok(())
+        })
+        .await?;
+    Ok(())
+}
+
+fn harvest_key(session: &str, text: &str) -> String {
+    format!(
+        "notes.harvested.{}",
+        penelope_kernel::canonical::sha256_hex(format!("{session}|{text}").as_bytes())
+    )
+}
+
 pub async fn harvest(s: &Services) -> anyhow::Result<Vec<(String, String)>> {
     let vault = crate::conversation::vault_dir(s);
     let mut out = Vec::new();
@@ -284,10 +308,7 @@ pub async fn harvest(s: &Services) -> anyhow::Result<Vec<(String, String)>> {
             if text.chars().count() < 8 {
                 continue;
             }
-            let key = format!(
-                "notes.harvested.{}",
-                penelope_kernel::canonical::sha256_hex(format!("{session}|{text}").as_bytes())
-            );
+            let key = harvest_key(&session, text);
             let seen = s
                 .store
                 .read({
@@ -303,12 +324,9 @@ pub async fn harvest(s: &Services) -> anyhow::Result<Vec<(String, String)>> {
             if seen {
                 continue;
             }
-            s.store
-                .write(move |tx| {
-                    tx.execute("INSERT OR IGNORE INTO kv(k, v) VALUES(?1, '1')", [key])?;
-                    Ok(())
-                })
-                .await?;
+            // Le marqueur « récoltée » est posé par l'appelant, une fois le candidat
+            // accepté : sinon une décision disparaît sans jamais devenir candidat
+            // (issue #61).
             out.push((session.clone(), text.to_string()));
         }
     }
@@ -500,6 +518,17 @@ mod tests {
                     && t == "Garder les montants en centimes entiers"),
             "{first:?}"
         );
+        // Le marqueur « récoltée » est posé par l'appelant, une fois le candidat
+        // enregistré (issue #61) : sans lui, la décision reste récoltable.
+        let still = harvest(s).await.unwrap();
+        assert_eq!(
+            still.len(),
+            first.len(),
+            "rien n'est consommé sans marqueur"
+        );
+        for (session, text) in &first {
+            mark_harvested(s, session, text).await.unwrap();
+        }
         let again = harvest(s).await.unwrap();
         assert!(again.is_empty(), "{again:?}");
 
