@@ -113,6 +113,7 @@ pub struct Config {
     pub workflows: Workflows,
     pub upgrade: Upgrade,
     pub voice: Voice,
+    pub retention: Retention,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -901,6 +902,28 @@ impl Default for Voice {
             tts_voice: "fr_female".into(),
             max_chars: 1_500,
             reply_in_kind: false,
+        }
+    }
+}
+
+/// Rétention des traces (issue #46) : ce qui n'est ni la mémoire ni la chaîne d'audit
+/// finit par disparaître.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Retention {
+    /// Jours gardés pour les tours terminés, les requêtes au modèle, les updates Telegram
+    /// et les clés de travail. 0 : rien n'est effacé.
+    pub days: u32,
+    /// Jours gardés pour les pré-images de la mémoire (`mem_history`). 0 : rien n'est
+    /// effacé.
+    pub memory_history_days: u32,
+}
+
+impl Default for Retention {
+    fn default() -> Self {
+        Retention {
+            days: 90,
+            memory_history_days: 30,
         }
     }
 }

@@ -201,6 +201,17 @@ pub enum SessionCmd {
     Close {
         session: String,
     },
+    /// Efface le contenu d'une session (RGPD) : messages, résumés, artefacts, requêtes.
+    /// La chaîne d'audit garde ses lignes, sans leur contenu.
+    Purge {
+        session: String,
+        /// Sans confirmation interactive.
+        #[arg(long)]
+        yes: bool,
+        /// Raison notée dans `audit.purge`.
+        #[arg(long)]
+        reason: Option<String>,
+    },
     /// Renomme une session.
     Title {
         session: String,
@@ -521,6 +532,27 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         _ => {}
     }
 
+    // Purge : effacement sans retour, confirmé à l'invite sauf `--yes` (issue #46).
+    if let Command::Session(SessionCmd::Purge { session, yes, .. }) = &cli.command
+        && !yes
+    {
+        eprint!(
+            "Effacer définitivement le contenu de la session « {session} » (messages, \
+             résumés, artefacts) ? La chaîne d'audit garde ses lignes, sans leur contenu. \
+             [o]ui / [n]on : "
+        );
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+        let mut answer = String::new();
+        let _ = std::io::stdin().read_line(&mut answer);
+        if !matches!(
+            answer.trim().to_lowercase().as_str(),
+            "o" | "oui" | "y" | "yes"
+        ) {
+            eprintln!("Rien n'a été effacé.");
+            return Ok(());
+        }
+    }
+
     let socket = socket_path(cli.home.clone())?;
     let (method, params) = route(&cli.command)?;
     let value = call(&socket, method, params).await?;
@@ -715,6 +747,12 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Session(SessionCmd::Close { session }) => {
             (m::SESSION_CLOSE, json!({"session": session}))
         }
+        Command::Session(SessionCmd::Purge {
+            session, reason, ..
+        }) => (
+            m::SESSION_PURGE,
+            json!({"session": session, "reason": reason}),
+        ),
         Command::Session(SessionCmd::Title { session, title }) => (
             m::SESSION_TITLE,
             json!({"session": session, "title": title.join(" ")}),

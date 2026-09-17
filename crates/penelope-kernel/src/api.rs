@@ -114,6 +114,8 @@ pub mod method {
     pub const SESSION_REWIND: &str = "session.rewind";
     pub const SESSION_COMPACT: &str = "session.compact";
     pub const SESSION_EXPORT: &str = "session.export";
+    /// Purge RGPD : efface le contenu d'une session, garde la chaîne d'audit (issue #46).
+    pub const SESSION_PURGE: &str = "session.purge";
     /// Modèle d'une session : lecture, épinglage d'un alias, retour à l'automatique.
     pub const SESSION_MODEL: &str = "session.model";
     pub const SESSION_BUDGET: &str = "session.budget";
@@ -224,6 +226,7 @@ pub mod method {
         SESSION_REWIND,
         SESSION_COMPACT,
         SESSION_EXPORT,
+        SESSION_PURGE,
         SESSION_MODEL,
         SESSION_BUDGET,
         CONFIG_GET,

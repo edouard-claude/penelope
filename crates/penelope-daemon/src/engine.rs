@@ -1029,8 +1029,9 @@ impl Daemon {
             .store
             .write(move |tx| {
                 tx.execute(
-                    "INSERT INTO kv(k, v) VALUES(?1, ?2)
-                     ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                    "INSERT INTO kv(k, v, ts)
+                     VALUES(?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                     ON CONFLICT(k) DO UPDATE SET v = excluded.v, ts = excluded.ts",
                     params![k, v],
                 )?;
                 Ok(())

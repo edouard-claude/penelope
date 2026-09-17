@@ -186,7 +186,7 @@ skills, workflows, planification, HITL, système. Chacune est reliée à une mé
 un test vérifie que **toutes** le sont : une commande sans méthode serait une impasse.
 
 ```
-/new /sessions /switch /close /title /fork /rewind /compact /export /stop
+/new /sessions /switch /close /purge /title /fork /rewind /compact /export /stop
 /model /models /budget /usage
 /note /retiens /oublie /recall /appris /pratique /dream /intentions /mien /forget /accueil /audit
 /mcp /mcp auth /p
@@ -224,6 +224,7 @@ Workflows (4)
 | `/status`, `/doctor` | résumé lisible, boutons vers l'écran de chaque alerte (MCP, dépenses, modèles) |
 | `/config`, `/logs` | générations et sous-systèmes ; journal filtré par composant, « Plus » |
 | `/restart`, `/close`, `/rewind` | confirmation |
+| `/purge` | confirmation ; efface le contenu de la session (messages, résumés, artefacts), la chaîne d'audit garde ses lignes sans leur contenu |
 | `/fork` | ↪️ revenir à l'original |
 | `/upgrade` | version installée et disponible, ⬆️ installer, ⏪ revenir (confirmés) ; sur une installation source, carte de bascule vers les releases |
 | `/quiet`, `/secret`, `/p` | plages proposées ; 🗑 par secret (confirmé) ; serveurs puis prompts MCP, arguments par formulaire |
@@ -239,7 +240,8 @@ chat, ⏳ un tour en cours ou en attente, heure de dernière activité pour la p
 un clic bascule le chat dessus et met le menu à jour, « ⋯ » ouvre Basculer, Forker,
 Renommer et Fermer. Douze sessions par page ; les fermées sont masquées sauf « Voir les
 fermées » (ou `/sessions all`). `/switch` accepte un identifiant, un préfixe unique ou
-un titre, `/close [session]` arrête une session et vide sa file.
+un titre, `/close [session]` arrête une session et vide sa file, `/purge [session]` en
+efface le contenu (RGPD, sans retour).
 
 ```
 Sessions (14 · page 1/2)

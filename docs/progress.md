@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1289 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1293 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -643,7 +643,7 @@ compaction de fond sur la taille réelle du contexte (#40).
 ### 0.16.1
 
 Verrou de session à jeton de clôture (#43), écrivain à l'épreuve des paniques (#44),
-mutations de configuration sérialisées (#45).
+mutations de configuration sérialisées (#45), purge RGPD et rétention (#46).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -660,6 +660,17 @@ mutations de configuration sérialisées (#45).
   publication), et le fichier temporaire d'`atomic_write` porte un nom unique. 800 mutations
   concurrentes donnent 800 générations et aucun refus « No such file or directory » ; le
   fichier sur disque porte toujours la dernière génération.
+- **Purge RGPD** : `penelope session purge`, `/purge` et la méthode `session.purge`
+  effacent le contenu d'une session (messages et index plein texte, contexte figé, résumés,
+  artefacts et leurs fichiers, requêtes au modèle, payloads des tours et des updates
+  Telegram, candidats de mémoire), avec confirmation. Le journal d'événements garde ses
+  lignes et leurs hachages : `audit-verify` reste vert, `audit.purge` dit ce qui a été fait.
+- **Rétention** : une passe par jour efface les tours terminés, les requêtes au modèle
+  abouties, les payloads d'updates Telegram et les clés de travail au-delà de
+  `retention.days` (90), les pré-images de la mémoire au-delà de
+  `retention.memory_history_days` (30). Le payload d'un update Telegram est vidé dès son
+  traitement : seul son identifiant sert encore, à la déduplication. `kv` date ses clés
+  (migration `0010_retention`).
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

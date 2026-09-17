@@ -51,6 +51,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0009_schedule_origin_session",
         sql: SQL_0009,
     },
+    Migration {
+        version: "0010_retention",
+        sql: SQL_0010,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -855,6 +859,19 @@ SET target = json_remove(
   '$.session_id'
 )
 WHERE json_valid(target) AND json_extract(target, '$.session_id') IS NOT NULL;
+"#;
+
+/// Rétention et purge (issue #46) : `kv` date ses clés pour qu'un balayage puisse retirer
+/// les éphémères, et les tables qui grossissent sans borne reçoivent l'index de leur
+/// colonne de date.
+const SQL_0010: &str = r#"
+ALTER TABLE kv ADD COLUMN ts TEXT;
+UPDATE kv SET ts = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE ts IS NULL;
+CREATE INDEX kv_ts ON kv(ts);
+CREATE INDEX turn_queue_finished ON turn_queue(state, finished_at);
+CREATE INDEX tg_updates_received ON tg_updates(processed, received_at);
+CREATE INDEX llm_requests_updated ON llm_requests(updated_at);
+CREATE INDEX mem_history_ts ON mem_history(ts);
 "#;
 
 #[cfg(test)]

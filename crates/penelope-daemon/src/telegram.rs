@@ -278,10 +278,12 @@ impl TelegramGateway {
         let incoming = classify(update, self.owner_id, self.allow_groups);
         self.handle(incoming).await?;
 
+        // Traité : seul `update_id` sert encore (déduplication). Le texte intégral n'a
+        // plus de raison d'être gardé (issue #46).
         s.store
             .write(move |tx| {
                 tx.execute(
-                    "UPDATE tg_updates SET processed = 1 WHERE update_id = ?1",
+                    "UPDATE tg_updates SET processed = 1, payload = '{}' WHERE update_id = ?1",
                     [update_id],
                 )?;
                 Ok(())
@@ -868,6 +870,41 @@ impl TelegramGateway {
                             "op": "session.close", "params": {"session": id},
                             "question": format!(
                                 "Fermer la session {label} ? Sa file d'attente est vidée."
+                            ),
+                            "back": null,
+                        });
+                        return self
+                            .show_screen(chat_id, topic_id, reply_to, "confirm", &args, None)
+                            .await;
+                    }
+                }
+            }
+            "purge" => {
+                let target = if args.is_empty() {
+                    s.sessions
+                        .find_by_topic(chat_id, topic_id)
+                        .await?
+                        .map(|x| x.id.to_string())
+                        .ok_or_else(|| "aucune session liée à ce chat".to_string())
+                } else {
+                    crate::session_ops::resolve(s, args)
+                        .await
+                        .map(|x| x.id.to_string())
+                };
+                match target {
+                    Err(e) => format!("❌ {e}"),
+                    Ok(id) => {
+                        let label = match s.sessions.get(&id).await? {
+                            Some(sess) => format!("« {} »", crate::titles::label(&sess)),
+                            None => format!("`{id}`"),
+                        };
+                        let args = json!({
+                            "op": "session.purge",
+                            "params": {"session": id, "reason": "demande du propriétaire"},
+                            "question": format!(
+                                "Effacer le contenu de la session {label} ? Messages, résumés, \
+                                 artefacts et requêtes partent définitivement ; la chaîne \
+                                 d'audit garde ses lignes, sans leur contenu."
                             ),
                             "back": null,
                         });

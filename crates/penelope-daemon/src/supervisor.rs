@@ -230,6 +230,10 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
         d.enqueue_resume(sid, a.id.as_str(), &origin).await?;
     }
     s.actions.purge_expired().await?;
+    // Rétention des traces : une passe par jour (issue #46).
+    if let Err(e) = crate::purge::retention_tick(d).await {
+        tracing::warn!(error = %e, "rétention");
+    }
 
     // Serveurs MCP qui attendent une autorisation : le propriétaire reçoit le lien, une
     // fois par jour au plus (§8.5).

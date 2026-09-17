@@ -113,6 +113,20 @@ impl Rpc {
                     .map_err(anyhow::Error::msg)?;
                 crate::session_ops::close(&self.daemon, sess.id.as_str()).await
             }
+            method::SESSION_PURGE => {
+                let query = required_str(p, "session")?;
+                let sess = crate::session_ops::resolve(s, &query)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                let id = sess.id.to_string();
+                // Le tour en cours est arrêté et la file vidée avant d'effacer.
+                crate::session_ops::silence(&self.daemon, &id, "session purgée").await?;
+                let reason = p
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("demande du propriétaire");
+                crate::purge::session(&self.daemon, &id, reason).await
+            }
             method::SESSION_TITLE => {
                 let sid = self.session_param(p).await?;
                 let title = required_str(p, "title")?;

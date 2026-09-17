@@ -446,6 +446,13 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `voice.tts_voice` | `"fr_female"` | Voix préréglée du modèle de synthèse (rôle `tts`). |
 | `voice.max_chars` | `1500` | Longueur maximale d'un texte lu en vocal, en caractères : au-delà, un résumé vocal. |
 | `voice.reply_in_kind` | `false` | Répondre en vocal quand le propriétaire vient d'envoyer un vocal. |
+
+**[retention]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `retention.days` | `90` | Jours gardés pour les tours terminés, les requêtes au modèle, les updates Telegram et les clés de travail. 0 : rien n'est effacé. |
+| `retention.memory_history_days` | `30` | Jours gardés pour les pré-images de la mémoire (`mem_history`). 0 : rien n'est effacé. |
 <!-- reference:config:fin -->
 
 ## 6. Modèles
@@ -1392,6 +1399,36 @@ penelope audit-verify
 Recalcule la chaîne de hachage du journal d'événements et nomme le premier maillon rompu
 s'il y en a un. Une purge RGPD conserve le hachage d'origine : purger n'invalide pas la
 chaîne.
+
+### Effacer une conversation
+
+```bash
+penelope session purge s_01J8
+```
+
+Efface le contenu de la session : messages et index plein texte, contexte figé, résumés,
+artefacts (leurs fichiers compris), requêtes au modèle, payloads des tours et des updates
+Telegram du chat, candidats de mémoire. Le journal d'événements garde ses lignes et leurs
+hachages, avec le contenu remplacé, et note la purge dans `audit.purge` : `audit-verify`
+reste vert. La commande demande confirmation (`--yes` pour s'en passer, `--reason` pour
+noter pourquoi) ; depuis Telegram, `/purge` affiche la même question avec un bouton.
+
+La mémoire durable n'est pas touchée : elle vit dans le vault et s'édite avec ses propres
+outils (`penelope mem …`). Une entrée née d'une conversation purgée reste donc en mémoire
+si elle y a été promue.
+
+### Rétention
+
+Ce qui n'est ni la mémoire ni la chaîne d'audit finit par disparaître, une passe par jour :
+
+| Réglage | Défaut | Ce qui est effacé au-delà |
+|---|---|---|
+| `retention.days` | `90` | tours terminés, requêtes au modèle abouties, payloads des updates Telegram, clés de travail (`turn.*`, `prompt.prefix.*`, `wf.*`, `tg.*`…) |
+| `retention.memory_history_days` | `30` | pré-images de la mémoire (`mem_history`), qui gardent chaque fichier avant et après chaque opération du rêve |
+
+`0` désactive la rétention correspondante. Le payload d'un update Telegram est de toute
+façon vidé dès qu'il est traité : seul son identifiant sert encore, pour ne pas traiter
+deux fois le même message.
 
 ## 10. Mise à jour
 

@@ -371,8 +371,8 @@ pub fn kv_get(conn: &Connection, key: &str) -> Result<Option<String>> {
 /// Aide : écrit une valeur du magasin clé/valeur générique.
 pub fn kv_set(tx: &Transaction<'_>, key: &str, value: &str) -> Result<()> {
     tx.execute(
-        "INSERT INTO kv(k, v) VALUES(?1, ?2)
-         ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+        "INSERT INTO kv(k, v, ts) VALUES(?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+         ON CONFLICT(k) DO UPDATE SET v = excluded.v, ts = excluded.ts",
         rusqlite::params![key, value],
     )?;
     Ok(())

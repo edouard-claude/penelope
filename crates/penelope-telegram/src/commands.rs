@@ -71,6 +71,13 @@ pub fn all() -> Vec<Command> {
             m::SESSION_CLOSE,
         ),
         c(
+            "purge",
+            "Session",
+            "Efface le contenu d'une session (RGPD)",
+            "/purge s_01J8",
+            m::SESSION_PURGE,
+        ),
+        c(
             "fork",
             "Session",
             "Duplique la session courante",
