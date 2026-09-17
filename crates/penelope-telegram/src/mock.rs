@@ -176,6 +176,7 @@ impl BotTransport for MockTransport {
             crate::api::method::SEND_MESSAGE
             | crate::api::method::SEND_RICH_MESSAGE
             | crate::api::method::SEND_DOCUMENT
+            | crate::api::method::SEND_VOICE
             | crate::api::method::SEND_PHOTO => {
                 g.next_message_id += 1;
                 json!({

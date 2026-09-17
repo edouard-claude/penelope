@@ -36,6 +36,32 @@ pub struct MockProvider {
     pub transcribed: Arc<Mutex<Vec<TranscribedFile>>>,
     /// Calcul d'embedding simulé ; `None` : le provider refuse.
     embedder: Arc<Mutex<Option<Embedder>>>,
+    /// Synthèse vocale : `Some(erreur)` fait échouer `speak` ; textes reçus.
+    speech_error: Arc<Mutex<Option<String>>>,
+    pub spoken: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+/// WAV PCM mono 16 bits à 16 kHz, de silence : ce que renvoie la synthèse simulée
+/// (0,1 s par tranche de 10 caractères).
+pub fn silent_wav(seconds: f64) -> Vec<u8> {
+    let rate: u32 = 16_000;
+    let samples = (seconds * rate as f64) as u32;
+    let data_len = samples * 2;
+    let mut out = Vec::with_capacity(44 + data_len as usize);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    out.resize(44 + data_len as usize, 0);
+    out
 }
 
 /// Fonction d'embedding d'un faux provider.
@@ -62,7 +88,15 @@ impl MockProvider {
             transcript: Arc::new(Mutex::new(None)),
             transcribed: Arc::new(Mutex::new(Vec::new())),
             embedder: Arc::new(Mutex::new(None)),
+            speech_error: Arc::new(Mutex::new(None)),
+            spoken: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Fait échouer la synthèse vocale (`Some(raison)`), ou la rétablit (`None`).
+    pub fn set_speech_error(&self, error: Option<&str>) -> &Self {
+        *self.speech_error.lock().unwrap_or_else(|p| p.into_inner()) = error.map(String::from);
+        self
     }
 
     /// Embeddings simulés ; `None` : le provider refuse.
@@ -216,6 +250,28 @@ impl Provider for MockProvider {
             let _ = tx.send(StreamChunk::Done { finish }).await;
         });
         Ok(rx)
+    }
+
+    async fn speak(
+        &self,
+        _model: &str,
+        input: &str,
+        voice: &str,
+        _format: &str,
+    ) -> Result<Vec<u8>> {
+        if let Some(e) = self
+            .speech_error
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+        {
+            return Err(LlmError::new(LlmErrorKind::Other, e));
+        }
+        self.spoken
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push((input.to_string(), voice.to_string()));
+        Ok(silent_wav(input.chars().count() as f64 / 100.0))
     }
 
     async fn transcribe(

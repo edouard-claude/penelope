@@ -104,6 +104,12 @@ enum Held {
         path: String,
         caption: Option<String>,
     },
+    /// Message vocal (issue #41).
+    Voice {
+        path: String,
+        duration_s: u32,
+        caption: Option<String>,
+    },
 }
 
 fn held_key(session_id: &str) -> String {
@@ -2137,7 +2143,14 @@ impl TelegramGateway {
         self.daemon
             .enqueue_message(
                 &session,
-                &format!("(message vocal transcrit) {text}"),
+                &if self.daemon.services.config.config().voice.reply_in_kind {
+                    format!(
+                        "(message vocal transcrit ; réponds en vocal avec `send_voice` si la \
+                         réponse s'y prête) {text}"
+                    )
+                } else {
+                    format!("(message vocal transcrit) {text}")
+                },
                 &origin,
                 Some(format!("tg:{update_id}")),
             )
@@ -3548,6 +3561,26 @@ impl TelegramGateway {
                         .await
                     {
                         tracing::warn!(error = %e, "fichier mis de côté non envoyé");
+                    }
+                }
+                Held::Voice {
+                    path,
+                    duration_s,
+                    caption,
+                } => {
+                    if let Err(e) = self
+                        .bot
+                        .send_voice(
+                            chat_id,
+                            topic_id,
+                            Path::new(path),
+                            *duration_s,
+                            caption.as_deref(),
+                            None,
+                        )
+                        .await
+                    {
+                        tracing::warn!(error = %e, "vocal mis de côté non envoyé");
                     }
                 }
             }
@@ -5173,6 +5206,37 @@ impl Messenger for TelegramGateway {
                 .map_err(|e| e.to_string());
         }
         self.send_file(origin, path, caption).await
+    }
+
+    async fn send_session_voice(
+        &self,
+        session_id: &str,
+        origin: &Origin,
+        path: &Path,
+        duration_s: u32,
+        caption: Option<&str>,
+    ) -> Result<(), String> {
+        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or((self.owner_id, None));
+        if self.out_of_focus(session_id, chat_id, topic_id).await {
+            let item = Held::Voice {
+                path: path.display().to_string(),
+                duration_s,
+                caption: caption.map(String::from),
+            };
+            return self
+                .hold(session_id, chat_id, topic_id, item)
+                .await
+                .map_err(|e| e.to_string());
+        }
+        let reply_to = match origin {
+            Origin::Telegram { message_id, .. } => *message_id,
+            _ => None,
+        };
+        self.bot
+            .send_voice(chat_id, topic_id, path, duration_s, caption, reply_to)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     async fn send_question(
@@ -7577,6 +7641,120 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(s.turns.pending_count().await.unwrap(), 1, "relancée");
+    }
+
+    /// Issue #41 : « réponds-moi en vocal » appelle `send_voice` une fois ; le vocal part en
+    /// OGG/Opus, avec sa durée, dans le même fil.
+    #[tokio::test]
+    async fn a_spoken_answer_arrives_as_a_voice_note() {
+        if penelope_platform::audio::ffmpeg().is_none() {
+            eprintln!("ffmpeg absent : envoi vocal non testé");
+            return;
+        }
+        let (_d, g, t, p) = gateway().await;
+        g.daemon
+            .kv_set("tg.onboard.proposed", "test")
+            .await
+            .unwrap();
+        p.reply(r#"{"complexity":"low"}"#);
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "v1".into(),
+                name: "send_voice".into(),
+                arguments: json!({"text": "## Veille\n\n**Mistral** sort Voxtral, 8 % plus rapide. 🎙️ Bonne journée !"}),
+            }],
+        ));
+        p.reply("C'est parti en vocal.");
+        g.process_update(&updates::text_message(
+            160,
+            OWNER,
+            OWNER,
+            "Réponds-moi en vocal : la veille du jour",
+        ))
+        .await
+        .unwrap();
+        drain(&g).await;
+
+        let spoken = p.spoken.lock().unwrap().clone();
+        assert_eq!(spoken.len(), 1, "une synthèse");
+        assert_eq!(
+            spoken[0],
+            (
+                "Veille. Mistral sort Voxtral, 8 pour cent plus rapide. Bonne journée !"
+                    .to_string(),
+                "fr_female".to_string()
+            )
+        );
+        let voices = t.calls_to(tg::SEND_VOICE).await;
+        assert_eq!(voices.len(), 1, "{voices:?}");
+        let v = &voices[0];
+        assert_eq!(v["chat_id"], OWNER.to_string());
+        assert!(v["duration"].as_str().unwrap().parse::<u32>().unwrap() >= 1);
+        assert!(
+            v["reply_parameters"]
+                .as_str()
+                .unwrap()
+                .contains("message_id")
+        );
+        let name = v["voice"].as_str().unwrap();
+        assert!(name.ends_with(".ogg"), "{name}");
+        let file = g
+            .daemon
+            .services
+            .platform
+            .dirs
+            .data()
+            .join("media/voice")
+            .join(name);
+        let bytes = std::fs::read(&file).unwrap();
+        assert!(
+            bytes.starts_with(b"OggS") && bytes.len() > 100,
+            "OGG/Opus non vide"
+        );
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            sent.iter().any(|m| m == "C'est parti en vocal."),
+            "{sent:?}"
+        );
+    }
+
+    /// Issue #41 : synthèse impossible, la réponse part en texte avec la raison.
+    #[tokio::test]
+    async fn a_failed_synthesis_falls_back_to_text() {
+        let (_d, g, t, p) = gateway().await;
+        g.daemon
+            .kv_set("tg.onboard.proposed", "test")
+            .await
+            .unwrap();
+        p.set_speech_error(Some("serveur mlx-audio arrêté"));
+        p.reply(r#"{"complexity":"low"}"#);
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "v1".into(),
+                name: "send_voice".into(),
+                arguments: json!({"text": "Trois tickets à traiter ce matin."}),
+            }],
+        ));
+        p.reply("Je te l'ai écrit.");
+        g.process_update(&updates::text_message(
+            170,
+            OWNER,
+            OWNER,
+            "lis-moi mes tickets",
+        ))
+        .await
+        .unwrap();
+        drain(&g).await;
+        assert!(t.calls_to(tg::SEND_VOICE).await.is_empty());
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            sent.iter()
+                .any(|m| m.contains("Trois tickets à traiter ce matin.")
+                    && m.contains("vocal indisponible : serveur mlx-audio arrêté")),
+            "{sent:?}"
+        );
     }
 
     #[tokio::test]

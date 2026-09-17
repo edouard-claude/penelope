@@ -43,6 +43,7 @@ pub mod upgrade;
 pub mod vault_git;
 pub mod vault_inventory;
 pub mod vault_ops;
+pub mod voice;
 #[cfg(test)]
 mod wiki_e2e;
 pub mod workflow;

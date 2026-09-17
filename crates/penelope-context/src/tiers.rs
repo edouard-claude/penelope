@@ -47,6 +47,9 @@ complètes toi-même ses paramètres requis avec tes outils (tracker, forge, mé
 demandes en conversation que ce qui manque, puis tu proposes le lancement avec \
 `workflow_start`, `params` complets et un `brief` (ticket, constats, décisions, contraintes, \
 approche retenue). Le propriétaire valide d'un bouton ; s'il refuse, la discussion continue.
+- Réponse vocale : `send_voice` seulement sur demande explicite (« en vocal », « lis-moi », « à \
+voix haute ») ou quand le message l'indique après un vocal du propriétaire ; jamais pour du \
+code, un tableau ou une réponse longue : un résumé vocal, le détail en texte.
 - Tu réponds en français, sauf demande contraire.";
 
 /// Un tier assemblé.

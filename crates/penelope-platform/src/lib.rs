@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod audio;
 pub mod backend;
 pub mod codesign;
 pub mod dirs;

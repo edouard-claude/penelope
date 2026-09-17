@@ -54,6 +54,68 @@ pub trait Provider: Send + Sync {
             format!("le provider `{}` ne sait pas transcrire", self.name()),
         ))
     }
+
+    /// Synthèse vocale (rôle `tts`, issue #41) : `POST /audio/speech`, renvoie les octets
+    /// audio au format demandé (`wav`).
+    async fn speak(&self, model: &str, input: &str, voice: &str, format: &str) -> Result<Vec<u8>> {
+        let _ = (model, input, voice, format);
+        Err(LlmError::new(
+            LlmErrorKind::BadRequest,
+            format!(
+                "le provider `{}` ne sait pas synthétiser la voix",
+                self.name()
+            ),
+        ))
+    }
+}
+
+/// Texte au plus par appel de synthèse vocale.
+pub const SPEECH_MAX_CHARS: usize = 4_000;
+
+/// Synthèse sur un endpoint `/audio/speech` OpenAI-compatible (mlx-audio, Kokoro-FastAPI…).
+async fn speak_openai(
+    request: reqwest::RequestBuilder,
+    model: &str,
+    input: &str,
+    voice: &str,
+    format: &str,
+) -> Result<Vec<u8>> {
+    if input.trim().is_empty() {
+        return Err(LlmError::new(LlmErrorKind::BadRequest, "texte vide"));
+    }
+    if input.chars().count() > SPEECH_MAX_CHARS {
+        return Err(LlmError::new(
+            LlmErrorKind::BadRequest,
+            format!("texte trop long pour une synthèse ({SPEECH_MAX_CHARS} caractères au plus)"),
+        ));
+    }
+    let resp = request
+        .json(&json!({
+            "model": strip_provider(model),
+            "input": input,
+            "voice": voice,
+            "response_format": format,
+        }))
+        .send()
+        .await
+        .map_err(map_reqwest_error)?;
+    let status = resp.status().as_u16();
+    let is_json = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("json"));
+    let bytes = resp.bytes().await.map_err(map_reqwest_error)?.to_vec();
+    if status >= 400 || is_json {
+        return Err(LlmError::from_status(
+            status.max(500),
+            &String::from_utf8_lossy(&bytes),
+        ));
+    }
+    if bytes.is_empty() {
+        return Err(LlmError::new(LlmErrorKind::Other, "synthèse vide"));
+    }
+    Ok(bytes)
 }
 
 /// Taille maximale d'un envoi multipart de transcription (limite d'OpenAI et d'OpenRouter).
@@ -528,6 +590,14 @@ impl Provider for OpenAiCompatProvider {
             request = request.bearer_auth(&self.api_key);
         }
         transcribe_multipart(request, model, audio, filename, language).await
+    }
+
+    async fn speak(&self, model: &str, input: &str, voice: &str, format: &str) -> Result<Vec<u8>> {
+        let mut request = self.http.post(format!("{}/audio/speech", self.base_url));
+        if !self.api_key.is_empty() {
+            request = request.bearer_auth(&self.api_key);
+        }
+        speak_openai(request, model, input, voice, format).await
     }
 
     async fn chat_stream(&self, req: ChatRequest, cancel: CancelToken) -> Result<ChunkStream> {
@@ -1474,6 +1544,40 @@ mod tests {
             !raw.to_lowercase().contains("authorization"),
             "pas de clé : pas d'en-tête"
         );
+    }
+
+    /// Issue #41 : la synthèse locale envoie modèle, texte, voix et format, et rend l'audio.
+    #[tokio::test]
+    async fn local_speech_posts_json_and_returns_audio_bytes() {
+        let wav = b"RIFF\x24\x00\x00\x00WAVEfmt ";
+        let mut resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            wav.len()
+        )
+        .into_bytes();
+        resp.extend_from_slice(wav);
+        let (url, seen) = capturing_server(String::from_utf8_lossy(&resp).to_string()).await;
+        let p = OpenAiCompatProvider::new(url, "", Catalog::new()).unwrap();
+        let audio = p
+            .speak(
+                "openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit",
+                "Bonjour Edouard.",
+                "fr_female",
+                "wav",
+            )
+            .await
+            .unwrap();
+        assert!(audio.starts_with(b"RIFF"));
+        let raw = String::from_utf8_lossy(&seen.await.unwrap()).to_string();
+        assert!(raw.starts_with("POST /v1/audio/speech"), "{raw}");
+        assert!(raw.contains("\"voice\":\"fr_female\""), "{raw}");
+        assert!(
+            raw.contains("\"model\":\"mlx-community/Voxtral-4B-TTS-2603-mlx-4bit\""),
+            "{raw}"
+        );
+        assert!(raw.contains("\"response_format\":\"wav\""), "{raw}");
+        let empty = p.speak("m", "  ", "fr_female", "wav").await.unwrap_err();
+        assert_eq!(empty.kind, LlmErrorKind::BadRequest);
     }
 
     #[tokio::test]

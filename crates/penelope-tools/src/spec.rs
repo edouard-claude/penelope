@@ -334,6 +334,27 @@ pub fn all() -> Vec<ToolSpec> {
             false,
         ),
         spec(
+            "send_voice",
+            RiskClass::Read,
+            "Lit un texte en message vocal (voix féminine locale) dans cette conversation. \
+             Seulement sur demande explicite (« en vocal », « lis-moi », « à voix haute ») ou \
+             en réponse à un vocal si `voice.reply_in_kind` est actif ; jamais pour du code, un \
+             tableau ou une réponse longue : un résumé vocal, le détail en texte. Le Markdown, \
+             les liens et les emojis sont retirés. Synthèse impossible : la réponse part en \
+             texte avec la raison.",
+            obj(
+                json!({
+                    "text": {"type":"string", "description": "Ce qui sera dit."},
+                    "voice": {"type":"string", "description": "Voix préréglée ; défaut `voice.tts_voice`."},
+                    "caption": {"type":"string", "description": "Légende courte facultative."}
+                }),
+                &["text"],
+            ),
+            true,
+            false,
+            false,
+        ),
+        spec(
             "send_file",
             RiskClass::Write,
             "Envoie un fichier au propriétaire.",

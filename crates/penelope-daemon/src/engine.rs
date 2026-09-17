@@ -77,6 +77,15 @@ impl crate::selfknow::Admin for Daemon {
         Ok(g)
     }
 
+    async fn send_voice(
+        &self,
+        session_id: &str,
+        origin: &Origin,
+        args: &Value,
+    ) -> Result<Value, String> {
+        crate::voice::tool(self, session_id, origin, args).await
+    }
+
     async fn memory_search(&self) -> Value {
         crate::embeddings::search_mode(self)
             .await

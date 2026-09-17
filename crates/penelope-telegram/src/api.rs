@@ -245,6 +245,7 @@ pub mod method {
     pub const EDIT_MESSAGE_REPLY_MARKUP: &str = "editMessageReplyMarkup";
     pub const DELETE_MESSAGE: &str = "deleteMessage";
     pub const SEND_DOCUMENT: &str = "sendDocument";
+    pub const SEND_VOICE: &str = "sendVoice";
     pub const SEND_PHOTO: &str = "sendPhoto";
     pub const SEND_CHAT_ACTION: &str = "sendChatAction";
     pub const SET_MESSAGE_REACTION: &str = "setMessageReaction";
@@ -483,6 +484,51 @@ impl Bot {
             }),
         )
         .await
+    }
+
+    /// Envoie un message vocal OGG/Opus (issue #41), en réponse éventuelle à un message.
+    pub async fn send_voice(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        path: &std::path::Path,
+        duration_s: u32,
+        caption: Option<&str>,
+        reply_to: Option<i64>,
+    ) -> TgResult<Value> {
+        let mut fields = vec![
+            ("chat_id".to_string(), chat_id.to_string()),
+            ("duration".to_string(), duration_s.max(1).to_string()),
+        ];
+        if let Some(t) = topic_id {
+            fields.push(("message_thread_id".into(), t.to_string()));
+        }
+        if let Some(c) = caption.filter(|c| !c.trim().is_empty()) {
+            fields.push(("caption".into(), c.chars().take(1024).collect()));
+        }
+        if let Some(m) = reply_to {
+            fields.push((
+                "reply_parameters".into(),
+                serde_json::json!({"message_id": m, "allow_sending_without_reply": true})
+                    .to_string(),
+            ));
+        }
+        let wait = self.limiter.delay_for(chat_id, self.clock.now_ms()).await;
+        if wait > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(wait as u64)).await;
+        }
+        let resp = self
+            .transport
+            .upload(method::SEND_VOICE, fields, "voice", path)
+            .await?;
+        if resp.ok {
+            Ok(resp.result.unwrap_or(Value::Null))
+        } else {
+            Err(TgError::Api {
+                code: resp.error_code.unwrap_or(0),
+                description: resp.description.unwrap_or_default(),
+            })
+        }
     }
 
     /// Envoie un fichier local en document (≤ 50 Mo côté Bot API).

@@ -80,6 +80,18 @@ pub trait Messenger: Send + Sync {
         let _ = session_id;
         self.send_file(origin, path, caption).await
     }
+    /// Message vocal OGG/Opus d'une session (issue #41).
+    async fn send_session_voice(
+        &self,
+        session_id: &str,
+        origin: &Origin,
+        path: &Path,
+        duration_s: u32,
+        caption: Option<&str>,
+    ) -> Result<(), String> {
+        let _ = (session_id, origin, path, duration_s, caption);
+        Err("ce canal n'envoie pas de message vocal".into())
+    }
 }
 
 /// Accès aux serveurs MCP vivants.
@@ -565,6 +577,16 @@ impl NativeToolExecutor {
                 .await
                 .map_err(ToolError::Network)?;
                 json!({"sent": true})
+            }
+            "send_voice" => {
+                let admin = self
+                    .admin
+                    .as_ref()
+                    .ok_or_else(|| ToolError::Other("vocal indisponible hors du daemon".into()))?;
+                admin
+                    .send_voice(&self.env.session_id, &self.env.origin, args)
+                    .await
+                    .map_err(ToolError::Invalid)?
             }
             "send_file" => {
                 let p = self.path_arg(args, "path")?;

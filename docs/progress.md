@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1273 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1281 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -639,6 +639,23 @@ compaction de fond sur la taille réelle du contexte (#40).
   de run n'arrêtent plus les résumés ; au plafond du jour, une réserve
   `budget.compaction_reserve_usd` (0,50 $). `/status`, `/budget` et `self_status` donnent
   la taille réelle du contexte, le seuil de fond et la dernière compaction.
+
+### 0.16.0
+
+Réponses vocales (#41).
+
+- **Synthèse locale** : méthode `speak` des providers (`POST /audio/speech`), rôle et alias
+  `tts` (Voxtral TTS de Mistral servi par mlx-audio, voix `fr_female`), jamais replié sur
+  le modèle de conversation ; section de configuration `[voice]` (`tts_voice`,
+  `max_chars`, `reply_in_kind`).
+- **Outil `send_voice`** (lecture, sans approbation) : texte rendu lisible (sans Markdown,
+  liens, code ni emojis, symboles dits en toutes lettres), découpé en phrases, synthétisé,
+  assemblé, converti en OGG/Opus par `ffmpeg`, envoyé par `sendVoice` en réponse au message
+  d'origine ; texte trop long renvoyé au modèle pour un résumé vocal ; synthèse impossible,
+  la réponse part en texte avec la raison. Usage `tts` et événement `voice.sent` avec la
+  durée.
+- Règle du harnais : vocal seulement sur demande explicite ou après un vocal si
+  `voice.reply_in_kind` ; `doctor` (ffmpeg et phrase d'essai) ; inventaire `install`.
 
 ### Routine de livraison
 

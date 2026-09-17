@@ -112,6 +112,7 @@ pub struct Config {
     pub tools: Tools,
     pub workflows: Workflows,
     pub upgrade: Upgrade,
+    pub voice: Voice,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -320,6 +321,10 @@ pub struct Models {
 /// Modèle d'embeddings par défaut : multilingue, servi par OpenRouter, sans serveur local
 /// (issue #11).
 pub const DEFAULT_EMBEDDING_MODEL: &str = "openrouter:openai/text-embedding-3-small";
+/// Synthèse vocale par défaut : Voxtral TTS de Mistral, servi en local par mlx-audio
+/// (issue #41).
+pub const DEFAULT_TTS_MODEL: &str = "openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit";
+
 /// Ancien défaut, qui exigeait un serveur local d'embeddings.
 pub const LEGACY_EMBEDDING_MODEL: &str = "openai_compat:embeddings-default";
 
@@ -335,6 +340,7 @@ impl Default for Models {
             ("image", "openrouter:google/gemini-3.1-flash-image"),
             ("embedding", DEFAULT_EMBEDDING_MODEL),
             ("stt", "openai_compat:whisper-default"),
+            ("tts", DEFAULT_TTS_MODEL),
         ]
         .into_iter()
         .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -350,6 +356,7 @@ impl Default for Models {
             ("image_describe", "vision"),
             ("embedding", "embedding"),
             ("stt", "stt"),
+            ("tts", "tts"),
         ]
         .into_iter()
         .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -872,6 +879,27 @@ impl Default for Upgrade {
             codesign_identity: String::new(),
             codesign_identifier: "io.github.edouard-claude.penelope".into(),
             install_dir: "~/.local/bin".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Voice {
+    /// Voix préréglée du modèle de synthèse (rôle `tts`).
+    pub tts_voice: String,
+    /// Longueur maximale d'un texte lu en vocal, en caractères : au-delà, un résumé vocal.
+    pub max_chars: usize,
+    /// Répondre en vocal quand le propriétaire vient d'envoyer un vocal.
+    pub reply_in_kind: bool,
+}
+
+impl Default for Voice {
+    fn default() -> Self {
+        Voice {
+            tts_voice: "fr_female".into(),
+            max_chars: 1_500,
+            reply_in_kind: false,
         }
     }
 }

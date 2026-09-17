@@ -21,6 +21,16 @@ pub trait Admin: Send + Sync {
     async fn memory_search(&self) -> Value {
         Value::Null
     }
+    /// Outil `send_voice` : synthèse, conversion et envoi, repli en texte (issue #41).
+    async fn send_voice(
+        &self,
+        session_id: &str,
+        origin: &crate::bus::Origin,
+        args: &Value,
+    ) -> Result<Value, String> {
+        let _ = (session_id, origin, args);
+        Err("vocal indisponible hors du daemon".into())
+    }
 }
 
 /// Modèle qui répond au tour en cours.
@@ -122,6 +132,7 @@ async fn inventory_section(
             })).collect::<Vec<_>>(),
         }),
         "install" => {
+            let cfg = s.config.config();
             let exe = crate::upgrade::running_binary().ok();
             json!({
                 "version": crate::VERSION,
@@ -135,6 +146,16 @@ async fn inventory_section(
                     .and_then(|p| std::fs::read_to_string(p).ok())
                     .and_then(|raw| penelope_platform::service::launchd_program(&raw)),
                 "docs": crate::selfdocs::url("README.md", None),
+                // Répondre en vocal (issue #41) : outil `send_voice`, synthèse locale.
+                "voice": {
+                    "send_voice": true,
+                    "tts_model": crate::voice::tts_model(&cfg),
+                    "voice": cfg.voice.tts_voice,
+                    "max_chars": cfg.voice.max_chars,
+                    "reply_in_kind": cfg.voice.reply_in_kind,
+                    "ffmpeg": penelope_platform::audio::ffmpeg().is_some(),
+                    "local_provider_enabled": cfg.providers.local.enabled,
+                },
             })
         }
         "limits" => crate::selfdocs::known_limits(),

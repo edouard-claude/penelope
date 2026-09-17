@@ -268,6 +268,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `models.aliases.reasoning` | `"openrouter:z-ai/glm-5.2"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
 | `models.aliases.stt` | `"openai_compat:whisper-default"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
 | `models.aliases.summarizer` | `"openrouter:deepseek/deepseek-v4-flash"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
+| `models.aliases.tts` | `"openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
 | `models.aliases.vision` | `"openrouter:google/gemini-3.1-flash-image"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
 | `models.roles.chat_default` | `"main"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.roles.classifier` | `"fast"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
@@ -278,6 +279,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `models.roles.image_generate` | `"image"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.roles.memory_review` | `"fast"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.roles.stt` | `"stt"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
+| `models.roles.tts` | `"tts"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.routing.classifier` | `true` | Classer la complexité d'un message pour choisir l'alias. |
 | `models.routing.low` | `"fast"` | Alias d'un message simple. |
 | `models.routing.medium` | `"main"` | Alias d'un message moyen. |
@@ -436,6 +438,14 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `upgrade.codesign_identity` | `""` | Identité de signature macOS (nom du certificat ou empreinte SHA-1) : le binaire téléchargé est re-signé avec elle avant la bascule (issue #28). Vide : non re-signé. |
 | `upgrade.codesign_identifier` | `"io.github.edouard-claude.penelope"` | Identifiant fixe de la signature macOS. |
 | `upgrade.install_dir` | `"~/.local/bin"` | Répertoire du binaire de release quand une installation source bascule vers les releases (issue #33). |
+
+**[voice]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `voice.tts_voice` | `"fr_female"` | Voix préréglée du modèle de synthèse (rôle `tts`). |
+| `voice.max_chars` | `1500` | Longueur maximale d'un texte lu en vocal, en caractères : au-delà, un résumé vocal. |
+| `voice.reply_in_kind` | `false` | Répondre en vocal quand le propriétaire vient d'envoyer un vocal. |
 <!-- reference:config:fin -->
 
 ## 6. Modèles
@@ -696,6 +706,43 @@ penelope config set providers.local.enabled true
 Sans provider local actif, un vocal reçoit une réponse qui dit quoi configurer, au lieu
 d'être envoyé ailleurs.
 
+**Répondre en vocal.** Pénélope peut aussi envoyer des vocaux, avec une voix féminine
+française générée en local : sur demande (« réponds-moi en vocal », « lis-moi la
+veille »), ou en réponse à un vocal si `voice.reply_in_kind` vaut `true`. Jamais pour du
+code, un tableau ou une longue réponse : elle envoie alors un résumé vocal et garde le
+détail en texte. L'outil `send_voice` retire le Markdown, les liens, les blocs de code et
+les emojis (« 8,5 % » devient « 8,5 pour cent »), découpe le texte en phrases, le fait
+lire par le modèle du rôle `tts`, convertit l'audio en OGG/Opus avec `ffmpeg` et l'envoie
+en message vocal dans la même conversation. Si la synthèse échoue (serveur arrêté, modèle
+absent), la réponse part en texte avec « vocal indisponible : <raison> ».
+
+Le modèle livré est Voxtral TTS de Mistral (`mlx-community/Voxtral-4B-TTS-2603-mlx-4bit`,
+2,5 Go, voix `fr_female`), servi par mlx-audio sur le même serveur local que la
+transcription (`/v1/audio/speech`). Voxtral TTS demande mlx-audio **depuis sa branche
+principale** (la release 0.5.4 ne le charge pas) et `mistral-common[audio]` 1.11.7 ou plus
+récent ; sinon le serveur répond `unexpected keyword argument 'voice_num_audio_tokens'`.
+
+```bash
+pip install "git+https://github.com/Blaizzy/mlx-audio.git" "mistral-common[audio]>=1.11.7"
+```
+
+```bash
+mlx_audio.server --host 127.0.0.1 --port 8080
+```
+
+Le premier appel télécharge le modèle ; ensuite, mettre `HF_HUB_OFFLINE=1` dans
+l'environnement du LaunchAgent du serveur pour ne plus contacter Hugging Face. Compter
+environ une seconde de calcul par seconde d'audio à chaud sur un M1 Pro. Réglages :
+`voice.tts_voice` (voix), `voice.max_chars` (1 500 caractères au plus par vocal),
+`voice.reply_in_kind` ; le modèle se change comme les autres :
+
+```bash
+penelope model set tts openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit
+```
+
+`penelope doctor` vérifie `ffmpeg` et lit une phrase d'essai ; `self_status` (inventaire
+`install`) dit si la réponse vocale est disponible et avec quelle voix.
+
 ### Ce que Pénélope sait d'elle-même
 
 L'outil `self_status` lui donne son état complet : version et durée de fonctionnement,
@@ -771,6 +818,7 @@ politique). Les outils MCP passent par `tool_search`, `tool_describe` et `tool_c
 | `self_status` | read | État complet de Pénélope et de sa machine : version, modèle qui répond à ce tour et routage, configuration effective (alias, rôles, bac à sable, budgets, Telegram, providers, transcription), coûts du jour et de la session, file de travail, chemins, et machine (batterie, secteur, disque, mémoire, charge, démarrage, système). |
 | `send_file` | write | Envoie un fichier au propriétaire. |
 | `send_message` | write | Envoie un message au propriétaire. |
+| `send_voice` | read | Lit un texte en message vocal (voix féminine locale) dans cette conversation. |
 | `session_metadata` | write | Lit ou modifie les métadonnées de session : critères, findings, todos. |
 | `session_notes` | read | Notes de travail de la session, qui survivent aux compactions et au fork : objectif, plan, décisions, fichiers touchés, points ouverts, prochaine étape. |
 | `shell_exec` | write | Exécute une commande sous bac à sable, avec délai. |
