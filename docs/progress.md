@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1186 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1199 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -424,6 +424,32 @@ Mémoire « second cerveau » et configuration.
   (`penelope_kernel::coherence`), refus nommé à `config_set`, avertissement sinon, audit
   au démarrage et dans `doctor` (déclencheurs pendant les heures calmes compris),
   `penelope config validate`.
+
+### 0.8.0
+
+Qualité de la mémoire, historique du vault, secrets et signature.
+
+- #24 **Règles dictées retenues** : `mem_note` accepte la citation exacte du
+  propriétaire, vérifiée dans ses messages depuis la dernière réponse ; sans citation, une
+  préférence, correction ou décision n'est plus rejetée mais demandée au propriétaire
+  (approbation « Tu confirmes cette règle ? »), promue au rêve suivant après
+  confirmation. `penelope mem retry-rejected` remet en file les règles rejetées pour leur
+  seule origine (migration 0007 pour les passes existantes).
+- #25 **Porte de qualité** : texte tronqué, phrase incomplète ou sujet absent rejetés,
+  entrées de plus de 300 caractères scindées en phrases, états passagers envoyés dans
+  `projets.md` avec `expire`, données client, financières ou de sécurité marquées
+  `sensible` (table `mem_flags`, migration 0008) et jamais injectées d'office, faits sur
+  la configuration de Pénélope refusés ; dépassement du budget Cœur signalé dans
+  `DREAMS.md`.
+- #26 **Aucun secret dans les journaux** : stderr rédigé comme les fichiers, jeton du bot
+  retiré des erreurs de transport, journaux en `0700`/`0600`, contrôle `logs_secrets` de
+  `doctor` sur les journaux existants.
+- #27 **Vault sous git** : dépôt créé au démarrage quand l'autocommit est actif, commit
+  périodique, commit par rêve, avertissement `doctor` et digest, `penelope mem diff
+  [--since dream]`.
+- #28 **Signature macOS stable** : `make build`/`make sign` avec `SIGN_IDENTITY`,
+  re-signature à l'upgrade (`upgrade.codesign_identity`), type de signature dans `doctor`,
+  workflow CI qui vérifie l'exigence désignée entre deux builds.
 
 ### Routine de livraison
 

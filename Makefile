@@ -5,18 +5,27 @@
 #
 # Le binaire installé est celui que trouve le PATH (`command -v penelope`), sinon
 # /usr/local/bin/penelope ; sudo n'est utilisé que si ce répertoire n'est pas inscriptible.
+#
+# macOS : avec SIGN_IDENTITY (certificat de signature de code, voir « Signature locale »
+# dans docs/install-headless.md), `build` signe le binaire avec un identifiant fixe. Son
+# exigence désignée ne change plus d'un build à l'autre : l'accès au Trousseau accordé une
+# fois reste valable. Vide par défaut : CI et Linux inchangés.
 
-CARGO   ?= cargo
-BIN     := target/release/penelope
-DEST    ?= $(shell command -v penelope 2>/dev/null || echo /usr/local/bin/penelope)
-SUDO    := $(shell test -w "$(dir $(DEST))" || echo sudo)
+CARGO           ?= cargo
+BIN             := target/release/penelope
+DEST            ?= $(shell command -v penelope 2>/dev/null || echo /usr/local/bin/penelope)
+SUDO            := $(shell test -w "$(dir $(DEST))" || echo sudo)
+SIGN_IDENTITY   ?=
+SIGN_IDENTIFIER ?= io.github.edouard-claude.penelope
+SIGN_FLAGS      ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help pull build update install restart deploy test clean
+.PHONY: help pull build sign update install restart deploy test clean
 
 help:
 	@echo "make pull     git pull (avance rapide uniquement)"
-	@echo "make build    cargo build --release"
+	@echo "make build    cargo build --release (signé si SIGN_IDENTITY est défini)"
+	@echo "make sign     signe $(BIN) avec SIGN_IDENTITY (macOS)"
 	@echo "make update   pull + build"
 	@echo "make install  copie $(BIN) vers $(DEST)"
 	@echo "make restart  penelope restart (le service repart avec le nouveau binaire)"
@@ -29,6 +38,12 @@ pull:
 
 build:
 	$(CARGO) build --release --locked
+	@if [ -n "$(SIGN_IDENTITY)" ]; then $(MAKE) --no-print-directory sign; fi
+
+sign:
+	@test -n "$(SIGN_IDENTITY)" || { echo "SIGN_IDENTITY est vide : voir « Signature locale » dans docs/install-headless.md"; exit 1; }
+	codesign --force --timestamp=none --sign "$(SIGN_IDENTITY)" --identifier $(SIGN_IDENTIFIER) $(SIGN_FLAGS) "$(BIN)"
+	codesign --verify --strict "$(BIN)"
 
 update: pull build
 

@@ -388,11 +388,14 @@ pub fn all() -> Vec<ToolSpec> {
             "mem_note",
             RiskClass::Write,
             "Note une observation dans le journal du jour. N'écrit jamais dans le niveau \
-             curé.",
+             curé. Pour une règle, une correction ou une décision que le propriétaire vient \
+             d'énoncer, `citation` recopie mot pour mot l'extrait de son message : la note \
+             compte alors comme venant de lui.",
             obj(
                 json!({
                     "type": {"type":"string","enum":["fait","preference","correction","ecart","decision","procedure_candidate"]},
                     "texte": {"type":"string"},
+                    "citation": {"type":"string"},
                     "quand": {"type":"string"},
                     "importance": {"type":"integer","minimum":1,"maximum":10}
                 }),

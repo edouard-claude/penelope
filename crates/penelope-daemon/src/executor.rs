@@ -623,10 +623,22 @@ impl NativeToolExecutor {
                     .ok_or_else(|| ToolError::Invalid("type inconnu".into()))?;
                 let texte = str_arg(args, "texte")?;
                 crate::vault_ops::write_filter(&texte).map_err(ToolError::Denied)?;
+                // Une règle dictée par le propriétaire compte comme la sienne, à condition
+                // d'en citer l'extrait mot pour mot (issue #24).
+                let citation = args.get("citation").and_then(|v| v.as_str());
+                let from_owner = match citation {
+                    Some(c) => self.cited_by_owner(c).await?,
+                    None => false,
+                };
+                let origin = if from_owner {
+                    penelope_memory::Origin::Owner
+                } else {
+                    penelope_memory::Origin::Agent
+                };
                 let mut c = penelope_memory::Candidate::new(
                     ctype,
                     &texte,
-                    penelope_memory::Origin::Agent,
+                    origin,
                     "interactive",
                     &s.clock.now_rfc3339(),
                 )
@@ -642,7 +654,15 @@ impl NativeToolExecutor {
                     .candidates
                     .record(vec![c], cfg.memory.review_max_candidates.max(1))
                     .await?;
-                json!({"noted": n == 1, "remarque": "consolidé lors du prochain rêve"})
+                json!({
+                    "noted": n == 1,
+                    "origine": origin.as_str(),
+                    "remarque": match (citation.is_some(), from_owner) {
+                        (_, true) => "citation vérifiée : consolidé comme une règle du propriétaire au prochain rêve",
+                        (true, false) => "citation introuvable mot pour mot dans les messages du propriétaire de ce tour : la règle lui sera demandée",
+                        (false, false) => "consolidé lors du prochain rêve",
+                    },
+                })
             }
             "mem_remember" => {
                 let level = match str_arg(args, "niveau")?.as_str() {
@@ -1066,6 +1086,61 @@ impl NativeToolExecutor {
         let mut o = ToolOutcome::ok(v);
         o.text = penelope_observe::injection::wrap_untrusted(&format!("http_fetch {url}"), &shown);
         Ok(o)
+    }
+
+    /// Vrai si `citation` figure mot pour mot (espaces et casse près) dans un message du
+    /// propriétaire du tour en cours : messages utilisateur depuis la dernière réponse
+    /// finale, hors déclencheurs, relances et contenus transférés.
+    async fn cited_by_owner(&self, citation: &str) -> ToolResult<bool> {
+        let norm = |t: &str| {
+            t.split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase()
+        };
+        let needle = norm(citation);
+        if needle.chars().count() < 8 || matches!(self.env.origin, Origin::Internal { .. }) {
+            return Ok(false);
+        }
+        let s = &self.services;
+        let sid = self.env.session_id.clone();
+        let last: i64 = s
+            .store
+            .read(move |c| {
+                Ok(c.query_row(
+                    "SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session_id = ?1",
+                    [sid],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .map_err(|e| ToolError::Other(e.to_string()))?;
+        let entries = s
+            .context
+            .history
+            .load(&self.env.session_id, (last - 60).max(0))
+            .await
+            .map_err(|e| ToolError::Other(e.to_string()))?;
+        for e in entries.iter().rev() {
+            let m = &e.message;
+            match m.role {
+                penelope_llm::types::Role::Assistant if m.tool_calls.is_empty() => break,
+                penelope_llm::types::Role::User => {
+                    let text = m.text();
+                    if text.starts_with("[déclencheur planifié]")
+                        || text.starts_with("[relance]")
+                        || text.contains("<<<DONNÉES NON FIABLES")
+                    {
+                        continue;
+                    }
+                    if norm(&text).contains(&needle) {
+                        return Ok(true);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(false)
     }
 
     async fn tool_search(&self, args: &Value) -> ToolResult<ToolOutcome> {

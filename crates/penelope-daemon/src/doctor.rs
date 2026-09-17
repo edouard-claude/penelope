@@ -195,6 +195,99 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     checks
 }
 
+/// Signature du binaire en cours (issue #28) : en ad hoc, macOS redemande l'accès au
+/// Trousseau après chaque build.
+pub fn binary_signature_check(s: &Services) -> DoctorCheck {
+    use penelope_platform::codesign::{Signature, inspect};
+    const ID: &str = "binary_signature";
+    const LABEL: &str = "Signature du binaire";
+    let Ok(exe) = std::env::current_exe() else {
+        return DoctorCheck::ok(ID, LABEL, "binaire introuvable");
+    };
+    let sig = inspect(&exe);
+    match &sig {
+        Signature::AdHoc { .. } | Signature::Unsigned => {
+            let configured = !s
+                .config
+                .config()
+                .upgrade
+                .codesign_identity
+                .trim()
+                .is_empty();
+            DoctorCheck::fail(
+                ID,
+                LABEL,
+                format!(
+                    "{} : macOS redemande l'accès au Trousseau après chaque build{}. Voir « Signature \
+                     locale » dans docs/install-headless.md",
+                    sig.describe(),
+                    if configured {
+                        " (upgrade.codesign_identity est configuré, mais ce binaire vient d'un build non signé)"
+                    } else {
+                        ""
+                    }
+                ),
+                Some("SIGN_IDENTITY=\"Penelope Dev\" make deploy".into()),
+            )
+        }
+        _ => DoctorCheck::ok(ID, LABEL, sig.describe()),
+    }
+}
+
+/// Secret en clair dans un journal existant (issue #26) : purger le fichier et révoquer.
+pub fn logs_secret_check(s: &Services) -> DoctorCheck {
+    use std::io::BufRead;
+    const ID: &str = "logs_secrets";
+    const LABEL: &str = "Aucun secret dans les journaux";
+    let dir = s.platform.dirs.logs();
+    let mut leaks: Vec<String> = Vec::new();
+    for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let path = e.path();
+        let name = e.file_name().to_string_lossy().to_string();
+        if !(name.ends_with(".log") || name.ends_with(".jsonl")) {
+            continue;
+        }
+        let Ok(file) = std::fs::File::open(&path) else {
+            continue;
+        };
+        let mut kinds: Vec<&str> = Vec::new();
+        for line in std::io::BufReader::new(std::io::Read::take(file, 64 * 1024 * 1024))
+            .lines()
+            .map_while(Result::ok)
+        {
+            if let Some(k) = penelope_observe::leaked_secret_kind(&line)
+                && !kinds.contains(&k)
+            {
+                kinds.push(k);
+            }
+        }
+        if !kinds.is_empty() {
+            leaks.push(format!("{} ({})", path.display(), kinds.join(", ")));
+        }
+    }
+    if leaks.is_empty() {
+        return DoctorCheck::ok(ID, LABEL, format!("{} vérifié", dir.display()));
+    }
+    let telegram = leaks
+        .iter()
+        .any(|l| l.contains("telegram") || l.contains("enregistré"));
+    DoctorCheck::fail(
+        ID,
+        LABEL,
+        format!(
+            "secret en clair dans : {}. Le considérer comme exposé{}",
+            leaks.join(" ; "),
+            if telegram {
+                " : révoquer le jeton du bot (@BotFather, /revoke) puis `penelope secret set telegram_bot_token`"
+            } else {
+                " et le renouveler"
+            }
+        ),
+        Some(format!("vider les fichiers concernés, par exemple : : > {}/daemon.err.log", dir.display())),
+    )
+    .critical()
+}
+
 /// Cohérence de la configuration et des déclencheurs (issue #16).
 pub async fn coherence_checks(s: &Services) -> Vec<DoctorCheck> {
     use penelope_kernel::coherence::{Gravity, contradictions};
@@ -457,6 +550,27 @@ mod tests {
     use super::*;
     use penelope_kernel::clock::TestClock;
     use std::sync::Arc;
+
+    /// Issue #26 : un jeton déjà écrit dans un journal est signalé, avec révocation.
+    #[tokio::test]
+    async fn a_token_left_in_a_log_is_reported() {
+        let (_d, s) = services().await;
+        let logs = s.platform.dirs.logs();
+        std::fs::create_dir_all(&logs).unwrap();
+        assert!(logs_secret_check(&s).ok);
+        std::fs::write(
+            logs.join("daemon.err.log"),
+            "WARN getUpdates en échec error=error sending request for url \
+             (https://api.telegram.org/bot7123456789:AAHleaked_token_abcdefghijklmnopqrstu/getUpdates)\n",
+        )
+        .unwrap();
+        let c = logs_secret_check(&s);
+        assert!(!c.ok);
+        assert!(
+            c.detail.contains("daemon.err.log") && c.detail.contains("BotFather"),
+            "{c:?}"
+        );
+    }
 
     async fn services() -> (tempfile::TempDir, Arc<Services>) {
         let dir = tempfile::tempdir().unwrap();

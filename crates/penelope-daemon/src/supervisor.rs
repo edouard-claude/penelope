@@ -37,6 +37,11 @@ impl Daemon {
         let report = self.recover().await?;
         tracing::info!(?report, "reprise terminée");
         crate::budget_alert::AlertWatcher::install(&self);
+        // Historique du vault : dépôt créé si l'autocommit est actif (issue #27).
+        match crate::vault_git::ensure_repo(&self.services).await {
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "initialisation git du vault"),
+        }
         // Audit de démarrage : un réglage qui en annule un autre est nommé (issue #16).
         for c in penelope_kernel::coherence::contradictions(&self.services.config.config()) {
             tracing::warn!(reglages = ?c.keys, gravite = ?c.gravity, "{}", c.message);
@@ -185,6 +190,7 @@ async fn maintenance_loop(d: Arc<Daemon>) {
                 tracing::warn!(error = %e, "inventaire du vault");
             }
         }
+        crate::vault_git::autocommit_tick(&d).await;
         sleep_or_shutdown(&d, Duration::from_secs(60)).await;
     }
 }

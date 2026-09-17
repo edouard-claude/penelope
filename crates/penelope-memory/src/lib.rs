@@ -17,6 +17,7 @@ pub mod index;
 pub mod ingest;
 pub mod intents;
 pub mod provenance;
+pub mod quality;
 pub mod recall;
 pub mod vault;
 

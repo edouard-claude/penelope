@@ -266,9 +266,11 @@ pub async fn build_tiers_in(
 }
 
 /// Profil, cœur et projets tels que l'index les donne maintenant.
-async fn fresh_snapshot(s: &Services) -> [String; 3] {
+pub(crate) async fn fresh_snapshot(s: &Services) -> [String; 3] {
     let cfg = s.config.config();
     let mut out: [String; 3] = Default::default();
+    // Entrées sensibles ou expirées : jamais injectées d'office (issue #25).
+    let hidden = s.memory.hidden_uids().await.unwrap_or_default();
     for (i, (level, budget)) in [
         (
             penelope_memory::Level::Profil,
@@ -283,7 +285,8 @@ async fn fresh_snapshot(s: &Services) -> [String; 3] {
     .into_iter()
     .enumerate()
     {
-        let entries = s.memory.by_level(level).await.unwrap_or_default();
+        let mut entries = s.memory.by_level(level).await.unwrap_or_default();
+        entries.retain(|e| !hidden.contains(&e.uid));
         out[i] = penelope_memory::recall::Snapshots::build_block(&entries, budget as u64);
     }
     out

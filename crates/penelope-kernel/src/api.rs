@@ -180,6 +180,9 @@ pub mod method {
     pub const MEM_LEARNED: &str = "mem.learned";
     /// Audit noté sur 100, historisé (issue #23).
     pub const MEM_AUDIT: &str = "mem.audit";
+    /// Règles rejetées pour leur seule origine, remises à consolider (issue #24).
+    pub const MEM_RETRY_REJECTED: &str = "mem.retry_rejected";
+    pub const MEM_DIFF: &str = "mem.diff";
     pub const INTENT_LIST: &str = "intent.list";
     pub const INTENT_CANCEL: &str = "intent.cancel";
     pub const VAULT_SYNC: &str = "vault.sync";
@@ -274,6 +277,8 @@ pub mod method {
         MEM_DREAM,
         MEM_LEARNED,
         MEM_AUDIT,
+        MEM_RETRY_REJECTED,
+        MEM_DIFF,
         INTENT_LIST,
         INTENT_CANCEL,
         VAULT_SYNC,

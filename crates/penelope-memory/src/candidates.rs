@@ -353,6 +353,42 @@ impl CandidateStore {
             .await
     }
 
+    /// Candidats confirmés par le propriétaire : origine `owner`, de nouveau à consolider.
+    pub async fn confirm_by_owner(&self, ids: &[String]) -> penelope_store::Result<usize> {
+        let ids = ids.to_vec();
+        self.store
+            .write(move |tx| {
+                let mut n = 0;
+                for id in &ids {
+                    n += tx.execute(
+                        "UPDATE mem_candidates SET origin = 'owner', state = 'new', reject_reason = NULL
+                         WHERE id = ?1",
+                        [id],
+                    )?;
+                }
+                Ok(n)
+            })
+            .await
+    }
+
+    /// Remet à consolider les règles rejetées pour leur seule origine (issue #24) : elles
+    /// seront demandées au propriétaire.
+    pub async fn retry_origin_rejections(&self) -> penelope_store::Result<usize> {
+        self.store
+            .write(|tx| {
+                let mut n = 0;
+                for reason in crate::consolidation::LEGACY_ORIGIN_REJECTIONS {
+                    n += tx.execute(
+                        "UPDATE mem_candidates SET state = 'new', reject_reason = NULL
+                         WHERE state = 'rejected' AND reject_reason = ?1",
+                        [reason],
+                    )?;
+                }
+                Ok(n)
+            })
+            .await
+    }
+
     pub async fn set_state(
         &self,
         ids: &[String],

@@ -43,6 +43,11 @@ Par défaut, sur macOS :
 | Journaux | `~/Library/Logs/Penelope` |
 | Cache | `~/Library/Caches/Penelope` |
 
+Le répertoire des journaux est créé en `0700` et chaque fichier en `0600`. Les secrets
+connus (jeton du bot Telegram, clés d'API) sont masqués sur **toutes** les sorties, stderr
+compris ; `penelope doctor` (contrôle `logs_secrets`) cherche un secret resté en clair dans
+un journal plus ancien et dit quoi révoquer.
+
 `install` inscrit dans le service le PATH du terminal qui la lance, complété des
 emplacements usuels (Homebrew, `~/.local/bin`, Docker, nvm) : sans cela, `launchd` ne
 fournit que les répertoires système, et le daemon ne trouverait ni `npx`, ni `uvx`, ni
@@ -72,6 +77,8 @@ Chaque contrôle en échec rend une commande de correction. Les contrôles propr
 | `macos.sandbox` | Le bac à sable Seatbelt est utilisable | réinstaller les outils de ligne de commande |
 | `macos.keychain` | Le trousseau répond sans invite graphique | déverrouiller le trousseau de session |
 | `macos.power_source` | La machine est sur secteur | rebrancher |
+| `binary_signature` | Le binaire porte une signature stable, pas ad hoc | `SIGN_IDENTITY="Penelope Dev" make deploy` (section 10) |
+| `vault_git` | Le vault est un dépôt git quand l'autocommit est actif | `penelope vault sync` |
 
 FileVault mérite une décision explicite. Activé, il protège les secrets au repos mais
 impose `fdesetup authrestart` pour qu'un redémarrage reparte sans mot de passe tapé à
@@ -609,8 +616,42 @@ penelope mem history --file profil.md
 ```
 
 puis `penelope mem restore <id>`. `penelope vault check` signale un frontmatter cassé ou
-un secret écrit à la main ; si le vault est un dépôt git, chaque passe fait un commit
-`dream: AAAA-MM-JJ` (poussé si `memory.vault_git_remote` est renseigné).
+un secret écrit à la main.
+
+**Règles dictées.** Une règle que tu énonces et que Pénélope note avec `mem_note` porte ta
+citation exacte : retrouvée dans tes messages récents, elle compte comme venant de toi et
+passe la nuit. Notée sans citation (ou avec une citation absente de tes messages), elle
+n'est plus rejetée : la consolidation te demande « Tu confirmes cette règle ? » (bouton
+Telegram ou `penelope approvals`), et ta réponse la fait promouvoir au rêve suivant. Les
+règles rejetées par une version antérieure pour leur seule origine se remettent en file :
+
+```bash
+penelope mem retry-rejected
+```
+
+**Qualité de ce qui est retenu.** Une entrée est un fait complet : un texte tronqué
+(« … »), une phrase incomplète ou un pronom sans sujet est rejeté ; au-delà de 300
+caractères, l'entrée est scindée en phrases, et une phrase inexploitable est écartée. Un
+état passager (« deal en cours », « propale non lue », « arbitrage ») part dans
+`projets.md` avec `expire: AAAA-MM-JJ` (30 jours) et n'est plus injecté après cette date.
+Une donnée client, financière ou de sécurité (montant, marge, faille, mot de passe) porte
+`sensible: oui` : jamais injectée d'office, toujours trouvable par `mem_search`. Un fait sur
+la configuration de Pénélope elle-même n'est pas retenu, `self_status` fait foi. Les deux
+annotations se posent aussi à la main et sont relues par `penelope mem reindex`. Quand le
+niveau Cœur (`memoire.md`) dépasse `memory.core_budget_tokens`, `DREAMS.md` le signale.
+
+**Historique git du vault.** Avec `memory.vault_git_autocommit` actif (15 min par défaut,
+`0s` pour désactiver), le vault devient un dépôt au démarrage (`.gitignore`, commit
+initial, identité locale si git n'en a pas). Les éditions faites dans Obsidian ou en SSH
+sont commitées à cette période, chaque rêve fait son commit `rêve du AAAA-MM-JJ (d_…) : N
+promues`, poussé si `memory.vault_git_remote` est renseigné. `doctor` et le digest
+avertissent si le vault reste hors git. Ce que le dernier rêve a changé :
+
+```bash
+penelope mem diff --since dream
+```
+
+sans `--since`, les changements pas encore commités.
 
 **Accueil.** Sur une instance neuve, le profil ne se remplit qu'au fil des jours. `/accueil`
 (ou `penelope onboard`) pose neuf questions, une à la fois, avec des boutons quand c'est
@@ -869,6 +910,33 @@ make deploy
 trouve le PATH (sudo seulement si son répertoire n'est pas inscriptible) et lance
 `penelope restart`. `make update` s'arrête après la compilation, `make clean` libère les
 Go de `target/`.
+
+### Signature locale
+
+Un binaire compilé n'a qu'une signature ad hoc dont l'exigence désignée change à chaque
+build : macOS redemande alors l'accès au Trousseau après chaque `make deploy`. Signé avec
+un certificat stable et un identifiant fixe, un « Toujours autoriser » donné une fois
+reste valable. Une fois :
+
+1. Trousseau d'accès > Assistant de certification > Créer un certificat : nom « Penelope
+   Dev », type d'identité « Racine auto-signée », type de certificat « Signature de code ».
+2. Dans `~/.zshrc` :
+
+   ```bash
+   export SIGN_IDENTITY="Penelope Dev"
+   ```
+
+3. Premier `make deploy` **depuis une session graphique** (pas en SSH, où `codesign` ne
+   peut pas demander l'accès à la clé) : « Toujours autoriser » pour `codesign`, puis pour
+   Pénélope au premier accès au Trousseau.
+
+`make build` signe alors le binaire (`make sign` seul le re-signe), avec l'identifiant
+`io.github.edouard-claude.penelope` (`SIGN_IDENTIFIER` pour un autre). Pour
+`penelope upgrade`, `upgrade.codesign_identity = "Penelope Dev"` re-signe le binaire
+téléchargé avant la bascule ; sans ce réglage, l'upgrade prévient que l'autorisation sera
+redemandée. `penelope doctor` affiche le type de signature du binaire en cours. Le
+workflow CI « Signature macOS » vérifie, avec une identité jetable, que deux builds signés
+gardent la même exigence désignée.
 
 Au démarrage suivant, la reprise (§17) s'exécute : les tours interrompus sont remis en
 file, les runs repartent à leur étape courante, les effets restés en vol deviennent des

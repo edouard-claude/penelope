@@ -64,6 +64,11 @@ pub trait BotTransport: Send + Sync {
 /// Taille maximale d'un fichier téléchargeable par un bot (Bot API : 20 Mo).
 pub const DOWNLOAD_MAX_BYTES: usize = 20 * 1024 * 1024;
 
+/// Erreur `reqwest` sans son URL : celle de la Bot API contient le jeton (issue #26).
+fn transport_error(e: reqwest::Error) -> TgError {
+    TgError::Transport(e.without_url().to_string())
+}
+
 /// Transport HTTP réel.
 pub struct HttpTransport {
     client: reqwest::Client,
@@ -99,7 +104,7 @@ impl BotTransport for HttpTransport {
             ))
             .send()
             .await
-            .map_err(|e| TgError::Transport(e.to_string()))?;
+            .map_err(transport_error)?;
         let status = resp.status().as_u16();
         if status >= 400 {
             return Err(TgError::Transport(format!(
@@ -109,7 +114,7 @@ impl BotTransport for HttpTransport {
         let mut out = Vec::new();
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| TgError::Transport(e.to_string()))?;
+            let chunk = chunk.map_err(transport_error)?;
             if out.len() + chunk.len() > DOWNLOAD_MAX_BYTES {
                 return Err(TgError::Transport(
                     "fichier trop gros : un bot ne télécharge pas plus de 20 Mo".into(),
@@ -127,12 +132,14 @@ impl BotTransport for HttpTransport {
             .json(&body)
             .send()
             .await
-            .map_err(|e| TgError::Transport(e.to_string()))?;
+            .map_err(transport_error)?;
         let status = resp.status().as_u16();
-        let parsed: ApiResponse = resp
-            .json()
-            .await
-            .map_err(|e| TgError::Transport(format!("réponse illisible ({status}) : {e}")))?;
+        let parsed: ApiResponse = resp.json().await.map_err(|e| {
+            TgError::Transport(format!(
+                "réponse illisible ({status}) : {}",
+                e.without_url()
+            ))
+        })?;
         Ok(parsed)
     }
 
@@ -164,11 +171,14 @@ impl BotTransport for HttpTransport {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| TgError::Transport(e.to_string()))?;
+            .map_err(transport_error)?;
         let status = resp.status().as_u16();
-        resp.json()
-            .await
-            .map_err(|e| TgError::Transport(format!("réponse illisible ({status}) : {e}")))
+        resp.json().await.map_err(|e| {
+            TgError::Transport(format!(
+                "réponse illisible ({status}) : {}",
+                e.without_url()
+            ))
+        })
     }
 }
 
@@ -714,6 +724,20 @@ mod tests {
             0,
             "un autre chat n'est pas pénalisé"
         );
+    }
+
+    /// Issue #26 : une panne réseau ne met pas l'URL, donc le jeton, dans l'erreur.
+    #[tokio::test]
+    async fn transport_errors_never_carry_the_token() {
+        let token = "5123456789:AAHno_token_in_errors_abcdefghijklmnop";
+        let t = HttpTransport::new("http://127.0.0.1:9", token).unwrap();
+        let err = t
+            .call("getUpdates", json!({}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("AAHno_token"), "{err}");
+        assert!(!err.contains("127.0.0.1:9/bot"), "{err}");
     }
 
     #[test]

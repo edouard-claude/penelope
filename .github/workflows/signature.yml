@@ -1,0 +1,31 @@
+name: Signature macOS
+
+# Issue #28 : `make sign` avec une identité stable donne la même exigence désignée d'un
+# build à l'autre. Identité de test dans un trousseau temporaire, sans secret.
+
+on:
+  push:
+    paths:
+      - Makefile
+      - scripts/check-codesign.sh
+      - .github/workflows/signature.yml
+  pull_request:
+    paths:
+      - Makefile
+      - scripts/check-codesign.sh
+      - .github/workflows/signature.yml
+  workflow_dispatch:
+
+concurrency:
+  group: signature-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exigence-designee:
+    name: Exigence désignée stable
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vérifier
+        run: scripts/check-codesign.sh

@@ -11,7 +11,7 @@ pub mod redact;
 pub mod trajectory;
 
 pub use injection::{InjectionFinding, Severity, is_suspicious, scan, wrap_untrusted};
-pub use redact::{contains_secret, redact, redact_json, register_secret};
+pub use redact::{contains_secret, leaked_secret_kind, redact, redact_json, register_secret};
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -51,9 +51,26 @@ struct DailyFile {
     current: Mutex<Option<(String, std::fs::File)>>,
 }
 
+/// Répertoire des journaux en `0700`, fichiers existants en `0600` : un journal peut
+/// contenir des extraits de conversation (issue #26).
+pub fn restrict_log_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        for e in std::fs::read_dir(dir)?.flatten() {
+            if e.path().is_file() {
+                let _ = std::fs::set_permissions(e.path(), std::fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl DailyFile {
     fn new(dir: &Path, prefix: &str, retention_days: u32) -> std::io::Result<Self> {
-        std::fs::create_dir_all(dir)?;
+        restrict_log_dir(dir)?;
         Ok(DailyFile {
             dir: dir.to_path_buf(),
             prefix: prefix.to_string(),
@@ -78,10 +95,11 @@ impl DailyFile {
         };
         if needs_new {
             let path = self.dir.join(format!("{}-{day}.jsonl", self.prefix));
-            let f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)?;
+            let mut options = std::fs::OpenOptions::new();
+            options.create(true).append(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            let f = options.open(path)?;
             *guard = Some((day.clone(), f));
             drop(guard);
             self.purge_old();
@@ -145,6 +163,55 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RedactingWriter {
     }
 }
 
+/// Writer `tracing` vers un flux (stderr), rédigé lui aussi : sous le service, stderr
+/// devient `daemon.err.log` (issue #26).
+#[derive(Clone)]
+pub struct RedactingStream<W: Fn() -> Box<dyn Write> + Clone>(pub W);
+
+/// Un écrit en cours : le texte formaté est rédigé en bloc à la fin.
+pub struct Redacted {
+    sink: Box<dyn Write>,
+    buf: Vec<u8>,
+}
+
+impl Write for Redacted {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.buf.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.buf.is_empty() {
+            return Ok(());
+        }
+        let cleaned = redact::redact(&String::from_utf8_lossy(&self.buf));
+        self.buf.clear();
+        self.sink.write_all(cleaned.as_bytes())?;
+        self.sink.flush()
+    }
+}
+
+impl Drop for Redacted {
+    fn drop(&mut self) {
+        let _ = self.flush();
+    }
+}
+
+impl<'a, W: Fn() -> Box<dyn Write> + Clone + 'a> tracing_subscriber::fmt::MakeWriter<'a>
+    for RedactingStream<W>
+{
+    type Writer = Redacted;
+    fn make_writer(&'a self) -> Self::Writer {
+        Redacted {
+            sink: (self.0)(),
+            buf: Vec::new(),
+        }
+    }
+}
+
+fn stderr_sink() -> Box<dyn Write> {
+    Box::new(std::io::stderr())
+}
+
 /// Initialise `tracing` : JSON sur fichier à rotation, texte lisible sur stderr.
 ///
 /// Appelable une seule fois par processus ; les appels suivants sont ignorés.
@@ -174,7 +241,7 @@ pub fn init(log_dir: &Path, level: &str, retention_days: u32, to_stderr: bool) -
     let stderr_layer = to_stderr.then(|| {
         tracing_subscriber::fmt::layer()
             .with_target(true)
-            .with_writer(std::io::stderr)
+            .with_writer(RedactingStream(stderr_sink as fn() -> Box<dyn Write>))
             .compact()
     });
 
@@ -229,6 +296,73 @@ mod tests {
         assert!(
             !dir.path().join(format!("penelope-{old}.jsonl")).exists(),
             "un log de 30 jours doit être purgé avec une rétention de 14 jours"
+        );
+    }
+
+    /// Issue #26 : une erreur de transport dont l'URL porte un secret enregistré sort de la
+    /// couche stderr sans le secret.
+    #[test]
+    fn stderr_is_redacted_too() {
+        use tracing_subscriber::layer::SubscriberExt;
+        let token = "7123456789:AAHtest_secret_value_for_the_bot_0123";
+        redact::register_secret(token);
+        let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl Write for Sink {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let c = captured.clone();
+        let layer = tracing_subscriber::fmt::layer()
+            .with_writer(RedactingStream(move || {
+                Box::new(Sink(c.clone())) as Box<dyn Write>
+            }))
+            .compact();
+        let subscriber = Registry::default().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(
+                error = %format!("error sending request for url (https://api.telegram.org/bot{token}/getUpdates)"),
+                "getUpdates en échec"
+            );
+        });
+        let out = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+        assert!(out.contains("getUpdates en échec"), "{out}");
+        assert!(!out.contains("AAHtest_secret_value"), "{out}");
+        // Même sans enregistrement, la forme d'URL de la Bot API est reconnue.
+        assert!(
+            !redact::redact(
+                "https://api.telegram.org/bot987654321:ZZZ_unregistered_token_abcdefghijklmn/x"
+            )
+            .contains("ZZZ_unregistered")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn log_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join("daemon.err.log"), b"ancien").unwrap();
+        std::fs::set_permissions(
+            logs.join("daemon.err.log"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let f = DailyFile::new(&logs, "penelope", 14).unwrap();
+        f.write_line(b"x\n").unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&logs), 0o700);
+        assert_eq!(mode(&logs.join("daemon.err.log")), 0o600);
+        assert_eq!(
+            mode(&logs.join(format!("penelope-{}.jsonl", DailyFile::today()))),
+            0o600
         );
     }
 

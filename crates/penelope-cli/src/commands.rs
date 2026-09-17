@@ -431,6 +431,15 @@ pub enum MemCmd {
     Candidates,
     /// Audit de la mémoire noté sur 100, avec la prochaine action par axe.
     Audit,
+    /// Remet à consolider les règles rejetées pour leur seule origine : elles seront
+    /// demandées au propriétaire.
+    #[command(name = "retry-rejected")]
+    RetryRejected,
+    /// Changements du vault non commités, ou depuis le dernier rêve (`--since dream`).
+    Diff {
+        #[arg(long, value_parser = ["dream"])]
+        since: Option<String>,
+    },
     /// Lance la consolidation (`--dry-run` : rien n'est écrit).
     Dream {
         #[arg(long)]
@@ -529,6 +538,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         }
         Command::Session(SessionCmd::Compact { .. })
         | Command::Mem(MemCmd::Dream { .. })
+        | Command::Mem(MemCmd::Diff { .. })
         | Command::Import(_)
             if !cli.json =>
         {
@@ -804,6 +814,8 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Mem(MemCmd::Forget { uid }) => (m::MEM_FORGET, json!({"uid": uid})),
         Command::Mem(MemCmd::Candidates) => (m::MEM_CANDIDATES, json!({})),
         Command::Mem(MemCmd::Audit) => (m::MEM_AUDIT, json!({})),
+        Command::Mem(MemCmd::RetryRejected) => (m::MEM_RETRY_REJECTED, json!({})),
+        Command::Mem(MemCmd::Diff { since }) => (m::MEM_DIFF, json!({"since": since})),
         Command::Mem(MemCmd::Dream { dry_run }) => (m::MEM_DREAM, json!({"dry_run": dry_run})),
         Command::Mem(MemCmd::Learned { days }) => (m::MEM_LEARNED, json!({"days": days})),
         Command::Vault(VaultCmd::Sync) => (m::VAULT_SYNC, json!({})),
@@ -893,6 +905,7 @@ async fn upgrade_offline(cli: &Cli, p: &Value) -> CliResult<Value> {
         binary: &binary,
         state_dir: &state,
         now: chrono::Utc::now().to_rfc3339(),
+        codesign: up::codesign_of(&cfg),
     })
     .await
     .map_err(CliError::Io)
@@ -1674,6 +1687,8 @@ mod tests {
             (vec!["schedule", "list"], m::SCHEDULE_LIST),
             (vec!["mem", "search", "x"], m::MEM_SEARCH),
             (vec!["mem", "audit"], m::MEM_AUDIT),
+            (vec!["mem", "retry-rejected"], m::MEM_RETRY_REJECTED),
+            (vec!["mem", "diff", "--since", "dream"], m::MEM_DIFF),
             (vec!["mem", "dream", "--dry-run"], m::MEM_DREAM),
             (vec!["mem", "restore", "12"], m::MEM_RESTORE),
             (vec!["vault", "check"], m::VAULT_CHECK),

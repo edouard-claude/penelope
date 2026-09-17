@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod backend;
+pub mod codesign;
 pub mod dirs;
 pub mod host;
 pub mod ipc;

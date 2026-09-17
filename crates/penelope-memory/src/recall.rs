@@ -262,6 +262,7 @@ impl<'a> Recall<'a> {
         let degraded = query_vector.is_none();
         let filter = SearchFilter {
             limit: 20,
+            automatic: true,
             ..Default::default()
         };
 
@@ -367,6 +368,16 @@ impl Snapshots {
     }
 
     /// Construit un bloc sous budget de tokens, entrées les plus importantes d'abord.
+    /// Coût estimé d'un niveau et nombre d'entrées laissées hors du bloc injecté.
+    pub fn budget_use(entries: &[crate::index::IndexedEntry], budget_tokens: u64) -> (u64, usize) {
+        let block = Self::build_block(entries, budget_tokens);
+        let total: u64 = entries
+            .iter()
+            .map(|e| (e.text.chars().count() as u64 / 4).max(1))
+            .sum();
+        (total, entries.len() - block.lines().count())
+    }
+
     pub fn build_block(entries: &[crate::index::IndexedEntry], budget_tokens: u64) -> String {
         let mut sorted: Vec<&crate::index::IndexedEntry> = entries.iter().collect();
         sorted.sort_by(|a, b| {

@@ -39,6 +39,14 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0006_prompt_cache",
         sql: SQL_0006,
     },
+    Migration {
+        version: "0007_retry_origin_rejections",
+        sql: SQL_0007,
+    },
+    Migration {
+        version: "0008_memory_flags",
+        sql: SQL_0008,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -811,6 +819,27 @@ ALTER TABLE usage ADD COLUMN system_hash TEXT;
 ALTER TABLE usage ADD COLUMN tools_hash TEXT;
 ALTER TABLE usage ADD COLUMN miss_cause TEXT;
 CREATE INDEX usage_session_ts ON usage(session_id, ts);
+"#;
+
+/// Règles notées par l'agent et rejetées pour leur seule origine (issue #24) : remises à
+/// consolider, elles seront demandées au propriétaire.
+const SQL_0007: &str = r#"
+UPDATE mem_candidates SET state = 'new', reject_reason = NULL
+WHERE state = 'rejected' AND reject_reason IN (
+  'une préférence doit venir du propriétaire',
+  'une correction doit venir du propriétaire',
+  'une décision doit être confirmée par le propriétaire'
+);
+"#;
+
+/// Entrées sensibles ou datées (issue #25) : jamais injectées d'office, toujours
+/// trouvables par une recherche explicite.
+const SQL_0008: &str = r#"
+CREATE TABLE mem_flags(
+  uid      TEXT PRIMARY KEY,
+  sensible INTEGER NOT NULL DEFAULT 0,
+  expire   TEXT
+);
 "#;
 
 #[cfg(test)]

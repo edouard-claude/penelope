@@ -165,6 +165,7 @@ pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
             .and_then(|f| f.strip_suffix(".md"))
             .filter(|f| !f.contains('/'));
         for e in entries {
+            let (sensible, expire) = (e.annotations.sensible, e.annotations.expire.clone());
             let ie = match concept {
                 Some(slug) => IndexedEntry::from_vault(&e, &rel, level, "entite", Some(slug), &day),
                 None => IndexedEntry::from_vault(&e, &rel, level, "fait", None, &day),
@@ -172,6 +173,10 @@ pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
             let prov = Provenance::owner("reindex", "maintenance", &now);
             s.memory
                 .upsert(&ie, &prov)
+                .await
+                .map_err(|e| e.to_string())?;
+            s.memory
+                .set_flags(&ie.uid, sensible, expire.as_deref())
                 .await
                 .map_err(|e| e.to_string())?;
             n += 1;

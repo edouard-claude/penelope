@@ -270,6 +270,16 @@ pub fn installed_binary() -> Result<PathBuf, String> {
     Ok(exe)
 }
 
+/// Identité et identifiant de re-signature configurés (`upgrade.codesign_identity`).
+pub fn codesign_of(cfg: &penelope_kernel::config::Config) -> Option<(&str, &str)> {
+    let identity = cfg.upgrade.codesign_identity.trim();
+    let identifier = match cfg.upgrade.codesign_identifier.trim() {
+        "" => penelope_platform::codesign::DEFAULT_IDENTIFIER,
+        id => id,
+    };
+    (!identity.is_empty()).then_some((identity, identifier))
+}
+
 /// Une installation.
 pub struct Install<'a> {
     pub source: &'a Source,
@@ -278,6 +288,8 @@ pub struct Install<'a> {
     pub binary: &'a Path,
     pub state_dir: &'a Path,
     pub now: String,
+    /// Identité de re-signature macOS et identifiant fixe (issue #28).
+    pub codesign: Option<(&'a str, &'a str)>,
 }
 
 /// Télécharge, vérifie et met en place une release. Rien n'est touché avant que la somme
@@ -348,6 +360,19 @@ pub async fn install(opts: Install<'_>) -> Result<Value, String> {
         ));
     }
 
+    // Signature stable avant la bascule : sans elle, macOS redemande l'accès au Trousseau
+    // au premier démarrage du nouveau binaire.
+    let codesign = match opts.codesign {
+        _ if !cfg!(target_os = "macos") => Value::Null,
+        Some((identity, identifier)) => {
+            penelope_platform::codesign::sign(&fresh, identity, identifier)?;
+            json!(format!("re-signé avec « {identity} »"))
+        }
+        None => json!(
+            "non re-signé : macOS redemandera l'accès au Trousseau (upgrade.codesign_identity)"
+        ),
+    };
+
     swap_in(&fresh, opts.binary)?;
     let _ = std::fs::remove_dir_all(&work);
     let pending = Pending {
@@ -367,6 +392,7 @@ pub async fn install(opts: Install<'_>) -> Result<Value, String> {
         "binary": opts.binary,
         "previous": pending.previous,
         "signature": signature,
+        "codesign": codesign,
     }))
 }
 
@@ -706,6 +732,7 @@ async fn change(d: &Arc<Daemon>, source: &Source, p: &Value) -> Result<Value, St
     if p["rollback"].as_bool().unwrap_or(false) {
         return manual_rollback(&binary, &state_dir);
     }
+    let cfg = d.services.config.config();
     install(Install {
         source,
         tag: p["tag"].as_str().filter(|t| !t.trim().is_empty()),
@@ -713,6 +740,7 @@ async fn change(d: &Arc<Daemon>, source: &Source, p: &Value) -> Result<Value, St
         binary: &binary,
         state_dir: &state_dir,
         now: d.services.clock.now_rfc3339(),
+        codesign: codesign_of(&cfg),
     })
     .await
 }
@@ -720,9 +748,13 @@ async fn change(d: &Arc<Daemon>, source: &Source, p: &Value) -> Result<Value, St
 /// Résumé lisible d'une réponse `upgrade`.
 pub fn render(v: &Value) -> String {
     if let Some(to) = v["installed"].as_str() {
+        let codesign = v["codesign"]
+            .as_str()
+            .map(|c| format!(" Binaire {c}."))
+            .unwrap_or_default();
         return format!(
             "⬆️ {to} installée (depuis {}, signature {}). Au redémarrage, retour automatique \
-             à l'ancienne version si la nouvelle ne démarre pas.",
+             à l'ancienne version si la nouvelle ne démarre pas.{codesign}",
             v["from"].as_str().unwrap_or("?"),
             v["signature"].as_str().unwrap_or("non vérifiée")
         );
@@ -994,6 +1026,7 @@ mod tests {
             binary: &bin,
             state_dir: &state,
             now: "t".into(),
+            codesign: None,
         })
         .await
         .unwrap_err();
@@ -1014,6 +1047,7 @@ mod tests {
             binary: &bin,
             state_dir: &state,
             now: "t".into(),
+            codesign: None,
         })
         .await
         .unwrap();
@@ -1044,6 +1078,7 @@ mod tests {
             binary: &bin,
             state_dir: &state,
             now: "t".into(),
+            codesign: None,
         })
         .await
         .unwrap_err();

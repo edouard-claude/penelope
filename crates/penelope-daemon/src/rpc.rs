@@ -64,6 +64,9 @@ impl Rpc {
                 checks.push(crate::doctor::embedding_check(&self.daemon).await);
                 checks.push(crate::doctor::vault_index_check(s).await);
                 checks.extend(crate::doctor::coherence_checks(s).await);
+                checks.push(crate::doctor::logs_secret_check(s));
+                checks.push(crate::vault_git::doctor_check(s));
+                checks.push(crate::doctor::binary_signature_check(s));
                 Ok(json!(checks))
             }
             method::SHUTDOWN => {
@@ -566,6 +569,9 @@ impl Rpc {
                 crate::embeddings::spawn_backfill(self.daemon.clone());
                 Ok(json!({"entries": n}))
             }
+            method::MEM_RETRY_REJECTED => Ok(json!({
+                "retried": s.candidates.retry_origin_rejections().await?,
+            })),
             method::MEM_AUDIT => {
                 let audit = crate::mem_audit::run(&self.daemon).await?;
                 Ok(crate::mem_audit::to_json(&audit))
@@ -606,6 +612,15 @@ impl Rpc {
                     .map_err(anyhow::Error::msg)
             }
             method::VAULT_CHECK => Ok(crate::dream::vault_check(s).await),
+            method::MEM_DIFF => {
+                let since = p.get("since").and_then(|v| v.as_str()).unwrap_or_default();
+                if !since.is_empty() && since != "dream" {
+                    anyhow::bail!("`--since` n'accepte que `dream`");
+                }
+                crate::vault_git::diff(s, since == "dream")
+                    .await
+                    .map_err(anyhow::Error::msg)
+            }
             method::INTENT_LIST => Ok(serde_json::to_value(s.intents.all().await?)?),
             method::INTENT_CANCEL => {
                 let id = required_str(p, "id")?;

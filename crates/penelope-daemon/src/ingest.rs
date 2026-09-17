@@ -577,6 +577,19 @@ pub async fn apply_memory_proposal(d: &Arc<Daemon>, approval_id: &str) -> anyhow
     if d.kv_get(&flag).await?.is_some() {
         return Ok(0);
     }
+    // Règles notées par l'agent et confirmées : elles deviennent celles du propriétaire et
+    // entrent en mémoire à la prochaine consolidation (issue #24).
+    if a.payload["confirm"].as_bool() == Some(true) {
+        let ids: Vec<String> = a.payload["candidates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        let confirmed = s.candidates.confirm_by_owner(&ids).await?;
+        d.kv_set(&flag, &confirmed.to_string()).await?;
+        return Ok(confirmed);
+    }
     let vault = crate::conversation::vault_dir(s);
     let source = a.payload["source"].as_str().unwrap_or_default().to_string();
     let mut written = 0;

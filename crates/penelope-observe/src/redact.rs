@@ -44,6 +44,8 @@ fn patterns() -> &'static Patterns {
         add(r"\bAKIA[0-9A-Z]{16}\b", "clé aws");
         // Jeton de bot Telegram : <digits>:<35 chars>.
         add(r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b", "jeton telegram");
+        // Le même, collé au préfixe `bot` d'une URL de la Bot API (issue #26).
+        add(r"bot\d{6,12}:[A-Za-z0-9_-]{30,}", "jeton telegram");
         // Affectation explicite d'un secret dans un texte de configuration.
         add(
             r#"(?i)\b(api[_-]?key|secret|password|passwd|token|private[_-]?key)\b\s*[:=]\s*["']?[^\s"',]{8,}"#,
@@ -153,6 +155,23 @@ pub fn contains_secret(input: &str) -> bool {
         return true;
     }
     redact_card_numbers(input) != input
+}
+
+/// Secret laissé en clair dans un journal : valeur enregistrée ou jeton reconnaissable.
+/// Les affectations génériques (`token = …`) sont ignorées, trop fréquentes dans les
+/// traces légitimes.
+pub fn leaked_secret_kind(line: &str) -> Option<&'static str> {
+    if let Ok(g) = known().read()
+        && g.iter().any(|v| line.contains(&**v))
+    {
+        return Some("secret enregistré");
+    }
+    patterns()
+        .rules
+        .iter()
+        .filter(|(_, label)| *label != "affectation de secret")
+        .find(|(re, _)| re.is_match(line))
+        .map(|(_, label)| *label)
 }
 
 /// Nature du secret détecté, pour le message d'erreur du filtre d'écriture.

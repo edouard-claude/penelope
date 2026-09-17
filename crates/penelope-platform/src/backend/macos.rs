@@ -306,6 +306,21 @@ impl ServiceManager for LaunchdService {
 
     fn install(&self, exe: &Path, home: Option<&Path>) -> Result<PathBuf> {
         std::fs::create_dir_all(&self.logs)?;
+        // Journaux privés : launchd crée stdout et stderr en 0644 s'ils n'existent pas, et
+        // ils peuvent contenir des extraits de conversation (issue #26).
+        {
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            std::fs::set_permissions(&self.logs, std::fs::Permissions::from_mode(0o700))?;
+            for name in ["daemon.out.log", "daemon.err.log"] {
+                let path = self.logs.join(name);
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .mode(0o600)
+                    .open(&path)?;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            }
+        }
         if let Some(p) = self.plist.parent() {
             std::fs::create_dir_all(p)?;
         }

@@ -707,6 +707,10 @@ pub struct Upgrade {
     pub minisign_pubkey: String,
     pub health_timeout: String,
     pub heartbeat_daily: bool,
+    /// Identité de signature macOS (nom du certificat ou empreinte SHA-1) : le binaire
+    /// téléchargé est re-signé avec elle avant la bascule (issue #28). Vide : non re-signé.
+    pub codesign_identity: String,
+    pub codesign_identifier: String,
 }
 
 impl Default for Upgrade {
@@ -717,6 +721,8 @@ impl Default for Upgrade {
             minisign_pubkey: String::new(),
             health_timeout: "60s".into(),
             heartbeat_daily: true,
+            codesign_identity: String::new(),
+            codesign_identifier: "io.github.edouard-claude.penelope".into(),
         }
     }
 }

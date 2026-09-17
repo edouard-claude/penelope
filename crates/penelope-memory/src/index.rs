@@ -103,6 +103,8 @@ pub struct SearchFilter {
     pub include_episodic: bool,
     pub include_untrusted: bool,
     pub limit: usize,
+    /// Injection d'office (rappel automatique) : sans entrées sensibles ni expirées.
+    pub automatic: bool,
 }
 
 impl SearchFilter {
@@ -460,6 +462,46 @@ impl MemoryIndex {
             .await
     }
 
+    /// Marqueurs d'une entrée (issue #25).
+    pub async fn set_flags(
+        &self,
+        uid: &str,
+        sensible: bool,
+        expire: Option<&str>,
+    ) -> penelope_store::Result<()> {
+        let (uid, expire) = (uid.to_string(), expire.map(String::from));
+        self.store
+            .write(move |tx| {
+                if !sensible && expire.is_none() {
+                    tx.execute("DELETE FROM mem_flags WHERE uid = ?1", [&uid])?;
+                } else {
+                    tx.execute(
+                        "INSERT INTO mem_flags(uid, sensible, expire) VALUES(?1, ?2, ?3)
+                         ON CONFLICT(uid) DO UPDATE SET sensible = excluded.sensible,
+                            expire = excluded.expire",
+                        params![uid, sensible as i64, expire],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+    }
+
+    /// Entrées à ne pas injecter d'office : sensibles, ou expirées à ce jour.
+    pub async fn hidden_uids(&self) -> penelope_store::Result<std::collections::HashSet<String>> {
+        let today: String = self.clock.now_rfc3339().chars().take(10).collect();
+        self.store
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT uid FROM mem_flags
+                     WHERE sensible = 1 OR (expire IS NOT NULL AND expire < ?1)",
+                )?;
+                let rows = st.query_map([today], |r| r.get(0))?;
+                Ok(rows.collect::<Result<_, _>>()?)
+            })
+            .await
+    }
+
     /// Stocke un embedding.
     pub async fn put_embedding(
         &self,
@@ -501,6 +543,12 @@ impl MemoryIndex {
         let projects = active_projects.to_vec();
         let params_ = self.params;
         let now_ms = self.clock.now_ms();
+        // Rappel automatique : ni entrée sensible, ni entrée expirée (issue #25).
+        let hidden = if filter.automatic {
+            self.hidden_uids().await?
+        } else {
+            Default::default()
+        };
 
         self.store
             .read(move |c| {
@@ -564,7 +612,7 @@ impl MemoryIndex {
                 // 3. Filtrage et pondération.
                 let mut out: Vec<Scored> = Vec::new();
                 for (_, (entry, fr, vr, sim)) in candidates {
-                    if !f.accepts(&entry) {
+                    if !f.accepts(&entry) || hidden.contains(&entry.uid) {
                         continue;
                     }
                     let base = rrf(fr, vr, params_.rrf_k);
@@ -809,6 +857,8 @@ pub fn annotations_of(e: &IndexedEntry) -> Annotations {
         preuves: Vec::new(),
         occurrences: None,
         revue: None,
+        expire: None,
+        sensible: false,
     }
 }
 

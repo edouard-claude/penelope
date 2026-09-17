@@ -168,6 +168,10 @@ pub struct Annotations {
     pub preuves: Vec<String>,
     pub occurrences: Option<u32>,
     pub revue: Option<String>,
+    /// Date (`AAAA-MM-JJ`) après laquelle l'entrée n'est plus injectée d'office.
+    pub expire: Option<String>,
+    /// Donnée client, financière ou de sécurité : jamais injectée d'office.
+    pub sensible: bool,
 }
 
 fn comment_re() -> &'static Regex {
@@ -207,6 +211,8 @@ impl Annotations {
                 }
                 "occurrences" => a.occurrences = val.parse().ok(),
                 "revue" => a.revue = Some(val),
+                "expire" => a.expire = Some(val),
+                "sensible" => a.sensible = matches!(val.as_str(), "oui" | "true" | "1"),
                 _ => {}
             }
         }
@@ -242,6 +248,12 @@ impl Annotations {
         }
         if let Some(o) = self.occurrences {
             parts.push(format!("<!-- occurrences: {o} -->"));
+        }
+        if let Some(e) = &self.expire {
+            parts.push(format!("<!-- expire: {e} -->"));
+        }
+        if self.sensible {
+            parts.push("<!-- sensible: oui -->".to_string());
         }
         if let Some(d) = &self.depuis {
             parts.push(format!("<!-- depuis: {d} -->"));

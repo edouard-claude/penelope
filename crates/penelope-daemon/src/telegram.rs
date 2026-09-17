@@ -1970,8 +1970,17 @@ impl TelegramGateway {
                 let note = match (accept, won) {
                     (false, _) => "🗑 Propositions écartées : rien n'entre en mémoire.".to_string(),
                     (true, true) => {
+                        let confirm = s
+                            .approvals
+                            .get(&approval_id)
+                            .await?
+                            .is_some_and(|a| a.payload["confirm"].as_bool() == Some(true));
                         match crate::ingest::apply_memory_proposal(&self.daemon, &approval_id).await
                         {
+                            Ok(n) if confirm => format!(
+                                "✅ {n} règle(s) confirmée(s) : elles entrent en mémoire à la \
+                                 prochaine consolidation (`/dream` pour tout de suite)."
+                            ),
                             Ok(n) => format!("🧠 {n} fait(s) ajouté(s) à `notes.md`."),
                             Err(e) => format!("❌ {e}"),
                         }
