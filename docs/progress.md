@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1316 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1319 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -649,7 +649,7 @@ messages regroupées (#49), nouvelles tentatives avant le flux (#50), flux muet 
 son inactivité (#51), résultats d'outils parallèles admis en groupe (#52), comptage et
 fenêtre des modèles locaux (#53), émulation d'outils retirée (#54), projection qui ne relit
 plus ce qui est résumé (#55), délai d'étape qui borne l'étape, pas le run (#56), `/stop`
-qui interrompt outils et sous-agents (#57).
+qui interrompt outils et sous-agents (#57), pratiques rappelées en conversation (#58).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -744,6 +744,13 @@ qui interrompt outils et sous-agents (#57).
   sous-agent reçoit un jeton enfant du tour parent, donc `/stop` l'arrête aussi, et un
   sous-agent qui s'arrête tout seul ne touche pas au parent. L'attente entre deux
   tentatives d'une étape de workflow écoute la pause au lieu de dormir jusqu'à 300 s.
+- **Pratiques branchées** : la voie 1 reçoit enfin les pratiques du vault (relues quand un
+  fichier change) et un contexte réel (type de tâche déduit du message, projet actif du
+  workspace de la session). Une règle défaisable est rappelée avec son défaut et ses
+  exceptions **satisfaites**, jamais ses écarts observés : ceux-ci, comme les exceptions,
+  sont désormais exclus du rappel automatique (ils restent trouvables par `mem_search`), et
+  `reindex` leur donne leur vrai type (`exception`, `ecart`) au lieu de `fait`. Le facteur
+  « projet actif » du classement fonctionne enfin en conversation.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

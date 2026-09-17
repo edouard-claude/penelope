@@ -748,6 +748,14 @@ impl SearchFilter {
     }
 
     fn accepts(&self, e: &IndexedEntry) -> bool {
+        /// Entrée d'une section « Exceptions » ou « Écarts observés » d'une pratique.
+        fn is_practice_part(e: &IndexedEntry) -> bool {
+            matches!(e.etype.as_str(), "exception" | "ecart")
+                || e.anchor
+                    .as_deref()
+                    .is_some_and(|a| a.starts_with("Exceptions") || a.starts_with("Écarts"))
+        }
+
         if let Some(l) = self.level
             && e.level != l
         {
@@ -773,6 +781,12 @@ impl SearchFilter {
         }
         // Passages de documents ingérés : non fiables, jamais rappelés sans demande.
         if !self.include_untrusted && e.etype == crate::ingest::SOURCE_ETYPE {
+            return false;
+        }
+        // Exceptions et écarts d'une pratique : ils ne valent que sous leur `quand`, et
+        // c'est le rappel de la pratique qui l'évalue. Jamais injectés d'office par la
+        // recherche, mais toujours trouvables par `mem_search` (§6.7, issue #58).
+        if self.automatic && is_practice_part(e) {
             return false;
         }
         true

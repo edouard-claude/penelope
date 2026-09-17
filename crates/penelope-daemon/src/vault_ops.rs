@@ -200,7 +200,16 @@ pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
             let (sensible, expire) = (e.annotations.sensible, e.annotations.expire.clone());
             let ie = match concept {
                 Some(slug) => IndexedEntry::from_vault(&e, &rel, level, "entite", Some(slug), &day),
-                None => IndexedEntry::from_vault(&e, &rel, level, "fait", None, &day),
+                // Pratique : la section dit ce qu'est l'entrée. Une exception ou un écart
+                // indexé comme un fait serait injecté sans son `quand` (issue #58).
+                None => IndexedEntry::from_vault(
+                    &e,
+                    &rel,
+                    level,
+                    practice_etype(&rel, &e.section),
+                    None,
+                    &day,
+                ),
             };
             let prov = Provenance::owner("reindex", "maintenance", &now);
             s.memory
@@ -215,6 +224,20 @@ pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
         }
     }
     Ok(n)
+}
+
+/// Type d'une entrée de pratique d'après sa section (issue #58).
+fn practice_etype(rel: &str, section: &str) -> &'static str {
+    if !rel.starts_with("pratiques/") {
+        return "fait";
+    }
+    if section.starts_with("Exceptions") {
+        "exception"
+    } else if section.starts_with("Écarts") {
+        "ecart"
+    } else {
+        "fait"
+    }
 }
 
 fn collect_markdown(root: &Path, dir: &Path, out: &mut Vec<String>) {

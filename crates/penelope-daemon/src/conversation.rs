@@ -313,11 +313,16 @@ pub async fn build_tiers_in(
         b = b.volatile(notes);
     }
     if !user_text.trim().is_empty() {
+        // Voie 1 avec ce qu'il faut pour être utile : les pratiques du vault et le
+        // contexte du tour, sans quoi aucune règle défaisable n'est rappelée et le
+        // facteur « projet actif » reste inopérant (issue #58).
+        let practices = practices_of(&vault);
+        let ctx = current_context(s, user_text, episode.map(|(sid, _)| sid)).await;
         let recall = penelope_memory::Recall::new(
             &s.memory,
             penelope_memory::RecallParams::from_config(&cfg.memory),
         )
-        .path1(user_text, &Default::default(), query_vector, &[])
+        .path1(user_text, &ctx, query_vector, &practices)
         .await;
         // Retour d'usage (issue #37) : un souvenir servi au modèle compte comme rappelé.
         for t in &recall.triggered {
@@ -329,6 +334,74 @@ pub async fn build_tiers_in(
         }
     }
     b.build()
+}
+
+/// Pratiques du vault, relues seulement quand un fichier a changé (issue #58).
+fn practices_of(vault: &std::path::Path) -> Vec<penelope_memory::vault::Practice> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    type Cache = HashMap<std::path::PathBuf, (std::time::SystemTime, Option<PracticeEntry>)>;
+    static CACHE: std::sync::OnceLock<Mutex<Cache>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap_or_else(|p| p.into_inner());
+
+    let dir = vault.join("pratiques");
+    let Ok(read) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut seen = Vec::new();
+    for e in read.flatten() {
+        let path = e.path();
+        let Some(stem) = path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .filter(|f| f.ends_with(".md"))
+            .map(|f| f.trim_end_matches(".md").to_string())
+        else {
+            continue;
+        };
+        seen.push(path.clone());
+        let mtime = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let fresh = guard.get(&path).map(|(t, _)| *t == mtime).unwrap_or(false);
+        if !fresh {
+            let parsed = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|raw| penelope_memory::vault::Practice::parse(&raw, &stem).ok());
+            guard.insert(path.clone(), (mtime, parsed));
+        }
+        if let Some((_, Some(p))) = guard.get(&path) {
+            out.push(p.clone());
+        }
+    }
+    guard.retain(|k, _| seen.contains(k));
+    out
+}
+
+type PracticeEntry = penelope_memory::vault::Practice;
+
+/// Contexte du tour : projet actif du workspace de la session, type de tâche déduit du
+/// message. Ce que la voie 1 évalue pour décider d'une exception (§6.7, issue #58).
+async fn current_context(
+    s: &Services,
+    user_text: &str,
+    session_id: Option<&str>,
+) -> penelope_memory::recall::CurrentContext {
+    let mut ctx = penelope_memory::recall::CurrentContext {
+        tache: penelope_memory::recall::classify_task(user_text),
+        ..Default::default()
+    };
+    if let Some(sid) = session_id
+        && let Ok(Some(sess)) = s.sessions.get(sid).await
+        && let Some(ws) = sess.workspace.filter(|w| !w.is_empty())
+    {
+        let key = penelope_memory::recall::project_key(None, &ws);
+        ctx.touch_project(&key);
+    }
+    ctx
 }
 
 /// Profil, cœur et projets tels que l'index les donne maintenant.
@@ -443,6 +516,160 @@ mod tests {
             .unwrap()
             .id
             .to_string()
+    }
+
+    const PRATIQUE: &str = "---\n\
+        type: pratique\n\
+        id: langage-backend\n\
+        scope: global\n\
+        confiance: 0.8\n\
+        preuves: 9\n\
+        statut: active\n\
+        maj: 2026-09-17\n\
+        declencheurs: [langage, backend]\n\
+        ---\n\
+        # Langage backend\n\n\
+        ## Défaut\n\
+        - Go (stdlib, architecture hexagonale). <!-- uid: 01J9A -->\n\n\
+        ## Exceptions\n\
+        - **Rust** si l'agent code seul sur un projet critique. <!-- uid: 01J9B --> \
+          <!-- quand: tache=code; criticite=haute; codeur=agent --> <!-- confiance: 0.9 -->\n\n\
+        ## Écarts observés\n\
+        - 2026-09-12 · [[client-x]] : langage imposé par l'existant. <!-- uid: 01J9C --> \
+          <!-- quand: client=client-x --> <!-- occurrences: 1 -->\n";
+
+    /// #58 : une pratique est rappelée avec son défaut quand le message la déclenche, et
+    /// son écart observé n'est jamais injecté d'office.
+    #[tokio::test]
+    async fn a_practice_is_recalled_with_its_default_and_never_its_deviations() {
+        let (_d, s) = services().await;
+        let vault = vault_dir(&s);
+        std::fs::create_dir_all(vault.join("pratiques")).unwrap();
+        std::fs::write(vault.join("pratiques/langage-backend.md"), PRATIQUE).unwrap();
+        crate::vault_ops::reindex(&s, &vault).await.unwrap();
+
+        let tiers = build_tiers(&s, "quel langage pour ce backend ?", &[], None).await;
+        let t4 = tiers.volatile.clone();
+        assert!(
+            t4.contains("[pratique: langage-backend"),
+            "la pratique doit être rappelée : {t4}"
+        );
+        assert!(t4.contains("Défaut : Go"), "{t4}");
+        assert!(
+            !t4.contains("langage imposé par l'existant"),
+            "un écart observé n'est jamais injecté d'office : {t4}"
+        );
+        assert!(
+            !t4.contains("Rust"),
+            "l'exception ne vaut que sous son `quand` : {t4}"
+        );
+
+        // Même en citant ses mots, l'écart ne remonte pas dans le rappel automatique.
+        let tiers = build_tiers(
+            &s,
+            "langage imposé par l'existant chez le client",
+            &[],
+            None,
+        )
+        .await;
+        let t4 = tiers.volatile.clone();
+        assert!(!t4.contains("2026-09-12"), "{t4}");
+    }
+
+    /// #58 : le projet actif du workspace de la session compte dans le classement : à
+    /// texte égal, l'entrée du projet passe devant.
+    #[tokio::test]
+    async fn an_entry_of_the_open_project_ranks_first() {
+        let (_d, s) = services().await;
+        let sess = s
+            .sessions
+            .create_with(
+                penelope_kernel::session::SessionKind::Chat,
+                None,
+                None,
+                Some("/Users/edouard/Code/atlas".into()),
+            )
+            .await
+            .unwrap();
+        let sid = sess.id.to_string();
+        let key = penelope_memory::recall::project_key(None, "/Users/edouard/Code/atlas");
+
+        let vault = vault_dir(&s);
+        std::fs::create_dir_all(&vault).unwrap();
+        std::fs::write(
+            vault.join("projets.md"),
+            format!(
+                "# Projets\n\n\
+                 - Les migrations passent par sqlx. <!-- uid: 01PROJ --> \
+                   <!-- projet: {key} -->\n\
+                 - Les migrations passent par sqlx ailleurs. <!-- uid: 01AUTRE -->\n"
+            ),
+        )
+        .unwrap();
+        crate::vault_ops::reindex(&s, &vault).await.unwrap();
+
+        let ctx = current_context(&s, "comment fait-on les migrations ?", Some(&sid)).await;
+        assert_eq!(
+            ctx.active_projects,
+            vec![key.clone()],
+            "projet actif du tour"
+        );
+
+        let hits = s
+            .memory
+            .search(
+                "migrations sqlx",
+                None,
+                &penelope_memory::index::SearchFilter {
+                    limit: 5,
+                    automatic: true,
+                    ..Default::default()
+                },
+                &ctx.active_projects,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            hits.first().map(|h| h.entry.uid.as_str()),
+            Some("01PROJ"),
+            "l'entrée du projet ouvert passe devant : {hits:?}"
+        );
+    }
+
+    /// #58 : l'index donne aux sections d'une pratique leur vrai type.
+    #[tokio::test]
+    async fn practice_sections_are_indexed_with_their_own_type() {
+        let (_d, s) = services().await;
+        let vault = vault_dir(&s);
+        std::fs::create_dir_all(vault.join("pratiques")).unwrap();
+        std::fs::write(vault.join("pratiques/langage-backend.md"), PRATIQUE).unwrap();
+        crate::vault_ops::reindex(&s, &vault).await.unwrap();
+
+        let types = s
+            .memory
+            .store()
+            .read(|c| {
+                let mut st = c.prepare("SELECT uid, etype FROM mem_entries ORDER BY uid")?;
+                let rows =
+                    st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+                let mut out = Vec::new();
+                for r in rows {
+                    out.push(r?);
+                }
+                Ok(out)
+            })
+            .await
+            .unwrap();
+        let etype = |uid: &str| {
+            types
+                .iter()
+                .find(|(u, _)| u == uid)
+                .map(|(_, t)| t.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(etype("01J9A"), "fait", "{types:?}");
+        assert_eq!(etype("01J9B"), "exception", "{types:?}");
+        assert_eq!(etype("01J9C"), "ecart", "{types:?}");
     }
 
     /// #55 : après une compaction, la projection ne relit plus les messages couverts par
