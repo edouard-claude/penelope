@@ -21,7 +21,7 @@ use crate::runtime::Services;
 use penelope_mcp::McpError;
 use penelope_mcp::client::McpClient;
 use penelope_mcp::config::ServerConfig;
-use penelope_mcp::protocol::{ContentBlock, Incoming, ProtocolVersion, ToolResult};
+use penelope_mcp::protocol::{ClientFeatures, ContentBlock, Incoming, ProtocolVersion, ToolResult};
 use penelope_mcp::registry::RegisteredTool;
 use penelope_mcp::supervisor::{Backoff, ServerMetrics, ServerState, ServerStatus};
 use penelope_mcp::transport::Transport;
@@ -36,6 +36,8 @@ use std::time::Duration;
 const MAINTENANCE_EVERY: Duration = Duration::from_secs(15);
 /// Un serveur actif mais silencieux depuis ce délai reçoit un `ping`.
 const HEALTH_AFTER_MS: i64 = 60_000;
+/// Relances MRTR au plus, avant d'abandonner un appel qui demande encore une saisie.
+const MAX_INPUT_ROUNDS: usize = 4;
 
 /// Ouvre le transport d'un serveur.
 #[async_trait::async_trait]
@@ -527,12 +529,17 @@ impl McpSupervisor {
             .open(cfg)
             .await
             .map_err(|e| (e, Vec::new(), false))?;
+        // L'élicitation n'est annoncée que si un propriétaire peut y répondre (issue #12).
+        let features = ClientFeatures {
+            elicitation: self.services.elicitations.reachable(),
+        };
         let first = McpClient::connect(
             cfg.name.clone(),
             transport.clone(),
             preferred,
             cfg.timeout_duration(),
             cfg.max_concurrency,
+            features,
         )
         .await;
         let client = match first {
@@ -563,6 +570,7 @@ impl McpSupervisor {
                     ProtocolVersion::V20251125,
                     cfg.timeout_duration(),
                     cfg.max_concurrency,
+                    features,
                 )
                 .await
                 {
@@ -584,7 +592,12 @@ impl McpSupervisor {
             }
         };
         let client = Arc::new(client);
-        let pump = self.pump(&cfg.name, client.transport(), cfg.roots.clone());
+        let pump = self.pump(
+            &cfg.name,
+            client.transport(),
+            cfg.roots.clone(),
+            client.version().has_url_elicitation(),
+        );
         Ok((client, pump))
     }
 
@@ -594,19 +607,11 @@ impl McpSupervisor {
         name: &str,
         transport: Arc<dyn Transport>,
         roots: Vec<String>,
+        url_elicitation: bool,
     ) -> tokio::task::JoinHandle<()> {
         let me = self.me.clone();
         let name = name.to_string();
-        let dirs_roots: Vec<Value> = roots
-            .iter()
-            .map(|r| {
-                let path = self.services.platform.dirs.expand(r);
-                json!({
-                    "uri": format!("file://{}", path.display()),
-                    "name": path.file_name().map(|n| n.to_string_lossy().to_string()),
-                })
-            })
-            .collect();
+        let dirs_roots = self.roots_json(&roots);
         let mut rx = transport.incoming();
         tokio::spawn(async move {
             loop {
@@ -616,12 +621,23 @@ impl McpSupervisor {
                     Err(_) => break,
                 };
                 match msg {
+                    // Le propriétaire peut mettre des minutes à répondre : la boucle continue.
+                    Incoming::ServerRequest(req) if req.method == "elicitation/create" => {
+                        let (me, transport, name) = (me.clone(), transport.clone(), name.clone());
+                        tokio::spawn(async move {
+                            let params = req.params.clone().unwrap_or(Value::Null);
+                            let result = match me.upgrade() {
+                                Some(sup) => sup.elicit(&name, &params, url_elicitation).await,
+                                None => Ok(json!({"action": "cancel"})),
+                            };
+                            let _ = transport.respond(req.id.clone(), result).await;
+                        });
+                    }
                     Incoming::ServerRequest(req) => {
                         let result: penelope_mcp::Result<Value> = match req.method.as_str() {
                             "ping" => Ok(json!({})),
                             "roots/list" => Ok(json!({ "roots": dirs_roots })),
-                            // Pas encore de formulaire côté propriétaire : on décline.
-                            "elicitation/create" => Ok(json!({ "action": "decline" })),
+                            // Non annoncé : un serveur qui le demande quand même est refusé.
                             "sampling/createMessage" => Err(McpError::Denied(
                                 "le sampling n'est pas autorisé pour ce serveur".into(),
                             )),
@@ -646,6 +662,20 @@ impl McpSupervisor {
                         }
                         "notifications/message" => {
                             tracing::debug!(server = %name, params = ?n.params, "journal MCP");
+                        }
+                        "notifications/elicitation/complete" => {
+                            let id = n
+                                .params
+                                .as_ref()
+                                .and_then(|p| p.get("elicitationId"))
+                                .and_then(|i| i.as_str())
+                                .map(String::from);
+                            if let (Some(sup), Some(id)) = (me.upgrade(), id) {
+                                let name = name.clone();
+                                tokio::spawn(async move {
+                                    sup.services.elicitations.complete(&name, &id).await;
+                                });
+                            }
                         }
                         _ => {}
                     },
@@ -765,18 +795,62 @@ impl McpSupervisor {
         let client = self.ensure_live(&slot).await?;
         let timeout = slot.config().timeout_for(&tool.name);
         let started = std::time::Instant::now();
-        let outcome = client
-            .call_tool(
+        let call = |input: Option<Value>, state: Option<String>| {
+            client.retry_tool(
                 &tool.name,
                 args.clone(),
                 tool.output_schema.as_ref(),
                 Some(timeout),
+                input,
+                state,
             )
-            .await;
+        };
+        let mut outcome = call(None, None).await;
+        // MRTR (2026-07-28) : le serveur demande une saisie, l'appel est relancé avec les
+        // réponses et son état opaque.
+        let mut rounds = 0;
+        while let Ok(r) = &outcome
+            && r.needs_input()
+            && rounds < MAX_INPUT_ROUNDS
+        {
+            rounds += 1;
+            let url_ok = client.version().has_url_elicitation();
+            let input = self
+                .input_responses(&tool.server, r.input_requests.as_ref(), url_ok)
+                .await;
+            let state = r.request_state.clone();
+            outcome = call(input, state).await;
+        }
+        // 2025-11-25 : l'appel exige un lien mené à bien, puis un nouvel essai.
+        if let Err(McpError::Rpc { code, data, .. }) = &outcome
+            && *code == penelope_mcp::protocol::URL_ELICITATION_REQUIRED
+            && self.links_completed(&tool.server, data.clone()).await
+        {
+            outcome = call(None, None).await;
+        }
+        let notes = self
+            .services
+            .elicitations
+            .notes_since(&tool.server, started);
         let ms = started.elapsed().as_secs_f64() * 1000.0;
         let now = self.now_ms();
         match outcome {
-            Ok(result) => {
+            Ok(mut result) => {
+                if result.needs_input() {
+                    result.is_error = true;
+                    result.content.push(ContentBlock::Text {
+                        text: format!(
+                            "[Pénélope : `{}` demande encore une saisie après {rounds} \
+                             échanges, appel abandonné.]",
+                            tool.server
+                        ),
+                    });
+                }
+                for note in &notes {
+                    result
+                        .content
+                        .push(ContentBlock::Text { text: note.clone() });
+                }
                 let now_s = self.now();
                 slot.info(|i| {
                     i.metrics.record(ms, !result.is_error);
@@ -805,9 +879,123 @@ impl McpSupervisor {
                     }
                     _ => self.persist(&slot).await,
                 }
-                Err(format!("`{qualified}` : {e}"))
+                let mut message = format!("`{qualified}` : {e}");
+                for note in &notes {
+                    message.push('\n');
+                    message.push_str(note);
+                }
+                Err(message)
             }
         }
+    }
+
+    /// Demande `elicitation/create` d'un serveur : présentée au propriétaire, résultat
+    /// `ElicitResult`. Le mode URL n'est accepté que s'il a été annoncé.
+    pub async fn elicit(
+        &self,
+        server: &str,
+        params: &Value,
+        url_allowed: bool,
+    ) -> penelope_mcp::Result<Value> {
+        let invalid = |message: String| McpError::Rpc {
+            code: penelope_mcp::protocol::INVALID_PARAMS,
+            message,
+            data: None,
+        };
+        if params.get("mode").and_then(|m| m.as_str()) == Some("url") && !url_allowed {
+            return Err(invalid(
+                "mode `url` non annoncé pour cette version du protocole".into(),
+            ));
+        }
+        let timeout = match self.slot(server).await {
+            Some(slot) => slot.config().elicitation_duration(),
+            None => Duration::from_secs(600),
+        };
+        self.services
+            .elicitations
+            .ask(server, params, timeout)
+            .await
+            .map(|o| o.result())
+            .map_err(invalid)
+    }
+
+    /// Réponses aux `inputRequests` d'un résultat MRTR : élicitations et racines. Le
+    /// sampling, jamais annoncé, reste sans réponse.
+    async fn input_responses(
+        &self,
+        server: &str,
+        requests: Option<&Value>,
+        url_allowed: bool,
+    ) -> Option<Value> {
+        let requests = requests?.as_object()?;
+        let mut out = serde_json::Map::new();
+        for (key, request) in requests {
+            let params = request.get("params").cloned().unwrap_or(json!({}));
+            match request.get("method").and_then(|m| m.as_str()) {
+                Some("elicitation/create") => {
+                    if let Ok(v) = self.elicit(server, &params, url_allowed).await {
+                        out.insert(key.clone(), v);
+                    }
+                }
+                Some("roots/list") => {
+                    let roots = match self.slot(server).await {
+                        Some(slot) => self.roots_json(&slot.config().roots),
+                        None => Vec::new(),
+                    };
+                    out.insert(key.clone(), json!({ "roots": roots }));
+                }
+                other => {
+                    tracing::debug!(server, method = ?other, "demande MRTR sans réponse");
+                }
+            }
+        }
+        Some(Value::Object(out))
+    }
+
+    /// Erreur −32042 : chaque lien exigé est présenté au propriétaire ; vrai quand tous ont
+    /// été acceptés et que le serveur en a signalé la fin.
+    async fn links_completed(&self, server: &str, data: Option<Value>) -> bool {
+        let Some(links) = data
+            .as_ref()
+            .and_then(|d| d.get("elicitations"))
+            .and_then(|e| e.as_array())
+            .filter(|l| !l.is_empty())
+        else {
+            return false;
+        };
+        let timeout = match self.slot(server).await {
+            Some(slot) => slot.config().elicitation_duration(),
+            None => Duration::from_secs(600),
+        };
+        let broker = &self.services.elicitations;
+        for link in links {
+            let Some(id) = link.get("elicitationId").and_then(|i| i.as_str()) else {
+                return false;
+            };
+            match broker.ask(server, link, timeout).await {
+                Ok(o) if o.accepted() => {
+                    if !broker.wait_completion(server, id, timeout).await {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    /// Racines déclarées, telles que `roots/list` les rend.
+    fn roots_json(&self, roots: &[String]) -> Vec<Value> {
+        roots
+            .iter()
+            .map(|r| {
+                let path = self.services.platform.dirs.expand(r);
+                json!({
+                    "uri": format!("file://{}", path.display()),
+                    "name": path.file_name().map(|n| n.to_string_lossy().to_string()),
+                })
+            })
+            .collect()
     }
 
     /// État d'une tâche MCP (`tasks/get`) et, une fois terminée, son résultat
@@ -1879,7 +2067,14 @@ mod tests {
                 .unwrap()
                 .ends_with("/projets/penelope")
         );
-        assert_eq!(by_id(8).unwrap()["action"], "decline");
+        // Sans propriétaire joignable : rien d'annoncé, et une demande quand même reçue est
+        // annulée sans que personne ait refusé (issue #12, parcours Telegram dans
+        // `telegram::tests::mcp_elicitation_is_answered_from_telegram`).
+        let log = t.call_log().await;
+        let (_, init) = log.iter().find(|(m, _)| m == "initialize").unwrap();
+        assert!(init["capabilities"].get("elicitation").is_none(), "{init}");
+        assert!(init["capabilities"].get("sampling").is_none(), "{init}");
+        assert_eq!(by_id(8).unwrap()["action"], "cancel");
         assert!(by_id(9).is_err());
         let close = s
             .mcp_tools

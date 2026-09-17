@@ -64,6 +64,13 @@ pub fn all() -> Vec<Command> {
             m::SESSION_TITLE,
         ),
         c(
+            "close",
+            "Session",
+            "Ferme une session et vide sa file",
+            "/close",
+            m::SESSION_CLOSE,
+        ),
+        c(
             "fork",
             "Session",
             "Duplique la session courante",

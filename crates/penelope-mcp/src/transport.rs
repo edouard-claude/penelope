@@ -32,10 +32,16 @@ pub trait Transport: Send + Sync {
     }
 }
 
+/// Plafond d'une attente prolongée par des requêtes du serveur.
+const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
 /// Appariement requête/réponse partagé par tous les transports.
 pub struct Pending {
     next_id: AtomicU64,
     waiting: Mutex<HashMap<u64, oneshot::Sender<Response>>>,
+    /// Requêtes du serveur encore sans réponse du client (une élicitation attend le
+    /// propriétaire).
+    serving: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl Default for Pending {
@@ -43,11 +49,68 @@ impl Default for Pending {
         Pending {
             next_id: AtomicU64::new(1),
             waiting: Mutex::new(HashMap::new()),
+            serving: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 }
 
 impl Pending {
+    /// Une requête du serveur part vers un abonné ; `respond` la clôt.
+    pub fn server_request_opened(&self, id: &serde_json::Value) {
+        if let Ok(mut g) = self.serving.lock() {
+            g.insert(id.to_string());
+        }
+    }
+
+    pub fn server_request_closed(&self, id: &serde_json::Value) {
+        if let Ok(mut g) = self.serving.lock() {
+            g.remove(&id.to_string());
+        }
+    }
+
+    /// Le serveur attend une réponse du client.
+    pub fn serving(&self) -> bool {
+        self.serving.lock().map(|g| !g.is_empty()).unwrap_or(false)
+    }
+
+    /// Attend `fut` au plus `timeout`, sans compter le temps où le serveur attend lui-même
+    /// une réponse du client : une élicitation qui patiente pour le propriétaire ne fait
+    /// pas expirer l'appel qui l'a déclenchée (issue #12). Plafond : 24 h.
+    pub async fn wait<F: std::future::Future>(
+        &self,
+        fut: F,
+        timeout: std::time::Duration,
+    ) -> Option<F::Output> {
+        tokio::pin!(fut);
+        let tick = std::time::Duration::from_millis(100);
+        let started = tokio::time::Instant::now();
+        let mut counted = std::time::Duration::ZERO;
+        loop {
+            let step = tick.min(timeout.saturating_sub(counted));
+            tokio::select! {
+                out = &mut fut => return Some(out),
+                _ = tokio::time::sleep(step) => {}
+            }
+            if !self.serving() {
+                counted += step;
+            }
+            if counted >= timeout || started.elapsed() >= MAX_WAIT {
+                return None;
+            }
+        }
+    }
+
+    /// Publie un entrant non sollicité ; une requête du serveur est suivie jusqu'à sa
+    /// réponse, si quelqu'un l'écoute.
+    pub fn publish(&self, tx: &broadcast::Sender<Incoming>, incoming: Incoming) {
+        if let Incoming::ServerRequest(r) = &incoming
+            && tx.receiver_count() > 0
+        {
+            self.server_request_opened(&r.id);
+        }
+        let _ = tx.send(incoming);
+    }
+
     pub fn next_id(&self) -> u64 {
         self.next_id.fetch_add(1, Ordering::SeqCst)
     }
@@ -142,9 +205,7 @@ impl StdioTransport {
                     }
                     match decode(&line) {
                         Some(Incoming::Response(r)) => pending.resolve(r).await,
-                        Some(other) => {
-                            let _ = tx.send(other);
-                        }
+                        Some(other) => pending.publish(&tx, other),
                         None => tracing::debug!(line = %line, "ligne stdio non JSON-RPC ignorée"),
                     }
                 }
@@ -208,12 +269,12 @@ impl Transport for StdioTransport {
         let req = Request::new(id, method, params);
         self.write_line(&serde_json::to_string(&req)?).await?;
 
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(resp)) => unwrap_response(resp),
-            Ok(Err(_)) => Err(McpError::Transport(
+        match self.pending.wait(rx, timeout).await {
+            Some(Ok(resp)) => unwrap_response(resp),
+            Some(Err(_)) => Err(McpError::Transport(
                 "le serveur a fermé la connexion".into(),
             )),
-            Err(_) => {
+            None => {
                 self.pending.cancel(id).await;
                 // Notification d'annulation, comme l'exige le protocole.
                 let _ = self
@@ -240,6 +301,7 @@ impl Transport for StdioTransport {
         id: serde_json::Value,
         result: Result<serde_json::Value>,
     ) -> Result<()> {
+        self.pending.server_request_closed(&id);
         let body = match result {
             Ok(v) => serde_json::json!({"jsonrpc":"2.0","id":id,"result":v}),
             Err(e) => serde_json::json!({
@@ -372,26 +434,15 @@ impl HttpTransport {
             .await
             .map_err(|e| McpError::Transport(format!("POST {} : {e}", self.url)))
     }
-}
 
-#[async_trait::async_trait]
-impl Transport for HttpTransport {
-    fn kind(&self) -> &'static str {
-        if self.legacy_sse { "sse" } else { "http" }
-    }
-
-    async fn request(
+    /// Réponse à la requête `id` : JSON direct, ou flux SSE lu **au fil de l'eau** pour
+    /// publier aussitôt les requêtes du serveur (une élicitation attend sa réponse avant
+    /// que le flux se termine).
+    async fn read_response(
         &self,
-        method: &str,
-        params: serde_json::Value,
-        timeout: std::time::Duration,
+        id: u64,
+        mut resp: reqwest::Response,
     ) -> Result<serde_json::Value> {
-        let id = self.pending.next_id();
-        let req = Request::new(id, method, params);
-        let resp = self
-            .post(serde_json::to_value(&req)?, method, timeout)
-            .await?;
-
         let status = resp.status().as_u16();
         if status == 401 || status == 403 {
             let www = resp
@@ -426,38 +477,90 @@ impl Transport for HttpTransport {
             .unwrap_or("")
             .to_string();
 
-        if content_type.contains("text/event-stream") {
-            // Flux SSE : on consomme jusqu'à la réponse portant notre identifiant, en
-            // publiant au passage les notifications (progression, logs).
-            let body = resp
-                .text()
+        if !content_type.contains("text/event-stream") {
+            let v: serde_json::Value = resp
+                .json()
                 .await
                 .map_err(|e| McpError::Transport(e.to_string()))?;
-            let mut result = None;
-            for payload in sse_payloads(&body) {
-                match decode(&payload) {
-                    Some(Incoming::Response(r)) if r.id == id => {
-                        result = Some(unwrap_response(r));
-                    }
-                    Some(other) => {
-                        let _ = self.incoming_tx.send(other);
-                    }
-                    None => {}
-                }
-            }
-            return result.unwrap_or_else(|| {
-                Err(McpError::Transport(
-                    "flux SSE terminé sans réponse à la requête".into(),
-                ))
-            });
+            let r: Response = serde_json::from_value(v)?;
+            return unwrap_response(r);
         }
 
-        let v: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| McpError::Transport(e.to_string()))?;
-        let r: Response = serde_json::from_value(v)?;
-        unwrap_response(r)
+        // Flux SSE : on consomme jusqu'à la réponse portant notre identifiant, en publiant
+        // au passage notifications et requêtes du serveur.
+        let mut buf: Vec<u8> = Vec::new();
+        let mut ended = false;
+        loop {
+            while let Some((end, sep)) = event_end(&buf).or(if ended && !buf.is_empty() {
+                Some((buf.len(), 0))
+            } else {
+                None
+            }) {
+                let event = String::from_utf8_lossy(&buf[..end]).to_string();
+                buf.drain(..end + sep);
+                for payload in sse_payloads(&event) {
+                    match decode(&payload) {
+                        Some(Incoming::Response(r)) if r.id == id => return unwrap_response(r),
+                        Some(other) => self.pending.publish(&self.incoming_tx, other),
+                        None => {}
+                    }
+                }
+            }
+            if ended {
+                return Err(McpError::Transport(
+                    "flux SSE terminé sans réponse à la requête".into(),
+                ));
+            }
+            match resp.chunk().await {
+                Ok(Some(bytes)) => buf.extend_from_slice(&bytes),
+                Ok(None) => ended = true,
+                Err(e) => return Err(McpError::Transport(e.to_string())),
+            }
+        }
+    }
+}
+
+/// Fin du premier événement SSE complet du tampon : (position, longueur du séparateur).
+fn event_end(buf: &[u8]) -> Option<(usize, usize)> {
+    let lf = buf.windows(2).position(|w| w == b"\n\n").map(|i| (i, 2));
+    let crlf = buf
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|i| (i, 4));
+    match (lf, crlf) {
+        (Some(a), Some(b)) => Some(if a.0 <= b.0 { a } else { b }),
+        (a, b) => a.or(b),
+    }
+}
+
+#[async_trait::async_trait]
+impl Transport for HttpTransport {
+    fn kind(&self) -> &'static str {
+        if self.legacy_sse { "sse" } else { "http" }
+    }
+
+    async fn request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> Result<serde_json::Value> {
+        let id = self.pending.next_id();
+        let req = Request::new(id, method, params);
+        let exchange = async {
+            // Délai tenu par `Pending::wait`, suspendu tant que le serveur attend le client.
+            let resp = self
+                .post(serde_json::to_value(&req)?, method, MAX_WAIT)
+                .await?;
+            self.read_response(id, resp).await
+        };
+        match self.pending.wait(exchange, timeout).await {
+            Some(r) => r,
+            None => Err(McpError::Timeout {
+                method: method.to_string(),
+                ms: timeout.as_millis() as u64,
+            }),
+        }
     }
 
     async fn notify(&self, method: &str, params: serde_json::Value) -> Result<()> {
@@ -482,6 +585,7 @@ impl Transport for HttpTransport {
         id: serde_json::Value,
         result: Result<serde_json::Value>,
     ) -> Result<()> {
+        self.pending.server_request_closed(&id);
         let body = match result {
             Ok(v) => serde_json::json!({"jsonrpc":"2.0","id":id,"result":v}),
             Err(e) => serde_json::json!({
@@ -683,6 +787,122 @@ mod tests {
             McpError::Rpc { code, .. } => assert_eq!(code, -32022),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// Le délai d'un appel ne court pas tant que le serveur attend une réponse du client.
+    #[tokio::test]
+    async fn waiting_for_the_client_does_not_count_against_the_timeout() {
+        use std::time::Duration;
+        let p = Arc::new(Pending::default());
+        let expired = p.wait(std::future::pending::<()>(), Duration::from_millis(250));
+        assert!(expired.await.is_none());
+
+        p.server_request_opened(&json!(7));
+        let p2 = p.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            p2.server_request_closed(&json!(7));
+        });
+        let slow = async {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            "fini"
+        };
+        assert_eq!(p.wait(slow, Duration::from_millis(250)).await, Some("fini"));
+    }
+
+    /// Streamable HTTP : une requête du serveur au milieu du flux SSE est publiée tout de
+    /// suite, la réponse du client part en POST, puis le flux livre le résultat, même
+    /// au-delà du délai de l'appel.
+    #[tokio::test]
+    async fn sse_server_requests_are_published_before_the_stream_ends() {
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn read_request(sock: &mut tokio::net::TcpStream) -> String {
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = sock.read(&mut chunk).await.unwrap();
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf).to_string();
+                if let Some(head_end) = text.find("\r\n\r\n") {
+                    let len = text[..head_end]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    if buf.len() >= head_end + 4 + len {
+                        return text[head_end + 4..].to_string();
+                    }
+                }
+                if n == 0 {
+                    return String::new();
+                }
+            }
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let (answered_tx, answered_rx) = oneshot::channel::<String>();
+        tokio::spawn(async move {
+            let (mut call, _) = listener.accept().await.unwrap();
+            let body = read_request(&mut call).await;
+            assert!(body.contains("tools/call"), "{body}");
+            call.write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n\
+                  data: {\"jsonrpc\":\"2.0\",\"id\":\"e1\",\"method\":\"elicitation/create\",\
+                  \"params\":{\"message\":\"Confirmer ?\"}}\n\n",
+            )
+            .await
+            .unwrap();
+            call.flush().await.unwrap();
+            let (mut answer, _) = listener.accept().await.unwrap();
+            let posted = read_request(&mut answer).await;
+            answer
+                .write_all(b"HTTP/1.1 202 Accepted\r\ncontent-length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            call.write_all(b"data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[]}}\n\n")
+                .await
+                .unwrap();
+            let _ = answered_tx.send(posted);
+        });
+
+        let t = HttpTransport::new(url).unwrap();
+        let mut incoming = t.incoming();
+        let client = t.clone();
+        tokio::spawn(async move {
+            if let Ok(Incoming::ServerRequest(r)) = incoming.recv().await {
+                // Le propriétaire met plus longtemps que le délai de l'appel à répondre.
+                tokio::time::sleep(Duration::from_millis(800)).await;
+                client
+                    .respond(r.id, Ok(json!({"action": "accept"})))
+                    .await
+                    .unwrap();
+            }
+        });
+        let r = t
+            .request(
+                "tools/call",
+                json!({"name": "x"}),
+                Duration::from_millis(400),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r, json!({"content": []}));
+        let posted = answered_rx.await.unwrap();
+        assert!(posted.contains("\"action\":\"accept\""), "{posted}");
+        assert!(posted.contains("\"id\":\"e1\""), "{posted}");
+    }
+
+    #[test]
+    fn sse_events_are_split_on_blank_lines() {
+        assert_eq!(event_end(b"data: a\n\ndata: b"), Some((7, 2)));
+        assert_eq!(event_end(b"data: a\r\n\r\n"), Some((7, 4)));
+        assert_eq!(event_end(b"data: a\n"), None);
     }
 
     #[test]

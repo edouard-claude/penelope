@@ -143,7 +143,16 @@ impl TurnQueue {
                     [&now],
                 )?;
 
-                // 2. Sélectionne le prochain tour dont la session est libre.
+                // 2. Les tours d'une session fermée ne répondront jamais (issue #10).
+                tx.execute(
+                    "UPDATE turn_queue SET state = 'cancelled', finished_at = ?1,
+                        last_error = 'session fermée'
+                     WHERE state = 'pending' AND session_id IN
+                       (SELECT id FROM sessions WHERE state IN ('closed', 'deleted'))",
+                    [&now],
+                )?;
+
+                // 3. Sélectionne le prochain tour dont la session est libre.
                 let candidate: Option<(String, String, String, String, i64, String)> = tx
                     .query_row(
                         "SELECT q.id, q.session_id, q.kind, q.payload, q.attempts, q.enqueued_at
@@ -151,6 +160,8 @@ impl TurnQueue {
                          WHERE q.state = 'pending'
                            AND NOT EXISTS (SELECT 1 FROM leases l
                                            WHERE l.resource = 'session:' || q.session_id)
+                           AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = q.session_id
+                                           AND s.state IN ('closed', 'deleted'))
                          ORDER BY q.priority DESC, q.enqueued_at
                          LIMIT 1",
                         [],
@@ -224,6 +235,26 @@ impl TurnQueue {
 
     pub async fn fail(&self, turn: &Turn, error: &str) -> Result<()> {
         self.finish(turn, "failed", Some(error.to_string())).await
+    }
+
+    /// Annule les tours en attente d'une session (fermée ou détachée de son chat). Renvoie
+    /// leur nombre.
+    pub async fn cancel_pending(&self, session_id: &str, reason: &str) -> Result<usize> {
+        let (sid, reason, now) = (
+            session_id.to_string(),
+            reason.to_string(),
+            self.clock.now_rfc3339(),
+        );
+        Ok(self
+            .store
+            .write(move |tx| {
+                Ok(tx.execute(
+                    "UPDATE turn_queue SET state = 'cancelled', finished_at = ?2, last_error = ?3
+                     WHERE session_id = ?1 AND state = 'pending'",
+                    params![sid, now, reason],
+                )?)
+            })
+            .await?)
     }
 
     pub async fn cancel(&self, turn_id: &str) -> Result<()> {

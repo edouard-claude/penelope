@@ -160,13 +160,17 @@ fn handle(v: ProtocolVersion, method: &str, params: &Value) -> Result<Value, Mcp
                     "task": {"taskId": "task-1"}
                 })),
                 "needs_input" if v.is_stateless_core() => Ok(json!({
-                    "content": [],
                     "resultType": "input_required",
-                    "inputRequests": [{
-                        "id":"i1",
-                        "schema":{"type":"object","properties":{"token":{"type":"string"}},
-                                  "required":["token"]}
-                    }]
+                    "inputRequests": {"i1": {
+                        "method": "elicitation/create",
+                        "params": {
+                            "message": "Quel projet ?",
+                            "requestedSchema": {"type":"object",
+                                "properties":{"projet":{"type":"string"}},
+                                "required":["projet"]}
+                        }
+                    }},
+                    "requestState": "etat-1"
                 })),
                 "failing" => Ok(json!({
                     "content":[{"type":"text","text":"le ticket n'existe pas"}],

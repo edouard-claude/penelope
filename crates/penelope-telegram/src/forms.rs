@@ -124,6 +124,26 @@ fn value_str(v: &Value) -> String {
     }
 }
 
+/// Options titrées `[{"const": …, "title": …}]` (enum titré des élicitations MCP).
+fn titled_options(list: Option<&Value>) -> Option<Vec<EnumOption>> {
+    let options: Vec<EnumOption> = list?
+        .as_array()?
+        .iter()
+        .filter_map(|o| {
+            let value = o.get("const")?.clone();
+            Some(EnumOption {
+                title: o
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .map(String::from)
+                    .unwrap_or_else(|| value_str(&value)),
+                value,
+            })
+        })
+        .collect();
+    (!options.is_empty()).then_some(options)
+}
+
 /// Compile un JSON Schema en champs de formulaire.
 pub fn fields_from_schema(schema: &Value) -> TgResult<Vec<Field>> {
     let props = schema
@@ -162,10 +182,16 @@ pub fn fields_from_schema(schema: &Value) -> TgResult<Vec<Field>> {
                     .collect(),
                 multi: false,
             }
+        } else if let Some(options) = titled_options(p.get("oneOf")) {
+            FieldKind::Enum {
+                options,
+                multi: false,
+            }
         } else if ty == "array" {
             let item = p.get("items").cloned().unwrap_or(json!({}));
-            match item.get("enum").and_then(|e| e.as_array()) {
-                Some(values) => FieldKind::Enum {
+            let titled = titled_options(item.get("anyOf").or_else(|| item.get("oneOf")));
+            match (item.get("enum").and_then(|e| e.as_array()), titled) {
+                (Some(values), _) => FieldKind::Enum {
                     options: values
                         .iter()
                         .map(|v| EnumOption {
@@ -175,7 +201,11 @@ pub fn fields_from_schema(schema: &Value) -> TgResult<Vec<Field>> {
                         .collect(),
                     multi: true,
                 },
-                None => FieldKind::Text { multiline: true },
+                (None, Some(options)) => FieldKind::Enum {
+                    options,
+                    multi: true,
+                },
+                (None, None) => FieldKind::Text { multiline: true },
             }
         } else {
             match ty {
@@ -398,6 +428,39 @@ mod tests {
             FieldKind::Enum { options, .. } => assert_eq!(options[0].title, "a"),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// Enums titrés des élicitations MCP (2025-11-25) : `oneOf` et `items.anyOf`.
+    #[test]
+    fn titled_enums_use_const_and_title() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "couleur": {"type": "string", "oneOf": [
+                    {"const": "#FF0000", "title": "Rouge"},
+                    {"const": "#00FF00", "title": "Vert"}
+                ]},
+                "tags": {"type": "array", "items": {"anyOf": [
+                    {"const": "a", "title": "Alpha"},
+                    {"const": "b", "title": "Bêta"}
+                ]}}
+            },
+            "required": ["couleur"]
+        });
+        let mut form = FormState::new("e1", schema).unwrap();
+        match &form.fields[0].kind {
+            FieldKind::Enum { options, multi } => {
+                assert!(!multi);
+                assert_eq!(options[1].title, "Vert");
+            }
+            other => panic!("{other:?}"),
+        }
+        form.answer("Vert").unwrap();
+        form.answer("Alpha, Bêta").unwrap();
+        assert_eq!(
+            form.submit().unwrap(),
+            json!({"couleur": "#00FF00", "tags": ["a", "b"]})
+        );
     }
 
     #[test]

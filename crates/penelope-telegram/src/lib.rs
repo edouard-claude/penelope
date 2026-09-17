@@ -92,6 +92,8 @@ pub enum Incoming {
         data: String,
         message_id: i64,
         chat_id: i64,
+        /// Sujet du forum du message cliqué.
+        topic_id: Option<i64>,
     },
     /// URL collée contenant `code=` et `state=` : flux OAuth `paste_back` (§8.5).
     OAuthCallback {
@@ -197,6 +199,10 @@ pub fn classify(update: &Value, owner_id: i64, allow_groups: bool) -> Incoming {
                 .and_then(|c| c.get("id"))
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0),
+            topic_id: cb
+                .get("message")
+                .and_then(|m| m.get("message_thread_id"))
+                .and_then(|v| v.as_i64()),
         };
     }
 

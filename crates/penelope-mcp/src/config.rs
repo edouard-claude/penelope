@@ -39,6 +39,9 @@ pub struct ServerConfig {
     pub roots: Vec<String>,
     /// Budget de tokens pour les requêtes `sampling/createMessage` (§8.4).
     pub sampling_budget_tokens: u64,
+    /// Attente maximale d'une réponse du propriétaire à une élicitation ; au-delà, la
+    /// demande est annulée (`cancel`).
+    pub elicitation_timeout: String,
     /// Surcharges de politique par outil : `{"create_pr": "ask_twice"}`.
     pub tool_policy: BTreeMap<String, String>,
     /// Surcharges de classe de risque par outil : les annotations ne sont que des indices.
@@ -69,6 +72,7 @@ impl Default for ServerConfig {
             sandbox_profile: "mcp-stdio".into(),
             roots: Vec::new(),
             sampling_budget_tokens: 20_000,
+            elicitation_timeout: "10m".into(),
             tool_policy: BTreeMap::new(),
             tool_risk: BTreeMap::new(),
             timeout_per_tool: BTreeMap::new(),
@@ -149,6 +153,8 @@ impl ServerConfig {
             .map_err(|e| bad(&format!("`timeout` : {e}")))?;
         penelope_kernel::config::parse_duration(&self.idle_timeout)
             .map_err(|e| bad(&format!("`idle_timeout` : {e}")))?;
+        penelope_kernel::config::parse_duration(&self.elicitation_timeout)
+            .map_err(|e| bad(&format!("`elicitation_timeout` : {e}")))?;
         if penelope_platform::sandbox::ProfileKind::parse(&self.sandbox_profile).is_none() {
             return Err(bad(&format!(
                 "profil de bac à sable inconnu : `{}`",
@@ -173,6 +179,11 @@ impl ServerConfig {
     pub fn timeout_duration(&self) -> std::time::Duration {
         penelope_kernel::config::parse_duration(&self.timeout)
             .unwrap_or_else(|_| std::time::Duration::from_secs(30))
+    }
+
+    pub fn elicitation_duration(&self) -> std::time::Duration {
+        penelope_kernel::config::parse_duration(&self.elicitation_timeout)
+            .unwrap_or_else(|_| std::time::Duration::from_secs(600))
     }
 
     pub fn idle_duration(&self) -> std::time::Duration {

@@ -52,6 +52,13 @@ impl Daemon {
             tokio::spawn(crate::upgrade::confirm_when_healthy(self.clone())),
         ];
 
+        // Telegram construit d'abord (sans réseau) : un serveur MCP qui se connecte sait déjà
+        // si un propriétaire peut répondre à ses demandes d'élicitation (issue #12).
+        let telegram = crate::telegram::TelegramGateway::from_config(self.clone()).await;
+        if let Ok(Some(_)) = &telegram {
+            self.services.elicitations.expect_owner();
+        }
+
         // Serveurs MCP de `mcp.d/` : chargés en fond, pour ne pas retarder le démarrage.
         let mcp = crate::mcp::McpSupervisor::new(
             self.services.clone(),
@@ -60,7 +67,7 @@ impl Daemon {
         self.hooks.set_mcp(mcp.clone());
         tasks.extend(mcp.start());
 
-        match crate::telegram::TelegramGateway::from_config(self.clone()).await {
+        match telegram {
             Ok(Some(gw)) => match gw.start().await {
                 Ok(handles) => tasks.extend(handles),
                 Err(e) => tracing::error!(error = %e, "Telegram non démarré"),

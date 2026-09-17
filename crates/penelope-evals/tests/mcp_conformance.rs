@@ -7,7 +7,7 @@ use penelope_evals::mcp_servers::{MockAuthServer, conformance_matrix, server};
 use penelope_mcp::client::McpClient;
 use penelope_mcp::error::McpError;
 use penelope_mcp::oauth::*;
-use penelope_mcp::protocol::{ContentBlock, ProtocolVersion};
+use penelope_mcp::protocol::{ClientFeatures, ContentBlock, ProtocolVersion};
 use serde_json::json;
 use std::time::Duration;
 
@@ -20,6 +20,7 @@ async fn connect(v: ProtocolVersion, transport: &'static str) -> McpClient {
         ProtocolVersion::V20260728,
         TIMEOUT,
         4,
+        ClientFeatures::default(),
     )
     .await
     .unwrap_or_else(|e| panic!("connexion {v} / {transport} : {e}"))
@@ -233,7 +234,9 @@ async fn mrtr_input_required_is_surfaced() {
         .await
         .unwrap();
     assert!(r.needs_input());
-    assert!(r.input_requests.is_some());
+    let requests = r.input_requests.as_ref().unwrap();
+    assert_eq!(requests["i1"]["method"], "elicitation/create");
+    assert_eq!(r.request_state.as_deref(), Some("etat-1"));
 }
 
 #[tokio::test]

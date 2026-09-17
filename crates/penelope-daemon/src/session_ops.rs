@@ -90,6 +90,86 @@ pub async fn fork(
 
 /// Revient `turns` échanges en arrière : les messages retirés ne sont pas perdus, ils
 /// partent dans une session d'archive (fermée, rattachée à la session d'origine).
+/// Arrête ce que fait une session sans la fermer : tour en cours interrompu, file vidée.
+/// Sert quand une session perd son chat (`/fork`, `/switch`) ou se ferme (issue #10).
+pub async fn silence(d: &Daemon, session_id: &str, reason: &str) -> anyhow::Result<usize> {
+    d.bus.cancel_session(session_id);
+    let cancelled = d.services.turns.cancel_pending(session_id, reason).await?;
+    if cancelled > 0 {
+        tracing::info!(session = %session_id, cancelled, %reason, "tours annulés");
+    }
+    Ok(cancelled)
+}
+
+/// Ferme une session : tour en cours arrêté, file vidée, chat détaché, épisode relu.
+pub async fn close(d: &Arc<Daemon>, session_id: &str) -> anyhow::Result<Value> {
+    let s = &d.services;
+    let sess = s.sessions.require(session_id).await?;
+    let cancelled = silence(d, session_id, "session fermée").await?;
+    s.sessions.set_state(session_id, "closed").await?;
+    s.sessions.unbind_telegram(session_id).await?;
+    crate::episodes::spawn_ingest(
+        d.clone(),
+        session_id.to_string(),
+        sess.episode_seq,
+        crate::episodes::Boundary::NewSession,
+    );
+    let _ = s
+        .events
+        .append(
+            EventDraft::new("session.closed", json!({"cancelled": cancelled})).session(session_id),
+        )
+        .await;
+    Ok(json!({
+        "session": session_id,
+        "title": sess.title,
+        "cancelled": cancelled,
+    }))
+}
+
+/// Retrouve une session par identifiant, préfixe unique d'identifiant ou titre exact.
+pub async fn resolve(
+    s: &Services,
+    query: &str,
+) -> Result<penelope_kernel::session::Session, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Err("session non précisée".into());
+    }
+    if let Ok(Some(sess)) = s.sessions.get(q).await {
+        return Ok(sess);
+    }
+    let all = s
+        .sessions
+        .list(Some(SessionKind::Chat), 500)
+        .await
+        .map_err(|e| e.to_string())?;
+    let by_prefix: Vec<_> = all
+        .iter()
+        .filter(|x| x.id.as_str().starts_with(q))
+        .collect();
+    let by_title: Vec<_> = all
+        .iter()
+        .filter(|x| {
+            x.title
+                .as_deref()
+                .is_some_and(|t| t.trim().eq_ignore_ascii_case(q))
+        })
+        .collect();
+    match (by_prefix.as_slice(), by_title.as_slice()) {
+        ([one], _) | ([], [one]) => Ok((*one).clone()),
+        ([], []) => Err(format!("aucune session ne correspond à « {q} »")),
+        (many, _) if many.len() > 1 => Err(format!(
+            "« {q} » désigne {} sessions : préciser l'identifiant",
+            many.len()
+        )),
+        (_, many) => Err(format!(
+            "{} sessions s'appellent « {q} » : préciser l'identifiant",
+            many.len()
+        )),
+    }
+}
+
 pub async fn rewind(d: &Arc<Daemon>, session_id: &str, turns: usize) -> anyhow::Result<Value> {
     let s = &d.services;
     if turns == 0 {

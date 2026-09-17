@@ -28,6 +28,8 @@ pub struct McpClient {
     /// Concurrence maximale par serveur (4 par défaut, §8.3).
     permits: Arc<Semaphore>,
     log_level: Option<String>,
+    /// Demandes du serveur que le client sait satisfaire (capacités annoncées).
+    features: ClientFeatures,
 }
 
 impl McpClient {
@@ -43,9 +45,10 @@ impl McpClient {
         preferred: ProtocolVersion,
         timeout: Duration,
         max_concurrency: usize,
+        features: ClientFeatures,
     ) -> Result<McpClient> {
         let name = name.into();
-        let negotiated = negotiate(transport.as_ref(), preferred, timeout).await?;
+        let negotiated = negotiate(transport.as_ref(), preferred, timeout, features).await?;
 
         let client = McpClient {
             name,
@@ -54,6 +57,7 @@ impl McpClient {
             default_timeout: timeout,
             permits: Arc::new(Semaphore::new(max_concurrency.max(1))),
             log_level: None,
+            features,
         };
 
         // En mode historique, le handshake se termine par `notifications/initialized`.
@@ -106,7 +110,12 @@ impl McpClient {
             .map_err(|_| McpError::Transport("sémaphore fermé".into()))?;
 
         if self.negotiated.stateless {
-            let meta = request_meta(self.negotiated.version, self.log_level.as_deref(), None);
+            let meta = request_meta(
+                self.negotiated.version,
+                self.features,
+                self.log_level.as_deref(),
+                None,
+            );
             if let Some(o) = params.as_object_mut() {
                 o.insert("_meta".into(), meta);
             }
@@ -147,13 +156,29 @@ impl McpClient {
         output_schema: Option<&Value>,
         timeout: Option<Duration>,
     ) -> Result<ToolResult> {
-        let v = self
-            .call(
-                "tools/call",
-                json!({"name": tool, "arguments": args}),
-                timeout,
-            )
-            .await?;
+        self.retry_tool(tool, args, output_schema, timeout, None, None)
+            .await
+    }
+
+    /// MRTR (2026-07-28) : relance d'un appel `input_required` avec les réponses aux
+    /// `inputRequests` et l'état opaque renvoyé tel quel.
+    pub async fn retry_tool(
+        &self,
+        tool: &str,
+        args: Value,
+        output_schema: Option<&Value>,
+        timeout: Option<Duration>,
+        input_responses: Option<Value>,
+        request_state: Option<String>,
+    ) -> Result<ToolResult> {
+        let mut params = json!({"name": tool, "arguments": args});
+        if let Some(r) = input_responses {
+            params["inputResponses"] = r;
+        }
+        if let Some(st) = request_state {
+            params["requestState"] = json!(st);
+        }
+        let v = self.call("tools/call", params, timeout).await?;
         let result = ToolResult::parse(&v);
 
         if let (Some(schema), Some(structured)) = (output_schema, &result.structured)
@@ -350,6 +375,7 @@ pub async fn negotiate(
     transport: &dyn Transport,
     preferred: ProtocolVersion,
     timeout: Duration,
+    features: ClientFeatures,
 ) -> Result<Negotiated> {
     // 1. Mode sans état : `server/discover`.
     if preferred.is_stateless_core() {
@@ -358,7 +384,7 @@ pub async fn negotiate(
         } else {
             timeout
         };
-        let params = json!({"_meta": request_meta(preferred, None, None)});
+        let params = json!({"_meta": request_meta(preferred, features, None, None)});
         match transport
             .request("server/discover", params, probe_timeout)
             .await
@@ -412,17 +438,18 @@ pub async fn negotiate(
     } else {
         preferred
     };
-    initialize_with(transport, start, timeout).await
+    initialize_with(transport, start, timeout, features).await
 }
 
 async fn initialize_with(
     transport: &dyn Transport,
     version: ProtocolVersion,
     timeout: Duration,
+    features: ClientFeatures,
 ) -> Result<Negotiated> {
     let params = json!({
         "protocolVersion": version.as_str(),
-        "capabilities": client_capabilities(version),
+        "capabilities": client_capabilities(version, features),
         "clientInfo": client_info(),
     });
     match transport.request("initialize", params, timeout).await {
@@ -459,7 +486,9 @@ async fn initialize_with(
                 .filter_map(|s| ProtocolVersion::parse(s))
                 .max();
             match best {
-                Some(b) if b != version => Box::pin(initialize_with(transport, b, timeout)).await,
+                Some(b) if b != version => {
+                    Box::pin(initialize_with(transport, b, timeout, features)).await
+                }
                 _ => Err(McpError::NoCommonVersion {
                     server: if announced.is_empty() {
                         vec![message]
@@ -533,9 +562,14 @@ mod tests {
                 data: None,
             }),
         });
-        let n = negotiate(tr.as_ref(), ProtocolVersion::V20260728, t(500))
-            .await
-            .unwrap();
+        let n = negotiate(
+            tr.as_ref(),
+            ProtocolVersion::V20260728,
+            t(500),
+            ClientFeatures::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(n.version, ProtocolVersion::V20260728);
         assert!(n.stateless);
         assert!(n.capabilities.tools_list_changed);
@@ -558,9 +592,14 @@ mod tests {
             })),
             _ => Ok(json!({})),
         });
-        let n = negotiate(tr.as_ref(), ProtocolVersion::V20260728, t(500))
-            .await
-            .unwrap();
+        let n = negotiate(
+            tr.as_ref(),
+            ProtocolVersion::V20260728,
+            t(500),
+            ClientFeatures::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(n.version, ProtocolVersion::V20250618);
         assert!(!n.stateless);
         assert!(n.capabilities.resources_subscribe);
@@ -600,9 +639,16 @@ mod tests {
             }]})),
             _ => Ok(json!({})),
         });
-        let client = McpClient::connect("xcode", tr.clone(), ProtocolVersion::V20260728, t(500), 4)
-            .await
-            .unwrap();
+        let client = McpClient::connect(
+            "xcode",
+            tr.clone(),
+            ProtocolVersion::V20260728,
+            t(500),
+            4,
+            ClientFeatures::default(),
+        )
+        .await
+        .unwrap();
         assert!(!client.negotiated().stateless);
         assert_eq!(client.version(), ProtocolVersion::V20250618);
         assert!(initialized.load(std::sync::atomic::Ordering::SeqCst));
@@ -641,9 +687,14 @@ mod tests {
             })),
             _ => Ok(json!({})),
         });
-        let n = negotiate(tr.as_ref(), ProtocolVersion::V20260728, t(500))
-            .await
-            .unwrap();
+        let n = negotiate(
+            tr.as_ref(),
+            ProtocolVersion::V20260728,
+            t(500),
+            ClientFeatures::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(n.version, ProtocolVersion::V20250618);
         assert!(!n.stateless);
 
@@ -655,9 +706,14 @@ mod tests {
             })
         });
         assert!(
-            negotiate(http.as_ref(), ProtocolVersion::V20260728, t(500))
-                .await
-                .is_err()
+            negotiate(
+                http.as_ref(),
+                ProtocolVersion::V20260728,
+                t(500),
+                ClientFeatures::default()
+            )
+            .await
+            .is_err()
         );
     }
 
@@ -684,9 +740,14 @@ mod tests {
             }
             _ => Ok(json!({})),
         });
-        let n = negotiate(tr.as_ref(), ProtocolVersion::V20260728, t(500))
-            .await
-            .unwrap();
+        let n = negotiate(
+            tr.as_ref(),
+            ProtocolVersion::V20260728,
+            t(500),
+            ClientFeatures::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(n.version, ProtocolVersion::V20241105);
     }
 
@@ -704,16 +765,28 @@ mod tests {
                 data: Some(json!({"supported":["1999-01-01"]})),
             }),
         });
-        let e = negotiate(tr.as_ref(), ProtocolVersion::V20260728, t(500))
-            .await
-            .unwrap_err();
+        let e = negotiate(
+            tr.as_ref(),
+            ProtocolVersion::V20260728,
+            t(500),
+            ClientFeatures::default(),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(e, McpError::NoCommonVersion { .. }), "{e:?}");
     }
 
     async fn client(tr: Arc<LoopbackTransport>) -> McpClient {
-        McpClient::connect("test", tr, ProtocolVersion::V20260728, t(500), 4)
-            .await
-            .unwrap()
+        McpClient::connect(
+            "test",
+            tr,
+            ProtocolVersion::V20260728,
+            t(500),
+            4,
+            ClientFeatures::default(),
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -759,7 +832,10 @@ mod tests {
             params["_meta"]["io.modelcontextprotocol/protocolVersion"],
             "2026-07-28"
         );
-        assert_eq!(params["_meta"]["clientInfo"]["name"], "penelope");
+        assert_eq!(
+            params["_meta"]["io.modelcontextprotocol/clientInfo"]["name"],
+            "penelope"
+        );
     }
 
     #[tokio::test]
@@ -890,7 +966,7 @@ mod tests {
         c.list_tools().await.unwrap();
         let log = tr.call_log().await;
         let (_, p) = log.iter().find(|(m, _)| m == "tools/list").unwrap();
-        assert_eq!(p["_meta"]["logLevel"], "debug");
+        assert_eq!(p["_meta"]["io.modelcontextprotocol/logLevel"], "debug");
 
         // 2025-06-18 : par `logging/setLevel`.
         let tr2 = LoopbackTransport::new("stdio", |m, _| match m {

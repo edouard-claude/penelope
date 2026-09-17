@@ -196,10 +196,48 @@ MCP ».
 serveur est converti en `mcp.d/<nom>.toml`, essayé, puis marqué `ok`, `auth_required` ou
 `failed` ; les secrets partent dans le SecretStore.
 
+## Élicitation
+
+Un serveur peut demander au propriétaire de confirmer une action, de remplir un
+formulaire ou d'ouvrir un lien (`elicitation/create`). La demande arrive sur Telegram,
+dans une carte qui nomme le serveur et cite son message :
+
+- **confirmation** (schéma sans champ) : Accepter, Refuser, Annuler ;
+- **formulaire** : « Remplir » ouvre un champ par écran (texte, nombre, booléen, choix
+  simple ou multiple, titré ou non, valeurs par défaut), récapitulatif modifiable, puis
+  Envoyer ; la saisie est validée contre `requestedSchema` ;
+- **lien** (2025-11-25 et suivantes) : domaine en gras, adresse entière, alerte si le
+  domaine est en Punycode ; rien n'est ouvert ni téléchargé sans l'accord du
+  propriétaire. Après accord, un bouton ouvre le lien ; la fin signalée par le serveur
+  (`notifications/elicitation/complete`) met la carte à jour.
+
+Sans réponse avant `elicitation_timeout` (10 min par défaut, réglable par serveur), la
+demande est annulée (`cancel`) et la carte le dit. Pendant l'attente, le délai de l'appel
+d'outil qui a déclenché la demande est suspendu.
+
+```toml
+# mcp.d/redmine.toml
+command = "redmine-mcp"
+elicitation_timeout = "5m"
+```
+
+En 2026-07-28, la demande arrive dans un résultat `input_required` : l'appel est relancé
+avec les réponses (`inputResponses`) et l'état du serveur (`requestState`), quatre fois au
+plus. Une erreur −32042 (lien exigé) présente les liens, attend leur fin, puis retente
+l'appel une fois.
+
+Le modèle lit dans le résultat de l'outil qui a répondu : le propriétaire (accepté,
+refusé, annulé), le délai dépassé, ou une annulation sans sollicitation quand aucun canal
+ne joint le propriétaire. Il n'a donc pas à deviner pourquoi un serveur a renoncé.
+
+L'élicitation n'est **annoncée** que si Telegram est configuré, et le sampling, toujours
+refusé, ne l'est jamais : un serveur qui sait se passer de confirmation garde ses
+replis.
+
 ## Limites actuelles
 
-- Les requêtes `sampling/createMessage` d'un serveur sont refusées et les formulaires
-  d'élicitation déclinés.
+- Les requêtes `sampling/createMessage` d'un serveur sont refusées (et la capacité n'est
+  pas annoncée).
 - Les filtres d'outils `include`/`exclude` d'Hermes n'ont pas d'équivalent : tous les
   outils d'un serveur sont exposés, la politique par outil (`tool_policy`) en restreint
   l'usage.

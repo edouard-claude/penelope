@@ -227,6 +227,11 @@ pub mod kind {
     pub const FORM_DECLINE: &str = "form_decline";
     pub const OAUTH_RETRY: &str = "oauth_retry";
     pub const OAUTH_PASTED: &str = "oauth_pasted";
+    /// Élicitation MCP (`target` : identifiant de la demande) : accepter (confirmer, remplir
+    /// le formulaire ou ouvrir le lien), refuser, annuler, lien terminé.
+    pub const ELICIT_ACCEPT: &str = "elicit_accept";
+    pub const ELICIT_DECLINE: &str = "elicit_decline";
+    pub const ELICIT_CANCEL: &str = "elicit_cancel";
     pub const ELICIT_DONE: &str = "elicit_done";
     pub const SCHEDULE_ENABLE: &str = "schedule_enable";
     pub const WORKFLOW_SAVE: &str = "workflow_save";
@@ -245,6 +250,14 @@ pub mod kind {
     pub const EFFECT_VERIFY: &str = "effect_verify";
     pub const EFFECT_RETRY: &str = "effect_retry";
     pub const EFFECT_IGNORE: &str = "effect_ignore";
+    /// Menu `/sessions` : basculer, sous-menu, forker, renommer, fermer, page (`args.page`,
+    /// `args.all`).
+    pub const SESSION_SWITCH: &str = "session_switch";
+    pub const SESSION_MENU: &str = "session_menu";
+    pub const SESSION_FORK: &str = "session_fork";
+    pub const SESSION_RENAME: &str = "session_rename";
+    pub const SESSION_CLOSE: &str = "session_close";
+    pub const SESSIONS_PAGE: &str = "sessions_page";
 
     pub const ALL: &[&str] = &[
         APPROVE,
@@ -269,6 +282,9 @@ pub mod kind {
         FORM_DECLINE,
         OAUTH_RETRY,
         OAUTH_PASTED,
+        ELICIT_ACCEPT,
+        ELICIT_DECLINE,
+        ELICIT_CANCEL,
         ELICIT_DONE,
         SCHEDULE_ENABLE,
         WORKFLOW_SAVE,
@@ -285,6 +301,12 @@ pub mod kind {
         EFFECT_VERIFY,
         EFFECT_RETRY,
         EFFECT_IGNORE,
+        SESSION_SWITCH,
+        SESSION_MENU,
+        SESSION_FORK,
+        SESSION_RENAME,
+        SESSION_CLOSE,
+        SESSIONS_PAGE,
     ];
 }
 

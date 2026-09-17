@@ -8,6 +8,7 @@ pub mod compaction;
 pub mod conversation;
 pub mod doctor;
 pub mod dream;
+pub mod elicitation;
 pub mod engine;
 pub mod episodes;
 pub mod executor;

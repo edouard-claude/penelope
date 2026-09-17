@@ -108,6 +108,7 @@ pub mod method {
     pub const SESSION_LIST: &str = "session.list";
     pub const SESSION_NEW: &str = "session.new";
     pub const SESSION_SWITCH: &str = "session.switch";
+    pub const SESSION_CLOSE: &str = "session.close";
     pub const SESSION_TITLE: &str = "session.title";
     pub const SESSION_FORK: &str = "session.fork";
     pub const SESSION_REWIND: &str = "session.rewind";
@@ -206,6 +207,7 @@ pub mod method {
         SESSION_LIST,
         SESSION_NEW,
         SESSION_SWITCH,
+        SESSION_CLOSE,
         SESSION_TITLE,
         SESSION_FORK,
         SESSION_REWIND,

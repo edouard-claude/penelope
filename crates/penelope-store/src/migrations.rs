@@ -31,6 +31,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0004_usage_attribution",
         sql: SQL_0004,
     },
+    Migration {
+        version: "0005_single_chat_binding",
+        sql: SQL_0005,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -771,6 +775,21 @@ ALTER TABLE usage ADD COLUMN upstream TEXT;
 ALTER TABLE usage ADD COLUMN finish TEXT;
 ALTER TABLE usage ADD COLUMN cache_write INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX usage_turn ON usage(turn_id);
+"#;
+
+/// Une seule session liée par chat (et sujet) Telegram (issue #10) : la plus récemment
+/// active garde la liaison, les autres sont détachées.
+const SQL_0005: &str = r#"
+UPDATE sessions SET tg_chat_id = NULL, tg_topic_id = NULL
+WHERE tg_chat_id IS NOT NULL AND id NOT IN (
+  SELECT id FROM (
+    SELECT id, ROW_NUMBER() OVER (
+      PARTITION BY tg_chat_id, COALESCE(tg_topic_id, -1)
+      ORDER BY CASE state WHEN 'active' THEN 0 ELSE 1 END, updated_at DESC
+    ) AS rn
+    FROM sessions WHERE tg_chat_id IS NOT NULL AND state = 'active'
+  ) WHERE rn = 1
+);
 "#;
 
 #[cfg(test)]

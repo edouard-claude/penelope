@@ -30,6 +30,15 @@ use tokio::sync::Notify;
 /// Longueur d'un fragment Markdown avant conversion HTML : marge pour les balises.
 const FRAGMENT_CHARS: usize = 3_500;
 const MAX_ATTEMPTS: i64 = 6;
+/// Mention des messages en attente abandonnés par un changement de session.
+fn cancelled_note(n: usize) -> String {
+    match n {
+        0 => String::new(),
+        1 => "\n⏹ 1 message en attente dans l'ancienne session a été abandonné.".into(),
+        n => format!("\n⏹ {n} messages en attente dans l'ancienne session ont été abandonnés."),
+    }
+}
+
 /// Formulaire d'étape `user` en cours dans un chat.
 fn form_key(chat_id: i64) -> String {
     format!("tg.form.{chat_id}")
@@ -48,6 +57,47 @@ pub struct TelegramGateway {
     outbox_wake: Notify,
     /// Albums en cours de réception, par `media_group_id`.
     albums: Arc<std::sync::Mutex<HashMap<String, Album>>>,
+    /// Sorties mises de côté des sessions en arrière-plan : lues et réécrites sous verrou.
+    held_lock: tokio::sync::Mutex<()>,
+}
+
+/// Sortie d'une session en arrière-plan, mise de côté jusqu'à son retour au focus du chat
+/// (issue #10).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum Held {
+    Text {
+        text: String,
+        reply_to: Option<i64>,
+        /// Réponse finale d'un tour : réaction ✅ sur le message d'origine.
+        answer: bool,
+    },
+    Approval {
+        id: String,
+    },
+    Failure {
+        error: String,
+        reply_to: Option<i64>,
+    },
+    File {
+        path: String,
+        caption: Option<String>,
+    },
+}
+
+fn held_key(session_id: &str) -> String {
+    format!("tg.held.{session_id}")
+}
+
+/// « 1 réponse », « 3 approbations ».
+fn count_of(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n > 1 { many } else { one })
+}
+
+/// Tour arrêté par le détecteur de boucles.
+fn loop_aborted_text(report: &str) -> String {
+    let r: String = report.chars().take(2_500).collect();
+    format!("⛔ **Boucle détectée**, tour arrêté.\n\n```\n{r}\n```")
 }
 
 /// Photos d'un même album, regroupées en un seul tour (§14.4).
@@ -96,6 +146,7 @@ impl TelegramGateway {
             poll_timeout_s: cfg.telegram.poll_timeout_s,
             outbox_wake: Notify::new(),
             albums: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            held_lock: tokio::sync::Mutex::new(()),
             daemon,
             bot,
         })
@@ -110,6 +161,7 @@ impl TelegramGateway {
         if let Ok(mut g) = hooks.telegram.write() {
             *g = Some(self.clone());
         }
+        self.daemon.services.elicitations.attach(self.clone());
     }
 
     /// Vérifie le jeton, publie les commandes, lance les boucles.
@@ -228,6 +280,29 @@ impl TelegramGateway {
                 forwarded,
                 ..
             } => {
+                // Renommage demandé depuis le menu `/sessions` il y a moins de 5 min : ce
+                // message est le titre.
+                let title_key = format!("tg.await_title.{chat_id}");
+                if let Some(raw) = self.daemon.kv_get(&title_key).await?
+                    && let Some((target, at)) = raw.split_once(' ')
+                    && self.daemon.services.clock.now_ms() - at.parse::<i64>().unwrap_or(0)
+                        < 5 * 60_000
+                {
+                    let target = target.to_string();
+                    self.daemon.kv_set(&title_key, "").await?;
+                    let note = match crate::titles::clean(&text) {
+                        Some(title) => {
+                            self.daemon
+                                .services
+                                .sessions
+                                .set_title(&target, &title, false)
+                                .await?;
+                            format!("✏️ Session renommée : « {title} ».")
+                        }
+                        None => "Titre vide : rien n'a changé.".to_string(),
+                    };
+                    return self.reply(chat_id, topic_id, Some(message_id), &note).await;
+                }
                 // Un formulaire d'étape `user` est en cours : ce message remplit le champ.
                 if let Some(raw) = self.daemon.kv_get(&form_key(chat_id)).await?
                     && !raw.is_empty()
@@ -300,10 +375,11 @@ impl TelegramGateway {
                 data,
                 message_id,
                 chat_id,
+                topic_id,
                 from_id,
                 ..
             } => {
-                self.callback(&callback_id, &data, chat_id, message_id, from_id)
+                self.callback(&callback_id, &data, chat_id, topic_id, message_id, from_id)
                     .await?;
             }
             Incoming::StoppedGeneration { draft_id, .. } => {
@@ -388,6 +464,7 @@ impl TelegramGateway {
             "start" | "help" => penelope_telegram::commands::help_text(),
             "new" => {
                 if let Some(old) = s.sessions.find_by_topic(chat_id, topic_id).await? {
+                    crate::session_ops::silence(d, old.id.as_str(), "nouvelle session").await?;
                     s.sessions.set_state(old.id.as_str(), "closed").await?;
                     // `/new` clôt aussi l'épisode en cours : il est relu (§6.6).
                     crate::episodes::spawn_ingest(
@@ -452,36 +529,10 @@ impl TelegramGateway {
                 }
             }
             "sessions" => {
-                // Sans créer de session : lister ne doit rien ajouter à la liste.
-                let current = s
-                    .sessions
-                    .find_by_topic(chat_id, topic_id)
-                    .await?
-                    .map(|sess| sess.id.to_string());
-                let list = s
-                    .sessions
-                    .list(Some(penelope_kernel::session::SessionKind::Chat), 12)
-                    .await?;
-                if list.is_empty() {
-                    "Aucune session.".into()
-                } else {
-                    let mut out = String::from("**Sessions récentes**\n");
-                    for sess in &list {
-                        let marker = if current.as_deref() == Some(sess.id.as_str()) {
-                            "▶️"
-                        } else if sess.state == "closed" {
-                            "▫️"
-                        } else {
-                            "•"
-                        };
-                        out.push_str(&format!(
-                            "\n{marker} {} · `/switch {}`",
-                            crate::titles::label(sess),
-                            sess.id
-                        ));
-                    }
-                    out
-                }
+                let all = matches!(args, "all" | "toutes" | "tout");
+                return self
+                    .send_sessions_menu(chat_id, topic_id, 0, all, None)
+                    .await;
             }
             "compact" => {
                 // Un résumé prend de quelques secondes à une minute : la file des updates
@@ -513,12 +564,13 @@ impl TelegramGateway {
                 match crate::session_ops::fork(d, &session, title).await {
                     Ok(v) => {
                         let fork = v["session"].as_str().unwrap_or_default().to_string();
-                        s.sessions.bind_telegram(&fork, chat_id, topic_id).await?;
+                        let cancelled = self.bind_chat(&fork, chat_id, topic_id).await?;
                         s.sessions.touch(&fork).await?;
                         format!(
                             "🍴 Session dupliquée ({} messages) : la suite se passe dans `{fork}`. \
-                             `/switch {session}` pour revenir à l'original.",
-                            v["messages"]
+                             `/switch {session}` pour revenir à l'original.{}",
+                            v["messages"],
+                            cancelled_note(cancelled)
                         )
                     }
                     Err(e) => format!("❌ {e}"),
@@ -599,19 +651,51 @@ impl TelegramGateway {
             }
             "switch" => {
                 if args.is_empty() {
-                    "Usage : `/switch <identifiant de session>`".into()
-                } else if s.sessions.get(args).await?.is_none() {
-                    format!("Session `{args}` introuvable.")
+                    "Usage : `/switch <identifiant, préfixe ou titre>` (ou `/sessions`)".into()
                 } else {
-                    s.sessions.bind_telegram(args, chat_id, topic_id).await?;
-                    s.sessions.touch(args).await?;
-                    match s.sessions.get(args).await? {
-                        Some(sess) => format!(
-                            "↪️ Session « {} » reprise (`{args}`).",
-                            crate::titles::label(&sess)
-                        ),
-                        None => format!("↪️ Session `{args}` reprise."),
+                    match crate::session_ops::resolve(s, args).await {
+                        Err(e) => format!("❌ {e}"),
+                        Ok(sess) => {
+                            let id = sess.id.to_string();
+                            if sess.state != "active" {
+                                s.sessions.set_state(&id, "active").await?;
+                            }
+                            let cancelled = self.bind_chat(&id, chat_id, topic_id).await?;
+                            s.sessions.touch(&id).await?;
+                            format!(
+                                "↪️ Session « {} » reprise (`{id}`).{}",
+                                crate::titles::label(&sess),
+                                cancelled_note(cancelled)
+                            )
+                        }
                     }
+                }
+            }
+            "close" => {
+                let target = if args.is_empty() {
+                    s.sessions
+                        .find_by_topic(chat_id, topic_id)
+                        .await?
+                        .map(|x| x.id.to_string())
+                        .ok_or_else(|| "aucune session liée à ce chat".to_string())
+                } else {
+                    crate::session_ops::resolve(s, args)
+                        .await
+                        .map(|x| x.id.to_string())
+                };
+                match target {
+                    Err(e) => format!("❌ {e}"),
+                    Ok(id) => match crate::session_ops::close(d, &id).await {
+                        Ok(v) => format!(
+                            "🔒 Session {} fermée.{}",
+                            v["title"]
+                                .as_str()
+                                .map(|t| format!("« {t} »"))
+                                .unwrap_or_else(|| format!("`{id}`")),
+                            cancelled_note(v["cancelled"].as_u64().unwrap_or(0) as usize)
+                        ),
+                        Err(e) => format!("❌ {e}"),
+                    },
                 }
             }
             "model" => {
@@ -1586,6 +1670,7 @@ impl TelegramGateway {
         callback_id: &str,
         data: &str,
         chat_id: i64,
+        topic_id: Option<i64>,
         message_id: i64,
         from_id: i64,
     ) -> anyhow::Result<()> {
@@ -1614,6 +1699,31 @@ impl TelegramGateway {
                     "📋 Colle ici l'adresse complète affichée par le navigateur après \
                      l'autorisation (elle contient `code=` et `state=`).",
                 )
+                .await;
+        }
+        if let ClickOutcome::Accepted(action) = &outcome
+            && matches!(
+                action.action.as_str(),
+                k::SESSION_SWITCH
+                    | k::SESSION_MENU
+                    | k::SESSION_FORK
+                    | k::SESSION_RENAME
+                    | k::SESSION_CLOSE
+                    | k::SESSIONS_PAGE
+            )
+        {
+            return self
+                .session_menu_clicked(callback_id, action, chat_id, topic_id, message_id)
+                .await;
+        }
+        if let ClickOutcome::Accepted(action) = &outcome
+            && matches!(
+                action.action.as_str(),
+                k::ELICIT_ACCEPT | k::ELICIT_DECLINE | k::ELICIT_CANCEL | k::ELICIT_DONE
+            )
+        {
+            return self
+                .elicitation_clicked(callback_id, action, chat_id, message_id)
                 .await;
         }
         if let ClickOutcome::Accepted(action) = &outcome
@@ -1908,6 +2018,513 @@ impl TelegramGateway {
         .await
     }
 
+    /// Menu `/sessions` : un bouton par session (bascule), un « ⋯ » par session (forker,
+    /// renommer, fermer), pagination, sessions fermées masquées sauf `all` (issue #14).
+    /// `edit` : message à remplacer plutôt qu'un nouvel envoi.
+    async fn send_sessions_menu(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        page: usize,
+        all: bool,
+        edit: Option<i64>,
+    ) -> anyhow::Result<()> {
+        const PER_PAGE: usize = 12;
+        let d = &self.daemon;
+        let s = &d.services;
+        let current = s
+            .sessions
+            .find_by_topic(chat_id, topic_id)
+            .await?
+            .map(|x| x.id.to_string());
+        let sessions: Vec<_> = s
+            .sessions
+            .list(Some(penelope_kernel::session::SessionKind::Chat), 1_000)
+            .await?
+            .into_iter()
+            .filter(|x| all || x.state != "closed")
+            .collect();
+        let busy: std::collections::BTreeMap<String, i64> = s
+            .store
+            .read(|c| {
+                let mut st = c.prepare(
+                    "SELECT session_id, COUNT(*) FROM turn_queue
+                     WHERE state IN ('pending', 'leased') GROUP BY session_id",
+                )?;
+                let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                Ok(rows.collect::<Result<_, _>>()?)
+            })
+            .await?;
+        let pages = sessions.len().div_ceil(PER_PAGE).max(1);
+        let page = page.min(pages - 1);
+        let ttl = 24 * 3_600_000;
+        let make = |label: String, action: &'static str, target: String, args: Value| async move {
+            s.actions
+                .create(action, &target, args, ttl, true)
+                .await
+                .map(|t| ButtonSpec::callback(&label, &t.token, ""))
+        };
+        let nav = json!({"page": page, "all": all});
+        let mut rows: Vec<Vec<ButtonSpec>> = Vec::new();
+        for (i, sess) in sessions
+            .iter()
+            .enumerate()
+            .skip(page * PER_PAGE)
+            .take(PER_PAGE)
+        {
+            let id = sess.id.to_string();
+            let mut label = String::new();
+            if current.as_deref() == Some(id.as_str()) {
+                label.push_str("▶️ ");
+            } else if sess.state == "closed" {
+                label.push_str("🔒 ");
+            }
+            if busy.get(&id).is_some_and(|n| *n > 0) {
+                label.push_str("⏳ ");
+            }
+            let title = crate::titles::label(sess);
+            label.push_str(&title.chars().take(48).collect::<String>());
+            // La plus récente porte aussi l'heure de sa dernière activité.
+            if i == 0
+                && let Some(hm) = sess.last_activity.as_deref().and_then(|t| t.get(11..16))
+            {
+                label.push_str(&format!(" {hm}"));
+            }
+            rows.push(vec![
+                make(label, k::SESSION_SWITCH, id.clone(), nav.clone()).await?,
+                make("⋯".into(), k::SESSION_MENU, id, nav.clone()).await?,
+            ]);
+        }
+        let mut footer = Vec::new();
+        if page > 0 {
+            footer.push(
+                make(
+                    "« Plus récentes".into(),
+                    k::SESSIONS_PAGE,
+                    String::new(),
+                    json!({"page": page - 1, "all": all}),
+                )
+                .await?,
+            );
+        }
+        if page + 1 < pages {
+            footer.push(
+                make(
+                    "Plus anciennes »".into(),
+                    k::SESSIONS_PAGE,
+                    String::new(),
+                    json!({"page": page + 1, "all": all}),
+                )
+                .await?,
+            );
+        }
+        footer.push(
+            make(
+                if all {
+                    "Masquer les fermées".into()
+                } else {
+                    "Voir les fermées".into()
+                },
+                k::SESSIONS_PAGE,
+                String::new(),
+                json!({"page": 0, "all": !all}),
+            )
+            .await?,
+        );
+        rows.push(footer);
+        let text = if sessions.is_empty() {
+            "**Sessions** : aucune.".to_string()
+        } else {
+            format!(
+                "**Sessions** ({} · page {}/{pages})\nUn clic bascule ce chat sur la session ; \
+                 « ⋯ » pour forker, renommer ou fermer. ▶️ session de ce chat, ⏳ tour en cours \
+                 ou en attente.",
+                sessions.len(),
+                page + 1
+            )
+        };
+        let html = markdown_to_html(&text);
+        let keyboard = inline_keyboard(&rows);
+        if let Some(message_id) = edit {
+            match self
+                .bot
+                .edit_text(chat_id, message_id, &html, Some(keyboard.clone()))
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) if e.to_string().contains("not modified") => return Ok(()),
+                Err(_) => {}
+            }
+        }
+        self.bot
+            .send_text(chat_id, topic_id, &html, Some(keyboard), None)
+            .await
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!(e.to_string()))
+    }
+
+    /// Boutons du menu `/sessions`.
+    async fn session_menu_clicked(
+        &self,
+        callback_id: &str,
+        action: &Action,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        message_id: i64,
+    ) -> anyhow::Result<()> {
+        let d = &self.daemon;
+        let s = &d.services;
+        let page = action.args["page"].as_u64().unwrap_or(0) as usize;
+        let all = action.args["all"].as_bool().unwrap_or(false);
+        let target = action.target.clone();
+        let toast = match action.action.as_str() {
+            k::SESSION_SWITCH => {
+                let Some(sess) = s.sessions.get(&target).await? else {
+                    let _ = self
+                        .bot
+                        .answer_callback(callback_id, Some("Session introuvable."), false)
+                        .await;
+                    return self
+                        .send_sessions_menu(chat_id, topic_id, page, all, Some(message_id))
+                        .await;
+                };
+                if sess.state != "active" {
+                    s.sessions.set_state(&target, "active").await?;
+                }
+                let cancelled = self.bind_chat(&target, chat_id, topic_id).await?;
+                s.sessions.touch(&target).await?;
+                let mut t = format!("Session « {} »", crate::titles::label(&sess));
+                if cancelled > 0 {
+                    t.push_str(&format!(" ({cancelled} en attente abandonné(s) ailleurs)"));
+                }
+                // Bouton d'une notification « réponses en attente » : pas de menu à redessiner.
+                if action.args["notice"].as_bool() == Some(true) {
+                    let _ = self.bot.answer_callback(callback_id, Some(&t), false).await;
+                    let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+                    return Ok(());
+                }
+                Some(t)
+            }
+            k::SESSION_FORK => match crate::session_ops::fork(d, &target, None).await {
+                Ok(v) => {
+                    let fork = v["session"].as_str().unwrap_or_default().to_string();
+                    self.bind_chat(&fork, chat_id, topic_id).await?;
+                    s.sessions.touch(&fork).await?;
+                    Some("Session dupliquée : la suite se passe dans le fork.".to_string())
+                }
+                Err(e) => Some(format!("Fork impossible : {e}")),
+            },
+            k::SESSION_CLOSE => match crate::session_ops::close(d, &target).await {
+                Ok(v) => Some(format!(
+                    "Session fermée{}",
+                    match v["cancelled"].as_u64().unwrap_or(0) {
+                        0 => String::new(),
+                        n => format!(", {n} en attente annulé(s)"),
+                    }
+                )),
+                Err(e) => Some(format!("Fermeture impossible : {e}")),
+            },
+            k::SESSION_RENAME => {
+                d.kv_set(
+                    &format!("tg.await_title.{chat_id}"),
+                    &format!("{target} {}", s.clock.now_ms()),
+                )
+                .await?;
+                let _ = self.bot.answer_callback(callback_id, None, false).await;
+                return self
+                    .reply(
+                        chat_id,
+                        topic_id,
+                        None,
+                        "✏️ Envoie le nouveau titre de la session en un message (dans les \
+                         5 minutes).",
+                    )
+                    .await;
+            }
+            k::SESSION_MENU => {
+                let _ = self.bot.answer_callback(callback_id, None, false).await;
+                return self
+                    .send_session_actions(chat_id, topic_id, message_id, &target, page, all)
+                    .await;
+            }
+            _ => None,
+        };
+        let _ = self
+            .bot
+            .answer_callback(callback_id, toast.as_deref(), false)
+            .await;
+        self.send_sessions_menu(chat_id, topic_id, page, all, Some(message_id))
+            .await
+    }
+
+    /// Sous-menu d'une session : basculer, forker, renommer, fermer, retour.
+    async fn send_session_actions(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        message_id: i64,
+        session_id: &str,
+        page: usize,
+        all: bool,
+    ) -> anyhow::Result<()> {
+        let s = &self.daemon.services;
+        let Some(sess) = s.sessions.get(session_id).await? else {
+            return self
+                .send_sessions_menu(chat_id, topic_id, page, all, Some(message_id))
+                .await;
+        };
+        let ttl = 24 * 3_600_000;
+        let nav = json!({"page": page, "all": all});
+        let mut rows = Vec::new();
+        for pair in [
+            [
+                ("↪️ Basculer", k::SESSION_SWITCH),
+                ("🍴 Forker", k::SESSION_FORK),
+            ],
+            [
+                ("✏️ Renommer", k::SESSION_RENAME),
+                ("🔒 Fermer", k::SESSION_CLOSE),
+            ],
+        ] {
+            let mut row = Vec::new();
+            for (label, action) in pair {
+                let t = s
+                    .actions
+                    .create(action, session_id, nav.clone(), ttl, true)
+                    .await?;
+                row.push(ButtonSpec::callback(label, &t.token, ""));
+            }
+            rows.push(row);
+        }
+        let back = s
+            .actions
+            .create(k::SESSIONS_PAGE, "", nav, ttl, true)
+            .await?;
+        rows.push(vec![ButtonSpec::callback("↩️ Retour", &back.token, "")]);
+        let text = format!(
+            "**{}**\n`{}` · {}",
+            crate::titles::label(&sess),
+            sess.id,
+            if sess.state == "closed" {
+                "fermée"
+            } else {
+                "active"
+            }
+        );
+        self.bot
+            .edit_text(
+                chat_id,
+                message_id,
+                &markdown_to_html(&text),
+                Some(inline_keyboard(&rows)),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!(e.to_string()))
+    }
+
+    /// Lie une session au chat : elle a le focus. Celles qui le perdent finissent leur tour
+    /// en cours, dont la sortie est mise de côté, et leur file est annulée ; la session liée
+    /// reçoit ce qui l'attendait (issue #10). Renvoie le nombre de tours annulés.
+    async fn bind_chat(
+        &self,
+        session_id: &str,
+        chat_id: i64,
+        topic_id: Option<i64>,
+    ) -> anyhow::Result<usize> {
+        let d = &self.daemon;
+        let mut cancelled = 0;
+        for other in d
+            .services
+            .sessions
+            .bind_telegram(session_id, chat_id, topic_id)
+            .await?
+        {
+            cancelled += d
+                .services
+                .turns
+                .cancel_pending(&other, "session détachée du chat")
+                .await?;
+        }
+        self.flush_held(session_id).await?;
+        Ok(cancelled)
+    }
+
+    /// Vrai quand une autre session a le focus du chat : la sortie de `session_id` est
+    /// alors mise de côté. Seules les sessions de conversation actives sont concernées, et un
+    /// chat sans session liée reçoit tout.
+    async fn out_of_focus(&self, session_id: &str, chat_id: i64, topic_id: Option<i64>) -> bool {
+        let s = &self.daemon.services;
+        match s.sessions.find_by_topic(chat_id, topic_id).await {
+            Ok(Some(focused)) if focused.id.as_str() != session_id => {}
+            _ => return false,
+        }
+        matches!(
+            s.sessions.get(session_id).await,
+            Ok(Some(sess)) if sess.kind == penelope_kernel::session::SessionKind::Chat
+                && sess.state == "active"
+        )
+    }
+
+    /// Met une sortie de côté et tient à jour l'unique notification de la session, avec
+    /// son bouton pour basculer.
+    async fn hold(
+        &self,
+        session_id: &str,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        item: Held,
+    ) -> anyhow::Result<()> {
+        use penelope_telegram::render::escape_html;
+        let _guard = self.held_lock.lock().await;
+        let d = &self.daemon;
+        let key = held_key(session_id);
+        let mut held: Value = d
+            .kv_get(&key)
+            .await?
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_else(|| json!({"chat_id": chat_id, "topic_id": topic_id, "items": []}));
+        let mut items: Vec<Held> =
+            serde_json::from_value(held["items"].clone()).unwrap_or_default();
+        items.push(item);
+        held["items"] = serde_json::to_value(&items)?;
+
+        let approvals = items
+            .iter()
+            .filter(|h| matches!(h, Held::Approval { .. }))
+            .count();
+        let mut parts = Vec::new();
+        if items.len() > approvals {
+            parts.push(count_of(items.len() - approvals, "réponse", "réponses"));
+        }
+        if approvals > 0 {
+            parts.push(count_of(approvals, "approbation", "approbations"));
+        }
+        let title = d
+            .services
+            .sessions
+            .get(session_id)
+            .await?
+            .and_then(|sess| sess.title)
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| "(sans titre)".into());
+        let html = format!(
+            "📬 {} en attente dans « {} »",
+            parts.join(" et "),
+            escape_html(&title)
+        );
+        let token = d
+            .services
+            .actions
+            .create(
+                k::SESSION_SWITCH,
+                session_id,
+                json!({"notice": true}),
+                7 * 24 * 3_600_000,
+                true,
+            )
+            .await?;
+        let keyboard =
+            inline_keyboard(&[vec![ButtonSpec::callback("↪️ Basculer", &token.token, "")]]);
+        let edited = match held["notice"].as_i64() {
+            Some(id) => self
+                .bot
+                .edit_text(chat_id, id, &html, Some(keyboard.clone()))
+                .await
+                .is_ok(),
+            None => false,
+        };
+        if !edited {
+            let mut payload = json!({
+                "chat_id": chat_id,
+                "text": html,
+                "parse_mode": "HTML",
+                "disable_notification": true,
+                "reply_markup": keyboard,
+            });
+            if let Some(t) = topic_id {
+                payload["message_thread_id"] = json!(t);
+            }
+            let sent = self
+                .bot
+                .call(
+                    penelope_telegram::api::method::SEND_MESSAGE,
+                    Some(chat_id),
+                    payload,
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            held["notice"] = sent["message_id"].clone();
+        }
+        d.kv_set(&key, &held.to_string()).await?;
+        Ok(())
+    }
+
+    /// Retour au focus : les sorties mises de côté partent dans l'ordre, approbations encore
+    /// ouvertes comprises. Renvoie le nombre de sorties envoyées.
+    async fn flush_held(&self, session_id: &str) -> anyhow::Result<usize> {
+        let _guard = self.held_lock.lock().await;
+        let d = &self.daemon;
+        let key = held_key(session_id);
+        let Some(held) = d
+            .kv_get(&key)
+            .await?
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        else {
+            return Ok(0);
+        };
+        d.kv_delete(&key).await?;
+        let chat_id = held["chat_id"].as_i64().unwrap_or(self.owner_id);
+        let topic_id = held["topic_id"].as_i64();
+        let items: Vec<Held> = serde_json::from_value(held["items"].clone()).unwrap_or_default();
+        if let Some(notice) = held["notice"].as_i64() {
+            let _ = self
+                .bot
+                .edit_text(
+                    chat_id,
+                    notice,
+                    "📬 Réponses mises de côté : envoyées ci-dessous.",
+                    None,
+                )
+                .await;
+        }
+        for item in &items {
+            match item {
+                Held::Text {
+                    text,
+                    reply_to,
+                    answer,
+                } => {
+                    self.reply(chat_id, topic_id, *reply_to, text).await?;
+                    if let (true, Some(mid)) = (answer, reply_to) {
+                        self.react(chat_id, *mid, reaction::DONE);
+                    }
+                }
+                Held::Approval { id } => {
+                    if let Some(a) = d.services.approvals.get(id).await?
+                        && a.state == ApprovalState::Pending
+                    {
+                        self.send_approval_card(chat_id, topic_id, &a).await?;
+                    }
+                }
+                Held::Failure { error, reply_to } => {
+                    self.send_failure(chat_id, topic_id, *reply_to, session_id, error)
+                        .await?;
+                }
+                Held::File { path, caption } => {
+                    if let Err(e) = self
+                        .bot
+                        .send_document(chat_id, topic_id, Path::new(path), caption.as_deref())
+                        .await
+                    {
+                        tracing::warn!(error = %e, "fichier mis de côté non envoyé");
+                    }
+                }
+            }
+        }
+        Ok(items.len())
+    }
+
     /// Écran courant d'un formulaire : le champ à remplir, ou le récapitulatif à envoyer.
     async fn send_form_step(&self, chat_id: i64, pending: &Value) -> anyhow::Result<()> {
         use penelope_telegram::forms::{FieldKind, FormState};
@@ -1930,9 +2547,16 @@ impl TelegramGateway {
                 button("✅ Envoyer", k::FORM_SUBMIT, json!({})).await?,
                 button("↩️ Modifier", k::FORM_PREV, json!({})).await?,
             ]);
-            rows.push(vec![
-                button("✖️ Abandonner", k::FORM_DECLINE, json!({})).await?,
-            ]);
+            let mut last = vec![button("✖️ Abandonner", k::FORM_DECLINE, json!({})).await?];
+            // Élicitation MCP : refuser reste possible jusqu'à l'envoi.
+            if let Some(id) = pending["elicitation"].as_str() {
+                let t = s
+                    .actions
+                    .create(k::ELICIT_DECLINE, id, json!({}), ttl, true)
+                    .await?;
+                last.push(ButtonSpec::callback("🚫 Refuser", &t.token, ""));
+            }
+            rows.push(last);
             format!(
                 "📝 « {} »\n\n{}",
                 pending["choice"].as_str().unwrap_or_default(),
@@ -2057,6 +2681,17 @@ impl TelegramGateway {
             }
             k::FORM_DECLINE => {
                 d.kv_set(&form_key(chat_id), "").await?;
+                if let Some(id) = pending["elicitation"].as_str() {
+                    return self
+                        .finish_elicitation(
+                            chat_id,
+                            id,
+                            crate::elicitation::Action::Cancel,
+                            "✖️ Formulaire abandonné : `{server}` reçoit une annulation.",
+                            true,
+                        )
+                        .await;
+                }
                 self.reply(
                     chat_id,
                     None,
@@ -2075,6 +2710,17 @@ impl TelegramGateway {
                     }
                 };
                 d.kv_set(&form_key(chat_id), "").await?;
+                if let Some(id) = pending["elicitation"].as_str() {
+                    return self
+                        .finish_elicitation(
+                            chat_id,
+                            id,
+                            crate::elicitation::Action::Accept(Some(values)),
+                            "✔️ Formulaire envoyé à `{server}`.",
+                            true,
+                        )
+                        .await;
+                }
                 let note = match crate::workflow::answer(
                     d,
                     pending["run"].as_str().unwrap_or_default(),
@@ -2090,6 +2736,255 @@ impl TelegramGateway {
                 self.reply(chat_id, None, None, &note).await
             }
         }
+    }
+
+    // ============================================================ élicitation MCP
+
+    /// Texte d'une carte d'élicitation : le serveur est nommé, son message cité et échappé,
+    /// un lien montré en entier avec son domaine (§8.4, issue #12).
+    fn elicitation_html(r: &crate::elicitation::Request) -> String {
+        use crate::elicitation::Kind;
+        use penelope_telegram::render::escape_html;
+        let server = escape_html(&r.server);
+        let quote = match r.message.trim() {
+            "" => String::new(),
+            m => format!("\n\n<blockquote>{}</blockquote>", escape_html(m)),
+        };
+        match &r.kind {
+            Kind::Form { schema } if r.field_count() > 0 => {
+                let fields = penelope_telegram::forms::fields_from_schema(schema)
+                    .map(|f| {
+                        f.iter()
+                            .map(|f| format!("{}{}", f.title, if f.required { " *" } else { "" }))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                format!(
+                    "📝 <b>Le serveur MCP <code>{server}</code> demande des informations</b>\
+                     {quote}\nChamps : {}",
+                    escape_html(&fields)
+                )
+            }
+            Kind::Form { .. } => format!(
+                "🔐 <b>Le serveur MCP <code>{server}</code> demande ta confirmation</b>{quote}"
+            ),
+            Kind::Url { url, .. } => {
+                let host = r.host().unwrap_or_default();
+                let warning = if host.split('.').any(|l| l.starts_with("xn--")) {
+                    "\n⚠️ Domaine en Punycode : ses caractères peuvent imiter un autre site."
+                } else {
+                    ""
+                };
+                format!(
+                    "🌐 <b>Le serveur MCP <code>{server}</code> demande d'ouvrir un lien</b>\
+                     {quote}\nDomaine : <b>{}</b>{warning}\n<code>{}</code>",
+                    escape_html(&host),
+                    escape_html(url)
+                )
+            }
+        }
+    }
+
+    async fn elicit_button(
+        &self,
+        label: &str,
+        action: &str,
+        r: &crate::elicitation::Request,
+    ) -> anyhow::Result<ButtonSpec> {
+        let ttl = r.timeout.as_millis() as i64 + 3_600_000;
+        let t = self
+            .daemon
+            .services
+            .actions
+            .create(action, &r.id, json!({}), ttl, true)
+            .await?;
+        Ok(ButtonSpec::callback(label, &t.token, ""))
+    }
+
+    /// Remplace la carte (texte d'origine, puis l'issue) ; à défaut, un nouveau message.
+    async fn elicitation_update(
+        &self,
+        r: &crate::elicitation::Request,
+        card: Option<i64>,
+        note: &str,
+        keyboard: Option<Value>,
+    ) -> anyhow::Result<()> {
+        let html = format!(
+            "{}\n\n{}",
+            Self::elicitation_html(r),
+            markdown_to_html(note)
+        );
+        if let Some(id) = card
+            && self
+                .bot
+                .edit_text(self.owner_id, id, &html, keyboard.clone())
+                .await
+                .is_ok()
+        {
+            return Ok(());
+        }
+        self.bot
+            .send_text(self.owner_id, None, &html, keyboard, None)
+            .await
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!(e.to_string()))
+    }
+
+    /// Répond au serveur, met la carte à jour et le dit dans le chat. `note` : `{server}`
+    /// est remplacé par le nom du serveur.
+    async fn finish_elicitation(
+        &self,
+        chat_id: i64,
+        id: &str,
+        answer: crate::elicitation::Action,
+        note: &str,
+        echo: bool,
+    ) -> anyhow::Result<()> {
+        let broker = &self.daemon.services.elicitations;
+        let card = broker.request(id).and_then(|(_, c)| c);
+        match broker.resolve(id, answer) {
+            Ok(request) => {
+                if let Some(raw) = self.daemon.kv_get(&form_key(chat_id)).await?
+                    && serde_json::from_str::<Value>(&raw)
+                        .is_ok_and(|p| p["elicitation"].as_str() == Some(id))
+                {
+                    self.daemon.kv_set(&form_key(chat_id), "").await?;
+                }
+                let note = note.replace("{server}", &request.server);
+                self.elicitation_update(&request, card, &note, None).await?;
+                // La carte est plus haut dans le chat : l'issue est redite en bas.
+                if echo && card.is_some() {
+                    self.reply(chat_id, None, None, &note).await?;
+                }
+                Ok(())
+            }
+            Err(e) => self.reply(chat_id, None, None, &format!("ℹ️ {e}")).await,
+        }
+    }
+
+    /// Boutons d'une carte d'élicitation.
+    async fn elicitation_clicked(
+        &self,
+        callback_id: &str,
+        action: &Action,
+        chat_id: i64,
+        message_id: i64,
+    ) -> anyhow::Result<()> {
+        use crate::elicitation::{Action as Answer, Kind};
+        let broker = self.daemon.services.elicitations.clone();
+        let Some((request, card)) = broker.request(&action.target) else {
+            let _ = self
+                .bot
+                .answer_callback(callback_id, Some("Demande expirée ou déjà traitée."), false)
+                .await;
+            let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+            return Ok(());
+        };
+        let _ = self.bot.answer_callback(callback_id, None, false).await;
+        let elsewhere = card != Some(message_id);
+        if elsewhere {
+            // Bouton d'un autre message (récapitulatif du formulaire) : il a servi.
+            let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+        }
+        let card = card.or(Some(message_id));
+        let (answer, note) = match action.action.as_str() {
+            k::ELICIT_DECLINE => (Answer::Decline, "🚫 Refusé : `{server}` en est informé."),
+            k::ELICIT_CANCEL => (Answer::Cancel, "✖️ Annulé : `{server}` en est informé."),
+            k::ELICIT_DONE => (Answer::Accept(None), "✅ Terminé : `{server}` reprend."),
+            _ => match &request.kind {
+                Kind::Form { schema } if request.field_count() > 0 => {
+                    let state =
+                        match penelope_telegram::forms::FormState::new(&request.id, schema.clone())
+                        {
+                            Ok(st) => st,
+                            Err(e) => {
+                                let _ = broker.resolve(&request.id, Answer::Cancel);
+                                return self
+                                    .elicitation_update(
+                                        &request,
+                                        card,
+                                        &format!(
+                                            "❌ Formulaire illisible ({e}) : demande annulée."
+                                        ),
+                                        None,
+                                    )
+                                    .await;
+                            }
+                        };
+                    let title: String = request.message.chars().take(80).collect();
+                    let pending = json!({
+                        "elicitation": request.id,
+                        "choice": format!("{} · {title}", request.server),
+                        "state": state,
+                    });
+                    self.daemon
+                        .kv_set(&form_key(chat_id), &pending.to_string())
+                        .await?;
+                    let rows = vec![vec![
+                        self.elicit_button("🚫 Refuser", k::ELICIT_DECLINE, &request)
+                            .await?,
+                        self.elicit_button("✖️ Annuler", k::ELICIT_CANCEL, &request)
+                            .await?,
+                    ]];
+                    self.elicitation_update(
+                        &request,
+                        card,
+                        "📝 Formulaire en cours ci-dessous.",
+                        Some(inline_keyboard(&rows)),
+                    )
+                    .await?;
+                    return self.send_form_step(chat_id, &pending).await;
+                }
+                Kind::Form { .. } => (
+                    Answer::Accept(Some(json!({}))),
+                    "✅ Accepté : `{server}` continue.",
+                ),
+                Kind::Url {
+                    url,
+                    elicitation_id,
+                } => {
+                    let host = request.host().unwrap_or_default();
+                    let open = ButtonSpec::url(&format!("🌐 Ouvrir {host}"), url);
+                    if elicitation_id.is_none() {
+                        // MRTR : le serveur reprend quand le propriétaire a terminé.
+                        let rows = vec![
+                            vec![open],
+                            vec![
+                                self.elicit_button("✅ J'ai terminé", k::ELICIT_DONE, &request)
+                                    .await?,
+                                self.elicit_button("✖️ Annuler", k::ELICIT_CANCEL, &request)
+                                    .await?,
+                            ],
+                        ];
+                        return self
+                            .elicitation_update(
+                                &request,
+                                card,
+                                "Ouvre le lien, puis « J'ai terminé ».",
+                                Some(inline_keyboard(&rows)),
+                            )
+                            .await;
+                    }
+                    if let Err(e) = broker.resolve(&request.id, Answer::Accept(None)) {
+                        return self.reply(chat_id, None, None, &format!("ℹ️ {e}")).await;
+                    }
+                    return self
+                        .elicitation_update(
+                            &request,
+                            card,
+                            &format!(
+                                "✅ Accepté : ouvre le lien, `{}` signalera la fin.",
+                                request.server
+                            ),
+                            Some(inline_keyboard(&[vec![open]])),
+                        )
+                        .await;
+                }
+            },
+        };
+        self.finish_elicitation(chat_id, &request.id, answer, note, elsewhere)
+            .await
     }
 
     /// Échec d'un tour, avec un bouton « Réessayer » qui relance la réponse sur le même
@@ -2562,7 +3457,10 @@ impl TelegramGateway {
             draft_id: i64,
             text: String,
             last: Instant,
+            /// Dernière vérification du focus : une session quittée cesse d'écrire.
+            checked: Instant,
         }
+        const FOCUS_EVERY: Duration = Duration::from_secs(2);
         let mut rx = self.daemon.bus.subscribe();
         let mut drafts: HashMap<String, Draft> = HashMap::new();
         while !self.shutting_down() {
@@ -2579,8 +3477,21 @@ impl TelegramGateway {
             if chat_id <= 0 {
                 continue;
             }
+            // Session en arrière-plan : ni brouillon ni « écrit… » (issue #10).
+            if let Some(d) = drafts.get_mut(&ev.turn_id)
+                && d.checked.elapsed() >= FOCUS_EVERY
+            {
+                d.checked = Instant::now();
+                if self.out_of_focus(&ev.session_id, chat_id, topic_id).await {
+                    drafts.remove(&ev.turn_id);
+                    continue;
+                }
+            }
             match &ev.kind {
                 BusKind::Started => {
+                    if self.out_of_focus(&ev.session_id, chat_id, topic_id).await {
+                        continue;
+                    }
                     drafts.insert(
                         ev.turn_id.clone(),
                         Draft {
@@ -2589,6 +3500,7 @@ impl TelegramGateway {
                             draft_id: crate::bus::draft_id_for(&ev.turn_id),
                             text: String::new(),
                             last: Instant::now() - self.draft_interval,
+                            checked: Instant::now(),
                         },
                     );
                     let bot = self.bot.clone();
@@ -2683,6 +3595,44 @@ impl ChannelDelivery for TelegramGateway {
         else {
             return;
         };
+        // Session en arrière-plan : rien n'est écrit dans le chat (issue #10).
+        if self.out_of_focus(session_id, chat_id, topic_id).await {
+            let item = match outcome {
+                TurnOutcome::Answered { text, .. } => Some(Held::Text {
+                    text: text.clone(),
+                    reply_to: message_id,
+                    answer: true,
+                }),
+                TurnOutcome::AwaitingApproval { approval_id } => Some(Held::Approval {
+                    id: approval_id.clone(),
+                }),
+                TurnOutcome::LoopAborted { report } => Some(Held::Text {
+                    text: loop_aborted_text(report),
+                    reply_to: message_id,
+                    answer: false,
+                }),
+                TurnOutcome::Cancelled => None,
+                TurnOutcome::BudgetExceeded {
+                    scope,
+                    spent_usd,
+                    limit_usd,
+                } => Some(Held::Text {
+                    text: crate::agent::budget_exceeded_text(scope, *spent_usd, *limit_usd),
+                    reply_to: message_id,
+                    answer: false,
+                }),
+                TurnOutcome::Failed { error } => Some(Held::Failure {
+                    error: error.clone(),
+                    reply_to: message_id,
+                }),
+            };
+            if let Some(item) = item
+                && let Err(e) = self.hold(session_id, chat_id, topic_id, item).await
+            {
+                tracing::error!(error = %e, "sortie d'une session en arrière-plan perdue");
+            }
+            return;
+        }
         let result: anyhow::Result<()> = async {
             match outcome {
                 TurnOutcome::Answered { text, .. } => {
@@ -2700,14 +3650,8 @@ impl ChannelDelivery for TelegramGateway {
                     }
                 }
                 TurnOutcome::LoopAborted { report } => {
-                    let r: String = report.chars().take(2_500).collect();
-                    self.reply(
-                        chat_id,
-                        topic_id,
-                        message_id,
-                        &format!("⛔ **Boucle détectée**, tour arrêté.\n\n```\n{r}\n```"),
-                    )
-                    .await?;
+                    self.reply(chat_id, topic_id, message_id, &loop_aborted_text(report))
+                        .await?;
                 }
                 TurnOutcome::Cancelled => {
                     self.reply(chat_id, topic_id, None, "⏹ Génération arrêtée.")
@@ -2743,6 +3687,58 @@ impl ChannelDelivery for TelegramGateway {
     }
 }
 
+/// Demandes d'élicitation MCP : une carte dans le chat privé du propriétaire.
+#[async_trait::async_trait]
+impl crate::elicitation::OwnerChannel for TelegramGateway {
+    async fn show(&self, r: &crate::elicitation::Request) -> Result<Option<i64>, String> {
+        use crate::elicitation::Kind;
+        let accept = match &r.kind {
+            Kind::Form { .. } if r.field_count() > 0 => "📝 Remplir",
+            Kind::Form { .. } => "✅ Accepter",
+            Kind::Url { .. } => "🌐 Ouvrir le lien",
+        };
+        let button = |label, action| self.elicit_button(label, action, r);
+        let rows = vec![
+            vec![
+                button(accept, k::ELICIT_ACCEPT)
+                    .await
+                    .map_err(|e| e.to_string())?,
+                button("🚫 Refuser", k::ELICIT_DECLINE)
+                    .await
+                    .map_err(|e| e.to_string())?,
+            ],
+            vec![
+                button("✖️ Annuler", k::ELICIT_CANCEL)
+                    .await
+                    .map_err(|e| e.to_string())?,
+            ],
+        ];
+        let html = format!(
+            "{}\n\n<i>Sans réponse d'ici {}, la demande est annulée.</i>",
+            Self::elicitation_html(r),
+            crate::elicitation::human(r.timeout)
+        );
+        let sent = self
+            .bot
+            .send_text(
+                self.owner_id,
+                None,
+                &html,
+                Some(inline_keyboard(&rows)),
+                None,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(sent["message_id"].as_i64())
+    }
+
+    async fn close(&self, r: &crate::elicitation::Request, card: Option<i64>, markdown: &str) {
+        if let Err(e) = self.elicitation_update(r, card, markdown, None).await {
+            tracing::warn!(error = %e, "carte d'élicitation non mise à jour");
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl Messenger for TelegramGateway {
     async fn send_text(&self, origin: &Origin, markdown: &str) -> Result<(), String> {
@@ -2764,6 +3760,50 @@ impl Messenger for TelegramGateway {
             .await
             .map(|_| ())
             .map_err(|e| e.to_string())
+    }
+
+    async fn send_session_text(
+        &self,
+        session_id: &str,
+        origin: &Origin,
+        markdown: &str,
+    ) -> Result<(), String> {
+        if let Some((chat_id, topic_id)) = origin.telegram_chat()
+            && self.out_of_focus(session_id, chat_id, topic_id).await
+        {
+            let item = Held::Text {
+                text: markdown.to_string(),
+                reply_to: None,
+                answer: false,
+            };
+            return self
+                .hold(session_id, chat_id, topic_id, item)
+                .await
+                .map_err(|e| e.to_string());
+        }
+        self.send_text(origin, markdown).await
+    }
+
+    async fn send_session_file(
+        &self,
+        session_id: &str,
+        origin: &Origin,
+        path: &Path,
+        caption: Option<&str>,
+    ) -> Result<(), String> {
+        if let Some((chat_id, topic_id)) = origin.telegram_chat()
+            && self.out_of_focus(session_id, chat_id, topic_id).await
+        {
+            let item = Held::File {
+                path: path.display().to_string(),
+                caption: caption.map(String::from),
+            };
+            return self
+                .hold(session_id, chat_id, topic_id, item)
+                .await
+                .map_err(|e| e.to_string());
+        }
+        self.send_file(origin, path, caption).await
     }
 
     async fn send_question(
@@ -3344,6 +4384,23 @@ mod tests {
             crate::runner::process(&g.daemon, turn, Duration::from_secs(30)).await;
         }
         g.flush_outbox().await.unwrap();
+    }
+
+    /// Boutons d'un message envoyé : (libellé, `callback_data` ou URL).
+    fn inline_buttons(call: &Value) -> Vec<(String, String)> {
+        call["reply_markup"]["inline_keyboard"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|row| row.as_array().cloned().unwrap_or_default())
+            .map(|b| {
+                let target = b["callback_data"].as_str().or(b["url"].as_str());
+                (
+                    b["text"].as_str().unwrap_or_default().to_string(),
+                    target.unwrap_or_default().to_string(),
+                )
+            })
+            .collect()
     }
 
     fn texts(calls: &[Value]) -> Vec<String> {
@@ -4443,6 +5500,843 @@ mod tests {
             .unwrap();
         let second = g.daemon.chat_session_for(&origin).await.unwrap();
         assert_ne!(first, second);
+    }
+
+    /// Issue #12 : une demande `elicitation/create` devient une carte Telegram ; le clic du
+    /// propriétaire part au serveur (confirmation, formulaire, refus, lien), un délai
+    /// dépassé annule et le dit.
+    #[tokio::test]
+    async fn mcp_elicitation_is_answered_from_telegram() {
+        use crate::mcp::testing::{FakeConnector, declare, server, tool};
+        use penelope_mcp::transport::LoopbackTransport;
+        let (_d, g, t, _p) = gateway().await;
+        let fake = Arc::new(FakeConnector::default());
+        for name in ["redmine", "lent"] {
+            fake.serve(
+                name,
+                server(Arc::new(std::sync::Mutex::new(vec![tool(
+                    "update_issue",
+                    json!({}),
+                )]))),
+            );
+        }
+        let sup = crate::mcp::McpSupervisor::new(g.daemon.services.clone(), fake.clone());
+        declare(&sup, "redmine", "");
+        declare(&sup, "lent", "elicitation_timeout = \"300ms\"\n");
+        sup.reload().await;
+        g.daemon.hooks.set_mcp(sup.clone());
+        let broker = g.daemon.services.elicitations.clone();
+
+        // Un propriétaire est joignable : l'élicitation est annoncée, pas le sampling.
+        let tr = fake.last_transport("redmine");
+        let log = tr.call_log().await;
+        let (_, init) = log.iter().find(|(m, _)| m == "initialize").unwrap();
+        assert!(init["capabilities"]["elicitation"].is_object(), "{init}");
+        assert!(init["capabilities"].get("sampling").is_none(), "{init}");
+
+        let answer = |tr: Arc<LoopbackTransport>, id: u64| async move {
+            for _ in 0..300 {
+                if let Some((_, r)) = tr
+                    .responses
+                    .lock()
+                    .await
+                    .iter()
+                    .find(|(i, _)| *i == json!(id))
+                {
+                    return r.clone().unwrap();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!("aucune réponse à la requête {id}");
+        };
+        let card = |needle: &'static str| {
+            let (t, broker) = (t.clone(), broker.clone());
+            async move {
+                for _ in 0..300 {
+                    let open = broker.open();
+                    if let Some((req, id)) = open.iter().find(|(r, _)| r.message.contains(needle))
+                        && let Some(sent) = t
+                            .calls_to(tg::SEND_MESSAGE)
+                            .await
+                            .into_iter()
+                            .rev()
+                            .find(|c| c["text"].as_str().is_some_and(|x| x.contains(needle)))
+                    {
+                        return (req.clone(), id.unwrap(), sent);
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                panic!("aucune carte « {needle} »");
+            }
+        };
+
+        // 1. Confirmation : Accepter.
+        tr.push_server_request(
+            8,
+            "elicitation/create",
+            json!({"message": "Modifier le ticket 42 ?",
+                   "requestedSchema": {"type": "object", "properties": {}}}),
+        );
+        let (_, card_id, sent) = card("Modifier le ticket 42").await;
+        let text = sent["text"].as_str().unwrap();
+        assert!(text.contains("<code>redmine</code>"), "{text}");
+        assert!(text.contains("Sans réponse d'ici 10 min"), "{text}");
+        let b = inline_buttons(&sent);
+        let labels: Vec<&str> = b.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(labels, ["✅ Accepter", "🚫 Refuser", "✖️ Annuler"]);
+        g.process_update(&updates::callback(200, OWNER, &b[0].1, card_id))
+            .await
+            .unwrap();
+        assert_eq!(
+            answer(tr.clone(), 8).await,
+            json!({"action": "accept", "content": {}})
+        );
+        let edits = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
+        assert!(
+            edits.last().unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .contains("Accepté"),
+            "{edits:?}"
+        );
+
+        // 2. Formulaire : Remplir, un enum titré au bouton, un texte en message, Envoyer.
+        tr.push_server_request(
+            9,
+            "elicitation/create",
+            json!({"message": "Précise la priorité",
+                   "requestedSchema": {"type": "object", "properties": {
+                       "priorite": {"type": "string", "title": "Priorité", "oneOf": [
+                           {"const": "high", "title": "Haute"},
+                           {"const": "low", "title": "Basse"}]},
+                       "note": {"type": "string", "title": "Note"}},
+                   "required": ["priorite"]}}),
+        );
+        let (_, card_id, sent) = card("Précise la priorité").await;
+        assert!(sent["text"].as_str().unwrap().contains("Priorité *, Note"));
+        let fill = inline_buttons(&sent)[0].clone();
+        assert_eq!(fill.0, "📝 Remplir");
+        g.process_update(&updates::callback(201, OWNER, &fill.1, card_id))
+            .await
+            .unwrap();
+        let step = t.calls_to(tg::SEND_MESSAGE).await.last().unwrap().clone();
+        let high = inline_buttons(&step)
+            .into_iter()
+            .find(|(l, _)| l == "Haute")
+            .unwrap();
+        g.process_update(&updates::callback(202, OWNER, &high.1, 3000))
+            .await
+            .unwrap();
+        g.process_update(&updates::text_message(
+            203,
+            OWNER,
+            OWNER,
+            "client en attente",
+        ))
+        .await
+        .unwrap();
+        let summary = t.calls_to(tg::SEND_MESSAGE).await.last().unwrap().clone();
+        let buttons = inline_buttons(&summary);
+        assert!(
+            buttons.iter().any(|(l, _)| l == "🚫 Refuser"),
+            "{buttons:?}"
+        );
+        let send = buttons.iter().find(|(l, _)| l == "✅ Envoyer").unwrap();
+        g.process_update(&updates::callback(204, OWNER, &send.1, 3001))
+            .await
+            .unwrap();
+        assert_eq!(
+            answer(tr.clone(), 9).await,
+            json!({"action": "accept",
+                   "content": {"priorite": "high", "note": "client en attente"}})
+        );
+        assert!(
+            g.daemon
+                .services
+                .turns
+                .claim("test")
+                .await
+                .unwrap()
+                .is_none(),
+            "la saisie du formulaire n'ouvre pas de tour"
+        );
+
+        // 3. Refus.
+        tr.push_server_request(
+            10,
+            "elicitation/create",
+            json!({"message": "Supprimer le ticket 7 ?"}),
+        );
+        let (_, card_id, sent) = card("Supprimer le ticket 7").await;
+        let decline = inline_buttons(&sent)[1].clone();
+        g.process_update(&updates::callback(205, OWNER, &decline.1, card_id))
+            .await
+            .unwrap();
+        assert_eq!(answer(tr.clone(), 10).await, json!({"action": "decline"}));
+
+        // 4. Sans réponse : annulation, carte mise à jour.
+        let slow = fake.last_transport("lent");
+        slow.push_server_request(
+            11,
+            "elicitation/create",
+            json!({"message": "Toujours là ?"}),
+        );
+        assert_eq!(answer(slow.clone(), 11).await, json!({"action": "cancel"}));
+        let edits = texts(&t.calls_to(tg::EDIT_MESSAGE_TEXT).await);
+        assert!(
+            edits
+                .iter()
+                .any(|e| e.contains("Toujours là") && e.contains("Sans réponse")),
+            "{edits:?}"
+        );
+    }
+
+    /// Issue #12, suite : en 2026-07-28 (MRTR) l'appel est relancé avec les réponses et
+    /// l'état du serveur, le modèle lit qui a répondu ; un lien (2025-11-25) montre son
+    /// domaine, s'ouvre après accord et sa fin signalée met la carte à jour.
+    #[tokio::test]
+    async fn mcp_links_and_mrtr_elicitations_from_telegram() {
+        use crate::executor::McpGateway;
+        use crate::mcp::testing::{FakeConnector, declare, server, tool};
+        let (_d, g, t, _p) = gateway().await;
+        let fake = Arc::new(FakeConnector::default());
+        fake.serve(
+            "tracker",
+            Arc::new(|m, p| match m {
+                "server/discover" => Ok(json!({
+                    "protocolVersion": "2026-07-28",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "tracker"}
+                })),
+                "tools/list" => Ok(json!({"tools": [tool("close_ticket", json!({}))]})),
+                "tools/call" => Ok(
+                    match (p.get("inputResponses"), p["arguments"]["lien"].as_bool()) {
+                        (Some(r), _) => {
+                            json!({"content": [{"type": "text", "text": format!("reçu {r}")}]})
+                        }
+                        (None, Some(true)) => json!({
+                            "resultType": "input_required",
+                            "inputRequests": {"compte": {"method": "elicitation/create", "params": {
+                                "mode": "url", "url": "https://auth.example.com/connect?t=1",
+                                "message": "Relie ton compte."}}},
+                            "requestState": "etat-lien"
+                        }),
+                        (None, _) => json!({
+                            "resultType": "input_required",
+                            "inputRequests": {"confirm": {"method": "elicitation/create",
+                                "params": {"message": "Fermer le ticket 9 ?"}}},
+                            "requestState": "etat-1"
+                        }),
+                    },
+                ),
+                _ => Ok(json!({})),
+            }),
+        );
+        let legacy = server(Arc::new(std::sync::Mutex::new(vec![tool(
+            "sync",
+            json!({}),
+        )])));
+        fake.serve(
+            "drive",
+            Arc::new(move |m, p| match m {
+                "initialize" => Ok(json!({
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "drive"}
+                })),
+                _ => legacy(m, p),
+            }),
+        );
+        let sup = crate::mcp::McpSupervisor::new(g.daemon.services.clone(), fake.clone());
+        declare(&sup, "tracker", "");
+        declare(&sup, "drive", "");
+        sup.reload().await;
+        g.daemon.hooks.set_mcp(sup.clone());
+        let broker = g.daemon.services.elicitations.clone();
+        let card = |needle: &'static str| {
+            let (t, broker) = (t.clone(), broker.clone());
+            async move {
+                for _ in 0..300 {
+                    if let Some((req, Some(id))) = broker
+                        .open()
+                        .into_iter()
+                        .find(|(r, _)| r.message.contains(needle))
+                        && let Some(sent) = t
+                            .calls_to(tg::SEND_MESSAGE)
+                            .await
+                            .into_iter()
+                            .rev()
+                            .find(|c| c["text"].as_str().is_some_and(|x| x.contains(needle)))
+                    {
+                        return (req, id, sent);
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                panic!("aucune carte « {needle} »");
+            }
+        };
+
+        // MRTR, formulaire : refus, relance avec la réponse et l'état, note pour le modèle.
+        let call = {
+            let sup = sup.clone();
+            tokio::spawn(async move {
+                sup.call_tool("mcp__tracker__close_ticket", &json!({}))
+                    .await
+            })
+        };
+        let (_, card_id, sent) = card("Fermer le ticket 9").await;
+        g.process_update(&updates::callback(
+            300,
+            OWNER,
+            &inline_buttons(&sent)[1].1,
+            card_id,
+        ))
+        .await
+        .unwrap();
+        let result = call.await.unwrap().unwrap();
+        let text = result.to_string();
+        assert!(
+            text.contains(r#"reçu {\"confirm\":{\"action\":\"decline\"}}"#),
+            "{text}"
+        );
+        assert!(
+            text.contains("le propriétaire a refusé sur Telegram (decline)"),
+            "{text}"
+        );
+        let tr = fake.last_transport("tracker");
+        let log = tr.call_log().await;
+        let retry = &log
+            .iter()
+            .filter(|(m, _)| m == "tools/call")
+            .nth(1)
+            .unwrap()
+            .1;
+        assert_eq!(retry["requestState"], "etat-1");
+        assert_eq!(
+            retry["_meta"]["io.modelcontextprotocol/clientCapabilities"]["elicitation"],
+            json!({"form": {}, "url": {}})
+        );
+
+        // MRTR, lien : domaine et URL entière, accord, puis « J'ai terminé ».
+        let call = {
+            let sup = sup.clone();
+            tokio::spawn(async move {
+                sup.call_tool("mcp__tracker__close_ticket", &json!({"lien": true}))
+                    .await
+            })
+        };
+        let (_, card_id, sent) = card("Relie ton compte").await;
+        let html = sent["text"].as_str().unwrap();
+        assert!(html.contains("Domaine : <b>auth.example.com</b>"), "{html}");
+        assert!(
+            html.contains("<code>https://auth.example.com/connect?t=1</code>"),
+            "{html}"
+        );
+        g.process_update(&updates::callback(
+            301,
+            OWNER,
+            &inline_buttons(&sent)[0].1,
+            card_id,
+        ))
+        .await
+        .unwrap();
+        let edited = t
+            .calls_to(tg::EDIT_MESSAGE_TEXT)
+            .await
+            .last()
+            .unwrap()
+            .clone();
+        let buttons = inline_buttons(&edited);
+        assert_eq!(
+            buttons[0],
+            (
+                "🌐 Ouvrir auth.example.com".to_string(),
+                "https://auth.example.com/connect?t=1".to_string()
+            )
+        );
+        let done = buttons
+            .iter()
+            .find(|(l, _)| l == "✅ J'ai terminé")
+            .unwrap();
+        g.process_update(&updates::callback(302, OWNER, &done.1, card_id))
+            .await
+            .unwrap();
+        let text = call.await.unwrap().unwrap().to_string();
+        assert!(
+            text.contains(r#"{\"compte\":{\"action\":\"accept\"}}"#),
+            "{text}"
+        );
+
+        // 2025-11-25, requête du serveur en mode URL : accord, puis fin signalée.
+        let drive = fake.last_transport("drive");
+        drive.push_server_request(
+            21,
+            "elicitation/create",
+            json!({"mode": "url", "elicitationId": "e-9",
+                   "url": "https://drive.example.org/oauth", "message": "Autorise Drive."}),
+        );
+        let (_, card_id, sent) = card("Autorise Drive").await;
+        g.process_update(&updates::callback(
+            303,
+            OWNER,
+            &inline_buttons(&sent)[0].1,
+            card_id,
+        ))
+        .await
+        .unwrap();
+        for _ in 0..300 {
+            if !drive.responses.lock().await.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            drive.responses.lock().await[0].1.clone().unwrap(),
+            json!({"action": "accept"})
+        );
+        drive.push_notification(
+            "notifications/elicitation/complete",
+            json!({"elicitationId": "e-9"}),
+        );
+        let mut finished = false;
+        for _ in 0..300 {
+            if texts(&t.calls_to(tg::EDIT_MESSAGE_TEXT).await)
+                .iter()
+                .any(|e| e.contains("Autorise Drive") && e.contains("terminée"))
+            {
+                finished = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(finished, "carte mise à jour à la fin du lien");
+    }
+
+    /// Issue #14 : `/sessions` rend un bouton par session ; un clic lie le chat à la session
+    /// et édite le message, les sessions fermées n'apparaissent qu'à la demande.
+    #[tokio::test]
+    async fn sessions_menu_switches_with_a_click() {
+        let (_d, g, t, _p) = gateway().await;
+        let d = g.daemon.clone();
+        let chat = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: None,
+        };
+        let first = d.chat_session_for(&chat).await.unwrap();
+        d.services
+            .sessions
+            .set_title(&first, "Refonte du site", false)
+            .await
+            .unwrap();
+        d.enqueue_message(&first, "en attente", &chat, None)
+            .await
+            .unwrap();
+        let other = d
+            .services
+            .sessions
+            .create(
+                penelope_kernel::session::SessionKind::Chat,
+                Some("Budget 2027".into()),
+            )
+            .await
+            .unwrap()
+            .id
+            .to_string();
+        let closed = d
+            .services
+            .sessions
+            .create(
+                penelope_kernel::session::SessionKind::Chat,
+                Some("Vieux sujet".into()),
+            )
+            .await
+            .unwrap()
+            .id
+            .to_string();
+        d.services
+            .sessions
+            .set_state(&closed, "closed")
+            .await
+            .unwrap();
+
+        let buttons = inline_buttons;
+        g.process_update(&updates::text_message(90, OWNER, OWNER, "/sessions"))
+            .await
+            .unwrap();
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        let menu = buttons(sent.last().unwrap());
+        let labels: Vec<&str> = menu.iter().map(|(l, _)| l.as_str()).collect();
+        assert!(
+            labels
+                .iter()
+                .any(|l| l.starts_with("▶️ ⏳ Refonte du site")),
+            "{labels:?}"
+        );
+        assert!(
+            !labels.iter().any(|l| l.contains("Vieux sujet")),
+            "{labels:?}"
+        );
+        let switch = menu
+            .iter()
+            .find(|(l, _)| l.contains("Budget 2027"))
+            .unwrap()
+            .1
+            .clone();
+
+        g.process_update(&updates::callback(91, OWNER, &switch, 1001))
+            .await
+            .unwrap();
+        let bound = d
+            .services
+            .sessions
+            .find_by_topic(OWNER, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(bound.id.to_string(), other);
+        let edits = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
+        let edited = edits.last().expect("message édité");
+        assert_eq!(edited["message_id"], 1001);
+        let labels: Vec<String> = buttons(edited).into_iter().map(|(l, _)| l).collect();
+        assert!(
+            labels.iter().any(|l| l.starts_with("▶️ Budget 2027")),
+            "{labels:?}"
+        );
+        // La session qui a perdu le chat n'a plus rien en attente.
+        assert!(
+            labels.iter().any(|l| l.starts_with("Refonte du site")),
+            "{labels:?}"
+        );
+
+        // Fermées à la demande, puis « ⋯ » > Fermer sur la session d'origine.
+        let show_closed = buttons(edited)
+            .into_iter()
+            .find(|(l, _)| l == "Voir les fermées")
+            .unwrap()
+            .1;
+        g.process_update(&updates::callback(92, OWNER, &show_closed, 1001))
+            .await
+            .unwrap();
+        let edits = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
+        let all = buttons(edits.last().unwrap());
+        assert!(
+            all.iter().any(|(l, _)| l.starts_with("🔒 Vieux sujet")),
+            "{all:?}"
+        );
+        let refonte = all
+            .iter()
+            .position(|(l, _)| l.starts_with("Refonte du site"))
+            .unwrap();
+        let more = all[refonte + 1].1.clone();
+        g.process_update(&updates::callback(93, OWNER, &more, 1001))
+            .await
+            .unwrap();
+        let edits = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
+        let close = buttons(edits.last().unwrap())
+            .into_iter()
+            .find(|(l, _)| l.contains("Fermer"))
+            .unwrap()
+            .1;
+        g.process_update(&updates::callback(94, OWNER, &close, 1001))
+            .await
+            .unwrap();
+        assert_eq!(
+            d.services
+                .sessions
+                .get(&first)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            "closed"
+        );
+        let answers = t.calls_to(tg::ANSWER_CALLBACK_QUERY).await;
+        assert!(
+            answers.last().unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("Session fermée"),
+            "{answers:?}"
+        );
+
+        // Renommer : le message suivant devient le titre, sans ouvrir de tour.
+        let edits = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
+        let rows = buttons(edits.last().unwrap());
+        let budget = rows
+            .iter()
+            .position(|(l, _)| l.contains("Budget 2027"))
+            .unwrap();
+        g.process_update(&updates::callback(95, OWNER, &rows[budget + 1].1, 1001))
+            .await
+            .unwrap();
+        let edits = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
+        let rename = buttons(edits.last().unwrap())
+            .into_iter()
+            .find(|(l, _)| l.contains("Renommer"))
+            .unwrap()
+            .1;
+        g.process_update(&updates::callback(96, OWNER, &rename, 1001))
+            .await
+            .unwrap();
+        g.process_update(&updates::text_message(
+            97,
+            OWNER,
+            OWNER,
+            "Budget prévisionnel",
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            d.services
+                .sessions
+                .get(&other)
+                .await
+                .unwrap()
+                .unwrap()
+                .title
+                .as_deref(),
+            Some("Budget prévisionnel")
+        );
+        assert!(d.services.turns.claim("test").await.unwrap().is_none());
+    }
+
+    /// Issue #10, règle précisée : une session quittée finit son tour en cours, mais sa
+    /// réponse, ses messages et ses approbations sont mis de côté derrière une seule
+    /// notification ; les nouveaux messages vont au focus ; le bouton « Basculer » envoie
+    /// tout dans l'ordre.
+    #[tokio::test]
+    async fn background_sessions_hold_their_replies_until_switched_back() {
+        let (_d, g, t, p) = gateway().await;
+        let d = g.daemon.clone();
+        let chat = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: None,
+        };
+        let first = d.chat_session_for(&chat).await.unwrap();
+        d.services
+            .sessions
+            .set_title(&first, "Refonte", false)
+            .await
+            .unwrap();
+        let asked = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: Some(77),
+        };
+        d.enqueue_message(&first, "longue question", &asked, None)
+            .await
+            .unwrap();
+        // Tour déjà pris par un runner quand l'utilisateur change de session.
+        let running = d.services.turns.claim("test").await.unwrap().unwrap();
+        g.process_update(&updates::text_message(100, OWNER, OWNER, "/fork"))
+            .await
+            .unwrap();
+        let fork = d.chat_session_for(&chat).await.unwrap();
+        assert_ne!(fork, first);
+
+        p.reply(r#"{"complexity":"low"}"#);
+        p.reply("réponse de fond");
+        crate::runner::process(&d, running, Duration::from_secs(30)).await;
+        let m: Arc<dyn Messenger> = g.clone();
+        m.send_session_text(&first, &chat, "question de fond ?")
+            .await
+            .unwrap();
+        let approval = d
+            .services
+            .approvals
+            .create(
+                penelope_hitl::ApprovalKind::ToolCall,
+                "shell_exec",
+                penelope_kernel::risk::RiskClass::Write,
+                json!({"arguments": {"cmd": "make deploy"}}),
+                vec!["Autoriser".into(), "Refuser".into()],
+                Some(&first),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        g.deliver(
+            "t-approbation",
+            &first,
+            &chat,
+            &TurnOutcome::AwaitingApproval {
+                approval_id: approval.id.0.clone(),
+            },
+        )
+        .await;
+        g.flush_outbox().await.unwrap();
+
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        let out = texts(&sent);
+        assert!(
+            !out.iter()
+                .any(|x| x.contains("réponse de fond") || x.contains("question de fond")),
+            "{out:?}"
+        );
+        let notices: Vec<&Value> = sent
+            .iter()
+            .filter(|c| c["text"].as_str().is_some_and(|x| x.contains("📬")))
+            .collect();
+        assert_eq!(notices.len(), 1, "une seule notification : {out:?}");
+        assert_eq!(notices[0]["disable_notification"], true);
+        let edits = texts(&t.calls_to(tg::EDIT_MESSAGE_TEXT).await);
+        assert!(
+            edits
+                .iter()
+                .any(|x| x.contains("2 réponses et 1 approbation en attente dans « Refonte »")),
+            "{edits:?}"
+        );
+
+        // Un nouveau message va au focus, qui répond aussitôt.
+        p.reply(r#"{"complexity":"low"}"#);
+        p.reply("réponse du fork");
+        g.process_update(&updates::text_message(101, OWNER, OWNER, "et maintenant ?"))
+            .await
+            .unwrap();
+        drain(&g).await;
+        g.flush_outbox().await.unwrap();
+        assert!(
+            texts(&t.calls_to(tg::SEND_MESSAGE).await).contains(&"réponse du fork".to_string())
+        );
+
+        // Basculer : tout part dans l'ordre, la notification perd son bouton.
+        let switch = inline_buttons(notices[0])[0].clone();
+        assert_eq!(switch.0, "↪️ Basculer");
+        g.process_update(&updates::callback(102, OWNER, &switch.1, 5000))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        assert_eq!(
+            d.services
+                .sessions
+                .find_by_topic(OWNER, None)
+                .await
+                .unwrap()
+                .unwrap()
+                .id
+                .to_string(),
+            first
+        );
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        let out = texts(&sent);
+        let at = |needle: &str| out.iter().position(|x| x.contains(needle)).unwrap();
+        assert!(at("réponse de fond") < at("question de fond ?"), "{out:?}");
+        assert!(at("question de fond ?") < at("make deploy"), "{out:?}");
+        let answer = sent
+            .iter()
+            .find(|c| {
+                c["text"]
+                    .as_str()
+                    .is_some_and(|x| x.contains("réponse de fond"))
+            })
+            .unwrap();
+        assert_eq!(answer["reply_parameters"]["message_id"], 77);
+        assert!(
+            texts(&t.calls_to(tg::EDIT_MESSAGE_TEXT).await)
+                .iter()
+                .any(|x| x.contains("envoyées ci-dessous"))
+        );
+        assert!(d.kv_get(&held_key(&first)).await.unwrap().is_none());
+    }
+
+    /// Issue #10 : après `/fork`, seul le fork répond ; les messages en attente de la session
+    /// d'origine sont annulés, et `/close` arrête une session et vide sa file.
+    #[tokio::test]
+    async fn after_a_fork_only_the_fork_answers() {
+        let (_d, g, t, p) = gateway().await;
+        let d = g.daemon.clone();
+        let chat = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: None,
+        };
+        let first = d.chat_session_for(&chat).await.unwrap();
+        for text in ["vieux message 1", "vieux message 2"] {
+            d.enqueue_message(&first, text, &chat, None).await.unwrap();
+        }
+        g.process_update(&updates::text_message(80, OWNER, OWNER, "/fork"))
+            .await
+            .unwrap();
+        let fork = d.chat_session_for(&chat).await.unwrap();
+        assert_ne!(fork, first);
+        g.flush_outbox().await.unwrap();
+        let notice = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
+        assert!(notice.contains("2 messages en attente"), "{notice}");
+
+        for i in 0..3 {
+            p.reply(r#"{"complexity":"low"}"#);
+            p.reply(&format!("réponse {i}"));
+            g.process_update(&updates::text_message(
+                81 + i,
+                OWNER,
+                OWNER,
+                &format!("question {i}"),
+            ))
+            .await
+            .unwrap();
+        }
+        drain(&g).await;
+
+        let states = |sid: String| {
+            let store = d.services.store.clone();
+            async move {
+                store
+                    .read(move |c| {
+                        let mut st = c.prepare(
+                            "SELECT state FROM turn_queue WHERE session_id = ?1 ORDER BY enqueued_at",
+                        )?;
+                        let rows = st.query_map([sid], |r| r.get::<_, String>(0))?;
+                        Ok(rows.collect::<Result<Vec<String>, _>>()?)
+                    })
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(states(first.clone()).await, vec!["cancelled", "cancelled"]);
+        assert_eq!(states(fork.clone()).await, vec!["done", "done", "done"]);
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        for i in 0..3 {
+            assert!(
+                sent.iter().any(|x| x == &format!("réponse {i}")),
+                "{sent:?}"
+            );
+        }
+        assert_eq!(
+            d.services
+                .sessions
+                .find_by_topic(OWNER, None)
+                .await
+                .unwrap()
+                .unwrap()
+                .id
+                .as_str(),
+            fork.as_str(),
+            "une seule session liée au chat"
+        );
+
+        // `/close` : la file du fork est vidée, le chat n'a plus de session liée.
+        d.enqueue_message(&fork, "encore un", &chat, None)
+            .await
+            .unwrap();
+        g.process_update(&updates::text_message(90, OWNER, OWNER, "/close"))
+            .await
+            .unwrap();
+        assert_eq!(states(fork.clone()).await.last().unwrap(), "cancelled");
+        assert!(
+            d.services
+                .sessions
+                .find_by_topic(OWNER, None)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            d.services.sessions.get(&fork).await.unwrap().unwrap().state,
+            "closed"
+        );
     }
 
     /// Étape `user` avec `input: "form:<id>"` : le choix ouvre le formulaire, un champ par

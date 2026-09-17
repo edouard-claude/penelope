@@ -68,8 +68,8 @@ variables = ["outil", "serveur"]
 | `question` | Question libre au propriétaire | Répondre |
 | `form` | Un champ de formulaire | Précédent, Suivant, Envoyer, Renoncer |
 | `mcp_oauth_required` | Un serveur MCP demande une autorisation | Ouvrir, Coller l'URL, Annuler |
-| `mcp_url_elicitation` | Un serveur demande une action à l'humain | selon la demande |
-| `sampling_request` | Un serveur demande une génération | Autoriser, Refuser |
+| `mcp_url_elicitation` | Un serveur demande une action à l'humain | Ouvrir le lien, J'ai terminé, Annuler |
+| `sampling_request` | Un serveur demande une génération (non annoncé, toujours refusé) | Autoriser, Refuser |
 | `effect_unknown` | Un effet est resté incertain après un crash | Vérifier, Relancer, Ignorer |
 | `skill_proposal` | Une skill est proposée | Accepter, Refuser |
 | `memory_proposal` | Des souvenirs sont proposés à la promotion | Accepter, Modifier, Refuser |
@@ -160,6 +160,20 @@ saisies sont validées contre le schéma avant d'être acceptées.
 Depuis Bot API 9.3, un brouillon est proposé dans la zone de saisie plutôt que dans un
 message : la réponse se corrige avant envoi.
 
+Une demande d'élicitation MCP ouvre une carte qui nomme le serveur et cite sa demande :
+
+```
+🔐 Le serveur MCP redmine demande ta confirmation
+│ Modifier le ticket 42 ?
+Sans réponse d'ici 10 min, la demande est annulée.
+[ ✅ Accepter ] [ 🚫 Refuser ]
+[ ✖️ Annuler ]
+```
+
+Avec des champs, « 📝 Remplir » ouvre le formulaire ; le récapitulatif garde « Refuser ».
+Pour un lien, la carte montre le domaine et l'adresse entière, et le bouton d'ouverture
+n'apparaît qu'après accord. Détails dans [mcp.md](mcp.md#élicitation).
+
 ## Commandes
 
 Une quarantaine de commandes, groupées par famille : session, modèles, mémoire, MCP,
@@ -181,8 +195,34 @@ un test vérifie que **toutes** le sont : une commande sans méthode serait une 
 `/secret` liste ou supprime, jamais ne saisit : un secret ne transite pas par une
 conversation.
 
-Une session reçoit un titre de quelques mots après son premier échange ; `/sessions` les
-liste avec leur date, `/title <texte>` renomme la session courante. `/upgrade` indique
+Une session reçoit un titre de quelques mots après son premier échange ; `/title
+<texte>` renomme la session courante. `/sessions` rend un bouton par session (▶️ celle du
+chat, ⏳ un tour en cours ou en attente, heure de dernière activité pour la plus récente) :
+un clic bascule le chat dessus et met le menu à jour, « ⋯ » ouvre Basculer, Forker,
+Renommer et Fermer. Douze sessions par page ; les fermées sont masquées sauf « Voir les
+fermées » (ou `/sessions all`). `/switch` accepte un identifiant, un préfixe unique ou
+un titre, `/close [session]` arrête une session et vide sa file.
+
+```
+Sessions (14 · page 1/2)
+[ ▶️ Refonte du site (16/09) 18:42 ] [ ⋯ ]
+[ ⏳ Budget 2027 (15/09)          ] [ ⋯ ]
+[ Plus anciennes » ] [ Voir les fermées ]
+```
+
+Seule la session au **focus** écrit dans le chat. Une session quittée (origine d'un fork,
+ou laissée par `/switch`) finit son tour en cours sans rien écrire : réponse, messages,
+fichiers et approbations sont mis de côté derrière une seule notification silencieuse,
+mise à jour au fil de l'eau.
+
+```
+📬 2 réponses et 1 approbation en attente dans « Budget 2027 »
+[ ↪️ Basculer ]
+```
+
+« Basculer » revient sur la session et envoie tout dans l'ordre ; une approbation déjà
+tranchée entre-temps n'est pas renvoyée. Les nouveaux messages vont toujours à la session
+au focus. `/upgrade` indique
 la dernière version publiée, `/upgrade install` l'installe (retour automatique à
 l'ancienne si elle ne démarre pas), `/upgrade rollback` revient au binaire précédent.
 

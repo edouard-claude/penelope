@@ -96,6 +96,13 @@ impl Rpc {
                 let sid = self.session_param(p).await?;
                 Ok(json!({"session": sid, "stopped": self.daemon.bus.cancel_session(&sid)}))
             }
+            method::SESSION_CLOSE => {
+                let query = required_str(p, "session")?;
+                let sess = crate::session_ops::resolve(s, &query)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                crate::session_ops::close(&self.daemon, sess.id.as_str()).await
+            }
             method::SESSION_TITLE => {
                 let sid = self.session_param(p).await?;
                 let title = required_str(p, "title")?;

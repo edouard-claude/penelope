@@ -50,6 +50,8 @@ pub struct Services {
     pub workflows: WorkflowRegistry,
     pub runs: RunStore,
     pub schedules: ScheduleStore,
+    /// Demandes des serveurs MCP au propriétaire (§8.4, issue #12).
+    pub elicitations: Arc<crate::elicitation::Broker>,
 }
 
 impl Services {
@@ -142,6 +144,7 @@ impl Services {
             workflows,
             runs,
             schedules,
+            elicitations: Arc::default(),
         })
     }
 
@@ -190,6 +193,7 @@ impl Services {
             workflows: WorkflowRegistry::with_bundled(&known),
             runs: RunStore::new(store.clone(), clock.clone()),
             schedules: ScheduleStore::new(store.clone(), clock.clone(), "Indian/Reunion"),
+            elicitations: Arc::default(),
             mcp_tools,
             context,
             catalog,

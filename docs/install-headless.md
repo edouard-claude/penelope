@@ -471,8 +471,12 @@ penelope mcp auth <nom>
 
 puis `penelope mcp auth <nom> --callback '<adresse collée>'`. Les jetons sont rangés
 dans le SecretStore et rafraîchis avant chaque connexion ; ils ne partent que vers un
-serveur en HTTPS (ou en boucle locale). Le sampling reste refusé et les formulaires
-d'elicitation déclinés.
+serveur en HTTPS (ou en boucle locale).
+
+Quand un serveur demande une confirmation, un formulaire ou l'ouverture d'un lien, la
+carte arrive sur Telegram (Accepter, Refuser, Annuler) ; sans réponse avant
+`elicitation_timeout` (10 min par défaut), la demande est annulée. Sans Telegram
+configuré, Pénélope n'annonce pas cette capacité. Le sampling reste refusé.
 
 ### Venir d'Hermes
 
@@ -620,7 +624,18 @@ Telegram.
 Chaque session reçoit un titre de quelques mots après son premier échange (réglage
 `context.auto_title`, modèle `fast`) ; `/title` ou `penelope session title <session>
 <titre>` le remplace, et un titre posé à la main n'est jamais écrasé. `/sessions` et
-`penelope session list` affichent titres et dates. Pour retrouver un sujet d'une session
+`penelope session list` affichent titres et dates. Sur Telegram, `/sessions` rend un
+bouton par session : un clic lie le chat à cette session, « ⋯ » propose de la forker, de
+la renommer ou de la fermer, et les sessions fermées n'apparaissent qu'à la demande.
+`/switch` accepte un identifiant, un préfixe unique ou un titre ; `/close` ou
+`penelope session close <session>` arrête une session et vide sa file.
+
+Une seule session écrit dans un chat : celle qui a le focus (la dernière choisie par
+`/new`, `/fork`, `/switch` ou le menu). Une session quittée finit son tour en cours, mais
+sa réponse, ses messages et ses approbations sont mis de côté derrière une seule
+notification « 📬 2 réponses en attente dans « Titre » » ; son bouton « Basculer »
+revient sur la session et envoie tout dans l'ordre. Ses messages encore en file sont
+abandonnés. Pour retrouver un sujet d'une session
 fermée, Pénélope cherche dans toutes les sessions (`history_grep` en `scope: all`, ou
 `history_expand_query` avec la question en phrase) et cite le titre et la date de la
 session d'où vient chaque extrait.

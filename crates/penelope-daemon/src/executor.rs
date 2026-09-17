@@ -58,6 +58,28 @@ pub trait Messenger: Send + Sync {
         let _ = key;
         self.send_text(origin, markdown).await
     }
+    /// Message écrit par une session pendant son tour. Seule la session au focus du chat
+    /// écrit : une session en arrière-plan le met de côté (issue #10).
+    async fn send_session_text(
+        &self,
+        session_id: &str,
+        origin: &Origin,
+        markdown: &str,
+    ) -> Result<(), String> {
+        let _ = session_id;
+        self.send_text(origin, markdown).await
+    }
+    /// Fichier envoyé par une session pendant son tour, même règle.
+    async fn send_session_file(
+        &self,
+        session_id: &str,
+        origin: &Origin,
+        path: &Path,
+        caption: Option<&str>,
+    ) -> Result<(), String> {
+        let _ = session_id;
+        self.send_file(origin, path, caption).await
+    }
 }
 
 /// Accès aux serveurs MCP vivants.
@@ -480,9 +502,13 @@ impl NativeToolExecutor {
                     .messenger
                     .as_ref()
                     .ok_or_else(|| ToolError::Other("aucun canal de message disponible".into()))?;
-                m.send_text(&self.env.origin, &str_arg(args, "text")?)
-                    .await
-                    .map_err(ToolError::Network)?;
+                m.send_session_text(
+                    &self.env.session_id,
+                    &self.env.origin,
+                    &str_arg(args, "text")?,
+                )
+                .await
+                .map_err(ToolError::Network)?;
                 json!({"sent": true})
             }
             "send_file" => {
@@ -491,7 +517,8 @@ impl NativeToolExecutor {
                     .messenger
                     .as_ref()
                     .ok_or_else(|| ToolError::Other("aucun canal de message disponible".into()))?;
-                m.send_file(
+                m.send_session_file(
+                    &self.env.session_id,
                     &self.env.origin,
                     &p,
                     args.get("caption").and_then(|v| v.as_str()),
@@ -912,7 +939,7 @@ impl NativeToolExecutor {
                     }
                 }
                 if let Some(m) = &self.messenger {
-                    m.send_text(&self.env.origin, &text)
+                    m.send_session_text(&self.env.session_id, &self.env.origin, &text)
                         .await
                         .map_err(ToolError::Network)?;
                 }
@@ -966,7 +993,14 @@ impl NativeToolExecutor {
                 if let Some(m) = &self.messenger {
                     for f in v["files"].as_array().cloned().unwrap_or_default() {
                         if let Some(path) = f.as_str() {
-                            let _ = m.send_file(&self.env.origin, Path::new(path), None).await;
+                            let _ = m
+                                .send_session_file(
+                                    &self.env.session_id,
+                                    &self.env.origin,
+                                    Path::new(path),
+                                    None,
+                                )
+                                .await;
                         }
                     }
                 }

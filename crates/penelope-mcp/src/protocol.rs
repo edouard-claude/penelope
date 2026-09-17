@@ -66,6 +66,9 @@ impl ProtocolVersion {
     pub fn has_icons(&self) -> bool {
         *self >= ProtocolVersion::V20251125
     }
+    pub fn has_url_elicitation(&self) -> bool {
+        *self >= ProtocolVersion::V20251125
+    }
     pub fn has_tasks(&self) -> bool {
         *self >= ProtocolVersion::V20251125
     }
@@ -109,6 +112,8 @@ pub const RESOURCE_NOT_FOUND_LEGACY: i32 = -32002;
 pub const HEADER_MISMATCH: i32 = -32020;
 pub const MISSING_REQUIRED_CLIENT_CAPABILITY: i32 = -32021;
 pub const UNSUPPORTED_PROTOCOL_VERSION: i32 = -32022;
+/// 2025-11-25 : l'appel attend qu'une élicitation en mode URL soit menée à bien.
+pub const URL_ELICITATION_REQUIRED: i32 = -32042;
 
 /// Vrai si le code signale une ressource introuvable, dans l'une ou l'autre version.
 pub fn is_resource_not_found(code: i32) -> bool {
@@ -202,14 +207,26 @@ pub fn decode(line: &str) -> Option<Incoming> {
 
 // ------------------------------------------------------------------ capacités
 
+/// Demandes du serveur que Pénélope sait vraiment satisfaire. Annoncer une capacité
+/// refusée à chaque fois prive le serveur de ses replis (issue #12) : le sampling, toujours
+/// refusé, n'est pas annoncé.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClientFeatures {
+    /// Un propriétaire joignable (Telegram) répond aux formulaires et aux liens.
+    pub elicitation: bool,
+}
+
 /// Ce que Pénélope annonce au serveur.
-pub fn client_capabilities(version: ProtocolVersion) -> Value {
+pub fn client_capabilities(version: ProtocolVersion, features: ClientFeatures) -> Value {
     let mut caps = json!({
         "roots": {"listChanged": true},
-        "sampling": {}
     });
-    if version.has_elicitation() {
-        caps["elicitation"] = json!({});
+    if features.elicitation && version.has_elicitation() {
+        caps["elicitation"] = if version.has_url_elicitation() {
+            json!({"form": {}, "url": {}})
+        } else {
+            json!({})
+        };
     }
     if version.has_tasks() {
         caps["experimental"] = json!({"io.modelcontextprotocol/tasks": {}});
@@ -309,6 +326,9 @@ pub struct ToolResult {
     /// Référence de tâche quand l'appel devient une tâche longue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_ref: Option<String>,
+    /// MRTR : état opaque à renvoyer tel quel avec les réponses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_state: Option<String>,
 }
 
 impl ToolResult {
@@ -333,7 +353,7 @@ impl ToolResult {
                 .and_then(|s| s.as_str())
                 .or_else(|| v.get("cacheScope").and_then(|s| s.as_str()))
                 .map(String::from),
-            input_requests: v.get("inputRequests").cloned(),
+            input_requests: v.get("inputRequests").filter(|r| !r.is_null()).cloned(),
             result_type: v
                 .get("resultType")
                 .and_then(|s| s.as_str())
@@ -341,6 +361,10 @@ impl ToolResult {
             task_ref: v
                 .get("task")
                 .and_then(|t| t.get("taskId").or_else(|| t.get("id")))
+                .and_then(|s| s.as_str())
+                .map(String::from),
+            request_state: v
+                .get("requestState")
                 .and_then(|s| s.as_str())
                 .map(String::from),
         }
@@ -351,7 +375,9 @@ impl ToolResult {
         matches!(self.result_type.as_deref(), None | Some("complete"))
     }
     pub fn needs_input(&self) -> bool {
-        self.result_type.as_deref() == Some("input_required") || self.input_requests.is_some()
+        self.result_type.as_deref() == Some("input_required")
+            || self.input_requests.is_some()
+            || self.request_state.is_some()
     }
 
     /// Rend le résultat en texte pour le modèle.
@@ -522,16 +548,17 @@ impl ToolDescriptor {
 /// Construit le bloc `_meta` d'une requête 2026-07-28 (§8.2).
 pub fn request_meta(
     version: ProtocolVersion,
+    features: ClientFeatures,
     log_level: Option<&str>,
     traceparent: Option<&str>,
 ) -> Value {
     let mut meta = json!({
         "io.modelcontextprotocol/protocolVersion": version.as_str(),
-        "clientCapabilities": client_capabilities(version),
-        "clientInfo": client_info(),
+        "io.modelcontextprotocol/clientCapabilities": client_capabilities(version, features),
+        "io.modelcontextprotocol/clientInfo": client_info(),
     });
     if let Some(l) = log_level {
-        meta["logLevel"] = json!(l);
+        meta["io.modelcontextprotocol/logLevel"] = json!(l);
     }
     if let Some(tp) = traceparent {
         meta["traceparent"] = json!(tp);
@@ -679,24 +706,42 @@ mod tests {
 
     #[test]
     fn client_capabilities_grow_with_the_version() {
-        let old = client_capabilities(ProtocolVersion::V20241105);
+        let owner = ClientFeatures { elicitation: true };
+        let old = client_capabilities(ProtocolVersion::V20241105, owner);
         assert!(old.get("elicitation").is_none());
-        let new = client_capabilities(ProtocolVersion::V20260728);
-        assert!(new.get("elicitation").is_some());
+        let form_only = client_capabilities(ProtocolVersion::V20250618, owner);
+        assert_eq!(form_only["elicitation"], json!({}));
+        let new = client_capabilities(ProtocolVersion::V20260728, owner);
+        assert_eq!(new["elicitation"], json!({"form": {}, "url": {}}));
         assert!(new["experimental"]["io.modelcontextprotocol/tasks"].is_object());
+    }
+
+    /// Issue #12 : sans propriétaire joignable, ni élicitation ni sampling annoncés.
+    #[test]
+    fn refused_requests_are_not_announced() {
+        for v in [ProtocolVersion::V20250618, ProtocolVersion::V20260728] {
+            let caps = client_capabilities(v, ClientFeatures::default());
+            assert!(caps.get("elicitation").is_none(), "{v} : {caps}");
+            assert!(caps.get("sampling").is_none(), "{v} : {caps}");
+        }
     }
 
     #[test]
     fn request_meta_carries_version_and_trace() {
         let m = request_meta(
             ProtocolVersion::V20260728,
+            ClientFeatures { elicitation: true },
             Some("debug"),
             Some("00-abc-def-01"),
         );
         assert_eq!(m["io.modelcontextprotocol/protocolVersion"], "2026-07-28");
-        assert_eq!(m["logLevel"], "debug");
+        assert_eq!(m["io.modelcontextprotocol/logLevel"], "debug");
         assert_eq!(m["traceparent"], "00-abc-def-01");
-        assert_eq!(m["clientInfo"]["name"], "penelope");
+        assert_eq!(m["io.modelcontextprotocol/clientInfo"]["name"], "penelope");
+        assert_eq!(
+            m["io.modelcontextprotocol/clientCapabilities"]["elicitation"]["url"],
+            json!({})
+        );
     }
 
     #[test]

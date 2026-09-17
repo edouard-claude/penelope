@@ -189,6 +189,10 @@ pub enum SessionCmd {
     Export {
         session: String,
     },
+    /// Ferme une session : tour en cours arrêté, file vidée (identifiant, préfixe ou titre).
+    Close {
+        session: String,
+    },
     /// Renomme une session.
     Title {
         session: String,
@@ -672,6 +676,9 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
 
         Command::Session(SessionCmd::List) => (m::SESSION_LIST, json!({})),
         Command::Session(SessionCmd::New { title }) => (m::SESSION_NEW, json!({"title": title})),
+        Command::Session(SessionCmd::Close { session }) => {
+            (m::SESSION_CLOSE, json!({"session": session}))
+        }
         Command::Session(SessionCmd::Title { session, title }) => (
             m::SESSION_TITLE,
             json!({"session": session, "title": title.join(" ")}),
@@ -1533,6 +1540,7 @@ mod tests {
                 vec!["session", "title", "s_1", "Refonte", "du", "site"],
                 m::SESSION_TITLE,
             ),
+            (vec!["session", "close", "s_1"], m::SESSION_CLOSE),
             (vec!["mcp", "list"], m::MCP_LIST),
             (vec!["mcp", "show", "redmine"], m::MCP_SHOW),
             (vec!["mcp", "rm", "redmine"], m::MCP_RM),

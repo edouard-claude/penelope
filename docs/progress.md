@@ -3,12 +3,12 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 16 septembre 2026.
+Dernière mise à jour : 17 septembre 2026.
 
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1151 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1167 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -338,6 +338,37 @@ Les huit issues ouvertes sur le dépôt, corrigées :
   découpe), `ctx-recall` (faits retrouvés après compaction), `mem-longitudinal` (14 jours
   simulés, score ≥ 85 %, aucune promotion non fiable), `ab-hermes` (30 tâches vérifiables,
   rapport Markdown, critère réussite ≥ Hermes et coût ≤ Hermes).
+
+### 0.5.0
+
+- #10 **Une seule session écrit dans un chat** : celle qui a le focus, choisie par `/new`,
+  `/fork`, `/switch` ou le menu `/sessions` (liaison explicite, migration `0005` qui ne
+  garde qu'une liaison par chat ou sujet). Une session quittée finit son tour en cours
+  sans rien écrire : réponse, messages, fichiers et approbations sont mis de côté derrière
+  une seule notification silencieuse (« 📬 2 réponses et 1 approbation en attente dans
+  « Titre » »), dont le bouton « Basculer » envoie tout dans l'ordre. Ses tours encore en
+  file sont annulés, la sélection des tours ignore les sessions fermées, et
+  `/close [session]` ou `penelope session close <session>` arrête une session et vide sa
+  file.
+- #12 **Élicitation MCP sur Telegram** : confirmation (Accepter, Refuser, Annuler),
+  formulaire généré depuis `requestedSchema` (enums titrés `oneOf` et `anyOf` compris),
+  lien en mode URL (domaine, adresse entière, alerte Punycode, fin signalée par
+  `notifications/elicitation/complete`), `elicitation_timeout` par serveur (10 min) au-delà
+  duquel la demande est annulée et la carte le dit. Le délai de l'appel d'outil est
+  suspendu tant que le serveur attend le propriétaire ; le flux SSE du transport HTTP est
+  lu au fil de l'eau pour que la demande arrive avant la fin de l'appel. En 2026-07-28,
+  `input_required` relance l'appel avec `inputResponses` et `requestState` ; une erreur
+  −32042 attend la fin des liens puis retente. Le résultat de l'outil dit au modèle qui a
+  répondu. L'élicitation n'est annoncée que si Telegram est configuré, le sampling jamais ;
+  les métadonnées `_meta` de 2026-07-28 portent les clés préfixées
+  `io.modelcontextprotocol/clientCapabilities`, `clientInfo` et `logLevel`.
+- #13 **Détecteur d'injection** : la règle `new_persona` ne se déclenche plus sur
+  « without new instructions » ni sur une formule d'erreur ordinaire ; l'alerte dit
+  qu'elle vient du détecteur local de Pénélope et cite le motif et l'extrait en cause.
+- #14 **`/sessions` cliquable** : un bouton par session (▶️ focus, ⏳ tour en cours ou en
+  attente, heure de dernière activité pour la plus récente), sous-menu Basculer, Forker,
+  Renommer, Fermer, douze par page, fermées masquées par défaut ; `/switch` accepte un
+  préfixe unique ou un titre.
 
 ### Routine de livraison
 

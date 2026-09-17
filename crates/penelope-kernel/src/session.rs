@@ -269,13 +269,50 @@ impl SessionStore {
         Ok(changed > 0)
     }
 
-    pub async fn bind_telegram(&self, id: &str, chat_id: i64, topic_id: Option<i64>) -> Result<()> {
+    /// Lie une session à un chat (et sujet) Telegram. Une seule session est liée par chat :
+    /// les autres sont détachées, et leurs identifiants renvoyés pour que l'appelant arrête
+    /// leurs tours (issue #10).
+    pub async fn bind_telegram(
+        &self,
+        id: &str,
+        chat_id: i64,
+        topic_id: Option<i64>,
+    ) -> Result<Vec<String>> {
+        let id = id.to_string();
+        Ok(self
+            .store
+            .write(move |tx| {
+                let detached: Vec<String> = {
+                    let mut st = tx.prepare(
+                        "SELECT id FROM sessions WHERE tg_chat_id = ?2
+                         AND COALESCE(tg_topic_id, -1) = COALESCE(?3, -1) AND id != ?1",
+                    )?;
+                    let rows = st.query_map(params![id, chat_id, topic_id], |r| r.get(0))?;
+                    rows.collect::<std::result::Result<_, _>>()?
+                };
+                tx.execute(
+                    "UPDATE sessions SET tg_chat_id = NULL, tg_topic_id = NULL
+                     WHERE tg_chat_id = ?2 AND COALESCE(tg_topic_id, -1) = COALESCE(?3, -1)
+                       AND id != ?1",
+                    params![id, chat_id, topic_id],
+                )?;
+                tx.execute(
+                    "UPDATE sessions SET tg_chat_id=?2, tg_topic_id=?3 WHERE id=?1",
+                    params![id, chat_id, topic_id],
+                )?;
+                Ok(detached)
+            })
+            .await?)
+    }
+
+    /// Détache une session de son chat Telegram.
+    pub async fn unbind_telegram(&self, id: &str) -> Result<()> {
         let id = id.to_string();
         self.store
             .write(move |tx| {
                 tx.execute(
-                    "UPDATE sessions SET tg_chat_id=?2, tg_topic_id=?3 WHERE id=?1",
-                    params![id, chat_id, topic_id],
+                    "UPDATE sessions SET tg_chat_id = NULL, tg_topic_id = NULL WHERE id = ?1",
+                    [id],
                 )?;
                 Ok(())
             })
