@@ -232,6 +232,8 @@ pub struct OpenRouterProvider {
     catalog: Catalog,
     /// Identifiants de fournisseurs amont par modèle : nom affiché → slug de `provider.order`.
     slugs: SlugCache,
+    /// Silence toléré pendant un flux (issue #51).
+    stream_idle: std::time::Duration,
 }
 
 /// Par modèle : date de lecture et slugs de ses fournisseurs.
@@ -268,8 +270,10 @@ impl OpenRouterProvider {
         api_key: impl Into<String>,
         catalog: Catalog,
     ) -> Result<Self> {
+        // Le délai global est large : c'est l'inactivité du flux qui borne un tour, pas
+        // sa durée (issue #51). Une longue réponse de raisonnement n'est plus coupée.
         let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(600))
+            .timeout(std::time::Duration::from_secs(1800))
             .connect_timeout(std::time::Duration::from_secs(15))
             .build()
             .map_err(|e| LlmError::new(LlmErrorKind::Other, e.to_string()))?;
@@ -283,6 +287,7 @@ impl OpenRouterProvider {
             routing: Value::Null,
             catalog,
             slugs: Default::default(),
+            stream_idle: DEFAULT_STREAM_IDLE,
         })
     }
 
@@ -331,6 +336,12 @@ impl OpenRouterProvider {
 
     pub fn with_categories(mut self, categories: impl Into<String>) -> Self {
         self.categories = categories.into();
+        self
+    }
+
+    /// Silence toléré pendant un flux ; zéro : aucun (issue #51).
+    pub fn with_stream_idle(mut self, idle: std::time::Duration) -> Self {
+        self.stream_idle = idle;
         self
     }
 
@@ -421,7 +432,7 @@ impl Provider for OpenRouterProvider {
             .await
             .map_err(map_reqwest_error)?;
 
-        stream_from_response(resp, cancel, self.name().to_string()).await
+        stream_from_response(resp, cancel, self.name().to_string(), self.stream_idle).await
     }
 
     async fn transcribe(
@@ -479,16 +490,25 @@ pub struct OpenAiCompatProvider {
     api_key: String,
     label: String,
     catalog: Catalog,
+    /// Silence toléré pendant un flux (issue #51).
+    stream_idle: std::time::Duration,
 }
 
 impl OpenAiCompatProvider {
+    /// Silence toléré pendant un flux ; zéro : aucun (issue #51).
+    pub fn with_stream_idle(mut self, idle: std::time::Duration) -> Self {
+        self.stream_idle = idle;
+        self
+    }
+
     pub fn new(
         base_url: impl Into<String>,
         api_key: impl Into<String>,
         catalog: Catalog,
     ) -> Result<Self> {
         let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(600))
+            .timeout(std::time::Duration::from_secs(1800))
+            .connect_timeout(std::time::Duration::from_secs(15))
             .build()
             .map_err(|e| LlmError::new(LlmErrorKind::Other, e.to_string()))?;
         Ok(OpenAiCompatProvider {
@@ -497,6 +517,7 @@ impl OpenAiCompatProvider {
             api_key: api_key.into(),
             label: "openai_compat".into(),
             catalog,
+            stream_idle: DEFAULT_STREAM_IDLE,
         })
     }
 
@@ -611,7 +632,7 @@ impl Provider for OpenAiCompatProvider {
             r = r.bearer_auth(&self.api_key);
         }
         let resp = r.send().await.map_err(map_reqwest_error)?;
-        stream_from_response(resp, cancel, self.label.clone()).await
+        stream_from_response(resp, cancel, self.label.clone(), self.stream_idle).await
     }
 
     async fn fetch_models(&self) -> Result<Vec<ModelInfo>> {
@@ -810,6 +831,9 @@ fn map_reqwest_error(e: reqwest::Error) -> LlmError {
 /// Intervalle de vérification de l'annulation pendant un flux silencieux.
 const CANCEL_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// Silence toléré par défaut pendant un flux (issue #51).
+pub const DEFAULT_STREAM_IDLE: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Transforme une réponse HTTP en flux de fragments.
 ///
 /// Les en-têtes sont déjà reçus à ce stade : l'appel passe en `response_started` (§4.3).
@@ -817,6 +841,7 @@ async fn stream_from_response(
     resp: reqwest::Response,
     cancel: CancelToken,
     provider: String,
+    idle: std::time::Duration,
 ) -> Result<ChunkStream> {
     let status = resp.status().as_u16();
     if status >= 400 {
@@ -842,6 +867,7 @@ async fn stream_from_response(
         let mut acc = StreamAccumulator::new();
         let mut bytes = resp.bytes_stream();
         let mut finished = false;
+        let mut last_data = std::time::Instant::now();
 
         loop {
             // L'annulation est vérifiée même quand rien n'arrive (modèle qui réfléchit) :
@@ -857,11 +883,28 @@ async fn stream_from_response(
                             .await;
                         return;
                     }
+                    // Fournisseur muet après ses en-têtes : on coupe et on laisse la
+                    // relance jouer, plutôt que d'attendre le délai global (issue #51).
+                    if !idle.is_zero() && last_data.elapsed() >= idle {
+                        let _ = tx
+                            .send(StreamChunk::Error {
+                                message: format!(
+                                    "flux muet ({provider}) : aucune donnée depuis {} s",
+                                    idle.as_secs()
+                                ),
+                                retryable: true,
+                                error_type: None,
+                            })
+                            .await;
+                        return;
+                    }
                     continue;
                 }
                 Ok(None) => break,
                 Ok(Some(next)) => next,
             };
+            // Tout octet reçu, commentaire SSE compris, prouve que le flux vit.
+            last_data = std::time::Instant::now();
             if cancel.is_cancelled() {
                 let _ = tx
                     .send(StreamChunk::Done {
@@ -1645,6 +1688,96 @@ mod tests {
             })
         ));
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    /// #51 : en-têtes puis silence. Le flux est coupé sur le délai d'inactivité, avec une
+    /// erreur réessayable, au lieu d'attendre le délai global.
+    #[tokio::test]
+    async fn a_mute_stream_is_cut_on_the_idle_timeout() {
+        let resp =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n: OPENROUTER PROCESSING\n\n"
+                .to_string();
+        let url = one_shot_server(resp, std::time::Duration::from_secs(30)).await;
+        let p = OpenRouterProvider::new(url, "sk-or-v1-test", Catalog::new())
+            .unwrap()
+            .with_stream_idle(std::time::Duration::from_millis(400));
+        let mut rx = p
+            .chat_stream(
+                ChatRequest {
+                    model: "a/b".into(),
+                    messages: vec![ChatMessage::user("x")],
+                    ..Default::default()
+                },
+                CancelToken::new(),
+            )
+            .await
+            .unwrap();
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("le flux muet doit être coupé");
+        match chunk {
+            Some(StreamChunk::Error {
+                message, retryable, ..
+            }) => {
+                assert!(retryable, "l'erreur doit être réessayable");
+                assert!(message.contains("aucune donnée depuis"), "{message}");
+            }
+            other => panic!("erreur d'inactivité attendue : {other:?}"),
+        }
+    }
+
+    /// #51 : un flux qui parle régulièrement n'est jamais coupé, même longtemps.
+    #[tokio::test]
+    async fn a_slow_but_talking_stream_is_never_cut() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 65536];
+            let _ = sock.read(&mut buf).await;
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n")
+                .await
+                .unwrap();
+            // Des commentaires SSE pendant plus de trois fois le délai d'inactivité.
+            for _ in 0..6 {
+                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                let _ = sock.write_all(b": OPENROUTER PROCESSING\n\n").await;
+                let _ = sock.flush().await;
+            }
+            let _ = sock
+                .write_all(
+                    b"data: {\"choices\":[{\"delta\":{\"content\":\"fini\"}}]}\n\ndata: [DONE]\n\n",
+                )
+                .await;
+            let _ = sock.flush().await;
+        });
+        let p = OpenRouterProvider::new(
+            format!("http://{addr}/api/v1"),
+            "sk-or-v1-test",
+            Catalog::new(),
+        )
+        .unwrap()
+        .with_stream_idle(std::time::Duration::from_millis(300));
+        let rx = p
+            .chat_stream(
+                ChatRequest {
+                    model: "a/b".into(),
+                    messages: vec![ChatMessage::user("x")],
+                    ..Default::default()
+                },
+                CancelToken::new(),
+            )
+            .await
+            .unwrap();
+        let r = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            collect_stream(rx, "a/b", "openrouter", &Catalog::new()),
+        )
+        .await
+        .expect("le flux ne doit pas être coupé")
+        .expect("réponse complète");
+        assert_eq!(r.message.text(), "fini");
     }
 
     #[tokio::test]

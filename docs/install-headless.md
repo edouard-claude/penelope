@@ -236,6 +236,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `providers.openrouter.api_key` | `"${SECRET:openrouter_api_key}"` | Clé d'API, par référence au magasin de secrets. |
 | `providers.openrouter.base_url` | `"https://openrouter.ai/api/v1"` | Adresse de l'API OpenRouter. |
 | `providers.openrouter.request_retries` | `3` | Nouvelles tentatives sur erreur transitoire **avant** le flux (5xx, délai de connexion, limite de débit) : attente de 1 s, 2 s, 4 s. 0 : aucune. |
+| `providers.openrouter.stream_idle_timeout` | `"120s"` | Silence toléré **pendant** un flux : au-delà, le flux est coupé et relancé. Tout octet reçu, commentaire compris, remet le compteur à zéro. |
 | `providers.openrouter.catalog_refresh` | `"6h"` | Période de rechargement du catalogue de modèles. |
 | `providers.openrouter.referer` | `"https://github.com/edouard-claude/penelope"` | Attribution (`HTTP-Referer`, `X-OpenRouter-Title`, `X-OpenRouter-Categories`). |
 | `providers.openrouter.title` | `"Penelope"` | Titre d'attribution (`X-OpenRouter-Title`). |
@@ -255,11 +256,13 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `providers.local.api_key` | `""` | Clé éventuelle, par référence au magasin de secrets. |
 | `providers.local.enabled` | `false` | Endpoint actif. |
 | `providers.local.models` | `[]` | Modèles servis par l'endpoint. |
+| `providers.local.stream_idle_timeout` | `"120s"` | Silence toléré pendant un flux, comme pour OpenRouter. |
 | `providers.extra.<nom>.kind` | – | Type d'endpoint (`openai_compat`). |
 | `providers.extra.<nom>.base_url` | – | Adresse de l'endpoint OpenAI-compatible. |
 | `providers.extra.<nom>.api_key` | – | Clé éventuelle, par référence au magasin de secrets. |
 | `providers.extra.<nom>.enabled` | – | Endpoint actif. |
 | `providers.extra.<nom>.models` | – | Modèles servis par l'endpoint. |
+| `providers.extra.<nom>.stream_idle_timeout` | – | Silence toléré pendant un flux, comme pour OpenRouter. |
 
 **[models]**
 

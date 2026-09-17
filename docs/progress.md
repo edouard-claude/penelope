@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1305 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1307 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -645,7 +645,8 @@ compaction de fond sur la taille réelle du contexte (#40).
 Verrou de session à jeton de clôture (#43), écrivain à l'épreuve des paniques (#44),
 mutations de configuration sérialisées (#45), purge RGPD et rétention (#46), journal
 d'audit sans faux positif (#47), listes de frontmatter lues correctement (#48), rafales de
-messages regroupées (#49), nouvelles tentatives avant le flux (#50).
+messages regroupées (#49), nouvelles tentatives avant le flux (#50), flux muet coupé sur
+son inactivité (#51).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -698,6 +699,12 @@ messages regroupées (#49), nouvelles tentatives avant le flux (#50).
   rien quand c'est OpenRouter lui-même qui est injoignable. Chaque nouvelle tentative est
   tracée (`llm.retried`), l'arrêt demandé interrompt l'attente, et l'échec final dit
   combien de fois on a essayé et combien de temps on a attendu.
+- **Flux muet** : un fournisseur qui se tait après ses en-têtes est coupé au bout de
+  `providers.openrouter.stream_idle_timeout` (120 s, même clé pour `providers.local`), avec
+  une erreur réessayable qui déclenche la relance et le repli. Tout octet reçu, commentaire
+  SSE compris, remet le compteur à zéro ; le délai global passe à 30 minutes, donc une
+  longue réponse qui progresse n'est plus coupée, et le client OpenAI-compatible a
+  désormais un délai de connexion.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

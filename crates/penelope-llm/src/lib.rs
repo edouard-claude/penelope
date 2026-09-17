@@ -27,6 +27,11 @@ pub use types::{
     Role, StreamChunk, ToolCall, ToolChoice, ToolDef, Usage,
 };
 
+/// Silence toléré pendant un flux, lu dans la configuration (issue #51).
+fn idle_of(raw: &str) -> std::time::Duration {
+    penelope_kernel::config::parse_duration(raw).unwrap_or(crate::provider::DEFAULT_STREAM_IDLE)
+}
+
 /// Construit l'ensemble des providers à partir de la configuration, secrets résolus.
 ///
 /// Les clés sont injectées **à la frontière** : elles ne transitent jamais par le modèle
@@ -48,7 +53,8 @@ pub fn build_providers(
                     cfg.providers.openrouter.title.clone(),
                 )
                 .with_categories(cfg.providers.openrouter.categories.clone())
-                .with_routing(routing_value(&cfg.providers.openrouter.routing)),
+                .with_routing(routing_value(&cfg.providers.openrouter.routing))
+                .with_stream_idle(idle_of(&cfg.providers.openrouter.stream_idle_timeout)),
         ))
     } else {
         None
@@ -61,11 +67,10 @@ pub fn build_providers(
         if !key.is_empty() {
             penelope_observe::register_secret(&key);
         }
-        Some(std::sync::Arc::new(OpenAiCompatProvider::new(
-            &cfg.providers.local.base_url,
-            key,
-            catalog.clone(),
-        )?))
+        Some(std::sync::Arc::new(
+            OpenAiCompatProvider::new(&cfg.providers.local.base_url, key, catalog.clone())?
+                .with_stream_idle(idle_of(&cfg.providers.local.stream_idle_timeout)),
+        ))
     } else {
         None
     };
