@@ -13,6 +13,7 @@
 //! | `budget.session_usd`, `budget.run_usd` / `budget.daily_usd` | plafond jamais atteint avant celui du jour | avertissement |
 //! | `budget.turn_checkpoint_usd` / `budget.session_usd` | point de contrôle au-delà du plafond de session | avertissement |
 //! | `context.max_prompt_tokens` / `context.tail_max_tokens` | plafond de prompt sous la queue verbatim | avertissement |
+//! | `runners.heartbeat` / `runners.lease_ttl` | bail expiré avant deux battements : tour repris en double | refus |
 //! | `tools.http_allowlist` / `tools.http_block_private_ips` | adresse privée autorisée mais toujours bloquée | refus |
 //! | `mcp.policy.*` | action destructive ou inconnue moins protégée qu'une écriture | avertissement |
 //! | `telegram.quiet_hours` / déclencheurs planifiés | déclencheur dans les heures calmes (vérifié par le daemon) | avertissement |
@@ -208,6 +209,21 @@ pub fn contradictions(c: &Config) -> Vec<Contradiction> {
             ),
         ));
     }
+    // Un bail qui expire avant deux battements est un verrou qui ne verrouille pas : le
+    // tour part en double chez un autre runner (#43).
+    if let (Ok(hb), Ok(ttl)) = (
+        crate::config::parse_duration(&c.runners.heartbeat),
+        crate::config::parse_duration(&c.runners.lease_ttl),
+    ) && hb * 2 > ttl
+    {
+        out.push(Contradiction::refus(
+            &[key("runners.heartbeat"), key("runners.lease_ttl")],
+            format!(
+                "`runners.heartbeat` ({}) dépasse la moitié de `runners.lease_ttl` ({}) : un tour en cours perdrait son bail et serait repris par un autre runner",
+                c.runners.heartbeat, c.runners.lease_ttl
+            ),
+        ));
+    }
     let ctx = &c.context;
     if ctx.max_prompt_tokens > 0 && ctx.max_prompt_tokens <= ctx.tail_max_tokens {
         out.push(Contradiction::warn(
@@ -275,6 +291,7 @@ mod tests {
         c.tools.http_allowlist = vec!["http://192.168.0.10:8080".into(), "api.example.com".into()];
         c.mcp.policy.destructive = "auto".into();
         c.budget.alert_ratio = 1.2;
+        c.runners.heartbeat = "2m".into();
         let found = contradictions(&c);
         let has = |k: &str, g: Gravity| found.iter().any(|x| x.gravity == g && x.concerns(k));
         assert!(has("models.roles.classifier", Gravity::Refus), "{found:?}");
@@ -283,6 +300,7 @@ mod tests {
         assert!(!found.iter().any(|x| x.message.contains("api.example.com")));
         assert!(has("mcp.policy.destructive", Gravity::Avertissement));
         assert!(has("budget.alert_ratio", Gravity::Refus));
+        assert!(has("runners.heartbeat", Gravity::Refus), "{found:?}");
 
         let before = Config::sample(42);
         let refused = new_refusals(&before, &c, "tools.http_allowlist");

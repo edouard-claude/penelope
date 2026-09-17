@@ -234,6 +234,18 @@ impl Bus {
         }
     }
 
+    /// Annule un tour précis, s'il est bien celui qui tourne pour cette session. Vrai
+    /// s'il y en avait un (#43 : un lease perdu n'annule pas le tour de son successeur).
+    pub fn cancel_turn(&self, session_id: &str, turn_id: &str) -> bool {
+        match lock(&self.active).get(session_id) {
+            Some(a) if a.turn_id == turn_id => {
+                a.cancel.cancel();
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Retrouve la session d'un brouillon arrêté par le bouton « stop » de Telegram.
     pub fn session_for_draft(&self, draft_id: i64) -> Option<String> {
         lock(&self.active)

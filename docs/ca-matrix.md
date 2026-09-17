@@ -9,7 +9,7 @@ Pour le régénérer après avoir ajouté un test :
 UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 ```
 
-70 tests d'acceptation, 14 sections couvertes.
+71 tests d'acceptation, 14 sections couvertes.
 
 ## §2. Plateformes, portabilité et exploitation headless
 
@@ -150,4 +150,5 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 | CA 17.4 | Llm calls are classified by where the crash happened | `crates/penelope-evals/tests/resilience.rs` |
 | CA 17.5 | A run resumes at its current step | `crates/penelope-evals/tests/resilience.rs` |
 | CA 17.6 | The event chain survives and detects tampering | `crates/penelope-evals/tests/resilience.rs` |
+| CA 17.7 | A frozen writer does not duplicate a turn in flight | `crates/penelope-evals/tests/resilience.rs` |
 

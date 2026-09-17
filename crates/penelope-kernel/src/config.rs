@@ -730,7 +730,8 @@ pub struct Runners {
     pub count: usize,
     /// Durée du bail d'un tour réclamé ; au-delà, un autre runner le reprend.
     pub lease_ttl: String,
-    /// Période de renouvellement du bail.
+    /// Période de renouvellement du bail : au plus la moitié de `lease_ttl`, sinon un tour
+    /// en cours perd son bail.
     pub heartbeat: String,
 }
 
@@ -1009,7 +1010,17 @@ impl Config {
         parse_duration(&self.mcp.default_timeout)?;
         parse_duration(&self.mcp.idle_timeout)?;
         parse_duration(&self.providers.openrouter.catalog_refresh)?;
-        parse_duration(&self.runners.lease_ttl)?;
+        let lease_ttl = parse_duration(&self.runners.lease_ttl)?;
+        let heartbeat = parse_duration(&self.runners.heartbeat)?;
+        // Il faut au moins deux battements par bail : sinon un tour un peu long expire et
+        // un autre runner le reprend alors qu'il tourne encore (#43).
+        if heartbeat * 2 > lease_ttl {
+            return Err(KernelError::config(format!(
+                "runners.heartbeat ({}) doit valoir au plus la moitié de runners.lease_ttl \
+                 ({}) : au-delà, un tour en cours perd son bail et part en double",
+                self.runners.heartbeat, self.runners.lease_ttl
+            )));
+        }
         parse_duration(&self.tools.shell_timeout)?;
         crate::cron::Cron::parse(&self.memory.dreaming_cron)?;
         crate::cron::Cron::parse(&self.memory.digest_cron)?;
@@ -1456,6 +1467,18 @@ mod tests {
         let mut c = cfg();
         c.models.roles.insert("code".into(), "nexistepas".into());
         assert!(c.validate().is_err());
+    }
+
+    /// #43 : un battement plus lent que la moitié du bail fait expirer les tours en cours.
+    #[test]
+    fn a_heartbeat_slower_than_half_the_lease_is_rejected() {
+        let mut c = cfg();
+        c.runners.heartbeat = "2m".into();
+        c.runners.lease_ttl = "60s".into();
+        let e = c.validate().unwrap_err().to_string();
+        assert!(e.contains("runners.heartbeat"), "{e}");
+        c.runners.heartbeat = "30s".into();
+        c.validate().unwrap();
     }
 
     #[test]

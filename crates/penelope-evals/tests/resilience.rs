@@ -70,6 +70,58 @@ async fn ca_17_1_a_turn_interrupted_mid_flight_is_requeued_once() {
     assert!(s.turns.claim("runner-4").await.unwrap().is_none());
 }
 
+/// #43 : l'écrivain est figé (sauvegarde, réindexation, veille du Mac) plus longtemps que
+/// le bail. Le tour en cours n'est pas repris : ni double exécution, ni double livraison.
+#[tokio::test]
+async fn ca_17_7_a_frozen_writer_does_not_duplicate_a_turn_in_flight() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(TestClock::default());
+    let s = Arc::new(
+        Services::for_tests(dir.path().to_path_buf(), clock.clone() as SharedClock)
+            .await
+            .expect("bootstrap"),
+    );
+    let sid = a_session(&s).await;
+    for t in ["premier", "second"] {
+        s.turns
+            .enqueue(&sid, TurnKind::Message, json!({"text": t}), None, 0)
+            .await
+            .unwrap()
+            .expect("tour créé");
+    }
+    let en_cours = s.turns.claim("runner-1").await.unwrap().expect("réclamé");
+
+    // L'écrivain part pour un long travail : la file d'écriture est bloquée, aucun
+    // battement ne passe, et le bail (60 s) expire.
+    let store = s.store.clone();
+    let c = clock.clone();
+    let fige = tokio::spawn(async move {
+        store
+            .write(move |_tx| {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                c.advance_ms(91_000);
+                Ok(())
+            })
+            .await
+            .unwrap();
+    });
+    fige.await.unwrap();
+
+    // Le runner est vivant : personne ne lui vole son tour.
+    assert!(
+        s.turns.claim("runner-2").await.unwrap().is_none(),
+        "un tour en cours chez un runner vivant n'est pas repris"
+    );
+    // L'écrivain repart : le battement retrouve son bail, et lui seul clôt le tour.
+    s.turns.heartbeat(&en_cours).await.unwrap();
+    s.turns.complete(&en_cours).await.unwrap();
+
+    let suivant = s.turns.claim("runner-2").await.unwrap().expect("le second");
+    assert_ne!(suivant.id.to_string(), en_cours.id.to_string());
+    assert_eq!(suivant.attempts, 1, "le second tour n'a pas été retenté");
+    assert_eq!(suivant.payload["text"], "second");
+}
+
 /// Un `update_id` Telegram rejoué après le crash ne crée pas un second tour.
 #[tokio::test]
 async fn replayed_updates_do_not_duplicate_turns() {

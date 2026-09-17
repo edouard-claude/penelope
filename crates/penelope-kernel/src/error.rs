@@ -41,6 +41,9 @@ pub enum KernelError {
     #[error("annulé")]
     Cancelled,
 
+    #[error("lease perdu : {0}")]
+    LeaseLost(String),
+
     #[error("{0}")]
     Other(String),
 }
@@ -50,6 +53,10 @@ pub type Result<T, E = KernelError> = std::result::Result<T, E>;
 impl KernelError {
     pub fn other(msg: impl Into<String>) -> Self {
         KernelError::Other(msg.into())
+    }
+    /// Vrai si l'erreur dit « ce tour n'est plus à toi » (#43).
+    pub fn is_lease_lost(&self) -> bool {
+        matches!(self, KernelError::LeaseLost(_))
     }
     pub fn config(msg: impl Into<String>) -> Self {
         KernelError::Config(msg.into())

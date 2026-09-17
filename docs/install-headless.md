@@ -387,7 +387,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 |---|---|---|
 | `runners.count` | `4` | Tours traités en parallèle. |
 | `runners.lease_ttl` | `"60s"` | Durée du bail d'un tour réclamé ; au-delà, un autre runner le reprend. |
-| `runners.heartbeat` | `"15s"` | Période de renouvellement du bail. |
+| `runners.heartbeat` | `"15s"` | Période de renouvellement du bail : au plus la moitié de `lease_ttl`, sinon un tour en cours perd son bail. |
 
 **[sandbox]**
 

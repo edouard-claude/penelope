@@ -46,14 +46,26 @@ async fn runner_loop(daemon: Arc<Daemon>, holder: String, heartbeat: Duration) {
 
 /// Exécute un tour réclamé jusqu'au bout et livre son issue.
 pub async fn process(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> TurnOutcome {
+    // Lease repris par un autre runner : ce tour n'est plus le nôtre, on l'abandonne sans
+    // rien livrer ni écrire (#43).
+    let lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let beat = {
-        let d = daemon.clone();
-        let t = turn.clone();
+        let (d, t, lost) = (daemon.clone(), turn.clone(), lost.clone());
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(heartbeat).await;
-                if let Err(e) = d.services.turns.heartbeat(&t).await {
-                    tracing::warn!(turn = %t.id, error = %e, "battement de lease perdu");
+                match d.services.turns.heartbeat(&t).await {
+                    Ok(()) => {}
+                    Err(e) if e.is_lease_lost() => {
+                        tracing::error!(turn = %t.id, holder = %t.holder, error = %e,
+                            "lease perdu : le tour est abandonné");
+                        lost.store(true, std::sync::atomic::Ordering::SeqCst);
+                        d.bus.cancel_turn(&t.session_id, t.id.as_str());
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::warn!(turn = %t.id, error = %e, "battement de lease perdu")
+                    }
                 }
             }
         })
@@ -67,8 +79,21 @@ pub async fn process(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> T
         TurnOutcome::Failed { error } => daemon.services.turns.fail(&turn, error).await,
         _ => daemon.services.turns.complete(&turn).await,
     };
+    let lost = lost.load(std::sync::atomic::Ordering::SeqCst)
+        || matches!(&stored, Err(e) if e.is_lease_lost());
     if let Err(e) = stored {
         tracing::error!(turn = %turn.id, error = %e, "fin de tour non enregistrée");
+    }
+    if lost {
+        // Le successeur livrera. Les attentes locales sont réveillées pour ne pas rester
+        // pendues, mais aucun message ne part.
+        let outcome = TurnOutcome::Failed {
+            error: "lease perdu : tour repris par un autre runner".into(),
+        };
+        daemon
+            .bus
+            .finish(turn.id.as_str(), &turn.session_id, &origin, outcome.clone());
+        return outcome;
     }
     // Prompt planifié : l'exécution compte à la fin de son tour, un échec prévient
     // (issue #39).
@@ -147,5 +172,68 @@ mod tests {
             .await
             .expect("le pool s'arrête")
             .unwrap();
+    }
+
+    /// #43 : le bail a changé de main pendant l'exécution. Le runner évincé ne livre rien
+    /// et ne touche pas au tour de son successeur.
+    #[tokio::test]
+    async fn a_runner_that_lost_its_lease_delivers_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock =
+            Arc::new(penelope_kernel::clock::SystemClock);
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+                .await
+                .unwrap(),
+        );
+        let d = Arc::new(Daemon::from_services(s.clone()));
+        let p = Arc::new(MockProvider::new());
+        p.reply(r#"{"complexity":"low"}"#);
+        p.reply("réponse qui ne partira pas");
+        d.set_provider_override(p.clone());
+
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.enqueue_message(&sid, "bonjour", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = s.turns.claim("runner-0").await.unwrap().expect("réclamé");
+
+        // Un autre runner s'est emparé du bail (processus figé, horloge qui a sauté).
+        let voleur = format!("turn:{}", turn.id);
+        s.store
+            .write(move |tx| {
+                tx.execute(
+                    "UPDATE leases SET holder='runner-voleur' WHERE resource=?1",
+                    [&voleur],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let out = process(&d, turn.clone(), Duration::from_millis(20)).await;
+        match out {
+            TurnOutcome::Failed { error } => assert!(error.contains("lease perdu"), "{error}"),
+            other => panic!("le tour devait être abandonné : {other:?}"),
+        }
+
+        // Le tour reste au voleur : ni état, ni bail réécrits par l'évincé.
+        let id = turn.id.0.clone();
+        let (state, holder): (String, String) = s
+            .store
+            .read(move |c| {
+                Ok(c.query_row(
+                    "SELECT q.state, l.holder FROM turn_queue q
+                     JOIN leases l ON l.resource = 'turn:' || q.id WHERE q.id=?1",
+                    [&id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            (state.as_str(), holder.as_str()),
+            ("leased", "runner-voleur")
+        );
     }
 }

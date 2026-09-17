@@ -8,13 +8,13 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1281 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1286 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
 - CI GitHub Actions (format, lint, tests, binaire, dépendances) et workflow de release
   sur tag `vX.Y.Z` avec binaire universel macOS.
-- 70 tests d'acceptation nommés `ca_<section>_<n>_<nom>`, couvrant 14 sections du PRD,
+- 71 tests d'acceptation nommés `ca_<section>_<n>_<nom>`, couvrant 14 sections du PRD,
   indexés dans [ca-matrix.md](ca-matrix.md), qui est généré depuis les sources.
 
 ## Étapes du §21
@@ -30,7 +30,7 @@ Dernière mise à jour : 17 septembre 2026.
 | 7 | `memory` + `skills` | fait | 97 memory, 12 skills |
 | 8 | `workflow` + déclencheurs + workflows livrés | fait, ordonnanceur et pilote des runs lancés | 74 |
 | 9 | Routage par complexité, budgets, images, STT | fait, alimenté par Telegram (vocaux, photos, documents) | inclus en llm |
-| 10 | `resilience`, `upgrade`, `backup`, suites live, `ab-hermes` | fait ; suites live et A/B écrites, pas encore lancées (clés, bot de test et instance Hermes requis) | 10 resilience, 6 upgrade |
+| 10 | `resilience`, `upgrade`, `backup`, suites live, `ab-hermes` | fait ; suites live et A/B écrites, pas encore lancées (clés, bot de test et instance Hermes requis) | 11 resilience, 6 upgrade |
 
 ## Suites du §20.1
 
@@ -639,6 +639,21 @@ compaction de fond sur la taille réelle du contexte (#40).
   de run n'arrêtent plus les résumés ; au plafond du jour, une réserve
   `budget.compaction_reserve_usd` (0,50 $). `/status`, `/budget` et `self_status` donnent
   la taille réelle du contexte, le seuil de fond et la dernière compaction.
+
+### 0.16.1
+
+Verrou de session à jeton de clôture (#43).
+
+- **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
+  runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
+  `LeaseLost`, abandonne son tour, ne livre rien et ne touche pas au bail de son
+  successeur.
+- **Bail expiré n'est pas runner mort** : les runners vivants du processus sont tenus en
+  mémoire ; un bail expiré parce que l'écrivain était figé (sauvegarde, réindexation, veille
+  du Mac) n'est pas repris. Seule la disparition du processus libère, comme avant, par
+  expiration puis `recover_on_boot`.
+- **Réglages** : `runners.heartbeat` doit valoir au plus la moitié de `runners.lease_ttl`,
+  refusé par `penelope config validate` et par la table de cohérence.
 
 ### 0.16.0
 

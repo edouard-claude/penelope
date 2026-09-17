@@ -4,14 +4,33 @@
 //! expiration), le traite en envoyant des heartbeats, puis le clôt. Un tour interrompu par
 //! un crash est réclamé à nouveau après expiration du lease : rien n'est perdu, rien n'est
 //! exécuté deux fois (l'idempotence des effets est assurée par le ledger, §4.2).
+//!
+//! Le lease porte un **jeton de clôture** (issue #43) : `heartbeat` et `finish` n'écrivent
+//! que si le lease appartient encore au holder qui l'a réclamé. Un runner évincé apprend
+//! qu'il a perdu la main ([`crate::error::KernelError::LeaseLost`]) au lieu de clore le
+//! tour d'un autre.
+//!
+//! ```text
+//!  claim("r1") ─► leases(turn:A, holder=r1)   écrivain figé 90 s, aucun battement
+//!                                │
+//!    claim("r2") ────────────────┤ r1 est vivant dans ce processus : pas de reprise
+//!                                │ (lease expiré = écrivain occupé, pas runner mort)
+//!    r1 termine ─► finish(holder=r1) ✓
+//!
+//!  processus tué ─► leases(turn:A, holder=r1) expire, aucun runner vivant
+//!    claim("r2") ─► reprise de A, holder=r2
+//!    r1 ressuscité ─► heartbeat/finish(holder=r1) ─► LeaseLost : ne livre rien
+//! ```
 
 use crate::clock::SharedClock;
-use crate::error::Result;
+use crate::error::{KernelError, Result};
 use crate::ids::TurnId;
 use penelope_store::Store;
 use penelope_store::rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,6 +69,9 @@ pub struct Turn {
     pub payload: Value,
     pub attempts: i64,
     pub enqueued_at: String,
+    /// Runner qui tient le lease : jeton de clôture de `heartbeat` et `finish` (#43).
+    #[serde(default)]
+    pub holder: String,
 }
 
 #[derive(Clone)]
@@ -57,6 +79,10 @@ pub struct TurnQueue {
     store: Store,
     clock: SharedClock,
     lease_ttl_ms: i64,
+    /// Runners vivants de **ce** processus : holder vers le tour qu'il tient. Un lease
+    /// expiré dont le holder est là n'est pas repris : l'écrivain était occupé (sauvegarde,
+    /// réindexation, veille du Mac), le runner n'est pas mort (#43).
+    live: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl TurnQueue {
@@ -65,6 +91,24 @@ impl TurnQueue {
             store,
             clock,
             lease_ttl_ms,
+            live: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn live_holders(&self) -> Vec<String> {
+        lock(&self.live).keys().cloned().collect()
+    }
+
+    /// Ce runner tient ce tour dans ce processus.
+    fn remember(&self, holder: &str, turn_id: &str) {
+        lock(&self.live).insert(holder.to_string(), turn_id.to_string());
+    }
+
+    /// Ce runner n'a plus de tour : son lease peut être repris s'il traîne.
+    fn forget(&self, holder: &str, turn_id: &str) {
+        let mut g = lock(&self.live);
+        if g.get(holder).map(|t| t == turn_id).unwrap_or(false) {
+            g.remove(holder);
         }
     }
 
@@ -110,38 +154,42 @@ impl TurnQueue {
     /// dont la session a déjà un lease actif n'est pas réclamé.
     pub async fn claim(&self, holder: &str) -> Result<Option<Turn>> {
         let holder = holder.to_string();
+        let mine = holder.clone();
         let now_ms = self.clock.now_ms();
         let now = self.clock.now_rfc3339();
         let expires = ms_to_rfc3339(now_ms + self.lease_ttl_ms);
+        let live = self.live_holders();
 
-        Ok(self
+        let claimed = self
             .store
             .write(move |tx| {
                 // 1. Libère les leases expirés : un tour dont le runner a disparu
-                //    redevient `pending`, avec un compteur de tentatives incrémenté.
-                let expired: Vec<String> = {
-                    let mut st = tx.prepare(
-                        "SELECT resource FROM leases WHERE expires_at <= ?1 AND resource LIKE 'turn:%'",
-                    )?;
-                    let rows = st.query_map([&now], |r| r.get::<_, String>(0))?;
+                //    redevient `pending`, avec un compteur de tentatives incrémenté. Un
+                //    holder vivant de ce processus garde le sien (#43).
+                let expired: Vec<(String, String)> = {
+                    let mut st =
+                        tx.prepare("SELECT resource, holder FROM leases WHERE expires_at <= ?1")?;
+                    let rows = st.query_map([&now], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    })?;
                     let mut v = Vec::new();
                     for r in rows {
                         v.push(r?);
                     }
                     v
                 };
-                for res in &expired {
-                    let turn_id = res.trim_start_matches("turn:");
-                    tx.execute(
-                        "UPDATE turn_queue SET state='pending' WHERE id=?1 AND state='leased'",
-                        [turn_id],
-                    )?;
+                for (res, owner) in &expired {
+                    if live.iter().any(|h| h == owner) {
+                        continue;
+                    }
+                    if let Some(turn_id) = res.strip_prefix("turn:") {
+                        tx.execute(
+                            "UPDATE turn_queue SET state='pending' WHERE id=?1 AND state='leased'",
+                            [turn_id],
+                        )?;
+                    }
                     tx.execute("DELETE FROM leases WHERE resource=?1", [res])?;
                 }
-                tx.execute(
-                    "DELETE FROM leases WHERE expires_at <= ?1 AND resource LIKE 'session:%'",
-                    [&now],
-                )?;
 
                 // 2. Les tours d'une session fermée ne répondront jamais (issue #10).
                 tx.execute(
@@ -202,30 +250,52 @@ impl TurnQueue {
                     payload: serde_json::from_str(&payload).unwrap_or(Value::Null),
                     attempts: attempts + 1,
                     enqueued_at,
+                    holder: mine,
                 }))
             })
-            .await?)
+            .await?;
+        if let Some(t) = &claimed {
+            self.remember(&t.holder, t.id.as_str());
+        }
+        Ok(claimed)
     }
 
     /// Prolonge le lease d'un tour en cours.
+    ///
+    /// Renvoie [`KernelError::LeaseLost`] si le lease appartient désormais à un autre
+    /// runner : l'appelant doit abandonner le tour sans rien livrer (#43).
     pub async fn heartbeat(&self, turn: &Turn) -> Result<()> {
         let now = self.clock.now_rfc3339();
         let expires = ms_to_rfc3339(self.clock.now_ms() + self.lease_ttl_ms);
-        let resources = vec![
+        let holder = turn.holder.clone();
+        let resources = [
             format!("turn:{}", turn.id),
             format!("session:{}", turn.session_id),
         ];
-        self.store
+        let kept = self
+            .store
             .write(move |tx| {
-                for r in &resources {
-                    tx.execute(
-                        "UPDATE leases SET heartbeat_at=?2, expires_at=?3 WHERE resource=?1",
-                        params![r, now, expires],
+                let mut kept = false;
+                for (i, r) in resources.iter().enumerate() {
+                    let n = tx.execute(
+                        "UPDATE leases SET heartbeat_at=?2, expires_at=?3
+                         WHERE resource=?1 AND holder=?4",
+                        params![r, now, expires, holder],
                     )?;
+                    if i == 0 {
+                        kept = n > 0;
+                    }
                 }
-                Ok(())
+                Ok(kept)
             })
             .await?;
+        if !kept {
+            self.forget(&turn.holder, turn.id.as_str());
+            return Err(KernelError::LeaseLost(format!(
+                "tour {} : lease repris par un autre runner",
+                turn.id
+            )));
+        }
         Ok(())
     }
 
@@ -275,26 +345,50 @@ impl TurnQueue {
         Ok(())
     }
 
+    /// Clôt un tour. N'écrit que si le lease est encore au holder : un runner évincé
+    /// repart en [`KernelError::LeaseLost`] sans toucher au tour de son successeur (#43).
     async fn finish(&self, turn: &Turn, state: &str, error: Option<String>) -> Result<()> {
-        let (id, sid, now, state) = (
+        let (id, sid, holder, now, state) = (
             turn.id.0.clone(),
             turn.session_id.clone(),
+            turn.holder.clone(),
             self.clock.now_rfc3339(),
             state.to_string(),
         );
-        self.store
+        let held = self
+            .store
             .write(move |tx| {
+                let (turn_res, session_res) = (format!("turn:{id}"), format!("session:{sid}"));
+                let owner: Option<String> = tx
+                    .query_row(
+                        "SELECT holder FROM leases WHERE resource=?1",
+                        [&turn_res],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                if matches!(&owner, Some(o) if o != &holder) {
+                    return Ok(false);
+                }
+                // `state='leased'` : un tour annulé entre-temps garde son état.
                 tx.execute(
-                    "UPDATE turn_queue SET state=?2, finished_at=?3, last_error=?4 WHERE id=?1",
+                    "UPDATE turn_queue SET state=?2, finished_at=?3, last_error=?4
+                     WHERE id=?1 AND state='leased'",
                     params![id, state, now, error],
                 )?;
                 tx.execute(
-                    "DELETE FROM leases WHERE resource IN (?1, ?2)",
-                    params![format!("turn:{id}"), format!("session:{sid}")],
+                    "DELETE FROM leases WHERE resource IN (?1, ?2) AND holder=?3",
+                    params![turn_res, session_res, holder],
                 )?;
-                Ok(())
+                Ok(true)
             })
             .await?;
+        self.forget(&turn.holder, turn.id.as_str());
+        if !held {
+            return Err(KernelError::LeaseLost(format!(
+                "tour {} : clôture refusée, le lease est à un autre runner",
+                turn.id
+            )));
+        }
         Ok(())
     }
 
@@ -313,6 +407,7 @@ impl TurnQueue {
 
     /// Au démarrage : tout lease est mort, tout tour `leased` redevient `pending`.
     pub async fn recover_on_boot(&self) -> Result<i64> {
+        lock(&self.live).clear();
         Ok(self
             .store
             .write(|tx| {
@@ -325,6 +420,10 @@ impl TurnQueue {
             })
             .await?)
     }
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 fn ms_to_rfc3339(ms: i64) -> String {
@@ -377,24 +476,102 @@ mod tests {
     }
 
     /// CA 3 : un tour interrompu par un crash est réclamé à nouveau après expiration
-    /// du lease.
+    /// du lease. Le « kill -9 » est un autre processus, donc une autre file (le runner
+    /// d'origine n'est plus vivant nulle part, #43).
     #[tokio::test]
     async fn ca_3_3_expired_lease_is_reclaimed() {
         let clock = TestClock::default();
         let store = Store::open_memory().unwrap();
-        let q = queue(store, clock.clone());
-        q.enqueue("s1", TurnKind::Message, json!({}), None, 0)
+        let mort = queue(store.clone(), clock.clone());
+        mort.enqueue("s1", TurnKind::Message, json!({}), None, 0)
             .await
             .unwrap();
 
-        let t1 = q.claim("runner-1").await.unwrap().unwrap();
-        assert!(q.claim("runner-2").await.unwrap().is_none());
+        let t1 = mort.claim("runner-1").await.unwrap().unwrap();
+        assert!(mort.claim("runner-2").await.unwrap().is_none());
 
-        // « kill -9 » du runner 1 : personne n'envoie plus de heartbeat.
+        // « kill -9 » du processus : personne n'envoie plus de heartbeat.
+        let vivant = queue(store, clock.clone());
         clock.advance_ms(61_000);
-        let t2 = q.claim("runner-2").await.unwrap().unwrap();
+        let t2 = vivant.claim("runner-2").await.unwrap().unwrap();
         assert_eq!(t2.id, t1.id);
         assert_eq!(t2.attempts, 2, "le compteur de tentatives doit progresser");
+    }
+
+    /// #43 : l'écrivain a gelé 90 s (sauvegarde, réindexation, veille du Mac), aucun
+    /// battement n'est passé, mais r1 est vivant : son tour n'est pas repris et lui seul
+    /// le clôt.
+    #[tokio::test]
+    async fn a_live_runner_keeps_its_turn_when_the_writer_was_frozen() {
+        let clock = TestClock::default();
+        let q = queue(Store::open_memory().unwrap(), clock.clone());
+        q.enqueue("s1", TurnKind::Message, json!({"t":"premier"}), None, 0)
+            .await
+            .unwrap();
+        q.enqueue("s1", TurnKind::Message, json!({"t":"second"}), None, 0)
+            .await
+            .unwrap();
+
+        let a = q.claim("r1").await.unwrap().unwrap();
+        clock.advance_ms(91_000);
+        assert!(
+            q.claim("r2").await.unwrap().is_none(),
+            "un runner vivant garde son tour même sans battement"
+        );
+        // L'écrivain repart : le battement retrouve son lease.
+        q.heartbeat(&a).await.unwrap();
+        q.complete(&a).await.unwrap();
+
+        let b = q.claim("r2").await.unwrap().unwrap();
+        assert_ne!(b.id, a.id, "le tour suivant de la session vient après");
+    }
+
+    /// #43 : un runner évincé (processus figé puis réveillé, tour repris ailleurs) ne
+    /// clôt pas le tour de son successeur et n'efface pas son lease.
+    #[tokio::test]
+    async fn an_evicted_runner_loses_its_lease_and_writes_nothing() {
+        let clock = TestClock::default();
+        let store = Store::open_memory().unwrap();
+        let fige = queue(store.clone(), clock.clone());
+        let repris = queue(store.clone(), clock.clone());
+        fige.enqueue("s1", TurnKind::Message, json!({"t":"premier"}), None, 0)
+            .await
+            .unwrap();
+        fige.enqueue("s1", TurnKind::Message, json!({"t":"second"}), None, 0)
+            .await
+            .unwrap();
+
+        let a_r1 = fige.claim("r1").await.unwrap().unwrap();
+        clock.advance_ms(61_000);
+        let a_r2 = repris.claim("r2").await.unwrap().unwrap();
+        assert_eq!(a_r1.id, a_r2.id, "r2 reprend le tour laissé sans battement");
+
+        let e = fige.complete(&a_r1).await.unwrap_err();
+        assert!(e.is_lease_lost(), "clôture refusée à l'évincé : {e}");
+        let e = fige.heartbeat(&a_r1).await.unwrap_err();
+        assert!(e.is_lease_lost(), "battement refusé à l'évincé : {e}");
+
+        // Le verrou de session tient : le second tour attend la fin du premier.
+        assert!(
+            repris.claim("r3").await.unwrap().is_none(),
+            "aucun autre tour de la session pendant que r2 exécute"
+        );
+        let id = a_r1.id.0.clone();
+        let state: String = store
+            .read(move |c| {
+                Ok(c.query_row(
+                    "SELECT state FROM turn_queue WHERE id=?1",
+                    [id.as_str()],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(state, "leased", "le tour reste à r2");
+
+        // r2 le termine : la session se libère pour le second tour.
+        repris.complete(&a_r2).await.unwrap();
+        assert!(repris.claim("r3").await.unwrap().is_some());
     }
 
     #[tokio::test]
