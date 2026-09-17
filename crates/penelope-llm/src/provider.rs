@@ -196,22 +196,34 @@ pub mod tokio_util_lite {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     /// Propagé à chaque appel LLM, outil et processus.
+    ///
+    /// Un jeton enfant suit son parent sans l'entraîner : annuler le run annule l'étape en
+    /// cours, annuler une étape (délai dépassé) ne touche pas le run ni ses sœurs
+    /// (issue #56).
     #[derive(Clone, Default)]
-    pub struct CancelToken(Arc<AtomicBool>);
+    pub struct CancelToken {
+        flag: Arc<AtomicBool>,
+        parent: Option<Arc<CancelToken>>,
+    }
 
     impl CancelToken {
         pub fn new() -> Self {
             Self::default()
         }
         pub fn cancel(&self) {
-            self.0.store(true, Ordering::SeqCst);
+            self.flag.store(true, Ordering::SeqCst);
         }
         pub fn is_cancelled(&self) -> bool {
-            self.0.load(Ordering::SeqCst)
+            self.flag.load(Ordering::SeqCst)
+                || self.parent.as_ref().is_some_and(|p| p.is_cancelled())
         }
-        /// Jeton enfant lié au parent : annuler le parent annule l'enfant.
+        /// Jeton enfant lié au parent : annuler le parent annule l'enfant, jamais
+        /// l'inverse.
         pub fn child(&self) -> CancelToken {
-            self.clone()
+            CancelToken {
+                flag: Arc::new(AtomicBool::new(false)),
+                parent: Some(Arc::new(self.clone())),
+            }
         }
     }
 }

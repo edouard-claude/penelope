@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1311 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1313 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -648,7 +648,7 @@ d'audit sans faux positif (#47), listes de frontmatter lues correctement (#48), 
 messages regroupées (#49), nouvelles tentatives avant le flux (#50), flux muet coupé sur
 son inactivité (#51), résultats d'outils parallèles admis en groupe (#52), comptage et
 fenêtre des modèles locaux (#53), émulation d'outils retirée (#54), projection qui ne relit
-plus ce qui est résumé (#55).
+plus ce qui est résumé (#55), délai d'étape qui borne l'étape, pas le run (#56).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -731,6 +731,12 @@ plus ce qui est résumé (#55).
   `ORDER BY seq DESC LIMIT 64`. Sur une session de 4 500 messages (9 Mo), deux lectures
   complètes par itération (17 ms chacune) deviennent une lecture de ce qui est projeté
   (2 ms).
+- **Délai d'une étape de workflow** : `CancelToken::child()` crée un vrai jeton enfant
+  (annuler le parent annule l'enfant, jamais l'inverse), et chaque étape, chaque enfant
+  d'un `parallel` et chaque vérification d'un `verify` reçoit le sien. Une étape qui dépasse
+  `timeoutMs` enregistre son résultat `timeout` et suit sa transition, au lieu d'annuler le
+  run, de perdre son résultat et d'être rejouée à chaque passage du pilote jusqu'au plafond
+  de budget.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

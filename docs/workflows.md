@@ -153,6 +153,13 @@ redémarrage du daemon. L'étape se déclenche (`fired`) quand la tâche se term
 soit son sort : la sortie porte `status` (`completed`, `failed`, `cancelled`) et `result`
 (lu par `tasks/result`). `timeoutMs` borne l'attente (`timeout`).
 
+`timeoutMs` borne aussi une étape `agent`, `sub_agent`, `shell`, `tool`, `verify` ou
+`parallel` : au-delà, l'étape rend `timeout`, ce résultat est journalisé et le workflow
+suit sa transition (`"condition": {"type": "step_result", "result": "timeout"}`). Seule
+l'étape est arrêtée : le run continue, et dans un `parallel` les frères vont au bout. Un
+`timeout` ne déclenche pas de nouvelle tentative `retry` (qui ne joue que sur `failure` et
+`error`) : une étape qui expire doit être traitée par sa transition.
+
 Une étape `user` peut demander une saisie : `"input": "text"` (un message libre après le
 choix) ou `"input": "form:<id>"`, qui renvoie à `settings.forms` :
 

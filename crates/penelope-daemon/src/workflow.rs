@@ -521,7 +521,8 @@ async fn drive_claimed(
             StepOutcome::Done { result, output } => (result, output),
         };
         if cancel.is_cancelled() {
-            // Pause ou annulation pendant l'étape : son résultat n'est pas enregistré.
+            // Pause ou annulation du **run** pendant l'étape : son résultat n'est pas
+            // enregistré. Un délai d'étape, lui, est un résultat comme un autre (#56).
             let state = s.runs.get(run_id).await?.map(|r| r.state);
             return Ok(state.unwrap_or(RunState::Cancelled));
         }
@@ -593,13 +594,15 @@ async fn execute_with_retry(
         .and_then(|a| a.parse().ok())
         .unwrap_or(0);
     loop {
+        // Jeton propre à l'étape : son délai n'annule pas le run (issue #56).
+        let step_cancel = cancel.child();
         let ctx = StepCtx {
             d,
             run,
             wf,
             step,
             attempt,
-            cancel,
+            cancel: &step_cancel,
         };
         let outcome = execute_step(&ctx).await?;
         let retry = step.retry.unwrap_or_default();
@@ -1006,6 +1009,8 @@ async fn execute_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
             match tokio::time::timeout(t, fut).await {
                 Ok(r) => r,
                 Err(_) => {
+                    // Le jeton de l'étape seulement : le run continue et sa transition
+                    // `step_result = timeout` décide de la suite (issue #56).
                     ctx.cancel.cancel();
                     Ok(done(
                         StepResult::Timeout,
@@ -1760,13 +1765,15 @@ async fn question_text(ctx: &StepCtx<'_>) -> String {
 
 /// `parallel` : enfants `shell`, `tool` ou `sub_agent` en concurrence bornée.
 async fn run_child(ctx: &StepCtx<'_>, child: &Step) -> (String, anyhow::Result<StepOutcome>) {
+    // Un enfant qui expire n'annule pas ses frères : chacun a son jeton (issue #56).
+    let child_cancel = ctx.cancel.child();
     let child_ctx = StepCtx {
         d: ctx.d,
         run: ctx.run,
         wf: ctx.wf,
         step: child,
         attempt: ctx.attempt,
-        cancel: ctx.cancel,
+        cancel: &child_cancel,
     };
     (child.id.clone(), Box::pin(execute_step(&child_ctx)).await)
 }
@@ -2094,13 +2101,15 @@ async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
             args: check.get("args").cloned().unwrap_or(Value::Null),
             ..Default::default()
         };
+        // Une vérification qui expire n'emporte pas les suivantes (issue #56).
+        let child_cancel = ctx.cancel.child();
         let child_ctx = StepCtx {
             d: ctx.d,
             run: ctx.run,
             wf: ctx.wf,
             step: &child,
             attempt: ctx.attempt,
-            cancel: ctx.cancel,
+            cancel: &child_cancel,
         };
         match Box::pin(execute_step(&child_ctx)).await? {
             StepOutcome::Waiting(why) => return Ok(StepOutcome::Waiting(why)),
@@ -3017,6 +3026,76 @@ mod tests {
                 .is_err(),
             "un run terminé ne reprend pas"
         );
+    }
+
+    /// #56 : une étape qui dépasse son `timeoutMs` enregistre son résultat et suit sa
+    /// transition, au lieu d'annuler le run et de repartir à chaque passage.
+    #[tokio::test]
+    async fn a_step_that_times_out_records_its_result_and_moves_on() {
+        let e = env().await;
+        e.p.slow(std::time::Duration::from_secs(5));
+        e.p.reply("trop tard");
+        let mut raw = wf(
+            "delai",
+            "reflechir",
+            json!([
+                {"id": "reflechir", "type": "agent", "prompt": "réfléchis", "timeoutMs": 200,
+                 "transitions": [
+                    {"goto": "$done", "condition": {"type": "step_result", "result": "timeout"}},
+                    {"goto": "reflechir"}
+                 ]}
+            ]),
+        );
+        raw["settings"]["maxIterations"] = json!(3);
+        install(&e.d, raw).await;
+        let run = start_run(&e.d, "delai", json!({}), &owner(), None, 0)
+            .await
+            .unwrap();
+
+        // Un seul passage suffit : le résultat `timeout` mène à `$done`.
+        assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Done);
+        let after = e.d.services.runs.get(&run.id).await.unwrap().unwrap();
+        assert_eq!(after.state, RunState::Done);
+        let log = e.d.services.runs.trace(&run.id).await.unwrap();
+        assert!(
+            log.iter().any(|l| l["result"] == "timeout"),
+            "le résultat doit être enregistré : {log:?}"
+        );
+        assert_eq!(e.p.call_count(), 1, "un seul appel au modèle");
+    }
+
+    /// #56 : dans un `parallel`, un enfant qui expire n'emporte pas ses frères.
+    #[tokio::test]
+    async fn a_timed_out_child_does_not_cancel_its_siblings() {
+        let e = env().await;
+        let mut raw = wf(
+            "para",
+            "groupe",
+            json!([
+                {"id": "groupe", "type": "parallel", "children": [
+                    {"id": "lent", "type": "shell", "command": "sleep 5", "timeoutMs": 200},
+                    {"id": "rapide", "type": "shell", "command": "echo bonjour"}
+                ],
+                 "transitions": [{"goto": "$done"}]}
+            ]),
+        );
+        raw["settings"]["maxIterations"] = json!(2);
+        install(&e.d, raw).await;
+        let run = start_run(&e.d, "para", json!({}), &owner(), None, 0)
+            .await
+            .unwrap();
+        assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Done);
+        let log = e.d.services.runs.trace(&run.id).await.unwrap();
+        let groupe = log
+            .iter()
+            .find(|l| l["step"] == "groupe")
+            .expect("étape parallèle journalisée");
+        let output = groupe["output"].clone();
+        assert_eq!(
+            output["rapide"]["result"], "success",
+            "le frère rapide doit aboutir : {output}"
+        );
+        assert_eq!(output["lent"]["result"], "timeout", "{output}");
     }
 
     #[tokio::test]

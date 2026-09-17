@@ -42,6 +42,8 @@ pub struct MockProvider {
     /// Nom rendu par `name()` : les chemins qui dépendent du fournisseur (repli côté
     /// serveur d'OpenRouter, issue #50) se testent avec `named("openrouter")`.
     name: Arc<std::sync::OnceLock<String>>,
+    /// Latence simulée avant la réponse : de quoi faire expirer un délai d'étape (#56).
+    latency: Arc<Mutex<std::time::Duration>>,
 }
 
 /// WAV PCM mono 16 bits à 16 kHz, de silence : ce que renvoie la synthèse simulée
@@ -94,6 +96,7 @@ impl MockProvider {
             speech_error: Arc::new(Mutex::new(None)),
             spoken: Arc::new(Mutex::new(Vec::new())),
             name: Arc::new(std::sync::OnceLock::new()),
+            latency: Arc::new(Mutex::new(std::time::Duration::ZERO)),
         }
     }
 
@@ -120,6 +123,12 @@ impl MockProvider {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .push(s);
+        self
+    }
+
+    /// Répond après ce délai : pour tester un `timeoutMs` (issue #56).
+    pub fn slow(&self, d: std::time::Duration) -> &Self {
+        *self.latency.lock().unwrap_or_else(|p| p.into_inner()) = d;
         self
     }
 
@@ -185,6 +194,10 @@ impl Provider for MockProvider {
             .unwrap_or_else(|p| p.into_inner())
             .push(req.clone());
 
+        let latency = *self.latency.lock().unwrap_or_else(|p| p.into_inner());
+        if !latency.is_zero() {
+            tokio::time::sleep(latency).await;
+        }
         let scripted = self.next();
         if let Scripted::Error(kind, msg) = &scripted {
             return Err(LlmError::new(kind.clone(), msg.clone()));
