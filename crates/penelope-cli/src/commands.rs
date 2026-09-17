@@ -1258,13 +1258,8 @@ async fn daemon(cli: &Cli) -> CliResult<()> {
     let dirs = penelope_platform::resolve_directories(cli.home.clone())
         .map_err(|e| CliError::Io(e.to_string()))?;
     match upgrade::on_boot_now(&dirs.state(), penelope_daemon::VERSION) {
-        Boot::RolledBack { from, to, reload } => {
-            // Bascule vers les releases annulée : le service retrouve son fichier d'origine.
-            if let Some(file) = reload
-                && let Err(e) = penelope_platform::service::reload_launchd_detached(&file, 1)
-            {
-                eprintln!("rechargement du service d'origine impossible : {e}");
-            }
+        Boot::RolledBack { from, to } => {
+            // L'ancien binaire est au même chemin : `KeepAlive` le relance (issue #36).
             return Err(CliError::Io(format!(
                 "la version {from} n'a pas confirmé son démarrage : binaire {to} remis en \
                  place, le service repart avec lui"

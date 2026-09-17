@@ -13,6 +13,7 @@
 pub mod backend;
 pub mod codesign;
 pub mod dirs;
+pub mod handoff;
 pub mod host;
 pub mod ipc;
 pub mod ocr;

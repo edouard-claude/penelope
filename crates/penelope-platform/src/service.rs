@@ -131,45 +131,6 @@ pub fn launchd_with_program(plist: &str, exe: &std::path::Path) -> Option<String
     ))
 }
 
-/// Recharge le LaunchAgent depuis `plist` après `delay_s` secondes, dans un processus
-/// détaché : le daemon qui le demande est lui-même arrêté par `bootout`, et le service
-/// repart avec la nouvelle définition.
-pub fn reload_launchd_detached(plist: &std::path::Path, delay_s: u64) -> crate::Result<()> {
-    if !cfg!(target_os = "macos") {
-        return Err(crate::PlatformError::Service(
-            "rechargement de service pris en charge sur macOS seulement".into(),
-        ));
-    }
-    let uid = std::process::Command::new("/usr/bin/id")
-        .arg("-u")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| crate::PlatformError::Service("uid introuvable".into()))?;
-    let quoted = format!("'{}'", plist.to_string_lossy().replace('\'', "'\\''"));
-    let script = format!(
-        "sleep {delay_s}; /bin/launchctl bootout gui/{uid}/{SERVICE_LABEL} 2>/dev/null; \
-         /bin/launchctl bootstrap gui/{uid} {quoted}"
-    );
-    let mut cmd = std::process::Command::new("/bin/sh");
-    cmd.arg("-c")
-        .arg(script)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    #[cfg(unix)]
-    {
-        // Groupe de processus à part : arrêter le service ne tue pas le rechargement.
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-    cmd.spawn()
-        .map(|_| ())
-        .map_err(|e| crate::PlatformError::Service(e.to_string()))
-}
-
 /// Unité systemd utilisateur (conception de référence, §2.3).
 pub fn systemd_unit(exe: &std::path::Path, home: Option<&std::path::Path>) -> String {
     let home_arg = home

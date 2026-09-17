@@ -19,6 +19,7 @@
 
 use crate::runtime::Daemon;
 use penelope_kernel::event::EventDraft;
+use penelope_platform::handoff::HandOff;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -274,7 +275,8 @@ pub fn installable_binary(exe: &Path) -> Result<PathBuf, String> {
     if is_source_build(exe) {
         return Err(format!(
             "{} est un binaire de compilation : `penelope upgrade --switch` (ou `/upgrade \
-             install` sur Telegram) bascule vers les releases, `make deploy` reste aux sources",
+             install` sur Telegram) bascule vers les releases au chemin stable, `make deploy` y \
+             installe une compilation",
             exe.display()
         ));
     }
@@ -365,7 +367,6 @@ pub async fn install(opts: Install<'_>) -> Result<Value, String> {
         attempts: 0,
         installed_at: opts.now,
         first_boot_ms: None,
-        service: None,
     };
     write_pending(opts.state_dir, &pending)?;
     Ok(json!({
@@ -508,24 +509,13 @@ pub struct Pending {
     pub installed_at: String,
     #[serde(default)]
     pub first_boot_ms: Option<i64>,
-    /// Bascule d'une installation source vers les releases : fichier de service réécrit et
-    /// sa sauvegarde, remise en place si la santé n'est pas confirmée (issue #33).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub service: Option<ServiceSwitch>,
 }
 
-/// Fichier de service réécrit par une bascule, et sa version d'origine.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ServiceSwitch {
-    pub file: PathBuf,
-    pub backup: PathBuf,
-}
-
-fn state_file(state_dir: &Path) -> PathBuf {
+pub fn state_file(state_dir: &Path) -> PathBuf {
     state_dir.join("upgrade.json")
 }
 
-fn rolled_back_note(state_dir: &Path) -> PathBuf {
+pub fn rolled_back_note(state_dir: &Path) -> PathBuf {
     state_dir.join("upgrade.rolled-back")
 }
 
@@ -551,14 +541,10 @@ pub enum Boot {
     Normal,
     /// Nouveau binaire à l'essai : le chien de garde doit être armé.
     Trial { attempt: u32 },
-    /// Nouveau binaire jamais confirmé : l'ancien est remis, le processus doit s'arrêter
-    /// pour que le service reparte avec lui. `reload` : fichier de service restauré, à
-    /// recharger (bascule vers les releases annulée).
-    RolledBack {
-        from: String,
-        to: String,
-        reload: Option<PathBuf>,
-    },
+    /// Nouveau binaire jamais confirmé : l'ancien est remis au même chemin, le processus
+    /// doit s'arrêter pour que le service reparte avec lui (`KeepAlive`), sans toucher au
+    /// fichier de service (issue #36).
+    RolledBack { from: String, to: String },
 }
 
 /// À appeler avant d'ouvrir quoi que ce soit : un binaire qui plante plus loin est compté.
@@ -586,18 +572,10 @@ pub fn on_boot(state_dir: &Path, running_version: &str, now_ms: i64) -> Boot {
             Err(e) => format!("{}\n\n{e}\n", p.to_version),
         };
         let _ = std::fs::write(rolled_back_note(state_dir), note);
-        // Bascule annulée : le service retrouve son fichier d'origine, donc le binaire de
-        // compilation.
-        let reload = p.service.as_ref().and_then(|sw| {
-            std::fs::copy(&sw.backup, &sw.file)
-                .ok()
-                .map(|_| sw.file.clone())
-        });
         return match outcome {
             Ok(()) => Boot::RolledBack {
                 from: p.to_version,
                 to: p.from_version,
-                reload,
             },
             Err(_) => Boot::Normal,
         };
@@ -774,8 +752,11 @@ pub trait SwitchHost: Send + Sync {
     fn service_program(&self, content: &str) -> Option<String>;
     /// Contenu du fichier de service lançant `exe`.
     fn service_with_program(&self, content: &str, exe: &Path) -> Option<String>;
-    /// Recharge le service depuis son fichier, une fois la réponse partie.
-    fn reload_service(&self, file: &Path) -> Result<(), String>;
+    /// Domaine launchd du service (`gui/<uid>`).
+    fn domain(&self) -> Result<String, String>;
+    /// Confie le rechargement et le garde-fou à un job launchd à part (issue #36) : lancé
+    /// depuis le daemon, un rechargement mourrait avec lui.
+    fn hand_off(&self, h: &HandOff) -> Result<(), String>;
 }
 
 /// Hôte réel : `codesign` et LaunchAgent.
@@ -797,9 +778,63 @@ impl SwitchHost for SystemHost {
     fn service_with_program(&self, content: &str, exe: &Path) -> Option<String> {
         penelope_platform::service::launchd_with_program(content, exe)
     }
-    fn reload_service(&self, file: &Path) -> Result<(), String> {
-        penelope_platform::service::reload_launchd_detached(file, 2).map_err(|e| e.to_string())
+    fn domain(&self) -> Result<String, String> {
+        penelope_platform::handoff::gui_domain().map_err(|e| e.to_string())
     }
+    fn hand_off(&self, h: &HandOff) -> Result<(), String> {
+        h.launch().map_err(|e| e.to_string())
+    }
+}
+
+/// Relais d'une mise à jour : rechargement éventuel, puis garde-fou qui remet `previous`
+/// au chemin stable si le nouveau binaire ne démarre jamais.
+fn relay(
+    host: &dyn SwitchHost,
+    service_plist: &Path,
+    p: &Pending,
+    state_dir: &Path,
+    reload: Option<&Path>,
+) -> Result<HandOff, String> {
+    Ok(HandOff {
+        domain: host.domain()?,
+        service_label: penelope_platform::service::SERVICE_LABEL.to_string(),
+        service_plist: service_plist.to_path_buf(),
+        backup_plist: reload.map(Path::to_path_buf),
+        reload: reload.is_some(),
+        binary: p.binary.clone(),
+        previous: Some(p.previous.clone()),
+        state_file: state_file(state_dir),
+        rolled_back_note: rolled_back_note(state_dir),
+        to_version: p.to_version.clone(),
+        from_version: p.from_version.clone(),
+        delay_s: if reload.is_some() { 2 } else { 0 },
+        guard_s: penelope_platform::handoff::GUARD_S,
+        work_dir: state_dir.join("upgrade").join("relay"),
+        launchctl: PathBuf::from(penelope_platform::handoff::LAUNCHCTL),
+    })
+}
+
+/// Après une mise à jour ordinaire, un garde-fou indépendant du nouveau binaire : s'il ne
+/// démarre jamais (tué au lancement, signature refusée…), le précédent revient. Rien à
+/// garder quand le service n'est pas géré ou lance un autre binaire. Rend vrai si le relais
+/// est parti.
+pub fn guard_install(host: &dyn SwitchHost, state_dir: &Path) -> Result<bool, String> {
+    let Some(p) = pending(state_dir) else {
+        return Ok(false);
+    };
+    let Some(file) = host.service_file() else {
+        return Ok(false);
+    };
+    let content = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
+    let launched = host
+        .service_program(&content)
+        .map(|prog| std::fs::canonicalize(&prog).unwrap_or_else(|_| PathBuf::from(prog)));
+    let binary = std::fs::canonicalize(&p.binary).unwrap_or_else(|_| p.binary.clone());
+    if launched.as_deref() != Some(binary.as_path()) {
+        return Ok(false);
+    }
+    host.hand_off(&relay(host, &file, &p, state_dir, None)?)?;
+    Ok(true)
 }
 
 /// Une bascule d'installation source vers les releases.
@@ -896,9 +931,10 @@ pub fn switch_preflight(opts: &Switch<'_>) -> Result<Preflight, String> {
 }
 
 /// Bascule vers les releases : release vérifiée, binaire installé et re-signé dans
-/// `install_dir`, service réécrit (fichier d'origine sauvegardé) puis rechargé. La fenêtre
-/// de santé s'applique : sans confirmation, le fichier d'origine revient avec le binaire de
-/// compilation (issue #33).
+/// `install_dir` (le chemin stable), service réécrit une dernière fois (fichier d'origine
+/// sauvegardé), puis rechargé par un relais launchd hors du job du daemon. Si le nouveau
+/// binaire ne démarre pas, le binaire de compilation est copié au chemin stable : le
+/// service ne change plus de programme (issues #33 et #36).
 pub async fn switch_to_releases(opts: Switch<'_>) -> Result<Value, String> {
     let pre = switch_preflight(&opts)?;
     let client = client()?;
@@ -934,20 +970,24 @@ pub async fn switch_to_releases(opts: Switch<'_>) -> Result<Value, String> {
         attempts: 0,
         installed_at: opts.now,
         first_boot_ms: None,
-        service: Some(ServiceSwitch {
-            file: pre.service_file.clone(),
-            backup: backup.clone(),
-        }),
     };
+    let relay = relay(
+        opts.host,
+        &pre.service_file,
+        &pending,
+        opts.state_dir,
+        Some(&backup),
+    )?;
     write_pending(opts.state_dir, &pending)?;
     let tmp = PathBuf::from(format!("{}.tmp", pre.service_file.display()));
     std::fs::write(&tmp, &rewritten).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &pre.service_file).map_err(|e| e.to_string())?;
-    if let Err(e) = opts.host.reload_service(&pre.service_file) {
+    if let Err(e) = opts.host.hand_off(&relay) {
         // Rien n'est relancé : tout revient comme avant.
         let _ = std::fs::copy(&backup, &pre.service_file);
+        let _ = std::fs::remove_file(&backup);
         let _ = std::fs::remove_file(state_file(opts.state_dir));
-        return Err(format!("rechargement du service : {e}"));
+        return Err(format!("relais de rechargement du service : {e}"));
     }
     Ok(json!({
         "installed": r.version,
@@ -1023,7 +1063,7 @@ async fn change(d: &Arc<Daemon>, source: &Source, p: &Value) -> Result<Value, St
         return manual_rollback(&binary, &state_dir);
     }
     let cfg = d.services.config.config();
-    install(Install {
+    let mut v = install(Install {
         source,
         tag: p["tag"].as_str().filter(|t| !t.trim().is_empty()),
         force: p["force"].as_bool().unwrap_or(false),
@@ -1032,7 +1072,14 @@ async fn change(d: &Arc<Daemon>, source: &Source, p: &Value) -> Result<Value, St
         now: d.services.clock.now_rfc3339(),
         codesign: codesign_of(&cfg),
     })
-    .await
+    .await?;
+    if v["installed"].is_string() && cfg!(target_os = "macos") {
+        match guard_install(&SystemHost, &state_dir) {
+            Ok(armed) => v["guard"] = json!(armed),
+            Err(e) => tracing::warn!(error = %e, "mise à jour : garde-fou non lancé"),
+        }
+    }
+    Ok(v)
 }
 
 /// Résumé lisible d'une réponse `upgrade`.
@@ -1040,9 +1087,9 @@ pub fn render(v: &Value) -> String {
     if let (Some(to), Some(true)) = (v["installed"].as_str(), v["switched"].as_bool()) {
         return format!(
             "📦 Bascule vers les releases : {to} installée dans `{}` et re-signée, service \
-             réécrit (l'original est gardé). Il redémarre ; sans confirmation de santé, retour \
-             automatique à l'installation depuis les sources. Les prochaines mises à jour se \
-             feront par `/upgrade install`.",
+             réécrit vers ce chemin stable. Un relais launchd le recharge ; si la nouvelle \
+             version ne démarre pas, le binaire de compilation revient au même chemin. Les \
+             prochaines mises à jour se feront par `/upgrade install`.",
             v["binary"].as_str().unwrap_or("?")
         );
     }
@@ -1072,7 +1119,7 @@ pub fn render(v: &Value) -> String {
         (Some(false), Some(latest)) if v["source_install"].as_bool() == Some(true) => format!(
             "🆕 {latest} est disponible (installée : {current}). Installation depuis les \
              sources : `/upgrade install` propose de basculer vers les releases, `make deploy` \
-             reste aux sources."
+             installe une compilation au chemin stable."
         ),
         (Some(false), Some(latest)) => format!(
             "🆕 {latest} est disponible (installée : {current}). `penelope upgrade` ou \
@@ -1125,7 +1172,6 @@ mod tests {
             attempts: 0,
             installed_at: "t".into(),
             first_boot_ms: None,
-            service: None,
         }
     }
 
@@ -1153,7 +1199,6 @@ mod tests {
             Boot::RolledBack {
                 from: "1.1.0".into(),
                 to: "1.0.0".into(),
-                reload: None,
             }
         );
         assert!(std::fs::read_to_string(&bin).unwrap().contains("1.0.0"));
@@ -1398,7 +1443,7 @@ mod tests {
         sign_fails: bool,
         file: PathBuf,
         signed: std::sync::Mutex<Vec<PathBuf>>,
-        reloaded: std::sync::Mutex<Vec<PathBuf>>,
+        relays: std::sync::Mutex<Vec<HandOff>>,
     }
 
     impl SwitchHost for FakeHost {
@@ -1418,8 +1463,11 @@ mod tests {
         fn service_with_program(&self, content: &str, exe: &Path) -> Option<String> {
             penelope_platform::service::launchd_with_program(content, exe)
         }
-        fn reload_service(&self, file: &Path) -> Result<(), String> {
-            self.reloaded.lock().unwrap().push(file.to_path_buf());
+        fn domain(&self) -> Result<String, String> {
+            Ok("gui/501".into())
+        }
+        fn hand_off(&self, h: &HandOff) -> Result<(), String> {
+            self.relays.lock().unwrap().push(h.clone());
             Ok(())
         }
     }
@@ -1534,7 +1582,18 @@ mod tests {
         );
         let backup = PathBuf::from(format!("{}.sources", plist.display()));
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
-        assert_eq!(host.reloaded.lock().unwrap().clone(), vec![plist.clone()]);
+        // Issue #36 : le rechargement part dans un job launchd à part, avec son garde-fou.
+        let relays = host.relays.lock().unwrap().clone();
+        assert_eq!(relays.len(), 1);
+        let relay = &relays[0];
+        assert!(relay.reload);
+        assert_eq!(relay.service_plist, plist);
+        assert_eq!(relay.backup_plist.as_deref(), Some(backup.as_path()));
+        assert_eq!(relay.binary, target);
+        assert_eq!(relay.previous.as_deref(), Some(current.as_path()));
+        assert_eq!(relay.state_file, state_file(&state));
+        assert_eq!(relay.helper_label(), "com.penelope.daemon.reloader");
+        assert_eq!(relay.to_version, "9.9.9");
         let p = pending(&state).unwrap();
         assert_eq!(p.previous, current);
         assert_eq!(p.binary, target);
@@ -1557,11 +1616,11 @@ mod tests {
         assert_eq!(installable_binary(&target).unwrap(), target);
     }
 
-    /// Issue #33 : santé non confirmée, le fichier de service d'origine revient et
-    /// l'ancien binaire est relancé.
+    /// Issues #33 et #36 : santé non confirmée, le binaire de compilation revient au chemin
+    /// stable ; le fichier de service n'est plus touché, `KeepAlive` relance l'ancien code.
     #[cfg(unix)]
     #[tokio::test]
-    async fn an_unconfirmed_switch_restores_the_source_service() {
+    async fn an_unconfirmed_switch_brings_the_source_build_back_to_the_stable_path() {
         let dir = tempfile::tempdir().unwrap();
         let (current, plist, original, releases_url) = source_install(dir.path()).await;
         let host = FakeHost {
@@ -1594,21 +1653,103 @@ mod tests {
             Boot::RolledBack {
                 from: "9.9.9".into(),
                 to: crate::VERSION.into(),
-                reload: Some(plist.clone()),
             }
         );
-        assert_eq!(std::fs::read_to_string(&plist).unwrap(), original);
+        let target = install_dir.join("penelope");
+        assert_eq!(
+            penelope_platform::service::launchd_program(&std::fs::read_to_string(&plist).unwrap())
+                .as_deref(),
+            Some(target.to_string_lossy().as_ref()),
+            "le service garde le chemin stable"
+        );
+        assert_ne!(std::fs::read_to_string(&plist).unwrap(), original);
         assert!(
-            std::fs::read_to_string(install_dir.join("penelope"))
+            std::fs::read_to_string(&target)
                 .unwrap()
                 .contains(crate::VERSION),
-            "même relancé par l'ancien fichier, c'est l'ancien code qui tourne"
+            "l'ancien code tourne au chemin stable"
         );
         assert_eq!(on_boot(&state, crate::VERSION, 80_000), Boot::Normal);
         assert!(matches!(
             confirm(&state, crate::VERSION),
             Some(Confirmation::RolledBack { .. })
         ));
+    }
+
+    /// Issue #36 : le relais lit `"first_boot_ms": null` dans `upgrade.json` pour savoir si
+    /// le nouveau binaire a démarré ; un `upgrade.json` d'une version antérieure (champ
+    /// `service`) reste lisible.
+    #[test]
+    fn the_state_file_speaks_the_relay_contract() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        write_pending(&state, &pending_for(&dir.path().join("penelope"))).unwrap();
+        let raw = std::fs::read_to_string(state_file(&state)).unwrap();
+        assert!(raw.contains("\"first_boot_ms\": null"), "{raw}");
+        on_boot(&state, "1.1.0", 5);
+        let raw = std::fs::read_to_string(state_file(&state)).unwrap();
+        assert!(!raw.contains("\"first_boot_ms\": null"), "{raw}");
+
+        let legacy = r#"{"from_version":"0.12.0","to_version":"0.13.0","binary":"/b","previous":"/p",
+            "attempts":0,"installed_at":"t","first_boot_ms":null,
+            "service":{"file":"/f.plist","backup":"/f.plist.sources"}}"#;
+        std::fs::write(state_file(&state), legacy).unwrap();
+        assert_eq!(pending(&state).unwrap().to_version, "0.13.0");
+    }
+
+    /// Issue #36 : une mise à jour ordinaire arme un garde-fou hors du daemon quand le
+    /// service lance ce binaire ; rien sinon.
+    #[cfg(unix)]
+    #[test]
+    fn an_ordinary_upgrade_arms_a_guard_outside_the_daemon() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin/penelope");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        fake_binary(&bin, "1.1.0");
+        let state = dir.path().join("state");
+        let plist = dir.path().join("com.penelope.daemon.plist");
+        let host = FakeHost {
+            file: plist.clone(),
+            ..Default::default()
+        };
+        // Aucune mise à jour en attente : rien.
+        assert!(!guard_install(&host, &state).unwrap());
+        write_pending(&state, &pending_for(&bin)).unwrap();
+        // Service absent : rien.
+        assert!(!guard_install(&host, &state).unwrap());
+        // Le service lance un autre binaire : rien.
+        let other = penelope_platform::service::launchd_plist(
+            &dir.path().join("ailleurs/penelope"),
+            None,
+            &dir.path().join("logs"),
+            "/usr/bin",
+        );
+        std::fs::write(&plist, other).unwrap();
+        assert!(!guard_install(&host, &state).unwrap());
+        assert!(host.relays.lock().unwrap().is_empty());
+
+        let ours = penelope_platform::service::launchd_plist(
+            &bin,
+            None,
+            &dir.path().join("logs"),
+            "/usr/bin",
+        );
+        std::fs::write(&plist, &ours).unwrap();
+        assert!(guard_install(&host, &state).unwrap());
+        let relay = host.relays.lock().unwrap()[0].clone();
+        assert!(
+            !relay.reload,
+            "surveillance seule : le daemon redémarre de lui-même"
+        );
+        assert!(relay.backup_plist.is_none());
+        assert_eq!(relay.binary, bin);
+        assert_eq!(relay.previous, Some(previous_path(&bin)));
+        assert_eq!(relay.from_version, "1.0.0");
+        assert_eq!(
+            std::fs::read_to_string(&plist).unwrap(),
+            ours,
+            "service intact"
+        );
     }
 
     /// Issue #33 : identité absente ou inutilisable, rien n'est modifié et le message dit
@@ -1660,7 +1801,7 @@ mod tests {
             assert!(!install_dir.join("penelope").exists());
             assert_eq!(std::fs::read_to_string(&plist).unwrap(), original);
             assert!(pending(&state).is_none());
-            assert!(host.reloaded.lock().unwrap().is_empty());
+            assert!(host.relays.lock().unwrap().is_empty());
         }
     }
 

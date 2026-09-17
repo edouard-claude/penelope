@@ -234,47 +234,108 @@ pub fn binary_signature_check(s: &Services) -> DoctorCheck {
     }
 }
 
-/// Mode d'installation (sources ou releases) et programme lancé par le service (issue #33).
+/// Mode d'installation et programme lancé par le service (issues #33 et #36) : le service
+/// doit lancer un chemin stable, que les mises à jour remplacent sans le recharger.
 pub fn install_mode_check() -> DoctorCheck {
     const ID: &str = "install_mode";
     const LABEL: &str = "Mode d'installation";
     let Ok(exe) = crate::upgrade::running_binary() else {
         return DoctorCheck::ok(ID, LABEL, "binaire introuvable");
     };
-    let mode = if crate::upgrade::is_source_build(&exe) {
-        "sources (`make deploy`, ou `/upgrade install` pour basculer vers les releases)"
-    } else {
-        "releases (`/upgrade install`)"
-    };
     let launched = penelope_platform::service::launchd_plist_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|raw| penelope_platform::service::launchd_program(&raw));
-    match launched {
-        None => DoctorCheck::ok(
+    install_mode(&exe, launched.as_deref())
+}
+
+fn install_mode(exe: &std::path::Path, launched: Option<&str>) -> DoctorCheck {
+    const ID: &str = "install_mode";
+    const LABEL: &str = "Mode d'installation";
+    let mode = if crate::upgrade::is_source_build(exe) {
+        "binaire de compilation"
+    } else {
+        "chemin stable (`/upgrade install` ou `make deploy` le remplacent)"
+    };
+    let Some(program) = launched else {
+        return DoctorCheck::ok(
             ID,
             LABEL,
             format!("{mode} · {} · service non installé", exe.display()),
-        ),
-        Some(program) => {
-            let same = std::fs::canonicalize(&program)
-                .map(|p| p == exe)
-                .unwrap_or(false);
-            if same {
-                DoctorCheck::ok(ID, LABEL, format!("{mode} · le service lance {program}"))
-            } else {
-                DoctorCheck::fail(
-                    ID,
-                    LABEL,
-                    format!(
-                        "{mode} · ce binaire est {}, mais le service lance {program} : un \
-                         redémarrage changerait de binaire",
-                        exe.display()
-                    ),
-                    Some("penelope uninstall && penelope install".into()),
-                )
-            }
-        }
+        );
+    };
+    let real = std::fs::canonicalize(program).unwrap_or_else(|_| program.into());
+    if crate::upgrade::is_source_build(&real) {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!(
+                "le service lance un binaire de compilation ({program}) : chaque mise à jour \
+                 devrait recharger le service. `make deploy` sur la machine, ou `/upgrade \
+                 install`, le passe au chemin stable (`upgrade.install_dir`)"
+            ),
+            Some("make deploy".into()),
+        );
     }
+    if real == exe {
+        DoctorCheck::ok(ID, LABEL, format!("{mode} · le service lance {program}"))
+    } else {
+        DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!(
+                "{mode} · ce binaire est {}, mais le service lance {program} : un redémarrage \
+                 changerait de binaire",
+                exe.display()
+            ),
+            Some("penelope uninstall && penelope install".into()),
+        )
+    }
+}
+
+/// Délai au-delà duquel une mise à jour jamais démarrée est signalée.
+const STALE_UPGRADE_MS: i64 = 5 * 60_000;
+
+/// Mise à jour installée mais jamais démarrée (issue #36) : le service n'a pas été relancé.
+pub fn pending_upgrade_check(s: &Services) -> DoctorCheck {
+    let state = s.platform.dirs.state();
+    pending_upgrade(&state, s.clock.now_ms())
+}
+
+fn pending_upgrade(state: &std::path::Path, now_ms: i64) -> DoctorCheck {
+    const ID: &str = "upgrade_pending";
+    const LABEL: &str = "Mise à jour en attente";
+    let Some(p) = crate::upgrade::pending(state) else {
+        return DoctorCheck::ok(ID, LABEL, "aucune");
+    };
+    let installed_ms = chrono::DateTime::parse_from_rfc3339(&p.installed_at)
+        .map(|t| t.timestamp_millis())
+        .ok();
+    let stale =
+        p.first_boot_ms.is_none() && installed_ms.is_some_and(|t| now_ms - t > STALE_UPGRADE_MS);
+    if !stale {
+        return DoctorCheck::ok(
+            ID,
+            LABEL,
+            format!(
+                "{} → {} à l'essai ({} démarrage(s))",
+                p.from_version, p.to_version, p.attempts
+            ),
+        );
+    }
+    let relay_log = state.join("upgrade").join("relay").join("reloader.log");
+    DoctorCheck::fail(
+        ID,
+        LABEL,
+        format!(
+            "{} installée le {} n'a jamais démarré : le service n'a pas été relancé. Journal \
+             du relais : {}",
+            p.to_version,
+            p.installed_at,
+            relay_log.display()
+        ),
+        Some("penelope start".into()),
+    )
+    .critical()
 }
 
 /// Secret en clair dans un journal existant (issue #26) : purger le fichier et révoquer.
@@ -590,6 +651,53 @@ pub fn render(checks: &[DoctorCheck]) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// Issue #36 : un service qui lance `target/release` est signalé ; un chemin stable
+    /// lancé par le service est sain.
+    #[test]
+    fn a_service_launching_a_build_output_is_flagged() {
+        let dir = tempfile::tempdir().unwrap();
+        let build = dir.path().join("code/target/release/penelope");
+        let stable = dir.path().join("bin/penelope");
+        for p in [&build, &stable] {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "x").unwrap();
+        }
+        let stable = std::fs::canonicalize(&stable).unwrap();
+        let c = install_mode(&stable, Some(&build.to_string_lossy()));
+        assert!(
+            !c.ok && c.detail.contains("binaire de compilation"),
+            "{c:?}"
+        );
+        assert_eq!(c.fix.as_deref(), Some("make deploy"));
+        let c = install_mode(&stable, Some(&stable.to_string_lossy()));
+        assert!(c.ok, "{c:?}");
+    }
+
+    /// Issue #36 : `upgrade.json` sans `first_boot_ms` depuis plus de 5 minutes est signalé.
+    #[test]
+    fn an_upgrade_that_never_booted_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path();
+        assert!(pending_upgrade(state, 0).ok);
+        std::fs::write(
+            state.join("upgrade.json"),
+            r#"{"from_version":"0.12.0","to_version":"0.13.0","binary":"/b","previous":"/p",
+               "attempts":0,"installed_at":"2026-09-17T10:16:06Z","first_boot_ms":null}"#,
+        )
+        .unwrap();
+        let installed = chrono::DateTime::parse_from_rfc3339("2026-09-17T10:16:06Z")
+            .unwrap()
+            .timestamp_millis();
+        assert!(
+            pending_upgrade(state, installed + 60_000).ok,
+            "encore récent"
+        );
+        let c = pending_upgrade(state, installed + 6 * 60_000);
+        assert!(!c.ok && c.detail.contains("n'a jamais démarré"), "{c:?}");
+        assert_eq!(c.severity, "error");
+        assert_eq!(c.fix.as_deref(), Some("penelope start"));
+    }
     use super::*;
     use penelope_kernel::clock::TestClock;
     use std::sync::Arc;

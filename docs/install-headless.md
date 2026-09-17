@@ -1001,10 +1001,26 @@ publiée, depuis le dépôt cloné sur la machine :
 make deploy
 ```
 
-`deploy` enchaîne `git pull --ff-only`, `cargo build --release`, remplace le binaire que
-trouve le PATH (sudo seulement si son répertoire n'est pas inscriptible) et lance
-`penelope restart`. `make update` s'arrête après la compilation, `make clean` libère les
-Go de `target/`.
+`deploy` enchaîne `git pull --ff-only`, `cargo build --release`, copie le binaire au
+**chemin stable** puis redémarre le service (sudo seulement si son répertoire n'est pas
+inscriptible). `make update` s'arrête après la compilation, `make clean` libère les Go de
+`target/`.
+
+Le service lance toujours le même fichier, que les mises à jour remplacent :
+`make deploy` comme `/upgrade install`. Il ne lance jamais `target/release`. Le chemin
+stable est le programme du LaunchAgent s'il ne pointe pas dans `target/`, sinon le
+`penelope` du PATH hors `target/` (sans service), sinon `~/.local/bin/penelope`
+(`INSTALL_DIR=… make deploy` pour un autre répertoire). Si le LaunchAgent lance encore
+`target/release`, `make deploy` le réécrit une dernière fois vers ce chemin et le recharge
+depuis le shell ; c'est le seul cas où le fichier de service change.
+
+Une mise à jour lancée par le daemon (`/upgrade install`) confie le redémarrage à un
+**relais** : un job launchd éphémère (`com.penelope.daemon.reloader`), hors du job du
+daemon. Il vérifie que la nouvelle version démarre dans les deux minutes. Sinon, il remet
+le binaire précédent au même chemin, relance le service et laisse une note que l'ancienne
+version annonce sur Telegram. Journal : `<état>/upgrade/relay/reloader.log`.
+`penelope doctor` signale un service qui lance `target/release` et une mise à jour
+installée depuis plus de cinq minutes sans jamais avoir démarré.
 
 ### Passer d'une installation source aux releases
 
@@ -1028,13 +1044,15 @@ Avant d'agir, Pénélope vérifie :
 - **Service** : le LaunchAgent lance bien ce binaire, et son fichier est modifiable.
 
 La bascule télécharge et vérifie la release comme une mise à jour, installe et re-signe le
-binaire dans `upgrade.install_dir`, garde le binaire de compilation comme précédent,
-réécrit `ProgramArguments` du LaunchAgent (l'original est gardé en `….plist.sources`) et
-recharge le service. La fenêtre de santé s'applique : sans confirmation dans la minute, le
-fichier d'origine revient et le binaire de compilation repart. Ensuite, `/upgrade install`
-suit le parcours normal. `penelope doctor` affiche le mode (sources ou releases) et le
-programme lancé par le service ; `make deploy` sur la machine remet le service d'origine et
-revient aux sources.
+binaire dans `upgrade.install_dir`, garde le binaire de compilation comme précédent, et
+réécrit une dernière fois `ProgramArguments` du LaunchAgent vers ce chemin stable
+(l'original est gardé en `….plist.sources` le temps du rechargement). Le relais recharge
+le service : il attend que l'ancien daemon soit vraiment arrêté (`launchctl bootout` rend la
+main avant), vérifie le `bootstrap` et le retente, et remet le fichier d'origine si launchd
+refuse le nouveau. Si la nouvelle version ne démarre pas, le binaire de compilation est
+copié au chemin stable : le service ne change plus de programme. Ensuite, `/upgrade
+install` suit le parcours normal, et `make deploy` sur la machine installe une compilation
+au même chemin.
 
 ### Signature locale
 

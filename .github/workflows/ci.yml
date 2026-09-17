@@ -51,11 +51,19 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # 1240 tests, tous hors réseau. Les suites nommées du §20.1 sont des filtres sur
+      # 1251 tests, tous hors réseau. Les suites nommées du §20.1 sont des filtres sur
       # cette commande : `arch`, `ctx-safety`, `mcp-conformance`, `hot-reload`,
       # `resilience` et `security` en font partie.
       - name: Tests
         run: cargo test --workspace
+
+      # Relais de mise à jour contre le vrai launchd (issue #36) : un faux daemon sous
+      # LaunchAgent charge le relais depuis son propre job, le service doit repartir sans
+      # intervention, ou revenir à l'ancien binaire si le nouveau ne démarre pas.
+      - name: launchd
+        env:
+          PENELOPE_LAUNCHD_TESTS: "1"
+        run: cargo test -p penelope-platform --test launchd_relay
 
       - name: Binaire de release
         run: cargo build --release --locked -p penelope-cli

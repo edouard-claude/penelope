@@ -1709,9 +1709,10 @@ impl TelegramGateway {
                 });
                 let mut t = format!(
                     "📦 **Installation depuis les sources** (`{}`).\nBasculer vers les releases ? \
-                     Les prochaines mises à jour se feront depuis Telegram ; `make deploy` sur la \
-                     machine revient aux sources.\n",
-                    current.display()
+                     Le service lancera `{}/penelope`, un chemin stable que les mises à jour \
+                     remplacent ; `make deploy` sur la machine y installe une compilation.\n",
+                    current.display(),
+                    install_dir.display()
                 );
                 match &preflight {
                     Ok(p) => t.push_str(&format!(

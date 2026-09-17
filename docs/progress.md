@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1240 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1251 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -552,6 +552,30 @@ Connaissance de soi (#34) et workflows lancés par la conversation (#35).
   de fusion et commentaires passent par `tool_search` / `tool_call` (Redmine ou ClickUp,
   GitHub ou GitLab) ; paramètre facultatif `tracker` ; la réponse à « quel dépôt ? »
   relance la résolution au lieu de laisser `checkout` sans dépôt.
+
+### 0.13.1
+
+Mise à jour à distance qui laissait le service déchargé (#36).
+
+- **Cause** : le rechargement lancé par le daemon enchaînait `launchctl bootout` et
+  `bootstrap` ; `bootout` rend la main avant la fin de l'arrêt du daemon, `bootstrap`
+  échouait (« 5: Input/output error ») et le service restait déchargé, sans retour arrière
+  possible puisque le nouveau binaire ne démarrait jamais.
+- **Chemin stable** : le service lance toujours le même fichier (`upgrade.install_dir`) ;
+  `/upgrade install` et `make deploy` le remplacent, le fichier de service ne change plus.
+  `make deploy` migre une dernière fois un service qui lance encore `target/release`,
+  depuis le shell.
+- **Relais launchd** (`com.penelope.daemon.reloader`) : job éphémère hors du job du daemon,
+  qui attend l'arrêt réel, vérifie et retente le `bootstrap`, remet le fichier de service
+  d'origine si launchd le refuse, puis garde-fou : nouveau binaire jamais démarré en deux
+  minutes, binaire précédent remis au même chemin et service relancé. Armé aussi après une
+  mise à jour ordinaire.
+- `penelope doctor` : service qui lance un binaire de compilation, mise à jour installée
+  depuis plus de cinq minutes sans démarrage.
+- Test contre le vrai launchd en CI macOS (`PENELOPE_LAUNCHD_TESTS=1`) : un faux daemon
+  lent à s'arrêter charge le relais depuis son propre job ; le service repart sur le chemin
+  stable, ou revient à l'ancien binaire si le nouveau ne démarre pas. Sans le correctif, le
+  test reproduit l'échec de production.
 
 ### Routine de livraison
 
