@@ -18,6 +18,7 @@ SUDO            := $(shell test -w "$(dir $(DEST))" || echo sudo)
 SIGN_IDENTITY   ?=
 SIGN_IDENTIFIER ?= io.github.edouard-claude.penelope
 SIGN_FLAGS      ?=
+SERVICE_PLIST   := $(HOME)/Library/LaunchAgents/com.penelope.daemon.plist
 
 .DEFAULT_GOAL := help
 .PHONY: help pull build sign update install restart deploy test clean
@@ -56,8 +57,23 @@ install: build
 	fi
 	@"$(DEST)" --version
 
+# Après une bascule vers les releases (`/upgrade install`), le service lance le binaire de
+# release : `make deploy` remet le fichier de service d'origine, celui des sources.
 restart:
-	"$(DEST)" restart
+	@if [ -f "$(SERVICE_PLIST).sources" ]; then \
+		echo "Retour aux sources : le service relance le binaire de compilation"; \
+		cp "$(SERVICE_PLIST).sources" "$(SERVICE_PLIST)" && rm -f "$(SERVICE_PLIST).sources"; \
+		launchctl bootout gui/$$(id -u)/com.penelope.daemon 2>/dev/null; \
+		launchctl bootstrap gui/$$(id -u) "$(SERVICE_PLIST)"; \
+	else \
+		launched=$$(plutil -extract ProgramArguments.0 raw "$(SERVICE_PLIST)" 2>/dev/null || true); \
+		if [ -n "$$launched" ] && [ "$$(realpath "$$launched" 2>/dev/null)" != "$$(realpath "$(DEST)")" ]; then \
+			echo "Le service lance $$launched : il lancera $(DEST)"; \
+			"$(DEST)" uninstall && "$(DEST)" install; \
+		else \
+			"$(DEST)" restart; \
+		fi; \
+	fi
 
 deploy: update install restart
 

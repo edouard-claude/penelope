@@ -247,27 +247,43 @@ pub async fn check(source: &Source) -> Result<Value, String> {
         "latest": r.version,
         "tag": r.tag,
         "up_to_date": !is_newer(&r.version, crate::VERSION),
+        "source_install": running_binary().is_ok_and(|b| is_source_build(&b)),
     }))
 }
 
-/// Chemin réel du binaire en cours. Un binaire de `target/` se met à jour par les sources.
-pub fn installed_binary() -> Result<PathBuf, String> {
+/// Chemin réel du binaire en cours.
+pub fn running_binary() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    Ok(std::fs::canonicalize(&exe).unwrap_or(exe))
+}
+
+/// Vrai pour un binaire de compilation (`target/debug`, `target/release`).
+pub fn is_source_build(exe: &Path) -> bool {
     let parts: Vec<String> = exe
         .components()
         .map(|c| c.as_os_str().to_string_lossy().to_string())
         .collect();
-    let dev = parts
+    parts
         .windows(2)
-        .any(|w| w[0] == "target" && (w[1] == "debug" || w[1] == "release"));
-    if dev {
+        .any(|w| w[0] == "target" && (w[1] == "debug" || w[1] == "release"))
+}
+
+/// Binaire qu'une mise à jour peut remplacer. Un binaire de compilation ne se remplace
+/// pas : il se met à jour par `make deploy`, ou bascule vers les releases (issue #33).
+pub fn installable_binary(exe: &Path) -> Result<PathBuf, String> {
+    if is_source_build(exe) {
         return Err(format!(
-            "{} est un binaire de compilation : mettre à jour avec `make deploy`",
+            "{} est un binaire de compilation : `penelope upgrade --switch` (ou `/upgrade \
+             install` sur Telegram) bascule vers les releases, `make deploy` reste aux sources",
             exe.display()
         ));
     }
-    Ok(exe)
+    Ok(exe.to_path_buf())
+}
+
+/// Chemin réel du binaire en cours, s'il peut être remplacé.
+pub fn installed_binary() -> Result<PathBuf, String> {
+    installable_binary(&running_binary()?)
 }
 
 /// Identité et identifiant de re-signature configurés (`upgrade.codesign_identity`).
@@ -292,6 +308,14 @@ pub struct Install<'a> {
     pub codesign: Option<(&'a str, &'a str)>,
 }
 
+/// Release téléchargée, vérifiée et extraite, prête à être mise en place.
+struct Fetched {
+    release: Release,
+    fresh: PathBuf,
+    work: PathBuf,
+    signature: &'static str,
+}
+
 /// Télécharge, vérifie et met en place une release. Rien n'est touché avant que la somme
 /// et `--version` soient vérifiées.
 pub async fn install(opts: Install<'_>) -> Result<Value, String> {
@@ -311,54 +335,12 @@ pub async fn install(opts: Install<'_>) -> Result<Value, String> {
     }
     let dir = opts.binary.parent().ok_or("binaire sans répertoire")?;
     preflight_writable(dir)?;
-
-    let sums_bytes = fetch(&client, &r.sums_url, 64 * 1024).await?;
-    let signature = match &opts.source.pubkey {
-        Some(key) => {
-            let url = r.signature_url.as_deref().ok_or_else(|| {
-                format!(
-                    "{} n'est pas signée (SHA256SUMS.minisig absent) alors qu'une clé publique \
-                     est configurée : mise à jour refusée",
-                    r.tag
-                )
-            })?;
-            let minisig = String::from_utf8(fetch(&client, url, 16 * 1024).await?)
-                .map_err(|_| "SHA256SUMS.minisig illisible".to_string())?;
-            verify_signature(&sums_bytes, &minisig, key)?;
-            "vérifiée"
-        }
-        None => "non vérifiée (aucune clé publique)",
-    };
-    let sums = String::from_utf8(sums_bytes).map_err(|_| "SHA256SUMS illisible".to_string())?;
-    let expected = expected_sum(&sums, &r.archive_name)
-        .ok_or_else(|| format!("aucune somme pour {}", r.archive_name))?;
-    let archive = fetch(&client, &r.archive_url, ARCHIVE_MAX_BYTES).await?;
-    let actual = penelope_kernel::canonical::sha256_hex(&archive);
-    if actual != expected {
-        return Err(format!(
-            "somme SHA-256 invalide pour {} : attendue {expected}, obtenue {actual}",
-            r.archive_name
-        ));
-    }
-
-    let work = opts.state_dir.join("upgrade").join(&r.version);
-    let _ = std::fs::remove_dir_all(&work);
-    std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
-    let archive_path = work.join(&r.archive_name);
-    std::fs::write(&archive_path, &archive).map_err(|e| e.to_string())?;
-    penelope_platform::process::extract_tar_gz(&archive_path, &work).map_err(|e| e.to_string())?;
-    let fresh = work.join("penelope");
-    if !fresh.is_file() {
-        return Err(format!("`penelope` absent de {}", r.archive_name));
-    }
-    set_executable(&fresh)?;
-    let said = penelope_platform::process::binary_version(&fresh).map_err(|e| e.to_string())?;
-    if !announces(&said, &r.version) {
-        return Err(format!(
-            "le binaire téléchargé annonce « {said} » au lieu de {}",
-            r.version
-        ));
-    }
+    let Fetched {
+        release: r,
+        fresh,
+        work,
+        signature,
+    } = download(&client, opts.source, r, opts.state_dir).await?;
 
     // Signature stable avant la bascule : sans elle, macOS redemande l'accès au Trousseau
     // au premier démarrage du nouveau binaire.
@@ -383,6 +365,7 @@ pub async fn install(opts: Install<'_>) -> Result<Value, String> {
         attempts: 0,
         installed_at: opts.now,
         first_boot_ms: None,
+        service: None,
     };
     write_pending(opts.state_dir, &pending)?;
     Ok(json!({
@@ -394,6 +377,68 @@ pub async fn install(opts: Install<'_>) -> Result<Value, String> {
         "signature": signature,
         "codesign": codesign,
     }))
+}
+
+/// Sommes (et signature minisign), archive, extraction, `--version` : la release est prête.
+async fn download(
+    client: &reqwest::Client,
+    source: &Source,
+    r: Release,
+    state_dir: &Path,
+) -> Result<Fetched, String> {
+    let sums_bytes = fetch(client, &r.sums_url, 64 * 1024).await?;
+    let signature = match &source.pubkey {
+        Some(key) => {
+            let url = r.signature_url.as_deref().ok_or_else(|| {
+                format!(
+                    "{} n'est pas signée (SHA256SUMS.minisig absent) alors qu'une clé publique \
+                     est configurée : mise à jour refusée",
+                    r.tag
+                )
+            })?;
+            let minisig = String::from_utf8(fetch(client, url, 16 * 1024).await?)
+                .map_err(|_| "SHA256SUMS.minisig illisible".to_string())?;
+            verify_signature(&sums_bytes, &minisig, key)?;
+            "vérifiée"
+        }
+        None => "non vérifiée (aucune clé publique)",
+    };
+    let sums = String::from_utf8(sums_bytes).map_err(|_| "SHA256SUMS illisible".to_string())?;
+    let expected = expected_sum(&sums, &r.archive_name)
+        .ok_or_else(|| format!("aucune somme pour {}", r.archive_name))?;
+    let archive = fetch(client, &r.archive_url, ARCHIVE_MAX_BYTES).await?;
+    let actual = penelope_kernel::canonical::sha256_hex(&archive);
+    if actual != expected {
+        return Err(format!(
+            "somme SHA-256 invalide pour {} : attendue {expected}, obtenue {actual}",
+            r.archive_name
+        ));
+    }
+
+    let work = state_dir.join("upgrade").join(&r.version);
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    let archive_path = work.join(&r.archive_name);
+    std::fs::write(&archive_path, &archive).map_err(|e| e.to_string())?;
+    penelope_platform::process::extract_tar_gz(&archive_path, &work).map_err(|e| e.to_string())?;
+    let fresh = work.join("penelope");
+    if !fresh.is_file() {
+        return Err(format!("`penelope` absent de {}", r.archive_name));
+    }
+    set_executable(&fresh)?;
+    let said = penelope_platform::process::binary_version(&fresh).map_err(|e| e.to_string())?;
+    if !announces(&said, &r.version) {
+        return Err(format!(
+            "le binaire téléchargé annonce « {said} » au lieu de {}",
+            r.version
+        ));
+    }
+    Ok(Fetched {
+        release: r,
+        fresh,
+        work,
+        signature,
+    })
 }
 
 fn previous_path(binary: &Path) -> PathBuf {
@@ -463,6 +508,17 @@ pub struct Pending {
     pub installed_at: String,
     #[serde(default)]
     pub first_boot_ms: Option<i64>,
+    /// Bascule d'une installation source vers les releases : fichier de service réécrit et
+    /// sa sauvegarde, remise en place si la santé n'est pas confirmée (issue #33).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<ServiceSwitch>,
+}
+
+/// Fichier de service réécrit par une bascule, et sa version d'origine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServiceSwitch {
+    pub file: PathBuf,
+    pub backup: PathBuf,
 }
 
 fn state_file(state_dir: &Path) -> PathBuf {
@@ -496,8 +552,13 @@ pub enum Boot {
     /// Nouveau binaire à l'essai : le chien de garde doit être armé.
     Trial { attempt: u32 },
     /// Nouveau binaire jamais confirmé : l'ancien est remis, le processus doit s'arrêter
-    /// pour que le service reparte avec lui.
-    RolledBack { from: String, to: String },
+    /// pour que le service reparte avec lui. `reload` : fichier de service restauré, à
+    /// recharger (bascule vers les releases annulée).
+    RolledBack {
+        from: String,
+        to: String,
+        reload: Option<PathBuf>,
+    },
 }
 
 /// À appeler avant d'ouvrir quoi que ce soit : un binaire qui plante plus loin est compté.
@@ -525,10 +586,18 @@ pub fn on_boot(state_dir: &Path, running_version: &str, now_ms: i64) -> Boot {
             Err(e) => format!("{}\n\n{e}\n", p.to_version),
         };
         let _ = std::fs::write(rolled_back_note(state_dir), note);
+        // Bascule annulée : le service retrouve son fichier d'origine, donc le binaire de
+        // compilation.
+        let reload = p.service.as_ref().and_then(|sw| {
+            std::fs::copy(&sw.backup, &sw.file)
+                .ok()
+                .map(|_| sw.file.clone())
+        });
         return match outcome {
             Ok(()) => Boot::RolledBack {
                 from: p.to_version,
                 to: p.from_version,
+                reload,
             },
             Err(_) => Boot::Normal,
         };
@@ -692,6 +761,207 @@ pub fn manual_rollback(binary: &Path, state_dir: &Path) -> Result<Value, String>
     Ok(json!({"rolled_back": true, "from": crate::VERSION, "to": target, "binary": binary}))
 }
 
+// ------------------------------------------------------------------ bascule vers les releases
+
+/// Ce que la bascule touche hors du répertoire d'état : signature et service, remplaçables
+/// en test.
+pub trait SwitchHost: Send + Sync {
+    /// Signe `path` avec l'identité et l'identifiant fixe.
+    fn sign(&self, path: &Path, identity: &str, identifier: &str) -> Result<(), String>;
+    /// Fichier du service qui lance le daemon ; `None` : service non géré.
+    fn service_file(&self) -> Option<PathBuf>;
+    /// Programme lancé par le fichier de service.
+    fn service_program(&self, content: &str) -> Option<String>;
+    /// Contenu du fichier de service lançant `exe`.
+    fn service_with_program(&self, content: &str, exe: &Path) -> Option<String>;
+    /// Recharge le service depuis son fichier, une fois la réponse partie.
+    fn reload_service(&self, file: &Path) -> Result<(), String>;
+}
+
+/// Hôte réel : `codesign` et LaunchAgent.
+pub struct SystemHost;
+
+impl SwitchHost for SystemHost {
+    fn sign(&self, path: &Path, identity: &str, identifier: &str) -> Result<(), String> {
+        penelope_platform::codesign::sign(path, identity, identifier)
+    }
+    fn service_file(&self) -> Option<PathBuf> {
+        if !cfg!(target_os = "macos") {
+            return None;
+        }
+        penelope_platform::service::launchd_plist_path().filter(|p| p.is_file())
+    }
+    fn service_program(&self, content: &str) -> Option<String> {
+        penelope_platform::service::launchd_program(content)
+    }
+    fn service_with_program(&self, content: &str, exe: &Path) -> Option<String> {
+        penelope_platform::service::launchd_with_program(content, exe)
+    }
+    fn reload_service(&self, file: &Path) -> Result<(), String> {
+        penelope_platform::service::reload_launchd_detached(file, 2).map_err(|e| e.to_string())
+    }
+}
+
+/// Une bascule d'installation source vers les releases.
+pub struct Switch<'a> {
+    pub source: &'a Source,
+    pub tag: Option<&'a str>,
+    /// Binaire de compilation qui tourne.
+    pub current: &'a Path,
+    /// Répertoire où installer le binaire de release (`upgrade.install_dir`).
+    pub install_dir: &'a Path,
+    pub state_dir: &'a Path,
+    pub now: String,
+    pub codesign: Option<(&'a str, &'a str)>,
+    pub host: &'a dyn SwitchHost,
+}
+
+/// Préconditions vérifiées : fichier de service et son contenu.
+pub struct Preflight {
+    pub service_file: PathBuf,
+    pub service: String,
+}
+
+/// Vérifie tout avant d'agir : identité de signature utilisable depuis le daemon,
+/// répertoire cible inscriptible, service géré qui lance bien ce binaire et fichier
+/// modifiable. Un message dit quoi configurer.
+pub fn switch_preflight(opts: &Switch<'_>) -> Result<Preflight, String> {
+    if !is_source_build(opts.current) {
+        return Err(format!(
+            "{} n'est pas un binaire de compilation : `/upgrade install` suffit",
+            opts.current.display()
+        ));
+    }
+    let Some((identity, identifier)) = opts.codesign else {
+        return Err(
+            "`upgrade.codesign_identity` n'est pas configuré : sans signature stable, macOS \
+             redemanderait des autorisations que personne ne pourra accepter. Créer l'identité \
+             (docs/install-headless.md, « Signature locale »), puis `penelope config set \
+             upgrade.codesign_identity \"Penelope Dev\"`"
+                .into(),
+        );
+    };
+    std::fs::create_dir_all(opts.install_dir)
+        .map_err(|e| format!("{} : {e}", opts.install_dir.display()))?;
+    preflight_writable(opts.install_dir)?;
+    // Essai de signature depuis le daemon : une identité dont la clé demande une
+    // autorisation échoue ici plutôt qu'au redémarrage.
+    let probe = opts
+        .install_dir
+        .join(format!(".penelope-sign-probe-{}", std::process::id()));
+    let sample = ["/usr/bin/true", "/bin/true"]
+        .iter()
+        .map(Path::new)
+        .find(|p| p.is_file())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| opts.current.to_path_buf());
+    std::fs::copy(&sample, &probe).map_err(|e| format!("essai de signature : {e}"))?;
+    let signed = opts.host.sign(&probe, identity, identifier);
+    let _ = std::fs::remove_file(&probe);
+    signed.map_err(|e| {
+        format!(
+            "l'identité « {identity} » n'est pas utilisable depuis le daemon ({e}) : autoriser \
+             `codesign` à utiliser sa clé (« Toujours autoriser », depuis une session graphique)"
+        )
+    })?;
+    let service_file = opts.host.service_file().ok_or(
+        "service non géré : la bascule demande le LaunchAgent (`penelope install`)".to_string(),
+    )?;
+    let service = std::fs::read_to_string(&service_file)
+        .map_err(|e| format!("{} : {e}", service_file.display()))?;
+    let program = opts.host.service_program(&service).ok_or_else(|| {
+        format!(
+            "{} ne déclare pas de programme lancé",
+            service_file.display()
+        )
+    })?;
+    let launched = std::fs::canonicalize(&program).unwrap_or_else(|_| PathBuf::from(&program));
+    let current =
+        std::fs::canonicalize(opts.current).unwrap_or_else(|_| opts.current.to_path_buf());
+    if launched != current {
+        return Err(format!(
+            "le service lance {program}, pas ce binaire ({}) : `penelope uninstall && penelope \
+             install` depuis le binaire voulu",
+            opts.current.display()
+        ));
+    }
+    let dir = service_file
+        .parent()
+        .ok_or("fichier de service sans répertoire")?;
+    preflight_writable(dir)?;
+    Ok(Preflight {
+        service_file,
+        service,
+    })
+}
+
+/// Bascule vers les releases : release vérifiée, binaire installé et re-signé dans
+/// `install_dir`, service réécrit (fichier d'origine sauvegardé) puis rechargé. La fenêtre
+/// de santé s'applique : sans confirmation, le fichier d'origine revient avec le binaire de
+/// compilation (issue #33).
+pub async fn switch_to_releases(opts: Switch<'_>) -> Result<Value, String> {
+    let pre = switch_preflight(&opts)?;
+    let client = client()?;
+    let r = release(&client, opts.source, opts.tag).await?;
+    let Fetched {
+        release: r,
+        fresh,
+        work,
+        signature,
+    } = download(&client, opts.source, r, opts.state_dir).await?;
+    let (identity, identifier) = opts.codesign.ok_or("identité de signature absente")?;
+
+    let target = opts.install_dir.join("penelope");
+    replace_with(&fresh, &target)?;
+    if let Err(e) = opts.host.sign(&target, identity, identifier) {
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_dir_all(&work);
+        return Err(format!("signature du binaire installé : {e}"));
+    }
+    let _ = std::fs::remove_dir_all(&work);
+
+    let rewritten = opts
+        .host
+        .service_with_program(&pre.service, &target)
+        .ok_or("réécriture du fichier de service impossible")?;
+    let backup = PathBuf::from(format!("{}.sources", pre.service_file.display()));
+    std::fs::write(&backup, &pre.service).map_err(|e| format!("{} : {e}", backup.display()))?;
+    let pending = Pending {
+        from_version: crate::VERSION.to_string(),
+        to_version: r.version.clone(),
+        binary: target.clone(),
+        previous: opts.current.to_path_buf(),
+        attempts: 0,
+        installed_at: opts.now,
+        first_boot_ms: None,
+        service: Some(ServiceSwitch {
+            file: pre.service_file.clone(),
+            backup: backup.clone(),
+        }),
+    };
+    write_pending(opts.state_dir, &pending)?;
+    let tmp = PathBuf::from(format!("{}.tmp", pre.service_file.display()));
+    std::fs::write(&tmp, &rewritten).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &pre.service_file).map_err(|e| e.to_string())?;
+    if let Err(e) = opts.host.reload_service(&pre.service_file) {
+        // Rien n'est relancé : tout revient comme avant.
+        let _ = std::fs::copy(&backup, &pre.service_file);
+        let _ = std::fs::remove_file(state_file(opts.state_dir));
+        return Err(format!("rechargement du service : {e}"));
+    }
+    Ok(json!({
+        "installed": r.version,
+        "switched": true,
+        "tag": r.tag,
+        "from": crate::VERSION,
+        "binary": target,
+        "previous": opts.current,
+        "service": pre.service_file,
+        "signature": signature,
+        "codesign": format!("re-signé avec « {identity} »"),
+    }))
+}
+
 /// Méthode RPC `upgrade` : `check`, `rollback`, ou installation (`tag`, `force`). Une
 /// installation ou un retour arrière réussi redémarre le daemon juste après la réponse.
 pub async fn rpc(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
@@ -717,6 +987,11 @@ pub async fn rpc(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
         .events
         .append(EventDraft::new(kind, v.clone()))
         .await;
+    // Bascule : le service rechargé arrête et relance le daemon lui-même.
+    if v["switched"].as_bool() == Some(true) {
+        v["restart"] = json!(true);
+        return Ok(v);
+    }
     let daemon = d.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -727,6 +1002,21 @@ pub async fn rpc(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
 }
 
 async fn change(d: &Arc<Daemon>, source: &Source, p: &Value) -> Result<Value, String> {
+    if p["switch"].as_bool() == Some(true) {
+        let cfg = d.services.config.config();
+        let install_dir = d.services.platform.dirs.expand(&cfg.upgrade.install_dir);
+        return switch_to_releases(Switch {
+            source,
+            tag: p["tag"].as_str().filter(|t| !t.trim().is_empty()),
+            current: &running_binary()?,
+            install_dir: &install_dir,
+            state_dir: &d.services.platform.dirs.state(),
+            now: d.services.clock.now_rfc3339(),
+            codesign: codesign_of(&cfg),
+            host: &SystemHost,
+        })
+        .await;
+    }
     let binary = installed_binary()?;
     let state_dir = d.services.platform.dirs.state();
     if p["rollback"].as_bool().unwrap_or(false) {
@@ -747,6 +1037,15 @@ async fn change(d: &Arc<Daemon>, source: &Source, p: &Value) -> Result<Value, St
 
 /// Résumé lisible d'une réponse `upgrade`.
 pub fn render(v: &Value) -> String {
+    if let (Some(to), Some(true)) = (v["installed"].as_str(), v["switched"].as_bool()) {
+        return format!(
+            "📦 Bascule vers les releases : {to} installée dans `{}` et re-signée, service \
+             réécrit (l'original est gardé). Il redémarre ; sans confirmation de santé, retour \
+             automatique à l'installation depuis les sources. Les prochaines mises à jour se \
+             feront par `/upgrade install`.",
+            v["binary"].as_str().unwrap_or("?")
+        );
+    }
     if let Some(to) = v["installed"].as_str() {
         let codesign = v["codesign"]
             .as_str()
@@ -770,6 +1069,11 @@ pub fn render(v: &Value) -> String {
         (Some(true), Some(latest)) => {
             format!("✅ À jour : {current} (dernière publiée : {latest}).")
         }
+        (Some(false), Some(latest)) if v["source_install"].as_bool() == Some(true) => format!(
+            "🆕 {latest} est disponible (installée : {current}). Installation depuis les \
+             sources : `/upgrade install` propose de basculer vers les releases, `make deploy` \
+             reste aux sources."
+        ),
         (Some(false), Some(latest)) => format!(
             "🆕 {latest} est disponible (installée : {current}). `penelope upgrade` ou \
              `/upgrade install` pour l'installer."
@@ -821,6 +1125,7 @@ mod tests {
             attempts: 0,
             installed_at: "t".into(),
             first_boot_ms: None,
+            service: None,
         }
     }
 
@@ -847,7 +1152,8 @@ mod tests {
             on_boot(&state, "1.1.0", 1_000 + HEALTH_WINDOW_MS + 1),
             Boot::RolledBack {
                 from: "1.1.0".into(),
-                to: "1.0.0".into()
+                to: "1.0.0".into(),
+                reload: None,
             }
         );
         assert!(std::fs::read_to_string(&bin).unwrap().contains("1.0.0"));
@@ -1084,6 +1390,278 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("pas signée"), "{err}");
         assert!(pending(&state).is_none());
+    }
+
+    /// Hôte simulé : signataire et service en mémoire.
+    #[derive(Default)]
+    struct FakeHost {
+        sign_fails: bool,
+        file: PathBuf,
+        signed: std::sync::Mutex<Vec<PathBuf>>,
+        reloaded: std::sync::Mutex<Vec<PathBuf>>,
+    }
+
+    impl SwitchHost for FakeHost {
+        fn sign(&self, path: &Path, _identity: &str, _identifier: &str) -> Result<(), String> {
+            if self.sign_fails {
+                return Err("errSecInternalComponent".into());
+            }
+            self.signed.lock().unwrap().push(path.to_path_buf());
+            Ok(())
+        }
+        fn service_file(&self) -> Option<PathBuf> {
+            self.file.is_file().then(|| self.file.clone())
+        }
+        fn service_program(&self, content: &str) -> Option<String> {
+            penelope_platform::service::launchd_program(content)
+        }
+        fn service_with_program(&self, content: &str, exe: &Path) -> Option<String> {
+            penelope_platform::service::launchd_with_program(content, exe)
+        }
+        fn reload_service(&self, file: &Path) -> Result<(), String> {
+            self.reloaded.lock().unwrap().push(file.to_path_buf());
+            Ok(())
+        }
+    }
+
+    /// Installation source simulée : binaire de compilation, service qui le lance, release
+    /// 9.9.9 publiée.
+    #[cfg(unix)]
+    async fn source_install(dir: &Path) -> (PathBuf, PathBuf, String, String) {
+        let current = dir.join("code/penelope/target/release/penelope");
+        std::fs::create_dir_all(current.parent().unwrap()).unwrap();
+        fake_binary(&current, crate::VERSION);
+        let plist = dir.join("LaunchAgents/com.penelope.daemon.plist");
+        std::fs::create_dir_all(plist.parent().unwrap()).unwrap();
+        let original = penelope_platform::service::launchd_plist(
+            &current,
+            None,
+            &dir.join("logs"),
+            "/usr/bin:/bin",
+        );
+        std::fs::write(&plist, &original).unwrap();
+
+        let pack = dir.join("pack");
+        std::fs::create_dir_all(&pack).unwrap();
+        fake_binary(&pack.join("penelope"), "9.9.9");
+        let archive = dir.join("a.tar.gz");
+        assert!(
+            std::process::Command::new("tar")
+                .arg("-czf")
+                .arg(&archive)
+                .arg("-C")
+                .arg(&pack)
+                .arg("penelope")
+                .status()
+                .unwrap()
+                .success()
+        );
+        let bytes = std::fs::read(&archive).unwrap();
+        let name = "penelope-v9.9.9-macos-universal.tar.gz";
+        let sums = format!(
+            "{}  ./{name}\n",
+            penelope_kernel::canonical::sha256_hex(&bytes)
+        );
+        let server = fake_releases(|base| {
+            vec![
+                (
+                    "/r".to_string(),
+                    json!([{
+                        "tag_name": "v9.9.9",
+                        "assets": [
+                            {"name": name, "browser_download_url": format!("{base}/dl/{name}")},
+                            {"name": "SHA256SUMS", "browser_download_url": format!("{base}/dl/sums")},
+                        ]
+                    }])
+                    .to_string()
+                    .into_bytes(),
+                ),
+                (format!("/dl/{name}"), bytes.clone()),
+                ("/dl/sums".to_string(), sums.into_bytes()),
+            ]
+        })
+        .await;
+        (current, plist, original, format!("{server}/r"))
+    }
+
+    /// Issue #33 : « Basculer » installe le binaire dans le répertoire cible, le re-signe,
+    /// réécrit le service et le recharge ; la santé confirmée supprime `upgrade.json`, et
+    /// la mise à jour suivante suit le parcours normal.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_source_install_switches_to_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let (current, plist, original, releases_url) = source_install(dir.path()).await;
+        let host = FakeHost {
+            file: plist.clone(),
+            ..Default::default()
+        };
+        let source = Source {
+            releases_url,
+            os: "macos".into(),
+            pubkey: None,
+        };
+        let install_dir = dir.path().join("home/.local/bin");
+        let state = dir.path().join("state");
+        assert!(
+            installable_binary(&current)
+                .unwrap_err()
+                .contains("--switch")
+        );
+
+        let v = switch_to_releases(Switch {
+            source: &source,
+            tag: None,
+            current: &current,
+            install_dir: &install_dir,
+            state_dir: &state,
+            now: "t".into(),
+            codesign: Some(("Penelope Test", "io.github.edouard-claude.penelope")),
+            host: &host,
+        })
+        .await
+        .unwrap();
+        assert_eq!(v["switched"], true);
+        let target = install_dir.join("penelope");
+        assert!(std::fs::read_to_string(&target).unwrap().contains("9.9.9"));
+        let signed = host.signed.lock().unwrap().clone();
+        assert_eq!(signed.len(), 2, "essai de signature puis binaire installé");
+        assert_eq!(signed[1], target);
+        let rewritten = std::fs::read_to_string(&plist).unwrap();
+        assert_eq!(
+            penelope_platform::service::launchd_program(&rewritten).as_deref(),
+            Some(target.to_string_lossy().as_ref())
+        );
+        let backup = PathBuf::from(format!("{}.sources", plist.display()));
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
+        assert_eq!(host.reloaded.lock().unwrap().clone(), vec![plist.clone()]);
+        let p = pending(&state).unwrap();
+        assert_eq!(p.previous, current);
+        assert_eq!(p.binary, target);
+        assert!(render(&v).contains("Bascule vers les releases"));
+
+        assert_eq!(on_boot(&state, "9.9.9", 1_000), Boot::Trial { attempt: 1 });
+        assert_eq!(
+            confirm(&state, "9.9.9"),
+            Some(Confirmation::Upgraded {
+                from: crate::VERSION.into(),
+                to: "9.9.9".into()
+            })
+        );
+        assert!(
+            pending(&state).is_none(),
+            "santé confirmée : upgrade.json supprimé"
+        );
+        // Après la bascule, le binaire lancé se met à jour par le parcours normal.
+        assert!(!is_source_build(&target));
+        assert_eq!(installable_binary(&target).unwrap(), target);
+    }
+
+    /// Issue #33 : santé non confirmée, le fichier de service d'origine revient et
+    /// l'ancien binaire est relancé.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unconfirmed_switch_restores_the_source_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let (current, plist, original, releases_url) = source_install(dir.path()).await;
+        let host = FakeHost {
+            file: plist.clone(),
+            ..Default::default()
+        };
+        let source = Source {
+            releases_url,
+            os: "macos".into(),
+            pubkey: None,
+        };
+        let install_dir = dir.path().join("bin");
+        let state = dir.path().join("state");
+        switch_to_releases(Switch {
+            source: &source,
+            tag: None,
+            current: &current,
+            install_dir: &install_dir,
+            state_dir: &state,
+            now: "t".into(),
+            codesign: Some(("Penelope Test", "io.github.edouard-claude.penelope")),
+            host: &host,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(on_boot(&state, "9.9.9", 1_000), Boot::Trial { attempt: 1 });
+        assert_eq!(
+            on_boot(&state, "9.9.9", 1_000 + HEALTH_WINDOW_MS + 1),
+            Boot::RolledBack {
+                from: "9.9.9".into(),
+                to: crate::VERSION.into(),
+                reload: Some(plist.clone()),
+            }
+        );
+        assert_eq!(std::fs::read_to_string(&plist).unwrap(), original);
+        assert!(
+            std::fs::read_to_string(install_dir.join("penelope"))
+                .unwrap()
+                .contains(crate::VERSION),
+            "même relancé par l'ancien fichier, c'est l'ancien code qui tourne"
+        );
+        assert_eq!(on_boot(&state, crate::VERSION, 80_000), Boot::Normal);
+        assert!(matches!(
+            confirm(&state, crate::VERSION),
+            Some(Confirmation::RolledBack { .. })
+        ));
+    }
+
+    /// Issue #33 : identité absente ou inutilisable, rien n'est modifié et le message dit
+    /// quoi configurer.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_switch_without_a_usable_identity_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (current, plist, original, releases_url) = source_install(dir.path()).await;
+        let source = Source {
+            releases_url,
+            os: "macos".into(),
+            pubkey: None,
+        };
+        let install_dir = dir.path().join("bin");
+        let state = dir.path().join("state");
+        for (host, codesign, expected) in [
+            (
+                FakeHost {
+                    file: plist.clone(),
+                    ..Default::default()
+                },
+                None,
+                "upgrade.codesign_identity",
+            ),
+            (
+                FakeHost {
+                    file: plist.clone(),
+                    sign_fails: true,
+                    ..Default::default()
+                },
+                Some(("Penelope Test", "io.github.edouard-claude.penelope")),
+                "n'est pas utilisable depuis le daemon",
+            ),
+        ] {
+            let err = switch_to_releases(Switch {
+                source: &source,
+                tag: None,
+                current: &current,
+                install_dir: &install_dir,
+                state_dir: &state,
+                now: "t".into(),
+                codesign,
+                host: &host,
+            })
+            .await
+            .unwrap_err();
+            assert!(err.contains(expected), "{err}");
+            assert!(!install_dir.join("penelope").exists());
+            assert_eq!(std::fs::read_to_string(&plist).unwrap(), original);
+            assert!(pending(&state).is_none());
+            assert!(host.reloaded.lock().unwrap().is_empty());
+        }
     }
 
     /// Vecteur de la crate `minisign-verify` : « test » signé par sa clé de test.

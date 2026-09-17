@@ -234,6 +234,49 @@ pub fn binary_signature_check(s: &Services) -> DoctorCheck {
     }
 }
 
+/// Mode d'installation (sources ou releases) et programme lancé par le service (issue #33).
+pub fn install_mode_check() -> DoctorCheck {
+    const ID: &str = "install_mode";
+    const LABEL: &str = "Mode d'installation";
+    let Ok(exe) = crate::upgrade::running_binary() else {
+        return DoctorCheck::ok(ID, LABEL, "binaire introuvable");
+    };
+    let mode = if crate::upgrade::is_source_build(&exe) {
+        "sources (`make deploy`, ou `/upgrade install` pour basculer vers les releases)"
+    } else {
+        "releases (`/upgrade install`)"
+    };
+    let launched = penelope_platform::service::launchd_plist_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|raw| penelope_platform::service::launchd_program(&raw));
+    match launched {
+        None => DoctorCheck::ok(
+            ID,
+            LABEL,
+            format!("{mode} · {} · service non installé", exe.display()),
+        ),
+        Some(program) => {
+            let same = std::fs::canonicalize(&program)
+                .map(|p| p == exe)
+                .unwrap_or(false);
+            if same {
+                DoctorCheck::ok(ID, LABEL, format!("{mode} · le service lance {program}"))
+            } else {
+                DoctorCheck::fail(
+                    ID,
+                    LABEL,
+                    format!(
+                        "{mode} · ce binaire est {}, mais le service lance {program} : un \
+                         redémarrage changerait de binaire",
+                        exe.display()
+                    ),
+                    Some("penelope uninstall && penelope install".into()),
+                )
+            }
+        }
+    }
+}
+
 /// Secret en clair dans un journal existant (issue #26) : purger le fichier et révoquer.
 pub fn logs_secret_check(s: &Services) -> DoctorCheck {
     use std::io::BufRead;

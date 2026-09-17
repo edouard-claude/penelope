@@ -711,6 +711,9 @@ pub struct Upgrade {
     /// téléchargé est re-signé avec elle avant la bascule (issue #28). Vide : non re-signé.
     pub codesign_identity: String,
     pub codesign_identifier: String,
+    /// Répertoire du binaire de release quand une installation source bascule vers les
+    /// releases (issue #33).
+    pub install_dir: String,
 }
 
 impl Default for Upgrade {
@@ -723,6 +726,7 @@ impl Default for Upgrade {
             heartbeat_daily: true,
             codesign_identity: String::new(),
             codesign_identifier: "io.github.edouard-claude.penelope".into(),
+            install_dir: "~/.local/bin".into(),
         }
     }
 }

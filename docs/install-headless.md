@@ -981,6 +981,36 @@ trouve le PATH (sudo seulement si son répertoire n'est pas inscriptible) et lan
 `penelope restart`. `make update` s'arrête après la compilation, `make clean` libère les
 Go de `target/`.
 
+### Passer d'une installation source aux releases
+
+Une instance installée par `make deploy` lance le binaire du dépôt
+(`…/target/release/penelope`) : `penelope upgrade` ne le remplace pas, pour ne pas le
+désynchroniser des sources. Pour une machine sans surveillance, la bascule vers les
+releases se fait une fois pour toutes, à distance : `/upgrade install` sur Telegram
+affiche « Installation depuis les sources. Basculer vers les releases ? » (« Basculer et
+installer vX », « Garder les sources », « Annuler »), ou en ligne de commande :
+
+```bash
+penelope upgrade --switch
+```
+
+Avant d'agir, Pénélope vérifie :
+
+- **Signature** : `upgrade.codesign_identity` est configuré, et un essai de signature
+  réussit depuis le daemon. Sinon macOS redemanderait des autorisations que personne ne
+  pourrait accepter (voir « Signature locale » ci-dessous).
+- **Répertoire cible** : `upgrade.install_dir` (`~/.local/bin` par défaut) est inscriptible.
+- **Service** : le LaunchAgent lance bien ce binaire, et son fichier est modifiable.
+
+La bascule télécharge et vérifie la release comme une mise à jour, installe et re-signe le
+binaire dans `upgrade.install_dir`, garde le binaire de compilation comme précédent,
+réécrit `ProgramArguments` du LaunchAgent (l'original est gardé en `….plist.sources`) et
+recharge le service. La fenêtre de santé s'applique : sans confirmation dans la minute, le
+fichier d'origine revient et le binaire de compilation repart. Ensuite, `/upgrade install`
+suit le parcours normal. `penelope doctor` affiche le mode (sources ou releases) et le
+programme lancé par le service ; `make deploy` sur la machine remet le service d'origine et
+revient aux sources.
+
 ### Signature locale
 
 Un binaire compilé n'a qu'une signature ad hoc dont l'exigence désignée change à chaque

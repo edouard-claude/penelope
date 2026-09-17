@@ -225,7 +225,7 @@ Workflows (4)
 | `/config`, `/logs` | générations et sous-systèmes ; journal filtré par composant, « Plus » |
 | `/restart`, `/close`, `/rewind` | confirmation |
 | `/fork` | ↪️ revenir à l'original |
-| `/upgrade` | version installée et disponible, ⬆️ installer, ⏪ revenir (confirmés) |
+| `/upgrade` | version installée et disponible, ⬆️ installer, ⏪ revenir (confirmés) ; sur une installation source, carte de bascule vers les releases |
 | `/quiet`, `/secret`, `/p` | plages proposées ; 🗑 par secret (confirmé) ; serveurs puis prompts MCP, arguments par formulaire |
 | `/retiens`, `/recall`, `/note`, `/title` | ✏️ bouton qui copie la commande à compléter |
 | `/budget session <montant>` | plafond propre à la session ; au plafond, carte « continuer ? » avec +5 $, +20 $, Arrêter |

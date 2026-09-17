@@ -1644,28 +1644,108 @@ impl TelegramGateway {
                 if let Some(e) = args["error"].as_str() {
                     t.push_str(&format!("\n❌ {e}"));
                 }
+                // Installation depuis les sources : l'installation passe par la bascule vers
+                // les releases (issue #33).
+                let from_sources = crate::upgrade::running_binary()
+                    .is_ok_and(|b| crate::upgrade::is_source_build(&b));
+                if from_sources {
+                    t.push_str(
+                        "\n📦 Installation depuis les sources : « Installer » propose de basculer \
+                         vers les releases.",
+                    );
+                }
                 let mut sc = Screen::new(t);
                 sc.rows.push(vec![
                     self.op("🔎 Vérifier", "upgrade.check", json!({}), here.clone())
                         .await?,
                 ]);
+                if from_sources {
+                    sc.rows.push(vec![
+                        self.nav("⬆️ Installer", "upgrade.switch", json!({}))
+                            .await?,
+                    ]);
+                } else {
+                    sc.rows.push(vec![
+                        self.guarded(
+                            "⬆️ Installer",
+                            "upgrade.install",
+                            json!({}),
+                            "Installer la dernière version publiée puis redémarrer ?",
+                            here.clone(),
+                        )
+                        .await?,
+                        self.guarded(
+                            "⏪ Revenir",
+                            "upgrade.rollback",
+                            json!({}),
+                            "Revenir au binaire précédent puis redémarrer ?",
+                            here.clone(),
+                        )
+                        .await?,
+                    ]);
+                }
+                sc
+            }
+
+            "upgrade.switch" => {
+                let cfg = s.config.config();
+                let current = crate::upgrade::running_binary().map_err(anyhow::Error::msg)?;
+                let install_dir = s.platform.dirs.expand(&cfg.upgrade.install_dir);
+                let source = crate::upgrade::Source::from_config(&cfg);
+                let latest: Option<String> = d
+                    .kv_get("tg.upgrade.last_check")
+                    .await?
+                    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                    .and_then(|v| v["latest"].as_str().map(String::from));
+                let preflight = crate::upgrade::switch_preflight(&crate::upgrade::Switch {
+                    source: &source,
+                    tag: None,
+                    current: &current,
+                    install_dir: &install_dir,
+                    state_dir: &s.platform.dirs.state(),
+                    now: s.clock.now_rfc3339(),
+                    codesign: crate::upgrade::codesign_of(&cfg),
+                    host: &crate::upgrade::SystemHost,
+                });
+                let mut t = format!(
+                    "📦 **Installation depuis les sources** (`{}`).\nBasculer vers les releases ? \
+                     Les prochaines mises à jour se feront depuis Telegram ; `make deploy` sur la \
+                     machine revient aux sources.\n",
+                    current.display()
+                );
+                match &preflight {
+                    Ok(p) => t.push_str(&format!(
+                        "\n✅ Signature utilisable, `{}` inscriptible, service `{}` modifiable.",
+                        install_dir.display(),
+                        p.service_file.display()
+                    )),
+                    Err(e) => t.push_str(&format!("\n❌ {e}")),
+                }
+                let mut sc = Screen::new(t);
+                if preflight.is_ok() {
+                    let label = match &latest {
+                        Some(v) => format!("📦 Basculer et installer {v}"),
+                        None => "📦 Basculer et installer la dernière version".to_string(),
+                    };
+                    sc.rows.push(vec![
+                        self.op(
+                            &label,
+                            "upgrade.switch",
+                            json!({}),
+                            back_of("upgrade", &json!({})),
+                        )
+                        .await?,
+                    ]);
+                }
                 sc.rows.push(vec![
-                    self.guarded(
-                        "⬆️ Installer",
-                        "upgrade.install",
+                    self.op(
+                        "Garder les sources",
+                        "upgrade.keep_sources",
                         json!({}),
-                        "Installer la dernière version publiée puis redémarrer ?",
-                        here.clone(),
+                        Value::Null,
                     )
                     .await?,
-                    self.guarded(
-                        "⏪ Revenir",
-                        "upgrade.rollback",
-                        json!({}),
-                        "Revenir au binaire précédent puis redémarrer ?",
-                        here.clone(),
-                    )
-                    .await?,
+                    self.nav("Annuler", "upgrade", json!({})).await?,
                 ]);
                 sc
             }
@@ -2058,9 +2138,13 @@ impl TelegramGateway {
                 let _ = d.kv_set("tg.upgrade.last_check", &args.to_string()).await;
                 Done::toast("🔎 Vérifié")
             }
-            "upgrade.install" | "upgrade.rollback" => {
+            "upgrade.keep_sources" => {
+                Done::quiet("Les sources restent : `make deploy` sur la machine")
+            }
+            "upgrade.install" | "upgrade.rollback" | "upgrade.switch" => {
                 let params = match (op, p["tag"].as_str()) {
                     ("upgrade.rollback", _) => json!({"rollback": true}),
+                    ("upgrade.switch", _) => json!({"switch": true}),
                     (_, Some(tag)) => json!({"tag": tag}),
                     _ => json!({}),
                 };
@@ -2075,10 +2159,10 @@ impl TelegramGateway {
                         let _ = m.send_text(&origin, &text).await;
                     }
                 });
-                Done::quiet(if op == "upgrade.install" {
-                    "⬆️ Installation lancée"
-                } else {
-                    "⏪ Retour arrière lancé"
+                Done::quiet(match op {
+                    "upgrade.install" => "⬆️ Installation lancée",
+                    "upgrade.switch" => "📦 Bascule vers les releases lancée",
+                    _ => "⏪ Retour arrière lancé",
                 })
             }
             "prompt.run" => {

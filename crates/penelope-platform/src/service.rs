@@ -91,6 +91,85 @@ pub fn launchd_plist(
     )
 }
 
+/// Fichier du LaunchAgent de l'utilisateur (`~/Library/LaunchAgents/com.penelope.daemon.plist`).
+pub fn launchd_plist_path() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|h| {
+        PathBuf::from(h)
+            .join("Library/LaunchAgents")
+            .join(format!("{SERVICE_LABEL}.plist"))
+    })
+}
+
+/// Programme lancé par un `plist` : première chaîne de `ProgramArguments`.
+pub fn launchd_program(plist: &str) -> Option<String> {
+    let after = plist.split("<key>ProgramArguments</key>").nth(1)?;
+    let start = after.find("<string>")? + "<string>".len();
+    let end = after[start..].find("</string>")? + start;
+    Some(
+        after[start..end]
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&"),
+    )
+}
+
+/// `plist` dont le programme lancé devient `exe` ; `None` si le fichier n'en déclare pas.
+pub fn launchd_with_program(plist: &str, exe: &std::path::Path) -> Option<String> {
+    let current = launchd_program(plist)?;
+    let marker = "<key>ProgramArguments</key>";
+    let at = plist.find(marker)? + marker.len();
+    let old = format!("<string>{}</string>", xml_escape(&current));
+    let rest = &plist[at..];
+    let pos = rest.find(&old)?;
+    let new = format!("<string>{}</string>", xml_escape(&exe.to_string_lossy()));
+    Some(format!(
+        "{}{}{}{}",
+        &plist[..at],
+        &rest[..pos],
+        new,
+        &rest[pos + old.len()..]
+    ))
+}
+
+/// Recharge le LaunchAgent depuis `plist` après `delay_s` secondes, dans un processus
+/// détaché : le daemon qui le demande est lui-même arrêté par `bootout`, et le service
+/// repart avec la nouvelle définition.
+pub fn reload_launchd_detached(plist: &std::path::Path, delay_s: u64) -> crate::Result<()> {
+    if !cfg!(target_os = "macos") {
+        return Err(crate::PlatformError::Service(
+            "rechargement de service pris en charge sur macOS seulement".into(),
+        ));
+    }
+    let uid = std::process::Command::new("/usr/bin/id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| crate::PlatformError::Service("uid introuvable".into()))?;
+    let quoted = format!("'{}'", plist.to_string_lossy().replace('\'', "'\\''"));
+    let script = format!(
+        "sleep {delay_s}; /bin/launchctl bootout gui/{uid}/{SERVICE_LABEL} 2>/dev/null; \
+         /bin/launchctl bootstrap gui/{uid} {quoted}"
+    );
+    let mut cmd = std::process::Command::new("/bin/sh");
+    cmd.arg("-c")
+        .arg(script)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        // Groupe de processus à part : arrêter le service ne tue pas le rechargement.
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| crate::PlatformError::Service(e.to_string()))
+}
+
 /// Unité systemd utilisateur (conception de référence, §2.3).
 pub fn systemd_unit(exe: &std::path::Path, home: Option<&std::path::Path>) -> String {
     let home_arg = home
@@ -122,6 +201,32 @@ fn xml_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn the_launched_program_is_read_and_rewritten() {
+        let p = launchd_plist(
+            Path::new("/Users/x/code/penelope/target/release/penelope"),
+            Some(Path::new("/Users/x/Penelope & co")),
+            Path::new("/tmp/logs"),
+            "/usr/bin:/bin",
+        );
+        assert_eq!(
+            launchd_program(&p).as_deref(),
+            Some("/Users/x/code/penelope/target/release/penelope")
+        );
+        let moved = launchd_with_program(&p, Path::new("/Users/x/.local/bin/penelope")).unwrap();
+        assert_eq!(
+            launchd_program(&moved).as_deref(),
+            Some("/Users/x/.local/bin/penelope")
+        );
+        assert!(moved.contains("<string>daemon</string>"));
+        assert!(moved.contains("Penelope &amp; co"), "le reste est gardé");
+        assert_eq!(
+            moved.matches("<string>").count(),
+            p.matches("<string>").count()
+        );
+        assert!(launchd_program("<plist/>").is_none());
+    }
 
     #[test]
     fn plist_has_the_prd_keys() {

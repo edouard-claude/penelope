@@ -746,6 +746,22 @@ impl TelegramGateway {
             }
             "upgrade" => {
                 // Installer ou revenir en arrière : toujours confirmé (issue #30).
+                // Installation depuis les sources : la carte de bascule (issue #33).
+                if args == "install"
+                    && crate::upgrade::running_binary()
+                        .is_ok_and(|b| crate::upgrade::is_source_build(&b))
+                {
+                    return self
+                        .show_screen(
+                            chat_id,
+                            topic_id,
+                            reply_to,
+                            "upgrade.switch",
+                            &json!({}),
+                            None,
+                        )
+                        .await;
+                }
                 let confirm = match args {
                     "install" => Some((
                         "upgrade.install",

@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1227 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1231 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -508,6 +508,23 @@ Sessions de travail longues (#32).
   fixes, bloc borné en fin de prompt à chaque tour, rappel après délégation ou
   compaction, copie au fork, proposition à `/new` sur un sujet proche, décisions relevées
   par le rêve.
+
+### 0.12.0
+
+Mise à jour à distance d'une installation source (#33).
+
+- `/upgrade install` sur un binaire de compilation affiche une carte de bascule vers les
+  releases ; `/upgrade` le signale dès l'annonce ; `penelope upgrade --switch` en ligne de
+  commande.
+- Préconditions vérifiées avant toute action : identité de signature utilisable depuis le
+  daemon (essai réel), `upgrade.install_dir` inscriptible, LaunchAgent qui lance ce binaire
+  et fichier modifiable.
+- Bascule : release vérifiée, binaire installé et re-signé, binaire de compilation gardé
+  comme précédent, `ProgramArguments` réécrit (original sauvegardé), service rechargé par un
+  processus détaché ; sans santé confirmée, fichier d'origine restauré et ancien binaire
+  relancé.
+- `penelope doctor` : mode d'installation et programme lancé par le service ; `make deploy`
+  revient aux sources.
 
 ### Routine de livraison
 

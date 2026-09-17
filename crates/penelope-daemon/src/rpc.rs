@@ -67,6 +67,7 @@ impl Rpc {
                 checks.push(crate::doctor::logs_secret_check(s));
                 checks.push(crate::vault_git::doctor_check(s));
                 checks.push(crate::doctor::binary_signature_check(s));
+                checks.push(crate::doctor::install_mode_check());
                 Ok(json!(checks))
             }
             method::SHUTDOWN => {

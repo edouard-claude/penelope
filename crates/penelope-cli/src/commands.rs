@@ -71,6 +71,10 @@ pub enum Command {
         /// Réinstalle même si cette version tourne déjà.
         #[arg(long)]
         force: bool,
+        /// Installation depuis les sources : bascule vers les releases (binaire re-signé
+        /// dans `upgrade.install_dir`, service réécrit, retour automatique sans santé).
+        #[arg(long, conflicts_with_all = ["check", "rollback"])]
+        switch: bool,
     },
     /// État du daemon.
     Status,
@@ -700,9 +704,10 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
             rollback,
             tag,
             force,
+            switch,
         } => (
             m::UPGRADE,
-            json!({"check": check, "rollback": rollback, "tag": tag, "force": force}),
+            json!({"check": check, "rollback": rollback, "tag": tag, "force": force, "switch": switch}),
         ),
 
         Command::Session(SessionCmd::List) => (m::SESSION_LIST, json!({})),
@@ -915,8 +920,24 @@ async fn upgrade_offline(cli: &Cli, p: &Value) -> CliResult<Value> {
     if p["check"].as_bool().unwrap_or(false) {
         return up::check(&source).await.map_err(CliError::Io);
     }
-    let binary = up::installed_binary().map_err(CliError::Usage)?;
     let state = dirs.state();
+    if p["switch"].as_bool() == Some(true) {
+        let install_dir = dirs.expand(&cfg.upgrade.install_dir);
+        let current = up::running_binary().map_err(CliError::Io)?;
+        return up::switch_to_releases(up::Switch {
+            source: &source,
+            tag: p["tag"].as_str(),
+            current: &current,
+            install_dir: &install_dir,
+            state_dir: &state,
+            now: chrono::Utc::now().to_rfc3339(),
+            codesign: up::codesign_of(&cfg),
+            host: &up::SystemHost,
+        })
+        .await
+        .map_err(CliError::Io);
+    }
+    let binary = up::installed_binary().map_err(CliError::Usage)?;
     if p["rollback"].as_bool().unwrap_or(false) {
         return up::manual_rollback(&binary, &state).map_err(CliError::Io);
     }
@@ -1237,7 +1258,13 @@ async fn daemon(cli: &Cli) -> CliResult<()> {
     let dirs = penelope_platform::resolve_directories(cli.home.clone())
         .map_err(|e| CliError::Io(e.to_string()))?;
     match upgrade::on_boot_now(&dirs.state(), penelope_daemon::VERSION) {
-        Boot::RolledBack { from, to } => {
+        Boot::RolledBack { from, to, reload } => {
+            // Bascule vers les releases annulée : le service retrouve son fichier d'origine.
+            if let Some(file) = reload
+                && let Err(e) = penelope_platform::service::reload_launchd_detached(&file, 1)
+            {
+                eprintln!("rechargement du service d'origine impossible : {e}");
+            }
             return Err(CliError::Io(format!(
                 "la version {from} n'a pas confirmé son démarrage : binaire {to} remis en \
                  place, le service repart avec lui"
