@@ -104,7 +104,19 @@ impl PolicyRule {
 }
 
 /// Correspondance de motif : toutes les clés du motif doivent être présentes et égales.
+///
+/// Un motif `{"$prefix": "cargo test"}` accepte toute chaîne qui commence ainsi : c'est ce
+/// qui borne un « toujours » à une famille de commandes ou à un répertoire, au lieu de
+/// l'outil entier (issue #67).
 fn args_match(pattern: &Value, args: &Value) -> bool {
+    if let Value::Object(p) = pattern
+        && p.len() == 1
+        && let Some(Value::String(prefix)) = p.get(PREFIX_OP)
+    {
+        return args
+            .as_str()
+            .is_some_and(|v| v.starts_with(prefix.as_str()));
+    }
     match (pattern, args) {
         (Value::Object(p), Value::Object(a)) => p.iter().all(|(k, v)| match a.get(k) {
             Some(av) => args_match(v, av),
@@ -112,6 +124,26 @@ fn args_match(pattern: &Value, args: &Value) -> bool {
         }),
         (p, a) => p == a,
     }
+}
+
+/// Opérateur de préfixe d'un motif d'arguments (issue #67).
+pub const PREFIX_OP: &str = "$prefix";
+
+/// Motif rendu lisible pour une carte ou `/policies` : `command commence par « cargo test »`.
+pub fn describe_pattern(pattern: &Value) -> String {
+    let Some(obj) = pattern.as_object() else {
+        return pattern.to_string();
+    };
+    obj.iter()
+        .map(|(k, v)| match v.get(PREFIX_OP).and_then(|p| p.as_str()) {
+            Some(prefix) => format!("{k} commence par « {prefix} »"),
+            None => format!(
+                "{k} = {}",
+                v.as_str().map(String::from).unwrap_or(v.to_string())
+            ),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Décision motivée, pour l'audit et l'affichage.

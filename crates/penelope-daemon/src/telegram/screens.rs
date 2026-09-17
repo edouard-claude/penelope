@@ -1308,8 +1308,15 @@ impl TelegramGateway {
                         .clone()
                         .or_else(|| r.server.clone().map(|x| format!("serveur {x}")))
                         .unwrap_or_else(|| "toutes les actions".into());
+                    // Portée réelle de la règle : « command commence par cargo test »
+                    // (issue #67).
+                    let scope = r
+                        .arg_match
+                        .as_ref()
+                        .map(|p| format!(" · {}", penelope_hitl::policy::describe_pattern(p)))
+                        .unwrap_or_default();
                     sc.text.push_str(&format!(
-                        "\n- `{label}` · {:?} · {:?} · {} usage(s)",
+                        "\n- `{label}`{scope} · {:?} · {:?} · {} usage(s)",
                         r.decision, r.window, r.hits
                     ));
                     sc.rows.push(vec![

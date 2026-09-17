@@ -1598,6 +1598,64 @@ impl AgentLoop {
     }
 }
 
+/// Motif d'arguments d'une règle « toujours », dérivé de l'appel : ce qui borne
+/// l'autorisation à ce que le propriétaire a vraiment vu (issue #67). `None` : la règle
+/// couvre l'outil (outils MCP, outils sans argument significatif).
+pub(crate) fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
+    use penelope_hitl::policy::PREFIX_OP;
+    let args = args?;
+    let str_of = |k: &str| args.get(k).and_then(|v| v.as_str()).map(String::from);
+    let prefix = |k: &str, v: String| Some(json!({k: {PREFIX_OP: v}}));
+    match tool {
+        // Famille de commandes : `cargo test …`, `git log …`, `ls …`.
+        "shell_exec" => {
+            let command = str_of("command")?;
+            let words: Vec<&str> = command.split_whitespace().collect();
+            const TWO_WORDS: &[&str] = &[
+                "cargo", "git", "npm", "pnpm", "yarn", "make", "docker", "kubectl", "brew",
+                "python3", "uv",
+            ];
+            let head = match words.as_slice() {
+                [first, second, ..] if TWO_WORDS.contains(first) => format!("{first} {second}"),
+                [first, ..] => first.to_string(),
+                [] => return None,
+            };
+            prefix("command", head)
+        }
+        // Répertoire du fichier : un « toujours » sur `src/a.rs` vaut pour `src/`.
+        "fs_write" | "fs_edit" => {
+            let path = str_of("path")?;
+            let dir = match path.rfind('/') {
+                Some(i) => path[..=i].to_string(),
+                None => String::new(),
+            };
+            prefix("path", dir)
+        }
+        "git_push" => {
+            let mut m = serde_json::Map::new();
+            for k in ["remote", "branch"] {
+                if let Some(v) = str_of(k) {
+                    m.insert(k.into(), json!(v));
+                }
+            }
+            (!m.is_empty()).then(|| Value::Object(m))
+        }
+        // Hôte visé, schéma compris.
+        "http_fetch" => {
+            let url = str_of("url")?;
+            let host = url
+                .split_once("://")
+                .map(|(scheme, rest)| {
+                    format!("{scheme}://{}", rest.split('/').next().unwrap_or_default())
+                })
+                .unwrap_or(url);
+            prefix("url", host)
+        }
+        "config_set" => str_of("path").map(|p| json!({"path": p})),
+        _ => None,
+    }
+}
+
 /// Tranche une approbation : la première décision gagne, une fenêtre crée une règle.
 pub async fn decide_approval(
     s: &Services,
@@ -1619,12 +1677,15 @@ pub async fn decide_approval(
                 } else {
                     decision.window
                 };
+                // Un « toujours » est borné au contexte de l'appel (famille de commandes,
+                // répertoire, remote), pas à l'outil entier (issue #67).
+                let pattern = arg_pattern(&a.subject, a.payload.get("arguments"));
                 s.policies
                     .create_rule(
                         penelope_hitl::RuleScope::Tool,
                         Some(&a.subject),
                         server_of(&a.subject).as_deref(),
-                        None,
+                        pattern,
                         PolicyDecision::Auto,
                         window,
                         window_ref.as_deref(),
@@ -2627,6 +2688,54 @@ mod tests {
         // Une attente, puis le repli : tant qu'un autre modèle reste, on n'insiste pas
         // sur celui qui vient d'échouer (issue #50).
         assert_eq!(models, vec!["mock/model", "mock/model", "mock/repli"]);
+    }
+
+    /// #67 : un « toujours » accordé à une commande vaut pour sa famille, pas pour tout
+    /// `shell_exec` : une autre commande redemande.
+    #[test]
+    fn an_always_rule_is_bounded_to_the_call_it_was_granted_for() {
+        use penelope_hitl::policy::PREFIX_OP;
+        let p = arg_pattern(
+            "shell_exec",
+            Some(&json!({"command": "cargo test -p penelope-kernel"})),
+        )
+        .expect("motif");
+        assert_eq!(p["command"][PREFIX_OP], "cargo test");
+        let rule = penelope_hitl::PolicyRule {
+            id: "r1".into(),
+            scope: penelope_hitl::RuleScope::Tool,
+            tool: Some("shell_exec".into()),
+            server: None,
+            arg_match: Some(p),
+            decision: penelope_kernel::risk::PolicyDecision::Auto,
+            window: PolicyWindow::Always,
+            window_ref: None,
+            created_at: "2026-09-18T00:00:00Z".into(),
+            hits: 0,
+            revoked_at: None,
+        };
+        assert!(rule.matches(
+            "shell_exec",
+            None,
+            &json!({"command": "cargo test -p penelope-store"})
+        ));
+        assert!(
+            !rule.matches("shell_exec", None, &json!({"command": "rm -rf target"})),
+            "une autre commande redemande"
+        );
+
+        // Fichiers : la règle vaut pour le répertoire, pas pour tout le disque.
+        let p = arg_pattern("fs_write", Some(&json!({"path": "src/a.rs"}))).expect("motif");
+        assert_eq!(p["path"][PREFIX_OP], "src/");
+        // URL : l'hôte visé.
+        let p = arg_pattern(
+            "http_fetch",
+            Some(&json!({"url": "https://example.com/a/b"})),
+        )
+        .expect("motif");
+        assert_eq!(p["url"][PREFIX_OP], "https://example.com");
+        // Outil MCP : rien n'est dérivé, la règle reste celle de l'outil.
+        assert!(arg_pattern("tool_call", Some(&json!({"server": "forge"}))).is_none());
     }
 
     /// #50 : avec OpenRouter, une erreur transitoire d'avant flux est réessayée au lieu

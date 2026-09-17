@@ -676,7 +676,12 @@ penelope config set sandbox.default_profile full
 ```
 
 Les approbations restent en place : c'est la carte `shell_exec` (« Toujours » compris) qui
-décide.
+décide. Un « Toujours » est **borné à l'appel qu'il autorise**, jamais à l'outil entier :
+pour `shell_exec`, à la famille de commandes (`cargo test …`, `git log …`) ; pour `fs_write`
+et `fs_edit`, au répertoire du fichier ; pour `git_push`, au couple remote et branche ; pour
+`http_fetch`, à l'hôte ; pour `config_set`, à la clé. Une autre commande, un autre
+répertoire, un autre hôte redemandent. `/policies` (et `penelope policies`) affiche la
+portée de chaque règle et permet de la retirer.
 
 Une suite de tests (`cargo test`, `go test`, `npm|pnpm|yarn test`, Jest, Vitest, `pytest`,
 `make test`) ne renvoie au modèle que le résumé et les sections d'échec (nom, assertion,
