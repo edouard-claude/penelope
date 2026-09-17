@@ -556,6 +556,9 @@ pub struct Memory {
     pub episode_topic_shift: f64,
     /// Candidats notés au plus par relecture d'un échange ; 0 : relecture désactivée.
     pub review_max_candidates: usize,
+    /// Candidats consolidés par appel au modèle, la nuit : au-delà, la réponse ne tient
+    /// plus dans la fenêtre de sortie et tout le lot est reporté.
+    pub dream_batch: usize,
     /// Heure de la consolidation nocturne (cron, fuseau du propriétaire).
     pub dreaming_cron: String,
     /// Heure du digest du matin (cron, fuseau du propriétaire).
@@ -587,6 +590,7 @@ impl Default for Memory {
             episode_idle: "2h".into(),
             episode_topic_shift: 0.35,
             review_max_candidates: 5,
+            dream_batch: 40,
             dreaming_cron: "30 3 * * *".into(),
             digest_cron: "0 8 * * *".into(),
             promotion: Promotion::default(),

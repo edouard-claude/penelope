@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1319 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1322 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -649,7 +649,8 @@ messages regroupées (#49), nouvelles tentatives avant le flux (#50), flux muet 
 son inactivité (#51), résultats d'outils parallèles admis en groupe (#52), comptage et
 fenêtre des modèles locaux (#53), émulation d'outils retirée (#54), projection qui ne relit
 plus ce qui est résumé (#55), délai d'étape qui borne l'étape, pas le run (#56), `/stop`
-qui interrompt outils et sous-agents (#57), pratiques rappelées en conversation (#58).
+qui interrompt outils et sous-agents (#57), pratiques rappelées en conversation (#58),
+consolidation nocturne par lots (#59).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -751,6 +752,12 @@ qui interrompt outils et sous-agents (#57), pratiques rappelées en conversation
   sont désormais exclus du rappel automatique (ils restent trouvables par `mem_search`), et
   `reindex` leur donne leur vrai type (`exception`, `ecart`) au lieu de `fait`. Le facteur
   « projet actif » du classement fonctionne enfin en conversation.
+- **Consolidation nocturne** : les candidats partent par lots (`memory.dream_batch`, 40),
+  la fenêtre de sortie est dimensionnée au lot, une réponse coupée est détectée et rejouée
+  avec un lot deux fois plus petit (la cause est nommée dans le rapport), les souvenirs
+  proches tiennent en un seul appel d'embeddings, et un candidat reporté trois nuits de
+  suite est rejeté avec sa raison. Un lot de 150 candidats ne se reportait plus jamais,
+  nuit après nuit, sans que rien ne soit promu.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

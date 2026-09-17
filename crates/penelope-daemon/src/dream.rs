@@ -158,16 +158,56 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
         let mut applied_ops: Vec<Operation> = Vec::new();
         if !admitted.is_empty() {
             let snapshot = VaultSnapshot::read(s, &vault).await?;
+            // Souvenirs proches : un seul appel d'embeddings pour tout le lot (issue #59).
+            let nearby_all = nearby_batch(
+                d,
+                &admitted
+                    .iter()
+                    .map(|g| g.representative.text.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .await;
             let mut items: Vec<Item<'_>> = Vec::new();
-            for g in &admitted {
+            for (i, g) in admitted.iter().enumerate() {
                 items.push(Item {
                     group: g,
-                    nearby: nearby(d, &g.representative.text).await,
+                    nearby: nearby_all.get(i).cloned().unwrap_or_default(),
                 });
             }
-            let response = consolidate(d, &items, &snapshot).await?;
-            let (ops, updates) = sort_and_plan(&items, &response, &snapshot, &day, &mut report);
-            state_updates.extend(updates);
+
+            // Lots bornés : au-delà, la réponse du modèle ne tient pas et tout le lot
+            // repart en attente, nuit après nuit (issue #59).
+            let batch = cfg.memory.dream_batch.max(1);
+            let mut ops: Vec<Operation> = Vec::new();
+            let mut i = 0usize;
+            while i < items.len() {
+                let mut size = batch.min(items.len() - i);
+                loop {
+                    let slice = &items[i..i + size];
+                    let (response, truncated) = consolidate(d, slice, &snapshot).await?;
+                    if truncated && size > 1 {
+                        // Sortie coupée : on rejoue tout de suite avec un lot deux fois
+                        // plus petit, en le disant.
+                        report.warnings.push(format!(
+                            "consolidation coupée sur {size} candidats : reprise par {}",
+                            size / 2
+                        ));
+                        size /= 2;
+                        continue;
+                    }
+                    if truncated {
+                        report
+                            .warnings
+                            .push("consolidation coupée sur un seul candidat".into());
+                    }
+                    let (batch_ops, updates) =
+                        sort_and_plan(slice, &response, &snapshot, &day, &mut report);
+                    ops.extend(batch_ops);
+                    state_updates.extend(updates);
+                    break;
+                }
+                i += size;
+            }
             let manually_modified = snapshot.changed_since_read(&vault);
             let validation = validate(
                 ops,
@@ -382,11 +422,28 @@ struct Item<'a> {
     nearby: Vec<IndexedEntry>,
 }
 
+/// Souvenirs proches de chaque candidat, avec **un seul** appel d'embeddings pour tout le
+/// lot (issue #59).
+async fn nearby_batch(d: &Arc<Daemon>, texts: &[String]) -> Vec<Vec<IndexedEntry>> {
+    let vectors = match crate::embeddings::embed_texts(d, texts).await {
+        Ok((_, v)) => v,
+        Err(e) => {
+            tracing::debug!(error = %e, "embeddings du lot indisponibles : recherche lexicale");
+            Vec::new()
+        }
+    };
+    let mut out = Vec::with_capacity(texts.len());
+    for (i, text) in texts.iter().enumerate() {
+        let vector = vectors.get(i).filter(|v| !v.is_empty()).cloned();
+        out.push(nearby_with(d, text, vector).await);
+    }
+    out
+}
+
 /// Souvenirs proches d'un candidat : recherche par le sens quand les embeddings répondent,
 /// sinon lexicale ; ni journal, ni documents ingérés.
-async fn nearby(d: &Arc<Daemon>, text: &str) -> Vec<IndexedEntry> {
+async fn nearby_with(d: &Arc<Daemon>, text: &str, vector: Option<Vec<f32>>) -> Vec<IndexedEntry> {
     let s = &d.services;
-    let vector = crate::embeddings::query_vector(d, text).await;
     let filter = penelope_memory::SearchFilter {
         limit: 8,
         ..Default::default()
@@ -771,7 +828,7 @@ async fn consolidate(
     d: &Arc<Daemon>,
     items: &[Item<'_>],
     snap: &VaultSnapshot,
-) -> anyhow::Result<penelope_memory::grid::Consolidation> {
+) -> anyhow::Result<(penelope_memory::grid::Consolidation, bool)> {
     let s = &d.services;
     let cfg = s.config.config();
     let alias = cfg.role_alias("compaction");
@@ -844,7 +901,9 @@ async fn consolidate(
             ChatMessage::user(user),
         ],
         stream: true,
-        max_tokens: Some(8_000),
+        // Un verdict et son opération font ~90 tokens : la sortie est dimensionnée au
+        // lot, sinon elle est coupée et tout le lot repart en attente (issue #59).
+        max_tokens: Some(((items.len() as u32) * 120).clamp(2_000, 16_000)),
         reasoning_effort: effort,
         response_format: structured.then(|| json!({"type": "json_object"})),
         ..Default::default()
@@ -877,7 +936,13 @@ async fn consolidate(
             ..Default::default()
         })
         .await;
-    Ok(penelope_memory::grid::parse(&response.message.text()))
+    let text = response.message.text();
+    let parsed = penelope_memory::grid::parse(&text);
+    // Réponse coupée : le fournisseur le dit, ou le JSON ne se lit pas alors qu'on
+    // attendait des verdicts.
+    let truncated = matches!(response.finish, penelope_llm::types::FinishReason::Length)
+        || (parsed.verdicts.is_empty() && !items.is_empty() && !text.trim().is_empty());
+    Ok((parsed, truncated))
 }
 
 fn target_file(s: &Services, op: &Operation) -> String {
@@ -1950,6 +2015,130 @@ mod tests {
             .in_session(session)
             .with_importance(importance);
         s.candidates.record(vec![c], 5).await.unwrap();
+    }
+
+    /// #59 : beaucoup de candidats passent en plusieurs appels, chacun dimensionné, et
+    /// aucun n'est reporté faute de place dans la réponse.
+    #[tokio::test]
+    async fn many_candidates_are_consolidated_in_bounded_batches() {
+        let (_dir, d, p) = daemon().await;
+        d.publish_config("test", |c| {
+            c.memory.dream_batch = 10;
+            Ok(vec!["memory.dream_batch".into()])
+        })
+        .unwrap();
+        // Trente candidats bien distincts : la déduplication ne doit pas les regrouper.
+        const SUJETS: [&str; 30] = [
+            "facturation",
+            "déploiement",
+            "sauvegarde",
+            "revue de code",
+            "veille",
+            "réunions",
+            "voyages",
+            "cuisine",
+            "sport",
+            "musique",
+            "lecture",
+            "jardin",
+            "photo",
+            "vélo",
+            "piano",
+            "café",
+            "thé",
+            "courses",
+            "impôts",
+            "banque",
+            "assurance",
+            "voiture",
+            "maison",
+            "chauffage",
+            "internet",
+            "téléphone",
+            "vacances",
+            "cinéma",
+            "théâtre",
+            "randonnée",
+        ];
+        for sujet in SUJETS {
+            note(
+                &d,
+                CandidateType::Preference,
+                &format!("Pour la {sujet}, le propriétaire décide seul et sans réunion"),
+                Origin::Owner,
+                "s1",
+                6,
+            )
+            .await;
+        }
+        // Un verdict « gardé » par candidat du lot, sans opération : rien à écrire, mais
+        // un verdict pour chacun.
+        for _ in 0..3 {
+            let tri: Vec<String> = (1..=10)
+                .map(|n| {
+                    format!(
+                        r#"{{"candidat": {n}, "durable": true, "utile": true, "precis": true,
+                          "introuvable": true, "endosse": true, "justification": "règle dite"}}"#
+                    )
+                })
+                .collect();
+            p.reply(&format!(
+                r#"{{"tri": [{}], "operations": []}}"#,
+                tri.join(",")
+            ));
+        }
+
+        let o = run(&d, false).await.unwrap();
+        assert_eq!(p.call_count(), 3, "trois lots de dix : {:?}", o.report);
+        assert_eq!(o.report.deferred, 0, "{:?}", o.report);
+        let sizes: Vec<u32> = p.requests().iter().filter_map(|r| r.max_tokens).collect();
+        assert!(
+            sizes.iter().all(|t| *t >= 2_000),
+            "sortie dimensionnée au lot : {sizes:?}"
+        );
+    }
+
+    /// #59 : une réponse coupée fait rejouer avec un lot réduit, et le dit.
+    #[tokio::test]
+    async fn a_truncated_consolidation_retries_with_a_smaller_batch() {
+        let (_dir, d, p) = daemon().await;
+        d.publish_config("test", |c| {
+            c.memory.dream_batch = 4;
+            Ok(vec!["memory.dream_batch".into()])
+        })
+        .unwrap();
+        for sujet in ["facturation", "déploiement", "sauvegarde", "veille"] {
+            note(
+                &d,
+                CandidateType::Preference,
+                &format!("Pour la {sujet}, le propriétaire décide seul et sans réunion"),
+                Origin::Owner,
+                "s1",
+                6,
+            )
+            .await;
+        }
+        // Première réponse : JSON coupé, illisible. Puis deux lots de deux, corrects.
+        p.reply(r#"{"tri": [{"candidat": 1, "durable": true, "uti"#);
+        for _ in 0..2 {
+            p.reply(
+                r#"{"tri": [{"candidat": 1, "durable": false, "utile": false, "precis": true,
+                    "introuvable": true, "endosse": true, "justification": "passager"},
+                   {"candidat": 2, "durable": false, "utile": false, "precis": true,
+                    "introuvable": true, "endosse": true, "justification": "passager"}],
+                  "operations": []}"#,
+            );
+        }
+        let o = run(&d, false).await.unwrap();
+        assert!(
+            o.report
+                .warnings
+                .iter()
+                .any(|w| w.contains("coupée") && w.contains("reprise par 2")),
+            "la troncature doit être nommée : {:?}",
+            o.report.warnings
+        );
+        assert_eq!(p.call_count(), 3, "un lot coupé, puis deux lots de deux");
     }
 
     #[tokio::test]

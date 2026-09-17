@@ -59,6 +59,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0011_events_seq_unique",
         sql: SQL_0011,
     },
+    Migration {
+        version: "0012_candidate_deferrals",
+        sql: SQL_0012,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -883,6 +887,12 @@ CREATE INDEX mem_history_ts ON mem_history(ts);
 /// rien dire.
 const SQL_0011: &str = r#"
 CREATE UNIQUE INDEX events_session_seq ON events(session_id, seq);
+"#;
+
+/// Reports de consolidation (issue #59) : un candidat reporté trois nuits de suite est
+/// rejeté avec sa raison, au lieu de revenir indéfiniment dans le lot.
+const SQL_0012: &str = r#"
+ALTER TABLE mem_candidates ADD COLUMN deferrals INTEGER NOT NULL DEFAULT 0;
 "#;
 
 #[cfg(test)]

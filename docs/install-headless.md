@@ -347,6 +347,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `memory.episode_idle` | `"2h"` | Inactivité qui clôt un épisode. Sans effet dans cette version. |
 | `memory.episode_topic_shift` | `0.35` | Écart de sujet qui clôt un épisode. Sans effet dans cette version. |
 | `memory.review_max_candidates` | `5` | Candidats notés au plus par relecture d'un échange ; 0 : relecture désactivée. |
+| `memory.dream_batch` | `40` | Candidats consolidés par appel au modèle, la nuit : au-delà, la réponse ne tient plus dans la fenêtre de sortie et tout le lot est reporté. |
 | `memory.dreaming_cron` | `"30 3 * * *"` | Heure de la consolidation nocturne (cron, fuseau du propriétaire). |
 | `memory.digest_cron` | `"0 8 * * *"` | Heure du digest du matin (cron, fuseau du propriétaire). |
 | `memory.promotion.ecart_min_occurrences` | `3` | Occurrences minimales d'un écart pour devenir une exception. |

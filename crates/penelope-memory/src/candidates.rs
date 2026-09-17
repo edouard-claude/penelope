@@ -389,6 +389,9 @@ impl CandidateStore {
             .await
     }
 
+    /// Reports tolérés avant rejet : au-delà, la file ne décroîtrait jamais (issue #59).
+    pub const MAX_DEFERRALS: i64 = 3;
+
     pub async fn set_state(
         &self,
         ids: &[String],
@@ -401,6 +404,35 @@ impl CandidateStore {
             .write(move |tx| {
                 let mut n = 0;
                 for id in &ids {
+                    if state == "deferred" {
+                        // Trois nuits sans verdict : le candidat est rejeté, avec sa
+                        // raison, plutôt que rejoué à l'identique (issue #59).
+                        tx.execute(
+                            "UPDATE mem_candidates SET deferrals = deferrals + 1 WHERE id=?1",
+                            params![id],
+                        )?;
+                        let count: i64 = tx
+                            .query_row(
+                                "SELECT deferrals FROM mem_candidates WHERE id=?1",
+                                params![id],
+                                |r| r.get(0),
+                            )
+                            .unwrap_or(0);
+                        if count >= Self::MAX_DEFERRALS {
+                            n += tx.execute(
+                                "UPDATE mem_candidates SET state='rejected', reject_reason=?2
+                                 WHERE id=?1",
+                                params![
+                                    id,
+                                    format!(
+                                        "reporté {count} nuits sans verdict : {}",
+                                        reason.clone().unwrap_or_else(|| "sans raison".into())
+                                    )
+                                ],
+                            )?;
+                            continue;
+                        }
+                    }
                     n += tx.execute(
                         "UPDATE mem_candidates SET state=?2, reject_reason=?3 WHERE id=?1",
                         params![id, state, reason],
@@ -505,6 +537,48 @@ pub fn stated_as_a_rule(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// #59 : un candidat reporté trois nuits de suite est rejeté avec sa raison, sinon la
+    /// file ne décroît jamais.
+    #[tokio::test]
+    async fn three_deferrals_reject_the_candidate() {
+        let cs = cs();
+        let c = Candidate::new(
+            CandidateType::Fait,
+            "Le bureau ferme à 18 h",
+            Origin::Owner,
+            "interactive",
+            "2026-09-17T10:00:00Z",
+        );
+        cs.record(vec![c], 5).await.unwrap();
+        let id = cs.pending(None).await.unwrap()[0].id.clone();
+
+        for _ in 0..2 {
+            cs.set_state(
+                std::slice::from_ref(&id),
+                "deferred",
+                Some("sans verdict de la grille"),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                cs.pending(None).await.unwrap().len(),
+                1,
+                "encore en attente"
+            );
+        }
+        cs.set_state(
+            std::slice::from_ref(&id),
+            "deferred",
+            Some("sans verdict de la grille"),
+        )
+        .await
+        .unwrap();
+        assert!(
+            cs.pending(None).await.unwrap().is_empty(),
+            "le troisième report le rejette"
+        );
+    }
     use super::*;
     use penelope_kernel::clock::TestClock;
     use std::sync::Arc;
