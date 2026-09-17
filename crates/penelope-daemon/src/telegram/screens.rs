@@ -172,7 +172,7 @@ impl TelegramGateway {
         Ok(ButtonSpec::callback(label, &t.token, ""))
     }
 
-    async fn op(
+    pub(super) async fn op(
         &self,
         label: &str,
         op: &str,
@@ -1909,6 +1909,73 @@ impl TelegramGateway {
                     self.start_workflow_form(chat_id, topic_id, &id, &title)
                         .await?;
                     Done::quiet(format!("Paramètres de « {title} »"))
+                }
+            }
+            // Rafale de messages : le propriétaire choisit ce qu'on en fait (issue #49).
+            "burst.one" | "burst.ingest" | "burst.each" | "burst.drop" => {
+                let id = str_of("id");
+                let key = format!("tg.burst.{id}");
+                let raw = d.kv_get(&key).await?.unwrap_or_default();
+                if raw.is_empty() {
+                    return Ok(Done::quiet("Rafale déjà traitée."));
+                }
+                d.kv_set(&key, "").await?;
+                let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+                let session = v["session"].as_str().unwrap_or_default().to_string();
+                let joined = v["joined"].as_str().unwrap_or_default().to_string();
+                let parts: Vec<String> = v["parts"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|p| p.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let origin = Origin::Telegram {
+                    chat_id,
+                    topic_id,
+                    message_id: v["message_id"].as_i64(),
+                };
+                match op {
+                    "burst.one" => {
+                        d.enqueue_message(&session, &joined, &origin, None).await?;
+                        Done::quiet("Traité comme un seul document")
+                    }
+                    "burst.each" => {
+                        for part in &parts {
+                            d.enqueue_message(&session, part, &origin, None).await?;
+                        }
+                        Done::quiet(format!("{} messages remis en file", parts.len()))
+                    }
+                    "burst.ingest" => {
+                        let (daemon, sess) = (d.clone(), session.clone());
+                        let name = format!(
+                            "collage-{}.md",
+                            s.clock.now_rfc3339().chars().take(19).collect::<String>()
+                        );
+                        let chan = origin.clone();
+                        tokio::spawn(async move {
+                            let note = match crate::ingest::ingest(
+                                &daemon,
+                                &name,
+                                joined.into_bytes(),
+                                "telegram",
+                                // Texte écrit par le propriétaire lui-même.
+                                penelope_memory::Origin::Owner,
+                                Some(&sess),
+                            )
+                            .await
+                            {
+                                Ok(i) => i.report(),
+                                Err(e) => format!("📄 Ingestion impossible : {e}"),
+                            };
+                            if let Some(m) = daemon.hooks.messenger() {
+                                let _ = m.send_text(&chan, &note).await;
+                            }
+                        });
+                        Done::quiet("Ingestion lancée")
+                    }
+                    _ => Done::quiet("Rien n'a été traité"),
                 }
             }
             "run.pause" | "run.resume" | "run.cancel" => {

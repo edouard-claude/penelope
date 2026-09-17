@@ -157,6 +157,9 @@ impl Services {
         let mut sample = Config::sample(42);
         sample.memory.review_max_candidates = 0;
         sample.context.auto_title = false;
+        // Pas de fenêtre de regroupement par défaut : un test qui l'exerce la règle
+        // lui-même (issue #49).
+        sample.telegram.text_group_window_ms = 0;
         let config = Arc::new(ConfigStore::new(
             sample,
             platform.dirs.config_file(),

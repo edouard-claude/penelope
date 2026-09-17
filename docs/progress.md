@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1298 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1302 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -644,7 +644,8 @@ compaction de fond sur la taille réelle du contexte (#40).
 
 Verrou de session à jeton de clôture (#43), écrivain à l'épreuve des paniques (#44),
 mutations de configuration sérialisées (#45), purge RGPD et rétention (#46), journal
-d'audit sans faux positif (#47), listes de frontmatter lues correctement (#48).
+d'audit sans faux positif (#47), listes de frontmatter lues correctement (#48), rafales de
+messages regroupées (#49).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -682,6 +683,14 @@ d'audit sans faux positif (#47), listes de frontmatter lues correctement (#48).
   découpée sur les virgules hors guillemets. Un alias contenant une virgule ne devient plus
   deux alias faux avec un guillemet résiduel : le lien qui le vise se résout, le lint ne
   signale plus d'alias fantôme.
+- **Rafales de messages** : les morceaux d'un même envoi (un long texte collé, découpé par
+  Telegram en messages de 4 096 caractères) forment un seul tour, recollés dans l'ordre,
+  dans la fenêtre `telegram.text_group_window_ms` (3 s). Au-delà de
+  `telegram.burst_messages` (5) ou `telegram.burst_chars` (20 000), une carte demande quoi
+  en faire (un seul document, ingérer sans répondre, un par un, tout annuler) et aucun tour
+  ne démarre avant le choix. `/stop` vide désormais la file de la session en plus d'arrêter
+  le tour en cours, et le dit ; `/stop tout` vide aussi les autres sessions du chat et met
+  les runs en pause.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

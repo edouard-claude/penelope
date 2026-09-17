@@ -235,7 +235,7 @@ async fn drive_everything(d: &Arc<Daemon>) {
 
 /// Clique le bouton `label` le plus récent qui n'a pas encore été cliqué.
 async fn click(
-    g: &TelegramGateway,
+    g: &Arc<TelegramGateway>,
     t: &MockTransport,
     label: &str,
     clicked: &mut BTreeSet<String>,
@@ -477,7 +477,7 @@ async fn ca_12_1_ticket_to_deploy_runs_end_to_end_and_survives_restarts() {
 }
 
 /// Exécute les tours de conversation en file, comme le pool de runners.
-async fn drain(d: &Arc<Daemon>, g: &TelegramGateway) {
+async fn drain(d: &Arc<Daemon>, g: &Arc<TelegramGateway>) {
     while let Some(turn) = d.services.turns.claim("test").await.unwrap() {
         crate::runner::process(d, turn, std::time::Duration::from_secs(30)).await;
     }

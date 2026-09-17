@@ -234,6 +234,32 @@ Workflows (4)
 `/secret` liste ou supprime, jamais ne saisit : un secret ne transite pas par une
 conversation.
 
+### Messages envoyés coup sur coup
+
+Un long texte collé arrive découpé par Telegram en messages de 4 096 caractères. Les
+morceaux reçus à moins de `telegram.text_group_window_ms` (3 s par défaut) forment **un
+seul tour**, recollés dans l'ordre : un morceau à la limite est la suite du précédent, les
+autres sont séparés par une ligne vide. Tant que le tour n'a pas démarré, un message de
+plus s'y ajoute. Chaque morceau reçoit sa réaction « reçu », mais une seule réponse part.
+
+Au-delà de `telegram.burst_messages` (5) ou de `telegram.burst_chars` (20 000), Pénélope
+ne répond pas d'elle-même : elle dit ce qu'elle a reçu et demande quoi en faire.
+
+```
+📥 Tu m'as envoyé 41 messages (150 000 caractères). Qu'est-ce que j'en fais ?
+[ 📄 Un seul document        ]
+[ 📥 Ingérer sans répondre   ]
+[ 1️⃣ Un par un ] [ 🗑 Tout annuler ]
+```
+
+« Ingérer sans répondre » passe par l'ingestion de documents : fiche source dans le vault,
+passages indexés, propositions de mémoire, sans réponse par morceau.
+
+`/stop` arrête le tour en cours **et** vide la file de la session, puis dit ce qui a été
+arrêté (« ⏹ Tour arrêté, 26 message(s) en attente annulé(s). ») et ce qui continue.
+`/stop tout` vide en plus les files des autres sessions du chat et met en pause les runs
+de workflow en cours.
+
 Une session reçoit un titre de quelques mots après son premier échange ; `/title
 <texte>` renomme la session courante. `/sessions` rend un bouton par session (▶️ celle du
 chat, ⏳ un tour en cours ou en attente, heure de dernière activité pour la plus récente) :

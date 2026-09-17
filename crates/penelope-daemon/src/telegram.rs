@@ -75,6 +75,8 @@ pub struct TelegramGateway {
     outbox_wake: Notify,
     /// Albums en cours de réception, par `media_group_id`.
     albums: Arc<std::sync::Mutex<HashMap<String, Album>>>,
+    /// Morceaux d'un même envoi texte en cours de réception, par chat (issue #49).
+    bursts: Arc<std::sync::Mutex<HashMap<i64, TextBurst>>>,
     /// Sorties mises de côté des sessions en arrière-plan : lues et réécrites sous verrou.
     held_lock: tokio::sync::Mutex<()>,
 }
@@ -132,6 +134,39 @@ struct Album {
 /// Fenêtre de regroupement d'un album : Telegram envoie ses photos une par une.
 const ALBUM_WINDOW: Duration = Duration::from_millis(1_500);
 
+/// Un long texte collé arrive découpé par Telegram en messages de 4 096 caractères : un
+/// morceau de cette taille appelle la suite sans séparateur (issue #49).
+const TELEGRAM_TEXT_LIMIT: usize = 4_000;
+
+/// Morceaux d'un même envoi, en attente de leur fin de fenêtre (issue #49).
+#[derive(Debug, Clone)]
+struct TextBurst {
+    origin: Origin,
+    session: String,
+    parts: Vec<String>,
+    message_ids: Vec<i64>,
+    /// `update_id` du premier morceau : clé de déduplication du tour.
+    update_id: i64,
+    chars: usize,
+    /// Instant à partir duquel la rafale est considérée comme finie.
+    deadline: std::time::Instant,
+}
+
+impl TextBurst {
+    /// Recolle les morceaux : un morceau à la limite de Telegram est la suite du
+    /// précédent, les autres sont des messages distincts.
+    fn joined(&self) -> String {
+        let mut out = String::new();
+        for (i, part) in self.parts.iter().enumerate() {
+            if i > 0 && self.parts[i - 1].chars().count() < TELEGRAM_TEXT_LIMIT {
+                out.push_str("\n\n");
+            }
+            out.push_str(part);
+        }
+        out
+    }
+}
+
 impl TelegramGateway {
     /// Construit la passerelle depuis la configuration. `Ok(None)` : Telegram n'est
     /// pas configuré (pas de propriétaire ou pas de jeton), ce n'est pas une erreur.
@@ -167,6 +202,7 @@ impl TelegramGateway {
             poll_timeout_s: cfg.telegram.poll_timeout_s,
             outbox_wake: Notify::new(),
             albums: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            bursts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             held_lock: tokio::sync::Mutex::new(()),
             daemon,
             bot,
@@ -248,7 +284,7 @@ impl TelegramGateway {
     }
 
     /// Traite un update. Idempotent : un update déjà traité est ignoré.
-    pub async fn process_update(&self, update: &Value) -> anyhow::Result<()> {
+    pub async fn process_update(self: &Arc<Self>, update: &Value) -> anyhow::Result<()> {
         let s = &self.daemon.services;
         let update_id = update
             .get("update_id")
@@ -292,7 +328,7 @@ impl TelegramGateway {
         Ok(())
     }
 
-    async fn handle(&self, incoming: Incoming) -> anyhow::Result<()> {
+    async fn handle(self: &Arc<Self>, incoming: Incoming) -> anyhow::Result<()> {
         match incoming {
             Incoming::Text {
                 update_id,
@@ -406,8 +442,9 @@ impl TelegramGateway {
                     text
                 };
                 self.react(chat_id, message_id, reaction::RECEIVED);
-                self.daemon
-                    .enqueue_message(&session, &content, &origin, Some(format!("tg:{update_id}")))
+                // Les morceaux d'un même envoi attendent la fin de la fenêtre et partent
+                // en un seul tour (issue #49).
+                self.buffer_text(&origin, &session, message_id, update_id, content)
                     .await?;
             }
             Incoming::Command {
@@ -816,12 +853,69 @@ impl TelegramGateway {
                     .await;
             }
             "stop" => {
+                // Arrêter, c'est aussi vider la file : sinon le flot reprend aussitôt
+                // (issue #49).
                 let session = d.chat_session_for(&origin).await?;
-                if d.bus.cancel_session(&session) {
-                    "⏹ Arrêt demandé.".into()
-                } else {
-                    "Rien à arrêter.".into()
+                let tout = matches!(args.trim(), "tout" | "all");
+                let burst = self
+                    .bursts
+                    .lock()
+                    .ok()
+                    .and_then(|mut g| g.remove(&chat_id))
+                    .map(|b| b.parts.len())
+                    .unwrap_or(0);
+                let running = d.bus.cancel_session(&session);
+                let mut queued = crate::session_ops::silence(d, &session, "arrêt demandé").await?;
+                let mut sessions = 0;
+                let mut runs = 0;
+                if tout {
+                    for other in s.sessions.list(None, 200).await? {
+                        let id = other.id.to_string();
+                        if other.tg_chat_id != Some(chat_id) || id == session {
+                            continue;
+                        }
+                        let n = crate::session_ops::silence(d, &id, "arrêt demandé").await?;
+                        if n > 0 || d.bus.is_active(&id) {
+                            sessions += 1;
+                        }
+                        queued += n;
+                    }
+                    for run in s.runs.list(None, 50).await? {
+                        if run.state != penelope_workflow::RunState::Running {
+                            continue;
+                        }
+                        if crate::workflow::control(d, &run.id, &penelope_workflow::Control::Pause)
+                            .await
+                            .is_ok()
+                        {
+                            runs += 1;
+                        }
+                    }
                 }
+                let mut note = match (running, queued) {
+                    (false, 0) => "Rien à arrêter.".to_string(),
+                    (true, 0) => "⏹ Tour arrêté.".to_string(),
+                    (false, n) => format!("⏹ {n} message(s) en attente annulé(s)."),
+                    (true, n) => format!("⏹ Tour arrêté, {n} message(s) en attente annulé(s)."),
+                };
+                if burst > 0 {
+                    note.push_str(&format!(" {burst} morceau(x) reçus à l'instant écartés."));
+                }
+                if sessions > 0 {
+                    note.push_str(&format!(
+                        " {sessions} autre(s) session(s) de ce chat vidée(s)."
+                    ));
+                }
+                if runs > 0 {
+                    note.push_str(&format!(" {runs} run(s) de workflow mis en pause."));
+                }
+                if !tout {
+                    note.push_str(
+                        " Les workflows et l'ingestion en cours continuent (`/stop tout` les \
+                         met en pause).",
+                    );
+                }
+                note
             }
             "switch" => {
                 if args.is_empty() {
@@ -1878,6 +1972,181 @@ impl TelegramGateway {
             }
         }
         Ok(())
+    }
+
+    // ---------------------------------------------------------- rafales (#49)
+
+    /// Met un morceau de côté le temps de la fenêtre de regroupement. Tant que la rafale
+    /// n'est pas finie, un nouveau message s'y ajoute au lieu de créer un tour de plus.
+    async fn buffer_text(
+        self: &Arc<Self>,
+        origin: &Origin,
+        session: &str,
+        message_id: i64,
+        update_id: i64,
+        text: String,
+    ) -> anyhow::Result<()> {
+        let cfg = self.daemon.services.config.config();
+        let window = cfg.telegram.text_group_window_ms;
+        let chat_id = match origin {
+            Origin::Telegram { chat_id, .. } => *chat_id,
+            _ => 0,
+        };
+        if window == 0 {
+            self.daemon
+                .enqueue_message(session, &text, origin, Some(format!("tg:{update_id}")))
+                .await?;
+            return Ok(());
+        }
+        let deadline = std::time::Instant::now() + Duration::from_millis(window);
+        let first = {
+            let mut g = self
+                .bursts
+                .lock()
+                .map_err(|_| anyhow::anyhow!("rafales verrouillées"))?;
+            match g.get_mut(&chat_id) {
+                Some(b) => {
+                    b.chars += text.chars().count();
+                    b.parts.push(text);
+                    b.message_ids.push(message_id);
+                    b.deadline = deadline;
+                    false
+                }
+                None => {
+                    g.insert(
+                        chat_id,
+                        TextBurst {
+                            origin: origin.clone(),
+                            session: session.to_string(),
+                            chars: text.chars().count(),
+                            parts: vec![text],
+                            message_ids: vec![message_id],
+                            update_id,
+                            deadline,
+                        },
+                    );
+                    true
+                }
+            }
+        };
+        if first {
+            let me = self.clone();
+            tokio::spawn(async move { me.flush_burst(chat_id).await });
+        }
+        Ok(())
+    }
+
+    /// Attend la fin de la rafale, puis en fait un tour unique (ou demande quoi en faire).
+    async fn flush_burst(self: Arc<Self>, chat_id: i64) {
+        loop {
+            let left = {
+                let g = match self.bursts.lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
+                match g.get(&chat_id) {
+                    Some(b) => b
+                        .deadline
+                        .saturating_duration_since(std::time::Instant::now()),
+                    None => return,
+                }
+            };
+            if left.is_zero() {
+                break;
+            }
+            tokio::time::sleep(left).await;
+        }
+        let burst = match self.bursts.lock() {
+            Ok(mut g) => g.remove(&chat_id),
+            Err(_) => None,
+        };
+        let Some(burst) = burst else { return };
+        if let Err(e) = self.deliver_burst(burst).await {
+            tracing::warn!(error = %e, "rafale Telegram non transmise");
+        }
+    }
+
+    /// Un seul tour pour toute la rafale, sauf si elle dépasse les seuils : Pénélope
+    /// demande alors quoi en faire avant de dépenser quoi que ce soit.
+    async fn deliver_burst(self: &Arc<Self>, burst: TextBurst) -> anyhow::Result<()> {
+        let cfg = self.daemon.services.config.config();
+        let too_many =
+            cfg.telegram.burst_messages > 0 && burst.parts.len() >= cfg.telegram.burst_messages;
+        let too_long = cfg.telegram.burst_chars > 0 && burst.chars >= cfg.telegram.burst_chars;
+        if too_many || too_long {
+            return self.ask_about_burst(burst).await;
+        }
+        self.daemon
+            .enqueue_message(
+                &burst.session,
+                &burst.joined(),
+                &burst.origin,
+                Some(format!("tg:{}", burst.update_id)),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Carte de rafale : ce qui est arrivé, et quatre façons de le traiter.
+    async fn ask_about_burst(self: &Arc<Self>, burst: TextBurst) -> anyhow::Result<()> {
+        let (chat_id, topic_id, reply_to) = match burst.origin {
+            Origin::Telegram {
+                chat_id,
+                topic_id,
+                message_id,
+            } => (chat_id, topic_id, message_id),
+            _ => (0, None, None),
+        };
+        let id = penelope_kernel::ids::Ulid::new().to_string();
+        let stored = json!({
+            "session": burst.session,
+            "message_id": reply_to,
+            "parts": burst.parts,
+            "joined": burst.joined(),
+        });
+        self.daemon
+            .kv_set(&format!("tg.burst.{id}"), &stored.to_string())
+            .await?;
+        let screen = screens::Screen {
+            text: format!(
+                "📥 Tu m'as envoyé {} messages ({} caractères). Qu'est-ce que j'en fais ?",
+                burst.parts.len(),
+                burst.chars
+            ),
+            rows: vec![
+                vec![
+                    self.op(
+                        "📄 Un seul document",
+                        "burst.one",
+                        json!({"id": id}),
+                        Value::Null,
+                    )
+                    .await?,
+                ],
+                vec![
+                    self.op(
+                        "📥 Ingérer sans répondre",
+                        "burst.ingest",
+                        json!({"id": id}),
+                        Value::Null,
+                    )
+                    .await?,
+                ],
+                vec![
+                    self.op("1️⃣ Un par un", "burst.each", json!({"id": id}), Value::Null)
+                        .await?,
+                    self.op(
+                        "🗑 Tout annuler",
+                        "burst.drop",
+                        json!({"id": id}),
+                        Value::Null,
+                    )
+                    .await?,
+                ],
+            ],
+        };
+        self.send_screen(chat_id, topic_id, reply_to, screen, None)
+            .await
     }
 
     /// Vocal ou fichier audio (§14.4) : téléchargement, transcription par le rôle `stt`,
@@ -5955,6 +6224,204 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let reactions = t.calls_to(tg::SET_MESSAGE_REACTION).await;
         assert!(reactions.len() >= 2, "{reactions:?}");
+    }
+
+    /// #49 : un long texte collé arrive en morceaux de 4 000 caractères. Ils forment un
+    /// seul tour, un seul appel au modèle, recollés dans l'ordre.
+    #[tokio::test]
+    async fn pieces_of_one_paste_become_a_single_turn() {
+        let (_d, g, t, p) = gateway().await;
+        g.daemon
+            .kv_set("tg.onboard.proposed", "test")
+            .await
+            .unwrap();
+        g.daemon
+            .publish_config("test", |c| {
+                c.telegram.text_group_window_ms = 60;
+                c.telegram.burst_messages = 0;
+                c.telegram.burst_chars = 0;
+                Ok(vec!["telegram.text_group_window_ms".into()])
+            })
+            .unwrap();
+        p.reply(r#"{"complexity":"low"}"#);
+        p.reply("Bien reçu.");
+
+        for i in 0..12 {
+            let part = format!("{i}{}", "a".repeat(TELEGRAM_TEXT_LIMIT));
+            g.process_update(&updates::text_message(100 + i as i64, OWNER, OWNER, &part))
+                .await
+                .unwrap();
+        }
+        // Rien ne part avant la fin de la fenêtre.
+        assert_eq!(g.daemon.services.turns.pending_count().await.unwrap(), 0);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        drain(&g).await;
+
+        assert_eq!(p.call_count(), 2, "un classement, une réponse");
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        assert_eq!(sent.len(), 1, "une seule réponse : {sent:?}");
+        let asked = p
+            .requests()
+            .into_iter()
+            .last()
+            .and_then(|r| r.messages.last().map(|m| m.text()))
+            .unwrap_or_default();
+        for i in 0..12 {
+            assert!(
+                asked.contains(&format!("{i}aaaa")),
+                "morceau {i} absent du tour"
+            );
+        }
+        assert!(
+            asked.find("0aaaa") < asked.find("11aaaa"),
+            "les morceaux doivent rester dans l'ordre"
+        );
+    }
+
+    /// #49 : deux messages espacés ne sont pas regroupés.
+    #[tokio::test]
+    async fn two_messages_far_apart_stay_two_turns() {
+        let (_d, g, _t, p) = gateway().await;
+        g.daemon
+            .kv_set("tg.onboard.proposed", "test")
+            .await
+            .unwrap();
+        g.daemon
+            .publish_config("test", |c| {
+                c.telegram.text_group_window_ms = 30;
+                Ok(vec!["telegram.text_group_window_ms".into()])
+            })
+            .unwrap();
+        p.reply(r#"{"complexity":"low"}"#);
+        p.reply("un");
+        p.reply(r#"{"complexity":"low"}"#);
+        p.reply("deux");
+
+        g.process_update(&updates::text_message(1, OWNER, OWNER, "premier"))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        g.process_update(&updates::text_message(2, OWNER, OWNER, "second"))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        assert_eq!(
+            g.daemon.services.turns.pending_count().await.unwrap(),
+            2,
+            "deux envois distincts, deux tours"
+        );
+    }
+
+    /// #49 : au-delà du seuil, Pénélope demande quoi faire de la rafale et ne démarre
+    /// aucun tour avant le choix ; « Ingérer » crée la fiche source sans répondre.
+    #[tokio::test]
+    async fn a_burst_asks_before_answering_and_can_be_ingested() {
+        let (_d, g, t, p) = gateway().await;
+        g.daemon
+            .kv_set("tg.onboard.proposed", "test")
+            .await
+            .unwrap();
+        g.daemon
+            .publish_config("test", |c| {
+                c.telegram.text_group_window_ms = 40;
+                c.telegram.burst_messages = 5;
+                Ok(vec!["telegram.burst_messages".into()])
+            })
+            .unwrap();
+
+        for i in 0..6 {
+            let part = format!("paragraphe {i} du document collé, sur la facturation.");
+            g.process_update(&updates::text_message(200 + i, OWNER, OWNER, &part))
+                .await
+                .unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        g.flush_outbox().await.unwrap();
+        assert_eq!(
+            g.daemon.services.turns.pending_count().await.unwrap(),
+            0,
+            "aucun tour ne démarre avant le choix"
+        );
+        assert_eq!(p.call_count(), 0, "aucun appel au modèle");
+
+        let card = t.calls_to(tg::SEND_MESSAGE).await;
+        let card = card.last().cloned().expect("carte de rafale");
+        assert!(
+            card["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("6 messages"),
+            "{card}"
+        );
+        let buttons = inline_buttons(&card);
+        let (_, token) = buttons
+            .iter()
+            .find(|(label, _)| label.contains("Ingérer"))
+            .cloned()
+            .expect("bouton Ingérer");
+
+        // L'ingestion résume le document avec le modèle, sans répondre par morceau.
+        p.reply(r#"{"resume": "document de facturation", "concepts": [], "a_definir": []}"#);
+        g.process_update(&updates::callback(900, OWNER, &token, 7777))
+            .await
+            .unwrap();
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            if crate::conversation::vault_dir(&g.daemon.services)
+                .join("sources")
+                .read_dir()
+                .map(|mut d| d.next().is_some())
+                .unwrap_or(false)
+            {
+                break;
+            }
+        }
+        let sources: Vec<_> = crate::conversation::vault_dir(&g.daemon.services)
+            .join("sources")
+            .read_dir()
+            .map(|d| d.filter_map(|e| e.ok()).collect())
+            .unwrap_or_default();
+        assert_eq!(sources.len(), 1, "une fiche source : {sources:?}");
+        assert_eq!(
+            g.daemon.services.turns.pending_count().await.unwrap(),
+            0,
+            "aucun tour créé par l'ingestion"
+        );
+    }
+
+    /// #49 : `/stop` arrête le tour en cours **et** vide la file, en disant combien.
+    #[tokio::test]
+    async fn stop_empties_the_queue_and_says_how_many() {
+        let (_d, g, t, _p) = gateway().await;
+        g.daemon
+            .kv_set("tg.onboard.proposed", "test")
+            .await
+            .unwrap();
+        for i in 0..5 {
+            g.process_update(&updates::text_message(
+                300 + i,
+                OWNER,
+                OWNER,
+                &format!("q{i}"),
+            ))
+            .await
+            .unwrap();
+        }
+        assert_eq!(g.daemon.services.turns.pending_count().await.unwrap(), 5);
+
+        g.process_update(&updates::text_message(400, OWNER, OWNER, "/stop"))
+            .await
+            .unwrap();
+        assert_eq!(
+            g.daemon.services.turns.pending_count().await.unwrap(),
+            0,
+            "la file est vidée"
+        );
+        g.flush_outbox().await.unwrap();
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        let note = sent.last().cloned().unwrap_or_default();
+        assert!(note.contains('5'), "le compte doit être dit : {note}");
+        assert!(note.contains("annulé"), "{note}");
     }
 
     /// Issue #5 : un tour échoué porte un bouton « Réessayer » qui relance la réponse sur

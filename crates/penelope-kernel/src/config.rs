@@ -172,6 +172,14 @@ pub struct Telegram {
     pub webhook_url: String,
     /// Accepter les messages du propriétaire dans les groupes.
     pub allow_groups: bool,
+    /// Fenêtre de regroupement des messages texte reçus coup sur coup, en millisecondes :
+    /// les morceaux d'un même envoi forment un seul tour. 0 : un message, un tour.
+    pub text_group_window_ms: u64,
+    /// Messages regroupés à partir desquels Pénélope demande quoi en faire au lieu de
+    /// répondre à chacun. 0 : jamais.
+    pub burst_messages: usize,
+    /// Caractères cumulés à partir desquels elle demande de même. 0 : jamais.
+    pub burst_chars: usize,
 }
 
 impl Default for Telegram {
@@ -193,6 +201,9 @@ impl Default for Telegram {
             draft_interval_ms: 700,
             webhook_url: String::new(),
             allow_groups: false,
+            text_group_window_ms: 3_000,
+            burst_messages: 5,
+            burst_chars: 20_000,
         }
     }
 }
