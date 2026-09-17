@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1310 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1311 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -647,7 +647,8 @@ mutations de configuration sérialisées (#45), purge RGPD et rétention (#46), 
 d'audit sans faux positif (#47), listes de frontmatter lues correctement (#48), rafales de
 messages regroupées (#49), nouvelles tentatives avant le flux (#50), flux muet coupé sur
 son inactivité (#51), résultats d'outils parallèles admis en groupe (#52), comptage et
-fenêtre des modèles locaux (#53), émulation d'outils retirée (#54).
+fenêtre des modèles locaux (#53), émulation d'outils retirée (#54), projection qui ne relit
+plus ce qui est résumé (#55).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -724,6 +725,12 @@ fenêtre des modèles locaux (#53), émulation d'outils retirée (#54).
   (`penelope model set` dit pourquoi, `doctor` signale une configuration déjà en place) ;
   les rôles de service (`stt`, `tts`, `embeddings`, `classifier`, `summarizer`, `titler`,
   `vision`) l'acceptent toujours. Le parseur JSON tolérant reste, sous `json_scan`.
+- **Projection** : la requête se construit à partir de la couverture des résumés actifs
+  (`seq > covered_to`) au lieu de relire et désérialiser toute la table `messages` pour
+  jeter ce que la compaction vient d'en retirer, et la queue du transcript se lit en
+  `ORDER BY seq DESC LIMIT 64`. Sur une session de 4 500 messages (9 Mo), deux lectures
+  complètes par itération (17 ms chacune) deviennent une lecture de ce qui est projeté
+  (2 ms).
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

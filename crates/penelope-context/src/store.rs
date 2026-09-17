@@ -327,6 +327,28 @@ impl HistoryStore {
             .await
     }
 
+    /// Les `limit` dernières entrées d'une session, dans l'ordre : la queue du transcript
+    /// sans relire tout l'historique (issue #55).
+    pub async fn tail(&self, session_id: &str, limit: usize) -> penelope_store::Result<Vec<Entry>> {
+        let sid = session_id.to_string();
+        self.store
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT seq, role, content, tool_call_id, tool_name, tokens_est, episode,
+                            eager, artifact_id, compacted
+                     FROM messages WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2",
+                )?;
+                let rows = st.query_map(params![sid, limit as i64], row_to_entry)?;
+                let mut out = Vec::new();
+                for r in rows {
+                    out.push(r?);
+                }
+                out.reverse();
+                Ok(out)
+            })
+            .await
+    }
+
     /// Derniers résultats d'outils encore entiers d'une session, du plus ancien au plus
     /// récent : ce qu'un groupe d'appels parallèles vient d'écrire (issue #52). Un
     /// résultat déjà externalisé (`artifact_id`) est laissé de côté : l'admission reste
@@ -392,12 +414,24 @@ impl HistoryStore {
         &self,
         session_id: &str,
     ) -> penelope_store::Result<std::collections::HashMap<i64, String>> {
+        self.contexts_from(session_id, 0).await
+    }
+
+    /// Contextes figés des messages à partir de `from_seq` : ce que la projection
+    /// réutilise vraiment (issue #55).
+    pub async fn contexts_from(
+        &self,
+        session_id: &str,
+        from_seq: i64,
+    ) -> penelope_store::Result<std::collections::HashMap<i64, String>> {
         let sid = session_id.to_string();
         self.store
             .read(move |c| {
-                let mut st =
-                    c.prepare("SELECT seq, context FROM message_context WHERE session_id = ?1")?;
-                let rows = st.query_map([sid], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                let mut st = c.prepare(
+                    "SELECT seq, context FROM message_context
+                     WHERE session_id = ?1 AND seq >= ?2",
+                )?;
+                let rows = st.query_map(params![sid, from_seq], |r| Ok((r.get(0)?, r.get(1)?)))?;
                 let mut out = std::collections::HashMap::new();
                 for r in rows {
                     let (seq, ctx): (i64, String) = r?;

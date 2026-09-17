@@ -75,9 +75,18 @@ impl SessionConversation {
     /// Entrées à projeter : résumés LCM actifs, puis tout ce qu'ils ne couvrent pas.
     async fn projected_entries(&self) -> anyhow::Result<Vec<Entry>> {
         let s = &self.services;
-        let mut entries = s.context.history.load(&self.session_id, 0).await?;
+        // Les résumés actifs d'abord : ce qu'ils couvrent n'a pas à être relu ni
+        // désérialisé pour être aussitôt jeté (issue #55).
+        let nodes = s.context.lcm.active_nodes(&self.session_id).await?;
+        let covered_to = nodes.iter().filter_map(|n| n.to_seq).max().unwrap_or(0);
+        let from_seq = if nodes.is_empty() { 0 } else { covered_to + 1 };
+        let mut entries = s.context.history.load(&self.session_id, from_seq).await?;
         // Contexte volatil figé avec chaque message utilisateur (issue #17).
-        let contexts = s.context.history.contexts(&self.session_id).await?;
+        let contexts = s
+            .context
+            .history
+            .contexts_from(&self.session_id, from_seq)
+            .await?;
         for e in entries.iter_mut() {
             if let Some(block) = contexts.get(&e.seq)
                 && e.message.role == Role::User
@@ -94,7 +103,6 @@ impl SessionConversation {
                 }
             }
         }
-        let nodes = s.context.lcm.active_nodes(&self.session_id).await?;
         if nodes.is_empty() {
             return Ok(entries);
         }
@@ -211,14 +219,15 @@ impl Conversation for SessionConversation {
     }
 
     async fn tail(&self) -> anyhow::Result<Vec<ChatMessage>> {
+        // Les dernières entrées seulement : `resolve_pending` appelle cette queue à
+        // chaque itération (issue #55).
         let entries = self
             .services
             .context
             .history
-            .load(&self.session_id, 0)
+            .tail(&self.session_id, TAIL_ENTRIES)
             .await?;
-        let start = entries.len().saturating_sub(TAIL_ENTRIES);
-        Ok(entries[start..].iter().map(|e| e.message.clone()).collect())
+        Ok(entries.iter().map(|e| e.message.clone()).collect())
     }
 }
 
@@ -434,6 +443,56 @@ mod tests {
             .unwrap()
             .id
             .to_string()
+    }
+
+    /// #55 : après une compaction, la projection ne relit plus les messages couverts par
+    /// un résumé, et la queue ne lit que ses dernières entrées.
+    #[tokio::test]
+    async fn the_projection_only_reads_what_is_not_summarised() {
+        let (_d, s) = services().await;
+        let sid = session(&s).await;
+        let tiers = build_tiers(&s, "bonjour", &[], None).await;
+        let conv = SessionConversation::new(s.clone(), &sid, "openrouter:mock/model", tiers, 0);
+        for i in 0..200 {
+            conv.record(&ChatMessage::user(format!("question {i}")), false)
+                .await
+                .unwrap();
+            conv.record(&ChatMessage::assistant(format!("réponse {i}")), false)
+                .await
+                .unwrap();
+        }
+        // Un résumé couvre les 300 premières entrées.
+        s.context
+            .lcm
+            .insert_leaf(&sid, 1, 300, "résumé des débuts", &[], 1_000, 40)
+            .await
+            .unwrap();
+        s.context
+            .history
+            .mark_compacted(&sid, 1, 300)
+            .await
+            .unwrap();
+
+        let msgs = conv.request_messages().await.unwrap();
+        let joined: String = msgs.iter().map(|m| m.text()).collect::<Vec<_>>().join("\n");
+        assert!(
+            joined.contains("résumé des débuts"),
+            "le résumé est projeté"
+        );
+        assert!(
+            !joined.contains("question 10\n") && !joined.contains("question 100"),
+            "les messages couverts ne sont pas relus"
+        );
+        assert!(joined.contains("question 199"), "la suite est là");
+
+        let tail = conv.tail().await.unwrap();
+        assert_eq!(tail.len(), TAIL_ENTRIES, "la queue est bornée");
+        assert_eq!(tail.last().unwrap().text(), "réponse 199");
+        assert!(
+            tail.first().unwrap().text().contains("question 1"),
+            "dans l'ordre : {}",
+            tail.first().unwrap().text()
+        );
     }
 
     /// #52 : cinq résultats d'outils parallèles de 20 k tokens chacun ne passent pas
