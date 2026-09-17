@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1327 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1328 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -651,7 +651,8 @@ fenêtre des modèles locaux (#53), émulation d'outils retirée (#54), projecti
 plus ce qui est résumé (#55), délai d'étape qui borne l'étape, pas le run (#56), `/stop`
 qui interrompt outils et sous-agents (#57), pratiques rappelées en conversation (#58),
 consolidation nocturne par lots (#59), état d'un candidat décidé après l'écriture (#60),
-décisions des notes de travail récoltées (#61), retour d'usage juste (#62).
+décisions des notes de travail récoltées (#61), retour d'usage juste (#62), skills relues
+sans redémarrage (#63).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -775,6 +776,10 @@ décisions des notes de travail récoltées (#61), retour d'usage juste (#62).
   qu'elle est dans chaque prompt ; le signal porte sur ce qui n'est injecté que sur
   déclenchement (niveau Cure, et entrées laissées hors budget). La voie 1 ne répète plus
   dans T4 une entrée déjà présente dans T2.
+- **Skills déposées en SSH** : la passe d'entretien compare une empreinte des dossiers de
+  skills (chemins, tailles, dates) et les relit dès qu'elle change, sans redémarrage ni
+  dépendance nouvelle ; `penelope skill reload` (méthode `skill.reload`) force la relecture
+  tout de suite et rend la génération et le nombre de skills.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

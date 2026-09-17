@@ -149,6 +149,8 @@ pub mod method {
     pub const SKILL_LIST: &str = "skill.list";
     pub const SKILL_SHOW: &str = "skill.show";
     pub const SKILL_ROLLBACK: &str = "skill.rollback";
+    /// Relit les dossiers de skills tout de suite (issue #63).
+    pub const SKILL_RELOAD: &str = "skill.reload";
 
     pub const WF_LIST: &str = "wf.list";
     pub const WF_SHOW: &str = "wf.show";
@@ -254,6 +256,7 @@ pub mod method {
         SKILL_LIST,
         SKILL_SHOW,
         SKILL_ROLLBACK,
+        SKILL_RELOAD,
         WF_LIST,
         WF_SHOW,
         WF_VALIDATE,

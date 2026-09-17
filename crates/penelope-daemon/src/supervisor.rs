@@ -210,6 +210,37 @@ async fn maintenance_loop(d: Arc<Daemon>) {
     }
 }
 
+/// Empreinte des dossiers de skills : chemins, tailles et dates de modification. Un
+/// changement suffit à déclencher une relecture (issue #63).
+fn skills_fingerprint(s: &crate::runtime::Services) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for root in [s.platform.dirs.skills(), s.platform.dirs.bundled_skills()] {
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            let Ok(read) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for e in read.flatten() {
+                let path = e.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let meta = e.metadata().ok();
+                let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                let mtime = meta
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0);
+                parts.push(format!("{}|{size}|{mtime}", path.display()));
+            }
+        }
+    }
+    parts.sort();
+    penelope_kernel::canonical::sha256_hex(parts.join("\n").as_bytes())
+}
+
 /// Un passage de maintenance. Une approbation échue relance son tour, qui dira au
 /// modèle que la demande a expiré sans réponse (§9.2).
 pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
@@ -230,6 +261,19 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
         d.enqueue_resume(sid, a.id.as_str(), &origin).await?;
     }
     s.actions.purge_expired().await?;
+
+    // Skills déposées en SSH : relues quand le dossier change, sans redémarrage (#63).
+    let fingerprint = skills_fingerprint(s);
+    if d.kv_get("skills.fingerprint").await?.as_deref() != Some(fingerprint.as_str()) {
+        match crate::runtime::reload_skills(s).await {
+            Ok(n) => {
+                tracing::info!(skills = n, "skills relues après changement du dossier");
+                d.kv_set("skills.fingerprint", &fingerprint).await?;
+            }
+            Err(e) => tracing::warn!(error = %e, "rechargement des skills"),
+        }
+    }
+
     // Rétention des traces : une passe par jour (issue #46).
     if let Err(e) = crate::purge::retention_tick(d).await {
         tracing::warn!(error = %e, "rétention");
@@ -294,6 +338,47 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use penelope_kernel::clock::TestClock;
+
+    /// #63 : une skill déposée après le démarrage est visible après une passe
+    /// d'entretien, sans redémarrage ; un fichier invalide n'efface pas les autres.
+    #[tokio::test]
+    async fn a_skill_dropped_by_scp_is_picked_up_by_the_maintenance_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(TestClock::default());
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock.clone())
+                .await
+                .unwrap(),
+        );
+        let d = Arc::new(Daemon::from_services(s.clone()));
+        crate::runtime::reload_skills(&s).await.unwrap();
+        let before = s.skills.all().len();
+        assert!(s.skills.get("revue-express").is_none());
+
+        // Dépôt en SSH, daemon en marche.
+        let root = s.platform.dirs.skills().join("revue-express");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("SKILL.md"),
+            "---\nname: revue-express\ndescription: Relire un diff en cinq points\n---\n\n\
+             # Revue express\n\nLis le diff, donne cinq points.\n",
+        )
+        .unwrap();
+
+        maintenance_pass(&d).await.unwrap();
+        assert!(
+            s.skills.get("revue-express").is_some(),
+            "la skill doit être visible sans redémarrage"
+        );
+
+        // Fichier invalide : les autres restent.
+        let bad = s.platform.dirs.skills().join("cassee");
+        std::fs::create_dir_all(&bad).unwrap();
+        std::fs::write(bad.join("SKILL.md"), "pas de frontmatter du tout\n").unwrap();
+        maintenance_pass(&d).await.unwrap();
+        assert!(s.skills.get("revue-express").is_some(), "toujours là");
+        assert!(s.skills.all().len() > before);
+    }
 
     #[tokio::test]
     async fn an_expired_approval_resumes_its_turn() {

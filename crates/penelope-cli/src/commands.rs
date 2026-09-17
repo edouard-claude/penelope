@@ -494,6 +494,8 @@ pub enum SkillCmd {
     Rollback {
         name: String,
     },
+    /// Relit les dossiers de skills tout de suite (après un dépôt par `scp`).
+    Reload,
 }
 
 /// Exécute la commande.
@@ -889,6 +891,7 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Skill(SkillCmd::List) => (m::SKILL_LIST, json!({})),
         Command::Skill(SkillCmd::Show { name }) => (m::SKILL_SHOW, json!({"name": name})),
         Command::Skill(SkillCmd::Rollback { name }) => (m::SKILL_ROLLBACK, json!({"name": name})),
+        Command::Skill(SkillCmd::Reload) => (m::SKILL_RELOAD, json!({})),
 
         Command::Approvals => (m::APPROVALS, json!({})),
         Command::Approve { id, always } => (m::APPROVE, json!({"id": id, "always": always})),

@@ -194,6 +194,11 @@ impl Rpc {
                 crate::session_ops::export(&self.daemon, what, id.as_deref()).await
             }
             method::STORE_REBUILD => crate::session_ops::rebuild(&self.daemon).await,
+            method::SKILL_RELOAD => {
+                // Skill déposée à l'instant : relue sans attendre la passe d'entretien.
+                let generation = crate::runtime::reload_skills(s).await?;
+                Ok(json!({"generation": generation, "skills": s.skills.all().len()}))
+            }
             method::SKILL_ROLLBACK => {
                 let name = required_str(p, "name")?;
                 let root = s.platform.dirs.skills();
