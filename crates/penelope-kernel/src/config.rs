@@ -1185,6 +1185,10 @@ pub struct ConfigStore {
     clock: SharedClock,
     results: std::sync::Mutex<BTreeMap<String, ApplyResult>>,
     tx: tokio::sync::broadcast::Sender<Arc<Generation>>,
+    /// Sérialise les mutations : lecture de l'instantané, écriture du fichier et
+    /// publication sous un seul verrou, sinon deux mutations concurrentes s'écrasent et
+    /// se volent leur fichier temporaire (issue #45).
+    writing: std::sync::Mutex<()>,
 }
 
 impl ConfigStore {
@@ -1210,6 +1214,7 @@ impl ConfigStore {
             clock,
             results: std::sync::Mutex::new(BTreeMap::new()),
             tx,
+            writing: std::sync::Mutex::new(()),
         }
     }
 
@@ -1274,7 +1279,25 @@ impl ConfigStore {
     ///
     /// Une mutation qui échoue à la validation **ne publie rien** : la génération
     /// courante reste en place (§12.6 pour les workflows, même principe ici).
+    /// Deux mutations concurrentes s'exécutent l'une après l'autre : la seconde part de
+    /// ce que la première a publié, jamais d'un instantané périmé (issue #45).
     pub fn mutate<F>(&self, source: &str, f: F) -> Result<Arc<Generation>>
+    where
+        F: FnOnce(&mut Config) -> Result<Vec<String>>,
+    {
+        let _writing = self.lock_writing();
+        self.apply(source, f)
+    }
+
+    fn lock_writing(&self) -> std::sync::MutexGuard<'_, ()> {
+        match self.writing.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        }
+    }
+
+    /// Corps d'une mutation, verrou déjà tenu.
+    fn apply<F>(&self, source: &str, f: F) -> Result<Arc<Generation>>
     where
         F: FnOnce(&mut Config) -> Result<Vec<String>>,
     {
@@ -1316,10 +1339,15 @@ impl ConfigStore {
     }
 
     /// Recharge depuis le fichier (watcher du §2.9).
+    ///
+    /// La lecture est sous le même verrou que les mutations : un `config set` qui écrit
+    /// entre la lecture et la publication ne se fait pas écraser par une relecture
+    /// périmée (issue #45).
     pub fn reload_from_disk(&self) -> Result<Arc<Generation>> {
+        let _writing = self.lock_writing();
         let raw = std::fs::read_to_string(&self.path)?;
         let parsed = Config::from_toml(&raw)?;
-        self.mutate("file", move |c| {
+        self.apply("file", move |c| {
             let changed = diff_paths(c, &parsed);
             *c = parsed;
             Ok(changed)
@@ -1386,14 +1414,18 @@ impl ConfigStore {
 /// Écriture atomique : fichier temporaire dans le même répertoire, puis renommage.
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     use std::io::Write;
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(dir)?;
+    // Nom unique : deux écritures concurrentes ne se renomment pas le fichier l'une de
+    // l'autre (« No such file or directory », issue #45).
     let tmp = dir.join(format!(
-        ".{}.tmp{}",
+        ".{}.tmp{}-{}",
         path.file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "f".into()),
-        std::process::id()
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::SeqCst)
     ));
     {
         let mut f = std::fs::File::create(&tmp)?;
@@ -1528,6 +1560,95 @@ mod tests {
             .insert("z-ai/glm-5.2".into(), 0.60);
         assert_eq!(c.compaction_threshold_for("openrouter:z-ai/glm-5.2"), 0.60);
         assert_eq!(c.compaction_threshold_for("autre/modele"), 0.70);
+    }
+
+    /// #45 : 800 mutations lancées par 4 threads. Aucune n'est refusée, aucune n'est
+    /// perdue, et le fichier sur disque porte la dernière génération.
+    #[test]
+    fn concurrent_mutations_never_lose_a_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let cs = std::sync::Arc::new(ConfigStore::new(
+            cfg(),
+            &path,
+            None,
+            std::sync::Arc::new(TestClock::default()),
+        ));
+        let depart = cs.config().budget.daily_usd;
+
+        std::thread::scope(|s| {
+            for _ in 0..4 {
+                let cs = cs.clone();
+                s.spawn(move || {
+                    for _ in 0..200 {
+                        cs.mutate("essai", |c| {
+                            c.budget.daily_usd += 1.0;
+                            Ok(vec!["budget.daily_usd".into()])
+                        })
+                        .expect("aucune mutation refusée");
+                    }
+                });
+            }
+        });
+
+        assert_eq!(cs.config().budget.daily_usd, depart + 800.0);
+        assert_eq!(cs.generation(), 801);
+        let on_disk = Config::from_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            on_disk.budget.daily_usd,
+            cs.config().budget.daily_usd,
+            "le fichier reflète la dernière génération"
+        );
+    }
+
+    /// #45 : une relecture du fichier pendant une mutation. Les deux aboutissent, la
+    /// génération publiée est la dernière écrite, et le fichier la reflète.
+    #[test]
+    fn a_reload_racing_a_mutation_leaves_a_consistent_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let cs = std::sync::Arc::new(ConfigStore::new(
+            cfg(),
+            &path,
+            None,
+            std::sync::Arc::new(TestClock::default()),
+        ));
+        // Le fichier porte une modification faite à la main, hors du daemon.
+        let mut edite = (*cs.config()).clone();
+        edite.runners.count = 7;
+        std::fs::write(&path, edite.to_toml().unwrap()).unwrap();
+
+        std::thread::scope(|s| {
+            let a = cs.clone();
+            s.spawn(move || a.reload_from_disk().expect("relecture"));
+            let b = cs.clone();
+            s.spawn(move || {
+                b.mutate("cli", |c| {
+                    c.budget.daily_usd = 123.0;
+                    Ok(vec!["budget.daily_usd".into()])
+                })
+                .expect("mutation")
+            });
+        });
+
+        let fin = cs.config();
+        assert_eq!(cs.generation(), 3, "les deux générations sont publiées");
+        assert_eq!(fin.budget.daily_usd, 123.0, "la mutation survit");
+        let on_disk = Config::from_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&*fin).unwrap(),
+            serde_json::to_value(&on_disk).unwrap(),
+            "le fichier porte la dernière génération"
+        );
+
+        // La relecture voit toujours ce que le fichier contient à son tour de verrou : une
+        // édition manuelle relue après la mutation entre elle aussi.
+        let mut edite = (*cs.config()).clone();
+        edite.runners.count = 9;
+        std::fs::write(&path, edite.to_toml().unwrap()).unwrap();
+        cs.reload_from_disk().unwrap();
+        assert_eq!(cs.config().runners.count, 9);
+        assert_eq!(cs.config().budget.daily_usd, 123.0);
     }
 
     /// CA 4 : générations strictement croissantes, sans perte d'écriture.
