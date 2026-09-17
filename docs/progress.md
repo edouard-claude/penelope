@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1322 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1324 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -650,7 +650,7 @@ son inactivité (#51), résultats d'outils parallèles admis en groupe (#52), co
 fenêtre des modèles locaux (#53), émulation d'outils retirée (#54), projection qui ne relit
 plus ce qui est résumé (#55), délai d'étape qui borne l'étape, pas le run (#56), `/stop`
 qui interrompt outils et sous-agents (#57), pratiques rappelées en conversation (#58),
-consolidation nocturne par lots (#59).
+consolidation nocturne par lots (#59), état d'un candidat décidé après l'écriture (#60).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -758,6 +758,11 @@ consolidation nocturne par lots (#59).
   proches tiennent en un seul appel d'embeddings, et un candidat reporté trois nuits de
   suite est rejeté avec sa raison. Un lot de 150 candidats ne se reportait plus jamais,
   nuit après nuit, sans que rien ne soit promu.
+- **État d'un candidat** : `promoted` n'est plus posé avant l'écriture. Une opération
+  refusée par la validation (uid inconnu, pratique inconnue, plafond de retrait), une
+  écriture en échec ou un candidat pour lequel le modèle n'a rien proposé laissent le
+  candidat en attente, avec sa raison dans le rapport : la règle n'est plus perdue en
+  silence, et elle est retentée la nuit suivante (jusqu'à trois reports, #59).
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

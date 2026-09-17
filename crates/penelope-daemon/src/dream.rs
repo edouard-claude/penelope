@@ -156,6 +156,7 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
         }
 
         let mut applied_ops: Vec<Operation> = Vec::new();
+        let mut applied_ids: Vec<Vec<String>> = Vec::new();
         if !admitted.is_empty() {
             let snapshot = VaultSnapshot::read(s, &vault).await?;
             // Souvenirs proches : un seul appel d'embeddings pour tout le lot (issue #59).
@@ -178,7 +179,9 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
             // Lots bornés : au-delà, la réponse du modèle ne tient pas et tout le lot
             // repart en attente, nuit après nuit (issue #59).
             let batch = cfg.memory.dream_batch.max(1);
-            let mut ops: Vec<Operation> = Vec::new();
+            // Chaque opération garde les candidats qu'elle sert : leur état se décide
+            // après l'écriture (issue #60).
+            let mut ops: Vec<(Vec<String>, Operation)> = Vec::new();
             let mut i = 0usize;
             while i < items.len() {
                 let mut size = batch.min(items.len() - i);
@@ -209,8 +212,10 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                 i += size;
             }
             let manually_modified = snapshot.changed_since_read(&vault);
+            let by_op = ops.clone();
+            let ids_of = move |op: &Operation| -> Vec<String> { ids_for(&by_op, op) };
             let validation = validate(
-                ops,
+                ops.iter().map(|(_, o)| o.clone()).collect(),
                 &ValidationContext {
                     known_uids: &snapshot.uids,
                     entries_per_file: &snapshot.entries_per_file,
@@ -223,8 +228,14 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
             );
             report.deferred = validation.deferred.len() as u32;
             report.proposals += validation.proposals.len() as u32;
+            // Opération refusée, reportée ou à confirmer : le candidat retourne en
+            // attente avec la raison, au lieu d'être marqué promu sans écriture (#60).
             for (op, reason) in &validation.rejected {
                 report.rejected.push(format!("{} : {reason}", op.kind()));
+                state_updates.push((ids_of(op), "deferred", Some(reason.clone())));
+            }
+            for (op, reason) in &validation.deferred {
+                state_updates.push((ids_of(op), "deferred", Some(reason.clone())));
             }
             for (op, reason) in &validation.proposals {
                 report.questions.push(format!(
@@ -232,8 +243,31 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                     op.kind(),
                     op.text().unwrap_or_default()
                 ));
+                state_updates.push((ids_of(op), "question", Some(reason.clone())));
+            }
+            // Candidat retenu par la grille pour lequel le modèle n'a rien proposé :
+            // rien n'a été écrit, il repasse la nuit prochaine.
+            let served: BTreeSet<String> = ops.iter().flat_map(|(ids, _)| ids.clone()).collect();
+            let decided: BTreeSet<String> = state_updates
+                .iter()
+                .flat_map(|(ids, _, _)| ids.clone())
+                .collect();
+            for g in &admitted {
+                let ids: Vec<String> = g.members.iter().map(|m| m.id.clone()).collect();
+                if ids
+                    .iter()
+                    .any(|id| served.contains(id) || decided.contains(id))
+                {
+                    continue;
+                }
+                report.sorted.push(format!(
+                    "⏳ en attente « {} » : aucune opération proposée",
+                    short(&g.representative.text)
+                ));
+                state_updates.push((ids, "deferred", Some("aucune opération proposée".into())));
             }
             applied_ops = validation.applied;
+            applied_ids = applied_ops.iter().map(ids_of).collect();
         }
 
         if dry_run {
@@ -247,7 +281,8 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
             return Ok::<(), anyhow::Error>(());
         }
 
-        for op in &applied_ops {
+        for (i, op) in applied_ops.iter().enumerate() {
+            let ids = applied_ids.get(i).cloned().unwrap_or_default();
             match apply(d, &vault, op, &run_id).await {
                 Ok(file) => {
                     report.promoted += 1;
@@ -257,8 +292,18 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                     if !report.files_touched.contains(&file) {
                         report.files_touched.push(file);
                     }
+                    // Écrit : le candidat est traité (issue #60).
+                    if !ids.is_empty() {
+                        state_updates.push((ids, "promoted", None));
+                    }
                 }
-                Err(e) => report.rejected.push(format!("{} : {e}", op.kind())),
+                Err(e) => {
+                    report.rejected.push(format!("{} : {e}", op.kind()));
+                    // L'écriture a échoué : le candidat sera rejoué la nuit prochaine.
+                    if !ids.is_empty() {
+                        state_updates.push((ids, "deferred", Some(e.to_string())));
+                    }
+                }
             }
         }
         // États passagers expirés : retirés du journal, sans question (issue #37).
@@ -459,6 +504,34 @@ async fn nearby_with(d: &Arc<Daemon>, text: &str, vector: Option<Vec<f32>>) -> V
         .collect()
 }
 
+/// Candidats servis par une opération, après le passage de `validate` qui peut l'avoir
+/// retouchée (texte rogné, fichier changé, découpée en morceaux) : égalité d'abord, puis
+/// texte normalisé, puis inclusion, puis uid visé (issue #60).
+fn ids_for(ops: &[(Vec<String>, Operation)], op: &Operation) -> Vec<String> {
+    use penelope_memory::grid::normalized;
+    if let Some((ids, _)) = ops.iter().find(|(_, o)| o == op) {
+        return ids.clone();
+    }
+    if let Some(text) = op.text().map(normalized).filter(|t| !t.is_empty()) {
+        let same = ops.iter().find(|(_, o)| {
+            o.text()
+                .map(normalized)
+                .is_some_and(|t| t == text || t.contains(&text) || text.contains(&t))
+        });
+        if let Some((ids, _)) = same {
+            return ids.clone();
+        }
+    }
+    if let Some(uid) = op.target_uid()
+        && let Some((ids, _)) = ops
+            .iter()
+            .find(|(_, o)| o.target_uid() == Some(uid) && o.kind() == op.kind())
+    {
+        return ids.clone();
+    }
+    Vec::new()
+}
+
 /// Opération d'ajout au journal des états en cours.
 fn is_journal(op: &Operation) -> bool {
     matches!(op, Operation::AddEntry { file, section: Some(section), .. }
@@ -476,7 +549,7 @@ fn sort_and_plan(
     day: &str,
     report: &mut DreamReport,
 ) -> (
-    Vec<Operation>,
+    Vec<(Vec<String>, Operation)>,
     Vec<(Vec<String>, &'static str, Option<String>)>,
 ) {
     use penelope_memory::grid::{JOURNAL_SECTION, Placement, normalized};
@@ -486,9 +559,10 @@ fn sort_and_plan(
         let g = item.group;
         let ids: Vec<String> = g.members.iter().map(|m| m.id.clone()).collect();
         let text = short(&g.representative.text);
-        // Un écart a passé ses seuils de répétition : pas de verdict à attendre.
+        // Un écart a passé ses seuils de répétition : pas de verdict à attendre. Son
+        // état se décide après l'écriture, comme les autres (issue #60).
         if g.ctype == penelope_memory::CandidateType::Ecart {
-            updates.push((ids, "promoted", None));
+            let _ = &ids;
             placements.push(Some(Placement::Durable));
             continue;
         }
@@ -516,12 +590,11 @@ fn sort_and_plan(
             place.label(),
             v.criteria_line()
         ));
-        match &place {
-            Placement::Ignored(reason) => {
-                report.rejected.push(format!("« {text} » : {reason}"));
-                updates.push((ids, "rejected", Some(reason.clone())));
-            }
-            _ => updates.push((ids, "promoted", None)),
+        // `promoted` seulement après une écriture réussie (issue #60) ; un candidat
+        // écarté par la grille, lui, est tranché ici.
+        if let Placement::Ignored(reason) = &place {
+            report.rejected.push(format!("« {text} » : {reason}"));
+            updates.push((ids, "rejected", Some(reason.clone())));
         }
         placements.push(Some(place));
     }
@@ -559,7 +632,10 @@ fn sort_and_plan(
                         continue;
                     }
                 }
-                ops.push(op.clone());
+                ops.push((
+                    item.group.members.iter().map(|m| m.id.clone()).collect(),
+                    op.clone(),
+                ));
             }
             Some(Placement::Journal { .. }) => {
                 if let Operation::AddEntry { text, .. } = op {
@@ -574,6 +650,17 @@ fn sort_and_plan(
     }
     for (candidat, reason) in &response.noops {
         if let Some(n) = candidat.filter(|n| *n >= 1 && *n <= items.len()) {
+            // Rien à écrire parce que c'est déjà en mémoire : le candidat est traité.
+            updates.push((
+                items[n - 1]
+                    .group
+                    .members
+                    .iter()
+                    .map(|m| m.id.clone())
+                    .collect(),
+                "promoted",
+                None,
+            ));
             report.sorted.push(format!(
                 "＝ déjà en mémoire « {} » : {reason}",
                 short(&items[n - 1].group.representative.text)
@@ -585,15 +672,23 @@ fn sort_and_plan(
             let text = journal_text
                 .remove(&(i + 1))
                 .unwrap_or_else(|| items[i].group.representative.text.clone());
-            ops.push(Operation::AddEntry {
-                file: "projets.md".into(),
-                section: Some(JOURNAL_SECTION.into()),
-                text,
-                importance: None,
-                declencheurs: None,
-                expire: Some(expire.clone()),
-                sensible: None,
-            });
+            ops.push((
+                items[i]
+                    .group
+                    .members
+                    .iter()
+                    .map(|m| m.id.clone())
+                    .collect(),
+                Operation::AddEntry {
+                    file: "projets.md".into(),
+                    section: Some(JOURNAL_SECTION.into()),
+                    text,
+                    importance: None,
+                    declencheurs: None,
+                    expire: Some(expire.clone()),
+                    sensible: None,
+                },
+            ));
         }
     }
     (ops, updates)
@@ -2015,6 +2110,85 @@ mod tests {
             .in_session(session)
             .with_importance(importance);
         s.candidates.record(vec![c], 5).await.unwrap();
+    }
+
+    /// #60 : une opération qui vise un uid inconnu ne fait pas passer son candidat pour
+    /// promu : il reste en attente, avec la raison.
+    #[tokio::test]
+    async fn a_rejected_operation_leaves_its_candidate_pending() {
+        let (_dir, d, p) = daemon().await;
+        let s = &d.services;
+        note(
+            &d,
+            CandidateType::Preference,
+            "Toujours répondre en français",
+            Origin::Owner,
+            "s1",
+            6,
+        )
+        .await;
+        p.reply(
+            r#"{"tri": [{"candidat": 1, "durable": true, "utile": true, "precis": true,
+                "introuvable": true, "endosse": true, "justification": "règle dite"}],
+              "operations": [{"op": "replace_entry", "candidat": 1, "uid": "01INCONNU",
+                "text": "Toujours répondre en français"}]}"#,
+        );
+        let o = run(&d, false).await.unwrap();
+        assert_eq!(o.report.promoted, 0, "{:?}", o.report);
+        let pending = s.candidates.pending(None).await.unwrap();
+        assert_eq!(
+            pending.len(),
+            1,
+            "le candidat reste en attente : {pending:?}"
+        );
+        assert!(
+            pending[0]
+                .reject_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("uid"),
+            "{pending:?}"
+        );
+        assert!(
+            o.report.rejected.iter().any(|r| r.contains("uid")),
+            "{:?}",
+            o.report.rejected
+        );
+    }
+
+    /// #60 : un candidat jugé durable pour lequel le modèle ne propose rien reste en
+    /// attente, au lieu d'être marqué promu à vide.
+    #[tokio::test]
+    async fn a_durable_candidate_without_any_operation_stays_pending() {
+        let (_dir, d, p) = daemon().await;
+        let s = &d.services;
+        note(
+            &d,
+            CandidateType::Preference,
+            "Les revues passent toujours par une relecture humaine",
+            Origin::Owner,
+            "s1",
+            6,
+        )
+        .await;
+        p.reply(
+            r#"{"tri": [{"candidat": 1, "durable": true, "utile": true, "precis": true,
+                "introuvable": true, "endosse": true, "justification": "règle dite"}],
+              "operations": []}"#,
+        );
+        let o = run(&d, false).await.unwrap();
+        assert_eq!(o.report.promoted, 0, "{:?}", o.report);
+        let pending = s.candidates.pending(None).await.unwrap();
+        assert_eq!(pending.len(), 1, "{pending:?}");
+        assert_eq!(pending[0].state, "deferred");
+        assert!(
+            o.report
+                .sorted
+                .iter()
+                .any(|l| l.contains("aucune opération proposée")),
+            "{:?}",
+            o.report.sorted
+        );
     }
 
     /// #59 : beaucoup de candidats passent en plusieurs appels, chacun dimensionné, et
