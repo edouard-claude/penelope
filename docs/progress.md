@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1302 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1305 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -645,7 +645,7 @@ compaction de fond sur la taille réelle du contexte (#40).
 Verrou de session à jeton de clôture (#43), écrivain à l'épreuve des paniques (#44),
 mutations de configuration sérialisées (#45), purge RGPD et rétention (#46), journal
 d'audit sans faux positif (#47), listes de frontmatter lues correctement (#48), rafales de
-messages regroupées (#49).
+messages regroupées (#49), nouvelles tentatives avant le flux (#50).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -691,6 +691,13 @@ messages regroupées (#49).
   ne démarre avant le choix. `/stop` vide désormais la file de la session en plus d'arrêter
   le tour en cours, et le dit ; `/stop tout` vide aussi les autres sessions du chat et met
   les runs en pause.
+- **Incident passager côté fournisseur** : une erreur avant le flux (5xx, délai de
+  connexion, limite de débit sans `Retry-After`) est réessayée sur le même modèle avec une
+  attente qui double (1 s, 2 s, 4 s, `providers.openrouter.request_retries`, 3), puis les
+  replis d'alias jouent **aussi** avec OpenRouter, dont le repli côté serveur ne sert à
+  rien quand c'est OpenRouter lui-même qui est injoignable. Chaque nouvelle tentative est
+  tracée (`llm.retried`), l'arrêt demandé interrompt l'attente, et l'échec final dit
+  combien de fois on a essayé et combien de temps on a attendu.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

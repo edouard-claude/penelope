@@ -798,7 +798,11 @@ impl AgentLoop {
             );
         }
         let mut last_error = CallFailure::plain("aucun modèle n'a répondu");
-        let mut waited = false;
+        // Erreur d'avant flux : quelques nouvelles tentatives, attente doublée à chaque
+        // fois, avant de changer de modèle (issue #50).
+        let max_retries = s.config.config().providers.openrouter.request_retries;
+        let mut retries: u32 = 0;
+        let mut waited_secs: u64 = 0;
         // Erreur en cours de flux avant tout texte : un nouvel essai, puis les replis
         // (côté client, même avec OpenRouter dont le repli ne joue qu'avant le flux).
         let mut stream_retried = false;
@@ -854,25 +858,70 @@ impl AgentLoop {
                         .failed(&llm_id, &e.to_string(), e.maybe_billed)
                         .await?;
                     last_error = CallFailure::from_llm(&e);
-                    // `Retry-After` court : une seule attente, puis le même modèle.
-                    if let Some(secs) = e.retry_after.filter(|s| *s <= RETRY_AFTER_MAX_SECS)
-                        && !waited
-                        && penelope_llm::Router::should_fallback(&e)
-                    {
-                        waited = true;
-                        tracing::warn!(model = %model_id, secs, "limite de débit : nouvel essai");
+                    let retryable = penelope_llm::Router::should_fallback(&e);
+                    // Incident passager (5xx, délai de connexion, limite de débit) : on
+                    // rappelle le même modèle après 1 s, 2 s, 4 s, ou après le
+                    // `Retry-After` s'il est court. Un incident de deux secondes ne fait
+                    // plus échouer le tour (issue #50).
+                    // Tant qu'un autre modèle reste à essayer, une seule attente : le
+                    // repli coûte moins cher qu'une attente de plus. Sur le dernier
+                    // candidat, tout le budget de tentatives sert.
+                    let others_left = attempt + 1 < candidates.len()
+                        || (!client_fallbacks
+                            && spec.fallback_models.iter().any(|m| !candidates.contains(m)));
+                    let budget = if others_left {
+                        max_retries.min(1)
+                    } else {
+                        max_retries
+                    };
+                    if retryable && retries < budget && !spec.cancel.is_cancelled() {
+                        let secs = e
+                            .retry_after
+                            .filter(|s| *s <= RETRY_AFTER_MAX_SECS)
+                            .unwrap_or_else(|| retry_backoff_secs(retries));
+                        retries += 1;
+                        waited_secs += secs;
+                        tracing::warn!(
+                            model = %model_id, error = %e, secs, attempt = retries,
+                            "erreur avant le flux : nouvel essai"
+                        );
+                        s.events
+                            .append(
+                                EventDraft::new(
+                                    "llm.retried",
+                                    json!({
+                                        "model": model_id,
+                                        "attempt": retries,
+                                        "wait_s": secs,
+                                        "error": e.to_string(),
+                                    }),
+                                )
+                                .session(&spec.session_id),
+                            )
+                            .await?;
                         if !sleep_unless_cancelled(&spec.cancel, secs).await {
                             return Ok(Err(CallFailure::plain("arrêt demandé")));
                         }
                         continue;
                     }
+                    // Le fournisseur lui-même est injoignable : son repli côté serveur ne
+                    // joue pas, on prend la main avec les replis d'alias.
+                    if retryable && !client_fallbacks {
+                        client_fallbacks = true;
+                        for m in &spec.fallback_models {
+                            if !candidates.contains(m) {
+                                candidates.push(m.clone());
+                            }
+                        }
+                    }
                     let more = attempt + 1 < candidates.len();
-                    if more && penelope_llm::Router::should_fallback(&e) {
+                    if more && retryable {
                         tracing::warn!(model = %model_id, error = %e, "repli sur le modèle suivant");
+                        retries = 0;
                         attempt += 1;
                         continue;
                     }
-                    return Ok(Err(last_error));
+                    return Ok(Err(with_attempts(last_error, retries, waited_secs)));
                 }
             };
             s.llm_state.response_started(&llm_id).await?;
@@ -1620,6 +1669,24 @@ pub fn pending_calls(tail: &[ChatMessage]) -> Vec<ToolCall> {
 const RETRY_AFTER_MAX_SECS: u64 = 20;
 /// Attente avant de relancer un flux coupé sans `Retry-After`.
 const STREAM_RETRY_SECS: u64 = 2;
+
+/// Attente avant la n-ième nouvelle tentative d'avant flux : 1 s, 2 s, 4 s… (issue #50).
+fn retry_backoff_secs(done: u32) -> u64 {
+    1u64 << done.min(4)
+}
+
+/// Dit combien de fois on a essayé et combien de temps on a attendu : un échec après
+/// trois délais de connexion ne se lit pas comme un échec immédiat (issue #50).
+fn with_attempts(mut failure: CallFailure, retries: u32, waited_secs: u64) -> CallFailure {
+    if retries > 0 {
+        failure.message = format!(
+            "{}\n\n{} tentatives, {waited_secs} s d'attente entre elles.",
+            failure.message,
+            retries + 1
+        );
+    }
+    failure
+}
 
 /// Dort `secs` secondes, sauf annulation. Vrai si l'attente est allée au bout.
 async fn sleep_unless_cancelled(cancel: &CancelToken, secs: u64) -> bool {
@@ -2516,9 +2583,10 @@ mod tests {
         assert_eq!(conv.messages().last().unwrap().text(), "bonjour à toi");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_transient_failure_falls_back_to_the_next_model() {
         let (_d, s, p) = setup().await;
+        p.push(Scripted::Error(LlmErrorKind::Transient, "503".into()));
         p.push(Scripted::Error(LlmErrorKind::Transient, "503".into()));
         p.reply("réponse du repli");
         let sid = session(&s).await;
@@ -2531,7 +2599,93 @@ mod tests {
             .unwrap();
         assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
         let models: Vec<String> = p.requests().iter().map(|r| r.model.clone()).collect();
-        assert_eq!(models, vec!["mock/model", "mock/repli"]);
+        // Une attente, puis le repli : tant qu'un autre modèle reste, on n'insiste pas
+        // sur celui qui vient d'échouer (issue #50).
+        assert_eq!(models, vec!["mock/model", "mock/model", "mock/repli"]);
+    }
+
+    /// #50 : avec OpenRouter, une erreur transitoire d'avant flux est réessayée au lieu
+    /// de faire échouer le tour, et le nouvel essai est tracé.
+    #[tokio::test(start_paused = true)]
+    async fn a_transient_error_before_the_stream_is_retried_with_openrouter() {
+        let (_d, s, p) = setup().await;
+        p.named("openrouter");
+        p.push(Scripted::Error(LlmErrorKind::Transient, "503".into()));
+        p.reply("réponse après nouvel essai");
+        let sid = session(&s).await;
+        let conv = MemoryConversation::new("Tu es Pénélope.", "salut");
+        let out = AgentLoop::new(s.clone(), p.clone())
+            .run_conversation(&spec(&sid), &conv, &exec(false), &NullSink)
+            .await
+            .unwrap();
+        assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
+        let models: Vec<String> = p.requests().iter().map(|r| r.model.clone()).collect();
+        assert_eq!(models, vec!["mock/model", "mock/model"], "même modèle");
+        let events = s.events.range(0, 200).await.unwrap();
+        assert!(
+            events.iter().any(|e| e.kind == "llm.retried"),
+            "le nouvel essai doit être tracé"
+        );
+    }
+
+    /// #50 : après les tentatives, l'échec dit combien de fois on a essayé.
+    #[tokio::test(start_paused = true)]
+    async fn repeated_connection_timeouts_say_how_many_attempts_were_made() {
+        let (_d, s, p) = setup().await;
+        p.named("openrouter");
+        for _ in 0..4 {
+            p.push(Scripted::Error(
+                LlmErrorKind::Transient,
+                "délai de connexion".into(),
+            ));
+        }
+        let sid = session(&s).await;
+        let conv = MemoryConversation::new("Tu es Pénélope.", "salut");
+        let out = AgentLoop::new(s.clone(), p.clone())
+            .run_conversation(&spec(&sid), &conv, &exec(false), &NullSink)
+            .await
+            .unwrap();
+        match out {
+            TurnOutcome::Failed { error } => {
+                assert!(error.contains("4 tentatives"), "{error}");
+                assert!(error.contains("7 s"), "{error}");
+            }
+            other => panic!("le tour devait échouer : {other:?}"),
+        }
+        assert_eq!(p.call_count(), 4, "trois nouvelles tentatives, pas plus");
+    }
+
+    /// #50 : `/stop` pendant l'attente arrête le tour sans rappeler le modèle.
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_during_the_retry_wait_ends_the_turn() {
+        let (_d, s, p) = setup().await;
+        p.named("openrouter");
+        p.push(Scripted::Error(LlmErrorKind::Transient, "503".into()));
+        p.reply("ne devrait jamais partir");
+        let sid = session(&s).await;
+        let sp = spec(&sid);
+        // L'arrêt arrive pendant l'attente, juste après le premier appel refusé.
+        let cancel = sp.cancel.clone();
+        let watcher = p.clone();
+        tokio::spawn(async move {
+            loop {
+                if watcher.call_count() >= 1 {
+                    cancel.cancel();
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        });
+        let conv = MemoryConversation::new("Tu es Pénélope.", "salut");
+        let out = AgentLoop::new(s.clone(), p.clone())
+            .run_conversation(&sp, &conv, &exec(false), &NullSink)
+            .await
+            .unwrap();
+        assert!(
+            matches!(out, TurnOutcome::Cancelled | TurnOutcome::Failed { .. }),
+            "{out:?}"
+        );
+        assert_eq!(p.call_count(), 1, "aucun nouvel appel après l'arrêt");
     }
 
     /// Issue #5 : une erreur arrivée pendant le flux, avant tout texte, est rejouée puis

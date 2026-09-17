@@ -39,4 +39,6 @@ minisign-verify.workspace = true
 [dev-dependencies]
 lopdf.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util"] }
+# `test-util` : horloge virtuelle des tests, pour ne pas dormir vraiment pendant les
+# attentes entre deux tentatives (issue #50).
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util", "test-util"] }

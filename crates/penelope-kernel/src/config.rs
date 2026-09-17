@@ -224,6 +224,9 @@ pub struct OpenRouter {
     pub api_key: String,
     /// Adresse de l'API OpenRouter.
     pub base_url: String,
+    /// Nouvelles tentatives sur erreur transitoire **avant** le flux (5xx, délai de
+    /// connexion, limite de débit) : attente de 1 s, 2 s, 4 s. 0 : aucune.
+    pub request_retries: u32,
     /// Période de rechargement du catalogue de modèles.
     pub catalog_refresh: String,
     /// Attribution (`HTTP-Referer`, `X-OpenRouter-Title`, `X-OpenRouter-Categories`).
@@ -242,6 +245,7 @@ impl Default for OpenRouter {
         OpenRouter {
             api_key: "${SECRET:openrouter_api_key}".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
+            request_retries: 3,
             catalog_refresh: "6h".into(),
             referer: "https://github.com/edouard-claude/penelope".into(),
             title: "Penelope".into(),

@@ -52,7 +52,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # 1302 tests, tous hors réseau. Les suites nommées du §20.1 sont des filtres sur
+      # 1305 tests, tous hors réseau. Les suites nommées du §20.1 sont des filtres sur
       # cette commande : `arch`, `ctx-safety`, `mcp-conformance`, `hot-reload`,
       # `resilience` et `security` en font partie.
       - name: Tests

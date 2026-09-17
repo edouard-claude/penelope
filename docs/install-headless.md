@@ -235,6 +235,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 |---|---|---|
 | `providers.openrouter.api_key` | `"${SECRET:openrouter_api_key}"` | Clé d'API, par référence au magasin de secrets. |
 | `providers.openrouter.base_url` | `"https://openrouter.ai/api/v1"` | Adresse de l'API OpenRouter. |
+| `providers.openrouter.request_retries` | `3` | Nouvelles tentatives sur erreur transitoire **avant** le flux (5xx, délai de connexion, limite de débit) : attente de 1 s, 2 s, 4 s. 0 : aucune. |
 | `providers.openrouter.catalog_refresh` | `"6h"` | Période de rechargement du catalogue de modèles. |
 | `providers.openrouter.referer` | `"https://github.com/edouard-claude/penelope"` | Attribution (`HTTP-Referer`, `X-OpenRouter-Title`, `X-OpenRouter-Categories`). |
 | `providers.openrouter.title` | `"Penelope"` | Titre d'attribution (`X-OpenRouter-Title`). |

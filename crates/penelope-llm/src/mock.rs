@@ -39,6 +39,9 @@ pub struct MockProvider {
     /// Synthèse vocale : `Some(erreur)` fait échouer `speak` ; textes reçus.
     speech_error: Arc<Mutex<Option<String>>>,
     pub spoken: Arc<Mutex<Vec<(String, String)>>>,
+    /// Nom rendu par `name()` : les chemins qui dépendent du fournisseur (repli côté
+    /// serveur d'OpenRouter, issue #50) se testent avec `named("openrouter")`.
+    name: Arc<std::sync::OnceLock<String>>,
 }
 
 /// WAV PCM mono 16 bits à 16 kHz, de silence : ce que renvoie la synthèse simulée
@@ -90,6 +93,7 @@ impl MockProvider {
             embedder: Arc::new(Mutex::new(None)),
             speech_error: Arc::new(Mutex::new(None)),
             spoken: Arc::new(Mutex::new(Vec::new())),
+            name: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -116,6 +120,13 @@ impl MockProvider {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .push(s);
+        self
+    }
+
+    /// Se fait passer pour un fournisseur donné (`openrouter`, `openai_compat`) : les
+    /// chemins qui en dépendent se testent alors pour de vrai (issue #50).
+    pub fn named(&self, name: &str) -> &Self {
+        let _ = self.name.set(name.to_string());
         self
     }
 
@@ -155,7 +166,7 @@ impl MockProvider {
 #[async_trait::async_trait]
 impl Provider for MockProvider {
     fn name(&self) -> &str {
-        "mock"
+        self.name.get().map(String::as_str).unwrap_or("mock")
     }
 
     async fn embed(&self, _model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>> {
