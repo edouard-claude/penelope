@@ -55,6 +55,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0010_retention",
         sql: SQL_0010,
     },
+    Migration {
+        version: "0011_events_seq_unique",
+        sql: SQL_0011,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -872,6 +876,13 @@ CREATE INDEX turn_queue_finished ON turn_queue(state, finished_at);
 CREATE INDEX tg_updates_received ON tg_updates(processed, received_at);
 CREATE INDEX llm_requests_updated ON llm_requests(updated_at);
 CREATE INDEX mem_history_ts ON mem_history(ts);
+"#;
+
+/// Chaîne d'audit (issue #47) : deux événements d'une même session ne peuvent plus porter
+/// le même `seq`. Un doublon rendrait le rejeu et `session_events(from_seq)` faux, sans
+/// rien dire.
+const SQL_0011: &str = r#"
+CREATE UNIQUE INDEX events_session_seq ON events(session_id, seq);
 "#;
 
 #[cfg(test)]

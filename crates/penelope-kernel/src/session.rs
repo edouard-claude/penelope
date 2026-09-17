@@ -4,7 +4,7 @@ use crate::clock::SharedClock;
 use crate::error::{KernelError, Result};
 use crate::ids::SessionId;
 use penelope_store::Store;
-use penelope_store::rusqlite::{self, params};
+use penelope_store::rusqlite::{self, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -429,11 +429,15 @@ impl SessionStore {
         Ok(self
             .store
             .write(move |tx| {
+                // Session inconnue : on ne fait pas semblant d'avoir écrit (issue #47).
                 let raw: String = tx
                     .query_row("SELECT metadata FROM sessions WHERE id=?1", [&id], |r| {
                         r.get(0)
                     })
-                    .unwrap_or_else(|_| "{}".to_string());
+                    .optional()?
+                    .ok_or_else(|| {
+                        penelope_store::StoreError::other(format!("session introuvable : {id}"))
+                    })?;
                 let mut meta: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
                 let obj = meta.as_object_mut().ok_or_else(|| {
                     penelope_store::StoreError::other("metadata de session corrompue")
@@ -565,6 +569,17 @@ mod tests {
         let back = s.require(sess.id.as_str()).await.unwrap();
         assert_eq!(back.title.as_deref(), Some("test"));
         assert_eq!(back.kind, SessionKind::Chat);
+    }
+
+    /// #47 : écrire les métadonnées d'une session inconnue ne réussit pas en silence.
+    #[tokio::test]
+    async fn metadata_on_an_unknown_session_fails() {
+        let s = ss().await;
+        let e = s
+            .metadata("s_inconnue", MetadataOp::Set, "k", json!("v"))
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("introuvable"), "{e}");
     }
 
     #[tokio::test]

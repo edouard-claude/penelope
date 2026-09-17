@@ -11,7 +11,7 @@ use crate::canonical::{canonical_json, sha256_hex};
 use crate::clock::SharedClock;
 use crate::error::{KernelError, Result};
 use penelope_store::Store;
-use penelope_store::rusqlite::{self, params};
+use penelope_store::rusqlite::{self, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -158,29 +158,29 @@ impl EventLog {
         let ts = self.clock.now_rfc3339();
         self.store
             .write(move |tx| {
+                // Journal vide : GENESIS. Toute autre erreur de lecture remonte : un
+                // maillon chaîné sur GENESIS au milieu du journal serait indiscernable
+                // d'une altération, et la chaîne ne se répare pas (issue #47).
                 let prev_hash: String = tx
                     .query_row(
                         "SELECT hash FROM events ORDER BY id DESC LIMIT 1",
                         [],
                         |r| r.get(0),
                     )
-                    .unwrap_or_else(|_| GENESIS.to_string());
+                    .optional()?
+                    .unwrap_or_else(|| GENESIS.to_string());
 
                 let seq: i64 = match draft.session_id.as_deref() {
-                    Some(sid) => tx
-                        .query_row(
-                            "SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE session_id = ?1",
-                            [sid],
-                            |r| r.get(0),
-                        )
-                        .unwrap_or(1),
-                    None => tx
-                        .query_row(
-                            "SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE session_id IS NULL",
-                            [],
-                            |r| r.get(0),
-                        )
-                        .unwrap_or(1),
+                    Some(sid) => tx.query_row(
+                        "SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE session_id = ?1",
+                        [sid],
+                        |r| r.get(0),
+                    )?,
+                    None => tx.query_row(
+                        "SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE session_id IS NULL",
+                        [],
+                        |r| r.get(0),
+                    )?,
                 };
 
                 let payload_s = canonical_json(&draft.payload);
@@ -392,6 +392,10 @@ impl EventLog {
 
 fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
     let payload_s: String = r.get(6)?;
+    // Un payload illisible est dit, pas remplacé par `null` en silence (issue #47). Un
+    // événement purgé garde son marqueur, qui est du JSON valide.
+    let payload = serde_json::from_str(&payload_s)
+        .unwrap_or_else(|e| json!({"payload_illisible": e.to_string(), "brut": payload_s}));
     Ok(Event {
         id: r.get(0)?,
         session_id: r.get(1)?,
@@ -399,7 +403,7 @@ fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
         seq: r.get(3)?,
         ts: r.get(4)?,
         kind: r.get(5)?,
-        payload: serde_json::from_str(&payload_s).unwrap_or(Value::Null),
+        payload,
         hash: r.get(7)?,
         prev_hash: r.get(8)?,
     })
@@ -436,6 +440,67 @@ mod tests {
         let r = l.verify().await.unwrap();
         assert!(r.ok, "{r:?}");
         assert_eq!(r.checked, 2);
+    }
+
+    /// #47 : une erreur de lecture pendant `append` fait échouer l'écriture. Un maillon
+    /// chaîné sur GENESIS au milieu du journal serait indiscernable d'une altération.
+    #[tokio::test]
+    async fn a_read_error_fails_the_append_instead_of_forging_a_genesis_link() {
+        let l = log().await;
+        l.append(EventDraft::new("turn.started", json!({"n":1})).session("s1"))
+            .await
+            .unwrap();
+
+        // La table disparaît sous les pieds de l'écriture : lecture en erreur.
+        l.store()
+            .write(|tx| {
+                tx.execute_batch("ALTER TABLE events RENAME TO events_absent;")?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let e = l
+            .append(EventDraft::new("turn.finished", json!({"n":2})).session("s1"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(e, KernelError::Store(_)),
+            "l'erreur doit remonter : {e}"
+        );
+
+        l.store()
+            .write(|tx| {
+                tx.execute_batch("ALTER TABLE events_absent RENAME TO events;")?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(l.count().await.unwrap(), 1, "rien n'a été écrit");
+        assert!(l.verify().await.unwrap().ok, "la chaîne reste saine");
+    }
+
+    /// #47 : deux événements d'une session ne peuvent pas porter le même `seq`.
+    #[tokio::test]
+    async fn a_duplicate_seq_is_refused_by_the_database() {
+        let l = log().await;
+        l.append(EventDraft::new("turn.started", json!({})).session("s1"))
+            .await
+            .unwrap();
+        let refused = l
+            .store()
+            .write(|tx| {
+                tx.execute(
+                    "INSERT INTO events(session_id, run_id, seq, ts, kind, payload, hash, prev_hash)
+                     VALUES('s1',NULL,1,'2026-01-01T00:00:00Z','triche','{}','h','p')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await;
+        assert!(
+            refused.is_err(),
+            "un doublon (session, seq) doit être refusé"
+        );
     }
 
     /// CA 4 : `penelope audit verify` détecte toute altération d'un événement.

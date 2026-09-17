@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1293 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1296 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -643,7 +643,8 @@ compaction de fond sur la taille réelle du contexte (#40).
 ### 0.16.1
 
 Verrou de session à jeton de clôture (#43), écrivain à l'épreuve des paniques (#44),
-mutations de configuration sérialisées (#45), purge RGPD et rétention (#46).
+mutations de configuration sérialisées (#45), purge RGPD et rétention (#46), journal
+d'audit sans faux positif (#47).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -671,6 +672,12 @@ mutations de configuration sérialisées (#45), purge RGPD et rétention (#46).
   `retention.memory_history_days` (30). Le payload d'un update Telegram est vidé dès son
   traitement : seul son identifiant sert encore, à la déduplication. `kv` date ses clés
   (migration `0010_retention`).
+- **Journal d'audit** : une erreur de lecture pendant `append` fait échouer l'écriture au
+  lieu de forger un maillon chaîné sur GENESIS ou un `seq` en doublon, indiscernables d'une
+  altération. Un doublon `(session_id, seq)` est refusé par la base (migration
+  `0011_events_seq_unique`), un payload illisible est dit au lieu d'être remplacé par
+  `null`, et écrire les métadonnées d'une session inconnue échoue au lieu de réussir sans
+  rien écrire.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et
