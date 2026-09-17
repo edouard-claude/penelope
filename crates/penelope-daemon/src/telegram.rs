@@ -4798,7 +4798,10 @@ mod tests {
     async fn a_text_message_gets_an_html_answer_as_a_reply() {
         let (_d, g, t, p) = gateway().await;
         // Accueil déjà proposé : seul l'échange compte ici.
-        g.daemon.kv_set("tg.onboard.proposed", "test").await.unwrap();
+        g.daemon
+            .kv_set("tg.onboard.proposed", "test")
+            .await
+            .unwrap();
         p.reply(r#"{"complexity":"low"}"#);
         p.reply("Bonjour, **Edouard**.");
         g.process_update(&updates::text_message(1, OWNER, OWNER, "salut"))
@@ -4890,7 +4893,10 @@ mod tests {
     #[tokio::test]
     async fn the_same_update_is_processed_only_once() {
         let (_d, g, t, p) = gateway().await;
-        g.daemon.kv_set("tg.onboard.proposed", "test").await.unwrap();
+        g.daemon
+            .kv_set("tg.onboard.proposed", "test")
+            .await
+            .unwrap();
         p.reply(r#"{"complexity":"low"}"#);
         p.reply("une seule fois");
         let u = updates::text_message(7, OWNER, OWNER, "salut");
