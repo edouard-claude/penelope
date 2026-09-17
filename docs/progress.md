@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1332 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1334 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -652,7 +652,8 @@ plus ce qui est résumé (#55), délai d'étape qui borne l'étape, pas le run (
 qui interrompt outils et sous-agents (#57), pratiques rappelées en conversation (#58),
 consolidation nocturne par lots (#59), état d'un candidat décidé après l'écriture (#60),
 décisions des notes de travail récoltées (#61), retour d'usage juste (#62), skills relues
-sans redémarrage (#63), redirections HTTP revérifiées (#64).
+sans redémarrage (#63), redirections HTTP revérifiées (#64), `shell_exec` qui ne laisse ni
+processus ni mémoire derrière lui (#65).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -786,6 +787,12 @@ sans redémarrage (#63), redirections HTTP revérifiées (#64).
   au lieu de revenir dans le transcript. Le corps est lu par morceaux et coupé à
   `max_bytes` sans passer en mémoire, et une taille annoncée au-delà de vingt fois la
   limite est refusée avant lecture.
+- **`shell_exec`** : au dépassement du délai, le groupe de processus est terminé (`SIGTERM`
+  puis `SIGKILL`) au lieu de survivre jusqu'au redémarrage de la machine pendant que le
+  modèle relance la commande ; les sorties sont lues en continu sous plafond (tête et
+  queue), si bien qu'une commande bavarde ne fait plus monter la mémoire du daemon de la
+  taille de sa sortie ; chaque appel porte une étiquette PID, ramassée au démarrage suivant
+  si le daemon a été tué.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et
