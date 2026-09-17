@@ -417,6 +417,9 @@ pub struct Budget {
     /// Nombre d'appels au modèle dans un tour à chaque multiple duquel le résultat d'outil
     /// suggère de regrouper les commandes ou de déléguer à un sous-agent. 0 : jamais.
     pub delegate_after_calls: u32,
+    /// Dépense du jour réservée aux résumés de compaction une fois le plafond du jour
+    /// atteint, en dollars ; les plafonds de session et de run ne les arrêtent jamais.
+    pub compaction_reserve_usd: f64,
 }
 
 impl Default for Budget {
@@ -429,6 +432,7 @@ impl Default for Budget {
             turn_checkpoint_usd: 1.0,
             show_turn_cost_usd: 0.5,
             delegate_after_calls: 10,
+            compaction_reserve_usd: 0.5,
         }
     }
 }

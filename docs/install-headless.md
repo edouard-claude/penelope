@@ -297,6 +297,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `budget.turn_checkpoint_usd` | `1.0` | Coût d'un tour de conversation à chaque multiple duquel Pénélope demande si elle continue (issue #19). 0 : jamais. |
 | `budget.show_turn_cost_usd` | `0.5` | Coût d'un tour au-delà duquel la réponse finale l'indique. 0 : jamais. |
 | `budget.delegate_after_calls` | `10` | Nombre d'appels au modèle dans un tour à chaque multiple duquel le résultat d'outil suggère de regrouper les commandes ou de déléguer à un sous-agent. 0 : jamais. |
+| `budget.compaction_reserve_usd` | `0.5` | Dépense du jour réservée aux résumés de compaction une fois le plafond du jour atteint, en dollars ; les plafonds de session et de run ne les arrêtent jamais. |
 
 **[context]**
 
@@ -1240,9 +1241,18 @@ rôle `compaction` (`summarizer`). Le seuil est aussi plafonné en valeur absolu
 `context.max_prompt_tokens` (120 000 par défaut, `0` pour s'en passer) : sur un modèle à
 1,3 M de tokens, la compaction part vers 103 k au lieu de 917 k. Une fenêtre immense sert
 à ne jamais échouer, pas à renvoyer 500 k tokens à chaque appel ; relever le plafond garde
-plus de conversation mot pour mot, au prix de chaque appel. `/budget` et `self_status`
-donnent la taille du contexte au dernier appel et le seuil de compaction. La conversation ne s'arrête pas : le résumé est publié
-à la fin du tour en cours. Les derniers échanges restent mot pour mot, les identifiants
+plus de conversation mot pour mot, au prix de chaque appel. La conversation ne s'arrête
+pas : le résumé est publié à la fin du tour en cours.
+
+Le déclenchement compare le seuil à l'estimation locale de la requête **et** au prompt
+réellement facturé au dernier appel : les instantanés mémoire, l'index et les outils,
+que l'estimation voit mal, comptent. Une session reprise après une pause (cache perdu de
+toute façon) dont le dernier prompt dépasse le seuil est résumée **avant** l'appel au
+modèle, comme le premier tour d'un fork. Chaque décision laisse un événement :
+`context.compaction_requested`, `context.compaction_skipped` avec sa raison (attente
+après échec, rien à compacter, réserve épuisée) et `context.compacted`, aussi en INFO dans
+les journaux. `/status`, `/budget` et `self_status` donnent la taille réelle du contexte,
+le seuil de fond et la date de la dernière compaction. Les derniers échanges restent mot pour mot, les identifiants
 (chemins, tickets, SHA, URLs) sont conservés tels quels, et un résumé existant est mis à
 jour plutôt que refait. Rien n'est effacé : les échanges résumés restent consultables par
 `history_grep` et `history_expand`.
@@ -1265,7 +1275,10 @@ penelope session compact
 Un résumé raté attend 1 min, puis 5, puis 15 avant un nouvel essai de fond ; `/compact`
 lève cette attente. Si le provider refuse une requête trop longue, Pénélope résume une
 fois et relance la même demande. Le coût apparaît sous le rôle `compaction` de
-`/budget rôles` ; un budget atteint suspend les résumés de fond, pas `/compact`.
+`/budget rôles`. Un résumé coûte peu et allège chaque appel suivant : les plafonds de
+session et de run ne l'arrêtent jamais ; une fois le plafond du jour atteint, les résumés
+de fond continuent dans la limite de `budget.compaction_reserve_usd` (0,50 $ par défaut),
+`/compact` toujours.
 
 ## 7. Premier essai en CLI
 

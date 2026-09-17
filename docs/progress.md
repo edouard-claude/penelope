@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1270 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1273 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -612,7 +612,8 @@ Rêve nocturne trié par une grille explicite (#37).
 
 ### 0.15.0
 
-Documentation vérifiée par la CI (#38), planifications qui ne meurent plus en silence (#39).
+Documentation vérifiée par la CI (#38), planifications qui ne meurent plus en silence (#39),
+compaction de fond sur la taille réelle du contexte (#40).
 
 - **Index `docs/README.md`** : par besoin, par fichier (rôle et sections), décisions ; le
   README racine y renvoie et `self_docs list` donne le rôle de chaque page.
@@ -630,6 +631,14 @@ Documentation vérifiée par la CI (#38), planifications qui ne meurent plus en 
   sinon `last_error`, visible dans `/schedules` et `doctor`. Un déclenchement manuel
   n'est plus dédoublonné avec le passage prévu. Une planification identique à une
   planification active est signalée à la création.
+- **Compaction de fond** (#40) : déclenchée aussi par le prompt réellement facturé au
+  dernier appel, pas seulement par l'estimation locale ; session froide (pause au-delà de
+  la durée du cache) ou premier tour d'un fork au-delà du seuil résumés avant l'appel au
+  modèle ; événements `context.compaction_requested`, `context.compaction_skipped` (avec
+  la raison) et `context.compacted`, en INFO dans les journaux. Les plafonds de session et
+  de run n'arrêtent plus les résumés ; au plafond du jour, une réserve
+  `budget.compaction_reserve_usd` (0,50 $). `/status`, `/budget` et `self_status` donnent
+  la taille réelle du contexte, le seuil de fond et la dernière compaction.
 
 ### Routine de livraison
 

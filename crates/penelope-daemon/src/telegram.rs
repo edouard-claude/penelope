@@ -2274,15 +2274,13 @@ impl TelegramGateway {
         if let Some(prompt) = view["last_prompt_tokens"].as_i64() {
             let cached = view["last_cached_tokens"].as_i64().unwrap_or(0);
             t.push_str(&format!(
-                "📏 Contexte : {} k tokens au dernier appel ({:.0} % en cache), compaction de \
-                 fond vers {} k\n",
-                prompt / 1000,
+                "📏 {} ({:.0} % en cache)\n",
+                context_line(&view),
                 if prompt > 0 {
                     cached as f64 * 100.0 / prompt as f64
                 } else {
                     0.0
                 },
-                view["background_compaction_at"].as_u64().unwrap_or(0) / 1000
             ));
         }
         let turns = s.budget.report("turn", Some(session), None, 5).await?;
@@ -5280,6 +5278,23 @@ impl Messenger for TelegramGateway {
             .await
             .map_err(|e| e.to_string())
     }
+}
+
+/// Taille du contexte d'une session, seuil de la compaction de fond et dernière
+/// compaction (issue #40).
+fn context_line(view: &Value) -> String {
+    let prompt = view["last_prompt_tokens"]
+        .as_i64()
+        .map(|p| format!("{} k tokens au dernier appel", p / 1000))
+        .unwrap_or_else(|| "aucun appel encore".into());
+    let last = view["last_compaction"]
+        .as_str()
+        .map(|t| t.chars().take(16).collect::<String>().replace('T', " "))
+        .unwrap_or_else(|| "jamais".into());
+    format!(
+        "Contexte : {prompt}, compaction de fond vers {} k, dernière compaction : {last}",
+        view["background_compaction_at"].as_u64().unwrap_or(0) / 1000
+    )
 }
 
 /// `clé=valeur clé2=valeur2` : chaque valeur est lue en JSON si possible (nombres,

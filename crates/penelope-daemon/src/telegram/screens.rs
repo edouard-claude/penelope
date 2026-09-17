@@ -1337,10 +1337,12 @@ impl TelegramGateway {
                     Ok(sid) => {
                         let cfg = s.config.config();
                         let (_, limit, _) = s.budget.limits(&cfg.budget, Some(&sid), None).await?;
+                        let view = crate::compaction::context_view(s, &sid, None).await?;
                         format!(
-                            "\n- Session : {:.2} $ sur {:.2} $",
+                            "\n- Session : {:.2} $ sur {:.2} $\n- {}",
                             s.budget.spent_session(&sid).await?,
-                            limit
+                            limit,
+                            super::context_line(&view)
                         )
                     }
                     Err(_) => String::new(),

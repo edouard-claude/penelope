@@ -431,6 +431,8 @@ impl Daemon {
             Some(m) => m.server_lines().await,
             None => Vec::new(),
         };
+        // Reprise d'une session froide au-delà du seuil : résumée avant l'appel (issue #40).
+        crate::compaction::before_turn(self, &turn.session_id, &model_id, Some(&origin_turn)).await;
         // Vecteur du message (délai borné) : rappel mémoire et intentions hybrides.
         let vector = if turn.kind == TurnKind::Message {
             crate::embeddings::query_vector(self, &text).await
@@ -510,10 +512,16 @@ impl Daemon {
         let outcome = AgentLoop::new(s.clone(), provider)
             .run_conversation(&spec, &conv, &exec, sink)
             .await;
-        if conv.wants_compaction() {
-            self.compaction
-                .request(&turn.session_id, spec.turn_id.clone());
-        }
+        // Estimation locale ou prompt réellement facturé : l'un ou l'autre au-delà du seuil
+        // demande la compaction de fond (issue #40).
+        crate::compaction::after_answer(
+            self,
+            &turn.session_id,
+            &model_id,
+            spec.turn_id.clone(),
+            conv.wants_compaction(),
+        )
+        .await;
         outcome
     }
 

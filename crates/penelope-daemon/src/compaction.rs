@@ -1,10 +1,12 @@
 //! Compaction niveau 3 (§5.4) : résumés LCM écrits par le rôle `compaction`.
 //!
-//! Trois déclencheurs : la fin d'un tour dont la projection atteint le seuil moins la
-//! marge (tâche de fond), `/compact` (lève le cooldown), et le dépassement de fenêtre
-//! prouvé par le provider (une tentative, publiée aussitôt). Le résumé se calcule sans
-//! bloquer la conversation ; il est publié à une frontière de tour : tout de suite si la
-//! session est au repos, sinon à la fin du tour en cours.
+//! Quatre déclencheurs : la fin d'un tour dont la projection estimée **ou le prompt
+//! réellement facturé** atteint le seuil moins la marge (tâche de fond), la reprise d'une
+//! session froide au-delà de ce seuil (avant l'appel au modèle), `/compact` (lève le
+//! cooldown), et le dépassement de fenêtre prouvé par le provider (une tentative, publiée
+//! aussitôt). Le résumé de fond se calcule sans bloquer la conversation et se publie à une
+//! frontière de tour. Chaque décision laisse un événement : `context.compaction_requested`,
+//! `context.compaction_skipped` (avec sa raison), `context.compacted` (issue #40).
 
 use crate::runtime::Daemon;
 use penelope_context::{CompactionParams, Cooldown, SummaryJob};
@@ -36,6 +38,9 @@ pub enum Trigger {
     Manual,
     /// Dépassement de fenêtre prouvé par le provider, en plein tour.
     Overflow,
+    /// Reprise d'une session froide au-delà du seuil de fond : avant l'appel au modèle,
+    /// publiée aussitôt (issue #40).
+    Resume,
 }
 
 impl Trigger {
@@ -44,7 +49,13 @@ impl Trigger {
             Trigger::Background => "background",
             Trigger::Manual => "manual",
             Trigger::Overflow => "overflow",
+            Trigger::Resume => "resume",
         }
+    }
+
+    /// Publié aussitôt, sans attendre la fin du tour.
+    fn publishes_now(&self) -> bool {
+        matches!(self, Trigger::Overflow | Trigger::Resume)
     }
 }
 
@@ -173,9 +184,12 @@ pub fn spawn(d: Arc<Daemon>, session_id: String, trigger: Trigger, turn_id: Opti
                 deferred = r.deferred,
                 "contexte compacté"
             ),
-            Ok(r) => {
-                tracing::debug!(session = %session_id, skipped = ?r.skipped, "rien à compacter")
-            }
+            Ok(r) => tracing::info!(
+                session = %session_id,
+                trigger = trigger.as_str(),
+                skipped = ?r.skipped,
+                "compaction non faite"
+            ),
             Err(e) => tracing::warn!(session = %session_id, error = %e, "compaction en échec"),
         }
     });
@@ -199,8 +213,215 @@ pub async fn publish_pending(d: &Arc<Daemon>, session_id: &str) -> anyhow::Resul
     Ok(Some(report))
 }
 
-/// Compacte une session : prépare les lots, les fait résumer, les publie.
+/// Compacte une session : prépare les lots, les fait résumer, les publie. Un saut laisse
+/// l'événement `context.compaction_skipped` avec sa raison (issue #40).
 pub async fn compact(
+    d: &Arc<Daemon>,
+    session_id: &str,
+    trigger: Trigger,
+    turn_id: Option<&str>,
+) -> anyhow::Result<Report> {
+    let report = compact_inner(d, session_id, trigger, turn_id).await?;
+    if let Some(reason) = report
+        .skipped
+        .as_ref()
+        .filter(|_| report.published == 0 && !report.deferred)
+    {
+        tracing::info!(
+            session = %session_id,
+            trigger = trigger.as_str(),
+            reason = %reason,
+            "compaction sautée"
+        );
+        let _ = d
+            .services
+            .events
+            .append(
+                EventDraft::new(
+                    "context.compaction_skipped",
+                    json!({"trigger": trigger.as_str(), "reason": reason}),
+                )
+                .session(session_id),
+            )
+            .await;
+    }
+    Ok(report)
+}
+
+/// Demande une compaction de fond pour la fin du tour, en le disant (issue #40).
+pub async fn request(
+    d: &Arc<Daemon>,
+    session_id: &str,
+    turn_id: Option<String>,
+    trigger: Trigger,
+    details: Value,
+) {
+    tracing::info!(
+        session = %session_id,
+        trigger = trigger.as_str(),
+        details = %details,
+        "compaction demandée"
+    );
+    let mut payload = json!({"trigger": trigger.as_str()});
+    if let (Some(p), Some(extra)) = (payload.as_object_mut(), details.as_object()) {
+        p.extend(extra.clone());
+    }
+    let _ = d
+        .services
+        .events
+        .append(EventDraft::new("context.compaction_requested", payload).session(session_id))
+        .await;
+    if trigger == Trigger::Background {
+        d.compaction.request(session_id, turn_id);
+    }
+}
+
+/// Prompt réellement facturé au dernier appel de conversation d'une session, et son
+/// instant (millisecondes).
+pub async fn last_prompt(s: &crate::runtime::Services, session_id: &str) -> Option<(u64, i64)> {
+    use penelope_store::rusqlite::OptionalExtension;
+    let sid = session_id.to_string();
+    let row: Option<(i64, String)> = s
+        .store
+        .read(move |c| {
+            Ok(c.query_row(
+                "SELECT prompt, ts FROM usage
+                 WHERE session_id = ?1 AND COALESCE(role, 'chat') = 'chat'
+                 ORDER BY ts DESC, rowid DESC LIMIT 1",
+                [sid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+        })
+        .await
+        .ok()
+        .flatten();
+    row.map(|(prompt, ts)| {
+        let ms = chrono::DateTime::parse_from_rfc3339(&ts)
+            .map(|t| t.timestamp_millis())
+            .unwrap_or(0);
+        (prompt.max(0) as u64, ms)
+    })
+}
+
+/// Seuil de la compaction de fond pour le modèle de conversation d'une session.
+pub fn background_threshold(s: &crate::runtime::Services, model_id: &str) -> u64 {
+    let cfg = s.config.config();
+    let params = CompactionParams::from_config(
+        &cfg,
+        s.catalog.window_of(strip_provider(model_id)),
+        model_id,
+    );
+    params.background_threshold_tokens(params.background_margin)
+}
+
+/// Fin d'un tour : la compaction de fond est demandée si la projection estimée l'a
+/// réclamée, ou si le prompt réellement facturé dépasse le seuil (issue #40).
+pub async fn after_answer(
+    d: &Arc<Daemon>,
+    session_id: &str,
+    model_id: &str,
+    turn_id: Option<String>,
+    estimated: bool,
+) {
+    let threshold = background_threshold(&d.services, model_id);
+    let real = last_prompt(&d.services, session_id).await.map(|(p, _)| p);
+    let over_real = real.is_some_and(|p| p >= threshold);
+    if !estimated && !over_real {
+        return;
+    }
+    request(
+        d,
+        session_id,
+        turn_id,
+        Trigger::Background,
+        json!({
+            "reason": if over_real { "taille réelle" } else { "estimation" },
+            "prompt_tokens": real,
+            "threshold": threshold,
+        }),
+    )
+    .await;
+}
+
+/// Début d'un tour : une session froide (cache perdu) dont le dernier prompt dépasse le
+/// seuil de fond est compactée **avant** l'appel au modèle (issue #40).
+pub async fn before_turn(d: &Arc<Daemon>, session_id: &str, model_id: &str, turn_id: Option<&str>) {
+    let s = &d.services;
+    let threshold = background_threshold(s, model_id);
+    let now = s.clock.now_ms();
+    let last = last_prompt(s, session_id).await;
+    let (size, reason) = match last {
+        Some((prompt, ts)) if now - ts > crate::cache_audit::CACHE_TTL_MS => {
+            (prompt, "reprise après une pause")
+        }
+        Some(_) => return,
+        // Premier tour d'un fork : il hérite du contexte de sa session mère, sans cache.
+        None => {
+            let Ok(Some(parent)) = s
+                .sessions
+                .get(session_id)
+                .await
+                .map(|x| x.and_then(|x| x.parent_id))
+            else {
+                return;
+            };
+            let size = match last_prompt(s, &parent).await {
+                Some((prompt, _)) => prompt,
+                None => match s.context.history.load(session_id, 0).await {
+                    Ok(entries) => entries
+                        .iter()
+                        .filter(|e| !e.compacted)
+                        .map(|e| e.tokens)
+                        .sum::<u64>(),
+                    Err(_) => return,
+                },
+            };
+            (size, "premier tour d'un fork")
+        }
+    };
+    if size < threshold {
+        return;
+    }
+    request(
+        d,
+        session_id,
+        turn_id.map(String::from),
+        Trigger::Resume,
+        json!({"reason": reason, "prompt_tokens": size, "threshold": threshold}),
+    )
+    .await;
+    match compact(d, session_id, Trigger::Resume, turn_id).await {
+        Ok(r) if r.published > 0 => tracing::info!(
+            session = %session_id,
+            messages = r.messages,
+            tokens_src = r.tokens_src,
+            tokens_summary = r.tokens_summary,
+            "contexte compacté avant la reprise"
+        ),
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!(session = %session_id, error = %e, "compaction de reprise en échec")
+        }
+    }
+}
+
+/// Dépense du jour en résumés.
+async fn compaction_spent_today(s: &crate::runtime::Services) -> f64 {
+    let day: String = s.clock.now_rfc3339().chars().take(10).collect();
+    s.store
+        .read(move |c| {
+            Ok(c.query_row(
+                "SELECT COALESCE(SUM(cost_usd), 0) FROM usage WHERE day = ?1 AND role = 'compaction'",
+                [day],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap_or(0.0)
+}
+
+async fn compact_inner(
     d: &Arc<Daemon>,
     session_id: &str,
     trigger: Trigger,
@@ -215,8 +436,9 @@ pub async fn compact(
 
     let _claim = match d.compaction.claim(session_id) {
         Some(c) => c,
-        // Sur dépassement, le résumé de fond déjà en route est la meilleure chance.
-        None if trigger == Trigger::Overflow => match wait_claim(d, session_id).await {
+        // Sur dépassement ou reprise, le résumé de fond déjà en route est la meilleure
+        // chance.
+        None if trigger.publishes_now() => match wait_claim(d, session_id).await {
             Some(c) => c,
             None => {
                 report.skipped = Some("une autre compaction ne se termine pas".into());
@@ -231,7 +453,7 @@ pub async fn compact(
 
     // Un résumé prêt passe d'abord : le lot suivant se prépare sur l'état publié.
     if let Some(pending) = load_pending(d, session_id).await? {
-        if trigger != Trigger::Overflow && d.bus.is_active(session_id) {
+        if !trigger.publishes_now() && d.bus.is_active(session_id) {
             report.deferred = true;
             report.skipped = Some("un résumé attend déjà la fin du tour en cours".into());
             return Ok(report);
@@ -243,7 +465,7 @@ pub async fn compact(
     let mut cooldown = load_cooldown(d, session_id).await;
     let now = s.clock.now_ms();
     match trigger {
-        Trigger::Background if cooldown.is_active(now) => {
+        Trigger::Background | Trigger::Resume if cooldown.is_active(now) => {
             report.skipped = Some(format!(
                 "échec récent, nouvel essai possible dans {} s",
                 (cooldown.until_ms - now) / 1000
@@ -256,12 +478,24 @@ pub async fn compact(
         }
         _ => {}
     }
-    // Hors demande explicite, un budget atteint n'est pas dépensé en résumés.
-    if trigger == Trigger::Background {
-        let statuses = s.budget.status(&cfg.budget, Some(session_id), None).await?;
-        if let Some(b) = statuses.iter().find(|b| b.exceeded) {
-            report.skipped = Some(format!("budget {} atteint", b.scope.as_str()));
-            return Ok(report);
+    // Un résumé coûte peu et allège chaque appel suivant : les plafonds de session et de
+    // run ne l'arrêtent pas. Le plafond du jour reste un garde-fou, au-delà d'une réserve
+    // propre aux résumés (issue #40).
+    if matches!(trigger, Trigger::Background | Trigger::Resume) {
+        let statuses = s.budget.status(&cfg.budget, None, None).await?;
+        let daily_exceeded = statuses
+            .iter()
+            .any(|b| b.exceeded && b.scope == penelope_kernel::budget::BudgetScope::Daily);
+        if daily_exceeded {
+            let spent = compaction_spent_today(s).await;
+            if spent >= cfg.budget.compaction_reserve_usd {
+                report.skipped = Some(format!(
+                    "budget du jour atteint et réserve des résumés épuisée ({spent:.2} $ sur \
+                     {:.2} $, `budget.compaction_reserve_usd`)",
+                    cfg.budget.compaction_reserve_usd
+                ));
+                return Ok(report);
+            }
         }
     }
 
@@ -280,7 +514,7 @@ pub async fn compact(
     let window = s.catalog.window_of(strip_provider(&model));
 
     for pass in 0..MAX_PASSES {
-        let force = pass == 0 && trigger != Trigger::Background;
+        let force = pass == 0 && matches!(trigger, Trigger::Manual | Trigger::Overflow);
         let Some(job) = s
             .context
             .prepare_summary(session_id, &params, window, &model, force)
@@ -332,7 +566,7 @@ pub async fn compact(
             summary,
             model: model.clone(),
         };
-        if trigger != Trigger::Overflow && d.bus.is_active(session_id) {
+        if !trigger.publishes_now() && d.bus.is_active(session_id) {
             save_pending(d, session_id, &pending).await?;
             report.deferred = true;
             report.model = Some(model.clone());
@@ -610,7 +844,23 @@ pub async fn context_view(
     let cfg = s.config.config();
     let params =
         CompactionParams::from_config(&cfg, s.catalog.window_of(strip_provider(&model)), &model);
+    let sid = session_id.to_string();
+    let last_compaction: Option<String> = s
+        .store
+        .read(move |c| {
+            Ok(c.query_row(
+                "SELECT ts FROM events WHERE session_id = ?1 AND kind = 'context.compacted'
+                 ORDER BY id DESC LIMIT 1",
+                [sid],
+                |r| r.get(0),
+            )
+            .optional()?)
+        })
+        .await
+        .ok()
+        .flatten();
     Ok(json!({
+        "last_compaction": last_compaction,
         "last_prompt_tokens": last.as_ref().map(|l| l.0),
         "last_cached_tokens": last.as_ref().map(|l| l.1),
         "last_upstream": last.as_ref().and_then(|l| l.4.clone()),
@@ -853,9 +1103,21 @@ mod tests {
         let events = d.services.events.session_events(&sid, 0).await.unwrap();
         assert!(events.iter().any(|e| e.kind == "context.compaction_failed"));
 
-        // La tâche de fond respecte le cooldown…
+        // La tâche de fond respecte le cooldown, et le dit (issue #40)…
         let bg = compact(&d, &sid, Trigger::Background, None).await.unwrap();
         assert!(bg.skipped.unwrap().contains("échec récent"));
+        let events = d.services.events.session_events(&sid, 0).await.unwrap();
+        let skipped = events
+            .iter()
+            .find(|e| e.kind == "context.compaction_skipped")
+            .expect("saut journalisé");
+        assert!(
+            skipped.payload["reason"]
+                .as_str()
+                .unwrap()
+                .contains("échec récent")
+        );
+        assert_eq!(skipped.payload["trigger"], "background");
         assert_eq!(summarizer_requests(&p).len(), 1);
 
         // … `/compact` le lève.
@@ -1016,5 +1278,218 @@ mod tests {
         }
         d.services.turns.complete(&turn).await.unwrap();
         assert_eq!(summarizer_requests(&p).len(), 2, "une compaction par tour");
+    }
+
+    fn kinds(events: &[penelope_kernel::event::Event]) -> Vec<&str> {
+        events.iter().map(|e| e.kind.as_str()).collect()
+    }
+
+    /// Issue #40 : l'estimation locale reste sous le seuil, mais le prompt réellement
+    /// facturé le dépasse : la compaction de fond est demandée, dite, puis publiée.
+    #[tokio::test]
+    async fn the_billed_prompt_size_requests_a_background_compaction() {
+        let (_dir, d, p) = daemon().await;
+        let sid = long_session(&d).await;
+        let cfg = d.services.config.config();
+        let main = strip_provider(cfg.alias_model("main").unwrap()).to_string();
+        d.services
+            .catalog
+            .upsert(vec![ModelInfo::minimal(&main, "z-ai", 1_300_000)]);
+        d.publish_config("test", |c| {
+            c.context.max_prompt_tokens = 50_000;
+            Ok(vec!["context.max_prompt_tokens".into()])
+        })
+        .unwrap();
+        let threshold = background_threshold(&d.services, cfg.alias_model("main").unwrap());
+        assert!(threshold > 30_000, "{threshold}");
+        p.set_usage(penelope_llm::types::Usage {
+            prompt: threshold + 2_000,
+            ..Default::default()
+        });
+
+        p.reply(r#"{"complexity":"medium"}"#);
+        p.reply("Je reprends où nous en étions.");
+        p.reply(SUMMARY);
+        d.enqueue_message(&sid, "on continue ?", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = d.services.turns.claim("test").await.unwrap().unwrap();
+        let out = d.run_turn(&turn).await;
+        assert!(
+            matches!(out, crate::agent::TurnOutcome::Answered { .. }),
+            "{out:?}"
+        );
+        d.services.turns.complete(&turn).await.unwrap();
+
+        let mut nodes = Vec::new();
+        for _ in 0..100 {
+            nodes = d.services.context.lcm.active_nodes(&sid).await.unwrap();
+            if !nodes.is_empty() && !d.compaction.is_running(&sid) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(nodes.len(), 1, "résumé publié");
+        let events = d.services.events.session_events(&sid, 0).await.unwrap();
+        let requested = events
+            .iter()
+            .position(|e| e.kind == "context.compaction_requested")
+            .unwrap_or_else(|| panic!("{:?}", kinds(&events)));
+        assert_eq!(events[requested].payload["reason"], "taille réelle");
+        let compacted = events
+            .iter()
+            .position(|e| e.kind == "context.compacted")
+            .expect("compacté");
+        assert!(requested < compacted);
+        let view = context_view(&d.services, &sid, None).await.unwrap();
+        assert!(view["last_compaction"].is_string(), "{view}");
+    }
+
+    /// Issue #40 : un budget de session dépassé n'empêche pas le résumé ; seul le plafond
+    /// du jour l'arrête, une fois la réserve des résumés dépensée, et le saut est dit.
+    #[tokio::test]
+    async fn budgets_do_not_block_compaction_until_the_summary_reserve_is_spent() {
+        let (_dir, d, p) = daemon().await;
+        let sid = long_session(&d).await;
+        let s = &d.services;
+        let spend =
+            |role: &str, cost: f64, session: Option<&str>| penelope_kernel::budget::UsageRecord {
+                session_id: session.map(String::from),
+                model: "m".into(),
+                provider: "p".into(),
+                role: Some(role.into()),
+                cost_usd: cost,
+                ..Default::default()
+            };
+        s.budget
+            .record(spend("chat", 6.0, Some(&sid)))
+            .await
+            .unwrap();
+        let statuses = s
+            .budget
+            .status(&s.config.config().budget, Some(&sid), None)
+            .await
+            .unwrap();
+        assert!(
+            statuses.iter().any(|b| b.exceeded),
+            "session au-delà de son plafond"
+        );
+        p.reply(SUMMARY);
+        let r = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+        assert_eq!(r.published, 1, "{r:?}");
+
+        s.budget.record(spend("chat", 30.0, None)).await.unwrap();
+        s.budget
+            .record(spend("compaction", 0.6, None))
+            .await
+            .unwrap();
+        let r = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+        assert!(r.skipped.as_deref().unwrap().contains("réserve"), "{r:?}");
+        let events = d.services.events.session_events(&sid, 0).await.unwrap();
+        assert!(
+            events.iter().any(|e| e.kind == "context.compaction_skipped"
+                && e.payload["reason"].as_str().unwrap().contains("réserve")),
+            "{:?}",
+            kinds(&events)
+        );
+    }
+
+    /// Issue #40 : une session reprise après une pause, au-delà du seuil, est résumée avant
+    /// l'appel au modèle, et le prompt envoyé passe sous le plafond.
+    #[tokio::test]
+    async fn a_cold_session_is_compacted_before_the_model_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = TestClock::default();
+        let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+                .await
+                .unwrap(),
+        );
+        let d = Arc::new(Daemon::from_services(s));
+        let p = Arc::new(MockProvider::new());
+        d.set_provider_override(p.clone());
+        let sid = long_session(&d).await;
+        let cfg = d.services.config.config();
+        let main_id = cfg.alias_model("main").unwrap().to_string();
+        d.services.catalog.upsert(vec![ModelInfo::minimal(
+            strip_provider(&main_id),
+            "z-ai",
+            1_300_000,
+        )]);
+        d.publish_config("test", |c| {
+            c.context.max_prompt_tokens = 20_000;
+            Ok(vec!["context.max_prompt_tokens".into()])
+        })
+        .unwrap();
+        // Dernier appel : 300 k tokens, puis une longue pause.
+        d.services
+            .budget
+            .record(penelope_kernel::budget::UsageRecord {
+                session_id: Some(sid.clone()),
+                model: main_id.clone(),
+                provider: "openrouter".into(),
+                role: Some("chat".into()),
+                prompt: 300_000,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        clock.advance_ms(3 * 3_600_000);
+
+        p.reply(r#"{"complexity":"medium"}"#);
+        p.reply(SUMMARY);
+        p.reply("Me revoilà.");
+        d.enqueue_message(&sid, "on reprend ?", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = d.services.turns.claim("test").await.unwrap().unwrap();
+        let out = d.run_turn(&turn).await;
+        assert!(
+            matches!(out, crate::agent::TurnOutcome::Answered { .. }),
+            "{out:?}"
+        );
+        d.services.turns.complete(&turn).await.unwrap();
+
+        let requests = p.requests();
+        let summary_at = requests
+            .iter()
+            .position(|r| {
+                r.messages
+                    .first()
+                    .is_some_and(|m| m.text().contains("module de compaction"))
+            })
+            .expect("résumé demandé");
+        let chat_at = requests
+            .iter()
+            .position(|r| {
+                r.messages
+                    .first()
+                    .is_some_and(|m| m.text().starts_with("Tu es Pénélope"))
+            })
+            .expect("appel de conversation");
+        assert!(summary_at < chat_at, "le résumé précède l'appel");
+        let chat = &requests[chat_at];
+        assert!(
+            chat.messages
+                .iter()
+                .any(|m| m.text().contains("Résumé de la conversation antérieure")),
+            "l'appel part avec le résumé"
+        );
+        let tokens: u64 = chat
+            .messages
+            .iter()
+            .map(|m| d.services.context.estimator.message_tokens(&main_id, m))
+            .sum();
+        assert!(tokens < 20_000, "prompt sous le plafond : {tokens}");
+        let events = d.services.events.session_events(&sid, 0).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == "context.compaction_requested"
+                    && e.payload["trigger"] == "resume"),
+            "{:?}",
+            kinds(&events)
+        );
     }
 }
