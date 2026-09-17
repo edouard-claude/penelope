@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1211 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1219 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -472,6 +472,23 @@ Le vault devient un wiki Markdown valide à tout moment (#29).
   de la session, digest avec les entrées du rêve et le journal de la veille.
 - **Migration** d'un vault antérieur au premier démarrage et à `mem reindex`, uid et
   provenance conservés.
+
+### 0.10.0
+
+Telegram cliquable et boucles d'outils qui répondent.
+
+- #30 **Écrans de commandes** : plus aucun « Usage : » ni affichage brut. Chaque commande
+  sans argument ouvre un écran (un bouton par élément, message redessiné en place,
+  pagination, confirmation des gestes risqués) ; paramètres de workflow et arguments de
+  prompts MCP par formulaire ; `/help` par familles ; `/status` et `/doctor` renvoient vers
+  l'écran de chaque alerte ; boutons `copy_text` et liens profonds
+  `t.me/<bot>?start=<écran>` depuis le digest ; `/p` exécute un prompt MCP ; `/note` écrit
+  dans le journal ; `/logs` lit le journal JSON. Test de couverture sur tout le catalogue.
+- #31 **Boucle d'outil arrêtée** : le dernier résultat réel et une note d'arrêt restent
+  dans la conversation, un appel sans outil (`tool_choice: none`) explique l'erreur exacte
+  et propose deux ou trois suites en boutons, qui arrivent dans la session comme des
+  messages ; repli lisible si cet appel échoue ; le rapport technique reste dans les
+  événements et les journaux.
 
 ### Routine de livraison
 

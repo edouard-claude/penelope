@@ -59,8 +59,16 @@ pub struct ButtonSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ButtonAction {
-    Callback { token: String },
-    Url { url: String },
+    Callback {
+        token: String,
+    },
+    Url {
+        url: String,
+    },
+    /// Copie un texte dans le presse-papiers : une commande à compléter (`/retiens `).
+    CopyText {
+        text: String,
+    },
 }
 
 impl ButtonSpec {
@@ -82,6 +90,17 @@ impl ButtonSpec {
             disabled: false,
         }
     }
+    /// Bouton qui copie `text` (Bot API 7.11, 256 caractères au plus).
+    pub fn copy_text(label: &str, text: &str) -> Self {
+        ButtonSpec {
+            label: label.into(),
+            action: ButtonAction::CopyText {
+                text: text.chars().take(256).collect(),
+            },
+            style: String::new(),
+            disabled: false,
+        }
+    }
     /// Un bouton non applicable est **affiché désactivé** plutôt que retiré, pour garder
     /// la mise en page (§14.5).
     pub fn disabled(mut self) -> Self {
@@ -99,6 +118,10 @@ impl ButtonSpec {
                 "text": self.decorated_label(),
                 "url": url,
             }),
+            ButtonAction::CopyText { text } => json!({
+                "text": self.decorated_label(),
+                "copy_text": {"text": text},
+            }),
         }
     }
 
@@ -109,6 +132,26 @@ impl ButtonSpec {
             self.label.clone()
         }
     }
+}
+
+/// Lien profond vers un écran du bot : `https://t.me/<bot>?start=<charge>`. La charge est
+/// réduite aux caractères admis par Telegram (lettres, chiffres, `_`, `-`, 64 au plus).
+pub fn deep_link(bot_username: &str, payload: &str) -> String {
+    let payload: String = payload
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect();
+    format!(
+        "https://t.me/{}?start={payload}",
+        bot_username.trim_start_matches('@')
+    )
 }
 
 /// Convertit du Markdown en blocs riches.

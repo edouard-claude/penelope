@@ -128,6 +128,37 @@ pub fn replace_entry_text(raw: &str, uid: &str, text: &str) -> Option<String> {
     Some(rebuild(out, raw.ends_with('\n')))
 }
 
+/// Modifie les annotations d'une entrée, texte conservé. `None` : uid absent ou encadré.
+pub fn update_annotations(
+    raw: &str,
+    uid: &str,
+    f: impl FnOnce(&mut Annotations),
+) -> Option<String> {
+    let lines: Vec<&str> = raw.lines().collect();
+    let i = find_line(&lines, uid)?;
+    let original = lines[i];
+    if crate::vault::standalone_block_id(original).is_some() {
+        return None;
+    }
+    let indent: String = original.chars().take_while(|c| c.is_whitespace()).collect();
+    let bullet = if original.trim_start().starts_with("* ") {
+        "* "
+    } else {
+        "- "
+    };
+    let mut annotations = Annotations::parse(original);
+    f(&mut annotations);
+    let text = crate::vault::strip_annotations(original.trim_start())
+        .trim_start_matches("- ")
+        .trim_start_matches("* ")
+        .to_string();
+    let mut new_line = entry_line(&text, &annotations);
+    new_line.replace_range(..2, bullet);
+    let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    out[i] = format!("{indent}{new_line}");
+    Some(rebuild(out, raw.ends_with('\n')))
+}
+
 /// Retire la ligne d'une entrée. `None` : uid absent.
 pub fn remove_entry(raw: &str, uid: &str) -> Option<String> {
     let lines: Vec<&str> = raw.lines().collect();

@@ -1160,6 +1160,23 @@ impl McpSupervisor {
         }))
     }
 
+    /// Prompts proposés par un serveur (`prompts/list`), pour `/p` (issue #30).
+    pub async fn prompts(&self, name: &str) -> Result<Vec<Value>, String> {
+        let slot = self.slot(name).await.ok_or_else(|| unknown(name))?;
+        let client = self.ensure_live(&slot).await?;
+        client.list_prompts().await.map_err(|e| e.to_string())
+    }
+
+    /// Un prompt rendu par son serveur (`prompts/get`).
+    pub async fn get_prompt(&self, name: &str, prompt: &str, args: Value) -> Result<Value, String> {
+        let slot = self.slot(name).await.ok_or_else(|| unknown(name))?;
+        let client = self.ensure_live(&slot).await?;
+        client
+            .get_prompt(prompt, args)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     /// Dernières lignes de stderr : du processus vivant, sinon celles gardées au dernier
     /// échec.
     pub async fn logs(&self, name: &str, n: usize) -> Result<Vec<String>, String> {

@@ -387,6 +387,17 @@ pub fn help_text() -> String {
     s
 }
 
+/// Familles de commandes, dans l'ordre du catalogue.
+pub fn categories() -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for c in all() {
+        if !out.contains(&c.category) {
+            out.push(c.category);
+        }
+    }
+    out
+}
+
 pub fn find(name: &str) -> Option<Command> {
     all().into_iter().find(|c| c.name == name)
 }

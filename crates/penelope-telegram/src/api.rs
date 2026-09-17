@@ -771,10 +771,16 @@ mod tests {
         let rows = vec![vec![
             crate::render::ButtonSpec::callback("Oui", "a:1", "success"),
             crate::render::ButtonSpec::url("Doc", "https://x"),
+            crate::render::ButtonSpec::copy_text("Écrire", "/retiens "),
         ]];
         let k = inline_keyboard(&rows);
         assert_eq!(k["inline_keyboard"][0][0]["callback_data"], "a:1");
         assert_eq!(k["inline_keyboard"][0][1]["url"], "https://x");
+        assert_eq!(k["inline_keyboard"][0][2]["copy_text"]["text"], "/retiens ");
+        assert_eq!(
+            crate::render::deep_link("@penelope_bot", "runs:stuck"),
+            "https://t.me/penelope_bot?start=runs_stuck"
+        );
     }
 
     #[tokio::test]

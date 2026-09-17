@@ -36,9 +36,13 @@ pub enum TurnOutcome {
     AwaitingApproval {
         approval_id: String,
     },
-    /// Arrêté par le détecteur de boucles, avec rapport.
+    /// Arrêté par le détecteur de boucles (issue #31) : une réponse sans outil qui cite
+    /// l'erreur réelle, 2 ou 3 suites à proposer en boutons, et le rapport technique,
+    /// gardé pour les événements et les journaux.
     LoopAborted {
         report: String,
+        answer: String,
+        choices: Vec<String>,
     },
     /// Annulé (bouton stop, `/stop`, annulation du run).
     Cancelled,
@@ -318,6 +322,72 @@ enum Pending {
     Nothing,
     Resolved,
     Stop(TurnOutcome),
+    /// Boucle arrêtée : le tour répond encore, sans outil.
+    Loop {
+        report: String,
+        tool: String,
+        last_result: Option<String>,
+    },
+}
+
+/// Note laissée dans la conversation quand le détecteur arrête une boucle : le tour suivant
+/// voit que l'approche a échoué.
+pub const LOOP_STOP_NOTE: &str =
+    "[boucle arrêtée par le harnais : cette approche a échoué, ne pas la réessayer telle quelle]";
+
+/// Suites proposées quand le modèle n'en donne pas.
+const LOOP_DEFAULT_CHOICES: [&str; 3] = [
+    "Chercher autrement",
+    "Je te précise (compte, dossier, dates)",
+    "Laisser tomber",
+];
+
+/// Dernier résultat réel d'un appel identique (même outil, mêmes arguments) dans le
+/// transcript, avertissements du harnais exclus.
+pub fn last_result_of(tail: &[ChatMessage], tool: &str, args: &Value) -> Option<String> {
+    let ids: BTreeSet<&str> = tail
+        .iter()
+        .filter(|m| m.role == Role::Assistant)
+        .flat_map(|m| m.tool_calls.iter())
+        .filter(|c| c.name == tool && &c.arguments == args)
+        .map(|c| c.id.as_str())
+        .collect();
+    tail.iter()
+        .rev()
+        .filter(|m| m.role == Role::Tool)
+        .filter(|m| m.tool_call_id.as_deref().is_some_and(|id| ids.contains(id)))
+        .map(|m| m.text())
+        .find(|t| !t.starts_with("[avertissement du harnais]") && !t.contains(LOOP_STOP_NOTE))
+}
+
+/// Sépare la réponse de la ligne `CHOIX : a | b | c` qui la termine.
+pub fn split_choices(text: &str) -> (String, Vec<String>) {
+    let mut lines: Vec<&str> = text.trim_end().lines().collect();
+    let Some(pos) = lines.iter().rposition(|l| {
+        l.trim()
+            .trim_start_matches(['*', '_', '-', ' '])
+            .to_lowercase()
+            .starts_with("choix")
+    }) else {
+        return (text.trim().to_string(), Vec::new());
+    };
+    let line = lines.remove(pos);
+    let choices: Vec<String> = line
+        .split_once(':')
+        .map(|(_, rest)| rest)
+        .unwrap_or_default()
+        .split('|')
+        .map(|c| {
+            c.trim()
+                .trim_matches(['*', '_', '`', '«', '»', '"'])
+                .trim()
+                .to_string()
+        })
+        .filter(|c| !c.is_empty())
+        .map(|c| c.chars().take(60).collect())
+        .take(3)
+        .collect();
+    (lines.join("\n").trim().to_string(), choices)
 }
 
 impl AgentLoop {
@@ -385,6 +455,15 @@ impl AgentLoop {
                 .await?
             {
                 Pending::Stop(outcome) => return Ok(outcome),
+                Pending::Loop {
+                    report,
+                    tool,
+                    last_result,
+                } => {
+                    return self
+                        .answer_after_loop(spec, conv, report, &tool, last_result.as_deref())
+                        .await;
+                }
                 Pending::Nothing | Pending::Resolved => {}
             }
             if spec.cancel.is_cancelled() {
@@ -444,7 +523,7 @@ impl AgentLoop {
                 s.clock.now_ms(),
             );
             let fingerprint = crate::cache_audit::Fingerprint::of(&messages, &spec.tools);
-            let response = match self.call_model(spec, messages, sink, pinned).await? {
+            let response = match self.call_model(spec, messages, sink, pinned, None).await? {
                 Ok(r) => r,
                 Err(failure) if failure.context_length && !overflow_compacted => {
                     overflow_compacted = true;
@@ -669,6 +748,7 @@ impl AgentLoop {
         messages: Vec<ChatMessage>,
         sink: &dyn TurnSink,
         pinned_upstream: Option<String>,
+        tool_choice: Option<ToolChoice>,
     ) -> anyhow::Result<Result<ChatResponse, CallFailure>> {
         let s = &self.services;
         let server_side_fallback = self.provider.name() == "openrouter";
@@ -695,10 +775,10 @@ impl AgentLoop {
                 model: model_id.clone(),
                 messages: fit_modalities(&messages, &s.catalog, &model_id),
                 tools: spec.tools.clone(),
-                tool_choice: if spec.tools.is_empty() {
-                    None
-                } else {
-                    Some(ToolChoice::Auto)
+                tool_choice: match (&tool_choice, spec.tools.is_empty()) {
+                    (_, true) => None,
+                    (Some(forced), false) => Some(*forced),
+                    (None, false) => Some(ToolChoice::Auto),
                 },
                 stream: true,
                 session_id: Some(spec.session_id.clone()),
@@ -872,6 +952,80 @@ impl AgentLoop {
         Ok(Err(last_error))
     }
 
+    /// Réponse après une boucle arrêtée (issue #31) : un appel sans outil explique ce qui a
+    /// été tenté et l'erreur exacte, et propose des suites ; à défaut, un repli lisible qui
+    /// cite l'erreur réelle. La réponse est gardée dans la conversation.
+    async fn answer_after_loop(
+        &self,
+        spec: &TurnSpec,
+        conv: &dyn Conversation,
+        report: String,
+        tool: &str,
+        last_result: Option<&str>,
+    ) -> anyhow::Result<TurnOutcome> {
+        let s = &self.services;
+        let mut messages = conv.request_messages().await?;
+        messages.push(ChatMessage::user(format!(
+            "(Message du harnais, pas du propriétaire.) Tu as appelé `{tool}` en boucle avec \
+             les mêmes arguments : les outils sont arrêtés pour ce tour. Réponds maintenant au \
+             propriétaire, sans outil, en quelques lignes : ce que tu as essayé, l'erreur exacte \
+             renvoyée par l'outil (cite-la telle quelle), et ce que tu as déjà obtenu s'il y a \
+             quelque chose. Termine par une seule ligne `CHOIX : <suite 1> | <suite 2> | <suite \
+             3>`, deux ou trois suites courtes qu'il pourra choisir d'un clic (par exemple \
+             Chercher autrement, Je te précise le compte ou les dates, Laisser tomber)."
+        )));
+        let text = match self
+            .call_model(spec, messages, &NullSink, None, Some(ToolChoice::None))
+            .await?
+        {
+            Ok(r) => {
+                let _ = s
+                    .budget
+                    .record(penelope_kernel::budget::UsageRecord {
+                        session_id: Some(spec.session_id.clone()),
+                        run_id: spec.run_id.clone(),
+                        turn_id: spec.turn_id.clone(),
+                        model: r.model.clone(),
+                        provider: r.provider.clone(),
+                        role: Some("chat".into()),
+                        generation_id: (!r.id.is_empty()).then(|| r.id.clone()),
+                        prompt: r.usage.prompt,
+                        completion: r.usage.completion,
+                        cached: r.usage.cached,
+                        reasoning: r.usage.reasoning,
+                        cost_usd: r.cost_usd,
+                        estimated: r.cost_estimated,
+                        ..Default::default()
+                    })
+                    .await;
+                r.message.text()
+            }
+            Err(failure) => {
+                tracing::warn!(error = %failure.message, "réponse après boucle impossible");
+                String::new()
+            }
+        };
+        let (mut answer, mut choices) = split_choices(&text);
+        if answer.trim().is_empty() {
+            answer = format!(
+                "Je me suis arrêtée : j'appelais `{tool}` en boucle sans avancer.\n\nErreur \
+                 renvoyée par l'outil : {}\n\nComment veux-tu continuer ?",
+                last_result
+                    .map(|r| r.chars().take(800).collect::<String>())
+                    .unwrap_or_else(|| "aucun résultat exploitable".into())
+            );
+        }
+        if choices.len() < 2 {
+            choices = LOOP_DEFAULT_CHOICES.iter().map(|c| c.to_string()).collect();
+        }
+        conv.record(&ChatMessage::assistant(&answer), true).await?;
+        Ok(TurnOutcome::LoopAborted {
+            report,
+            answer,
+            choices,
+        })
+    }
+
     /// Résout les appels d'outils sans résultat à la fin du transcript.
     async fn resolve_pending(
         &self,
@@ -978,7 +1132,43 @@ impl AgentLoop {
                                         .session(&spec.session_id),
                                 )
                                 .await?;
-                            return Ok(Pending::Stop(TurnOutcome::LoopAborted { report }));
+                            tracing::warn!(session = %spec.session_id, %report, "boucle d'outil arrêtée");
+                            // L'échec reste dans la conversation (issue #31) : le résultat réel,
+                            // puis la note d'arrêt, pour que le tour suivant ne recommence pas.
+                            let last =
+                                last_result_of(&conv.tail().await?, &call.name, &call.arguments);
+                            let body = match &last {
+                                Some(r) => format!(
+                                    "Dernier résultat réel de l'outil :\n{}",
+                                    r.chars().take(1_500).collect::<String>()
+                                ),
+                                None => "Aucun résultat obtenu.".to_string(),
+                            };
+                            self.record_result(
+                                conv,
+                                sink,
+                                &call,
+                                false,
+                                format!("{body}\n\n{LOOP_STOP_NOTE}"),
+                                false,
+                            )
+                            .await?;
+                            for rest in pending_calls(&conv.tail().await?) {
+                                self.record_result(
+                                    conv,
+                                    sink,
+                                    &rest,
+                                    false,
+                                    "Non exécuté : tour arrêté par le détecteur de boucles.".into(),
+                                    false,
+                                )
+                                .await?;
+                            }
+                            return Ok(Pending::Loop {
+                                report,
+                                tool: info.effective_name.clone(),
+                                last_result: last,
+                            });
                         }
                     }
 
@@ -1912,12 +2102,117 @@ mod tests {
             .await
             .unwrap();
         match out {
-            TurnOutcome::LoopAborted { report } => {
+            TurnOutcome::LoopAborted {
+                report, choices, ..
+            } => {
                 assert!(report.contains("fs_read"));
                 assert!(report.contains("Appels du tour"));
+                assert_eq!(choices.len(), 3, "suites par défaut");
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// Issue #31 : un outil qui renvoie toujours la même erreur, appelé en boucle. Le tour
+    /// répond quand même en citant l'erreur et en proposant des suites, la conversation
+    /// garde le résultat et la note d'arrêt, et le message suivant ne relance rien.
+    #[tokio::test]
+    async fn a_stopped_loop_still_answers_with_the_real_error_and_choices() {
+        let (_d, s, p) = setup().await;
+        for i in 0..4 {
+            p.push(Scripted::ToolCalls(
+                String::new(),
+                vec![call(&format!("c{i}"), "fs_read", json!({"path": "mails"}))],
+            ));
+        }
+        p.reply(
+            "J'ai lu la boîte trois fois, l'outil répond « disque plein ».\n\
+             CHOIX : Chercher autrement | Je te précise le compte | Laisser tomber",
+        );
+        let sid = session(&s).await;
+        let e = exec(true);
+        let conv = MemoryConversation::new("système", "regarde mes mails");
+        let spec = TurnSpec {
+            session_id: sid.clone(),
+            run_id: None,
+            turn_id: None,
+            model_id: "mock/model".into(),
+            fallback_models: Vec::new(),
+            tools: vec![ToolDef::new("fs_read", "lire", json!({"type":"object"}))],
+            allowed_tools: Vec::new(),
+            cancel: CancelToken::new(),
+        };
+        let agent = AgentLoop::new(s.clone(), p.clone());
+        let out = agent
+            .run_conversation(&spec, &conv, &e, &NullSink)
+            .await
+            .unwrap();
+        let TurnOutcome::LoopAborted {
+            answer, choices, ..
+        } = out
+        else {
+            panic!("{out:?}");
+        };
+        assert!(answer.contains("disque plein"), "{answer}");
+        assert!(!answer.contains("CHOIX"));
+        assert_eq!(
+            choices,
+            vec![
+                "Chercher autrement",
+                "Je te précise le compte",
+                "Laisser tomber"
+            ]
+        );
+        let wrap_up = p.requests().last().unwrap().clone();
+        assert_eq!(
+            wrap_up.tool_choice,
+            Some(ToolChoice::None),
+            "dernière réponse sans outil"
+        );
+
+        let history = conv.messages();
+        let stopped = history
+            .iter()
+            .find(|m| m.role == Role::Tool && m.text().contains(LOOP_STOP_NOTE))
+            .expect("note d'arrêt dans la conversation");
+        assert!(
+            stopped.text().contains("disque plein"),
+            "{}",
+            stopped.text()
+        );
+        assert_eq!(history.last().unwrap().text(), answer, "réponse gardée");
+        assert!(pending_calls(&history).is_empty(), "plus rien à relancer");
+
+        // « Donc ? » : le modèle voit la note, aucun outil n'est rejoué d'office.
+        let calls_before = e.calls.load(Ordering::SeqCst);
+        conv.record(&ChatMessage::user("Donc ?"), false)
+            .await
+            .unwrap();
+        p.reply("Je n'insiste pas avec la même lecture : précise le compte.");
+        let next = agent
+            .run_conversation(&spec, &conv, &e, &NullSink)
+            .await
+            .unwrap();
+        assert!(matches!(next, TurnOutcome::Answered { .. }), "{next:?}");
+        assert_eq!(e.calls.load(Ordering::SeqCst), calls_before);
+        let seen = p.requests().last().unwrap().clone();
+        assert!(
+            seen.messages
+                .iter()
+                .any(|m| m.text().contains(LOOP_STOP_NOTE)),
+            "la note d'arrêt est dans l'historique envoyé au modèle"
+        );
+    }
+
+    #[test]
+    fn choices_are_split_from_the_answer() {
+        let (answer, choices) =
+            split_choices("Erreur : 401.\n\n**CHOIX :** Réessayer | « Autre compte »  |");
+        assert_eq!(answer, "Erreur : 401.");
+        assert_eq!(choices, vec!["Réessayer", "Autre compte"]);
+        let (answer, choices) = split_choices("Rien à proposer.");
+        assert_eq!(answer, "Rien à proposer.");
+        assert!(choices.is_empty());
     }
 
     #[tokio::test]

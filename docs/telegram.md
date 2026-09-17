@@ -147,6 +147,11 @@ Trois propriétés en découlent, chacune couverte par un test :
 - **Autorisation.** Un clic d'un autre utilisateur est refusé, même s'il a vu la carte.
 - **Expiration.** Un jeton périmé répond que la fenêtre est passée, il ne rejoue rien.
 
+Outre `callback_data` et les liens, un bouton peut copier un texte (`copy_text`) : une
+commande à compléter, comme `/retiens `. Les textes longs (digest, audit) renvoient vers un
+écran précis par lien profond `https://t.me/<bot>?start=<écran>` (`approvals`,
+`runs_stuck`, `audit`…), une fois le nom du bot connu.
+
 ## Formulaires
 
 Un formulaire est engendré depuis un **JSON Schema**, pas écrit à la main : c'est le même
@@ -192,6 +197,38 @@ un test vérifie que **toutes** le sont : une commande sans méthode serait une 
 /status /doctor /config /logs /restart /upgrade /secret
 ```
 
+**Aucune commande ne répond par un « Usage : ».** Sans argument, chacune ouvre son écran :
+un bouton par élément actionnable, le message redessiné en place après chaque action,
+« Précédent / Suivant » au-delà de dix éléments, et un second écran « Confirmer /
+Annuler » pour tout geste risqué (supprimer, oublier, fermer, redémarrer, installer ou
+annuler une mise à jour).
+
+```
+Workflows (4)
+[ ▶️ Construire puis vérifier ] [ ℹ️ ]
+[ ▶️ Revue                     ] [ ℹ️ ]
+```
+
+| Commande | Écran |
+|---|---|
+| `/help` | familles, puis un bouton par commande |
+| `/wf`, `/run` | ▶️ lance (les paramètres déclarés sont demandés un par un), ℹ️ étapes et paramètres |
+| `/runs`, `/resume` | état et étape de chaque run, ⏸ ▶️ ⏹ (confirmé), 🔎 détail ; `/resume` ne montre que les runs en pause ou bloqués |
+| `/schedules` | ⚡ déclencher, ⏸/▶️, 🗑 (confirmé) |
+| `/mcp` | par serveur : détail, 🔄 redémarrer, 🧪 tester ; le détail ajoute 📜 journal, ⏻ activer ou désactiver, 🔐 autoriser |
+| `/models` | un modèle, puis l'alias auquel l'affecter ; 🔎 chercher |
+| `/skills`, `/skill` | 📖 voir, ⏪ version précédente (confirmé) |
+| `/oublie`, `/forget` | une entrée (ou une session) par bouton, puis confirmation |
+| `/appris`, `/pratique` | voir, ✅ valider, 🚫 rejeter |
+| `/intentions`, `/policies` | ❌ annuler une intention, 🗑 retirer une règle (confirmé) |
+| `/status`, `/doctor` | résumé lisible, boutons vers l'écran de chaque alerte (MCP, dépenses, modèles) |
+| `/config`, `/logs` | générations et sous-systèmes ; journal filtré par composant, « Plus » |
+| `/restart`, `/close`, `/rewind` | confirmation |
+| `/fork` | ↪️ revenir à l'original |
+| `/upgrade` | version installée et disponible, ⬆️ installer, ⏪ revenir (confirmés) |
+| `/quiet`, `/secret`, `/p` | plages proposées ; 🗑 par secret (confirmé) ; serveurs puis prompts MCP, arguments par formulaire |
+| `/retiens`, `/recall`, `/note`, `/title` | ✏️ bouton qui copie la commande à compléter |
+
 `/secret` liste ou supprime, jamais ne saisit : un secret ne transite pas par une
 conversation.
 
@@ -222,9 +259,16 @@ mise à jour au fil de l'eau.
 
 « Basculer » revient sur la session et envoie tout dans l'ordre ; une approbation déjà
 tranchée entre-temps n'est pas renvoyée. Les nouveaux messages vont toujours à la session
-au focus. `/upgrade` indique
-la dernière version publiée, `/upgrade install` l'installe (retour automatique à
-l'ancienne si elle ne démarre pas), `/upgrade rollback` revient au binaire précédent.
+au focus. `/upgrade install` installe la dernière version publiée (retour automatique à
+l'ancienne si elle ne démarre pas), `/upgrade rollback` revient au binaire précédent,
+après confirmation.
+
+Quand le détecteur arrête un outil appelé en boucle, Pénélope répond quand même, sans
+outil : ce qu'elle a tenté, l'erreur exacte renvoyée, ce qu'elle a déjà obtenu, et deux ou
+trois suites en boutons (« Chercher autrement », « Je te précise… », « Laisser tomber »).
+Un clic envoie la suite comme un message. Le résultat réel et une note d'arrêt restent
+dans la conversation, pour que le tour suivant ne recommence pas à l'identique ; le
+rapport technique (compteurs d'appels) reste dans les événements et `/logs`.
 
 Un tour qui échoue arrive avec un bouton « 🔁 Réessayer » : la réponse est relancée sur
 la même conversation, sans renvoyer le message. Quand le plafond d'une session, du jour

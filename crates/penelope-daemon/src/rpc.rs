@@ -1032,7 +1032,14 @@ pub fn outcome_json(session_id: &str, turn_id: &str, o: &TurnOutcome) -> Value {
         TurnOutcome::AwaitingApproval { approval_id } => {
             ("awaiting_approval", json!({"approval_id": approval_id}))
         }
-        TurnOutcome::LoopAborted { report } => ("loop_aborted", json!({"report": report})),
+        TurnOutcome::LoopAborted {
+            report,
+            answer,
+            choices,
+        } => (
+            "loop_aborted",
+            json!({"report": report, "answer": answer, "choices": choices}),
+        ),
         TurnOutcome::Cancelled => ("cancelled", json!({})),
         TurnOutcome::BudgetExceeded {
             scope,
@@ -1101,9 +1108,12 @@ fn to_stream_event(ev: &crate::bus::BusEvent) -> Option<StreamEvent> {
             session_id: Some(session_id),
             message: "génération arrêtée".into(),
         },
-        BusKind::Finished(TurnOutcome::LoopAborted { report }) => StreamEvent::Error {
+        // Le rapport technique reste dans les événements et les journaux (issue #31).
+        BusKind::Finished(TurnOutcome::LoopAborted {
+            answer, choices, ..
+        }) => StreamEvent::Error {
             session_id: Some(session_id),
-            message: format!("boucle détectée, tour arrêté\n{report}"),
+            message: format!("{answer}\n\nSuites possibles : {}", choices.join(" · ")),
         },
         BusKind::Finished(TurnOutcome::BudgetExceeded {
             scope,

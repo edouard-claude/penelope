@@ -27,6 +27,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
+mod screens;
+
 /// Longueur d'un fragment Markdown avant conversion HTML : marge pour les balises.
 const FRAGMENT_CHARS: usize = 3_500;
 const MAX_ATTEMPTS: i64 = 6;
@@ -40,6 +42,15 @@ fn cancelled_note(n: usize) -> String {
 }
 
 /// Formulaire d'étape `user` en cours dans un chat.
+const BOT_USERNAME_KEY: &str = "tg.bot_username";
+
+/// Lien `https://t.me/<bot>?start=<charge>` vers un écran ou une commande, quand le bot est
+/// connu (issue #30).
+pub async fn deep_link(d: &Daemon, payload: &str) -> Option<String> {
+    let bot = d.kv_get(BOT_USERNAME_KEY).await.ok().flatten()?;
+    (!bot.is_empty() && bot != "?").then(|| penelope_telegram::render::deep_link(&bot, payload))
+}
+
 fn form_key(chat_id: i64) -> String {
     format!("tg.form.{chat_id}")
 }
@@ -71,6 +82,9 @@ enum Held {
         reply_to: Option<i64>,
         /// Réponse finale d'un tour : réaction ✅ sur le message d'origine.
         answer: bool,
+        /// Suites proposées en boutons (boucle arrêtée, issue #31).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        choices: Vec<String>,
     },
     Approval {
         id: String,
@@ -92,12 +106,6 @@ fn held_key(session_id: &str) -> String {
 /// « 1 réponse », « 3 approbations ».
 fn count_of(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n > 1 { many } else { one })
-}
-
-/// Tour arrêté par le détecteur de boucles.
-fn loop_aborted_text(report: &str) -> String {
-    let r: String = report.chars().take(2_500).collect();
-    format!("⛔ **Boucle détectée**, tour arrêté.\n\n```\n{r}\n```")
 }
 
 /// Photos d'un même album, regroupées en un seul tour (§14.4).
@@ -170,10 +178,10 @@ impl TelegramGateway {
             self.bot.get_me().await.map_err(|e| {
                 format!("jeton Telegram refusé ({e}) : vérifier `telegram_bot_token`")
             })?;
-        tracing::info!(
-            bot = me.get("username").and_then(|u| u.as_str()).unwrap_or("?"),
-            "Telegram connecté"
-        );
+        let username = me.get("username").and_then(|u| u.as_str()).unwrap_or("?");
+        tracing::info!(bot = username, "Telegram connecté");
+        // Liens profonds des textes longs (digest, audit) vers un écran précis (issue #30).
+        let _ = self.daemon.kv_set(BOT_USERNAME_KEY, username).await;
         if let Err(e) = self
             .bot
             .set_commands(penelope_telegram::commands::to_bot_commands())
@@ -395,8 +403,7 @@ impl TelegramGateway {
                 args,
                 ..
             } => {
-                self.command(chat_id, topic_id, message_id, &command, &args)
-                    .await?;
+                Box::pin(self.command(chat_id, topic_id, message_id, &command, &args)).await?;
             }
             Incoming::Callback {
                 callback_id,
@@ -489,7 +496,17 @@ impl TelegramGateway {
         let reply_to = Some(message_id);
 
         let text: String = match command {
-            "start" | "help" => penelope_telegram::commands::help_text(),
+            "start" | "help" => {
+                // `/start <charge>` : lien profond vers un écran (issue #30).
+                if !args.is_empty() {
+                    return self
+                        .open_deep_link(chat_id, topic_id, message_id, args)
+                        .await;
+                }
+                return self
+                    .show_screen(chat_id, topic_id, reply_to, "help", &json!({}), None)
+                    .await;
+            }
             "new" => {
                 if let Some(old) = s.sessions.find_by_topic(chat_id, topic_id).await? {
                     crate::session_ops::silence(d, old.id.as_str(), "nouvelle session").await?;
@@ -549,7 +566,21 @@ impl TelegramGateway {
             "title" => {
                 let session = d.chat_session_for(&origin).await?;
                 match crate::titles::clean(args) {
-                    None => "Usage : `/title <titre de la session>`".into(),
+                    None => {
+                        return self
+                            .send_screen(
+                                chat_id,
+                                topic_id,
+                                reply_to,
+                                Self::typed_screen(
+                                    "✏️ Nouveau titre de la session : `/title` suivi du titre.",
+                                    "✏️ Écrire le titre",
+                                    "/title ",
+                                ),
+                                None,
+                            )
+                            .await;
+                    }
                     Some(title) => {
                         s.sessions.set_title(&session, &title, false).await?;
                         format!("✏️ Session renommée : « {title} ».")
@@ -594,15 +625,40 @@ impl TelegramGateway {
                         let fork = v["session"].as_str().unwrap_or_default().to_string();
                         let cancelled = self.bind_chat(&fork, chat_id, topic_id).await?;
                         s.sessions.touch(&fork).await?;
-                        format!(
-                            "🍴 Session dupliquée ({} messages) : la suite se passe dans `{fork}`. \
-                             `/switch {session}` pour revenir à l'original.{}",
-                            v["messages"],
-                            cancelled_note(cancelled)
-                        )
+                        let back = s
+                            .actions
+                            .create(
+                                k::SESSION_SWITCH,
+                                &session,
+                                json!({"notice": true}),
+                                7 * 24 * 3_600_000,
+                                false,
+                            )
+                            .await?;
+                        let screen = screens::Screen {
+                            text: format!(
+                                "🍴 Session dupliquée ({} messages) : la suite se passe dans \
+                                 `{fork}`.{}",
+                                v["messages"],
+                                cancelled_note(cancelled)
+                            ),
+                            rows: vec![vec![ButtonSpec::callback(
+                                "↪️ Revenir à l'original",
+                                &back.token,
+                                "",
+                            )]],
+                        };
+                        return self
+                            .send_screen(chat_id, topic_id, reply_to, screen, None)
+                            .await;
                     }
                     Err(e) => format!("❌ {e}"),
                 }
+            }
+            "rewind" if args.is_empty() => {
+                return self
+                    .show_screen(chat_id, topic_id, reply_to, "rewind", &json!({}), None)
+                    .await;
             }
             "rewind" => {
                 let session = d.chat_session_for(&origin).await?;
@@ -641,33 +697,51 @@ impl TelegramGateway {
                 }
             }
             "upgrade" => {
-                let params = match args {
-                    "" | "check" => json!({"check": true}),
-                    "install" => json!({}),
-                    "rollback" => json!({"rollback": true}),
-                    tag if tag.starts_with('v') && !tag.contains(char::is_whitespace) => {
-                        json!({"tag": tag})
-                    }
-                    _ => {
-                        let usage = "Usage : `/upgrade` (vérifier), `/upgrade install`, \
-                                     `/upgrade rollback` ou `/upgrade v0.3.1`.";
-                        return self.reply(chat_id, topic_id, reply_to, usage).await;
+                // Installer ou revenir en arrière : toujours confirmé (issue #30).
+                let confirm = match args {
+                    "install" => Some((
+                        "upgrade.install",
+                        json!({}),
+                        "Installer la dernière version publiée puis redémarrer ?".to_string(),
+                    )),
+                    "rollback" => Some((
+                        "upgrade.rollback",
+                        json!({}),
+                        "Revenir au binaire précédent puis redémarrer ?".to_string(),
+                    )),
+                    tag if tag.starts_with('v') && !tag.contains(char::is_whitespace) => Some((
+                        "upgrade.install",
+                        json!({"tag": tag}),
+                        format!("Installer {tag} puis redémarrer ?"),
+                    )),
+                    _ => None,
+                };
+                let args = match confirm {
+                    Some((op, params, question)) => json!({
+                        "op": op, "params": params, "question": question,
+                        "back": {"screen": "upgrade", "args": {}},
+                    }),
+                    None => {
+                        // L'écran s'affiche tout de suite ; la vérification suit en fond.
+                        let daemon = d.clone();
+                        tokio::spawn(async move {
+                            let rpc = crate::rpc::Rpc::new(daemon.clone());
+                            if let Ok(v) = rpc.call(m::UPGRADE, json!({"check": true})).await {
+                                let cached =
+                                    json!({"latest": v["latest"], "up_to_date": v["up_to_date"]});
+                                let _ = daemon
+                                    .kv_set("tg.upgrade.last_check", &cached.to_string())
+                                    .await;
+                            }
+                        });
+                        return self
+                            .show_screen(chat_id, topic_id, reply_to, "upgrade", &json!({}), None)
+                            .await;
                     }
                 };
-                // Le téléchargement prend du temps : la file des updates n'attend pas.
-                self.react(chat_id, message_id, reaction::RECEIVED);
-                let (daemon, messenger) = (d.clone(), d.hooks.messenger());
-                tokio::spawn(async move {
-                    let rpc = crate::rpc::Rpc::new(daemon);
-                    let text = match rpc.call(m::UPGRADE, params).await {
-                        Ok(v) => crate::upgrade::render(&v),
-                        Err(e) => format!("❌ {e}"),
-                    };
-                    if let Some(m) = messenger {
-                        let _ = m.send_text(&origin, &text).await;
-                    }
-                });
-                return Ok(());
+                return self
+                    .show_screen(chat_id, topic_id, reply_to, "confirm", &args, None)
+                    .await;
             }
             "stop" => {
                 let session = d.chat_session_for(&origin).await?;
@@ -679,7 +753,9 @@ impl TelegramGateway {
             }
             "switch" => {
                 if args.is_empty() {
-                    "Usage : `/switch <identifiant, préfixe ou titre>` (ou `/sessions`)".into()
+                    return self
+                        .send_sessions_menu(chat_id, topic_id, 0, false, None)
+                        .await;
                 } else {
                     match crate::session_ops::resolve(s, args).await {
                         Err(e) => format!("❌ {e}"),
@@ -713,17 +789,22 @@ impl TelegramGateway {
                 };
                 match target {
                     Err(e) => format!("❌ {e}"),
-                    Ok(id) => match crate::session_ops::close(d, &id).await {
-                        Ok(v) => format!(
-                            "🔒 Session {} fermée.{}",
-                            v["title"]
-                                .as_str()
-                                .map(|t| format!("« {t} »"))
-                                .unwrap_or_else(|| format!("`{id}`")),
-                            cancelled_note(v["cancelled"].as_u64().unwrap_or(0) as usize)
-                        ),
-                        Err(e) => format!("❌ {e}"),
-                    },
+                    Ok(id) => {
+                        let label = match s.sessions.get(&id).await? {
+                            Some(sess) => format!("« {} »", crate::titles::label(&sess)),
+                            None => format!("`{id}`"),
+                        };
+                        let args = json!({
+                            "op": "session.close", "params": {"session": id},
+                            "question": format!(
+                                "Fermer la session {label} ? Sa file d'attente est vidée."
+                            ),
+                            "back": null,
+                        });
+                        return self
+                            .show_screen(chat_id, topic_id, reply_to, "confirm", &args, None)
+                            .await;
+                    }
                 }
             }
             "model" => {
@@ -786,41 +867,32 @@ impl TelegramGateway {
                 }
             }
             "models" => {
-                let v = rpc
-                    .call(m::MODEL_LIST, json!({"filter": args}))
-                    .await
-                    .unwrap_or(json!({}));
-                let mut t = routing_text(&v);
-                let models = v["models"].as_array().cloned().unwrap_or_default();
-                if !models.is_empty() {
-                    t.push_str(&format!(
-                        "\n**Catalogue** ({} résultat(s))\n\n",
-                        models.len()
-                    ));
-                    for x in models.iter().take(30) {
-                        t.push_str(&format!(
-                            "- `{}` · {} $/M en entrée\n",
-                            x["id"].as_str().unwrap_or("?"),
-                            x["usd_per_m_in"]
-                        ));
-                    }
-                } else {
-                    t.push_str(&format!(
-                        "\n{} modèle(s) au catalogue. Chercher : `/models glm`",
-                        v["catalog_size"]
-                    ));
-                }
-                t
+                return self
+                    .show_screen(
+                        chat_id,
+                        topic_id,
+                        reply_to,
+                        "models",
+                        &json!({"filter": args}),
+                        None,
+                    )
+                    .await;
             }
             "schedules" => {
                 let parts: Vec<&str> = args.split_whitespace().collect();
                 let by_id = |method: &'static str, id: &str| rpc.call(method, json!({"id": id}));
                 match parts.as_slice() {
-                    [] => match rpc.call(m::SCHEDULE_LIST, json!({})).await {
-                        Ok(v) => schedules_text(&v),
-                        Err(e) => format!("❌ {e}"),
-                    },
-                    [op @ ("pause" | "resume" | "rm" | "run"), id] => {
+                    ["rm", id] => {
+                        let args = json!({
+                            "op": "schedule.rm", "params": {"id": id},
+                            "question": format!("Supprimer le déclencheur `{id}` ?"),
+                            "back": {"screen": "schedules", "args": {}},
+                        });
+                        return self
+                            .show_screen(chat_id, topic_id, reply_to, "confirm", &args, None)
+                            .await;
+                    }
+                    [op @ ("pause" | "resume" | "run"), id] => {
                         let method = match *op {
                             "pause" => m::SCHEDULE_PAUSE,
                             "resume" => m::SCHEDULE_RESUME,
@@ -837,7 +909,11 @@ impl TelegramGateway {
                             Err(e) => format!("❌ {e}"),
                         }
                     }
-                    _ => "Usage : `/schedules`, `/schedules pause|resume|rm|run <id>`".into(),
+                    _ => {
+                        return self
+                            .show_screen(chat_id, topic_id, reply_to, "schedules", &json!({}), None)
+                            .await;
+                    }
                 }
             }
             "mcp" => {
@@ -845,17 +921,19 @@ impl TelegramGateway {
                 let call =
                     |method: &'static str, name: &str| rpc.call(method, json!({"name": name}));
                 match parts.as_slice() {
-                    [] => match rpc.call(m::MCP_LIST, json!({})).await {
-                        Ok(v) => mcp_list_text(&v),
-                        Err(e) => format!("❌ {e}"),
-                    },
+                    [] => {
+                        return self
+                            .show_screen(chat_id, topic_id, reply_to, "mcp", &json!({}), None)
+                            .await;
+                    }
                     ["auth", name] => {
                         return self.send_oauth_card(chat_id, topic_id, name).await;
                     }
                     ["restart", name] => match call(m::MCP_RESTART, name).await {
                         Ok(v) => format!(
                             "🔄 `{name}` redémarré : {} outil(s), état {}.",
-                            v["tool_count"], v["state"].as_str().unwrap_or("?")
+                            v["tool_count"],
+                            v["state"].as_str().unwrap_or("?")
                         ),
                         Err(e) => format!("❌ {e}"),
                     },
@@ -886,10 +964,9 @@ impl TelegramGateway {
                             v["tools"],
                             v["ms"]
                         ),
-                        Ok(v) => format!(
-                            "❌ `{name}` : {}",
-                            v["error"].as_str().unwrap_or("échec")
-                        ),
+                        Ok(v) => {
+                            format!("❌ `{name}` : {}", v["error"].as_str().unwrap_or("échec"))
+                        }
                         Err(e) => format!("❌ {e}"),
                     },
                     [op @ ("enable" | "disable"), name] => {
@@ -904,11 +981,23 @@ impl TelegramGateway {
                             Err(e) => format!("❌ {e}"),
                         }
                     }
-                    [name] => match call(m::MCP_SHOW, name).await {
-                        Ok(v) => mcp_show_text(&v),
-                        Err(e) => format!("❌ {e}"),
-                    },
-                    _ => "Usage : `/mcp`, `/mcp <serveur>`, `/mcp restart|logs|test|enable|disable <serveur>`".into(),
+                    [name] => {
+                        return self
+                            .show_screen(
+                                chat_id,
+                                topic_id,
+                                reply_to,
+                                "mcp.server",
+                                &json!({"name": name}),
+                                None,
+                            )
+                            .await;
+                    }
+                    _ => {
+                        return self
+                            .show_screen(chat_id, topic_id, reply_to, "mcp", &json!({}), None)
+                            .await;
+                    }
                 }
             }
             "budget" => {
@@ -953,68 +1042,46 @@ impl TelegramGateway {
             }
             "appris" => {
                 let days = args.trim().parse::<i64>().unwrap_or(7);
-                let items = crate::dream::learned(s, days).await?;
-                if items.is_empty() {
-                    format!("Rien appris sur les {days} derniers jours.")
-                } else {
-                    let mut t = format!("📚 **Appris sur {days} jours**\n");
-                    for i in items.iter().take(30) {
-                        t.push_str(&format!(
-                            "\n- {} _({}, {})_",
-                            i["text"].as_str().unwrap_or("(entrée retirée depuis)"),
-                            i["file"].as_str().unwrap_or("?"),
-                            &i["ts"].as_str().unwrap_or("")
-                                [..10.min(i["ts"].as_str().unwrap_or("").len())]
-                        ));
-                    }
-                    t
-                }
+                return self
+                    .show_screen(
+                        chat_id,
+                        topic_id,
+                        reply_to,
+                        "learned",
+                        &json!({"days": days}),
+                        None,
+                    )
+                    .await;
             }
             "pratique" => {
-                if args.is_empty() {
-                    "Usage : `/pratique <slug>`".into()
+                let (screen, screen_args) = if args.is_empty() {
+                    ("practices", json!({}))
                 } else {
-                    let slug = penelope_platform::slugify(args);
-                    let path =
-                        crate::conversation::vault_dir(s).join(format!("pratiques/{slug}.md"));
-                    match std::fs::read_to_string(&path)
-                        .map_err(|_| format!("pratique `{slug}` introuvable"))
-                        .and_then(|raw| penelope_memory::vault::Practice::parse(&raw, &slug))
-                    {
-                        Ok(p) => {
-                            let mut t = format!(
-                                "📐 **{}** · confiance {:.1} · {}\n\nDéfaut : {}",
-                                p.title,
-                                p.confiance,
-                                p.statut.as_str(),
-                                p.default_entry
-                                    .as_ref()
-                                    .map(|e| e.text.as_str())
-                                    .unwrap_or("(aucun)")
-                            );
-                            for e in &p.exceptions {
-                                t.push_str(&format!(
-                                    "\n- Exception : {} ({})",
-                                    e.text,
-                                    e.annotations
-                                        .quand
-                                        .as_ref()
-                                        .map(|q| q.render())
-                                        .unwrap_or_default()
-                                ));
-                            }
-                            if !p.ecarts.is_empty() {
-                                t.push_str(&format!("\n{} écart(s) observé(s).", p.ecarts.len()));
-                            }
-                            t
-                        }
-                        Err(e) => format!("❌ {e}"),
-                    }
-                }
+                    (
+                        "practice",
+                        json!({"slug": penelope_platform::slugify(args)}),
+                    )
+                };
+                return self
+                    .show_screen(chat_id, topic_id, reply_to, screen, &screen_args, None)
+                    .await;
             }
             "retiens" => {
                 if args.is_empty() {
-                    "Usage : `/retiens <ce qu'il faut retenir>`".into()
+                    return self
+                        .send_screen(
+                            chat_id,
+                            topic_id,
+                            reply_to,
+                            Self::typed_screen(
+                                "🧠 **Retenir** : `/retiens` suivi de ce qu'il faut garder en \
+                                 mémoire de fond (une ligne, sans secret).",
+                                "✏️ Écrire",
+                                "/retiens ",
+                            ),
+                            None,
+                        )
+                        .await;
                 } else {
                     let vault = crate::conversation::vault_dir(s);
                     let session = d.chat_session_for(&origin).await?;
@@ -1032,38 +1099,77 @@ impl TelegramGateway {
                     }
                 }
             }
-            "oublie" | "forget" => {
+            "oublie" => {
+                if !args.is_empty()
+                    && let Some(e) = s.memory.get(args).await?
+                {
+                    let confirm = json!({
+                        "op": "mem.forget", "params": {"uid": args},
+                        "question": format!("Oublier « {} » ?", e.text),
+                        "back": {"screen": "forget", "args": {}},
+                    });
+                    return self
+                        .show_screen(chat_id, topic_id, reply_to, "confirm", &confirm, None)
+                        .await;
+                }
+                return self
+                    .show_screen(
+                        chat_id,
+                        topic_id,
+                        reply_to,
+                        "forget",
+                        &json!({"query": args}),
+                        None,
+                    )
+                    .await;
+            }
+            "forget" => {
                 if args.is_empty() {
-                    "Usage : `/oublie <uid ou mots-clés>`".into()
-                } else if s.memory.get(args).await?.is_some() {
-                    let vault = crate::conversation::vault_dir(s);
-                    match crate::vault_ops::forget(s, &vault, args).await {
-                        Ok(true) => "🗑 Oublié.".into(),
-                        Ok(false) => "Rien à oublier.".into(),
-                        Err(e) => format!("❌ {e}"),
+                    return self
+                        .show_screen(
+                            chat_id,
+                            topic_id,
+                            reply_to,
+                            "forget.sessions",
+                            &json!({}),
+                            None,
+                        )
+                        .await;
+                }
+                match crate::session_ops::resolve(s, args).await {
+                    Err(e) => format!("❌ {e}"),
+                    Ok(sess) => {
+                        let confirm = json!({
+                            "op": "session.forget", "params": {"session": sess.id.to_string()},
+                            "question": format!(
+                                "Oublier tout ce que la mémoire a retenu de la session « {} » ?",
+                                crate::titles::label(&sess)
+                            ),
+                            "back": {"screen": "forget.sessions", "args": {}},
+                        });
+                        return self
+                            .show_screen(chat_id, topic_id, reply_to, "confirm", &confirm, None)
+                            .await;
                     }
-                } else {
-                    let v = rpc.call(m::MEM_SEARCH, json!({"query": args})).await?;
-                    let mut t = String::from("Entrées trouvées (répondre `/oublie <uid>`) :\n\n");
-                    for h in v.as_array().cloned().unwrap_or_default().iter().take(10) {
-                        t.push_str(&format!(
-                            "- `{}` {}\n",
-                            h["uid"].as_str().unwrap_or("?"),
-                            h["text"].as_str().unwrap_or("")
-                        ));
-                    }
-                    t
                 }
             }
             "secret" => {
                 let parts: Vec<&str> = args.split_whitespace().collect();
                 match parts.first().copied() {
                     None | Some("list") => {
-                        render_value(&rpc.call(m::SECRET_LIST, json!({})).await?)
+                        return self
+                            .show_screen(chat_id, topic_id, reply_to, "secrets", &json!({}), None)
+                            .await;
                     }
                     Some("rm") if parts.len() > 1 => {
-                        rpc.call(m::SECRET_RM, json!({"name": parts[1]})).await?;
-                        format!("🗑 Secret `{}` supprimé.", parts[1])
+                        let confirm = json!({
+                            "op": "secret.rm", "params": {"name": parts[1]},
+                            "question": format!("Supprimer le secret `{}` ?", parts[1]),
+                            "back": {"screen": "secrets", "args": {}},
+                        });
+                        return self
+                            .show_screen(chat_id, topic_id, reply_to, "confirm", &confirm, None)
+                            .await;
                     }
                     _ => "Un secret ne se saisit **jamais** dans une conversation. En SSH : \
                           `penelope secret set <nom>` puis coller la valeur à l'invite"
@@ -1081,15 +1187,64 @@ impl TelegramGateway {
                     format!("{} demande(s) en attente.", pending.len())
                 }
             }
-            "recall" => render_value(&rpc.call(m::MEM_SEARCH, json!({"query": args})).await?),
+            "recall" => {
+                if args.is_empty() {
+                    return self
+                        .send_screen(
+                            chat_id,
+                            topic_id,
+                            reply_to,
+                            Self::typed_screen(
+                                "🔎 **Rechercher en mémoire** : `/recall` suivi des mots-clés.",
+                                "🔎 Chercher",
+                                "/recall ",
+                            ),
+                            None,
+                        )
+                        .await;
+                }
+                let hits = rpc.call(m::MEM_SEARCH, json!({"query": args})).await?;
+                let hits = hits.as_array().cloned().unwrap_or_default();
+                if hits.is_empty() {
+                    format!("🔎 Rien en mémoire pour « {args} ».")
+                } else {
+                    let mut t = format!(
+                        "🔎 **Mémoire** : {} résultat(s) pour « {args} »\n",
+                        hits.len()
+                    );
+                    for h in hits.iter().take(10) {
+                        t.push_str(&format!(
+                            "\n- {} _({})_",
+                            h["text"].as_str().unwrap_or_default(),
+                            h["file"].as_str().unwrap_or("?")
+                        ));
+                    }
+                    t
+                }
+            }
             "run" => {
                 let mut words = args.splitn(2, char::is_whitespace);
                 match words.next().filter(|w| !w.is_empty()) {
                     None => {
-                        "Usage : `/run <workflow> clé=valeur…` (`/wf` liste les workflows).".into()
+                        return self
+                            .show_screen(chat_id, topic_id, reply_to, "wf", &json!({}), None)
+                            .await;
                     }
                     Some(id) => {
-                        let params = parse_params(words.next().unwrap_or_default());
+                        let rest = words.next().unwrap_or_default().trim();
+                        // Paramètres déclarés et rien de saisi : le formulaire les demande.
+                        if rest.is_empty()
+                            && let Some(w) = s.workflows.get(id)
+                            && !w.metadata.parameters.is_empty()
+                        {
+                            let title = if w.metadata.name.is_empty() {
+                                id.to_string()
+                            } else {
+                                w.metadata.name.clone()
+                            };
+                            return self.start_workflow_form(chat_id, id, &title).await;
+                        }
+                        let params = parse_params(rest);
                         match crate::workflow::start_run(d, id, params, &origin, None, 0).await {
                             Ok(run) => format!("▶️ Run `{}` lancé.", run.id),
                             Err(e) => format!("❌ {e}"),
@@ -1099,37 +1254,208 @@ impl TelegramGateway {
             }
             "resume" => {
                 if args.is_empty() {
-                    "Usage : `/resume <run>` (`/runs` liste les runs).".into()
-                } else {
-                    match crate::workflow::control(d, args, &penelope_workflow::Control::Resume)
-                        .await
-                    {
-                        Ok(state) => format!("▶️ Run `{args}` : {}.", state.as_str()),
-                        Err(e) => format!("❌ {e}"),
-                    }
+                    return self
+                        .show_screen(
+                            chat_id,
+                            topic_id,
+                            reply_to,
+                            "runs",
+                            &json!({"filter": "stuck"}),
+                            None,
+                        )
+                        .await;
+                }
+                match crate::workflow::control(d, args, &penelope_workflow::Control::Resume).await {
+                    Ok(state) => format!("▶️ Run `{args}` : {}.", state.as_str()),
+                    Err(e) => format!("❌ {e}"),
                 }
             }
-            other => {
-                // Commandes du catalogue sans traitement dédié : appel RPC générique.
-                let cmd = penelope_telegram::commands::all()
-                    .into_iter()
-                    .find(|c| c.name == other);
-                match cmd {
-                    None => format!("Commande inconnue : `/{other}`. Voir `/help`."),
-                    Some(c) => {
-                        let params = generic_params(c.rpc, args);
-                        match rpc.call(c.rpc, params).await {
-                            Ok(v) => render_value(&v),
-                            Err(e) if e.to_string().contains("méthode inconnue") => {
-                                format!("`/{other}` n'est pas encore branchée dans ce daemon.")
-                            }
+            "wf" | "runs" | "skills" | "intentions" | "policies" | "status" | "doctor"
+            | "config" => {
+                let screen = match command {
+                    "wf" if !args.is_empty() => {
+                        return self
+                            .show_screen(
+                                chat_id,
+                                topic_id,
+                                reply_to,
+                                "wf.detail",
+                                &json!({"id": args}),
+                                None,
+                            )
+                            .await;
+                    }
+                    other => other,
+                };
+                return self
+                    .show_screen(chat_id, topic_id, reply_to, screen, &json!({}), None)
+                    .await;
+            }
+            "skill" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                let (screen, screen_args) = match parts.as_slice() {
+                    [] => ("skills", json!({})),
+                    ["rollback", name] => (
+                        "confirm",
+                        json!({
+                            "op": "skill.rollback", "params": {"name": name},
+                            "question": format!("Revenir à la version précédente de `{name}` ?"),
+                            "back": {"screen": "skills", "args": {}},
+                        }),
+                    ),
+                    [name, ..] => ("skill", json!({"name": name})),
+                };
+                return self
+                    .show_screen(chat_id, topic_id, reply_to, screen, &screen_args, None)
+                    .await;
+            }
+            "logs" => {
+                let component = args.split_whitespace().next().unwrap_or_default();
+                return self
+                    .show_screen(
+                        chat_id,
+                        topic_id,
+                        reply_to,
+                        "logs",
+                        &json!({"component": component}),
+                        None,
+                    )
+                    .await;
+            }
+            "restart" => {
+                let confirm = json!({
+                    "op": "restart", "params": {},
+                    "question": "Redémarrer le daemon ? Les tours en cours reprennent au redémarrage.",
+                    "back": null,
+                });
+                return self
+                    .show_screen(chat_id, topic_id, reply_to, "confirm", &confirm, None)
+                    .await;
+            }
+            "note" => {
+                if args.is_empty() {
+                    return self
+                        .send_screen(
+                            chat_id,
+                            topic_id,
+                            reply_to,
+                            Self::typed_screen(
+                                "📝 **Noter** : `/note` suivi du texte, rangé dans le journal du jour.",
+                                "✏️ Écrire",
+                                "/note ",
+                            ),
+                            None,
+                        )
+                        .await;
+                }
+                let vault = crate::conversation::vault_dir(s);
+                let session = d.chat_session_for(&origin).await?;
+                match crate::vault_ops::remember(
+                    s,
+                    &vault,
+                    penelope_memory::Level::Episodic,
+                    args,
+                    &session,
+                )
+                .await
+                {
+                    Ok(_) => "📝 Noté dans le journal du jour.".into(),
+                    Err(e) => format!("❌ {e}"),
+                }
+            }
+            "mien" => "📄 Envoie un document avec la légende `/mien` : il est ingéré comme rédigé \
+                       par toi, donc fiable et rappelable. Sans légende, un document reçu reste \
+                       une source non fiable."
+                .into(),
+            "p" => {
+                let mut words = args.splitn(3, char::is_whitespace);
+                match (words.next().filter(|w| !w.is_empty()), words.next()) {
+                    (None, _) => {
+                        return self
+                            .show_screen(chat_id, topic_id, reply_to, "prompts", &json!({}), None)
+                            .await;
+                    }
+                    (Some(server), None) => {
+                        return self
+                            .show_screen(
+                                chat_id,
+                                topic_id,
+                                reply_to,
+                                "prompts",
+                                &json!({"server": server}),
+                                None,
+                            )
+                            .await;
+                    }
+                    (Some(server), Some(prompt)) => {
+                        let params = parse_params(words.next().unwrap_or_default());
+                        match self
+                            .run_mcp_prompt(chat_id, topic_id, server, prompt, params)
+                            .await
+                        {
+                            Ok(n) => format!(
+                                "💬 Prompt `{prompt}` de `{server}` : {n} message(s) envoyé(s) au modèle."
+                            ),
                             Err(e) => format!("❌ {e}"),
                         }
                     }
                 }
             }
+            "quiet" => {
+                if args.is_empty() {
+                    return self
+                        .show_screen(chat_id, topic_id, reply_to, "quiet", &json!({}), None)
+                        .await;
+                }
+                let range = if matches!(args, "off" | "non" | "aucune") {
+                    ""
+                } else {
+                    args
+                };
+                match rpc.call(m::QUIET, json!({"range": range})).await {
+                    Ok(_) if range.is_empty() => "🔔 Heures silencieuses désactivées.".into(),
+                    Ok(_) => format!("🌙 Heures silencieuses : {range}."),
+                    Err(e) => format!("❌ {e}"),
+                }
+            }
+            other => format!("Commande inconnue : `/{other}`. Voir `/help`."),
         };
         self.reply(chat_id, topic_id, reply_to, &text).await
+    }
+
+    /// Réponse suivie d'un bouton par suite proposée ; un clic envoie la suite comme message
+    /// du propriétaire dans la session (issue #31).
+    async fn send_choices(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        reply_to: Option<i64>,
+        session_id: &str,
+        text: &str,
+        choices: &[String],
+    ) -> anyhow::Result<()> {
+        let mut rows = Vec::new();
+        for choice in choices {
+            let t = self
+                .daemon
+                .services
+                .actions
+                .create(
+                    k::SAY,
+                    session_id,
+                    json!({"text": choice}),
+                    7 * 24 * 3_600_000,
+                    true,
+                )
+                .await?;
+            rows.push(vec![ButtonSpec::callback(choice, &t.token, "")]);
+        }
+        let screen = screens::Screen {
+            text: text.to_string(),
+            rows,
+        };
+        self.send_screen(chat_id, topic_id, reply_to, screen, None)
+            .await
     }
 
     /// Menu `/model` : état du modèle de la session et un bouton par choix.
@@ -1827,6 +2153,37 @@ impl TelegramGateway {
         {
             return self
                 .session_menu_clicked(callback_id, action, chat_id, topic_id, message_id)
+                .await;
+        }
+        if let ClickOutcome::Accepted(action) = &outcome
+            && action.action == k::SAY
+        {
+            let text = action.args["text"].as_str().unwrap_or_default().to_string();
+            let _ = self
+                .bot
+                .answer_callback(callback_id, Some(&text), false)
+                .await;
+            let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+            let origin = Origin::Telegram {
+                chat_id,
+                topic_id,
+                message_id: None,
+            };
+            self.reply(chat_id, topic_id, Some(message_id), &format!("➡️ {text}"))
+                .await?;
+            self.daemon
+                .enqueue_message(&action.target, &text, &origin, None)
+                .await?;
+            return Ok(());
+        }
+        if let ClickOutcome::Accepted(action) = &outcome
+            && matches!(
+                action.action.as_str(),
+                k::SCREEN | k::SCREEN_DO | k::RUN_COMMAND
+            )
+        {
+            return self
+                .screen_clicked(callback_id, action, chat_id, topic_id, message_id)
                 .await;
         }
         if let ClickOutcome::Accepted(action) = &outcome
@@ -2665,8 +3022,14 @@ impl TelegramGateway {
                     text,
                     reply_to,
                     answer,
+                    choices,
                 } => {
-                    self.reply(chat_id, topic_id, *reply_to, text).await?;
+                    if choices.is_empty() {
+                        self.reply(chat_id, topic_id, *reply_to, text).await?;
+                    } else {
+                        self.send_choices(chat_id, topic_id, *reply_to, session_id, text, choices)
+                            .await?;
+                    }
                     if let (true, Some(mid)) = (answer, reply_to) {
                         self.react(chat_id, *mid, reaction::DONE);
                     }
@@ -2852,6 +3215,16 @@ impl TelegramGateway {
             }
             k::FORM_DECLINE => {
                 d.kv_set(&form_key(chat_id), "").await?;
+                if pending["workflow"].is_string() || pending["prompt"].is_object() {
+                    return self
+                        .reply(
+                            chat_id,
+                            None,
+                            None,
+                            "✖️ Formulaire abandonné : rien n'est lancé.",
+                        )
+                        .await;
+                }
                 if let Some(id) = pending["elicitation"].as_str() {
                     return self
                         .finish_elicitation(
@@ -2881,6 +3254,42 @@ impl TelegramGateway {
                     }
                 };
                 d.kv_set(&form_key(chat_id), "").await?;
+                // Paramètres d'un workflow lancé depuis `/wf` ou `/run` (issue #30).
+                if let Some(workflow) = pending["workflow"].as_str() {
+                    let origin = Origin::Telegram {
+                        chat_id,
+                        topic_id: None,
+                        message_id: None,
+                    };
+                    let note =
+                        match crate::workflow::start_run(d, workflow, values, &origin, None, 0)
+                            .await
+                        {
+                            Ok(run) => format!(
+                                "▶️ Run `{}` lancé (« {} »).",
+                                run.id,
+                                pending["choice"].as_str().unwrap_or(workflow)
+                            ),
+                            Err(e) => format!("❌ {e}"),
+                        };
+                    return self.reply(chat_id, None, None, &note).await;
+                }
+                // Arguments d'un prompt MCP (`/p`).
+                if let (Some(server), Some(prompt)) = (
+                    pending["prompt"]["server"].as_str(),
+                    pending["prompt"]["name"].as_str(),
+                ) {
+                    let note = match self
+                        .run_mcp_prompt(chat_id, None, server, prompt, values)
+                        .await
+                    {
+                        Ok(n) => {
+                            format!("💬 Prompt `{prompt}` : {n} message(s) envoyé(s) au modèle.")
+                        }
+                        Err(e) => format!("❌ {e}"),
+                    };
+                    return self.reply(chat_id, None, None, &note).await;
+                }
                 if let Some(id) = pending["elicitation"].as_str() {
                     return self
                         .finish_elicitation(
@@ -3995,14 +4404,18 @@ impl ChannelDelivery for TelegramGateway {
                     text: text.clone(),
                     reply_to: message_id,
                     answer: true,
+                    choices: Vec::new(),
                 }),
                 TurnOutcome::AwaitingApproval { approval_id } => Some(Held::Approval {
                     id: approval_id.clone(),
                 }),
-                TurnOutcome::LoopAborted { report } => Some(Held::Text {
-                    text: loop_aborted_text(report),
+                TurnOutcome::LoopAborted {
+                    answer, choices, ..
+                } => Some(Held::Text {
+                    text: answer.clone(),
                     reply_to: message_id,
                     answer: false,
+                    choices: choices.clone(),
                 }),
                 TurnOutcome::Cancelled => None,
                 TurnOutcome::BudgetExceeded {
@@ -4013,6 +4426,7 @@ impl ChannelDelivery for TelegramGateway {
                     text: crate::agent::budget_exceeded_text(scope, *spent_usd, *limit_usd),
                     reply_to: message_id,
                     answer: false,
+                    choices: Vec::new(),
                 }),
                 TurnOutcome::Failed { error } => Some(Held::Failure {
                     error: error.clone(),
@@ -4042,8 +4456,10 @@ impl ChannelDelivery for TelegramGateway {
                         self.react(chat_id, mid, reaction::WAITING_APPROVAL);
                     }
                 }
-                TurnOutcome::LoopAborted { report } => {
-                    self.reply(chat_id, topic_id, message_id, &loop_aborted_text(report))
+                TurnOutcome::LoopAborted {
+                    answer, choices, ..
+                } => {
+                    self.send_choices(chat_id, topic_id, message_id, session_id, answer, choices)
                         .await?;
                 }
                 TurnOutcome::Cancelled => {
@@ -4168,6 +4584,7 @@ impl Messenger for TelegramGateway {
                 text: markdown.to_string(),
                 reply_to: None,
                 answer: false,
+                choices: Vec::new(),
             };
             return self
                 .hold(session_id, chat_id, topic_id, item)
@@ -4396,24 +4813,6 @@ fn normalise_model_id(raw: &str) -> String {
     }
 }
 
-/// Paramètres RPC d'une commande générique : l'argument libre va dans le champ usuel.
-fn generic_params(method: &str, args: &str) -> Value {
-    if args.is_empty() {
-        return json!({});
-    }
-    match method {
-        m::MEM_SEARCH => json!({"query": args}),
-        m::SESSION_EXPORT => json!({"session": args}),
-        m::WF_SHOW => json!({"id": args}),
-        m::WF_TRACE => json!({"run": args}),
-        m::SKILL_SHOW | m::SKILL_ROLLBACK => json!({"name": args}),
-        m::INTENT_CANCEL | m::POLICY_REVOKE => json!({"id": args}),
-        m::MODEL_LIST => json!({"filter": args}),
-        m::USAGE => json!({"by": args}),
-        _ => json!({"arg": args}),
-    }
-}
-
 /// Remplace les `{{variables}}` d'un gabarit.
 fn substitute(body: &str, vars: &BTreeMap<String, String>) -> String {
     let mut out = body.to_string();
@@ -4521,6 +4920,58 @@ fn schedules_text(v: &Value) -> String {
     }
     t.push_str("\n`/schedules pause|resume|rm|run <id>`");
     t
+}
+
+/// Dernières lignes du journal JSON du jour (le plus récent à défaut), filtrées par
+/// composant (cible `tracing` ou texte), rendues `HH:MM:SS NIVEAU cible : message`.
+fn recent_log_lines(dir: &Path, component: &str, n: usize) -> Vec<String> {
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .map(|f| f.to_string_lossy())
+                .is_some_and(|f| f.starts_with("penelope-") && f.ends_with(".jsonl"))
+        })
+        .collect();
+    files.sort();
+    let Some(latest) = files.last() else {
+        return Vec::new();
+    };
+    let Ok(raw) = std::fs::read_to_string(latest) else {
+        return Vec::new();
+    };
+    let wanted = component.to_lowercase();
+    let mut out: Vec<String> = raw
+        .lines()
+        .rev()
+        .filter_map(|line| {
+            let v: Value = serde_json::from_str(line).ok()?;
+            let target = v["target"].as_str().unwrap_or_default();
+            let message = v["fields"]["message"].as_str().unwrap_or_default();
+            if !wanted.is_empty()
+                && !target.to_lowercase().contains(&wanted)
+                && !message.to_lowercase().contains(&wanted)
+            {
+                return None;
+            }
+            let time = v["timestamp"]
+                .as_str()
+                .and_then(|t| t.get(11..19))
+                .unwrap_or("");
+            let short_target = target.rsplit("::").next().unwrap_or(target);
+            Some(format!(
+                "{time} {} {short_target} : {}",
+                v["level"].as_str().unwrap_or("?"),
+                message.chars().take(200).collect::<String>()
+            ))
+        })
+        .take(n)
+        .collect();
+    out.reverse();
+    out
 }
 
 fn mcp_state_icon(state: &str) -> &'static str {
@@ -5686,6 +6137,335 @@ mod tests {
         assert_eq!(fake.opened("redmine"), 2);
     }
 
+    /// Dernier message envoyé ou édité portant des boutons, et le jeton du bouton dont le
+    /// libellé contient `label`.
+    async fn button(t: &MockTransport, label: &str) -> String {
+        let mut calls = t.calls_to(tg::SEND_MESSAGE).await;
+        calls.extend(t.calls_to(tg::EDIT_MESSAGE_TEXT).await);
+        calls
+            .iter()
+            .rev()
+            .flat_map(inline_buttons)
+            .find(|(l, _)| l.contains(label))
+            .unwrap_or_else(|| panic!("pas de bouton « {label} »"))
+            .1
+    }
+
+    /// Issue #30 : `/wf`, ▶️ sur un workflow à paramètres, le formulaire s'ouvre, la saisie
+    /// est validée, et le run démarre avec ces paramètres.
+    #[tokio::test]
+    async fn a_workflow_is_launched_from_its_menu_with_a_parameter_form() {
+        let (_d, g, t, _p) = gateway().await;
+        let s = &g.daemon.services;
+        g.process_update(&updates::text_message(300, OWNER, OWNER, "/wf"))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let menu = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
+        assert!(
+            menu.contains("build-verify") && !menu.contains("Usage"),
+            "{menu}"
+        );
+        let launch = button(&t, "▶️ Construire puis vérifier").await;
+        g.process_update(&updates::callback(301, OWNER, &launch, 900))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let form = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
+        assert!(form.contains("Objectif"), "formulaire ouvert : {form}");
+        assert!(
+            s.runs.list(None, 5).await.unwrap().is_empty(),
+            "rien lancé avant l'envoi"
+        );
+
+        g.process_update(&updates::text_message(
+            302,
+            OWNER,
+            OWNER,
+            "réparer le build",
+        ))
+        .await
+        .unwrap();
+        g.flush_outbox().await.unwrap();
+        let submit = button(&t, "Envoyer").await;
+        g.process_update(&updates::callback(303, OWNER, &submit, 901))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let run = s
+            .runs
+            .list(None, 5)
+            .await
+            .unwrap()
+            .pop()
+            .expect("run lancé");
+        assert_eq!(run.workflow_id, "build-verify");
+        assert_eq!(run.params["objectif"], "réparer le build");
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
+        assert!(sent.contains(&run.id), "{sent}");
+    }
+
+    /// Issue #30 : `/schedules`, 🗑, Confirmer : la planification est supprimée et le
+    /// message édité sur place.
+    #[tokio::test]
+    async fn a_schedule_is_deleted_after_confirmation() {
+        let (_d, g, t, _p) = gateway().await;
+        let s = &g.daemon.services;
+        let sched = s
+            .schedules
+            .create(
+                penelope_workflow::TriggerKind::Cron,
+                json!({"expr": "0 9 * * 1"}),
+                json!({"type": "notify", "template": "⏰ Revue hebdo"}),
+                json!({}),
+            )
+            .await
+            .unwrap();
+        g.process_update(&updates::text_message(310, OWNER, OWNER, "/schedules"))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let delete = button(&t, "🗑").await;
+        g.process_update(&updates::callback(311, OWNER, &delete, 910))
+            .await
+            .unwrap();
+        let confirm_screen = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
+        assert!(
+            texts(&confirm_screen)
+                .join("\n")
+                .contains("Supprimer le déclencheur"),
+            "écran de confirmation : {confirm_screen:?}"
+        );
+        assert_eq!(
+            s.schedules.list().await.unwrap().len(),
+            1,
+            "rien de supprimé avant la confirmation"
+        );
+        let confirm = button(&t, "Confirmer").await;
+        g.process_update(&updates::callback(312, OWNER, &confirm, 910))
+            .await
+            .unwrap();
+        assert!(
+            !s.schedules
+                .list()
+                .await
+                .unwrap()
+                .iter()
+                .any(|x| x.id == sched.id),
+            "déclencheur supprimé"
+        );
+        let edits = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
+        let last = edits.last().unwrap();
+        assert_eq!(last["message_id"], 910, "même message redessiné");
+        assert!(
+            last["text"].as_str().unwrap().contains("Aucun déclencheur"),
+            "{last}"
+        );
+    }
+
+    /// Issue #30 : `/mcp`, 🔄 sur un serveur : le superviseur le redémarre et le message
+    /// affiche son état à jour.
+    #[tokio::test]
+    async fn an_mcp_server_is_restarted_from_its_menu() {
+        use crate::mcp::testing::{FakeConnector, declare, server, tool};
+        let (_d, g, t, _p) = gateway().await;
+        let fake = Arc::new(FakeConnector::default());
+        fake.serve(
+            "redmine",
+            server(Arc::new(std::sync::Mutex::new(vec![tool(
+                "list_issues",
+                json!({"readOnlyHint": true}),
+            )]))),
+        );
+        let sup = crate::mcp::McpSupervisor::new(g.daemon.services.clone(), fake.clone());
+        declare(&sup, "redmine", "");
+        sup.reload().await;
+        g.daemon.hooks.set_mcp(sup.clone());
+        let opened = fake.opened("redmine");
+
+        g.process_update(&updates::text_message(320, OWNER, OWNER, "/mcp"))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let restart = button(&t, "🔄").await;
+        g.process_update(&updates::callback(321, OWNER, &restart, 920))
+            .await
+            .unwrap();
+        assert_eq!(fake.opened("redmine"), opened + 1, "redémarrage demandé");
+        let edits = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
+        let last = edits.last().expect("message redessiné");
+        assert_eq!(last["message_id"], 920);
+        assert!(
+            last["text"].as_str().unwrap().contains("redmine")
+                && last["text"].as_str().unwrap().contains("prêt"),
+            "{last}"
+        );
+        let answers = t.calls_to(tg::ANSWER_CALLBACK_QUERY).await;
+        assert!(
+            answers
+                .iter()
+                .any(|a| a["text"].as_str().is_some_and(|x| x.contains("redmine"))),
+            "{answers:?}"
+        );
+    }
+
+    /// Issue #31 : la réponse d'une boucle arrêtée arrive avec ses suites en boutons, sans
+    /// rapport technique, et un clic arrive dans la session comme un message du propriétaire.
+    #[tokio::test]
+    async fn a_stopped_loop_answer_offers_choices_that_become_messages() {
+        use crate::bus::ChannelDelivery;
+        let (_d, g, t, _p) = gateway().await;
+        let d = &g.daemon;
+        let chat = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: Some(640),
+        };
+        let sid = d.chat_session_for(&chat).await.unwrap();
+        g.deliver(
+            "t1",
+            &sid,
+            &chat,
+            &TurnOutcome::LoopAborted {
+                report: "l'outil `tool_call` a été appelé 4 fois\n\nAppels du tour :".into(),
+                answer: "La messagerie répond « 401 Unauthorized » à chaque lecture.".into(),
+                choices: vec!["Chercher autrement".into(), "Laisser tomber".into()],
+            },
+        )
+        .await;
+        g.flush_outbox().await.unwrap();
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        let card = sent.last().unwrap();
+        let text = card["text"].as_str().unwrap();
+        assert!(text.contains("401 Unauthorized"), "{text}");
+        assert!(
+            !text.contains("Appels du tour"),
+            "rapport technique absent : {text}"
+        );
+        let token = inline_buttons(card)
+            .into_iter()
+            .find(|(l, _)| l == "Chercher autrement")
+            .expect("suite en bouton")
+            .1;
+        g.process_update(&updates::callback(641, OWNER, &token, 642))
+            .await
+            .unwrap();
+        let turn = d
+            .services
+            .turns
+            .claim("test")
+            .await
+            .unwrap()
+            .expect("message mis en file");
+        assert_eq!(turn.session_id, sid);
+        assert!(
+            turn.payload.to_string().contains("Chercher autrement"),
+            "{}",
+            turn.payload
+        );
+    }
+
+    /// Issue #30 : le digest renvoie vers un écran précis par lien profond, une fois le bot
+    /// connu.
+    #[tokio::test]
+    async fn the_digest_links_to_screens_once_the_bot_is_known() {
+        let (_d, g, _t, _p) = gateway().await;
+        let d = &g.daemon;
+        assert!(deep_link(d, "approvals").await.is_none());
+        d.kv_set(BOT_USERNAME_KEY, "penelope_test_bot")
+            .await
+            .unwrap();
+        assert_eq!(
+            deep_link(d, "approvals").await.as_deref(),
+            Some("https://t.me/penelope_test_bot?start=approvals")
+        );
+        d.services
+            .approvals
+            .create(
+                penelope_hitl::ApprovalKind::ToolCall,
+                "native__shell",
+                penelope_kernel::risk::RiskClass::Write,
+                json!({"arguments": {}}),
+                Vec::new(),
+                None,
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        let digest = crate::dream::digest_text(d).await.unwrap();
+        assert!(
+            digest.contains("[ouvrir](https://t.me/penelope_test_bot?start=approvals)"),
+            "{digest}"
+        );
+        assert!(
+            markdown_to_html(&digest)
+                .contains("<a href=\"https://t.me/penelope_test_bot?start=approvals\">")
+        );
+    }
+
+    /// Issue #30 : chaque commande du catalogue appelée sans argument rend un clavier ou un
+    /// texte sans « Usage : », et aucune ne tombe dans un affichage générique.
+    #[tokio::test]
+    async fn every_catalog_command_without_arguments_opens_a_screen() {
+        let (_d, g, t, _p) = gateway().await;
+        g.daemon
+            .publish_config("test", |c| {
+                c.upgrade.base_url = "http://127.0.0.1:9".into();
+                Ok(vec!["upgrade.base_url".into()])
+            })
+            .unwrap();
+        // Réponses différées (résumé, rêve) ou fichier : pas de message immédiat attendu.
+        let deferred = ["compact", "dream", "export"];
+        let mut update = 400;
+        for c in penelope_telegram::commands::all() {
+            let before = t.calls_to(tg::SEND_MESSAGE).await.len();
+            let edits_before = t.calls_to(tg::EDIT_MESSAGE_TEXT).await.len();
+            update += 1;
+            g.process_update(&updates::text_message(
+                update,
+                OWNER,
+                OWNER,
+                &format!("/{}", c.name),
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("/{} : {e}", c.name));
+            g.flush_outbox().await.unwrap();
+            let mut new = t.calls_to(tg::SEND_MESSAGE).await.split_off(before);
+            new.extend(
+                t.calls_to(tg::EDIT_MESSAGE_TEXT)
+                    .await
+                    .split_off(edits_before),
+            );
+            if new.is_empty() {
+                assert!(deferred.contains(&c.name), "/{} n'a rien répondu", c.name);
+                continue;
+            }
+            for call in &new {
+                let text = call["text"].as_str().unwrap_or_default();
+                assert!(!text.contains("Usage"), "/{} : {text}", c.name);
+                assert!(
+                    !text.contains("Commande inconnue") && !text.contains("pas encore branchée"),
+                    "/{} : {text}",
+                    c.name
+                );
+            }
+        }
+        // Lien profond : `/start <charge>` ouvre l'écran visé.
+        let before = t.calls_to(tg::SEND_MESSAGE).await.len();
+        g.process_update(&updates::text_message(
+            499,
+            OWNER,
+            OWNER,
+            "/start runs_stuck",
+        ))
+        .await
+        .unwrap();
+        g.flush_outbox().await.unwrap();
+        let opened = texts(&t.calls_to(tg::SEND_MESSAGE).await.split_off(before)).join("\n");
+        assert!(opened.contains("Runs en pause ou bloqués"), "{opened}");
+    }
+
     #[tokio::test]
     async fn schedules_are_listed_paused_and_run_from_telegram() {
         let (_d, g, t, _p) = gateway().await;
@@ -5809,30 +6589,38 @@ mod tests {
         s.workflows
             .load_dir(&dir, penelope_workflow::registry::Scope::User, &known);
 
+        // Sans paramètres saisis, le formulaire les demande un par un (issue #30).
         g.process_update(&updates::text_message(120, OWNER, OWNER, "/run validation"))
             .await
             .unwrap();
-        g.process_update(&updates::text_message(
-            121,
-            OWNER,
-            OWNER,
-            "/run validation sujet=devis-42",
-        ))
-        .await
-        .unwrap();
         g.flush_outbox().await.unwrap();
         let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
         assert!(
-            sent.iter().any(|m| m.contains("sujet")),
-            "paramètre manquant signalé : {sent:?}"
+            sent.iter().any(|m| m.contains("Sujet")),
+            "paramètre demandé : {sent:?}"
         );
+        g.process_update(&updates::text_message(121, OWNER, OWNER, "devis-42"))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let recap = t.calls_to(tg::SEND_MESSAGE).await.last().unwrap().clone();
+        let send = inline_buttons(&recap)
+            .into_iter()
+            .find(|(l, _)| l.contains("Envoyer"))
+            .expect("récapitulatif")
+            .1;
+        g.process_update(&updates::callback(1210, OWNER, &send, 690))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let after = texts(&t.calls_to(tg::SEND_MESSAGE).await);
         let run = s
             .runs
             .list(None, 5)
             .await
             .unwrap()
             .pop()
-            .expect("run lancé");
+            .unwrap_or_else(|| panic!("run lancé : {after:?}"));
         assert_eq!(run.params["sujet"], "devis-42");
 
         crate::workflow::drive(&g.daemon, &run.id).await.unwrap();
@@ -6881,6 +7669,21 @@ mod tests {
             .await
             .unwrap();
         g.process_update(&updates::text_message(90, OWNER, OWNER, "/close"))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        assert_eq!(
+            states(fork.clone()).await.last().unwrap(),
+            "pending",
+            "fermer demande confirmation (issue #30)"
+        );
+        let confirm = t.calls_to(tg::SEND_MESSAGE).await.last().unwrap().clone();
+        let token = inline_buttons(&confirm)
+            .into_iter()
+            .find(|(l, _)| l.contains("Confirmer"))
+            .expect("bouton Confirmer")
+            .1;
+        g.process_update(&updates::callback(91, OWNER, &token, 5000))
             .await
             .unwrap();
         assert_eq!(states(fork.clone()).await.last().unwrap(), "cancelled");

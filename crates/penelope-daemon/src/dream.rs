@@ -1350,8 +1350,12 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
     let pending = s.approvals.pending(100).await?;
     if !pending.is_empty() {
         t.push_str(&format!(
-            "\n📋 {} demande(s) en attente : `/approvals`\n",
-            pending.len()
+            "\n📋 {} demande(s) en attente : {}\n",
+            pending.len(),
+            match crate::telegram::deep_link(d, "approvals").await {
+                Some(link) => format!("[ouvrir]({link})"),
+                None => "`/approvals`".into(),
+            }
         ));
     }
     let runs = s.runs.list(None, 50).await?;
@@ -1368,7 +1372,14 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
     }
     if done + blocked + running > 0 {
         t.push_str(&format!(
-            "\n🔧 Runs récents : {done} terminé(s), {blocked} bloqué(s), {running} en cours\n"
+            "\n🔧 Runs récents : {done} terminé(s), {blocked} bloqué(s), {running} en cours{}\n",
+            match (
+                blocked > 0,
+                crate::telegram::deep_link(d, "runs_stuck").await
+            ) {
+                (true, Some(link)) => format!(" · [reprendre]({link})"),
+                _ => String::new(),
+            }
         ));
     }
     if let Some(w) = crate::vault_git::warning(s) {
@@ -1409,6 +1420,9 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
                     })
                     .unwrap_or_default();
                 t.push_str(&format!("\n📈 Mémoire : {}/100{delta}", audit.total));
+                if let Some(link) = crate::telegram::deep_link(d, "audit").await {
+                    t.push_str(&format!(" · [détail]({link})"));
+                }
                 if let Some(best) = crate::mem_audit::best_next(&audit) {
                     t.push_str(&format!(" · prochaine action : {}", best.next));
                 }

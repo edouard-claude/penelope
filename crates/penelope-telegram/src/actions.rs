@@ -265,6 +265,16 @@ pub mod kind {
     pub const ONBOARD_PAUSE: &str = "onboard_pause";
     pub const ONBOARD_WRITE: &str = "onboard_write";
     pub const ONBOARD_CANCEL: &str = "onboard_cancel";
+    /// Écrans de commandes (issue #30) : `target` nomme l'écran à (re)dessiner, `args` ses
+    /// paramètres (page, filtre…).
+    pub const SCREEN: &str = "screen";
+    /// Opération d'un écran : `target` nomme l'opération, `args` = `{params, back}`.
+    pub const SCREEN_DO: &str = "screen_do";
+    /// Exécute une commande du catalogue sans argument (`target` : son nom).
+    pub const RUN_COMMAND: &str = "run_command";
+    /// Envoie `args.text` comme message du propriétaire dans la session `target` (suites
+    /// proposées après une boucle arrêtée, issue #31).
+    pub const SAY: &str = "say";
 
     pub const ALL: &[&str] = &[
         APPROVE,
@@ -319,6 +329,10 @@ pub mod kind {
         ONBOARD_PAUSE,
         ONBOARD_WRITE,
         ONBOARD_CANCEL,
+        SCREEN,
+        SCREEN_DO,
+        RUN_COMMAND,
+        SAY,
     ];
 }
 
