@@ -117,8 +117,12 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Owner {
+    /// Identifiant Telegram du propriétaire : le seul compte auquel le bot répond (0 :
+    /// canal fermé).
     pub telegram_user_id: i64,
+    /// Fuseau horaire du propriétaire : planifications, digest, date du jour.
     pub timezone: String,
+    /// Langue des réponses.
     pub language: String,
 }
 
@@ -135,20 +139,36 @@ impl Default for Owner {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Telegram {
+    /// Jeton du bot, par référence au magasin de secrets.
     pub token: String,
-    /// `polling` | `webhook`
+    /// Réception des messages : `polling` (long polling) ou `webhook` (pas encore servi).
     pub mode: String,
+    /// Sujets de forum Telegram. Sans effet dans cette version.
     pub topics: bool,
+    /// Rendu riche natif de la Bot API plutôt que HTML.
     pub rich_messages: bool,
+    /// Heures calmes `HH:MM-HH:MM` : les notifications non urgentes attendent la fin de la
+    /// plage.
     pub quiet_hours: String,
+    /// Adresse de la Bot API.
     pub api_base: String,
+    /// Attente d'un appel `getUpdates` en long polling, en secondes.
     pub poll_timeout_s: u64,
+    /// Messages envoyés au plus par seconde, par chat.
     pub rate_per_chat_per_s: f64,
+    /// Taille maximale d'un message. Sans effet dans cette version.
     pub text_limit: usize,
+    /// Taille maximale d'une légende. Sans effet dans cette version.
     pub caption_limit: usize,
+    /// Fragments au-delà desquels une réponse part en document. Sans effet dans cette
+    /// version.
     pub max_fragments: usize,
+    /// Intervalle entre deux mises à jour du brouillon de réponse, en millisecondes (300 au
+    /// moins).
     pub draft_interval_ms: u64,
+    /// Adresse du webhook. Sans effet dans cette version.
     pub webhook_url: String,
+    /// Accepter les messages du propriétaire dans les groupes.
     pub allow_groups: bool,
 }
 
@@ -187,14 +207,20 @@ pub struct Providers {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OpenRouter {
+    /// Clé d'API, par référence au magasin de secrets.
     pub api_key: String,
+    /// Adresse de l'API OpenRouter.
     pub base_url: String,
+    /// Période de rechargement du catalogue de modèles.
     pub catalog_refresh: String,
     /// Attribution (`HTTP-Referer`, `X-OpenRouter-Title`, `X-OpenRouter-Categories`).
     pub referer: String,
+    /// Titre d'attribution (`X-OpenRouter-Title`).
     pub title: String,
+    /// Catégories d'attribution (`X-OpenRouter-Categories`).
     pub categories: String,
     pub routing: OpenRouterRouting,
+    /// Fournisseur actif.
     pub enabled: bool,
 }
 
@@ -216,18 +242,22 @@ impl Default for OpenRouter {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OpenRouterRouting {
+    /// OpenRouter peut passer à un autre provider du même modèle en cas d'échec.
     pub allow_fallbacks: bool,
     /// Ordre imposé des providers. Attention : il désactive le routage collant, donc le
     /// cache de préfixe entre deux tours.
     pub order: Vec<String>,
     /// `deny` : uniquement des providers qui ne conservent pas les données.
     pub data_collection: String,
+    /// Uniquement les providers qui acceptent tous les paramètres de la requête.
     pub require_parameters: bool,
     /// Uniquement des endpoints à rétention nulle (ZDR).
     pub zdr: bool,
     /// `price`, `throughput` ou `latency` ; vide = répartition par défaut d'OpenRouter.
     pub sort: String,
+    /// Providers autorisés, à l'exclusion des autres ; vide : tous.
     pub only: Vec<String>,
+    /// Providers exclus.
     pub ignore: Vec<String>,
     /// Quantifications acceptées (`fp8`, `bf16`…) ; vide = toutes.
     pub quantizations: Vec<String>,
@@ -252,10 +282,15 @@ impl Default for OpenRouterRouting {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LocalProvider {
+    /// Type d'endpoint (`openai_compat`).
     pub kind: String,
+    /// Adresse de l'endpoint OpenAI-compatible.
     pub base_url: String,
+    /// Clé éventuelle, par référence au magasin de secrets.
     pub api_key: String,
+    /// Endpoint actif.
     pub enabled: bool,
+    /// Modèles servis par l'endpoint.
     pub models: Vec<String>,
 }
 
@@ -274,7 +309,10 @@ impl Default for LocalProvider {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Models {
+    /// Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2).
     pub aliases: BTreeMap<String, String>,
+    /// Rôle vers alias : conversation, classification, compaction, relecture de mémoire,
+    /// code, images, embeddings, transcription.
     pub roles: BTreeMap<String, String>,
     pub routing: Routing,
 }
@@ -328,11 +366,17 @@ impl Default for Models {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Routing {
+    /// Classer la complexité d'un message pour choisir l'alias.
     pub classifier: bool,
+    /// Alias d'un message simple.
     pub low: String,
+    /// Alias d'un message moyen.
     pub medium: String,
+    /// Alias d'un message complexe.
     pub high: String,
+    /// Garder l'alias choisi pour la session (sauf l'alias `low`).
     pub sticky: bool,
+    /// Alias de repli, dans l'ordre, quand un modèle ne répond pas.
     pub fallback: BTreeMap<String, Vec<String>>,
 }
 
@@ -357,9 +401,13 @@ impl Default for Routing {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Budget {
+    /// Plafond de dépense par jour, en dollars.
     pub daily_usd: f64,
+    /// Plafond de dépense par session, en dollars.
     pub session_usd: f64,
+    /// Plafond de dépense par run de workflow, en dollars.
     pub run_usd: f64,
+    /// Part d'un plafond à partir de laquelle une alerte part.
     pub alert_ratio: f64,
     /// Coût d'un tour de conversation à chaque multiple duquel Pénélope demande si elle
     /// continue (issue #19). 0 : jamais.
@@ -388,18 +436,29 @@ impl Default for Budget {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Context {
+    /// Part de la fenêtre du modèle à partir de laquelle l'historique est compacté.
     pub compaction_threshold: f64,
+    /// Part de la fenêtre gardée intacte en fin d'historique.
     pub tail_ratio: f64,
+    /// Taille minimale de la fin d'historique gardée intacte, en jetons.
     pub tail_min_tokens: usize,
+    /// Taille maximale de la fin d'historique gardée intacte, en jetons.
     pub tail_max_tokens: usize,
+    /// Messages du propriétaire gardés intacts au moins.
     pub min_tail_user_messages: usize,
+    /// Part maximale de la fenêtre qu'un résultat d'outil peut occuper.
     pub max_tool_result_share: f64,
+    /// Taille à partir de laquelle un résultat d'outil est rangé en artefact et résumé, en
+    /// jetons.
     pub large_payload_tokens: usize,
     /// Taille de prompt au-delà de laquelle la compaction se déclenche, quelle que soit la
     /// fenêtre du modèle : une limite de coût, pas de fenêtre (issue #18). 0 : aucune.
     pub max_prompt_tokens: usize,
+    /// Seuil de compaction propre à un modèle. Sans effet dans cette version.
     pub model_thresholds: BTreeMap<String, f64>,
+    /// Marge sous le seuil à partir de laquelle la compaction se prépare en tâche de fond.
     pub background_compaction_margin: f64,
+    /// Attentes successives après une compaction en échec, en millisecondes.
     pub cooldown_ms: Vec<u64>,
     /// Titre de 3 à 6 mots donné par le modèle rapide après le premier échange.
     pub auto_title: bool,
@@ -427,27 +486,47 @@ impl Default for Context {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Memory {
+    /// Répertoire du vault (`{data}` : répertoire de données).
     pub vault_path: String,
+    /// Période de commit du vault sous git ; `0s` : désactivé.
     pub vault_git_autocommit: String,
+    /// Remote git où pousser le vault ; vide : aucun.
     pub vault_git_remote: String,
+    /// Budget du profil injecté (`profil.md`), en jetons.
     pub profile_budget_tokens: usize,
+    /// Budget du niveau Cœur injecté (`memoire.md`), en jetons.
     pub core_budget_tokens: usize,
+    /// Budget des projets injectés (`projets.md`), en jetons.
     pub project_budget_tokens: usize,
+    /// Budget du rappel automatique par tour, en jetons.
     pub recall_budget_tokens: usize,
+    /// Temps accordé au rappel automatique avant de répondre sans lui, en millisecondes.
     pub recall_timeout_ms: u64,
+    /// Score minimal d'une entrée pour être rappelée automatiquement.
     pub trigger_threshold: f64,
+    /// Entrées rappelées automatiquement au plus par tour.
     pub max_injected_per_turn: usize,
+    /// Demi-vie de la récence dans le score de recherche. Sans effet dans cette version.
     pub half_life_days: f64,
+    /// Similarité cosinus de doublon. Sans effet dans cette version.
     pub dedup_cosine: f64,
+    /// Similarité à partir de laquelle deux candidats sont des doublons.
     pub dedup_jaccard: f64,
+    /// Inactivité qui clôt un épisode. Sans effet dans cette version.
     pub episode_idle: String,
+    /// Écart de sujet qui clôt un épisode. Sans effet dans cette version.
     pub episode_topic_shift: f64,
+    /// Candidats notés au plus par relecture d'un échange ; 0 : relecture désactivée.
     pub review_max_candidates: usize,
+    /// Heure de la consolidation nocturne (cron, fuseau du propriétaire).
     pub dreaming_cron: String,
+    /// Heure du digest du matin (cron, fuseau du propriétaire).
     pub digest_cron: String,
     pub promotion: Promotion,
     pub intents: Intents,
+    /// Âge d'élagage du journal. Sans effet dans cette version.
     pub prune_episodic_days: i64,
+    /// Âge au-delà duquel un écart jamais promu est abandonné, en jours.
     pub expire_ecart_days: i64,
 }
 
@@ -483,8 +562,11 @@ impl Default for Memory {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Promotion {
+    /// Occurrences minimales d'un écart pour devenir une exception.
     pub ecart_min_occurrences: u32,
+    /// Sessions distinctes minimales d'un écart.
     pub ecart_min_sessions: u32,
+    /// Jours distincts minimaux d'un écart.
     pub ecart_min_days: u32,
     /// Ignoré depuis 0.14.0 : faits, préférences, décisions et corrections passent par la
     /// grille de tri (issue #37). Gardé pour qu'une configuration existante reste valide.
@@ -493,8 +575,11 @@ pub struct Promotion {
     pub fact_min_importance: u32,
     /// Ignoré depuis 0.14.0 (grille de tri, issue #37).
     pub preference_min_sessions: u32,
+    /// Part maximale des entrées d'un fichier retirées en une nuit.
     pub max_retire_ratio: f64,
+    /// Confiance d'une règle contestée. Sans effet dans cette version.
     pub contested_confidence: f64,
+    /// Observations minimales d'une règle contestée. Sans effet dans cette version.
     pub contested_min_observations: u32,
 }
 
@@ -517,9 +602,13 @@ impl Default for Promotion {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Intents {
+    /// Délai minimal entre deux déclenchements d'une intention.
     pub cooldown: String,
+    /// Déclenchements au plus d'une intention.
     pub fire_budget: u32,
+    /// Durée de vie d'une intention.
     pub expiry: String,
+    /// Intentions déclenchées au plus par tour.
     pub max_per_turn: usize,
 }
 
@@ -537,22 +626,39 @@ impl Default for Intents {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Mcp {
-    /// `lazy` | `eager`
+    /// `lazy` | `eager`. Sans effet dans cette version.
     pub registry_mode: String,
+    /// Processus de serveurs MCP actifs au plus.
     pub max_processes: usize,
+    /// Délai par défaut d'un appel MCP (réglé par serveur dans `mcp.d`). Sans effet dans
+    /// cette version.
     pub default_timeout: String,
+    /// Retour OAuth : `paste_back` (adresse collée dans Telegram) ou `public_callback`.
     pub oauth_redirect_mode: String,
+    /// Adresse publique de retour OAuth en mode `public_callback`.
     pub public_callback_url: String,
+    /// Adresse du document de métadonnées client OAuth ; vide : enregistrement dynamique.
     pub cimd_url: String,
+    /// Version de protocole MCP préférée. Sans effet dans cette version.
     pub preferred_protocol: String,
+    /// Inactivité d'arrêt d'un serveur (réglée par serveur dans `mcp.d`). Sans effet dans
+    /// cette version.
     pub idle_timeout: String,
+    /// Appels simultanés au plus par serveur. Sans effet dans cette version.
     pub max_concurrency_per_server: usize,
+    /// Outils MCP gardés décrits d'un tour à l'autre, au plus.
     pub sticky_set_max: usize,
+    /// Taille maximale d'un schéma d'outil exposé directement au modèle, en octets.
     pub schema_max_bytes: usize,
+    /// Taille totale des schémas exposés directement au modèle, en octets.
     pub eager_total_max_bytes: usize,
+    /// Port local du retour OAuth.
     pub callback_port: u16,
     pub policy: McpPolicy,
+    /// Attente maximale entre deux redémarrages d'un serveur. Sans effet dans cette
+    /// version.
     pub restart_backoff_max: String,
+    /// Échecs consécutifs après lesquels un serveur est mis de côté.
     pub max_failures: u32,
 }
 
@@ -582,10 +688,15 @@ impl Default for Mcp {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct McpPolicy {
+    /// Politique d'un outil MCP en lecture : `auto`, `ask`, `ask_twice` ou `deny`.
     pub read: String,
+    /// Politique d'un outil MCP en écriture.
     pub write: String,
+    /// Politique d'un outil MCP destructif.
     pub destructive: String,
+    /// Politique d'un outil MCP à effet externe.
     pub external: String,
+    /// Politique d'un outil MCP au risque inconnu.
     pub unknown: String,
 }
 
@@ -604,8 +715,11 @@ impl Default for McpPolicy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Runners {
+    /// Tours traités en parallèle.
     pub count: usize,
+    /// Durée du bail d'un tour réclamé ; au-delà, un autre runner le reprend.
     pub lease_ttl: String,
+    /// Période de renouvellement du bail.
     pub heartbeat: String,
 }
 
@@ -622,8 +736,11 @@ impl Default for Runners {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Sandbox {
+    /// Profil du bac à sable de `shell_exec` : `read-only`, `workspace-write` ou `full`.
     pub default_profile: String,
+    /// Serveurs MCP autorisés à tourner avec le profil `full` (sans bac à sable).
     pub allow_full_for: Vec<String>,
+    /// Répertoires de travail des outils de fichiers et du shell, en plus du défaut.
     pub workspaces: Vec<String>,
     /// Réseau pour `shell_exec`. Sans lui, `gh`, `git push`, `curl` ou `npm` échouent,
     /// et `gh auth status` croit le jeton invalide faute de pouvoir le vérifier.
@@ -644,9 +761,13 @@ impl Default for Sandbox {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Observability {
+    /// Export OpenTelemetry. Sans effet dans cette version.
     pub otlp_endpoint: String,
+    /// Adresse d'exposition Prometheus. Sans effet dans cette version.
     pub prometheus: String,
+    /// Durée de conservation des journaux, en jours.
     pub log_retention_days: u32,
+    /// Niveau de journalisation. Sans effet dans cette version.
     pub log_level: String,
 }
 
@@ -664,11 +785,18 @@ impl Default for Observability {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Tools {
+    /// Shell de `shell_exec`, programme puis arguments (`-c` par défaut) ; vide : shell de la
+    /// plateforme.
     pub shell: String,
+    /// Délai d'une commande `shell_exec`.
     pub shell_timeout: String,
+    /// Hôtes autorisés pour `http_fetch` ; vide : tous.
     pub http_allowlist: Vec<String>,
+    /// Refuser les adresses privées et locales dans `http_fetch`.
     pub http_block_private_ips: bool,
+    /// Appels identiques qui font arrêter une boucle d'outil.
     pub loop_detector_repeats: usize,
+    /// Taille maximale d'une sortie de commande gardée telle quelle, en octets.
     pub max_output_bytes: usize,
 }
 
@@ -688,8 +816,11 @@ impl Default for Tools {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Workflows {
+    /// Durée de conservation de l'espace de travail d'un run terminé, en jours.
     pub workspace_retention_days: i64,
+    /// Profondeur maximale de sous-workflows.
     pub max_depth: u32,
+    /// Itérations au plus d'un run sans réglage propre. Sans effet dans cette version.
     pub default_max_iterations: u32,
 }
 
@@ -706,14 +837,20 @@ impl Default for Workflows {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Upgrade {
+    /// Canal de mise à jour. Sans effet dans cette version.
     pub channel: String,
+    /// Adresse de la liste des releases ; vide : le dépôt GitHub.
     pub base_url: String,
+    /// Clé publique minisign des sommes ; vide : celle du binaire de release.
     pub minisign_pubkey: String,
+    /// Délai de confirmation de santé. Sans effet dans cette version.
     pub health_timeout: String,
+    /// Signal de vie quotidien. Sans effet dans cette version.
     pub heartbeat_daily: bool,
     /// Identité de signature macOS (nom du certificat ou empreinte SHA-1) : le binaire
     /// téléchargé est re-signé avec elle avant la bascule (issue #28). Vide : non re-signé.
     pub codesign_identity: String,
+    /// Identifiant fixe de la signature macOS.
     pub codesign_identifier: String,
     /// Répertoire du binaire de release quand une installation source bascule vers les
     /// releases (issue #33).

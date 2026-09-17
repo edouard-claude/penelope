@@ -286,7 +286,9 @@ pub fn all() -> Vec<ToolSpec> {
              `{\"type\": \"prompt\", \"prompt\": \"…\"}` pour travailler à l'heure dite. \
              Autres kinds : `interval` (`every_ms`), `mcp_poll` (`server`, `tool` en lecture, \
              `args`, `every_ms` ≥ 60000, `item_path`, `id_path`, `filter`), `watch_file` \
-             (`path`), `event` (`event`). Le retour arrive dans cette conversation.",
+             (`path`), `event` (`event`). Le retour arrive dans ce chat, chaque exécution \
+             d'un prompt dans sa propre session (`label` dans target pour la nommer) ; une \
+             planification identique déjà active est signalée (`doublons`).",
             obj(
                 json!({
                     "kind": {"type":"string","enum":["cron","interval","mcp_poll","watch_file","event"]},

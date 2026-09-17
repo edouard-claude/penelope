@@ -522,22 +522,26 @@ impl NativeToolExecutor {
                 let kind = penelope_workflow::TriggerKind::parse(&str_arg(args, "kind")?)
                     .ok_or_else(|| ToolError::Invalid("kind inconnu".into()))?;
                 let mut target = args.get("target").cloned().unwrap_or(Value::Null);
-                // Le déclencheur revient dans cette session, par ce canal.
+                // Le déclencheur répond par ce canal ; la session d'origine n'est qu'une
+                // référence, chaque exécution ouvre la sienne (issue #39).
                 if let Some(o) = target.as_object_mut() {
-                    o.entry("session_id").or_insert(json!(self.env.session_id));
+                    if let Some(sid) = o.remove("session_id") {
+                        o.entry("origin_session").or_insert(sid);
+                    }
+                    o.entry("origin_session")
+                        .or_insert(json!(self.env.session_id));
                     o.entry("origin").or_insert(self.env.origin.to_value());
                 }
-                let sch = s
-                    .schedules
-                    .create(
-                        kind,
-                        args.get("spec").cloned().unwrap_or(Value::Null),
-                        target,
-                        args.get("dedup").cloned().unwrap_or(Value::Null),
-                    )
-                    .await
-                    .map_err(ToolError::Invalid)?;
-                serde_json::to_value(sch).unwrap_or_default()
+                let spec = args.get("spec").cloned().unwrap_or(Value::Null);
+                crate::scheduler::create(
+                    s,
+                    kind,
+                    spec,
+                    target,
+                    args.get("dedup").cloned().unwrap_or(Value::Null),
+                )
+                .await
+                .map_err(ToolError::Invalid)?
             }
             "schedule_list" => serde_json::to_value(s.schedules.list().await?).unwrap_or_default(),
             "schedule_delete" => {

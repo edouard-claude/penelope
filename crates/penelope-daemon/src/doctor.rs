@@ -292,6 +292,33 @@ fn install_mode(exe: &std::path::Path, launched: Option<&str>) -> DoctorCheck {
     }
 }
 
+/// Planifications actives dont la dernière exécution a échoué (issue #39).
+pub async fn schedules_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "schedules";
+    const LABEL: &str = "Planifications";
+    let list = s.schedules.list().await.unwrap_or_default();
+    let active = list.iter().filter(|x| x.state == "active").count();
+    let failing: Vec<String> = list
+        .iter()
+        .filter(|x| x.state == "active")
+        .filter_map(|x| {
+            x.last_error
+                .as_ref()
+                .map(|e| format!("{} ({})", x.id, e.chars().take(120).collect::<String>()))
+        })
+        .collect();
+    if failing.is_empty() {
+        DoctorCheck::ok(ID, LABEL, format!("{active} active(s), aucune en échec"))
+    } else {
+        DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!("{} en échec : {}", failing.len(), failing.join(" ; ")),
+            Some("/schedules".into()),
+        )
+    }
+}
+
 /// Délai au-delà duquel une mise à jour jamais démarrée est signalée.
 const STALE_UPGRADE_MS: i64 = 5 * 60_000;
 

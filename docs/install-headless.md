@@ -142,8 +142,8 @@ environnement : la valeur n'apparaît jamais dans la configuration ni dans un jo
 penelope config validate
 ```
 
-Hors daemon, donc utilisable avant le premier démarrage et en CI. Le fichier de référence
-commenté est au §19 du PRD.
+Hors daemon, donc utilisable avant le premier démarrage et en CI. Chaque clé, sa valeur
+par défaut et son rôle sont dans la [référence des clés](#référence-des-clés).
 
 **Le propriétaire d'abord.** Tant que `owner.telegram_user_id` vaut 0, la configuration
 est invalide (un bot sans propriétaire serait ouvert à tous), et toute autre modification
@@ -191,6 +191,251 @@ penelope config status
 
 `config status` montre quels sous-systèmes ont pris la génération, et lesquels demandent
 un redémarrage.
+
+### Référence des clés
+
+Tirée des commentaires de `crates/penelope-kernel/src/config.rs` et des valeurs par
+défaut ; le test `docs` échoue si une clé manque ou si la table est périmée. Une clé
+« sans effet dans cette version » est acceptée mais pas encore lue.
+
+<!-- reference:config:debut (générée : UPDATE_DOCS=1 cargo test -p penelope-evals --test docs) -->
+**[owner]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `owner.telegram_user_id` | `0` | Identifiant Telegram du propriétaire : le seul compte auquel le bot répond (0 : canal fermé). |
+| `owner.timezone` | `"Indian/Reunion"` | Fuseau horaire du propriétaire : planifications, digest, date du jour. |
+| `owner.language` | `"fr"` | Langue des réponses. |
+
+**[telegram]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `telegram.token` | `"${SECRET:telegram_bot_token}"` | Jeton du bot, par référence au magasin de secrets. |
+| `telegram.mode` | `"polling"` | Réception des messages : `polling` (long polling) ou `webhook` (pas encore servi). |
+| `telegram.topics` | `true` | Sujets de forum Telegram. Sans effet dans cette version. |
+| `telegram.rich_messages` | `false` | Rendu riche natif de la Bot API plutôt que HTML. |
+| `telegram.quiet_hours` | `"22:00-07:00"` | Heures calmes `HH:MM-HH:MM` : les notifications non urgentes attendent la fin de la plage. |
+| `telegram.api_base` | `"https://api.telegram.org"` | Adresse de la Bot API. |
+| `telegram.poll_timeout_s` | `50` | Attente d'un appel `getUpdates` en long polling, en secondes. |
+| `telegram.rate_per_chat_per_s` | `1.0` | Messages envoyés au plus par seconde, par chat. |
+| `telegram.text_limit` | `4096` | Taille maximale d'un message. Sans effet dans cette version. |
+| `telegram.caption_limit` | `1024` | Taille maximale d'une légende. Sans effet dans cette version. |
+| `telegram.max_fragments` | `3` | Fragments au-delà desquels une réponse part en document. Sans effet dans cette version. |
+| `telegram.draft_interval_ms` | `700` | Intervalle entre deux mises à jour du brouillon de réponse, en millisecondes (300 au moins). |
+| `telegram.webhook_url` | `""` | Adresse du webhook. Sans effet dans cette version. |
+| `telegram.allow_groups` | `false` | Accepter les messages du propriétaire dans les groupes. |
+
+**[providers]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `providers.openrouter.api_key` | `"${SECRET:openrouter_api_key}"` | Clé d'API, par référence au magasin de secrets. |
+| `providers.openrouter.base_url` | `"https://openrouter.ai/api/v1"` | Adresse de l'API OpenRouter. |
+| `providers.openrouter.catalog_refresh` | `"6h"` | Période de rechargement du catalogue de modèles. |
+| `providers.openrouter.referer` | `"https://github.com/edouard-claude/penelope"` | Attribution (`HTTP-Referer`, `X-OpenRouter-Title`, `X-OpenRouter-Categories`). |
+| `providers.openrouter.title` | `"Penelope"` | Titre d'attribution (`X-OpenRouter-Title`). |
+| `providers.openrouter.categories` | `"personal-agent"` | Catégories d'attribution (`X-OpenRouter-Categories`). |
+| `providers.openrouter.routing.allow_fallbacks` | `true` | OpenRouter peut passer à un autre provider du même modèle en cas d'échec. |
+| `providers.openrouter.routing.order` | `[]` | Ordre imposé des providers. Attention : il désactive le routage collant, donc le cache de préfixe entre deux tours. |
+| `providers.openrouter.routing.data_collection` | `"allow"` | `deny` : uniquement des providers qui ne conservent pas les données. |
+| `providers.openrouter.routing.require_parameters` | `false` | Uniquement les providers qui acceptent tous les paramètres de la requête. |
+| `providers.openrouter.routing.zdr` | `false` | Uniquement des endpoints à rétention nulle (ZDR). |
+| `providers.openrouter.routing.sort` | `""` | `price`, `throughput` ou `latency` ; vide = répartition par défaut d'OpenRouter. |
+| `providers.openrouter.routing.only` | `[]` | Providers autorisés, à l'exclusion des autres ; vide : tous. |
+| `providers.openrouter.routing.ignore` | `[]` | Providers exclus. |
+| `providers.openrouter.routing.quantizations` | `[]` | Quantifications acceptées (`fp8`, `bf16`…) ; vide = toutes. |
+| `providers.openrouter.enabled` | `true` | Fournisseur actif. |
+| `providers.local.kind` | `"openai_compat"` | Type d'endpoint (`openai_compat`). |
+| `providers.local.base_url` | `"http://127.0.0.1:8080/v1"` | Adresse de l'endpoint OpenAI-compatible. |
+| `providers.local.api_key` | `""` | Clé éventuelle, par référence au magasin de secrets. |
+| `providers.local.enabled` | `false` | Endpoint actif. |
+| `providers.local.models` | `[]` | Modèles servis par l'endpoint. |
+| `providers.extra.<nom>.kind` | – | Type d'endpoint (`openai_compat`). |
+| `providers.extra.<nom>.base_url` | – | Adresse de l'endpoint OpenAI-compatible. |
+| `providers.extra.<nom>.api_key` | – | Clé éventuelle, par référence au magasin de secrets. |
+| `providers.extra.<nom>.enabled` | – | Endpoint actif. |
+| `providers.extra.<nom>.models` | – | Modèles servis par l'endpoint. |
+
+**[models]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `models.aliases.embedding` | `"openrouter:openai/text-embedding-3-small"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
+| `models.aliases.fast` | `"openrouter:deepseek/deepseek-v4-flash"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
+| `models.aliases.image` | `"openrouter:google/gemini-3.1-flash-image"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
+| `models.aliases.main` | `"openrouter:deepseek/deepseek-v4-pro"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
+| `models.aliases.reasoning` | `"openrouter:z-ai/glm-5.2"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
+| `models.aliases.stt` | `"openai_compat:whisper-default"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
+| `models.aliases.summarizer` | `"openrouter:deepseek/deepseek-v4-flash"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
+| `models.aliases.vision` | `"openrouter:google/gemini-3.1-flash-image"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
+| `models.roles.chat_default` | `"main"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
+| `models.roles.classifier` | `"fast"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
+| `models.roles.code` | `"reasoning"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
+| `models.roles.compaction` | `"summarizer"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
+| `models.roles.embedding` | `"embedding"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
+| `models.roles.image_describe` | `"vision"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
+| `models.roles.image_generate` | `"image"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
+| `models.roles.memory_review` | `"fast"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
+| `models.roles.stt` | `"stt"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
+| `models.routing.classifier` | `true` | Classer la complexité d'un message pour choisir l'alias. |
+| `models.routing.low` | `"fast"` | Alias d'un message simple. |
+| `models.routing.medium` | `"main"` | Alias d'un message moyen. |
+| `models.routing.high` | `"reasoning"` | Alias d'un message complexe. |
+| `models.routing.sticky` | `true` | Garder l'alias choisi pour la session (sauf l'alias `low`). |
+| `models.routing.fallback.main` | `["fast"]` | Alias de repli, dans l'ordre, quand un modèle ne répond pas. |
+| `models.routing.fallback.reasoning` | `["main"]` | Alias de repli, dans l'ordre, quand un modèle ne répond pas. |
+
+**[budget]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `budget.daily_usd` | `20.0` | Plafond de dépense par jour, en dollars. |
+| `budget.session_usd` | `5.0` | Plafond de dépense par session, en dollars. |
+| `budget.run_usd` | `5.0` | Plafond de dépense par run de workflow, en dollars. |
+| `budget.alert_ratio` | `0.8` | Part d'un plafond à partir de laquelle une alerte part. |
+| `budget.turn_checkpoint_usd` | `1.0` | Coût d'un tour de conversation à chaque multiple duquel Pénélope demande si elle continue (issue #19). 0 : jamais. |
+| `budget.show_turn_cost_usd` | `0.5` | Coût d'un tour au-delà duquel la réponse finale l'indique. 0 : jamais. |
+| `budget.delegate_after_calls` | `10` | Nombre d'appels au modèle dans un tour à chaque multiple duquel le résultat d'outil suggère de regrouper les commandes ou de déléguer à un sous-agent. 0 : jamais. |
+
+**[context]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `context.compaction_threshold` | `0.7` | Part de la fenêtre du modèle à partir de laquelle l'historique est compacté. |
+| `context.tail_ratio` | `0.025` | Part de la fenêtre gardée intacte en fin d'historique. |
+| `context.tail_min_tokens` | `10000` | Taille minimale de la fin d'historique gardée intacte, en jetons. |
+| `context.tail_max_tokens` | `25000` | Taille maximale de la fin d'historique gardée intacte, en jetons. |
+| `context.min_tail_user_messages` | `2` | Messages du propriétaire gardés intacts au moins. |
+| `context.max_tool_result_share` | `0.25` | Part maximale de la fenêtre qu'un résultat d'outil peut occuper. |
+| `context.large_payload_tokens` | `25000` | Taille à partir de laquelle un résultat d'outil est rangé en artefact et résumé, en jetons. |
+| `context.max_prompt_tokens` | `120000` | Taille de prompt au-delà de laquelle la compaction se déclenche, quelle que soit la fenêtre du modèle : une limite de coût, pas de fenêtre (issue #18). 0 : aucune. |
+| `context.model_thresholds.<nom>` | – | Seuil de compaction propre à un modèle. Sans effet dans cette version. |
+| `context.background_compaction_margin` | `0.1` | Marge sous le seuil à partir de laquelle la compaction se prépare en tâche de fond. |
+| `context.cooldown_ms` | `[60000,300000,900000]` | Attentes successives après une compaction en échec, en millisecondes. |
+| `context.auto_title` | `true` | Titre de 3 à 6 mots donné par le modèle rapide après le premier échange. |
+
+**[memory]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `memory.vault_path` | `"{data}/vault"` | Répertoire du vault (`{data}` : répertoire de données). |
+| `memory.vault_git_autocommit` | `"15m"` | Période de commit du vault sous git ; `0s` : désactivé. |
+| `memory.vault_git_remote` | `""` | Remote git où pousser le vault ; vide : aucun. |
+| `memory.profile_budget_tokens` | `600` | Budget du profil injecté (`profil.md`), en jetons. |
+| `memory.core_budget_tokens` | `1200` | Budget du niveau Cœur injecté (`memoire.md`), en jetons. |
+| `memory.project_budget_tokens` | `800` | Budget des projets injectés (`projets.md`), en jetons. |
+| `memory.recall_budget_tokens` | `1000` | Budget du rappel automatique par tour, en jetons. |
+| `memory.recall_timeout_ms` | `150` | Temps accordé au rappel automatique avant de répondre sans lui, en millisecondes. |
+| `memory.trigger_threshold` | `0.72` | Score minimal d'une entrée pour être rappelée automatiquement. |
+| `memory.max_injected_per_turn` | `3` | Entrées rappelées automatiquement au plus par tour. |
+| `memory.half_life_days` | `30.0` | Demi-vie de la récence dans le score de recherche. Sans effet dans cette version. |
+| `memory.dedup_cosine` | `0.92` | Similarité cosinus de doublon. Sans effet dans cette version. |
+| `memory.dedup_jaccard` | `0.9` | Similarité à partir de laquelle deux candidats sont des doublons. |
+| `memory.episode_idle` | `"2h"` | Inactivité qui clôt un épisode. Sans effet dans cette version. |
+| `memory.episode_topic_shift` | `0.35` | Écart de sujet qui clôt un épisode. Sans effet dans cette version. |
+| `memory.review_max_candidates` | `5` | Candidats notés au plus par relecture d'un échange ; 0 : relecture désactivée. |
+| `memory.dreaming_cron` | `"30 3 * * *"` | Heure de la consolidation nocturne (cron, fuseau du propriétaire). |
+| `memory.digest_cron` | `"0 8 * * *"` | Heure du digest du matin (cron, fuseau du propriétaire). |
+| `memory.promotion.ecart_min_occurrences` | `3` | Occurrences minimales d'un écart pour devenir une exception. |
+| `memory.promotion.ecart_min_sessions` | `3` | Sessions distinctes minimales d'un écart. |
+| `memory.promotion.ecart_min_days` | `2` | Jours distincts minimaux d'un écart. |
+| `memory.promotion.fact_min_recalls` | `2` | Ignoré depuis 0.14.0 : faits, préférences, décisions et corrections passent par la grille de tri (issue #37). Gardé pour qu'une configuration existante reste valide. |
+| `memory.promotion.fact_min_importance` | `8` | Ignoré depuis 0.14.0 (grille de tri, issue #37). |
+| `memory.promotion.preference_min_sessions` | `2` | Ignoré depuis 0.14.0 (grille de tri, issue #37). |
+| `memory.promotion.max_retire_ratio` | `0.2` | Part maximale des entrées d'un fichier retirées en une nuit. |
+| `memory.promotion.contested_confidence` | `0.5` | Confiance d'une règle contestée. Sans effet dans cette version. |
+| `memory.promotion.contested_min_observations` | `4` | Observations minimales d'une règle contestée. Sans effet dans cette version. |
+| `memory.intents.cooldown` | `"24h"` | Délai minimal entre deux déclenchements d'une intention. |
+| `memory.intents.fire_budget` | `3` | Déclenchements au plus d'une intention. |
+| `memory.intents.expiry` | `"90d"` | Durée de vie d'une intention. |
+| `memory.intents.max_per_turn` | `3` | Intentions déclenchées au plus par tour. |
+| `memory.prune_episodic_days` | `180` | Âge d'élagage du journal. Sans effet dans cette version. |
+| `memory.expire_ecart_days` | `90` | Âge au-delà duquel un écart jamais promu est abandonné, en jours. |
+
+**[mcp]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `mcp.registry_mode` | `"lazy"` | `lazy` \| `eager`. Sans effet dans cette version. |
+| `mcp.max_processes` | `24` | Processus de serveurs MCP actifs au plus. |
+| `mcp.default_timeout` | `"30s"` | Délai par défaut d'un appel MCP (réglé par serveur dans `mcp.d`). Sans effet dans cette version. |
+| `mcp.oauth_redirect_mode` | `"paste_back"` | Retour OAuth : `paste_back` (adresse collée dans Telegram) ou `public_callback`. |
+| `mcp.public_callback_url` | `""` | Adresse publique de retour OAuth en mode `public_callback`. |
+| `mcp.cimd_url` | `""` | Adresse du document de métadonnées client OAuth ; vide : enregistrement dynamique. |
+| `mcp.preferred_protocol` | `"2026-07-28"` | Version de protocole MCP préférée. Sans effet dans cette version. |
+| `mcp.idle_timeout` | `"10m"` | Inactivité d'arrêt d'un serveur (réglée par serveur dans `mcp.d`). Sans effet dans cette version. |
+| `mcp.max_concurrency_per_server` | `4` | Appels simultanés au plus par serveur. Sans effet dans cette version. |
+| `mcp.sticky_set_max` | `30` | Outils MCP gardés décrits d'un tour à l'autre, au plus. |
+| `mcp.schema_max_bytes` | `8192` | Taille maximale d'un schéma d'outil exposé directement au modèle, en octets. |
+| `mcp.eager_total_max_bytes` | `65536` | Taille totale des schémas exposés directement au modèle, en octets. |
+| `mcp.callback_port` | `7777` | Port local du retour OAuth. |
+| `mcp.policy.read` | `"auto"` | Politique d'un outil MCP en lecture : `auto`, `ask`, `ask_twice` ou `deny`. |
+| `mcp.policy.write` | `"ask"` | Politique d'un outil MCP en écriture. |
+| `mcp.policy.destructive` | `"ask_twice"` | Politique d'un outil MCP destructif. |
+| `mcp.policy.external` | `"ask"` | Politique d'un outil MCP à effet externe. |
+| `mcp.policy.unknown` | `"ask"` | Politique d'un outil MCP au risque inconnu. |
+| `mcp.restart_backoff_max` | `"5m"` | Attente maximale entre deux redémarrages d'un serveur. Sans effet dans cette version. |
+| `mcp.max_failures` | `8` | Échecs consécutifs après lesquels un serveur est mis de côté. |
+
+**[runners]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `runners.count` | `4` | Tours traités en parallèle. |
+| `runners.lease_ttl` | `"60s"` | Durée du bail d'un tour réclamé ; au-delà, un autre runner le reprend. |
+| `runners.heartbeat` | `"15s"` | Période de renouvellement du bail. |
+
+**[sandbox]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `sandbox.default_profile` | `"workspace-write"` | Profil du bac à sable de `shell_exec` : `read-only`, `workspace-write` ou `full`. |
+| `sandbox.allow_full_for` | `[]` | Serveurs MCP autorisés à tourner avec le profil `full` (sans bac à sable). |
+| `sandbox.workspaces` | `[]` | Répertoires de travail des outils de fichiers et du shell, en plus du défaut. |
+| `sandbox.shell_network` | `true` | Réseau pour `shell_exec`. Sans lui, `gh`, `git push`, `curl` ou `npm` échouent, et `gh auth status` croit le jeton invalide faute de pouvoir le vérifier. |
+
+**[observability]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `observability.otlp_endpoint` | `""` | Export OpenTelemetry. Sans effet dans cette version. |
+| `observability.prometheus` | `"127.0.0.1:9464"` | Adresse d'exposition Prometheus. Sans effet dans cette version. |
+| `observability.log_retention_days` | `14` | Durée de conservation des journaux, en jours. |
+| `observability.log_level` | `"info"` | Niveau de journalisation. Sans effet dans cette version. |
+
+**[tools]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `tools.shell` | `""` | Shell de `shell_exec`, programme puis arguments (`-c` par défaut) ; vide : shell de la plateforme. |
+| `tools.shell_timeout` | `"120s"` | Délai d'une commande `shell_exec`. |
+| `tools.http_allowlist` | `[]` | Hôtes autorisés pour `http_fetch` ; vide : tous. |
+| `tools.http_block_private_ips` | `true` | Refuser les adresses privées et locales dans `http_fetch`. |
+| `tools.loop_detector_repeats` | `3` | Appels identiques qui font arrêter une boucle d'outil. |
+| `tools.max_output_bytes` | `262144` | Taille maximale d'une sortie de commande gardée telle quelle, en octets. |
+
+**[workflows]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `workflows.workspace_retention_days` | `7` | Durée de conservation de l'espace de travail d'un run terminé, en jours. |
+| `workflows.max_depth` | `3` | Profondeur maximale de sous-workflows. |
+| `workflows.default_max_iterations` | `40` | Itérations au plus d'un run sans réglage propre. Sans effet dans cette version. |
+
+**[upgrade]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `upgrade.channel` | `"stable"` | Canal de mise à jour. Sans effet dans cette version. |
+| `upgrade.base_url` | `""` | Adresse de la liste des releases ; vide : le dépôt GitHub. |
+| `upgrade.minisign_pubkey` | `""` | Clé publique minisign des sommes ; vide : celle du binaire de release. |
+| `upgrade.health_timeout` | `"60s"` | Délai de confirmation de santé. Sans effet dans cette version. |
+| `upgrade.heartbeat_daily` | `true` | Signal de vie quotidien. Sans effet dans cette version. |
+| `upgrade.codesign_identity` | `""` | Identité de signature macOS (nom du certificat ou empreinte SHA-1) : le binaire téléchargé est re-signé avec elle avant la bascule (issue #28). Vide : non re-signé. |
+| `upgrade.codesign_identifier` | `"io.github.edouard-claude.penelope"` | Identifiant fixe de la signature macOS. |
+| `upgrade.install_dir` | `"~/.local/bin"` | Répertoire du binaire de release quand une installation source bascule vers les releases (issue #33). |
+<!-- reference:config:fin -->
 
 ## 6. Modèles
 
@@ -479,6 +724,70 @@ politiques exigent une double confirmation à chaque fois : une règle « Toujou
 couvre pas. Les secrets et l'identifiant du propriétaire sont refusés : ils ne se règlent
 qu'en ligne de commande.
 
+### Outils natifs
+
+Ce que le modèle peut appeler sans serveur MCP, avec la classe de risque qui décide de
+l'approbation (`read` : sans approbation ; `write`, `external`, `destructive` : selon la
+politique). Les outils MCP passent par `tool_search`, `tool_describe` et `tool_call`.
+
+<!-- reference:outils:debut (générée : UPDATE_DOCS=1 cargo test -p penelope-evals --test docs) -->
+| Outil | Risque | Rôle |
+|---|---|---|
+| `artifact_read` | read | Lecture paginée d'un artefact ; le curseur n'avance que des octets renvoyés. |
+| `ask_user` | read | Pose une question au propriétaire et attend sa réponse. |
+| `config_set` | write | Modifie un réglage de ta propre configuration, appliqué à chaud : chemin pointé et valeur, par exemple `models.aliases.main` = `openrouter:z-ai/glm-5.3`, `models.routing.classifier` = `false`, `budget.daily_usd` = `30`. |
+| `fs_edit` | write | Remplace une portion exacte d'un fichier. |
+| `fs_list` | read | Liste le contenu d'un répertoire du workspace. |
+| `fs_read` | read | Lit un fichier du workspace autorisé, avec pagination par lignes. |
+| `fs_search` | read | Recherche une expression régulière dans les fichiers du workspace. |
+| `fs_write` | write | Écrit un fichier dans le workspace. |
+| `git_branch` | write | Crée ou change de branche. |
+| `git_clone` | external | Clone un dépôt distant dans le workspace. |
+| `git_commit` | write | Valide les changements indexés. |
+| `git_diff` | read | Diff du dépôt, éventuellement contre une référence. |
+| `git_push` | external | Pousse une branche vers le dépôt distant. |
+| `git_status` | read | État du dépôt : branche, fichiers modifiés. |
+| `history_describe` | read | Manifeste d'un nœud de résumé : tokens, intervalle, enfants. |
+| `history_expand` | read | Contenu paginé d'un nœud ou d'un intervalle brut. |
+| `history_expand_query` | read | Retrouve, dans toutes les sessions y compris fermées, les passages liés à une question en langage naturel : recherche mot significatif par mot significatif, extraits classés par nombre de mots trouvés, avec le titre et la date de leur session. |
+| `history_grep` | read | Recherche plein texte dans les messages bruts et les résumés. |
+| `http_fetch` | external | Récupère une URL. |
+| `image_generate` | external | Génère une image et la stocke en artefact. |
+| `intent_cancel` | write | Annule une intention. |
+| `intent_create` | write | Arme une intention événementielle : « quand on reparle de X, rappelle-moi Y ». |
+| `intent_list` | read | Liste les intentions armées. |
+| `mem_forget` | destructive | Retire une entrée de mémoire. |
+| `mem_get` | read | Lit une entrée de mémoire par uid ou par slug. |
+| `mem_neighbors` | read | Voisins d'une note dans le graphe du vault : concepts d'une source, sources et entrées de mémoire qui citent un concept (liens `[[slug]]` sortants et entrants). |
+| `mem_note` | write | Note une observation dans le journal du jour. |
+| `mem_remember` | write | Écrit directement en mémoire. |
+| `mem_search` | read | Recherche dans la mémoire curée, dans les documents ingérés (`vault/sources`, passages encadrés comme non fiables, `slug` pour un seul document) et, sur demande explicite, épisodique. |
+| `return_value` | read | Renvoie le résultat d'une étape de workflow. (dans un workflow) |
+| `schedule_create` | write | Crée un déclencheur planifié, soumis à approbation. |
+| `schedule_delete` | write | Supprime un déclencheur planifié. |
+| `schedule_list` | read | Liste les déclencheurs planifiés. |
+| `self_docs` | read | Documentation de ta propre version, embarquée dans le binaire : le dépôt edouard-claude/penelope est la source de vérité sur toi. |
+| `self_status` | read | État complet de Pénélope et de sa machine : version, modèle qui répond à ce tour et routage, configuration effective (alias, rôles, bac à sable, budgets, Telegram, providers, transcription), coûts du jour et de la session, file de travail, chemins, et machine (batterie, secteur, disque, mémoire, charge, démarrage, système). |
+| `send_file` | write | Envoie un fichier au propriétaire. |
+| `send_message` | write | Envoie un message au propriétaire. |
+| `session_metadata` | write | Lit ou modifie les métadonnées de session : critères, findings, todos. |
+| `session_notes` | read | Notes de travail de la session, qui survivent aux compactions et au fork : objectif, plan, décisions, fichiers touchés, points ouverts, prochaine étape. |
+| `shell_exec` | write | Exécute une commande sous bac à sable, avec délai. |
+| `skill_load` | read | Charge une skill dans le tour courant. |
+| `skill_patch` | write | Propose une modification de skill. |
+| `skill_propose` | write | Propose une nouvelle skill. |
+| `skill_search` | read | Cherche une skill par mots-clés. |
+| `step_done` | read | Déclare l'étape de workflow terminée. (dans un workflow) |
+| `sub_agent_spawn` | write | Lance un sub-agent à contexte neuf, outils restreints, retour structuré. |
+| `time_now` | read | Date et heure courantes dans le fuseau du propriétaire. |
+| `workflow_author` | write | Rédige un workflow (format décrit dans `docs/workflows.md` : lis-le avec `self_docs` avant d'écrire, n'invente aucun type d'étape ni champ). |
+| `workflow_control` | write | Contrôle un run : pause, reprise, annulation, relance d'étape. |
+| `workflow_describe` | read | Décrit un workflow : étapes, paramètres, budget. |
+| `workflow_list` | read | Liste les workflows disponibles. |
+| `workflow_start` | write | Propose le lancement d'un workflow : le propriétaire valide d'un bouton. |
+| `workflow_status` | read | État d'un run. |
+<!-- reference:outils:fin -->
+
 ### Serveurs MCP
 
 Chaque serveur se déclare dans un fichier de `mcp.d` (`penelope paths` donne le
@@ -576,8 +885,18 @@ L'ordonnanceur passe toutes les dix secondes. « Rappelle-moi vendredi à 9 h d'
 Paul » devient un déclencheur `cron` à tir unique (`once`) dont la cible `notify` envoie
 le message tel quel, sans appel au modèle ; « chaque lundi à 8 h, fais le point sur mes
 tickets » garde le `cron` sans `once` avec une cible `prompt`, qui fait travailler
-Pénélope à l'heure dite dans la conversation d'origine. Un rappel manqué pendant un
-arrêt part une fois au redémarrage.
+Pénélope à l'heure dite. Chaque exécution ouvre sa propre session, titrée d'après la
+planification et le jour (« Veille agents IA · 17/09 »), et répond dans le chat ou le
+sujet d'origine : fermer la conversation où la planification est née (`/new`, `/close`)
+ne l'arrête plus. Un rappel manqué pendant un arrêt part une fois au redémarrage.
+
+**Jamais de silence.** Si l'exécution d'un prompt planifié est annulée, échoue ou atteint
+son budget, le propriétaire reçoit « ⚠️ La planification « … » n'a pas pu s'exécuter :
+<raison> » avec « 🔁 Relancer maintenant » et « 📅 Voir la planification ». Une
+exécution ne compte (`runs`, `last_run`) qu'une fois menée à terme ; sinon la raison
+reste dans `last_error`, visible dans `/schedules` et `penelope doctor`. Créer une
+planification identique à une planification active (même déclencheur, prompt quasi
+identique) est signalé dans la réponse de création.
 
 Les autres déclencheurs : `interval` (toutes les N minutes), `mcp_poll` (un outil MCP en
 lecture interrogé à intervalle ; seuls les éléments nouveaux déclenchent, le premier

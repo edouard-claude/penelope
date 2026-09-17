@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1258 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1270 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -610,6 +610,27 @@ Rêve nocturne trié par une grille explicite (#37).
   aux releases. Il a trouvé deux défauts, corrigés : une référence `${SECRET:…}` prise
   pour un secret, et un marqueur de masquage pris pour un mot de passe.
 
+### 0.15.0
+
+Documentation vérifiée par la CI (#38), planifications qui ne meurent plus en silence (#39).
+
+- **Index `docs/README.md`** : par besoin, par fichier (rôle et sections), décisions ; le
+  README racine y renvoie et `self_docs list` donne le rôle de chaque page.
+- **Test `docs`** (remplace `docs_freshness`) : index complet, aucun lien relatif mort
+  (ancres comprises), catalogue Telegram et `telegram.md` identiques dans les deux sens,
+  références générées des clés de configuration (tirées des commentaires de `config.rs`,
+  chaque clé documentée) et des outils natifs dans `install-headless.md`, section de
+  version dans `progress.md`, sections de limites sans méthode, commande ni outil livrés.
+  Modèle de pull request avec la case documentation.
+- **Planifications** : chaque exécution d'un prompt ouvre sa session, titrée d'après la
+  planification, et répond dans le chat ou le sujet d'origine ; `session_id` devient la
+  référence `origin_session` (migration 0009). Un tour planifié annulé, en échec ou au
+  budget atteint envoie une alerte avec « Relancer maintenant » et « Voir la
+  planification » ; `runs` et `last_run` ne comptent qu'une exécution menée à terme,
+  sinon `last_error`, visible dans `/schedules` et `doctor`. Un déclenchement manuel
+  n'est plus dédoublonné avec le passage prévu. Une planification identique à une
+  planification active est signalée à la création.
+
 ### Routine de livraison
 
 Avant chaque tag :
@@ -619,10 +640,13 @@ Avant chaque tag :
 2. `progress.md` : nouvelle section de version, compte de tests, tableau du §21.
 3. Relire **toutes** les sections « Limites actuelles » et « pas encore branché » de
    `README.md` et de `docs/` (`mcp.md`, `telegram.md`, `workflows.md`,
-   `install-headless.md`), pas seulement celle-ci. Le test `docs_freshness` attrape une
-   méthode RPC servie présentée comme absente, pas le reste.
-4. `install-headless.md` pour tout ce qui change l'usage ; `UPDATE_CA_MATRIX=1` si un
-   test `ca_*` a été ajouté.
+   `install-headless.md`), pas seulement celle-ci. Le test `docs` attrape une méthode
+   RPC, une commande ou un outil livrés présentés comme absents, pas le reste.
+4. `install-headless.md` pour tout ce qui change l'usage ; `UPDATE_DOCS=1 cargo test -p
+   penelope-evals --test docs` si une clé de configuration ou un outil a changé (le test
+   `docs` vérifie aussi l'index `docs/README.md`, les liens et ancres, les commandes
+   Telegram et la section de version) ; `UPDATE_CA_MATRIX=1` si un test `ca_*` a été
+   ajouté. Le modèle de pull request reprend ces cases.
 5. CI verte sur `main`, puis tag annoncé, release suivie jusqu'aux artefacts.
 
 ### Encore à brancher

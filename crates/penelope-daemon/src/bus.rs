@@ -73,6 +73,16 @@ pub trait ChannelDelivery: Send + Sync {
 
     /// Une session vient de recevoir son titre automatique.
     async fn session_titled(&self, _session_id: &str, _title: &str) {}
+
+    /// Alerte d'une planification qui n'a pas pu s'exécuter, avec ses boutons (issue #39).
+    async fn schedule_alert(
+        &self,
+        _origin: &Origin,
+        _schedule_id: &str,
+        _text: &str,
+    ) -> Result<(), String> {
+        Err("canal sans alerte de planification".into())
+    }
 }
 
 /// Un événement publié sur le bus.

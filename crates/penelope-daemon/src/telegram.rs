@@ -4859,6 +4859,51 @@ impl TelegramGateway {
 
 #[async_trait::async_trait]
 impl ChannelDelivery for TelegramGateway {
+    async fn schedule_alert(
+        &self,
+        origin: &Origin,
+        schedule_id: &str,
+        text: &str,
+    ) -> Result<(), String> {
+        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or((self.owner_id, None));
+        let s = &self.daemon.services;
+        let ttl = 7 * 24 * 3_600_000;
+        let rerun = s
+            .actions
+            .create(
+                k::SCREEN_DO,
+                "schedule.run",
+                json!({"params": {"id": schedule_id}, "back": null}),
+                ttl,
+                true,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let show = s
+            .actions
+            .create(k::SCREEN, "schedules", json!({}), ttl, false)
+            .await
+            .map_err(|e| e.to_string())?;
+        let rows = vec![vec![
+            ButtonSpec::callback("🔁 Relancer maintenant", &rerun.token, ""),
+            ButtonSpec::callback("📅 Voir la planification", &show.token, ""),
+        ]];
+        self.outbox_push(
+            chat_id,
+            topic_id,
+            "sendMessage",
+            json!({
+                "chat_id": chat_id,
+                "text": markdown_to_html(text),
+                "parse_mode": "HTML",
+                "reply_markup": inline_keyboard(&rows),
+                "message_thread_id": topic_id,
+            }),
+        )
+        .await
+        .map_err(|e| e.to_string())
+    }
+
     async fn session_titled(&self, session_id: &str, title: &str) {
         let key = format!("tg.new_session.{session_id}");
         let Some((chat_id, message_id)) =
@@ -7438,6 +7483,85 @@ mod tests {
         assert_eq!(origin.telegram_chat(), Some((OWNER, None)));
         let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
         assert!(sent.iter().any(|m| m.contains("C'est lancé")), "{sent:?}");
+    }
+
+    /// Issue #39 : une veille planifiée depuis une conversation répond encore après `/new`,
+    /// et un échec arrive au propriétaire avec « Relancer maintenant ».
+    #[tokio::test]
+    async fn a_scheduled_prompt_answers_after_new_and_warns_on_failure() {
+        let (_d, g, t, p) = gateway().await;
+        let d = g.daemon.clone();
+        let s = &d.services;
+        d.kv_set("tg.onboard.proposed", "test").await.unwrap();
+        let chat = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: None,
+        };
+        let created_in = d.chat_session_for(&chat).await.unwrap();
+        let sched = crate::scheduler::create(
+            s,
+            penelope_workflow::TriggerKind::Cron,
+            json!({"expr": "30 8 * * *"}),
+            json!({"type": "prompt", "label": "Veille agents IA", "prompt": "Fais la veille du jour",
+                   "origin_session": created_in, "origin": chat.to_value()}),
+            json!({}),
+        )
+        .await
+        .unwrap();
+        let id = sched["id"].as_str().unwrap().to_string();
+
+        // La conversation d'origine est remplacée par une nouvelle.
+        g.process_update(&updates::text_message(150, OWNER, OWNER, "/new"))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+
+        p.reply(r#"{"complexity":"medium"}"#);
+        p.reply("Veille du jour : deux annonces à lire.");
+        crate::scheduler::run_now(&d, &id).await.unwrap();
+        drain(&g).await;
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            sent.iter().any(|m| m.contains("deux annonces")),
+            "réponse dans le chat : {sent:?}"
+        );
+        let after = s.schedules.get(&id).await.unwrap().unwrap();
+        assert_eq!(after.runs, 1, "{after:?}");
+
+        // Échec du modèle : alerte avec ses boutons, erreur gardée.
+        t.clear().await;
+        p.reply(r#"{"complexity":"low"}"#);
+        p.push(penelope_llm::mock::Scripted::Error(
+            penelope_llm::types::LlmErrorKind::Other,
+            "fournisseur indisponible".into(),
+        ));
+        crate::scheduler::run_now(&d, &id).await.unwrap();
+        drain(&g).await;
+        let calls = t.calls_to(tg::SEND_MESSAGE).await;
+        let alert = calls
+            .iter()
+            .find(|c| {
+                c["text"].as_str().is_some_and(|x| {
+                    x.contains("La planification « Veille agents IA » n'a pas pu s'exécuter")
+                })
+            })
+            .unwrap_or_else(|| panic!("alerte : {:?}", texts(&calls)));
+        let labels: Vec<String> = inline_buttons(alert).into_iter().map(|(l, _)| l).collect();
+        assert_eq!(
+            labels,
+            vec!["🔁 Relancer maintenant", "📅 Voir la planification"]
+        );
+        let failed = s.schedules.get(&id).await.unwrap().unwrap();
+        assert_eq!(failed.runs, 1);
+        assert!(failed.last_error.is_some());
+
+        // « Relancer maintenant » redéclenche la planification.
+        let rerun = button(&t, "🔁 Relancer maintenant").await;
+        g.process_update(&updates::callback(151, OWNER, &rerun, 1500))
+            .await
+            .unwrap();
+        assert_eq!(s.turns.pending_count().await.unwrap(), 1, "relancée");
     }
 
     #[tokio::test]

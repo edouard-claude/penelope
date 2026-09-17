@@ -7,7 +7,7 @@ workflows durables et demande l'avis de son propriétaire avant tout ce qui enga
 
 La spécification de référence est le PRD, gardé hors du dépôt (`spec/` est ignoré par
 git). Ce README dit comment le dépôt est fait et comment le faire tourner ; les détails
-vivent dans `docs/`.
+vivent dans `docs/`, dont l'[index](docs/README.md) dit quoi lire pour quel besoin.
 
 ## Ce qui est là
 
@@ -81,7 +81,7 @@ penelope-platform            penelope-observe ├──► penelope-mcp     ├�
 cargo test --workspace
 ```
 
-1258 tests, tous hors réseau. Les suites nommées du PRD §20.1 sont des filtres sur cette
+1270 tests, tous hors réseau. Les suites nommées du PRD §20.1 sont des filtres sur cette
 même commande, ce qui évite qu'un chemin de test diverge de l'autre :
 
 ```bash
@@ -142,6 +142,7 @@ Détails dans [.github/workflows/README.md](.github/workflows/README.md).
 
 ## Documentation
 
+- [docs/README.md](docs/README.md) : index de la documentation, par besoin et par fichier.
 - [docs/install-headless.md](docs/install-headless.md) : installation sur un Mac sans écran.
 - [docs/mcp.md](docs/mcp.md) : client MCP, versions, transports, OAuth, registre paresseux.
 - [docs/workflows.md](docs/workflows.md) : référence complète du schéma de workflow, dont [schemas/workflow.schema.json](schemas/workflow.schema.json).

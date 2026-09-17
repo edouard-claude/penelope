@@ -105,8 +105,36 @@ fn fold(s: &str) -> String {
         .collect()
 }
 
-/// `self_docs list` : fichiers, titre et sections de premier et second niveau.
+/// Rôle de chaque page, lu dans l'index `docs/README.md` (issue #38) : lignes
+/// `- [nom](chemin) : rôle. Sections : …` des parties « Par fichier » et « Décisions ».
+pub fn roles() -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    let Some((_, index)) = DOCS.iter().find(|(f, _)| *f == "docs/README.md") else {
+        return out;
+    };
+    let link = |l: &str| -> Option<(String, String)> {
+        let rest = l.strip_prefix("- [")?;
+        let (_, after) = rest.split_once("](")?;
+        let (target, tail) = after.split_once(')')?;
+        let role = tail.trim_start().strip_prefix(':')?.trim();
+        let role = role.split(" Sections :").next().unwrap_or(role).trim();
+        Some((
+            format!("docs/{}", target.split('#').next().unwrap_or(target)),
+            role.trim_end_matches('.').to_string(),
+        ))
+    };
+    for line in index.lines() {
+        if let Some((file, role)) = link(line.trim()) {
+            out.entry(file).or_insert(role);
+        }
+    }
+    out
+}
+
+/// `self_docs list` : fichiers, rôle (index `docs/README.md`), titre et sections de premier
+/// et second niveau.
 pub fn list() -> Value {
+    let roles = roles();
     json!(
         DOCS.iter()
             .map(|(file, raw)| {
@@ -119,6 +147,7 @@ pub fn list() -> Value {
                 json!({
                     "file": file,
                     "title": title,
+                    "role": roles.get(*file),
                     "sections": secs.iter().filter(|s| s.level == 2).map(|s| s.heading.clone()).collect::<Vec<_>>(),
                     "url": url(file, None),
                 })
@@ -368,5 +397,32 @@ mod tests {
         let (heading, link) = workflow_doc_for("unknown variant `bidule`, expected one of `agent`");
         assert_eq!(heading, "Les neuf types d'étapes");
         assert!(link.ends_with("docs/workflows.md#les-neuf-types-détapes"));
+    }
+
+    /// Issue #38 : `self_docs list` donne le rôle de chaque page d'après l'index.
+    #[test]
+    fn the_list_carries_each_page_role_from_the_index() {
+        let v = list();
+        let role = |file: &str| {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["file"] == file)
+                .and_then(|e| e["role"].as_str())
+                .map(String::from)
+        };
+        assert!(
+            role("docs/install-headless.md")
+                .unwrap()
+                .starts_with("installer, configurer et exploiter"),
+            "{v}"
+        );
+        assert!(role("docs/workflows.md").is_some());
+        assert!(
+            role("docs/decisions/0008-cache-de-prompt.md")
+                .unwrap()
+                .contains("cache de prompt")
+        );
+        assert!(role("README.md").is_none());
     }
 }

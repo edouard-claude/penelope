@@ -69,6 +69,7 @@ impl Rpc {
                 checks.push(crate::doctor::binary_signature_check(s));
                 checks.push(crate::doctor::install_mode_check());
                 checks.push(crate::doctor::pending_upgrade_check(s));
+                checks.push(crate::doctor::schedules_check(s).await);
                 Ok(json!(checks))
             }
             method::SHUTDOWN => {
@@ -769,17 +770,15 @@ impl Rpc {
                             "kind inconnu : cron, interval, mcp_poll, watch_file ou event"
                         )
                     })?;
-                let sched = s
-                    .schedules
-                    .create(
-                        kind,
-                        p.get("spec").cloned().unwrap_or(json!({})),
-                        p.get("target").cloned().unwrap_or(json!({})),
-                        p.get("dedup").cloned().unwrap_or(json!({})),
-                    )
-                    .await
-                    .map_err(anyhow::Error::msg)?;
-                Ok(serde_json::to_value(sched)?)
+                crate::scheduler::create(
+                    s,
+                    kind,
+                    p.get("spec").cloned().unwrap_or(json!({})),
+                    p.get("target").cloned().unwrap_or(json!({})),
+                    p.get("dedup").cloned().unwrap_or(json!({})),
+                )
+                .await
+                .map_err(anyhow::Error::msg)
             }
             method::SCHEDULE_RUN_NOW => {
                 let id = required_str(p, "id")?;

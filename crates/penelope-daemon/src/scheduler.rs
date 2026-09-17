@@ -8,7 +8,8 @@
 //!   ├─ watch_file ────► fichier modifié ────────────────────────────────────────► cible
 //!   └─ event ─────────► événement du journal apparu depuis le dernier passage ──► cible
 //!
-//! cible  prompt  ─► tour « déclencheur » dans la session d'origine (ou une session planifiée)
+//! cible  prompt  ─► tour « déclencheur » dans une session neuve à chaque exécution, réponse
+//!                   dans le chat (ou le sujet) d'origine ; échec ou annulation : alerte
 //!        notify  ─► message direct au propriétaire, sans modèle
 //!        workflow ─► run du moteur de workflows
 //! ```
@@ -112,6 +113,7 @@ pub async fn tick(d: &Arc<Daemon>) -> anyhow::Result<TickReport> {
         }
     }
     d.kv_set("scheduler.event_cursor", &to.to_string()).await?;
+    cancelled_triggers(d).await?;
     Ok(report)
 }
 
@@ -123,14 +125,25 @@ pub async fn run_now(d: &Arc<Daemon>, id: &str) -> anyhow::Result<Value> {
         .get(id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("déclencheur introuvable : `{id}`"))?;
+    // Un déclenchement manuel n'est jamais dédoublonné avec le passage prévu, ni avec une
+    // relance précédente (« Relancer maintenant », issue #39).
+    let manual: BTreeMap<String, String> = [(
+        MANUAL.to_string(),
+        penelope_kernel::ids::Ulid::new().to_string(),
+    )]
+    .into_iter()
+    .collect();
     let result = match sched.kind {
         TriggerKind::McpPoll => poll(d, &sched).await,
-        _ => fire(d, &sched, &[], &BTreeMap::new()).await.map(|_| true),
+        _ => fire(d, &sched, &[], &manual).await.map(|_| true),
     };
     let mut report = TickReport::default();
     finish(d, &sched, result, &mut report).await?;
     Ok(serde_json::to_value(report)?)
 }
+
+/// Variable d'un déclenchement manuel : rend sa clé de dédoublonnage unique.
+const MANUAL: &str = "declenchement_manuel";
 
 /// Enregistre le tir (ou l'erreur) et programme la suite.
 async fn finish(
@@ -144,9 +157,21 @@ async fn finish(
         Ok(_) => None,
         Err(e) => Some(e.to_string()),
     };
-    // `mark_run` compte le passage et programme le suivant (aucun pour `watch_file` et
-    // `event`, qui n'ont pas de calendrier).
-    s.schedules.mark_run(&sched.id, error.as_deref()).await?;
+    // Seule une exécution menée à terme compte (issue #39) : un prompt déclenché ne l'est
+    // qu'à la fin de son tour, un déclenchement en échec garde son erreur sans compter. Un
+    // passage de sondage sans nouveauté compte, lui : il a fait tout son travail. Le passage
+    // suivant est programmé dans tous les cas (aucun pour `watch_file` et `event`).
+    let prompt = sched.target_kind() == Some(TargetKind::Prompt);
+    match (&error, &result) {
+        (None, Ok(true)) if prompt => s.schedules.advance(&sched.id, None).await?,
+        (None, _) => s.schedules.mark_run(&sched.id, None).await?,
+        (Some(e), _) => {
+            s.schedules.advance(&sched.id, Some(e)).await?;
+            if prompt {
+                alert(d, sched, e).await;
+            }
+        }
+    }
     match (&result, error) {
         (Ok(fired), None) => {
             if *fired {
@@ -385,21 +410,22 @@ async fn fire(
                     &serde_json::to_string_pretty(&listing).unwrap_or_default(),
                 ));
             }
-            let session = match sched.target["session_id"].as_str() {
-                Some(sid) if s.sessions.get(sid).await?.is_some() => sid.to_string(),
-                _ => {
-                    let title = format!("planifié {}", sched.id);
-                    s.sessions
-                        .create(SessionKind::Scheduled, Some(title))
-                        .await?
-                        .id
-                        .to_string()
-                }
-            };
+            // Une session par exécution (issue #39) : fermer la conversation où la
+            // planification est née (`/new`, `/close`) ne la fait plus mourir en silence.
+            let title = format!("{} · {}", label(d, sched).await, local_day(d));
+            let session = s
+                .sessions
+                .create(SessionKind::Scheduled, Some(title))
+                .await?
+                .id
+                .to_string();
             let dedup = format!(
-                "sch:{}:{}:{}",
+                "sch:{}:{}{}:{}",
                 sched.id,
                 sched.next_run.clone().unwrap_or_default(),
+                vars.get(MANUAL)
+                    .map(|n| format!(":{n}"))
+                    .unwrap_or_default(),
                 items
                     .iter()
                     .map(|i| format!("{}@{}", i.id, i.fingerprint))
@@ -435,6 +461,187 @@ async fn fire(
         }
         None => anyhow::bail!("cible inconnue"),
     }
+    Ok(())
+}
+
+/// Crée une planification ; une planification active identique (même déclencheur, même
+/// spécification, prompt quasi identique) est signalée dans la réponse (issue #39).
+pub async fn create(
+    s: &crate::runtime::Services,
+    kind: penelope_workflow::TriggerKind,
+    spec: Value,
+    target: Value,
+    dedup: Value,
+) -> Result<Value, String> {
+    let twins = s
+        .schedules
+        .similar(kind, &spec, &target)
+        .await
+        .map_err(|e| e.to_string())?;
+    let sched = s.schedules.create(kind, spec, target, dedup).await?;
+    let mut v = serde_json::to_value(&sched).map_err(|e| e.to_string())?;
+    if !twins.is_empty() {
+        let ids: Vec<&str> = twins.iter().map(|t| t.id.as_str()).collect();
+        v["doublons"] = json!(ids);
+        v["avertissement"] = json!(format!(
+            "une planification identique est déjà active ({}) : supprimer l'une des deux \
+             (`schedule_delete`) si ce n'est pas voulu",
+            ids.join(", ")
+        ));
+    }
+    Ok(v)
+}
+
+/// Nom lisible d'une planification : son libellé, sinon le titre de la conversation où
+/// elle est née, sinon le début du prompt.
+pub async fn label(d: &Daemon, sched: &Schedule) -> String {
+    if let Some(l) = sched.target["label"]
+        .as_str()
+        .filter(|l| !l.trim().is_empty())
+    {
+        return l.trim().to_string();
+    }
+    if let Some(sid) = sched.target["origin_session"]
+        .as_str()
+        .or_else(|| sched.target["session_id"].as_str())
+        && let Ok(Some(sess)) = d.services.sessions.get(sid).await
+        && let Some(title) = sess.title.filter(|t| !t.trim().is_empty())
+    {
+        return title;
+    }
+    let text = sched.target["prompt"]
+        .as_str()
+        .or_else(|| sched.target["template"].as_str())
+        .or_else(|| sched.target["workflowId"].as_str())
+        .unwrap_or_default();
+    let words: Vec<&str> = text.split_whitespace().take(6).collect();
+    if words.is_empty() {
+        sched.id.clone()
+    } else {
+        words.join(" ")
+    }
+}
+
+/// Alerte : une planification n'a pas pu s'exécuter (issue #39). Jamais de silence.
+pub async fn alert(d: &Arc<Daemon>, sched: &Schedule, reason: &str) {
+    let text = format!(
+        "⚠️ La planification « {} » n'a pas pu s'exécuter : {reason}",
+        label(d, sched).await
+    );
+    let origin = target_origin(d, sched);
+    let _ = d
+        .services
+        .events
+        .append(penelope_kernel::event::EventDraft::new(
+            "schedule.failed",
+            json!({"schedule": sched.id, "reason": reason}),
+        ))
+        .await;
+    if let Some(tg) = d.hooks.telegram()
+        && tg.schedule_alert(&origin, &sched.id, &text).await.is_ok()
+    {
+        return;
+    }
+    match d.hooks.messenger() {
+        Some(m) => {
+            if let Err(e) = m.send_text(&origin, &text).await {
+                tracing::warn!(schedule = %sched.id, error = %e, "alerte de planification non envoyée");
+            }
+        }
+        None => tracing::warn!(schedule = %sched.id, "{text}"),
+    }
+}
+
+/// Jour du propriétaire, `JJ/MM`.
+fn local_day(d: &Daemon) -> String {
+    let s = &d.services;
+    let utc = chrono::DateTime::from_timestamp_millis(s.clock.now_ms()).unwrap_or_default();
+    match s.config.config().owner.timezone.parse::<chrono_tz::Tz>() {
+        Ok(tz) => utc.with_timezone(&tz).format("%d/%m").to_string(),
+        Err(_) => utc.format("%d/%m").to_string(),
+    }
+}
+
+/// Fin du tour d'un prompt planifié : l'exécution compte si le modèle a répondu, sinon la
+/// raison est gardée et le propriétaire prévenu (issue #39).
+pub async fn trigger_outcome(
+    d: &Arc<Daemon>,
+    schedule_id: &str,
+    outcome: &crate::agent::TurnOutcome,
+) {
+    use crate::agent::TurnOutcome;
+    let s = &d.services;
+    let Ok(Some(sched)) = s.schedules.get(schedule_id).await else {
+        return;
+    };
+    let (error, warn) = match outcome {
+        TurnOutcome::Answered { .. } => (None, false),
+        // La carte d'approbation est partie : l'exécution reprendra après la décision.
+        TurnOutcome::AwaitingApproval { .. } => return,
+        TurnOutcome::LoopAborted { .. } => (
+            Some("boucle d'outils arrêtée (réponse envoyée)".to_string()),
+            false,
+        ),
+        TurnOutcome::Failed { error } => (Some(format!("erreur du modèle : {error}")), true),
+        TurnOutcome::BudgetExceeded { scope, .. } => {
+            (Some(format!("budget {scope} atteint")), true)
+        }
+        TurnOutcome::Cancelled => (Some("exécution interrompue".to_string()), true),
+    };
+    if let Err(e) = s
+        .schedules
+        .record_outcome(schedule_id, error.as_deref())
+        .await
+    {
+        tracing::warn!(schedule = %schedule_id, error = %e, "issue de planification non enregistrée");
+    }
+    if let (Some(reason), true) = (error, warn) {
+        alert(d, &sched, &reason).await;
+    }
+}
+
+/// Tours de prompts planifiés annulés dans la file sans jamais tourner (session fermée,
+/// `/stop`) : erreur gardée, propriétaire prévenu. Le premier passage prend l'instant sans
+/// rien signaler.
+async fn cancelled_triggers(d: &Arc<Daemon>) -> anyhow::Result<()> {
+    const CURSOR: &str = "scheduler.cancelled_cursor";
+    let s = &d.services;
+    let now = s.clock.now_rfc3339();
+    let Some(cursor) = d.kv_get(CURSOR).await? else {
+        d.kv_set(CURSOR, &now).await?;
+        return Ok(());
+    };
+    let since = cursor.clone();
+    let rows: Vec<(String, String, Option<String>)> = s
+        .store
+        .read(move |c| {
+            let mut st = c.prepare(
+                "SELECT payload, finished_at, last_error FROM turn_queue
+                 WHERE kind = 'trigger' AND state = 'cancelled' AND finished_at > ?1
+                 ORDER BY finished_at",
+            )?;
+            let rows = st.query_map([&since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await?;
+    let mut last = cursor;
+    for (payload, finished, error) in rows {
+        last = last.max(finished);
+        let payload: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
+        let Some(id) = payload["schedule"].as_str() else {
+            continue;
+        };
+        let Some(sched) = s.schedules.get(id).await? else {
+            continue;
+        };
+        let reason = format!(
+            "tour annulé ({})",
+            error.unwrap_or_else(|| "sans raison".into())
+        );
+        s.schedules.record_outcome(id, Some(&reason)).await?;
+        alert(d, &sched, &reason).await;
+    }
+    d.kv_set(CURSOR, &last).await?;
     Ok(())
 }
 
@@ -635,11 +842,18 @@ mod tests {
         assert_eq!(rec.texts().len(), 1, "un rappel unique ne revient pas");
     }
 
+    /// Issue #39 : un prompt planifié s'exécute dans une session neuve, titrée d'après la
+    /// planification, même si la conversation où il est né a été fermée ; il ne compte
+    /// qu'une fois son tour terminé.
     #[tokio::test]
-    async fn a_recurring_prompt_comes_back_in_its_conversation() {
+    async fn a_recurring_prompt_survives_the_closing_of_its_conversation() {
         let (_dir, d, clock, _rec) = daemon().await;
         let s = &d.services;
         let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        s.sessions
+            .set_title(&sid, "Veille agents IA", false)
+            .await
+            .unwrap();
         let origin = Origin::Telegram {
             chat_id: 42,
             topic_id: Some(7),
@@ -651,11 +865,13 @@ mod tests {
                 TriggerKind::Interval,
                 json!({"every_ms": 3_600_000}),
                 json!({"type": "prompt", "prompt": "Fais le point sur mes tickets",
-                       "session_id": sid, "origin": origin.to_value()}),
+                       "origin_session": sid, "origin": origin.to_value()}),
                 json!({}),
             )
             .await
             .unwrap();
+        // La conversation d'origine est fermée (`/new`, `/close`).
+        s.sessions.set_state(&sid, "closed").await.unwrap();
 
         clock.advance_ms(3_600_500);
         tick(&d).await.unwrap();
@@ -665,13 +881,36 @@ mod tests {
             1,
             "une occurrence, un tour"
         );
-
-        let turn = s.turns.claim("t").await.unwrap().unwrap();
+        let turn = s.turns.claim("t").await.unwrap().expect("tour non annulé");
         assert_eq!(turn.kind, TurnKind::Trigger);
-        assert_eq!(turn.session_id, sid);
+        assert_ne!(turn.session_id, sid, "session neuve");
+        let session = s.sessions.get(&turn.session_id).await.unwrap().unwrap();
+        assert_eq!(session.kind, SessionKind::Scheduled);
+        assert!(
+            session
+                .title
+                .as_deref()
+                .unwrap()
+                .starts_with("Veille agents IA · "),
+            "{:?}",
+            session.title
+        );
         assert_eq!(turn.payload["text"], "Fais le point sur mes tickets");
         assert_eq!(Origin::from_payload(&turn.payload), origin);
+        let pending = s.schedules.get(&sched.id).await.unwrap().unwrap();
+        assert_eq!(pending.runs, 0, "rien n'est compté avant la fin du tour");
+        assert!(pending.next_run.is_some());
+
+        let answered = crate::agent::TurnOutcome::Answered {
+            text: "Trois tickets ouverts.".into(),
+            iterations: 1,
+            cost_usd: 0.0,
+        };
         s.turns.complete(&turn).await.unwrap();
+        trigger_outcome(&d, &sched.id, &answered).await;
+        let done = s.schedules.get(&sched.id).await.unwrap().unwrap();
+        assert_eq!(done.runs, 1);
+        assert!(done.last_run.is_some() && done.last_error.is_none());
 
         run_now(&d, &sched.id).await.unwrap();
         assert_eq!(
@@ -679,8 +918,133 @@ mod tests {
             1,
             "exécution immédiate"
         );
+    }
+
+    /// Issue #39 : un tour planifié annulé dans la file ou en échec n'est jamais silencieux.
+    #[tokio::test]
+    async fn a_cancelled_or_failed_scheduled_prompt_warns_the_owner() {
+        let (_dir, d, clock, rec) = daemon().await;
+        let s = &d.services;
+        let sched = s
+            .schedules
+            .create(
+                TriggerKind::Interval,
+                json!({"every_ms": 3_600_000}),
+                json!({"type": "prompt", "label": "Veille du matin", "prompt": "Veille"}),
+                json!({}),
+            )
+            .await
+            .unwrap();
+        tick(&d).await.unwrap();
+        // Un ancien tour, dans une session fermée : la file l'annule sans le jouer.
+        let closed = s
+            .sessions
+            .create(SessionKind::Chat, None)
+            .await
+            .unwrap()
+            .id
+            .to_string();
+        s.sessions.set_state(&closed, "closed").await.unwrap();
+        clock.advance_ms(1_000);
+        s.turns
+            .enqueue(
+                &closed,
+                TurnKind::Trigger,
+                json!({"text": "Veille", "schedule": sched.id}),
+                None,
+                5,
+            )
+            .await
+            .unwrap();
+        assert!(s.turns.claim("t").await.unwrap().is_none());
+        clock.advance_ms(1_000);
+        tick(&d).await.unwrap();
+        let texts = rec.texts();
+        assert!(
+            texts.iter().any(|t| t
+                .contains("⚠️ La planification « Veille du matin » n'a pas pu s'exécuter")
+                && t.contains("session fermée")),
+            "{texts:?}"
+        );
         let after = s.schedules.get(&sched.id).await.unwrap().unwrap();
-        assert_eq!(after.runs, 2);
+        assert!(
+            after
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("session fermée")
+        );
+        assert_eq!(after.runs, 0);
+        tick(&d).await.unwrap();
+        assert_eq!(rec.texts().len(), texts.len(), "une seule alerte");
+
+        trigger_outcome(
+            &d,
+            &sched.id,
+            &crate::agent::TurnOutcome::Failed {
+                error: "fournisseur indisponible".into(),
+            },
+        )
+        .await;
+        let texts = rec.texts();
+        assert!(
+            texts
+                .last()
+                .unwrap()
+                .contains("erreur du modèle : fournisseur indisponible"),
+            "{texts:?}"
+        );
+        let after = s.schedules.get(&sched.id).await.unwrap().unwrap();
+        assert!(after.last_error.as_deref().unwrap().contains("fournisseur"));
+        let doctor = crate::doctor::schedules_check(s).await;
+        assert!(
+            !doctor.ok && doctor.detail.contains(&sched.id),
+            "{doctor:?}"
+        );
+    }
+
+    /// Issue #39 : une planification identique déjà active est signalée à la création.
+    #[tokio::test]
+    async fn a_duplicate_schedule_is_reported_at_creation() {
+        let (_dir, d, _clock, _rec) = daemon().await;
+        let s = &d.services;
+        let spec = json!({"expr": "30 8 * * *"});
+        let first = create(
+            s,
+            TriggerKind::Cron,
+            spec.clone(),
+            json!({"type": "prompt", "prompt": "Charge la skill veille et exécute le protocole de veille"}),
+            json!({}),
+        )
+        .await
+        .unwrap();
+        assert!(first.get("doublons").is_none());
+        let twin = create(
+            s,
+            TriggerKind::Cron,
+            spec.clone(),
+            json!({"type": "prompt", "prompt": "Charge la skill veille et exécute le protocole de veille."}),
+            json!({}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(twin["doublons"], json!([first["id"]]));
+        assert!(
+            twin["avertissement"]
+                .as_str()
+                .unwrap()
+                .contains("identique")
+        );
+        let other = create(
+            s,
+            TriggerKind::Cron,
+            spec,
+            json!({"type": "prompt", "prompt": "Résume mes mails de la nuit"}),
+            json!({}),
+        )
+        .await
+        .unwrap();
+        assert!(other.get("doublons").is_none());
     }
 
     #[tokio::test]

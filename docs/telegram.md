@@ -214,7 +214,7 @@ Workflows (4)
 | `/help` | familles, puis un bouton par commande |
 | `/wf`, `/run` | ▶️ lance (les paramètres déclarés sont demandés un par un), ℹ️ étapes et paramètres ; `/run <workflow>` sans paramètres passe par la conversation, formulaire à un bouton |
 | `/runs`, `/resume` | état et étape de chaque run, ⏸ ▶️ ⏹ (confirmé), 🔎 détail ; `/resume` ne montre que les runs en pause ou bloqués |
-| `/schedules` | ⚡ déclencher, ⏸/▶️, 🗑 (confirmé) |
+| `/schedules` | ⚡ déclencher, ⏸/▶️, 🗑 (confirmé) ; dernière erreur de chaque planification ; une exécution en échec arrive en alerte avec « Relancer maintenant » |
 | `/mcp` | par serveur : détail, 🔄 redémarrer, 🧪 tester ; le détail ajoute 📜 journal, ⏻ activer ou désactiver, 🔐 autoriser |
 | `/models` | un modèle, puis l'alias auquel l'affecter ; 🔎 chercher |
 | `/skills`, `/skill` | 📖 voir, ⏪ version précédente (confirmé) |

@@ -47,6 +47,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0008_memory_flags",
         sql: SQL_0008,
     },
+    Migration {
+        version: "0009_schedule_origin_session",
+        sql: SQL_0009,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -842,6 +846,17 @@ CREATE TABLE mem_flags(
 );
 "#;
 
+/// Une planification ne dépend plus de sa session d'origine (issue #39) : `session_id`
+/// devient la référence informative `origin_session`, chaque exécution ouvre sa session.
+const SQL_0009: &str = r#"
+UPDATE schedules
+SET target = json_remove(
+  json_set(target, '$.origin_session', json_extract(target, '$.session_id')),
+  '$.session_id'
+)
+WHERE json_valid(target) AND json_extract(target, '$.session_id') IS NOT NULL;
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -969,5 +984,29 @@ mod tests {
                 .unwrap();
             assert_eq!(n, 1, "table manquante : {t}");
         }
+    }
+
+    /// Issue #39 : une planification liée à sa session garde la référence, sans en
+    /// dépendre.
+    #[test]
+    fn schedule_session_ids_become_informative_references() {
+        let c = fresh();
+        c.execute(
+            "INSERT INTO schedules(id, kind, spec, target, dedup, state, created_at, updated_at)
+             VALUES('sch_1', 'cron', '{}', ?1, '{}', 'active', 't', 't')",
+            [r#"{"type":"prompt","prompt":"veille","session_id":"s_1","origin":{"kind":"cli"}}"#],
+        )
+        .unwrap();
+        c.execute_batch(SQL_0009).unwrap();
+        let target: String = c
+            .query_row("SELECT target FROM schedules WHERE id = 'sch_1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&target).unwrap();
+        assert_eq!(v["origin_session"], "s_1");
+        assert!(v.get("session_id").is_none());
+        assert_eq!(v["prompt"], "veille");
+        assert_eq!(v["origin"]["kind"], "cli");
     }
 }

@@ -1,0 +1,529 @@
+//! Fraîcheur de la documentation (issues #3 et #38). La documentation est aussi ce que
+//! Pénélope sait d'elle-même (`self_docs`) : une page périmée lui fait dire des choses
+//! fausses.
+//!
+//! ```text
+//!  index docs/README.md ─► cite chaque guide et chaque décision
+//!  liens ────────────────► aucun lien relatif mort, ancres comprises
+//!  commandes ────────────► catalogue Telegram = docs/telegram.md
+//!  configuration ────────► chaque clé dans la référence générée d'install-headless.md
+//!  outils ───────────────► chaque outil natif dans la référence générée
+//!  version ──────────────► sa section dans progress.md
+//!  limites ──────────────► aucune méthode, commande ou outil livré présenté comme manquant
+//! ```
+//!
+//! Les deux références se régénèrent :
+//!
+//! ```bash
+//! UPDATE_DOCS=1 cargo test -p penelope-evals --test docs
+//! ```
+
+use penelope_evals::ca_matrix;
+use penelope_kernel::api::method;
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+fn root() -> PathBuf {
+    ca_matrix::repo_root()
+}
+
+fn read(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{} : {e}", path.display()))
+}
+
+/// `README.md` et tout `docs/`, décisions comprises.
+fn markdown_files() -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "md") {
+                out.push(p);
+            }
+        }
+    }
+    let mut out = vec![root().join("README.md")];
+    walk(&root().join("docs"), &mut out);
+    out.sort();
+    out
+}
+
+/// Lignes hors blocs de code.
+fn prose(markdown: &str) -> Vec<&str> {
+    let mut in_code = false;
+    markdown
+        .lines()
+        .filter(|l| {
+            if l.trim_start().starts_with("```") {
+                in_code = !in_code;
+                return false;
+            }
+            !in_code
+        })
+        .collect()
+}
+
+/// Ancres GitHub des titres d'un fichier, doublons suffixés.
+fn anchors(markdown: &str) -> BTreeSet<String> {
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    let mut out = BTreeSet::new();
+    for line in prose(markdown) {
+        let level = line.chars().take_while(|c| *c == '#').count();
+        if level == 0 || !line[level..].starts_with(' ') {
+            continue;
+        }
+        let base = penelope_daemon::selfdocs::anchor(line[level..].trim());
+        let n = seen.entry(base.clone()).or_insert(0);
+        out.insert(if *n == 0 {
+            base.clone()
+        } else {
+            format!("{base}-{n}")
+        });
+        *n += 1;
+    }
+    out
+}
+
+/// Liens Markdown `[texte](cible)` hors blocs de code.
+fn links(markdown: &str) -> Vec<String> {
+    let re = regex::Regex::new(r"\]\(([^)\s]+)(?:\s+\x22[^\x22]*\x22)?\)").unwrap();
+    prose(markdown)
+        .iter()
+        .flat_map(|l| {
+            // Le code en ligne peut contenir des crochets : on l'écarte.
+            let without_code = regex::Regex::new(r"`[^`]*`").unwrap().replace_all(l, "");
+            re.captures_iter(&without_code)
+                .map(|c| c[1].to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+// ------------------------------------------------------------------ index et liens
+
+#[test]
+fn the_index_cites_every_guide_and_decision() {
+    let docs = root().join("docs");
+    let index = read(&docs.join("README.md"));
+    let targets: BTreeSet<String> = links(&index)
+        .into_iter()
+        .map(|l| l.split('#').next().unwrap_or_default().to_string())
+        .collect();
+    let mut missing = Vec::new();
+    for f in markdown_files() {
+        let Ok(rel) = f.strip_prefix(&docs) else {
+            continue;
+        };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        if rel == "README.md" {
+            continue;
+        }
+        if !targets.contains(&rel) {
+            missing.push(rel);
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "docs/README.md ne cite pas : {}",
+        missing.join(", ")
+    );
+    assert!(
+        read(&root().join("README.md")).contains("](docs/README.md)"),
+        "le README racine doit renvoyer à l'index docs/README.md"
+    );
+}
+
+#[test]
+fn no_relative_link_is_dead_anchors_included() {
+    let mut dead = Vec::new();
+    let mut cache: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
+    for file in markdown_files() {
+        let raw = read(&file);
+        let dir = file.parent().unwrap().to_path_buf();
+        for target in links(&raw) {
+            if target.contains("://") || target.starts_with("mailto:") {
+                continue;
+            }
+            let (path, anchor) = match target.split_once('#') {
+                Some((p, a)) => (p, Some(a)),
+                None => (target.as_str(), None),
+            };
+            let resolved = if path.is_empty() {
+                file.clone()
+            } else {
+                dir.join(path)
+            };
+            if !resolved.exists() {
+                dead.push(format!("{} → {target}", file.display()));
+                continue;
+            }
+            if let Some(a) = anchor
+                && resolved.extension().is_some_and(|x| x == "md")
+            {
+                let set = cache
+                    .entry(resolved.clone())
+                    .or_insert_with(|| anchors(&read(&resolved)));
+                let wanted = a.to_lowercase();
+                if !set.contains(&wanted) {
+                    dead.push(format!("{} → {target} (ancre inconnue)", file.display()));
+                }
+            }
+        }
+    }
+    assert!(dead.is_empty(), "liens morts :\n{}", dead.join("\n"));
+}
+
+// ------------------------------------------------------------------ commandes
+
+#[test]
+fn telegram_commands_and_their_documentation_match() {
+    let catalog: BTreeSet<&str> = penelope_telegram::commands::all()
+        .iter()
+        .map(|c| c.name)
+        .collect();
+    let doc = read(&root().join("docs/telegram.md"));
+    let missing: Vec<&&str> = catalog
+        .iter()
+        .filter(|c| !doc.contains(&format!("/{c}")))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "commandes absentes de docs/telegram.md : {missing:?}"
+    );
+    // Et inversement : la section « Commandes » ne cite que des commandes du catalogue.
+    let start = doc.find("\n## Commandes").expect("section Commandes");
+    let end = doc[start + 1..]
+        .find("\n## ")
+        .map(|i| start + 1 + i)
+        .unwrap_or(doc.len());
+    let re = regex::Regex::new(r"(?:^|[\s`(,])/([a-z][a-z_]*)\b").unwrap();
+    let unknown: BTreeSet<String> = re
+        .captures_iter(&doc[start..end])
+        .map(|c| c[1].to_string())
+        .filter(|c| !catalog.contains(c.as_str()) && !["start", "help"].contains(&c.as_str()))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "docs/telegram.md cite des commandes hors catalogue : {unknown:?}"
+    );
+}
+
+// ------------------------------------------------------------------ références générées
+
+/// Remplace (ou vérifie) le bloc généré `name` d'un fichier.
+fn generated_block(file: &Path, name: &str, content: &str) {
+    let raw = read(file);
+    let begin = format!("<!-- reference:{name}:debut");
+    let end = format!("<!-- reference:{name}:fin -->");
+    let b = raw
+        .find(&begin)
+        .unwrap_or_else(|| panic!("{} : bloc `{name}` absent", file.display()));
+    let b_end = raw[b..].find("-->").map(|i| b + i + 3).unwrap();
+    let e = raw
+        .find(&end)
+        .unwrap_or_else(|| panic!("{} : fin du bloc `{name}` absente", file.display()));
+    let current = &raw[b_end..e];
+    let wanted = format!("\n{content}");
+    if current == wanted {
+        return;
+    }
+    if std::env::var("UPDATE_DOCS").as_deref() == Ok("1") {
+        let updated = format!("{}{wanted}{}", &raw[..b_end], &raw[e..]);
+        std::fs::write(file, updated).unwrap();
+        return;
+    }
+    panic!(
+        "{} : référence `{name}` périmée. Régénérer :\n\
+         UPDATE_DOCS=1 cargo test -p penelope-evals --test docs",
+        file.display()
+    );
+}
+
+fn cell(s: &str) -> String {
+    s.replace('|', "\\|").replace('\n', " ")
+}
+
+/// Champs documentés de chaque structure de `config.rs` : (champ, type, doc).
+fn config_structs(source: &str) -> BTreeMap<String, Vec<(String, String, String)>> {
+    let struct_re = regex::Regex::new(r"^pub struct (\w+) \{").unwrap();
+    let field_re = regex::Regex::new(r"^    pub (\w+): (.+),$").unwrap();
+    let mut out: BTreeMap<String, Vec<(String, String, String)>> = BTreeMap::new();
+    let mut current: Option<String> = None;
+    let mut doc: Vec<String> = Vec::new();
+    for line in source.lines() {
+        if let Some(c) = struct_re.captures(line) {
+            current = Some(c[1].to_string());
+            doc.clear();
+            continue;
+        }
+        if line.starts_with('}') {
+            current = None;
+            continue;
+        }
+        let Some(name) = &current else { continue };
+        let t = line.trim();
+        if let Some(d) = t.strip_prefix("///") {
+            doc.push(d.trim().to_string());
+        } else if t.starts_with("#[") {
+        } else if let Some(c) = field_re.captures(line) {
+            out.entry(name.clone()).or_default().push((
+                c[1].to_string(),
+                c[2].to_string(),
+                doc.join(" "),
+            ));
+            doc.clear();
+        } else {
+            doc.clear();
+        }
+    }
+    out
+}
+
+fn value_at<'a>(v: &'a Value, path: &[String]) -> Option<&'a Value> {
+    path.iter().try_fold(v, |acc, k| acc.get(k))
+}
+
+/// Lignes de la référence : (clé, défaut, rôle).
+fn config_rows(
+    structs: &BTreeMap<String, Vec<(String, String, String)>>,
+    defaults: &Value,
+    name: &str,
+    prefix: Vec<String>,
+    rows: &mut Vec<(String, String, String)>,
+) {
+    for (field, ty, doc) in structs.get(name).cloned().unwrap_or_default() {
+        let mut path = prefix.clone();
+        path.push(field.clone());
+        if structs.contains_key(ty.as_str()) {
+            config_rows(structs, defaults, &ty, path, rows);
+            continue;
+        }
+        if let Some(inner) = ty.strip_prefix("BTreeMap<String, ") {
+            let value_ty = inner.trim_end_matches('>').trim();
+            let keys: Vec<String> = value_at(defaults, &path)
+                .and_then(|v| v.as_object())
+                .map(|m| m.keys().cloned().collect())
+                .filter(|k: &Vec<String>| !k.is_empty())
+                .unwrap_or_else(|| vec!["<nom>".to_string()]);
+            for k in keys {
+                let mut p = path.clone();
+                p.push(k);
+                if structs.contains_key(value_ty) {
+                    config_rows(structs, defaults, value_ty, p, rows);
+                } else {
+                    rows.push((p.join("."), default_of(defaults, &p), doc.clone()));
+                }
+            }
+            continue;
+        }
+        rows.push((path.join("."), default_of(defaults, &path), doc));
+    }
+}
+
+fn default_of(defaults: &Value, path: &[String]) -> String {
+    match value_at(defaults, path) {
+        Some(v) => format!("`{v}`"),
+        None => "–".into(),
+    }
+}
+
+#[test]
+fn every_configuration_key_is_documented() {
+    let source = read(&root().join("crates/penelope-kernel/src/config.rs"));
+    let structs = config_structs(&source);
+    let defaults = serde_json::to_value(penelope_kernel::config::Config::default()).unwrap();
+    let mut rows = Vec::new();
+    config_rows(&structs, &defaults, "Config", Vec::new(), &mut rows);
+    let undocumented: Vec<&String> = rows
+        .iter()
+        .filter(|(_, _, doc)| doc.is_empty())
+        .map(|(k, _, _)| k)
+        .collect();
+    assert!(
+        undocumented.is_empty(),
+        "clés sans commentaire `///` dans config.rs : {undocumented:?}"
+    );
+    let mut table = String::new();
+    let mut section = String::new();
+    for (key, default, doc) in &rows {
+        let top = key.split('.').next().unwrap_or_default().to_string();
+        if top != section {
+            if !section.is_empty() {
+                table.push('\n');
+            }
+            table.push_str(&format!(
+                "**[{top}]**\n\n| Clé | Défaut | Rôle |\n|---|---|---|\n"
+            ));
+            section = top;
+        }
+        table.push_str(&format!(
+            "| `{}` | {} | {} |\n",
+            key,
+            cell(default),
+            cell(doc)
+        ));
+    }
+    generated_block(&root().join("docs/install-headless.md"), "config", &table);
+    // Toutes les clés figurent donc dans install-headless.md.
+    let doc = read(&root().join("docs/install-headless.md"));
+    for (key, _, _) in &rows {
+        assert!(doc.contains(&format!("`{key}`")), "{key}");
+    }
+}
+
+#[test]
+fn every_native_tool_is_documented() {
+    let mut table = String::from("| Outil | Risque | Rôle |\n|---|---|---|\n");
+    for t in penelope_tools::all_tools() {
+        let first = t
+            .description
+            .split_inclusive(". ")
+            .next()
+            .unwrap_or(t.description)
+            .trim();
+        let scope = if t.workflow_only {
+            " (dans un workflow)"
+        } else {
+            ""
+        };
+        table.push_str(&format!(
+            "| `{}` | {} | {}{scope} |\n",
+            t.name,
+            t.risk.as_str(),
+            cell(first)
+        ));
+    }
+    generated_block(&root().join("docs/install-headless.md"), "outils", &table);
+    let all: String = markdown_files().iter().map(|f| read(f)).collect();
+    for t in penelope_tools::all_tools() {
+        assert!(
+            all.contains(&format!("`{}`", t.name)),
+            "outil non documenté : {}",
+            t.name
+        );
+    }
+}
+
+// ------------------------------------------------------------------ version
+
+#[test]
+fn the_workspace_version_has_its_progress_section() {
+    let progress = read(&root().join("docs/progress.md"));
+    let v = penelope_daemon::VERSION;
+    assert!(
+        progress.lines().any(|l| l.trim() == format!("### {v}")),
+        "docs/progress.md n'a pas de section « ### {v} »"
+    );
+}
+
+// ------------------------------------------------------------------ limites
+
+/// Sections dont le titre annonce un manque : (titre, corps).
+fn missing_sections(markdown: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut current: Option<(usize, String, String)> = None;
+    let mut in_code = false;
+    for line in markdown.lines() {
+        if line.trim_start().starts_with("```") {
+            in_code = !in_code;
+        }
+        let level = line.chars().take_while(|c| *c == '#').count();
+        let heading = !in_code && level > 0 && line[level..].starts_with(' ');
+        if heading {
+            if let Some((l, title, body)) = current.take() {
+                if level > l {
+                    current = Some((l, title, body + line + "\n"));
+                    continue;
+                }
+                out.push((title, body));
+            }
+            let title = line[level..].trim().to_string();
+            let lower = title.to_lowercase();
+            if [
+                "pas encore branché",
+                "à brancher",
+                "non servies",
+                "limites actuelles",
+                "autres manques",
+            ]
+            .iter()
+            .any(|k| lower.contains(k))
+            {
+                current = Some((level, title, String::new()));
+            }
+            continue;
+        }
+        if let Some((_, _, body)) = current.as_mut() {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    if let Some((_, title, body)) = current {
+        out.push((title, body));
+    }
+    out
+}
+
+/// Une section qui annonce un manque ne cite jamais une méthode RPC servie, une commande
+/// du catalogue ni un outil livré : ce serait une phrase périmée.
+#[test]
+fn no_doc_presents_something_shipped_as_missing() {
+    let families: BTreeSet<&str> = method::ALL
+        .iter()
+        .filter_map(|m| m.split_once('.').map(|(f, _)| f))
+        .collect();
+    let commands: Vec<&str> = penelope_telegram::commands::all()
+        .iter()
+        .map(|c| c.name)
+        .collect();
+    let tools: Vec<&str> = penelope_tools::all_tools().iter().map(|t| t.name).collect();
+    let mut stale = Vec::new();
+    for file in markdown_files() {
+        let raw = read(&file);
+        for (title, body) in missing_sections(&raw) {
+            let mut cite = |what: String| {
+                if body.contains(&what) {
+                    stale.push(format!("{} « {title} » cite {what}", file.display()));
+                }
+            };
+            for m in method::ALL {
+                cite(format!("`{m}`"));
+            }
+            for f in &families {
+                cite(format!("`{f}.*`"));
+            }
+            for c in &commands {
+                cite(format!("`/{c}`"));
+            }
+            for t in &tools {
+                cite(format!("`{t}`"));
+            }
+        }
+    }
+    assert!(
+        stale.is_empty(),
+        "sections périmées (méthodes, commandes et outils livrés) :\n{}",
+        stale.join("\n")
+    );
+}
+
+#[test]
+fn sections_are_cut_at_the_next_heading_of_the_same_level() {
+    let md = "# A\n## Ce qui n'est pas encore branché\n`wf.run` manque\n### détail\nx\n## Suite\n`wf.run` servi\n";
+    let s = missing_sections(md);
+    assert_eq!(s.len(), 1);
+    assert!(s[0].1.contains("détail"));
+    assert!(!s[0].1.contains("servi"));
+}
+
+#[test]
+fn anchors_follow_github() {
+    let a = anchors(
+        "# Titre\n## 2. Compiler et installer\n## Limites actuelles\n## Limites actuelles\n```\n# pas un titre\n```\n",
+    );
+    assert!(a.contains("2-compiler-et-installer"), "{a:?}");
+    assert!(a.contains("limites-actuelles") && a.contains("limites-actuelles-1"));
+    assert!(!a.contains("pas-un-titre"));
+}

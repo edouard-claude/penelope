@@ -70,6 +70,13 @@ pub async fn process(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> T
     if let Err(e) = stored {
         tracing::error!(turn = %turn.id, error = %e, "fin de tour non enregistrée");
     }
+    // Prompt planifié : l'exécution compte à la fin de son tour, un échec prévient
+    // (issue #39).
+    if turn.kind == penelope_kernel::turn::TurnKind::Trigger
+        && let Some(schedule) = turn.payload["schedule"].as_str()
+    {
+        crate::scheduler::trigger_outcome(daemon, schedule, &outcome).await;
+    }
 
     daemon.deliver(&turn, &origin, &outcome).await;
     daemon

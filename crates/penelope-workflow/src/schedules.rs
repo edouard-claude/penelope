@@ -381,6 +381,105 @@ impl ScheduleStore {
             .await
     }
 
+    /// Programme le passage suivant sans compter d'exécution (issue #39) : un prompt planifié
+    /// n'est exécuté qu'à la fin de son tour. `error` : le déclenchement lui-même a échoué.
+    pub async fn advance(&self, id: &str, error: Option<&str>) -> penelope_store::Result<()> {
+        let sched = self.get(id).await?;
+        let next = sched
+            .as_ref()
+            .and_then(|s| s.next_after(self.clock.now_ms(), &self.timezone))
+            .map(ms_to_rfc3339);
+        let (id, now, err) = (
+            id.to_string(),
+            self.clock.now_rfc3339(),
+            error.map(String::from),
+        );
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "UPDATE schedules SET next_run = ?2, updated_at = ?3,
+                        last_error = COALESCE(?4, last_error) WHERE id = ?1",
+                    params![id, next, now, err],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Issue d'une exécution menée jusqu'au bout : réussie, elle compte (`runs`, `last_run`)
+    /// et efface l'erreur ; sinon seule l'erreur est gardée (issue #39).
+    pub async fn record_outcome(
+        &self,
+        id: &str,
+        error: Option<&str>,
+    ) -> penelope_store::Result<()> {
+        let (id, now, err) = (
+            id.to_string(),
+            self.clock.now_rfc3339(),
+            error.map(String::from),
+        );
+        self.store
+            .write(move |tx| {
+                match err {
+                    None => tx.execute(
+                        "UPDATE schedules SET runs = runs + 1, last_run = ?2, last_error = NULL,
+                            updated_at = ?2 WHERE id = ?1",
+                        params![id, now],
+                    )?,
+                    Some(e) => tx.execute(
+                        "UPDATE schedules SET last_error = ?3, updated_at = ?2 WHERE id = ?1",
+                        params![id, now, e],
+                    )?,
+                };
+                Ok(())
+            })
+            .await
+    }
+
+    /// Planifications actives identiques à celle qu'on s'apprête à créer : même déclencheur,
+    /// même spécification, même cible (prompt quasi identique) (issue #39).
+    pub async fn similar(
+        &self,
+        kind: TriggerKind,
+        spec: &Value,
+        target: &Value,
+    ) -> penelope_store::Result<Vec<Schedule>> {
+        let words = |v: &Value| -> std::collections::BTreeSet<String> {
+            v.as_str()
+                .unwrap_or_default()
+                .to_lowercase()
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|w| w.chars().count() > 2)
+                .map(String::from)
+                .collect()
+        };
+        let same_target = |other: &Value| {
+            if other.get("type") != target.get("type") {
+                return false;
+            }
+            match target.get("type").and_then(|t| t.as_str()) {
+                Some("prompt") => {
+                    let (a, b) = (words(&target["prompt"]), words(&other["prompt"]));
+                    let union = a.union(&b).count();
+                    union > 0 && a.intersection(&b).count() as f64 / union as f64 >= 0.8
+                }
+                Some("notify") => other.get("template") == target.get("template"),
+                Some("workflow") => {
+                    other.get("workflowId") == target.get("workflowId")
+                        && other.get("params") == target.get("params")
+                }
+                _ => false,
+            }
+        };
+        Ok(self
+            .list()
+            .await?
+            .into_iter()
+            .filter(|s| s.state == "active" && s.kind == kind && &s.spec == spec)
+            .filter(|s| same_target(&s.target))
+            .collect())
+    }
+
     pub async fn set_state(&self, id: &str, state: &str) -> penelope_store::Result<()> {
         let (id, state, now) = (id.to_string(), state.to_string(), self.clock.now_rfc3339());
         self.store
