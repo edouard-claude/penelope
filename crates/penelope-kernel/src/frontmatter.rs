@@ -191,13 +191,7 @@ pub fn parse(raw: &str) -> Result<Frontmatter, FrontmatterError> {
 
 fn parse_scalar(v: &str) -> FmValue {
     if v.starts_with('[') && v.ends_with(']') {
-        let inner = &v[1..v.len() - 1];
-        let items: Vec<String> = inner
-            .split(',')
-            .map(|s| unquote(s.trim()))
-            .filter(|s| !s.is_empty())
-            .collect();
-        return FmValue::List(items);
+        return FmValue::List(split_inline_list(&v[1..v.len() - 1]));
     }
     match v {
         "true" | "yes" => return FmValue::Bool(true),
@@ -212,6 +206,52 @@ fn parse_scalar(v: &str) -> FmValue {
         }
     }
     FmValue::Str(unquote(v))
+}
+
+/// Découpe une liste en ligne `a, "b, c", 'd'' e'` sur les virgules **hors guillemets** :
+/// une valeur citée qui contient une virgule reste un seul élément (issue #48).
+fn split_inline_list(inner: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = inner.chars().peekable();
+    while let Some(c) = chars.next() {
+        match quote {
+            // Dans des guillemets doubles, `\"` est un guillemet, pas la fin.
+            Some('"') if c == '\\' => {
+                current.push(c);
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+            }
+            Some(q) if c == q => {
+                // `''` dans des apostrophes est une apostrophe, pas la fin.
+                if q == '\'' && chars.peek() == Some(&'\'') {
+                    current.push(c);
+                    current.push(chars.next().unwrap_or(q));
+                } else {
+                    quote = None;
+                    current.push(c);
+                }
+            }
+            Some(_) => current.push(c),
+            None if c == '"' || c == '\'' => {
+                quote = Some(c);
+                current.push(c);
+            }
+            None if c == ',' => {
+                items.push(std::mem::take(&mut current));
+                continue;
+            }
+            None => current.push(c),
+        }
+    }
+    items.push(current);
+    items
+        .into_iter()
+        .map(|s| unquote(s.trim()))
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn unquote(s: &str) -> String {
@@ -333,6 +373,35 @@ mod tests {
         assert_eq!(back.string("citation"), "il a dit \"oui\"");
         assert_eq!(back.list("aliases"), vec!["Factur-X", "ZUGFeRD 2"]);
         assert!(back.list("tags").is_empty());
+    }
+
+    /// #48 : une liste en ligne dont une valeur citée contient une virgule n'est pas
+    /// découpée dans la valeur. Cas venu des fichiers édités à la main.
+    #[test]
+    fn an_inline_list_keeps_a_comma_inside_a_quoted_value() {
+        let fm = parse("---\naliases: [\"Le Crew, coworking\", Crew]\n---\n").unwrap();
+        assert_eq!(fm.list("aliases"), vec!["Le Crew, coworking", "Crew"]);
+
+        let fm =
+            parse("---\ntags: ['Aujourd''hui, demain', \"un \\\"vrai\\\" titre\", \"\", b]\n---\n")
+                .unwrap();
+        assert_eq!(
+            fm.list("tags"),
+            vec!["Aujourd'hui, demain", "un \"vrai\" titre", "b"],
+            "guillemets échappés, apostrophe doublée, élément vide ignoré"
+        );
+        assert!(
+            parse("---\naliases: [ ]\n---\n")
+                .unwrap()
+                .list("aliases")
+                .is_empty()
+        );
+        assert!(
+            parse("---\naliases: []\n---\n")
+                .unwrap()
+                .list("aliases")
+                .is_empty()
+        );
     }
 
     #[test]

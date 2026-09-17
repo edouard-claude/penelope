@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1296 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1298 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -644,7 +644,7 @@ compaction de fond sur la taille réelle du contexte (#40).
 
 Verrou de session à jeton de clôture (#43), écrivain à l'épreuve des paniques (#44),
 mutations de configuration sérialisées (#45), purge RGPD et rétention (#46), journal
-d'audit sans faux positif (#47).
+d'audit sans faux positif (#47), listes de frontmatter lues correctement (#48).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -678,6 +678,10 @@ d'audit sans faux positif (#47).
   `0011_events_seq_unique`), un payload illisible est dit au lieu d'être remplacé par
   `null`, et écrire les métadonnées d'une session inconnue échoue au lieu de réussir sans
   rien écrire.
+- **Frontmatter** : une liste en ligne (`aliases: ["Le Crew, coworking", Crew]`) est
+  découpée sur les virgules hors guillemets. Un alias contenant une virgule ne devient plus
+  deux alias faux avec un guillemet résiduel : le lien qui le vise se résout, le lint ne
+  signale plus d'alias fantôme.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

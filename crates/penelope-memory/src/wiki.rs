@@ -845,6 +845,27 @@ mod tests {
         assert!(v.join("accueil/accueil-2026-09-17.md").exists());
     }
 
+    /// #48 : un alias écrit en liste en ligne, avec une virgule dans la valeur citée,
+    /// résout le lien qui le vise et ne crée pas d'alias fantôme.
+    #[test]
+    fn an_inline_alias_list_with_a_comma_resolves_its_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let v = dir.path();
+        write(
+            v,
+            "index.md",
+            "---\ntype: index\n---\n- [[Le Crew, coworking]] · [[Crew]]\n",
+        );
+        write(
+            v,
+            "entites/le-crew.md",
+            "---\ntype: entite\naliases: [\"Le Crew, coworking\", Crew]\n---\n- [[index]]\n",
+        );
+        let r = lint(v);
+        assert!(r.unresolved.is_empty(), "alias fantôme : {r:?}");
+        assert!(r.duplicate_aliases.is_empty(), "{r:?}");
+    }
+
     #[test]
     fn lint_reports_the_graph_problems() {
         let dir = tempfile::tempdir().unwrap();
