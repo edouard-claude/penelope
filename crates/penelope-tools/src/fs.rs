@@ -54,17 +54,55 @@ pub fn resolve(path: &str, workspaces: &[PathBuf]) -> ToolResult<PathBuf> {
     } else {
         normalise(&workspaces[0].join(&raw))
     };
-    if !is_within(&candidate, workspaces) {
-        return Err(ToolError::Denied(format!(
+    let refuse = || {
+        ToolError::Denied(format!(
             "`{path}` est hors des workspaces autorisés ({})",
             workspaces
                 .iter()
                 .map(|w| w.display().to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
-        )));
+        ))
+    };
+    if !is_within(&candidate, workspaces) {
+        return Err(refuse());
+    }
+    // Le chemin **et** sa forme réelle doivent rester dans un workspace : un lien
+    // symbolique déposé dans le workspace ne doit pas ouvrir le reste du disque. Les
+    // outils `fs_*` tournent dans le processus du daemon, sans bac à sable de l'OS
+    // (issue #66).
+    let real_roots: Vec<PathBuf> = workspaces
+        .iter()
+        .map(|w| std::fs::canonicalize(w).unwrap_or_else(|_| normalise(w)))
+        .collect();
+    if !is_within(&real_path(&candidate), &real_roots) {
+        return Err(refuse());
     }
     Ok(candidate)
+}
+
+/// Forme réelle d'un chemin : le plus long préfixe existant est canonicalisé (liens
+/// symboliques suivis), la fin est rajoutée telle quelle. Un fichier qui n'existe pas
+/// encore sous un lien vers l'extérieur est donc vu pour ce qu'il est (issue #66).
+fn real_path(path: &Path) -> PathBuf {
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path.to_path_buf();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(&cur) {
+            let mut out = real;
+            for part in rest.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        match (cur.file_name().map(|f| f.to_os_string()), cur.parent()) {
+            (Some(name), Some(parent)) if !parent.as_os_str().is_empty() => {
+                rest.push(name);
+                cur = parent.to_path_buf();
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
 /// `fs_read` : lecture paginée par lignes.
@@ -377,6 +415,43 @@ pub fn diff_stats(diff: &str) -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
+
+    /// #66 : un lien symbolique déposé dans le workspace n'ouvre pas le reste du disque,
+    /// même pour un fichier qui n'existe pas encore sous le lien. Un lien interne reste
+    /// accepté, et un workspace lui-même lien (cas de `/tmp` sur macOS) marche.
+    #[test]
+    #[cfg(unix)]
+    fn a_symlink_out_of_the_workspace_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        let outside = dir.path().join("dehors");
+        std::fs::create_dir_all(ws.join("interne")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), "contenu hors workspace").unwrap();
+        std::fs::write(ws.join("interne/note.txt"), "dedans").unwrap();
+        std::os::unix::fs::symlink(&outside, ws.join("lien")).unwrap();
+        std::os::unix::fs::symlink(ws.join("interne"), ws.join("lien-interne")).unwrap();
+        let workspaces = vec![ws.clone()];
+
+        for p in [
+            "lien/secret.txt",
+            "lien/pas-encore-la.txt",
+            "lien/sous/dossier/x.txt",
+        ] {
+            let e = resolve(p, &workspaces).unwrap_err();
+            assert!(
+                matches!(e, ToolError::Denied(_)),
+                "`{p}` doit être refusé : {e}"
+            );
+        }
+        assert!(resolve("lien-interne/note.txt", &workspaces).is_ok());
+        assert!(resolve("interne/nouveau.txt", &workspaces).is_ok());
+
+        // Workspace donné par un chemin qui est lui-même un lien : accepté.
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(&ws, &alias).unwrap();
+        assert!(resolve("interne/note.txt", &[alias]).is_ok());
+    }
     use super::*;
 
     fn ws() -> (tempfile::TempDir, Vec<PathBuf>) {

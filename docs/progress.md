@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1334 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1335 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -653,7 +653,7 @@ qui interrompt outils et sous-agents (#57), pratiques rappelées en conversation
 consolidation nocturne par lots (#59), état d'un candidat décidé après l'écriture (#60),
 décisions des notes de travail récoltées (#61), retour d'usage juste (#62), skills relues
 sans redémarrage (#63), redirections HTTP revérifiées (#64), `shell_exec` qui ne laisse ni
-processus ni mémoire derrière lui (#65).
+processus ni mémoire derrière lui (#65), liens symboliques bornés au workspace (#66).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -793,6 +793,12 @@ processus ni mémoire derrière lui (#65).
   queue), si bien qu'une commande bavarde ne fait plus monter la mémoire du daemon de la
   taille de sa sortie ; chaque appel porte une étiquette PID, ramassée au démarrage suivant
   si le daemon a été tué.
+- **Outils de fichiers et liens symboliques** : `resolve` vérifie désormais le chemin
+  demandé **et** sa forme réelle (plus long préfixe existant canonicalisé). Un lien déposé
+  dans le workspace n'ouvre plus le reste du disque à `fs_read`, `fs_write`, `fs_edit`,
+  `fs_list`, `fs_search` ni au `cwd` de `shell_exec` et des outils git, y compris pour un
+  fichier qui n'existe pas encore sous le lien ; un lien interne au workspace, et un
+  workspace qui est lui-même un lien, restent acceptés.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et
