@@ -615,7 +615,16 @@ async fn execute_with_retry(
                 attempt += 1;
                 kv_set(s, &attempt_key, &attempt.to_string()).await?;
                 let backoff = retry.backoff_ms.saturating_mul(1 << (attempt - 1).min(6));
-                tokio::time::sleep(Duration::from_millis(backoff.min(300_000))).await;
+                // L'attente écoute la pause et l'annulation : jusqu'à 300 s sans rien
+                // regarder, c'était un run qu'on ne pouvait plus arrêter (issue #57).
+                let deadline = tokio::time::Instant::now()
+                    + Duration::from_millis(backoff.min(300_000) as u64);
+                while tokio::time::Instant::now() < deadline {
+                    if cancel.is_cancelled() {
+                        return Ok(outcome);
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
             }
             _ => return Ok(outcome),
         }
@@ -1471,12 +1480,15 @@ async fn shell_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
             let _ = std::fs::create_dir_all(&cwd);
             match penelope_tools::shell::exec(
                 &s.platform.processes,
-                Some(&profile),
                 &command,
-                Some(&cwd),
-                timeout,
-                cfg.tools.max_output_bytes,
-                crate::executor::shell_override(&cfg.tools.shell),
+                penelope_tools::shell::ExecOptions {
+                    profile: Some(&profile),
+                    cwd: Some(&cwd),
+                    timeout,
+                    max_output_bytes: cfg.tools.max_output_bytes,
+                    shell: crate::executor::shell_override(&cfg.tools.shell),
+                    cancel: Some(ctx.cancel),
+                },
             )
             .await
             {
@@ -2321,6 +2333,7 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
         prompt: &str,
         model: Option<&str>,
         tools: Vec<String>,
+        cancel: &CancelToken,
     ) -> Result<Value, String> {
         let cfg = self.daemon.services.config.config();
         let alias = model
@@ -2342,7 +2355,9 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
                 tools: &tools,
                 workspaces: crate::executor::default_workspaces(&self.daemon.services),
             },
-            &CancelToken::new(),
+            // Jeton enfant : `/stop` sur le tour parent arrête le sous-agent, et un
+            // sous-agent qui s'arrête ne touche pas au parent (issue #57).
+            &cancel.child(),
         )
         .await?;
         Ok(json!({"text": text, "model": model_id}))
@@ -3026,6 +3041,39 @@ mod tests {
                 .is_err(),
             "un run terminé ne reprend pas"
         );
+    }
+
+    /// #57 : `/stop` pendant un sous-agent l'arrête : aucun appel au modèle après l'arrêt,
+    /// et le tour parent n'est pas touché par l'arrêt du sous-agent.
+    #[tokio::test]
+    async fn a_cancelled_turn_stops_its_sub_agent() {
+        let e = env().await;
+        e.p.reply("le sous-agent ne devrait pas répondre");
+        let orchestrator: Arc<dyn crate::executor::Orchestrator> = Arc::new(WorkflowOrchestrator {
+            daemon: e.d.clone(),
+        });
+        let sid =
+            e.d.services
+                .sessions
+                .create(penelope_kernel::session::SessionKind::Chat, None)
+                .await
+                .unwrap()
+                .id
+                .to_string();
+
+        // Le tour parent est déjà arrêté quand le sous-agent démarre.
+        let parent = CancelToken::new();
+        parent.cancel();
+        let _ = orchestrator
+            .spawn_sub_agent(&sid, "cherche la cause", None, vec![], &parent)
+            .await;
+        assert_eq!(e.p.call_count(), 0, "aucun appel après l'arrêt");
+
+        // Le sous-agent s'arrête tout seul (son délai) : le parent continue.
+        let vivant = CancelToken::new();
+        let enfant = vivant.child();
+        enfant.cancel();
+        assert!(!vivant.is_cancelled(), "le tour parent n'est pas touché");
     }
 
     /// #56 : une étape qui dépasse son `timeoutMs` enregistre son résultat et suit sa

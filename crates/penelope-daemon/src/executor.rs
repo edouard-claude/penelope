@@ -122,12 +122,15 @@ pub trait Orchestrator: Send + Sync {
         brief: Option<&str>,
         origin: &Origin,
     ) -> Result<Value, String>;
+    /// `cancel` : le jeton du tour parent. Le sous-agent en reçoit un enfant, pour que
+    /// `/stop` l'arrête aussi (issue #57).
     async fn spawn_sub_agent(
         &self,
         session_id: &str,
         prompt: &str,
         model: Option<&str>,
         tools: Vec<String>,
+        cancel: &penelope_llm::CancelToken,
     ) -> Result<Value, String>;
     async fn generate_image(&self, prompt: &str, size: Option<&str>) -> Result<Value, String>;
     /// Contrôle d'un run (`pause`, `resume`, `cancel`, `retry-step`, `skip-step`, `goto:<étape>`).
@@ -223,7 +226,12 @@ impl NativeToolExecutor {
         }
     }
 
-    async fn dispatch(&self, name: &str, args: &Value) -> ToolResult<ToolOutcome> {
+    async fn dispatch(
+        &self,
+        name: &str,
+        args: &Value,
+        cancel: &penelope_llm::CancelToken,
+    ) -> ToolResult<ToolOutcome> {
         let s = &self.services;
         let cfg = s.config.config();
 
@@ -334,12 +342,15 @@ impl NativeToolExecutor {
                 let shell = shell_override(&cfg.tools.shell);
                 let out = penelope_tools::shell::exec(
                     &s.platform.processes,
-                    Some(&profile),
                     &command,
-                    Some(&cwd),
-                    timeout,
-                    cfg.tools.max_output_bytes,
-                    shell,
+                    penelope_tools::shell::ExecOptions {
+                        profile: Some(&profile),
+                        cwd: Some(&cwd),
+                        timeout,
+                        max_output_bytes: cfg.tools.max_output_bytes,
+                        shell,
+                        cancel: Some(cancel),
+                    },
                 )
                 .await?;
                 let mut o = ToolOutcome::ok(out.to_json());
@@ -1023,6 +1034,7 @@ impl NativeToolExecutor {
                                 .collect()
                         })
                         .unwrap_or_default(),
+                    cancel,
                 )
                 .await
                 .map_err(ToolError::Other)?
@@ -1302,7 +1314,17 @@ impl NativeToolExecutor {
 #[async_trait::async_trait]
 impl ToolExecutor for NativeToolExecutor {
     async fn execute(&self, name: &str, args: &Value) -> Result<ToolOutcome, ToolError> {
-        self.dispatch(name, args).await
+        self.dispatch(name, args, &penelope_llm::CancelToken::new())
+            .await
+    }
+
+    async fn execute_cancellable(
+        &self,
+        name: &str,
+        args: &Value,
+        cancel: &penelope_llm::CancelToken,
+    ) -> Result<ToolOutcome, ToolError> {
+        self.dispatch(name, args, cancel).await
     }
 
     async fn describe_call(&self, name: &str, args: &Value) -> CallInfo {

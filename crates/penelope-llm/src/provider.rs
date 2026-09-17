@@ -1741,6 +1741,23 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 
+    /// #56, #57 : un jeton enfant suit son parent sans l'entraîner.
+    #[test]
+    fn a_child_token_follows_its_parent_but_not_the_other_way() {
+        let run = CancelToken::new();
+        let step = run.child();
+        let sibling = run.child();
+        step.cancel();
+        assert!(step.is_cancelled(), "l'étape est arrêtée");
+        assert!(!run.is_cancelled(), "le run continue");
+        assert!(!sibling.is_cancelled(), "la sœur continue");
+
+        let grandchild = sibling.child();
+        run.cancel();
+        assert!(sibling.is_cancelled(), "le run arrête ses enfants");
+        assert!(grandchild.is_cancelled(), "et leurs enfants");
+    }
+
     /// #51 : en-têtes puis silence. Le flux est coupé sur le délai d'inactivité, avec une
     /// erreur réessayable, au lieu d'attendre le délai global.
     #[tokio::test]

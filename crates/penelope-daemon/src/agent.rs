@@ -274,6 +274,18 @@ pub trait ToolExecutor {
         args: &Value,
     ) -> Result<ToolOutcome, penelope_tools::ToolError>;
 
+    /// Exécute en écoutant l'arrêt demandé : `/stop` pendant un `shell_exec` ou un
+    /// sous-agent doit les interrompre, pas attendre leur délai (issue #57).
+    async fn execute_cancellable(
+        &self,
+        name: &str,
+        args: &Value,
+        cancel: &CancelToken,
+    ) -> Result<ToolOutcome, penelope_tools::ToolError> {
+        let _ = cancel;
+        self.execute(name, args).await
+    }
+
     /// Risque et nom effectif d'un appel. Par défaut : le catalogue natif.
     async fn describe_call(&self, name: &str, args: &Value) -> CallInfo {
         let _ = args;
@@ -1397,7 +1409,9 @@ impl AgentLoop {
                 },
                 Planned::Fresh(id) => {
                     s.effects.dispatching(&id).await?;
-                    let result = execute.execute(&call.name, &call.arguments).await;
+                    let result = execute
+                        .execute_cancellable(&call.name, &call.arguments, &spec.cancel)
+                        .await;
                     match &result {
                         Ok(o) if !o.is_error => s.effects.complete(&id, o.value.clone()).await?,
                         Ok(o) => s.effects.fail(&id, o.text.clone()).await?,

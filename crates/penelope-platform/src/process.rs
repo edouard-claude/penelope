@@ -530,6 +530,24 @@ async fn signal_group(pid: u32, sig: &str) -> Result<()> {
     }
 }
 
+/// Arrête un groupe de processus : `SIGTERM`, puis `SIGKILL` après la grâce. Sert quand
+/// le processus a été consommé par `wait_with_output` et qu'il ne reste que son pid
+/// (issue #57).
+pub async fn terminate_group(pid: u32, grace: std::time::Duration) {
+    if pid == 0 {
+        return;
+    }
+    let _ = signal_group(pid, "TERM").await;
+    let deadline = tokio::time::Instant::now() + grace;
+    while tokio::time::Instant::now() < deadline {
+        if !process_exists(pid) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let _ = signal_group(pid, "KILL").await;
+}
+
 /// Vrai si le PID existe encore (`kill -0`).
 pub fn process_exists(pid: u32) -> bool {
     std::process::Command::new("/bin/kill")

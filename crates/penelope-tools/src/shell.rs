@@ -76,15 +76,48 @@ pub const SHELL_EXTRA_ENV: &[&str] = &[
 ];
 
 /// Exécute une commande sous le profil de bac à sable donné.
+/// Intervalle de vérification de l'arrêt demandé pendant qu'un processus tourne.
+const CANCEL_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+/// Grâce laissée au groupe de processus entre `SIGTERM` et `SIGKILL`.
+const GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Paramètres d'une exécution : bac à sable, répertoire, délai, troncature, shell et
+/// jeton d'arrêt (issue #57).
+pub struct ExecOptions<'a> {
+    pub profile: Option<&'a penelope_platform::Profile>,
+    pub cwd: Option<&'a Path>,
+    pub timeout: std::time::Duration,
+    pub max_output_bytes: usize,
+    pub shell: Option<(String, Vec<String>)>,
+    pub cancel: Option<&'a penelope_llm::CancelToken>,
+}
+
+impl Default for ExecOptions<'_> {
+    fn default() -> Self {
+        ExecOptions {
+            profile: None,
+            cwd: None,
+            timeout: std::time::Duration::from_secs(120),
+            max_output_bytes: 256 * 1024,
+            shell: None,
+            cancel: None,
+        }
+    }
+}
+
 pub async fn exec(
     host: &penelope_platform::UnixProcessHost,
-    profile: Option<&penelope_platform::Profile>,
     command: &str,
-    cwd: Option<&Path>,
-    timeout: std::time::Duration,
-    max_output_bytes: usize,
-    shell: Option<(String, Vec<String>)>,
+    opts: ExecOptions<'_>,
 ) -> ToolResult<ShellOutput> {
+    let ExecOptions {
+        profile,
+        cwd,
+        timeout,
+        max_output_bytes,
+        shell,
+        cancel,
+    } = opts;
     use penelope_platform::ProcessHost;
 
     check_command(command)?;
@@ -105,7 +138,30 @@ pub async fn exec(
         .await
         .map_err(|e| ToolError::Io(e.to_string()))?;
 
-    let output = tokio::time::timeout(timeout, child.inner.wait_with_output()).await;
+    // Le processus est suivi par son pid : arrêt demandé ou délai dépassé, son groupe est
+    // terminé (`SIGTERM` puis `SIGKILL`) au lieu de continuer en orphelin (issue #57).
+    let pid = child.pid;
+    let waiting = child.inner.wait_with_output();
+    tokio::pin!(waiting);
+    let deadline = tokio::time::Instant::now() + timeout;
+    let output = loop {
+        let tick = tokio::time::Instant::now() + CANCEL_POLL;
+        tokio::select! {
+            r = &mut waiting => break Ok(r),
+            _ = tokio::time::sleep_until(tick.min(deadline)) => {
+                if cancel.is_some_and(|c| c.is_cancelled()) {
+                    penelope_platform::process::terminate_group(pid, GRACE).await;
+                    let _ = tokio::time::timeout(GRACE, &mut waiting).await;
+                    return Err(ToolError::Cancelled);
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    penelope_platform::process::terminate_group(pid, GRACE).await;
+                    let _ = tokio::time::timeout(GRACE, &mut waiting).await;
+                    break Err(());
+                }
+            }
+        }
+    };
     let duration_ms = started.elapsed().as_millis() as u64;
 
     match output {
@@ -121,7 +177,7 @@ pub async fn exec(
             })
         }
         Ok(Err(e)) => Err(ToolError::Io(e.to_string())),
-        Err(_) => Err(ToolError::Timeout(timeout.as_millis() as u64)),
+        Err(()) => Err(ToolError::Timeout(timeout.as_millis() as u64)),
     }
 }
 
@@ -198,6 +254,40 @@ mod tests {
             );
         }
         assert!(profile_for("workspace-write", Path::new("/w"), true).allow_network);
+    }
+
+    /// #57 : `/stop` pendant une commande longue termine le processus et son groupe,
+    /// au lieu d'attendre le délai.
+    #[tokio::test]
+    async fn a_cancelled_command_is_terminated_quickly() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = penelope_platform::UnixProcessHost::new(dir.path().join("pids"));
+        let cancel = penelope_llm::CancelToken::new();
+        let stopper = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            stopper.cancel();
+        });
+        let started = std::time::Instant::now();
+        let e = exec(
+            &host,
+            "sleep 60",
+            ExecOptions {
+                timeout: std::time::Duration::from_secs(60),
+                max_output_bytes: 4096,
+                shell: Some(("/bin/sh".into(), vec!["-c".into()])),
+                cancel: Some(&cancel),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(e, ToolError::Cancelled), "{e}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "arrêt trop lent : {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
@@ -279,12 +369,13 @@ mod tests {
         let host = penelope_platform::UnixProcessHost::new(dir.path());
         let e = exec(
             &host,
-            None,
             "sleep 30",
-            None,
-            std::time::Duration::from_millis(200),
-            4096,
-            Some(("/bin/sh".into(), vec!["-c".into()])),
+            ExecOptions {
+                timeout: std::time::Duration::from_millis(200),
+                max_output_bytes: 4096,
+                shell: Some(("/bin/sh".into(), vec!["-c".into()])),
+                ..Default::default()
+            },
         )
         .await
         .unwrap_err();
@@ -298,12 +389,13 @@ mod tests {
         let host = penelope_platform::UnixProcessHost::new(dir.path());
         let out = exec(
             &host,
-            None,
             "echo bonjour; echo souci >&2; exit 3",
-            None,
-            std::time::Duration::from_secs(10),
-            4096,
-            Some(("/bin/sh".into(), vec!["-c".into()])),
+            ExecOptions {
+                timeout: std::time::Duration::from_secs(10),
+                max_output_bytes: 4096,
+                shell: Some(("/bin/sh".into(), vec!["-c".into()])),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
