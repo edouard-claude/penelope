@@ -355,6 +355,14 @@ pub struct Budget {
     pub session_usd: f64,
     pub run_usd: f64,
     pub alert_ratio: f64,
+    /// Coût d'un tour de conversation à chaque multiple duquel Pénélope demande si elle
+    /// continue (issue #19). 0 : jamais.
+    pub turn_checkpoint_usd: f64,
+    /// Coût d'un tour au-delà duquel la réponse finale l'indique. 0 : jamais.
+    pub show_turn_cost_usd: f64,
+    /// Nombre d'appels au modèle dans un tour à chaque multiple duquel le résultat d'outil
+    /// suggère de regrouper les commandes ou de déléguer à un sous-agent. 0 : jamais.
+    pub delegate_after_calls: u32,
 }
 
 impl Default for Budget {
@@ -364,6 +372,9 @@ impl Default for Budget {
             session_usd: 5.0,
             run_usd: 5.0,
             alert_ratio: 0.8,
+            turn_checkpoint_usd: 1.0,
+            show_turn_cost_usd: 0.5,
+            delegate_after_calls: 10,
         }
     }
 }
@@ -378,6 +389,9 @@ pub struct Context {
     pub min_tail_user_messages: usize,
     pub max_tool_result_share: f64,
     pub large_payload_tokens: usize,
+    /// Taille de prompt au-delà de laquelle la compaction se déclenche, quelle que soit la
+    /// fenêtre du modèle : une limite de coût, pas de fenêtre (issue #18). 0 : aucune.
+    pub max_prompt_tokens: usize,
     pub model_thresholds: BTreeMap<String, f64>,
     pub background_compaction_margin: f64,
     pub cooldown_ms: Vec<u64>,
@@ -395,6 +409,7 @@ impl Default for Context {
             min_tail_user_messages: 2,
             max_tool_result_share: 0.25,
             large_payload_tokens: 25_000,
+            max_prompt_tokens: 120_000,
             model_thresholds: BTreeMap::new(),
             background_compaction_margin: 0.10,
             cooldown_ms: vec![60_000, 300_000, 900_000],
@@ -784,6 +799,12 @@ impl Config {
         if self.context.tail_min_tokens > self.context.tail_max_tokens {
             return Err(KernelError::config(
                 "context.tail_min_tokens > context.tail_max_tokens",
+            ));
+        }
+        if self.context.max_prompt_tokens != 0 && self.context.max_prompt_tokens < 20_000 {
+            return Err(KernelError::config(
+                "context.max_prompt_tokens doit valoir 0 (aucun plafond) ou au moins 20000 : \
+                 en dessous, la queue verbatim et le préfixe ne tiennent plus",
             ));
         }
         if !(0.0..=1.0).contains(&self.context.max_tool_result_share) {

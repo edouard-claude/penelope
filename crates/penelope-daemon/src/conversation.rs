@@ -75,7 +75,25 @@ impl SessionConversation {
     /// Entrées à projeter : résumés LCM actifs, puis tout ce qu'ils ne couvrent pas.
     async fn projected_entries(&self) -> anyhow::Result<Vec<Entry>> {
         let s = &self.services;
-        let entries = s.context.history.load(&self.session_id, 0).await?;
+        let mut entries = s.context.history.load(&self.session_id, 0).await?;
+        // Contexte volatil figé avec chaque message utilisateur (issue #17).
+        let contexts = s.context.history.contexts(&self.session_id).await?;
+        for e in entries.iter_mut() {
+            if let Some(block) = contexts.get(&e.seq)
+                && e.message.role == Role::User
+            {
+                let m = &mut e.message;
+                match m.content.iter_mut().find_map(|c| match c {
+                    penelope_llm::types::Content::Text { text } => Some(text),
+                    _ => None,
+                }) {
+                    Some(text) => text.insert_str(0, block),
+                    None => m
+                        .content
+                        .insert(0, penelope_llm::types::Content::text(block.clone())),
+                }
+            }
+        }
         let nodes = s.context.lcm.active_nodes(&self.session_id).await?;
         if nodes.is_empty() {
             return Ok(entries);

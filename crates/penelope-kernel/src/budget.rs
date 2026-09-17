@@ -77,6 +77,14 @@ pub struct UsageRecord {
     /// Coût calculé du catalogue faute de coût facturé annoncé.
     pub estimated: bool,
     pub maybe_duplicate: bool,
+    /// Empreinte de la requête (issue #17) : nombre de messages, hachage chaîné des
+    /// messages, du message système et des outils.
+    pub msg_count: Option<i64>,
+    pub request_hash: Option<String>,
+    pub system_hash: Option<String>,
+    pub tools_hash: Option<String>,
+    /// Cause probable d'un raté de cache, `None` quand le cache a servi.
+    pub miss_cause: Option<String>,
 }
 
 /// Une ligne de rapport de consommation.
@@ -91,25 +99,72 @@ pub struct UsageRow {
     /// Appels dont le coût est estimé, non facturé tel quel.
     pub estimated: i64,
     pub last_ts: String,
+    /// Tokens d'entrée, dont lus en cache, et de sortie.
+    #[serde(default)]
+    pub prompt: i64,
+    #[serde(default)]
+    pub cached: i64,
+    #[serde(default)]
+    pub completion: i64,
+}
+
+impl UsageRow {
+    /// Part des tokens d'entrée servis par le cache du fournisseur.
+    pub fn cache_ratio(&self) -> f64 {
+        if self.prompt > 0 {
+            self.cached as f64 / self.prompt as f64
+        } else {
+            0.0
+        }
+    }
+}
+
+/// Prévenu après chaque consommation enregistrée : alerte de seuil (issue #20).
+pub trait UsageWatcher: Send + Sync {
+    fn recorded(&self, session_id: Option<&str>, run_id: Option<&str>);
 }
 
 /// Axes de regroupement acceptés par [`BudgetLedger::report`].
 pub const USAGE_AXES: &[&str] = &[
-    "session", "turn", "model", "day", "role", "provider", "upstream", "run",
+    "session", "turn", "model", "day", "role", "provider", "upstream", "run", "miss",
 ];
+
+type Watcher = std::sync::Arc<std::sync::RwLock<Option<std::sync::Arc<dyn UsageWatcher>>>>;
 
 #[derive(Clone)]
 pub struct BudgetLedger {
     store: Store,
     clock: SharedClock,
+    watcher: Watcher,
 }
 
 impl BudgetLedger {
     pub fn new(store: Store, clock: SharedClock) -> Self {
-        BudgetLedger { store, clock }
+        BudgetLedger {
+            store,
+            clock,
+            watcher: Watcher::default(),
+        }
+    }
+
+    /// Branche l'observateur des consommations (un seul).
+    pub fn watch(&self, watcher: std::sync::Arc<dyn UsageWatcher>) {
+        if let Ok(mut g) = self.watcher.write() {
+            *g = Some(watcher);
+        }
     }
 
     pub async fn record(&self, u: UsageRecord) -> Result<()> {
+        let (session, run) = (u.session_id.clone(), u.run_id.clone());
+        self.insert(u).await?;
+        let watcher = self.watcher.read().ok().and_then(|g| g.clone());
+        if let Some(w) = watcher {
+            w.recorded(session.as_deref(), run.as_deref());
+        }
+        Ok(())
+    }
+
+    async fn insert(&self, u: UsageRecord) -> Result<()> {
         let ts = self.clock.now_rfc3339();
         let day = ts.chars().take(10).collect::<String>();
         self.store
@@ -117,8 +172,10 @@ impl BudgetLedger {
                 tx.execute(
                     "INSERT INTO usage(ts, day, session_id, run_id, model, provider, role,
                         prompt, completion, cached, reasoning, cost_usd, estimated, maybe_dup,
-                        turn_id, generation_id, upstream, finish, cache_write)
-                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+                        turn_id, generation_id, upstream, finish, cache_write, msg_count,
+                        request_hash, system_hash, tools_hash, miss_cause)
+                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,
+                            ?20,?21,?22,?23,?24)",
                     params![
                         ts,
                         day,
@@ -138,7 +195,12 @@ impl BudgetLedger {
                         u.generation_id,
                         u.upstream,
                         u.finish,
-                        u.cache_write as i64
+                        u.cache_write as i64,
+                        u.msg_count,
+                        u.request_hash,
+                        u.system_hash,
+                        u.tools_hash,
+                        u.miss_cause
                     ],
                 )?;
                 if let Some(sid) = &u.session_id {
@@ -207,6 +269,24 @@ impl BudgetLedger {
             .await?)
     }
 
+    /// Appels de conversation et coût total d'un tour, reprises après approbation
+    /// comprises.
+    pub async fn turn_totals(&self, turn_id: &str) -> Result<(i64, f64)> {
+        let tid = turn_id.to_string();
+        Ok(self
+            .store
+            .read(move |c| {
+                Ok(c.query_row(
+                    "SELECT COALESCE(SUM(CASE WHEN COALESCE(role, 'chat') = 'chat' THEN 1 END), 0),
+                            COALESCE(SUM(cost_usd), 0)
+                     FROM usage WHERE turn_id = ?1",
+                    [tid],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .await?)
+    }
+
     /// Statuts de tous les périmètres pertinents pour un tour.
     pub async fn status(
         &self,
@@ -260,6 +340,18 @@ impl BudgetLedger {
         since: Option<&str>,
         limit: i64,
     ) -> Result<Vec<UsageRow>> {
+        self.report_run(by, session, None, since, limit).await
+    }
+
+    /// [`Self::report`], restreint en plus à un run.
+    pub async fn report_run(
+        &self,
+        by: &str,
+        session: Option<&str>,
+        run: Option<&str>,
+        since: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<UsageRow>> {
         // Colonnes fixes : jamais d'entrée utilisateur dans le SQL.
         let column = match by {
             "session" => "COALESCE(session_id, '')",
@@ -269,25 +361,28 @@ impl BudgetLedger {
             "provider" => "provider",
             "upstream" => "COALESCE(upstream, '')",
             "run" => "COALESCE(run_id, '')",
+            "miss" => "COALESCE(miss_cause, '')",
             _ => "model",
         };
         let by = by.to_string();
         let sql = format!(
             "SELECT {column} AS k, SUM(cost_usd), SUM(prompt + completion), COUNT(*),
-                    SUM(estimated), MAX(ts)
+                    SUM(estimated), MAX(ts), SUM(prompt), SUM(cached), SUM(completion)
              FROM usage
              WHERE (?1 IS NULL OR session_id = ?1) AND (?2 IS NULL OR day >= ?2)
+               AND (?4 IS NULL OR run_id = ?4)
              GROUP BY k ORDER BY SUM(cost_usd) DESC, MAX(ts) DESC LIMIT ?3"
         );
         let session = session.map(String::from);
         let since = since.map(String::from);
+        let run = run.map(String::from);
         Ok(self
             .store
             .read(move |c| {
                 let mut rows = Vec::new();
                 {
                     let mut st = c.prepare(&sql)?;
-                    let it = st.query_map(params![session, since, limit], |r| {
+                    let it = st.query_map(params![session, since, limit, run], |r| {
                         Ok(UsageRow {
                             key: r.get::<_, String>(0)?,
                             label: None,
@@ -296,6 +391,9 @@ impl BudgetLedger {
                             calls: r.get::<_, i64>(3)?,
                             estimated: r.get::<_, i64>(4)?,
                             last_ts: r.get::<_, String>(5)?,
+                            prompt: r.get::<_, i64>(6)?,
+                            cached: r.get::<_, i64>(7)?,
+                            completion: r.get::<_, i64>(8)?,
                         })
                     })?;
                     for row in it {
@@ -306,12 +404,28 @@ impl BudgetLedger {
                     row.label = match by.as_str() {
                         "session" => session_label(c, &row.key),
                         "turn" => turn_label(c, &row.key),
+                        "miss" => Some(miss_label(&row.key).to_string()),
                         _ => None,
                     };
                 }
                 Ok(rows)
             })
             .await?)
+    }
+}
+
+/// Libellé d'une cause de raté de cache.
+pub fn miss_label(cause: &str) -> &'static str {
+    match cause {
+        "" => "cache servi, ou prompt trop court pour compter",
+        "premier_appel" => "premier appel de la session",
+        "pause" => "pause de plus de 5 min, cache expiré",
+        "prefixe" => "message système modifié (T0 à T2)",
+        "outils" => "liste d'outils modifiée",
+        "modele" => "autre modèle que l'appel précédent",
+        "historique" => "historique réécrit avant le dernier message",
+        "fournisseur" => "autre fournisseur amont que l'appel précédent",
+        _ => "préfixe intact, cache non servi par le fournisseur",
     }
 }
 

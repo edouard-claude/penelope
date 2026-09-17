@@ -327,6 +327,48 @@ impl HistoryStore {
             .await
     }
 
+    /// Fige le contexte volatil (T4) d'un message utilisateur : il l'accompagnera dans
+    /// toutes les requêtes suivantes, pour que le préfixe ne change plus (issue #17).
+    /// Sans effet s'il est déjà figé.
+    pub async fn freeze_context(
+        &self,
+        session_id: &str,
+        seq: i64,
+        context: &str,
+    ) -> penelope_store::Result<bool> {
+        let (sid, ctx) = (session_id.to_string(), context.to_string());
+        self.store
+            .write(move |tx| {
+                Ok(tx.execute(
+                    "INSERT OR IGNORE INTO message_context(session_id, seq, context)
+                     VALUES(?1, ?2, ?3)",
+                    params![sid, seq, ctx],
+                )? > 0)
+            })
+            .await
+    }
+
+    /// Contextes figés d'une session, par numéro de message.
+    pub async fn contexts(
+        &self,
+        session_id: &str,
+    ) -> penelope_store::Result<std::collections::HashMap<i64, String>> {
+        let sid = session_id.to_string();
+        self.store
+            .read(move |c| {
+                let mut st =
+                    c.prepare("SELECT seq, context FROM message_context WHERE session_id = ?1")?;
+                let rows = st.query_map([sid], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                let mut out = std::collections::HashMap::new();
+                for r in rows {
+                    let (seq, ctx): (i64, String) = r?;
+                    out.insert(seq, ctx);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
     /// Messages d'un épisode, dans l'ordre.
     pub async fn load_episode(
         &self,

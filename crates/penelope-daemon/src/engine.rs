@@ -435,6 +435,10 @@ impl Daemon {
             tiers.volatile.push_str("\n\n");
             tiers.volatile.push_str(&block);
         }
+        // Cache de prompt (issue #17) : le contexte volatil reste avec son message, et un
+        // préfixe modifié attend que le cache soit froid.
+        crate::cache_audit::freeze_volatile(&s, &turn.session_id, &mut tiers).await?;
+        crate::cache_audit::stable_prefix(self, &turn.session_id, &mut tiers).await?;
         // Un résumé prêt depuis le tour précédent (ou avant un redémarrage) est publié
         // avant de construire la projection.
         if let Err(e) = crate::compaction::publish_pending(self, &turn.session_id).await {
@@ -1139,12 +1143,14 @@ mod tests {
         assert_eq!(last.session_id.as_deref(), Some(sid.as_str()));
         let seen: Vec<String> = last.messages.iter().map(|m| m.text()).collect();
         assert!(
-            seen.iter().any(|t| t == "bonjour"),
-            "l'ancien message reste intact"
+            seen.iter()
+                .any(|t| t.starts_with("<contexte>") && t.ends_with("bonjour")),
+            "l'ancien message garde le contexte de son tour : le préfixe ne bouge pas"
         );
         assert!(
-            seen.iter().any(|t| t.ends_with("tu es là ?")),
-            "le dernier porte le contexte volatil en tête"
+            seen.iter()
+                .any(|t| t.starts_with("<contexte>") && t.ends_with("tu es là ?")),
+            "le dernier porte son propre contexte volatil en tête"
         );
         let sess = d.services.sessions.require(&sid).await.unwrap();
         assert_eq!(sess.model_alias.as_deref(), Some("main"));

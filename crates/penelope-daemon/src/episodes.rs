@@ -406,6 +406,10 @@ pub async fn refresh_snapshot(d: &Daemon, s: &Services, session_id: &str) {
             .kv_delete(&snapshot_key(session_id, sess.episode_seq))
             .await;
     }
+    // La compaction casse le cache : le préfixe peut suivre ses changements.
+    let _ = d
+        .kv_delete(&crate::cache_audit::prefix_key(session_id))
+        .await;
 }
 
 #[cfg(test)]

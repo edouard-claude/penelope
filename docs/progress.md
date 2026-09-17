@@ -8,13 +8,13 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1167 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1175 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
 - CI GitHub Actions (format, lint, tests, binaire, dépendances) et workflow de release
   sur tag `vX.Y.Z` avec binaire universel macOS.
-- 69 tests d'acceptation nommés `ca_<section>_<n>_<nom>`, couvrant 14 sections du PRD,
+- 70 tests d'acceptation nommés `ca_<section>_<n>_<nom>`, couvrant 14 sections du PRD,
   indexés dans [ca-matrix.md](ca-matrix.md), qui est généré depuis les sources.
 
 ## Étapes du §21
@@ -370,6 +370,32 @@ Les huit issues ouvertes sur le dépôt, corrigées :
   Renommer, Fermer, douze par page, fermées masquées par défaut ; `/switch` accepte un
   préfixe unique ou un titre.
 
+### 0.6.0
+
+Coûts : la journée qui a atteint le plafond de 20 $ en évitait environ la moitié.
+
+- #20 **Alerte de budget** : au premier passage de `budget.alert_ratio` (80 %), une seule
+  notification par périmètre (jour, session, run), avec les trois plus gros postes, leur
+  coût et leur part de cache ; relever le plafond réarme l'alerte. `/usage` sur Telegram et
+  `penelope usage` donnent tokens d'entrée, en cache et de sortie et la part de cache.
+- #18 **Plafond de prompt** : `context.max_prompt_tokens` (120 000) borne le seuil de
+  compaction, le budget des résultats d'outils et la queue verbatim, quelle que soit la
+  fenêtre du modèle ; sur GLM-5.3 (1,3 M), la compaction de fond part vers 103 k au lieu
+  de 917 k. `/budget` et `self_status` donnent la taille du contexte au dernier appel.
+- #19 **Boucles d'outils** : règle de harnais (regrouper les commandes, déléguer une
+  investigation à `sub_agent_spawn`), rappel tous les `budget.delegate_after_calls`
+  appels (10), point de contrôle « Ce tour a coûté 1,05 $, je continue ? » à chaque
+  `budget.turn_checkpoint_usd` (1 $), plafond de 24 appels compté sur tout le tour
+  (reprises après approbation comprises), coût du tour ajouté à la réponse au-delà de
+  `budget.show_turn_cost_usd` (0,50 $).
+- #17 **Cache de prompt** ([décision 0008](decisions/0008-cache-de-prompt.md)) : contexte
+  volatil figé avec son message (migration `0006`), raisonnement toujours joint aux appels
+  d'outil et jamais aux réponses finales, préfixe T0 à T2 modifié différé jusqu'à un cache
+  froid ou une compaction, fournisseur amont collant pendant 10 min (`provider.order`,
+  replis permis), empreinte de chaque requête et cause de chaque raté
+  (`penelope usage --by miss`). Test : chaque requête reprend la précédente octet pour
+  octet, dans un tour et d'un tour à l'autre (CA 5).
+
 ### Routine de livraison
 
 Avant chaque tag :
@@ -425,6 +451,7 @@ Les écarts assumés par rapport à un « DEVRAIT » du PRD sont documentés un 
 | [0005](decisions/0005-watcher-par-scrutation.md) | Surveillance par scrutation | La resynchronisation périodique est déjà le mécanisme de vérité, et elle est testable |
 | [0006](decisions/0006-changement-de-sujet-lexical.md) | Changement de sujet mesuré sans modèle | Aucun appel de plus par message ; une fausse frontière ne perd rien |
 | [0007](decisions/0007-deploiement-par-makefile.md) | `deploy-generic` par cibles `make` | Pas de commande arbitraire lue dans le dépôt ; convention lisible en SSH |
+| [0008](decisions/0008-cache-de-prompt.md) | Rien ne bouge avant le dernier message | Un préfixe relu coûte une fraction du prix d'entrée ; chaque raté est mesuré |
 
 ## Deux failles corrigées en écrivant la suite `security`
 

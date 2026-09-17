@@ -27,6 +27,8 @@ pub struct CompactionParams {
     pub large_payload_tokens: u64,
     /// Marge sous le seuil à partir de laquelle la compaction de fond démarre.
     pub background_margin: f64,
+    /// Plafond de coût du prompt (`context.max_prompt_tokens`), 0 : aucun.
+    pub max_prompt_tokens: u64,
 }
 
 impl CompactionParams {
@@ -41,20 +43,39 @@ impl CompactionParams {
             max_tool_result_share: cfg.context.max_tool_result_share,
             large_payload_tokens: cfg.context.large_payload_tokens as u64,
             background_margin: cfg.context.background_compaction_margin,
+            max_prompt_tokens: cfg.context.max_prompt_tokens as u64,
         }
+    }
+
+    /// Fenêtre de travail : celle du modèle, réduite pour que le seuil de compaction ne
+    /// dépasse pas `max_prompt_tokens`. Sur un modèle à 1,3 M de tokens et 120 k de
+    /// plafond, la compaction part vers 103 k au lieu de 917 k (issue #18).
+    pub fn budget_window(&self) -> u64 {
+        if self.max_prompt_tokens == 0 || self.threshold <= 0.0 {
+            return self.window;
+        }
+        self.window
+            .min((self.max_prompt_tokens as f64 / self.threshold) as u64)
     }
 
     /// Budget de la **queue verbatim** : 2,5 % de la fenêtre, borné entre 10K et 25K.
     pub fn tail_budget(&self) -> u64 {
-        ((self.window as f64 * self.tail_ratio) as u64)
-            .clamp(self.tail_min_tokens, self.tail_max_tokens)
+        let tail = ((self.window as f64 * self.tail_ratio) as u64)
+            .clamp(self.tail_min_tokens, self.tail_max_tokens);
+        if self.budget_window() < self.window {
+            // Plafond de coût actif : la queue verbatim reste sous le quart du seuil de fond,
+            // sinon elle couvrirait tout ce qu'il faudrait résumer.
+            tail.min(self.background_threshold_tokens(self.background_margin) / 4)
+        } else {
+            tail
+        }
     }
 
     /// Budget d'admission d'un groupe de résultats d'outils : une part de la fenêtre,
     /// plafonnée en valeur absolue. Sans plafond, un modèle à 1,3 M de tokens gardait
     /// entiers des résultats de 175 k (issue #8).
     pub fn tool_group_budget(&self) -> u64 {
-        let share = (self.window as f64 * self.max_tool_result_share) as u64;
+        let share = (self.budget_window() as f64 * self.max_tool_result_share) as u64;
         if self.large_payload_tokens == 0 {
             share
         } else {
@@ -63,12 +84,16 @@ impl CompactionParams {
     }
 
     pub fn threshold_tokens(&self) -> u64 {
-        (self.window as f64 * self.threshold) as u64
+        let t = (self.window as f64 * self.threshold) as u64;
+        match self.max_prompt_tokens {
+            0 => t,
+            cap => t.min(cap),
+        }
     }
 
     /// Seuil de déclenchement de la compaction de fond (seuil moins 10 points).
     pub fn background_threshold_tokens(&self, margin: f64) -> u64 {
-        (self.window as f64 * (self.threshold - margin).max(0.1)) as u64
+        (self.budget_window() as f64 * (self.threshold - margin).max(0.1)) as u64
     }
 }
 
@@ -636,6 +661,7 @@ mod tests {
             max_tool_result_share: 0.25,
             large_payload_tokens: 25_000,
             background_margin: 0.10,
+            max_prompt_tokens: 0,
         }
     }
 
@@ -1012,5 +1038,38 @@ mod tests {
         let p = params(100_000);
         assert_eq!(p.threshold_tokens(), 70_000);
         assert_eq!(p.background_threshold_tokens(0.10), 60_000);
+    }
+
+    /// Issue #18 : sur une fenêtre de 1,3 M, le plafond de 120 k borne les seuils et le
+    /// budget des résultats d'outils ; une petite fenêtre garde les siens.
+    #[test]
+    fn max_prompt_tokens_caps_the_thresholds() {
+        let p = CompactionParams {
+            max_prompt_tokens: 120_000,
+            ..params(1_300_000)
+        };
+        assert_eq!(p.threshold_tokens(), 120_000);
+        assert_eq!(p.background_threshold_tokens(0.10), 102_856);
+        assert_eq!(p.tool_group_budget(), 25_000);
+        assert_eq!(
+            p.tail_budget(),
+            25_000,
+            "la queue verbatim suit la vraie fenêtre"
+        );
+        let small = CompactionParams {
+            max_prompt_tokens: 120_000,
+            ..params(100_000)
+        };
+        assert_eq!(small.threshold_tokens(), 70_000);
+        let tight = CompactionParams {
+            max_prompt_tokens: 40_000,
+            ..params(1_300_000)
+        };
+        assert_eq!(tight.tool_group_budget(), 14_285);
+        assert_eq!(
+            tight.tail_budget(),
+            8_571,
+            "queue sous le quart du seuil de fond"
+        );
     }
 }

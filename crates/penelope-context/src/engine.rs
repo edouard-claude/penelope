@@ -662,6 +662,7 @@ mod tests {
             max_tool_result_share: 0.25,
             large_payload_tokens: 25_000,
             background_margin: 0.10,
+            max_prompt_tokens: 0,
         }
     }
 

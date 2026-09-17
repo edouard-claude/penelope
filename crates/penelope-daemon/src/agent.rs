@@ -420,6 +420,12 @@ impl AgentLoop {
                 });
             }
 
+            // 2 bis. Tour déjà long, reprises après approbation comprises : plafond d'appels
+            // et point de contrôle de coût (issue #19).
+            if let Some(stop) = self.turn_limits(spec, sink, iteration, cost).await? {
+                return Ok(stop);
+            }
+
             // 3. Appel du modèle, avec repli sur panne transitoire.
             let mut messages = conv.request_messages().await?;
             if empty_retry {
@@ -429,7 +435,16 @@ impl AgentLoop {
                      maintenant, en texte, au dernier message.)",
                 ));
             }
-            let response = match self.call_model(spec, messages, sink).await? {
+            // Empreinte et fournisseur amont collant : le cache de préfixe reste chaud et
+            // un raté est expliqué (issue #17).
+            let previous = crate::cache_audit::previous_call(s, &spec.session_id).await?;
+            let pinned = crate::cache_audit::sticky_upstream(
+                previous.as_ref(),
+                &spec.model_id,
+                s.clock.now_ms(),
+            );
+            let fingerprint = crate::cache_audit::Fingerprint::of(&messages, &spec.tools);
+            let response = match self.call_model(spec, messages, sink, pinned).await? {
                 Ok(r) => r,
                 Err(failure) if failure.context_length && !overflow_compacted => {
                     overflow_compacted = true;
@@ -466,8 +481,24 @@ impl AgentLoop {
             };
 
             cost += response.cost_usd;
+            let miss = crate::cache_audit::miss_cause(
+                previous.as_ref(),
+                &crate::cache_audit::Observed {
+                    fingerprint: &fingerprint,
+                    model: &response.model,
+                    upstream: response.upstream.as_deref(),
+                    prompt: response.usage.prompt,
+                    cached: response.usage.cached,
+                    now_ms: s.clock.now_ms(),
+                },
+            );
             s.budget
                 .record(penelope_kernel::budget::UsageRecord {
+                    msg_count: Some(fingerprint.chain.len() as i64),
+                    request_hash: fingerprint.request_hash(),
+                    system_hash: Some(fingerprint.system_hash.clone()),
+                    tools_hash: Some(fingerprint.tools_hash.clone()),
+                    miss_cause: miss.map(String::from),
                     session_id: Some(spec.session_id.clone()),
                     run_id: spec.run_id.clone(),
                     turn_id: spec.turn_id.clone(),
@@ -588,7 +619,19 @@ impl AgentLoop {
 
             // 4. Pas d'appel d'outil : c'est la réponse finale.
             if response.message.tool_calls.is_empty() {
-                let text = response.message.text();
+                let mut text = response.message.text();
+                // Un tour coûteux le dit, sans que la mention entre dans l'historique.
+                if let Some(turn_id) = &spec.turn_id
+                    && cfg.budget.show_turn_cost_usd > 0.0
+                {
+                    let (calls, turn_cost) = s.budget.turn_totals(turn_id).await?;
+                    if turn_cost >= cfg.budget.show_turn_cost_usd {
+                        text.push_str(&format!(
+                            "\n\n_Coût de ce tour : {} ({calls} appels au modèle)._",
+                            crate::budget_alert::usd(turn_cost)
+                        ));
+                    }
+                }
                 s.events
                     .append(
                         EventDraft::new(
@@ -625,6 +668,7 @@ impl AgentLoop {
         spec: &TurnSpec,
         messages: Vec<ChatMessage>,
         sink: &dyn TurnSink,
+        pinned_upstream: Option<String>,
     ) -> anyhow::Result<Result<ChatResponse, CallFailure>> {
         let s = &self.services;
         let server_side_fallback = self.provider.name() == "openrouter";
@@ -663,6 +707,8 @@ impl AgentLoop {
                 } else {
                     Vec::new()
                 },
+                // Collant pour le modèle principal seulement : un repli change de fournisseur.
+                pinned_upstream: (attempt == 0).then(|| pinned_upstream.clone()).flatten(),
                 ..Default::default()
             };
 
@@ -842,6 +888,7 @@ impl AgentLoop {
         if pending.is_empty() {
             return Ok(Pending::Nothing);
         }
+        let mut nudge = self.delegation_nudge(spec).await?;
 
         for call in pending {
             if spec.cancel.is_cancelled() {
@@ -1088,17 +1135,126 @@ impl AgentLoop {
                     .session(&spec.session_id),
                 )
                 .await?;
-            self.record_result(
-                conv,
-                sink,
-                &call,
-                !outcome.is_error,
-                outcome.text.clone(),
-                outcome.eager,
-            )
-            .await?;
+            let mut text = outcome.text.clone();
+            if let Some(n) = nudge.take() {
+                text.push_str(&n);
+            }
+            self.record_result(conv, sink, &call, !outcome.is_error, text, outcome.eager)
+                .await?;
         }
         Ok(Pending::Resolved)
+    }
+
+    /// Plafond d'appels et point de contrôle de coût d'un tour, comptés sur tout le tour
+    /// (reprises après approbation comprises) : `Some` arrête ou suspend le tour.
+    async fn turn_limits(
+        &self,
+        spec: &TurnSpec,
+        sink: &dyn TurnSink,
+        iteration: u32,
+        cost: f64,
+    ) -> anyhow::Result<Option<TurnOutcome>> {
+        let s = &self.services;
+        let cfg = s.config.config();
+        let Some(turn_id) = &spec.turn_id else {
+            return Ok(None);
+        };
+        let (calls, turn_cost) = s.budget.turn_totals(turn_id).await?;
+        if calls >= self.max_iterations as i64 {
+            return Ok(Some(TurnOutcome::Failed {
+                error: format!(
+                    "le tour n'a pas convergé en {} appels au modèle (reprises après \
+                     approbation comprises)",
+                    self.max_iterations
+                ),
+            }));
+        }
+        let step = cfg.budget.turn_checkpoint_usd;
+        // Un run de workflow a son propre plafond (`budget.run_usd`).
+        if step <= 0.0 || spec.run_id.is_some() || turn_cost < step {
+            return Ok(None);
+        }
+        let level = (turn_cost / step).floor() as i64;
+        let call_id = format!("checkpoint:{turn_id}:{level}");
+        let usd = crate::budget_alert::usd;
+        let prior = s
+            .approvals
+            .find_for_call(&spec.session_id, &call_id)
+            .await?;
+        match prior.map(|a| (a.state, a.id.0)) {
+            Some((ApprovalState::Approved, _)) => Ok(None),
+            Some((ApprovalState::Pending, id)) => {
+                Ok(Some(TurnOutcome::AwaitingApproval { approval_id: id }))
+            }
+            Some(_) => Ok(Some(TurnOutcome::Answered {
+                text: format!(
+                    "⏹ Tour arrêté à ta demande après {} ({calls} appels au modèle).",
+                    usd(turn_cost)
+                ),
+                iterations: iteration,
+                cost_usd: cost,
+            })),
+            None => {
+                let reason = format!(
+                    "Ce tour a coûté {} ({calls} appels au modèle), je continue ?",
+                    usd(turn_cost)
+                );
+                let arguments = json!({"cost_usd": turn_cost, "calls": calls});
+                let approval = s
+                    .approvals
+                    .create(
+                        ApprovalKind::BudgetExceeded,
+                        "tour",
+                        RiskClass::Unknown,
+                        json!({
+                            "checkpoint": true,
+                            "call_id": call_id,
+                            "turn_id": turn_id,
+                            "arguments": arguments,
+                            "reason": reason,
+                        }),
+                        vec!["Continuer".into(), "Arrêter".into()],
+                        Some(&spec.session_id),
+                        None,
+                        false,
+                    )
+                    .await?;
+                sink.emit(TurnEvent::Approval {
+                    id: approval.id.0.clone(),
+                    tool: "tour".into(),
+                    risk: RiskClass::Unknown,
+                    arguments,
+                    reason,
+                    double: false,
+                });
+                Ok(Some(TurnOutcome::AwaitingApproval {
+                    approval_id: approval.id.0,
+                }))
+            }
+        }
+    }
+
+    /// Tous les `delegate_after_calls` appels au modèle d'un tour, le résultat d'outil
+    /// suivant rappelle de regrouper les commandes ou de déléguer (issue #19).
+    async fn delegation_nudge(&self, spec: &TurnSpec) -> anyhow::Result<Option<String>> {
+        let s = &self.services;
+        let every = s.config.config().budget.delegate_after_calls as i64;
+        let Some(turn_id) = &spec.turn_id else {
+            return Ok(None);
+        };
+        if every == 0 {
+            return Ok(None);
+        }
+        let (calls, turn_cost) = s.budget.turn_totals(turn_id).await?;
+        if calls == 0 || calls % every != 0 {
+            return Ok(None);
+        }
+        Ok(Some(format!(
+            "\n\n[Harnais : {calls} appels au modèle dans ce tour ({}), chacun renvoie tout le \
+             contexte. Regroupe les commandes restantes dans un seul `shell_exec`, ou confie la \
+             suite à `sub_agent_spawn`, qui ne rend que sa conclusion.]",
+            crate::budget_alert::usd(turn_cost)
+        )))
     }
 
     async fn record_result(
@@ -1809,6 +1965,157 @@ mod tests {
         }
         assert_eq!(p.call_count(), 0, "le modèle n'est pas appelé");
         assert_eq!(s.approvals.pending(10).await.unwrap().len(), 1);
+    }
+
+    fn spent(turn: &str, calls: usize, each: f64) -> Vec<penelope_kernel::budget::UsageRecord> {
+        (0..calls)
+            .map(|_| penelope_kernel::budget::UsageRecord {
+                turn_id: Some(turn.into()),
+                model: "m".into(),
+                provider: "mock".into(),
+                role: Some("chat".into()),
+                prompt: 100_000,
+                cost_usd: each,
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    /// Issue #19 : un tour qui a coûté 1 $ (reprises comprises) demande s'il continue ;
+    /// accepté, il reprend jusqu'au palier suivant et sa réponse dit ce qu'il a coûté ;
+    /// refusé, il s'arrête.
+    #[tokio::test]
+    async fn a_costly_turn_asks_before_going_on() {
+        let (_d, s, p) = setup().await;
+        let sid = session(&s).await;
+        for u in spent("t_test", 8, 0.13) {
+            s.budget.record(u).await.unwrap();
+        }
+        let conv = MemoryConversation::new("Tu es Pénélope.", "enquête");
+        let e = exec(false);
+        let loop_ = AgentLoop::new(s.clone(), p.clone());
+        let sink = RecordingSink::default();
+        let id = match loop_
+            .run_conversation(&spec(&sid), &conv, &e, &sink)
+            .await
+            .unwrap()
+        {
+            TurnOutcome::AwaitingApproval { approval_id } => approval_id,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(p.call_count(), 0, "rien n'est dépensé avant la réponse");
+        let a = s.approvals.get(&id).await.unwrap().unwrap();
+        assert_eq!(a.payload["checkpoint"], true);
+        assert!(
+            a.payload["reason"]
+                .as_str()
+                .unwrap()
+                .contains("Ce tour a coûté 1,04 $ (8 appels au modèle)"),
+            "{}",
+            a.payload
+        );
+        assert!(
+            sink.events()
+                .iter()
+                .any(|ev| matches!(ev, TurnEvent::Approval { .. }))
+        );
+
+        decide_approval(&s, &id, &Decision::approve_once("test"))
+            .await
+            .unwrap();
+        p.reply("conclusion");
+        match loop_
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap()
+        {
+            TurnOutcome::Answered { text, .. } => {
+                assert!(text.starts_with("conclusion"), "{text}");
+                assert!(
+                    text.contains("_Coût de ce tour : 1,04 $ (9 appels au modèle)._"),
+                    "{text}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // Palier suivant, refusé : le tour s'arrête sans appeler le modèle.
+        for u in spent("t_test", 1, 1.0) {
+            s.budget.record(u).await.unwrap();
+        }
+        let id = match loop_
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap()
+        {
+            TurnOutcome::AwaitingApproval { approval_id } => approval_id,
+            other => panic!("{other:?}"),
+        };
+        decide_approval(&s, &id, &Decision::deny("test", None))
+            .await
+            .unwrap();
+        let calls = p.call_count();
+        match loop_
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap()
+        {
+            TurnOutcome::Answered { text, .. } => {
+                assert!(text.contains("Tour arrêté à ta demande"), "{text}")
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(p.call_count(), calls);
+    }
+
+    /// Issue #19 : le plafond d'appels compte tout le tour, reprises comprises, et le
+    /// dixième appel rappelle de regrouper ou de déléguer.
+    #[tokio::test]
+    async fn the_call_cap_spans_resumptions_and_suggests_delegating() {
+        let (_d, s, p) = setup().await;
+        let sid = session(&s).await;
+        for u in spent("t_test", 9, 0.0) {
+            s.budget.record(u).await.unwrap();
+        }
+        let conv = MemoryConversation::new("Tu es Pénélope.", "enquête");
+        let e = exec(false);
+        let loop_ = AgentLoop::new(s.clone(), p.clone());
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![call("c9", "fs_read", json!({"path": "src/lib.rs"}))],
+        ));
+        p.reply("fini");
+        loop_
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap();
+        let tail = conv.tail().await.unwrap();
+        let result = tail.iter().find(|m| m.role == Role::Tool).unwrap();
+        assert!(
+            result.text().contains("10 appels au modèle dans ce tour"),
+            "{}",
+            result.text()
+        );
+        assert!(result.text().contains("sub_agent_spawn"));
+
+        for u in spent("t_test", 20, 0.0) {
+            s.budget.record(u).await.unwrap();
+        }
+        let calls = p.call_count();
+        match loop_
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap()
+        {
+            TurnOutcome::Failed { error } => {
+                assert!(
+                    error.contains("reprises après approbation comprises"),
+                    "{error}"
+                )
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(p.call_count(), calls);
     }
 
     #[test]

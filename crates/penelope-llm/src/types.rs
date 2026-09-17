@@ -231,6 +231,10 @@ pub struct ChatRequest {
     /// Modalités de sortie demandées : `["image", "text"]` pour générer une image (§10.4).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modalities: Vec<String>,
+    /// Fournisseur amont à garder (nom affiché, `provider` de la réponse précédente) : son
+    /// cache de préfixe est chaud (issue #17). OpenRouter seulement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_upstream: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -127,6 +127,13 @@ pub fn all() -> Vec<Command> {
             "/budget sessions",
             m::USAGE,
         ),
+        c(
+            "usage",
+            "Modèles",
+            "Consommation : tokens d'entrée, cache, sortie, coût",
+            "/usage turn",
+            m::USAGE,
+        ),
         // Mémoire
         c(
             "note",

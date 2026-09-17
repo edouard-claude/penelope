@@ -103,7 +103,7 @@ async fn chat_stream_sends_deltas_then_the_final_answer() {
         .iter()
         .map(|m| m.text())
         .collect();
-    assert!(seen.iter().any(|t| t == "bonjour"), "{seen:?}");
+    assert!(seen.iter().any(|t| t.ends_with("\n\nbonjour")), "{seen:?}");
 
     d.handle.shutdown();
 }

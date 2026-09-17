@@ -176,6 +176,12 @@ pub async fn status(
                 "session_limit_usd": cfg.budget.session_usd,
                 "today_by_model": rows(s.budget.report("model", None, Some(&today), 5).await?),
                 "this_session_by_request": rows(s.budget.report("turn", Some(session_id), None, 5).await?),
+                "context": crate::compaction::context_view(
+                    s,
+                    session_id,
+                    turn.map(|t| t.model_id.as_str()),
+                )
+                .await?,
             }),
         );
         if all {

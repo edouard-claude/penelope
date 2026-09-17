@@ -35,6 +35,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0005_single_chat_binding",
         sql: SQL_0005,
     },
+    Migration {
+        version: "0006_prompt_cache",
+        sql: SQL_0006,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -790,6 +794,23 @@ WHERE tg_chat_id IS NOT NULL AND id NOT IN (
     FROM sessions WHERE tg_chat_id IS NOT NULL AND state = 'active'
   ) WHERE rn = 1
 );
+"#;
+
+/// Cache de prompt (issue #17) : contexte volatil figé avec son message, empreinte de
+/// chaque requête et cause probable d'un raté de cache.
+const SQL_0006: &str = r#"
+CREATE TABLE message_context(
+  session_id TEXT NOT NULL,
+  seq        INTEGER NOT NULL,
+  context    TEXT NOT NULL,
+  PRIMARY KEY(session_id, seq)
+);
+ALTER TABLE usage ADD COLUMN msg_count INTEGER;
+ALTER TABLE usage ADD COLUMN request_hash TEXT;
+ALTER TABLE usage ADD COLUMN system_hash TEXT;
+ALTER TABLE usage ADD COLUMN tools_hash TEXT;
+ALTER TABLE usage ADD COLUMN miss_cause TEXT;
+CREATE INDEX usage_session_ts ON usage(session_id, ts);
 "#;
 
 #[cfg(test)]

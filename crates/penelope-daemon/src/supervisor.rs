@@ -36,6 +36,7 @@ impl Daemon {
 
         let report = self.recover().await?;
         tracing::info!(?report, "reprise terminée");
+        crate::budget_alert::AlertWatcher::install(&self);
 
         // Workflows, sous-agents et images : offerts aux outils et à l'ordonnanceur.
         self.hooks

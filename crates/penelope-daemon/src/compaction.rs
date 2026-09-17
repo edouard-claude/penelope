@@ -579,6 +579,52 @@ async fn conversation_model(d: &Arc<Daemon>, session_id: &str) -> String {
     cfg.alias_model(&alias).unwrap_or_default().to_string()
 }
 
+/// Taille du contexte d'une session (issue #18) : prompt du dernier appel de conversation,
+/// part en cache, seuils de compaction et fenêtre du modèle.
+pub async fn context_view(
+    s: &crate::runtime::Services,
+    session_id: &str,
+    model_id: Option<&str>,
+) -> anyhow::Result<Value> {
+    use penelope_store::rusqlite::OptionalExtension;
+    let sid = session_id.to_string();
+    /// Prompt, cache, modèle, cause du raté, fournisseur amont.
+    type LastCall = (i64, i64, String, Option<String>, Option<String>);
+    let last: Option<LastCall> = s
+        .store
+        .read(move |c| {
+            Ok(c.query_row(
+                "SELECT prompt, cached, model, miss_cause, upstream FROM usage
+                 WHERE session_id = ?1 AND COALESCE(role, 'chat') = 'chat'
+                 ORDER BY ts DESC, rowid DESC LIMIT 1",
+                [sid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .optional()?)
+        })
+        .await?;
+    let model = model_id
+        .map(String::from)
+        .or_else(|| last.as_ref().map(|l| l.2.clone()))
+        .unwrap_or_default();
+    let cfg = s.config.config();
+    let params =
+        CompactionParams::from_config(&cfg, s.catalog.window_of(strip_provider(&model)), &model);
+    Ok(json!({
+        "last_prompt_tokens": last.as_ref().map(|l| l.0),
+        "last_cached_tokens": last.as_ref().map(|l| l.1),
+        "last_upstream": last.as_ref().and_then(|l| l.4.clone()),
+        "last_cache_miss": last.as_ref().and_then(|l| l.3.as_deref()).map(|m| {
+            json!({"cause": m, "label": penelope_kernel::budget::miss_label(m)})
+        }),
+        "model": model,
+        "window": params.window,
+        "max_prompt_tokens": params.max_prompt_tokens,
+        "background_compaction_at": params.background_threshold_tokens(params.background_margin),
+        "compaction_at": params.threshold_tokens(),
+    }))
+}
+
 /// Compaction sur dépassement de fenêtre, offerte à la conversation d'un tour.
 pub struct OverflowCompactor {
     pub daemon: Arc<Daemon>,
@@ -861,6 +907,58 @@ mod tests {
             "le résumé est attribué au tour qui l'a déclenché"
         );
         assert_eq!(by_turn[0].calls, 3, "classifieur, réponse, résumé");
+    }
+
+    /// Issue #18 : sur une fenêtre de 1,3 M, le plafond `max_prompt_tokens` suffit à
+    /// déclencher la compaction de fond (ici 20 k pour une conversation de 24 k ; en
+    /// production 120 k).
+    #[tokio::test]
+    async fn max_prompt_tokens_compacts_a_huge_window_in_the_background() {
+        let (_dir, d, p) = daemon().await;
+        let sid = long_session(&d).await;
+        let cfg = d.services.config.config();
+        let main = strip_provider(cfg.alias_model("main").unwrap()).to_string();
+        d.services
+            .catalog
+            .upsert(vec![ModelInfo::minimal(&main, "z-ai", 1_300_000)]);
+        d.publish_config("test", |c| {
+            c.context.max_prompt_tokens = 20_000;
+            Ok(vec!["context.max_prompt_tokens".into()])
+        })
+        .unwrap();
+
+        p.reply(r#"{"complexity":"medium"}"#);
+        p.reply("Je reprends où nous en étions.");
+        p.reply(SUMMARY);
+        d.enqueue_message(&sid, "on continue ?", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = d.services.turns.claim("test").await.unwrap().unwrap();
+        let out = d.run_turn(&turn).await;
+        assert!(
+            matches!(out, crate::agent::TurnOutcome::Answered { .. }),
+            "{out:?}"
+        );
+        d.services.turns.complete(&turn).await.unwrap();
+
+        let mut nodes = Vec::new();
+        for _ in 0..100 {
+            nodes = d.services.context.lcm.active_nodes(&sid).await.unwrap();
+            if !nodes.is_empty() && !d.compaction.is_running(&sid) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            nodes.len(),
+            1,
+            "compaction de fond malgré la grande fenêtre"
+        );
+
+        let view = context_view(&d.services, &sid, None).await.unwrap();
+        assert_eq!(view["window"], 1_300_000);
+        assert_eq!(view["compaction_at"], 20_000);
+        assert!(view["last_prompt_tokens"].as_i64().is_some(), "{view}");
     }
 
     #[tokio::test]

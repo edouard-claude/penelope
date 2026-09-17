@@ -887,6 +887,10 @@ impl TelegramGateway {
                 let session = d.chat_session_for(&origin).await?;
                 self.budget_text(&session, args).await?
             }
+            "usage" => {
+                let session = d.chat_session_for(&origin).await?;
+                self.usage_text(&session, args).await?
+            }
             "dream" => {
                 // Une passe peut prendre une minute : le bilan arrive quand il est prêt.
                 self.react(chat_id, message_id, reaction::RECEIVED);
@@ -1579,6 +1583,60 @@ impl TelegramGateway {
 
     /// `/budget` : dépense du jour et de la session, requêtes les plus chères.
     /// `/budget sessions|requêtes|modèles|jours` : un regroupement précis.
+    /// `/usage [session|turn|model|day|role|upstream]` : tokens d'entrée, part en cache,
+    /// sortie et coût (issue #20). `turn` se limite à la session du chat.
+    async fn usage_text(&self, session: &str, args: &str) -> anyhow::Result<String> {
+        let s = &self.daemon.services;
+        let by = match args.trim() {
+            "" | "sessions" => "session",
+            "requêtes" | "requetes" | "tours" | "turns" => "turn",
+            "modèles" | "modeles" | "models" => "model",
+            other => other,
+        };
+        if !penelope_kernel::budget::USAGE_AXES.contains(&by) {
+            return Ok(format!(
+                "Regroupement inconnu `{by}`. Choix : {}.",
+                penelope_kernel::budget::USAGE_AXES.join(", ")
+            ));
+        }
+        let today: String = s.clock.now_rfc3339().chars().take(10).collect();
+        let (scope, since, title) = match by {
+            "turn" => (Some(session), None, "Requêtes de la session"),
+            "day" => (None, None, "Par jour"),
+            _ => (None, Some(today.as_str()), "Aujourd'hui"),
+        };
+        let rows = s.budget.report(by, scope, since, 10).await?;
+        if rows.is_empty() {
+            return Ok("Aucune consommation enregistrée.".into());
+        }
+        let k = |n: i64| {
+            if n >= 1_000_000 {
+                format!("{:.1} M", n as f64 / 1e6).replace('.', ",")
+            } else if n >= 1_000 {
+                format!("{} k", n / 1_000)
+            } else {
+                n.to_string()
+            }
+        };
+        let mut t = format!("**{title}, par {by}**\n");
+        for r in &rows {
+            let label = r
+                .label
+                .as_deref()
+                .map(|l| format!("« {l} »"))
+                .unwrap_or_else(|| format!("`{}`", if r.key.is_empty() { "?" } else { &r.key }));
+            t.push_str(&format!(
+                "\n- {} · {label} · {} appel(s) · entrée {} (cache {:.0} %) · sortie {}",
+                crate::budget_alert::usd(r.cost_usd),
+                r.calls,
+                k(r.prompt),
+                r.cache_ratio() * 100.0,
+                k(r.completion)
+            ));
+        }
+        Ok(t)
+    }
+
     async fn budget_text(&self, session: &str, args: &str) -> anyhow::Result<String> {
         let s = &self.daemon.services;
         let cfg = s.config.config();
@@ -1639,6 +1697,21 @@ impl TelegramGateway {
             usd(in_session),
             usd(cfg.budget.session_usd)
         );
+        let view = crate::compaction::context_view(s, session, None).await?;
+        if let Some(prompt) = view["last_prompt_tokens"].as_i64() {
+            let cached = view["last_cached_tokens"].as_i64().unwrap_or(0);
+            t.push_str(&format!(
+                "📏 Contexte : {} k tokens au dernier appel ({:.0} % en cache), compaction de \
+                 fond vers {} k\n",
+                prompt / 1000,
+                if prompt > 0 {
+                    cached as f64 * 100.0 / prompt as f64
+                } else {
+                    0.0
+                },
+                view["background_compaction_at"].as_u64().unwrap_or(0) / 1000
+            ));
+        }
         let turns = s.budget.report("turn", Some(session), None, 5).await?;
         if !turns.is_empty() {
             t.push_str("\n**Requêtes les plus chères de la session**\n\n");
@@ -1888,12 +1961,15 @@ impl TelegramGateway {
 
         // Une autre décision est passée avant (CLI) : on le dit, sans rien rejouer.
         let first = won == decision.approved && a.decided_via.as_deref() == Some("telegram");
+        let checkpoint = a.payload["checkpoint"].as_bool() == Some(true);
         let note = match (first, a.state) {
             (false, st) => format!(
                 "ℹ️ Déjà tranché : {} via {}.",
                 st.as_str(),
                 a.decided_via.clone().unwrap_or_default()
             ),
+            (true, ApprovalState::Approved) if checkpoint => "▶️ Je continue.".to_string(),
+            (true, _) if checkpoint => "⏹ Tour arrêté.".to_string(),
             (true, ApprovalState::Approved) => format!("✅ {} : `{}`.", decision.choice, a.subject),
             (true, _) => format!("❌ Refusé : `{}`.", a.subject),
         };
@@ -1936,6 +2012,38 @@ impl TelegramGateway {
             return self.send_memory_card(chat_id, topic_id, a).await;
         }
         let s = &self.daemon.services;
+        // Point de contrôle de coût d'un tour (issue #19) : continuer ou arrêter.
+        if a.payload["checkpoint"].as_bool() == Some(true) {
+            let ttl = 24 * 3_600_000;
+            let mut row = Vec::new();
+            for (label, action) in [("▶️ Continuer", k::APPROVE), ("⏹ Arrêter", k::DENY)] {
+                let t = s
+                    .actions
+                    .create(action, a.id.as_str(), json!({}), ttl, true)
+                    .await?;
+                row.push(ButtonSpec::callback(label, &t.token, ""));
+            }
+            let text = format!(
+                "💸 {}",
+                a.payload["reason"]
+                    .as_str()
+                    .unwrap_or("Ce tour coûte cher, je continue ?")
+            );
+            return self
+                .outbox_push(
+                    chat_id,
+                    topic_id,
+                    "sendMessage",
+                    json!({
+                        "chat_id": chat_id,
+                        "text": markdown_to_html(&text),
+                        "parse_mode": "HTML",
+                        "reply_markup": inline_keyboard(&[row]),
+                        "message_thread_id": topic_id,
+                    }),
+                )
+                .await;
+        }
         let args = serde_json::to_string_pretty(&a.payload["arguments"])
             .unwrap_or_default()
             .replace("```", "ʼʼʼ");

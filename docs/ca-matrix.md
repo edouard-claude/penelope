@@ -9,7 +9,7 @@ Pour le régénérer après avoir ajouté un test :
 UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 ```
 
-69 tests d'acceptation, 14 sections couvertes.
+70 tests d'acceptation, 14 sections couvertes.
 
 ## §2. Plateformes, portabilité et exploitation headless
 
@@ -43,6 +43,7 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 |---|---|---|
 | CA 5.1 | Level4 proves it fits | `crates/penelope-context/src/compaction.rs` |
 | CA 5.3 | Prefix is byte identical across turns | `crates/penelope-context/src/tiers.rs` |
+| CA 5.4 | Each request extends the previous one | `crates/penelope-daemon/src/cache_audit.rs` |
 
 ## §6. Mémoire, apprentissage continu et second brain
 

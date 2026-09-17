@@ -9,6 +9,7 @@ use crate::sse::{SseDecoder, StreamAccumulator};
 use crate::types::*;
 use futures::StreamExt;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -158,6 +159,31 @@ pub struct OpenRouterProvider {
     categories: String,
     routing: Value,
     catalog: Catalog,
+    /// Identifiants de fournisseurs amont par modèle : nom affiché → slug de `provider.order`.
+    slugs: SlugCache,
+}
+
+/// Par modèle : date de lecture et slugs de ses fournisseurs.
+type SlugCache =
+    Arc<tokio::sync::Mutex<HashMap<String, (std::time::Instant, HashMap<String, String>)>>>;
+
+/// Durée de validité des identifiants de fournisseurs amont d'un modèle.
+const SLUGS_TTL: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+
+/// Slugs des fournisseurs d'un modèle, lus dans `GET /models/{id}/endpoints` :
+/// `provider_name` (« Z.AI ») → base du `tag` (« z-ai »), en minuscules.
+pub fn endpoint_slugs(v: &Value) -> HashMap<String, String> {
+    v["data"]["endpoints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| {
+            let name = e["provider_name"].as_str()?;
+            let tag = e["tag"].as_str()?;
+            let base = tag.split('/').next().filter(|b| !b.is_empty())?;
+            Some((name.to_lowercase(), base.to_string()))
+        })
+        .collect()
 }
 
 /// Longueur maximale d'un `session_id` accepté par OpenRouter.
@@ -185,7 +211,40 @@ impl OpenRouterProvider {
             categories: "personal-agent".into(),
             routing: Value::Null,
             catalog,
+            slugs: Default::default(),
         })
+    }
+
+    /// Slug du fournisseur amont `upstream` (nom affiché dans la réponse) pour `model`.
+    async fn upstream_slug(&self, model: &str, upstream: &str) -> Option<String> {
+        let model = strip_provider(model).to_string();
+        let mut cache = self.slugs.lock().await;
+        let fresh = cache
+            .get(&model)
+            .is_some_and(|(at, _)| at.elapsed() < SLUGS_TTL);
+        if !fresh {
+            let url = format!("{}/models/{model}/endpoints", self.base_url);
+            let fetched = async {
+                let resp = self
+                    .http
+                    .get(&url)
+                    .bearer_auth(&self.api_key)
+                    .timeout(std::time::Duration::from_secs(10))
+                    .send()
+                    .await
+                    .ok()?
+                    .error_for_status()
+                    .ok()?;
+                resp.json::<Value>().await.ok()
+            }
+            .await;
+            // Un échec est retenu aussi : pas de nouvelle requête avant l'expiration.
+            let slugs = fetched.map(|v| endpoint_slugs(&v)).unwrap_or_default();
+            cache.insert(model.clone(), (std::time::Instant::now(), slugs));
+        }
+        cache
+            .get(&model)
+            .and_then(|(_, s)| s.get(&upstream.to_lowercase()).cloned())
     }
 
     pub fn with_routing(mut self, routing: Value) -> Self {
@@ -207,13 +266,26 @@ impl OpenRouterProvider {
     /// Corps OpenRouter : le corps commun, plus les champs propres à OpenRouter.
     ///
     /// L'usage (coût compris) arrive toujours dans le dernier fragment : rien à demander.
-    fn body(&self, req: &ChatRequest) -> Value {
+    fn body(&self, req: &ChatRequest, pinned_slug: Option<&str>) -> Value {
         let mut b = to_openai_body(req);
         let Some(obj) = b.as_object_mut() else {
             return b;
         };
-        if !self.routing.is_null() {
-            obj.insert("provider".into(), self.routing.clone());
+        let mut routing = self.routing.clone();
+        // Fournisseur amont collant (issue #17) : le cache de préfixe y est chaud. Un ordre
+        // ou une liste imposés par la configuration gardent la main ; les replis restent
+        // permis, et le fournisseur qui reprend devient le nouveau collant.
+        if let Some(slug) = pinned_slug
+            && routing.get("order").is_none()
+            && routing.get("only").is_none()
+        {
+            if !routing.is_object() {
+                routing = json!({});
+            }
+            routing["order"] = json!([slug]);
+        }
+        if !routing.is_null() {
+            obj.insert("provider".into(), routing);
         }
         if let Some(sid) = req.session_id.as_deref().filter(|s| !s.is_empty()) {
             obj.insert(
@@ -249,7 +321,11 @@ impl Provider for OpenRouterProvider {
 
     async fn chat_stream(&self, req: ChatRequest, cancel: CancelToken) -> Result<ChunkStream> {
         let url = format!("{}/chat/completions", self.base_url);
-        let body = self.body(&req);
+        let slug = match req.pinned_upstream.as_deref() {
+            Some(upstream) => self.upstream_slug(&req.model, upstream).await,
+            None => None,
+        };
+        let body = self.body(&req, slug.as_deref());
         let resp = self
             .http
             .post(&url)
@@ -447,23 +523,17 @@ impl Provider for OpenAiCompatProvider {
 
 /// Convertit une requête interne en corps « chat completions ».
 pub fn to_openai_body(req: &ChatRequest) -> Value {
-    // Le raisonnement n'est renvoyé que pour le tour en cours (après le dernier message
-    // utilisateur) : c'est là qu'il sert à enchaîner un appel d'outil et sa suite. Le
-    // renvoyer pour tout l'historique coûterait cher sans rien apporter.
-    let current_turn = req
-        .messages
-        .iter()
-        .rposition(|m| m.role == Role::User)
-        .map(|i| i + 1)
-        .unwrap_or(0);
+    // Le raisonnement accompagne les messages qui appellent un outil, et eux seuls : c'est
+    // là qu'il sert à enchaîner l'appel et sa suite. La règle ne dépend pas du tour en
+    // cours, sinon le tour suivant réécrirait ces messages et casserait le cache de
+    // préfixe (issue #17) ; une réponse finale ne le renvoie jamais.
     let messages: Vec<Value> = req
         .messages
         .iter()
-        .enumerate()
-        .map(|(i, m)| {
+        .map(|m| {
             let mut v = message_to_json(m);
-            if i >= current_turn
-                && m.role == Role::Assistant
+            if m.role == Role::Assistant
+                && !m.tool_calls.is_empty()
                 && let Some(o) = v.as_object_mut()
             {
                 if let Some(d) = &m.reasoning_details {
@@ -863,7 +933,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reasoning_goes_back_only_for_the_current_turn() {
+    fn reasoning_goes_back_only_with_tool_calls() {
         let with_reasoning = |text: &str| ChatMessage {
             reasoning: Some(format!("pensée {text}")),
             reasoning_details: Some(json!([{"type":"reasoning.text","text":text,"index":0}])),
@@ -873,6 +943,16 @@ mod tests {
             model: "openrouter:a/b".into(),
             messages: vec![
                 ChatMessage::user("ancien"),
+                ChatMessage {
+                    tool_calls: vec![ToolCall {
+                        id: "c0".into(),
+                        name: "fs_list".into(),
+                        arguments: json!({}),
+                    }],
+                    content: vec![],
+                    ..with_reasoning("appel ancien")
+                },
+                ChatMessage::tool_result("c0", "fs_list", "liste"),
                 with_reasoning("ancienne réponse"),
                 ChatMessage::user("nouveau"),
                 ChatMessage {
@@ -889,13 +969,17 @@ mod tests {
             ..Default::default()
         };
         let b = to_openai_body(&req);
-        assert!(
-            b["messages"][1].get("reasoning_details").is_none(),
-            "tour précédent : rien"
+        assert_eq!(
+            b["messages"][1]["reasoning_details"][0]["text"], "appel ancien",
+            "un appel d'outil d'un tour précédent garde le sien : le préfixe ne bouge pas"
         );
-        assert_eq!(b["messages"][3]["reasoning_details"][0]["text"], "appel");
         assert!(
-            b["messages"][3].get("reasoning").is_none(),
+            b["messages"][3].get("reasoning_details").is_none(),
+            "réponse finale : rien"
+        );
+        assert_eq!(b["messages"][5]["reasoning_details"][0]["text"], "appel");
+        assert!(
+            b["messages"][5].get("reasoning").is_none(),
             "les blocs priment sur le texte"
         );
     }
@@ -1136,7 +1220,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let b = openrouter().body(&req);
+        let b = openrouter().body(&req, None);
         assert_eq!(b["model"], "z-ai/glm-5.3");
         assert_eq!(b["session_id"], "01J9SESSION");
         assert_eq!(b["models"], json!(["deepseek/deepseek-v4-flash"]));
@@ -1151,9 +1235,44 @@ mod tests {
             session_id: Some("x".repeat(400)),
             ..Default::default()
         };
-        let b = openrouter().body(&long);
+        let b = openrouter().body(&long, None);
         assert_eq!(b["session_id"].as_str().unwrap().len(), 256);
         assert!(b.get("models").is_none());
+    }
+
+    /// Issue #17 : le fournisseur amont de l'appel précédent passe en tête de
+    /// `provider.order`, sauf ordre imposé par la configuration.
+    #[test]
+    fn the_previous_upstream_is_pinned_unless_routing_is_configured() {
+        let slugs = endpoint_slugs(&json!({"data": {"endpoints": [
+            {"provider_name": "Z.AI", "tag": "z-ai/fp8"},
+            {"provider_name": "Sail Research", "tag": "sail-research"},
+            {"provider_name": "sans tag"}
+        ]}}));
+        assert_eq!(slugs.get("z.ai").map(String::as_str), Some("z-ai"));
+        assert_eq!(
+            slugs.get("sail research").map(String::as_str),
+            Some("sail-research")
+        );
+        assert_eq!(slugs.len(), 2);
+
+        let req = ChatRequest {
+            model: "openrouter:z-ai/glm-5.3".into(),
+            messages: vec![ChatMessage::user("salut")],
+            ..Default::default()
+        };
+        let b = openrouter().body(&req, Some("z-ai"));
+        assert_eq!(b["provider"], json!({"order": ["z-ai"]}));
+        let configured = openrouter().with_routing(json!({"order": ["together"], "sort": "price"}));
+        assert_eq!(
+            configured.body(&req, Some("z-ai"))["provider"]["order"],
+            json!(["together"])
+        );
+        let sorted = openrouter().with_routing(json!({"sort": "price"}));
+        assert_eq!(
+            sorted.body(&req, Some("z-ai"))["provider"],
+            json!({"sort": "price", "order": ["z-ai"]})
+        );
     }
 
     /// Faux serveur HTTP : répond une fois avec les octets fournis, puis garde la

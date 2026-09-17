@@ -319,9 +319,11 @@ penelope usage
 
 Par défaut, les sessions les plus chères, avec leur titre ou leur premier message. Autres
 regroupements : `--by turn` (requêtes), `--by model`, `--by day`, `--by role`
-(conversation ou classifieur), `--by upstream` ; filtres `--session <id>` et
-`--since AAAA-MM-JJ`. Sur Telegram, `/budget` résume le jour, la session et ses requêtes
-les plus chères ; `/budget sessions`, `/budget requêtes`, `/budget modèles` détaillent.
+(conversation ou classifieur), `--by upstream`, `--by miss` (ratés de cache par cause) ;
+filtres `--session <id>` et `--since AAAA-MM-JJ`. Chaque ligne donne les tokens d'entrée,
+en cache et de sortie, et la part servie par le cache. Sur Telegram, `/budget` résume le
+jour, la session, la taille du contexte et les requêtes les plus chères ; `/usage`,
+`/usage turn`, `/usage model` ou `/usage miss` donnent tokens, cache et coût.
 
 Le budget se règle à côté, en dollars :
 
@@ -329,8 +331,27 @@ Le budget se règle à côté, en dollars :
 [budget]
 daily_usd = 20.0
 session_usd = 5.0
-alert_ratio = 0.8
+alert_ratio = 0.8           # une alerte par périmètre au premier passage de 80 %
+turn_checkpoint_usd = 1.0   # « Ce tour a coûté 1,05 $, je continue ? » à chaque dollar
+show_turn_cost_usd = 0.5    # coût du tour ajouté à la réponse au-delà
+delegate_after_calls = 10   # rappel de regrouper ou de déléguer tous les 10 appels
 ```
+
+À 80 % d'un plafond (jour, session ou run), une seule notification arrive avec les trois
+plus gros postes et leur part de cache ; à 100 %, le tour est suspendu. Un tour qui
+enchaîne les appels d'outils paie tout le contexte à chaque appel : au-delà de
+`turn_checkpoint_usd`, Pénélope demande si elle continue (▶️ Continuer, ⏹ Arrêter), et
+le plafond de 24 appels au modèle compte les reprises après approbation.
+
+**Cache de prompt.** Les fournisseurs facturent beaucoup moins cher un préfixe déjà vu.
+Pour le garder, le contexte volatil (heure, rappel mémoire) reste attaché au message qu'il
+accompagne, le raisonnement suit toujours les appels d'outil et jamais les réponses
+finales, un changement d'instantané mémoire, de skill ou de serveur MCP attend une pause
+de 5 min ou une compaction, et le fournisseur amont qui a servi l'appel précédent reste en
+tête de `provider.order` pendant 10 min (sauf ordre imposé par
+`providers.openrouter.routing`). Chaque raté est expliqué dans `penelope usage --by miss` :
+premier appel, pause, préfixe, outils, modèle, historique réécrit, fournisseur amont
+différent, ou préfixe intact non servi par le fournisseur.
 
 `model set` signale un identifiant absent du catalogue (`known: false`) quand le catalogue
 est chargé ; sinon, une faute de frappe ne se verra qu'au premier appel.
@@ -653,7 +674,12 @@ résumée par dossier, la liste complète en artefact.
 
 Quand une conversation approche le seuil de sa fenêtre (70 % par défaut, moins une marge
 de 10 points), Pénélope fait résumer les anciens échanges en tâche de fond par l'alias du
-rôle `compaction` (`summarizer`). La conversation ne s'arrête pas : le résumé est publié
+rôle `compaction` (`summarizer`). Le seuil est aussi plafonné en valeur absolue par
+`context.max_prompt_tokens` (120 000 par défaut, `0` pour s'en passer) : sur un modèle à
+1,3 M de tokens, la compaction part vers 103 k au lieu de 917 k. Une fenêtre immense sert
+à ne jamais échouer, pas à renvoyer 500 k tokens à chaque appel ; relever le plafond garde
+plus de conversation mot pour mot, au prix de chaque appel. `/budget` et `self_status`
+donnent la taille du contexte au dernier appel et le seuil de compaction. La conversation ne s'arrête pas : le résumé est publié
 à la fin du tour en cours. Les derniers échanges restent mot pour mot, les identifiants
 (chemins, tickets, SHA, URLs) sont conservés tels quels, et un résumé existant est mis à
 jour plutôt que refait. Rien n'est effacé : les échanges résumés restent consultables par

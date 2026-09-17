@@ -771,6 +771,10 @@ impl Rpc {
                             "calls": r.calls,
                             "estimated": r.estimated,
                             "last": r.last_ts,
+                            "promptTokens": r.prompt,
+                            "cachedTokens": r.cached,
+                            "completionTokens": r.completion,
+                            "cacheRatio": (r.cache_ratio() * 1000.0).round() / 1000.0,
                         }))
                         .collect::<Vec<_>>()
                 ))

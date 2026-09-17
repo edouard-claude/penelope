@@ -125,7 +125,8 @@ pub enum Command {
     /// Règles d'autorisation.
     Policies,
 
-    /// Consommation et coûts, du plus cher au moins cher.
+    /// Consommation et coûts, du plus cher au moins cher : tokens d'entrée, en cache, de
+    /// sortie, part de cache.
     Usage {
         /// Regroupement : session, turn (requête), model, day, role, provider, upstream, run.
         #[arg(long, default_value = "session")]
