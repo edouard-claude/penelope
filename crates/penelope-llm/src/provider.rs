@@ -492,9 +492,19 @@ pub struct OpenAiCompatProvider {
     catalog: Catalog,
     /// Silence toléré pendant un flux (issue #51).
     stream_idle: std::time::Duration,
+    /// Fenêtre annoncée pour les modèles dont `GET /models` ne dit rien (issue #53).
+    window: u64,
 }
 
 impl OpenAiCompatProvider {
+    /// Fenêtre annoncée pour un modèle dont l'endpoint ne dit pas la sienne (issue #53).
+    pub fn with_window(mut self, window: u64) -> Self {
+        if window > 0 {
+            self.window = window;
+        }
+        self
+    }
+
     /// Silence toléré pendant un flux ; zéro : aucun (issue #51).
     pub fn with_stream_idle(mut self, idle: std::time::Duration) -> Self {
         self.stream_idle = idle;
@@ -518,6 +528,7 @@ impl OpenAiCompatProvider {
             label: "openai_compat".into(),
             catalog,
             stream_idle: DEFAULT_STREAM_IDLE,
+            window: DEFAULT_LOCAL_WINDOW,
         })
     }
 
@@ -651,8 +662,11 @@ impl Provider for OpenAiCompatProvider {
             .and_then(|d| d.as_array())
             .map(|a| {
                 a.iter()
-                    .filter_map(|m| m.get("id").and_then(|i| i.as_str()))
-                    .map(|id| ModelInfo::minimal(id, "openai_compat", 32_768))
+                    .filter(|m| m.get("id").and_then(|i| i.as_str()).is_some())
+                    .map(|m| {
+                        let id = m["id"].as_str().unwrap_or_default();
+                        ModelInfo::minimal(id, "openai_compat", local_window(m, self.window))
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -691,6 +705,10 @@ pub fn to_openai_body(req: &ChatRequest) -> Value {
         "model": strip_provider(&req.model),
         "messages": messages,
         "stream": true,
+        // Sans cela, un serveur local (vLLM, llama.cpp, LM Studio, mlx_lm) ne renvoie
+        // jamais `usage` en streaming : plus de comptage de tokens, ni de compaction sur
+        // la taille réelle (issue #53).
+        "stream_options": {"include_usage": true},
     });
     let obj = b.as_object_mut().expect("objet");
     if !req.tools.is_empty() {
@@ -833,6 +851,27 @@ const CANCEL_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Silence toléré par défaut pendant un flux (issue #51).
 pub const DEFAULT_STREAM_IDLE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Fenêtre par défaut d'un modèle servi par un endpoint OpenAI-compatible.
+pub const DEFAULT_LOCAL_WINDOW: u64 = 32_768;
+
+/// Fenêtre d'un modèle local : ce que `GET /models` en dit (vLLM, llama.cpp, LM Studio),
+/// sinon la valeur configurée (issue #53).
+fn local_window(m: &Value, configured: u64) -> u64 {
+    for path in [
+        "context_length",
+        "max_model_len",
+        "max_context_length",
+        "n_ctx",
+    ] {
+        for value in [m.get(path), m.get("meta").and_then(|x| x.get(path))] {
+            if let Some(n) = value.and_then(|v| v.as_u64()).filter(|n| *n > 0) {
+                return n;
+            }
+        }
+    }
+    configured
+}
 
 /// Transforme une réponse HTTP en flux de fragments.
 ///
@@ -1778,6 +1817,70 @@ mod tests {
         .expect("le flux ne doit pas être coupé")
         .expect("réponse complète");
         assert_eq!(r.message.text(), "fini");
+    }
+
+    /// #53 : sans `stream_options.include_usage`, un serveur local ne renvoie jamais
+    /// `usage` en streaming : plus de comptage ni de compaction sur la taille réelle.
+    #[test]
+    fn the_openai_body_asks_for_usage_in_the_stream() {
+        let body = to_openai_body(&ChatRequest {
+            model: "openai_compat:qwen".into(),
+            messages: vec![ChatMessage::user("salut")],
+            ..Default::default()
+        });
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    /// #53 : un flux local qui finit par un fragment `usage` alimente le comptage.
+    #[tokio::test]
+    async fn a_local_stream_ending_with_usage_feeds_the_token_count() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"salut\"}}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1234,\"completion_tokens\":7}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}"
+        );
+        let url = one_shot_server(resp, std::time::Duration::from_millis(50)).await;
+        let p = OpenAiCompatProvider::new(url, "", Catalog::new()).unwrap();
+        let rx = p
+            .chat_stream(
+                ChatRequest {
+                    model: "openai_compat:qwen".into(),
+                    messages: vec![ChatMessage::user("x")],
+                    ..Default::default()
+                },
+                CancelToken::new(),
+            )
+            .await
+            .unwrap();
+        let r = collect_stream(rx, "openai_compat:qwen", "openai_compat", &Catalog::new())
+            .await
+            .unwrap();
+        assert_eq!(r.message.text(), "salut");
+        assert_eq!(r.usage.prompt, 1234);
+        assert_eq!(r.usage.completion, 7);
+    }
+
+    /// #53 : la fenêtre d'un modèle local vient de l'endpoint quand il la donne, de la
+    /// configuration sinon.
+    #[test]
+    fn a_local_model_window_comes_from_the_endpoint_or_the_configuration() {
+        assert_eq!(
+            local_window(&json!({"id": "qwen", "context_length": 131072}), 32_768),
+            131_072
+        );
+        assert_eq!(
+            local_window(&json!({"id": "q", "meta": {"n_ctx": 8192}}), 32_768),
+            8_192
+        );
+        assert_eq!(local_window(&json!({"id": "q"}), 120_000), 120_000);
+        assert_eq!(
+            local_window(&json!({"id": "q", "max_model_len": 0}), 32_768),
+            32_768
+        );
     }
 
     #[tokio::test]

@@ -315,6 +315,9 @@ pub struct LocalProvider {
     pub models: Vec<String>,
     /// Silence toléré pendant un flux, comme pour OpenRouter.
     pub stream_idle_timeout: String,
+    /// Fenêtre de contexte annoncée pour les modèles servis par cet endpoint, quand
+    /// `GET /models` ne la donne pas.
+    pub context_window: u64,
 }
 
 impl Default for LocalProvider {
@@ -326,6 +329,7 @@ impl Default for LocalProvider {
             enabled: false,
             models: Vec::new(),
             stream_idle_timeout: "120s".into(),
+            context_window: 32_768,
         }
     }
 }

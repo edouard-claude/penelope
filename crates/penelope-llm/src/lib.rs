@@ -69,7 +69,8 @@ pub fn build_providers(
         }
         Some(std::sync::Arc::new(
             OpenAiCompatProvider::new(&cfg.providers.local.base_url, key, catalog.clone())?
-                .with_stream_idle(idle_of(&cfg.providers.local.stream_idle_timeout)),
+                .with_stream_idle(idle_of(&cfg.providers.local.stream_idle_timeout))
+                .with_window(cfg.providers.local.context_window),
         ))
     } else {
         None

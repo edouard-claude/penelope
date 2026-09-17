@@ -257,12 +257,14 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `providers.local.enabled` | `false` | Endpoint actif. |
 | `providers.local.models` | `[]` | Modèles servis par l'endpoint. |
 | `providers.local.stream_idle_timeout` | `"120s"` | Silence toléré pendant un flux, comme pour OpenRouter. |
+| `providers.local.context_window` | `32768` | Fenêtre de contexte annoncée pour les modèles servis par cet endpoint, quand `GET /models` ne la donne pas. |
 | `providers.extra.<nom>.kind` | – | Type d'endpoint (`openai_compat`). |
 | `providers.extra.<nom>.base_url` | – | Adresse de l'endpoint OpenAI-compatible. |
 | `providers.extra.<nom>.api_key` | – | Clé éventuelle, par référence au magasin de secrets. |
 | `providers.extra.<nom>.enabled` | – | Endpoint actif. |
 | `providers.extra.<nom>.models` | – | Modèles servis par l'endpoint. |
 | `providers.extra.<nom>.stream_idle_timeout` | – | Silence toléré pendant un flux, comme pour OpenRouter. |
+| `providers.extra.<nom>.context_window` | – | Fenêtre de contexte annoncée pour les modèles servis par cet endpoint, quand `GET /models` ne la donne pas. |
 
 **[models]**
 

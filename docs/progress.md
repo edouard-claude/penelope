@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1309 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1312 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -646,7 +646,8 @@ Verrou de session à jeton de clôture (#43), écrivain à l'épreuve des paniqu
 mutations de configuration sérialisées (#45), purge RGPD et rétention (#46), journal
 d'audit sans faux positif (#47), listes de frontmatter lues correctement (#48), rafales de
 messages regroupées (#49), nouvelles tentatives avant le flux (#50), flux muet coupé sur
-son inactivité (#51), résultats d'outils parallèles admis en groupe (#52).
+son inactivité (#51), résultats d'outils parallèles admis en groupe (#52), comptage et
+fenêtre des modèles locaux (#53).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -710,6 +711,12 @@ son inactivité (#51), résultats d'outils parallèles admis en groupe (#52).
   Cinq `fs_read` de 20 k tokens entraient entiers (100 k tokens dans le canonique, renvoyés
   à chaque appel) ; ils sont maintenant répartis sous le budget, les petits gardés entiers,
   les gros externalisés en artefacts relisibles. L'admission reste idempotente.
+- **Modèles locaux** : la requête demande `stream_options.include_usage`, sans quoi vLLM,
+  llama.cpp, LM Studio et mlx_lm ne renvoient jamais `usage` en streaming (comptage à zéro,
+  compaction sur la taille réelle jamais déclenchée). La fenêtre de contexte vient de
+  `GET /models` quand l'endpoint la donne (`context_length`, `max_model_len`, `n_ctx`),
+  sinon de `providers.local.context_window` (32 768) : un modèle local à 128 k n'est plus
+  compacté vers 22 900 tokens.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et
