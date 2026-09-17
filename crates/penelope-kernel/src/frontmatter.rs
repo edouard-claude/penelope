@@ -216,20 +216,67 @@ fn parse_scalar(v: &str) -> FmValue {
 
 fn unquote(s: &str) -> String {
     let s = s.trim();
-    if (s.starts_with('"') && s.ends_with('"') && s.len() >= 2)
-        || (s.starts_with('\'') && s.ends_with('\'') && s.len() >= 2)
-    {
-        return s[1..s.len() - 1].to_string();
+    if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
+        return s[1..s.len() - 1]
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\");
+    }
+    if s.starts_with('\'') && s.ends_with('\'') && s.len() >= 2 {
+        return s[1..s.len() - 1].replace("''", "'");
     }
     s.to_string()
 }
 
-/// Sérialise un frontmatter, en préservant l'ordre alphabétique des clés.
+/// Chaîne YAML valide : entre guillemets dès qu'elle serait lue autrement
+/// (lien `[[x]]`, `: `, ` #`, indicateur en tête, booléen ou nombre), telle quelle sinon.
+/// Une date `AAAA-MM-JJ` reste nue : elle se lit comme une date.
+pub fn yaml_string(s: &str) -> String {
+    let lower = s.to_ascii_lowercase();
+    let needs = s.is_empty()
+        || s != s.trim()
+        || s.contains(": ")
+        || s.ends_with(':')
+        || s.contains(" #")
+        || s.contains("[[")
+        || s.contains(['\n', '\r', '\t'])
+        || s.starts_with([
+            '[', ']', '{', '}', '>', '|', '*', '&', '!', '%', '@', '`', '"', '\'', ',', '?', '#',
+            '-',
+        ])
+        || matches!(
+            lower.as_str(),
+            "true" | "false" | "yes" | "no" | "on" | "off" | "null" | "~"
+        )
+        || (s.parse::<f64>().is_ok() && !is_date(s));
+    if needs {
+        format!(
+            "\"{}\"",
+            s.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace(['\n', '\r', '\t'], " ")
+        )
+    } else {
+        s.to_string()
+    }
+}
+
+fn is_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b.iter()
+            .enumerate()
+            .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+}
+
+/// Sérialise un frontmatter, en préservant l'ordre alphabétique des clés. Les listes sont
+/// écrites en blocs (`- élément`), la forme usuelle des propriétés YAML (issue #29).
 pub fn render(fields: &BTreeMap<String, FmValue>, body: &str) -> String {
     let mut out = String::from("---\n");
     for (k, v) in fields {
         match v {
-            FmValue::Str(s) => out.push_str(&format!("{k}: {s}\n")),
+            FmValue::Str(s) => out.push_str(&format!("{k}: {}\n", yaml_string(s))),
             FmValue::Bool(b) => out.push_str(&format!("{k}: {b}\n")),
             FmValue::Num(n) => {
                 if n.fract() == 0.0 {
@@ -238,8 +285,12 @@ pub fn render(fields: &BTreeMap<String, FmValue>, body: &str) -> String {
                     out.push_str(&format!("{k}: {n}\n"));
                 }
             }
+            FmValue::List(items) if items.is_empty() => out.push_str(&format!("{k}: []\n")),
             FmValue::List(items) => {
-                out.push_str(&format!("{k}: [{}]\n", items.join(", ")));
+                out.push_str(&format!("{k}:\n"));
+                for item in items {
+                    out.push_str(&format!("  - {}\n", yaml_string(item)));
+                }
             }
         }
     }
@@ -251,6 +302,38 @@ pub fn render(fields: &BTreeMap<String, FmValue>, body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #29 : ce qui est écrit reste du YAML qui se relit comme prévu.
+    #[test]
+    fn rendered_properties_are_valid_yaml() {
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "aliases".into(),
+            FmValue::List(vec!["Factur-X".into(), "ZUGFeRD 2".into()]),
+        );
+        fields.insert("tags".into(), FmValue::List(vec![]));
+        fields.insert("titre".into(), FmValue::Str("Contrat: v2 #final".into()));
+        fields.insert("source".into(), FmValue::Str("[[contrat-v2]]".into()));
+        fields.insert("created".into(), FmValue::Str("2026-09-17".into()));
+        fields.insert("version".into(), FmValue::Str("12".into()));
+        fields.insert("citation".into(), FmValue::Str("il a dit \"oui\"".into()));
+        let raw = render(&fields, "# x\n");
+        assert!(
+            raw.contains("aliases:\n  - Factur-X\n  - ZUGFeRD 2\n"),
+            "{raw}"
+        );
+        assert!(raw.contains("tags: []\n"));
+        assert!(raw.contains("titre: \"Contrat: v2 #final\"\n"));
+        assert!(raw.contains("source: \"[[contrat-v2]]\"\n"));
+        assert!(raw.contains("created: 2026-09-17\n"));
+        assert!(raw.contains("version: \"12\"\n"));
+        let back = parse(&raw).unwrap();
+        assert_eq!(back.string("titre"), "Contrat: v2 #final");
+        assert_eq!(back.string("source"), "[[contrat-v2]]");
+        assert_eq!(back.string("citation"), "il a dit \"oui\"");
+        assert_eq!(back.list("aliases"), vec!["Factur-X", "ZUGFeRD 2"]);
+        assert!(back.list("tags").is_empty());
+    }
 
     #[test]
     fn parses_scalars_lists_and_body() {

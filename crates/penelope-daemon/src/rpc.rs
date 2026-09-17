@@ -181,7 +181,7 @@ impl Rpc {
                 let root = s.platform.dirs.skills();
                 let path =
                     penelope_skills::rollback_skill(&root, &name).map_err(anyhow::Error::msg)?;
-                s.skills.reload(None, &root, None).await?;
+                crate::runtime::reload_skills(s).await?;
                 Ok(json!({"name": name, "restored": path}))
             }
             method::RESTORE => anyhow::bail!(
@@ -558,6 +558,9 @@ impl Rpc {
             }
             method::MEM_REINDEX => {
                 let vault = crate::conversation::vault_dir(s);
+                crate::vault_ops::migrate_wiki(s, &vault)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
                 let n = crate::vault_ops::reindex(s, &vault)
                     .await
                     .map_err(anyhow::Error::msg)?;
@@ -612,6 +615,24 @@ impl Rpc {
                     .map_err(anyhow::Error::msg)
             }
             method::VAULT_CHECK => Ok(crate::dream::vault_check(s).await),
+            method::VAULT_LINT => {
+                let vault = crate::conversation::vault_dir(s);
+                let (report, proposals) = crate::dream::wiki_review(s, &vault).await;
+                let mut text = if report.is_clean() {
+                    format!("✅ Wiki valide : {} note(s), aucun problème.", report.notes)
+                } else {
+                    format!(
+                        "{} problème(s) sur {} note(s) :\n- {}",
+                        report.problems(),
+                        report.notes,
+                        report.summary().join("\n- ")
+                    )
+                };
+                if !proposals.is_empty() {
+                    text.push_str(&format!("\nÀ trancher :\n- {}", proposals.join("\n- ")));
+                }
+                Ok(json!({"report": report, "proposals": proposals, "text": text}))
+            }
             method::MEM_DIFF => {
                 let since = p.get("since").and_then(|v| v.as_str()).unwrap_or_default();
                 if !since.is_empty() && since != "dream" {

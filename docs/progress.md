@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1199 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1211 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -152,7 +152,7 @@ Dernière mise à jour : 17 septembre 2026.
 - **Ingestion de documents** (§6.13) : PDF (`lopdf`, décompression bornée par page,
   panique rattrapée), DOCX (`zip`), HTML, Markdown, texte ; fiche
   `vault/sources/<slug>.md` d'origine `untrusted` (sauf `/mien`), secrets et numéros de
-  carte masqués, original conservé sous `{data}/media/documents`, passages indexés en
+  carte masqués, original conservé (dans `vault/attachments/` depuis 0.9.0), passages indexés en
   type `source`, exclus du rappel automatique et encadrés à la lecture (`mem_search`,
   `mem_get`). Même contenu reçu deux fois : fiche reprise. La réindexation garde la
   provenance déclarée par la fiche.
@@ -450,6 +450,28 @@ Qualité de la mémoire, historique du vault, secrets et signature.
 - #28 **Signature macOS stable** : `make build`/`make sign` avec `SIGN_IDENTITY`,
   re-signature à l'upgrade (`upgrade.codesign_identity`), type de signature dans `doctor`,
   workflow CI qui vérifie l'exigence désignée entre deux builds.
+
+### 0.9.0
+
+Le vault devient un wiki Markdown valide à tout moment (#29).
+
+- **Format** : propriétés YAML sur chaque note (`type`, `created`, `updated`, `aliases` et
+  `tags` en listes, valeurs citées au besoin), uid en identifiant de bloc final (`^uid`,
+  visé par `[[note#^uid]]`), encadrés reconnus, noms de fichiers uniques dans tout le vault
+  (`accueil-AAAA-MM-JJ`, `audit-AAAA-MM-JJ`, wikilink par chemin si ambigu), originaux dans
+  `attachments/` embarqués par leur fiche, `log.md` en ajout seul, skill livrée
+  `wiki-markdown` (les skills sont désormais chargées au démarrage).
+- **Lint** : résolveur de wikilinks (nom, chemin, puis alias), liens non résolus, blocs
+  absents, orphelines, impasses, alias et noms en double, identifiants de bloc invalides
+  ou dupliqués, propriétés ; entrées expirées et contradictions proposées ; rapport dans
+  `DREAMS.md`, `log.md` et l'audit (barème v2) ; `penelope vault lint`.
+- **Coexistence** : écriture optimiste (relecture juste avant d'écrire, opération
+  réappliquée, reportée si la ligne visée a changé), écriture atomique, dossiers cachés
+  intacts, renommage avec réécriture des wikilinks, `.gitignore` sans nom de produit.
+- **Journal et digest** : candidats et épisodes reliés aux concepts cités et aux sources
+  de la session, digest avec les entrées du rêve et le journal de la veille.
+- **Migration** d'un vault antérieur au premier démarrage et à `mem reindex`, uid et
+  provenance conservés.
 
 ### Routine de livraison
 

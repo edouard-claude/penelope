@@ -521,6 +521,26 @@ impl Daemon {
     }
 }
 
+/// Skills livrées avec le binaire (portée `bundled`) : une skill utilisateur ou de dépôt du
+/// même nom l'emporte.
+pub const BUNDLED_SKILLS: &[(&str, &str)] = &[(
+    "wiki-markdown",
+    include_str!("../skills/wiki-markdown/SKILL.md"),
+)];
+
+/// Recharge les skills : livrées (réécrites depuis le binaire), puis celles de l'utilisateur.
+pub async fn reload_skills(s: &Services) -> anyhow::Result<u64> {
+    let bundled = s.platform.dirs.bundled_skills();
+    for (name, body) in BUNDLED_SKILLS {
+        let dir = bundled.join(name);
+        std::fs::create_dir_all(&dir)?;
+        penelope_kernel::config::atomic_write(&dir.join("SKILL.md"), body.as_bytes())?;
+    }
+    Ok(s.skills
+        .reload(Some(&bundled), &s.platform.dirs.skills(), None)
+        .await?)
+}
+
 /// Sous-systèmes abonnés aux générations de configuration (§4.4).
 pub const SUBSYSTEMS: &[&str] = &[
     "context",

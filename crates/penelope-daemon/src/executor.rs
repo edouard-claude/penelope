@@ -854,7 +854,9 @@ impl NativeToolExecutor {
                 proposal.validate().map_err(ToolError::Invalid)?;
                 let root = s.platform.dirs.skills();
                 let path = penelope_skills::write_skill(&root, &proposal).map_err(ToolError::Io)?;
-                s.skills.reload(None, &root, None).await?;
+                crate::runtime::reload_skills(s)
+                    .await
+                    .map_err(|e| ToolError::Io(e.to_string()))?;
                 json!({"written": path, "name": proposal.name})
             }
 

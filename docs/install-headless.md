@@ -565,7 +565,9 @@ message.
 
 Un document PDF, DOCX, HTML, Markdown ou texte est ingéré : son texte devient une fiche
 `vault/sources/<nom>.md`, découpée en passages que `mem_search` retrouve, et un résumé
-revient sur Telegram. Le contenu d'un document est traité comme non fiable : jamais
+revient sur Telegram. L'original, jamais modifié, est rangé dans `vault/attachments/` et
+embarqué par la fiche (`![[nom.pdf]]`, propriété `source`) ; l'ingestion s'inscrit dans
+`log.md`. Le contenu d'un document est traité comme non fiable : jamais
 rappelé automatiquement, toujours encadré quand Pénélope le lit. Une légende commençant
 par `/mien` déclare un document rédigé par soi. Toute autre légende est une demande :
 « quand expire ce contrat ? » part avec le document.
@@ -642,7 +644,7 @@ niveau Cœur (`memoire.md`) dépasse `memory.core_budget_tokens`, `DREAMS.md` le
 
 **Historique git du vault.** Avec `memory.vault_git_autocommit` actif (15 min par défaut,
 `0s` pour désactiver), le vault devient un dépôt au démarrage (`.gitignore`, commit
-initial, identité locale si git n'en a pas). Les éditions faites dans Obsidian ou en SSH
+initial, identité locale si git n'en a pas). Les éditions faites à la main (éditeur, SSH)
 sont commitées à cette période, chaque rêve fait son commit `rêve du AAAA-MM-JJ (d_…) : N
 promues`, poussé si `memory.vault_git_remote` est renseigné. `doctor` et le digest
 avertissent si le vault reste hors git. Ce que le dernier rêve a changé :
@@ -657,7 +659,7 @@ sans `--since`, les changements pas encore commités.
 (ou `penelope onboard`) pose neuf questions, une à la fois, avec des boutons quand c'est
 possible : rôle, clients, projets, outils, tutoiement, longueur et langue des réponses, ce
 que Pénélope ne doit jamais faire, ce qu'elle doit toujours faire ou éviter. Chaque
-question est écrite dans `accueil/AAAA-MM-JJ.md` avant d'être posée et sa réponse se range
+question est écrite dans `accueil/accueil-AAAA-MM-JJ.md` avant d'être posée et sa réponse se range
 dessous : la séance se reprend après une pause. À la fin, un récapitulatif montre ce qui
 change dans `profil.md` (directives Toujours, Jamais, Préférer, Éviter) et `memoire.md` ;
 rien n'est écrit sans validation, et chaque entrée garde sa provenance vers sa question.
@@ -665,10 +667,10 @@ rien n'est écrit sans validation, et chaque entrée garde sa provenance vers sa
 l'ancienne réponse. Le premier message d'une instance au profil vide propose l'accueil.
 
 **Audit.** `/audit` ou `penelope mem audit` note la mémoire sur 100 avec un barème fixe
-(v1) sur cinq axes : connaissance du propriétaire, portée (serveurs MCP, sources,
+(v2, le lint du wiki compte dans la qualité) sur cinq axes : connaissance du propriétaire, portée (serveurs MCP, sources,
 projets), savoir-faire, autonomie, qualité (provenance, liens morts, concepts à définir,
 contradictions, vecteurs). Chaque axe dit pourquoi et propose une seule prochaine action ;
-l'audit est gardé dans `audits/AAAA-MM-JJ.md` avec l'écart depuis le précédent, et le
+l'audit est gardé dans `audits/audit-AAAA-MM-JJ.md` avec l'écart depuis le précédent, et le
 digest du lundi en donne le score.
 
 **Wiki de concepts.** Le résumé d'un document reçu nomme aussi ses concepts (personne,
@@ -677,16 +679,51 @@ alias, sources), dédoublonné par les mots puis par le sens. La fiche source re
 section `## Concepts` avec ses liens `[[slug]]`, les lignes de `memoire.md` et `projets.md`
 qui citent le concept aussi, `concepts/_a-definir.md` liste les termes employés sans
 définition (repris par le digest du matin) et `index.md` sert de point d'entrée, y compris
-dans Obsidian. L'outil `mem_neighbors` parcourt ce graphe.
+dans un éditeur de wiki Markdown. L'outil `mem_neighbors` parcourt ce graphe.
 
 **Ce qui est indexé.** Toutes les entrées `- …` des fichiers Markdown du vault et les
 passages des fiches `sources/`. Ne le sont pas, à dessein : `inbox/` (en attente
-d'ingestion), `accueil/`, `audits/`, `archive/`, `index.md`, `concepts/_a-definir.md`,
-les fichiers cachés. Tout le reste qui échappe à l'index (un PDF déposé à la main, un
+d'ingestion), `accueil/`, `audits/`, `archive/`, `attachments/` (originaux, indexés par
+leur fiche), `index.md`, `log.md`, `concepts/_a-definir.md`, les fichiers cachés. Tout le reste qui échappe à l'index (un PDF déposé à la main, un
 texte sans entrées, des lignes sans uid) est nommé par `penelope vault check`,
 `penelope doctor` et le journal du daemon ; une recherche mémoire vide le rappelle au
 modèle, qui dit « je ne trouve rien dans ce que j'ai indexé » plutôt que « cela n'existe
 pas ».
+
+**Wiki Markdown.** Le vault reste un wiki Markdown valide à tout moment, même édité à la
+main pendant que Pénélope écrit :
+
+- chaque note porte des propriétés YAML : `type` (`journal`, `source`, `concept`, `profil`,
+  `memoire`, `accueil`, `audit`, `revue`…), `created` et `updated` en `AAAA-MM-JJ`,
+  `aliases` et `tags` en listes, `date` pour le journal ;
+- chaque entrée se termine par son identifiant de bloc (`- texte ^01J9…`), que vise un
+  wikilink `[[memoire#^01J9…]]` ; les autres annotations restent en commentaires ;
+- un nom de fichier est unique dans tout le vault (sinon le wikilink porte le chemin) ;
+  accueil et audits s'appellent `accueil-AAAA-MM-JJ` et `audit-AAAA-MM-JJ` ;
+- `log.md` reçoit, en ajout seul, une ligne `## [AAAA-MM-JJ] <op> | <titre>` par ingestion,
+  rêve, accueil et lint :
+
+```bash
+grep "^## \[" log.md
+```
+
+Avant d'écrire, Pénélope relit le fichier : une édition faite entre-temps est gardée et
+l'opération réappliquée ligne à ligne ; si la ligne visée a elle-même changé, l'opération
+est reportée. Les dossiers cachés (configuration d'éditeur) ne sont jamais touchés. Le rêve
+passe le lint et l'écrit dans `DREAMS.md` et `log.md` ; à la demande :
+
+```bash
+penelope vault lint
+```
+
+liens non résolus, notes orphelines et impasses, alias et noms en double, identifiants de
+bloc invalides ou dupliqués, propriétés mal typées, puis les entrées expirées et les
+contradictions à trancher (proposées, jamais corrigées en silence). Le digest du matin
+cite les entrées du rêve (`[[memoire#^…]]`) et le journal de la veille. Un vault d'une
+version antérieure est converti au premier démarrage (et par `penelope mem reindex`) :
+uid en identifiants de bloc, `alias` en `aliases`, noms d'accueil et d'audit (wikilinks
+réécrits), originaux déplacés dans `attachments/`, propriétés posées ; les uid et leur
+provenance ne changent pas. La skill livrée `wiki-markdown` donne ces règles au modèle.
 
 **Recherche par le sens.** Le rappel mémoire, `mem_search`, le déclenchement des
 intentions et `tool_search` croisent les mots et les vecteurs : une entrée sur

@@ -345,10 +345,22 @@ pub async fn ingest(
             .as_deref()
             .filter(|t| !t.trim().is_empty())
             .unwrap_or("session sans titre");
-        let line = format!(
+        let mut line = format!(
             "Épisode {episode} de « {title} » clos ({}) : {resume}",
             boundary.as_str()
         );
+        // Sources touchées pendant la session : wikilinks, les concepts suivent à l'écriture.
+        let vault = crate::conversation::vault_dir(s);
+        let resolver = penelope_memory::wiki::Resolver::scan(&vault);
+        for slug in crate::concepts::session_sources(s, session_id).await {
+            let target = resolver.link_target(&format!(
+                "{}/{slug}.md",
+                penelope_memory::ingest::SOURCES_DIR
+            ));
+            if !line.contains(&format!("[[{target}]]")) {
+                line.push_str(&format!(" [[{target}]]"));
+            }
+        }
         let prov = Provenance {
             origin: Origin::Agent,
             session_kind: "episode".into(),
@@ -357,7 +369,6 @@ pub async fn ingest(
             source_ref: Some(source_ref.clone()),
             session_id: Some(session_id.to_string()),
         };
-        let vault = crate::conversation::vault_dir(s);
         if let Err(e) =
             crate::vault_ops::remember_with(s, &vault, Level::Episodic, &line, prov).await
         {

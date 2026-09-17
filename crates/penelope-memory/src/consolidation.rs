@@ -582,6 +582,11 @@ pub fn detect_contradiction(
 /// La comparaison de sujet se fait par **containment** sur les mots significatifs (le plus
 /// petit énoncé sert de dénominateur) : « Toujours répondre en anglais aux clients » et
 /// « Jamais de réponse en anglais » se contredisent malgré des longueurs différentes.
+/// Deux entrées se contredisent : directives de polarité opposée sur le même sujet.
+pub fn contradicts(a: &str, b: &str) -> bool {
+    negates(a, b)
+}
+
 fn negates(a: &str, b: &str) -> bool {
     let (pa, pb) = (polarity(a), polarity(b));
     if pa == 0 || pb == 0 || pa == pb {
@@ -686,6 +691,14 @@ pub struct DreamReport {
     /// Signalements (budget du niveau Cœur dépassé, issue #25).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// Entrées ajoutées ou réécrites, en wikilinks `[[note#^uid]]` (issue #29).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub promoted_refs: Vec<String>,
+    /// Lint du wiki : une ligne par catégorie de problème.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lint: Vec<String>,
+    #[serde(default)]
+    pub lint_problems: u32,
 }
 
 impl DreamReport {
@@ -711,6 +724,15 @@ impl DreamReport {
         }
         for w in &self.warnings {
             s.push_str(&format!("\nAttention : {w}"));
+        }
+        if !self.promoted_refs.is_empty() {
+            s.push_str(&format!("\nEntrées : {}", self.promoted_refs.join(", ")));
+        }
+        if !self.lint.is_empty() {
+            s.push_str("\nLint du wiki :");
+            for l in &self.lint {
+                s.push_str(&format!("\n- {l}"));
+            }
         }
         if !self.rejected.is_empty() {
             s.push_str(&format!(

@@ -179,6 +179,52 @@ fn comment_re() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"<!--\s*([a-zA-Zé]+)\s*:\s*(.*?)\s*-->").expect("regex valide"))
 }
 
+/// Identifiant de bloc en fin de ligne : ` ^id` (issue #29).
+fn block_id_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?:^|\s)\^([A-Za-z0-9-]+)\s*$").expect("regex valide"))
+}
+
+/// Identifiant de bloc valide : lettres latines, chiffres et tirets.
+pub fn is_valid_block_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Identifiant de bloc terminant la ligne, s'il y en a un.
+pub fn block_id(line: &str) -> Option<String> {
+    let without = comment_re().replace_all(line, "");
+    block_id_re()
+        .captures(without.trim_end())
+        .map(|c| c[1].to_string())
+}
+
+/// Ligne réduite à un identifiant de bloc (`^id`), qui désigne le bloc précédent.
+pub fn standalone_block_id(line: &str) -> Option<String> {
+    line.trim()
+        .strip_prefix('^')
+        .filter(|id| is_valid_block_id(id))
+        .map(str::to_string)
+}
+
+/// Ligne au format antérieur (`<!-- uid: X -->`) réécrite avec l'identifiant de bloc final,
+/// annotations conservées ; `None` si rien à migrer. N'ajoute jamais d'uid.
+pub fn migrate_legacy_line(line: &str) -> Option<String> {
+    if !Annotations::has_legacy_uid(line) {
+        return None;
+    }
+    let ann = Annotations::parse(line);
+    if !ann.uid.as_deref().is_some_and(is_valid_block_id) {
+        return None;
+    }
+    let text = strip_annotations(line);
+    Some(format!("{text} {}", ann.render()))
+}
+
+/// uid d'une ligne : identifiant de bloc, ou ancien commentaire `<!-- uid: … -->`.
+pub fn line_uid(line: &str) -> Option<String> {
+    Annotations::parse(line).uid
+}
+
 impl Annotations {
     /// Extrait les annotations d'une ligne. Une ligne sans commentaire donne des valeurs
     /// neutres : le parseur tolère l'absence (§6.4).
@@ -216,13 +262,25 @@ impl Annotations {
                 _ => {}
             }
         }
+        if a.uid.is_none() {
+            a.uid = block_id(line);
+        }
         a
     }
 
-    /// Rend les annotations en commentaires, dans un ordre stable.
+    /// Vrai si l'uid est encore écrit en commentaire (format antérieur à 0.9.0).
+    pub fn has_legacy_uid(line: &str) -> bool {
+        comment_re()
+            .captures_iter(line)
+            .any(|c| c[1].eq_ignore_ascii_case("uid"))
+    }
+
+    /// Rend les annotations en commentaires, dans un ordre stable, et l'uid en identifiant
+    /// de bloc final (`^uid`) : un wikilink peut alors viser l'entrée, `[[note#^uid]]`. Un uid
+    /// que l'identifiant de bloc ne peut pas porter reste en commentaire.
     pub fn render(&self) -> String {
         let mut parts = Vec::new();
-        if let Some(u) = &self.uid {
+        if let Some(u) = self.uid.as_ref().filter(|u| !is_valid_block_id(u)) {
             parts.push(format!("<!-- uid: {u} -->"));
         }
         if let Some(i) = self.importance {
@@ -264,13 +322,21 @@ impl Annotations {
         if let Some(r) = &self.revue {
             parts.push(format!("<!-- revue: {r} -->"));
         }
+        if let Some(u) = self.uid.as_ref().filter(|u| is_valid_block_id(u)) {
+            parts.push(format!("^{u}"));
+        }
         parts.join(" ")
     }
 }
 
-/// Retire les commentaires d'annotation pour obtenir le texte seul.
+/// Retire les commentaires d'annotation et l'identifiant de bloc final pour obtenir le
+/// texte seul.
 pub fn strip_annotations(line: &str) -> String {
-    comment_re().replace_all(line, "").trim().to_string()
+    let without = comment_re().replace_all(line, "");
+    block_id_re()
+        .replace(without.trim_end(), "")
+        .trim()
+        .to_string()
 }
 
 /// Une entrée de liste dans un fichier du vault.
@@ -295,6 +361,8 @@ pub fn parse_entries(raw: &str) -> (Vec<VaultEntry>, Option<String>) {
     let mut entries = Vec::new();
     let mut section = String::new();
     let mut changed = false;
+    // Encadré en cours : texte, puis texte brut pour ses annotations.
+    let mut callout: Option<(String, String)> = None;
     let mut out_lines: Vec<String> = raw
         .replace("\r\n", "\n")
         .split('\n')
@@ -308,11 +376,59 @@ pub fn parse_entries(raw: &str) -> (Vec<VaultEntry>, Option<String>) {
         let trimmed = line.trim();
         if let Some(h) = trimmed.strip_prefix("## ") {
             section = h.trim().to_string();
+            callout = None;
             continue;
         }
         if trimmed.starts_with("# ") {
+            callout = None;
             continue;
         }
+        // Encadré (`> [!abstract] …`) suivi d'un identifiant de bloc seul sur sa
+        // ligne : une entrée dont le texte est celui de l'encadré.
+        if trimmed.starts_with('>') {
+            let body = trimmed.trim_start_matches('>').trim();
+            let body = match body.strip_prefix("[!") {
+                Some(rest) => rest.split_once(']').map(|(_, t)| t).unwrap_or("").trim(),
+                None => body,
+            };
+            let (text, ann) = callout.get_or_insert_with(|| (String::new(), String::new()));
+            if !body.is_empty() {
+                ann.push_str(body);
+                ann.push(' ');
+                let plain = strip_annotations(body);
+                if !plain.is_empty() {
+                    if !text.is_empty() {
+                        text.push_str(if text.ends_with(['.', ':', '!', '?']) {
+                            " "
+                        } else {
+                            " : "
+                        });
+                    }
+                    text.push_str(&plain);
+                }
+            }
+            continue;
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(id) = standalone_block_id(trimmed) {
+            if let Some((text, raw_ann)) = callout.take()
+                && !text.is_empty()
+            {
+                let mut annotations = Annotations::parse(&raw_ann);
+                annotations.uid = Some(id.clone());
+                entries.push(VaultEntry {
+                    uid: id,
+                    text,
+                    annotations,
+                    section: section.clone(),
+                    line: i + 1,
+                });
+            }
+            continue;
+        }
+        callout = None;
         let Some(item) = trimmed
             .strip_prefix("- ")
             .or_else(|| trimmed.strip_prefix("* "))
@@ -324,23 +440,24 @@ pub fn parse_entries(raw: &str) -> (Vec<VaultEntry>, Option<String>) {
         if text.is_empty() {
             continue;
         }
-        let uid = match &ann.uid {
-            Some(u) => u.clone(),
-            None => {
-                let u = Ulid::new().to_string();
-                ann.uid = Some(u.clone());
-                // Réécriture de la ligne avec l'uid ajouté.
-                let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-                let bullet = if trimmed.starts_with("* ") {
-                    "* "
-                } else {
-                    "- "
-                };
-                out_lines[i] = format!("{indent}{bullet}{} <!-- uid: {u} -->", item.trim());
-                changed = true;
-                u
-            }
-        };
+        let legacy =
+            Annotations::has_legacy_uid(item) && ann.uid.as_deref().is_some_and(is_valid_block_id);
+        if ann.uid.is_none() {
+            ann.uid = Some(Ulid::new().to_string());
+        }
+        let uid = ann.uid.clone().unwrap_or_default();
+        if legacy || block_id(item).is_none() && is_valid_block_id(&uid) {
+            // Réécriture avec identifiant de bloc : uid ajouté, ou déplacé du commentaire vers
+            // l'identifiant de bloc final, annotations conservées.
+            let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+            let bullet = if trimmed.starts_with("* ") {
+                "* "
+            } else {
+                "- "
+            };
+            out_lines[i] = format!("{indent}{bullet}{} {}", text, ann.render());
+            changed = true;
+        }
         entries.push(VaultEntry {
             uid,
             text,
@@ -394,6 +511,9 @@ pub struct Practice {
     pub default_entry: Option<VaultEntry>,
     pub exceptions: Vec<VaultEntry>,
     pub ecarts: Vec<VaultEntry>,
+    /// Autres propriétés (`created`, `updated`, `tags`…), conservées à la réécriture.
+    #[serde(skip)]
+    pub extra: BTreeMap<String, FmValue>,
 }
 
 /// Résultat du rappel d'une pratique dans un contexte donné (§6.7 point 3).
@@ -478,6 +598,24 @@ impl Practice {
             default_entry: defaults.into_iter().next(),
             exceptions,
             ecarts,
+            extra: fm
+                .fields
+                .iter()
+                .filter(|(k, _)| {
+                    !matches!(
+                        k.as_str(),
+                        "type"
+                            | "id"
+                            | "scope"
+                            | "confiance"
+                            | "preuves"
+                            | "statut"
+                            | "maj"
+                            | "declencheurs"
+                    )
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         })
     }
 
@@ -561,7 +699,7 @@ impl Practice {
     }
 
     pub fn render(&self) -> String {
-        let mut fields: BTreeMap<String, FmValue> = BTreeMap::new();
+        let mut fields: BTreeMap<String, FmValue> = self.extra.clone();
         fields.insert("type".into(), FmValue::Str("pratique".into()));
         fields.insert("id".into(), FmValue::Str(self.id.clone()));
         fields.insert("scope".into(), FmValue::Str(self.scope.clone()));
@@ -674,12 +812,18 @@ pub fn is_directive(text: &str) -> bool {
         .any(|p| text.trim_start().starts_with(p))
 }
 
-/// Liens `[[slug]]` d'un texte.
+/// Cibles des wikilinks d'un texte, réduites au nom : `[[dossier/slug#^bloc|texte]]` donne
+/// `slug`.
 pub fn links(text: &str) -> Vec<String> {
     static R: OnceLock<Regex> = OnceLock::new();
     let re = R.get_or_init(|| Regex::new(r"\[\[([^\]]+)\]\]").expect("regex valide"));
     re.captures_iter(text)
-        .map(|c| c[1].trim().to_string())
+        .filter_map(|c| {
+            let target = c[1].split(['|', '#']).next().unwrap_or_default().trim();
+            let name = target.rsplit('/').next().unwrap_or(target);
+            let name = name.strip_suffix(".md").unwrap_or(name);
+            (!name.is_empty()).then(|| name.to_string())
+        })
         .collect()
 }
 
@@ -760,6 +904,41 @@ mod tests {
         assert_eq!(back.declencheurs, a.declencheurs);
     }
 
+    /// Issue #29 : l'uid devient un identifiant de bloc, les autres annotations
+    /// restent des commentaires, et un encadré suivi de `^uid` est une entrée.
+    #[test]
+    fn entries_use_block_ids() {
+        let a = Annotations {
+            uid: Some("01J9ABC".into()),
+            importance: Some(7),
+            sensible: true,
+            ..Default::default()
+        };
+        let line = crate::edit::entry_line("Le serveur est à Lyon", &a);
+        assert_eq!(
+            line,
+            "- Le serveur est à Lyon <!-- importance: 7 --> <!-- sensible: oui --> ^01J9ABC"
+        );
+        let back = Annotations::parse(&line);
+        assert_eq!(back.uid.as_deref(), Some("01J9ABC"));
+        assert!(back.sensible);
+        assert_eq!(strip_annotations(&line), "- Le serveur est à Lyon");
+        assert_eq!(line_uid("- Calcul de x^2 au tableau"), None);
+        assert_eq!(block_id("- Formule e = mc ^2"), Some("2".into()));
+        assert!(!is_valid_block_id("src_1"));
+
+        let raw = "# Journal\n\n> [!abstract] Épisode 2 · Migration DNS\n                   > Bascule faite, TTL remis à 3600.\n\n^EP2\n\n- Une ligne ^L1\n";
+        let (entries, rewritten) = parse_entries(raw);
+        assert!(rewritten.is_none(), "format déjà valide");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].uid, "EP2");
+        assert_eq!(
+            entries[0].text,
+            "Épisode 2 · Migration DNS : Bascule faite, TTL remis à 3600."
+        );
+        assert_eq!(entries[1].uid, "L1");
+    }
+
     #[test]
     fn missing_annotations_are_neutral() {
         let a = Annotations::parse("une ligne toute simple");
@@ -778,7 +957,14 @@ mod tests {
         assert_eq!(entries[0].uid, "01J8A");
         assert_eq!(entries[1].uid.len(), 26, "un ULID est généré");
         let rewritten = rewritten.expect("le fichier doit être réécrit");
-        assert!(rewritten.contains(&format!("<!-- uid: {} -->", entries[1].uid)));
+        assert!(rewritten.contains(&format!(
+            "- Préférer Go pour le backend. ^{}",
+            entries[1].uid
+        )));
+        assert!(
+            rewritten.contains("- Toujours répondre en français. ^01J8A"),
+            "ancien uid en commentaire migré en identifiant de bloc : {rewritten}"
+        );
         // Une seconde passe ne change plus rien.
         let (again, changed) = parse_entries(&rewritten);
         assert!(changed.is_none());

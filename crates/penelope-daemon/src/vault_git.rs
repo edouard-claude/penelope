@@ -3,7 +3,7 @@
 //! ```text
 //! démarrage ── autocommit actif, vault hors git ─► git init + .gitignore + commit initial
 //! rêve ─────── fin de passe ─────────────────────► commit « rêve du AAAA-MM-JJ (d_…) : N promues »
-//! maintenance  toutes les `vault_git_autocommit` ► commit des éditions (Obsidian, SSH)
+//! maintenance  toutes les `vault_git_autocommit` ► commit des éditions (éditeur, SSH)
 //! doctor, digest ─ autocommit actif, vault hors git ─► avertissement
 //! penelope mem diff [--since dream] ─► ce que le dernier rêve a changé
 //! ```
@@ -21,8 +21,8 @@ pub const DREAM_PREFIX: &str = "rêve du ";
 
 const GITIGNORE: &str = "# Pénélope : fichiers locaux hors historique\n\
 .DS_Store\n\
-.obsidian/workspace*.json\n\
-.obsidian/cache\n\
+.*/workspace.json\n\
+.*/workspaces.json\n\
 .trash/\n\
 *.tmp\n\
 *.swp\n";

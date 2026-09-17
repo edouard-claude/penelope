@@ -37,6 +37,21 @@ impl Daemon {
         let report = self.recover().await?;
         tracing::info!(?report, "reprise terminée");
         crate::budget_alert::AlertWatcher::install(&self);
+        // Skills livrées et de l'utilisateur, disponibles dès le premier tour.
+        if let Err(e) = crate::runtime::reload_skills(&self.services).await {
+            tracing::warn!(error = %e, "chargement des skills");
+        }
+        // Vault d'une version antérieure : mis au format du wiki une fois (issue #29).
+        if self.kv_get("wiki.migrated").await.ok().flatten().is_none() {
+            let vault = crate::conversation::vault_dir(&self.services);
+            match crate::vault_ops::migrate_wiki(&self.services, &vault).await {
+                Ok(m) => {
+                    tracing::info!(?m, "vault mis au format du wiki");
+                    let _ = self.kv_set("wiki.migrated", "1").await;
+                }
+                Err(e) => tracing::warn!(error = %e, "migration du vault"),
+            }
+        }
         // Historique du vault : dépôt créé si l'autocommit est actif (issue #27).
         match crate::vault_git::ensure_repo(&self.services).await {
             Ok(_) => {}

@@ -45,6 +45,12 @@ pub fn excluded(rel: &str) -> Option<&'static str> {
         "inbox" => Some("en attente d'ingestion"),
         "accueil" | "audits" => Some("compte rendu, repris dans le profil ou le digest"),
         "archive" => Some("archivé"),
+        penelope_memory::wiki::ATTACHMENTS_DIR => {
+            Some("original immuable, indexé par sa fiche source")
+        }
+        _ if rel == penelope_memory::wiki::LOG_FILE => {
+            Some("journal des opérations, en ajout seul")
+        }
         _ if rel == crate::concepts::INDEX || rel == crate::concepts::TO_DEFINE => {
             Some("page générée")
         }

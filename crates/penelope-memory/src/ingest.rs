@@ -31,6 +31,8 @@ pub const PASSAGE_CHARS: usize = 1_200;
 pub const CONTENT_HEADER: &str = "## Contenu";
 /// Titre de la section du résumé.
 pub const SUMMARY_HEADER: &str = "## Résumé";
+/// Section qui embarque l'original immuable, rangé dans `attachments/` (issue #29).
+pub const ORIGINAL_HEADER: &str = "## Original";
 
 /// Décompression maximale d'une page PDF ou du corps d'un DOCX.
 const DECOMPRESSED_MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -416,12 +418,15 @@ pub struct SourceMeta {
     pub format: String,
     pub pages: Option<usize>,
     pub caracteres: usize,
+    /// Nom de l'original dans `attachments/`, embarqué par la fiche.
+    pub attachment: Option<String>,
 }
 
-/// Une valeur de frontmatter tient sur une ligne et ne passe pas pour une liste.
+/// Une valeur de frontmatter tient sur une ligne ; le rendu la met entre guillemets au
+/// besoin.
 fn fm_scalar(s: &str) -> FmValue {
     let one_line = s.replace(['\n', '\r'], " ");
-    FmValue::Str(one_line.trim().trim_start_matches('[').to_string())
+    FmValue::Str(one_line.trim().to_string())
 }
 
 /// Rend une fiche `vault/sources/<slug>.md`.
@@ -445,9 +450,19 @@ pub fn render_source(meta: &SourceMeta, summary: Option<&str>, text: &str) -> St
         "caracteres".to_string(),
         FmValue::Num(meta.caracteres as f64),
     );
+    fields.insert("tags".to_string(), FmValue::List(vec!["sources".into()]));
+    if let Some(day) = meta.recu.get(..10) {
+        fields.insert("created".to_string(), FmValue::Str(day.to_string()));
+    }
+    if let Some(file) = &meta.attachment {
+        fields.insert("source".to_string(), FmValue::Str(format!("[[{file}]]")));
+    }
     let mut body = format!("# {}\n\n", meta.titre.replace('\n', " "));
     if let Some(s) = summary.filter(|s| !s.trim().is_empty()) {
         body.push_str(&format!("{SUMMARY_HEADER}\n\n{}\n\n", s.trim()));
+    }
+    if let Some(file) = &meta.attachment {
+        body.push_str(&format!("{ORIGINAL_HEADER}\n\n![[{file}]]\n\n"));
     }
     body.push_str(&format!("{CONTENT_HEADER}\n\n{}\n", text.trim()));
     frontmatter::render(&fields, &body)
@@ -712,12 +727,20 @@ mod tests {
             format: "pdf".into(),
             pages: Some(3),
             caracteres: 42,
+            attachment: Some("contrat.pdf".into()),
         };
         let raw = render_source(&meta, Some("Un contrat."), "Article 1.\n\n- tiret");
+        assert!(raw.contains("source: \"[[contrat.pdf]]\"\n"), "{raw}");
+        assert!(
+            raw.contains("titre: \"Contrat: v2 [brouillon]\"\n"),
+            "{raw}"
+        );
+        assert!(raw.contains("tags:\n  - sources\n") && raw.contains("created: 2026-09-16\n"));
+        assert!(raw.contains("## Original\n\n![[contrat.pdf]]\n"));
         let parsed = parse_source(&raw).expect("fiche");
         assert_eq!(parsed.origine, Origin::Untrusted);
         assert_eq!(parsed.text, "Article 1.\n\n- tiret");
-        assert!(parsed.titre.starts_with("Contrat"));
+        assert_eq!(parsed.titre, "Contrat: v2 [brouillon]");
         assert!(raw.contains("## Résumé"));
 
         // Une fiche retouchée à la main ne devient pas fiable pour autant…

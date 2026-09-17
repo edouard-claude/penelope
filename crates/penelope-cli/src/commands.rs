@@ -458,6 +458,9 @@ pub enum VaultCmd {
     Sync,
     /// Vérifie frontmatter, pratiques et contenu interdit.
     Check,
+    /// Lint du wiki : liens non résolus, orphelines, impasses, alias et noms en double,
+    /// identifiants de bloc, propriétés ; entrées expirées et contradictions à trancher.
+    Lint,
 }
 
 #[derive(Subcommand, Debug)]
@@ -539,6 +542,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Session(SessionCmd::Compact { .. })
         | Command::Mem(MemCmd::Dream { .. })
         | Command::Mem(MemCmd::Diff { .. })
+        | Command::Vault(VaultCmd::Lint)
         | Command::Import(_)
             if !cli.json =>
         {
@@ -820,6 +824,7 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Mem(MemCmd::Learned { days }) => (m::MEM_LEARNED, json!({"days": days})),
         Command::Vault(VaultCmd::Sync) => (m::VAULT_SYNC, json!({})),
         Command::Vault(VaultCmd::Check) => (m::VAULT_CHECK, json!({})),
+        Command::Vault(VaultCmd::Lint) => (m::VAULT_LINT, json!({})),
 
         Command::Skill(SkillCmd::List) => (m::SKILL_LIST, json!({})),
         Command::Skill(SkillCmd::Show { name }) => (m::SKILL_SHOW, json!({"name": name})),
@@ -1692,6 +1697,7 @@ mod tests {
             (vec!["mem", "dream", "--dry-run"], m::MEM_DREAM),
             (vec!["mem", "restore", "12"], m::MEM_RESTORE),
             (vec!["vault", "check"], m::VAULT_CHECK),
+            (vec!["vault", "lint"], m::VAULT_LINT),
             (vec!["skill", "list"], m::SKILL_LIST),
         ] {
             let c = parse(&args);

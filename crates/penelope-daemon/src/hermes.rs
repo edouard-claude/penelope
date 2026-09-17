@@ -399,7 +399,7 @@ async fn import_skills(s: &Services, opts: &Options, r: &mut Report) {
         }
     }
     if imported > 0
-        && let Err(e) = s.skills.reload(None, &root, None).await
+        && let Err(e) = crate::runtime::reload_skills(s).await
     {
         r.warn(format!("rechargement des skills : {e}"));
     }
@@ -1916,7 +1916,12 @@ mcp_servers:
 
         let memoire = std::fs::read_to_string(vault.join("memoire.md")).unwrap();
         assert_eq!(memoire.matches("Debian").count(), 1, "{memoire}");
-        assert!(memoire.contains("<!-- uid: "), "{memoire}");
+        assert!(
+            memoire
+                .lines()
+                .any(|l| l.contains("Debian") && penelope_memory::vault::block_id(l).is_some()),
+            "{memoire}"
+        );
         assert!(
             !memoire.contains("Ignore all previous"),
             "injection refusée"

@@ -205,7 +205,7 @@ mod tests {
             "Penelope utilise un dreaming tous les 3h30"
         ));
         assert!(!is_about_penelope(
-            "Le propriétaire utilise Obsidian tous les jours"
+            "Le propriétaire relit ses notes tous les jours"
         ));
         assert_eq!(expiry_from("2026-09-17"), "2026-10-17");
     }

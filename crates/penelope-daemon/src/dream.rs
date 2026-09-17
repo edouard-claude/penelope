@@ -245,6 +245,30 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
         if let Some(w) = core_overflow(s, cfg.memory.core_budget_tokens as u64).await {
             report.warnings.push(w);
         }
+        // Entrées ajoutées ou réécrites cette nuit, adressables `[[note#^uid]]`.
+        let run = run_id.clone();
+        let touched: Vec<(String, String)> = s
+            .store
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT DISTINCT uid, file FROM mem_history
+                     WHERE dream_run = ?1 AND uid IS NOT NULL
+                       AND op IN ('add_entry', 'replace_entry', 'add_exception', 'record_ecart')",
+                )?;
+                let rows = st.query_map([&run], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await?;
+        let resolver = penelope_memory::wiki::Resolver::scan(&vault);
+        report.promoted_refs = touched
+            .iter()
+            .filter(|(uid, _)| penelope_memory::vault::is_valid_block_id(uid))
+            .map(|(uid, file)| format!("[[{}#^{uid}]]", resolver.link_target(file)))
+            .collect();
+        let (lint, proposals) = wiki_review(s, &vault).await;
+        report.lint = lint.summary();
+        report.lint_problems = lint.problems() as u32;
+        report.questions.extend(proposals);
         for (ids, state, reason) in state_updates {
             s.candidates
                 .set_state(&ids, state, reason.as_deref())
@@ -901,9 +925,9 @@ async fn add_to_practice(
     mutate(s, vault, &file, Some(&uid), op.kind(), run_id, |raw| {
         let mut p = Practice::parse(raw, practice)?;
         if is_exception {
-            p.exceptions.push(for_file);
+            p.exceptions.push(for_file.clone());
         } else {
-            p.ecarts.push(for_file);
+            p.ecarts.push(for_file.clone());
         }
         p.maj = day.clone();
         Ok(p.render())
@@ -928,7 +952,8 @@ fn title_of(file: &str) -> &'static str {
     }
 }
 
-/// Lit, transforme, écrit atomiquement, et garde la pré-image dans `mem_history`.
+/// Lit, transforme, écrit atomiquement sans écraser une édition concurrente, et garde la
+/// pré-image dans `mem_history`.
 async fn mutate(
     s: &Services,
     vault: &Path,
@@ -936,21 +961,15 @@ async fn mutate(
     uid: Option<&str>,
     op: &str,
     run_id: &str,
-    f: impl FnOnce(&str) -> Result<String, String>,
+    f: impl Fn(&str) -> Result<String, String>,
 ) -> Result<(), String> {
     if rel.contains("..") || rel.starts_with('/') {
         return Err(format!("chemin refusé : {rel}"));
     }
-    let path = vault.join(rel);
-    let before = std::fs::read_to_string(&path).unwrap_or_default();
-    let after = f(&before)?;
-    if after == before {
+    let Some((before, after)) = crate::vault_ops::update_note(vault, rel, uid, &today(s), f)?
+    else {
         return Ok(());
-    }
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    penelope_kernel::config::atomic_write(&path, after.as_bytes()).map_err(|e| e.to_string())?;
+    };
     let (uid, rel, op, run, ts) = (
         uid.map(String::from),
         rel.to_string(),
@@ -978,24 +997,106 @@ fn append_dreams(
     run_id: &str,
     report: &DreamReport,
 ) -> anyhow::Result<()> {
-    let path = vault.join("DREAMS.md");
-    let mut body = std::fs::read_to_string(&path).unwrap_or_else(|_| "# Revue\n".into());
-    if !body.ends_with('\n') {
-        body.push('\n');
+    let day = today(s);
+    crate::vault_ops::update_note(vault, "DREAMS.md", None, &day, |raw| {
+        let mut body = if raw.trim().is_empty() {
+            "# Revue\n".to_string()
+        } else {
+            raw.to_string()
+        };
+        if !body.ends_with('\n') {
+            body.push('\n');
+        }
+        body.push_str(&format!(
+            "\n## Rêve du {day} (`{run_id}`)\n\n{}\n",
+            report.render()
+        ));
+        if !report.reflections.is_empty() {
+            body.push_str("\n### Réflexions\n");
+            for r in &report.reflections {
+                body.push_str(&format!("- {r}\n"));
+            }
+        }
+        Ok(body)
+    })
+    .map_err(anyhow::Error::msg)?;
+    let mut details: Vec<String> = report.promoted_refs.clone();
+    details.extend(report.lint.iter().cloned());
+    crate::vault_ops::log(
+        vault,
+        &day,
+        "dream",
+        &format!("{} promues", report.promoted),
+        &details,
+    )
+    .map_err(anyhow::Error::msg)?;
+    if !report.lint.is_empty() {
+        crate::vault_ops::log(
+            vault,
+            &day,
+            "lint",
+            &format!("{} problème(s)", report.lint_problems),
+            &report.lint,
+        )
+        .map_err(anyhow::Error::msg)?;
     }
-    body.push_str(&format!(
-        "\n## Rêve du {} (`{run_id}`)\n\n{}\n",
-        today(s),
-        report.render()
-    ));
-    if !report.reflections.is_empty() {
-        body.push_str("\n### Réflexions\n");
-        for r in &report.reflections {
-            body.push_str(&format!("- {r}\n"));
+    Ok(())
+}
+
+/// Passe de lint du rêve (issue #29) : graphe et propriétés du wiki, puis ce qui se
+/// propose sans se corriger en silence (entrées expirées, contradictions).
+pub async fn wiki_review(
+    s: &Services,
+    vault: &Path,
+) -> (penelope_memory::wiki::LintReport, Vec<String>) {
+    let report = penelope_memory::wiki::lint(vault);
+    let mut proposals = Vec::new();
+    let day = today(s);
+    let resolver = penelope_memory::wiki::Resolver::scan(vault);
+    let refer = |file: &str, uid: &str| format!("[[{}#^{uid}]]", resolver.link_target(file));
+    let hidden_expired: Vec<(String, String)> = s
+        .store
+        .read(move |c| {
+            let mut st = c.prepare(
+                "SELECT f.uid, f.expire FROM mem_flags f JOIN mem_entries e ON e.uid = f.uid
+                 WHERE e.statut != 'retiree' AND f.expire IS NOT NULL AND f.expire < ?1
+                 ORDER BY f.expire",
+            )?;
+            let rows = st.query_map([&day], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .unwrap_or_default();
+    for (uid, expire) in hidden_expired.into_iter().take(5) {
+        if let Ok(Some(e)) = s.memory.get(&uid).await {
+            proposals.push(format!(
+                "« {} » ({}) a expiré le {expire} : la retirer ou la prolonger ?",
+                short(&e.text),
+                refer(&e.file, &uid)
+            ));
         }
     }
-    penelope_kernel::config::atomic_write(&path, body.as_bytes())?;
-    Ok(())
+    let mut entries = s.memory.by_level(Level::Profil).await.unwrap_or_default();
+    entries.extend(s.memory.by_level(Level::Coeur).await.unwrap_or_default());
+    let mut contradictions = 0;
+    'outer: for (i, a) in entries.iter().enumerate() {
+        for b in &entries[i + 1..] {
+            if penelope_memory::consolidation::contradicts(&a.text, &b.text) {
+                proposals.push(format!(
+                    "« {} » ({}) et « {} » ({}) se contredisent : laquelle garder ?",
+                    short(&a.text),
+                    refer(&a.file, &a.uid),
+                    short(&b.text),
+                    refer(&b.file, &b.uid)
+                ));
+                contradictions += 1;
+                if contradictions >= 5 {
+                    break 'outer;
+                }
+            }
+        }
+    }
+    (report, proposals)
 }
 
 // ------------------------------------------------------------------ ledger des passes
@@ -1272,6 +1373,16 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
     }
     if let Some(w) = crate::vault_git::warning(s) {
         t.push_str(&format!("\n⚠️ {w}\n"));
+    }
+    // Journal de la veille, à ouvrir dans le wiki (issue #29).
+    let yesterday_note = (s.clock.now_utc() - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+    if crate::conversation::vault_dir(s)
+        .join(format!("journal/{yesterday_note}.md"))
+        .exists()
+    {
+        t.push_str(&format!("\n📓 Journal d'hier : [[{yesterday_note}]]\n"));
     }
     // Termes employés dans les sources sans définition (issue #22).
     let undefined = crate::concepts::to_define(&crate::conversation::vault_dir(s));

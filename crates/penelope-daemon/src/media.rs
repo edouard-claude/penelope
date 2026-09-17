@@ -101,28 +101,37 @@ pub fn save_attachment(s: &Services, name: &str, bytes: &[u8]) -> Result<PathBuf
     Ok(path)
 }
 
-/// Enregistre l'original d'un document ingéré, à côté des autres médias.
+/// Range l'original d'un document ingéré dans `attachments/` du vault, sous un nom libre
+/// dans tout le vault ; il n'est plus jamais modifié. Renvoie son nom de fichier.
 pub fn save_document_original(
-    s: &Services,
+    vault: &Path,
     slug: &str,
     name: &str,
     bytes: &[u8],
-) -> Result<PathBuf, String> {
+) -> Result<String, String> {
     let ext = penelope_memory::ingest::extension(name);
-    let file = if ext.is_empty() {
-        slug.to_string()
-    } else {
-        format!("{slug}.{ext}")
+    let named = |stem: &str| {
+        if ext.is_empty() {
+            stem.to_string()
+        } else {
+            format!("{stem}.{ext}")
+        }
     };
-    let path = s
-        .platform
-        .dirs
-        .data()
-        .join("media")
-        .join("documents")
-        .join(file);
-    write(&path, bytes)?;
-    Ok(path)
+    let resolver = penelope_memory::wiki::Resolver::scan(vault);
+    let mut file = named(slug);
+    let mut n = 2;
+    while resolver.is_taken(&file) {
+        file = named(&format!("{slug}-{n}"));
+        n += 1;
+    }
+    let path = vault
+        .join(penelope_memory::wiki::ATTACHMENTS_DIR)
+        .join(&file);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    penelope_kernel::config::atomic_write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(file)
 }
 
 /// Nom de fichier sans séparateur de chemin ni caractère de contrôle.

@@ -85,6 +85,10 @@ pub trait Directories: Send + Sync {
     fn skills(&self) -> PathBuf {
         self.data().join("skills")
     }
+    /// Skills livrées avec le binaire, réécrites à chaque chargement.
+    fn bundled_skills(&self) -> PathBuf {
+        self.state().join("skills-bundled")
+    }
     fn workflows(&self) -> PathBuf {
         self.data().join("workflows")
     }

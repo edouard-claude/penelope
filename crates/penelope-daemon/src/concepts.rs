@@ -5,7 +5,7 @@
 //! complète `concepts/<slug>.md` (définition, alias, sources), la fiche source reçoit
 //! ses liens `[[slug]]`, les entrées de `memoire.md` et `projets.md` qui citent le
 //! concept aussi, `concepts/_a-definir.md` liste les termes à définir et `index.md` sert de
-//! point d'entrée, y compris dans Obsidian. `mem_neighbors` parcourt le graphe.
+//! point d'entrée du wiki. `mem_neighbors` parcourt le graphe.
 
 use crate::runtime::Daemon;
 use penelope_memory::{IndexedEntry, Level, Origin, Provenance};
@@ -105,35 +105,34 @@ struct Page {
     alias: Vec<String>,
     definition: (String, String),
     sources: Vec<(String, String, String)>,
+    /// Date de création conservée d'une réécriture à l'autre.
+    created: String,
 }
 
 fn uid() -> String {
     penelope_kernel::ids::Ulid::new().to_string()
 }
 
+/// Texte et uid d'une entrée de liste (identifiant de bloc ou ancien commentaire).
 fn line_uid(line: &str) -> Option<(String, String)> {
-    let (text, rest) = line.split_once("<!-- uid:")?;
-    let id = rest.trim().trim_end_matches("-->").trim().to_string();
-    Some((text.trim().trim_start_matches("- ").to_string(), id))
+    let item = line.trim_start().strip_prefix("- ")?;
+    let id = penelope_memory::vault::line_uid(item)?;
+    Some((penelope_memory::vault::strip_annotations(item), id))
 }
 
 fn read_page(vault: &Path, slug: &str) -> Option<Page> {
     let raw = std::fs::read_to_string(vault.join(DIR).join(format!("{slug}.md"))).ok()?;
+    let fm = penelope_kernel::frontmatter::parse(&raw).ok()?;
     let mut page = Page {
         slug: slug.to_string(),
+        nom: fm.string("nom"),
+        alias: penelope_memory::wiki::aliases_of(&fm),
+        created: fm.string("created"),
         ..Default::default()
     };
     let mut section = "";
-    for line in raw.lines() {
-        if let Some(n) = line.strip_prefix("nom: ") {
-            page.nom = n.trim().to_string();
-        } else if let Some(a) = line.strip_prefix("alias: ") {
-            page.alias = a
-                .split(',')
-                .map(|x| x.trim().to_string())
-                .filter(|x| !x.is_empty())
-                .collect();
-        } else if line.starts_with("## ") {
+    for line in fm.body.lines() {
+        if line.starts_with("## ") {
             section = if line.contains("Sources") {
                 "sources"
             } else {
@@ -154,24 +153,94 @@ fn read_page(vault: &Path, slug: &str) -> Option<Page> {
     (!page.nom.is_empty()).then_some(page)
 }
 
+fn entry(text: &str, id: &str) -> String {
+    penelope_memory::edit::entry_line(
+        text,
+        &penelope_memory::vault::Annotations {
+            uid: Some(id.to_string()),
+            ..Default::default()
+        },
+    )
+}
+
+/// Page de concept : propriétés `aliases` et `tags` en listes, entrées à identifiant de
+/// bloc (issue #29).
 fn render_page(p: &Page) -> String {
-    let mut t = format!(
-        "---\ntype: concept\nnom: {}\nalias: {}\n---\n\n# {}\n\n",
-        p.nom,
-        p.alias.join(", "),
-        p.nom
-    );
+    use penelope_kernel::frontmatter::FmValue;
+    let mut fields = BTreeMap::new();
+    fields.insert("type".to_string(), FmValue::Str("concept".into()));
+    fields.insert("nom".to_string(), FmValue::Str(p.nom.clone()));
+    fields.insert("aliases".to_string(), FmValue::List(p.alias.clone()));
+    fields.insert("tags".to_string(), FmValue::List(vec!["concepts".into()]));
+    if !p.created.is_empty() {
+        fields.insert("created".to_string(), FmValue::Str(p.created.clone()));
+    }
+    let mut body = format!("\n# {}\n\n", p.nom);
     if !p.definition.0.is_empty() {
-        t.push_str(&format!(
-            "- {} <!-- uid: {} -->\n",
-            p.definition.0, p.definition.1
-        ));
+        body.push_str(&entry(&p.definition.0, &p.definition.1));
+        body.push('\n');
     }
-    t.push_str("\n## Sources\n\n");
+    body.push_str("\n## Sources\n\n");
     for (_, text, id) in &p.sources {
-        t.push_str(&format!("- {text} <!-- uid: {id} -->\n"));
+        body.push_str(&entry(text, id));
+        body.push('\n');
     }
-    t
+    penelope_kernel::frontmatter::render(&fields, &body)
+}
+
+/// Réécrit les pages de concept au format courant (`aliases` en liste, identifiants de
+/// bloc) ; rend le nombre de pages réécrites.
+pub fn migrate_pages(vault: &Path, day: &str) -> Result<usize, String> {
+    let mut n = 0;
+    for mut page in pages(vault) {
+        let rel = format!("{DIR}/{}.md", page.slug);
+        let current = std::fs::read_to_string(vault.join(&rel)).unwrap_or_default();
+        if page.created.is_empty() {
+            page.created = day.to_string();
+        }
+        let rendered = render_page(&page);
+        // Une page déjà au format garde son `updated`.
+        if penelope_memory::wiki::body_of(&current) == penelope_memory::wiki::body_of(&rendered)
+            && !current.contains("\nalias:")
+        {
+            continue;
+        }
+        crate::vault_ops::save_note(vault, &rel, &rendered, day)?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// Sources ingérées pendant une session, les plus récentes d'abord.
+pub async fn session_sources(s: &crate::runtime::Services, session_id: &str) -> Vec<String> {
+    let sid = session_id.to_string();
+    s.store
+        .read(move |c| {
+            let mut st = c.prepare(
+                "SELECT e.slug FROM mem_entries e JOIN mem_provenance p ON p.uid = e.uid
+                 WHERE p.session_id = ?1 AND e.file LIKE 'sources/%' AND e.slug IS NOT NULL
+                 GROUP BY e.slug ORDER BY MAX(p.observed_at) DESC LIMIT 5",
+            )?;
+            let rows = st.query_map([&sid], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .unwrap_or_default()
+}
+
+/// Complète un texte des wikilinks des concepts qu'il cite (journal, mémoire).
+pub fn link_known_concepts(vault: &Path, text: &str) -> String {
+    let words = format!(" {} ", normalize(text));
+    let mut out = text.to_string();
+    for p in pages(vault) {
+        let cited = std::iter::once(&p.nom)
+            .chain(&p.alias)
+            .any(|name| words.contains(&format!(" {} ", normalize(name))));
+        if cited && !out.contains(&format!("[[{}]]", p.slug)) {
+            out.push_str(&format!(" [[{}]]", p.slug));
+        }
+    }
+    out
 }
 
 fn pages(vault: &Path) -> Vec<Page> {
@@ -191,21 +260,11 @@ fn pages(vault: &Path) -> Vec<Page> {
     out
 }
 
-/// Slug d'un nouveau concept : jamais celui d'une source, pour que `[[slug]]` reste
-/// univoque dans Obsidian.
+/// Slug d'un nouveau concept : un nom libre dans tout le vault, pour que `[[slug]]` reste
+/// univoque.
 fn concept_slug(vault: &Path, nom: &str) -> String {
     let base = penelope_memory::ingest::slugify(nom);
-    let taken = |s: &str| {
-        vault
-            .join(penelope_memory::ingest::SOURCES_DIR)
-            .join(format!("{s}.md"))
-            .exists()
-    };
-    if taken(&base) {
-        format!("{base}-concept")
-    } else {
-        base
-    }
+    penelope_memory::wiki::Resolver::scan(vault).unique_name(&base, "concept")
 }
 
 /// Indexe les entrées d'une page de concept sous son slug.
@@ -245,6 +304,7 @@ pub async fn apply(
     };
     let mut existing = pages(&vault);
     let mut touched: Vec<String> = Vec::new();
+    let day = crate::vault_ops::day(s);
 
     for c in concepts {
         let names: Vec<String> = std::iter::once(&c.nom)
@@ -266,6 +326,7 @@ pub async fn apply(
                 existing.push(Page {
                     slug: concept_slug(&vault, &c.nom),
                     nom: c.nom.clone(),
+                    created: day.clone(),
                     ..Default::default()
                 });
                 existing.last_mut().expect("page ajoutée")
@@ -281,14 +342,19 @@ pub async fn apply(
             page.definition = (c.definition.clone(), uid());
         }
         if !page.sources.iter().any(|(slug, _, _)| slug == source_slug) {
+            let target = penelope_memory::wiki::Resolver::scan(&vault).link_target(&format!(
+                "{}/{source_slug}.md",
+                penelope_memory::ingest::SOURCES_DIR
+            ));
             page.sources.push((
                 source_slug.to_string(),
-                format!("[[{source_slug}]] · {source_title}"),
+                format!("[[{target}]] · {source_title}"),
                 uid(),
             ));
         }
-        let rel = vault.join(DIR).join(format!("{}.md", page.slug));
-        penelope_kernel::config::atomic_write(&rel, render_page(page).as_bytes())?;
+        let rel = format!("{DIR}/{}.md", page.slug);
+        crate::vault_ops::save_note(&vault, &rel, &render_page(page), &day)
+            .map_err(anyhow::Error::msg)?;
         index_page(d, page, &prov).await?;
         if !touched.contains(&page.slug) {
             touched.push(page.slug.clone());
@@ -299,8 +365,8 @@ pub async fn apply(
         link_source(d, source_slug, &touched, &prov).await?;
         link_memory(d, &existing).await?;
     }
-    update_to_define(&vault, source_slug, undefined, &existing)?;
-    write_index(d, &existing).await?;
+    update_to_define(&vault, source_slug, undefined, &existing, &day)?;
+    write_index(d, &existing, &day).await?;
     Ok(touched)
 }
 
@@ -330,7 +396,10 @@ pub async fn reindex_source_links(
     origin: Origin,
 ) -> anyhow::Result<()> {
     let id = format!("concepts-{source_slug}");
-    let Some(line) = raw.lines().find(|l| l.contains(&format!("uid: {id}"))) else {
+    let Some(line) = raw
+        .lines()
+        .find(|l| penelope_memory::vault::line_uid(l).as_deref() == Some(id.as_str()))
+    else {
         return Ok(());
     };
     let Some((text, _)) = line_uid(line) else {
@@ -395,7 +464,7 @@ async fn link_source(
     let id = format!("concepts-{source_slug}");
     let mut all: Vec<String> = raw
         .lines()
-        .find(|l| l.contains(&format!("uid: {id}")))
+        .find(|l| penelope_memory::vault::line_uid(l).as_deref() == Some(id.as_str()))
         .map(penelope_memory::vault::links)
         .unwrap_or_default();
     for c in concepts {
@@ -410,23 +479,29 @@ async fn link_source(
             .collect::<Vec<_>>()
             .join(", ")
     );
-    let line = format!("- {text} <!-- uid: {id} -->");
+    let line = entry(&text, &id);
     let header = penelope_memory::ingest::CONTENT_HEADER;
-    let body = match raw.find("## Concepts") {
-        Some(start) => {
-            let end = raw[start..]
-                .find(header)
-                .map(|e| start + e)
-                .unwrap_or(raw.len());
-            format!("{}## Concepts\n\n{line}\n\n{}", &raw[..start], &raw[end..])
-        }
-        None => match raw.find(header) {
-            Some(i) => format!("{}## Concepts\n\n{line}\n\n{}", &raw[..i], &raw[i..]),
-            None => format!("{raw}\n## Concepts\n\n{line}\n"),
-        },
-    };
-    penelope_kernel::config::atomic_write(&path, body.as_bytes())?;
-    let _ = rel;
+    crate::vault_ops::update_note(&vault, &rel, None, &crate::vault_ops::day(s), |raw| {
+        // La section se place avant le contenu extrait, ou avant l'original embarqué.
+        let anchor = [penelope_memory::ingest::ORIGINAL_HEADER, header]
+            .iter()
+            .filter_map(|h| raw.find(h))
+            .min();
+        Ok(match raw.find("## Concepts") {
+            Some(start) => {
+                let end = raw[start + 1..]
+                    .find("\n## ")
+                    .map(|e| start + 2 + e)
+                    .unwrap_or(raw.len());
+                format!("{}## Concepts\n\n{line}\n\n{}", &raw[..start], &raw[end..])
+            }
+            None => match anchor {
+                Some(i) => format!("{}## Concepts\n\n{line}\n\n{}", &raw[..i], &raw[i..]),
+                None => format!("{raw}\n## Concepts\n\n{line}\n"),
+            },
+        })
+    })
+    .map_err(anyhow::Error::msg)?;
     s.memory
         .upsert(&source_links_entry(s, source_slug, text), prov)
         .await?;
@@ -454,14 +529,22 @@ async fn link_memory(d: &Daemon, pages: &[Page]) -> anyhow::Result<usize> {
             if text == e.text {
                 continue;
             }
-            let path = vault.join(&e.file);
-            let Ok(raw) = std::fs::read_to_string(&path) else {
+            if !vault.join(&e.file).exists() {
                 continue;
-            };
-            let Some(body) = penelope_memory::edit::replace_entry_text(&raw, &e.uid, &text) else {
+            }
+            let written = crate::vault_ops::update_note(
+                &vault,
+                &e.file,
+                Some(&e.uid),
+                &crate::vault_ops::day(s),
+                |raw| {
+                    penelope_memory::edit::replace_entry_text(raw, &e.uid, &text)
+                        .ok_or_else(|| "uid absent".to_string())
+                },
+            );
+            if written.is_err() {
                 continue;
-            };
-            penelope_kernel::config::atomic_write(&path, body.as_bytes())?;
+            }
             e.content_hash = penelope_kernel::canonical::sha256_hex(text.as_bytes());
             e.text = text;
             let prov = Provenance::owner("concepts", "maintenance", &s.clock.now_rfc3339());
@@ -479,9 +562,11 @@ fn update_to_define(
     source_slug: &str,
     undefined: &[String],
     pages: &[Page],
+    day: &str,
 ) -> anyhow::Result<()> {
     let path = vault.join(TO_DEFINE);
     let raw = std::fs::read_to_string(&path).unwrap_or_default();
+    let body_raw = penelope_memory::wiki::body_of(&raw);
     let defined = |term: &str| {
         let n = normalize(term);
         pages.iter().any(|p| {
@@ -491,7 +576,7 @@ fn update_to_define(
                     .any(|x| normalize(x) == n)
         })
     };
-    let mut terms: BTreeMap<String, String> = raw
+    let mut terms: BTreeMap<String, String> = body_raw
         .lines()
         .filter_map(|l| l.strip_prefix("- "))
         .map(|l| {
@@ -515,24 +600,32 @@ fn update_to_define(
     for (t, where_) in &terms {
         body.push_str(&format!("- {t} · {where_}\n"));
     }
-    penelope_kernel::config::atomic_write(&path, body.as_bytes())?;
+    crate::vault_ops::save_note(
+        vault,
+        TO_DEFINE,
+        &penelope_memory::wiki::replace_body(&raw, &body),
+        day,
+    )
+    .map_err(anyhow::Error::msg)?;
     Ok(())
 }
 
 /// Termes à définir, pour le digest.
 pub fn to_define(vault: &Path) -> Vec<String> {
-    std::fs::read_to_string(vault.join(TO_DEFINE))
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| l.strip_prefix("- "))
-        .map(|l| l.split(" · ").next().unwrap_or(l).trim().to_string())
-        .collect()
+    penelope_memory::wiki::body_of(
+        &std::fs::read_to_string(vault.join(TO_DEFINE)).unwrap_or_default(),
+    )
+    .lines()
+    .filter_map(|l| l.strip_prefix("- "))
+    .map(|l| l.split(" · ").next().unwrap_or(l).trim().to_string())
+    .collect()
 }
 
 /// `index.md` : concepts les plus liés, sources récentes, projets.
-async fn write_index(d: &Daemon, pages: &[Page]) -> anyhow::Result<()> {
+async fn write_index(d: &Daemon, pages: &[Page], day: &str) -> anyhow::Result<()> {
     let s = &d.services;
     let vault = crate::conversation::vault_dir(s);
+    let resolver = penelope_memory::wiki::Resolver::scan(&vault);
     let mut concepts: Vec<&Page> = pages.iter().collect();
     concepts.sort_by(|a, b| {
         b.sources
@@ -546,7 +639,7 @@ async fn write_index(d: &Daemon, pages: &[Page]) -> anyhow::Result<()> {
     for p in concepts.iter().take(20) {
         t.push_str(&format!(
             "- [[{}]] · {} ({} source(s))\n",
-            p.slug,
+            resolver.link_target(&format!("{DIR}/{}.md", p.slug)),
             p.nom,
             p.sources.len()
         ));
@@ -560,12 +653,9 @@ async fn write_index(d: &Daemon, pages: &[Page]) -> anyhow::Result<()> {
                 let name = e.file_name().to_string_lossy().to_string();
                 let slug = name.strip_suffix(".md")?.to_string();
                 let raw = std::fs::read_to_string(e.path()).ok()?;
-                let recu = raw
-                    .lines()
-                    .find_map(|l| l.strip_prefix("recu: "))
-                    .unwrap_or_default()
-                    .trim_matches('"')
-                    .to_string();
+                let recu = penelope_kernel::frontmatter::parse(&raw)
+                    .map(|fm| fm.string("recu"))
+                    .unwrap_or_default();
                 let titre = penelope_memory::ingest::parse_source(&raw)
                     .map(|p| p.titre)
                     .unwrap_or_else(|| slug.clone());
@@ -575,8 +665,12 @@ async fn write_index(d: &Daemon, pages: &[Page]) -> anyhow::Result<()> {
     sources.sort_by(|a, b| b.0.cmp(&a.0));
     t.push_str("\n## Sources récentes\n\n");
     for (recu, slug, titre) in sources.iter().take(10) {
-        let day: String = recu.chars().take(10).collect();
-        t.push_str(&format!("- [[{slug}]] · {titre} ({day})\n"));
+        let received: String = recu.chars().take(10).collect();
+        let target = resolver.link_target(&format!(
+            "{}/{slug}.md",
+            penelope_memory::ingest::SOURCES_DIR
+        ));
+        t.push_str(&format!("- [[{target}]] · {titre} ({received})\n"));
     }
     t.push_str("\n## Projets\n\n");
     let mut projects: Vec<String> = s
@@ -597,7 +691,14 @@ async fn write_index(d: &Daemon, pages: &[Page]) -> anyhow::Result<()> {
     for p in projects.iter().take(20) {
         t.push_str(&format!("- {p}\n"));
     }
-    penelope_kernel::config::atomic_write(&vault.join(INDEX), t.as_bytes())?;
+    let raw = std::fs::read_to_string(vault.join(INDEX)).unwrap_or_default();
+    crate::vault_ops::save_note(
+        &vault,
+        INDEX,
+        &penelope_memory::wiki::replace_body(&raw, &t),
+        day,
+    )
+    .map_err(anyhow::Error::msg)?;
     Ok(())
 }
 

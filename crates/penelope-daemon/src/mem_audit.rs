@@ -1,14 +1,15 @@
 //! Audit de la mémoire noté sur 100 (issue #23) : ce que Pénélope sait de son propriétaire
 //! et de son contexte, ce qui manque, et pour chaque axe la prochaine action la plus
 //! rentable. Le barème est fixe et versionné, pour que deux audits se comparent ; chaque
-//! audit est historisé dans `audits/AAAA-MM-JJ.md` avec l'écart depuis le précédent.
+//! audit est historisé dans `audits/audit-AAAA-MM-JJ.md` avec l'écart depuis le précédent.
 
 use crate::runtime::Daemon;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-/// Version du barème : un changement de pondération la fait monter.
-pub const SCALE_VERSION: u32 = 1;
+/// Version du barème : un changement de pondération la fait monter. v2 : le lint du wiki
+/// compte avec les liens morts (issue #29).
+pub const SCALE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Axis {
@@ -50,6 +51,8 @@ struct Facts {
     entries: i64,
     with_provenance: i64,
     dead_links: i64,
+    /// Problèmes du lint du wiki (liens, identifiants de bloc, propriétés, noms).
+    lint_problems: i64,
     undefined_concepts: i64,
     contradictions: i64,
     vectors: i64,
@@ -110,10 +113,13 @@ async fn facts(d: &Daemon) -> anyhow::Result<Facts> {
             .filter(|st| st.state == penelope_mcp::supervisor::ServerState::Ready)
             .count() as i64;
     }
-    let pending = crate::conversation::vault_dir(s).join("concepts/_a-definir.md");
+    let vault = crate::conversation::vault_dir(s);
+    f.lint_problems = penelope_memory::wiki::lint(&vault).problems() as i64;
+    let pending = vault.join("concepts/_a-definir.md");
     f.undefined_concepts = std::fs::read_to_string(pending)
         .map(|raw| {
-            raw.lines()
+            penelope_memory::wiki::body_of(&raw)
+                .lines()
                 .filter(|l| l.trim_start().starts_with("- "))
                 .count() as i64
         })
@@ -238,19 +244,23 @@ fn axes(f: &Facts) -> Vec<Axis> {
         0
     } else {
         pts(f.with_provenance, f.entries, 6) + pts(f.vectors, f.entries, 4)
-    } + if f.dead_links == 0 { 4 } else { 1 }
-        + if f.undefined_concepts == 0 { 3 } else { 1 }
+    } + if f.dead_links == 0 && f.lint_problems == 0 {
+        4
+    } else {
+        1
+    } + if f.undefined_concepts == 0 { 3 } else { 1 }
         + if f.contradictions == 0 { 3 } else { 0 };
     let quality = Axis {
         name: "Qualité".into(),
         score: quality_score.min(20),
         max: 20,
         why: format!(
-            "{}/{} entrée(s) avec provenance, {} lien(s) mort(s), {} concept(s) à définir, \
-             {} contradiction(s) ouverte(s), {}/{} vecteur(s)",
+            "{}/{} entrée(s) avec provenance, {} lien(s) mort(s), {} problème(s) de lint, \
+             {} concept(s) à définir, {} contradiction(s) ouverte(s), {}/{} vecteur(s)",
             f.with_provenance,
             f.entries,
             f.dead_links,
+            f.lint_problems,
             f.undefined_concepts,
             f.contradictions,
             f.vectors,
@@ -260,8 +270,8 @@ fn axes(f: &Facts) -> Vec<Axis> {
             "Trancher les contradictions en attente (`/approvals`)".into()
         } else if f.entries > 0 && f.vectors < f.entries {
             "`penelope mem reindex --embeddings` : vecteurs manquants".into()
-        } else if f.dead_links > 0 {
-            "Corriger les liens `[[…]]` sans page (`penelope vault check`)".into()
+        } else if f.dead_links > 0 || f.lint_problems > 0 {
+            "Corriger ce que signale `penelope vault lint` (liens, blocs, propriétés)".into()
         } else if f.undefined_concepts > 0 {
             "Définir les concepts de `concepts/_a-definir.md`".into()
         } else {
@@ -303,11 +313,17 @@ pub async fn run(d: &Daemon) -> anyhow::Result<Audit> {
         axes,
     };
     d.kv_set(LAST_KEY, &serde_json::to_string(&audit)?).await?;
-    let path = crate::conversation::vault_dir(&d.services).join(format!("audits/{date}.md"));
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    penelope_kernel::config::atomic_write(&path, render(&audit).as_bytes())?;
+    // `audit-AAAA-MM-JJ` : un nom unique dans tout le vault (issue #29).
+    let vault = crate::conversation::vault_dir(&d.services);
+    let rel = format!("audits/audit-{date}.md");
+    let current = std::fs::read_to_string(vault.join(&rel)).unwrap_or_default();
+    crate::vault_ops::save_note(
+        &vault,
+        &rel,
+        &penelope_memory::wiki::replace_body(&current, &render(&audit)),
+        &date,
+    )
+    .map_err(anyhow::Error::msg)?;
     Ok(audit)
 }
 
@@ -428,7 +444,7 @@ mod tests {
             "{after:?}"
         );
         let file =
-            std::fs::read_to_string(vault.join(format!("audits/{}.md", after.date))).unwrap();
+            std::fs::read_to_string(vault.join(format!("audits/audit-{}.md", after.date))).unwrap();
         assert!(file.contains(&format!("**{}/100**", after.total)), "{file}");
         assert!(file.contains("depuis le"), "{file}");
     }

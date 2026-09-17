@@ -187,6 +187,7 @@ pub mod method {
     pub const INTENT_CANCEL: &str = "intent.cancel";
     pub const VAULT_SYNC: &str = "vault.sync";
     pub const VAULT_CHECK: &str = "vault.check";
+    pub const VAULT_LINT: &str = "vault.lint";
     /// Entretien d'accueil (issue #21) : question suivante, réponse, écriture validée.
     pub const ONBOARD_NEXT: &str = "onboard.next";
     pub const ONBOARD_ANSWER: &str = "onboard.answer";
@@ -283,6 +284,7 @@ pub mod method {
         INTENT_CANCEL,
         VAULT_SYNC,
         VAULT_CHECK,
+        VAULT_LINT,
         ONBOARD_NEXT,
         ONBOARD_ANSWER,
         ONBOARD_WRITE,

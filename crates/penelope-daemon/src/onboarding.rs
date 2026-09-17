@@ -1,7 +1,7 @@
 //! Entretien d'accueil (issue #21) : ce que le propriétaire dit de lui (rôle, projets,
 //! outils, style, limites) n'attend pas les occurrences répétées du rêve nocturne.
 //!
-//! Les questions sont écrites dans le vault (`accueil/AAAA-MM-JJ.md`) avant d'être posées,
+//! Les questions sont écrites dans le vault (`accueil/accueil-AAAA-MM-JJ.md`) avant d'être posées,
 //! chaque réponse se range sous sa question : la séance se relit et se reprend après une
 //! interruption. À la clôture, un récapitulatif montre ce qui change dans `profil.md` et
 //! `memoire.md` ; rien n'est écrit sans validation, et chaque entrée garde sa provenance
@@ -245,9 +245,11 @@ pub async fn start(d: &Daemon, part: Option<Part>) -> anyhow::Result<Sitting> {
         return Ok(s);
     }
     let date = today(d);
+    // Nom unique dans tout le vault : `accueil-AAAA-MM-JJ`, jamais le nom d'une note du
+    // journal (issue #29).
     let rel = match part {
-        Some(p) => format!("accueil/{date}-{}.md", p.as_str()),
-        None => format!("accueil/{date}.md"),
+        Some(p) => format!("accueil/accueil-{date}-{}.md", p.as_str()),
+        None => format!("accueil/accueil-{date}.md"),
     };
     let sitting = Sitting {
         rel: rel.clone(),
@@ -283,17 +285,17 @@ pub fn load(d: &Daemon, rel: &str) -> Option<Sitting> {
 }
 
 fn save(d: &Daemon, s: &Sitting) -> anyhow::Result<()> {
-    let path = vault(d).join(&s.rel);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
+    let vault = vault(d);
     let date = s
         .rel
         .trim_start_matches("accueil/")
+        .trim_start_matches("accueil-")
         .chars()
         .take(10)
         .collect::<String>();
-    penelope_kernel::config::atomic_write(&path, s.render(&date).as_bytes())?;
+    let current = std::fs::read_to_string(vault.join(&s.rel)).unwrap_or_default();
+    let content = penelope_memory::wiki::replace_body(&current, &s.render(&date));
+    crate::vault_ops::save_note(&vault, &s.rel, &content, &today(d)).map_err(anyhow::Error::msg)?;
     Ok(())
 }
 
@@ -591,6 +593,20 @@ pub async fn write(d: &Daemon, s: &Sitting, session_id: &str) -> anyhow::Result<
             .map_err(anyhow::Error::msg)?;
     }
     d.kv_set(kv_current(), "").await?;
+    let sitting = s.rel.trim_start_matches("accueil/").trim_end_matches(".md");
+    if let Err(e) = crate::vault_ops::log(
+        &vault,
+        &today(d),
+        "accueil",
+        &format!(
+            "{} ajout(s), {} remplacement(s)",
+            plan.add.len(),
+            plan.replace.len()
+        ),
+        &[format!("[[{sitting}]]")],
+    ) {
+        tracing::warn!(error = %e, "log.md non mis à jour");
+    }
     Ok((plan.add.len(), plan.replace.len()))
 }
 

@@ -7,7 +7,7 @@
 
 use crate::vault::Annotations;
 
-/// Ligne d'entrée : `- texte <!-- uid: … --> …`.
+/// Ligne d'entrée : `- texte <!-- importance: … --> … ^uid`.
 pub fn entry_line(text: &str, annotations: &Annotations) -> String {
     let text = text.replace(['\n', '\r'], " ");
     let rendered = annotations.render();
@@ -64,19 +64,28 @@ pub fn append_entry(raw: &str, title: &str, section: Option<&str>, line: &str) -
     joined
 }
 
-fn uid_marker(uid: &str) -> String {
-    format!("uid: {uid}")
+/// Index de la ligne portant `uid` : identifiant de bloc final, identifiant seul sur sa
+/// ligne (encadré), ou ancien commentaire `<!-- uid: … -->`.
+fn find_line(lines: &[&str], uid: &str) -> Option<usize> {
+    lines.iter().position(|l| {
+        crate::vault::standalone_block_id(l).as_deref() == Some(uid)
+            || crate::vault::line_uid(l).as_deref() == Some(uid)
+    })
 }
 
-/// Index de la ligne portant `uid`.
-fn find_line(lines: &[&str], uid: &str) -> Option<usize> {
-    let marker = uid_marker(uid);
-    lines.iter().position(|l| {
-        l.contains(&marker)
-            && l.split(&marker)
-                .nth(1)
-                .is_some_and(|rest| rest.trim_start().starts_with("-->"))
-    })
+/// Lignes d'un encadré désigné par un identifiant seul en ligne `i` : de la première ligne
+/// `>` jusqu'à l'identifiant.
+fn callout_span(lines: &[&str], i: usize) -> Option<std::ops::RangeInclusive<usize>> {
+    crate::vault::standalone_block_id(lines[i])?;
+    let mut start = i;
+    while start > 0 && lines[start - 1].trim().is_empty() {
+        start -= 1;
+    }
+    let mut first = start;
+    while first > 0 && lines[first - 1].trim_start().starts_with('>') {
+        first -= 1;
+    }
+    Some(if first < start { first..=i } else { i..=i })
 }
 
 fn rebuild(lines: Vec<String>, trailing_newline: bool) -> String {
@@ -87,11 +96,24 @@ fn rebuild(lines: Vec<String>, trailing_newline: bool) -> String {
     s
 }
 
+/// Lignes qui portent l'entrée `uid` (l'encadré entier pour un identifiant seul), pour
+/// détecter qu'une autre main l'a modifiée entre la lecture et l'écriture.
+pub fn line_of(raw: &str, uid: &str) -> Option<String> {
+    let lines: Vec<&str> = raw.lines().collect();
+    let i = find_line(&lines, uid)?;
+    let span = callout_span(&lines, i).unwrap_or(i..=i);
+    Some(lines[span].join("\n"))
+}
+
 /// Remplace le texte d'une entrée, annotations conservées. `None` : uid absent.
 pub fn replace_entry_text(raw: &str, uid: &str, text: &str) -> Option<String> {
     let lines: Vec<&str> = raw.lines().collect();
     let i = find_line(&lines, uid)?;
     let original = lines[i];
+    if crate::vault::standalone_block_id(original).is_some() {
+        // Un encadré se réécrit à la main : son texte n'est pas une ligne.
+        return None;
+    }
     let indent: String = original.chars().take_while(|c| c.is_whitespace()).collect();
     let bullet = if original.trim_start().starts_with("* ") {
         "* "
@@ -110,10 +132,11 @@ pub fn replace_entry_text(raw: &str, uid: &str, text: &str) -> Option<String> {
 pub fn remove_entry(raw: &str, uid: &str) -> Option<String> {
     let lines: Vec<&str> = raw.lines().collect();
     let i = find_line(&lines, uid)?;
+    let span = callout_span(&lines, i).unwrap_or(i..=i);
     let out: Vec<String> = lines
         .iter()
         .enumerate()
-        .filter(|(j, _)| *j != i)
+        .filter(|(j, _)| !span.contains(j))
         .map(|(_, l)| l.to_string())
         .collect();
     Some(rebuild(out, raw.ends_with('\n')))
@@ -171,7 +194,7 @@ mod tests {
         let lines: Vec<&str> = out.lines().collect();
         let faits = lines.iter().position(|l| *l == "## Faits").unwrap();
         let clients = lines.iter().position(|l| *l == "## Clients").unwrap();
-        let added = lines.iter().position(|l| l.contains("uid: C3")).unwrap();
+        let added = lines.iter().position(|l| l.ends_with("^C3")).unwrap();
         assert!(faits < added && added < clients, "{out}");
         assert!(
             out.contains("- Écrit à la main, sans uid"),
@@ -187,7 +210,8 @@ mod tests {
     fn replacing_removing_and_linking_touch_one_line() {
         let replaced = replace_entry_text(RAW, "A1", "Le serveur est à Lyon").unwrap();
         assert!(
-            replaced.contains("- Le serveur est à Lyon <!-- uid: A1 --> <!-- importance: 7 -->")
+            replaced.contains("- Le serveur est à Lyon <!-- importance: 7 --> ^A1"),
+            "ancienne ligne réécrite avec son identifiant de bloc : {replaced}"
         );
         assert!(replaced.contains("ACME paie à 30 jours"));
 
@@ -197,7 +221,7 @@ mod tests {
 
         let linked = link_entry(RAW, "B2", "acme").unwrap();
         assert!(
-            linked.contains("- ACME paie à 30 jours [[acme]] <!-- uid: B2 -->"),
+            linked.contains("- ACME paie à 30 jours [[acme]] ^B2"),
             "{linked}"
         );
         assert_eq!(
@@ -214,6 +238,20 @@ mod tests {
         assert!(
             remove_entry(RAW, "A").is_none(),
             "un préfixe d'uid ne suffit pas"
+        );
+    }
+
+    #[test]
+    fn a_callout_entry_is_removed_whole() {
+        let raw =
+            "# Journal\n\n- avant ^A\n\n> [!abstract] Épisode 1\n> résumé\n\n^EP1\n\n- après ^B\n";
+        let removed = remove_entry(raw, "EP1").unwrap();
+        assert_eq!(removed, "# Journal\n\n- avant ^A\n\n\n- après ^B\n");
+        assert!(replace_entry_text(raw, "EP1", "x").is_none());
+        assert!(
+            replace_entry_text(raw, "B", "après tout")
+                .unwrap()
+                .contains("- après tout ^B")
         );
     }
 }

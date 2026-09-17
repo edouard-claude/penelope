@@ -207,7 +207,16 @@ pub async fn ingest(
     };
     let (summary, proposals) = (digest.summary.clone(), digest.facts.clone());
 
+    // L'original, immuable, rejoint `attachments/` avant la fiche qui l'embarque.
+    let attachment = match crate::media::save_document_original(&vault, &slug, name, &bytes) {
+        Ok(file) => Some(file),
+        Err(e) => {
+            tracing::warn!(document = %name, error = %e, "original du document non conservé");
+            None
+        }
+    };
     let meta = doc::SourceMeta {
+        attachment,
         titre: title.clone(),
         fichier: name.to_string(),
         canal: canal.to_string(),
@@ -218,17 +227,16 @@ pub async fn ingest(
         pages: extracted.pages,
         caracteres: chars,
     };
-    let path = vault.join(&file);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    }
-    penelope_kernel::config::atomic_write(
-        &path,
-        doc::render_source(&meta, summary.as_deref(), &text).as_bytes(),
-    )
-    .map_err(|e| e.to_string())?;
-    if let Err(e) = crate::media::save_document_original(s, &slug, name, &bytes) {
-        tracing::warn!(document = %name, error = %e, "original du document non conservé");
+    let day = crate::vault_ops::day(s);
+    crate::vault_ops::save_note(
+        &vault,
+        &file,
+        &doc::render_source(&meta, summary.as_deref(), &text),
+        &day,
+    )?;
+    if let Err(e) = crate::vault_ops::log(&vault, &day, "ingest", &title, &[format!("[[{slug}]]")])
+    {
+        tracing::warn!(document = %name, error = %e, "log.md non mis à jour");
     }
 
     let source_ref = format!("{canal}:{name}");
@@ -339,12 +347,15 @@ pub async fn index_source(
 }
 
 /// Premier nom libre : `slug`, `slug-2`, `slug-3`…
+/// Slug libre dans tout le vault : un wikilink `[[slug]]` ne doit désigner qu'une note.
 fn unique_slug(vault: &Path, base: &str) -> String {
+    let resolver = penelope_memory::wiki::Resolver::scan(vault);
+    // Le document en cours d'ingestion depuis `inbox/` ne se fait pas concurrence.
     let taken = |slug: &str| {
-        vault
-            .join(doc::SOURCES_DIR)
-            .join(format!("{slug}.md"))
-            .exists()
+        resolver
+            .paths_named(slug)
+            .iter()
+            .any(|p| !p.starts_with("inbox/"))
     };
     let mut slug = base.to_string();
     let mut n = 2;

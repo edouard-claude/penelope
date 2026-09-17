@@ -20,6 +20,7 @@ pub mod provenance;
 pub mod quality;
 pub mod recall;
 pub mod vault;
+pub mod wiki;
 
 pub use candidates::{Candidate, CandidateStore, CandidateType};
 pub use consolidation::{DreamReport, Gate, Operation, PromotionGates};
