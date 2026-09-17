@@ -200,7 +200,7 @@ pub async fn build_tiers(
     mcp_lines: &[String],
     run_state: Option<&str>,
 ) -> Tiers {
-    build_tiers_in(s, user_text, mcp_lines, run_state, None).await
+    build_tiers_in(s, user_text, mcp_lines, run_state, None, None).await
 }
 
 /// Comme [`build_tiers`], avec les instantanés T2 figés pour l'épisode `(session, n)` :
@@ -211,6 +211,7 @@ pub async fn build_tiers_in(
     mcp_lines: &[String],
     run_state: Option<&str>,
     episode: Option<(&str, i64)>,
+    query_vector: Option<Vec<f32>>,
 ) -> Tiers {
     let cfg = s.config.config();
     let vault = vault_dir(s);
@@ -254,7 +255,7 @@ pub async fn build_tiers_in(
             &s.memory,
             penelope_memory::RecallParams::from_config(&cfg.memory),
         )
-        .path1(user_text, &Default::default(), None, &[])
+        .path1(user_text, &Default::default(), query_vector, &[])
         .await;
         let rendered = recall.render();
         if !rendered.trim().is_empty() {

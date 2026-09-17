@@ -178,10 +178,16 @@ pub mod method {
     pub const MEM_CANDIDATES: &str = "mem.candidates";
     pub const MEM_DREAM: &str = "mem.dream";
     pub const MEM_LEARNED: &str = "mem.learned";
+    /// Audit noté sur 100, historisé (issue #23).
+    pub const MEM_AUDIT: &str = "mem.audit";
     pub const INTENT_LIST: &str = "intent.list";
     pub const INTENT_CANCEL: &str = "intent.cancel";
     pub const VAULT_SYNC: &str = "vault.sync";
     pub const VAULT_CHECK: &str = "vault.check";
+    /// Entretien d'accueil (issue #21) : question suivante, réponse, écriture validée.
+    pub const ONBOARD_NEXT: &str = "onboard.next";
+    pub const ONBOARD_ANSWER: &str = "onboard.answer";
+    pub const ONBOARD_WRITE: &str = "onboard.write";
 
     pub const IMPORT_HERMES: &str = "import.hermes";
     pub const EXPORT: &str = "export";
@@ -267,10 +273,14 @@ pub mod method {
         MEM_CANDIDATES,
         MEM_DREAM,
         MEM_LEARNED,
+        MEM_AUDIT,
         INTENT_LIST,
         INTENT_CANCEL,
         VAULT_SYNC,
         VAULT_CHECK,
+        ONBOARD_NEXT,
+        ONBOARD_ANSWER,
+        ONBOARD_WRITE,
         IMPORT_HERMES,
         EXPORT,
         BACKUP,

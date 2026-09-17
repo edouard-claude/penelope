@@ -136,6 +136,20 @@ pub fn all() -> Vec<Command> {
         ),
         // Mémoire
         c(
+            "audit",
+            "Mémoire",
+            "Audit de la mémoire sur 100, prochaine action",
+            "/audit",
+            m::MEM_AUDIT,
+        ),
+        c(
+            "accueil",
+            "Mémoire",
+            "Entretien d'accueil : profil, outils, style, limites",
+            "/accueil limites",
+            m::ONBOARD_NEXT,
+        ),
+        c(
             "note",
             "Mémoire",
             "Note dans le journal du jour",

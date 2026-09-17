@@ -258,6 +258,13 @@ pub mod kind {
     pub const SESSION_RENAME: &str = "session_rename";
     pub const SESSION_CLOSE: &str = "session_close";
     pub const SESSIONS_PAGE: &str = "sessions_page";
+    /// Entretien d'accueil (`target` : fichier de la séance) : commencer, répondre
+    /// (`args.n`, `args.answer`, `null` pour passer), pause, écrire, annuler.
+    pub const ONBOARD_START: &str = "onboard_start";
+    pub const ONBOARD_ANSWER: &str = "onboard_answer";
+    pub const ONBOARD_PAUSE: &str = "onboard_pause";
+    pub const ONBOARD_WRITE: &str = "onboard_write";
+    pub const ONBOARD_CANCEL: &str = "onboard_cancel";
 
     pub const ALL: &[&str] = &[
         APPROVE,
@@ -307,6 +314,11 @@ pub mod kind {
         SESSION_RENAME,
         SESSION_CLOSE,
         SESSIONS_PAGE,
+        ONBOARD_START,
+        ONBOARD_ANSWER,
+        ONBOARD_PAUSE,
+        ONBOARD_WRITE,
+        ONBOARD_CANCEL,
     ];
 }
 

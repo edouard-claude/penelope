@@ -34,7 +34,12 @@ pub struct MockProvider {
     /// Transcription renvoyée par `transcribe`, et fichiers reçus.
     transcript: Arc<Mutex<Option<String>>>,
     pub transcribed: Arc<Mutex<Vec<TranscribedFile>>>,
+    /// Calcul d'embedding simulé ; `None` : le provider refuse.
+    embedder: Arc<Mutex<Option<Embedder>>>,
 }
+
+/// Fonction d'embedding d'un faux provider.
+pub type Embedder = Arc<dyn Fn(&str) -> Vec<f32> + Send + Sync>;
 
 /// Fichier reçu par `transcribe` : nom, taille en octets, langue demandée.
 pub type TranscribedFile = (String, usize, Option<String>);
@@ -56,7 +61,14 @@ impl MockProvider {
             )])),
             transcript: Arc::new(Mutex::new(None)),
             transcribed: Arc::new(Mutex::new(Vec::new())),
+            embedder: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Embeddings simulés ; `None` : le provider refuse.
+    pub fn set_embedder(&self, f: Option<Embedder>) -> &Self {
+        *self.embedder.lock().unwrap_or_else(|p| p.into_inner()) = f;
+        self
     }
 
     /// Texte que rendra la prochaine transcription ; `None` : le provider refuse.
@@ -110,6 +122,16 @@ impl MockProvider {
 impl Provider for MockProvider {
     fn name(&self) -> &str {
         "mock"
+    }
+
+    async fn embed(&self, _model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>> {
+        let f = self
+            .embedder
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .ok_or_else(|| LlmError::new(LlmErrorKind::BadRequest, "embeddings non simulés"))?;
+        Ok(inputs.iter().map(|t| f(t)).collect())
     }
 
     async fn chat_stream(&self, req: ChatRequest, cancel: CancelToken) -> Result<ChunkStream> {

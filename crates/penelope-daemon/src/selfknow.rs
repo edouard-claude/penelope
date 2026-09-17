@@ -17,6 +17,10 @@ pub trait Admin: Send + Sync {
     async fn mcp_servers(&self) -> Value {
         Value::Null
     }
+    /// Recherche mémoire : hybride ou lexicale seule, vecteurs calculés (issue #11).
+    async fn memory_search(&self) -> Value {
+        Value::Null
+    }
 }
 
 /// Modèle qui répond au tour en cours.
@@ -155,6 +159,7 @@ pub async fn status(
         && let Some(a) = admin
     {
         out.insert("mcp_servers".into(), a.mcp_servers().await);
+        out.insert("memory_search".into(), a.memory_search().await);
     }
 
     if all || section == "costs" {

@@ -279,6 +279,12 @@ pub struct Models {
     pub routing: Routing,
 }
 
+/// Modèle d'embeddings par défaut : multilingue, servi par OpenRouter, sans serveur local
+/// (issue #11).
+pub const DEFAULT_EMBEDDING_MODEL: &str = "openrouter:openai/text-embedding-3-small";
+/// Ancien défaut, qui exigeait un serveur local d'embeddings.
+pub const LEGACY_EMBEDDING_MODEL: &str = "openai_compat:embeddings-default";
+
 impl Default for Models {
     fn default() -> Self {
         // §10.2 : identifiants donnés à titre d'exemple de configuration initiale.
@@ -289,7 +295,7 @@ impl Default for Models {
             ("summarizer", "openrouter:deepseek/deepseek-v4-flash"),
             ("vision", "openrouter:google/gemini-3.1-flash-image"),
             ("image", "openrouter:google/gemini-3.1-flash-image"),
-            ("embedding", "openai_compat:embeddings-default"),
+            ("embedding", DEFAULT_EMBEDDING_MODEL),
             ("stt", "openai_compat:whisper-default"),
         ]
         .into_iter()
@@ -1023,7 +1029,21 @@ impl ConfigStore {
         let path = path.as_ref().to_path_buf();
         let cfg = if path.exists() {
             let raw = std::fs::read_to_string(&path)?;
-            Config::from_toml(&raw)?
+            let mut c = Config::from_toml(&raw)?;
+            // L'ancien défaut d'embeddings visait un serveur local désactivé : la recherche
+            // restait lexicale sans le dire (issue #11).
+            if !c.providers.local.enabled
+                && let Some(alias) = c.models.aliases.get_mut("embedding")
+                && alias == LEGACY_EMBEDDING_MODEL
+            {
+                tracing::warn!(
+                    ancien = LEGACY_EMBEDDING_MODEL,
+                    nouveau = DEFAULT_EMBEDDING_MODEL,
+                    "alias `embedding` sans serveur local : bascule sur OpenRouter"
+                );
+                *alias = DEFAULT_EMBEDDING_MODEL.to_string();
+            }
+            c
         } else {
             let c = Config::sample(owner_id);
             if let Some(p) = path.parent() {

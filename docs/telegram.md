@@ -181,9 +181,9 @@ skills, workflows, planification, HITL, système. Chacune est reliée à une mé
 un test vérifie que **toutes** le sont : une commande sans méthode serait une impasse.
 
 ```
-/new /sessions /switch /title /fork /rewind /compact /export /stop
-/model /models /budget
-/note /retiens /oublie /recall /appris /pratique /dream /intentions /mien /forget
+/new /sessions /switch /close /title /fork /rewind /compact /export /stop
+/model /models /budget /usage
+/note /retiens /oublie /recall /appris /pratique /dream /intentions /mien /forget /accueil /audit
 /mcp /mcp auth /p
 /skills /skill
 /wf /run /runs /resume

@@ -375,6 +375,16 @@ pub fn all() -> Vec<ToolSpec> {
             false,
         ),
         spec(
+            "mem_neighbors",
+            RiskClass::Read,
+            "Voisins d'une note dans le graphe du vault : concepts d'une source, sources et \
+             entrées de mémoire qui citent un concept (liens `[[slug]]` sortants et entrants).",
+            obj(json!({"slug": {"type":"string"}}), &["slug"]),
+            true,
+            false,
+            false,
+        ),
+        spec(
             "mem_note",
             RiskClass::Write,
             "Note une observation dans le journal du jour. N'écrit jamais dans le niveau \
@@ -825,6 +835,7 @@ mod tests {
             "send_message",
             "mem_search",
             "mem_get",
+            "mem_neighbors",
             "mem_note",
             "mem_remember",
             "mem_forget",

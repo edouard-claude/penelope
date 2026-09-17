@@ -47,6 +47,9 @@ pub enum Command {
         /// Message à envoyer. Sans message : mode interactif.
         message: Vec<String>,
     },
+    /// Entretien d'accueil : rôle, projets, outils, style, limites. Une partie seule :
+    /// `penelope onboard limites`.
+    Onboard { part: Option<String> },
     /// Démarre le service.
     Start,
     /// Arrête le service.
@@ -416,12 +419,18 @@ pub enum MemCmd {
         id: i64,
     },
     /// Reconstruit l'index depuis le vault.
-    Reindex,
+    Reindex {
+        /// Recalcule aussi tous les vecteurs (mémoire, intentions, outils MCP).
+        #[arg(long)]
+        embeddings: bool,
+    },
     Forget {
         uid: String,
     },
     /// Candidats en attente de consolidation.
     Candidates,
+    /// Audit de la mémoire noté sur 100, avec la prochaine action par axe.
+    Audit,
     /// Lance la consolidation (`--dry-run` : rien n'est écrit).
     Dream {
         #[arg(long)]
@@ -486,6 +495,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Chat { session, message } => {
             return chat(&cli, session.clone(), message.clone()).await;
         }
+        Command::Onboard { part } => return onboard(&cli, part.clone()).await,
         _ => {}
     }
 
@@ -788,9 +798,12 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
             (m::MEM_HISTORY, json!({"uid": uid, "file": file}))
         }
         Command::Mem(MemCmd::Restore { id }) => (m::MEM_RESTORE, json!({"id": id})),
-        Command::Mem(MemCmd::Reindex) => (m::MEM_REINDEX, json!({})),
+        Command::Mem(MemCmd::Reindex { embeddings }) => {
+            (m::MEM_REINDEX, json!({"embeddings": embeddings}))
+        }
         Command::Mem(MemCmd::Forget { uid }) => (m::MEM_FORGET, json!({"uid": uid})),
         Command::Mem(MemCmd::Candidates) => (m::MEM_CANDIDATES, json!({})),
+        Command::Mem(MemCmd::Audit) => (m::MEM_AUDIT, json!({})),
         Command::Mem(MemCmd::Dream { dry_run }) => (m::MEM_DREAM, json!({"dry_run": dry_run})),
         Command::Mem(MemCmd::Learned { days }) => (m::MEM_LEARNED, json!({"days": days})),
         Command::Vault(VaultCmd::Sync) => (m::VAULT_SYNC, json!({})),
@@ -1078,6 +1091,21 @@ fn validate_config(cli: &Cli, file: Option<PathBuf>) -> CliResult<()> {
         .map_err(|e| CliError::Validation(e.to_string()))?;
     cfg.validate()
         .map_err(|e| CliError::Validation(e.to_string()))?;
+    let found = penelope_kernel::coherence::contradictions(&cfg);
+    let refusals: Vec<String> = found
+        .iter()
+        .filter(|c| c.gravity == penelope_kernel::coherence::Gravity::Refus)
+        .map(|c| format!("{} ({})", c.message, c.keys.join(", ")))
+        .collect();
+    if !refusals.is_empty() {
+        return Err(CliError::Validation(format!(
+            "réglages qui s'annulent :\n- {}",
+            refusals.join("\n- ")
+        )));
+    }
+    for c in &found {
+        println!("⚠️ {} ({})", c.message, c.keys.join(", "));
+    }
     output::ok(&format!("{} est valide", path.display()), cli.json);
     Ok(())
 }
@@ -1207,6 +1235,90 @@ async fn daemon(cli: &Cli) -> CliResult<()> {
 }
 
 /// `penelope chat` : un message, ou une conversation interactive.
+/// `penelope onboard` : une question à la fois, réponse vide pour passer, `q` pour
+/// reprendre plus tard ; le récapitulatif est validé avant écriture.
+async fn onboard(cli: &Cli, part: Option<String>) -> CliResult<()> {
+    use std::io::Write;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let socket = socket_path(cli.home.clone())?;
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let mut read = async || -> CliResult<Option<String>> {
+        let _ = std::io::stdout().flush();
+        lines
+            .next_line()
+            .await
+            .map_err(|e| CliError::Io(e.to_string()))
+    };
+    loop {
+        let v = call(&socket, m::ONBOARD_NEXT, json!({"part": part})).await?;
+        if v["done"].as_bool() == Some(true) {
+            println!("\n{}", v["text"].as_str().unwrap_or_default());
+            print!("Écrire dans le profil et la mémoire ? [o/N] ");
+            let ok = read()
+                .await?
+                .is_some_and(|l| matches!(l.trim(), "o" | "O" | "oui" | "y"));
+            if ok {
+                let w = call(&socket, m::ONBOARD_WRITE, json!({"rel": v["rel"]})).await?;
+                println!(
+                    "Enregistré : {} ajout(s), {} remplacement(s).",
+                    w["added"], w["replaced"]
+                );
+            } else {
+                println!("Rien n'est écrit.");
+            }
+            return Ok(());
+        }
+        let q = &v["question"];
+        println!(
+            "\n[{}/{}] {}",
+            q["position"],
+            q["total"],
+            q["text"].as_str().unwrap_or_default()
+        );
+        if let Some(h) = q["hint"].as_str().filter(|h| !h.is_empty()) {
+            println!("  {h}");
+        }
+        if let Some(choices) = q["choices"].as_array().filter(|c| !c.is_empty()) {
+            let list: Vec<&str> = choices.iter().filter_map(|c| c.as_str()).collect();
+            println!("  Choix : {}", list.join(", "));
+        }
+        let multi = q["list"].as_bool() == Some(true);
+        if multi {
+            println!("  Une réponse par ligne, ligne vide pour finir.");
+        }
+        print!("› ");
+        let mut answer = String::new();
+        loop {
+            let Some(line) = read().await? else {
+                return Ok(());
+            };
+            if line.trim() == "q" && answer.is_empty() {
+                println!("Accueil en pause : `penelope onboard` reprend ici.");
+                return Ok(());
+            }
+            if line.trim().is_empty() {
+                break;
+            }
+            answer.push_str(line.trim());
+            answer.push('\n');
+            if !multi {
+                break;
+            }
+            print!("› ");
+        }
+        let answer = answer.trim();
+        let params = json!({
+            "rel": q["rel"],
+            "n": q["n"],
+            "answer": (!answer.is_empty()).then_some(answer),
+        });
+        if let Err(e) = call(&socket, m::ONBOARD_ANSWER, params).await {
+            println!("⚠️ {e}");
+        }
+    }
+}
+
 async fn chat(cli: &Cli, session: Option<String>, message: Vec<String>) -> CliResult<()> {
     use std::io::Write;
     use tokio::io::{AsyncBufReadExt, BufReader};
@@ -1561,6 +1673,7 @@ mod tests {
             (vec!["wf", "list"], m::WF_LIST),
             (vec!["schedule", "list"], m::SCHEDULE_LIST),
             (vec!["mem", "search", "x"], m::MEM_SEARCH),
+            (vec!["mem", "audit"], m::MEM_AUDIT),
             (vec!["mem", "dream", "--dry-run"], m::MEM_DREAM),
             (vec!["mem", "restore", "12"], m::MEM_RESTORE),
             (vec!["vault", "check"], m::VAULT_CHECK),

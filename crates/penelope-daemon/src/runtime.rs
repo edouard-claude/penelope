@@ -286,6 +286,8 @@ pub struct Daemon {
     pub compaction: crate::compaction::State,
     /// Runs de workflow pilotés par ce processus (§12.7).
     pub workflows: crate::workflow::State,
+    /// Calcul des embeddings : dernier échec, rattrapage en cours (issue #11).
+    pub embeddings: crate::embeddings::State,
     /// Providers construits à la demande (la clé peut arriver après le démarrage).
     providers: tokio::sync::Mutex<Option<Arc<penelope_llm::ProviderSet>>>,
     /// Provider imposé, pour les tests et les suites sans réseau.
@@ -356,6 +358,7 @@ impl Daemon {
             hooks: Hooks::default(),
             compaction: crate::compaction::State::default(),
             workflows: crate::workflow::State::default(),
+            embeddings: crate::embeddings::State::default(),
             providers: tokio::sync::Mutex::new(None),
             provider_override: std::sync::RwLock::new(None),
         }

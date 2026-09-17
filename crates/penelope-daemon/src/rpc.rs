@@ -61,6 +61,9 @@ impl Rpc {
                 if let Some(sup) = self.daemon.hooks.mcp_supervisor() {
                     checks.extend(crate::doctor::mcp_checks(s, &sup).await);
                 }
+                checks.push(crate::doctor::embedding_check(&self.daemon).await);
+                checks.push(crate::doctor::vault_index_check(s).await);
+                checks.extend(crate::doctor::coherence_checks(s).await);
                 Ok(json!(checks))
             }
             method::SHUTDOWN => {
@@ -208,7 +211,7 @@ impl Rpc {
                 let value = p.get("value").cloned().unwrap_or(Value::Null);
                 let g = set_config_path(&self.daemon, &path, value)?;
                 self.daemon.invalidate_providers().await;
-                Ok(json!({"generation": g}))
+                Ok(json!({"generation": g, "warnings": config_warnings(&self.daemon, &path)}))
             }
 
             // ------------------------------------------------------------ secrets
@@ -555,7 +558,20 @@ impl Rpc {
                 let n = crate::vault_ops::reindex(s, &vault)
                     .await
                     .map_err(anyhow::Error::msg)?;
+                // `embeddings` : tous les vecteurs recalculés avec le modèle courant.
+                if p.get("embeddings").and_then(|v| v.as_bool()) == Some(true) {
+                    let report = crate::embeddings::backfill(&self.daemon, true).await?;
+                    return Ok(json!({"entries": n, "embeddings": report}));
+                }
+                crate::embeddings::spawn_backfill(self.daemon.clone());
                 Ok(json!({"entries": n}))
+            }
+            method::MEM_AUDIT => {
+                let audit = crate::mem_audit::run(&self.daemon).await?;
+                Ok(crate::mem_audit::to_json(&audit))
+            }
+            method::ONBOARD_NEXT | method::ONBOARD_ANSWER | method::ONBOARD_WRITE => {
+                crate::onboarding::rpc(&self.daemon, method, p).await
             }
             method::MEM_FORGET => {
                 let uid = required_str(p, "uid")?;
@@ -1126,10 +1142,33 @@ pub(crate) fn set_config_path(daemon: &Daemon, path: &str, value: Value) -> anyh
                 })?;
             }
         }
-        *c = serde_json::from_value(v).map_err(penelope_kernel::KernelError::Json)?;
+        let updated: penelope_kernel::Config =
+            serde_json::from_value(v).map_err(penelope_kernel::KernelError::Json)?;
+        // Un réglage qui annule sa propre intention est refusé, nommément (issue #16).
+        let refused = penelope_kernel::coherence::new_refusals(c, &updated, &path_owned);
+        if !refused.is_empty() {
+            return Err(penelope_kernel::KernelError::config(format!(
+                "réglage refusé : {}",
+                refused
+                    .iter()
+                    .map(|r| r.message.clone())
+                    .collect::<Vec<_>>()
+                    .join(" ; ")
+            )));
+        }
+        *c = updated;
         Ok(vec![path_owned.clone()])
     })?;
     Ok(generation)
+}
+
+/// Avertissements de cohérence qui touchent un réglage, après son écriture.
+pub(crate) fn config_warnings(daemon: &Daemon, path: &str) -> Vec<String> {
+    penelope_kernel::coherence::contradictions(&daemon.services.config.config())
+        .into_iter()
+        .filter(|c| c.concerns(path))
+        .map(|c| c.message)
+        .collect()
 }
 
 /// Sert la socket locale jusqu'à l'arrêt du daemon.
@@ -1349,6 +1388,56 @@ mod tests {
             .unwrap();
         assert_eq!(st["generation"], 2);
         assert!(st["subsystems"]["mcp"].is_object());
+    }
+
+    /// Issue #16 : un réglage qui annule sa propre intention est refusé nommément ; celui
+    /// qui en rend un autre inutile passe avec un avertissement.
+    #[tokio::test]
+    async fn self_cancelling_settings_are_refused_or_warned() {
+        let (_d, r) = rpc().await;
+        let resp = call(
+            &r,
+            method::CONFIG_SET,
+            json!({"path": "tools.http_allowlist", "value": ["http://192.168.0.10:8080"]}),
+        )
+        .await;
+        let err = resp.error.expect("refus").message;
+        assert!(
+            err.contains("réglage refusé") && err.contains("192.168.0.10"),
+            "{err}"
+        );
+        let cfg = call(&r, method::CONFIG_GET, json!({}))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(
+            cfg["tools"]["http_allowlist"],
+            json!([]),
+            "rien n'est écrit"
+        );
+
+        let resp = call(
+            &r,
+            method::CONFIG_SET,
+            json!({"path": "budget.session_usd", "value": 50.0}),
+        )
+        .await;
+        let v = resp.result.expect("accepté");
+        assert!(
+            v["warnings"][0]
+                .as_str()
+                .unwrap()
+                .contains("ne sera jamais atteint"),
+            "{v}"
+        );
+
+        let resp = call(
+            &r,
+            method::CONFIG_SET,
+            json!({"path": "models.roles.classifier", "value": "absent"}),
+        )
+        .await;
+        assert!(resp.error.unwrap().message.contains("n'existe pas"));
     }
 
     #[tokio::test]

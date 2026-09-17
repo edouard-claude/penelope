@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1175 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1186 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -395,6 +395,35 @@ Coûts : la journée qui a atteint le plafond de 20 $ en évitait environ la moi
   replis permis), empreinte de chaque requête et cause de chaque raté
   (`penelope usage --by miss`). Test : chaque requête reprend la précédente octet pour
   octet, dans un tour et d'un tour à l'autre (CA 5).
+
+### 0.7.0
+
+Mémoire « second cerveau » et configuration.
+
+- #11 **Embeddings calculés** : vecteurs des entrées mémoire, des intentions et des outils
+  MCP, rattrapés en fond après chaque tour, réindexation ou inscription d'outils, mis en
+  cache par contenu ; au tour, le vecteur du message (1,5 s au plus) alimente le rappel et
+  les intentions, `mem_search` et `tool_search` croisent mots et sens. Défaut
+  `openrouter:openai/text-embedding-3-small`, sans serveur local (l'ancien défaut bascule
+  au chargement) ; `doctor` vérifie l'alias, `self_status` dit si la recherche est
+  hybride, `penelope mem reindex --embeddings` recalcule tout.
+- #21 **Accueil** : `/accueil` et `penelope onboard`, neuf questions écrites dans
+  `accueil/AAAA-MM-JJ.md` avant d'être posées, reprise après pause, récapitulatif validé
+  avant d'écrire `profil.md` et `memoire.md` (provenance vers la question), parties
+  rejouables avec remplacement, proposé au premier message d'un profil vide.
+- #23 **Audit sur 100** : `/audit` et `penelope mem audit`, barème v1 sur cinq axes, une
+  prochaine action par axe, historique `audits/`, score au digest du lundi.
+- #22 **Wiki de concepts** : pages `concepts/<slug>.md` tirées des documents ingérés,
+  dédoublonnées par les mots puis le sens, liens `[[slug]]` depuis les sources et la
+  mémoire, `concepts/_a-definir.md` au digest, `index.md`, outil `mem_neighbors`.
+- #15 **Contenu hors index nommé** : inventaire du vault (`penelope vault check`,
+  `doctor`, journal à chaque changement), exclusions documentées, recherche vide qui
+  rappelle le périmètre et les fichiers hors index, règle du harnais « pas de résultat »
+  n'est pas « n'existe pas ».
+- #16 **Réglages qui s'annulent** : inventaire des paires contradictoires
+  (`penelope_kernel::coherence`), refus nommé à `config_set`, avertissement sinon, audit
+  au démarrage et dans `doctor` (déclencheurs pendant les heures calmes compris),
+  `penelope config validate`.
 
 ### Routine de livraison
 

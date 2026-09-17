@@ -2202,6 +2202,10 @@ pub struct WorkflowOrchestrator {
 
 #[async_trait::async_trait]
 impl crate::executor::Orchestrator for WorkflowOrchestrator {
+    async fn embed_query(&self, text: &str) -> Option<Vec<f32>> {
+        crate::embeddings::query_vector(&self.daemon, text).await
+    }
+
     async fn start_workflow(
         &self,
         id: &str,

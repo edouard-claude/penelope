@@ -30,6 +30,15 @@ pub trait Provider: Send + Sync {
     /// Rafraîchit le catalogue depuis le provider.
     async fn fetch_models(&self) -> Result<Vec<ModelInfo>>;
 
+    /// Embeddings (§6.11) : un vecteur par texte, dans l'ordre.
+    async fn embed(&self, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>> {
+        let _ = (model, inputs);
+        Err(LlmError::new(
+            LlmErrorKind::BadRequest,
+            format!("le provider `{}` ne calcule pas d'embeddings", self.name()),
+        ))
+    }
+
     /// Transcrit un fichier audio (rôle `stt`). Le nom de fichier porte le format
     /// (`.ogg`, `.mp3`, `.wav`…), que les serveurs lisent à l'extension.
     async fn transcribe(
@@ -319,6 +328,17 @@ impl Provider for OpenRouterProvider {
         "openrouter"
     }
 
+    async fn embed(&self, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>> {
+        let req = self
+            .http
+            .post(format!("{}/embeddings", self.base_url))
+            .bearer_auth(&self.api_key)
+            .header("HTTP-Referer", &self.referer)
+            .header("X-OpenRouter-Title", &self.title)
+            .timeout(std::time::Duration::from_secs(60));
+        embed_openai(req, model, inputs).await
+    }
+
     async fn chat_stream(&self, req: ChatRequest, cancel: CancelToken) -> Result<ChunkStream> {
         let url = format!("{}/chat/completions", self.base_url);
         let slug = match req.pinned_upstream.as_deref() {
@@ -421,46 +441,77 @@ impl OpenAiCompatProvider {
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
+}
 
-    /// Embeddings (§6.11) : dimension lue à la première réponse et figée par index.
-    pub async fn embed(&self, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>> {
-        let url = format!("{}/embeddings", self.base_url);
-        let mut req = self.http.post(&url).json(&json!({
-            "model": strip_provider(model),
-            "input": inputs,
-        }));
-        if !self.api_key.is_empty() {
-            req = req.bearer_auth(&self.api_key);
-        }
-        let resp = req.send().await.map_err(map_reqwest_error)?;
-        let status = resp.status().as_u16();
-        let body: Value = resp
-            .json()
-            .await
-            .map_err(|e| LlmError::new(LlmErrorKind::Other, e.to_string()))?;
-        if status >= 400 {
-            return Err(LlmError::from_status(status, &body.to_string()));
-        }
-        let data = body.get("data").and_then(|d| d.as_array()).ok_or_else(|| {
-            LlmError::new(LlmErrorKind::Other, "réponse d'embeddings sans `data`")
-        })?;
-        Ok(data
-            .iter()
-            .filter_map(|e| {
-                e.get("embedding").and_then(|v| v.as_array()).map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_f64().map(|f| f as f32))
-                        .collect()
-                })
-            })
-            .collect())
+/// `POST {base}/embeddings` au format OpenAI, commun à OpenRouter et aux serveurs
+/// compatibles.
+async fn embed_openai(
+    request: reqwest::RequestBuilder,
+    model: &str,
+    inputs: &[String],
+) -> Result<Vec<Vec<f32>>> {
+    let resp = request
+        .json(&json!({"model": strip_provider(model), "input": inputs}))
+        .send()
+        .await
+        .map_err(map_reqwest_error)?;
+    let status = resp.status().as_u16();
+    let body: Value = resp
+        .json()
+        .await
+        .map_err(|e| LlmError::new(LlmErrorKind::Other, e.to_string()))?;
+    if status >= 400 || body.get("error").is_some() {
+        return Err(LlmError::from_status(status.max(400), &body.to_string()));
     }
+    let vectors = parse_embeddings(&body)?;
+    if vectors.len() != inputs.len() {
+        return Err(LlmError::new(
+            LlmErrorKind::Other,
+            format!("{} embeddings pour {} textes", vectors.len(), inputs.len()),
+        ));
+    }
+    Ok(vectors)
+}
+
+/// Vecteurs d'une réponse d'embeddings, remis dans l'ordre de `index`.
+pub fn parse_embeddings(body: &Value) -> Result<Vec<Vec<f32>>> {
+    let data = body
+        .get("data")
+        .and_then(|d| d.as_array())
+        .ok_or_else(|| LlmError::new(LlmErrorKind::Other, "réponse d'embeddings sans `data`"))?;
+    let mut indexed: Vec<(usize, Vec<f32>)> = data
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| {
+            let v = e.get("embedding")?.as_array()?;
+            let index = e
+                .get("index")
+                .and_then(|x| x.as_u64())
+                .map_or(i, |x| x as usize);
+            Some((
+                index,
+                v.iter()
+                    .filter_map(|x| x.as_f64().map(|f| f as f32))
+                    .collect(),
+            ))
+        })
+        .collect();
+    indexed.sort_by_key(|(i, _)| *i);
+    Ok(indexed.into_iter().map(|(_, v)| v).collect())
 }
 
 #[async_trait::async_trait]
 impl Provider for OpenAiCompatProvider {
     fn name(&self) -> &str {
         &self.label
+    }
+
+    async fn embed(&self, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>> {
+        let mut req = self.http.post(format!("{}/embeddings", self.base_url));
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+        embed_openai(req, model, inputs).await
     }
 
     async fn transcribe(

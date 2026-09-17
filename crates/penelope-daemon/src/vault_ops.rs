@@ -138,10 +138,15 @@ pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
                     None,
                 )
                 .await?;
+                crate::concepts::reindex_source_links(s, slug, &raw, src.origine)
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
             continue;
         }
-        if rel.starts_with(&format!("{}/", penelope_memory::ingest::INBOX_DIR)) {
+        // Exclusions documentées (`vault_inventory`) : en attente, comptes rendus, pages
+        // générées.
+        if crate::vault_inventory::excluded(&rel).is_some() {
             continue;
         }
         let (entries, rewritten) = penelope_memory::vault::parse_entries(&raw);
@@ -154,8 +159,16 @@ pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
         } else {
             Level::from_path(&rel)
         };
+        // Page de concept : ses entrées portent le slug du concept (graphe, issue #22).
+        let concept = rel
+            .strip_prefix(&format!("{}/", crate::concepts::DIR))
+            .and_then(|f| f.strip_suffix(".md"))
+            .filter(|f| !f.contains('/'));
         for e in entries {
-            let ie = IndexedEntry::from_vault(&e, &rel, level, "fait", None, &day);
+            let ie = match concept {
+                Some(slug) => IndexedEntry::from_vault(&e, &rel, level, "entite", Some(slug), &day),
+                None => IndexedEntry::from_vault(&e, &rel, level, "fait", None, &day),
+            };
             let prov = Provenance::owner("reindex", "maintenance", &now);
             s.memory
                 .upsert(&ie, &prov)

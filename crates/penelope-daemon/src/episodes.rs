@@ -633,7 +633,8 @@ mod tests {
             let s = s.clone();
             let sid = sid.clone();
             async move {
-                crate::conversation::build_tiers_in(&s, "bonjour", &[], None, Some((&sid, n))).await
+                crate::conversation::build_tiers_in(&s, "bonjour", &[], None, Some((&sid, n)), None)
+                    .await
             }
         };
         let before = build(0).await;

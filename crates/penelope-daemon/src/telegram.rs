@@ -303,6 +303,22 @@ impl TelegramGateway {
                     };
                     return self.reply(chat_id, topic_id, Some(message_id), &note).await;
                 }
+                // Entretien d'accueil en cours : ce message répond à la question posée.
+                let onboard_key = format!("tg.onboard.{chat_id}");
+                if let Some(raw) = self.daemon.kv_get(&onboard_key).await?
+                    && let Ok(v) = serde_json::from_str::<Value>(&raw)
+                    && let Some(rel) = v["rel"].as_str()
+                {
+                    let n = v["n"].as_u64().unwrap_or(0) as u32;
+                    return match crate::onboarding::answer(&self.daemon, rel, n, Some(&text)).await
+                    {
+                        Ok(sitting) => self.onboarding_ask(chat_id, topic_id, &sitting).await,
+                        Err(e) => {
+                            self.reply(chat_id, topic_id, Some(message_id), &format!("⚠️ {e}"))
+                                .await
+                        }
+                    };
+                }
                 // Un formulaire d'étape `user` est en cours : ce message remplit le champ.
                 if let Some(raw) = self.daemon.kv_get(&form_key(chat_id)).await?
                     && !raw.is_empty()
@@ -343,6 +359,18 @@ impl TelegramGateway {
                     return Ok(());
                 }
 
+                // Profil vide : l'accueil est proposé une fois, sans retenir le message.
+                if self.daemon.kv_get("tg.onboard.proposed").await?.is_none()
+                    && crate::onboarding::profile_is_empty(&self.daemon).await
+                {
+                    self.daemon
+                        .kv_set(
+                            "tg.onboard.proposed",
+                            &self.daemon.services.clock.now_rfc3339(),
+                        )
+                        .await?;
+                    self.propose_onboarding(chat_id, topic_id).await?;
+                }
                 let origin = Origin::Telegram {
                     chat_id,
                     topic_id,
@@ -890,6 +918,18 @@ impl TelegramGateway {
             "usage" => {
                 let session = d.chat_session_for(&origin).await?;
                 self.usage_text(&session, args).await?
+            }
+            "audit" => {
+                let audit = crate::mem_audit::run(d).await?;
+                crate::mem_audit::summary(&audit)
+            }
+            "accueil" => {
+                let part = crate::onboarding::Part::parse(args);
+                if !args.is_empty() && part.is_none() {
+                    "Partie inconnue : profil, outils, style ou limites.".to_string()
+                } else {
+                    return self.onboarding_next(chat_id, topic_id, part).await;
+                }
             }
             "dream" => {
                 // Une passe peut prendre une minute : le bilan arrive quand il est prêt.
@@ -1787,6 +1827,20 @@ impl TelegramGateway {
         {
             return self
                 .session_menu_clicked(callback_id, action, chat_id, topic_id, message_id)
+                .await;
+        }
+        if let ClickOutcome::Accepted(action) = &outcome
+            && matches!(
+                action.action.as_str(),
+                k::ONBOARD_START
+                    | k::ONBOARD_ANSWER
+                    | k::ONBOARD_PAUSE
+                    | k::ONBOARD_WRITE
+                    | k::ONBOARD_CANCEL
+            )
+        {
+            return self
+                .onboarding_clicked(callback_id, action, chat_id, topic_id, message_id)
                 .await;
         }
         if let ClickOutcome::Accepted(action) = &outcome
@@ -2842,6 +2896,228 @@ impl TelegramGateway {
                     Err(e) => format!("ℹ️ {e}"),
                 };
                 self.reply(chat_id, None, None, &note).await
+            }
+        }
+    }
+
+    // ============================================================ accueil
+
+    async fn propose_onboarding(&self, chat_id: i64, topic_id: Option<i64>) -> anyhow::Result<()> {
+        let t = self
+            .daemon
+            .services
+            .actions
+            .create(k::ONBOARD_START, "", json!({}), 7 * 24 * 3_600_000, true)
+            .await?;
+        let rows = vec![vec![ButtonSpec::callback(
+            "📋 Commencer l'accueil",
+            &t.token,
+            "",
+        )]];
+        self.bot
+            .send_text(
+                chat_id,
+                topic_id,
+                &markdown_to_html(
+                    "👋 Ton profil est encore vide. Neuf questions (rôle, projets, outils, style, \
+                     limites) et je te connais dès aujourd'hui ; chacune peut être passée.",
+                ),
+                Some(inline_keyboard(&rows)),
+                None,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!(e.to_string()))
+    }
+
+    /// `/accueil [partie]` : reprend la séance en cours ou en ouvre une (issue #21).
+    async fn onboarding_next(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        part: Option<crate::onboarding::Part>,
+    ) -> anyhow::Result<()> {
+        let sitting = crate::onboarding::start(&self.daemon, part).await?;
+        self.onboarding_ask(chat_id, topic_id, &sitting).await
+    }
+
+    /// Pose la question suivante, ou montre le récapitulatif à valider.
+    async fn onboarding_ask(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        sitting: &crate::onboarding::Sitting,
+    ) -> anyhow::Result<()> {
+        let d = &self.daemon;
+        let s = &d.services;
+        let key = format!("tg.onboard.{chat_id}");
+        let ttl = 7 * 24 * 3_600_000;
+        let button = |label: String, action: &'static str, args: Value| {
+            let rel = sitting.rel.clone();
+            async move {
+                s.actions
+                    .create(action, &rel, args, ttl, true)
+                    .await
+                    .map(|t| ButtonSpec::callback(&label, &t.token, ""))
+            }
+        };
+        let Some(q) = sitting.next() else {
+            d.kv_set(&key, "").await?;
+            let plan = crate::onboarding::plan(d, sitting).await?;
+            if plan.is_empty() && plan.keep.is_empty() {
+                crate::onboarding::cancel(d).await?;
+                return self
+                    .reply(
+                        chat_id,
+                        topic_id,
+                        None,
+                        "Aucune réponse à retenir : rien n'est écrit.",
+                    )
+                    .await;
+            }
+            let rows = vec![vec![
+                button("✅ Écrire".into(), k::ONBOARD_WRITE, json!({})).await?,
+                button("✖️ Annuler".into(), k::ONBOARD_CANCEL, json!({})).await?,
+            ]];
+            return self
+                .bot
+                .send_text(
+                    chat_id,
+                    topic_id,
+                    &markdown_to_html(&crate::onboarding::plan_text(&plan)),
+                    Some(inline_keyboard(&rows)),
+                    None,
+                )
+                .await
+                .map(|_| ())
+                .map_err(|e| anyhow::anyhow!(e.to_string()));
+        };
+        d.kv_set(&key, &json!({"rel": sitting.rel, "n": q.n}).to_string())
+            .await?;
+        let (i, total) = sitting.position(q.n);
+        let mut hint = q.hint.to_string();
+        if q.n == 4
+            && let Some(sup) = d.hooks.mcp_supervisor()
+        {
+            let servers: Vec<String> = sup.statuses().await.into_iter().map(|st| st.name).collect();
+            if !servers.is_empty() {
+                hint.push_str(&format!(" Serveurs MCP déclarés : {}.", servers.join(", ")));
+            }
+        }
+        let mut rows: Vec<Vec<ButtonSpec>> = Vec::new();
+        if !q.choices.is_empty() {
+            let mut row = Vec::new();
+            for c in q.choices {
+                row.push(
+                    button(
+                        c.to_string(),
+                        k::ONBOARD_ANSWER,
+                        json!({"n": q.n, "answer": c}),
+                    )
+                    .await?,
+                );
+            }
+            rows.push(row);
+        }
+        rows.push(vec![
+            button(
+                "⏭ Passer".into(),
+                k::ONBOARD_ANSWER,
+                json!({"n": q.n, "answer": null}),
+            )
+            .await?,
+            button("⏸ Plus tard".into(), k::ONBOARD_PAUSE, json!({})).await?,
+        ]);
+        let mut text = format!("📋 **Accueil · {i}/{total}**\n\n{}", q.text);
+        if !hint.trim().is_empty() {
+            text.push_str(&format!("\n_{}_", hint.trim()));
+        }
+        if q.choices.is_empty() {
+            text.push_str("\n\nRéponds en un message.");
+        }
+        self.bot
+            .send_text(
+                chat_id,
+                topic_id,
+                &markdown_to_html(&text),
+                Some(inline_keyboard(&rows)),
+                None,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!(e.to_string()))
+    }
+
+    /// Boutons de l'accueil.
+    async fn onboarding_clicked(
+        &self,
+        callback_id: &str,
+        action: &Action,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        message_id: i64,
+    ) -> anyhow::Result<()> {
+        let d = &self.daemon;
+        let _ = self.bot.answer_callback(callback_id, None, false).await;
+        let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+        let rel = action.target.as_str();
+        match action.action.as_str() {
+            k::ONBOARD_START => self.onboarding_next(chat_id, topic_id, None).await,
+            k::ONBOARD_ANSWER => {
+                let n = action.args["n"].as_u64().unwrap_or(0) as u32;
+                match crate::onboarding::answer(d, rel, n, action.args["answer"].as_str()).await {
+                    Ok(sitting) => self.onboarding_ask(chat_id, topic_id, &sitting).await,
+                    Err(e) => {
+                        self.reply(chat_id, topic_id, None, &format!("⚠️ {e}"))
+                            .await
+                    }
+                }
+            }
+            k::ONBOARD_PAUSE => {
+                d.kv_set(&format!("tg.onboard.{chat_id}"), "").await?;
+                self.reply(
+                    chat_id,
+                    topic_id,
+                    None,
+                    "⏸ Accueil en pause : `/accueil` reprend à la première question sans réponse.",
+                )
+                .await
+            }
+            k::ONBOARD_WRITE => {
+                let Some(sitting) = crate::onboarding::load(d, rel) else {
+                    return self
+                        .reply(chat_id, topic_id, None, "ℹ️ séance d'accueil introuvable")
+                        .await;
+                };
+                let origin = Origin::Telegram {
+                    chat_id,
+                    topic_id,
+                    message_id: None,
+                };
+                let session = d.chat_session_for(&origin).await?;
+                let (added, replaced) = crate::onboarding::write(d, &sitting, &session).await?;
+                self.reply(
+                    chat_id,
+                    topic_id,
+                    None,
+                    &format!(
+                        "✅ Accueil enregistré : {added} ajout(s), {replaced} remplacement(s) \
+                         dans `profil.md` et `memoire.md`. `/accueil limites` (ou profil, \
+                         outils, style) pour revenir sur une partie."
+                    ),
+                )
+                .await
+            }
+            _ => {
+                crate::onboarding::cancel(d).await?;
+                d.kv_set(&format!("tg.onboard.{chat_id}"), "").await?;
+                self.reply(
+                    chat_id,
+                    topic_id,
+                    None,
+                    &format!("✖️ Rien n'est écrit ; la séance reste lisible dans `{rel}`."),
+                )
+                .await
             }
         }
     }
@@ -4521,6 +4797,8 @@ mod tests {
     #[tokio::test]
     async fn a_text_message_gets_an_html_answer_as_a_reply() {
         let (_d, g, t, p) = gateway().await;
+        // Accueil déjà proposé : seul l'échange compte ici.
+        g.daemon.kv_set("tg.onboard.proposed", "test").await.unwrap();
         p.reply(r#"{"complexity":"low"}"#);
         p.reply("Bonjour, **Edouard**.");
         g.process_update(&updates::text_message(1, OWNER, OWNER, "salut"))
@@ -4612,6 +4890,7 @@ mod tests {
     #[tokio::test]
     async fn the_same_update_is_processed_only_once() {
         let (_d, g, t, p) = gateway().await;
+        g.daemon.kv_set("tg.onboard.proposed", "test").await.unwrap();
         p.reply(r#"{"complexity":"low"}"#);
         p.reply("une seule fois");
         let u = updates::text_message(7, OWNER, OWNER, "salut");
@@ -5608,6 +5887,163 @@ mod tests {
             .unwrap();
         let second = g.daemon.chat_session_for(&origin).await.unwrap();
         assert_ne!(first, second);
+    }
+
+    /// Issue #21 : une séance d'accueil complète sur Telegram écrit `profil.md` et
+    /// `memoire.md`, chaque directive reliée à sa réponse ; rejouer une partie montre ce
+    /// qui change et remplace l'ancienne réponse.
+    #[tokio::test]
+    async fn onboarding_writes_the_profile_from_the_answers() {
+        let (_d, g, t, _p) = gateway().await;
+        let d = g.daemon.clone();
+        let vault = crate::conversation::vault_dir(&d.services);
+        let last = || {
+            let t = t.clone();
+            async move { t.calls_to(tg::SEND_MESSAGE).await.last().unwrap().clone() }
+        };
+        let click = |label: &'static str, update: i64| {
+            let (g, last) = (g.clone(), last);
+            async move {
+                let msg = last().await;
+                let token = inline_buttons(&msg)
+                    .into_iter()
+                    .find(|(l, _)| l.contains(label))
+                    .unwrap_or_else(|| panic!("pas de bouton « {label} » : {msg}"))
+                    .1;
+                g.process_update(&updates::callback(update, OWNER, &token, 4000))
+                    .await
+                    .unwrap();
+            }
+        };
+        let say = |text: &'static str, update: i64| {
+            let g = g.clone();
+            async move {
+                g.process_update(&updates::text_message(update, OWNER, OWNER, text))
+                    .await
+                    .unwrap();
+            }
+        };
+
+        say("/accueil", 400).await;
+        assert!(
+            last().await["text"]
+                .as_str()
+                .unwrap()
+                .contains("Accueil · 1/9")
+        );
+        say("développeur indépendant", 401).await;
+        let file = std::fs::read_dir(vault.join("accueil"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let raw = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            raw.contains("## 1. Quel est ton rôle ou ton métier ?\n\ndéveloppeur indépendant"),
+            "{raw}"
+        );
+        assert!(
+            raw.contains("## 9. Et ce que je dois toujours faire"),
+            "questions écrites d'avance"
+        );
+        say("Squirrel et ses clients", 402).await;
+        say("Pénélope\nSite vitrine", 403).await;
+        click("Passer", 404).await;
+        click("Tutoiement", 405).await;
+        click("Courtes", 406).await;
+        say("français", 407).await;
+        say("écrire en mon nom\nsupprimer sans demander", 408).await;
+        say("éviter le jargon", 409).await;
+        let recap = last().await["text"].as_str().unwrap().to_string();
+        assert!(
+            recap.contains("+ Toujours tutoyer le propriétaire"),
+            "{recap}"
+        );
+        assert!(
+            recap.contains("+ Jamais supprimer sans demander"),
+            "{recap}"
+        );
+        assert!(
+            recap.contains("+ Projet en cours du propriétaire : Site vitrine"),
+            "{recap}"
+        );
+        assert!(!recap.contains("Outils"), "question passée : {recap}");
+        click("Écrire", 410).await;
+
+        let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
+        for directive in [
+            "Toujours tutoyer le propriétaire",
+            "Préférer des réponses courtes",
+            "Toujours répondre en français",
+            "Jamais écrire en mon nom",
+            "Éviter le jargon",
+        ] {
+            assert!(profil.contains(directive), "{directive} absent : {profil}");
+        }
+        assert!(
+            std::fs::read_to_string(vault.join("memoire.md"))
+                .unwrap()
+                .contains("Rôle du propriétaire : développeur indépendant")
+        );
+        let rel = format!("accueil/{}", file.file_name().unwrap().to_string_lossy());
+        let source: String = d
+            .services
+            .store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT p.source_ref FROM mem_entries e JOIN mem_provenance p ON p.uid = e.uid
+                     WHERE e.text = 'Toujours tutoyer le propriétaire'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(source, format!("{rel}#q5"));
+
+        // Rejouer le style : l'ancienne réponse est remplacée, le reste gardé.
+        say("/accueil style", 420).await;
+        click("Vouvoiement", 421).await;
+        click("Courtes", 422).await;
+        click("Français", 423).await;
+        let recap = last().await["text"].as_str().unwrap().to_string();
+        assert!(
+            recap.contains(
+                "- Toujours tutoyer le propriétaire\n+ Toujours vouvoyer le propriétaire"
+            ),
+            "{recap}"
+        );
+        assert!(
+            recap.contains("= Préférer des réponses courtes (déjà retenu)"),
+            "{recap}"
+        );
+        click("Écrire", 424).await;
+        let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
+        assert!(profil.contains("Toujours vouvoyer le propriétaire"));
+        assert!(
+            !profil.contains("Toujours tutoyer le propriétaire"),
+            "{profil}"
+        );
+    }
+
+    /// Issue #21 : un premier message sur un profil vide propose l'accueil, une fois.
+    #[tokio::test]
+    async fn an_empty_profile_proposes_onboarding_once() {
+        let (_d, g, t, p) = gateway().await;
+        for i in 0..2 {
+            p.reply(r#"{"complexity":"low"}"#);
+            p.reply("Bonjour !");
+            g.process_update(&updates::text_message(430 + i, OWNER, OWNER, "salut"))
+                .await
+                .unwrap();
+            drain(&g).await;
+        }
+        let proposals = texts(&t.calls_to(tg::SEND_MESSAGE).await)
+            .into_iter()
+            .filter(|x| x.contains("Ton profil est encore vide"))
+            .count();
+        assert_eq!(proposals, 1);
     }
 
     /// Issue #12 : une demande `elicitation/create` devient une carte Telegram ; le clic du

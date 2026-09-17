@@ -195,6 +195,138 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     checks
 }
 
+/// Cohérence de la configuration et des déclencheurs (issue #16).
+pub async fn coherence_checks(s: &Services) -> Vec<DoctorCheck> {
+    use penelope_kernel::coherence::{Gravity, contradictions};
+    let cfg = s.config.config();
+    let mut out: Vec<DoctorCheck> = contradictions(&cfg)
+        .into_iter()
+        .map(|c| {
+            let check = DoctorCheck::fail(
+                "config_coherence",
+                "Configuration cohérente",
+                format!("{} ({})", c.message, c.keys.join(", ")),
+                c.keys.first().map(|k| format!("penelope config get {k}")),
+            );
+            if c.gravity == Gravity::Refus {
+                check.critical()
+            } else {
+                check
+            }
+        })
+        .collect();
+    // Heures calmes : un déclencheur planifié qui y tombe attend leur fin pour notifier.
+    if let Ok(quiet) = penelope_kernel::config::TimeRange::parse(&cfg.telegram.quiet_hours)
+        && let Ok(schedules) = s.schedules.list().await
+    {
+        for sc in schedules.iter().filter(|x| x.state == "active") {
+            let Some(next) = sc.next_run.as_deref() else {
+                continue;
+            };
+            let Ok(at) = chrono::DateTime::parse_from_rfc3339(next) else {
+                continue;
+            };
+            let local = match cfg.owner.timezone.parse::<chrono_tz::Tz>() {
+                Ok(tz) => at.with_timezone(&tz).naive_local().time(),
+                Err(_) => at.naive_utc().time(),
+            };
+            let minute = chrono::Timelike::hour(&local) * 60 + chrono::Timelike::minute(&local);
+            if quiet.contains(minute) {
+                out.push(DoctorCheck::fail(
+                    "config_coherence",
+                    "Configuration cohérente",
+                    format!(
+                        "le déclencheur `{}` part à {:02}:{:02}, pendant les heures calmes \
+                         (`telegram.quiet_hours` = {}) : sa notification attendra",
+                        sc.id,
+                        chrono::Timelike::hour(&local),
+                        chrono::Timelike::minute(&local),
+                        cfg.telegram.quiet_hours
+                    ),
+                    Some(format!("penelope schedule pause {}", sc.id)),
+                ));
+            }
+        }
+    }
+    if out.is_empty() {
+        out.push(DoctorCheck::ok(
+            "config_coherence",
+            "Configuration cohérente",
+            "aucun réglage n'annule un autre",
+        ));
+    }
+    out
+}
+
+/// Contenu du vault hors de l'index (issue #15).
+pub async fn vault_index_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "vault_index";
+    const LABEL: &str = "Vault indexé";
+    match crate::vault_inventory::inventory(s).await {
+        Ok(inv) if inv.not_indexed.is_empty() => DoctorCheck::ok(
+            ID,
+            LABEL,
+            format!(
+                "{} fichier(s), {} entrée(s) indexée(s)",
+                inv.files, inv.entries
+            ),
+        ),
+        Ok(inv) => {
+            let names: Vec<&str> = inv
+                .not_indexed
+                .iter()
+                .take(5)
+                .map(|g| g.path.as_str())
+                .collect();
+            DoctorCheck::fail(
+                ID,
+                LABEL,
+                format!(
+                    "{} fichier(s) présents mais hors index : {}{}",
+                    inv.not_indexed.len(),
+                    names.join(", "),
+                    if inv.not_indexed.len() > 5 { "…" } else { "" }
+                ),
+                Some("penelope vault check".into()),
+            )
+        }
+        Err(e) => DoctorCheck::fail(ID, LABEL, e.to_string(), None),
+    }
+}
+
+/// Alias `embedding` joignable (issue #11) : sans lui, la recherche reste lexicale.
+pub async fn embedding_check(d: &crate::runtime::Daemon) -> DoctorCheck {
+    const ID: &str = "embedding";
+    const LABEL: &str = "Embeddings (recherche par le sens)";
+    let fix = Some(format!(
+        "penelope config set models.aliases.embedding {}",
+        penelope_kernel::config::DEFAULT_EMBEDDING_MODEL
+    ));
+    let Some(model) = crate::embeddings::model(d) else {
+        return DoctorCheck::fail(ID, LABEL, "aucun modèle pour le rôle `embedding`", fix);
+    };
+    let texts = ["penelope doctor".to_string()];
+    let probe = crate::embeddings::embed_texts(d, &texts);
+    match tokio::time::timeout(std::time::Duration::from_secs(15), probe).await {
+        Ok(Ok((_, v))) if v.first().is_some_and(|x| !x.is_empty()) => {
+            DoctorCheck::ok(ID, LABEL, format!("`{model}`, {} dimensions", v[0].len()))
+        }
+        Ok(Ok(_)) => DoctorCheck::fail(ID, LABEL, format!("`{model}` : vecteur vide"), fix),
+        Ok(Err(e)) => DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!("`{model}` injoignable ({e}) : recherche lexicale seule"),
+            fix,
+        ),
+        Err(_) => DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!("`{model}` ne répond pas en 15 s : recherche lexicale seule"),
+            fix,
+        ),
+    }
+}
+
 fn clock_check(s: &Services) -> DoctorCheck {
     let now = s.clock.now_ms();
     let system = std::time::SystemTime::now()

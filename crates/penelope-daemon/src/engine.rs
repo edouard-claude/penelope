@@ -77,6 +77,12 @@ impl crate::selfknow::Admin for Daemon {
         Ok(g)
     }
 
+    async fn memory_search(&self) -> Value {
+        crate::embeddings::search_mode(self)
+            .await
+            .unwrap_or_else(|e| json!({"error": e.to_string()}))
+    }
+
     async fn mcp_servers(&self) -> Value {
         let Some(sup) = self.hooks.mcp_supervisor() else {
             return json!("superviseur MCP non démarré");
@@ -263,6 +269,8 @@ impl Daemon {
         };
         self.bus.end(&turn.session_id, turn.id.as_str());
         self.handle.record_turn();
+        // Un tour a pu écrire en mémoire ou créer une intention : vecteurs manquants.
+        crate::embeddings::spawn_backfill(self.clone());
         // Apprentissage continu (§6.6) : revue de fond des échanges qui le méritent.
         if let (TurnKind::Message, TurnOutcome::Answered { text: answer, .. }) =
             (turn.kind, &outcome)
@@ -423,15 +431,22 @@ impl Daemon {
             Some(m) => m.server_lines().await,
             None => Vec::new(),
         };
+        // Vecteur du message (délai borné) : rappel mémoire et intentions hybrides.
+        let vector = if turn.kind == TurnKind::Message {
+            crate::embeddings::query_vector(self, &text).await
+        } else {
+            None
+        };
         let mut tiers = crate::conversation::build_tiers_in(
             &s,
             &text,
             &mcp_lines,
             None,
             (session.kind == SessionKind::Chat).then_some((turn.session_id.as_str(), episode)),
+            vector.clone(),
         )
         .await;
-        if let Some(block) = self.intents_block(turn, &text).await? {
+        if let Some(block) = self.intents_block(turn, &text, vector.as_deref()).await? {
             tiers.volatile.push_str("\n\n");
             tiers.volatile.push_str(&block);
         }
@@ -505,7 +520,12 @@ impl Daemon {
     /// Intentions armées que ce message réveille (§6.9) : elles tirent une fois, et leur
     /// texte rejoint le contexte volatil du tour. Un tour rejoué retrouve le même bloc
     /// sans tirer une seconde fois.
-    async fn intents_block(&self, turn: &Turn, text: &str) -> anyhow::Result<Option<String>> {
+    async fn intents_block(
+        &self,
+        turn: &Turn,
+        text: &str,
+        vector: Option<&[f32]>,
+    ) -> anyhow::Result<Option<String>> {
         if turn.kind != TurnKind::Message || text.trim().is_empty() {
             return Ok(None);
         }
@@ -515,7 +535,7 @@ impl Daemon {
         }
         let s = &self.services;
         let max = s.config.config().memory.intents.max_per_turn.max(1);
-        let matches = s.intents.matching(text, None, 0.5, max).await?;
+        let matches = s.intents.matching(text, vector, 0.5, max).await?;
         let mut lines = Vec::new();
         for i in &matches {
             s.intents.fire(&i.id).await?;

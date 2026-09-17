@@ -1183,6 +1183,39 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
             "\n🔧 Runs récents : {done} terminé(s), {blocked} bloqué(s), {running} en cours\n"
         ));
     }
+    // Termes employés dans les sources sans définition (issue #22).
+    let undefined = crate::concepts::to_define(&crate::conversation::vault_dir(s));
+    if !undefined.is_empty() {
+        let shown: Vec<&str> = undefined.iter().take(5).map(String::as_str).collect();
+        t.push_str(&format!(
+            "\n🧩 {} concept(s) à définir : {}{} (`concepts/_a-definir.md`)\n",
+            undefined.len(),
+            shown.join(", "),
+            if undefined.len() > 5 { "…" } else { "" }
+        ));
+    }
+    // Le lundi, l'audit de la mémoire et son écart sur la semaine (issue #23).
+    if chrono::Datelike::weekday(&s.clock.now_utc()) == chrono::Weekday::Mon {
+        match crate::mem_audit::run(d).await {
+            Ok(audit) => {
+                let delta = audit
+                    .delta
+                    .map(|x| {
+                        format!(
+                            " ({x:+} depuis le {})",
+                            audit.previous_date.clone().unwrap_or_default()
+                        )
+                    })
+                    .unwrap_or_default();
+                t.push_str(&format!("\n📈 Mémoire : {}/100{delta}", audit.total));
+                if let Some(best) = crate::mem_audit::best_next(&audit) {
+                    t.push_str(&format!(" · prochaine action : {}", best.next));
+                }
+                t.push('\n');
+            }
+            Err(e) => tracing::warn!(error = %e, "audit hebdomadaire de la mémoire"),
+        }
+    }
     let yesterday = (s.clock.now_utc() - chrono::Duration::days(1))
         .format("%Y-%m-%d")
         .to_string();
@@ -1317,7 +1350,19 @@ pub async fn vault_check(s: &Services) -> Value {
             }
         }
     }
-    json!({"files": files, "ok": issues.iter().all(|i| i["severity"] != "error"), "issues": issues})
+    // Contenu présent mais hors de l'index : nommé, jamais silencieux (issue #15).
+    let inventory = crate::vault_inventory::inventory(s).await.ok();
+    if let Some(inv) = &inventory {
+        for g in &inv.not_indexed {
+            issues.push(json!({"file": g.path, "severity": "warning", "message": format!("hors index : {}", g.reason)}));
+        }
+    }
+    json!({
+        "files": files,
+        "ok": issues.iter().all(|i| i["severity"] != "error"),
+        "issues": issues,
+        "inventory": inventory,
+    })
 }
 
 /// Répertoire d'un fichier du vault, pour les chemins affichés.

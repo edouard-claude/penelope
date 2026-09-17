@@ -165,6 +165,15 @@ session_usd = 5.0
 Une modification est publiée à chaud, comme une génération immuable : les tours déjà
 commencés gardent l'instantané qu'ils ont lu, les suivants prennent la nouvelle.
 
+**Réglages qui s'annulent.** Un réglage qui annulerait sa propre intention est refusé,
+nommément : rôle ou palier de routage vers un alias absent, repli vers soi-même,
+`budget.alert_ratio` hors de ]0, 1[, adresse privée dans `tools.http_allowlist` alors que
+`tools.http_block_private_ips` la bloque. Un réglage qui en rend un autre inutile passe
+avec un avertissement : plafond de session au-delà du plafond du jour, alias vers un
+provider désactivé, action destructive moins protégée qu'une écriture, déclencheur
+planifié pendant `telegram.quiet_hours`. `penelope config validate` et `penelope doctor`
+listent ces contradictions, et le daemon les signale au démarrage.
+
 ```bash
 penelope config set context.compaction_threshold 0.66
 ```
@@ -602,6 +611,60 @@ penelope mem history --file profil.md
 puis `penelope mem restore <id>`. `penelope vault check` signale un frontmatter cassé ou
 un secret écrit à la main ; si le vault est un dépôt git, chaque passe fait un commit
 `dream: AAAA-MM-JJ` (poussé si `memory.vault_git_remote` est renseigné).
+
+**Accueil.** Sur une instance neuve, le profil ne se remplit qu'au fil des jours. `/accueil`
+(ou `penelope onboard`) pose neuf questions, une à la fois, avec des boutons quand c'est
+possible : rôle, clients, projets, outils, tutoiement, longueur et langue des réponses, ce
+que Pénélope ne doit jamais faire, ce qu'elle doit toujours faire ou éviter. Chaque
+question est écrite dans `accueil/AAAA-MM-JJ.md` avant d'être posée et sa réponse se range
+dessous : la séance se reprend après une pause. À la fin, un récapitulatif montre ce qui
+change dans `profil.md` (directives Toujours, Jamais, Préférer, Éviter) et `memoire.md` ;
+rien n'est écrit sans validation, et chaque entrée garde sa provenance vers sa question.
+`/accueil limites` (ou `profil`, `outils`, `style`) ne rejoue qu'une partie et remplace
+l'ancienne réponse. Le premier message d'une instance au profil vide propose l'accueil.
+
+**Audit.** `/audit` ou `penelope mem audit` note la mémoire sur 100 avec un barème fixe
+(v1) sur cinq axes : connaissance du propriétaire, portée (serveurs MCP, sources,
+projets), savoir-faire, autonomie, qualité (provenance, liens morts, concepts à définir,
+contradictions, vecteurs). Chaque axe dit pourquoi et propose une seule prochaine action ;
+l'audit est gardé dans `audits/AAAA-MM-JJ.md` avec l'écart depuis le précédent, et le
+digest du lundi en donne le score.
+
+**Wiki de concepts.** Le résumé d'un document reçu nomme aussi ses concepts (personne,
+client, projet, terme métier) : chacun crée ou complète `concepts/<slug>.md` (définition,
+alias, sources), dédoublonné par les mots puis par le sens. La fiche source reçoit une
+section `## Concepts` avec ses liens `[[slug]]`, les lignes de `memoire.md` et `projets.md`
+qui citent le concept aussi, `concepts/_a-definir.md` liste les termes employés sans
+définition (repris par le digest du matin) et `index.md` sert de point d'entrée, y compris
+dans Obsidian. L'outil `mem_neighbors` parcourt ce graphe.
+
+**Ce qui est indexé.** Toutes les entrées `- …` des fichiers Markdown du vault et les
+passages des fiches `sources/`. Ne le sont pas, à dessein : `inbox/` (en attente
+d'ingestion), `accueil/`, `audits/`, `archive/`, `index.md`, `concepts/_a-definir.md`,
+les fichiers cachés. Tout le reste qui échappe à l'index (un PDF déposé à la main, un
+texte sans entrées, des lignes sans uid) est nommé par `penelope vault check`,
+`penelope doctor` et le journal du daemon ; une recherche mémoire vide le rappelle au
+modèle, qui dit « je ne trouve rien dans ce que j'ai indexé » plutôt que « cela n'existe
+pas ».
+
+**Recherche par le sens.** Le rappel mémoire, `mem_search`, le déclenchement des
+intentions et `tool_search` croisent les mots et les vecteurs : une entrée sur
+« l'automobile » répond à une question sur « la voiture ». Les vecteurs viennent de
+l'alias `embedding`, par défaut `openrouter:openai/text-embedding-3-small` (quelques
+centimes par million de tokens, aucun serveur local), et sont calculés en fond après
+chaque tour, chaque réindexation et chaque inscription d'outils MCP, puis mis en cache par
+contenu. Au tour, le vecteur du message a 1,5 s ; au-delà, ou si l'alias ne répond pas, la
+recherche reste lexicale pour ce tour. `penelope doctor` vérifie l'alias, `self_status` dit
+si la recherche est hybride ou lexicale seule et combien de vecteurs sont calculés. Après
+un changement de modèle :
+
+```bash
+penelope mem reindex --embeddings
+```
+
+Une configuration qui gardait l'ancien défaut (`openai_compat:embeddings-default`, serveur
+local désactivé) bascule au chargement sur le défaut OpenRouter, avec un avertissement
+dans le journal.
 
 ### Workflows
 

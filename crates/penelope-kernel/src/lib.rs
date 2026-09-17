@@ -17,6 +17,7 @@ pub mod api;
 pub mod budget;
 pub mod canonical;
 pub mod clock;
+pub mod coherence;
 pub mod config;
 pub mod cron;
 pub mod effects;

@@ -37,6 +37,18 @@ impl Daemon {
         let report = self.recover().await?;
         tracing::info!(?report, "reprise terminée");
         crate::budget_alert::AlertWatcher::install(&self);
+        // Audit de démarrage : un réglage qui en annule un autre est nommé (issue #16).
+        for c in penelope_kernel::coherence::contradictions(&self.services.config.config()) {
+            tracing::warn!(reglages = ?c.keys, gravite = ?c.gravity, "{}", c.message);
+            let _ = self
+                .services
+                .events
+                .append(penelope_kernel::event::EventDraft::new(
+                    "config.contradiction",
+                    serde_json::json!(c),
+                ))
+                .await;
+        }
 
         // Workflows, sous-agents et images : offerts aux outils et à l'ordonnanceur.
         self.hooks
@@ -155,6 +167,23 @@ async fn maintenance_loop(d: Arc<Daemon>) {
     while !d.handle.is_shutting_down() {
         if let Err(e) = maintenance_pass(&d).await {
             tracing::warn!(error = %e, "maintenance");
+        }
+        // Outils MCP inscrits, vault réindexé : vecteurs manquants.
+        crate::embeddings::spawn_backfill(d.clone());
+        // Contenu du vault hors index : signalé à chaque changement, toutes les 30 min.
+        let now = d.services.clock.now_ms();
+        let last = d
+            .kv_get("vault.gaps.checked")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
+        if now - last >= 30 * 60_000 {
+            let _ = d.kv_set("vault.gaps.checked", &now.to_string()).await;
+            if let Err(e) = crate::vault_inventory::report_gaps(&d).await {
+                tracing::warn!(error = %e, "inventaire du vault");
+            }
         }
         sleep_or_shutdown(&d, Duration::from_secs(60)).await;
     }

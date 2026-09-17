@@ -122,6 +122,11 @@ pub trait Orchestrator: Send + Sync {
         let _ = (run_id, op);
         Err("moteur de workflows indisponible".into())
     }
+    /// Vecteur d'une requête de recherche, en temps borné ; `None` : recherche lexicale.
+    async fn embed_query(&self, text: &str) -> Option<Vec<f32>> {
+        let _ = text;
+        None
+    }
 }
 
 /// Contexte d'un appel.
@@ -439,11 +444,18 @@ impl NativeToolExecutor {
                     .set_config(&path, value.clone())
                     .await
                     .map_err(ToolError::Invalid)?;
+                let warnings: Vec<String> =
+                    penelope_kernel::coherence::contradictions(&s.config.config())
+                        .into_iter()
+                        .filter(|c| c.concerns(&path))
+                        .map(|c| c.message)
+                        .collect();
                 json!({
                     "path": path,
                     "value": value,
                     "generation": generation,
                     "applied": "à chaud, dès le prochain appel",
+                    "avertissements": warnings,
                 })
             }
             "time_now" => {
@@ -546,10 +558,18 @@ impl NativeToolExecutor {
                     limit: u_arg(args, "limit").unwrap_or(10),
                     ..Default::default()
                 };
-                let hits = s
-                    .memory
-                    .search(&str_arg(args, "query")?, None, &filter, &[])
-                    .await?;
+                let query = str_arg(args, "query")?;
+                let vector = match &self.orchestrator {
+                    Some(o) => o.embed_query(&query).await,
+                    None => None,
+                };
+                let hits = s.memory.search(&query, vector, &filter, &[]).await?;
+                // Rien trouvé : le périmètre et ce qui en sort, jamais un silence (issue #15).
+                if hits.is_empty() {
+                    return Ok(ToolOutcome::ok(
+                        crate::vault_inventory::empty_search_note(s).await,
+                    ));
+                }
                 let mut out = Vec::new();
                 for h in &hits {
                     let untrusted = h.entry.etype == penelope_memory::ingest::SOURCE_ETYPE
@@ -569,6 +589,9 @@ impl NativeToolExecutor {
                 }
                 json!(out)
             }
+            "mem_neighbors" => crate::concepts::neighbors(s, &str_arg(args, "slug")?)
+                .await
+                .map_err(|e| ToolError::Other(e.to_string()))?,
             "mem_get" => {
                 let mut entries = match args.get("uid").and_then(|v| v.as_str()) {
                     Some(uid) => s.memory.get(uid).await?.into_iter().collect(),
@@ -1047,11 +1070,16 @@ impl NativeToolExecutor {
 
     async fn tool_search(&self, args: &Value) -> ToolResult<ToolOutcome> {
         let q = str_arg(args, "query")?;
+        let vector = match &self.orchestrator {
+            Some(o) => o.embed_query(&q).await,
+            None => None,
+        };
         let hits = self
             .services
             .mcp_tools
-            .search(
+            .search_hybrid(
                 &q,
+                vector.as_deref(),
                 args.get("server").and_then(|v| v.as_str()),
                 u_arg(args, "limit").unwrap_or(10),
             )
