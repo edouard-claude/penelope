@@ -1312,6 +1312,17 @@ suit le sujet de travail de la session (#119).
   rappel (exclues de `injected_uids`) et à `mem_search`. Une session sans sujet ne reçoit
   que les entrées sans projet. `/sessions` affiche 📁, `self_status` donne `project`.
 
+### 0.17.8
+
+- **Une planification muette est un échec, et son état est remis** (#120) : la veille de
+  8 h 33 avait produit son édition, consommé `seen.json` et rien envoyé, comptée réussie.
+  Un prompt planifié déclare son `livrable` (`message`, `fichier:<chemin>`, `run`) et son
+  `etat` (fichier consommé) dans sa cible. Avant le tour, l'état est gardé (2 Mio au plus,
+  dans un workspace) ; après, `trigger_outcome_of` vérifie le livrable : sans lui,
+  l'exécution est enregistrée en échec (« exécutée sans livrable : … ») et prévenue comme
+  celles de #39, et l'état est remis. Le digest du matin liste les planifications en
+  échec. Sans livrable déclaré, rien ne change.
+
 ### Routine de livraison
 
 Avant chaque tag :

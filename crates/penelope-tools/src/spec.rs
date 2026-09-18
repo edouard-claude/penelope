@@ -301,7 +301,10 @@ pub fn all() -> Vec<ToolSpec> {
              `args`, `every_ms` ≥ 60000, `item_path`, `id_path`, `filter`), `watch_file` \
              (`path`), `event` (`event`). Le retour arrive dans ce chat, chaque exécution \
              d'un prompt dans sa propre session (`label` dans target pour la nommer) ; une \
-             planification identique déjà active est signalée (`doublons`).",
+             planification identique déjà active est signalée (`doublons`). Un prompt peut \
+             déclarer dans target son `livrable` (`message`, `fichier:<chemin>`, `run`) : sans \
+             lui, l'exécution compte comme un échec ; et son `etat` (chemin du fichier « déjà \
+             vu »), remis tel qu'avant si rien n'est livré.",
             obj(
                 json!({
                     "kind": {"type":"string","enum":["cron","interval","mcp_poll","watch_file","event"]},

@@ -432,11 +432,21 @@ async fn fire(
                     .collect::<Vec<_>>()
                     .join(",")
             );
+            // État consommé par le travail (« déjà vu », curseur) : gardé tel qu'avant le
+            // tour, remis si l'exécution ne livre rien (issue #120).
+            if let Some(path) = sched.target["etat"].as_str() {
+                save_state(d, &session, path).await;
+            }
             s.turns
                 .enqueue(
                     &session,
                     TurnKind::Trigger,
-                    json!({"text": text, "origin": origin.to_value(), "schedule": sched.id}),
+                    json!({
+                        "text": text,
+                        "origin": origin.to_value(),
+                        "schedule": sched.id,
+                        "livrable": sched.target["livrable"],
+                    }),
                     Some(dedup),
                     5,
                 )
@@ -559,6 +569,174 @@ fn local_day(d: &Daemon) -> String {
     match s.config.config().owner.timezone.parse::<chrono_tz::Tz>() {
         Ok(tz) => utc.with_timezone(&tz).format("%d/%m").to_string(),
         Err(_) => utc.format("%d/%m").to_string(),
+    }
+}
+
+/// Clé de l'état d'une planification gardé avant son tour.
+fn state_key(session_id: &str) -> String {
+    format!("schedule.state.{session_id}")
+}
+
+/// Chemin d'un état ou d'un fichier livrable : absolu, ou relatif au premier workspace ;
+/// jamais hors des workspaces.
+fn resolve_in_workspace(d: &Daemon, path: &str) -> Option<std::path::PathBuf> {
+    let workspaces = crate::executor::default_workspaces(&d.services);
+    let p = std::path::Path::new(path);
+    let full = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        workspaces.first()?.join(p)
+    };
+    let full = penelope_platform::sandbox::normalise(&full);
+    workspaces
+        .iter()
+        .any(|w| full.starts_with(w))
+        .then_some(full)
+}
+
+/// Garde l'état tel qu'avant le tour (2 Mio au plus, texte).
+async fn save_state(d: &Daemon, session_id: &str, path: &str) {
+    let Some(full) = resolve_in_workspace(d, path) else {
+        tracing::warn!(
+            path,
+            "état de planification hors des workspaces : non gardé"
+        );
+        return;
+    };
+    let saved = match std::fs::read(&full) {
+        Ok(bytes) if bytes.len() <= 2 * 1024 * 1024 => match String::from_utf8(bytes) {
+            Ok(text) => json!({"path": full, "content": text}),
+            Err(_) => return,
+        },
+        Ok(_) => return,
+        Err(_) => json!({"path": full, "content": null}),
+    };
+    let _ = d.kv_set(&state_key(session_id), &saved.to_string()).await;
+}
+
+/// Remet l'état d'avant le tour (`restore`), ou l'oublie : il est validé.
+async fn settle_state(d: &Daemon, session_id: &str, restore: bool) {
+    let key = state_key(session_id);
+    let Ok(Some(raw)) = d.kv_get(&key).await else {
+        return;
+    };
+    if restore && let Ok(v) = serde_json::from_str::<Value>(&raw) {
+        let path = std::path::PathBuf::from(v["path"].as_str().unwrap_or_default());
+        let done: Result<(), String> = match v["content"].as_str() {
+            Some(text) => penelope_kernel::config::atomic_write(&path, text.as_bytes())
+                .map_err(|e| e.to_string()),
+            None => match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+                _ => Ok(()),
+            },
+        };
+        match done {
+            Ok(()) => tracing::info!(path = %path.display(), "état de planification remis"),
+            Err(e) => tracing::warn!(error = %e, "état de planification non remis"),
+        }
+    }
+    let _ = d.kv_delete(&key).await;
+}
+
+/// Ce que le tour devait livrer et n'a pas livré, s'il en déclarait un (issue #120).
+async fn missing_deliverable(
+    d: &Daemon,
+    turn: &penelope_kernel::turn::Turn,
+    outcome: &crate::agent::TurnOutcome,
+) -> Option<String> {
+    let s = &d.services;
+    let wanted = turn.payload["livrable"].as_str()?.trim().to_string();
+    let since = s
+        .sessions
+        .get(&turn.session_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|x| x.created_at)
+        .unwrap_or_default();
+    if wanted == "message" {
+        let answered = matches!(
+            outcome,
+            crate::agent::TurnOutcome::Answered { text, .. } if !text.trim().is_empty()
+        );
+        let channel = matches!(
+            crate::bus::Origin::from_payload(&turn.payload),
+            crate::bus::Origin::Telegram { .. }
+        );
+        // Un message envoyé par l'agent lui-même compte aussi.
+        let sent = s
+            .context
+            .history
+            .load(&turn.session_id, 0)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .any(|e| {
+                matches!(
+                    e.message.name.as_deref(),
+                    Some("send_message" | "send_file")
+                ) && !e.message.text().starts_with("Erreur")
+            });
+        return (!(answered && channel || sent))
+            .then(|| "aucun message envoyé au propriétaire".to_string());
+    }
+    if let Some(path) = wanted.strip_prefix("fichier:") {
+        let Some(full) = resolve_in_workspace(d, path.trim()) else {
+            return Some(format!("fichier `{}` hors des workspaces", path.trim()));
+        };
+        let since = chrono::DateTime::parse_from_rfc3339(&since)
+            .map(std::time::SystemTime::from)
+            .unwrap_or(std::time::UNIX_EPOCH);
+        let written = std::fs::metadata(&full)
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t >= since);
+        return (!written).then(|| format!("fichier `{}` non écrit", path.trim()));
+    }
+    if wanted == "run" {
+        let started = s
+            .runs
+            .list(None, 50)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .any(|r| r.started_at >= since);
+        return (!started).then(|| "aucun run lancé".to_string());
+    }
+    tracing::warn!(livrable = %wanted, "livrable de planification inconnu : ignoré");
+    None
+}
+
+/// Fin du tour d'un prompt planifié, livrable compris (issue #120) : une exécution qui
+/// répond sans livrer ce qu'elle a promis est un échec, prévenu comme ceux de #39, et
+/// l'état qu'elle a consommé est remis pour que la suivante reprenne les mêmes éléments.
+pub async fn trigger_outcome_of(
+    d: &Arc<Daemon>,
+    schedule_id: &str,
+    outcome: &crate::agent::TurnOutcome,
+    turn: &penelope_kernel::turn::Turn,
+) {
+    use crate::agent::TurnOutcome;
+    if let TurnOutcome::AwaitingApproval { .. } = outcome {
+        return trigger_outcome(d, schedule_id, outcome).await;
+    }
+    let missing = match outcome {
+        TurnOutcome::Answered { .. } => missing_deliverable(d, turn, outcome).await,
+        _ => None,
+    };
+    let delivered = matches!(outcome, TurnOutcome::Answered { .. }) && missing.is_none();
+    settle_state(d, &turn.session_id, !delivered).await;
+    match missing {
+        None => trigger_outcome(d, schedule_id, outcome).await,
+        Some(what) => {
+            let s = &d.services;
+            let reason = format!("exécutée sans livrable : {what}");
+            if let Err(e) = s.schedules.record_outcome(schedule_id, Some(&reason)).await {
+                tracing::warn!(schedule = %schedule_id, error = %e, "issue de planification non enregistrée");
+            }
+            if let Ok(Some(sched)) = s.schedules.get(schedule_id).await {
+                alert(d, &sched, &reason).await;
+            }
+        }
     }
 }
 
@@ -840,6 +1018,111 @@ mod tests {
         clock.advance_days(365);
         tick(&d).await.unwrap();
         assert_eq!(rec.texts().len(), 1, "un rappel unique ne revient pas");
+    }
+
+    /// #120 : un prompt qui déclare un message pour livrable et répond sans rien envoyer
+    /// est un échec prévenu, et son état « déjà vu » est remis ; le même tour avec message
+    /// compte et valide l'état ; sans livrable déclaré, rien ne change.
+    #[tokio::test]
+    async fn a_silent_scheduled_run_is_a_failure_and_its_state_is_restored() {
+        let (_dir, d, clock, rec) = daemon().await;
+        let s = &d.services;
+        let origin = Origin::Telegram {
+            chat_id: 42,
+            topic_id: Some(7),
+            message_id: None,
+        };
+        let ws = crate::executor::default_workspaces(s)[0].clone();
+        std::fs::create_dir_all(ws.join("veille")).unwrap();
+        std::fs::write(ws.join("veille/seen.json"), r#"["a","b"]"#).unwrap();
+        let make = |livrable: Value| {
+            let origin = origin.to_value();
+            async move {
+                s.schedules
+                    .create(
+                        TriggerKind::Interval,
+                        json!({"every_ms": 3_600_000}),
+                        json!({"type": "prompt", "prompt": "Prépare la veille",
+                               "origin": origin, "livrable": livrable,
+                               "etat": "veille/seen.json"}),
+                        json!({}),
+                    )
+                    .await
+                    .unwrap()
+            }
+        };
+        let run = |text: &'static str| {
+            let d = d.clone();
+            async move {
+                let turn = d.services.turns.claim("t").await.unwrap().expect("tour");
+                // Le travail consomme l'état.
+                let ws = crate::executor::default_workspaces(&d.services)[0].clone();
+                std::fs::write(ws.join("veille/seen.json"), r#"["a","b","c","d"]"#).unwrap();
+                let outcome = crate::agent::TurnOutcome::Answered {
+                    text: text.into(),
+                    iterations: 1,
+                    cost_usd: 0.0,
+                };
+                d.services.turns.complete(&turn).await.unwrap();
+                let schedule = turn.payload["schedule"].as_str().unwrap().to_string();
+                trigger_outcome_of(&d, &schedule, &outcome, &turn).await;
+                schedule
+            }
+        };
+
+        let muet = make(json!("message")).await;
+        clock.advance_ms(3_600_500);
+        tick(&d).await.unwrap();
+        run("").await;
+        let after = s.schedules.get(&muet.id).await.unwrap().unwrap();
+        assert!(
+            after
+                .last_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("sans livrable"),
+            "{after:?}"
+        );
+        assert!(
+            rec.texts()
+                .iter()
+                .any(|t| t.contains("aucun message envoyé")),
+            "{:?}",
+            rec.texts()
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.join("veille/seen.json")).unwrap(),
+            r#"["a","b"]"#,
+            "état remis : la suivante reprend les mêmes éléments"
+        );
+        let digest = crate::dream::digest_text(&d).await.unwrap();
+        assert!(digest.contains("planification(s) en échec"), "{digest}");
+        s.schedules.set_state(&muet.id, "paused").await.unwrap();
+
+        let parle = make(json!("message")).await;
+        clock.advance_ms(3_600_500);
+        tick(&d).await.unwrap();
+        let alerts = rec.texts().len();
+        run("Six items cette semaine.").await;
+        let after = s.schedules.get(&parle.id).await.unwrap().unwrap();
+        assert!(after.last_error.is_none() && after.runs == 1, "{after:?}");
+        assert_eq!(rec.texts().len(), alerts, "pas d'alerte");
+        assert_eq!(
+            std::fs::read_to_string(ws.join("veille/seen.json")).unwrap(),
+            r#"["a","b","c","d"]"#,
+            "état validé"
+        );
+        s.schedules.set_state(&parle.id, "paused").await.unwrap();
+
+        let libre = make(Value::Null).await;
+        clock.advance_ms(3_600_500);
+        tick(&d).await.unwrap();
+        run("").await;
+        let after = s.schedules.get(&libre.id).await.unwrap().unwrap();
+        assert!(
+            after.last_error.is_none() && after.runs == 1,
+            "comme avant : {after:?}"
+        );
     }
 
     /// Issue #39 : un prompt planifié s'exécute dans une session neuve, titrée d'après la

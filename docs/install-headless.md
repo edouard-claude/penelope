@@ -1128,6 +1128,16 @@ reste dans `last_error`, visible dans `/schedules` et `penelope doctor`. Créer 
 planification identique à une planification active (même déclencheur, prompt quasi
 identique) est signalé dans la réponse de création.
 
+**Ce qu'une exécution doit livrer.** Un prompt planifié peut déclarer son livrable dans sa
+cible : `"livrable": "message"` (une réponse non vide dans le chat d'origine, ou un
+`send_message`), `"fichier:veille/2026-09-18.md"` (écrit pendant l'exécution) ou `"run"`
+(un workflow lancé). Une exécution qui répond sans ce livrable n'est pas comptée : elle est
+signalée comme un échec (« exécutée sans livrable : aucun message envoyé »), dans le chat,
+`/schedules`, `penelope schedule list` et le digest du matin. Une planification qui
+consomme un état (« déjà vu », curseur) le déclare (`"etat": "veille/seen.json"`, dans un
+workspace) : il est gardé avant le tour et remis tel quel si rien n'est livré, pour que la
+suivante reprenne les mêmes éléments. Sans livrable déclaré, rien ne change.
+
 Les autres déclencheurs : `interval` (toutes les N minutes), `mcp_poll` (un outil MCP en
 lecture interrogé à intervalle ; seuls les éléments nouveaux déclenchent, le premier
 passage ne fait que mémoriser l'existant), `watch_file` (un fichier modifié) et `event`

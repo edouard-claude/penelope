@@ -2014,6 +2014,28 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
         }
         None => t.push_str("\n🧠 Pas encore de consolidation.\n"),
     }
+    // Planifications dont la dernière exécution a échoué, ou n'a rien livré (#39, #120).
+    let failing: Vec<String> = {
+        let mut v = Vec::new();
+        for sched in s.schedules.list().await.unwrap_or_default() {
+            if sched.state == "active"
+                && let Some(err) = &sched.last_error
+            {
+                v.push(format!(
+                    "- {} : {err}",
+                    crate::scheduler::label(d, &sched).await
+                ));
+            }
+        }
+        v
+    };
+    if !failing.is_empty() {
+        t.push_str(&format!(
+            "\n⏰ {} planification(s) en échec (`/schedules`) :\n{}\n",
+            failing.len(),
+            failing.into_iter().take(5).collect::<Vec<_>>().join("\n")
+        ));
+    }
     let pending = s.approvals.pending(100).await?;
     if !pending.is_empty() {
         t.push_str(&format!(

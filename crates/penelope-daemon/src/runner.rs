@@ -173,7 +173,7 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     if turn.kind == penelope_kernel::turn::TurnKind::Trigger
         && let Some(schedule) = turn.payload["schedule"].as_str()
     {
-        crate::scheduler::trigger_outcome(daemon, schedule, &outcome).await;
+        crate::scheduler::trigger_outcome_of(daemon, schedule, &outcome, &turn).await;
     }
 
     daemon.deliver(&turn, &origin, &outcome).await;
