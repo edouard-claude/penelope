@@ -1,5 +1,11 @@
 # Pénélope
 
+[![CI](https://github.com/edouard-claude/penelope/actions/workflows/ci.yml/badge.svg)](https://github.com/edouard-claude/penelope/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/edouard-claude/penelope?include_prereleases&sort=semver&label=version)](https://github.com/edouard-claude/penelope/releases)
+[![Rust](https://img.shields.io/badge/rust-2024-000?logo=rust)](https://www.rust-lang.org)
+[![Plateforme](https://img.shields.io/badge/plateforme-macOS%20arm64-000?logo=apple)](docs/install-headless.md)
+[![Documentation](https://img.shields.io/badge/docs-index-informational)](docs/README.md)
+
 Agent personnel autonome, écrit en Rust, conçu pour tourner **sans écran** sur un
 MacBook Pro M1 branché en permanence. On lui parle par Telegram ou en SSH ; elle garde
 sa mémoire dans des fichiers Markdown lisibles, appelle des serveurs MCP, exécute des
