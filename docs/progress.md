@@ -8,7 +8,7 @@ Dernière mise à jour : 18 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1450 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1452 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1203,6 +1203,9 @@ quoi envoyer, un nom inconnu rend les noms proches (#110).
   couvrait tout le shell ; elles portent désormais sur les arguments de l'outil visé.
 
 ### 0.17.4
+
+Un groupe Telegram à sujets s'ouvre par son identifiant, et le propriétaire y parle même
+en administrateur anonyme (#113).
 
 - **Un groupe à sujets s'ouvre par son identifiant** (#113) : `telegram.allowed_chats`
   liste les conversations de groupe autorisées ; hors de la liste, un message est ignoré
