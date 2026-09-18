@@ -915,6 +915,15 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   pendant la copie ; copie des fichiers, tar, Argon2id, chiffrement, somme et envoi git
   s'exécutent sur un thread bloquant au lieu d'un worker tokio. L'événement `store.backup`
   et `doctor` donnent la durée de l'instantané et de la sauvegarde.
+- **Purge et rétention complètes** (#78) : `session.purge` vide aussi les arguments et
+  résultats d'outils (`effects`, la ligne et la clé d'idempotence restent, un rejeu est
+  toujours reconnu), les messages envoyés sur Telegram pendant la session (`tg_outbox`,
+  fenêtre bornée à l'ouverture de la session suivante sur le même chat, comme pour les
+  updates), les demandes d'approbation (celles en attente sont annulées), les tâches MCP,
+  les paramètres et sorties des runs de la session. La rétention vide au-delà de
+  `retention.days` le contenu des effets tranchés (un effet `unknown` garde tout), les
+  envois partis, les demandes décidées, les tâches MCP et sorties de workflows terminées.
+  `doctor` donne la date de la dernière passe et ce que ces tables gardent.
 
 ### Routine de livraison
 

@@ -135,6 +135,9 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     // Clés du fichier ignorées : version plus récente ou faute de frappe (#76).
     checks.push(config_unknown_check(s));
 
+    // Rétention : dernière passe et contenu que gardent les tables d'effets (#78).
+    checks.push(retention_check(s).await);
+
     // Un alias de conversation vers un modèle sans tool calling ne marchera pas (#54).
     checks.push(tool_calling_check(s).await);
 
@@ -713,6 +716,71 @@ fn config_unknown_check(s: &Services) -> DoctorCheck {
     }
 }
 
+/// #78 : ce que gardent les tables qui grossissent avec l'activité (arguments et
+/// résultats d'outils, messages envoyés, demandes, tâches MCP, sorties d'étapes), et la
+/// date de la dernière passe de rétention qui les vide.
+async fn retention_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "retention";
+    const LABEL: &str = "Rétention";
+    let days = s.config.config().retention.days;
+    let read = s
+        .store
+        .read(|c| {
+            let sizes: [i64; 5] = c.query_row(
+                "SELECT
+                   (SELECT coalesce(sum(length(request) + coalesce(length(result), 0)), 0)
+                      FROM effects),
+                   (SELECT coalesce(sum(length(payload)), 0) FROM tg_outbox),
+                   (SELECT coalesce(sum(length(payload)), 0) FROM approval_requests),
+                   (SELECT coalesce(sum(length(request) + coalesce(length(result), 0)), 0)
+                      FROM mcp_tasks),
+                   (SELECT coalesce(sum(coalesce(length(output), 0)), 0) FROM workflow_step_log)",
+                [],
+                |r| Ok([r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?]),
+            )?;
+            let last = penelope_store::kv_get(c, "retention.last")?;
+            Ok((sizes, last))
+        })
+        .await;
+    let Ok((sizes, last)) = read else {
+        return DoctorCheck::fail(ID, LABEL, "tables illisibles", None);
+    };
+    let mo = |b: i64| format!("{:.1} Mo", b as f64 / (1024.0 * 1024.0));
+    let kept = format!(
+        "effets {}, envois Telegram {}, demandes {}, tâches MCP {}, étapes {}",
+        mo(sizes[0]),
+        mo(sizes[1]),
+        mo(sizes[2]),
+        mo(sizes[3]),
+        mo(sizes[4])
+    );
+    if days == 0 {
+        return DoctorCheck::ok(ID, LABEL, format!("désactivée ; contenu gardé : {kept}"));
+    }
+    let age_h = last
+        .and_then(|v| v.parse::<i64>().ok())
+        .map(|ms| (s.clock.now_ms() - ms) / 3_600_000);
+    match age_h {
+        Some(h) if h <= 48 => DoctorCheck::ok(
+            ID,
+            LABEL,
+            format!("dernière passe il y a {h} h ({days} j) ; contenu gardé : {kept}"),
+        ),
+        Some(h) => DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!("dernière passe il y a {h} h, attendue chaque jour ; contenu gardé : {kept}"),
+            Some("penelope restart".into()),
+        ),
+        None => DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!("aucune passe enregistrée ; contenu gardé : {kept}"),
+            Some("penelope restart".into()),
+        ),
+    }
+}
+
 fn clock_check(s: &Services) -> DoctorCheck {
     let now = s.clock.now_ms();
     let system = std::time::SystemTime::now()
@@ -964,6 +1032,40 @@ mod tests {
         let checks = run(&s).await;
         let c = checks.iter().find(|c| c.id == "config.unknown").unwrap();
         assert!(!c.ok && c.detail.contains("futur"), "{c:?}");
+    }
+
+    /// #78 : `doctor` dit ce que gardent les tables d'effets et quand la rétention est
+    /// passée pour la dernière fois.
+    #[tokio::test]
+    async fn retention_is_reported_with_the_kept_content() {
+        let (_d, s) = services().await;
+        let c = run(&s)
+            .await
+            .into_iter()
+            .find(|c| c.id == "retention")
+            .unwrap();
+        assert!(!c.ok && c.detail.contains("aucune passe"), "{c:?}");
+
+        let now = s.clock.now_ms().to_string();
+        s.store
+            .write(move |tx| {
+                penelope_store::kv_set(tx, "retention.last", &now)?;
+                tx.execute(
+                    "INSERT INTO tg_outbox(id, chat_id, method, payload, state, created_at)
+                     VALUES('o1',1,'sendMessage',?1,'sent','2026-06-01T00:00:00Z')",
+                    [format!(r#"{{"text":"{}"}}"#, "x".repeat(300_000))],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let c = run(&s)
+            .await
+            .into_iter()
+            .find(|c| c.id == "retention")
+            .unwrap();
+        assert!(c.ok, "{c:?}");
+        assert!(c.detail.contains("envois Telegram 0.3 Mo"), "{}", c.detail);
     }
 
     #[tokio::test]

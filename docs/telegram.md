@@ -224,7 +224,7 @@ Workflows (4)
 | `/status`, `/doctor` | résumé lisible, boutons vers l'écran de chaque alerte (MCP, dépenses, modèles) |
 | `/config`, `/logs` | générations et sous-systèmes ; journal filtré par composant, « Plus » |
 | `/restart`, `/close`, `/rewind` | confirmation |
-| `/purge` | confirmation ; efface le contenu de la session (messages, résumés, artefacts), la chaîne d'audit garde ses lignes sans leur contenu |
+| `/purge` | confirmation ; efface le contenu de la session (messages, résumés, artefacts, arguments et résultats d'outils, messages envoyés), la chaîne d'audit garde ses lignes sans leur contenu |
 | `/fork` | ↪️ revenir à l'original |
 | `/upgrade` | version installée et disponible, ⬆️ installer, ⏪ revenir (confirmés) ; sur une installation source, carte de bascule vers les releases |
 | `/quiet`, `/secret`, `/p` | plages proposées ; 🗑 par secret (confirmé) ; serveurs puis prompts MCP, arguments par formulaire |

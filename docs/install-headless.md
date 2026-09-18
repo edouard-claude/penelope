@@ -1533,7 +1533,11 @@ penelope session purge s_01J8
 
 Efface le contenu de la session : messages et index plein texte, contexte figé, résumés,
 artefacts (leurs fichiers compris), requêtes au modèle, payloads des tours et des updates
-Telegram du chat, candidats de mémoire. Le journal d'événements garde ses lignes et leurs
+Telegram du chat, candidats de mémoire, et ce que l'agent a fait et dit : arguments et
+résultats d'outils, messages envoyés sur Telegram, demandes d'approbation (celles en
+attente sont annulées), tâches MCP, paramètres et sorties des workflows de la session. Un
+outil déjà exécuté reste reconnu comme tel : sa ligne et sa clé d'idempotence demeurent,
+seul leur contenu part. Le journal d'événements garde ses lignes et leurs
 hachages, avec le contenu remplacé, et note la purge dans `audit.purge` : `audit-verify`
 reste vert. La commande demande confirmation (`--yes` pour s'en passer, `--reason` pour
 noter pourquoi) ; depuis Telegram, `/purge` affiche la même question avec un bouton.
@@ -1548,12 +1552,14 @@ Ce qui n'est ni la mémoire ni la chaîne d'audit finit par disparaître, une pa
 
 | Réglage | Défaut | Ce qui est effacé au-delà |
 |---|---|---|
-| `retention.days` | `90` | tours terminés, requêtes au modèle abouties, payloads des updates Telegram, clés de travail (`turn.*`, `prompt.prefix.*`, `wf.*`, `tg.*`…) |
+| `retention.days` | `90` | tours terminés, requêtes au modèle abouties, payloads des updates Telegram, clés de travail (`turn.*`, `prompt.prefix.*`, `wf.*`, `tg.*`…), arguments et résultats des outils menés à terme (un effet incertain garde tout), messages Telegram envoyés, contenu des demandes décidées, tâches MCP terminées, sorties des workflows finis |
 | `retention.memory_history_days` | `30` | pré-images de la mémoire (`mem_history`), qui gardent chaque fichier avant et après chaque opération du rêve |
 
 `0` désactive la rétention correspondante. Le payload d'un update Telegram est de toute
 façon vidé dès qu'il est traité : seul son identifiant sert encore, pour ne pas traiter
-deux fois le même message.
+deux fois le même message. `penelope doctor` donne la date de la dernière passe et ce que
+gardent encore les tables d'effets, d'envois, de demandes, de tâches MCP et d'étapes : ce
+sont elles qui grossissent avec l'activité, et elles partent dans la sauvegarde.
 
 ## 10. Mise à jour
 
