@@ -133,6 +133,43 @@ pub fn is_read_command(command: &str) -> bool {
     }
 }
 
+/// Préfixe `cd <répertoire> && ` d'une ligne de commande (issue #123) : le modèle se place
+/// ainsi dans un dépôt avant d'y lire. Renvoie le répertoire et la commande qui suit quand
+/// le préfixe est seul de son espèce : `cd` en tête, un chemin sans variable, substitution,
+/// joker, tilde ni échappement (entre guillemets ou non), puis `&&`. La suite est rendue
+/// telle quelle : c'est elle qui se classe, et un second enchaînement la laisse composée.
+pub fn split_cd_prefix(command: &str) -> Option<(String, String)> {
+    const UNSAFE: &[char] = &[
+        '$', '`', '\\', ';', '&', '|', '<', '>', '(', ')', '{', '}', '*', '?', '[', ']', '~', '!',
+        '#', '\'', '"', '\n', '\r',
+    ];
+    let rest = command.trim_start().strip_prefix("cd")?;
+    if !rest.starts_with([' ', '\t']) {
+        return None;
+    }
+    let rest = rest.trim_start_matches([' ', '\t']);
+    let (dir, after) = match rest.chars().next()? {
+        q @ ('\'' | '"') => {
+            let body = &rest[1..];
+            let end = body.find(q)?;
+            (&body[..end], &body[end + 1..])
+        }
+        _ => {
+            let end = rest.find([' ', '\t']).unwrap_or(rest.len());
+            (&rest[..end], &rest[end..])
+        }
+    };
+    if dir.is_empty() || dir == "-" || dir.contains(UNSAFE) {
+        return None;
+    }
+    let after = after.trim_start_matches([' ', '\t']).strip_prefix("&&")?;
+    if after.starts_with('&') {
+        return None;
+    }
+    let next = after.trim();
+    (!next.is_empty()).then(|| (dir.to_string(), next.to_string()))
+}
+
 /// Une commande qui peut détruire, ou dont on ne peut pas le dire (issue #111) :
 /// enchaînement ou substitution (ce qui suit peut être n'importe quoi), suppression,
 /// écrasement, élévation de droits, git qui réécrit ou efface. Le mode « tout sauf le
@@ -626,6 +663,50 @@ mod tests {
             "",
         ] {
             assert!(!is_read_command(not), "{not}");
+        }
+    }
+
+    /// #123 : un `cd <chemin> &&` seul en tête se sépare de la commande qui suit ; tout
+    /// ce qui ferait du chemin autre chose qu'un chemin laisse la ligne entière.
+    #[test]
+    fn a_single_cd_prefix_is_split_from_the_command() {
+        let split = |c: &str| split_cd_prefix(c);
+        assert_eq!(
+            split("cd /Users/essai/depot && grep -rn \"BaseURL\" src"),
+            Some((
+                "/Users/essai/depot".into(),
+                "grep -rn \"BaseURL\" src".into()
+            ))
+        );
+        assert_eq!(
+            split("  cd 'mon depot'&&ls"),
+            Some(("mon depot".into(), "ls".into()))
+        );
+        assert_eq!(
+            split("cd src && echo x; grep foo"),
+            Some(("src".into(), "echo x; grep foo".into())),
+            "la suite reste composée, à elle de se classer"
+        );
+        for kept in [
+            "cd $HOME && ls",
+            "cd `pwd` && ls",
+            "cd $(pwd) && ls",
+            "cd ~/depot && ls",
+            "cd /x* && ls",
+            "cd - && ls",
+            "cd /x; ls",
+            "cd /x || ls",
+            "cd /x & ls",
+            "cd /x &&& ls",
+            "cd /x && ",
+            "cd /x",
+            "cd /x /y && ls",
+            "cd /x&&ls",
+            "cdx /x && ls",
+            "ls && cd /x",
+            "cd \"/x && ls",
+        ] {
+            assert_eq!(split(kept), None, "{kept}");
         }
     }
 

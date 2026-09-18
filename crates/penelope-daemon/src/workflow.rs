@@ -1550,6 +1550,8 @@ async fn tool_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     let args = if args.is_null() { json!({}) } else { args };
     let exec = ctx.executor().await;
     use crate::agent::ToolExecutor;
+    // Même forme qu'en conversation : `cd <workspace> && …` porte son `cwd` (#123).
+    let args = exec.normalise_call(&step.tool, &args).unwrap_or(args);
     let info = exec.describe_call(&step.tool, &args).await;
     let call_id = format!(
         "wf-{}-{}-{}-{}",

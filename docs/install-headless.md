@@ -781,8 +781,17 @@ penelope config set tools.shell_allow '["cargo test", "npm run lint"]'
 penelope config set tools.shell_allow_network '["git push", "gh pr"]'
 ```
 
-Un « Toujours » sur une commande composée (`cd /x && ls`) l'autorise cette fois, sans
-créer de règle : une famille `cd` ne s'appliquerait jamais. `penelope policies` et
+Un `cd <répertoire> &&` seul en tête, vers un répertoire d'un workspace et sans
+variable, substitution, tilde ni joker, n'est pas un enchaînement : c'est le répertoire de
+travail de la commande qui suit. `cd /Users/moi/depot && grep -rn foo src` (avec
+`/Users/moi/depot` dans `sandbox.workspaces`) se lit donc comme `grep -rn foo src` dans ce
+dépôt : lecture sans demande, carte qui montre la vraie commande et son répertoire, « Toujours » qui règle la famille de cette commande (jamais `cd`), et
+famille déclarée d'avance qui vaut aussi derrière le `cd`. Hors des workspaces, ou suivi
+d'un autre enchaînement (`;`, `|`, `&&`), d'une redirection ou d'une substitution, la
+ligne reste composée. Le modèle a de toute façon le paramètre `cwd` de `shell_exec`.
+
+Un « Toujours » sur une autre commande composée (`cd /x && ls` hors workspace, `ls; pwd`)
+l'autorise cette fois, sans créer de règle : une famille `cd` ne s'appliquerait jamais. `penelope policies` et
 `/policies` signalent les règles inutiles (famille issue d'une commande composée, lecture
 déjà libre, jamais utilisée depuis une semaine), à retirer d'un bouton.
 

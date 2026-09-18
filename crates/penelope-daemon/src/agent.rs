@@ -294,6 +294,13 @@ pub trait ToolExecutor {
         Ok(())
     }
 
+    /// Forme canonique d'un appel, avant toute décision : ce que la garde de boucle, la
+    /// politique, la carte et l'exécution voient (issue #123). `None` : l'appel tel quel.
+    fn normalise_call(&self, name: &str, args: &Value) -> Option<Value> {
+        let _ = (name, args);
+        None
+    }
+
     /// Risque et nom effectif d'un appel. Par défaut : le catalogue natif.
     async fn describe_call(&self, name: &str, args: &Value) -> CallInfo {
         let _ = args;
@@ -1216,7 +1223,11 @@ impl AgentLoop {
         //    approbation arrête la liste (ceux d'avant partent quand même).
         let mut steps: Vec<Step> = Vec::new();
         let mut terminal: Option<Terminal> = None;
-        for call in pending {
+        for mut call in pending {
+            // `cd <workspace> && grep …` devient `grep …` dans ce répertoire (#123).
+            if let Some(args) = execute.normalise_call(&call.name, &call.arguments) {
+                call.arguments = args;
+            }
             let info = execute.describe_call(&call.name, &call.arguments).await;
 
             // Liste blanche de l'étape ou de la skill.

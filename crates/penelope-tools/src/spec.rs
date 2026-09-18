@@ -174,7 +174,8 @@ pub fn all() -> Vec<ToolSpec> {
              npm, pytest, make test) ou une commande en échec à longue sortie rend un résumé et \
              les échecs seulement, la sortie complète en artefact (`artifact_read`) ; \
              `output: \"full\"` rend la sortie brute. Le réseau est coupé sauf `network: true` \
-             (git push/pull/clone, gh, installation de paquets, curl) : l'approbation le dit.",
+             (git push/pull/clone, gh, installation de paquets, curl) : l'approbation le dit. \
+             Répertoire de travail : `cwd` (dans un workspace), pas de préfixe `cd … &&`.",
             obj(
                 json!({
                     "command": {"type":"string"},

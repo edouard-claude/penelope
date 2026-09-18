@@ -1774,6 +1774,9 @@ mod tests {
             Ok(vec!["tools.shell_allow".into()])
         })
         .unwrap();
+        // `{ws}` : le workspace de la session (#123).
+        let ws = crate::executor::default_workspaces(&d.services)[0].clone();
+        let command = command.replace("{ws}", &ws.to_string_lossy());
         let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
         d.pin_model(&sid, Some("main")).await.unwrap();
         if let Some(m) = mode {
@@ -1847,7 +1850,7 @@ mod tests {
         assert!(asked(&out), "demander tout : {out:?}");
         let (_dir, _d, out) = shell_turn("mkdir build", Some("auto"), &[]).await;
         assert!(!asked(&out), "auto : {out:?}");
-        for risky in ["rm -rf build", "cd build && make"] {
+        for risky in ["rm -rf build", "cd /x && make", "cd build && rm -rf cible"] {
             let (_dir, _d, out) = shell_turn(risky, Some("auto"), &[]).await;
             assert!(asked(&out), "auto, {risky} : {out:?}");
         }
@@ -1855,6 +1858,114 @@ mod tests {
         assert!(!asked(&out), "famille déclarée : {out:?}");
         let (_dir, _d, out) = shell_turn("cargo test; rm -rf ~", None, &["cargo test"]).await;
         assert!(asked(&out), "enchaînement : {out:?}");
+    }
+
+    /// #123 : un `cd <workspace> &&` seul en tête est le répertoire de travail de la
+    /// commande qui suit, qui se classe pour ce qu'elle est ; hors workspace, suivi d'une
+    /// écriture, d'une redirection ou d'un second enchaînement, la ligne est demandée.
+    #[tokio::test]
+    async fn a_cd_into_the_workspace_is_the_working_directory() {
+        for read in [
+            "cd {ws} && grep -rn foo src",
+            "cd src && grep -n \"LIMIT\" app.tsx",
+            "cd '{ws}' && git log -5",
+        ] {
+            let (_dir, _d, out) = shell_turn(read, None, &[]).await;
+            assert!(!asked(&out), "{read} : {out:?}");
+        }
+        for asks in [
+            "cd /ailleurs && grep foo",
+            "cd {ws} && rm -rf build",
+            "cd {ws} && grep foo > sortie.txt",
+            "cd {ws} && echo x; grep foo",
+            "cd {ws} && grep foo && curl https://example.com",
+            "cd $HOME && grep foo",
+        ] {
+            let (_dir, _d, out) = shell_turn(asks, None, &[]).await;
+            assert!(asked(&out), "{asks} : {out:?}");
+        }
+        // Une famille déclarée d'avance vaut aussi derrière le `cd`.
+        let (_dir, _d, out) = shell_turn("cd {ws} && cargo test -p x", None, &["cargo test"]).await;
+        assert!(!asked(&out), "famille déclarée : {out:?}");
+    }
+
+    /// #123 : la carte d'une ligne `cd <workspace> && …` montre la vraie commande et son
+    /// répertoire ; « Toujours » règle la vraie commande, pas `cd`, et ne couvre pas une
+    /// autre commande derrière le même `cd`.
+    #[tokio::test]
+    async fn always_after_a_cd_rules_the_real_command() {
+        let (_dir, d, p) = daemon().await;
+        let ws = crate::executor::default_workspaces(&d.services)[0].clone();
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        let call = |command: &str, id: &str| {
+            Scripted::ToolCalls(
+                String::new(),
+                vec![ToolCall {
+                    id: id.into(),
+                    name: "shell_exec".into(),
+                    arguments: json!({"command": format!("cd {} && {command}", ws.display())}),
+                }],
+            )
+        };
+
+        p.push(call("make check", "c1"));
+        d.enqueue_message(&sid, "vérifie", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        let out = d.run_turn(&turn).await;
+        d.services.turns.complete(&turn).await.unwrap();
+        let TurnOutcome::AwaitingApproval { approval_id } = out else {
+            panic!("{out:?}");
+        };
+        let a = d
+            .services
+            .approvals
+            .get(&approval_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(a.payload["arguments"]["command"], "make check");
+        assert_eq!(
+            a.payload["arguments"]["cwd"],
+            json!(ws.to_string_lossy()),
+            "{}",
+            a.payload
+        );
+        crate::agent::decide_approval(
+            &d.services,
+            &approval_id,
+            &penelope_hitl::Decision::approve_always("cli"),
+        )
+        .await
+        .unwrap();
+        let rules = d.services.policies.active_rules().await.unwrap();
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        assert_eq!(
+            rules[0].arg_match,
+            Some(json!({"command": {penelope_hitl::policy::CMD_PREFIX_OP: "make check"}})),
+            "la vraie commande, pas `cd`"
+        );
+
+        // Reprise : l'appel approuvé part, puis la même famille derrière le même `cd`
+        // passe par la règle.
+        d.enqueue_resume(&sid, &approval_id, &Origin::Cli)
+            .await
+            .unwrap();
+        p.push(call("make check -s", "c2"));
+        p.reply("C'est fait.");
+        let turn = claim(&d).await;
+        let out = d.run_turn(&turn).await;
+        d.services.turns.complete(&turn).await.unwrap();
+        assert!(!asked(&out), "même famille : {out:?}");
+
+        p.push(call("curl https://example.com", "c3"));
+        d.enqueue_message(&sid, "et ça", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let out = d.run_turn(&claim(&d).await).await;
+        assert!(asked(&out), "autre commande derrière le même cd : {out:?}");
     }
 
     #[tokio::test]

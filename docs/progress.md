@@ -1358,6 +1358,20 @@ trousseau, et un trousseau fermé ne se fait plus passer pour un secret absent (
   l'environnement (`${SECRET:nom}` dans `env`). `docs/mcp.md` gagne une section « Bac à
   sable ».
 
+### 0.17.11
+
+Une lecture précédée de `cd <dépôt> &&` ne demande plus rien (#123).
+
+- **Un `cd` en tête n'est plus un enchaînement** (#123) : le modèle écrit
+  `cd <dépôt> && grep …`, et le critère d'enchaînement de #111 faisait demander chacune de
+  ces lectures. Un `cd <répertoire> &&` seul en tête, vers un répertoire d'un workspace,
+  sans variable, substitution, tilde ni joker, est relevé en `cwd` avant toute décision
+  (`normalise_call`) : garde de boucle, classement, carte, « Toujours » et exécution
+  portent sur la vraie commande. Hors workspace, suivi d'un `;`, d'un `|`, d'un second
+  `&&`, d'une redirection ou d'une substitution, la ligne reste composée et demandée.
+  Même forme dans les étapes de workflow et par `tool_call`. La description de
+  `shell_exec` dit au modèle d'utiliser `cwd` plutôt que ce préfixe.
+
 ### Routine de livraison
 
 Avant chaque tag :

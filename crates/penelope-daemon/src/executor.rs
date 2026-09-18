@@ -1616,8 +1616,44 @@ pub(crate) fn effective_arguments(tool: &str, args: &Value) -> Value {
     }
 }
 
+/// `cd <répertoire> && <commande>` rendu en `{command: <commande>, cwd: <répertoire>}`
+/// quand le répertoire est dans un workspace et que l'appel ne donne pas déjà son `cwd`
+/// (issue #123) : la commande se classe, s'approuve et se règle pour ce qu'elle est. Hors
+/// des workspaces, la ligne reste composée, donc demandée.
+pub(crate) fn lift_cd(args: &Value, workspaces: &[PathBuf]) -> Option<Value> {
+    let obj = args.as_object()?;
+    if obj
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .is_some_and(|c| !c.trim().is_empty())
+    {
+        return None;
+    }
+    let (dir, rest) = penelope_tools::shell::split_cd_prefix(obj.get("command")?.as_str()?)?;
+    let cwd = penelope_tools::fs::resolve(&dir, workspaces).ok()?;
+    let mut out = obj.clone();
+    out.insert("command".into(), json!(rest));
+    out.insert("cwd".into(), json!(cwd.to_string_lossy()));
+    Some(Value::Object(out))
+}
+
 #[async_trait::async_trait]
 impl ToolExecutor for NativeToolExecutor {
+    fn normalise_call(&self, name: &str, args: &Value) -> Option<Value> {
+        match name {
+            "shell_exec" => lift_cd(args, &self.env.workspaces),
+            // Par `tool_call`, l'appel interne ; `args_json` cède la place à l'objet.
+            "tool_call" if args.get("name").and_then(|v| v.as_str()) == Some("shell_exec") => {
+                let inner = lift_cd(&call_arguments(args).ok()?, &self.env.workspaces)?;
+                let mut out = args.as_object()?.clone();
+                out.remove("args_json");
+                out.insert("args".into(), inner);
+                Some(Value::Object(out))
+            }
+            _ => None,
+        }
+    }
+
     async fn precheck(&self, name: &str, args: &Value) -> Result<(), ToolError> {
         match self.validate_call(name, args).await {
             Ok(()) => Ok(()),
@@ -2063,6 +2099,49 @@ mod tests {
             turn_model: None,
         };
         (dir, NativeToolExecutor::new(s, env))
+    }
+
+    /// #123 : `cd <workspace> && …` devient la commande et son `cwd`, en direct comme par
+    /// `tool_call` (`args_json` compris) ; un `cwd` déjà donné ou un répertoire hors des
+    /// workspaces laisse l'appel tel quel.
+    #[tokio::test]
+    async fn a_cd_into_a_workspace_becomes_the_cwd() {
+        let (_dir, x) = executor().await;
+        let ws = x.env.workspaces[0].clone();
+        let line = format!("cd {} && grep -rn foo src", ws.display());
+        let lifted = x
+            .normalise_call("shell_exec", &json!({"command": line, "network": false}))
+            .expect("relevé");
+        assert_eq!(
+            lifted,
+            json!({"command": "grep -rn foo src", "cwd": ws.to_string_lossy(), "network": false})
+        );
+        let sub = x
+            .normalise_call("shell_exec", &json!({"command": "cd app && ls"}))
+            .expect("chemin relatif au workspace");
+        assert_eq!(sub["cwd"], json!(ws.join("app").to_string_lossy()));
+
+        let via = x
+            .normalise_call(
+                "tool_call",
+                &json!({"name": "shell_exec", "args_json": json!({"command": line}).to_string()}),
+            )
+            .expect("par tool_call");
+        assert_eq!(via["args"]["command"], "grep -rn foo src");
+        assert!(via.get("args_json").is_none(), "{via}");
+        assert_eq!(
+            effective_arguments("tool_call", &via)["cwd"],
+            json!(ws.to_string_lossy())
+        );
+
+        for kept in [
+            json!({"command": "cd /ailleurs && grep foo"}),
+            json!({"command": line, "cwd": ws.join("autre").to_string_lossy()}),
+            json!({"command": "grep foo"}),
+        ] {
+            assert_eq!(x.normalise_call("shell_exec", &kept), None, "{kept}");
+        }
+        assert_eq!(x.normalise_call("fs_read", &json!({"path": line})), None);
     }
 
     /// Issue #8 : une page HTML arrive en texte lisible, le brut reste en artefact ; une
