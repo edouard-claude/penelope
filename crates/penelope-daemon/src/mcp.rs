@@ -2498,11 +2498,20 @@ mod tests {
                 .await
                 .unwrap(),
         );
+        // Profil `full`, explicitement autorisé : le bac à sable `mcp-stdio` n'existe que
+        // sur macOS (#102), et ce test porte sur la mort du processus, pas sur lui.
+        s.config
+            .mutate("test", |c| {
+                c.sandbox.allow_full_for = vec!["pont".into()];
+                Ok(vec!["sandbox.allow_full_for".into()])
+            })
+            .unwrap();
         let sup = McpSupervisor::new(s.clone(), Arc::new(ProcessConnector::new(s.clone())));
         std::fs::create_dir_all(sup.dir()).unwrap();
         std::fs::write(
             sup.dir().join("pont.toml"),
-            "command = \"/bin/sh\"\nargs = [\"-c\", \"exit 7\"]\ntimeout = \"10s\"\n",
+            "command = \"/bin/sh\"\nargs = [\"-c\", \"exit 7\"]\ntimeout = \"10s\"\n\
+             sandbox_profile = \"full\"\n",
         )
         .unwrap();
         sup.reload().await;
