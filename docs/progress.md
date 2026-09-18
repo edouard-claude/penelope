@@ -1060,6 +1060,9 @@ l'adresse vérifiée (#93), fichiers lus en flux (#94), secret posé sans `argv`
   branché dans la maintenance. Une demande sans réponse est rappelée à T+1 h puis T+6 h
   (« ⏰ Rappel 1/2 », carte et boutons neufs, dans la conversation d'origine), plus rien
   ensuite ni après une décision ; `reminded_at` est enfin écrit.
+- **Document détaché** (#98) : le téléchargement d'un document (jusqu'à 20 Mo) quitte la
+  boucle des updates, comme vocaux et photos depuis #69 : `/stop`, les boutons et le
+  message suivant n'attendent plus ; l'échec reste dit en réponse au document.
 
 ### Routine de livraison
 

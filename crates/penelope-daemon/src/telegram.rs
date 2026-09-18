@@ -585,7 +585,16 @@ impl TelegramGateway {
                     }
                 });
             }
-            document @ Incoming::Document { .. } => self.document(document).await?,
+            document @ Incoming::Document { .. } => {
+                // Téléchargement du document : détaché comme vocaux et photos, sinon
+                // `/stop` et les boutons attendent jusqu'à 20 Mo (issue #98).
+                let me = self.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = me.document(document).await {
+                        tracing::warn!(error = %e, "document Telegram non traité");
+                    }
+                });
+            }
             Incoming::OAuthCallback { chat_id, url, .. } => {
                 // Adresse de retour collée (§8.5, `paste_back`) : elle ne sert qu'une fois.
                 match crate::mcp_auth::complete(&self.daemon, &url).await {
@@ -6772,6 +6781,54 @@ mod tests {
                 .any(|m| m.contains("arrêter") || m.contains("⏹")),
             "`/stop` doit avoir répondu : {sent:?}"
         );
+    }
+
+    /// #98 : un document long à télécharger ne retarde pas le message suivant ; l'échec
+    /// du téléchargement arrive toujours, en réponse au document.
+    #[tokio::test]
+    async fn a_slow_document_does_not_block_the_next_update() {
+        let (_d, g, t, _p) = gateway().await;
+        g.daemon
+            .kv_set("tg.onboard.proposed", "test")
+            .await
+            .unwrap();
+        t.set_download_delay(Duration::from_millis(1500)).await;
+
+        g.process_update(&updates::document(90, OWNER, OWNER, "contrat.pdf"))
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        g.process_update(&updates::text_message(91, OWNER, OWNER, "/stop"))
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "`/stop` a attendu le téléchargement : {elapsed:?}"
+        );
+
+        // Aucun fichier `d1` servi par le faux transport : l'échec est dit, en réponse.
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            g.flush_outbox().await.unwrap();
+            if texts(&t.calls_to(tg::SEND_MESSAGE).await)
+                .iter()
+                .any(|m| m.contains("Téléchargement impossible"))
+            {
+                break;
+            }
+        }
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        let failure = sent
+            .iter()
+            .find(|c| {
+                c["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("Téléchargement impossible")
+            })
+            .expect("échec dit dans le chat");
+        assert_eq!(failure["reply_parameters"]["message_id"], 900, "{failure}");
     }
 
     /// #49 : un long texte collé arrive en morceaux de 4 000 caractères. Ils forment un
