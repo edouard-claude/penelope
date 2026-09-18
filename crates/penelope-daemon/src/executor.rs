@@ -180,6 +180,18 @@ pub fn denied_reads(s: &Services) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Résultat dont le texte vient des serveurs MCP (descriptions, schémas) : la valeur reste
+/// structurée, le texte montré au modèle est encadré comme non fiable (#92).
+fn untrusted_listing(source: &str, value: Value) -> ToolOutcome {
+    let pretty = serde_json::to_string_pretty(&value).unwrap_or_default();
+    ToolOutcome {
+        text: penelope_observe::injection::wrap_untrusted(source, &pretty),
+        value,
+        is_error: false,
+        eager: false,
+    }
+}
+
 /// Workspaces autorisés : configuration, sinon `{data}/workspace`.
 pub fn default_workspaces(s: &Services) -> Vec<PathBuf> {
     let cfg = s.config.config();
@@ -1272,9 +1284,10 @@ impl NativeToolExecutor {
                 "remarque": "aucun outil MCP ne correspond ; vérifier les serveurs avec /mcp",
             })));
         }
-        Ok(ToolOutcome::ok(json!(
-            hits.iter().map(|h| h.tool.short()).collect::<Vec<_>>()
-        )))
+        // Descriptions écrites par les serveurs : encadrées comme tout contenu observé,
+        // avec l'alerte du détecteur local s'il y voit une consigne (#92).
+        let value = json!(hits.iter().map(|h| h.tool.short()).collect::<Vec<_>>());
+        Ok(untrusted_listing("mcp tool_search", value))
     }
 
     async fn tool_describe(&self, args: &Value) -> ToolResult<ToolOutcome> {
@@ -1291,7 +1304,7 @@ impl NativeToolExecutor {
             return Err(ToolError::Invalid("`names` est vide".into()));
         }
         let v = self.services.mcp_tools.describe(&names).await?;
-        Ok(ToolOutcome::ok(json!(v)))
+        Ok(untrusted_listing("mcp tool_describe", json!(v)))
     }
 
     async fn tool_call(&self, args: &Value) -> ToolResult<ToolOutcome> {

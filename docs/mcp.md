@@ -121,6 +121,20 @@ unknown = "ask"
 Un résultat d'outil qui contient `isError: true` est transmis tel quel au modèle : c'est
 une réponse, pas une panne du harnais, et le modèle doit pouvoir la corriger seul.
 
+Les **descriptions** et les schémas des outils viennent eux aussi du serveur, et le modèle
+les lit comme des consignes (« tool poisoning »). `tool_search` et `tool_describe` les
+rendent encadrés comme contenu non fiable, avec l'alerte du détecteur local s'il y voit une
+consigne ; un outil exposé d'office (`eager_schemas`) porte la mention de son serveur, et sa
+description est retirée si elle est suspecte. Chaque inscription d'outil est journalisée
+(`mcp_tool_suspicious` quand le détecteur signale quelque chose) et la carte d'approbation
+d'un outil signalé le dit.
+
+Chaque outil est aussi **épinglé** par l'empreinte de sa description, de son schéma et de
+ses annotations. Si un serveur les change en silence (`notifications/tools/list_changed`
+après une mise à jour du paquet), les règles « Toujours » de cet outil sont révoquées,
+l'événement `mcp.tool_changed` est journalisé et le propriétaire est prévenu : la prochaine
+utilisation redemande. Une liste identique ne change rien.
+
 ## OAuth 2.1
 
 Le flux complet est implémenté et testé contre un serveur d'autorisation simulé.

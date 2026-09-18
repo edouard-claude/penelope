@@ -233,7 +233,8 @@ async fn ca_8_7_adding_an_mcp_server_is_hot() {
             "2026-09-16T10:00:00Z",
         )
         .await
-        .unwrap();
+        .unwrap()
+        .generation;
     assert!(generation > before);
     assert_eq!(s.mcp_tools.count().await.unwrap(), 1);
 
@@ -259,7 +260,8 @@ async fn ca_8_7_adding_an_mcp_server_is_hot() {
         .mcp_tools
         .replace_server_tools("compta", vec![], "2026-09-16T10:05:00Z")
         .await
-        .unwrap();
+        .unwrap()
+        .generation;
     assert!(after > generation);
     assert_eq!(s.mcp_tools.count().await.unwrap(), 0);
 }

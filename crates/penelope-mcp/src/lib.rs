@@ -21,7 +21,7 @@ pub use config::{ServerConfig, load_dir, write_server};
 pub use error::{McpError, Result};
 pub use oauth::{AuthRequest, Pkce, RedirectMode, Tokens};
 pub use protocol::{ContentBlock, ProtocolVersion, ServerCapabilities, ToolDescriptor, ToolResult};
-pub use registry::{RegisteredTool, ToolRegistry, qualified_name};
+pub use registry::{RegisteredTool, ReplaceReport, ToolRegistry, qualified_name};
 pub use supervisor::{Backoff, ServerState, ServerStatus};
 pub use transport::{HttpTransport, LoopbackTransport, StdioTransport, Transport};
 

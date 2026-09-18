@@ -3167,14 +3167,31 @@ impl TelegramGateway {
             "raison".into(),
             a.payload["reason"].as_str().unwrap_or("").to_string(),
         );
-        vars.insert(
-            "alerte".into(),
-            if double {
-                "⚠️ Action destructive : une seconde confirmation sera demandée.".into()
-            } else {
-                String::new()
-            },
-        );
+        let mut alerte = if double {
+            "⚠️ Action destructive : une seconde confirmation sera demandée.".to_string()
+        } else {
+            String::new()
+        };
+        // Outil MCP dont la description porte une consigne : le propriétaire le voit avant
+        // d'accepter (#92).
+        if let Some(t) = s.mcp_tools.get(&a.subject).await.ok().flatten() {
+            let rules: Vec<String> = t
+                .flags()
+                .iter()
+                .map(|f| f.split(" «").next().unwrap_or(f).to_string())
+                .collect();
+            if !rules.is_empty() {
+                if !alerte.is_empty() {
+                    alerte.push('\n');
+                }
+                alerte.push_str(&format!(
+                    "⚠️ La description de cet outil contient une consigne selon le détecteur \
+                     local ({}) : le modèle a pu être manipulé.",
+                    rules.join(", ")
+                ));
+            }
+        }
+        vars.insert("alerte".into(), alerte);
 
         let ttl = 24 * 3_600_000;
         let mut tokens = BTreeMap::new();

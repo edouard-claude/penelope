@@ -312,6 +312,18 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
         tracing::warn!(error = %e, "rétention");
     }
 
+    // Outils MCP changés depuis leur « Toujours » : règles révoquées, le propriétaire le
+    // sait (#92).
+    if let Some(sup) = d.hooks.mcp_supervisor() {
+        let notices = sup.take_notices();
+        if let Some(m) = d.hooks.messenger() {
+            let origin = crate::scheduler::owner_origin(d);
+            for n in notices {
+                let _ = m.send_text(&origin, &n).await;
+            }
+        }
+    }
+
     // Serveurs MCP qui attendent une autorisation : le propriétaire reçoit le lien, une
     // fois par jour au plus (§8.5).
     if let Some(sup) = d.hooks.mcp_supervisor() {

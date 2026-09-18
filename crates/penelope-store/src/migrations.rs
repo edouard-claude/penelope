@@ -67,6 +67,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0013_memory_seen",
         sql: SQL_0013,
     },
+    Migration {
+        version: "0014_mcp_tool_fingerprint",
+        sql: SQL_0014,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -903,6 +907,13 @@ ALTER TABLE mem_candidates ADD COLUMN deferrals INTEGER NOT NULL DEFAULT 0;
 /// dénominateur du retour d'usage (issue #86).
 const SQL_0013: &str = r#"
 ALTER TABLE mem_signals ADD COLUMN seen INTEGER NOT NULL DEFAULT 0;
+"#;
+
+/// Empreinte d'un outil MCP (description, schéma, annotations) et date où elle a été vue
+/// la première fois : un changement silencieux après `tools/list_changed` se voit (#92).
+const SQL_0014: &str = r#"
+ALTER TABLE mcp_tools ADD COLUMN fingerprint TEXT NOT NULL DEFAULT '';
+ALTER TABLE mcp_tools ADD COLUMN first_seen TEXT;
 "#;
 
 #[cfg(test)]

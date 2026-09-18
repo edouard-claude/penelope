@@ -1010,6 +1010,14 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   les sockets Unix (`(deny network-outbound (remote unix-socket))`) hors `mDNSResponder` et
   l'agent SSH : un serveur MCP ne joint plus la socket du daemon ni celle de Docker.
   Vérifié sur la machine par un test ignoré par défaut.
+- **Outils MCP : descriptions encadrées, empreintes épinglées** (#92) : `tool_search` et
+  `tool_describe` rendent descriptions et schémas encadrés comme contenu non fiable (alerte
+  du détecteur local comprise) ; un schéma exposé d'office dit son serveur et perd sa
+  description si elle porte une consigne ; la carte d'approbation d'un outil signalé
+  l'annonce. `mcp_tools` garde l'empreinte (description, schéma, annotations) et la date de
+  première vue (migration `0014_mcp_tool_fingerprint`) : un changement silencieux après
+  `tools/list_changed` révoque les « Toujours » de l'outil, journalise `mcp.tool_changed` et
+  prévient le propriétaire ; une description suspecte journalise `mcp_tool_suspicious`.
 
 ### Routine de livraison
 
