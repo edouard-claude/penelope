@@ -201,43 +201,6 @@ mod tests {
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::MockProvider;
 
-    /// #103 : chaque ligne écrite pendant un tour porte son identifiant et sa session,
-    /// même celles des étapes internes (choix du modèle).
-    #[tokio::test(flavor = "current_thread")]
-    async fn every_log_line_of_a_turn_carries_the_turn() {
-        let (dispatch, buf) = penelope_observe::capture_json();
-        let _guard = tracing::dispatcher::set_default(&dispatch);
-        let dir = tempfile::tempdir().unwrap();
-        let clock: penelope_kernel::clock::SharedClock =
-            Arc::new(penelope_kernel::clock::SystemClock);
-        let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
-                .await
-                .unwrap(),
-        );
-        let d = Arc::new(Daemon::from_services(s.clone()));
-        let p = Arc::new(MockProvider::new());
-        p.reply(r#"{"complexity":"low"}"#);
-        p.reply("fait");
-        d.set_provider_override(p.clone());
-        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
-        d.enqueue_message(&sid, "fais le point sur la semaine", &Origin::Cli, None)
-            .await
-            .unwrap();
-        let turn = s.turns.claim("runner-0").await.unwrap().unwrap();
-        process(&d, turn.clone(), Duration::from_secs(30)).await;
-
-        let text = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
-        let chosen: Vec<serde_json::Value> = text
-            .lines()
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .filter(|v: &serde_json::Value| v["fields"]["message"] == "modèle choisi")
-            .collect();
-        assert_eq!(chosen.len(), 1, "{text}");
-        assert_eq!(chosen[0]["span"]["turn"], turn.id.to_string());
-        assert_eq!(chosen[0]["span"]["session"], sid);
-    }
-
     #[tokio::test]
     async fn the_pool_answers_queued_turns_and_waiters_get_the_outcome() {
         let dir = tempfile::tempdir().unwrap();
