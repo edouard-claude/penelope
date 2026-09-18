@@ -1381,7 +1381,7 @@ impl NativeToolExecutor {
         cancel: &penelope_llm::CancelToken,
     ) -> ToolResult<ToolOutcome> {
         let name = str_arg(args, "name")?;
-        let inner = args.get("args").cloned().unwrap_or(json!({}));
+        let inner = call_arguments(args)?;
         if penelope_tools::tool_spec(&name).is_some() {
             return self.dispatch(&name, &inner, cancel).await;
         }
@@ -1390,10 +1390,17 @@ impl NativeToolExecutor {
 
     async fn mcp_call(&self, qualified: &str, args: &Value) -> ToolResult<ToolOutcome> {
         let s = &self.services;
+        // Refus local, sans aller au serveur : `explain` y joint son schéma (#110).
         s.mcp_tools
             .validate_args(qualified, args)
             .await
-            .map_err(|e| ToolError::Invalid(e.to_string()))?;
+            .map_err(|e| match e {
+                penelope_mcp::McpError::UnknownTool(q) => ToolError::Unknown(q),
+                penelope_mcp::McpError::InvalidArguments { reason, .. } => {
+                    ToolError::Invalid(reason)
+                }
+                other => ToolError::Invalid(other.to_string()),
+            })?;
         s.mcp_tools.mark_for_promotion(&[qualified.to_string()]);
         let gw = self
             .mcp
@@ -1414,10 +1421,158 @@ impl NativeToolExecutor {
     }
 }
 
+impl NativeToolExecutor {
+    /// Exécute, et rend une erreur d'arguments ou de nom avec de quoi se corriger.
+    async fn run(
+        &self,
+        name: &str,
+        args: &Value,
+        cancel: &penelope_llm::CancelToken,
+    ) -> Result<ToolOutcome, ToolError> {
+        match self.dispatch(name, args, cancel).await {
+            Err(e) => Err(self.explain(name, args, e).await),
+            ok => ok,
+        }
+    }
+
+    /// Schéma d'arguments d'un outil natif ou MCP.
+    async fn schema_of(&self, tool: &str) -> Option<Value> {
+        if let Some(t) = penelope_tools::tool_spec(tool) {
+            return Some(t.schema);
+        }
+        self.services
+            .mcp_tools
+            .get(tool)
+            .await
+            .ok()
+            .flatten()
+            .map(|t| t.input_schema)
+    }
+
+    /// Issue #110 : une erreur d'arguments porte les paramètres attendus (outil natif ou
+    /// MCP, borné) ; un `tool_call` arrivé sans arguments le dit comme tel ; un nom inconnu
+    /// rend les noms proches. Le filet reste la garde de boucle, qui compare les appels.
+    async fn explain(&self, name: &str, args: &Value, e: ToolError) -> ToolError {
+        let via_call = name == "tool_call";
+        let target = if via_call {
+            args.get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string()
+        } else {
+            name.to_string()
+        };
+        // `args` vide et pas de repli en chaîne : les arguments ont pu se perdre en route.
+        let lost = via_call
+            && call_arguments(args)
+                .ok()
+                .and_then(|v| v.as_object().map(|o| o.is_empty()))
+                .unwrap_or(false);
+        let lost_note = |reason: String, schema: &Value| -> String {
+            if !lost {
+                return reason;
+            }
+            let required: Vec<String> = schema["required"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|r| format!("`{r}`"))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if required.is_empty() {
+                return reason;
+            }
+            format!(
+                "`tool_call` est arrivé avec `args` vide alors que {} est requis. Si tu \
+                 l'avais rempli, les arguments ont été perdus en route : renvoie-les dans \
+                 `args_json`, en chaîne JSON (par exemple \"{{\\\"{}\\\": …}}\") ; sinon, \
+                 ajoute-les ({reason})",
+                required.join(", "),
+                required[0].trim_matches('`')
+            )
+        };
+        match e {
+            ToolError::Invalid(reason) if !target.is_empty() => match self.schema_of(&target).await
+            {
+                Some(schema) => ToolError::BadArguments {
+                    reason: lost_note(reason, &schema),
+                    expected: penelope_tools::expected_args(
+                        &schema,
+                        penelope_tools::EXPECTED_ARGS_MAX_CHARS,
+                    ),
+                    tool: target,
+                },
+                None => ToolError::Invalid(reason),
+            },
+            ToolError::BadArguments {
+                tool,
+                reason,
+                expected,
+            } => {
+                let reason = match self.schema_of(&tool).await {
+                    Some(schema) => lost_note(reason, &schema),
+                    None => reason,
+                };
+                ToolError::BadArguments {
+                    tool,
+                    reason,
+                    expected,
+                }
+            }
+            ToolError::Unknown(n) | ToolError::NoSuchTool { name: n, .. } => {
+                let mut names: Vec<String> = penelope_tools::all_tools()
+                    .iter()
+                    .map(|t| t.name.to_string())
+                    .collect();
+                names.extend(self.services.mcp_tools.names().await.unwrap_or_default());
+                ToolError::NoSuchTool {
+                    close: penelope_tools::close_names(&n, names.iter().map(String::as_str), 5),
+                    name: n,
+                }
+            }
+            other => other,
+        }
+    }
+}
+
+/// Arguments d'un `tool_call` : l'objet `args`, ou `args_json` quand l'objet arrive vide
+/// (certains fournisseurs vident un objet sans propriétés déclarées, issue #110).
+pub(crate) fn call_arguments(args: &Value) -> ToolResult<Value> {
+    let object = args.get("args").filter(|v| !v.is_null());
+    if let Some(v) = object.filter(|v| v.as_object().is_some_and(|o| !o.is_empty())) {
+        return Ok(v.clone());
+    }
+    // Des arguments rendus en chaîne, dans `args_json` ou à la place de l'objet.
+    let raw = args
+        .get("args_json")
+        .and_then(|v| v.as_str())
+        .or_else(|| object.and_then(|v| v.as_str()))
+        .filter(|s| !s.trim().is_empty());
+    if let Some(raw) = raw {
+        return serde_json::from_str::<Value>(raw)
+            .ok()
+            .filter(|v| v.is_object())
+            .ok_or_else(|| ToolError::Invalid("`args_json` n'est pas un objet JSON".into()));
+    }
+    Ok(json!({}))
+}
+
+/// Arguments sur lesquels portent la politique et la carte d'approbation : ceux de
+/// l'outil visé par un `tool_call`, ceux de l'appel sinon.
+pub(crate) fn effective_arguments(tool: &str, args: &Value) -> Value {
+    if tool == "tool_call" {
+        call_arguments(args).unwrap_or_else(|_| json!({}))
+    } else {
+        args.clone()
+    }
+}
+
 #[async_trait::async_trait]
 impl ToolExecutor for NativeToolExecutor {
     async fn execute(&self, name: &str, args: &Value) -> Result<ToolOutcome, ToolError> {
-        self.dispatch(name, args, &penelope_llm::CancelToken::new())
+        self.run(name, args, &penelope_llm::CancelToken::new())
             .await
     }
 
@@ -1427,7 +1582,7 @@ impl ToolExecutor for NativeToolExecutor {
         args: &Value,
         cancel: &penelope_llm::CancelToken,
     ) -> Result<ToolOutcome, ToolError> {
-        self.dispatch(name, args, cancel).await
+        self.run(name, args, cancel).await
     }
 
     async fn describe_call(&self, name: &str, args: &Value) -> CallInfo {
@@ -1468,7 +1623,7 @@ impl ToolExecutor for NativeToolExecutor {
                 // Un natif par `tool_call` garde sa classe de risque et sa politique : la
                 // même carte qu'un appel direct (#104).
                 if penelope_tools::tool_spec(&q).is_some() {
-                    let inner = args.get("args").cloned().unwrap_or(json!({}));
+                    let inner = effective_arguments("tool_call", args);
                     return native_info(&q, &inner, shell_network);
                 }
                 mcp_info(q).await
@@ -2054,7 +2209,162 @@ mod tests {
             .execute("fs_write", &json!({"path": "a.txt"}))
             .await
             .unwrap_err();
-        assert!(matches!(e, ToolError::Invalid(_)), "{e}");
+        assert!(matches!(e, ToolError::BadArguments { .. }), "{e}");
+    }
+
+    /// Passerelle MCP de test : compte les appels et garde les arguments reçus.
+    #[derive(Default)]
+    struct RecordingGateway {
+        calls: std::sync::Mutex<Vec<(String, Value)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl McpGateway for RecordingGateway {
+        async fn call_tool(&self, qualified: &str, args: &Value) -> Result<Value, String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((qualified.to_string(), args.clone()));
+            Ok(json!({"content": [{"type": "text", "text": "ticket 7653 : ouvert"}]}))
+        }
+        async fn server_lines(&self) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    async fn with_redmine(x: &mut NativeToolExecutor) -> Arc<RecordingGateway> {
+        let mut props = serde_json::Map::new();
+        props.insert(
+            "issue_id".into(),
+            json!({"type": "integer", "description": "Identifiant numérique du ticket, ex. 7653"}),
+        );
+        for i in 0..19 {
+            props.insert(
+                format!("option_{i:02}"),
+                json!({"type": "string", "description": "une option facultative au texte long ".repeat(8)}),
+            );
+        }
+        let d = penelope_mcp::protocol::ToolDescriptor::parse(&json!({
+            "name": "get_issue", "description": "Lit un ticket",
+            "inputSchema": {"type": "object", "properties": props, "required": ["issue_id"]},
+            "annotations": {"readOnlyHint": true}
+        }))
+        .unwrap();
+        x.services
+            .mcp_tools
+            .replace_server_tools(
+                "redmine",
+                vec![penelope_mcp::registry::RegisteredTool::from_descriptor(
+                    "redmine", &d,
+                )],
+                "2026-09-18T10:00:00Z",
+            )
+            .await
+            .unwrap();
+        let gw = Arc::new(RecordingGateway::default());
+        x.mcp = Some(gw.clone());
+        gw
+    }
+
+    /// #110 : un outil natif sans argument requis rend le nom, le type et la description
+    /// du paramètre attendu.
+    #[tokio::test]
+    async fn a_missing_native_argument_comes_back_with_the_expected_parameters() {
+        let (_d, x) = executor().await;
+        let e = x.execute("config_set", &json!({})).await.unwrap_err();
+        let text = e.for_model();
+        assert!(text.contains("`path` (string, requis)"), "{text}");
+        assert!(text.contains("Chemin pointé"), "{text}");
+        assert!(text.contains("`value`"), "{text}");
+    }
+
+    /// #110 : un appel MCP invalide est refusé chez nous avec le schéma du serveur, sans
+    /// aller au serveur, et borné même avec vingt propriétés ; `tool_call` arrivé vide le
+    /// dit comme tel, et `args_json` fait passer la valeur jusqu'au serveur.
+    #[tokio::test]
+    async fn an_invalid_mcp_call_is_explained_without_reaching_the_server() {
+        let (_d, mut x) = executor().await;
+        let gw = with_redmine(&mut x).await;
+
+        let e = x
+            .execute("mcp__redmine__get_issue", &json!({}))
+            .await
+            .unwrap_err();
+        let text = e.for_model();
+        assert!(text.contains("issue_id"), "{text}");
+        assert!(
+            text.contains("`issue_id` (integer, requis) : Identifiant numérique"),
+            "{text}"
+        );
+        assert!(
+            text.chars().count() < 2_000,
+            "{} caractères",
+            text.chars().count()
+        );
+        assert!(text.contains("autre(s) paramètre(s)"), "{text}");
+        assert!(!text.contains("perdus en route"), "appel direct : {text}");
+        assert!(
+            gw.calls.lock().unwrap().is_empty(),
+            "rien n'est parti au serveur"
+        );
+
+        let lost = x
+            .execute(
+                "tool_call",
+                &json!({"name": "mcp__redmine__get_issue", "args": {}}),
+            )
+            .await
+            .unwrap_err()
+            .for_model();
+        assert!(
+            lost.contains("perdus en route") && lost.contains("args_json"),
+            "{lost}"
+        );
+        assert!(gw.calls.lock().unwrap().is_empty());
+
+        x.execute(
+            "tool_call",
+            &json!({"name": "mcp__redmine__get_issue", "args": {}, "args_json": "{\"issue_id\": 7653}"}),
+        )
+        .await
+        .unwrap();
+        x.execute(
+            "tool_call",
+            &json!({"name": "mcp__redmine__get_issue", "args": {"issue_id": 7654}}),
+        )
+        .await
+        .unwrap();
+        let calls = gw.calls.lock().unwrap().clone();
+        assert_eq!(calls[0].1["issue_id"], 7653, "{calls:?}");
+        assert_eq!(calls[1].1["issue_id"], 7654, "{calls:?}");
+    }
+
+    /// #110 : `tool_call` déclare des arguments libres et un repli en chaîne ; un nom
+    /// inconnu rend les noms proches.
+    #[tokio::test]
+    async fn tool_call_accepts_any_arguments_and_unknown_names_get_suggestions() {
+        let (_d, mut x) = executor().await;
+        with_redmine(&mut x).await;
+        let (_, _, schema) = penelope_mcp::registry::ToolRegistry::meta_tools()
+            .into_iter()
+            .find(|(n, _, _)| *n == "tool_call")
+            .unwrap();
+        assert_eq!(schema["properties"]["args"]["additionalProperties"], true);
+        assert_eq!(schema["properties"]["args_json"]["type"], "string");
+        assert_eq!(schema["required"], json!(["name"]));
+
+        let text = x
+            .execute("mcp__redmine__getissue", &json!({}))
+            .await
+            .unwrap_err()
+            .for_model();
+        assert!(text.contains("`mcp__redmine__get_issue`"), "{text}");
+        let text = x
+            .execute("tool_call", &json!({"name": "schedule_add", "args": {}}))
+            .await
+            .unwrap_err()
+            .for_model();
+        assert!(text.contains("`schedule_create`"), "{text}");
     }
 
     #[tokio::test]

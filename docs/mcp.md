@@ -92,7 +92,7 @@ trois méta-outils, et découvre le reste à la demande.
 |---|---|
 | `tool_search` | Cherche par mots-clés (FTS + repli lexical). Rend noms, descriptions courtes, niveau de risque ; les outils natifs à la demande d'abord (serveur `natif`) |
 | `tool_describe` | Rend les schémas complets de 20 outils au plus |
-| `tool_call` | Appelle un outil par son nom qualifié `mcp__<serveur>__<outil>`, arguments validés contre son schéma **avant** l'envoi ; un outil natif par son nom, comme un appel direct |
+| `tool_call` | Appelle un outil par son nom qualifié `mcp__<serveur>__<outil>`, arguments (`args`, objet libre, ou `args_json` en chaîne) validés contre son schéma **avant** l'envoi ; un refus rend les paramètres attendus, un nom inconnu les noms proches ; un outil natif par son nom, comme un appel direct |
 
 Les mêmes méta-outils mènent aux outils natifs rares (planification, git, skills,
 intentions, gestion des workflows), sortis de la liste de chaque appel de conversation

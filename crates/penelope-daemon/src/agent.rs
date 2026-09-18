@@ -1280,14 +1280,18 @@ impl AgentLoop {
                         }
                     }
 
-                    // 4. Politique et approbation.
+                    // 4. Politique et approbation, sur les arguments de l'outil visé : par
+                    // `tool_call`, ceux de l'appel interne (#110), sinon une règle
+                    // « Toujours » couvrirait l'outil entier.
+                    let effective_args =
+                        crate::executor::effective_arguments(&call.name, &call.arguments);
                     let mut verdict = s
                         .policies
                         .evaluate(
                             &cfg.mcp.policy,
                             &info.effective_name,
                             server_of(&info.effective_name).as_deref(),
-                            &call.arguments,
+                            &effective_args,
                             info.risk,
                             spec.run_id.as_deref(),
                             Some(&spec.session_id),
@@ -1305,7 +1309,7 @@ impl AgentLoop {
                         );
                     }
                     // Réseau demandé par une commande : la carte le dit en toutes lettres.
-                    if crate::executor::wants_network(&info.effective_name, &call.arguments)
+                    if crate::executor::wants_network(&info.effective_name, &effective_args)
                         && info.risk == RiskClass::External
                     {
                         verdict.reason = format!(
@@ -1334,7 +1338,7 @@ impl AgentLoop {
                         }
                         PolicyDecision::Ask | PolicyDecision::AskTwice => {
                             let double = verdict.decision == PolicyDecision::AskTwice;
-                            let arguments = penelope_observe::redact_json(&call.arguments);
+                            let arguments = penelope_observe::redact_json(&effective_args);
                             let approval = s
                                 .approvals
                                 .create(

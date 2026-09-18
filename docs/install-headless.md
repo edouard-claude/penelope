@@ -892,6 +892,16 @@ direct. Un outil décrit ou appelé rejoint la liste de la session dès le tour 
 la quitte après dix tours sans usage. Les étapes de workflow et les sous-agents gardent
 leur liste complète.
 
+Un appel aux arguments invalides est refusé avant de partir, avec les paramètres
+attendus : les requis d'abord, leur type, leurs valeurs permises et leur description,
+1 500 caractères au plus (le reste se lit avec `tool_describe`). Un nom d'outil inconnu
+rend les noms proches. Un `tool_call` arrivé avec `args` vide alors que l'outil visé a
+des paramètres requis le dit comme tel : les arguments ont pu se perdre en route, et
+`args_json` (la même chose en chaîne JSON) les fait passer. La garde de boucle reste le
+filet : le même appel rejoué à l'identique est arrêté quoi que dise l'erreur. Par
+`tool_call`, la politique, la carte d'approbation et « Toujours » portent sur les
+arguments de l'outil visé, jamais sur l'enveloppe.
+
 `fs_read` et `fs_search` lisent en flux : 50 lignes d'un journal de 512 Mio se lisent en
 moins d'une milliseconde et quelques Mio de mémoire. Au-delà de 8 Mio, `fs_read` ne compte
 plus le total des lignes (il le dit) et refuse d'aller chercher une ligne au-delà de 64 Mio

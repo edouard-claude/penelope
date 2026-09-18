@@ -25,6 +25,19 @@ pub enum ToolError {
     #[error("outil inconnu : {0}")]
     Unknown(String),
 
+    /// Arguments refusés, avec les paramètres que l'outil attend : le modèle se corrige
+    /// sans deviner le schéma (issue #110).
+    #[error("arguments invalides pour `{tool}` : {reason}")]
+    BadArguments {
+        tool: String,
+        reason: String,
+        expected: String,
+    },
+
+    /// Outil inconnu, avec les noms proches (issue #110).
+    #[error("outil inconnu : {name}")]
+    NoSuchTool { name: String, close: Vec<String> },
+
     #[error("stockage : {0}")]
     Store(#[from] penelope_store::StoreError),
 
@@ -56,6 +69,26 @@ impl ToolError {
             ToolError::Network(m) => format!("Erreur réseau : {m}."),
             ToolError::Unknown(n) => format!(
                 "L'outil `{n}` n'existe pas. Utilise `tool_search` pour trouver le bon nom."
+            ),
+            ToolError::BadArguments {
+                tool,
+                reason,
+                expected,
+            } => format!(
+                "Erreur d'arguments pour `{tool}` : {reason}.\nParamètres attendus :\n{expected}\n\
+                 Corrige l'appel avec ces paramètres ; ne le rejoue pas à l'identique."
+            ),
+            ToolError::NoSuchTool { name, close } if !close.is_empty() => format!(
+                "L'outil `{name}` n'existe pas. Noms proches : {}. Sinon, `tool_search` trouve \
+                 un outil par ce qu'il fait.",
+                close
+                    .iter()
+                    .map(|c| format!("`{c}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            ToolError::NoSuchTool { name, .. } => format!(
+                "L'outil `{name}` n'existe pas. Utilise `tool_search` pour trouver le bon nom."
             ),
             ToolError::Cancelled => "Appel annulé.".into(),
             other => format!("Erreur : {other}"),

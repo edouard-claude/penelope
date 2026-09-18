@@ -1559,6 +1559,79 @@ mod tests {
         assert_eq!((sig.recalls, sig.useful_recalls), (2, 1), "{sig:?}");
     }
 
+    /// #110 : un appel invalide rejoué à l'identique déclenche toujours la garde de
+    /// boucle, même avec les paramètres attendus dans l'erreur ; et une approbation par
+    /// `tool_call` porte sur les arguments de l'outil visé : « Toujours » se borne à la
+    /// famille de commandes, jamais au shell entier.
+    #[tokio::test]
+    async fn explained_errors_keep_the_loop_guard_and_tool_call_rules_stay_bounded() {
+        let (_dir, d, p) = daemon().await;
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        for i in 0..4 {
+            p.push(Scripted::ToolCalls(
+                String::new(),
+                vec![ToolCall {
+                    id: format!("c{i}"),
+                    name: "fs_read".into(),
+                    arguments: json!({}),
+                }],
+            ));
+        }
+        p.reply("Je n'arrive pas à lire le fichier.");
+        d.enqueue_message(&sid, "lis le fichier de config", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        let out = d.run_turn(&turn).await;
+        assert!(matches!(out, TurnOutcome::LoopAborted { .. }), "{out:?}");
+        d.services.turns.complete(&turn).await.unwrap();
+        let history = d.services.context.history.load(&sid, 0).await.unwrap();
+        assert!(
+            history
+                .iter()
+                .any(|e| e.message.text().contains("`path` (string, requis)")),
+            "l'erreur porte les paramètres attendus"
+        );
+
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "t1".into(),
+                name: "tool_call".into(),
+                arguments: json!({"name": "shell_exec", "args": {"command": "cargo test -p x"}}),
+            }],
+        ));
+        d.enqueue_message(&sid, "lance les tests du crate x", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        let id = match d.run_turn(&turn).await {
+            TurnOutcome::AwaitingApproval { approval_id } => approval_id,
+            other => panic!("{other:?}"),
+        };
+        let a = d.services.approvals.get(&id).await.unwrap().unwrap();
+        assert_eq!(a.subject, "shell_exec");
+        assert_eq!(a.payload["arguments"]["command"], "cargo test -p x");
+        crate::agent::decide_approval(
+            &d.services,
+            &id,
+            &penelope_hitl::Decision::approve_always("cli"),
+        )
+        .await
+        .unwrap();
+        let rules = d.services.policies.active_rules().await.unwrap();
+        let rule = rules
+            .iter()
+            .find(|r| r.tool.as_deref() == Some("shell_exec"))
+            .expect("règle");
+        assert_eq!(
+            rule.arg_match.as_ref().unwrap()["command"][penelope_hitl::policy::CMD_PREFIX_OP],
+            "cargo test",
+            "famille de commandes, pas le shell entier"
+        );
+    }
+
     #[tokio::test]
     async fn penelope_reports_her_own_model_and_state() {
         let (_dir, d, p) = daemon().await;

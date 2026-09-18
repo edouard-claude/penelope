@@ -129,15 +129,211 @@ pub fn is_allowed(tool: &str, allow: &[String]) -> bool {
 /// Valide les arguments contre le schéma de l'outil.
 pub fn validate_args(tool: &str, args: &Value) -> ToolResult<()> {
     let Some(s) = spec::get(tool) else {
-        return Err(ToolError::Unknown(tool.to_string()));
+        return Err(ToolError::NoSuchTool {
+            name: tool.to_string(),
+            close: close_names(tool, spec::all().iter().map(|s| s.name), 5),
+        });
     };
-    penelope_kernel::schema::validate_ok(&s.schema, args).map_err(ToolError::Invalid)
+    penelope_kernel::schema::validate_ok(&s.schema, args).map_err(|reason| {
+        ToolError::BadArguments {
+            tool: tool.to_string(),
+            reason,
+            expected: expected_args(&s.schema, EXPECTED_ARGS_MAX_CHARS),
+        }
+    })
+}
+
+/// Plafond des paramètres rendus avec une erreur d'arguments : un gros schéma ne fait pas
+/// exploser le tour (issue #110).
+pub const EXPECTED_ARGS_MAX_CHARS: usize = 1_500;
+
+/// Paramètres d'un schéma d'arguments, lisibles par le modèle : les requis d'abord, avec
+/// leur type, leurs valeurs permises et leur description, sous `max_chars` ; ce qui ne
+/// tient pas est compté, `tool_describe` donne le reste.
+pub fn expected_args(schema: &Value, max_chars: usize) -> String {
+    let required: Vec<&str> = schema["required"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    let Some(props) = schema["properties"].as_object() else {
+        return if required.is_empty() {
+            "- aucun paramètre déclaré".into()
+        } else {
+            required
+                .iter()
+                .map(|r| format!("- `{r}` (requis)"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+    };
+    let mut names: Vec<&String> = props.keys().collect();
+    names.sort_by_key(|n| (!required.contains(&n.as_str()), n.to_string()));
+    let mut out = String::new();
+    let mut shown = 0;
+    for name in &names {
+        let p = &props[name.as_str()];
+        let ty = match &p["type"] {
+            Value::String(t) => t.clone(),
+            Value::Array(ts) => ts
+                .iter()
+                .filter_map(|t| t.as_str())
+                .collect::<Vec<_>>()
+                .join("|"),
+            _ => "valeur".into(),
+        };
+        let mut attrs = vec![ty];
+        if required.contains(&name.as_str()) {
+            attrs.push("requis".into());
+        }
+        if let Some(values) = p["enum"].as_array() {
+            let list: Vec<String> = values
+                .iter()
+                .take(8)
+                .map(|v| {
+                    v.as_str()
+                        .map(String::from)
+                        .unwrap_or_else(|| v.to_string())
+                })
+                .collect();
+            attrs.push(format!("une de : {}", list.join(", ")));
+        }
+        let mut line = format!("- `{name}` ({})", attrs.join(", "));
+        if let Some(d) = p["description"].as_str().filter(|d| !d.trim().is_empty()) {
+            let d = d.replace('\n', " ");
+            let d: String = if d.chars().count() > 160 {
+                format!("{}…", d.chars().take(159).collect::<String>())
+            } else {
+                d
+            };
+            line.push_str(&format!(" : {d}"));
+        }
+        if out.chars().count() + line.chars().count() + 1 > max_chars && shown > 0 {
+            break;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&line);
+        shown += 1;
+    }
+    let rest = names.len() - shown;
+    if rest > 0 {
+        out.push_str(&format!(
+            "\n- … {rest} autre(s) paramètre(s) facultatif(s) : `tool_describe` les donne"
+        ));
+    }
+    out
+}
+
+/// Noms proches d'un nom d'outil inconnu : même nom à quelques fautes près, ou mots en
+/// commun (`schedule_add` rapproche `schedule_create`). Les plus proches d'abord.
+pub fn close_names<'a>(
+    name: &str,
+    candidates: impl IntoIterator<Item = &'a str>,
+    max: usize,
+) -> Vec<String> {
+    fn words(s: &str) -> Vec<String> {
+        s.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.len() >= 3 && *w != "mcp")
+            .map(String::from)
+            .collect()
+    }
+    fn distance(a: &str, b: &str) -> usize {
+        let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+        let mut prev: Vec<usize> = (0..=b.len()).collect();
+        for (i, ca) in a.iter().enumerate() {
+            let mut cur = vec![i + 1; b.len() + 1];
+            for (j, cb) in b.iter().enumerate() {
+                cur[j + 1] = (prev[j] + usize::from(ca != cb))
+                    .min(prev[j + 1] + 1)
+                    .min(cur[j] + 1);
+            }
+            prev = cur;
+        }
+        prev[b.len()]
+    }
+    let wanted = name.to_lowercase();
+    let wanted_words = words(name);
+    let mut scored: Vec<(usize, usize, String)> = candidates
+        .into_iter()
+        .filter(|c| *c != name)
+        .filter_map(|c| {
+            let d = distance(&wanted, &c.to_lowercase());
+            let shared = words(c).iter().filter(|w| wanted_words.contains(w)).count();
+            (d <= (wanted.chars().count() / 3).max(2) || shared > 0)
+                .then(|| (usize::MAX - shared, d, c.to_string()))
+        })
+        .collect();
+    scored.sort();
+    scored.into_iter().take(max).map(|(_, _, c)| c).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// #110 : les paramètres attendus, requis d'abord, sous le plafond.
+    #[test]
+    fn expected_arguments_are_readable_and_bounded() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "b_opt": {"type": "string", "enum": ["x", "y"]},
+                "a_req": {"type": "integer", "description": "Identifiant"},
+            },
+            "required": ["a_req"]
+        });
+        let t = expected_args(&schema, 1_000);
+        assert_eq!(
+            t,
+            "- `a_req` (integer, requis) : Identifiant\n- `b_opt` (string, une de : x, y)"
+        );
+        let mut props = serde_json::Map::new();
+        for i in 0..50 {
+            props.insert(
+                format!("p{i:02}"),
+                json!({"type": "string", "description": "d".repeat(300)}),
+            );
+        }
+        let big = expected_args(&json!({"properties": props}), EXPECTED_ARGS_MAX_CHARS);
+        assert!(
+            big.chars().count() <= EXPECTED_ARGS_MAX_CHARS + 100,
+            "{}",
+            big.len()
+        );
+        assert!(big.contains("autre(s) paramètre(s)"));
+        let e = validate_args("fs_read", &json!({})).unwrap_err();
+        assert!(
+            e.for_model().contains("`path` (string, requis)"),
+            "{}",
+            e.for_model()
+        );
+    }
+
+    /// #110 : un nom inconnu rapproche les noms à quelques fautes près ou aux mots
+    /// communs, pas n'importe lequel.
+    #[test]
+    fn unknown_names_get_close_suggestions() {
+        let names = [
+            "schedule_create",
+            "schedule_list",
+            "fs_read",
+            "mcp__redmine__get_issue",
+        ];
+        assert_eq!(close_names("fs_raed", names, 3), vec!["fs_read"]);
+        let s = close_names("schedule_add", names, 3);
+        assert!(s.contains(&"schedule_create".to_string()), "{s:?}");
+        assert!(!s.contains(&"fs_read".to_string()));
+        assert_eq!(
+            close_names("mcp__redmine__getissue", names, 3)[0],
+            "mcp__redmine__get_issue"
+        );
+        assert!(close_names("zzzzzz", names, 3).is_empty());
+        let e = validate_args("fs_raed", &json!({})).unwrap_err();
+        assert!(e.for_model().contains("`fs_read`"), "{}", e.for_model());
+    }
 
     #[test]
     fn render_prefers_the_readable_field() {

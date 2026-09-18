@@ -1183,6 +1183,19 @@ le rouvrir à tout, `penelope config set sandbox.shell_network true`. La migrati
   retenir » avec le motif dominant, ou le constat qu'aucun candidat n'a été noté. Le
   digest reprend `DreamReport::render_brief` (sans la liste des rejets) : cinquante
   rejets tiennent sous la limite d'un message Telegram.
+- **Une erreur d'arguments dit quoi envoyer** (#110) : la cause racine était `tool_call`,
+  qui déclarait `args` en objet sans propriétés ; les fournisseurs qui contraignent la
+  génération le vidaient, huit appels de suite arrivaient avec `{}`. `args` autorise
+  maintenant des propriétés libres (`additionalProperties: true`, exemple dans la
+  description), `args_json` accepte les mêmes arguments en chaîne, et seul `name` est
+  requis. Un refus (natif ou MCP, sans aller au serveur) devient
+  `ToolError::BadArguments` avec les paramètres attendus (`expected_args` : requis
+  d'abord, type, valeurs, description, 1 500 caractères au plus) ; un `tool_call` vide
+  vers un outil à paramètres requis le dit (« perdus en route ») ; un nom inconnu devient
+  `NoSuchTool` avec les noms proches (`close_names`, natifs et MCP). La garde de boucle
+  reste le filet. Au passage, par `tool_call`, la politique, la carte et la règle
+  « Toujours » portaient sur l'enveloppe : un « Toujours » sur `shell_exec` appelé ainsi
+  couvrait tout le shell ; elles portent désormais sur les arguments de l'outil visé.
 
 ### Routine de livraison
 

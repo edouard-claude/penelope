@@ -552,6 +552,17 @@ impl ToolRegistry {
             .await
     }
 
+    /// Noms qualifiés de tous les outils connus, pour proposer un nom proche (issue #110).
+    pub async fn names(&self) -> penelope_store::Result<Vec<String>> {
+        self.store
+            .read(|c| {
+                let mut st = c.prepare("SELECT qualified FROM mcp_tools ORDER BY qualified")?;
+                let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await
+    }
+
     /// Enregistre un outil comme utilisé : il sera promu à la frontière suivante.
     pub fn mark_for_promotion(&self, names: &[String]) {
         if let Ok(mut g) = self.pending_promotion.write() {
@@ -687,10 +698,20 @@ impl ToolRegistry {
                 json!({
                     "type":"object",
                     "properties":{
-                        "name":{"type":"string"},
-                        "args":{"type":"object"}
+                        "name":{"type":"string","description":"nom de l'outil visé"},
+                        "args":{
+                            "type":"object",
+                            "additionalProperties":true,
+                            "description":"arguments de l'outil visé, selon son schéma \
+                                           (`tool_describe`) : par exemple {\"issue_id\": 7653}"
+                        },
+                        "args_json":{
+                            "type":"string",
+                            "description":"les mêmes arguments en chaîne JSON, si l'objet \
+                                           `args` arrive vide"
+                        }
                     },
-                    "required":["name","args"]
+                    "required":["name"]
                 }),
             ),
         ]
