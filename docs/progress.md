@@ -990,6 +990,12 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   les vecteurs écartés ne sont plus décodés. Mille passages ingérés plus proches de la
   question ne chassent plus un souvenir de `notes.md` du rappel automatique ; `mem_search`
   explicite garde sa portée. La décision 0002 dit enfin ce que fait le code.
+- **Serveurs MCP confinés pour de bon** (#89) : le profil d'un serveur stdio imposé
+  (`mcp-stdio`, `workspace-write`, `readonly`) reçoit `sandbox.deny_read`, comme le shell :
+  `~/.ssh`, `penelope.db`, `secrets.enc`, `mcp.d`, configuration et état ne se lisent plus
+  depuis un paquet tiers ; son répertoire de données et ses racines restent lisibles. Le
+  trousseau est fermé à tout profil imposé, même avec `deny_read = []`. `doctor` signale un
+  serveur confiné sans lecture refusée.
 
 ### Routine de livraison
 

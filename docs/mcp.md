@@ -41,7 +41,7 @@ peuvent vivre derrière la même URL et sont chacun traités selon la sienne.
 
 | Transport | Quand | Notes |
 |---|---|---|
-| `stdio` | Serveur local lancé par Pénélope | Le processus tourne dans son propre groupe, sous profil de bac à sable `mcp-stdio` ; les orphelins sont récupérés au démarrage |
+| `stdio` | Serveur local lancé par Pénélope | Le processus tourne dans son propre groupe, sous profil de bac à sable `mcp-stdio` : lectures de `sandbox.deny_read` refusées (clés, secrets, base), trousseau fermé ; les orphelins sont récupérés au démarrage |
 | Streamable HTTP | Serveur distant, ≥ 2025-03-26 | Session par en-tête, reprise de flux |
 | SSE historique | Serveur distant < 2025-03-26 | Conservé pour les serveurs anciens, jamais choisi spontanément |
 

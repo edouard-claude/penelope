@@ -722,8 +722,12 @@ Sous bac à sable, une commande peut lire le disque : `sandbox.deny_read` ferme 
 regarde pas, et le trousseau du système avec (`security find-generic-password` ne répond
 plus depuis une commande). La liste livrée couvre `~/.ssh`, `~/.aws`, `~/.gnupg`,
 `~/.config/gh`, `~/.netrc`, `~/.kube`, la base de Pénélope, le magasin de secrets, `mcp.d`,
-la configuration et l'état. Un workspace situé sous un chemin refusé reste lisible. Pour
-fermer aussi le réseau du shell :
+la configuration et l'état. Un workspace situé sous un chemin refusé reste lisible. Les
+serveurs MCP stdio confinés (`mcp-stdio`, `workspace-write`, `readonly`) suivent la même
+liste et n'ont pas non plus le trousseau : un paquet tiers ne lit pas ce que `shell_exec`
+ne lit pas ; son répertoire de données et ses racines restent lisibles pour lui, et
+`penelope doctor` signale un serveur confiné qui ne refuserait aucune lecture. Pour fermer
+aussi le réseau du shell :
 
 ```bash
 penelope config set sandbox.shell_network false

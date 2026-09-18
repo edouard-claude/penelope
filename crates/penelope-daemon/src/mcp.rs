@@ -61,30 +61,47 @@ impl ProcessConnector {
         ProcessConnector { services, host }
     }
 
-    /// Profil de bac à sable d'un serveur stdio. `full` exige que le serveur figure dans
-    /// `sandbox.allow_full_for` (§13.2).
     fn profile(&self, cfg: &ServerConfig) -> Result<penelope_platform::Profile, String> {
-        use penelope_platform::{Profile, ProfileKind};
-        let s = &self.services;
-        let data_dir = s.platform.dirs.data().join("mcp-data").join(&cfg.name);
-        std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
-        Ok(match ProfileKind::parse(&cfg.sandbox_profile) {
-            Some(ProfileKind::Full) => {
-                let allowed = s.config.config().sandbox.allow_full_for.clone();
-                if !allowed.iter().any(|n| n == &cfg.name) {
-                    return Err(format!(
-                        "le profil `full` de `{0}` doit être autorisé explicitement : \
-                         `penelope config set sandbox.allow_full_for '[\"{0}\"]'`",
-                        cfg.name
-                    ));
-                }
-                Profile::full()
-            }
-            Some(ProfileKind::ReadOnly) => Profile::read_only(),
-            Some(ProfileKind::WorkspaceWrite) => Profile::workspace_write(data_dir),
-            _ => Profile::mcp_stdio(data_dir, Vec::new()),
-        })
+        stdio_profile(&self.services, cfg)
     }
+}
+
+/// Profil de bac à sable d'un serveur stdio. `full` exige que le serveur figure dans
+/// `sandbox.allow_full_for` (§13.2). Les profils imposés refusent les mêmes lectures que
+/// le shell (`sandbox.deny_read` : clés SSH, secrets, base, configuration) et ferment le
+/// trousseau : un paquet tiers ne lit pas ce que `shell_exec` ne lit pas (issue #89). Un
+/// chemin refusé qui contient le répertoire de données du serveur ou une de ses racines
+/// reste lisible pour eux.
+pub fn stdio_profile(
+    s: &Services,
+    cfg: &ServerConfig,
+) -> Result<penelope_platform::Profile, String> {
+    use penelope_platform::{Profile, ProfileKind};
+    let data_dir = s.platform.dirs.data().join("mcp-data").join(&cfg.name);
+    std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    let mut profile = match ProfileKind::parse(&cfg.sandbox_profile) {
+        Some(ProfileKind::Full) => {
+            let allowed = s.config.config().sandbox.allow_full_for.clone();
+            if !allowed.iter().any(|n| n == &cfg.name) {
+                return Err(format!(
+                    "le profil `full` de `{0}` doit être autorisé explicitement : \
+                     `penelope config set sandbox.allow_full_for '[\"{0}\"]'`",
+                    cfg.name
+                ));
+            }
+            return Ok(Profile::full());
+        }
+        Some(ProfileKind::ReadOnly) => Profile::read_only(),
+        Some(ProfileKind::WorkspaceWrite) => Profile::workspace_write(data_dir.clone()),
+        _ => Profile::mcp_stdio(data_dir.clone(), Vec::new()),
+    };
+    let mut kept: Vec<std::path::PathBuf> = vec![data_dir];
+    kept.extend(cfg.roots.iter().map(|r| s.platform.dirs.expand(r)));
+    profile.deny_read = crate::executor::denied_reads(s)
+        .into_iter()
+        .filter(|d| !kept.iter().any(|k| k.starts_with(d)))
+        .collect();
+    Ok(profile)
 }
 
 #[async_trait::async_trait]
@@ -1759,6 +1776,67 @@ pub(crate) mod testing {
 mod tests {
     use super::testing::*;
     use super::*;
+
+    /// #89 : un serveur stdio sous `mcp-stdio` refuse les mêmes lectures que le shell, après
+    /// l'autorisation générale, et ferme le trousseau.
+    #[tokio::test]
+    async fn a_stdio_server_cannot_read_what_the_shell_cannot() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock =
+            Arc::new(penelope_kernel::clock::TestClock::default());
+        let s = crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            .await
+            .unwrap();
+        let cfg = ServerConfig {
+            name: "tiers".into(),
+            command: "/bin/sh".into(),
+            ..Default::default()
+        };
+        let p = stdio_profile(&s, &cfg).unwrap();
+        let sbpl = penelope_platform::sandbox::seatbelt_profile(&p);
+        let allow = sbpl.find("(allow file-read*)\n").expect("lecture générale");
+        let ssh = s.platform.dirs.expand("~/.ssh");
+        let deny = sbpl
+            .find(&format!(
+                "(deny file-read* (subpath \"{}\"))",
+                ssh.display()
+            ))
+            .unwrap_or_else(|| panic!("~/.ssh refusé :\n{sbpl}"));
+        assert!(deny > allow, "{sbpl}");
+        assert!(sbpl.contains("secrets.enc"), "{sbpl}");
+        assert!(sbpl.contains("com.apple.SecurityServer"), "{sbpl}");
+    }
+
+    /// #89 : un chemin refusé qui contient le répertoire de données ou une racine du
+    /// serveur reste lisible pour lui.
+    #[tokio::test]
+    async fn a_server_keeps_its_own_directories_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock =
+            Arc::new(penelope_kernel::clock::TestClock::default());
+        let s = crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            .await
+            .unwrap();
+        s.config
+            .mutate("test", |c| {
+                c.sandbox.deny_read = vec![
+                    "{data}/mcp-data".into(),
+                    "{data}/partage".into(),
+                    "{data}/secrets.enc".into(),
+                ];
+                Ok(vec!["sandbox.deny_read".into()])
+            })
+            .unwrap();
+        let cfg = ServerConfig {
+            name: "notes".into(),
+            command: "/bin/sh".into(),
+            roots: vec!["{data}/partage/projet".into()],
+            ..Default::default()
+        };
+        let p = stdio_profile(&s, &cfg).unwrap();
+        let data = s.platform.dirs.data();
+        assert_eq!(p.deny_read, vec![data.join("secrets.enc")]);
+    }
     use crate::executor::McpGateway;
     use penelope_kernel::clock::TestClock;
     use penelope_kernel::risk::RiskClass;

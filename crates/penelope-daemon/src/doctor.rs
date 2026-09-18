@@ -893,6 +893,23 @@ pub async fn mcp_checks(s: &Services, sup: &crate::mcp::McpSupervisor) -> Vec<Do
                 )),
             ),
         });
+        // #89 : un serveur stdio confiné doit refuser les mêmes lectures que le shell.
+        if let Some(cfg) = sup.config_of(&st.name).await
+            && cfg.effective_transport() == "stdio"
+            && let Ok(p) = crate::mcp::stdio_profile(s, &cfg)
+            && p.enforced()
+            && p.deny_read.is_empty()
+        {
+            out.push(DoctorCheck::fail(
+                &format!("{id}.sandbox"),
+                &format!("Bac à sable de `{}`", st.name),
+                "aucune lecture refusée : ce serveur lit `~/.ssh`, les secrets et la base",
+                Some(
+                    "penelope config set sandbox.deny_read '[\"~/.ssh\", \"{data}/secrets.enc\"]'"
+                        .into(),
+                ),
+            ));
+        }
     }
     for (file, error) in sup.invalid() {
         out.push(DoctorCheck::fail(

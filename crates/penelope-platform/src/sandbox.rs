@@ -217,7 +217,9 @@ pub fn seatbelt_profile(p: &Profile) -> String {
     for d in p.deny_read.iter().flat_map(|d| with_real_path(d)) {
         s.push_str(&format!("(deny file-read* (subpath \"{}\"))\n", esc(&d)));
     }
-    if !p.deny_read.is_empty() && p.kind != ProfileKind::Full {
+    // Le trousseau est fermé à tout profil imposé, même sans lecture refusée : une
+    // configuration `deny_read = []` ne doit pas le rouvrir (issue #89).
+    if p.kind != ProfileKind::Full {
         s.push_str("(deny mach-lookup (global-name \"com.apple.SecurityServer\"))\n");
     }
 
@@ -270,6 +272,24 @@ pub fn unsupported(profile: &Profile, os: &str) -> PlatformError {
 
 #[cfg(test)]
 mod tests {
+
+    /// #89 : le trousseau est fermé à tout profil imposé, même sans lecture refusée.
+    #[test]
+    fn the_keychain_is_closed_to_every_enforced_profile() {
+        for p in [
+            Profile::read_only(),
+            Profile::workspace_write("/tmp/ws"),
+            Profile::mcp_stdio("/tmp/data", Vec::new()),
+        ] {
+            assert!(p.deny_read.is_empty());
+            let sbpl = seatbelt_profile(&p);
+            assert!(
+                sbpl.contains("(deny mach-lookup (global-name \"com.apple.SecurityServer\"))"),
+                "{:?} :\n{sbpl}",
+                p.kind
+            );
+        }
+    }
 
     /// #68 : le profil refuse la lecture des clés et des secrets **après** avoir autorisé
     /// la lecture du disque (en SBPL, la dernière règle l'emporte), et ferme le trousseau.
