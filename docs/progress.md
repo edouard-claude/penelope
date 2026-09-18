@@ -931,6 +931,11 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   chaque calcul : un changement à chaud vaut pour les lignes suivantes, et `doctor` signale
   les consommations des dernières 48 h comptées dans un autre fuseau. Les lignes des
   versions précédentes gardent leur jour UTC (décalage ponctuel le jour de la mise à jour).
+- **Flux sans « � »** (#80) : le décodeur SSE garde les octets d'un caractère coupé par le
+  transport (au plus trois) pour le paquet suivant au lieu de décoder chaque paquet seul ;
+  un `é` ou un emoji à cheval sur deux segments TCP n'abîme plus ni la réponse, ni le
+  transcript, ni les arguments d'outils. Testé à chaque offset d'octet et sur des paquets
+  de tailles aléatoires ; des octets réellement invalides restent remplacés.
 
 ### Routine de livraison
 

@@ -9,9 +9,16 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// Découpe un flux d'octets SSE en événements `data:`.
+///
+/// Les paquets suivent les frontières du transport (TLS, TCP, proxy), jamais celles des
+/// caractères : un `é` ou un emoji peut arriver en deux morceaux. Les octets d'un
+/// caractère incomplet attendent donc le paquet suivant au lieu d'être décodés seuls, ce
+/// qui les changerait en « � » dans la réponse et les arguments d'outils (issue #80).
 #[derive(Default)]
 pub struct SseDecoder {
     buffer: String,
+    /// Début d'un caractère multi-octets coupé par le transport (trois octets au plus).
+    partial: Vec<u8>,
 }
 
 impl SseDecoder {
@@ -21,7 +28,41 @@ impl SseDecoder {
 
     /// Ajoute des octets et renvoie les charges utiles `data:` complètes.
     pub fn push(&mut self, bytes: &[u8]) -> Vec<String> {
-        self.buffer.push_str(&String::from_utf8_lossy(bytes));
+        let joined;
+        let mut input: &[u8] = if self.partial.is_empty() {
+            bytes
+        } else {
+            let mut v = std::mem::take(&mut self.partial);
+            v.extend_from_slice(bytes);
+            joined = v;
+            &joined
+        };
+        loop {
+            match std::str::from_utf8(input) {
+                Ok(text) => {
+                    self.buffer.push_str(text);
+                    break;
+                }
+                Err(e) => {
+                    let (valid, rest) = input.split_at(e.valid_up_to());
+                    // Sûr : `valid_up_to` borne une tranche UTF-8 valide.
+                    self.buffer
+                        .push_str(std::str::from_utf8(valid).unwrap_or_default());
+                    match e.error_len() {
+                        // Caractère incomplet en fin de paquet : il attend la suite.
+                        None => {
+                            self.partial = rest.to_vec();
+                            break;
+                        }
+                        // Octets réellement invalides : remplacés, comme avant.
+                        Some(n) => {
+                            self.buffer.push(char::REPLACEMENT_CHARACTER);
+                            input = &rest[n..];
+                        }
+                    }
+                }
+            }
+        }
         let mut out = Vec::new();
 
         // Un événement se termine par une ligne vide ; on tolère \n\n et \r\n\r\n.
@@ -50,6 +91,11 @@ impl SseDecoder {
     /// Reste non consommé (diagnostic d'un flux coupé).
     pub fn pending(&self) -> &str {
         &self.buffer
+    }
+
+    /// Octets d'un caractère encore incomplet, en attente du paquet suivant.
+    pub fn pending_bytes(&self) -> &[u8] {
+        &self.partial
     }
 }
 
@@ -425,12 +471,112 @@ mod tests {
         assert_eq!(out, vec!["{\"x\":1}".to_string()]);
     }
 
-    #[test]
-    fn decoder_handles_split_utf8_across_chunks() {
+    /// Décode un flux découpé aux frontières données, tous les événements à la suite.
+    fn decode_in_pieces(stream: &[u8], cuts: &[usize]) -> Vec<String> {
         let mut d = SseDecoder::new();
-        let out = d.push("data: {\"t\":\"é\"}\n\n".as_bytes());
-        assert_eq!(out.len(), 1);
-        assert!(out[0].contains('é'));
+        let mut out = Vec::new();
+        let mut from = 0;
+        for &cut in cuts.iter().chain(std::iter::once(&stream.len())) {
+            out.extend(d.push(&stream[from..cut]));
+            from = cut;
+        }
+        assert!(d.pending_bytes().is_empty(), "octets restés en attente");
+        out
+    }
+
+    /// #80 : un caractère multi-octets coupé entre deux paquets est reconstitué, à
+    /// **chaque** offset d'octet possible.
+    #[test]
+    fn a_character_split_at_any_byte_is_rebuilt() {
+        // é (2 octets), € (3), 🚀 (4), e + accent combinant (1 + 2).
+        let text = "été € 🚀 e\u{301} fini";
+        let stream = format!("data: {{\"t\":\"{text}\"}}\n\n");
+        let expected = decode_in_pieces(stream.as_bytes(), &[]);
+        assert!(expected[0].contains(text));
+        for cut in 1..stream.len() {
+            assert_eq!(
+                decode_in_pieces(stream.as_bytes(), &[cut]),
+                expected,
+                "coupé à l'octet {cut}"
+            );
+        }
+    }
+
+    /// #80 : les arguments d'un appel d'outil, fragmentés par le fournisseur puis coupés
+    /// par le transport, sont identiques à ceux d'un flux entier.
+    #[test]
+    fn tool_arguments_survive_transport_cuts() {
+        let events = [
+            r#"{"id":"1","model":"m","choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"fs_write","arguments":"{\"path\":\"rapport-d"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"écembre.md\",\"content\":\"Été 🚀\"}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ];
+        let stream: String = events.iter().map(|e| format!("data: {e}\n\n")).collect();
+        let call_of = |payloads: Vec<String>| {
+            let mut a = StreamAccumulator::new();
+            payloads
+                .iter()
+                .flat_map(|p| a.push_payload(p))
+                .find_map(|c| match c {
+                    StreamChunk::ToolCall(t) => Some(t),
+                    _ => None,
+                })
+                .expect("appel reconstitué")
+        };
+        let whole = call_of(decode_in_pieces(stream.as_bytes(), &[]));
+        assert_eq!(
+            whole.arguments,
+            serde_json::json!({"path": "rapport-décembre.md", "content": "Été 🚀"})
+        );
+        for cut in 1..stream.len() {
+            assert_eq!(
+                call_of(decode_in_pieces(stream.as_bytes(), &[cut])).arguments,
+                whole.arguments,
+                "coupé à l'octet {cut}"
+            );
+        }
+    }
+
+    /// #80 : paquets de tailles aléatoires (graine fixe) sur un flux de plusieurs Kio.
+    #[test]
+    fn random_packet_sizes_give_the_same_text() {
+        let mut stream = String::new();
+        for i in 0..200 {
+            stream.push_str(&format!(
+                "data: {{\"n\":{i},\"t\":\"déjà vu, ça coûte 3 € 🚀 … ok\"}}\n\n"
+            ));
+        }
+        let bytes = stream.as_bytes();
+        let expected = decode_in_pieces(bytes, &[]);
+        assert_eq!(expected.len(), 200);
+        let mut seed: u64 = 0x5eed_2026;
+        for _ in 0..50 {
+            let mut cuts = Vec::new();
+            let mut at = 0;
+            loop {
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                at += 1 + (seed >> 33) as usize % 17;
+                if at >= bytes.len() {
+                    break;
+                }
+                cuts.push(at);
+            }
+            assert_eq!(decode_in_pieces(bytes, &cuts), expected);
+        }
+    }
+
+    /// Des octets réellement invalides restent remplacés, sans bloquer la suite.
+    #[test]
+    fn invalid_bytes_are_replaced_not_held() {
+        let mut d = SseDecoder::new();
+        let mut stream = b"data: a".to_vec();
+        stream.push(0xFF);
+        stream.extend_from_slice(b"b\n\n");
+        let out = d.push(&stream);
+        assert_eq!(out, vec!["a\u{FFFD}b".to_string()]);
+        assert!(d.pending_bytes().is_empty());
     }
 
     #[test]
