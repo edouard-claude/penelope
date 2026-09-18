@@ -174,8 +174,9 @@ Version 0.x, publiée en pre-release, une seule instance réelle en service.
 - La signature minisign des releases est implémentée mais la clé n'est pas créée : seule
   la somme SHA-256 est vérifiée aujourd'hui.
 - Les suites qui parlent à de vrais services sont écrites et n'ont pas encore tourné.
-- La suite de tests n'est verte que sur macOS : sept tests supposent Seatbelt ou un
-  `sleep` BSD, et la CI ne tourne que sur `macos-14`.
+- Le bac à sable n'existe que sur macOS : la suite entière tourne aussi sur Linux (la CI
+  la rejoue sur `ubuntu-latest`), mais les tests de Seatbelt, de launchd et du trousseau
+  ne tournent que sur `macos-14`.
 - Les manques et les écarts trouvés en revue sont suivis dans les
   [issues](https://github.com/edouard-claude/penelope/issues) du dépôt, lisibles par
   tout le monde.

@@ -1080,6 +1080,14 @@ l'adresse vérifiée (#93), fichiers lus en flux (#94), secret posé sans `argv`
   `Bot::call`. Un refus définitif est dit dans le chat par une note en texte brut, jamais
   suivie d'une autre si elle échoue à son tour ; `/status` et `status` comptent les
   messages non envoyés (`outbox_failed`).
+- **Suite verte sur Linux, CI en deux jobs** (#102) : hors macOS, `Services::for_tests`
+  lance les commandes sans profil imposé (le bac à sable n'existe pas, l'échec fermé
+  refusait tout) : le condensé de tests, le ledger des étapes shell et l'e2e
+  `ticket-to-deploy` y tournent. Le vrai serveur MCP sous Seatbelt est marqué macOS, le test
+  de `probe_version` n'utilise plus `sleep` (GNU répond à `--version`). La CI rejoue la
+  suite entière sur `ubuntu-latest` et garde sur `macos-14` le format, clippy, les tests de
+  la plateforme (Seatbelt réellement appliqué compris), le serveur MCP sous bac à sable,
+  launchd et le binaire de release.
 
 ### Routine de livraison
 

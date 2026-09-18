@@ -166,6 +166,12 @@ impl Services {
         // Pas de fenêtre de regroupement par défaut : un test qui l'exerce la règle
         // lui-même (issue #49).
         sample.telegram.text_group_window_ms = 0;
+        // Sans bac à sable sur cette plateforme, le profil imposé refuserait toute commande
+        // (échec fermé) : les tests de logique (condensé de tests, ledger, e2e) y tournent
+        // sans profil. Sur macOS, ils gardent Seatbelt (issue #102).
+        if !cfg!(target_os = "macos") {
+            sample.sandbox.default_profile = "full".into();
+        }
         let config = Arc::new(ConfigStore::new(
             sample,
             platform.dirs.config_file(),

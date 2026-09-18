@@ -829,9 +829,23 @@ mod tests {
         let git = which("git").expect("git est requis pour les tests");
         let v = probe_version(&git, std::time::Duration::from_secs(5)).unwrap();
         assert!(v.starts_with("git version"), "{v}");
-        // Un programme qui ne comprend pas `--version` ne passe pas pour sain.
-        let sleep = which("sleep").unwrap();
-        assert!(probe_version(&sleep, std::time::Duration::from_millis(200)).is_none());
+        // Un programme qui échoue à `--version`, ou qui ne répond pas dans le délai, ne
+        // passe pas pour sain. Des scripts plutôt que `sleep` : le `sleep` de GNU répond à
+        // `--version`, celui de BSD non (issue #102).
+        let dir = tempfile::tempdir().unwrap();
+        let script = |name: &str, body: &str| {
+            use std::os::unix::fs::PermissionsExt;
+            let p = dir.path().join(name);
+            std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            p
+        };
+        let fails = script("echoue", "exit 1");
+        assert!(probe_version(&fails, std::time::Duration::from_secs(5)).is_none());
+        let mute = script("muet", "sleep 5");
+        let t = std::time::Instant::now();
+        assert!(probe_version(&mute, std::time::Duration::from_millis(200)).is_none());
+        assert!(t.elapsed() < std::time::Duration::from_secs(3));
     }
 
     #[test]

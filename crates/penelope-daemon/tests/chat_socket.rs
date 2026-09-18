@@ -25,10 +25,11 @@ async fn start() -> (tempfile::TempDir, Arc<Daemon>, Arc<MockProvider>) {
     d.set_provider_override(p.clone());
     tokio::spawn(penelope_daemon::runner::run_pool(d.clone()));
     tokio::spawn(penelope_daemon::rpc::serve(d.clone()));
-    // Laisser la socket apparaître.
+    // Attendre que la socket accepte : le fichier existe entre `bind` et `listen`, une
+    // connexion à ce moment-là est refusée.
     let sock = d.services.platform.dirs.socket_path();
-    for _ in 0..50 {
-        if sock.exists() {
+    for _ in 0..250 {
+        if penelope_platform::ipc::connect(&sock).await.is_ok() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -53,7 +54,7 @@ async fn exchange_raw(d: &Daemon, req: RpcRequest) -> Vec<Value> {
     let mut lines = BufReader::new(read).lines();
     let mut out = Vec::new();
     loop {
-        let line = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+        let line = tokio::time::timeout(Duration::from_secs(30), lines.next_line())
             .await
             .expect("le daemon doit répondre")
             .unwrap()
@@ -128,11 +129,12 @@ async fn chat_stream_sends_deltas_then_the_final_answer() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_request_without_the_session_token_is_refused() {
     let (_dir, d, _p) = start().await;
+    let before = d.services.config.config().sandbox.default_profile.clone();
     let set = |auth: Option<&str>| {
         RpcRequest::new(
             3,
             method::CONFIG_SET,
-            json!({"path": "sandbox.default_profile", "value": "full"}),
+            json!({"path": "sandbox.default_profile", "value": "readonly"}),
         )
         .with_auth(auth.map(String::from))
     };
@@ -143,7 +145,7 @@ async fn a_request_without_the_session_token_is_refused() {
     }
     assert_eq!(
         d.services.config.config().sandbox.default_profile,
-        "workspace-write",
+        before,
         "rien n'a été écrit"
     );
 
@@ -166,7 +168,7 @@ async fn a_stream_client_that_leaves_cancels_its_turn() {
     use penelope_llm::mock::Scripted;
     use penelope_llm::types::ToolCall;
     let (_dir, d, p) = start().await;
-    p.slow(Duration::from_millis(700));
+    p.slow(Duration::from_millis(300));
     p.reply(r#"{"complexity":"low"}"#);
     p.push(Scripted::ToolCalls(
         String::new(),

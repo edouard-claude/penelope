@@ -19,11 +19,12 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  verification:
-    name: Format, lint et tests
-    # macOS est la plateforme cible : les tests touchent Seatbelt, launchd et le
-    # trousseau, autant les exécuter là où ils comptent.
-    runs-on: macos-14
+  # La suite entière tourne sur Linux : dix fois moins cher que macOS, et chacun peut la
+  # rejouer. Sans bac à sable sur cette plateforme, les tests de logique y tournent sans
+  # profil imposé (issue #102).
+  tests:
+    name: Tests (Linux)
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -46,17 +47,52 @@ jobs:
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-registry-
 
+      # 1406 tests, tous hors réseau. Les suites nommées du §20.1 sont des filtres sur
+      # cette commande : `arch`, `ctx-safety`, `mcp-conformance`, `hot-reload`,
+      # `resilience` et `security` en font partie.
+      - name: Tests
+        run: cargo test --workspace
+
+  # macOS est la plateforme cible : format, lint, et ce qui n'existe que là (Seatbelt,
+  # launchd, trousseau, binaire de release). Pas la suite entière une seconde fois.
+  verification:
+    name: Format, lint et plateforme (macOS)
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Chaîne d'outils
+        run: |
+          rustup toolchain install
+          rustc --version && cargo --version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
+
       - name: Format
         run: cargo fmt --all --check
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # 1406 tests, tous hors réseau. Les suites nommées du §20.1 sont des filtres sur
-      # cette commande : `arch`, `ctx-safety`, `mcp-conformance`, `hot-reload`,
-      # `resilience` et `security` en font partie.
-      - name: Tests
-        run: cargo test --workspace
+      # Backends macOS : Seatbelt réellement appliqué (lectures refusées, sockets Unix
+      # fermées), répertoires, trousseau par `security` en lecture seule.
+      - name: Plateforme
+        run: |
+          cargo test -p penelope-platform
+          cargo test -p penelope-platform --lib seatbelt -- --ignored
+
+      # Un vrai serveur MCP stdio sous le profil `mcp-stdio`.
+      - name: MCP sous bac à sable
+        run: cargo test -p penelope-daemon --lib a_real_stdio_server_runs_under_the_sandbox
 
       # Relais de mise à jour contre le vrai launchd (issue #36) : un faux daemon sous
       # LaunchAgent charge le relais depuis son propre job, le service doit repartir sans

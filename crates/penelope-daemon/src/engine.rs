@@ -1507,6 +1507,7 @@ mod tests {
         assert!(!s.config.config().models.routing.classifier);
 
         // Bac à sable : double confirmation malgré la règle, rien n'est appliqué.
+        let profile_before = s.config.config().sandbox.default_profile.clone();
         p.push(Scripted::ToolCalls(
             String::new(),
             vec![ToolCall {
@@ -1525,7 +1526,7 @@ mod tests {
         };
         let a = s.approvals.get(&approval_id).await.unwrap().unwrap();
         assert_eq!(a.payload["double"], true);
-        assert_eq!(s.config.config().sandbox.default_profile, "workspace-write");
+        assert_eq!(s.config.config().sandbox.default_profile, profile_before);
 
         // Un secret ne passe jamais, même approuvé.
         let x = crate::executor::NativeToolExecutor::new(

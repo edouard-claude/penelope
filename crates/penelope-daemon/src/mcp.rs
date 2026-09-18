@@ -2484,7 +2484,9 @@ mod tests {
         assert_eq!(v["content"][2]["text"], "# titre");
     }
 
-    /// Un vrai serveur stdio (script Python), lancé sous le profil `mcp-stdio`.
+    /// Un vrai serveur stdio (script Python), lancé sous le profil `mcp-stdio`. Seatbelt
+    /// n'existe que sur macOS (issue #102).
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn a_real_stdio_server_runs_under_the_sandbox() {
         let Some(python) = penelope_platform::which("python3") else {
