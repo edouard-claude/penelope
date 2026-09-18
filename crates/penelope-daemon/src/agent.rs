@@ -339,6 +339,36 @@ pub struct AgentLoop {
 /// Lectures lancées ensemble, au plus (issue #85).
 const PARALLEL_READS: usize = 4;
 
+/// Lectures **pures**, sans effet sur la conversation, le run ou le propriétaire : elles
+/// seules partent en parallèle. `return_value` puis `step_done`, `ask_user`, `send_voice`
+/// ou `skill_load` sont aussi de classe `read`, mais leur ordre compte (#85).
+const PARALLEL_SAFE: &[&str] = &[
+    "fs_read",
+    "fs_list",
+    "fs_search",
+    "git_status",
+    "git_diff",
+    "time_now",
+    "schedule_list",
+    "mem_search",
+    "mem_get",
+    "mem_neighbors",
+    "intent_list",
+    "history_grep",
+    "history_describe",
+    "history_expand",
+    "history_expand_query",
+    "artifact_read",
+    "skill_search",
+    "workflow_list",
+    "workflow_describe",
+    "workflow_status",
+    "self_status",
+    "self_docs",
+    "tool_search",
+    "tool_describe",
+];
+
 /// Suite d'un appel, décidée avant toute exécution.
 enum Step {
     /// Résultat connu sans exécuter : refus, avertissement du harnais.
@@ -1336,8 +1366,9 @@ impl AgentLoop {
                         }
                         PolicyDecision::Auto => {}
                     }
-                    // Lecture autorisée d'office : elle peut partir avec ses voisines.
-                    parallel = info.risk == RiskClass::Read;
+                    // Lecture pure autorisée d'office : elle peut partir avec ses voisines.
+                    parallel = info.risk == RiskClass::Read
+                        && PARALLEL_SAFE.contains(&info.effective_name.as_str());
                 }
             }
             steps.push(Step::Execute {

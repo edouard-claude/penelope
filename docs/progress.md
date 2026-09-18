@@ -967,8 +967,10 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   `doctor` les boucles relancées dans l'heure ou finies.
 - **Lectures parallèles** (#85) : `resolve_pending` décide d'abord de chaque appel dans
   l'ordre (liste blanche, décision prise, boucles, politique), puis exécute. Les lectures
-  consécutives autorisées d'office partent ensemble, par quatre ; écritures, actions
-  externes et appels approuvés restent seuls et forment une barrière. Les résultats sont
+  pures consécutives (liste fermée : fichiers, git en lecture, mémoire, historique,
+  artefacts, catalogues) partent ensemble, par quatre ; écritures, actions externes,
+  appels approuvés et lectures dont l'ordre compte (`return_value` puis `step_done`,
+  `ask_user`, `send_voice`) restent seuls et forment une barrière. Les résultats sont
   enregistrés dans l'ordre des appels et admis en groupe (#52), un échec n'annule pas les
   autres, `/stop` interrompt tout le lot. Trois lectures de 300 ms : moins de 600 ms au lieu
   de 900.

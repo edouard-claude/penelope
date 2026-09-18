@@ -854,10 +854,12 @@ Ce que le modèle peut appeler sans serveur MCP, avec la classe de risque qui d�
 l'approbation (`read` : sans approbation ; `write`, `external`, `destructive` : selon la
 politique). Les outils MCP passent par `tool_search`, `tool_describe` et `tool_call`.
 
-Quand le modèle demande plusieurs appels d'un coup, les lectures consécutives autorisées
-d'office partent ensemble, par quatre : cinq `fs_read` ou trois `http_fetch` coûtent la
-durée du plus lent, pas la somme. Tout le reste (écriture, action externe, appel soumis à
-approbation) part seul, après les lectures qui le précèdent et avant celles qui le suivent.
+Quand le modèle demande plusieurs appels d'un coup, les lectures pures consécutives
+(fichiers, git en lecture, mémoire, historique, artefacts, catalogues) partent ensemble,
+par quatre : cinq `fs_read` ou trois `mem_search` coûtent la durée du plus lent, pas la
+somme. Tout le reste (écriture, action externe, appel soumis à approbation, et les
+lectures dont l'ordre compte comme `return_value` puis `step_done`) part seul, après les
+lectures qui le précèdent et avant celles qui le suivent.
 Les résultats sont enregistrés dans l'ordre des appels, un échec n'annule pas les autres,
 et `/stop` interrompt tout le lot.
 
