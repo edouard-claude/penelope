@@ -1138,6 +1138,17 @@ l'adresse vérifiée (#93), fichiers lus en flux (#94), secret posé sans `argv`
   clone, le déploiement, la vérification et le retour arrière. `doctor` :
   `sandbox.shell_network`. Test sous Seatbelt (CI macOS) : `nc -z` vers un port local
   échoue sans réseau avec la note, passe avec `network: true`.
+- **La compression de contexte sur une page** (#107) : `docs/context.md` suit une session
+  du premier tour à la cinquième compaction (ce qui part au modèle, niveaux 0 à 4, queue
+  verbatim, gabarit à neuf sections, mise à jour du même résumé, échecs, attente, réserve
+  de budget, cache, événements). Sa table par fenêtre (8 k à 1 M) est générée depuis
+  `CompactionParams`, et le test `docs` refuse une clé inconnue ou une valeur citée
+  (`` `clé` = `valeur` ``) qui n'est plus le défaut ; l'index la cite. Le code suit la page
+  sur deux points : sans seuil propre au modèle, le seuil descend jusqu'à laisser la place
+  d'un groupe de résultats d'outils entier et de la réserve de réponse (65 % sur 32 k,
+  63 % sur 8 k, 70 % inchangé dès 128 k), et la queue verbatim ne dépasse jamais le quart
+  du seuil de fond (sur 8 k, 10 k de queue interdisaient tout résumé). La documentation de
+  `context.model_thresholds` disait « sans effet » : elle était lue depuis longtemps.
 
 ### Routine de livraison
 

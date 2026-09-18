@@ -495,7 +495,9 @@ pub struct Context {
     /// Taille de prompt au-delà de laquelle la compaction se déclenche, quelle que soit la
     /// fenêtre du modèle : une limite de coût, pas de fenêtre (issue #18). 0 : aucune.
     pub max_prompt_tokens: usize,
-    /// Seuil de compaction propre à un modèle. Sans effet dans cette version.
+    /// Seuil de compaction propre à un modèle (identifiant avec ou sans provider). Sans
+    /// entrée, le seuil général s'applique, abaissé sur une fenêtre courte pour laisser la
+    /// place d'un résultat d'outil et de la réponse.
     pub model_thresholds: BTreeMap<String, f64>,
     /// Marge sous le seuil à partir de laquelle la compaction se prépare en tâche de fond.
     pub background_compaction_margin: f64,
@@ -1358,13 +1360,18 @@ impl Config {
 
     /// Seuil de compaction effectif pour un modèle (surcharge §19 `context.model_thresholds`).
     pub fn compaction_threshold_for(&self, model_id: &str) -> f64 {
+        self.model_threshold(model_id)
+            .unwrap_or(self.context.compaction_threshold)
+    }
+
+    /// Seuil propre au modèle, s'il y en a un (identifiant avec ou sans provider).
+    pub fn model_threshold(&self, model_id: &str) -> Option<f64> {
         let bare = model_id.split_once(':').map(|(_, m)| m).unwrap_or(model_id);
         self.context
             .model_thresholds
             .get(model_id)
             .or_else(|| self.context.model_thresholds.get(bare))
             .copied()
-            .unwrap_or(self.context.compaction_threshold)
     }
 
     pub fn quiet_range(&self) -> Option<TimeRange> {

@@ -31,9 +31,18 @@ pub struct CompactionParams {
     pub max_prompt_tokens: u64,
 }
 
+/// Tokens réservés à la réponse : on ne remplit jamais la fenêtre jusqu'au bord (10 % de
+/// la fenêtre, entre 1 000 et 32 000).
+pub fn reserved_output(window: u64) -> u64 {
+    (window / 10).clamp(1_000, 32_000)
+}
+
 impl CompactionParams {
+    /// Paramètres d'un modèle. Sans seuil propre au modèle (`context.model_thresholds`),
+    /// le seuil est ramené à [`CompactionParams::headroom_threshold`] quand la fenêtre est
+    /// trop courte pour lui (issue #107).
     pub fn from_config(cfg: &penelope_kernel::config::Config, window: u64, model_id: &str) -> Self {
-        CompactionParams {
+        let mut p = CompactionParams {
             window,
             threshold: cfg.compaction_threshold_for(model_id),
             tail_ratio: cfg.context.tail_ratio,
@@ -44,7 +53,20 @@ impl CompactionParams {
             large_payload_tokens: cfg.context.large_payload_tokens as u64,
             background_margin: cfg.context.background_compaction_margin,
             max_prompt_tokens: cfg.context.max_prompt_tokens as u64,
+        };
+        if cfg.model_threshold(model_id).is_none() {
+            p.threshold = p.threshold.min(p.headroom_threshold()).max(0.1);
         }
+        p
+    }
+
+    /// Seuil le plus haut qui laisse toujours la place, au-dessus de lui, d'un groupe de
+    /// résultats d'outils admis entier et de la réserve de réponse. Sur 32 k tokens, 70 %
+    /// plus un résultat d'un quart de fenêtre plus 10 % de réserve débordent : le seuil
+    /// descend à 65 %. Sur 128 k, le résultat est plafonné à 25 k : 70 % tient.
+    pub fn headroom_threshold(&self) -> f64 {
+        let w = self.window.max(1) as f64;
+        1.0 - reserved_output(self.window) as f64 / w - self.tool_group_budget() as f64 / w
     }
 
     /// Fenêtre de travail : celle du modèle, réduite pour que le seuil de compaction ne
@@ -58,17 +80,14 @@ impl CompactionParams {
             .min((self.max_prompt_tokens as f64 / self.threshold) as u64)
     }
 
-    /// Budget de la **queue verbatim** : 2,5 % de la fenêtre, borné entre 10K et 25K.
+    /// Budget de la **queue verbatim** : 2,5 % de la fenêtre, borné entre 10K et 25K, et
+    /// jamais plus du quart du seuil de fond : sous un plafond de coût comme sur une fenêtre
+    /// courte, une queue plus grosse couvrirait tout ce qu'il faudrait résumer (sur 8 k
+    /// tokens, 10 k de queue interdisaient tout résumé, issue #107).
     pub fn tail_budget(&self) -> u64 {
-        let tail = ((self.window as f64 * self.tail_ratio) as u64)
-            .clamp(self.tail_min_tokens, self.tail_max_tokens);
-        if self.budget_window() < self.window {
-            // Plafond de coût actif : la queue verbatim reste sous le quart du seuil de fond,
-            // sinon elle couvrirait tout ce qu'il faudrait résumer.
-            tail.min(self.background_threshold_tokens(self.background_margin) / 4)
-        } else {
-            tail
-        }
+        ((self.window as f64 * self.tail_ratio) as u64)
+            .clamp(self.tail_min_tokens, self.tail_max_tokens)
+            .min(self.background_threshold_tokens(self.background_margin) / 4)
     }
 
     /// Budget d'admission d'un groupe de résultats d'outils : une part de la fenêtre,
@@ -649,6 +668,34 @@ mod tests {
     use super::*;
     use penelope_llm::types::ToolCall;
     use serde_json::json;
+
+    /// #107 : sur une fenêtre courte, le seuil laisse la place d'un résultat d'outil
+    /// admis entier et de la réponse, et la queue verbatim laisse quelque chose à résumer ;
+    /// sur 128 k, rien ne change ; un seuil propre au modèle l'emporte.
+    #[test]
+    fn short_windows_get_a_lower_threshold_and_a_smaller_tail() {
+        let cfg = penelope_kernel::config::Config::default();
+        let at = |w: u64| CompactionParams::from_config(&cfg, w, "openrouter:exemple/modele");
+        let p32 = at(32_768);
+        assert!((p32.threshold - 0.65).abs() < 0.01, "{}", p32.threshold);
+        let limit = p32.window - reserved_output(p32.window);
+        assert!(p32.threshold_tokens() + p32.tool_group_budget() <= limit);
+        assert!(p32.tail_budget() < p32.background_threshold_tokens(p32.background_margin) / 3);
+        let p8 = at(8_192);
+        assert!(p8.tail_budget() < 8_192 / 4, "{}", p8.tail_budget());
+        assert!(p8.threshold < 0.65);
+        let p128 = at(131_072);
+        assert_eq!(p128.threshold, 0.70);
+        assert_eq!(p128.tail_budget(), 10_000);
+
+        let mut explicit = cfg.clone();
+        explicit
+            .context
+            .model_thresholds
+            .insert("exemple/modele".into(), 0.8);
+        let p = CompactionParams::from_config(&explicit, 32_768, "openrouter:exemple/modele");
+        assert_eq!(p.threshold, 0.8, "le seuil du modèle l'emporte");
+    }
 
     fn params(window: u64) -> CompactionParams {
         CompactionParams {

@@ -536,11 +536,6 @@ impl ContextEngine {
     }
 }
 
-/// Tokens réservés à la sortie : on ne remplit jamais la fenêtre jusqu'au bord.
-fn reserved_output(window: u64) -> u64 {
-    (window / 10).clamp(1_000, 32_000)
-}
-
 /// Met le transcript en forme pour le résumeur.
 pub fn render_transcript(entries: &[Entry]) -> String {
     entries.iter().map(render_entry).collect()

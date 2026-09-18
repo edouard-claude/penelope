@@ -146,7 +146,7 @@ impl Conversation for SessionConversation {
         // Niveau 4 : la requête ne tient pas, on la réduit en le prouvant (§5.4).
         let limit = params
             .window
-            .saturating_sub((params.window / 10).clamp(1_000, 32_000));
+            .saturating_sub(penelope_context::compaction::reserved_output(params.window));
         let (messages, _) = s
             .context
             .emergency(ctx.messages, limit, &self.model_id)

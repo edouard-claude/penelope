@@ -341,7 +341,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `context.max_tool_result_share` | `0.25` | Part maximale de la fenêtre qu'un résultat d'outil peut occuper. |
 | `context.large_payload_tokens` | `25000` | Taille à partir de laquelle un résultat d'outil est rangé en artefact et résumé, en jetons. |
 | `context.max_prompt_tokens` | `120000` | Taille de prompt au-delà de laquelle la compaction se déclenche, quelle que soit la fenêtre du modèle : une limite de coût, pas de fenêtre (issue #18). 0 : aucune. |
-| `context.model_thresholds.<nom>` | – | Seuil de compaction propre à un modèle. Sans effet dans cette version. |
+| `context.model_thresholds.<nom>` | – | Seuil de compaction propre à un modèle (identifiant avec ou sans provider). Sans entrée, le seuil général s'applique, abaissé sur une fenêtre courte pour laisser la place d'un résultat d'outil et de la réponse. |
 | `context.background_compaction_margin` | `0.1` | Marge sous le seuil à partir de laquelle la compaction se prépare en tâche de fond. |
 | `context.cooldown_ms` | `[60000,300000,900000]` | Attentes successives après une compaction en échec, en millisecondes. |
 | `context.auto_title` | `true` | Titre de 3 à 6 mots donné par le modèle rapide après le premier échange. |
@@ -1456,6 +1456,9 @@ un résultat de 175 k entier. Une longue liste de fichiers (`fs_list` récursif)
 résumée par dossier, la liste complète en artefact.
 
 ### Longues conversations
+
+Le parcours complet, seuils et chiffres par fenêtre compris, est dans
+[context.md](context.md).
 
 Quand une conversation approche le seuil de sa fenêtre (70 % par défaut, moins une marge
 de 10 points), Pénélope fait résumer les anciens échanges en tâche de fond par l'alias du

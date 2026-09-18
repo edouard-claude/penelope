@@ -123,7 +123,7 @@ documentation de chaque projet.
 | Découpage | 5 tuiles T0 à T4, stabilité déclarée par tuile | moteur enfichable, pas de couches documentées | pas de couches, double seuil 85 % puis 50 % |
 | Compaction | 5 niveaux, un seul appelle un modèle | automatique et `/compact`, garde les tours récents | résumé structuré à gabarit fixe, mis à jour d'une compression à l'autre, repli déterministe |
 | Préfixe de cache | identique octet pour octet, vérifié par un test | élagage au TTL, battement conseillé pour garder le cache chaud | règle écrite de non-mutation, 4 points de rupture |
-| Plafond de contexte | indépendant de la fenêtre du modèle, déclenché sur le prompt réellement facturé | plafonds de contexte configurables | seuils par modèle, queue bornée |
+| Plafond de contexte | indépendant de la fenêtre du modèle, déclenché sur le prompt réellement facturé, seuil abaissé sur fenêtre courte ; chiffres dans [docs/context.md](docs/context.md), vérifiés contre le code | plafonds de contexte configurables | seuils par modèle, queue bornée |
 | Journal | événements chaînés par hachage, altération détectée, écriture refusée plutôt que maillon forgé | événements typés, « best-effort », rétention 30 jours | SQLite WAL, pas de registre d'audit |
 | Effets | ledger avant exécution, un effet incertain devient une question | non | non |
 | Reprise | run repris à son étape, écrit dans la même transaction, tests dédiés | deux bugs de reprise fautive ouverts | instantanés git avant écriture et `/rollback`, suite crash/reprise encore à l'état de demande |
@@ -147,10 +147,6 @@ Il faut le dire aussi, sinon le tableau ci-dessus ne vaut rien.
   Nix, avec une douzaine de canaux et autant de fournisseurs de modèles. Hermes offre
   sept backends d'exécution dont des bacs à sable distants qui hibernent. Pénélope fait
   macOS et Telegram, point.
-- **Documentation de la compression de contexte.** Hermes en fait une page unique, avec
-  ses seuils et ses budgets chiffrés. La même mécanique existe ici (seuil par modèle,
-  budget de queue verbatim, gabarit de résumé validé par schéma, repli sans modèle) mais
-  il faut la recoller depuis la référence des clés et les décisions.
 - **Scoring de mémoire.** Les six signaux de promotion d'OpenClaw sont plus riches que
   notre grille à cinq critères, même si notre chemin d'écriture est plus réversible.
   L'usage mesuré (rappels jugés utiles sur la réponse, succès) ordonne désormais le

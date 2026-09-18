@@ -329,13 +329,19 @@ fn default_of(defaults: &Value, path: &[String]) -> String {
     }
 }
 
-#[test]
-fn every_configuration_key_is_documented() {
+/// Toutes les clés de configuration : (clé, défaut rendu, rôle).
+fn config_reference() -> Vec<(String, String, String)> {
     let source = read(&root().join("crates/penelope-kernel/src/config.rs"));
     let structs = config_structs(&source);
     let defaults = serde_json::to_value(penelope_kernel::config::Config::default()).unwrap();
     let mut rows = Vec::new();
     config_rows(&structs, &defaults, "Config", Vec::new(), &mut rows);
+    rows
+}
+
+#[test]
+fn every_configuration_key_is_documented() {
+    let rows = config_reference();
     let undocumented: Vec<&String> = rows
         .iter()
         .filter(|(_, _, doc)| doc.is_empty())
@@ -371,6 +377,89 @@ fn every_configuration_key_is_documented() {
     for (key, _, _) in &rows {
         assert!(doc.contains(&format!("`{key}`")), "{key}");
     }
+}
+
+/// Nombre avec espaces de milliers : `131 072`.
+fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(' ');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// #107 : la page sur le contexte suit le code. Ses chiffres par fenêtre sont calculés
+/// par `CompactionParams`, chaque clé citée existe, et une valeur citée sous la forme
+/// `` `clé` = `valeur` `` est le défaut du code.
+#[test]
+fn the_context_page_follows_the_code() {
+    use penelope_context::compaction::{CompactionParams, reserved_output};
+    let cfg = penelope_kernel::config::Config::default();
+    let mut table = String::from(
+        "| Fenêtre | Seuil | Compaction de fond dès | Réserve de réponse | Queue verbatim | \
+         Groupe d'outils gardé entier |\n|---|---|---|---|---|---|\n",
+    );
+    for window in [8_192u64, 32_768, 131_072, 200_000, 1_000_000] {
+        let p = CompactionParams::from_config(&cfg, window, "openrouter:exemple/modele");
+        table.push_str(&format!(
+            "| {} | {} % | {} | {} | {} | {} |\n",
+            grouped(window),
+            (p.threshold * 100.0).round(),
+            grouped(p.background_threshold_tokens(p.background_margin)),
+            grouped(reserved_output(window)),
+            grouped(p.tail_budget()),
+            grouped(p.tool_group_budget()),
+        ));
+    }
+    let page = root().join("docs/context.md");
+    generated_block(&page, "fenetres", &table);
+
+    let rows = config_reference();
+    let defaults: BTreeMap<&str, &str> = rows
+        .iter()
+        .map(|(k, d, _)| (k.as_str(), d.as_str()))
+        .collect();
+    let key_re =
+        regex::Regex::new(r"`((?:context|budget|models|memory|sandbox|tools)\.[a-z_.]+)`").unwrap();
+    let value_re = regex::Regex::new(r"`([a-z_]+\.[a-z_.]+)` = (`[^`]+`)").unwrap();
+    // Un nom d'événement a la forme d'une clé : il existe s'il est émis par le daemon.
+    let mut daemon_source = String::new();
+    for e in std::fs::read_dir(root().join("crates/penelope-daemon/src"))
+        .unwrap()
+        .flatten()
+    {
+        if e.path().extension().is_some_and(|x| x == "rs") {
+            daemon_source.push_str(&read(&e.path()));
+        }
+    }
+    let raw = read(&page);
+    let mut wrong = Vec::new();
+    for line in prose(&raw) {
+        for c in key_re.captures_iter(line) {
+            let key = &c[1];
+            let known = defaults.contains_key(key)
+                || daemon_source.contains(&format!("\"{key}\""))
+                || defaults.keys().any(|k| {
+                    k.strip_suffix(".<nom>")
+                        .is_some_and(|base| key == base || key.starts_with(&format!("{base}.")))
+                });
+            if !known {
+                wrong.push(format!("clé inconnue : {key}"));
+            }
+        }
+        for c in value_re.captures_iter(line) {
+            match defaults.get(&c[1]) {
+                Some(d) if *d == &c[2] => {}
+                Some(d) => wrong.push(format!("{} = {} au lieu de {d}", &c[1], &c[2])),
+                None => wrong.push(format!("valeur d'une clé inconnue : {}", &c[1])),
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "docs/context.md :\n{}", wrong.join("\n"));
 }
 
 #[test]
