@@ -162,13 +162,15 @@ pub fn all() -> Vec<ToolSpec> {
             "Exécute une commande sous bac à sable, avec délai. Une suite de tests (cargo, go, \
              npm, pytest, make test) ou une commande en échec à longue sortie rend un résumé et \
              les échecs seulement, la sortie complète en artefact (`artifact_read`) ; \
-             `output: \"full\"` rend la sortie brute.",
+             `output: \"full\"` rend la sortie brute. Le réseau est coupé sauf `network: true` \
+             (git push/pull/clone, gh, installation de paquets, curl) : l'approbation le dit.",
             obj(
                 json!({
                     "command": {"type":"string"},
                     "cwd": {"type":"string"},
                     "timeout_ms": {"type":"integer","minimum":1000,"maximum":3600000},
-                    "output": {"type":"string","enum":["digest","full"]}
+                    "output": {"type":"string","enum":["digest","full"]},
+                    "network": {"type":"boolean"}
                 }),
                 &["command"],
             ),

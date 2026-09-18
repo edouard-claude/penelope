@@ -1126,6 +1126,18 @@ l'adresse vérifiée (#93), fichiers lus en flux (#94), secret posé sans `argv`
   (test : mêmes verdicts, compteurs à 0 ou 20, même tri). `penelope mem signals <uid>`
   (méthode `mem.signals`) lit les compteurs et le facteur. Migration 0015 : rappels et
   rappels utiles repartent de zéro, ils comptaient tout souvenir servi comme utile.
+- **Réseau du shell accordé par appel** (#106) : `sandbox.shell_network` passe à `false`
+  par défaut (une configuration qui porte `true` le garde). `shell_exec` prend
+  `network: true` : l'appel devient `external`, la raison de la carte commence par « accès
+  réseau demandé » et Telegram ajoute une alerte 🌐. « Toujours » enregistre la famille de
+  commandes **et** le réseau ; une règle sur `shell_exec` qui ne nomme pas le réseau ne le
+  donne jamais (`PolicyRule::matches`), `/policies` affiche « avec réseau ». Un échec sans
+  réseau qui y ressemble (résolution, connexion, `curl`, `git push`, `gh`, installation de
+  paquets) porte `NETWORK_OFF_NOTE` et `network: false`. Les étapes `shell` gagnent
+  `network` (schéma, aperçu « · réseau ») ; les workflows livrés le déclarent pour le
+  clone, le déploiement, la vérification et le retour arrière. `doctor` :
+  `sandbox.shell_network`. Test sous Seatbelt (CI macOS) : `nc -z` vers un port local
+  échoue sans réseau avec la note, passe avec `network: true`.
 
 ### Routine de livraison
 

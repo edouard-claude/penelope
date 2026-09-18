@@ -144,8 +144,10 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     // Un alias de conversation vers un modèle sans tool calling ne marchera pas (#54).
     checks.push(tool_calling_check(s).await);
 
-    // Bac à sable : ce qu'une commande peut lire malgré tout (#68).
+    // Bac à sable : ce qu'une commande peut lire malgré tout (#68), et où elle peut
+    // l'envoyer (#106).
     checks.push(sandbox_reads_check(s));
+    checks.push(sandbox_network_check(s).await);
 
     // Effets en attente de décision.
     let unknown = s
@@ -640,6 +642,51 @@ fn sandbox_reads_check(s: &Services) -> DoctorCheck {
             None,
         )
     }
+}
+
+/// #106 : le réseau du shell est fermé par défaut et accordé par appel ; ouvert à toutes
+/// les commandes, une lecture peut partir dans le même appel sans que la carte le dise.
+pub async fn sandbox_network_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "sandbox.shell_network";
+    const LABEL: &str = "Réseau du shell";
+    let cfg = s.config.config();
+    if cfg.sandbox.default_profile == "full" {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            "profil `full` : réseau ouvert à toute commande, sans bac à sable",
+            Some("penelope config set sandbox.default_profile workspace-write".into()),
+        );
+    }
+    if cfg.sandbox.shell_network {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            "ouvert à toutes les commandes de `shell_exec` : une commande peut envoyer ce \
+             qu'elle lit sans que la carte d'approbation le dise",
+            Some("penelope config set sandbox.shell_network false".into()),
+        );
+    }
+    let granted = s
+        .policies
+        .active_rules()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| {
+            r.tool.as_deref() == Some("shell_exec")
+                && r.arg_match.as_ref().and_then(|p| p.get("network"))
+                    == Some(&serde_json::Value::Bool(true))
+        })
+        .count();
+    DoctorCheck::ok(
+        ID,
+        LABEL,
+        format!(
+            "fermé, accordé par appel (`network: true`, approbation) ; {granted} règle(s) \
+             « Toujours » avec réseau"
+        ),
+    )
 }
 
 /// #54 : un alias de conversation qui vise un modèle sans tool calling ne marchera pas,

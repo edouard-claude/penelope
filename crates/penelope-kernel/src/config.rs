@@ -791,8 +791,10 @@ pub struct Sandbox {
     pub allow_full_for: Vec<String>,
     /// Répertoires de travail des outils de fichiers et du shell, en plus du défaut.
     pub workspaces: Vec<String>,
-    /// Réseau pour `shell_exec`. Sans lui, `gh`, `git push`, `curl` ou `npm` échouent,
-    /// et `gh auth status` croit le jeton invalide faute de pouvoir le vérifier.
+    /// Réseau pour **toutes** les commandes de `shell_exec` et des étapes `shell`. Faux :
+    /// une commande n'a le réseau que si son appel le demande (`network: true`, carte
+    /// d'approbation qui le dit, « Toujours » borné à la famille de commandes) ou si son
+    /// étape de workflow le déclare. Une configuration qui porte `true` le garde.
     pub shell_network: bool,
     /// Chemins dont la lecture est refusée aux commandes sous bac à sable, même quand le
     /// profil lit le disque : clés, jetons, base de Pénélope, secrets, configuration.
@@ -828,7 +830,7 @@ impl Default for Sandbox {
             default_profile: "workspace-write".into(),
             allow_full_for: Vec::new(),
             workspaces: Vec::new(),
-            shell_network: true,
+            shell_network: false,
             deny_read: default_deny_read(),
         }
     }
@@ -1939,6 +1941,17 @@ mod tests {
             assert!(unknown.is_empty(), "{version} : {unknown:?}");
             c.validate().unwrap_or_else(|e| panic!("{version} : {e}"));
         }
+    }
+
+    /// #106 : une instance en service garde le réseau qu'elle a écrit ; un fichier sans
+    /// la clé prend le nouveau défaut, fermé.
+    #[test]
+    fn an_explicit_shell_network_survives_the_new_default() {
+        let (old, _) = Config::parse(include_str!("../tests/fixtures/config-0.17.0.toml")).unwrap();
+        assert!(old.sandbox.shell_network, "valeur écrite par 0.17.0");
+        let (fresh, _) = Config::parse("[owner]\nname = \"Anne\"\n").unwrap();
+        assert!(!fresh.sandbox.shell_network, "défaut fermé");
+        assert!(!Config::default().sandbox.shell_network);
     }
 
     #[test]

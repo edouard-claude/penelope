@@ -208,6 +208,10 @@ pub struct Step {
     pub cwd: String,
     #[serde(rename = "successExitCodes")]
     pub success_exit_codes: Vec<i32>,
+    /// `shell` : la commande a besoin du réseau (clone, push, déploiement, dépendances).
+    /// Déclaré dans le workflow, montré dans l'aperçu validé au lancement (issue #106).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub network: bool,
 
     // --- tool ---
     pub tool: String,
@@ -261,6 +265,7 @@ impl Default for Step {
             command: Value::Null,
             cwd: String::new(),
             success_exit_codes: vec![0],
+            network: false,
             tool: String::new(),
             args: Value::Null,
             template: String::new(),
@@ -464,10 +469,11 @@ impl Workflow {
         let mut s = String::new();
         for st in &self.steps {
             s.push_str(&format!(
-                "{} [{}] ({})\n",
+                "{} [{}] ({}){}\n",
                 st.id,
                 st.kind,
-                st.phase.as_str()
+                st.phase.as_str(),
+                if st.network { " · réseau" } else { "" }
             ));
             for t in &st.transitions {
                 let cond = t

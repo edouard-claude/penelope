@@ -425,7 +425,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `sandbox.default_profile` | `"workspace-write"` | Profil du bac à sable de `shell_exec` : `read-only`, `workspace-write` ou `full`. |
 | `sandbox.allow_full_for` | `[]` | Serveurs MCP autorisés à tourner avec le profil `full` (sans bac à sable). |
 | `sandbox.workspaces` | `[]` | Répertoires de travail des outils de fichiers et du shell, en plus du défaut. |
-| `sandbox.shell_network` | `true` | Réseau pour `shell_exec`. Sans lui, `gh`, `git push`, `curl` ou `npm` échouent, et `gh auth status` croit le jeton invalide faute de pouvoir le vérifier. |
+| `sandbox.shell_network` | `false` | Réseau pour **toutes** les commandes de `shell_exec` et des étapes `shell`. Faux : une commande n'a le réseau que si son appel le demande (`network: true`, carte d'approbation qui le dit, « Toujours » borné à la famille de commandes) ou si son étape de workflow le déclare. Une configuration qui porte `true` le garde. |
 | `sandbox.deny_read` | `["~/.ssh","~/.aws","~/.gnupg","~/.config/gh","~/.netrc","~/.kube","~/.docker/config.json","{data}/penelope.db","{data}/secrets.enc","{data}/mcp.d","{config}","{state}"]` | Chemins dont la lecture est refusée aux commandes sous bac à sable, même quand le profil lit le disque : clés, jetons, base de Pénélope, secrets, configuration. `{data}`, `{config}`, `{state}` et `~` sont développés. |
 
 **[observability]**
@@ -714,8 +714,7 @@ est chargé ; sinon, une faute de frappe ne se verra qu'au premier appel.
 ### Shell et bac à sable
 
 `shell_exec` tourne sous Seatbelt : écriture limitée au workspace et au répertoire
-temporaire, réseau autorisé (`sandbox.shell_network`, vrai par défaut ; sans réseau,
-`gh auth status` croit le jeton invalide faute de pouvoir le vérifier). L'environnement
+temporaire, **réseau coupé** sauf pour l'appel qui le demande. L'environnement
 reste filtré : `PATH`, `HOME`, la langue, l'agent SSH et les emplacements de configuration,
 jamais de jeton. Sur une machine dédiée à Pénélope, le bac à sable peut être levé pour le
 shell :
@@ -738,14 +737,28 @@ ne lit pas ; son répertoire de données et ses racines restent lisibles pour lu
 `penelope doctor` signale un serveur confiné qui ne refuserait aucune lecture. Réseau
 ouvert ou non, les sockets Unix locales restent fermées aux processus confinés (socket du
 daemon, `/var/run/docker.sock`, autres services), sauf la résolution DNS et l'agent SSH
-(`SSH_AUTH_SOCK`). Pour fermer aussi le réseau du shell :
+(`SSH_AUTH_SOCK`).
+
+**Réseau accordé par appel.** Une commande qui a besoin du réseau (`git push`, `gh`,
+`npm install`, `curl`) le demande dans son appel (`"network": true`) : l'appel devient
+une action externe, et la carte d'approbation le dit en toutes lettres (« accès réseau
+demandé », 🌐 sur Telegram). « Toujours » l'accorde à la famille de commandes (`git push`
+avec réseau), jamais au shell : `curl` ou `python` redemandent, et une règle sans réseau
+(antérieure, ou sur l'outil entier) ne le donne pas. Sans réseau, un échec de résolution ou
+de connexion, ou d'une commande qui ne vit que du réseau, porte la note « Réseau coupé pour
+cette commande » : l'agent relance avec `network: true` au lieu de boucler. Une étape
+`shell` de workflow déclare `network: true` dans le workflow, et l'aperçu validé au
+lancement la marque « réseau » ; parmi les workflows livrés, le clone, le déploiement, la
+vérification et le retour arrière la déclarent, pas les tests ni le lint. `penelope
+doctor` dit si le réseau est fermé et combien de règles l'accordent. Pour le rouvrir à
+toutes les commandes, comme avant 0.17.2 :
 
 ```bash
-penelope config set sandbox.shell_network false
+penelope config set sandbox.shell_network true
 ```
 
-`gh`, `git push`, `curl` et `npm` cessent alors de fonctionner depuis `shell_exec` :
-c'est un choix, pas un défaut. Un « Toujours » est **borné à l'appel qu'il autorise**, jamais à l'outil entier :
+Une configuration qui porte déjà `shell_network = true` (écrite par une version
+antérieure) le garde à la mise à jour ; sans la clé, le réseau est fermé. Un « Toujours » est **borné à l'appel qu'il autorise**, jamais à l'outil entier :
 pour `shell_exec`, à la famille de commandes (`cargo test …`, `git log …`) ; pour `fs_write`
 et `fs_edit`, au répertoire du fichier ; pour `git_push`, au couple remote et branche ; pour
 `http_fetch`, à l'hôte ; pour `config_set`, à la clé. Une autre commande, un autre

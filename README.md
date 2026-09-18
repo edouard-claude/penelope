@@ -155,9 +155,10 @@ Il faut le dire aussi, sinon le tableau ci-dessus ne vaut rien.
   notre grille à cinq critères, même si notre chemin d'écriture est plus réversible.
   L'usage mesuré (rappels jugés utiles sur la réponse, succès) ordonne désormais le
   rappel, borné, et sert de preuve à la grille ; il ne promeut encore rien seul.
-- **Bac à sable par défaut.** Codex CLI coupe le réseau par défaut dans son bac à sable.
-  Chez nous, le réseau du shell est ouvert par défaut : c'est un choix documenté et
-  réversible, pas une victoire.
+- **Bac à sable par défaut.** Comme Codex CLI, le shell n'a plus le réseau par défaut :
+  une commande le demande, la carte d'approbation le dit, et « Toujours » l'accorde à une
+  famille de commandes. Codex coupe aussi ses autres outils ; nos appels MCP et
+  `http_fetch` passent par leurs propres garde-fous, pas par le bac à sable.
 - **Maturité.** Ces projets encaissent des millions d'heures d'usage et publient leurs
   vulnérabilités. Pénélope a une instance en service et des trous de sécurité ouverts
   dans ses issues.

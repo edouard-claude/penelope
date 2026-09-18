@@ -362,10 +362,12 @@ impl NativeToolExecutor {
                     .map(|ms| std::time::Duration::from_millis(ms as u64))
                     .unwrap_or(default_timeout)
                     .min(std::time::Duration::from_secs(1800));
+                // Réseau accordé par appel (#106) : la carte d'approbation l'a dit.
+                let network = cfg.sandbox.shell_network || b_arg(args, "network").unwrap_or(false);
                 let profile = penelope_tools::shell::profile_with_denied_reads(
                     &cfg.sandbox.default_profile,
                     &cwd,
-                    cfg.sandbox.shell_network,
+                    network,
                     &denied_reads(s),
                 );
                 let shell = shell_override(&cfg.tools.shell);
@@ -382,7 +384,20 @@ impl NativeToolExecutor {
                     },
                 )
                 .await?;
-                let mut o = ToolOutcome::ok(out.to_json());
+                let offline = !network
+                    && cfg.sandbox.default_profile != "full"
+                    && penelope_tools::shell::looks_like_network_failure(
+                        &command,
+                        out.exit_code,
+                        &out.stdout,
+                        &out.stderr,
+                    );
+                let mut value = out.to_json();
+                if offline {
+                    value["network"] = json!(false);
+                    value["note"] = json!(penelope_tools::shell::NETWORK_OFF_NOTE);
+                }
+                let mut o = ToolOutcome::ok(value);
                 // Suites de tests et longues sorties en échec : résumé et échecs pour le
                 // modèle, sortie complète en artefact (issue #32).
                 let full = args.get("output").and_then(|v| v.as_str()) == Some("full");
@@ -425,6 +440,10 @@ impl NativeToolExecutor {
                         "Code de sortie {}.\n--- stdout ---\n{}\n--- stderr ---\n{}",
                         out.exit_code, out.stdout, out.stderr
                     );
+                    if offline {
+                        o.text =
+                            format!("{}\n\n{}", penelope_tools::shell::NETWORK_OFF_NOTE, o.text);
+                    }
                 }
                 return Ok(o.eager());
             }
@@ -1412,6 +1431,7 @@ impl ToolExecutor for NativeToolExecutor {
     }
 
     async fn describe_call(&self, name: &str, args: &Value) -> CallInfo {
+        let shell_network = self.services.config.config().sandbox.shell_network;
         let s = &self.services;
         let mcp_info = |q: String| async move {
             let risk = match s.mcp_tools.get(&q).await {
@@ -1449,19 +1469,32 @@ impl ToolExecutor for NativeToolExecutor {
                 // même carte qu'un appel direct (#104).
                 if penelope_tools::tool_spec(&q).is_some() {
                     let inner = args.get("args").cloned().unwrap_or(json!({}));
-                    return native_info(&q, &inner);
+                    return native_info(&q, &inner, shell_network);
                 }
                 mcp_info(q).await
             }
             n if n.starts_with("mcp__") => mcp_info(n.to_string()).await,
-            _ => native_info(name, args),
+            _ => native_info(name, args, shell_network),
         }
     }
 }
 
-/// Risque et nom effectif d'un appel d'outil natif.
-fn native_info(name: &str, args: &Value) -> CallInfo {
+/// Vrai quand un appel `shell_exec` demande le réseau (issue #106).
+pub(crate) fn wants_network(tool: &str, args: &Value) -> bool {
+    tool == "shell_exec" && args.get("network").and_then(|v| v.as_bool()) == Some(true)
+}
+
+/// Risque et nom effectif d'un appel d'outil natif. `shell_network` : le réseau est
+/// ouvert à toutes les commandes par la configuration.
+fn native_info(name: &str, args: &Value, shell_network: bool) -> CallInfo {
     match name {
+        // Réseau demandé pour une commande : une action externe, approuvée comme telle.
+        "shell_exec" if wants_network(name, args) && !shell_network => CallInfo {
+            effective_name: name.to_string(),
+            risk: RiskClass::External,
+            idempotent: false,
+            policy: None,
+        },
         "config_set" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
             CallInfo {
@@ -2156,6 +2189,62 @@ mod tests {
             crate::tools_on_demand::exposed_for_turn(&x.services, "s1").await,
             vec!["schedule_create".to_string()]
         );
+    }
+
+    /// #106 : une commande qui demande le réseau est une action externe, approuvée comme
+    /// telle ; réseau déjà ouvert par la configuration, elle reste une écriture.
+    #[tokio::test]
+    async fn a_command_asking_for_network_is_an_external_action() {
+        let (_dir, x) = executor().await;
+        let plain = x
+            .describe_call("shell_exec", &json!({"command": "git push"}))
+            .await;
+        assert_eq!(plain.risk, RiskClass::Write);
+        let net = json!({"command": "git push", "network": true});
+        assert_eq!(
+            x.describe_call("shell_exec", &net).await.risk,
+            RiskClass::External
+        );
+        assert_eq!(
+            x.describe_call("tool_call", &json!({"name": "shell_exec", "args": net}))
+                .await
+                .risk,
+            RiskClass::External
+        );
+        x.services
+            .config
+            .mutate("test", |c| {
+                c.sandbox.shell_network = true;
+                Ok(vec!["sandbox.shell_network".into()])
+            })
+            .unwrap();
+        assert_eq!(
+            x.describe_call("shell_exec", &net).await.risk,
+            RiskClass::Write
+        );
+    }
+
+    /// #106 : sous Seatbelt, une commande sans réseau ne joint même pas une adresse locale,
+    /// et l'échec le dit ; la même commande avec `network: true` passe.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn shell_network_is_granted_per_call_under_the_sandbox() {
+        let (_dir, x) = executor().await;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let command = format!("nc -z 127.0.0.1 {port}");
+        let closed = x
+            .execute("shell_exec", &json!({"command": command}))
+            .await
+            .unwrap();
+        assert_ne!(closed.value["exitCode"], 0, "{}", closed.text);
+        assert!(closed.text.contains("Réseau coupé"), "{}", closed.text);
+        assert_eq!(closed.value["network"], false);
+        let open = x
+            .execute("shell_exec", &json!({"command": command, "network": true}))
+            .await
+            .unwrap();
+        assert_eq!(open.value["exitCode"], 0, "{}", open.text);
     }
 
     /// #104 : la liste d'un tour de conversation tient sous 20 définitions, méta-outils

@@ -87,6 +87,15 @@ impl PolicyRule {
         {
             return false;
         }
+        // Le réseau d'une commande ne s'accorde jamais implicitement (issue #106) : une
+        // règle sur `shell_exec` qui ne le nomme pas (antérieure, ou sur l'outil entier)
+        // ne couvre pas un appel qui le demande.
+        if self.tool.as_deref() == Some("shell_exec")
+            && args.get("network") == Some(&Value::Bool(true))
+            && self.arg_match.as_ref().and_then(|p| p.get("network")) != Some(&Value::Bool(true))
+        {
+            return false;
+        }
         true
     }
 
@@ -213,6 +222,7 @@ pub fn describe_pattern(pattern: &Value) -> String {
             Some((op, val)) if op == ORIGIN_OP => {
                 format!("{k} sur « {} »", val.as_str().unwrap_or_default())
             }
+            _ if k == "network" && v == &Value::Bool(true) => "avec réseau".to_string(),
             _ => format!(
                 "{k} = {}",
                 v.as_str().map(String::from).unwrap_or(v.to_string())

@@ -1478,10 +1478,11 @@ async fn shell_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         }
         Planned::Fresh(id) => {
             s.effects.dispatching(&id).await?;
+            // Réseau déclaré par l'étape, visible dans l'aperçu validé au lancement (#106).
             let profile = penelope_tools::shell::profile_with_denied_reads(
                 &cfg.sandbox.default_profile,
                 &cwd,
-                cfg.sandbox.shell_network,
+                cfg.sandbox.shell_network || step.network,
                 &crate::executor::denied_reads(s),
             );
             let _ = std::fs::create_dir_all(&cwd);
@@ -1513,13 +1514,30 @@ async fn shell_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     };
     let code = value["exitCode"].as_i64().unwrap_or(-1) as i32;
     let ok = step.success_exit_codes.contains(&code);
+    let mut out = json!({"stdout": value["stdout"], "stderr": value["stderr"], "exitCode": code});
+    // Réseau coupé : l'échec le dit, au lieu d'être relancé à l'identique (#106).
+    if !ok
+        && !(cfg.sandbox.shell_network || step.network)
+        && cfg.sandbox.default_profile != "full"
+        && penelope_tools::shell::looks_like_network_failure(
+            &command,
+            code,
+            value["stdout"].as_str().unwrap_or_default(),
+            value["stderr"].as_str().unwrap_or_default(),
+        )
+    {
+        out["note"] = json!(
+            "Réseau coupé pour cette étape par le bac à sable : elle ne déclare pas \
+             `network: true` (sandbox.shell_network est fermé)."
+        );
+    }
     Ok(done(
         if ok {
             StepResult::Success
         } else {
             StepResult::Failure
         },
-        json!({"stdout": value["stdout"], "stderr": value["stderr"], "exitCode": code}),
+        out,
     ))
 }
 

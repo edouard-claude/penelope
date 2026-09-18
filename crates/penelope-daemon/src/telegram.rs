@@ -3208,6 +3208,17 @@ impl TelegramGateway {
         } else {
             String::new()
         };
+        // Réseau demandé par une commande (#106) : « Toujours » le donne à cette famille
+        // de commandes seulement.
+        if crate::executor::wants_network(&a.subject, &a.payload["arguments"]) {
+            if !alerte.is_empty() {
+                alerte.push('\n');
+            }
+            alerte.push_str(
+                "🌐 Cette commande demande le réseau : elle pourra envoyer ce qu'elle lit. \
+                 « Toujours » l'accorde à cette famille de commandes seulement.",
+            );
+        }
         // Outil MCP dont la description porte une consigne : le propriétaire le voit avant
         // d'accepter (#92).
         if let Some(t) = s.mcp_tools.get(&a.subject).await.ok().flatten() {

@@ -193,6 +193,7 @@ pub fn deploy_generic() -> Workflow {
                     Transition::on_result("verifier", "success"),
                     Transition::always("rollback"),
                 ],
+                network: true,
                 ..step("deployer", "shell", Phase::Deploy)
             },
             Step {
@@ -205,6 +206,7 @@ pub fn deploy_generic() -> Workflow {
                     Transition::on_result(DONE, "success"),
                     Transition::always("rollback"),
                 ],
+                network: true,
                 ..step("verifier", "shell", Phase::Verification)
             },
             Step {
@@ -214,6 +216,7 @@ pub fn deploy_generic() -> Workflow {
                 }),
                 cwd: "{{repo}}".into(),
                 transitions: vec![Transition::always(BLOCKED)],
+                network: true,
                 ..step("rollback", "shell", Phase::Deploy)
             },
         ],
@@ -359,6 +362,7 @@ pub fn ticket_to_deploy() -> Workflow {
                     Transition::on_result("analyze", "success"),
                     Transition::always(BLOCKED),
                 ],
+                network: true,
                 ..step("checkout", "shell", Phase::Plan)
             },
             // 4
@@ -669,6 +673,29 @@ mod tests {
         assert!(w.step("rollback").is_some());
         let deploy = w.step("deployer").unwrap();
         assert_eq!(deploy.transitions.last().unwrap().goto, "rollback");
+    }
+
+    /// #106 : le réseau n'est déclaré que là où la commande en vit (clone, déploiement,
+    /// vérification et retour arrière d'un environnement), et l'aperçu le montre ; tests
+    /// et lint exécutent le code du dépôt sans réseau.
+    #[test]
+    fn network_is_declared_only_where_the_command_lives_on_it() {
+        let deploy = deploy_generic();
+        for id in ["deployer", "verifier", "rollback"] {
+            assert!(deploy.step(id).unwrap().network, "{id}");
+        }
+        assert!(deploy.render_graph().contains("deployer [shell] (deploy) · réseau"));
+        let ticket = ticket_to_deploy();
+        assert!(ticket.step("checkout").unwrap().network);
+        let mut offline = Vec::new();
+        for w in all() {
+            for s in w.steps.iter().chain(w.steps.iter().flat_map(|s| s.children.iter())) {
+                if s.kind == "shell" && !s.network {
+                    offline.push(s.id.as_str().to_string());
+                }
+            }
+        }
+        assert!(offline.iter().all(|id| id == "tests" || id == "lint"), "{offline:?}");
     }
 
     #[test]

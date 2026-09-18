@@ -90,9 +90,13 @@ jobs:
           cargo test -p penelope-platform
           cargo test -p penelope-platform --lib seatbelt -- --ignored
 
-      # Un vrai serveur MCP stdio sous le profil `mcp-stdio`.
-      - name: MCP sous bac à sable
-        run: cargo test -p penelope-daemon --lib a_real_stdio_server_runs_under_the_sandbox
+      # Un vrai serveur MCP stdio sous le profil `mcp-stdio`, et le réseau du shell
+      # accordé par appel (#106).
+      - name: Daemon sous bac à sable
+        run: >-
+          cargo test -p penelope-daemon --lib --
+          a_real_stdio_server_runs_under_the_sandbox
+          shell_network_is_granted_per_call_under_the_sandbox
 
       # Relais de mise à jour contre le vrai launchd (issue #36) : un faux daemon sous
       # LaunchAgent charge le relais depuis son propre job, le service doit repartir sans

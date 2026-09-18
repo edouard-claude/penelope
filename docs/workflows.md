@@ -114,7 +114,7 @@ par identifiant.
 |---|---|---|
 | `agent` | `prompt` (obligatoire), `nudgePrompt`, `model`, `tools`, `agentId` | Un tour d'agent dans la session du run |
 | `sub_agent` | `prompt` (obligatoire), `outputSchema`, `subAgentType` | Un sous-agent isolé qui rend une sortie structurée |
-| `shell` | `command` (obligatoire), `cwd`, `successExitCodes` | Une commande, sous bac à sable |
+| `shell` | `command` (obligatoire), `cwd`, `successExitCodes`, `network` | Une commande, sous bac à sable ; réseau coupé sauf `network: true` (montré dans l'aperçu) ou `sandbox.shell_network` |
 | `tool` | `tool` (obligatoire), `args` | Un outil natif ou MCP, arguments validés contre son schéma |
 | `user` | `template` (obligatoire), `choices` (non vide), `input` | Une question au propriétaire sur Telegram |
 | `parallel` | `children` (non vide), `maxConcurrency` | Plusieurs enfants en parallèle |

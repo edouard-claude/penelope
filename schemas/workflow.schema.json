@@ -258,6 +258,11 @@
           "items": { "type": "integer" },
           "default": [0]
         },
+        "network": {
+          "type": "boolean",
+          "default": false,
+          "description": "`shell` : la commande a besoin du réseau (clone, push, déploiement, dépendances). Sans lui, le bac à sable coupe les connexions sortantes, sauf `sandbox.shell_network = true`."
+        },
 
         "tool": { "type": "string", "description": "`tool` : outil natif ou `mcp__<serveur>__<outil>`." },
         "args": { "description": "`tool` : arguments, validés contre le schéma de l'outil." },

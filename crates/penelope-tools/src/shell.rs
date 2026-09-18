@@ -61,6 +61,66 @@ impl ShellOutput {
     }
 }
 
+/// Note ajoutée à l'échec d'une commande lancée sans réseau quand elle en avait
+/// vraisemblablement besoin (issue #106) : l'agent sait quoi changer au lieu de relancer
+/// la même commande.
+pub const NETWORK_OFF_NOTE: &str = "Réseau coupé pour cette commande par le bac à sable : \
+elle n'a pas demandé `network: true` (sandbox.shell_network est fermé). Si elle a besoin du \
+réseau, relance-la avec \"network\": true ; le propriétaire approuvera l'accès.";
+
+/// Un échec qui ressemble à un réseau coupé : message de résolution ou de connexion, ou
+/// commande qui ne vit que du réseau (`curl`, `git push`, `gh`, installation de paquets).
+pub fn looks_like_network_failure(
+    command: &str,
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+) -> bool {
+    if exit_code == 0 {
+        return false;
+    }
+    const SIGNS: &[&str] = &[
+        "could not resolve",
+        "couldn't resolve",
+        "couldn't connect",
+        "failed to connect",
+        "could not connect",
+        "name or service not known",
+        "nodename nor servname",
+        "temporary failure in name resolution",
+        "network is unreachable",
+        "no route to host",
+        "getaddrinfo",
+        "enotfound",
+        "eai_again",
+        "econnrefused",
+        "dns error",
+        "error sending request",
+        "operation not permitted (os error 1)",
+        "connect: operation not permitted",
+        "unable to access 'http",
+        "could not read from remote repository",
+    ];
+    let text = format!("{stdout}\n{stderr}").to_lowercase();
+    if SIGNS.iter().any(|s| text.contains(s)) {
+        return true;
+    }
+    let words: Vec<&str> = command.split_whitespace().collect();
+    matches!(
+        words.as_slice(),
+        [
+            "curl" | "wget" | "nc" | "ssh" | "scp" | "rsync" | "gh" | "ping",
+            ..
+        ] | ["git", "push" | "pull" | "fetch" | "clone" | "ls-remote", ..]
+            | [
+                "npm" | "pnpm" | "yarn" | "pip" | "pip3" | "brew",
+                "install" | "add" | "i" | "update",
+                ..
+            ]
+            | ["cargo", "install" | "fetch" | "update" | "publish", ..]
+    )
+}
+
 /// Variables héritées en plus par le shell du propriétaire : emplacements de
 /// configuration et agent SSH, pour que `gh`, `git` ou `ssh` retrouvent ceux du terminal.
 /// Jamais de jeton (`GH_TOKEN`, `GITHUB_TOKEN`…) : un `env` le montrerait au modèle.
@@ -404,6 +464,54 @@ mod tests {
         .unwrap();
         assert_eq!(allowed.exit_code, 0, "{allowed:?}");
         assert!(allowed.stdout.contains("dans le workspace"), "{allowed:?}");
+    }
+
+    /// #106 : un échec de résolution ou de connexion, ou une commande qui ne vit que du
+    /// réseau, se reconnaît ; un échec ordinaire non.
+    #[test]
+    fn a_network_failure_is_told_apart_from_a_command_failure() {
+        assert!(looks_like_network_failure(
+            "curl -sS https://example.com",
+            6,
+            "",
+            "curl: (6) Could not resolve host: example.com"
+        ));
+        assert!(looks_like_network_failure(
+            "git ls-remote origin",
+            128,
+            "",
+            "fatal : impossible d'accéder à 'https://github.com/x/y/' : Could not resolve host: github.com"
+        ));
+        assert!(looks_like_network_failure(
+            "nc -z 127.0.0.1 8080",
+            1,
+            "",
+            ""
+        ));
+        assert!(looks_like_network_failure(
+            "git push origin main",
+            1,
+            "",
+            ""
+        ));
+        assert!(!looks_like_network_failure(
+            "cargo test",
+            101,
+            "test result: FAILED",
+            ""
+        ));
+        assert!(!looks_like_network_failure(
+            "ls /nope",
+            1,
+            "",
+            "No such file or directory"
+        ));
+        assert!(!looks_like_network_failure(
+            "curl https://example.com",
+            0,
+            "ok",
+            ""
+        ));
     }
 
     /// #65 : au dépassement du délai, la commande et son groupe sont terminés : rien ne
