@@ -715,6 +715,79 @@ mod tests {
         assert_eq!(i.signals_of("vu").await.unwrap().seen, 10);
     }
 
+    /// #87 : mille passages de documents ingérés, plus proches de la question que le
+    /// souvenir, ne le chassent plus du rappel automatique ; leurs vecteurs ne sont même
+    /// pas décodés. Le même souvenir en épisodique n'est pas injecté, `mem_search`
+    /// explicite le trouve.
+    #[tokio::test]
+    async fn ingested_passages_do_not_evict_memories_from_recall() {
+        let i = index();
+        for n in 0..1000 {
+            let uid = format!("p{n:04}");
+            let mut e = simple_entry(
+                &uid,
+                &format!("Le code du portail de la résidence, le portail, son code : section {n}."),
+                Level::Cure,
+                "2026-01-01",
+            );
+            e.etype = crate::ingest::SOURCE_ETYPE.into();
+            e.file = format!("sources/reglement-{}.md", n / 100);
+            i.upsert(&e, &prov()).await.unwrap();
+            i.put_embedding(&uid, "m", &[1.0, 0.01 * (n % 10) as f32, 0.0])
+                .await
+                .unwrap();
+        }
+        let mut souvenir = simple_entry(
+            "souvenir",
+            "Pour entrer chez Paul, taper le code du portail : 4812.",
+            Level::Cure,
+            "2025-12-20",
+        );
+        souvenir.file = "notes.md".into();
+        i.upsert(&souvenir, &prov()).await.unwrap();
+        i.put_embedding("souvenir", "m", &[0.6, 0.8, 0.0])
+            .await
+            .unwrap();
+        let mut journal = simple_entry(
+            "journal",
+            "Paul a redonné le code du portail de sa résidence.",
+            Level::Episodic,
+            "2025-12-21",
+        );
+        journal.file = "journal/2025-12-21.md".into();
+        i.upsert(&journal, &prov()).await.unwrap();
+        i.put_embedding("journal", "m", &[0.6, 0.8, 0.0])
+            .await
+            .unwrap();
+
+        let before = i.vectors_decoded();
+        let params = RecallParams {
+            timeout_ms: 5_000,
+            ..RecallParams::default()
+        };
+        let r = Recall::new(&i, params)
+            .path1(
+                "quel est le code du portail de la résidence ?",
+                &CurrentContext::default(),
+                Some(vec![1.0, 0.0, 0.0]),
+                &[],
+            )
+            .await;
+        let injected: Vec<&str> = r.triggered.iter().map(|t| t.entry.uid.as_str()).collect();
+        assert_eq!(injected, vec!["souvenir"]);
+        assert_eq!(
+            i.vectors_decoded() - before,
+            1,
+            "ni passage ni épisodique décodé pour le rappel automatique"
+        );
+
+        let explicit = i
+            .search("code portail Paul", None, &SearchFilter::explicit(), &[])
+            .await
+            .unwrap();
+        assert!(explicit.iter().any(|h| h.entry.uid == "journal"));
+    }
+
     #[tokio::test]
     async fn path1_never_injects_episodic_or_low_score() {
         let i = index();

@@ -984,6 +984,12 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   memory.half_life_days 180`. Le retrait n'est proposé qu'aux entrées apparues au
   moins dix fois dans les résultats sans être retenues (`mem_signals.seen`, migration
   `0013_memory_seen`).
+- **Filtrer avant de couper** (#87) : niveau, type, projet, slug, épisodique, passages de
+  documents (`source`) et parties de pratiques entrent dans les deux requêtes de
+  `MemoryIndex::search` ; la coupe aux 200 premiers porte sur des candidats admissibles et
+  les vecteurs écartés ne sont plus décodés. Mille passages ingérés plus proches de la
+  question ne chassent plus un souvenir de `notes.md` du rappel automatique ; `mem_search`
+  explicite garde sa portée. La décision 0002 dit enfin ce que fait le code.
 
 ### Routine de livraison
 

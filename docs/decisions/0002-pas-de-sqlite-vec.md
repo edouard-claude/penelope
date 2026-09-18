@@ -23,8 +23,11 @@ Rust qui calcule la similarité cosinus sur tous les vecteurs candidats.
 - **Robustesse au changement de modèle.** Le calcul rend 0.0 quand les dimensions
   diffèrent, ce qui arrive pendant une ré-indexation avec un nouveau modèle d'embedding.
   C'est une décision métier, pas un détail que l'on veut caché dans une extension.
-- **Filtrage d'abord.** Le rappel filtre par portée, niveau et fraîcheur avant de comparer
-  les vecteurs : le nombre réel de comparaisons est très inférieur au total.
+- **Filtrage d'abord.** Le rappel filtre par portée, niveau, type et source dans la
+  requête SQL, avant de comparer les vecteurs et avant la coupe aux 200 meilleurs de chaque
+  liste : le nombre réel de comparaisons est très inférieur au total, et les passages de
+  documents ingérés ne sont même pas décodés pour le rappel automatique. Vérifié par le
+  test `ingested_passages_do_not_evict_memories_from_recall` (issue #87).
 
 ## Conséquences
 
