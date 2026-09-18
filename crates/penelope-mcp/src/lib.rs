@@ -65,6 +65,7 @@ mod tests {
             errors: 0,
             running: true,
             lazy: true,
+            keychain: false,
         };
         let line = server_summary_line(&s);
         assert!(line.contains("redmine"));

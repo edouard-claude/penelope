@@ -722,6 +722,7 @@ fn render_mcp_list(v: &Value) -> String {
                     "état": s["state"],
                     "outils": s["tools"],
                     "actif": if s["running"].as_bool().unwrap_or(false) { "oui" } else { "non" },
+                    "trousseau": keychain_cell(s),
                     "appels": s["calls"],
                     "erreur": s["last_error"].as_str().unwrap_or(""),
                 })
@@ -737,6 +738,16 @@ fn render_mcp_list(v: &Value) -> String {
         ));
     }
     out
+}
+
+/// Colonne « trousseau » de `penelope mcp list` : un serveur distant n'a pas de processus
+/// local, donc rien à dire (issue #122).
+fn keychain_cell(s: &Value) -> &'static str {
+    match (s["transport"].as_str(), s["keychain"].as_bool()) {
+        (Some("stdio"), Some(true)) => "ouvert",
+        (Some("stdio"), _) => "fermé",
+        _ => "",
+    }
 }
 
 /// `penelope model list` : alias, routage en vigueur, puis recherche au catalogue.
@@ -2394,6 +2405,22 @@ mod tests {
         };
         let e = set_secret(&cli, name).unwrap_err();
         assert!(e.to_string().contains("nom de secret invalide"), "{e}");
+    }
+
+    /// #122 : `penelope mcp list` dit quels serveurs joignent le trousseau.
+    #[test]
+    fn mcp_list_says_which_servers_reach_the_keychain() {
+        let v = json!({"servers": [
+            {"name": "mailbridge", "state": "ready", "transport": "stdio", "keychain": true},
+            {"name": "notes", "state": "ready", "transport": "stdio", "keychain": false},
+            {"name": "forge", "state": "ready", "transport": "http", "keychain": false},
+        ]});
+        let out = render_mcp_list(&v);
+        assert!(out.contains("trousseau"), "{out}");
+        let line = |name: &str| out.lines().find(|l| l.contains(name)).unwrap().to_string();
+        assert!(line("mailbridge").contains("ouvert"), "{out}");
+        assert!(line("notes").contains("fermé"), "{out}");
+        assert!(!line("forge").contains("ouvert") && !line("forge").contains("fermé"));
     }
 
     #[test]

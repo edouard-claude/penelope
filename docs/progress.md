@@ -1340,6 +1340,24 @@ longtemps que le tour, dans le bon sujet (#121).
   sont jetables (hors file durable, erreurs ignorées). Le brouillon privé montre l'outil
   et son argument principal (commande, chemin, requête).
 
+### 0.17.10
+
+Un serveur MCP qui lit ses propres identifiants garde son bac à sable et retrouve le
+trousseau, et un trousseau fermé ne se fait plus passer pour un secret absent (#122).
+
+- **Le trousseau, par serveur, sans tout rouvrir** (#122) : depuis #89, `mailbridge` ne
+  lisait plus ses mots de passe, et le trousseau fermé répondait « introuvable » (`secret
+  not found in keyring`), ce qui envoyait vérifier une configuration juste.
+  `sandbox.allow_keychain_for` ouvre le trousseau (`mach-lookup` sur
+  `com.apple.SecurityServer`) aux seuls serveurs stdio nommés ; lectures refusées,
+  écritures et sockets restent celles du profil, `allow_full_for` n'est pas nécessaire.
+  Le réglage prend effet au prochain appel : un serveur lancé repart sous le profil en
+  vigueur. `penelope mcp list` (colonne « trousseau »), `mcp show` (`keychain`) et
+  `doctor` disent quels serveurs le joignent. Un serveur confiné qui échoue en parlant du
+  trousseau voit son erreur suivie du bac à sable et du réglage, ou de la voie par
+  l'environnement (`${SECRET:nom}` dans `env`). `docs/mcp.md` gagne une section « Bac à
+  sable ».
+
 ### Routine de livraison
 
 Avant chaque tag :

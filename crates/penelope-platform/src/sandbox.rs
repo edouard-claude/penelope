@@ -53,6 +53,10 @@ pub struct Profile {
     pub deny_read: Vec<PathBuf>,
     /// Dérogation explicite : le profil n'est pas appliqué, mais l'audit le sait.
     pub waived: bool,
+    /// Trousseau ouvert malgré le profil : un serveur MCP dont le métier est de lire ses
+    /// propres identifiants, déclaré dans `sandbox.allow_keychain_for` (issue #122). Le
+    /// reste du profil ne change pas.
+    pub allow_keychain: bool,
 }
 
 impl Profile {
@@ -64,6 +68,7 @@ impl Profile {
             allow_network: false,
             deny_read: Vec::new(),
             waived: false,
+            allow_keychain: false,
         }
     }
 
@@ -75,6 +80,7 @@ impl Profile {
             allow_network: false,
             deny_read: Vec::new(),
             waived: false,
+            allow_keychain: false,
         }
     }
 
@@ -86,6 +92,7 @@ impl Profile {
             allow_network: true,
             deny_read: Vec::new(),
             waived: false,
+            allow_keychain: false,
         }
     }
 
@@ -97,6 +104,7 @@ impl Profile {
             allow_network: true,
             deny_read: Vec::new(),
             waived: false,
+            allow_keychain: false,
         }
     }
 
@@ -108,6 +116,17 @@ impl Profile {
     pub fn waive(mut self) -> Self {
         self.waived = true;
         self
+    }
+
+    pub fn with_keychain(mut self, yes: bool) -> Self {
+        self.allow_keychain = yes;
+        self
+    }
+
+    /// Vrai si le processus confiné ne joint pas le trousseau : il y verra « introuvable »
+    /// ce qui y est pourtant rangé (issue #122).
+    pub fn closes_keychain(&self) -> bool {
+        self.enforced() && !self.allow_keychain
     }
 
     /// Vrai si ce profil doit être imposé par le backend.
@@ -216,8 +235,9 @@ pub fn seatbelt_profile(p: &Profile) -> String {
         s.push_str(&format!("(deny file-read* (subpath \"{}\"))\n", esc(&d)));
     }
     // Le trousseau est fermé à tout profil imposé, même sans lecture refusée : une
-    // configuration `deny_read = []` ne doit pas le rouvrir (issue #89).
-    if p.kind != ProfileKind::Full {
+    // configuration `deny_read = []` ne doit pas le rouvrir (issue #89). Seule une
+    // déclaration explicite du propriétaire l'ouvre, et rien d'autre (issue #122).
+    if p.kind != ProfileKind::Full && !p.allow_keychain {
         s.push_str("(deny mach-lookup (global-name \"com.apple.SecurityServer\"))\n");
     }
 
@@ -326,6 +346,24 @@ mod tests {
                 p.kind
             );
         }
+    }
+
+    /// #122 : le trousseau s'ouvre au seul profil qui le déclare, et le reste du profil
+    /// ne bouge pas : mêmes lectures refusées, mêmes écritures, mêmes sockets.
+    #[test]
+    fn the_keychain_opens_only_for_a_profile_that_declares_it() {
+        let deny = "(deny mach-lookup (global-name \"com.apple.SecurityServer\"))";
+        let mut closed = Profile::mcp_stdio("/tmp/data", Vec::new());
+        closed.deny_read = vec![PathBuf::from("/Users/essai/.ssh")];
+        let open = closed.clone().with_keychain(true);
+        let (closed_sbpl, open_sbpl) = (seatbelt_profile(&closed), seatbelt_profile(&open));
+        assert!(closed_sbpl.contains(deny), "{closed_sbpl}");
+        assert!(!open_sbpl.contains("SecurityServer"), "{open_sbpl}");
+        assert_eq!(closed_sbpl.replace(&format!("{deny}\n"), ""), open_sbpl);
+        assert!(closed.closes_keychain());
+        assert!(!open.closes_keychain());
+        assert!(open.enforced(), "le profil reste imposé");
+        assert!(!Profile::full().closes_keychain());
     }
 
     /// #68 : le profil refuse la lecture des clés et des secrets **après** avoir autorisé

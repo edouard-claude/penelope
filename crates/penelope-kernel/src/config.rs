@@ -798,6 +798,10 @@ pub struct Sandbox {
     pub default_profile: String,
     /// Serveurs MCP autorisés à tourner avec le profil `full` (sans bac à sable).
     pub allow_full_for: Vec<String>,
+    /// Serveurs MCP stdio qui gardent leur bac à sable mais joignent le trousseau macOS :
+    /// ceux dont le métier est de lire leurs propres identifiants. Le trousseau reste fermé
+    /// aux autres, qui y verraient « introuvable » ce qui y est rangé.
+    pub allow_keychain_for: Vec<String>,
     /// Répertoires de travail des outils de fichiers et du shell, en plus du défaut.
     pub workspaces: Vec<String>,
     /// Réseau pour **toutes** les commandes de `shell_exec` et des étapes `shell`. Faux :
@@ -838,6 +842,7 @@ impl Default for Sandbox {
         Sandbox {
             default_profile: "workspace-write".into(),
             allow_full_for: Vec::new(),
+            allow_keychain_for: Vec::new(),
             workspaces: Vec::new(),
             shell_network: false,
             deny_read: default_deny_read(),

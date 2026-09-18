@@ -664,6 +664,47 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&allowed.stdout), "lisible");
     }
 
+    /// #122, sur la machine : sous un profil qui ferme le trousseau, même un certificat
+    /// public du système est « introuvable » (c'est ce qui trompait le propriétaire) ; le
+    /// même profil déclaré avec le trousseau le trouve. Seul le trousseau des racines du
+    /// système est lu, jamais celui de l'utilisateur. Lancé à la main.
+    #[test]
+    #[ignore]
+    fn seatbelt_opens_the_keychain_only_when_declared_on_this_mac() {
+        let dir = tempfile::tempdir().unwrap();
+        let find = |profile: &Profile| {
+            let w = sandbox_wrapper(
+                profile,
+                Path::new("/usr/bin/security"),
+                &[
+                    "find-certificate".into(),
+                    "-c".into(),
+                    "Apple Root CA".into(),
+                    "/System/Library/Keychains/SystemRootCertificates.keychain".into(),
+                ],
+            )
+            .unwrap();
+            std::process::Command::new(&w.program)
+                .args(&w.args)
+                .output()
+                .unwrap()
+        };
+        let closed = Profile::mcp_stdio(dir.path().join("data"), Vec::new());
+        let refused = find(&closed);
+        assert!(!refused.status.success());
+        assert!(
+            String::from_utf8_lossy(&refused.stderr).contains("could not be found"),
+            "{}",
+            String::from_utf8_lossy(&refused.stderr)
+        );
+        let found = find(&closed.clone().with_keychain(true));
+        assert!(
+            found.status.success(),
+            "{}",
+            String::from_utf8_lossy(&found.stderr)
+        );
+    }
+
     /// #91, sur la machine : sous `mcp-stdio` (réseau ouvert), une socket Unix locale
     /// n'est pas joignable ; la résolution de nom l'est. Lancé à la main.
     #[test]

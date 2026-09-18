@@ -41,7 +41,7 @@ peuvent vivre derrière la même URL et sont chacun traités selon la sienne.
 
 | Transport | Quand | Notes |
 |---|---|---|
-| `stdio` | Serveur local lancé par Pénélope | Le processus tourne dans son propre groupe, sous profil de bac à sable `mcp-stdio` : lectures de `sandbox.deny_read` refusées (clés, secrets, base), trousseau fermé ; les orphelins sont récupérés au démarrage |
+| `stdio` | Serveur local lancé par Pénélope | Le processus tourne dans son propre groupe, sous profil de bac à sable `mcp-stdio` : lectures de `sandbox.deny_read` refusées (clés, secrets, base), trousseau fermé sauf déclaration (voir [Bac à sable](#bac-à-sable)) ; les orphelins sont récupérés au démarrage |
 | Streamable HTTP | Serveur distant, ≥ 2025-03-26 | Session par en-tête, reprise de flux |
 | SSE historique | Serveur distant < 2025-03-26 | Conservé pour les serveurs anciens, jamais choisi spontanément |
 
@@ -81,6 +81,58 @@ redémarrage.
 
 `roots` mérite une seconde de réflexion : ce sont les répertoires exposés au serveur par
 `roots/list`. Jamais le home entier.
+
+## Bac à sable
+
+Un serveur stdio tourne sous le profil de sa déclaration (`sandbox_profile`, `mcp-stdio`
+par défaut ; `workspace-write` et `readonly` aussi). Sous macOS, ces profils :
+
+- n'écrivent que dans `mcp-data/<nom>` et le répertoire temporaire ;
+- refusent les lectures de `sandbox.deny_read` (clés, secrets, base, configuration), sauf
+  son répertoire de données et ses `roots` ;
+- ferment les sockets Unix locales, sauf la résolution DNS et l'agent SSH ;
+- ferment le trousseau macOS.
+
+Deux sorties, déclarées par le propriétaire dans la configuration (jamais dans `mcp.d`,
+qu'un outil peut écrire) :
+
+| Réglage | Ce qu'il ouvre |
+|---|---|
+| `sandbox.allow_keychain_for` | Le trousseau, et seulement lui : le reste du profil tient |
+| `sandbox.allow_full_for` | Tout, avec `sandbox_profile = "full"` dans la déclaration |
+
+### Un serveur qui lit ses propres identifiants dans le trousseau
+
+Un pont de messagerie qui range ses mots de passe dans le trousseau (service
+`mailbridge-mcp`, par exemple) ne les trouve plus sous bac à sable. Le piège : le
+trousseau fermé ne répond pas « refusé » mais « introuvable » (`security` sort en 44, une
+bibliothèque de trousseau dit `secret not found in keyring`), même pour un secret bien
+rangé. Pénélope le dit : quand un serveur confiné échoue en parlant du trousseau
+(`keychain`, `keyring`, `SecItem…`, `errSec…`), son erreur est suivie d'une ligne qui
+nomme le bac à sable et le réglage, au lieu de laisser chercher le secret ailleurs.
+
+Deux voies, la seconde étant la plus propre quand le serveur la permet :
+
+```bash
+penelope config set sandbox.allow_keychain_for '["mailbridge"]'
+```
+
+```toml
+# mcp.d/mailbridge.toml : Pénélope lit le secret, le serveur ne touche pas au trousseau
+command = "mailbridge"
+env = { MAILBRIDGE_PASSWORD = "${SECRET:mailbridge_password}" }
+```
+
+Le secret se range une fois par `penelope secret set mailbridge_password` (saisie
+masquée) ; il n'existe ensuite que dans l'environnement du processus, jamais dans
+`mcp.d`. Cette voie suppose que le serveur sache lire son secret dans une variable.
+
+Poser ou retirer un nom dans `allow_keychain_for` (ou `allow_full_for`) prend effet sans
+redémarrage : au prochain appel, un serveur déjà lancé repart sous le profil en vigueur.
+`penelope mcp list` (colonne « trousseau ») et `penelope mcp show <nom>` (`keychain`)
+disent quels serveurs le joignent ; `penelope doctor` les nomme, avec la raison. Sur les
+autres systèmes, les serveurs stdio confinés ne démarrent pas (pas de bac à sable, échec
+fermé) : le réglage n'y change rien.
 
 ## Registre paresseux
 

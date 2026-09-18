@@ -425,6 +425,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 |---|---|---|
 | `sandbox.default_profile` | `"workspace-write"` | Profil du bac à sable de `shell_exec` : `read-only`, `workspace-write` ou `full`. |
 | `sandbox.allow_full_for` | `[]` | Serveurs MCP autorisés à tourner avec le profil `full` (sans bac à sable). |
+| `sandbox.allow_keychain_for` | `[]` | Serveurs MCP stdio qui gardent leur bac à sable mais joignent le trousseau macOS : ceux dont le métier est de lire leurs propres identifiants. Le trousseau reste fermé aux autres, qui y verraient « introuvable » ce qui y est rangé. |
 | `sandbox.workspaces` | `[]` | Répertoires de travail des outils de fichiers et du shell, en plus du défaut. |
 | `sandbox.shell_network` | `false` | Réseau pour **toutes** les commandes de `shell_exec` et des étapes `shell`. Faux : une commande n'a le réseau que si son appel le demande (`network: true`, carte d'approbation qui le dit, « Toujours » borné à la famille de commandes) ou si son étape de workflow le déclare. Une configuration qui porte `true` le garde. |
 | `sandbox.deny_read` | `["~/.ssh","~/.aws","~/.gnupg","~/.config/gh","~/.netrc","~/.kube","~/.docker/config.json","{data}/penelope.db","{data}/secrets.enc","{data}/mcp.d","{config}","{state}"]` | Chemins dont la lecture est refusée aux commandes sous bac à sable, même quand le profil lit le disque : clés, jetons, base de Pénélope, secrets, configuration. `{data}`, `{config}`, `{state}` et `~` sont développés. |
@@ -736,8 +737,8 @@ plus depuis une commande). La liste livrée couvre `~/.ssh`, `~/.aws`, `~/.gnupg
 `~/.config/gh`, `~/.netrc`, `~/.kube`, la base de Pénélope, le magasin de secrets, `mcp.d`,
 la configuration et l'état. Un workspace situé sous un chemin refusé reste lisible. Les
 serveurs MCP stdio confinés (`mcp-stdio`, `workspace-write`, `readonly`) suivent la même
-liste et n'ont pas non plus le trousseau : un paquet tiers ne lit pas ce que `shell_exec`
-ne lit pas ; son répertoire de données et ses racines restent lisibles pour lui, et
+liste et n'ont pas non plus le trousseau (sauf ceux de `sandbox.allow_keychain_for`) : un
+paquet tiers ne lit pas ce que `shell_exec` ne lit pas ; son répertoire de données et ses racines restent lisibles pour lui, et
 `penelope doctor` signale un serveur confiné qui ne refuserait aucune lecture. Réseau
 ouvert ou non, les sockets Unix locales restent fermées aux processus confinés (socket du
 daemon, `/var/run/docker.sock`, autres services), sauf la résolution DNS et l'agent SSH
@@ -1045,6 +1046,19 @@ profil `full` se donne alors serveur par serveur, dans la déclaration
 ```bash
 penelope config set sandbox.allow_full_for '["mailbridge"]'
 ```
+
+Un serveur dont le métier est de lire ses propres identifiants dans le trousseau n'a pas
+besoin de `full` : le trousseau fermé lui répond « introuvable » (`secret not found in
+keyring`), et Pénélope complète alors son erreur par le réglage qui l'ouvre, lui seul,
+sans rien défaire du reste du profil. Le changement vaut au prochain appel, sans relance :
+
+```bash
+penelope config set sandbox.allow_keychain_for '["mailbridge"]'
+```
+
+Plus propre quand le serveur le permet : lui passer le secret par son environnement
+(`${SECRET:nom}` dans `env` de sa déclaration), et laisser le trousseau fermé. Détail dans
+[mcp.md](mcp.md), section « Bac à sable ».
 
 Administration, en ligne de commande comme sur Telegram (`/mcp`, `/mcp redmine`,
 `/mcp restart|logs|test redmine`) :

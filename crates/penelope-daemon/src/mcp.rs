@@ -71,7 +71,8 @@ impl ProcessConnector {
 /// le shell (`sandbox.deny_read` : clés SSH, secrets, base, configuration) et ferment le
 /// trousseau : un paquet tiers ne lit pas ce que `shell_exec` ne lit pas (issue #89). Un
 /// chemin refusé qui contient le répertoire de données du serveur ou une de ses racines
-/// reste lisible pour eux.
+/// reste lisible pour eux. Un serveur de `sandbox.allow_keychain_for` garde tout cela et
+/// joint le trousseau, sans plus (issue #122).
 pub fn stdio_profile(
     s: &Services,
     cfg: &ServerConfig,
@@ -101,7 +102,59 @@ pub fn stdio_profile(
         .into_iter()
         .filter(|d| !kept.iter().any(|k| k.starts_with(d)))
         .collect();
-    Ok(profile)
+    Ok(profile.with_keychain(declared_for_keychain(s, cfg)))
+}
+
+fn declared_for_keychain(s: &Services, cfg: &ServerConfig) -> bool {
+    s.config
+        .config()
+        .sandbox
+        .allow_keychain_for
+        .iter()
+        .any(|n| n == &cfg.name)
+}
+
+/// Vrai si le processus du serveur joint le trousseau : serveur stdio déclaré dans
+/// `sandbox.allow_keychain_for`, ou profil `full` autorisé. Un serveur distant n'a pas de
+/// processus local, donc pas de trousseau (issue #122).
+pub fn keychain_open(s: &Services, cfg: &ServerConfig) -> bool {
+    if cfg.effective_transport() != "stdio" {
+        return false;
+    }
+    match penelope_platform::ProfileKind::parse(&cfg.sandbox_profile) {
+        Some(penelope_platform::ProfileKind::Full) => s
+            .config
+            .config()
+            .sandbox
+            .allow_full_for
+            .iter()
+            .any(|n| n == &cfg.name),
+        _ => declared_for_keychain(s, cfg),
+    }
+}
+
+/// Un serveur confiné qui échoue sur le trousseau n'y voit qu'« introuvable », même pour
+/// un secret bien rangé : la phrase qui nomme le bac à sable et le réglage, au lieu de
+/// laisser chercher le secret ailleurs (issue #122). `None` si le texte ne parle pas du
+/// trousseau ou si le serveur le joint.
+pub fn keychain_hint(s: &Services, cfg: &ServerConfig, text: &str) -> Option<String> {
+    const CUES: [&str; 5] = ["keychain", "keyring", "trousseau", "secitem", "errsec"];
+    let lower = text.to_lowercase();
+    if cfg.effective_transport() != "stdio"
+        || keychain_open(s, cfg)
+        || !CUES.iter().any(|c| lower.contains(c))
+    {
+        return None;
+    }
+    Some(format!(
+        "[Pénélope : `{0}` tourne sous bac à sable (`{1}`) et le trousseau macOS lui est \
+         fermé : ce qu'il y cherche lui paraît introuvable, même rangé. Le secret n'est \
+         donc pas forcément absent. Si `{0}` doit lire ses propres identifiants : \
+         `penelope config set sandbox.allow_keychain_for '[\"{0}\"]'`. Sinon, lui passer \
+         le secret par son environnement : `${{SECRET:nom}}` dans la table [env] de sa \
+         déclaration.]",
+        cfg.name, cfg.sandbox_profile
+    ))
 }
 
 #[async_trait::async_trait]
@@ -173,6 +226,9 @@ impl Connector for ProcessConnector {
 struct Live {
     client: Arc<McpClient>,
     pump: tokio::task::JoinHandle<()>,
+    /// Accès au trousseau accordé au lancement : s'il change, le processus repart sous
+    /// le nouveau profil (issue #122).
+    keychain: bool,
 }
 
 struct Info {
@@ -448,8 +504,18 @@ impl McpSupervisor {
     /// Connexion vivante, démarrée au besoin, dans le respect du backoff.
     async fn ensure_live(&self, slot: &Arc<Slot>) -> Result<Arc<McpClient>, String> {
         let mut live = slot.live.lock().await;
+        let keychain = keychain_open(&self.services, &slot.config());
         if let Some(l) = live.as_ref() {
-            return Ok(l.client.clone());
+            if l.keychain == keychain {
+                return Ok(l.client.clone());
+            }
+            // L'accès au trousseau a changé depuis le lancement (réglage posé ou retiré) :
+            // le processus repart sous le profil en vigueur (issue #122).
+            if let Some(old) = live.take() {
+                tracing::info!(server = %slot.name, keychain, "trousseau modifié, relance");
+                let _ = old.client.close().await;
+                old.pump.abort();
+            }
         }
         let now = self.now_ms();
         let gate = slot.info(|i| match i.state {
@@ -497,6 +563,7 @@ impl McpSupervisor {
                 *live = Some(Live {
                     client: client.clone(),
                     pump,
+                    keychain,
                 });
                 drop(live);
                 self.persist(slot).await;
@@ -603,14 +670,15 @@ impl McpSupervisor {
                     Err(e2) => {
                         let logs = second.logs(20).await;
                         let _ = second.close().await;
-                        return Err((explain(cfg, &e2, &logs), logs, e2.needs_auth()));
+                        let msg = self.explain(cfg, &e2, &logs);
+                        return Err((msg, logs, e2.needs_auth()));
                     }
                 }
             }
             Err(e) => {
                 let logs = transport.logs(20).await;
                 let _ = transport.close().await;
-                return Err((explain(cfg, &e, &logs), logs, false));
+                return Err((self.explain(cfg, &e, &logs), logs, false));
             }
         };
         let client = Arc::new(client);
@@ -621,6 +689,17 @@ impl McpSupervisor {
             client.version().has_url_elicitation(),
         );
         Ok((client, pump))
+    }
+
+    /// [`explain`], plus la phrase du trousseau si l'échec en parle (issue #122).
+    fn explain(&self, cfg: &ServerConfig, e: &McpError, logs: &[String]) -> String {
+        let mut msg = explain(cfg, e, logs);
+        let seen = format!("{e}\n{}", logs.join("\n"));
+        if let Some(hint) = keychain_hint(&self.services, cfg, &seen) {
+            msg.push(' ');
+            msg.push_str(&hint);
+        }
+        msg
     }
 
     /// Requêtes et notifications venant du serveur.
@@ -935,6 +1014,21 @@ impl McpSupervisor {
                         .content
                         .push(ContentBlock::Text { text: note.clone() });
                 }
+                if result.is_error {
+                    let said: Vec<&str> = result
+                        .content
+                        .iter()
+                        .filter_map(|c| match c {
+                            ContentBlock::Text { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect();
+                    if let Some(hint) =
+                        keychain_hint(&self.services, &slot.config(), &said.join("\n"))
+                    {
+                        result.content.push(ContentBlock::Text { text: hint });
+                    }
+                }
                 let now_s = self.now();
                 slot.info(|i| {
                     i.metrics.record(ms, !result.is_error);
@@ -964,6 +1058,10 @@ impl McpSupervisor {
                     _ => self.persist(&slot).await,
                 }
                 let mut message = format!("`{qualified}` : {e}");
+                if let Some(hint) = keychain_hint(&self.services, &slot.config(), &message) {
+                    message.push('\n');
+                    message.push_str(&hint);
+                }
                 for note in &notes {
                     message.push('\n');
                     message.push_str(note);
@@ -1213,6 +1311,7 @@ impl McpSupervisor {
             errors: i.metrics.errors,
             running,
             lazy: c.lazy_start,
+            keychain: keychain_open(&self.services, &c),
         })
     }
 
@@ -1873,6 +1972,195 @@ mod tests {
         assert!(deny > allow, "{sbpl}");
         assert!(sbpl.contains("secrets.enc"), "{sbpl}");
         assert!(sbpl.contains("com.apple.SecurityServer"), "{sbpl}");
+    }
+
+    /// #122 : un serveur déclaré dans `sandbox.allow_keychain_for` joint le trousseau et
+    /// garde le reste de son bac à sable ; les autres ne le joignent pas, et
+    /// `allow_full_for` n'y est pour rien.
+    #[tokio::test]
+    async fn only_a_declared_server_reaches_the_keychain() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock =
+            Arc::new(penelope_kernel::clock::TestClock::default());
+        let s = crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            .await
+            .unwrap();
+        s.config
+            .mutate("test", |c| {
+                c.sandbox.allow_keychain_for = vec!["mailbridge".into()];
+                Ok(vec!["sandbox.allow_keychain_for".into()])
+            })
+            .unwrap();
+        assert!(s.config.config().sandbox.allow_full_for.is_empty());
+        let server = |name: &str| ServerConfig {
+            name: name.into(),
+            command: "/opt/mcp/bin".into(),
+            ..Default::default()
+        };
+        let keychain = "(global-name \"com.apple.SecurityServer\")";
+        let ssh = s.platform.dirs.expand("~/.ssh");
+
+        let declared = stdio_profile(&s, &server("mailbridge")).unwrap();
+        assert!(declared.enforced(), "le bac à sable reste imposé");
+        assert_eq!(declared.kind, penelope_platform::ProfileKind::McpStdio);
+        let sbpl = penelope_platform::sandbox::seatbelt_profile(&declared);
+        assert!(!sbpl.contains(keychain), "{sbpl}");
+        assert!(sbpl.contains(&format!(
+            "(deny file-read* (subpath \"{}\"))",
+            ssh.display()
+        )));
+        assert!(
+            sbpl.contains("(deny network-outbound (remote unix-socket))"),
+            "{sbpl}"
+        );
+        assert!(keychain_open(&s, &server("mailbridge")));
+
+        let other = stdio_profile(&s, &server("tiers")).unwrap();
+        let sbpl = penelope_platform::sandbox::seatbelt_profile(&other);
+        assert!(
+            sbpl.contains(&format!("(deny mach-lookup {keychain})")),
+            "{sbpl}"
+        );
+        assert!(!keychain_open(&s, &server("tiers")));
+
+        // Un serveur distant n'a pas de processus local : pas de trousseau à ouvrir.
+        let distant = ServerConfig {
+            name: "mailbridge".into(),
+            url: "https://mcp.example.test/mcp".into(),
+            ..Default::default()
+        };
+        assert!(!keychain_open(&s, &distant));
+    }
+
+    /// #122 : un serveur confiné qui échoue sur le trousseau voit son erreur complétée par
+    /// le bac à sable et le réglage ; déclaré, il n'a pas cette phrase ; une erreur qui ne
+    /// parle pas du trousseau non plus.
+    #[tokio::test]
+    async fn a_keychain_failure_names_the_sandbox_not_the_secret() {
+        let (_d, s, _c, fake, sup) = setup().await;
+        let tools = Arc::new(Mutex::new(vec![
+            tool("search_emails", json!({"readOnlyHint": true})),
+            tool("list_accounts", json!({"readOnlyHint": true})),
+        ]));
+        let base = server(tools);
+        fake.serve(
+            "mailbridge",
+            Arc::new(move |m, p| {
+                if m == "tools/call" {
+                    let text = if p["name"] == "search_emails" {
+                        "IMAP connection failed: get password for essai@example.test: \
+                         secret not found in keyring"
+                    } else {
+                        "IMAP connection failed: timeout"
+                    };
+                    return Ok(json!({
+                        "content": [{"type": "text", "text": text}],
+                        "isError": true
+                    }));
+                }
+                base(m, p)
+            }),
+        );
+        declare(&sup, "mailbridge", "");
+        sup.reload().await;
+
+        let v = sup
+            .call("mcp__mailbridge__search_emails", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(v["isError"], true);
+        let said = v["content"].to_string();
+        assert!(said.contains("secret not found in keyring"), "{said}");
+        assert!(said.contains("bac à sable"), "{said}");
+        assert!(said.contains("sandbox.allow_keychain_for"), "{said}");
+        assert!(said.contains("SECRET:nom"), "{said}");
+        assert!(!said.contains("allow_full_for"), "{said}");
+
+        let v = sup
+            .call("mcp__mailbridge__list_accounts", &json!({}))
+            .await
+            .unwrap();
+        assert!(!v["content"].to_string().contains("bac à sable"), "{v}");
+
+        s.config
+            .mutate("test", |c| {
+                c.sandbox.allow_keychain_for = vec!["mailbridge".into()];
+                Ok(vec!["sandbox.allow_keychain_for".into()])
+            })
+            .unwrap();
+        let v = sup
+            .call("mcp__mailbridge__search_emails", &json!({}))
+            .await
+            .unwrap();
+        assert!(!v["content"].to_string().contains("bac à sable"), "{v}");
+    }
+
+    /// #122 : poser ou retirer l'accès au trousseau relance un serveur déjà démarré, qui
+    /// repart sous le profil en vigueur ; `mcp list` et `doctor` le disent.
+    #[tokio::test]
+    async fn the_keychain_setting_takes_effect_on_a_running_server() {
+        let (_d, s, _c, fake, sup) = setup().await;
+        fake.serve("mailbridge", server(two_tools()));
+        fake.serve("redmine", server(two_tools()));
+        declare(&sup, "mailbridge", "");
+        declare(&sup, "redmine", "");
+        sup.reload().await;
+        sup.call("mcp__mailbridge__list_issues", &json!({}))
+            .await
+            .unwrap();
+        sup.call("mcp__mailbridge__list_issues", &json!({}))
+            .await
+            .unwrap();
+        let opened = fake.opened("mailbridge");
+        let keychain = |sts: &[ServerStatus], name: &str| {
+            sts.iter().find(|st| st.name == name).unwrap().keychain
+        };
+        assert!(!keychain(&sup.statuses().await, "mailbridge"));
+
+        s.config
+            .mutate("test", |c| {
+                c.sandbox.allow_keychain_for = vec!["mailbridge".into()];
+                Ok(vec!["sandbox.allow_keychain_for".into()])
+            })
+            .unwrap();
+        sup.call("mcp__mailbridge__list_issues", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(fake.opened("mailbridge"), opened + 1, "relancé une fois");
+        sup.call("mcp__mailbridge__list_issues", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(fake.opened("mailbridge"), opened + 1, "puis gardé");
+        let sts = sup.statuses().await;
+        assert!(keychain(&sts, "mailbridge"));
+        assert!(!keychain(&sts, "redmine"));
+
+        let checks = crate::doctor::mcp_checks(&s, &sup).await;
+        let open = checks
+            .iter()
+            .find(|c| c.id == "mcp.mailbridge.keychain")
+            .expect("le doctor nomme le trousseau ouvert");
+        assert!(
+            open.detail.contains("sandbox.allow_keychain_for"),
+            "{open:?}"
+        );
+        assert!(!checks.iter().any(|c| c.id == "mcp.redmine.keychain"));
+
+        s.config
+            .mutate("test", |c| {
+                c.sandbox.allow_keychain_for.clear();
+                Ok(vec!["sandbox.allow_keychain_for".into()])
+            })
+            .unwrap();
+        sup.call("mcp__mailbridge__list_issues", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(
+            fake.opened("mailbridge"),
+            opened + 2,
+            "retiré : relancé aussi"
+        );
+        assert!(!keychain(&sup.statuses().await, "mailbridge"));
     }
 
     /// #89 : un chemin refusé qui contient le répertoire de données ou une racine du

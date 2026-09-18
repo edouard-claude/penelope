@@ -307,6 +307,7 @@ impl Rpc {
                             "tools": st.tool_count,
                             "running": st.running,
                             "lazy": st.lazy,
+                            "keychain": st.keychain,
                             "protocol": st.protocol,
                             "calls": st.calls,
                             "errors": st.errors,

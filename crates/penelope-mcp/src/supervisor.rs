@@ -127,6 +127,10 @@ pub struct ServerStatus {
     pub errors: u64,
     pub running: bool,
     pub lazy: bool,
+    /// Le processus du serveur joint le trousseau macOS (`sandbox.allow_keychain_for`, ou
+    /// profil `full` autorisé).
+    #[serde(default)]
+    pub keychain: bool,
 }
 
 /// Décide quels serveurs `lazy_start` inactifs évincer pour respecter le plafond de

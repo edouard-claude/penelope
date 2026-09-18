@@ -1000,6 +1000,24 @@ pub async fn mcp_checks(s: &Services, sup: &crate::mcp::McpSupervisor) -> Vec<Do
                 )),
             ),
         });
+        // #122 : un serveur qui joint le trousseau se voit, et la raison avec.
+        if st.keychain {
+            let why = if st.transport == "stdio"
+                && sup
+                    .config_of(&st.name)
+                    .await
+                    .is_some_and(|c| c.sandbox_profile == "full")
+            {
+                "ouvert : profil `full` (sandbox.allow_full_for)"
+            } else {
+                "ouvert, le reste du bac à sable tient (sandbox.allow_keychain_for)"
+            };
+            out.push(DoctorCheck::ok(
+                &format!("{id}.keychain"),
+                &format!("Trousseau de `{}`", st.name),
+                why,
+            ));
+        }
         // #89 : un serveur stdio confiné doit refuser les mêmes lectures que le shell.
         if let Some(cfg) = sup.config_of(&st.name).await
             && cfg.effective_transport() == "stdio"
