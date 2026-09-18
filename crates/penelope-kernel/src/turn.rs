@@ -409,6 +409,22 @@ impl TurnQueue {
         Ok(())
     }
 
+    /// Tours d'une session en file ou en cours.
+    pub async fn queued_for(&self, session_id: &str) -> Result<i64> {
+        let sid = session_id.to_string();
+        Ok(self
+            .store
+            .read(move |c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM turn_queue
+                     WHERE session_id = ?1 AND state IN ('pending','leased')",
+                    [&sid],
+                    |r| r.get(0),
+                )?)
+            })
+            .await?)
+    }
+
     pub async fn pending_count(&self) -> Result<i64> {
         Ok(self
             .store

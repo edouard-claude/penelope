@@ -32,12 +32,26 @@ mod screens;
 /// Longueur d'un fragment Markdown avant conversion HTML : marge pour les balises.
 const FRAGMENT_CHARS: usize = 3_500;
 const MAX_ATTEMPTS: i64 = 6;
-/// Mention des messages en attente abandonnés par un changement de session.
+/// Mention des messages en attente abandonnés par la fermeture d'une session.
 fn cancelled_note(n: usize) -> String {
     match n {
         0 => String::new(),
-        1 => "\n⏹ 1 message en attente dans l'ancienne session a été abandonné.".into(),
-        n => format!("\n⏹ {n} messages en attente dans l'ancienne session ont été abandonnés."),
+        1 => "\n⏹ 1 message en attente dans la session a été abandonné.".into(),
+        n => format!("\n⏹ {n} messages en attente dans la session ont été abandonnés."),
+    }
+}
+
+/// Mention du travail que la session quittée poursuit en fond (issue #112).
+fn background_note(n: usize) -> String {
+    match n {
+        0 => String::new(),
+        1 => "\n⏳ L'ancienne session continue en fond (1 tour en file) : sa réponse t'attend \
+              à ton retour."
+            .into(),
+        n => format!(
+            "\n⏳ L'ancienne session continue en fond ({n} tours en file) : ses réponses \
+             t'attendent à ton retour."
+        ),
     }
 }
 
@@ -681,16 +695,64 @@ impl TelegramGateway {
                     .await;
             }
             "new" => {
+                // `/new !titre` ferme l'ancienne session sans redemander, `/new ~titre` la
+                // garde en fond : ce sont les deux boutons de la question ci-dessous.
+                let (choice, args) = match args.trim_start().chars().next() {
+                    Some('!') => (Some(true), args.trim_start()[1..].trim()),
+                    Some('~') => (Some(false), args.trim_start()[1..].trim()),
+                    _ => (None, args),
+                };
                 if let Some(old) = s.sessions.find_by_topic(chat_id, topic_id).await? {
-                    crate::session_ops::silence(d, old.id.as_str(), "nouvelle session").await?;
-                    s.sessions.set_state(old.id.as_str(), "closed").await?;
-                    // `/new` clôt aussi l'épisode en cours : il est relu (§6.6).
-                    crate::episodes::spawn_ingest(
-                        d.clone(),
-                        old.id.to_string(),
-                        old.episode_seq,
-                        crate::episodes::Boundary::NewSession,
-                    );
+                    let queued = s.turns.queued_for(old.id.as_str()).await?;
+                    // Une session qui travaille encore : dire ce que `/new` lui ferait,
+                    // avant de le faire (issue #112).
+                    if choice.is_none() && queued > 0 {
+                        let rows = vec![
+                            vec![
+                                self.command_button_with(
+                                    "⏳ Garder l'ancienne en fond",
+                                    "new",
+                                    &format!("~{args}"),
+                                )
+                                .await?,
+                            ],
+                            vec![
+                                self.command_button_with(
+                                    &format!("🗑 Fermer ({queued} tour(s) perdu(s))"),
+                                    "new",
+                                    &format!("!{args}"),
+                                )
+                                .await?,
+                            ],
+                        ];
+                        let text = format!(
+                            "La session « {} » a {queued} tour(s) en file ou en cours. \
+                             `/new` la ferme et **ils seront perdus**. La garder en fond : \
+                             elle finit son travail et ses réponses t'attendent à ton retour \
+                             (`/sessions`).",
+                            crate::titles::label(&old)
+                        );
+                        return self
+                            .send_screen(
+                                chat_id,
+                                topic_id,
+                                reply_to,
+                                screens::Screen { text, rows },
+                                None,
+                            )
+                            .await;
+                    }
+                    if choice != Some(false) {
+                        crate::session_ops::silence(d, old.id.as_str(), "nouvelle session").await?;
+                        s.sessions.set_state(old.id.as_str(), "closed").await?;
+                        // `/new` clôt aussi l'épisode en cours : il est relu (§6.6).
+                        crate::episodes::spawn_ingest(
+                            d.clone(),
+                            old.id.to_string(),
+                            old.episode_seq,
+                            crate::episodes::Boundary::NewSession,
+                        );
+                    }
                 }
                 let title = (!args.is_empty())
                     .then(|| crate::titles::clean(args))
@@ -837,7 +899,7 @@ impl TelegramGateway {
                 match crate::session_ops::fork(d, &session, title).await {
                     Ok(v) => {
                         let fork = v["session"].as_str().unwrap_or_default().to_string();
-                        let cancelled = self.bind_chat(&fork, chat_id, topic_id).await?;
+                        let background = self.bind_chat(&fork, chat_id, topic_id).await?;
                         s.sessions.touch(&fork).await?;
                         let back = s
                             .actions
@@ -854,7 +916,7 @@ impl TelegramGateway {
                                 "🍴 Session dupliquée ({} messages) : la suite se passe dans \
                                  `{fork}`.{}",
                                 v["messages"],
-                                cancelled_note(cancelled)
+                                background_note(background)
                             ),
                             rows: vec![vec![ButtonSpec::callback(
                                 "↪️ Revenir à l'original",
@@ -1061,12 +1123,12 @@ impl TelegramGateway {
                             if sess.state != "active" {
                                 s.sessions.set_state(&id, "active").await?;
                             }
-                            let cancelled = self.bind_chat(&id, chat_id, topic_id).await?;
+                            let background = self.bind_chat(&id, chat_id, topic_id).await?;
                             s.sessions.touch(&id).await?;
                             format!(
                                 "↪️ Session « {} » reprise (`{id}`).{}",
                                 crate::titles::label(&sess),
-                                cancelled_note(cancelled)
+                                background_note(background)
                             )
                         }
                     }
@@ -1236,11 +1298,8 @@ impl TelegramGateway {
                         ] {
                             let mark = if mode == current { "✅ " } else { "" };
                             rows.push(vec![
-                                self.command_button(
-                                    &format!("{mark}{label}"),
-                                    &format!("/mode {mode}"),
-                                )
-                                .await?,
+                                self.command_button_with(&format!("{mark}{label}"), "mode", mode)
+                                    .await?,
                             ]);
                         }
                         let text = format!(
@@ -3777,8 +3836,9 @@ impl TelegramGateway {
             } else if sess.state == "closed" {
                 label.push_str("🔒 ");
             }
-            if busy.get(&id).is_some_and(|n| *n > 0) {
-                label.push_str("⏳ ");
+            // Une session qui travaille en fond, avec sa file (issue #112).
+            if let Some(n) = busy.get(&id).filter(|n| **n > 0) {
+                label.push_str(&format!("⏳{n} "));
             }
             let title = crate::titles::label(sess);
             label.push_str(&title.chars().take(48).collect::<String>());
@@ -3889,11 +3949,13 @@ impl TelegramGateway {
                 if sess.state != "active" {
                     s.sessions.set_state(&target, "active").await?;
                 }
-                let cancelled = self.bind_chat(&target, chat_id, topic_id).await?;
+                let background = self.bind_chat(&target, chat_id, topic_id).await?;
                 s.sessions.touch(&target).await?;
                 let mut t = format!("Session « {} »", crate::titles::label(&sess));
-                if cancelled > 0 {
-                    t.push_str(&format!(" ({cancelled} en attente abandonné(s) ailleurs)"));
+                if background > 0 {
+                    t.push_str(&format!(
+                        " ({background} tour(s) continuent en fond ailleurs)"
+                    ));
                 }
                 // Bouton d'une notification « réponses en attente » : pas de menu à redessiner.
                 if action.args["notice"].as_bool() == Some(true) {
@@ -4024,6 +4086,9 @@ impl TelegramGateway {
     /// Lie une session au chat : elle a le focus. Celles qui le perdent finissent leur tour
     /// en cours, dont la sortie est mise de côté, et leur file est annulée ; la session liée
     /// reçoit ce qui l'attendait (issue #10). Renvoie le nombre de tours annulés.
+    /// Donne le fil à `session_id`. La session qu'il quitte garde sa file : ses tours
+    /// s'exécutent en fond et ce qu'ils produisent est retenu jusqu'au retour, comme la
+    /// réponse du tour en vol (issue #112). Renvoie le nombre de tours qu'elle a encore.
     async fn bind_chat(
         &self,
         session_id: &str,
@@ -4031,21 +4096,17 @@ impl TelegramGateway {
         topic_id: Option<i64>,
     ) -> anyhow::Result<usize> {
         let d = &self.daemon;
-        let mut cancelled = 0;
+        let mut background = 0;
         for other in d
             .services
             .sessions
             .bind_telegram(session_id, chat_id, topic_id)
             .await?
         {
-            cancelled += d
-                .services
-                .turns
-                .cancel_pending(&other, "session détachée du chat")
-                .await?;
+            background += d.services.turns.queued_for(&other).await? as usize;
         }
         self.flush_held(session_id).await?;
-        Ok(cancelled)
+        Ok(background)
     }
 
     /// Vrai quand une autre session a le focus du chat : la sortie de `session_id` est
@@ -9980,7 +10041,7 @@ mod tests {
         assert!(
             labels
                 .iter()
-                .any(|l| l.starts_with("▶️ ⏳ Refonte du site")),
+                .any(|l| l.starts_with("▶️ ⏳1 Refonte du site")),
             "{labels:?}"
         );
         assert!(
@@ -10014,9 +10075,9 @@ mod tests {
             labels.iter().any(|l| l.starts_with("▶️ Budget 2027")),
             "{labels:?}"
         );
-        // La session qui a perdu le chat n'a plus rien en attente.
+        // La session qui a perdu le chat garde sa file et travaille en fond (#112).
         assert!(
-            labels.iter().any(|l| l.starts_with("Refonte du site")),
+            labels.iter().any(|l| l.starts_with("⏳1 Refonte du site")),
             "{labels:?}"
         );
 
@@ -10038,7 +10099,7 @@ mod tests {
         );
         let refonte = all
             .iter()
-            .position(|(l, _)| l.starts_with("Refonte du site"))
+            .position(|(l, _)| l.starts_with("⏳1 Refonte du site"))
             .unwrap();
         let more = all[refonte + 1].1.clone();
         g.process_update(&updates::callback(93, OWNER, &more, 1001))
@@ -10259,8 +10320,235 @@ mod tests {
         assert!(d.kv_get(&held_key(&first)).await.unwrap().is_none());
     }
 
-    /// Issue #10 : après `/fork`, seul le fork répond ; les messages en attente de la session
-    /// d'origine sont annulés, et `/close` arrête une session et vide sa file.
+    /// #112 : deux tours en file dans A, bascule vers B : les tours de A s'exécutent en
+    /// fond, leurs réponses sont retenues puis délivrées au retour dans A ; A au-delà de
+    /// son plafond s'arrête sans toucher à B.
+    #[tokio::test]
+    async fn a_left_session_keeps_working_and_answers_on_return() {
+        let (_d, g, t, p) = gateway().await;
+        let d = g.daemon.clone();
+        let s = d.services.clone();
+        let chat = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: None,
+        };
+        let a = d.chat_session_for(&chat).await.unwrap();
+        d.pin_model(&a, Some("main")).await.unwrap();
+        for text in ["prépare le rapport", "et la synthèse"] {
+            d.enqueue_message(&a, text, &chat, None).await.unwrap();
+        }
+        let b = s
+            .sessions
+            .create(
+                penelope_kernel::session::SessionKind::Chat,
+                Some("Budget 2027".into()),
+            )
+            .await
+            .unwrap()
+            .id
+            .to_string();
+        d.pin_model(&b, Some("main")).await.unwrap();
+        g.process_update(&updates::text_message(
+            700,
+            OWNER,
+            OWNER,
+            &format!("/switch {b}"),
+        ))
+        .await
+        .unwrap();
+        g.flush_outbox().await.unwrap();
+        let notice = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
+        assert!(
+            notice.contains("continue en fond (2 tours en file)"),
+            "{notice}"
+        );
+
+        p.reply("rapport de fond");
+        p.reply("synthèse de fond");
+        drain(&g).await;
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(!sent.iter().any(|x| x.contains("de fond")), "{sent:?}");
+
+        g.process_update(&updates::text_message(
+            701,
+            OWNER,
+            OWNER,
+            &format!("/switch {a}"),
+        ))
+        .await
+        .unwrap();
+        g.flush_outbox().await.unwrap();
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        for answer in ["rapport de fond", "synthèse de fond"] {
+            assert!(
+                sent.iter().any(|x| x.contains(answer)),
+                "{answer} : {sent:?}"
+            );
+        }
+
+        // A en fond au-delà de son plafond de session : elle s'arrête, B répond.
+        g.process_update(&updates::text_message(
+            702,
+            OWNER,
+            OWNER,
+            &format!("/switch {b}"),
+        ))
+        .await
+        .unwrap();
+        s.sessions.set_budget(&a, Some(0.01)).await.unwrap();
+        s.budget
+            .record(penelope_kernel::budget::UsageRecord {
+                session_id: Some(a.clone()),
+                model: "mock".into(),
+                provider: "mock".into(),
+                cost_usd: 1.0,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        d.enqueue_message(&a, "encore une chose", &chat, None)
+            .await
+            .unwrap();
+        p.reply("réponse de B");
+        g.process_update(&updates::text_message(703, OWNER, OWNER, "question pour B"))
+            .await
+            .unwrap();
+        drain(&g).await;
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(sent.iter().any(|x| x == "réponse de B"), "{sent:?}");
+        assert_eq!(s.turns.queued_for(&a).await.unwrap(), 0, "A s'est arrêtée");
+        assert_eq!(
+            p.requests()
+                .iter()
+                .filter(|r| r
+                    .messages
+                    .iter()
+                    .any(|m| m.text().contains("encore une chose")))
+                .count(),
+            0,
+            "A n'a rien dépensé de plus"
+        );
+    }
+
+    /// #111 : `/mode` montre le mode de la session et le change d'un bouton.
+    #[tokio::test]
+    async fn the_approval_mode_is_set_from_telegram() {
+        let (_d, g, t, _p) = gateway().await;
+        let d = g.daemon.clone();
+        g.process_update(&updates::text_message(720, OWNER, OWNER, "/mode"))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let menu = t.calls_to(tg::SEND_MESSAGE).await.last().unwrap().clone();
+        assert!(
+            menu["text"]
+                .as_str()
+                .unwrap()
+                .contains("lectures sans demande"),
+            "{menu}"
+        );
+        let auto = inline_buttons(&menu)
+            .into_iter()
+            .find(|(l, _)| l.contains("Tout sauf le destructif"))
+            .unwrap()
+            .1;
+        g.process_update(&updates::callback(721, OWNER, &auto, 9100))
+            .await
+            .unwrap();
+        settle_click(&g).await;
+        let sid = d
+            .chat_session_for(&Origin::Telegram {
+                chat_id: OWNER,
+                topic_id: None,
+                message_id: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            crate::approval_mode::of_session(&d.services, &sid).await,
+            crate::approval_mode::ApprovalMode::Auto
+        );
+    }
+
+    /// #112 : `/new` sur un fil dont la session travaille annonce les tours qui seraient
+    /// perdus avant de fermer ; « garder en fond » crée la nouvelle sans fermer l'ancienne.
+    #[tokio::test]
+    async fn new_says_what_it_would_lose_before_closing() {
+        let (_d, g, t, _p) = gateway().await;
+        let d = g.daemon.clone();
+        let s = d.services.clone();
+        let chat = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: None,
+        };
+        let a = d.chat_session_for(&chat).await.unwrap();
+        for text in ["un", "deux"] {
+            d.enqueue_message(&a, text, &chat, None).await.unwrap();
+        }
+        g.process_update(&updates::text_message(710, OWNER, OWNER, "/new"))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let ask = t.calls_to(tg::SEND_MESSAGE).await.last().unwrap().clone();
+        assert!(
+            ask["text"].as_str().unwrap().contains("2 tour(s) en file"),
+            "{ask}"
+        );
+        assert_eq!(s.sessions.get(&a).await.unwrap().unwrap().state, "active");
+        assert_eq!(
+            s.turns.queued_for(&a).await.unwrap(),
+            2,
+            "rien n'est encore perdu"
+        );
+
+        let buttons = inline_buttons(&ask);
+        let keep = buttons
+            .iter()
+            .find(|(l, _)| l.contains("Garder"))
+            .unwrap()
+            .1
+            .clone();
+        let close = buttons
+            .iter()
+            .find(|(l, _)| l.contains("Fermer"))
+            .unwrap()
+            .1
+            .clone();
+        g.process_update(&updates::callback(711, OWNER, &keep, 9001))
+            .await
+            .unwrap();
+        settle_click(&g).await;
+        let b = d.chat_session_for(&chat).await.unwrap();
+        assert_ne!(b, a);
+        assert_eq!(s.sessions.get(&a).await.unwrap().unwrap().state, "active");
+        assert_eq!(s.turns.queued_for(&a).await.unwrap(), 2, "gardée en fond");
+
+        // Le bouton « Fermer » d'une autre question ferme la session du fil, avec sa file.
+        d.enqueue_message(&b, "trois", &chat, None).await.unwrap();
+        g.process_update(&updates::text_message(712, OWNER, OWNER, "/new"))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let ask = t.calls_to(tg::SEND_MESSAGE).await.last().unwrap().clone();
+        let close_b = inline_buttons(&ask)
+            .into_iter()
+            .find(|(l, _)| l.contains("Fermer"))
+            .unwrap()
+            .1;
+        let _ = close;
+        g.process_update(&updates::callback(713, OWNER, &close_b, 9002))
+            .await
+            .unwrap();
+        settle_click(&g).await;
+        assert_eq!(s.sessions.get(&b).await.unwrap().unwrap().state, "closed");
+        assert_eq!(s.turns.queued_for(&b).await.unwrap(), 0);
+    }
+
+    /// Issues #10 et #112 : après `/fork`, seul le fork répond dans le fil ; les messages
+    /// en attente de la session d'origine s'exécutent en fond et leurs réponses sont
+    /// retenues pour le retour ; `/close` arrête une session et vide sa file.
     #[tokio::test]
     async fn after_a_fork_only_the_fork_answers() {
         let (_d, g, t, p) = gateway().await;
@@ -10271,6 +10559,7 @@ mod tests {
             message_id: None,
         };
         let first = d.chat_session_for(&chat).await.unwrap();
+        d.pin_model(&first, Some("main")).await.unwrap();
         for text in ["vieux message 1", "vieux message 2"] {
             d.enqueue_message(&first, text, &chat, None).await.unwrap();
         }
@@ -10279,12 +10568,17 @@ mod tests {
             .unwrap();
         let fork = d.chat_session_for(&chat).await.unwrap();
         assert_ne!(fork, first);
+        d.pin_model(&fork, Some("main")).await.unwrap();
         g.flush_outbox().await.unwrap();
         let notice = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
-        assert!(notice.contains("2 messages en attente"), "{notice}");
+        assert!(
+            notice.contains("continue en fond (2 tours en file)"),
+            "{notice}"
+        );
 
+        p.reply("réponse de fond 1");
+        p.reply("réponse de fond 2");
         for i in 0..3 {
-            p.reply(r#"{"complexity":"low"}"#);
             p.reply(&format!("réponse {i}"));
             g.process_update(&updates::text_message(
                 81 + i,
@@ -10312,7 +10606,11 @@ mod tests {
                     .unwrap()
             }
         };
-        assert_eq!(states(first.clone()).await, vec!["cancelled", "cancelled"]);
+        assert_eq!(
+            states(first.clone()).await,
+            vec!["done", "done"],
+            "exécutés en fond"
+        );
         assert_eq!(states(fork.clone()).await, vec!["done", "done", "done"]);
         let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
         for i in 0..3 {
@@ -10321,6 +10619,11 @@ mod tests {
                 "{sent:?}"
             );
         }
+        assert!(
+            !sent.iter().any(|x| x.contains("réponse de fond")),
+            "retenues tant que le fork a le fil : {sent:?}"
+        );
+        assert!(d.kv_get(&held_key(&first)).await.unwrap().is_some());
         assert_eq!(
             d.services
                 .sessions

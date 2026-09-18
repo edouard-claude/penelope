@@ -345,6 +345,15 @@ saisie est validée contre son schéma avant de repartir au workflow.
 Dans un groupe avec sujets activés, chaque run ou session longue peut recevoir son propre
 fil. Les cartes du run y restent groupées au lieu de se mélanger à la conversation.
 
+Changer de session dans un fil (`/switch`, `/sessions`, `/fork`) ne coupe plus celle
+qu'on quitte : ses tours en file s'exécutent en fond, ce qu'elle produit est retenu, une
+seule notification la signale avec un bouton pour y revenir, et tout est délivré au
+retour. `/sessions` marque celles qui travaillent (⏳ et le nombre de tours en file). Une
+session en fond reste soumise à son plafond : au-delà, elle s'arrête sans toucher à la
+session du fil. `/new` sur une session qui travaille encore demande d'abord : la garder
+en fond (la nouvelle session prend le fil, l'ancienne finit son travail) ou la fermer, en
+disant combien de tours seraient perdus.
+
 Chaque sujet porte sa propre session : plusieurs chantiers avancent en parallèle, un par
 sujet. Pour monter un tel groupe :
 

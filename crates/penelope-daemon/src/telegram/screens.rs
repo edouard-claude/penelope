@@ -216,11 +216,27 @@ impl TelegramGateway {
         label: &str,
         command: &str,
     ) -> anyhow::Result<ButtonSpec> {
+        self.command_button_with(label, command, "").await
+    }
+
+    /// Bouton qui lance une commande avec ses arguments (`mode`, `auto`).
+    pub(super) async fn command_button_with(
+        &self,
+        label: &str,
+        command: &str,
+        args: &str,
+    ) -> anyhow::Result<ButtonSpec> {
         let t = self
             .daemon
             .services
             .actions
-            .create(k::RUN_COMMAND, command, json!({}), WEEK_MS, false)
+            .create(
+                k::RUN_COMMAND,
+                command,
+                json!({"args": args}),
+                WEEK_MS,
+                false,
+            )
             .await?;
         Ok(ButtonSpec::callback(label, &t.token, ""))
     }
@@ -350,7 +366,8 @@ impl TelegramGateway {
         match action.action.as_str() {
             k::RUN_COMMAND => {
                 let _ = self.bot.answer_callback(callback_id, None, false).await;
-                Box::pin(self.command(chat_id, topic_id, message_id, &action.target, "")).await
+                let args = action.args["args"].as_str().unwrap_or_default().to_string();
+                Box::pin(self.command(chat_id, topic_id, message_id, &action.target, &args)).await
             }
             k::SCREEN => {
                 let _ = self.bot.answer_callback(callback_id, None, false).await;

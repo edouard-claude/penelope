@@ -1232,6 +1232,14 @@ en administrateur anonyme (#113).
   `tools.shell_allow_network` autorisent des familles d'avance. Une commande composée
   n'a plus de famille : « Toujours » l'autorise une fois sans créer de règle sur `cd`.
   `penelope policies` et `/policies` marquent les règles inutiles (`rule_note`).
+- **Quitter une session ne vide plus sa file** (#112) : `bind_chat` n'annule plus les
+  tours de la session qui perd le fil ; ils s'exécutent en fond et leurs sorties sont
+  retenues (`hold`) puis délivrées au retour, comme la réponse du tour en vol. L'avis de
+  bascule dit « continue en fond (N tours en file) », `/sessions` affiche `⏳N`. `/new` sur
+  une session qui a une file demande d'abord : « Garder l'ancienne en fond » (la nouvelle
+  prend le fil, l'ancienne reste active) ou « Fermer (N tours perdus) ». Un bouton de
+  commande porte désormais ses arguments (`command_button_with`). Une session en fond
+  au-delà de son plafond s'arrête seule.
 
 ### Routine de livraison
 
