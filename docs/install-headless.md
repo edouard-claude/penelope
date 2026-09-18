@@ -67,7 +67,13 @@ ailleurs que dans `penelope-platform`, et un test d'architecture l'impose.
 penelope doctor
 ```
 
-Chaque contrôle en échec rend une commande de correction. Les contrôles propres à macOS :
+Chaque contrôle en échec rend une commande de correction. `doctor` vérifie d'abord ce qui
+ne dépend pas du daemon (binaire, fichier de configuration) puis lui demande ses propres
+contrôles : un daemon arrêté ou figé devient le premier contrôle en échec du rapport, pas
+une commande qui pend. Toute commande attend au plus 15 s une réponse du daemon (sauf les
+commandes longues par nature : `chat`, `session compact`, `mem dream`, `backup`, `upgrade`…),
+puis sort avec le code 7 et la marche à suivre ; `--timeout 60` attend plus, `--timeout 0`
+sans limite. Les contrôles propres à macOS :
 
 | Contrôle | Ce qu'il vérifie | Correction usuelle |
 |---|---|---|

@@ -1063,6 +1063,11 @@ l'adresse vérifiée (#93), fichiers lus en flux (#94), secret posé sans `argv`
 - **Document détaché** (#98) : le téléchargement d'un document (jusqu'à 20 Mo) quitte la
   boucle des updates, comme vocaux et photos depuis #69 : `/stop`, les boutons et le
   message suivant n'attendent plus ; l'échec reste dit en réponse au document.
+- **CLI qui ne pend plus** (#99) : une réponse du daemon est attendue 15 s au plus
+  (`--timeout`, 0 pour sans limite ; les méthodes longues par nature attendent sans limite
+  sauf `--timeout` explicite), puis la commande sort avec le code 7 (`DAEMON_UNRESPONSIVE`)
+  et la marche à suivre. `doctor` rend ses contrôles locaux (binaire, configuration) même
+  quand le daemon est absent ou muet, et le nomme en tête comme contrôle critique.
 
 ### Routine de livraison
 

@@ -27,6 +27,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
+    /// Attente maximale d'une réponse du daemon, en secondes (15 par défaut, sauf pour
+    /// les commandes longues ; 0 : sans limite).
+    #[arg(long, global = true)]
+    pub timeout: Option<u64>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -524,9 +529,11 @@ pub enum SkillCmd {
 
 /// Exécute la commande.
 pub async fn run(cli: Cli) -> CliResult<()> {
+    crate::client::set_timeout(cli.timeout);
     // Les commandes hors daemon d'abord : elles doivent marcher sans socket.
     match &cli.command {
         Command::Paths => return paths(&cli),
+        Command::Doctor => return doctor(&cli).await,
         Command::Config(ConfigCmd::Validate { file }) => {
             return validate_config(&cli, file.clone());
         }
@@ -1373,6 +1380,83 @@ fn set_secret(cli: &Cli, name: String) -> CliResult<()> {
     Ok(())
 }
 
+/// `doctor` en deux temps (issue #99) : ce qui se vérifie sans le daemon d'abord, puis
+/// ses propres contrôles. Un daemon muet ou absent est un contrôle en échec, en tête du
+/// rapport, pas une commande qui pend.
+async fn doctor(cli: &Cli) -> CliResult<()> {
+    use penelope_kernel::api::DoctorCheck;
+    let dirs = penelope_platform::resolve_directories(cli.home.clone())
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    let socket = dirs.socket_path();
+    let mut checks: Vec<DoctorCheck> = Vec::new();
+
+    let remote = call(&socket, m::DOCTOR, json!({})).await;
+    checks.push(match &remote {
+        Ok(_) => DoctorCheck::ok("daemon", "Daemon", "répond"),
+        Err(e @ CliError::DaemonUnresponsive(_)) => DoctorCheck::fail(
+            "daemon",
+            "Daemon",
+            e.to_string(),
+            Some("penelope restart".into()),
+        )
+        .critical(),
+        Err(e) => DoctorCheck::fail(
+            "daemon",
+            "Daemon",
+            e.to_string(),
+            Some("penelope start".into()),
+        )
+        .critical(),
+    });
+    checks.push(DoctorCheck::ok(
+        "binary",
+        "Binaire",
+        format!("penelope {}", env!("CARGO_PKG_VERSION")),
+    ));
+    let config = dirs.config_file();
+    checks.push(match std::fs::read_to_string(&config) {
+        Ok(raw) => match penelope_kernel::Config::parse(&raw) {
+            Ok((cfg, _)) => match cfg.validate() {
+                Ok(()) => DoctorCheck::ok("config.file", "Fichier de configuration", "valide"),
+                Err(e) => DoctorCheck::fail(
+                    "config.file",
+                    "Fichier de configuration",
+                    e.to_string(),
+                    Some("penelope config validate".into()),
+                ),
+            },
+            Err(e) => DoctorCheck::fail(
+                "config.file",
+                "Fichier de configuration",
+                e.to_string(),
+                Some("penelope config validate".into()),
+            )
+            .critical(),
+        },
+        Err(e) => DoctorCheck::fail(
+            "config.file",
+            "Fichier de configuration",
+            format!("{} : {e}", config.display()),
+            None,
+        ),
+    });
+    if let Ok(v) = remote {
+        let from_daemon: Vec<DoctorCheck> = serde_json::from_value(v).unwrap_or_default();
+        checks.extend(from_daemon);
+    }
+    if cli.json {
+        output::print(&json!(checks), true);
+    } else {
+        print!("{}", penelope_daemon::doctor::render(&checks));
+    }
+    if checks.iter().any(|c| !c.ok && c.severity == "error") {
+        return Err(CliError::Validation(
+            "des contrôles critiques sont en échec".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_config(cli: &Cli, file: Option<PathBuf>) -> CliResult<()> {
     let path = match file {
         Some(p) => p,
@@ -2044,6 +2128,24 @@ mod tests {
         assert_eq!(parse_scalar("true"), json!(true));
         assert_eq!(parse_scalar("Indian/Reunion"), json!("Indian/Reunion"));
         assert_eq!(parse_scalar("[\"a\",\"b\"]"), json!(["a", "b"]));
+    }
+
+    /// #99 : sans daemon, `doctor` rend quand même ses contrôles locaux et nomme le
+    /// daemon absent en tête, en contrôle critique.
+    #[tokio::test]
+    async fn doctor_reports_local_checks_without_a_daemon() {
+        let dir = tempfile::Builder::new()
+            .prefix("pnl")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let home = dir.path().to_string_lossy().to_string();
+        let cli = parse(&["--json", "--home", &home, "doctor"]);
+        let e = doctor(&cli).await.unwrap_err();
+        assert_eq!(
+            e.exit_code(),
+            penelope_kernel::api::exit_code::VALIDATION_FAILED,
+            "{e}"
+        );
     }
 
     #[test]

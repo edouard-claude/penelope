@@ -8,7 +8,12 @@ use std::path::Path;
 #[derive(Debug)]
 pub enum CliError {
     DaemonUnreachable(String),
-    Rpc { code: i32, message: String },
+    /// Connexion acceptée, réponse jamais venue dans le délai (issue #99).
+    DaemonUnresponsive(String),
+    Rpc {
+        code: i32,
+        message: String,
+    },
     Validation(String),
     Usage(String),
     Io(String),
@@ -18,6 +23,7 @@ impl std::fmt::Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CliError::DaemonUnreachable(m) => write!(f, "daemon injoignable : {m}"),
+            CliError::DaemonUnresponsive(m) => write!(f, "daemon muet : {m}"),
             CliError::Rpc { code, message } => write!(f, "{message} (code {code})"),
             CliError::Validation(m) => write!(f, "{m}"),
             CliError::Usage(m) => write!(f, "{m}"),
@@ -33,6 +39,7 @@ impl CliError {
         use penelope_kernel::api::exit_code as c;
         match self {
             CliError::DaemonUnreachable(_) => c::DAEMON_UNREACHABLE,
+            CliError::DaemonUnresponsive(_) => c::DAEMON_UNRESPONSIVE,
             CliError::Validation(_) => c::VALIDATION_FAILED,
             CliError::Usage(_) => c::USAGE,
             CliError::Rpc { code, .. } => match *code {
@@ -50,6 +57,11 @@ impl CliError {
             CliError::DaemonUnreachable(_) => {
                 Some("démarrer le daemon : penelope install puis penelope start")
             }
+            CliError::DaemonUnresponsive(_) => Some(
+                "journal du service : tail -f ~/Library/Logs/Penelope/daemon.err.log ; puis \
+                 penelope restart (ou launchctl kickstart -k gui/$(id -u)/com.penelope.daemon) ; \
+                 --timeout 60 pour attendre plus, --timeout 0 pour attendre sans limite",
+            ),
             CliError::Rpc { code, .. } if *code == penelope_kernel::api::METHOD_NOT_FOUND => {
                 Some("cette commande n'est pas encore servie par ce daemon")
             }
@@ -60,6 +72,63 @@ impl CliError {
 
 pub type CliResult<T> = Result<T, CliError>;
 
+/// Délai par défaut d'une réponse du daemon (issue #99).
+pub const DEFAULT_TIMEOUT_SECS: u64 = 15;
+
+/// `--timeout` : `None` tant que la CLI ne l'a pas posé.
+static TIMEOUT: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+
+/// Méthodes longues par nature (un tour, une consolidation, un envoi git…) : sans
+/// `--timeout` explicite, elles attendent sans limite.
+const LONG: &[&str] = &[
+    "chat.send",
+    "chat.stream",
+    "tail",
+    "session.compact",
+    "mem.reindex",
+    "mem.dream",
+    "mem.audit",
+    "mem.retry_rejected",
+    "mcp.test",
+    "mcp.restart",
+    "mcp.auth",
+    "wf.run",
+    "schedule.run_now",
+    "onboard.answer",
+    "onboard.write",
+    "import.hermes",
+    "export",
+    "backup",
+    "restore",
+    "audit.verify",
+    "store.rebuild",
+    "eval.run",
+    "upgrade",
+    "vault.sync",
+];
+
+/// Pose `--timeout` (secondes ; 0 : aucune limite).
+pub fn set_timeout(secs: Option<u64>) {
+    if let Ok(mut g) = TIMEOUT.lock() {
+        *g = secs;
+    }
+}
+
+/// Délai d'une méthode : `--timeout` s'il est posé, sinon 15 s, sauf méthode longue.
+pub fn timeout_for(method: &str) -> Option<std::time::Duration> {
+    limit_of(TIMEOUT.lock().ok().and_then(|g| *g), method)
+}
+
+fn limit_of(explicit: Option<u64>, method: &str) -> Option<std::time::Duration> {
+    let secs = match explicit {
+        Some(0) => return None,
+        Some(s) => s,
+        None if LONG.contains(&method) => return None,
+        None => DEFAULT_TIMEOUT_SECS,
+    };
+    Some(std::time::Duration::from_secs(secs))
+}
+
 /// Requête signée du jeton de session du daemon (issue #91).
 pub fn request(socket: &Path, method: &str, params: Value) -> RpcRequest {
     RpcRequest::new(1, method, params).with_auth(penelope_platform::ipc::read_token(socket))
@@ -67,6 +136,16 @@ pub fn request(socket: &Path, method: &str, params: Value) -> RpcRequest {
 
 /// Appelle une méthode du daemon.
 pub async fn call(socket: &Path, method: &str, params: Value) -> CliResult<Value> {
+    call_limited(socket, method, params, timeout_for(method)).await
+}
+
+/// `call` avec un délai explicite (`None` : sans limite).
+pub async fn call_limited(
+    socket: &Path,
+    method: &str,
+    params: Value,
+    limit: Option<std::time::Duration>,
+) -> CliResult<Value> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     let stream = penelope_platform::ipc::connect(socket)
@@ -87,9 +166,19 @@ pub async fn call(socket: &Path, method: &str, params: Value) -> CliResult<Value
         .map_err(|e| CliError::DaemonUnreachable(e.to_string()))?;
 
     let mut lines = BufReader::new(read).lines();
-    let line = lines
-        .next_line()
-        .await
+    // Un daemon figé accepte la connexion (le noyau la met en file) et ne répond jamais :
+    // sans délai, la commande pendait sans un mot (issue #99).
+    let next = lines.next_line();
+    let read = match limit {
+        Some(limit) => tokio::time::timeout(limit, next).await.map_err(|_| {
+            CliError::DaemonUnresponsive(format!(
+                "le daemon accepte la connexion mais ne répond pas à `{method}` depuis {} s",
+                limit.as_secs()
+            ))
+        })?,
+        None => next.await,
+    };
+    let line = read
         .map_err(|e| CliError::DaemonUnreachable(e.to_string()))?
         .ok_or_else(|| CliError::DaemonUnreachable("réponse vide".into()))?;
 
@@ -196,6 +285,53 @@ mod tests {
             .exit_code(),
             c::INTERNAL
         );
+    }
+
+    /// #99 : 15 s par défaut, sans limite pour une méthode longue, `--timeout` l'emporte.
+    #[test]
+    fn each_method_has_its_limit() {
+        use std::time::Duration;
+        assert_eq!(limit_of(None, "status"), Some(Duration::from_secs(15)));
+        assert_eq!(limit_of(None, "chat.send"), None);
+        assert_eq!(limit_of(None, "session.compact"), None);
+        assert_eq!(limit_of(Some(0), "status"), None);
+        assert_eq!(
+            limit_of(Some(60), "chat.send"),
+            Some(Duration::from_secs(60))
+        );
+    }
+
+    /// #99 : une socket qui accepte et ne répond jamais fait sortir la commande dans le
+    /// délai, avec son propre code de sortie.
+    #[tokio::test]
+    async fn a_mute_daemon_is_reported_not_waited_for() {
+        let dir = tempfile::Builder::new()
+            .prefix("pnl")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let sock = dir.path().join("rpc.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        // Accepte et garde la connexion ouverte, sans jamais répondre.
+        let hold = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((s, _)) = listener.accept().await {
+                held.push(s);
+            }
+        });
+        let t = std::time::Instant::now();
+        let e = call_limited(
+            &sock,
+            "status",
+            serde_json::json!({}),
+            Some(std::time::Duration::from_secs(1)),
+        )
+        .await
+        .unwrap_err();
+        assert!(t.elapsed() < std::time::Duration::from_secs(3));
+        assert!(matches!(e, CliError::DaemonUnresponsive(_)), "{e}");
+        assert_eq!(e.exit_code(), c::DAEMON_UNRESPONSIVE);
+        assert!(e.hint().unwrap().contains("--timeout"));
+        hold.abort();
     }
 
     #[test]
