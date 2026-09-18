@@ -8,7 +8,7 @@ Dernière mise à jour : 18 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1406 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1440 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1049,6 +1049,20 @@ l'adresse vérifiée (#93), fichiers lus en flux (#94), secret posé sans `argv`
   ignoré par défaut, à lancer à la main (il écrit un secret d'essai).
 
 ### 0.17.2
+
+Message court traité tout de suite (#96), rappels d'approbation envoyés (#97), document
+Telegram détaché (#98), CLI qui ne pend plus devant un daemon muet (#99), Ctrl-C qui
+arrête le tour (#100), file d'envoi Telegram dans l'ordre et échecs dits (#101), suite
+verte sur Linux et CI en deux jobs (#102), journaux corrélés par tour et métriques
+lisibles (#103), outils natifs à la demande : 20 définitions par appel au lieu de 52
+(#104), usage mesuré dans le classement de la mémoire (#105), réseau du shell fermé par
+défaut et accordé par appel (#106), compression de contexte expliquée sur une page
+vérifiée contre le code (#107).
+
+**À la mise à jour.** Une configuration sans `sandbox.shell_network` perd le réseau du
+shell : une commande le demande désormais (`network: true`) et l'approbation le dit ; pour
+le rouvrir à tout, `penelope config set sandbox.shell_network true`. La migration 0015 remet
+à zéro les compteurs de rappels de la mémoire.
 
 - **Un message court part tout de suite** (#96) : la fenêtre de regroupement ne s'ouvre
   plus pour chaque message. Un morceau à la limite de Telegram (4 000 caractères ou plus)
