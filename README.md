@@ -133,7 +133,7 @@ documentation de chaque projet.
 | | Pénélope | OpenClaw | Hermes |
 |---|---|---|---|
 | Approbation | bornée par motif d'arguments, enchaînements refusés, règle visible et révocable | demande hors liste d'autorisation, registre des octrois | mode « smart » par défaut, liste noire infranchissable |
-| Bac à sable | Seatbelt, toujours appliqué, profil `workspace-write` par défaut, aucun interrupteur pour le couper | désactivé par défaut | durcissement conteneur si le backend Docker est choisi |
+| Bac à sable | Seatbelt, toujours appliqué, profil `workspace-write` par défaut, réseau fermé et accordé appel par appel, aucun interrupteur pour le couper | désactivé par défaut | durcissement conteneur si le backend Docker est choisi |
 | Secrets | trousseau du système | fichiers en clair, permissions restreintes | `.env` en clair, coffre chiffré optionnel |
 | Contenu non fiable | donnée jamais instruction, détecteur d'injection, adresses privées revérifiées à chaque redirection | balisage explicite du contenu externe | scan des fichiers de contexte avant inclusion |
 | Coût | celui facturé par le fournisseur, lisible par session, tour, modèle, jour, rôle, fournisseur amont et cause de raté de cache | suivi par message et session | suivi par session |
@@ -156,8 +156,9 @@ Il faut le dire aussi, sinon le tableau ci-dessus ne vaut rien.
   famille de commandes. Codex coupe aussi ses autres outils ; nos appels MCP et
   `http_fetch` passent par leurs propres garde-fous, pas par le bac à sable.
 - **Maturité.** Ces projets encaissent des millions d'heures d'usage et publient leurs
-  vulnérabilités. Pénélope a une instance en service et des trous de sécurité ouverts
-  dans ses issues.
+  vulnérabilités. Pénélope a une instance en service : ce qu'elle sait de ses propres
+  défauts vient d'une revue adversariale de son code, pas encore de l'usage de milliers
+  de gens.
 
 ## Ce qu'elle ne fait pas
 
@@ -267,6 +268,7 @@ cargo deny check
 - [docs/README.md](docs/README.md) : index, par besoin et par fichier.
 - [docs/install-headless.md](docs/install-headless.md) : installation, configuration,
   référence des clés et des outils natifs.
+- [docs/context.md](docs/context.md) : compression du contexte, seuils, budgets, cache.
 - [docs/mcp.md](docs/mcp.md) : versions, transports, OAuth, registre paresseux.
 - [docs/workflows.md](docs/workflows.md) : schéma complet et cycle de vie d'un run.
 - [docs/telegram.md](docs/telegram.md) : commandes, gabarits, rendu.
