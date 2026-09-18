@@ -8,7 +8,7 @@ Dernière mise à jour : 18 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1472 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1473 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1327,6 +1327,9 @@ remis (#120).
   échec. Sans livrable déclaré, rien ne change.
 
 ### 0.17.9
+
+Pendant un tour, Pénélope donne des signes de vie : l'indicateur d'activité vit aussi
+longtemps que le tour, dans le bon sujet (#121).
 
 - **Des signes de vie pendant un tour** (#121) : `sendChatAction` n'était envoyé qu'une
   fois, au premier brouillon, sans `message_thread_id` et jamais dans un groupe. Chaque
