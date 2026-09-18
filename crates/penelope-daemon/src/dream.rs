@@ -760,7 +760,7 @@ async fn unused_entries(d: &Arc<Daemon>, day: &str) -> Vec<String> {
         .unwrap_or_default();
     // Ce qui est servi d'office dans l'instantané n'a pas d'usage mesurable par entrée :
     // le proposer au retrait retirerait ce qui sert le plus (issue #62).
-    let injected = crate::conversation::snapshot_uids(s).await;
+    let injected = crate::conversation::snapshot_uids(s, &crate::session_project::Scope::All).await;
     let vault = crate::conversation::vault_dir(s);
     let resolver = penelope_memory::wiki::Resolver::scan(&vault);
     entries
@@ -2956,7 +2956,8 @@ mod tests {
             .expect("paiement");
         assert!(paid.contains("sensible: oui"), "{paid}");
 
-        let blocks = crate::conversation::fresh_snapshot(s).await;
+        let blocks =
+            crate::conversation::fresh_snapshot(s, &crate::session_project::Scope::All).await;
         assert!(blocks[1].contains("agence web"), "{blocks:?}");
         assert!(
             blocks[1].contains("Durand"),

@@ -131,6 +131,8 @@ pub mod method {
     pub const SESSION_MODEL: &str = "session.model";
     /// Mode d'approbation d'une session : `ask`, `reads`, `auto` (issue #111).
     pub const SESSION_MODE: &str = "session.mode";
+    /// Sujet de travail d'une session : filtre la mémoire injectée d'office (issue #119).
+    pub const SESSION_PROJECT: &str = "session.project";
     pub const SESSION_BUDGET: &str = "session.budget";
 
     pub const CONFIG_GET: &str = "config.get";
@@ -249,6 +251,7 @@ pub mod method {
         SESSION_PURGE,
         SESSION_MODEL,
         SESSION_MODE,
+        SESSION_PROJECT,
         SESSION_BUDGET,
         CONFIG_GET,
         CONFIG_SET,

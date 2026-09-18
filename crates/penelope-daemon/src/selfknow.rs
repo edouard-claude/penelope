@@ -237,6 +237,7 @@ pub async fn status(
                 "alias": turn.map(|t| t.alias.clone()),
                 "model": turn.map(|t| model_view(&t.model_id)),
                 "sticky_alias": session.as_ref().and_then(|x| x.model_alias.clone()),
+                "project": crate::session_project::of_session(s, session_id).await.0,
             }),
         );
         let alias_of = |a: &str| json!({"alias": a, "model": cfg.alias_model(a)});

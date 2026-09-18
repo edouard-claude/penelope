@@ -519,6 +519,15 @@ impl TelegramGateway {
             owner_id: self.owner_id,
             allowed_chats: s.config.config().telegram.allowed_chats.clone(),
         };
+        // Nom du sujet Telegram : il peut donner son sujet de travail à la session (#119).
+        if let Some((chat, topic, name)) = topic_name_of(update)
+            && access.allowed_chats.contains(&chat)
+        {
+            let key = topic_name_key(chat, topic);
+            if self.daemon.kv_get(&key).await.ok().flatten().as_deref() != Some(name.as_str()) {
+                let _ = self.daemon.kv_set(&key, &name).await;
+            }
+        }
         let incoming = classify(update, &access);
         self.handle(incoming).await?;
 
@@ -1390,6 +1399,87 @@ impl TelegramGateway {
                         None,
                     )
                     .await;
+            }
+            // Sujet de travail de la session (issue #119) : sans argument, l'état et un
+            // bouton par projet connu.
+            "projet" => {
+                let session = d.chat_session_for(&origin).await?;
+                let wanted = args.trim();
+                match rpc
+                    .call(
+                        m::SESSION_PROJECT,
+                        json!({"session": session, "project": wanted}),
+                    )
+                    .await
+                {
+                    Err(e) => format!("❌ {e}"),
+                    Ok(v) if !wanted.is_empty() => match v["project"].as_str() {
+                        Some(p) => format!(
+                            "📁 Sujet de la session : **{p}**. La mémoire d'office s'y limite dès \
+                             le prochain message ; le reste reste au rappel."
+                        ),
+                        None => "📁 Session sans sujet : seules les entrées sans projet sont \
+                                 injectées d'office."
+                            .into(),
+                    },
+                    Ok(v) => {
+                        let current = v["project"].as_str();
+                        let mut rows = Vec::new();
+                        for p in v["known"]
+                            .as_array()
+                            .cloned()
+                            .unwrap_or_default()
+                            .iter()
+                            .take(12)
+                        {
+                            let p = p.as_str().unwrap_or_default();
+                            let mark = if Some(p) == current { "✅ " } else { "" };
+                            rows.push(vec![
+                                self.command_button_with(&format!("{mark}{p}"), "projet", p)
+                                    .await?,
+                            ]);
+                        }
+                        rows.push(vec![
+                            self.command_button_with(
+                                if current.is_none() {
+                                    "✅ Aucun"
+                                } else {
+                                    "Aucun"
+                                },
+                                "projet",
+                                "aucun",
+                            )
+                            .await?,
+                        ]);
+                        let state = match (current, v["how"].as_str()) {
+                            (Some(p), Some("explicite")) => format!("**{p}** (choisi)"),
+                            (Some(p), Some(how)) => format!("**{p}** (déduit du {how})"),
+                            (Some(p), None) => format!("**{p}**"),
+                            (None, Some(_)) => "aucun (choisi)".into(),
+                            (None, None) => "aucun pour l'instant".into(),
+                        };
+                        let text = format!(
+                            "📁 Sujet de la session : {state}.\n\nLe profil et les entrées sans \
+                             projet sont toujours là ; celles d'un projet n'entrent d'office que \
+                             dans une session de ce projet. Les autres restent au rappel et à \
+                             `mem_search`."
+                        );
+                        let mut payload = json!({
+                            "chat_id": chat_id,
+                            "text": markdown_to_html(&text),
+                            "parse_mode": "HTML",
+                            "reply_markup": inline_keyboard(&rows),
+                            "message_thread_id": topic_id,
+                        });
+                        if let Some(r) = reply_to {
+                            payload["reply_parameters"] =
+                                json!({"message_id": r, "allow_sending_without_reply": true});
+                        }
+                        return self
+                            .outbox_push(chat_id, topic_id, "sendMessage", payload)
+                            .await;
+                    }
+                }
             }
             // Mode d'approbation de la session (issue #111) : sans argument, l'état et un
             // bouton par mode.
@@ -3970,6 +4060,10 @@ impl TelegramGateway {
             }
             let title = crate::titles::label(sess);
             label.push_str(&title.chars().take(48).collect::<String>());
+            // Son sujet de travail, qui filtre sa mémoire d'office (#119).
+            if let (Some(p), _) = crate::session_project::of_session(s, &id).await {
+                label.push_str(&format!(" · 📁{p}"));
+            }
             // La plus récente porte aussi l'heure de sa dernière activité.
             if i == 0
                 && let Some(hm) = sess.last_activity.as_deref().and_then(|t| t.get(11..16))
@@ -6750,6 +6844,24 @@ pub fn render_value(v: &Value) -> String {
         other => scalar(other),
     };
     out.chars().take(3_500).collect()
+}
+
+/// Clé du nom d'un sujet Telegram, lu dans les messages du sujet (issue #119).
+pub fn topic_name_key(chat_id: i64, topic_id: i64) -> String {
+    format!("tg.topic_name.{chat_id}.{topic_id}")
+}
+
+/// Nom du sujet d'un message de forum : à sa création, à son renommage, ou dans le
+/// message de création auquel chaque message du sujet répond.
+fn topic_name_of(update: &Value) -> Option<(i64, i64, String)> {
+    let msg = update.get("message")?;
+    let chat = msg["chat"]["id"].as_i64()?;
+    let topic = msg["message_thread_id"].as_i64()?;
+    let name = msg["forum_topic_created"]["name"]
+        .as_str()
+        .or(msg["forum_topic_edited"]["name"].as_str())
+        .or(msg["reply_to_message"]["forum_topic_created"]["name"].as_str())?;
+    Some((chat, topic, name.to_string()))
 }
 
 /// Conversations refusées récemment, les plus récentes d'abord (issue #113).

@@ -128,6 +128,13 @@ pub fn all() -> Vec<Command> {
             m::MODEL_LIST,
         ),
         c(
+            "projet",
+            "Session",
+            "Sujet de travail de la session : la mémoire d'office s'y limite",
+            "/projet fidelatoo",
+            m::SESSION_PROJECT,
+        ),
+        c(
             "mode",
             "Session",
             "Ce qui part sans demande : tout demander, lectures libres, tout sauf le destructif",

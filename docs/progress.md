@@ -1299,6 +1299,15 @@ telle qu'elle sera exécutée (#116).
   prompt intact. Les ratés de cache « outils » ne venaient pas de là (les skills sont dans
   le préfixe, dont le changement se classe « préfixe ») mais des outils à la demande qui
   rejoignent ou quittent la liste d'une session (#104).
+- **La mémoire d'office suit le sujet de la session** (#119) : dans un sujet Telegram
+  créé pour LinkedIn, tout Fidelatoo était injecté à chaque tour. Une session porte
+  désormais un sujet de travail (`session_project`) : choisi (`/projet`, `penelope session
+  project`, `session.project`) ou déduit, quand l'instantané de l'épisode se fige, du nom
+  du sujet Telegram (lu dans les messages du forum), du titre ou du message, parmi les
+  projets connus du vault (annotation `projet`, sections de `projets.md`). L'instantané T2
+  garde le profil, les entrées sans projet et celles du sujet ; les autres restent au
+  rappel (exclues de `injected_uids`) et à `mem_search`. Une session sans sujet ne reçoit
+  que les entrées sans projet. `/sessions` affiche 📁, `self_status` donne `project`.
 
 ### Routine de livraison
 

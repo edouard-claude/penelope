@@ -37,6 +37,7 @@ pub mod selfdocs;
 pub mod selfknow;
 pub mod session_notes;
 pub mod session_ops;
+pub mod session_project;
 pub mod supervisor;
 pub mod tasks;
 pub mod telegram;

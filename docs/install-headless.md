@@ -1225,6 +1225,15 @@ est dans `DREAMS.md` sous le rêve de la nuit, avec une section « Motifs d'éca
 nuits de suite ou plus sans rien promouvoir ajoutent une ligne explicite, avec le motif
 dominant : un motif qui revient vingt fois est un réglage à revoir.
 
+**Sujet de travail.** Ce qui est injecté d'office (profil, mémoire de fond, projets) suit
+le sujet de la session : le profil et les entrées sans projet toujours, une entrée d'un
+projet (annotation `<!-- projet: nom -->`, ou section de `projets.md`) seulement dans les
+sessions de ce projet. Le sujet se déduit du nom du sujet Telegram, du titre ou du premier
+message quand ils nomment un projet connu, ou se choisit (`/projet`, `penelope session
+project <nom>`, `aucun`). Rien n'est perdu : ce qui n'est pas injecté revient par le rappel
+et `mem_search`. Le sujet se fige avec l'instantané de l'épisode, le préfixe du prompt ne
+bouge pas d'un tour à l'autre ; le changer à la main le refige au message suivant.
+
 **Journal des états en cours.** Ce qui est vrai aujourd'hui mais pas dans un mois (ticket
 corrigé en dev, document pas encore lu, rendez-vous) va dans `projets.md`, section « États
 en cours », avec `expire` (14 jours par défaut, 90 au plus). Il est injecté jusqu'à cette

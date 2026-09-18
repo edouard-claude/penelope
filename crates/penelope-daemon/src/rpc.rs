@@ -439,6 +439,20 @@ impl Rpc {
                 let mode = of_session(s, &sid).await;
                 Ok(json!({"session": sid, "mode": mode.as_str(), "label": mode.label()}))
             }
+            method::SESSION_PROJECT => {
+                let sid = self.session_param(p).await?;
+                match p.get("project").and_then(|m| m.as_str()).map(str::trim) {
+                    None | Some("") => {}
+                    Some("aucun" | "none" | "-") => {
+                        crate::session_project::set(&self.daemon, &sid, None).await
+                    }
+                    Some(name) => crate::session_project::set(&self.daemon, &sid, Some(name)).await,
+                }
+                let (project, how) = crate::session_project::of_session(s, &sid).await;
+                let known: Vec<String> =
+                    crate::session_project::known(s).await.into_iter().collect();
+                Ok(json!({"session": sid, "project": project, "how": how, "known": known}))
+            }
             method::MODEL_LIST => {
                 // D'abord ce que l'utilisateur a configuré, ensuite le catalogue du provider.
                 let filter = p

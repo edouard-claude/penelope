@@ -301,6 +301,13 @@ pub enum SessionCmd {
         #[arg(long)]
         session: Option<String>,
     },
+    /// Sujet de travail de la session : sans argument l'état et les projets connus, sinon
+    /// un projet, ou `aucun`. Filtre la mémoire injectée d'office.
+    Project {
+        project: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -854,6 +861,10 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Session(SessionCmd::Mode { mode, session }) => {
             (m::SESSION_MODE, json!({"mode": mode, "session": session}))
         }
+        Command::Session(SessionCmd::Project { project, session }) => (
+            m::SESSION_PROJECT,
+            json!({"project": project, "session": session}),
+        ),
 
         Command::Config(ConfigCmd::Get) => (m::CONFIG_GET, json!({})),
         Command::Config(ConfigCmd::Status) => (m::CONFIG_STATUS, json!({})),
@@ -2131,6 +2142,7 @@ mod tests {
             (vec!["session", "model", "main"], m::SESSION_MODEL),
             (vec!["session", "compact"], m::SESSION_COMPACT),
             (vec!["session", "mode", "ask"], m::SESSION_MODE),
+            (vec!["session", "project", "fidelatoo"], m::SESSION_PROJECT),
             (vec!["session", "fork"], m::SESSION_FORK),
             (vec!["session", "rewind", "2"], m::SESSION_REWIND),
             (vec!["export", "run", "r_1"], m::EXPORT),

@@ -199,7 +199,7 @@ un test vérifie que **toutes** le sont : une commande sans méthode serait une 
 
 ```
 /new /sessions /switch /close /purge /title /fork /rewind /compact /export /stop
-/model /models /mode /budget /usage
+/model /models /mode /projet /budget /usage
 /note /retiens /oublie /recall /appris /pratique /dream /intentions /mien /forget /accueil /audit
 /mcp /mcp auth /p
 /skills /skill
@@ -229,6 +229,7 @@ Workflows (4)
 | `/schedules` | ⚡ déclencher, ⏸/▶️, 🗑 (confirmé) ; dernière erreur de chaque planification ; une exécution en échec arrive en alerte avec « Relancer maintenant » |
 | `/mcp` | par serveur : détail, 🔄 redémarrer, 🧪 tester ; le détail ajoute 📜 journal, ⏻ activer ou désactiver, 🔐 autoriser |
 | `/models` | un modèle, puis l'alias auquel l'affecter ; 🔎 chercher |
+| `/projet` | sujet de travail de la session : un bouton par projet connu du vault, et « Aucun » ; la mémoire d'office s'y limite |
 | `/mode` | ce qui part sans demande dans cette session : demander tout, lectures sans demande (défaut), tout sauf le destructif ; le mode actuel coché |
 | `/skills`, `/skill` | 📖 voir, ⏪ version précédente (confirmé) |
 | `/oublie`, `/forget` | une entrée (ou une session) par bouton, puis confirmation |
@@ -363,7 +364,14 @@ en fond (la nouvelle session prend le fil, l'ancienne finit son travail) ou la f
 disant combien de tours seraient perdus.
 
 Chaque sujet porte sa propre session : plusieurs chantiers avancent en parallèle, un par
-sujet. Pour monter un tel groupe :
+sujet. Chaque session a aussi un **sujet de travail** : le nom du sujet Telegram, le titre
+de la session ou son premier message, quand il nomme un projet connu du vault (annotation
+`projet`, section de `projets.md`), sinon `/projet`. La mémoire injectée d'office s'y
+limite : le profil et les entrées sans projet partout, celles d'un projet seulement dans
+ses sessions ; le reste revient par le rappel quand la question le vise, ou par
+`mem_search`. `/sessions` le montre (📁), `/projet` le change.
+
+Pour monter un tel groupe :
 
 1. Créer un groupe, activer les sujets (il devient un supergroupe) et y ajouter le bot
    comme administrateur ; sinon, désactiver son mode privé chez @BotFather

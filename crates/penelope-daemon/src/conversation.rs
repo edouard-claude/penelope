@@ -313,8 +313,8 @@ pub async fn build_turn_prompt(
 
     // T2 : instantanés mémoire, figés par épisode quand il y en a un.
     let [profile, core, project] = match episode {
-        Some((session_id, n)) => frozen_snapshot(s, session_id, n).await,
-        None => fresh_snapshot(s).await,
+        Some((session_id, n)) => frozen_snapshot(s, session_id, n, user_text).await,
+        None => fresh_snapshot(s, &crate::session_project::Scope::All).await,
     };
     b = b.memory_snapshot(profile, core, project);
 
@@ -338,7 +338,13 @@ pub async fn build_turn_prompt(
         // facteur « projet actif » reste inopérant (issue #58).
         let practices = practices_of(&vault);
         let mut ctx = current_context(s, user_text, episode.map(|(sid, _)| sid)).await;
-        ctx.injected_uids = snapshot_uids(s).await;
+        let scope = match episode {
+            Some((sid, _)) => crate::session_project::Scope::Session(
+                crate::session_project::of_session(s, sid).await.0,
+            ),
+            None => crate::session_project::Scope::All,
+        };
+        ctx.injected_uids = snapshot_uids(s, &scope).await;
         let recall = penelope_memory::Recall::new(
             &s.memory,
             penelope_memory::RecallParams::from_config(&cfg.memory),
@@ -432,7 +438,10 @@ async fn current_context(
 
 /// uid servis d'office dans l'instantané T2 : ni rappelés une seconde fois, ni comptés
 /// « jamais rappelés » (issue #62).
-pub(crate) async fn snapshot_uids(s: &Services) -> Vec<String> {
+pub(crate) async fn snapshot_uids(
+    s: &Services,
+    scope: &crate::session_project::Scope,
+) -> Vec<String> {
     let cfg = s.config.config();
     let hidden = s.memory.hidden_uids().await.unwrap_or_default();
     let mut out = Vec::new();
@@ -448,7 +457,7 @@ pub(crate) async fn snapshot_uids(s: &Services) -> Vec<String> {
         ),
     ] {
         let mut entries = s.memory.by_level(level).await.unwrap_or_default();
-        entries.retain(|e| !hidden.contains(&e.uid));
+        entries.retain(|e| !hidden.contains(&e.uid) && crate::session_project::keeps(scope, e));
         let (_, uids) =
             penelope_memory::recall::Snapshots::build_block_with_uids(&entries, budget as u64);
         out.extend(uids);
@@ -456,8 +465,12 @@ pub(crate) async fn snapshot_uids(s: &Services) -> Vec<String> {
     out
 }
 
-/// Profil, cœur et projets tels que l'index les donne maintenant.
-pub(crate) async fn fresh_snapshot(s: &Services) -> [String; 3] {
+/// Profil, cœur et projets tels que l'index les donne maintenant, pour cette portée : le
+/// cœur et les projets d'un autre sujet restent au rappel (issue #119).
+pub(crate) async fn fresh_snapshot(
+    s: &Services,
+    scope: &crate::session_project::Scope,
+) -> [String; 3] {
     let cfg = s.config.config();
     let mut out: [String; 3] = Default::default();
     // Entrées expirées : jamais injectées d'office ; `sensible` n'est qu'un marqueur
@@ -478,14 +491,19 @@ pub(crate) async fn fresh_snapshot(s: &Services) -> [String; 3] {
     .enumerate()
     {
         let mut entries = s.memory.by_level(level).await.unwrap_or_default();
-        entries.retain(|e| !hidden.contains(&e.uid));
+        entries.retain(|e| !hidden.contains(&e.uid) && crate::session_project::keeps(scope, e));
         out[i] = penelope_memory::recall::Snapshots::build_block(&entries, budget as u64);
     }
     out
 }
 
 /// Instantané de l'épisode : calculé au premier tour, relu ensuite.
-async fn frozen_snapshot(s: &Services, session_id: &str, episode: i64) -> [String; 3] {
+async fn frozen_snapshot(
+    s: &Services,
+    session_id: &str,
+    episode: i64,
+    user_text: &str,
+) -> [String; 3] {
     let key = crate::episodes::snapshot_key(session_id, episode);
     let k = key.clone();
     let stored: Option<String> = s
@@ -504,7 +522,9 @@ async fn frozen_snapshot(s: &Services, session_id: &str, episode: i64) -> [Strin
     if let Some(blocks) = stored.and_then(|raw| serde_json::from_str::<[String; 3]>(&raw).ok()) {
         return blocks;
     }
-    let blocks = fresh_snapshot(s).await;
+    // Le sujet se fixe ici, avec l'instantané de l'épisode (#119).
+    let project = crate::session_project::resolve(s, session_id, user_text).await;
+    let blocks = fresh_snapshot(s, &crate::session_project::Scope::Session(project)).await;
     if let Ok(raw) = serde_json::to_string(&blocks) {
         let _ = s
             .store
@@ -559,6 +579,127 @@ mod tests {
             .await
             .unwrap();
         (dir, Arc::new(s))
+    }
+
+    /// #119 : deux sessions de sujets différents ne reçoivent pas le même bloc Projet ;
+    /// une entrée d'un projet n'entre pas dans la tuile T2 d'une session d'un autre projet
+    /// mais ressort par `mem_search` ; une entrée sans projet entre partout ; le préfixe
+    /// reste identique d'un tour à l'autre ; le sujet se déduit du titre ou du sujet
+    /// Telegram quand il nomme un projet connu.
+    #[tokio::test]
+    async fn the_injected_memory_follows_the_session_subject() {
+        let (_dir, s) = services().await;
+        let vault = vault_dir(&s);
+        std::fs::create_dir_all(&vault).unwrap();
+        std::fs::write(
+            vault.join("memoire.md"),
+            "# Mémoire de fond\n\n## Clients\n\
+             - La base de Fidelatoo tourne sur Postgres chez Scaleway <!-- projet: Fidelatoo --> ^01FIDBASE\n\
+             - Le propriétaire préfère le tutoiement ^01GENERAL\n",
+        )
+        .unwrap();
+        std::fs::write(
+            vault.join("projets.md"),
+            "# Projets\n\n## Fidelatoo\n- Pagination infinie à corriger ^01FIDPAG\n\n\
+             ## LinkedIn\n- Trois publications par semaine ^01LINKED\n",
+        )
+        .unwrap();
+        crate::vault_ops::reindex(&s, &vault).await.unwrap();
+        let d = crate::runtime::Daemon::from_services(s.clone());
+
+        let fid = session(&s).await;
+        let lnk = session(&s).await;
+        crate::session_project::set(&d, &fid, Some("Fidelatoo")).await;
+        crate::session_project::set(&d, &lnk, Some("linkedin")).await;
+        let t2 = |sid: String| {
+            let s = s.clone();
+            async move {
+                build_tiers_in(&s, "bonjour", &[], None, Some((sid.as_str(), 0)), None)
+                    .await
+                    .context
+            }
+        };
+        let (a, b) = (t2(fid.clone()).await, t2(lnk.clone()).await);
+        assert!(
+            a.contains("Postgres chez Scaleway") && a.contains("Pagination infinie"),
+            "{a}"
+        );
+        assert!(!a.contains("Trois publications"), "{a}");
+        assert!(b.contains("Trois publications"), "{b}");
+        assert!(!b.contains("Scaleway") && !b.contains("Pagination"), "{b}");
+        assert!(
+            a.contains("tutoiement") && b.contains("tutoiement"),
+            "sans projet : partout"
+        );
+
+        // Ce qui est écarté reste atteignable.
+        let hits = s
+            .memory
+            .search(
+                "Postgres Scaleway",
+                None,
+                &penelope_memory::SearchFilter::explicit(),
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(hits.iter().any(|h| h.entry.uid == "01FIDBASE"));
+        let uids = snapshot_uids(
+            &s,
+            &crate::session_project::Scope::Session(Some("linkedin".into())),
+        )
+        .await;
+        assert!(
+            !uids.contains(&"01FIDBASE".to_string()),
+            "le rappel peut la servir"
+        );
+
+        // Préfixe stable d'un tour à l'autre dans la même session.
+        let p1 = build_tiers_in(&s, "et ensuite ?", &[], None, Some((fid.as_str(), 0)), None)
+            .await
+            .prefix_hash();
+        let p2 = build_tiers_in(&s, "autre chose", &[], None, Some((fid.as_str(), 0)), None)
+            .await
+            .prefix_hash();
+        assert_eq!(p1, p2);
+
+        // Déduit du titre, puis du nom du sujet Telegram.
+        let titled = session(&s).await;
+        s.sessions
+            .set_title(&titled, "Fidelatoo : correctif de la pagination", false)
+            .await
+            .unwrap();
+        let c = t2(titled.clone()).await;
+        assert!(
+            c.contains("Pagination infinie") && !c.contains("Trois publications"),
+            "{c}"
+        );
+        assert_eq!(
+            crate::session_project::of_session(&s, &titled).await,
+            (Some("fidelatoo".into()), Some("titre".into()))
+        );
+        let topic = session(&s).await;
+        s.sessions
+            .bind_telegram(&topic, -10_042, Some(21))
+            .await
+            .unwrap();
+        d.kv_set(
+            &crate::telegram::topic_name_key(-10_042, 21),
+            "Posts LinkedIn",
+        )
+        .await
+        .unwrap();
+        let t = t2(topic.clone()).await;
+        assert!(
+            t.contains("Trois publications") && !t.contains("Scaleway"),
+            "{t}"
+        );
+        let plain = session(&s).await;
+        let p = t2(plain).await;
+        assert!(
+            p.contains("tutoiement") && !p.contains("Scaleway") && !p.contains("Trois"),
+            "{p}"
+        );
     }
 
     async fn session(s: &Services) -> String {
