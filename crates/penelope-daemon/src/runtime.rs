@@ -586,7 +586,12 @@ pub async fn reload_skills(s: &Services) -> anyhow::Result<u64> {
     for (name, body) in BUNDLED_SKILLS {
         let dir = bundled.join(name);
         std::fs::create_dir_all(&dir)?;
-        penelope_kernel::config::atomic_write(&dir.join("SKILL.md"), body.as_bytes())?;
+        // Réécrite seulement si elle a changé : une réécriture identique déplaçait sa date
+        // de modification et relançait le rechargement suivant, chaque minute (#118).
+        let path = dir.join("SKILL.md");
+        if std::fs::read(&path).ok().as_deref() != Some(body.as_bytes()) {
+            penelope_kernel::config::atomic_write(&path, body.as_bytes())?;
+        }
     }
     Ok(s.skills
         .reload(Some(&bundled), &s.platform.dirs.skills(), None)

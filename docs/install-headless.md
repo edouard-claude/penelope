@@ -1081,8 +1081,9 @@ configuré, Pénélope n'annonce pas cette capacité. Le sampling reste refusé.
 ### Déposer une skill
 
 Une skill est un dossier avec un `SKILL.md` dans `{data}/skills/` : il suffit de le
-déposer, par exemple par `scp`. La passe d'entretien relit le dossier chaque minute dès que
-son contenu change, sans redémarrage ; la skill est alors visible par `skill_search`,
+déposer, par exemple par `scp`. La passe d'entretien vérifie le dossier chaque minute et
+ne relit les skills que si le contenu d'un fichier a changé (pas sa seule date), sans
+redémarrage ; la skill est alors visible par `skill_search`,
 `skill_load` et l'index des capacités. Pour ne pas attendre :
 
 ```bash

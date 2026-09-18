@@ -1288,6 +1288,18 @@ telle qu'elle sera exécutée (#116).
   harnais qui conseillait d'enchaîner les lectures (`&&`) dit désormais qu'une lecture
   simple passe sans demande et qu'enchaînée elle demande (#111).
 
+### 0.17.7
+
+- **Les skills ne se rechargent plus chaque minute** (#118) : `reload_skills` réécrivait
+  les skills livrées à chaque passage, ce qui déplaçait leur date, et l'empreinte du
+  dossier était bâtie sur les dates : chaque rechargement provoquait le suivant (851 par
+  jour en production). Une skill livrée n'est réécrite que si son contenu diffère,
+  l'empreinte hache le contenu (la date seulement au-delà d'un Mio), et celle gardée est
+  calculée après le rechargement (`skills_tick`). Un contenu inchangé laisse le préfixe du
+  prompt intact. Les ratés de cache « outils » ne venaient pas de là (les skills sont dans
+  le préfixe, dont le changement se classe « préfixe ») mais des outils à la demande qui
+  rejoignent ou quittent la liste d'une session (#104).
+
 ### Routine de livraison
 
 Avant chaque tag :

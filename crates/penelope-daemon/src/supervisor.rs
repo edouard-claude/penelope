@@ -242,9 +242,10 @@ async fn maintenance_loop(d: Arc<Daemon>) {
     }
 }
 
-/// Empreinte des dossiers de skills : chemins, tailles et dates de modification. Un
-/// changement suffit à déclencher une relecture (issue #63).
-fn skills_fingerprint(s: &crate::runtime::Services) -> String {
+/// Empreinte des dossiers de skills : chemins et contenus (issue #63). Le contenu, pas la
+/// date de modification : une réécriture à l'identique ne relance rien (#118). Au-delà
+/// d'un Mio, un fichier (image, archive) compte par sa taille et sa date.
+pub(crate) fn skills_fingerprint(s: &crate::runtime::Services) -> String {
     let mut parts: Vec<String> = Vec::new();
     for root in [s.platform.dirs.skills(), s.platform.dirs.bundled_skills()] {
         let mut stack = vec![root];
@@ -260,17 +261,44 @@ fn skills_fingerprint(s: &crate::runtime::Services) -> String {
                 }
                 let meta = e.metadata().ok();
                 let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-                let mtime = meta
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_millis())
-                    .unwrap_or(0);
-                parts.push(format!("{}|{size}|{mtime}", path.display()));
+                let content = if size <= 1024 * 1024 {
+                    std::fs::read(&path)
+                        .map(|b| penelope_kernel::canonical::sha256_hex(&b))
+                        .unwrap_or_default()
+                } else {
+                    meta.and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis().to_string())
+                        .unwrap_or_default()
+                };
+                parts.push(format!("{}|{size}|{content}", path.display()));
             }
         }
     }
     parts.sort();
     penelope_kernel::canonical::sha256_hex(parts.join("\n").as_bytes())
+}
+
+/// Relit les skills si leur contenu a changé. L'empreinte gardée est celle d'après le
+/// rechargement : ce qu'il réécrit ne compte pas comme un changement (#118). Vrai si les
+/// skills ont été relues.
+pub(crate) async fn skills_tick(d: &Daemon) -> anyhow::Result<bool> {
+    let s = &d.services;
+    if d.kv_get("skills.fingerprint").await?.as_deref() == Some(skills_fingerprint(s).as_str()) {
+        return Ok(false);
+    }
+    match crate::runtime::reload_skills(s).await {
+        Ok(n) => {
+            tracing::info!(skills = n, "skills relues après changement du dossier");
+            d.kv_set("skills.fingerprint", &skills_fingerprint(s))
+                .await?;
+            Ok(true)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "rechargement des skills");
+            Ok(false)
+        }
+    }
 }
 
 /// Conversation d'où vient une demande : le chat de sa session, sinon le propriétaire.
@@ -333,16 +361,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     }
 
     // Skills déposées en SSH : relues quand le dossier change, sans redémarrage (#63).
-    let fingerprint = skills_fingerprint(s);
-    if d.kv_get("skills.fingerprint").await?.as_deref() != Some(fingerprint.as_str()) {
-        match crate::runtime::reload_skills(s).await {
-            Ok(n) => {
-                tracing::info!(skills = n, "skills relues après changement du dossier");
-                d.kv_set("skills.fingerprint", &fingerprint).await?;
-            }
-            Err(e) => tracing::warn!(error = %e, "rechargement des skills"),
-        }
-    }
+    skills_tick(d).await?;
 
     // Sauvegarde complète à l'heure dite (issue #42).
     if let Err(e) = crate::backup::nightly_tick(d).await {
@@ -568,6 +587,85 @@ mod tests {
         maintenance_pass(&d).await.unwrap();
         assert!(s.skills.get("revue-express").is_some(), "toujours là");
         assert!(s.skills.all().len() > before);
+    }
+
+    /// #118 : deux passes sans changement ne relisent les skills qu'une fois ; réécrire
+    /// une skill livrée à l'identique ne change pas l'empreinte ; modifier le contenu d'une
+    /// skill déposée relance exactement un rechargement ; un rechargement sans changement de
+    /// contenu laisse le préfixe du prompt intact.
+    #[tokio::test]
+    async fn skills_reload_only_when_their_content_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(TestClock::default());
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock.clone())
+                .await
+                .unwrap(),
+        );
+        let d = Arc::new(Daemon::from_services(s.clone()));
+        let root = s.platform.dirs.skills().join("revue-express");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("SKILL.md"),
+            "---\nname: revue-express\ndescription: Relire un diff\n---\n\nCinq points.\n",
+        )
+        .unwrap();
+
+        assert!(
+            skills_tick(&d).await.unwrap(),
+            "premier passage : rechargement"
+        );
+        let prefix = crate::conversation::build_tiers(&s, "bonjour", &[], None)
+            .await
+            .prefix_hash();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(!skills_tick(&d).await.unwrap(), "rien n'a changé");
+        assert!(!skills_tick(&d).await.unwrap(), "toujours rien");
+
+        let before = skills_fingerprint(&s);
+        let bundled = s
+            .platform
+            .dirs
+            .bundled_skills()
+            .join("wiki-markdown")
+            .join("SKILL.md");
+        let modified = std::fs::metadata(&bundled).unwrap().modified().unwrap();
+        crate::runtime::reload_skills(&s).await.unwrap();
+        assert_eq!(
+            std::fs::metadata(&bundled).unwrap().modified().unwrap(),
+            modified,
+            "une skill livrée identique n'est pas réécrite"
+        );
+        std::fs::write(&bundled, std::fs::read(&bundled).unwrap()).unwrap();
+        assert_eq!(
+            skills_fingerprint(&s),
+            before,
+            "même contenu, même empreinte"
+        );
+        assert!(!skills_tick(&d).await.unwrap());
+        assert_eq!(
+            crate::conversation::build_tiers(&s, "bonjour", &[], None)
+                .await
+                .prefix_hash(),
+            prefix,
+            "préfixe intact"
+        );
+
+        std::fs::write(
+            root.join("SKILL.md"),
+            "---\nname: revue-express\ndescription: Relire un diff en sept points\n---\n\nSept.\n",
+        )
+        .unwrap();
+        assert!(
+            skills_tick(&d).await.unwrap(),
+            "contenu modifié : rechargement"
+        );
+        assert!(!skills_tick(&d).await.unwrap(), "un seul");
+        assert!(
+            s.skills
+                .get("revue-express")
+                .is_some_and(|k| k.description.contains("sept")),
+        );
     }
 
     #[tokio::test]
