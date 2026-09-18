@@ -530,7 +530,7 @@ impl TelegramGateway {
                     let name = w["name"].as_str().filter(|n| !n.is_empty()).unwrap_or(id);
                     sc.text.push_str(&format!(
                         "\n- **{name}** (`{id}`) · {} étape(s){}",
-                        w["steps"],
+                        super::shown(&w["steps"]),
                         if w["runsHere"].as_bool() == Some(false) {
                             " · pas sur cette machine"
                         } else {
@@ -877,7 +877,10 @@ impl TelegramGateway {
                 let models = v["models"].as_array().cloned().unwrap_or_default();
                 let mut t = routing_text(&v);
                 t.push_str(&if models.is_empty() && filter.is_empty() {
-                    format!("\n{} modèle(s) au catalogue.", v["catalog_size"])
+                    format!(
+                        "\n{} modèle(s) au catalogue.",
+                        super::shown(&v["catalog_size"])
+                    )
                 } else if filter.is_empty() {
                     format!(
                         "\n**Catalogue** ({}) : un modèle pour l'affecter à un alias.",
@@ -902,7 +905,7 @@ impl TelegramGateway {
                             &format!(
                                 "{} · {} $/M",
                                 trunc(&short_model(id), 36),
-                                x["usd_per_m_in"]
+                                super::shown(&x["usd_per_m_in"])
                             ),
                             "model.assign",
                             json!({"model": id, "back": back_of("models", &back_args)}),
@@ -1525,7 +1528,7 @@ impl TelegramGateway {
                 let v = rpc.call(m::CONFIG_STATUS, json!({})).await?;
                 let mut t = format!(
                     "⚙️ **Configuration** · génération {}\n`{}`\n\n**Sous-systèmes**",
-                    v["generation"],
+                    super::shown(&v["generation"]),
                     v["path"].as_str().unwrap_or("?")
                 );
                 match v["subsystems"].as_object() {
@@ -2064,7 +2067,7 @@ impl TelegramGateway {
                 let v = rpc.call(m::MCP_RESTART, json!({"name": name})).await?;
                 Done::toast(format!(
                     "🔄 {name} : {} outil(s), {}",
-                    v["tool_count"],
+                    super::shown(&v["tool_count"]),
                     v["state"].as_str().unwrap_or("?")
                 ))
             }
@@ -2072,7 +2075,7 @@ impl TelegramGateway {
                 let name = str_of("name");
                 let v = rpc.call(m::MCP_TEST, json!({"name": name})).await?;
                 if v["ok"].as_bool() == Some(true) {
-                    Done::toast(format!("✅ {name} répond ({} ms)", v["ms"]))
+                    Done::toast(format!("✅ {name} répond ({} ms)", super::shown(&v["ms"])))
                 } else {
                     Done::toast(format!(
                         "❌ {name} : {}",
@@ -2134,7 +2137,10 @@ impl TelegramGateway {
                     .await?;
                 Done::note(
                     format!("✅ {alias} → {}", short_model(&model)),
-                    format!("✅ `{alias}` → `{model}` (génération {}).", v["generation"]),
+                    format!(
+                        "✅ `{alias}` → `{model}` (génération {}).",
+                        super::shown(&v["generation"])
+                    ),
                 )
             }
             "skill.rollback" => {
@@ -2248,7 +2254,7 @@ impl TelegramGateway {
                     toast: format!("⏪ {turns} échange(s) défait(s)"),
                     note: Some(format!(
                         "⏪ {turns} échange(s) défait(s) ({} messages mis de côté dans `{}`).",
-                        v["removed"],
+                        super::shown(&v["removed"]),
                         v["archive"].as_str().unwrap_or("?")
                     )),
                     redraw: false,

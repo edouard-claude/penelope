@@ -1247,6 +1247,10 @@ en administrateur anonyme (#113).
   avec sa dernière ligne d'erreur. `logs` ajoute la fin du processus et dit une sortie
   vide au lieu de rendre `[]` ; `last_error` de `mcp show` et le résultat de `mcp test` le
   reprennent.
+- **Plus de `null` dans les bulles** (#115) : une valeur JSON montrée passe par `shown`
+  (chaîne sans guillemets, nombre tel quel, absence en « ? ») ; quinze sites corrigés dans
+  les écrans, les commandes et `doctor`. Un test refuse toute valeur JSON brute passée à
+  `format!` dans le code Telegram et parcourt les écrans usuels sans y trouver `null`.
 
 ### Routine de livraison
 

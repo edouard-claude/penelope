@@ -32,6 +32,17 @@ mod screens;
 /// Longueur d'un fragment Markdown avant conversion HTML : marge pour les balises.
 const FRAGMENT_CHARS: usize = 3_500;
 const MAX_ATTEMPTS: i64 = 6;
+/// Une valeur JSON telle qu'on la montre dans une bulle : une chaîne sans guillemets, un
+/// nombre tel quel, une absence en « ? », jamais `null` (issue #115).
+pub(crate) fn shown(v: &Value) -> String {
+    match v {
+        Value::Null => "?".into(),
+        Value::String(s) if s.is_empty() => "?".into(),
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
 /// Mention des messages en attente abandonnés par la fermeture d'une session.
 fn cancelled_note(n: usize) -> String {
     match n {
@@ -915,7 +926,7 @@ impl TelegramGateway {
                             text: format!(
                                 "🍴 Session dupliquée ({} messages) : la suite se passe dans \
                                  `{fork}`.{}",
-                                v["messages"],
+                                shown(&v["messages"]),
                                 background_note(background)
                             ),
                             rows: vec![vec![ButtonSpec::callback(
@@ -942,7 +953,7 @@ impl TelegramGateway {
                 match crate::session_ops::rewind(d, &session, turns).await {
                     Ok(v) => format!(
                         "⏪ {turns} échange(s) défait(s) ({} messages mis de côté dans `{}`).",
-                        v["removed"],
+                        shown(&v["removed"]),
                         v["archive"].as_str().unwrap_or("?")
                     ),
                     Err(e) => format!("❌ {e}"),
@@ -1253,7 +1264,7 @@ impl TelegramGateway {
                         {
                             Ok(v) => format!(
                                 "✅ `{alias}` → `{model}` (génération {}).",
-                                v["generation"]
+                                shown(&v["generation"])
                             ),
                             Err(e) => format!("❌ {e}"),
                         }
@@ -1381,7 +1392,7 @@ impl TelegramGateway {
                     ["restart", name] => match call(m::MCP_RESTART, name).await {
                         Ok(v) => format!(
                             "🔄 `{name}` redémarré : {} outil(s), état {}.",
-                            v["tool_count"],
+                            shown(&v["tool_count"]),
                             v["state"].as_str().unwrap_or("?")
                         ),
                         Err(e) => format!("❌ {e}"),
@@ -1410,8 +1421,8 @@ impl TelegramGateway {
                         Ok(v) if v["ok"].as_bool() == Some(true) => format!(
                             "✅ `{name}` répond : protocole {}, {} outil(s), {} ms.",
                             v["protocol"].as_str().unwrap_or("?"),
-                            v["tools"],
-                            v["ms"]
+                            shown(&v["tools"]),
+                            shown(&v["ms"])
                         ),
                         Ok(v) => {
                             format!("❌ `{name}` : {}", v["error"].as_str().unwrap_or("échec"))
@@ -6450,7 +6461,7 @@ fn mcp_list_text(v: &Value) -> String {
                 "{} `{}` · {} outil(s) · {label}\n",
                 mcp_state_icon(state),
                 srv["name"].as_str().unwrap_or("?"),
-                srv["tools"]
+                shown(&srv["tools"])
             ));
             if let Some(e) = srv["last_error"].as_str().filter(|_| state != "ready") {
                 t.push_str(&format!(
@@ -6481,9 +6492,9 @@ fn mcp_show_text(v: &Value) -> String {
         "{} **{name}** · {} · {} outil(s) · {} appel(s), {} erreur(s)\n",
         mcp_state_icon(state),
         state,
-        st["tool_count"],
-        st["calls"],
-        st["errors"]
+        shown(&st["tool_count"]),
+        shown(&st["calls"]),
+        shown(&st["errors"])
     );
     if let Some(p) = st["protocol"].as_str() {
         t.push_str(&format!(
@@ -10429,6 +10440,90 @@ mod tests {
             0,
             "A n'a rien dépensé de plus"
         );
+    }
+
+    /// #115 : une valeur absente se montre en « ? », jamais en `null`.
+    #[test]
+    fn an_absent_value_is_shown_as_a_question_mark() {
+        let v = json!({"ms": 42, "name": "redmine", "vide": ""});
+        assert_eq!(shown(&v["ms"]), "42");
+        assert_eq!(shown(&v["name"]), "redmine");
+        assert_eq!(shown(&v["absent"]), "?");
+        assert_eq!(shown(&v["vide"]), "?");
+        assert_eq!(
+            format!("✅ redmine répond ({} ms)", shown(&json!({})["ms"])),
+            "✅ redmine répond (? ms)"
+        );
+    }
+
+    /// #115 : aucune bulle ne se construit depuis une valeur JSON brute. Le code des
+    /// écrans et des commandes n'en passe aucune à `format!`, et les écrans usuels ne
+    /// montrent jamais `null`.
+    #[tokio::test]
+    async fn no_bubble_ever_shows_null() {
+        let re = regex::Regex::new(r#"^\s*[a-z_.]+\["[a-z_]+"\](\["[a-z_]+"\]|\[[0-9]+\])*,?\s*$"#)
+            .unwrap();
+        for file in ["src/telegram.rs", "src/telegram/screens.rs"] {
+            let src = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file),
+            )
+            .unwrap();
+            let code = src.split("#[cfg(test)]\nmod tests {").next().unwrap();
+            let lines: Vec<&str> = code.lines().collect();
+            // Une valeur seule sur sa ligne, que ne suit aucun accesseur (`.as_str()`…).
+            let raw: Vec<&str> = lines
+                .iter()
+                .enumerate()
+                .filter(|(i, l)| {
+                    re.is_match(l)
+                        && !lines
+                            .get(i + 1)
+                            .is_some_and(|next| next.trim_start().starts_with('.'))
+                })
+                .map(|(_, l)| *l)
+                .collect();
+            assert!(
+                raw.is_empty(),
+                "{file} : valeurs JSON brutes formatées : {raw:?}"
+            );
+        }
+
+        let (_d, g, t, _p) = gateway().await;
+        for (i, command) in [
+            "/status",
+            "/config",
+            "/models",
+            "/model",
+            "/mcp",
+            "/sessions",
+            "/policies",
+            "/wf",
+            "/mode",
+            "/approvals",
+            "/schedules",
+            "/budget",
+            "/doctor",
+        ]
+        .iter()
+        .enumerate()
+        {
+            g.process_update(&updates::text_message(
+                800 + i as i64,
+                OWNER,
+                OWNER,
+                command,
+            ))
+            .await
+            .unwrap();
+        }
+        settle(&g).await;
+        g.flush_outbox().await.unwrap();
+        let mut bubbles = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        bubbles.extend(texts(&t.calls_to(tg::EDIT_MESSAGE_TEXT).await));
+        assert!(bubbles.len() >= 10, "{bubbles:?}");
+        for b in &bubbles {
+            assert!(!b.contains("null") && !b.contains("undefined"), "{b}");
+        }
     }
 
     /// #111 : `/mode` montre le mode de la session et le change d'un bouton.

@@ -665,7 +665,7 @@ pub async fn telegram_chats_check(s: &Services) -> DoctorCheck {
                 "{} « {} » `{}` (vu le {})",
                 c["type"].as_str().unwrap_or("?"),
                 c["title"].as_str().unwrap_or_default(),
-                c["id"],
+                crate::telegram::shown(&c["id"]),
                 c["last_seen"]
                     .as_str()
                     .unwrap_or_default()
