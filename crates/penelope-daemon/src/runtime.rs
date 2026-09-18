@@ -76,7 +76,10 @@ impl Services {
             .map(|d| d.as_millis() as i64)
             .unwrap_or(60_000);
         let turns = TurnQueue::new(store.clone(), clock.clone(), lease_ttl);
-        let budget = BudgetLedger::new(store.clone(), clock.clone());
+        let budget = BudgetLedger::new(store.clone(), clock.clone()).with_timezone({
+            let config = config.clone();
+            move || config.config().owner.timezone.clone()
+        });
 
         let catalog = Catalog::new();
         let llm_state = LlmStateMachine::new(store.clone(), clock.clone());
@@ -183,7 +186,10 @@ impl Services {
             effects: EffectLedger::new(store.clone(), clock.clone()),
             sessions: SessionStore::new(store.clone(), clock.clone()),
             turns: TurnQueue::new(store.clone(), clock.clone(), 60_000),
-            budget: BudgetLedger::new(store.clone(), clock.clone()),
+            budget: BudgetLedger::new(store.clone(), clock.clone()).with_timezone({
+                let config = config.clone();
+                move || config.config().owner.timezone.clone()
+            }),
             llm_state: LlmStateMachine::new(store.clone(), clock.clone()),
             memory: MemoryIndex::new(store.clone(), clock.clone()),
             candidates: CandidateStore::new(store.clone(), clock.clone()),

@@ -53,7 +53,8 @@ pub async fn check(
 ) -> anyhow::Result<Vec<String>> {
     let s = &d.services;
     let cfg = s.config.config();
-    let today: String = s.clock.now_rfc3339().chars().take(10).collect();
+    // Jour du propriétaire, comme le plafond qu'il surveille (#79).
+    let today = s.budget.today();
     let mut sent = Vec::new();
     for status in s.budget.status(&cfg.budget, session_id, run_id).await? {
         if !status.alerting {

@@ -138,6 +138,9 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     // Rétention : dernière passe et contenu que gardent les tables d'effets (#78).
     checks.push(retention_check(s).await);
 
+    // Jour budgétaire : des lignes récentes comptées dans un autre fuseau (#79).
+    checks.push(budget_days_check(s).await);
+
     // Un alias de conversation vers un modèle sans tool calling ne marchera pas (#54).
     checks.push(tool_calling_check(s).await);
 
@@ -778,6 +781,29 @@ async fn retention_check(s: &Services) -> DoctorCheck {
             format!("aucune passe enregistrée ; contenu gardé : {kept}"),
             Some("penelope restart".into()),
         ),
+    }
+}
+
+/// #79 : la journée budgétaire suit `owner.timezone`. Après un changement de fuseau, ou
+/// juste après la mise à jour qui a quitté l'UTC, des consommations récentes portent le
+/// jour de l'ancien fuseau : le total du jour peut être décalé de quelques heures.
+async fn budget_days_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "budget.day";
+    const LABEL: &str = "Jour budgétaire";
+    let tz = s.config.config().owner.timezone.clone();
+    match s.budget.mixed_days().await {
+        Ok(0) => DoctorCheck::ok(ID, LABEL, format!("minuit à {tz}")),
+        Ok(n) => DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!(
+                "{n} consommation(s) des dernières 48 h comptée(s) dans un autre fuseau que \
+                 {tz} (changement de `owner.timezone`, ou version antérieure qui comptait en \
+                 UTC) : le total du jour peut être décalé jusqu'à demain"
+            ),
+            None,
+        ),
+        Err(e) => DoctorCheck::fail(ID, LABEL, e.to_string(), None),
     }
 }
 

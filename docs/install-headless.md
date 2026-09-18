@@ -662,7 +662,9 @@ plus gros postes et leur part de cache. À 100 %, une carte demande « 5,02 $ d�
 - pour une session ouverte par toi, le tour est suspendu et reprend là où il s'était arrêté
   une fois le plafond relevé ;
 - le plafond du jour reste un arrêt ferme ; le relever vaut pour la journée, et la
-  demande se renvoie ;
+  demande se renvoie. La journée est celle de `owner.timezone` : minuit local, pas minuit
+  UTC, pour le plafond, son relèvement, `/budget`, `/usage` et `--by day`. Une consommation
+  de 0 h 30 à La Réunion compte pour ce jour-là, et la consolidation de 3 h 30 aussi ;
 - un run de workflow reçoit la même carte, et il reprend après relèvement.
 
 Une session de travail longue a son propre plafond, sans toucher aux autres ni au

@@ -131,20 +131,81 @@ pub const USAGE_AXES: &[&str] = &[
 
 type Watcher = std::sync::Arc<std::sync::RwLock<Option<std::sync::Arc<dyn UsageWatcher>>>>;
 
+/// Fuseau du propriétaire, relu à chaque calcul : un changement à chaud de
+/// `owner.timezone` s'applique aux consommations suivantes (issue #79).
+type Timezone = std::sync::Arc<dyn Fn() -> String + Send + Sync>;
+
 #[derive(Clone)]
 pub struct BudgetLedger {
     store: Store,
     clock: SharedClock,
     watcher: Watcher,
+    timezone: Option<Timezone>,
 }
 
 impl BudgetLedger {
+    /// Sans fuseau, les journées sont celles d'UTC (tests, outils hors daemon).
     pub fn new(store: Store, clock: SharedClock) -> Self {
         BudgetLedger {
             store,
             clock,
             watcher: Watcher::default(),
+            timezone: None,
         }
+    }
+
+    /// Journée budgétaire dans le fuseau du propriétaire (#79) : le plafond du jour, son
+    /// relèvement, `/usage` et les regroupements par jour suivent minuit **local**.
+    pub fn with_timezone(mut self, tz: impl Fn() -> String + Send + Sync + 'static) -> Self {
+        self.timezone = Some(std::sync::Arc::new(tz));
+        self
+    }
+
+    /// Jour du propriétaire à l'instant `ms` (`AAAA-MM-JJ`).
+    pub fn day_at(&self, ms: i64) -> String {
+        let utc = chrono::DateTime::from_timestamp_millis(ms).unwrap_or_default();
+        match self
+            .timezone
+            .as_ref()
+            .and_then(|f| f().parse::<chrono_tz::Tz>().ok())
+        {
+            Some(tz) => utc.with_timezone(&tz).format("%Y-%m-%d").to_string(),
+            None => utc.format("%Y-%m-%d").to_string(),
+        }
+    }
+
+    /// Jour budgétaire courant, clé des sommes « aujourd'hui ».
+    pub fn today(&self) -> String {
+        self.day_at(self.clock.now_ms())
+    }
+
+    /// Consommations des dernières 48 h dont le jour enregistré n'est pas celui que donne
+    /// le fuseau actuel : changement de `owner.timezone`, ou lignes d'une version qui
+    /// comptait en UTC. Le total du jour peut alors être décalé (`doctor`, #79).
+    pub async fn mixed_days(&self) -> Result<u64> {
+        let since = chrono::DateTime::from_timestamp_millis(self.clock.now_ms() - 48 * 3_600_000)
+            .unwrap_or_default()
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let rows: Vec<(String, String)> = self
+            .store
+            .read(move |c| {
+                let mut st = c.prepare("SELECT ts, day FROM usage WHERE ts >= ?1")?;
+                let rows = st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                let mut out = Vec::new();
+                for r in rows {
+                    out.push(r?);
+                }
+                Ok(out)
+            })
+            .await?;
+        Ok(rows
+            .iter()
+            .filter(|(ts, day)| {
+                chrono::DateTime::parse_from_rfc3339(ts)
+                    .map(|t| self.day_at(t.timestamp_millis()) != *day)
+                    .unwrap_or(false)
+            })
+            .count() as u64)
     }
 
     /// Branche l'observateur des consommations (un seul).
@@ -166,7 +227,7 @@ impl BudgetLedger {
 
     async fn insert(&self, u: UsageRecord) -> Result<()> {
         let ts = self.clock.now_rfc3339();
-        let day = ts.chars().take(10).collect::<String>();
+        let day = self.today();
         self.store
             .write(move |tx| {
                 tx.execute(
@@ -223,12 +284,7 @@ impl BudgetLedger {
     }
 
     pub async fn spent_today(&self) -> Result<f64> {
-        let day = self
-            .clock
-            .now_rfc3339()
-            .chars()
-            .take(10)
-            .collect::<String>();
+        let day = self.today();
         Ok(self
             .store
             .read(move |c| {
@@ -285,10 +341,6 @@ impl BudgetLedger {
                 )?)
             })
             .await?)
-    }
-
-    fn today(&self) -> String {
-        self.clock.now_rfc3339().chars().take(10).collect()
     }
 
     async fn kv_limit(&self, key: String) -> Result<Option<f64>> {
@@ -621,6 +673,72 @@ mod tests {
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].0, "m");
         assert_eq!(b[0].2, 330);
+    }
+
+    fn conso(cost: f64) -> UsageRecord {
+        UsageRecord {
+            model: "m".into(),
+            provider: "openrouter".into(),
+            cost_usd: cost,
+            ..Default::default()
+        }
+    }
+
+    /// #79 : à La Réunion (UTC+4), 00:30 le 2 janvier est encore le 1er en UTC. La
+    /// consommation compte pour le 2, le relèvement du jour vaut jusqu'à 23:59 locale.
+    #[tokio::test]
+    async fn the_budget_day_is_the_owners_day() {
+        let store = Store::open_memory().unwrap();
+        // 2026-01-01T20:30:00Z = 2026-01-02T00:30+04:00
+        let clock = Arc::new(TestClock::new(1_767_299_400_000));
+        let tz = Arc::new(std::sync::RwLock::new("Indian/Reunion".to_string()));
+        let l = BudgetLedger::new(store.clone(), clock.clone()).with_timezone({
+            let tz = tz.clone();
+            move || tz.read().unwrap().clone()
+        });
+        assert_eq!(l.today(), "2026-01-02");
+        l.record(conso(1.5)).await.unwrap();
+        assert!((l.spent_today().await.unwrap() - 1.5).abs() < 1e-9);
+        let day: String = store
+            .read(|c| Ok(c.query_row("SELECT day FROM usage", [], |r| r.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(day, "2026-01-02");
+
+        let cfg = crate::config::Budget::default();
+        l.raise_daily(99.0).await.unwrap();
+        let key: i64 = store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM kv WHERE k = 'budget.daily.2026-01-02'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(key, 1);
+        // 23:59 locale : toujours relevé.
+        clock.set_ms(1_767_383_940_000); // 2026-01-02T19:59:00Z
+        assert_eq!(l.limits(&cfg, None, None).await.unwrap().0, 99.0);
+        // Minuit local : un nouveau jour, plafond de la configuration, compteur à zéro.
+        clock.set_ms(1_767_384_000_000); // 2026-01-02T20:00:00Z
+        assert_eq!(l.today(), "2026-01-03");
+        assert_eq!(l.limits(&cfg, None, None).await.unwrap().0, cfg.daily_usd);
+        assert_eq!(l.spent_today().await.unwrap(), 0.0);
+        l.record(conso(0.5)).await.unwrap();
+
+        let days = l.report("day", None, None, 10).await.unwrap();
+        let mut keys: Vec<String> = days.iter().map(|r| r.key.clone()).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["2026-01-02", "2026-01-03"]);
+        assert_eq!(l.mixed_days().await.unwrap(), 0);
+
+        // Changement de fuseau à chaud : les lignes suivantes le suivent, et les lignes
+        // récentes comptées dans l'ancien sont signalées.
+        *tz.write().unwrap() = "UTC".into();
+        assert_eq!(l.today(), "2026-01-02");
+        assert_eq!(l.mixed_days().await.unwrap(), 2);
     }
 
     #[tokio::test]

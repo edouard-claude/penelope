@@ -2543,7 +2543,7 @@ impl TelegramGateway {
                 penelope_kernel::budget::USAGE_AXES.join(", ")
             ));
         }
-        let today: String = s.clock.now_rfc3339().chars().take(10).collect();
+        let today = s.budget.today();
         let (scope, since, title) = match by {
             "turn" => (Some(session), None, "Requêtes de la session"),
             "day" => (None, None, "Par jour"),
@@ -2670,7 +2670,7 @@ impl TelegramGateway {
                 t.push_str(&row_line(r));
             }
         }
-        let today_day = s.clock.now_rfc3339().chars().take(10).collect::<String>();
+        let today_day = s.budget.today();
         let models = s.budget.report("model", None, Some(&today_day), 5).await?;
         if !models.is_empty() {
             t.push_str("\n**Par modèle, aujourd'hui**\n\n");

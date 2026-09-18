@@ -313,7 +313,7 @@ pub async fn status(
     }
 
     if all || section == "costs" {
-        let today = s.clock.now_rfc3339().chars().take(10).collect::<String>();
+        let today = s.budget.today();
         let rows = |r: Vec<penelope_kernel::budget::UsageRow>| {
             r.into_iter()
                 .map(|x| {

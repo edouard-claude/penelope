@@ -408,7 +408,7 @@ pub async fn before_turn(d: &Arc<Daemon>, session_id: &str, model_id: &str, turn
 
 /// Dépense du jour en résumés.
 async fn compaction_spent_today(s: &crate::runtime::Services) -> f64 {
-    let day: String = s.clock.now_rfc3339().chars().take(10).collect();
+    let day = s.budget.today();
     s.store
         .read(move |c| {
             Ok(c.query_row(

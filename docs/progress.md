@@ -924,6 +924,13 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   `retention.days` le contenu des effets tranchés (un effet `unknown` garde tout), les
   envois partis, les demandes décidées, les tâches MCP et sorties de workflows terminées.
   `doctor` donne la date de la dernière passe et ce que ces tables gardent.
+- **Journée budgétaire locale** (#79) : `usage.day`, `spent_today`, la clé de relèvement
+  `budget.daily.<jour>`, `/budget`, `/usage` et `--by day` suivent minuit dans
+  `owner.timezone` au lieu de minuit UTC ; à La Réunion, la journée ne commence plus à
+  4 h et la consolidation de 3 h 30 n'est plus imputée à la veille. Le fuseau est relu à
+  chaque calcul : un changement à chaud vaut pour les lignes suivantes, et `doctor` signale
+  les consommations des dernières 48 h comptées dans un autre fuseau. Les lignes des
+  versions précédentes gardent leur jour UTC (décalage ponctuel le jour de la mise à jour).
 
 ### Routine de livraison
 
