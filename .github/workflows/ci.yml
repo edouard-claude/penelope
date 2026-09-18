@@ -51,7 +51,7 @@ jobs:
       # cette commande : `arch`, `ctx-safety`, `mcp-conformance`, `hot-reload`,
       # `resilience` et `security` en font partie.
       - name: Tests
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
   # macOS est la plateforme cible : format, lint, et ce qui n'existe que là (Seatbelt,
   # launchd, trousseau, binaire de release). Pas la suite entière une seconde fois.
