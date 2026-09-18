@@ -88,7 +88,10 @@ impl Services {
         let lcm = Lcm::new(store.clone(), clock.clone());
         let context = ContextEngine::new(history, lcm, estimator, catalog.clone(), clock.clone());
 
-        let memory = MemoryIndex::new(store.clone(), clock.clone());
+        let memory = MemoryIndex::new(store.clone(), clock.clone()).with_half_life({
+            let config = config.clone();
+            move || config.config().memory.half_life_days
+        });
         let candidates = CandidateStore::new(store.clone(), clock.clone());
         let intents = IntentStore::new(store.clone(), clock.clone());
         let skills = SkillRegistry::new(store.clone());
@@ -191,7 +194,10 @@ impl Services {
                 move || config.config().owner.timezone.clone()
             }),
             llm_state: LlmStateMachine::new(store.clone(), clock.clone()),
-            memory: MemoryIndex::new(store.clone(), clock.clone()),
+            memory: MemoryIndex::new(store.clone(), clock.clone()).with_half_life({
+                let config = config.clone();
+                move || config.config().memory.half_life_days
+            }),
             candidates: CandidateStore::new(store.clone(), clock.clone()),
             intents: IntentStore::new(store.clone(), clock.clone()),
             skills: SkillRegistry::new(store.clone()),

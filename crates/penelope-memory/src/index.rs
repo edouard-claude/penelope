@@ -80,13 +80,21 @@ pub struct Signals {
     pub contradictions: u32,
     pub last_recall: Option<String>,
     pub distinct_queries: Vec<String>,
+    /// Apparitions dans les résultats du rappel automatique sans être retenue (#86).
+    pub seen: u32,
 }
 
 /// Entrée avec son score de classement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scored {
     pub entry: IndexedEntry,
+    /// Priorité : pertinence pondérée par la récence, l'importance, le projet et la
+    /// confiance. Ordonne les résultats et départage sous budget.
     pub score: f64,
+    /// Pertinence seule (rang RRF normalisé : 1 pour un premier rang dans une liste, 2
+    /// dans les deux). C'est elle que compare le seuil du rappel automatique : un
+    /// souvenir ancien reste rappelable, il passe seulement après un récent (#86).
+    pub relevance: f64,
     pub fts_rank: Option<usize>,
     pub vec_rank: Option<usize>,
     pub similarity: f64,
@@ -128,13 +136,13 @@ pub struct ScoreParams {
 impl Default for ScoreParams {
     fn default() -> Self {
         ScoreParams {
-            half_life_days: 30.0,
+            half_life_days: 180.0,
             rrf_k: 60.0,
         }
     }
 }
 
-/// `decay = exp(−âge/30 j × ln 2)` ; 1 pour profil, cœur et épinglés.
+/// `decay = exp(−âge/demi-vie × ln 2)` ; 1 pour profil, cœur et épinglés.
 pub fn decay(age_days: f64, half_life_days: f64, pinned: bool) -> f64 {
     if pinned {
         return 1.0;
@@ -183,11 +191,15 @@ pub fn rrf(fts_rank: Option<usize>, vec_rank: Option<usize>, k: f64) -> f64 {
     (f + v) * (k + 1.0)
 }
 
+/// Demi-vie lue à chaque recherche : `memory.half_life_days` s'applique à chaud (#86).
+type HalfLife = std::sync::Arc<dyn Fn() -> f64 + Send + Sync>;
+
 #[derive(Clone)]
 pub struct MemoryIndex {
     store: Store,
     clock: SharedClock,
     params: ScoreParams,
+    half_life: Option<HalfLife>,
 }
 
 impl MemoryIndex {
@@ -196,12 +208,27 @@ impl MemoryIndex {
             store,
             clock,
             params: ScoreParams::default(),
+            half_life: None,
         }
     }
 
     pub fn with_params(mut self, p: ScoreParams) -> Self {
         self.params = p;
         self
+    }
+
+    /// Demi-vie de la récence relue à chaque recherche (configuration à chaud, #86).
+    pub fn with_half_life(mut self, f: impl Fn() -> f64 + Send + Sync + 'static) -> Self {
+        self.half_life = Some(std::sync::Arc::new(f));
+        self
+    }
+
+    fn score_params(&self) -> ScoreParams {
+        let mut p = self.params;
+        if let Some(f) = &self.half_life {
+            p.half_life_days = f();
+        }
+        p
     }
 
     pub fn store(&self) -> &Store {
@@ -353,14 +380,18 @@ impl MemoryIndex {
     }
 
     /// Entrées durables jamais rappelées depuis `cutoff` (`AAAA-MM-JJ`), ni récentes, ni
-    /// datées d'une expiration : candidates au retrait (retour d'usage, issue #37).
+    /// datées d'une expiration, et vues au moins `min_seen` fois dans les résultats sans
+    /// être retenues : candidates au retrait (retour d'usage, issues #37 et #86). Une
+    /// entrée qu'aucune question n'a jamais approchée n'a pas eu sa chance.
     pub async fn unrecalled_since(
         &self,
         levels: &[Level],
         cutoff: &str,
+        min_seen: u32,
     ) -> penelope_store::Result<Vec<IndexedEntry>> {
         let levels: Vec<String> = levels.iter().map(|l| l.as_str().to_string()).collect();
         let cutoff = cutoff.to_string();
+        let min_seen = min_seen as i64;
         self.store
             .read(move |c| {
                 let marks = vec!["?"; levels.len()].join(",");
@@ -372,6 +403,7 @@ impl MemoryIndex {
                        AND e.level IN ({marks})
                        AND COALESCE(e.depuis, e.maj) < ?
                        AND (g.last_recall IS NULL OR substr(g.last_recall, 1, 10) < ?)
+                       AND COALESCE(g.seen, 0) >= ?
                        AND f.expire IS NULL
                      ORDER BY COALESCE(e.depuis, e.maj), e.uid"
                 ))?;
@@ -381,6 +413,7 @@ impl MemoryIndex {
                 }
                 params.push(&cutoff);
                 params.push(&cutoff);
+                params.push(&min_seen);
                 let rows = st.query_map(params.as_slice(), row_to_entry)?;
                 let mut v = Vec::new();
                 for r in rows {
@@ -413,7 +446,7 @@ impl MemoryIndex {
             .read(move |c| {
                 let mut st = c.prepare(
                     "SELECT occurrences, sessions, days, recalls, useful_recalls, successes,
-                            contradictions, last_recall, distinct_queries
+                            contradictions, last_recall, distinct_queries, seen
                      FROM mem_signals WHERE uid = ?1",
                 )?;
                 let mut rows = st.query([&uid])?;
@@ -430,6 +463,7 @@ impl MemoryIndex {
                             contradictions: r.get::<_, i64>(6)? as u32,
                             last_recall: r.get(7)?,
                             distinct_queries: serde_json::from_str(&dq).unwrap_or_default(),
+                            seen: r.get::<_, i64>(9)? as u32,
                         })
                     }
                     None => Ok(Signals::default()),
@@ -479,6 +513,27 @@ impl MemoryIndex {
                         serde_json::to_string(&queries).unwrap_or_default()
                     ],
                 )?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Compte les entrées apparues dans les résultats du rappel automatique sans être
+    /// retenues (#86) : le retour d'usage ne propose au retrait que ce qui a eu sa chance.
+    pub async fn record_seen(&self, uids: &[String]) -> penelope_store::Result<()> {
+        if uids.is_empty() {
+            return Ok(());
+        }
+        let uids = uids.to_vec();
+        self.store
+            .write(move |tx| {
+                for uid in &uids {
+                    tx.execute(
+                        "INSERT INTO mem_signals(uid, seen) VALUES(?1, 1)
+                         ON CONFLICT(uid) DO UPDATE SET seen = seen + 1",
+                        [uid],
+                    )?;
+                }
                 Ok(())
             })
             .await
@@ -582,7 +637,7 @@ impl MemoryIndex {
         let fts = crate::index::fts_query(query);
         let f = filter.clone_for_move();
         let projects = active_projects.to_vec();
-        let params_ = self.params;
+        let params_ = self.score_params();
         let now_ms = self.clock.now_ms();
         // Rappel automatique : pas d'entrée expirée (issues #25 et #37).
         let hidden = if filter.automatic {
@@ -666,6 +721,7 @@ impl MemoryIndex {
                     out.push(Scored {
                         entry,
                         score,
+                        relevance: base,
                         fts_rank: fr,
                         vec_rank: vr,
                         similarity: sim,

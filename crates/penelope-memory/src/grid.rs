@@ -136,6 +136,10 @@ pub fn journal_expiry(requested: Option<&str>, today: &str) -> String {
     }
 }
 
+/// Apparitions dans les résultats sans être retenue avant qu'une entrée jamais rappelée
+/// soit proposée au retrait (issue #86).
+pub const SEEN_BEFORE_RETIRE: u32 = 10;
+
 /// Date limite du retour d'usage : `today` moins [`UNUSED_DAYS`].
 pub fn unused_cutoff(today: &str) -> String {
     add_days(today, -UNUSED_DAYS)

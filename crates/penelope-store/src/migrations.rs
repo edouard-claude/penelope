@@ -63,6 +63,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0012_candidate_deferrals",
         sql: SQL_0012,
     },
+    Migration {
+        version: "0013_memory_seen",
+        sql: SQL_0013,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -893,6 +897,12 @@ CREATE UNIQUE INDEX events_session_seq ON events(session_id, seq);
 /// rejeté avec sa raison, au lieu de revenir indéfiniment dans le lot.
 const SQL_0012: &str = r#"
 ALTER TABLE mem_candidates ADD COLUMN deferrals INTEGER NOT NULL DEFAULT 0;
+"#;
+
+/// Entrée vue dans les résultats du rappel automatique sans être retenue : le
+/// dénominateur du retour d'usage (issue #86).
+const SQL_0013: &str = r#"
+ALTER TABLE mem_signals ADD COLUMN seen INTEGER NOT NULL DEFAULT 0;
 "#;
 
 #[cfg(test)]

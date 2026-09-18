@@ -349,9 +349,9 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `memory.project_budget_tokens` | `800` | Budget des projets injectés (`projets.md`), en jetons. |
 | `memory.recall_budget_tokens` | `1000` | Budget du rappel automatique par tour, en jetons. |
 | `memory.recall_timeout_ms` | `150` | Temps accordé au rappel automatique avant de répondre sans lui, en millisecondes. |
-| `memory.trigger_threshold` | `0.72` | Score minimal d'une entrée pour être rappelée automatiquement. |
+| `memory.trigger_threshold` | `0.72` | Pertinence minimale d'une entrée pour être rappelée automatiquement : rang de recherche normalisé (1 pour la première d'une liste, 2 pour la première des deux), sans la récence ni l'importance, qui ne font qu'ordonner. |
 | `memory.max_injected_per_turn` | `3` | Entrées rappelées automatiquement au plus par tour. |
-| `memory.half_life_days` | `30.0` | Demi-vie de la récence dans le score de recherche. Sans effet dans cette version. |
+| `memory.half_life_days` | `180.0` | Demi-vie de la récence dans le classement des souvenirs, en jours : un souvenir ancien passe après un récent équivalent, il reste rappelable. |
 | `memory.dedup_cosine` | `0.92` | Similarité cosinus de doublon. Sans effet dans cette version. |
 | `memory.dedup_jaccard` | `0.9` | Similarité à partir de laquelle deux candidats sont des doublons. |
 | `memory.episode_idle` | `"2h"` | Inactivité qui clôt un épisode. Sans effet dans cette version. |
@@ -1144,10 +1144,18 @@ dans le magasin de secrets dès la relecture, sous un nom tiré du contexte (par
 `${SECRET:cle-stripe-projet-atlas-1f2e3d4c}`, jamais la valeur. `DREAMS.md` liste les
 noms rangés. Un numéro de carte, lui, est refusé.
 
+**Rappel automatique.** Un souvenir est servi d'office quand il est **pertinent** pour le
+message (`memory.trigger_threshold`, sur le rang de recherche seul) ; sa récence
+(`memory.half_life_days`, 180 jours), son importance, le projet et la confiance ne font
+que l'ordonner face aux autres. Une entrée de six mois reste donc rappelée quand la
+question la vise, après une plus récente équivalente.
+
 **Retour d'usage.** Chaque souvenir servi au modèle (rappel automatique ou `mem_search`)
-est compté. Une entrée de `memoire.md` ou `projets.md` jamais rappelée depuis 60 jours est
-proposée au retrait dans le digest ; les préférences du profil, toujours appliquées, ne le
-sont pas.
+est compté, et chaque apparition dans les résultats sans être retenu aussi. Une entrée de
+`memoire.md` ou `projets.md` jamais rappelée depuis 60 jours, mais apparue au moins dix fois
+dans les résultats, est proposée au retrait dans le digest : une entrée qu'aucune question
+n'a jamais approchée n'a pas eu sa chance, elle reste. Les préférences du profil,
+toujours appliquées, ne sont jamais proposées.
 
 ```bash
 penelope mem dream --dry-run

@@ -329,6 +329,8 @@ pub async fn build_tiers_in(
         for t in &recall.triggered {
             let _ = s.memory.record_recall(&t.entry.uid, user_text, true).await;
         }
+        // Vue sans être retenue : le dénominateur du retrait proposé (issue #86).
+        let _ = s.memory.record_seen(&recall.seen).await;
         let rendered = recall.render();
         if !rendered.trim().is_empty() {
             b = b.volatile(rendered);

@@ -541,11 +541,14 @@ pub struct Memory {
     pub recall_budget_tokens: usize,
     /// Temps accordé au rappel automatique avant de répondre sans lui, en millisecondes.
     pub recall_timeout_ms: u64,
-    /// Score minimal d'une entrée pour être rappelée automatiquement.
+    /// Pertinence minimale d'une entrée pour être rappelée automatiquement : rang de
+    /// recherche normalisé (1 pour la première d'une liste, 2 pour la première des deux),
+    /// sans la récence ni l'importance, qui ne font qu'ordonner.
     pub trigger_threshold: f64,
     /// Entrées rappelées automatiquement au plus par tour.
     pub max_injected_per_turn: usize,
-    /// Demi-vie de la récence dans le score de recherche. Sans effet dans cette version.
+    /// Demi-vie de la récence dans le classement des souvenirs, en jours : un souvenir
+    /// ancien passe après un récent équivalent, il reste rappelable.
     pub half_life_days: f64,
     /// Similarité cosinus de doublon. Sans effet dans cette version.
     pub dedup_cosine: f64,
@@ -585,7 +588,7 @@ impl Default for Memory {
             recall_timeout_ms: 150,
             trigger_threshold: 0.72,
             max_injected_per_turn: 3,
-            half_life_days: 30.0,
+            half_life_days: 180.0,
             dedup_cosine: 0.92,
             dedup_jaccard: 0.90,
             episode_idle: "2h".into(),

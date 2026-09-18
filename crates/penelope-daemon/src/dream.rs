@@ -750,7 +750,11 @@ async fn unused_entries(d: &Arc<Daemon>, day: &str) -> Vec<String> {
     let s = &d.services;
     let entries = s
         .memory
-        .unrecalled_since(&[Level::Coeur, Level::Projet, Level::Cure], &cutoff)
+        .unrecalled_since(
+            &[Level::Coeur, Level::Projet, Level::Cure],
+            &cutoff,
+            penelope_memory::grid::SEEN_BEFORE_RETIRE,
+        )
         .await
         .unwrap_or_default();
     // Ce qui est servi d'office dans l'instantané n'a pas d'usage mesurable par entrée :
@@ -2991,6 +2995,24 @@ mod tests {
             .record_recall("01MARTIN", "où est Martin ?", true)
             .await
             .unwrap();
+        // Vue dix fois dans les résultats sans être retenue : elle a eu sa chance (#86).
+        let base_uid: String = s
+            .store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT uid FROM mem_entries WHERE text LIKE '%127.0.0.1:40000%'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        for _ in 0..penelope_memory::grid::SEEN_BEFORE_RETIRE {
+            s.memory
+                .record_seen(std::slice::from_ref(&base_uid))
+                .await
+                .unwrap();
+        }
         // Le signal ne porte que sur ce qui n'est pas servi d'office : le budget de
         // l'instantané est ramené à rien pour ce tour (issue #62).
         d.publish_config("test", |c| {

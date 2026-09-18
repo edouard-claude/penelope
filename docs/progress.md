@@ -974,6 +974,16 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   enregistrés dans l'ordre des appels et admis en groupe (#52), un échec n'annule pas les
   autres, `/stop` interrompt tout le lot. Trois lectures de 300 ms : moins de 600 ms au lieu
   de 900.
+- **Souvenirs anciens rappelables** (#86) : le seuil du rappel automatique porte sur la
+  pertinence (`Scored.relevance`, rang RRF), plus sur le score multiplié par la récence et
+  l'importance ; ces facteurs ne font qu'ordonner. Une entrée de niveau Cure d'importance 5
+  n'est plus perdue après 7 jours : à 30, 90 et 180 jours elle est injectée quand elle est
+  la seule réponse, après une récente équivalente. `memory.half_life_days` est enfin lu
+  (à chaud) et passe à 180 jours ; un `config.toml` écrit en entier par une version
+  antérieure porte encore `30.0`, à relever par `penelope config set
+  memory.half_life_days 180`. Le retrait n'est proposé qu'aux entrées apparues au
+  moins dix fois dans les résultats sans être retenues (`mem_signals.seen`, migration
+  `0013_memory_seen`).
 
 ### Routine de livraison
 

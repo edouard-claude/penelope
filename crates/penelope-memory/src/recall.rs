@@ -174,9 +174,11 @@ pub struct RecallResult {
     pub practices: Vec<PracticeRecall>,
     /// Vrai si la recherche vectorielle a été sautée (backend indisponible ou budget).
     pub degraded: bool,
-    /// Score maximal obtenu : sert à décider l'escalade en voie 2.
+    /// Pertinence maximale obtenue : sert à décider l'escalade en voie 2.
     pub max_score: f64,
     pub tokens_used: u64,
+    /// Entrées apparues dans les résultats sans être retenues (retour d'usage, #86).
+    pub seen: Vec<String>,
 }
 
 impl RecallResult {
@@ -287,13 +289,15 @@ impl<'a> Recall<'a> {
             }
         };
 
-        let max_score = hits.first().map(|h| h.score).unwrap_or(0.0);
+        let max_score = hits.iter().map(|h| h.relevance).fold(0.0, f64::max);
 
-        // 2. Déclencheurs : seuil, puis plafond, puis budget de tokens.
+        // 2. Déclencheurs : seuil de **pertinence**, puis plafond, puis budget de tokens.
+        //    Récence, importance, projet et confiance ordonnent les résultats (`score`),
+        //    ils ne décident pas seuls qu'un souvenir ne sera plus jamais servi (#86).
         let mut triggered = Vec::new();
         let mut tokens_used = 0u64;
         for h in hits.iter() {
-            if h.score < self.params.trigger_threshold {
+            if h.relevance < self.params.trigger_threshold {
                 continue;
             }
             // 5. Le contenu non fiable et l'épisodique ne sont jamais injectés.
@@ -341,12 +345,25 @@ impl<'a> Recall<'a> {
             recalls.push(r);
         }
 
+        // Vues sans être retenues : ni servies, ni déjà dans l'instantané.
+        let seen = hits
+            .iter()
+            .filter(|h| !ctx.injected_uids.contains(&h.entry.uid))
+            .filter(|h| {
+                !triggered
+                    .iter()
+                    .any(|t: &Scored| t.entry.uid == h.entry.uid)
+            })
+            .map(|h| h.entry.uid.clone())
+            .collect();
+
         RecallResult {
             triggered,
             practices: recalls,
             degraded,
             max_score,
             tokens_used,
+            seen,
         }
     }
 }
@@ -538,6 +555,164 @@ mod tests {
         );
         assert!(r.tokens_used <= 1000);
         assert!(r.degraded, "sans vecteur, la voie 1 est en mode FTS seul");
+    }
+
+    /// Entrée de niveau Cure, importance 5 (défaut d'un candidat), datée de `maj`.
+    fn aged(uid: &str, text: &str, maj: &str) -> IndexedEntry {
+        let mut e = simple_entry(uid, text, Level::Cure, maj);
+        e.file = "notes.md".into();
+        e.importance = Some(5);
+        e
+    }
+
+    /// #86 : l'horloge de test est au 1er janvier 2026. Seule réponse lexicale à la
+    /// question, une entrée de 30, 90 ou 180 jours est toujours injectée : la récence
+    /// ordonne, elle ne décide pas seule.
+    #[tokio::test]
+    async fn an_old_curated_entry_is_still_recalled() {
+        for (maj, age) in [("2025-12-02", 30), ("2025-10-03", 90), ("2025-07-05", 180)] {
+            let i = index();
+            i.upsert(
+                &aged("vieux", "Le code du portail de la résidence est 4812.", maj),
+                &prov(),
+            )
+            .await
+            .unwrap();
+            let r = Recall::new(&i, RecallParams::default())
+                .path1(
+                    "quel est le code du portail ?",
+                    &CurrentContext::default(),
+                    None,
+                    &[],
+                )
+                .await;
+            assert_eq!(r.triggered.len(), 1, "âgée de {age} jours");
+            assert!(r.seen.is_empty());
+        }
+    }
+
+    /// #86 : à pertinence égale, la récente passe avant l'ancienne.
+    #[tokio::test]
+    async fn a_recent_entry_ranks_before_an_old_equivalent() {
+        let i = index();
+        i.upsert(
+            &aged(
+                "ancien",
+                "Le portail de la résidence a pour code 4812.",
+                "2025-07-05",
+            ),
+            &prov(),
+        )
+        .await
+        .unwrap();
+        i.upsert(
+            &aged(
+                "recent",
+                "Le portail de la résidence a pour code 7731.",
+                "2025-12-30",
+            ),
+            &prov(),
+        )
+        .await
+        .unwrap();
+        let r = Recall::new(&i, RecallParams::default())
+            .path1(
+                "le code du portail de la résidence",
+                &CurrentContext::default(),
+                None,
+                &[],
+            )
+            .await;
+        let uids: Vec<&str> = r.triggered.iter().map(|t| t.entry.uid.as_str()).collect();
+        assert_eq!(uids, vec!["recent", "ancien"]);
+    }
+
+    /// #86 : `memory.half_life_days` change l'ordre entre une entrée ancienne importante
+    /// et une récente ordinaire.
+    #[tokio::test]
+    async fn the_half_life_setting_changes_the_order() {
+        let half = Arc::new(std::sync::Mutex::new(10.0));
+        let i = {
+            let half = half.clone();
+            index().with_half_life(move || *half.lock().unwrap())
+        };
+        let mut ancien = aged(
+            "ancien",
+            "Le portail de la résidence a pour code 4812.",
+            "2025-11-02",
+        );
+        ancien.importance = Some(10);
+        let mut recent = aged(
+            "recent",
+            "Le portail de la résidence a pour code 7731.",
+            "2025-12-31",
+        );
+        recent.importance = Some(1);
+        i.upsert(&ancien, &prov()).await.unwrap();
+        i.upsert(&recent, &prov()).await.unwrap();
+        let first = |i: MemoryIndex| async move {
+            i.search(
+                "portail résidence code",
+                None,
+                &SearchFilter::explicit(),
+                &[],
+            )
+            .await
+            .unwrap()[0]
+                .entry
+                .uid
+                .clone()
+        };
+        assert_eq!(
+            first(i.clone()).await,
+            "recent",
+            "demi-vie courte : la récente"
+        );
+        *half.lock().unwrap() = 365.0;
+        assert_eq!(
+            first(i.clone()).await,
+            "ancien",
+            "demi-vie longue : l'importante"
+        );
+    }
+
+    /// #86 : ce qui n'est jamais apparu dans un résultat n'est pas proposé au retrait ;
+    /// ce qui y est apparu dix fois sans être retenu l'est.
+    #[tokio::test]
+    async fn only_entries_that_had_their_chance_are_proposed_for_retirement() {
+        let i = index();
+        i.upsert(
+            &aged(
+                "jamais_vu",
+                "Le wifi du garage est Garage-5G.",
+                "2025-06-01",
+            ),
+            &prov(),
+        )
+        .await
+        .unwrap();
+        i.upsert(
+            &aged("vu", "La haie se taille en mars.", "2025-06-01"),
+            &prov(),
+        )
+        .await
+        .unwrap();
+        for _ in 0..crate::grid::SEEN_BEFORE_RETIRE {
+            i.record_seen(&["vu".to_string()]).await.unwrap();
+        }
+        let proposed: Vec<String> = i
+            .unrecalled_since(
+                &[Level::Cure],
+                "2025-11-01",
+                crate::grid::SEEN_BEFORE_RETIRE,
+            )
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.uid)
+            .collect();
+        assert_eq!(proposed, vec!["vu"]);
+        assert_eq!(i.signals_of("vu").await.unwrap().seen, 10);
     }
 
     #[tokio::test]
