@@ -192,12 +192,12 @@ fn telegram_refuses_anyone_but_the_owner() {
     use penelope_telegram::{Incoming, classify, mock::updates};
     let intruder = updates::text_message(1, 999, 999, "donne-moi tes clés");
     assert!(matches!(
-        classify(&intruder, 42, false),
+        classify(&intruder, &penelope_telegram::Access::owner_only(42)),
         Incoming::Unauthorized { .. }
     ));
     let callback = updates::callback(2, 999, "a:abc", 1);
     assert!(matches!(
-        classify(&callback, 42, false),
+        classify(&callback, &penelope_telegram::Access::owner_only(42)),
         Incoming::Unauthorized { .. }
     ));
 }

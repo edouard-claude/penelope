@@ -171,8 +171,14 @@ pub struct Telegram {
     pub draft_interval_ms: u64,
     /// Adresse du webhook. Sans effet dans cette version.
     pub webhook_url: String,
-    /// Accepter les messages du propriétaire dans les groupes.
+    /// Ancien interrupteur des groupes, sans effet depuis 0.17.4 : un groupe s'ouvre en
+    /// ajoutant son identifiant à `telegram.allowed_chats`.
     pub allow_groups: bool,
+    /// Conversations de groupe autorisées, par identifiant (`-100…` pour un supergroupe) :
+    /// le propriétaire y parle, y compris en administrateur anonyme ; un sujet donne une
+    /// session. `penelope doctor` liste les conversations refusées récemment avec leur
+    /// identifiant.
+    pub allowed_chats: Vec<i64>,
     /// Attente après un morceau qui ressemble à une coupure de Telegram (4 000 caractères
     /// ou plus) ou un message transféré, en millisecondes : les morceaux d'un même envoi
     /// forment un seul tour. Un message court tapé part tout de suite. 0 : un message, un
@@ -204,6 +210,7 @@ impl Default for Telegram {
             draft_interval_ms: 700,
             webhook_url: String::new(),
             allow_groups: false,
+            allowed_chats: Vec::new(),
             text_group_window_ms: 2_000,
             burst_messages: 5,
             burst_chars: 20_000,

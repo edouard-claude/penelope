@@ -69,7 +69,6 @@ pub struct TelegramGateway {
     pub daemon: Arc<Daemon>,
     pub bot: Arc<Bot>,
     owner_id: i64,
-    allow_groups: bool,
     draft_interval: Duration,
     poll_timeout_s: u64,
     outbox_wake: Notify,
@@ -201,7 +200,6 @@ impl TelegramGateway {
         ));
         Arc::new(TelegramGateway {
             owner_id: cfg.owner.telegram_user_id,
-            allow_groups: cfg.telegram.allow_groups,
             draft_interval: Duration::from_millis(cfg.telegram.draft_interval_ms.max(300)),
             poll_timeout_s: cfg.telegram.poll_timeout_s,
             outbox_wake: Notify::new(),
@@ -382,7 +380,13 @@ impl TelegramGateway {
             return Ok(());
         }
 
-        let incoming = classify(update, self.owner_id, self.allow_groups);
+        // Conversations autorisées relues à chaque update : `config set` s'applique à
+        // chaud (issue #113).
+        let access = penelope_telegram::Access {
+            owner_id: self.owner_id,
+            allowed_chats: s.config.config().telegram.allowed_chats.clone(),
+        };
+        let incoming = classify(update, &access);
         self.handle(incoming).await?;
 
         // Traité : seul `update_id` sert encore (déduplication). Le texte intégral n'a
@@ -616,6 +620,25 @@ impl TelegramGateway {
             Incoming::Unauthorized { from_id, .. } => {
                 // Aucune réponse : ne pas confirmer l'existence du bot à un inconnu.
                 tracing::warn!(from = from_id, "message Telegram d'un inconnu ignoré");
+            }
+            Incoming::ForeignChat {
+                chat_id,
+                chat_type,
+                title,
+                from_id,
+                ..
+            } => {
+                // Silence dans la conversation, mais l'identifiant est dit : c'est ce qu'il
+                // faut ajouter à `telegram.allowed_chats` (issue #113).
+                tracing::warn!(
+                    chat = chat_id,
+                    kind = %chat_type,
+                    title = %title,
+                    from = from_id,
+                    "conversation Telegram non autorisée ignorée : \
+                     telegram.allowed_chats"
+                );
+                record_seen_chat(&self.daemon.services, chat_id, &chat_type, &title).await;
             }
             Incoming::Ignored { reason, .. } => {
                 tracing::debug!(%reason, "update ignoré");
@@ -6482,6 +6505,37 @@ pub fn render_value(v: &Value) -> String {
     out.chars().take(3_500).collect()
 }
 
+/// Conversations refusées récemment, les plus récentes d'abord (issue #113).
+pub const SEEN_CHATS_KEY: &str = "telegram.seen_chats";
+const SEEN_CHATS_MAX: usize = 20;
+
+/// Une conversation refusée : son identifiant, son type, son titre et la dernière fois.
+pub async fn record_seen_chat(s: &crate::runtime::Services, chat_id: i64, kind: &str, title: &str) {
+    let mut seen = seen_chats(s).await;
+    seen.retain(|c| c["id"].as_i64() != Some(chat_id));
+    seen.insert(
+        0,
+        json!({"id": chat_id, "type": kind, "title": title, "last_seen": s.clock.now_rfc3339()}),
+    );
+    seen.truncate(SEEN_CHATS_MAX);
+    let v = serde_json::to_string(&seen).unwrap_or_default();
+    let _ = s
+        .store
+        .write(move |tx| penelope_store::kv_set(tx, SEEN_CHATS_KEY, &v))
+        .await;
+}
+
+/// Conversations refusées récemment.
+pub async fn seen_chats(s: &crate::runtime::Services) -> Vec<Value> {
+    s.store
+        .read(|c| penelope_store::kv_get(c, SEEN_CHATS_KEY))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6571,6 +6625,89 @@ mod tests {
             .iter()
             .filter_map(|c| c.get("text").and_then(|t| t.as_str()).map(String::from))
             .collect()
+    }
+
+    /// #113 : un groupe à sujets autorisé par son identifiant ; l'administrateur anonyme y
+    /// ouvre une session par sujet, deux sujets travaillent en parallèle ; un groupe non
+    /// listé est ignoré mais son identifiant est gardé pour `doctor` ; un tiers est ignoré.
+    #[tokio::test]
+    async fn a_topic_group_listed_by_id_accepts_the_anonymous_admin() {
+        let (_d, g, t, _p) = gateway().await;
+        let s = g.daemon.services.clone();
+        let chat: i64 = -1_001_234_567_890;
+        let group_message = |update_id: i64, chat_id: i64, from: i64, topic: i64, text: &str| {
+            let mut u = updates::in_topic(updates::text_message(update_id, 0, from, text), topic);
+            u["message"]["chat"] = json!({"id": chat_id, "type": "supergroup", "title": "Chantiers", "is_forum": true});
+            if from == penelope_telegram::ANONYMOUS_ADMIN_ID {
+                u["message"]["sender_chat"] = json!({"id": chat_id, "type": "supergroup"});
+            }
+            u
+        };
+        let anon = penelope_telegram::ANONYMOUS_ADMIN_ID;
+
+        // Pas encore listé : silence, identifiant gardé.
+        g.process_update(&group_message(500, chat, anon, 7, "bonjour"))
+            .await
+            .unwrap();
+        settle(&g).await;
+        assert_eq!(s.turns.pending_count().await.unwrap(), 0);
+        assert!(
+            t.calls_to(tg::SEND_MESSAGE).await.is_empty(),
+            "rien dans le groupe"
+        );
+        let seen = seen_chats(&s).await;
+        assert_eq!(seen[0]["id"], chat);
+        assert_eq!(seen[0]["type"], "supergroup");
+        let check = crate::doctor::telegram_chats_check(&s).await;
+        assert!(check.detail.contains("-1001234567890"), "{}", check.detail);
+
+        g.daemon
+            .publish_config("test", |c| {
+                c.telegram.allowed_chats = vec![chat];
+                Ok(vec!["telegram.allowed_chats".into()])
+            })
+            .unwrap();
+        g.process_update(&group_message(501, chat, anon, 7, "corrige le ticket 12"))
+            .await
+            .unwrap();
+        g.process_update(&group_message(
+            502,
+            chat,
+            anon,
+            8,
+            "rédige la note de version",
+        ))
+        .await
+        .unwrap();
+        g.process_update(&group_message(503, chat, 999, 7, "je passe par là"))
+            .await
+            .unwrap();
+        settle(&g).await;
+        let a = s
+            .sessions
+            .find_by_topic(chat, Some(7))
+            .await
+            .unwrap()
+            .expect("sujet 7");
+        let b = s
+            .sessions
+            .find_by_topic(chat, Some(8))
+            .await
+            .unwrap()
+            .expect("sujet 8");
+        assert_ne!(a.id, b.id, "une session par sujet");
+        let first = s.turns.claim("r1").await.unwrap().expect("tour du sujet 7");
+        let second = s
+            .turns
+            .claim("r2")
+            .await
+            .unwrap()
+            .expect("tour du sujet 8 en parallèle");
+        assert_ne!(first.session_id, second.session_id);
+        assert!(
+            s.turns.claim("r3").await.unwrap().is_none(),
+            "le tiers n'a rien lancé"
+        );
     }
 
     /// #83 : au démarrage de la passerelle, la demande `effect_unknown` part sans que le

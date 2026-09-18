@@ -243,7 +243,8 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `telegram.max_fragments` | `3` | Fragments au-delà desquels une réponse part en document. Sans effet dans cette version. |
 | `telegram.draft_interval_ms` | `700` | Intervalle entre deux mises à jour du brouillon de réponse, en millisecondes (300 au moins). |
 | `telegram.webhook_url` | `""` | Adresse du webhook. Sans effet dans cette version. |
-| `telegram.allow_groups` | `false` | Accepter les messages du propriétaire dans les groupes. |
+| `telegram.allow_groups` | `false` | Ancien interrupteur des groupes, sans effet depuis 0.17.4 : un groupe s'ouvre en ajoutant son identifiant à `telegram.allowed_chats`. |
+| `telegram.allowed_chats` | `[]` | Conversations de groupe autorisées, par identifiant (`-100…` pour un supergroupe) : le propriétaire y parle, y compris en administrateur anonyme ; un sujet donne une session. `penelope doctor` liste les conversations refusées récemment avec leur identifiant. |
 | `telegram.text_group_window_ms` | `2000` | Attente après un morceau qui ressemble à une coupure de Telegram (4 000 caractères ou plus) ou un message transféré, en millisecondes : les morceaux d'un même envoi forment un seul tour. Un message court tapé part tout de suite. 0 : un message, un tour. |
 | `telegram.burst_messages` | `5` | Messages regroupés à partir desquels Pénélope demande quoi en faire au lieu de répondre à chacun. 0 : jamais. |
 | `telegram.burst_chars` | `20000` | Caractères cumulés à partir desquels elle demande de même. 0 : jamais. |

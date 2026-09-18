@@ -120,6 +120,15 @@ pub enum Incoming {
         update_id: i64,
         from_id: i64,
     },
+    /// Message d'un groupe absent de `telegram.allowed_chats` : ignoré en silence, mais
+    /// journalisé avec son identifiant pour qu'on puisse l'autoriser (issue #113).
+    ForeignChat {
+        update_id: i64,
+        chat_id: i64,
+        chat_type: String,
+        title: String,
+        from_id: i64,
+    },
     Ignored {
         update_id: i64,
         reason: String,
@@ -139,6 +148,7 @@ impl Incoming {
             | Incoming::Edited { update_id, .. }
             | Incoming::StoppedGeneration { update_id, .. }
             | Incoming::Unauthorized { update_id, .. }
+            | Incoming::ForeignChat { update_id, .. }
             | Incoming::Ignored { update_id, .. } => *update_id,
         }
     }
@@ -159,8 +169,32 @@ impl Incoming {
     }
 }
 
-/// Classe un update brut. `owner_id` est la **liste blanche d'un seul élément** (§13.4).
-pub fn classify(update: &Value, owner_id: i64, allow_groups: bool) -> Incoming {
+/// `from.id` d'un message écrit en administrateur anonyme : le bot `GroupAnonymousBot`
+/// de Telegram, la conversation étant dans `sender_chat`.
+pub const ANONYMOUS_ADMIN_ID: i64 = 1_087_968_824;
+
+/// Qui peut parler à Pénélope, et où (§13.4, issue #113) : le propriétaire, en privé et
+/// dans les seules conversations de groupe nommées par leur identifiant.
+#[derive(Debug, Clone, Default)]
+pub struct Access {
+    pub owner_id: i64,
+    pub allowed_chats: Vec<i64>,
+}
+
+impl Access {
+    pub fn owner_only(owner_id: i64) -> Self {
+        Access {
+            owner_id,
+            allowed_chats: Vec::new(),
+        }
+    }
+}
+
+/// Classe un update brut. Le propriétaire est la **liste blanche d'un seul élément**
+/// (§13.4) ; un groupe n'est ouvert que s'il figure dans `access.allowed_chats`, et y
+/// parler en administrateur anonyme vaut propriétaire (issue #113).
+pub fn classify(update: &Value, access: &Access) -> Incoming {
+    let owner_id = access.owner_id;
     let update_id = update
         .get("update_id")
         .and_then(|v| v.as_i64())
@@ -172,9 +206,17 @@ pub fn classify(update: &Value, owner_id: i64, allow_groups: bool) -> Incoming {
             .and_then(|f| f.get("id"))
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        if from_id != owner_id {
+        let chat_id = cb
+            .get("message")
+            .and_then(|m| m.get("chat"))
+            .and_then(|c| c.get("id"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let anonymous = from_id == ANONYMOUS_ADMIN_ID && access.allowed_chats.contains(&chat_id);
+        if from_id != owner_id && !anonymous {
             return Incoming::Unauthorized { update_id, from_id };
         }
+        let from_id = owner_id;
         return Incoming::Callback {
             update_id,
             from_id,
@@ -234,26 +276,41 @@ pub fn classify(update: &Value, owner_id: i64, allow_groups: bool) -> Incoming {
         .and_then(|f| f.get("id"))
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    if from_id != owner_id {
-        return Incoming::Unauthorized { update_id, from_id };
-    }
-    let chat_type = msg
-        .get("chat")
+    let chat = msg.get("chat");
+    let chat_type = chat
         .and_then(|c| c.get("type"))
         .and_then(|v| v.as_str())
         .unwrap_or("private");
-    if chat_type != "private" && !allow_groups {
-        return Incoming::Ignored {
-            update_id,
-            reason: format!("conversation `{chat_type}` refusée : le bot est privé"),
-        };
-    }
-
-    let chat_id = msg
-        .get("chat")
+    let chat_id = chat
         .and_then(|c| c.get("id"))
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
+    // Un groupe n'est ouvert que par son identifiant : ailleurs, silence (issue #113).
+    if chat_type != "private" && !access.allowed_chats.contains(&chat_id) {
+        return Incoming::ForeignChat {
+            update_id,
+            chat_id,
+            chat_type: chat_type.to_string(),
+            title: chat
+                .and_then(|c| c.get("title").or_else(|| c.get("username")))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            from_id,
+        };
+    }
+    // Dans un groupe autorisé, l'administrateur anonyme parle au nom de la conversation
+    // elle-même : c'est le propriétaire, et lui seul.
+    let sender_chat = msg
+        .get("sender_chat")
+        .and_then(|c| c.get("id"))
+        .and_then(|v| v.as_i64());
+    let anonymous_admin =
+        chat_type != "private" && from_id == ANONYMOUS_ADMIN_ID && sender_chat == Some(chat_id);
+    if from_id != owner_id && !anonymous_admin {
+        return Incoming::Unauthorized { update_id, from_id };
+    }
+    let from_id = owner_id;
     let message_id = msg.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0);
     let topic_id = msg.get("message_thread_id").and_then(|v| v.as_i64());
     let text = msg
@@ -417,10 +474,79 @@ mod tests {
 
     const OWNER: i64 = 42;
 
+    fn group(chat_id: i64) -> Access {
+        Access {
+            owner_id: OWNER,
+            allowed_chats: vec![chat_id],
+        }
+    }
+
+    fn in_supergroup(mut u: serde_json::Value, chat_id: i64, title: &str) -> serde_json::Value {
+        u["message"]["chat"] =
+            serde_json::json!({"id": chat_id, "type": "supergroup", "title": title});
+        u
+    }
+
+    /// #113 : dans un groupe autorisé par son identifiant, l'administrateur anonyme parle
+    /// au nom du propriétaire ; hors liste, silence avec l'identifiant ; un tiers reste
+    /// refusé ; l'anonyme d'un autre groupe ne passe pas.
+    #[test]
+    fn allowed_chats_open_a_group_and_accept_the_anonymous_admin() {
+        let chat = -1_001_234_567_890;
+        let mut anon = in_supergroup(
+            updates::in_topic(updates::text_message(1, 0, ANONYMOUS_ADMIN_ID, "go"), 7),
+            chat,
+            "Chantiers",
+        );
+        anon["message"]["sender_chat"] = serde_json::json!({"id": chat, "type": "supergroup"});
+        match classify(&anon, &group(chat)) {
+            Incoming::Text {
+                from_id, topic_id, ..
+            } => {
+                assert_eq!(from_id, OWNER);
+                assert_eq!(topic_id, Some(7));
+            }
+            other => panic!("{other:?}"),
+        }
+        match classify(&anon, &Access::owner_only(OWNER)) {
+            Incoming::ForeignChat {
+                chat_id,
+                chat_type,
+                title,
+                ..
+            } => {
+                assert_eq!(chat_id, chat);
+                assert_eq!(chat_type, "supergroup");
+                assert_eq!(title, "Chantiers");
+            }
+            other => panic!("{other:?}"),
+        }
+        let stranger = in_supergroup(updates::text_message(2, 0, 999, "salut"), chat, "Chantiers");
+        assert!(matches!(
+            classify(&stranger, &group(chat)),
+            Incoming::Unauthorized { from_id: 999, .. }
+        ));
+        let mut other_anon = anon.clone();
+        other_anon["message"]["sender_chat"] = serde_json::json!({"id": -1_009, "type": "channel"});
+        assert!(matches!(
+            classify(&other_anon, &group(chat)),
+            Incoming::Unauthorized { .. }
+        ));
+        let owner = in_supergroup(
+            updates::text_message(3, 0, OWNER, "bonjour"),
+            chat,
+            "Chantiers",
+        );
+        assert!(matches!(
+            classify(&owner, &group(chat)),
+            Incoming::Text { .. }
+        ));
+    }
+
     #[test]
     fn text_messages_are_classified() {
         let u = updates::text_message(1, OWNER, OWNER, "bonjour");
-        match classify(&u, OWNER, false) {
+        match classify(&u, &Access::owner_only(OWNER)) {
             Incoming::Text {
                 text, forwarded, ..
             } => {
@@ -436,25 +562,25 @@ mod tests {
     fn ca_14_5_unauthorized_users_are_rejected() {
         let u = updates::text_message(1, 999, 999, "coucou");
         assert!(matches!(
-            classify(&u, OWNER, false),
+            classify(&u, &Access::owner_only(OWNER)),
             Incoming::Unauthorized { from_id: 999, .. }
         ));
         let c = updates::callback(2, 999, "a:abc", 1);
         assert!(matches!(
-            classify(&c, OWNER, false),
+            classify(&c, &Access::owner_only(OWNER)),
             Incoming::Unauthorized { .. }
         ));
     }
 
     #[test]
-    fn groups_are_refused_unless_configured() {
+    fn groups_are_refused_unless_listed() {
         let mut u = updates::text_message(1, -100, OWNER, "salut");
         u["message"]["chat"]["type"] = serde_json::json!("supergroup");
         assert!(matches!(
-            classify(&u, OWNER, false),
-            Incoming::Ignored { .. }
+            classify(&u, &Access::owner_only(OWNER)),
+            Incoming::ForeignChat { chat_id: -100, .. }
         ));
-        assert!(matches!(classify(&u, OWNER, true), Incoming::Text { .. }));
+        assert!(matches!(classify(&u, &group(-100)), Incoming::Text { .. }));
     }
 
     #[test]
@@ -477,7 +603,7 @@ mod tests {
     #[test]
     fn command_updates_are_routed() {
         let u = updates::text_message(1, OWNER, OWNER, "/doctor");
-        match classify(&u, OWNER, false) {
+        match classify(&u, &Access::owner_only(OWNER)) {
             Incoming::Command { command, .. } => assert_eq!(command, "doctor"),
             other => panic!("{other:?}"),
         }
@@ -485,7 +611,10 @@ mod tests {
 
     #[test]
     fn photos_albums_documents_and_voice() {
-        match classify(&updates::photo(1, OWNER, OWNER, Some("g1")), OWNER, false) {
+        match classify(
+            &updates::photo(1, OWNER, OWNER, Some("g1")),
+            &Access::owner_only(OWNER),
+        ) {
             Incoming::Photo {
                 media_group,
                 file_ids,
@@ -498,14 +627,13 @@ mod tests {
         }
         match classify(
             &updates::document(2, OWNER, OWNER, "note.pdf"),
-            OWNER,
-            false,
+            &Access::owner_only(OWNER),
         ) {
             Incoming::Document { file_name, .. } => assert_eq!(file_name, "note.pdf"),
             other => panic!("{other:?}"),
         }
         assert!(matches!(
-            classify(&updates::voice(3, OWNER, OWNER), OWNER, false),
+            classify(&updates::voice(3, OWNER, OWNER), &Access::owner_only(OWNER)),
             Incoming::Voice { .. }
         ));
     }
@@ -513,7 +641,7 @@ mod tests {
     #[test]
     fn forwarded_messages_are_flagged() {
         let u = updates::forwarded(1, OWNER, OWNER, "contenu venu d'ailleurs");
-        match classify(&u, OWNER, false) {
+        match classify(&u, &Access::owner_only(OWNER)) {
             Incoming::Text { forwarded, .. } => assert!(forwarded),
             other => panic!("{other:?}"),
         }
@@ -538,13 +666,13 @@ mod tests {
         ));
         let bare = updates::text_message(2, OWNER, OWNER, "127.0.0.1:7777/cb?code=a&state=b");
         assert!(matches!(
-            classify(&bare, OWNER, false),
+            classify(&bare, &Access::owner_only(OWNER)),
             Incoming::OAuthCallback { .. }
         ));
 
         let u = updates::text_message(1, OWNER, OWNER, url);
         assert!(matches!(
-            classify(&u, OWNER, false),
+            classify(&u, &Access::owner_only(OWNER)),
             Incoming::OAuthCallback { .. }
         ));
     }
@@ -552,11 +680,17 @@ mod tests {
     #[test]
     fn edited_messages_and_stop_are_recognised() {
         assert!(matches!(
-            classify(&updates::edited(1, OWNER, OWNER, "corrigé"), OWNER, false),
+            classify(
+                &updates::edited(1, OWNER, OWNER, "corrigé"),
+                &Access::owner_only(OWNER)
+            ),
             Incoming::Edited { .. }
         ));
         assert!(matches!(
-            classify(&updates::stopped_generation(2, OWNER, 71), OWNER, false),
+            classify(
+                &updates::stopped_generation(2, OWNER, 71),
+                &Access::owner_only(OWNER)
+            ),
             Incoming::StoppedGeneration { .. }
         ));
     }
@@ -564,7 +698,7 @@ mod tests {
     #[test]
     fn topic_is_carried() {
         let u = updates::in_topic(updates::text_message(1, OWNER, OWNER, "x"), 7);
-        match classify(&u, OWNER, false) {
+        match classify(&u, &Access::owner_only(OWNER)) {
             Incoming::Text { topic_id, .. } => assert_eq!(topic_id, Some(7)),
             other => panic!("{other:?}"),
         }
@@ -574,7 +708,7 @@ mod tests {
     fn unknown_update_kinds_are_ignored_not_fatal() {
         let u = serde_json::json!({"update_id": 9, "poll": {"id": "p"}});
         assert!(matches!(
-            classify(&u, OWNER, false),
+            classify(&u, &Access::owner_only(OWNER)),
             Incoming::Ignored { .. }
         ));
     }

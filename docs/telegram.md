@@ -344,6 +344,28 @@ saisie est validée contre son schéma avant de repartir au workflow.
 Dans un groupe avec sujets activés, chaque run ou session longue peut recevoir son propre
 fil. Les cartes du run y restent groupées au lieu de se mélanger à la conversation.
 
+Chaque sujet porte sa propre session : plusieurs chantiers avancent en parallèle, un par
+sujet. Pour monter un tel groupe :
+
+1. Créer un groupe, activer les sujets (il devient un supergroupe) et y ajouter le bot
+   comme administrateur ; sinon, désactiver son mode privé chez @BotFather
+   (`/setprivacy`, *Disable*), faute de quoi il ne voit que les commandes.
+2. Écrire un premier message dans le groupe. Pénélope ne répond pas (le groupe n'est pas
+   encore autorisé), mais `penelope doctor`, ligne « Conversations Telegram », donne son
+   identifiant (`-100…`), son type et son titre ; le journal aussi.
+3. Autoriser le groupe par cet identifiant :
+
+```bash
+penelope config set telegram.allowed_chats '[-1001234567890]'
+```
+
+Le changement s'applique sans redémarrer. Dans un groupe listé, seul le propriétaire est
+écouté ; s'il écrit en administrateur anonyme, Telegram envoie ses messages au nom de
+`GroupAnonymousBot` (`1087968824`), avec le groupe comme expéditeur : ce message-là, dans
+ce groupe-là, vaut propriétaire. Un autre membre, ou l'anonyme d'une autre conversation,
+est ignoré. Un groupe absent de la liste est ignoré en silence, même avec
+`telegram.allow_groups` : l'interrupteur ne suffit plus, il faut l'identifiant.
+
 ## Limites et reprise
 
 Le client respecte les limites de débit de Telegram sans perdre de message : un `429`

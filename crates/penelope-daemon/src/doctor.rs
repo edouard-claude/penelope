@@ -45,6 +45,10 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
         )
     });
 
+    // Conversations de groupe : autorisées par identifiant, et celles refusées récemment
+    // avec le leur (issue #113).
+    checks.push(telegram_chats_check(s).await);
+
     // Secrets attendus.
     for (name, placeholder) in [
         ("telegram_bot_token", cfg.telegram.token.as_str()),
@@ -642,6 +646,62 @@ fn sandbox_reads_check(s: &Services) -> DoctorCheck {
             None,
         )
     }
+}
+
+/// #113 : un groupe s'ouvre par son identifiant ; celui d'une conversation refusée est
+/// donné ici, avec la commande qui l'autorise.
+pub async fn telegram_chats_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "telegram.allowed_chats";
+    const LABEL: &str = "Conversations Telegram";
+    let cfg = s.config.config();
+    let allowed = &cfg.telegram.allowed_chats;
+    let refused: Vec<String> = crate::telegram::seen_chats(s)
+        .await
+        .iter()
+        .filter(|c| !c["id"].as_i64().is_some_and(|id| allowed.contains(&id)))
+        .take(5)
+        .map(|c| {
+            format!(
+                "{} « {} » `{}` (vu le {})",
+                c["type"].as_str().unwrap_or("?"),
+                c["title"].as_str().unwrap_or_default(),
+                c["id"],
+                c["last_seen"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .get(..16)
+                    .unwrap_or_default()
+            )
+        })
+        .collect();
+    let mut detail = if allowed.is_empty() {
+        "conversation privée seulement".to_string()
+    } else {
+        format!(
+            "privée et {} groupe(s) : {}",
+            allowed.len(),
+            allowed
+                .iter()
+                .map(|c| format!("`{c}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    if !refused.is_empty() {
+        detail.push_str(&format!(" ; refusées récemment : {}", refused.join(", ")));
+    }
+    if cfg.telegram.allow_groups && allowed.is_empty() {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!(
+                "`telegram.allow_groups` n'ouvre plus aucun groupe : il faut l'identifiant \
+                 ({detail})"
+            ),
+            Some("penelope config set telegram.allowed_chats '[-100…]'".into()),
+        );
+    }
+    DoctorCheck::ok(ID, LABEL, detail)
 }
 
 /// #106 : le réseau du shell est fermé par défaut et accordé par appel ; ouvert à toutes

@@ -1202,6 +1202,19 @@ quoi envoyer, un nom inconnu rend les noms proches (#110).
   « Toujours » portaient sur l'enveloppe : un « Toujours » sur `shell_exec` appelé ainsi
   couvrait tout le shell ; elles portent désormais sur les arguments de l'outil visé.
 
+### 0.17.4
+
+- **Un groupe à sujets s'ouvre par son identifiant** (#113) : `telegram.allowed_chats`
+  liste les conversations de groupe autorisées ; hors de la liste, un message est ignoré
+  en silence (`Incoming::ForeignChat`), mais journalisé avec l'identifiant, le type et le
+  titre, et gardé (vingt au plus) pour la ligne « Conversations Telegram » de
+  `penelope doctor`. Dans un groupe listé, un message de `GroupAnonymousBot`
+  (`1087968824`) dont `sender_chat` est le groupe lui-même vaut propriétaire, et lui
+  seul ; un tiers reste refusé. La liste est relue à chaque update, donc s'applique à
+  chaud. `telegram.allow_groups` n'ouvre plus rien seul ; `doctor` le signale s'il est
+  vrai sans identifiant. Chaque sujet porte sa session, deux sujets travaillent en
+  parallèle.
+
 ### Routine de livraison
 
 Avant chaque tag :

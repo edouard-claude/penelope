@@ -386,7 +386,7 @@ async fn ca_8_3_paste_back_flow_over_telegram() {
 
     // L'utilisateur colle l'URL dans Telegram.
     let update = penelope_telegram::mock::updates::text_message(1, 42, 42, &pasted);
-    let url = match classify(&update, 42, false) {
+    let url = match classify(&update, &penelope_telegram::Access::owner_only(42)) {
         Incoming::OAuthCallback { url, .. } => url,
         other => panic!("l'URL collée doit être reconnue : {other:?}"),
     };
