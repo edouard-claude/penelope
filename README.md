@@ -147,8 +147,10 @@ Il faut le dire aussi, sinon le tableau ci-dessus ne vaut rien.
   Nix, avec une douzaine de canaux et autant de fournisseurs de modèles. Hermes offre
   sept backends d'exécution dont des bacs à sable distants qui hibernent. Pénélope fait
   macOS et Telegram, point.
-- **Compression de contexte.** La documentation d'ingénierie de Hermes sur ses seuils,
-  son gabarit de résumé et sa stratégie de cache est plus précise que la nôtre.
+- **Documentation de la compression de contexte.** Hermes en fait une page unique, avec
+  ses seuils et ses budgets chiffrés. La même mécanique existe ici (seuil par modèle,
+  budget de queue verbatim, gabarit de résumé validé par schéma, repli sans modèle) mais
+  il faut la recoller depuis la référence des clés et les décisions.
 - **Scoring de mémoire.** Les six signaux de promotion d'OpenClaw sont plus riches que
   notre grille à cinq critères, même si notre chemin d'écriture est plus réversible.
 - **Bac à sable par défaut.** Codex CLI coupe le réseau par défaut dans son bac à sable.
