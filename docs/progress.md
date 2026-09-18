@@ -1018,6 +1018,13 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   première vue (migration `0014_mcp_tool_fingerprint`) : un changement silencieux après
   `tools/list_changed` révoque les « Toujours » de l'outil, journalise `mcp.tool_changed` et
   prévient le propriétaire ; une description suspecte journalise `mcp_tool_suspicious`.
+- **`http_fetch` épinglé sur l'adresse vérifiée** (#93) : chaque saut résout le nom une
+  seule fois (`resolve_checked`), refuse s'il voit une adresse privée, puis se connecte par
+  un client épinglé sur ces adresses (`resolve_to_addrs`) : reqwest ne résout plus une
+  seconde fois, un DNS à TTL nul ne peut plus basculer vers la boucle locale ou les
+  métadonnées entre le contrôle et la connexion. SNI, `Host` et certificat restent sur le
+  nom. Le garde (`AddressGuard`) est injectable : les tests rejouent un rebinding, une
+  redirection vers un nom qui rebinde et le repli sur une seconde adresse vérifiée.
 
 ### Routine de livraison
 

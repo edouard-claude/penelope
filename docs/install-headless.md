@@ -1388,7 +1388,11 @@ session d'où vient chaque extrait.
 ### Gros résultats d'outils
 
 Une page web lue par `http_fetch` arrive en texte lisible (titres, listes, liens) ; le
-HTML d'origine reste relisible en artefact. Au-delà de `context.large_payload_tokens`
+HTML d'origine reste relisible en artefact. Avec `tools.http_block_private_ips` (défaut),
+chaque saut résout le nom une seule fois, vérifie toutes ses adresses et se connecte sur
+elles : un nom qui répond « public » au contrôle puis `127.0.0.1` ou `169.254.169.254` à la
+connexion (rebinding DNS) n'atteint pas le réseau local ; le certificat reste vérifié
+contre le nom. Au-delà de `context.large_payload_tokens`
 (25 k par défaut), un résultat d'outil part en artefact avec un aperçu du début et de la
 fin, quelle que soit la fenêtre du modèle : un modèle à un million de tokens ne garde pas
 un résultat de 175 k entier. Une longue liste de fichiers (`fs_list` récursif) est

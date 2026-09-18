@@ -107,28 +107,72 @@ pub fn host_allowed(host: &str, allowlist: &[String]) -> bool {
     })
 }
 
-/// Vérifie les adresses résolues : une URL publique peut pointer vers une IP privée.
-pub async fn check_resolved_addresses(host: &str, port: u16) -> ToolResult<()> {
-    let target = format!("{host}:{port}");
-    let addrs = tokio::net::lookup_host(target)
+/// Résolution de noms et politique d'adresses du garde SSRF, injectables pour les tests
+/// (issue #93).
+#[async_trait::async_trait]
+pub trait AddressGuard: Send + Sync {
+    async fn lookup(&self, host: &str, port: u16) -> std::io::Result<Vec<std::net::SocketAddr>>;
+    fn blocked(&self, ip: &IpAddr) -> bool {
+        is_blocked_ip(ip)
+    }
+}
+
+/// Résolveur du système, adresses privées et réservées refusées.
+pub struct SystemGuard;
+
+#[async_trait::async_trait]
+impl AddressGuard for SystemGuard {
+    async fn lookup(&self, host: &str, port: u16) -> std::io::Result<Vec<std::net::SocketAddr>> {
+        Ok(tokio::net::lookup_host(format!("{host}:{port}"))
+            .await?
+            .collect())
+    }
+}
+
+/// Résout `host` et vérifie **toutes** ses adresses : une URL publique peut pointer vers
+/// une IP privée. Rend les adresses vérifiées, sur lesquelles la connexion est épinglée.
+pub async fn resolve_checked(
+    guard: &dyn AddressGuard,
+    host: &str,
+    port: u16,
+) -> ToolResult<Vec<std::net::SocketAddr>> {
+    let addrs = guard
+        .lookup(host, port)
         .await
         .map_err(|e| ToolError::Network(format!("résolution de `{host}` : {e}")))?;
-    let mut any = false;
-    for a in addrs {
-        any = true;
-        if is_blocked_ip(&a.ip()) {
-            return Err(ToolError::Denied(format!(
-                "`{host}` résout vers une adresse privée ({}) : accès refusé",
-                a.ip()
-            )));
-        }
-    }
-    if !any {
+    if addrs.is_empty() {
         return Err(ToolError::Network(format!(
             "`{host}` ne résout vers aucune adresse"
         )));
     }
-    Ok(())
+    if let Some(a) = addrs.iter().find(|a| guard.blocked(&a.ip())) {
+        return Err(ToolError::Denied(format!(
+            "`{host}` résout vers une adresse privée ({}) : accès refusé",
+            a.ip()
+        )));
+    }
+    Ok(addrs)
+}
+
+/// Vérifie les adresses résolues avec le résolveur du système.
+pub async fn check_resolved_addresses(host: &str, port: u16) -> ToolResult<()> {
+    resolve_checked(&SystemGuard, host, port).await.map(|_| ())
+}
+
+/// Délai d'une requête épinglée, le même que celui du client partagé du daemon.
+const PINNED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Client d'un saut, dont la connexion va **sur les adresses vérifiées** : reqwest ne
+/// résout plus le nom une seconde fois, un DNS à TTL nul ne peut plus basculer vers
+/// 127.0.0.1 ou 169.254.169.254 entre le contrôle et la connexion (issue #93). SNI, `Host`
+/// et vérification du certificat restent sur le nom.
+fn pinned_client(host: &str, addrs: &[std::net::SocketAddr]) -> ToolResult<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(PINNED_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve_to_addrs(host, addrs)
+        .build()
+        .map_err(|e| ToolError::Network(e.to_string()))
 }
 
 /// Taille annoncée au-delà de laquelle la réponse est refusée sans être lue : ce multiple
@@ -175,13 +219,27 @@ pub async fn fetch(
     max_bytes: usize,
     block_private: bool,
 ) -> ToolResult<Value> {
+    let guard: Option<&dyn AddressGuard> = block_private.then_some(&SystemGuard as _);
+    fetch_guarded(
+        client, raw_url, method, headers, body, allowlist, max_bytes, guard,
+    )
+    .await
+}
+
+/// `fetch`, garde d'adresses explicite. Avec un garde, chaque saut résout le nom une
+/// seule fois, vérifie les adresses, et se connecte sur elles.
+#[allow(clippy::too_many_arguments)]
+pub async fn fetch_guarded(
+    client: &reqwest::Client,
+    raw_url: &str,
+    method: &str,
+    headers: &[(String, String)],
+    body: Option<&str>,
+    allowlist: &[String],
+    max_bytes: usize,
+    guard: Option<&dyn AddressGuard>,
+) -> ToolResult<Value> {
     let mut url = check_url(raw_url, allowlist)?;
-    if block_private {
-        let port = url.port_or_known_default().unwrap_or(443);
-        if let Some(h) = url.host_str() {
-            check_resolved_addresses(h, port).await?;
-        }
-    }
 
     let m = match method.to_uppercase().as_str() {
         "POST" => reqwest::Method::POST,
@@ -190,6 +248,17 @@ pub async fn fetch(
     };
 
     for hop in 0..5 {
+        // Chaque saut est revérifié : une redirection vers 169.254.169.254 est le scénario
+        // SSRF classique ; et la connexion part sur les adresses vérifiées (#93).
+        let pinned = match (guard, url.host_str()) {
+            (Some(g), Some(h)) => {
+                let port = url.port_or_known_default().unwrap_or(443);
+                let addrs = resolve_checked(g, h, port).await?;
+                Some(pinned_client(h, &addrs)?)
+            }
+            _ => None,
+        };
+        let client = pinned.as_ref().unwrap_or(client);
         let mut req = client.request(m.clone(), url.clone());
         for (k, v) in headers {
             req = req.header(k.as_str(), v.as_str());
@@ -217,15 +286,7 @@ pub async fn fetch(
             let next = url
                 .join(&loc)
                 .map_err(|e| ToolError::Network(format!("redirection illisible : {e}")))?;
-            // Chaque saut est revérifié : une redirection vers 169.254.169.254 est le
-            // scénario SSRF classique.
             url = check_url(next.as_str(), allowlist)?;
-            if block_private {
-                let port = url.port_or_known_default().unwrap_or(443);
-                if let Some(h) = url.host_str() {
-                    check_resolved_addresses(h, port).await?;
-                }
-            }
             if hop == 4 {
                 return Err(ToolError::Network("trop de redirections".into()));
             }
@@ -300,6 +361,160 @@ mod tests {
 
     fn url_of(addr: std::net::SocketAddr, path: &str) -> String {
         format!("http://essai.test:{}{path}", addr.port())
+    }
+
+    /// Résolveur scripté : une liste de réponses par nom, la dernière se répète ; les
+    /// adresses de `blocked` jouent le rôle des adresses privées.
+    struct Scripted {
+        answers: std::sync::Mutex<std::collections::HashMap<String, Vec<Vec<IpAddr>>>>,
+        blocked: Vec<IpAddr>,
+        lookups: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Scripted {
+        fn new(answers: &[(&str, Vec<Vec<IpAddr>>)], blocked: &[IpAddr]) -> Self {
+            Scripted {
+                answers: std::sync::Mutex::new(
+                    answers
+                        .iter()
+                        .map(|(h, a)| (h.to_string(), a.clone()))
+                        .collect(),
+                ),
+                blocked: blocked.to_vec(),
+                lookups: Default::default(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AddressGuard for Scripted {
+        async fn lookup(
+            &self,
+            host: &str,
+            port: u16,
+        ) -> std::io::Result<Vec<std::net::SocketAddr>> {
+            self.lookups
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut g = self.answers.lock().unwrap();
+            let list = g.get_mut(host).expect("nom inconnu du résolveur scripté");
+            let ips = if list.len() > 1 {
+                list.remove(0)
+            } else {
+                list[0].clone()
+            };
+            Ok(ips
+                .into_iter()
+                .map(|ip| std::net::SocketAddr::new(ip, port))
+                .collect())
+        }
+        fn blocked(&self, ip: &IpAddr) -> bool {
+            self.blocked.contains(ip)
+        }
+    }
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    fn plain() -> reqwest::Client {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+    }
+
+    /// #93 : le nom répond « public » au contrôle puis « privé » : la connexion part sur
+    /// l'adresse contrôlée, le nom n'est pas résolu une seconde fois.
+    #[tokio::test]
+    async fn the_connection_goes_to_the_checked_address() {
+        let server = one_shot(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nPUBLIC".to_vec(),
+        )
+        .await;
+        let guard = Scripted::new(
+            &[(
+                "rebind.test",
+                vec![vec![ip("127.0.0.1")], vec![ip("127.0.0.2")]],
+            )],
+            &[ip("127.0.0.2")],
+        );
+        let v = fetch_guarded(
+            &plain(),
+            &format!("http://rebind.test:{}/", server.port()),
+            "GET",
+            &[],
+            None,
+            &[],
+            4096,
+            Some(&guard),
+        )
+        .await
+        .unwrap();
+        assert_eq!(v["status"], 200);
+        assert!(v.to_string().contains("PUBLIC"), "{v}");
+        assert_eq!(
+            guard.lookups.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "une seule résolution par saut"
+        );
+    }
+
+    /// #93 : une redirection vers un nom qui résout en privé est refusée au saut suivant.
+    #[tokio::test]
+    async fn a_redirect_to_a_rebinding_name_is_refused() {
+        let redirect = one_shot(
+            b"HTTP/1.1 302 Found\r\nLocation: http://second.test:9/x\r\n\
+              Content-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_vec(),
+        )
+        .await;
+        let guard = Scripted::new(
+            &[
+                ("first.test", vec![vec![ip("127.0.0.1")]]),
+                ("second.test", vec![vec![ip("127.0.0.2")]]),
+            ],
+            &[ip("127.0.0.2")],
+        );
+        let e = fetch_guarded(
+            &plain(),
+            &format!("http://first.test:{}/", redirect.port()),
+            "GET",
+            &[],
+            None,
+            &[],
+            4096,
+            Some(&guard),
+        )
+        .await
+        .unwrap_err();
+        assert!(e.to_string().contains("adresse privée"), "{e}");
+    }
+
+    /// #93 : un nom à plusieurs adresses vérifiées reste joignable par la seconde quand la
+    /// première refuse la connexion.
+    #[tokio::test]
+    async fn a_name_with_several_checked_addresses_falls_back() {
+        let server = one_shot(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK".to_vec(),
+        )
+        .await;
+        let guard = Scripted::new(
+            &[("multi.test", vec![vec![ip("::1"), ip("127.0.0.1")]])],
+            &[],
+        );
+        let v = fetch_guarded(
+            &plain(),
+            &format!("http://multi.test:{}/", server.port()),
+            "GET",
+            &[],
+            None,
+            &[],
+            4096,
+            Some(&guard),
+        )
+        .await
+        .unwrap();
+        assert_eq!(v["status"], 200);
     }
 
     /// #64 : une redirection vers la boucle locale est refusée, même quand le premier
