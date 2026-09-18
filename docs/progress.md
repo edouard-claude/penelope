@@ -1164,6 +1164,17 @@ le rouvrir à tout, `penelope config set sandbox.shell_network true`. La migrati
   du seuil de fond (sur 8 k, 10 k de queue interdisaient tout résumé). La documentation de
   `context.model_thresholds` disait « sans effet » : elle était lue depuis longtemps.
 
+### 0.17.3
+
+- **Un « ok » relit la décision qu'il prend** (#108) : un accord court (« ok », « go »,
+  « oui », « vas-y », « tu peux publier », 👍 ; ni remerciement, ni question, ni réserve)
+  qui suit une proposition de Pénélope (choix proposés, « je propose… », ou une dernière
+  ligne qui demande « je l'ouvre ? », « tu valides ? ») déclenche la revue avec la
+  proposition du tour précédent comme matière. Le prompt de revue dit qu'une décision
+  acceptée d'un mot se formule depuis la proposition, et ne pousse plus vers la liste
+  vide. Un appel au rôle `memory_review` par tour retenu, au plus
+  `memory.review_max_candidates` candidats, comme avant.
+
 ### Routine de livraison
 
 Avant chaque tag :

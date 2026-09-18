@@ -321,8 +321,14 @@ impl Daemon {
                 .get("text")
                 .and_then(|t| t.as_str())
                 .unwrap_or_default();
+            // Un accord court (« ok », « go ») relit la proposition qu'il accepte (#108).
+            let previous = if crate::review::is_short_agreement(said) {
+                crate::review::previous_answer(&self.services, &turn.session_id).await
+            } else {
+                None
+            };
             if self.services.config.config().memory.review_max_candidates > 0
-                && crate::review::wants_review(said)
+                && let Some(matter) = crate::review::review_matter(said, previous.as_deref())
             {
                 crate::review::spawn(
                     self.clone(),
@@ -330,6 +336,7 @@ impl Daemon {
                     turn.id.to_string(),
                     said.to_string(),
                     answer.clone(),
+                    matter,
                 );
             }
             // Premier échange d'une session sans titre : un titre lisible (issue #2).

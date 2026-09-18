@@ -1137,7 +1137,11 @@ demande les outils de développement Xcode (`xcode-select --install`) ; 50 pages
 
 Après un échange qui en vaut la peine (message un peu long, correction, règle énoncée),
 le modèle de l'alias du rôle `memory_review` note au plus cinq candidats : préférence,
-correction, décision, fait, écart. Rien n'est écrit dans le profil ni la mémoire à ce
+correction, décision, fait, écart. Un accord court (« ok », « go », « oui », « tu peux
+publier ») qui répond à une proposition de Pénélope (« je propose… », « je l'ouvre ? »,
+des choix) est relu lui aussi, avec la proposition comme matière : la décision est là,
+et elle devient un candidat « décision » d'origine propriétaire. Un « merci », un accord
+qui ne suit aucune proposition ou une commande ne coûtent aucun appel. Rien n'est écrit dans le profil ni la mémoire à ce
 moment-là : les candidats vont dans le journal du jour.
 
 Une conversation Telegram ne se ferme jamais : Pénélope la découpe en **épisodes**. Un

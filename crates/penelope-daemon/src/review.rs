@@ -17,15 +17,16 @@ const TIMEOUT: Duration = Duration::from_secs(60);
 
 const REVIEW_PROMPT: &str = "Tu relis un échange entre le propriétaire et Pénélope, son \
 assistante, pour repérer ce qui mériterait d'être retenu plus tard. Réponds uniquement par \
-un objet JSON {\"candidats\": [...]}, liste vide si rien ne mérite d'être retenu (le cas le \
-plus fréquent).\n\
+un objet JSON {\"candidats\": [...]}, liste vide si rien ne mérite d'être retenu.\n\
 Chaque candidat : {\"type\": \"fait|preference|correction|ecart|decision\", \"texte\": \
 \"une phrase autonome\", \"importance\": 1-10, \"quand\": \"clé=valeur; …\" ou \"\"}.\n\
 - preference : une façon de faire que le propriétaire veut (« toujours », « désormais », \
 « je préfère ») ;\n\
 - correction : le propriétaire reprend Pénélope (« non, ici on fait… ») ; importance 8 ou \
 plus ;\n\
-- decision : un choix que le propriétaire a arrêté ;\n\
+- decision : un choix que le propriétaire a arrêté, y compris d'un mot (« ok », « go ») en \
+acceptant une proposition de Pénélope : le texte dit ce qui est décidé, tiré de la \
+proposition, sans « le propriétaire a dit ok » ;\n\
 - fait : une information durable sur lui, ses projets, ses clients ;\n\
 - ecart : une pratique habituelle contournée dans un contexte précis.\n\
 `quand` décrit le contexte où cela vaut (clés : projet, client, depot, langage, tache, \
@@ -44,6 +45,193 @@ pub fn wants_review(user_text: &str) -> bool {
     t.chars().count() >= 60 || looks_like_correction(t) || stated_as_a_rule(t)
 }
 
+/// Ce qu'une revue relit (issue #108).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReviewMatter {
+    /// L'échange du tour : message du propriétaire et réponse.
+    Exchange,
+    /// Un accord court (« ok », « go ») à la proposition de Pénélope du tour précédent :
+    /// la décision est dans la proposition.
+    Agreement { proposal: String },
+}
+
+/// Faut-il relire ce tour, et avec quelle matière ? `previous_answer` : la dernière
+/// réponse de Pénélope avant ce message, lue seulement pour un accord court.
+pub fn review_matter(user_text: &str, previous_answer: Option<&str>) -> Option<ReviewMatter> {
+    if wants_review(user_text) {
+        return Some(ReviewMatter::Exchange);
+    }
+    if !is_short_agreement(user_text) {
+        return None;
+    }
+    let proposal = previous_answer.filter(|a| looks_like_proposal(a))?;
+    Some(ReviewMatter::Agreement {
+        proposal: proposal.to_string(),
+    })
+}
+
+fn fold(text: &str) -> String {
+    text.to_lowercase()
+        .replace(['’', '\''], "'")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '\'' || *c == '-')
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Un accord court : « ok », « go », « oui », « vas-y », « tu peux publier ». Pas un
+/// remerciement, pas une question, pas une réserve (« ok mais attends »).
+pub fn is_short_agreement(user_text: &str) -> bool {
+    let raw = user_text.trim();
+    if raw.is_empty() || raw.starts_with('/') || raw.contains('?') || raw.chars().count() > 40 {
+        return false;
+    }
+    if ["👍", "✅", "👌"].contains(&raw) {
+        return true;
+    }
+    let t = fold(raw);
+    const NOT: &[&str] = &[
+        "merci", "thanks", "thx", "non", "pas", "attends", "stop", "mais", "plutôt", "sauf",
+    ];
+    if t.split(' ').any(|w| NOT.contains(&w)) {
+        return false;
+    }
+    const AGREE: &[&str] = &[
+        "ok",
+        "okay",
+        "oki",
+        "go",
+        "vas-y",
+        "vas y",
+        "allez",
+        "allez-y",
+        "allé",
+        "oui",
+        "ouais",
+        "yes",
+        "yep",
+        "d'accord",
+        "dac",
+        "banco",
+        "carrément",
+        "valide",
+        "validé",
+        "je valide",
+        "parfait",
+        "c'est bon",
+        "ça marche",
+        "fais-le",
+        "fais le",
+        "fais",
+        "lance",
+        "publie",
+        "tu peux",
+        "on y va",
+        "top",
+        "exact",
+        "exactement",
+    ];
+    t.split(' ').count() <= 6
+        && AGREE
+            .iter()
+            .any(|a| t == *a || t.starts_with(&format!("{a} ")))
+}
+
+/// La réponse se termine-t-elle par une proposition que le propriétaire peut accepter
+/// d'un mot : des choix proposés, ou une question sur ce que Pénélope va faire (« je
+/// l'ouvre ? », « tu valides ? »), ou une proposition explicite (« je propose… »).
+pub fn looks_like_proposal(answer: &str) -> bool {
+    let text = answer.trim();
+    if text.contains("**CHOIX :**") {
+        return true;
+    }
+    let tail: String = {
+        let n = text.chars().count();
+        text.chars().skip(n.saturating_sub(600)).collect()
+    };
+    let t = fold(&tail);
+    const EXPLICIT: &[&str] = &[
+        "je propose",
+        "je te propose",
+        "je vous propose",
+        "ma proposition",
+    ];
+    if EXPLICIT.iter().any(|c| t.contains(c)) {
+        return true;
+    }
+    let last = tail
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or_default();
+    if !last.contains('?') {
+        return false;
+    }
+    const CUES: &[&str] = &[
+        "veux-tu",
+        "tu veux",
+        "souhaites-tu",
+        "dois-je",
+        "je peux",
+        "on part sur",
+        "je lance",
+        "je publie",
+        "j'ouvre",
+        "je crée",
+        "je fais",
+        "je modifie",
+        "je passe",
+        "je mets",
+        "je change",
+        "je commite",
+        "je pousse",
+        "tu valides",
+        "ok pour",
+        "d'accord pour",
+        "on y va",
+        "on garde",
+        "on fait",
+        "on lance",
+        "je m'en occupe",
+        "je supprime",
+        "je l'",
+        "je le ",
+        "je la ",
+        "je les",
+        "on le ",
+        "on la ",
+        "on les",
+        "j'applique",
+        "je corrige",
+        "je déploie",
+        "je réponds",
+        "j'envoie",
+        "on publie",
+        "je continue",
+        "on continue",
+    ];
+    CUES.iter().any(|c| t.contains(c))
+}
+
+/// Dernière réponse de Pénélope **avant** le dernier message du propriétaire : la
+/// proposition qu'un accord court accepte.
+pub async fn previous_answer(s: &crate::runtime::Services, session_id: &str) -> Option<String> {
+    use penelope_llm::types::Role;
+    let entries = s.context.history.tail(session_id, 40).await.ok()?;
+    let last_user = entries.iter().rposition(|e| e.message.role == Role::User)?;
+    entries[..last_user]
+        .iter()
+        .rev()
+        .find(|e| {
+            e.message.role == Role::Assistant
+                && e.message.tool_calls.is_empty()
+                && !e.message.text().trim().is_empty()
+        })
+        .map(|e| e.message.text())
+}
+
 /// Lance la revue sans attendre.
 pub fn spawn(
     d: Arc<Daemon>,
@@ -51,9 +239,14 @@ pub fn spawn(
     turn_id: String,
     user_text: String,
     answer: String,
+    matter: ReviewMatter,
 ) {
     tokio::spawn(async move {
-        match review(&d, &session_id, &turn_id, &user_text, &answer).await {
+        let proposal = match &matter {
+            ReviewMatter::Agreement { proposal } => Some(proposal.as_str()),
+            ReviewMatter::Exchange => None,
+        };
+        match review(&d, &session_id, &turn_id, &user_text, &answer, proposal).await {
             Ok(0) => {}
             Ok(n) => tracing::info!(session = %session_id, candidats = n, "revue de fond"),
             Err(e) => tracing::debug!(session = %session_id, error = %e, "revue de fond"),
@@ -61,13 +254,15 @@ pub fn spawn(
     });
 }
 
-/// Relit un échange et enregistre ses candidats. Renvoie le nombre retenu.
+/// Relit un échange et enregistre ses candidats. Renvoie le nombre retenu. `proposal` :
+/// la proposition que le message du propriétaire accepte d'un mot (issue #108).
 pub async fn review(
     d: &Arc<Daemon>,
     session_id: &str,
     turn_id: &str,
     user_text: &str,
     answer: &str,
+    proposal: Option<&str>,
 ) -> anyhow::Result<usize> {
     let s = &d.services;
     let cfg = s.config.config();
@@ -89,14 +284,25 @@ pub async fn review(
         .unwrap_or(false);
     let answer: String = answer.chars().take(2_000).collect();
     let user: String = user_text.chars().take(4_000).collect();
+    let mut exchange = String::new();
+    if let Some(p) = proposal {
+        // La fin de la proposition : c'est là que la question est posée.
+        let n = p.chars().count();
+        let p: String = p.chars().skip(n.saturating_sub(3_000)).collect();
+        exchange.push_str(&format!(
+            "Proposition de Pénélope au tour précédent, que le propriétaire accepte :\n\
+             <proposition>\n{p}\n</proposition>\n\n"
+        ));
+    }
+    exchange.push_str(&format!(
+        "Message du propriétaire :\n<message>\n{user}\n</message>\n\nRéponse de \
+         Pénélope (extrait) :\n<reponse>\n{answer}\n</reponse>"
+    ));
     let request = ChatRequest {
         model: model.clone(),
         messages: vec![
             ChatMessage::system(REVIEW_PROMPT),
-            ChatMessage::user(format!(
-                "Message du propriétaire :\n<message>\n{user}\n</message>\n\nRéponse de \
-                 Pénélope (extrait) :\n<reponse>\n{answer}\n</reponse>"
-            )),
+            ChatMessage::user(exchange),
         ],
         stream: true,
         max_tokens: Some(if effort.as_deref() == Some("none") {
@@ -290,6 +496,56 @@ mod tests {
         ));
     }
 
+    /// #108 : un accord court relit la proposition qu'il accepte ; un remerciement, un
+    /// accord sans proposition, une commande ou une réserve ne déclenchent rien.
+    #[test]
+    fn a_short_agreement_is_reviewed_only_after_a_proposal() {
+        let proposal = "J'ai relu le digest : il ne dit rien des rejets. Je propose d'ouvrir \
+                        une issue « Digest : motifs de rejet » sur le dépôt public. Je l'ouvre ?";
+        let info = "Le digest de la nuit liste 11 entrées promues.";
+        for ok in [
+            "ok",
+            "go",
+            "Oui.",
+            "vas-y",
+            "allé",
+            "tu peux publier",
+            "yes",
+            "👍",
+            "OK go !",
+        ] {
+            assert_eq!(
+                review_matter(ok, Some(proposal)),
+                Some(ReviewMatter::Agreement {
+                    proposal: proposal.into()
+                }),
+                "{ok}"
+            );
+            assert_eq!(review_matter(ok, Some(info)), None, "{ok} sans proposition");
+            assert_eq!(review_matter(ok, None), None, "{ok} sans tour précédent");
+        }
+        for not in [
+            "merci",
+            "ok merci",
+            "/status",
+            "ok mais attends",
+            "non",
+            "ok ?",
+            "pas encore",
+        ] {
+            assert_eq!(review_matter(not, Some(proposal)), None, "{not}");
+        }
+        assert_eq!(
+            review_matter("non, ici on fait les migrations avec sqlx", Some(proposal)),
+            Some(ReviewMatter::Exchange)
+        );
+        assert!(looks_like_proposal(
+            "Deux options.\n\n**CHOIX :** Publier | Attendre"
+        ));
+        assert!(looks_like_proposal("Le README est prêt. Je le publie ?"));
+        assert!(!looks_like_proposal("C'est fait. Autre chose ?"));
+    }
+
     #[test]
     fn candidates_are_typed_bounded_and_filtered() {
         let raw = r#"{"candidats": [
@@ -394,6 +650,7 @@ mod daemon_tests {
             "t1",
             "non, ici on fait les migrations avec sqlx, pas diesel",
             "D'accord, je passe par sqlx.",
+            None,
         )
         .await
         .unwrap();
@@ -412,5 +669,87 @@ mod daemon_tests {
             .await
             .unwrap();
         assert!(roles.iter().any(|r| r.key == "memory_review"));
+    }
+
+    /// #108 : « ok » après une proposition de Pénélope produit une décision tirée de la
+    /// proposition, d'origine propriétaire ; la revue voit la proposition, et ne note jamais
+    /// plus que `memory.review_max_candidates`.
+    #[tokio::test]
+    async fn an_agreement_turns_the_proposal_into_an_owner_decision() {
+        use crate::bus::Origin as Channel;
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+                .await
+                .unwrap(),
+        );
+        let d = Arc::new(Daemon::from_services(s.clone()));
+        let p = Arc::new(MockProvider::new());
+        d.set_provider_override(p.clone());
+        d.publish_config("test", |c| {
+            c.memory.review_max_candidates = 2;
+            c.context.auto_title = false;
+            Ok(vec!["memory.review_max_candidates".into()])
+        })
+        .unwrap();
+        let sid = d.chat_session_for(&Channel::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        let say = |text: &'static str| {
+            let d = d.clone();
+            let sid = sid.clone();
+            async move {
+                d.enqueue_message(&sid, text, &Channel::Cli, None)
+                    .await
+                    .unwrap();
+                let turn = d.services.turns.claim("test").await.unwrap().unwrap();
+                d.run_turn(&turn).await;
+                d.services.turns.complete(&turn).await.unwrap();
+            }
+        };
+
+        p.reply(
+            "Le digest ne dit rien des rejets. Je propose d'ouvrir une issue « Digest : \
+             motifs de rejet » sur le dépôt public. Je l'ouvre ?",
+        );
+        say("regarde le digest de cette nuit").await;
+        let before = p.call_count();
+        p.reply("Issue ouverte.");
+        p.reply(
+            r#"{"candidats": [
+                {"type": "decision", "texte": "Ouvrir une issue publique sur les motifs de rejet du digest", "importance": 6},
+                {"type": "fait", "texte": "Le digest ne dit rien des rejets", "importance": 4},
+                {"type": "fait", "texte": "Troisième candidat au-delà du plafond", "importance": 3}
+            ]}"#,
+        );
+        say("ok").await;
+        let mut pending = Vec::new();
+        for _ in 0..200 {
+            pending = d.services.candidates.pending(None).await.unwrap();
+            if !pending.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(p.call_count(), before + 2, "une réponse, une revue");
+        let asked = p.requests().last().unwrap().messages[1].text();
+        assert!(
+            asked.contains("<proposition>") && asked.contains("Je l'ouvre ?"),
+            "{asked}"
+        );
+        assert!(pending.len() <= 2, "{pending:?}");
+        let decision = pending
+            .iter()
+            .find(|c| c.ctype == CandidateType::Decision)
+            .expect("décision");
+        assert_eq!(decision.origin, Origin::Owner);
+        assert!(decision.text.contains("motifs de rejet"));
+
+        // « merci » ensuite : aucune revue.
+        let before = p.call_count();
+        p.reply("Avec plaisir.");
+        say("merci").await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(p.call_count(), before + 1, "pas de revue");
     }
 }
