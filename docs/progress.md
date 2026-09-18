@@ -8,7 +8,7 @@ Dernière mise à jour : 18 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1452 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1465 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1219,6 +1219,11 @@ en administrateur anonyme (#113).
   parallèle.
 
 ### 0.17.5
+
+Les lectures du shell passent sans demande, avec un mode d'approbation par session et des
+familles autorisées d'avance (#111) ; quitter une session ne vide plus sa file, elle
+travaille en fond (#112) ; un serveur MCP stdio mort dit son code et sa durée de vie
+(#114) ; plus de `null` dans les bulles Telegram (#115).
 
 - **Les lectures du shell ne demandent plus rien** (#111) : `is_read_command` classe une
   ligne de lecture (programme connu appelé par son nom, sans enchaînement, redirection,
