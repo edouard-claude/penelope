@@ -12,7 +12,7 @@ peut relire et corriger à la main, appelle des serveurs MCP, exécute des workf
 survivent à un redémarrage, et demande l'accord de son propriétaire avant tout ce qui
 engage.
 
-Rust, 17 crates, `#![forbid(unsafe_code)]` dans chacun, 1392 tests qui ne touchent pas
+Rust, 17 crates, `#![forbid(unsafe_code)]` dans chacun, 1406 tests qui ne touchent pas
 au réseau.
 
 ## Pourquoi celle-ci
@@ -233,7 +233,7 @@ penelope-platform            penelope-observe ├──► penelope-mcp     ├�
 cargo test --workspace
 ```
 
-1392 tests, aucun ne touche au réseau, donc la CI n'a besoin d'aucun secret. Les suites
+1406 tests, aucun ne touche au réseau, donc la CI n'a besoin d'aucun secret. Les suites
 nommées sont des filtres sur cette même commande, ce qui évite qu'un chemin de test
 diverge de l'autre.
 

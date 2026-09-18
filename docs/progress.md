@@ -3,12 +3,12 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 17 septembre 2026.
+Dernière mise à jour : 18 septembre 2026.
 
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1355 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1406 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -893,6 +893,16 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   taille et sa destination ; `self_status` porte la même information.
 
 ### 0.17.1
+
+Effets durables contre une coupure (#75), retour arrière qui relit la configuration de la
+version suivante (#76), sauvegarde sans gel (#77), purge et rétention de ce que l'agent a
+fait et dit (#78), journée budgétaire locale (#79), flux sans « � » (#80), routage image
+strict (#81), modèle collant revu aux frontières (#82), effet incertain tranché pour de bon
+(#83), boucles de fond surveillées (#84), lectures parallèles (#85), souvenirs anciens
+rappelables (#86), filtrage avant la coupe de la recherche mémoire (#87), serveurs MCP
+confinés (#89), profil Seatbelt en argument (#90), socket RPC authentifiée (#91),
+descriptions d'outils MCP encadrées et épinglées (#92), `http_fetch` épinglé sur
+l'adresse vérifiée (#93), fichiers lus en flux (#94), secret posé sans `argv` (#95).
 
 - **Effets durables contre la machine** (#75) : `dispatching` et `completed` d'un effet non
   idempotent passent par `Store::write_durable`, qui exécute la transaction sous
