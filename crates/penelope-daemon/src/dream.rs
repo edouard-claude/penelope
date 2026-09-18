@@ -2036,6 +2036,14 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
             failing.into_iter().take(5).collect::<Vec<_>>().join("\n")
         ));
     }
+    // Ce qui part aujourd'hui, et où (#124).
+    let due = crate::scheduler::due_today(d).await;
+    if !due.is_empty() {
+        t.push_str(&format!(
+            "\n🗓 Aujourd'hui :\n{}\n",
+            due.into_iter().take(10).collect::<Vec<_>>().join("\n")
+        ));
+    }
     let pending = s.approvals.pending(100).await?;
     if !pending.is_empty() {
         t.push_str(&format!(

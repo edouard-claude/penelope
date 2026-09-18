@@ -904,7 +904,25 @@ impl Rpc {
             }
 
             // ------------------------------------------------------------ schedules
-            method::SCHEDULE_LIST => Ok(serde_json::to_value(s.schedules.list().await?)?),
+            method::SCHEDULE_LIST => Ok(json!(crate::scheduler::listing(s).await?)),
+            // Nouvelle destination, sans recréer la planification (#124) : `private`, ou
+            // `chat_id` et `topic_id`.
+            method::SCHEDULE_MOVE => {
+                let id = required_str(p, "id")?;
+                let (chat_id, topic_id) =
+                    if p.get("private").and_then(|v| v.as_bool()) == Some(true) {
+                        (s.config.config().owner.telegram_user_id, None)
+                    } else {
+                        let chat = p.get("chat_id").and_then(|v| v.as_i64()).ok_or_else(|| {
+                            anyhow::anyhow!("`chat_id` (et `topic_id`) ou `private: true`")
+                        })?;
+                        (chat, p.get("topic_id").and_then(|v| v.as_i64()))
+                    };
+                let to = crate::scheduler::retarget(s, &id, chat_id, topic_id)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                Ok(json!({"id": id, "destination": to}))
+            }
             method::SCHEDULE_ADD => {
                 let kind = penelope_workflow::TriggerKind::parse(&required_str(p, "kind")?)
                     .ok_or_else(|| {

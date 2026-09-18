@@ -18,7 +18,7 @@
 //! un arrêt part une fois au redémarrage, jamais en rafale.
 
 use crate::bus::Origin;
-use crate::runtime::Daemon;
+use crate::runtime::{Daemon, Services};
 use penelope_kernel::session::SessionKind;
 use penelope_kernel::turn::TurnKind;
 use penelope_workflow::schedules::{PolledItem, Schedule, TargetKind, TriggerKind};
@@ -377,7 +377,7 @@ async fn fire(
             vars.entry(k.clone()).or_insert(text);
         }
     }
-    let origin = target_origin(d, sched);
+    let origin = target_origin(&d.services, sched);
 
     match sched.target_kind() {
         Some(TargetKind::Notify) => {
@@ -538,7 +538,7 @@ pub async fn alert(d: &Arc<Daemon>, sched: &Schedule, reason: &str) {
         "⚠️ La planification « {} » n'a pas pu s'exécuter : {reason}",
         label(d, sched).await
     );
-    let origin = target_origin(d, sched);
+    let origin = target_origin(&d.services, sched);
     let _ = d
         .services
         .events
@@ -823,16 +823,21 @@ async fn cancelled_triggers(d: &Arc<Daemon>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Canal de retour déclaré : celui de la conversation qui a créé le schedule, ou celui
+/// où il a été déplacé (#124). `None` : le défaut, la conversation du propriétaire.
+fn own_origin(sched: &Schedule) -> Option<Origin> {
+    let o = sched.target.get("origin")?;
+    let origin = Origin::from_payload(&json!({ "origin": o }));
+    (!matches!(origin, Origin::Internal { .. } | Origin::Cli)).then_some(origin)
+}
+
 /// Canal de retour : celui de la conversation qui a créé le schedule, sinon le chat
 /// Telegram du propriétaire.
-fn target_origin(d: &Daemon, sched: &Schedule) -> Origin {
-    if let Some(o) = sched.target.get("origin") {
-        let origin = Origin::from_payload(&json!({ "origin": o }));
-        if !matches!(origin, Origin::Internal { .. } | Origin::Cli) {
-            return origin;
-        }
+fn target_origin(s: &Services, sched: &Schedule) -> Origin {
+    if let Some(origin) = own_origin(sched) {
+        return origin;
     }
-    match owner_origin(d) {
+    match owner_origin_of(s) {
         Origin::Internal { .. } => Origin::Internal {
             source: format!("schedule {}", sched.id),
         },
@@ -840,9 +845,153 @@ fn target_origin(d: &Daemon, sched: &Schedule) -> Origin {
     }
 }
 
+/// Où livre une planification, en mots : « conversation privée », « sujet « Veille »,
+/// groupe « Équipe » »… Le défaut est dit comme tel (issue #124).
+pub async fn destination(s: &Services, sched: &Schedule) -> (Origin, String) {
+    let origin = target_origin(s, sched);
+    let mut name = place_name(s, &origin).await;
+    if own_origin(sched).is_none() && matches!(origin, Origin::Telegram { .. }) {
+        name.push_str(" (par défaut)");
+    }
+    (origin, name)
+}
+
+/// Nom lisible d'une conversation Telegram : titre du groupe et nom du sujet quand
+/// Pénélope les a vus passer, identifiants sinon.
+pub async fn place_name(s: &Services, origin: &Origin) -> String {
+    let Origin::Telegram {
+        chat_id, topic_id, ..
+    } = origin
+    else {
+        return "aucune conversation (Telegram non configuré)".into();
+    };
+    let kv = |k: String| async move {
+        s.store
+            .read(move |c| penelope_store::kv_get(c, &k))
+            .await
+            .ok()
+            .flatten()
+            .filter(|v| !v.trim().is_empty())
+    };
+    let owner = s.config.config().owner.telegram_user_id;
+    let chat = if *chat_id == owner {
+        "conversation privée".to_string()
+    } else if *chat_id > 0 {
+        format!("conversation {chat_id}")
+    } else {
+        match kv(crate::telegram::chat_title_key(*chat_id)).await {
+            Some(title) => format!("groupe « {title} »"),
+            None => format!("groupe {chat_id}"),
+        }
+    };
+    match topic_id {
+        None => chat,
+        Some(t) => match kv(crate::telegram::topic_name_key(*chat_id, *t)).await {
+            Some(name) => format!("sujet « {name} », {chat}"),
+            None => format!("sujet {t}, {chat}"),
+        },
+    }
+}
+
+/// Déplace une planification vers une autre conversation, sans la recréer : son
+/// historique, ses exécutions et son état restent (issue #124). La conversation doit
+/// être celle du propriétaire ou une conversation autorisée. Renvoie la nouvelle
+/// destination, en mots.
+pub async fn retarget(
+    s: &Services,
+    id: &str,
+    chat_id: i64,
+    topic_id: Option<i64>,
+) -> Result<String, String> {
+    let cfg = s.config.config();
+    let owner = cfg.owner.telegram_user_id;
+    if chat_id == 0 {
+        return Err("Telegram n'est pas configuré (`owner.telegram_user_id`)".into());
+    }
+    if !(chat_id == owner || cfg.telegram.allowed_chats.contains(&chat_id)) {
+        return Err(format!(
+            "la conversation {chat_id} n'est pas autorisée : `penelope config set \
+             telegram.allowed_chats '[{chat_id}]'`"
+        ));
+    }
+    let origin = Origin::Telegram {
+        chat_id,
+        topic_id,
+        message_id: None,
+    };
+    let moved = s
+        .schedules
+        .set_origin(id, origin.to_value())
+        .await
+        .map_err(|e| e.to_string())?;
+    if !moved {
+        return Err(format!("planification `{id}` introuvable"));
+    }
+    Ok(place_name(s, &origin).await)
+}
+
+/// Planifications avec leur destination, pour `schedule list`, `/schedules` et l'outil
+/// `schedule_list` (issue #124).
+pub async fn listing(s: &Services) -> anyhow::Result<Vec<Value>> {
+    let mut out = Vec::new();
+    for sched in s.schedules.list().await? {
+        let (origin, name) = destination(s, &sched).await;
+        let mut v = serde_json::to_value(&sched)?;
+        v["destination"] = json!(name);
+        v["destination_origin"] = origin.to_value();
+        out.push(v);
+    }
+    Ok(out)
+}
+
+/// Planifications actives qui partent aujourd'hui (jour du propriétaire), à l'heure
+/// locale et avec leur destination : le digest du matin les rappelle, pour qu'une
+/// livraison au mauvais endroit se voie tout de suite (#124).
+pub async fn due_today(d: &Daemon) -> Vec<String> {
+    let s = &d.services;
+    let tz = s
+        .config
+        .config()
+        .owner
+        .timezone
+        .parse::<chrono_tz::Tz>()
+        .ok();
+    let local = |t: chrono::DateTime<chrono::Utc>| match tz {
+        Some(tz) => t.with_timezone(&tz).naive_local(),
+        None => t.naive_utc(),
+    };
+    let now = local(chrono::DateTime::from_timestamp_millis(s.clock.now_ms()).unwrap_or_default());
+    let mut rows = Vec::new();
+    for sched in s.schedules.list().await.unwrap_or_default() {
+        let Some(next) = sched
+            .next_run
+            .as_deref()
+            .filter(|_| sched.state == "active")
+            .and_then(|n| chrono::DateTime::parse_from_rfc3339(n).ok())
+        else {
+            continue;
+        };
+        let at = local(next.with_timezone(&chrono::Utc));
+        if at.date() != now.date() {
+            continue;
+        }
+        let (_, to) = destination(s, &sched).await;
+        rows.push((
+            at,
+            format!("- {} {} → {to}", at.format("%H:%M"), label(d, &sched).await),
+        ));
+    }
+    rows.sort_by_key(|(at, _)| *at);
+    rows.into_iter().map(|(_, line)| line).collect()
+}
+
 /// Conversation privée du propriétaire sur Telegram, s'il est configuré.
 pub(crate) fn owner_origin(d: &Daemon) -> Origin {
-    let owner = d.services.config.config().owner.telegram_user_id;
+    owner_origin_of(&d.services)
+}
+
+fn owner_origin_of(s: &Services) -> Origin {
+    let owner = s.config.config().owner.telegram_user_id;
     if owner != 0 {
         Origin::Telegram {
             chat_id: owner,
@@ -1201,6 +1350,98 @@ mod tests {
             1,
             "exécution immédiate"
         );
+    }
+
+    /// #124 : chaque planification dit où elle livre ; on la déplace sans la recréer
+    /// (identifiant, exécutions et libellé gardés), vers une conversation autorisée
+    /// seulement, et l'exécution suivante part au nouvel endroit ; le digest rappelle ce
+    /// qui part aujourd'hui, et où.
+    #[tokio::test]
+    async fn a_schedule_says_where_it_delivers_and_can_be_moved() {
+        let (_dir, d, clock, rec) = daemon().await;
+        let s = &d.services;
+        d.publish_config("test", |c| {
+            c.telegram.allowed_chats = vec![-100_777];
+            Ok(vec!["telegram.allowed_chats".into()])
+        })
+        .unwrap();
+        d.kv_set(&crate::telegram::chat_title_key(-100_777), "Équipe")
+            .await
+            .unwrap();
+        d.kv_set(&crate::telegram::topic_name_key(-100_777, 12), "Veille")
+            .await
+            .unwrap();
+        let sched = s
+            .schedules
+            .create(
+                TriggerKind::Cron,
+                json!({"expr": "0 9 * * *"}),
+                json!({"type": "notify", "template": "🧭 Veille", "label": "Veille du matin",
+                       "origin": {"channel": "telegram", "chat_id": 42, "message_id": 99}}),
+                json!({}),
+            )
+            .await
+            .unwrap();
+        let other = s
+            .schedules
+            .create(
+                TriggerKind::Cron,
+                json!({"expr": "0 9 1 6 *"}),
+                json!({"type": "notify", "template": "☀️ Été"}),
+                json!({}),
+            )
+            .await
+            .unwrap();
+        let to_of = |list: &[Value], id: &str| {
+            list.iter().find(|v| v["id"] == id).unwrap()["destination"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let list = listing(s).await.unwrap();
+        assert_eq!(to_of(&list, &sched.id), "conversation privée");
+        assert_eq!(to_of(&list, &other.id), "conversation privée (par défaut)");
+
+        let refused = retarget(s, &sched.id, -100_999, Some(1)).await.unwrap_err();
+        assert!(refused.contains("telegram.allowed_chats"), "{refused}");
+        assert!(retarget(s, "inconnu", 42, None).await.is_err());
+
+        clock.set_ms(1_767_243_630_000); // 2026-01-01T05:00:30Z = 09:00:30 à La Réunion
+        assert_eq!(tick(&d).await.unwrap().fired, vec![sched.id.clone()]);
+        let to = retarget(s, &sched.id, -100_777, Some(12)).await.unwrap();
+        assert_eq!(to, "sujet « Veille », groupe « Équipe »");
+        let moved = s.schedules.get(&sched.id).await.unwrap().unwrap();
+        assert_eq!((moved.runs, moved.state.as_str()), (1, "active"));
+        assert!(moved.last_run.is_some());
+        assert_eq!(moved.target["label"], "Veille du matin");
+        assert_eq!(moved.target["origin"]["message_id"], Value::Null);
+        assert_eq!(to_of(&listing(s).await.unwrap(), &sched.id), to);
+
+        clock.set_ms(1_767_330_030_000); // le lendemain, 09:00:30
+        assert_eq!(tick(&d).await.unwrap().fired, vec![sched.id.clone()]);
+        let sent = rec.0.lock().unwrap().clone();
+        assert!(matches!(sent[0].0, Origin::Telegram { chat_id: 42, .. }));
+        assert!(
+            matches!(
+                sent.last().unwrap().0,
+                Origin::Telegram {
+                    chat_id: -100_777,
+                    topic_id: Some(12),
+                    ..
+                }
+            ),
+            "{sent:?}"
+        );
+
+        clock.set_ms(1_767_405_600_000); // surlendemain, 06:00 à La Réunion
+        let today = due_today(&d).await;
+        assert_eq!(
+            today,
+            vec!["- 09:00 Veille du matin → sujet « Veille », groupe « Équipe »".to_string()]
+        );
+        let digest = crate::dream::digest_text(&d).await.unwrap();
+        assert!(digest.contains("Aujourd'hui"), "{digest}");
+        assert!(digest.contains("groupe « Équipe »"), "{digest}");
     }
 
     /// Issue #39 : un tour planifié annulé dans la file ou en échec n'est jamais silencieux.

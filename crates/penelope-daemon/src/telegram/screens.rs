@@ -768,7 +768,8 @@ impl TelegramGateway {
                 let mut sc = Screen::new(schedules_text(&v));
                 if !list.is_empty() {
                     sc.text.push_str(
-                        "\n⚡ déclenche maintenant, ⏸/▶️ suspend ou reprend, 🗑 supprime.",
+                        "\n⚡ déclenche maintenant, ⏸/▶️ suspend ou reprend, 📍 livre ici, \
+                         🗑 supprime.",
                     );
                 }
                 let page = page_of(args);
@@ -795,6 +796,8 @@ impl TelegramGateway {
                             self.op("⏸", "schedule.pause", json!({"id": id}), here.clone())
                                 .await?
                         },
+                        self.op("📍", "schedule.here", json!({"id": id}), here.clone())
+                            .await?,
                         self.guarded(
                             "🗑",
                             "schedule.rm",
@@ -2045,6 +2048,14 @@ impl TelegramGateway {
                 };
                 let state = crate::workflow::control(d, &run, &control).await?;
                 Done::toast(format!("Run {} : {}", run, state.as_str()))
+            }
+            // Livrer dans la conversation (et le sujet) où l'écran est affiché (#124).
+            "schedule.here" => {
+                let id = str_of("id");
+                let to = crate::scheduler::retarget(s, &id, chat_id, topic_id)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                Done::toast(format!("📍 Livrera ici : {to}"))
             }
             "schedule.run" | "schedule.pause" | "schedule.resume" | "schedule.rm" => {
                 let id = str_of("id");

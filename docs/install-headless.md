@@ -989,7 +989,8 @@ et `/stop` interrompt tout le lot.
 | `return_value` | read | Renvoie le résultat d'une étape de workflow. (dans un workflow) |
 | `schedule_create` | write | Crée un déclencheur planifié, soumis à approbation. (à la demande) |
 | `schedule_delete` | write | Supprime un déclencheur planifié. (à la demande) |
-| `schedule_list` | read | Liste les déclencheurs planifiés. (à la demande) |
+| `schedule_list` | read | Liste les déclencheurs planifiés, avec la conversation où chacun livre (`destination`). (à la demande) |
+| `schedule_move` | write | Change où livre un déclencheur planifié, sans le recréer (historique gardé) : `to: "here"` vers cette conversation (ce sujet compris), `"private"` vers la conversation privée du propriétaire. (à la demande) |
 | `self_docs` | read | Documentation de ta propre version, embarquée dans le binaire : le dépôt edouard-claude/penelope est la source de vérité sur toi. (à la demande) |
 | `self_status` | read | État complet de Pénélope et de sa machine : version, modèle qui répond à ce tour et routage, configuration effective (alias, rôles, bac à sable, budgets, Telegram, providers, transcription), coûts du jour et de la session, file de travail, chemins, et machine (batterie, secteur, disque, mémoire, charge, démarrage, système). |
 | `send_file` | write | Envoie un fichier au propriétaire. (à la demande) |
@@ -1172,6 +1173,23 @@ les gère. En ligne de commande :
 ```bash
 penelope schedule list
 ```
+
+**Où livre une planification.** Chacune livre dans la conversation où elle est née : la
+conversation privée si elle y a été créée, même quand on regarde ensuite un sujet d'un
+groupe. `/schedules`, `penelope schedule list` (colonne « vers ») et `schedule_list` le
+disent en toutes lettres (« conversation privée », « sujet « Veille », groupe « Équipe » »,
+« (par défaut) » quand rien n'a été choisi), et le digest du matin rappelle ce qui part
+dans la journée, avec l'heure et l'endroit. Pour la déplacer sans la recréer (identifiant,
+exécutions et historique gardés) : `/schedules ici <id>` écrit dans le sujet voulu, 📍 sur
+l'écran `/schedules` pour la conversation où il s'affiche, ou en ligne de commande vers un
+groupe autorisé (`telegram.allowed_chats`) :
+
+```bash
+penelope schedule move <id> --chat -1001234567890 --topic 21
+```
+
+`--private` la ramène dans la conversation privée. Pénélope le fait aussi sur demande
+(outil `schedule_move`, soumis à approbation).
 
 Une « intention » est l'autre mémoire prospective : « quand on reparle du déploiement,
 rappelle-moi le changelog » reste armée et revient dans le contexte du premier message

@@ -477,6 +477,18 @@ pub enum ScheduleCmd {
     Run {
         id: String,
     },
+    /// Change où livre une planification, sans la recréer : `--private`, ou `--chat`
+    /// (et `--topic`) d'une conversation autorisée.
+    Move {
+        id: String,
+        /// Un groupe a un identifiant négatif (`-100…`).
+        #[arg(long, conflicts_with = "private", allow_negative_numbers = true)]
+        chat: Option<i64>,
+        #[arg(long, requires = "chat")]
+        topic: Option<i64>,
+        #[arg(long)]
+        private: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -657,6 +669,9 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Mcp(McpCmd::List) if !cli.json => {
             println!("{}", render_mcp_list(&value));
         }
+        Command::Schedule(ScheduleCmd::List) if !cli.json => {
+            println!("{}", render_schedule_list(&value));
+        }
         Command::Session(SessionCmd::List) if !cli.json => {
             println!("{}", render_session_list(&value));
         }
@@ -738,6 +753,48 @@ fn render_mcp_list(v: &Value) -> String {
         ));
     }
     out
+}
+
+/// `penelope schedule list` : une planification par ligne, avec où elle livre (#124).
+fn render_schedule_list(v: &Value) -> String {
+    let list = v.as_array().cloned().unwrap_or_default();
+    if list.is_empty() {
+        return "Aucune planification.".into();
+    }
+    let rows: Vec<Value> = list
+        .iter()
+        .map(|s| {
+            let spec = &s["spec"];
+            let quand = match s["kind"].as_str().unwrap_or("?") {
+                "cron" => spec["expr"].as_str().unwrap_or("?").to_string(),
+                "interval" | "mcp_poll" => format!(
+                    "toutes les {} min",
+                    spec["every_ms"].as_u64().unwrap_or(0) / 60_000
+                ),
+                "watch_file" => spec["path"].as_str().unwrap_or("?").to_string(),
+                _ => spec["event"].as_str().unwrap_or("?").to_string(),
+            };
+            let t = &s["target"];
+            let quoi = t["label"]
+                .as_str()
+                .or(t["prompt"].as_str())
+                .or(t["template"].as_str())
+                .or(t["workflowId"].as_str())
+                .unwrap_or("")
+                .chars()
+                .take(40)
+                .collect::<String>();
+            json!({
+                "id": s["id"],
+                "état": s["state"],
+                "quand": quand,
+                "quoi": quoi,
+                "vers": s["destination"].as_str().unwrap_or(""),
+                "prochain": s["next_run"].as_str().unwrap_or(""),
+            })
+        })
+        .collect();
+    output::table(&rows)
 }
 
 /// Colonne « trousseau » de `penelope mcp list` : un serveur distant n'a pas de processus
@@ -940,6 +997,22 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Schedule(ScheduleCmd::Resume { id }) => (m::SCHEDULE_RESUME, json!({"id": id})),
         Command::Schedule(ScheduleCmd::Rm { id }) => (m::SCHEDULE_RM, json!({"id": id})),
         Command::Schedule(ScheduleCmd::Run { id }) => (m::SCHEDULE_RUN_NOW, json!({"id": id})),
+        Command::Schedule(ScheduleCmd::Move {
+            id,
+            chat,
+            topic,
+            private,
+        }) => {
+            if !private && chat.is_none() {
+                return Err(CliError::Usage(
+                    "où l'envoyer : `--private`, ou `--chat <id>` (et `--topic <id>`)".into(),
+                ));
+            }
+            (
+                m::SCHEDULE_MOVE,
+                json!({"id": id, "private": private, "chat_id": chat, "topic_id": topic}),
+            )
+        }
         Command::Schedule(ScheduleCmd::Add {
             kind,
             spec,
@@ -2405,6 +2478,38 @@ mod tests {
         };
         let e = set_secret(&cli, name).unwrap_err();
         assert!(e.to_string().contains("nom de secret invalide"), "{e}");
+    }
+
+    /// #124 : `penelope schedule move` vise une conversation ou la conversation privée,
+    /// jamais rien ; `schedule list` dit où livre chaque planification.
+    #[test]
+    fn a_schedule_is_moved_and_listed_with_its_destination() {
+        let c = parse(&[
+            "schedule", "move", "s1", "--chat", "-100777", "--topic", "12",
+        ]);
+        let (method, params) = route(&c.command).unwrap();
+        assert_eq!(method, m::SCHEDULE_MOVE);
+        assert_eq!(params["chat_id"], -100777);
+        assert_eq!(params["topic_id"], 12);
+        let c = parse(&["schedule", "move", "s1", "--private"]);
+        assert_eq!(route(&c.command).unwrap().1["private"], true);
+        let c = parse(&["schedule", "move", "s1"]);
+        assert!(route(&c.command).is_err(), "une destination est exigée");
+
+        let out = render_schedule_list(&json!([{
+            "id": "s1", "state": "active", "kind": "cron", "spec": {"expr": "33 8 * * *"},
+            "target": {"type": "prompt", "label": "Veille du matin"},
+            "destination": "sujet « Veille », groupe « Équipe »",
+            "next_run": "2026-09-20T04:33:00Z",
+        }]));
+        for want in [
+            "vers",
+            "sujet « Veille », groupe « Équipe »",
+            "Veille du matin",
+            "33 8 * * *",
+        ] {
+            assert!(out.contains(want), "{want} :\n{out}");
+        }
     }
 
     /// #122 : `penelope mcp list` dit quels serveurs joignent le trousseau.

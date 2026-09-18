@@ -614,7 +614,33 @@ impl NativeToolExecutor {
                 .await
                 .map_err(ToolError::Invalid)?
             }
-            "schedule_list" => serde_json::to_value(s.schedules.list().await?).unwrap_or_default(),
+            "schedule_list" => json!(
+                crate::scheduler::listing(s)
+                    .await
+                    .map_err(|e| ToolError::Other(e.to_string()))?
+            ),
+            "schedule_move" => {
+                let id = str_arg(args, "id")?;
+                let (chat_id, topic_id) = match str_arg(args, "to")?.as_str() {
+                    "private" => (s.config.config().owner.telegram_user_id, None),
+                    "here" => self.env.origin.telegram_chat().ok_or_else(|| {
+                        ToolError::Invalid(
+                            "`here` : cette conversation n'est pas Telegram, `private` ou \
+                             `penelope schedule move`"
+                                .into(),
+                        )
+                    })?,
+                    other => {
+                        return Err(ToolError::Invalid(format!(
+                            "`to` : `here` ou `private`, pas `{other}`"
+                        )));
+                    }
+                };
+                let to = crate::scheduler::retarget(s, &id, chat_id, topic_id)
+                    .await
+                    .map_err(ToolError::Invalid)?;
+                json!({"id": id, "destination": to})
+            }
             "schedule_delete" => {
                 s.schedules
                     .set_state(&str_arg(args, "id")?, "deleted")
@@ -2099,6 +2125,60 @@ mod tests {
             turn_model: None,
         };
         (dir, NativeToolExecutor::new(s, env))
+    }
+
+    /// #124 : `schedule_move` déplace une planification vers la conversation de l'appel
+    /// (sujet compris) ou vers la conversation privée ; `schedule_list` dit où livre
+    /// chacune ; hors Telegram, `here` n'a pas de sens.
+    #[tokio::test]
+    async fn schedule_move_sends_a_schedule_here_or_home() {
+        let (_dir, mut x) = executor().await;
+        let s = x.services.clone();
+        s.config
+            .mutate("test", |c| {
+                c.owner.telegram_user_id = 42;
+                c.telegram.allowed_chats = vec![-100_777];
+                Ok(vec!["telegram.allowed_chats".into()])
+            })
+            .unwrap();
+        let sched = s
+            .schedules
+            .create(
+                penelope_workflow::TriggerKind::Cron,
+                json!({"expr": "0 9 * * *"}),
+                json!({"type": "notify", "template": "🧭 Veille"}),
+                json!({}),
+            )
+            .await
+            .unwrap();
+        let err = x
+            .execute("schedule_move", &json!({"id": sched.id, "to": "here"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("private"), "{err}");
+
+        x.env.origin = Origin::Telegram {
+            chat_id: -100_777,
+            topic_id: Some(12),
+            message_id: Some(5),
+        };
+        let moved = x
+            .execute("schedule_move", &json!({"id": sched.id, "to": "here"}))
+            .await
+            .unwrap();
+        assert_eq!(moved.value["destination"], "sujet 12, groupe -100777");
+        let listed = x.execute("schedule_list", &json!({})).await.unwrap();
+        assert_eq!(listed.value[0]["destination"], "sujet 12, groupe -100777");
+        assert_eq!(
+            listed.value[0]["target"]["origin"]["message_id"],
+            Value::Null
+        );
+
+        let home = x
+            .execute("schedule_move", &json!({"id": sched.id, "to": "private"}))
+            .await
+            .unwrap();
+        assert_eq!(home.value["destination"], "conversation privée");
     }
 
     /// #123 : `cd <workspace> && …` devient la commande et son `cwd`, en direct comme par

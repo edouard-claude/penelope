@@ -322,7 +322,8 @@ pub fn all() -> Vec<ToolSpec> {
         spec(
             "schedule_list",
             RiskClass::Read,
-            "Liste les déclencheurs planifiés.",
+            "Liste les déclencheurs planifiés, avec la conversation où chacun livre \
+             (`destination`).",
             obj(json!({}), &[]),
             true,
             false,
@@ -333,6 +334,24 @@ pub fn all() -> Vec<ToolSpec> {
             RiskClass::Write,
             "Supprime un déclencheur planifié.",
             obj(json!({"id": {"type":"string"}}), &["id"]),
+            true,
+            false,
+            false,
+        ),
+        spec(
+            "schedule_move",
+            RiskClass::Write,
+            "Change où livre un déclencheur planifié, sans le recréer (historique gardé) : \
+             `to: \"here\"` vers cette conversation (ce sujet compris), `\"private\"` vers \
+             la conversation privée du propriétaire. `schedule_list` donne la destination \
+             actuelle de chacun.",
+            obj(
+                json!({
+                    "id": {"type":"string"},
+                    "to": {"type":"string","enum":["here","private"]}
+                }),
+                &["id", "to"],
+            ),
             true,
             false,
             false,
@@ -921,6 +940,7 @@ pub const ON_DEMAND: &[&str] = &[
     "schedule_create",
     "schedule_delete",
     "schedule_list",
+    "schedule_move",
     "self_docs",
     "send_file",
     "send_voice",
@@ -1035,6 +1055,7 @@ mod tests {
             "schedule_create",
             "schedule_list",
             "schedule_delete",
+            "schedule_move",
             "send_file",
             "send_message",
             "mem_search",

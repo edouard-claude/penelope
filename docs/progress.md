@@ -1360,7 +1360,8 @@ trousseau, et un trousseau fermé ne se fait plus passer pour un secret absent (
 
 ### 0.17.11
 
-Une lecture précédée de `cd <dépôt> &&` ne demande plus rien (#123).
+Une lecture précédée de `cd <dépôt> &&` ne demande plus rien (#123), et chaque
+planification dit où elle livre et se déplace sans être recréée (#124).
 
 - **Un `cd` en tête n'est plus un enchaînement** (#123) : le modèle écrit
   `cd <dépôt> && grep …`, et le critère d'enchaînement de #111 faisait demander chacune de
@@ -1371,6 +1372,18 @@ Une lecture précédée de `cd <dépôt> &&` ne demande plus rien (#123).
   `&&`, d'une redirection ou d'une substitution, la ligne reste composée et demandée.
   Même forme dans les étapes de workflow et par `tool_call`. La description de
   `shell_exec` dit au modèle d'utiliser `cwd` plutôt que ce préfixe.
+
+- **Où livre une planification, et la déplacer** (#124) : la veille du matin était bien
+  partie (#120, constat corrigé), mais dans la conversation privée où elle était née,
+  alors que le propriétaire regardait un sujet de groupe ; rien ne le disait, et la
+  déplacer obligeait à la recréer. `schedule list`, `/schedules` et `schedule_list`
+  portent sa `destination` en mots (titre du groupe et nom du sujet retenus au passage,
+  « (par défaut) » sans choix). `penelope schedule move <id> --chat … --topic …|--private`,
+  `/schedules ici <id>`, le bouton 📍 et l'outil `schedule_move` (méthode
+  `schedule.move`) changent `target.origin` sans toucher à l'identifiant, aux exécutions
+  ni à l'état, vers le propriétaire ou une conversation de `telegram.allowed_chats`
+  seulement. Le digest du matin liste ce qui part dans la journée, avec l'heure locale et
+  l'endroit.
 
 ### Routine de livraison
 

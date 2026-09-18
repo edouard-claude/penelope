@@ -493,6 +493,37 @@ impl ScheduleStore {
             .await
     }
 
+    /// Change la destination d'une planification (`target.origin`) sans la recréer : son
+    /// historique, ses exécutions et son état restent (issue #124). Faux si elle n'existe
+    /// pas.
+    pub async fn set_origin(&self, id: &str, origin: Value) -> penelope_store::Result<bool> {
+        let (id, now) = (id.to_string(), self.clock.now_rfc3339());
+        self.store
+            .write(move |tx| {
+                let target: Option<String> = tx
+                    .query_row(
+                        "SELECT target FROM schedules WHERE id = ?1 AND state != 'deleted'",
+                        [&id],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                let Some(target) = target else {
+                    return Ok(false);
+                };
+                let mut v: Value = serde_json::from_str(&target).unwrap_or_else(|_| json!({}));
+                if !v.is_object() {
+                    v = json!({});
+                }
+                v["origin"] = origin;
+                tx.execute(
+                    "UPDATE schedules SET target = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![id, v.to_string(), now],
+                )?;
+                Ok(true)
+            })
+            .await
+    }
+
     /// Amorçage : marque les éléments existants comme vus **sans déclencher**, sauf
     /// `backfill` (§12.9).
     pub async fn seed(

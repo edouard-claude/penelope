@@ -647,11 +647,15 @@ impl TelegramGateway {
             allowed_chats: s.config.config().telegram.allowed_chats.clone(),
         };
         // Nom du sujet Telegram : il peut donner son sujet de travail à la session (#119).
-        if let Some((chat, topic, name)) = topic_name_of(update)
-            && access.allowed_chats.contains(&chat)
-        {
-            let key = topic_name_key(chat, topic);
-            if self.daemon.kv_get(&key).await.ok().flatten().as_deref() != Some(name.as_str()) {
+        // Titre du groupe : il nomme où livre une planification (#124).
+        let names = topic_name_of(update)
+            .map(|(chat, topic, name)| (chat, topic_name_key(chat, topic), name))
+            .into_iter()
+            .chain(chat_title_of(update).map(|(chat, t)| (chat, chat_title_key(chat), t)));
+        for (chat, key, name) in names {
+            if access.allowed_chats.contains(&chat)
+                && self.daemon.kv_get(&key).await.ok().flatten().as_deref() != Some(name.as_str())
+            {
                 let _ = self.daemon.kv_set(&key, &name).await;
             }
         }
@@ -1676,6 +1680,20 @@ impl TelegramGateway {
                         return self
                             .show_screen(chat_id, topic_id, reply_to, "confirm", &args, None)
                             .await;
+                    }
+                    // Livrer ici, dans cette conversation et ce sujet (#124).
+                    ["ici" | "here", id] => {
+                        match crate::scheduler::retarget(
+                            &self.daemon.services,
+                            id,
+                            chat_id,
+                            topic_id,
+                        )
+                        .await
+                        {
+                            Ok(to) => format!("📍 `{id}` livrera désormais ici : {to}."),
+                            Err(e) => format!("❌ {e}"),
+                        }
                     }
                     [op @ ("pause" | "resume" | "run"), id] => {
                         let method = match *op {
@@ -6713,6 +6731,9 @@ fn schedules_text(v: &Value) -> String {
             sc["id"].as_str().unwrap_or("?"),
             what.chars().take(80).collect::<String>()
         ));
+        if let Some(to) = sc["destination"].as_str() {
+            t.push_str(&format!("   ↳ vers : {to}\n"));
+        }
         if let Some(next) = sc["next_run"].as_str().filter(|_| state == "active") {
             t.push_str(&format!("   ↳ prochain : {next}\n"));
         }
@@ -6723,7 +6744,9 @@ fn schedules_text(v: &Value) -> String {
             ));
         }
     }
-    t.push_str("\n`/schedules pause|resume|rm|run <id>`");
+    t.push_str(
+        "\n`/schedules pause|resume|rm|run <id>` ; `/schedules ici <id>` la fait livrer ici",
+    );
     t
 }
 
@@ -6991,6 +7014,18 @@ pub fn render_value(v: &Value) -> String {
 /// Clé du nom d'un sujet Telegram, lu dans les messages du sujet (issue #119).
 pub fn topic_name_key(chat_id: i64, topic_id: i64) -> String {
     format!("tg.topic_name.{chat_id}.{topic_id}")
+}
+
+/// Titre d'un groupe autorisé, pour nommer où livre une planification (#124).
+pub fn chat_title_key(chat_id: i64) -> String {
+    format!("tg.chat_title.{chat_id}")
+}
+
+/// Titre du groupe d'un message (un chat privé n'en a pas).
+fn chat_title_of(update: &Value) -> Option<(i64, String)> {
+    let chat = &update.get("message")?["chat"];
+    let title = chat["title"].as_str().filter(|t| !t.trim().is_empty())?;
+    Some((chat["id"].as_i64()?, title.to_string()))
 }
 
 /// Nom du sujet d'un message de forum : à sa création, à son renommage, ou dans le
@@ -9054,6 +9089,73 @@ mod tests {
             last["text"].as_str().unwrap().contains("Aucun déclencheur"),
             "{last}"
         );
+    }
+
+    /// #124 : `/schedules` dit où livre chaque planification ; `/schedules ici <id>` dans
+    /// un sujet d'un groupe autorisé l'y déplace, et 📍 fait de même pour la conversation
+    /// de l'écran ; le titre du groupe et le nom du sujet sont retenus au passage.
+    #[tokio::test]
+    async fn a_schedule_is_moved_to_the_topic_it_is_asked_from() {
+        let (_d, g, t, _p) = gateway().await;
+        let s = &g.daemon.services;
+        let chat: i64 = -1_001_234_567_890;
+        g.daemon
+            .publish_config("test", move |c| {
+                c.telegram.allowed_chats = vec![chat];
+                Ok(vec!["telegram.allowed_chats".into()])
+            })
+            .unwrap();
+        let sched = s
+            .schedules
+            .create(
+                penelope_workflow::TriggerKind::Cron,
+                json!({"expr": "0 9 * * *"}),
+                json!({"type": "notify", "template": "🧭 Veille"}),
+                json!({}),
+            )
+            .await
+            .unwrap();
+        g.process_update(&updates::text_message(410, OWNER, OWNER, "/schedules"))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let listed = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
+        assert!(
+            listed.contains("vers : conversation privée (par défaut)"),
+            "{listed}"
+        );
+
+        let mut u = updates::in_topic(
+            updates::text_message(411, chat, OWNER, &format!("/schedules ici {}", sched.id)),
+            21,
+        );
+        u["message"]["chat"] = json!({"id": chat, "type": "supergroup", "title": "Chantiers"});
+        u["message"]["reply_to_message"] =
+            json!({"message_id": 21, "forum_topic_created": {"name": "Veille IA"}});
+        g.process_update(&u).await.unwrap();
+        g.flush_outbox().await.unwrap();
+        let said = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
+        assert!(
+            said.contains("livrera désormais ici : sujet « Veille IA », groupe « Chantiers »"),
+            "{said}"
+        );
+        let moved = s.schedules.get(&sched.id).await.unwrap().unwrap();
+        assert_eq!(moved.target["origin"]["chat_id"], chat);
+        assert_eq!(moved.target["origin"]["topic_id"], 21);
+
+        // 📍 depuis la conversation privée : retour chez le propriétaire.
+        g.process_update(&updates::text_message(412, OWNER, OWNER, "/schedules"))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let here = button(&t, "📍").await;
+        g.process_update(&updates::callback(413, OWNER, &here, 920))
+            .await
+            .unwrap();
+        settle_click(&g).await;
+        let back = s.schedules.get(&sched.id).await.unwrap().unwrap();
+        assert_eq!(back.target["origin"]["chat_id"], OWNER);
+        assert_eq!(back.target["origin"]["topic_id"], Value::Null);
     }
 
     /// Issue #30 : `/mcp`, 🔄 sur un serveur : le superviseur le redémarre et le message

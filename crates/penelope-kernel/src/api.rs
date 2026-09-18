@@ -181,6 +181,7 @@ pub mod method {
     pub const SCHEDULE_PAUSE: &str = "schedule.pause";
     pub const SCHEDULE_RESUME: &str = "schedule.resume";
     pub const SCHEDULE_RUN_NOW: &str = "schedule.run_now";
+    pub const SCHEDULE_MOVE: &str = "schedule.move";
 
     pub const APPROVALS: &str = "approvals";
     pub const APPROVE: &str = "approve";
@@ -292,6 +293,7 @@ pub mod method {
         SCHEDULE_PAUSE,
         SCHEDULE_RESUME,
         SCHEDULE_RUN_NOW,
+        SCHEDULE_MOVE,
         APPROVALS,
         APPROVE,
         DENY,
