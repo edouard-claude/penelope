@@ -788,6 +788,32 @@ pub struct Sandbox {
     /// Réseau pour `shell_exec`. Sans lui, `gh`, `git push`, `curl` ou `npm` échouent,
     /// et `gh auth status` croit le jeton invalide faute de pouvoir le vérifier.
     pub shell_network: bool,
+    /// Chemins dont la lecture est refusée aux commandes sous bac à sable, même quand le
+    /// profil lit le disque : clés, jetons, base de Pénélope, secrets, configuration.
+    /// `{data}`, `{config}`, `{state}` et `~` sont développés.
+    pub deny_read: Vec<String>,
+}
+
+/// Lectures refusées par défaut : ce qu'une consigne cachée dans un résultat d'outil
+/// chercherait à exfiltrer (issue #68).
+pub fn default_deny_read() -> Vec<String> {
+    [
+        "~/.ssh",
+        "~/.aws",
+        "~/.gnupg",
+        "~/.config/gh",
+        "~/.netrc",
+        "~/.kube",
+        "~/.docker/config.json",
+        "{data}/penelope.db",
+        "{data}/secrets.enc",
+        "{data}/mcp.d",
+        "{config}",
+        "{state}",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 impl Default for Sandbox {
@@ -797,6 +823,7 @@ impl Default for Sandbox {
             allow_full_for: Vec::new(),
             workspaces: Vec::new(),
             shell_network: true,
+            deny_read: default_deny_read(),
         }
     }
 }

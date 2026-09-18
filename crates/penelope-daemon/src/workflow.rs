@@ -1472,10 +1472,11 @@ async fn shell_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         }
         Planned::Fresh(id) => {
             s.effects.dispatching(&id).await?;
-            let profile = penelope_tools::shell::profile_for(
+            let profile = penelope_tools::shell::profile_with_denied_reads(
                 &cfg.sandbox.default_profile,
                 &cwd,
                 cfg.sandbox.shell_network,
+                &crate::executor::denied_reads(s),
             );
             let _ = std::fs::create_dir_all(&cwd);
             match penelope_tools::shell::exec(

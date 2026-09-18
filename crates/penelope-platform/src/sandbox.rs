@@ -48,6 +48,9 @@ pub struct Profile {
     /// Répertoires en lecture au-delà des chemins système.
     pub readable: Vec<PathBuf>,
     pub allow_network: bool,
+    /// Chemins dont la **lecture** est refusée, même sous un profil qui lit le disque :
+    /// clés SSH, base de Pénélope, secrets, configuration (issue #68).
+    pub deny_read: Vec<PathBuf>,
     /// Dérogation explicite : le profil n'est pas appliqué, mais l'audit le sait.
     pub waived: bool,
 }
@@ -59,6 +62,7 @@ impl Profile {
             writable: Vec::new(),
             readable: Vec::new(),
             allow_network: false,
+            deny_read: Vec::new(),
             waived: false,
         }
     }
@@ -69,6 +73,7 @@ impl Profile {
             writable: vec![workspace.into(), std::env::temp_dir()],
             readable: Vec::new(),
             allow_network: false,
+            deny_read: Vec::new(),
             waived: false,
         }
     }
@@ -79,6 +84,7 @@ impl Profile {
             writable: vec![data_dir.into(), std::env::temp_dir()],
             readable,
             allow_network: true,
+            deny_read: Vec::new(),
             waived: false,
         }
     }
@@ -89,6 +95,7 @@ impl Profile {
             writable: Vec::new(),
             readable: Vec::new(),
             allow_network: true,
+            deny_read: Vec::new(),
             waived: false,
         }
     }
@@ -203,6 +210,17 @@ pub fn seatbelt_profile(p: &Profile) -> String {
         );
     }
 
+    // En SBPL, la **dernière** règle qui correspond l'emporte : les refus de lecture
+    // viennent donc après les autorisations, sinon `(allow file-read*)` les effacerait
+    // (issue #68). Le trousseau est fermé aussi : `security find-generic-password -w`
+    // depuis une commande ne doit pas rendre une clé.
+    for d in p.deny_read.iter().flat_map(|d| with_real_path(d)) {
+        s.push_str(&format!("(deny file-read* (subpath \"{}\"))\n", esc(&d)));
+    }
+    if !p.deny_read.is_empty() && p.kind != ProfileKind::Full {
+        s.push_str("(deny mach-lookup (global-name \"com.apple.SecurityServer\"))\n");
+    }
+
     if p.allow_network {
         s.push_str("(allow network*)\n");
     } else {
@@ -252,6 +270,38 @@ pub fn unsupported(profile: &Profile, os: &str) -> PlatformError {
 
 #[cfg(test)]
 mod tests {
+
+    /// #68 : le profil refuse la lecture des clés et des secrets **après** avoir autorisé
+    /// la lecture du disque (en SBPL, la dernière règle l'emporte), et ferme le trousseau.
+    #[test]
+    fn denied_reads_come_after_the_allow_and_close_the_keychain() {
+        let mut p = Profile::workspace_write("/tmp/ws");
+        p.deny_read = vec![
+            PathBuf::from("/Users/essai/.ssh"),
+            PathBuf::from("/Users/essai/Library/Application Support/Penelope/secrets.enc"),
+        ];
+        let sbpl = seatbelt_profile(&p);
+        let allow_at = sbpl
+            .find("(allow file-read*)\n")
+            .expect("autorisation générale");
+        let deny_at = sbpl
+            .find("(deny file-read* (subpath \"/Users/essai/.ssh\"))")
+            .expect("refus des clés SSH");
+        assert!(
+            deny_at > allow_at,
+            "le refus doit venir après l'autorisation :\n{sbpl}"
+        );
+        assert!(sbpl.contains("secrets.enc"), "{sbpl}");
+        assert!(
+            sbpl.contains("(deny mach-lookup (global-name \"com.apple.SecurityServer\"))"),
+            "le trousseau doit être fermé :\n{sbpl}"
+        );
+
+        // Profil `full` : aucune restriction, c'est son rôle.
+        let mut f = Profile::full();
+        f.deny_read = vec![PathBuf::from("/Users/essai/.ssh")];
+        assert!(!seatbelt_profile(&f).contains("SecurityServer"));
+    }
     #[cfg(unix)]
     #[test]
     fn symlinked_workspaces_are_allowed_by_their_real_path() {

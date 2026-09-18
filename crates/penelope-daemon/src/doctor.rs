@@ -135,6 +135,9 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     // Un alias de conversation vers un modèle sans tool calling ne marchera pas (#54).
     checks.push(tool_calling_check(s).await);
 
+    // Bac à sable : ce qu'une commande peut lire malgré tout (#68).
+    checks.push(sandbox_reads_check(s));
+
     // Effets en attente de décision.
     let unknown = s
         .effects
@@ -583,6 +586,51 @@ pub fn alias_needs_tools(cfg: &penelope_kernel::config::Config, alias: &str) -> 
         .roles
         .iter()
         .any(|(role, a)| a == alias && !TOOLLESS_ROLES.contains(&role.as_str()))
+}
+
+/// #68 : un bac à sable qui lit tout le disque ne retient ni les clés SSH ni les jetons.
+fn sandbox_reads_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "sandbox.deny_read";
+    const LABEL: &str = "Lectures refusées au shell";
+    let cfg = s.config.config();
+    if cfg.sandbox.default_profile == "full" {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            "profil `full` : aucune restriction, une commande lit et envoie ce qu'elle veut",
+            Some("penelope config set sandbox.default_profile workspace-write".into()),
+        );
+    }
+    if cfg.sandbox.deny_read.is_empty() {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            "aucune lecture refusée : `~/.ssh`, les secrets et la base restent lisibles par \
+             `shell_exec`",
+            Some(
+                "penelope config set sandbox.deny_read '[\"~/.ssh\", \"{data}/secrets.enc\"]'"
+                    .into(),
+            ),
+        );
+    }
+    let missing: Vec<&str> = ["~/.ssh", "{data}/secrets.enc", "{data}/penelope.db"]
+        .into_iter()
+        .filter(|d| !cfg.sandbox.deny_read.iter().any(|x| x == d))
+        .collect();
+    if missing.is_empty() {
+        DoctorCheck::ok(
+            ID,
+            LABEL,
+            format!("{} chemin(s) refusé(s)", cfg.sandbox.deny_read.len()),
+        )
+    } else {
+        DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!("lisibles par le shell : {}", missing.join(", ")),
+            None,
+        )
+    }
 }
 
 /// #54 : un alias de conversation qui vise un modèle sans tool calling ne marchera pas,

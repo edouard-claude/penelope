@@ -296,12 +296,29 @@ pub fn profile_for(
     workspace: &Path,
     network: bool,
 ) -> penelope_platform::Profile {
+    profile_with_denied_reads(default_profile, workspace, network, &[])
+}
+
+/// Comme [`profile_for`], avec les chemins dont la lecture est refusée (issue #68).
+pub fn profile_with_denied_reads(
+    default_profile: &str,
+    workspace: &Path,
+    network: bool,
+    deny_read: &[PathBuf],
+) -> penelope_platform::Profile {
     let mut p = match default_profile {
         "readonly" => penelope_platform::Profile::read_only(),
         "full" => penelope_platform::Profile::full(),
         _ => penelope_platform::Profile::workspace_write(workspace.to_path_buf()),
     };
     p = p.with_network(network);
+    // Un workspace sous un chemin refusé resterait lisible : le refus ne vise que ce qui
+    // n'est pas un répertoire de travail.
+    p.deny_read = deny_read
+        .iter()
+        .filter(|d| !workspace.starts_with(d))
+        .cloned()
+        .collect();
     p
 }
 
@@ -326,6 +343,67 @@ mod tests {
             );
         }
         assert!(profile_for("workspace-write", Path::new("/w"), true).allow_network);
+    }
+
+    /// #68 : sous bac à sable, un chemin refusé n'est pas lisible, même par une commande
+    /// qui a le droit de lire le disque ; le workspace reste lisible.
+    #[tokio::test]
+    #[cfg(target_os = "macos")]
+    async fn a_denied_path_is_unreadable_under_the_sandbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        let secrets = dir.path().join("secrets");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(&secrets).unwrap();
+        std::fs::write(secrets.join("cle.txt"), "CLE-PRIVEE").unwrap();
+        std::fs::write(ws.join("note.txt"), "dans le workspace").unwrap();
+        let host = penelope_platform::UnixProcessHost::new(dir.path().join("pids"));
+        let profile = profile_with_denied_reads(
+            "workspace-write",
+            &ws,
+            false,
+            std::slice::from_ref(&secrets),
+        );
+
+        let refused = exec(
+            &host,
+            &format!("cat {}", secrets.join("cle.txt").display()),
+            ExecOptions {
+                profile: Some(&profile),
+                cwd: Some(&ws),
+                timeout: std::time::Duration::from_secs(20),
+                max_output_bytes: 4096,
+                shell: Some(("/bin/sh".into(), vec!["-c".into()])),
+                cancel: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_ne!(
+            refused.exit_code, 0,
+            "la lecture doit échouer : {refused:?}"
+        );
+        assert!(
+            !refused.stdout.contains("CLE-PRIVEE"),
+            "le contenu ne doit pas sortir : {refused:?}"
+        );
+
+        let allowed = exec(
+            &host,
+            "cat note.txt",
+            ExecOptions {
+                profile: Some(&profile),
+                cwd: Some(&ws),
+                timeout: std::time::Duration::from_secs(20),
+                max_output_bytes: 4096,
+                shell: Some(("/bin/sh".into(), vec!["-c".into()])),
+                cancel: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(allowed.exit_code, 0, "{allowed:?}");
+        assert!(allowed.stdout.contains("dans le workspace"), "{allowed:?}");
     }
 
     /// #65 : au dépassement du délai, la commande et son groupe sont terminés : rien ne

@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1336 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1339 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -654,7 +654,7 @@ consolidation nocturne par lots (#59), état d'un candidat décidé après l'éc
 décisions des notes de travail récoltées (#61), retour d'usage juste (#62), skills relues
 sans redémarrage (#63), redirections HTTP revérifiées (#64), `shell_exec` qui ne laisse ni
 processus ni mémoire derrière lui (#65), liens symboliques bornés au workspace (#66),
-« Toujours » borné à l'appel (#67).
+« Toujours » borné à l'appel (#67), bac à sable qui ferme les secrets (#68).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -806,6 +806,18 @@ processus ni mémoire derrière lui (#65), liens symboliques bornés au workspac
   hôte pour `http_fetch`, clé pour `config_set`. Un « Toujours » accordé à `cargo test` ne
   rend plus automatique `rm -rf target`, et `/policies` affiche la portée de chaque règle.
   Les règles des outils MCP sont inchangées.
+- **Bac à sable** : `sandbox.deny_read` (liste livrée : `~/.ssh`, `~/.aws`, `~/.gnupg`,
+  `~/.config/gh`, `~/.netrc`, `~/.kube`, base, secrets, `mcp.d`, configuration, état) est
+  rendu en `(deny file-read* …)` **après** les autorisations, et le trousseau est fermé
+  (`deny mach-lookup com.apple.SecurityServer`) : une commande ne relit plus les clés par
+  `security find-generic-password -w`. `doctor` signale un profil sans refus effectif. Le
+  réseau du shell reste ouvert par défaut (`sandbox.shell_network`), pour ne pas casser
+  `gh`, `git push` et `npm` sans prévenir : le fermer est un choix documenté.
+- **Approbation « Toujours »** : les motifs d'arguments sont écrits pour ne pas se
+  contourner (revue de sécurité) : la famille de commandes refuse tout enchaînement
+  (`;`, `&&`, `|`, `$(…)`, redirection) et s'arrête à une frontière de mot, le répertoire
+  est comparé sur le chemin normalisé (`..` résolu), et l'URL sur l'origine exacte, jamais
+  sur un préfixe de texte.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

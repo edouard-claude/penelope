@@ -407,6 +407,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `sandbox.allow_full_for` | `[]` | Serveurs MCP autorisés à tourner avec le profil `full` (sans bac à sable). |
 | `sandbox.workspaces` | `[]` | Répertoires de travail des outils de fichiers et du shell, en plus du défaut. |
 | `sandbox.shell_network` | `true` | Réseau pour `shell_exec`. Sans lui, `gh`, `git push`, `curl` ou `npm` échouent, et `gh auth status` croit le jeton invalide faute de pouvoir le vérifier. |
+| `sandbox.deny_read` | `["~/.ssh","~/.aws","~/.gnupg","~/.config/gh","~/.netrc","~/.kube","~/.docker/config.json","{data}/penelope.db","{data}/secrets.enc","{data}/mcp.d","{config}","{state}"]` | Chemins dont la lecture est refusée aux commandes sous bac à sable, même quand le profil lit le disque : clés, jetons, base de Pénélope, secrets, configuration. `{data}`, `{config}`, `{state}` et `~` sont développés. |
 
 **[observability]**
 
@@ -676,7 +677,21 @@ penelope config set sandbox.default_profile full
 ```
 
 Les approbations restent en place : c'est la carte `shell_exec` (« Toujours » compris) qui
-décide. Un « Toujours » est **borné à l'appel qu'il autorise**, jamais à l'outil entier :
+décide.
+
+Sous bac à sable, une commande peut lire le disque : `sandbox.deny_read` ferme ce qui ne la
+regarde pas, et le trousseau du système avec (`security find-generic-password` ne répond
+plus depuis une commande). La liste livrée couvre `~/.ssh`, `~/.aws`, `~/.gnupg`,
+`~/.config/gh`, `~/.netrc`, `~/.kube`, la base de Pénélope, le magasin de secrets, `mcp.d`,
+la configuration et l'état. Un workspace situé sous un chemin refusé reste lisible. Pour
+fermer aussi le réseau du shell :
+
+```bash
+penelope config set sandbox.shell_network false
+```
+
+`gh`, `git push`, `curl` et `npm` cessent alors de fonctionner depuis `shell_exec` :
+c'est un choix, pas un défaut. Un « Toujours » est **borné à l'appel qu'il autorise**, jamais à l'outil entier :
 pour `shell_exec`, à la famille de commandes (`cargo test …`, `git log …`) ; pour `fs_write`
 et `fs_edit`, au répertoire du fichier ; pour `git_push`, au couple remote et branche ; pour
 `http_fetch`, à l'hôte ; pour `config_set`, à la clé. Une autre commande, un autre

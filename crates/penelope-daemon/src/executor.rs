@@ -169,6 +169,17 @@ pub struct NativeToolExecutor {
     pub admin: Option<Arc<dyn crate::selfknow::Admin>>,
 }
 
+/// Chemins dont la lecture est refusée aux commandes sous bac à sable (issue #68).
+pub fn denied_reads(s: &Services) -> Vec<PathBuf> {
+    s.config
+        .config()
+        .sandbox
+        .deny_read
+        .iter()
+        .map(|d| s.platform.dirs.expand(d))
+        .collect()
+}
+
 /// Workspaces autorisés : configuration, sinon `{data}/workspace`.
 pub fn default_workspaces(s: &Services) -> Vec<PathBuf> {
     let cfg = s.config.config();
@@ -337,10 +348,11 @@ impl NativeToolExecutor {
                     .map(|ms| std::time::Duration::from_millis(ms as u64))
                     .unwrap_or(default_timeout)
                     .min(std::time::Duration::from_secs(1800));
-                let profile = penelope_tools::shell::profile_for(
+                let profile = penelope_tools::shell::profile_with_denied_reads(
                     &cfg.sandbox.default_profile,
                     &cwd,
                     cfg.sandbox.shell_network,
+                    &denied_reads(s),
                 );
                 let shell = shell_override(&cfg.tools.shell);
                 let out = penelope_tools::shell::exec(
