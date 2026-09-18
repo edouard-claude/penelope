@@ -108,6 +108,10 @@ conversation :
 └──────────────────────────────────────────────┘
 ```
 
+Une carte restée sans réponse revient : « ⏰ Rappel 1/2 » au bout d'une heure, « Rappel
+2/2 » au bout de six, chaque fois avec des boutons neufs, dans la conversation d'origine.
+Au bout de 24 h, la demande expire et le tour reprend en le disant au modèle.
+
 Et `run_blocked`, qui porte la dernière sortie dans un bloc de code :
 
 ```

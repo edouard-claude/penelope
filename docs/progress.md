@@ -1056,6 +1056,10 @@ l'adresse vérifiée (#93), fichiers lus en flux (#94), secret posé sans `argv`
   2 s au lieu de 3) ; un message court tapé seul crée son tour aussitôt ; un message court
   pendant une rafale en est la fin probable et la ferme après 300 ms de silence. Un
   « merci » ne paie plus 3 s d'attente avant le modèle.
+- **Rappels d'approbation** (#97) : `due_reminders`, écrit et testé mais jamais appelé, est
+  branché dans la maintenance. Une demande sans réponse est rappelée à T+1 h puis T+6 h
+  (« ⏰ Rappel 1/2 », carte et boutons neufs, dans la conversation d'origine), plus rien
+  ensuite ni après une décision ; `reminded_at` est enfin écrit.
 
 ### Routine de livraison
 

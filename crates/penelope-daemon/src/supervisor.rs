@@ -269,6 +269,21 @@ fn skills_fingerprint(s: &crate::runtime::Services) -> String {
     penelope_kernel::canonical::sha256_hex(parts.join("\n").as_bytes())
 }
 
+/// Conversation d'où vient une demande : le chat de sa session, sinon le propriétaire.
+async fn approval_origin(d: &Daemon, a: &penelope_hitl::ApprovalRequest) -> Origin {
+    if let Some(sid) = &a.session_id
+        && let Ok(Some(sess)) = d.services.sessions.get(sid).await
+        && let Some(chat_id) = sess.tg_chat_id
+    {
+        return Origin::Telegram {
+            chat_id,
+            topic_id: sess.tg_topic_id,
+            message_id: None,
+        };
+    }
+    crate::scheduler::owner_origin(d)
+}
+
 /// Un passage de maintenance. Une approbation échue relance son tour, qui dira au
 /// modèle que la demande a expiré sans réponse (§9.2).
 pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
@@ -289,6 +304,29 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
         d.enqueue_resume(sid, a.id.as_str(), &origin).await?;
     }
     s.actions.purge_expired().await?;
+
+    // Une demande restée sans réponse est rappelée à T+1 h puis T+6 h, avec une carte
+    // neuve, dans la conversation d'origine (§9.2, issue #97). Sans canal de message
+    // (CLI seule), rien n'est marqué : le propriétaire y est actif.
+    if let Some(m) = d.hooks.messenger() {
+        for (a, stage) in s.approvals.due_reminders().await? {
+            let origin = approval_origin(d, &a).await;
+            let since = if stage == 1 { "1 h" } else { "6 h" };
+            let _ = m
+                .send_text(
+                    &origin,
+                    &format!(
+                        "⏰ Rappel {stage}/2 : une demande attend ta réponse depuis {since} \
+                         (`{}`). Sans réponse, elle expire au bout de 24 h.",
+                        a.subject
+                    ),
+                )
+                .await;
+            if let Err(e) = m.send_approval(&origin, a.id.as_str()).await {
+                tracing::warn!(demande = %a.id.as_str(), error = %e, "rappel d'approbation");
+            }
+        }
+    }
 
     // Skills déposées en SSH : relues quand le dossier change, sans redémarrage (#63).
     let fingerprint = skills_fingerprint(s);
@@ -383,6 +421,109 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use penelope_kernel::clock::TestClock;
+
+    #[derive(Default)]
+    struct Recorder {
+        texts: std::sync::Mutex<Vec<String>>,
+        cards: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::executor::Messenger for Recorder {
+        async fn send_text(&self, _origin: &Origin, markdown: &str) -> Result<(), String> {
+            self.texts.lock().unwrap().push(markdown.to_string());
+            Ok(())
+        }
+        async fn send_file(
+            &self,
+            _origin: &Origin,
+            _path: &std::path::Path,
+            _caption: Option<&str>,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        async fn send_approval(&self, _origin: &Origin, approval_id: &str) -> Result<(), String> {
+            self.cards.lock().unwrap().push(approval_id.to_string());
+            Ok(())
+        }
+    }
+
+    /// #97 : une demande sans réponse reçoit un rappel à T+1 h et un à T+6 h, pas plus ;
+    /// une demande tranchée n'en reçoit aucun.
+    #[tokio::test]
+    async fn pending_approvals_are_reminded_at_one_and_six_hours() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = TestClock::default();
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), Arc::new(clock.clone()))
+                .await
+                .unwrap(),
+        );
+        let d = Arc::new(Daemon::from_services(s.clone()));
+        let rec = Arc::new(Recorder::default());
+        *d.hooks.messenger.write().unwrap() =
+            Some(rec.clone() as Arc<dyn crate::executor::Messenger>);
+        let ask = |subject: &'static str| {
+            let s = s.clone();
+            async move {
+                s.approvals
+                    .create(
+                        penelope_hitl::ApprovalKind::ToolCall,
+                        subject,
+                        penelope_kernel::risk::RiskClass::Write,
+                        serde_json::json!({"arguments": {}}),
+                        vec![],
+                        None,
+                        None,
+                        false,
+                    )
+                    .await
+                    .unwrap()
+            }
+        };
+        let oubliee = ask("shell_exec").await;
+        let tranchee = ask("fs_write").await;
+        let cards = |r: &Recorder| r.cards.lock().unwrap().clone();
+
+        maintenance_pass(&d).await.unwrap();
+        assert!(cards(&rec).is_empty(), "rien avant une heure");
+
+        clock.advance_ms(3_600_000 + 1);
+        s.approvals
+            .decide(
+                tranchee.id.as_str(),
+                &penelope_hitl::Decision::approve_once("cli"),
+            )
+            .await
+            .unwrap();
+        maintenance_pass(&d).await.unwrap();
+        assert_eq!(cards(&rec), vec![oubliee.id.0.clone()], "premier rappel");
+        assert!(rec.texts.lock().unwrap()[0].contains("Rappel 1/2"));
+
+        clock.advance_ms(30 * 60_000);
+        maintenance_pass(&d).await.unwrap();
+        assert_eq!(cards(&rec).len(), 1, "rien à T+1 h 30");
+
+        clock.advance_ms(5 * 3_600_000);
+        maintenance_pass(&d).await.unwrap();
+        assert_eq!(cards(&rec).len(), 2, "second rappel à T+6 h");
+
+        clock.advance_ms(3_600_000);
+        maintenance_pass(&d).await.unwrap();
+        assert_eq!(cards(&rec).len(), 2, "rien à T+7 h");
+        let reminded: Option<String> = s
+            .store
+            .read(move |c| {
+                Ok(c.query_row(
+                    "SELECT reminded_at FROM approval_requests WHERE id = ?1",
+                    [oubliee.id.0.clone()],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert!(reminded.is_some());
+    }
 
     /// #63 : une skill déposée après le démarrage est visible après une passe
     /// d'entretien, sans redémarrage ; un fichier invalide n'efface pas les autres.
