@@ -640,27 +640,22 @@ compaction de fond sur la taille réelle du contexte (#40).
   `budget.compaction_reserve_usd` (0,50 $). `/status`, `/budget` et `self_status` donnent
   la taille réelle du contexte, le seuil de fond et la dernière compaction.
 
-### 0.17.0
+### 0.16.0
 
-Sauvegarde complète chiffrée et restauration en une commande (#42).
+Réponses vocales (#41).
 
-- **`penelope backup --push`** : archive de l'instantané de la base, du vault, des skills,
-  des workflows, des gabarits, de `mcp.d` et de `config.toml` (artefacts et médias exclus
-  sauf `--media`), **chiffrée** par la phrase de passe `backup_passphrase` (Argon2id puis
-  XChaCha20-Poly1305) avant de quitter la machine, poussée dans un dépôt privé avec un
-  `MANIFEST.json` lisible qui dit la date, la version, les tailles, la somme SHA-256 et les
-  **noms** des secrets à ressaisir, jamais leurs valeurs.
-- **Garde-fous** : dépôt public refusé (vérifié par `gh`), archive au-delà de
-  `backup.max_push_bytes` refusée avec la marche à suivre, absence de phrase de passe dite
-  avant tout travail. Rotation 7 quotidiennes, 4 hebdomadaires, 12 mensuelles.
-- **Planification** : une sauvegarde par nuit à `backup.cron` (4 h), échec annoncé sur
-  Telegram.
-- **`penelope restore-all`** : clone le dépôt (ou lit une archive locale), demande la phrase
-  de passe à l'invite, remet base et fichiers en place (l'existant mis de côté), puis dit ce
-  qui reste à faire : service, secrets à ressaisir, `penelope doctor`. `--dry-run` liste sans
-  rien écrire.
-- **Diagnostic** : `doctor` suit l'âge de la dernière sauvegarde (alerte au-delà de 48 h), sa
-  taille et sa destination ; `self_status` porte la même information.
+- **Synthèse locale** : méthode `speak` des providers (`POST /audio/speech`), rôle et alias
+  `tts` (Voxtral TTS de Mistral servi par mlx-audio, voix `fr_female`), jamais replié sur
+  le modèle de conversation ; section de configuration `[voice]` (`tts_voice`,
+  `max_chars`, `reply_in_kind`).
+- **Outil `send_voice`** (lecture, sans approbation) : texte rendu lisible (sans Markdown,
+  liens, code ni emojis, symboles dits en toutes lettres), découpé en phrases, synthétisé,
+  assemblé, converti en OGG/Opus par `ffmpeg`, envoyé par `sendVoice` en réponse au message
+  d'origine ; texte trop long renvoyé au modèle pour un résumé vocal ; synthèse impossible,
+  la réponse part en texte avec la raison. Usage `tts` et événement `voice.sent` avec la
+  durée.
+- Règle du harnais : vocal seulement sur demande explicite ou après un vocal si
+  `voice.reply_in_kind` ; `doctor` (ffmpeg et phrase d'essai) ; inventaire `install`.
 
 ### 0.16.1
 
@@ -875,22 +870,27 @@ acquittés tout de suite (#73), latence du premier jeton réduite (#74).
   renvoyée au demandeur (`WriterPanic`, qui nomme la panique) au lieu de tuer le thread
   écrivain. Un daemon qui lit mais n'écrit plus, sans alerte, n'est plus possible.
 
-### 0.16.0
+### 0.17.0
 
-Réponses vocales (#41).
+Sauvegarde complète chiffrée et restauration en une commande (#42).
 
-- **Synthèse locale** : méthode `speak` des providers (`POST /audio/speech`), rôle et alias
-  `tts` (Voxtral TTS de Mistral servi par mlx-audio, voix `fr_female`), jamais replié sur
-  le modèle de conversation ; section de configuration `[voice]` (`tts_voice`,
-  `max_chars`, `reply_in_kind`).
-- **Outil `send_voice`** (lecture, sans approbation) : texte rendu lisible (sans Markdown,
-  liens, code ni emojis, symboles dits en toutes lettres), découpé en phrases, synthétisé,
-  assemblé, converti en OGG/Opus par `ffmpeg`, envoyé par `sendVoice` en réponse au message
-  d'origine ; texte trop long renvoyé au modèle pour un résumé vocal ; synthèse impossible,
-  la réponse part en texte avec la raison. Usage `tts` et événement `voice.sent` avec la
-  durée.
-- Règle du harnais : vocal seulement sur demande explicite ou après un vocal si
-  `voice.reply_in_kind` ; `doctor` (ffmpeg et phrase d'essai) ; inventaire `install`.
+- **`penelope backup --push`** : archive de l'instantané de la base, du vault, des skills,
+  des workflows, des gabarits, de `mcp.d` et de `config.toml` (artefacts et médias exclus
+  sauf `--media`), **chiffrée** par la phrase de passe `backup_passphrase` (Argon2id puis
+  XChaCha20-Poly1305) avant de quitter la machine, poussée dans un dépôt privé avec un
+  `MANIFEST.json` lisible qui dit la date, la version, les tailles, la somme SHA-256 et les
+  **noms** des secrets à ressaisir, jamais leurs valeurs.
+- **Garde-fous** : dépôt public refusé (vérifié par `gh`), archive au-delà de
+  `backup.max_push_bytes` refusée avec la marche à suivre, absence de phrase de passe dite
+  avant tout travail. Rotation 7 quotidiennes, 4 hebdomadaires, 12 mensuelles.
+- **Planification** : une sauvegarde par nuit à `backup.cron` (4 h), échec annoncé sur
+  Telegram.
+- **`penelope restore-all`** : clone le dépôt (ou lit une archive locale), demande la phrase
+  de passe à l'invite, remet base et fichiers en place (l'existant mis de côté), puis dit ce
+  qui reste à faire : service, secrets à ressaisir, `penelope doctor`. `--dry-run` liste sans
+  rien écrire.
+- **Diagnostic** : `doctor` suit l'âge de la dernière sauvegarde (alerte au-delà de 48 h), sa
+  taille et sa destination ; `self_status` porte la même information.
 
 ### Routine de livraison
 

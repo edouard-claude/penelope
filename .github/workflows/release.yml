@@ -186,9 +186,27 @@ jobs:
           MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
         run: |
           set -euo pipefail
+          # Notes de version : la section « ### X.Y.Z » de docs/progress.md. Le job
+          # `verification` (cargo test) garantit qu'elle existe pour la version publiée ;
+          # le repli couvre une exécution isolée de ce job.
+          notes_section=$(awk -v ver="### ${VERSION#v}" '
+            $0 == ver { found = 1; next }
+            found && (/^### / || /^## /) { exit }
+            found {
+              if (!started && $0 ~ /^[ \t]*$/) next
+              started = 1
+              print
+            }
+          ' docs/progress.md)
           {
             echo "Binaires macOS 13 ou plus récent, construits et testés par la CI."
             echo
+            if [ -n "$notes_section" ]; then
+              echo "## Nouveautés"
+              echo
+              printf '%s\n' "$notes_section"
+              echo
+            fi
             echo "L'archive \`macos-universal\` marche sur Apple Silicon comme sur Intel ;"
             echo "les archives par architecture sont là pour qui préfère un binaire plus petit."
             echo
@@ -209,7 +227,7 @@ jobs:
             echo "sudo mv penelope /usr/local/bin/ && penelope doctor"
             echo '```'
             echo
-            echo "Ce qui est livré et ce qui manque : voir \`docs/progress.md\`."
+            echo "Le détail complet, et ce qui manque encore : voir \`docs/progress.md\`."
           } > notes.md
           cat notes.md
 
