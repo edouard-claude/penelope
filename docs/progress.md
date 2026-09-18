@@ -8,7 +8,7 @@ Dernière mise à jour : 18 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1469 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1471 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1289,6 +1289,9 @@ telle qu'elle sera exécutée (#116).
   simple passe sans demande et qu'enchaînée elle demande (#111).
 
 ### 0.17.7
+
+Les skills ne se rechargent plus chaque minute (#118), et la mémoire injectée d'office
+suit le sujet de travail de la session (#119).
 
 - **Les skills ne se rechargent plus chaque minute** (#118) : `reload_skills` réécrivait
   les skills livrées à chaque passage, ce qui déplaçait leur date, et l'empreinte du
