@@ -595,7 +595,7 @@ impl ProcessHost for UnixProcessHost {
             };
             if process_exists(pid) {
                 let _ = std::process::Command::new("/bin/kill")
-                    .args(["-KILL", &format!("-{pid}")])
+                    .args(group_kill_args("KILL", pid))
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status();
@@ -607,10 +607,17 @@ impl ProcessHost for UnixProcessHost {
     }
 }
 
+/// Arguments de `/bin/kill` pour signaler tout le groupe dont `pid` est le leader.
+///
+/// La forme POSIX `-s SIG -- -<pgid>` : sans `--`, le `kill` de procps-ng (Linux) lit
+/// `-<pgid>` comme une option et ne signale rien, le groupe survit au délai.
+fn group_kill_args(sig: &str, pid: u32) -> [String; 4] {
+    ["-s".into(), sig.into(), "--".into(), format!("-{pid}")]
+}
+
 async fn signal_group(pid: u32, sig: &str) -> Result<()> {
-    // Le groupe porte le pid du leader : la cible est `-<pid>`.
     let status = tokio::process::Command::new("/bin/kill")
-        .args([&format!("-{sig}"), &format!("-{pid}")])
+        .args(group_kill_args(sig, pid))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
