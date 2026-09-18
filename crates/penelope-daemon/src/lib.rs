@@ -44,6 +44,7 @@ mod ticket_to_deploy_e2e;
 pub mod titles;
 pub mod tools_on_demand;
 pub mod upgrade;
+pub mod usage_feedback;
 pub mod vault_git;
 pub mod vault_inventory;
 pub mod vault_ops;

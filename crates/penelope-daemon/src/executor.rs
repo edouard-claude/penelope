@@ -675,10 +675,17 @@ impl NativeToolExecutor {
                         crate::vault_inventory::empty_search_note(s).await,
                     ));
                 }
+                // Retour d'usage (issues #37 et #105) : trouvé par une recherche, donc
+                // servi ; utile si la réponse d'une conversation le reprend.
+                let in_chat = matches!(
+                    s.sessions.get(&self.env.session_id).await,
+                    Ok(Some(ref x)) if x.kind == penelope_kernel::session::SessionKind::Chat
+                );
+                let uids: Vec<String> = hits.iter().map(|h| h.entry.uid.clone()).collect();
+                crate::usage_feedback::served(s, &self.env.session_id, in_chat, &uids, &query)
+                    .await;
                 let mut out = Vec::new();
                 for h in &hits {
-                    // Retour d'usage (issue #37) : trouvé par une recherche, donc rappelé.
-                    let _ = s.memory.record_recall(&h.entry.uid, &query, true).await;
                     let untrusted = h.entry.etype == penelope_memory::ingest::SOURCE_ETYPE
                         && s.memory.origin_of(&h.entry.uid).await?
                             != Some(penelope_memory::Origin::Owner);

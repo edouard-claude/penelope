@@ -71,6 +71,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0014_mcp_tool_fingerprint",
         sql: SQL_0014,
     },
+    Migration {
+        version: "0015_memory_usage_reset",
+        sql: SQL_0015,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -916,6 +920,13 @@ ALTER TABLE mcp_tools ADD COLUMN fingerprint TEXT NOT NULL DEFAULT '';
 ALTER TABLE mcp_tools ADD COLUMN first_seen TEXT;
 "#;
 
+/// Jusqu'ici tout souvenir servi comptait comme utile : les deux compteurs, désormais lus
+/// par le classement, repartent de zéro (issue #105). La date du dernier rappel, les
+/// requêtes et les vues restent.
+const SQL_0015: &str = r#"
+UPDATE mem_signals SET recalls = 0, useful_recalls = 0;
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -965,6 +976,48 @@ mod tests {
         }
         migrate(&mut c).unwrap();
         assert_eq!(applied_versions(&c).unwrap().len(), MIGRATIONS.len());
+    }
+
+    /// #105 : une base d'avant la mesure de l'utilité garde ses dates et ses vues, pas
+    /// ses compteurs de rappels où tout comptait comme utile.
+    #[test]
+    fn usage_counters_restart_from_zero_once() {
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY,
+             applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));",
+        )
+        .unwrap();
+        {
+            let tx = c.transaction().unwrap();
+            for m in MIGRATIONS
+                .iter()
+                .take_while(|m| m.version != "0015_memory_usage_reset")
+            {
+                tx.execute_batch(m.sql).unwrap();
+                tx.execute(
+                    "INSERT INTO schema_migrations(version) VALUES(?1)",
+                    [m.version],
+                )
+                .unwrap();
+            }
+            tx.execute(
+                "INSERT INTO mem_signals(uid, recalls, useful_recalls, last_recall, seen)
+                 VALUES('u1', 30, 30, '2026-09-01T10:00:00Z', 4)",
+                [],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        migrate(&mut c).unwrap();
+        let row: (i64, i64, String, i64) = c
+            .query_row(
+                "SELECT recalls, useful_recalls, last_recall, seen FROM mem_signals",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (0, 0, "2026-09-01T10:00:00Z".into(), 4));
     }
 
     #[test]

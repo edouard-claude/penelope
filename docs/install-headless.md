@@ -1188,6 +1188,25 @@ dans les résultats, est proposée au retrait dans le digest : une entrée qu'au
 n'a jamais approchée n'a pas eu sa chance, elle reste. Les préférences du profil,
 toujours appliquées, ne sont jamais proposées.
 
+**Usage dans le classement.** Un souvenir servi en conversation ne compte comme utile que
+si la réponse le reprend : au moins un mot distinctif du souvenir que la question ne
+contenait pas (deux pour un souvenir long). Ce qui a servi (rappels utiles, succès) monte
+le score jusqu'à ×1,2 ; un souvenir servi vingt fois sans jamais servir, ou contredit,
+descend jusqu'à ×0,85. Le facteur ne fait qu'ordonner : il ne franchit pas l'écart entre
+une entrée trouvée par les mots et le sens et une entrée trouvée par un seul des deux, et
+le seuil du rappel automatique ne compare que la pertinence. La consolidation voit
+l'usage de chaque souvenir proche (« rappelé 12 fois, utile 9 ») comme une preuve, le
+placement reste calculé des cinq critères. Servi dans un workflow ou un sous-agent, où
+aucune réponse ne se juge, un souvenir ne voit que sa date de rappel mise à jour.
+
+```bash
+penelope mem signals 01MARTIN
+```
+
+donne ses rappels, rappels utiles, vues, succès, contradictions et le facteur qui en
+résulte. La mise à jour vers 0.17.2 remet les rappels et rappels utiles à zéro : avant
+elle, tout souvenir servi comptait comme utile.
+
 ```bash
 penelope mem dream --dry-run
 ```

@@ -95,6 +95,8 @@ pub struct Scored {
     /// dans les deux). C'est elle que compare le seuil du rappel automatique : un
     /// souvenir ancien reste rappelable, il passe seulement après un récent (#86).
     pub relevance: f64,
+    /// Facteur d'usage appliqué au score ([`usage_factor`], issue #105).
+    pub usage: f64,
     pub fts_rank: Option<usize>,
     pub vec_rank: Option<usize>,
     pub similarity: f64,
@@ -181,6 +183,45 @@ pub fn confidence_factor(confiance: Option<f64>) -> f64 {
         Some(c) => 0.5 + c / 2.0,
         None => 1.0,
     }
+}
+
+/// Gain maximal du facteur d'usage (issue #105) : ×1,2 au plus, sous le facteur projet.
+pub const USAGE_MAX_GAIN: f64 = 0.2;
+/// Perte maximale : ×0,85 pour une entrée souvent servie sans servir, ou contredite.
+pub const USAGE_MAX_LOSS: f64 = 0.15;
+/// Rappels sous lesquels la part d'inutiles ne dit encore rien.
+pub const USAGE_MIN_RECALLS: u32 = 5;
+
+/// `usage` (issue #105) : la preuve d'usage d'une entrée, bornée à [0,85 ; 1,2].
+///
+/// ```text
+///  gain  = 0,2 × (1 − e^(−(rappels utiles + succès) / 5))      dix rappels utiles : ×1,17
+///  perte = 0,15 × max(part des rappels inutiles × min(1, rappels / 20),
+///                     part des contradictions)             vingt rappels inutiles : ×0,85
+/// ```
+///
+/// Le gain ne compte que ce qui a servi, pas ce qui a été servi : une entrée rappelée
+/// souvent et jamais utile descend. La borne tient une entrée populaire derrière une
+/// correspondance nettement meilleure (deux listes contre une, rang RRF) : l'usage
+/// départage, il ne remplace pas la pertinence. Le seuil du rappel automatique compare
+/// la pertinence seule, l'usage ne fait entrer aucun souvenir.
+pub fn usage_factor(s: &Signals) -> f64 {
+    let good = (s.useful_recalls + s.successes) as f64;
+    let gain = USAGE_MAX_GAIN * (1.0 - (-good / 5.0).exp());
+    let useless = if s.recalls >= USAGE_MIN_RECALLS {
+        let wasted = s.recalls.saturating_sub(s.useful_recalls) as f64 / s.recalls as f64;
+        wasted * (s.recalls as f64 / 20.0).min(1.0)
+    } else {
+        0.0
+    };
+    let judged = s.successes + s.contradictions;
+    let contradicted = if judged > 0 {
+        s.contradictions as f64 / judged as f64
+    } else {
+        0.0
+    };
+    let loss = USAGE_MAX_LOSS * useless.max(contradicted);
+    (1.0 + gain - loss).clamp(1.0 - USAGE_MAX_LOSS, 1.0 + USAGE_MAX_GAIN)
 }
 
 /// Fusion de rangs réciproques (RRF).
@@ -451,34 +492,7 @@ impl MemoryIndex {
 
     pub async fn signals_of(&self, uid: &str) -> penelope_store::Result<Signals> {
         let uid = uid.to_string();
-        self.store
-            .read(move |c| {
-                let mut st = c.prepare(
-                    "SELECT occurrences, sessions, days, recalls, useful_recalls, successes,
-                            contradictions, last_recall, distinct_queries, seen
-                     FROM mem_signals WHERE uid = ?1",
-                )?;
-                let mut rows = st.query([&uid])?;
-                match rows.next()? {
-                    Some(r) => {
-                        let dq: String = r.get(8)?;
-                        Ok(Signals {
-                            occurrences: r.get::<_, i64>(0)? as u32,
-                            sessions: r.get::<_, i64>(1)? as u32,
-                            days: r.get::<_, i64>(2)? as u32,
-                            recalls: r.get::<_, i64>(3)? as u32,
-                            useful_recalls: r.get::<_, i64>(4)? as u32,
-                            successes: r.get::<_, i64>(5)? as u32,
-                            contradictions: r.get::<_, i64>(6)? as u32,
-                            last_recall: r.get(7)?,
-                            distinct_queries: serde_json::from_str(&dq).unwrap_or_default(),
-                            seen: r.get::<_, i64>(9)? as u32,
-                        })
-                    }
-                    None => Ok(Signals::default()),
-                }
-            })
-            .await
+        self.store.read(move |c| signals_row(c, &uid)).await
     }
 
     /// Enregistre un rappel, avec la requête qui l'a déclenché (diversité des requêtes).
@@ -487,6 +501,45 @@ impl MemoryIndex {
         uid: &str,
         query: &str,
         useful: bool,
+    ) -> penelope_store::Result<()> {
+        self.bump_recall(uid, query, 1, useful as i64).await
+    }
+
+    /// Un souvenir servi au modèle (issue #105) : sa date de rappel et la requête sont
+    /// notées ; `counted`, il compte parmi les rappels et son utilité sera jugée sur la
+    /// réponse ([`MemoryIndex::mark_useful`]). Servi hors conversation, où rien ne juge,
+    /// il ne pèse pas sur la part des rappels utiles.
+    pub async fn record_served(
+        &self,
+        uid: &str,
+        query: &str,
+        counted: bool,
+    ) -> penelope_store::Result<()> {
+        self.bump_recall(uid, query, counted as i64, 0).await
+    }
+
+    /// Le souvenir servi a servi : la réponse s'en est servie (issue #105). Jamais plus de
+    /// rappels utiles que de rappels.
+    pub async fn mark_useful(&self, uid: &str) -> penelope_store::Result<()> {
+        let uid = uid.to_string();
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "UPDATE mem_signals SET useful_recalls = MIN(recalls, useful_recalls + 1)
+                     WHERE uid = ?1",
+                    [&uid],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    async fn bump_recall(
+        &self,
+        uid: &str,
+        query: &str,
+        recalls: i64,
+        useful: i64,
     ) -> penelope_store::Result<()> {
         let (uid, q, now) = (uid.to_string(), query.to_string(), self.clock.now_rfc3339());
         self.store
@@ -509,17 +562,18 @@ impl MemoryIndex {
                 tx.execute(
                     "INSERT INTO mem_signals(uid, recalls, useful_recalls, last_recall,
                         distinct_queries)
-                     VALUES(?1, 1, ?2, ?3, ?4)
+                     VALUES(?1, ?5, ?2, ?3, ?4)
                      ON CONFLICT(uid) DO UPDATE SET
-                        recalls = recalls + 1,
+                        recalls = recalls + ?5,
                         useful_recalls = useful_recalls + ?2,
                         last_recall = ?3,
                         distinct_queries = ?4",
                     params![
                         uid,
-                        useful as i64,
+                        useful,
                         now,
-                        serde_json::to_string(&queries).unwrap_or_default()
+                        serde_json::to_string(&queries).unwrap_or_default(),
+                        recalls
                     ],
                 )?;
                 Ok(())
@@ -736,15 +790,18 @@ impl MemoryIndex {
                     }
                     let base = rrf(fr, vr, params_.rrf_k);
                     let age = age_days(&entry.maj, now_ms);
+                    let usage = usage_factor(&signals_row(c, &entry.uid)?);
                     let score = base
                         * decay(age, params_.half_life_days, entry.pinned)
                         * importance_factor(entry.importance)
                         * project_factor(entry.projet.as_deref(), &projects)
-                        * confidence_factor(entry.confiance);
+                        * confidence_factor(entry.confiance)
+                        * usage;
                     out.push(Scored {
                         entry,
                         score,
                         relevance: base,
+                        usage,
                         fts_rank: fr,
                         vec_rank: vr,
                         similarity: sim,
@@ -948,6 +1005,37 @@ pub fn fts_query(q: &str) -> String {
         .map(|w| format!("\"{w}\"*"))
         .collect::<Vec<_>>()
         .join(" OR ")
+}
+
+/// Signaux d'une entrée, neutres si elle n'en a pas.
+fn signals_row(
+    c: &penelope_store::rusqlite::Connection,
+    uid: &str,
+) -> penelope_store::Result<Signals> {
+    let mut st = c.prepare_cached(
+        "SELECT occurrences, sessions, days, recalls, useful_recalls, successes,
+                contradictions, last_recall, distinct_queries, seen
+         FROM mem_signals WHERE uid = ?1",
+    )?;
+    let mut rows = st.query([uid])?;
+    match rows.next()? {
+        Some(r) => {
+            let dq: String = r.get(8)?;
+            Ok(Signals {
+                occurrences: r.get::<_, i64>(0)? as u32,
+                sessions: r.get::<_, i64>(1)? as u32,
+                days: r.get::<_, i64>(2)? as u32,
+                recalls: r.get::<_, i64>(3)? as u32,
+                useful_recalls: r.get::<_, i64>(4)? as u32,
+                successes: r.get::<_, i64>(5)? as u32,
+                contradictions: r.get::<_, i64>(6)? as u32,
+                last_recall: r.get(7)?,
+                distinct_queries: serde_json::from_str(&dq).unwrap_or_default(),
+                seen: r.get::<_, i64>(9)? as u32,
+            })
+        }
+        None => Ok(Signals::default()),
+    }
 }
 
 const COLUMNS: &str = "uid, file, anchor, level, etype, slug, text, quand, importance, projet,
@@ -1259,6 +1347,115 @@ mod tests {
         );
     }
 
+    /// #105 : le facteur d'usage monte avec les rappels utiles, descend quand les rappels
+    /// ne servent pas, et reste borné.
+    #[test]
+    fn usage_factor_is_bounded_and_rewards_useful_recalls_only() {
+        let sig = |recalls, useful_recalls, successes, contradictions| Signals {
+            recalls,
+            useful_recalls,
+            successes,
+            contradictions,
+            ..Default::default()
+        };
+        assert_eq!(usage_factor(&Signals::default()), 1.0);
+        let ten_useful = usage_factor(&sig(10, 10, 0, 0));
+        assert!(
+            ten_useful > 1.15 && ten_useful <= 1.0 + USAGE_MAX_GAIN,
+            "{ten_useful}"
+        );
+        assert!(
+            usage_factor(&sig(20, 0, 0, 0)) < 1.0,
+            "vingt rappels inutiles"
+        );
+        assert!((usage_factor(&sig(20, 0, 0, 0)) - (1.0 - USAGE_MAX_LOSS)).abs() < 1e-9);
+        assert_eq!(usage_factor(&sig(3, 0, 0, 0)), 1.0, "trop peu pour juger");
+        assert!(usage_factor(&sig(0, 0, 0, 4)) < 1.0, "contredite");
+        let huge = usage_factor(&sig(10_000, 10_000, 10_000, 0));
+        assert!(huge <= 1.0 + USAGE_MAX_GAIN + 1e-12, "{huge}");
+    }
+
+    /// #105 : à pertinence égale, dix rappels utiles font passer devant ; vingt rappels
+    /// inutiles ne font pas monter ; une correspondance exacte jamais rappelée reste
+    /// devant une entrée populaire qui ne correspond qu'à moitié.
+    #[tokio::test]
+    async fn usage_orders_equal_matches_without_beating_a_better_one() {
+        let i = index(TestClock::default());
+        for uid in ["neuf", "servi", "ignore"] {
+            i.upsert(
+                &simple_entry(
+                    uid,
+                    "la sauvegarde nocturne du serveur",
+                    Level::Cure,
+                    "2026-09-16",
+                ),
+                &prov(),
+            )
+            .await
+            .unwrap();
+        }
+        for _ in 0..10 {
+            i.record_recall("servi", "sauvegarde", true).await.unwrap();
+        }
+        for _ in 0..20 {
+            i.record_served("ignore", "sauvegarde", true).await.unwrap();
+        }
+        let hits = i
+            .search("sauvegarde nocturne", None, &SearchFilter::explicit(), &[])
+            .await
+            .unwrap();
+        let order: Vec<&str> = hits.iter().map(|h| h.entry.uid.as_str()).collect();
+        // Textes identiques : leurs rangs FTS ne diffèrent que par l'ordre d'insertion
+        // (moins de 4 % de pertinence), l'usage décide.
+        assert_eq!(order, ["servi", "neuf", "ignore"], "{hits:?}");
+
+        // Correspondance exacte (mots et sens) jamais rappelée, contre une entrée
+        // populaire trouvée par un seul des deux chemins.
+        let i = index(TestClock::default());
+        i.upsert(
+            &simple_entry(
+                "exacte",
+                "le code du portail est 4521",
+                Level::Cure,
+                "2026-09-16",
+            ),
+            &prov(),
+        )
+        .await
+        .unwrap();
+        i.upsert(
+            &simple_entry(
+                "populaire",
+                "la boîte aux lettres du voisin",
+                Level::Cure,
+                "2026-09-16",
+            ),
+            &prov(),
+        )
+        .await
+        .unwrap();
+        i.put_embedding("exacte", "m", &[1.0, 0.0, 0.0])
+            .await
+            .unwrap();
+        i.put_embedding("populaire", "m", &[0.6, 0.8, 0.0])
+            .await
+            .unwrap();
+        for _ in 0..50 {
+            i.record_recall("populaire", "portail", true).await.unwrap();
+        }
+        let hits = i
+            .search(
+                "code du portail",
+                Some(vec![1.0, 0.0, 0.0]),
+                &SearchFilter::explicit(),
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(hits[0].entry.uid, "exacte", "{hits:?}");
+        assert!(hits[1].usage > 1.15);
+    }
+
     #[tokio::test]
     async fn signals_accumulate() {
         let i = index(TestClock::default());
@@ -1291,6 +1488,24 @@ mod tests {
         let s = i.signals_of("u1").await.unwrap();
         assert_eq!(s.successes, 1);
         assert_eq!(s.contradictions, 1);
+
+        // #105 : servi hors conversation, rien ne compte ; servi en conversation, le
+        // rappel compte et son utilité se juge après coup, jamais au-delà des rappels.
+        i.record_served("u1", "hors conversation", false)
+            .await
+            .unwrap();
+        let s = i.signals_of("u1").await.unwrap();
+        assert_eq!((s.recalls, s.useful_recalls), (3, 2));
+        assert!(
+            s.distinct_queries
+                .contains(&"hors conversation".to_string())
+        );
+        i.record_served("u1", "où ?", true).await.unwrap();
+        i.mark_useful("u1").await.unwrap();
+        i.mark_useful("u1").await.unwrap();
+        i.mark_useful("u1").await.unwrap();
+        let s = i.signals_of("u1").await.unwrap();
+        assert_eq!((s.recalls, s.useful_recalls), (4, 4));
     }
 
     /// CA 6 (reconstruction) : l'index dérivé peut être effacé et reconstruit ; la

@@ -1115,6 +1115,17 @@ l'adresse vérifiée (#93), fichiers lus en flux (#94), secret posé sans `argv`
   et la quitte après dix tours sans usage (`session.tools.<id>`, purgé avec les clés
   éphémères). Workflows et sous-agents gardent leur liste complète. L'évaluation en
   direct du choix d'outil (`live_openrouter`) demande une clé et le réseau : non rejouée.
+- **L'usage pèse sur le rappel** (#105) : un souvenir servi en conversation (rappel
+  automatique ou `mem_search`) compte comme rappelé, et comme utile seulement si la
+  réponse reprend un de ses mots distinctifs absents de la question (deux pour un souvenir
+  long) ; un tour rejoué après approbation ne compte pas deux fois. Le score gagne un
+  facteur `usage_factor` borné à [0,85 ; 1,2] : gain sur les rappels utiles et les succès,
+  perte sur la part de rappels inutiles (à partir de cinq) et les contradictions. La
+  pertinence seule garde le seuil du rappel automatique. La grille de consolidation voit
+  l'usage de chaque souvenir proche comme preuve, le placement reste calculé des critères
+  (test : mêmes verdicts, compteurs à 0 ou 20, même tri). `penelope mem signals <uid>`
+  (méthode `mem.signals`) lit les compteurs et le facteur. Migration 0015 : rappels et
+  rappels utiles repartent de zéro, ils comptaient tout souvenir servi comme utile.
 
 ### Routine de livraison
 

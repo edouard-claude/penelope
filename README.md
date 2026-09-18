@@ -153,6 +153,8 @@ Il faut le dire aussi, sinon le tableau ci-dessus ne vaut rien.
   il faut la recoller depuis la référence des clés et les décisions.
 - **Scoring de mémoire.** Les six signaux de promotion d'OpenClaw sont plus riches que
   notre grille à cinq critères, même si notre chemin d'écriture est plus réversible.
+  L'usage mesuré (rappels jugés utiles sur la réponse, succès) ordonne désormais le
+  rappel, borné, et sert de preuve à la grille ; il ne promeut encore rien seul.
 - **Bac à sable par défaut.** Codex CLI coupe le réseau par défaut dans son bac à sable.
   Chez nous, le réseau du shell est ouvert par défaut : c'est un choix documenté et
   réversible, pas une victoire.

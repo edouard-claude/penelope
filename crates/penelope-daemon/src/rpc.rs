@@ -600,6 +600,29 @@ impl Rpc {
                 let uid = required_str(p, "uid")?;
                 Ok(serde_json::to_value(s.memory.get(&uid).await?)?)
             }
+            method::MEM_SIGNALS => {
+                let uid = required_str(p, "uid")?;
+                let entry = s
+                    .memory
+                    .get(&uid)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("aucune entrée `{uid}`"))?;
+                let sig = s.memory.signals_of(&uid).await?;
+                Ok(json!({
+                    "uid": uid,
+                    "fichier": entry.file,
+                    "texte": entry.text,
+                    "rappels": sig.recalls,
+                    "rappels_utiles": sig.useful_recalls,
+                    "vu_sans_etre_retenu": sig.seen,
+                    "succes": sig.successes,
+                    "contradictions": sig.contradictions,
+                    "dernier_rappel": sig.last_recall,
+                    "requetes_distinctes": sig.distinct_queries.len(),
+                    "facteur_usage": (penelope_memory::index::usage_factor(&sig) * 1000.0).round()
+                        / 1000.0,
+                }))
+            }
             method::MCP_AUTH => {
                 let name = required_str(p, "name")?;
                 if let Some(callback) = p.get("callback").and_then(|c| c.as_str()) {
@@ -1815,6 +1838,40 @@ mod tests {
             .to_string();
         assert!(text.contains("penelope_turns_total"), "{text}");
         assert!(text.contains("penelope_approvals_pending"), "{text}");
+    }
+
+    /// #105 : les signaux d'une entrée se lisent, avec le facteur qu'ils donnent.
+    #[tokio::test]
+    async fn memory_signals_are_readable() {
+        let (_dir, r) = rpc().await;
+        let s = &r.daemon.services;
+        s.memory
+            .upsert(
+                &penelope_memory::index::simple_entry(
+                    "u1",
+                    "Le client Martin est basé à Lyon",
+                    penelope_memory::Level::Cure,
+                    "2026-09-16",
+                ),
+                &penelope_memory::Provenance::owner("s1", "interactive", "2026-09-16T10:00:00Z"),
+            )
+            .await
+            .unwrap();
+        for _ in 0..10 {
+            s.memory
+                .record_recall("u1", "où est Martin ?", true)
+                .await
+                .unwrap();
+        }
+        let v = call(&r, method::MEM_SIGNALS, json!({"uid": "u1"}))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(v["rappels"], 10);
+        assert_eq!(v["rappels_utiles"], 10);
+        assert!(v["facteur_usage"].as_f64().unwrap() > 1.15, "{v}");
+        let missing = call(&r, method::MEM_SIGNALS, json!({"uid": "u2"})).await;
+        assert!(missing.error.is_some());
     }
 
     #[tokio::test]

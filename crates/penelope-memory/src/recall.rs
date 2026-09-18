@@ -141,6 +141,60 @@ pub fn classify_task(message: &str) -> Option<String> {
     None
 }
 
+/// Mots distinctifs d'un texte, pour juger l'usage d'un souvenir : minuscules, sans
+/// accents, quatre lettres au moins, hors mots outils, ramenés à leurs cinq premières
+/// lettres (« habite » et « habiter » se rejoignent).
+fn distinctive(text: &str) -> std::collections::BTreeSet<String> {
+    const TOOL_WORDS: &[&str] = &[
+        "avec", "dans", "pour", "sans", "sous", "chez", "vers", "mais", "donc", "comme", "plus",
+        "moins", "tres", "tout", "tous", "toute", "toutes", "cette", "ces", "leur", "leurs",
+        "nous", "vous", "elle", "elles", "sont", "etre", "avoir", "fait", "faire", "peut", "doit",
+        "quand", "alors", "aussi", "encore", "deja", "bien", "ceci", "cela", "celui", "celle",
+        "entre", "depuis", "avant", "apres", "toujours", "jamais", "rien", "quelque", "chose",
+        "notre", "votre", "mon", "ton", "son",
+    ];
+    let folded: String = text
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'à' | 'â' | 'ä' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'î' | 'ï' => 'i',
+            'ô' | 'ö' => 'o',
+            'ù' | 'û' | 'ü' => 'u',
+            'ç' => 'c',
+            c if c.is_alphanumeric() => c,
+            _ => ' ',
+        })
+        .collect();
+    folded
+        .split_whitespace()
+        .filter(|w| w.chars().count() >= 4 && !TOOL_WORDS.contains(w))
+        .map(|w| w.chars().take(5).collect())
+        .collect()
+}
+
+/// Un souvenir servi a-t-il servi (issue #105) ? Vrai quand la réponse reprend des mots
+/// distinctifs du souvenir que la question ne contenait pas : un seul suffit pour un
+/// souvenir court (quatre mots distinctifs au plus), deux au-delà. « Martin habite à
+/// Lyon », servi pour « où habite Martin ? », a servi si la réponse dit « Lyon ».
+///
+/// Un indice, pas une preuve : il départage des souvenirs par leur usage, borné par
+/// [`crate::index::usage_factor`], et ne décide jamais d'un retrait.
+pub fn used_in_answer(entry: &str, asked: &str, answer: &str) -> bool {
+    let asked = distinctive(asked);
+    let own: Vec<String> = distinctive(entry)
+        .into_iter()
+        .filter(|w| !asked.contains(w))
+        .collect();
+    if own.is_empty() {
+        return false;
+    }
+    let said = distinctive(answer);
+    let hits = own.iter().filter(|w| said.contains(*w)).count();
+    hits >= if own.len() <= 4 { 1 } else { 2 }
+}
+
 /// Intention de rappel détectée dans un message (§6.7 voie 2).
 pub fn shows_recall_intent(message: &str) -> bool {
     let m = message.to_lowercase();
@@ -438,6 +492,35 @@ impl Snapshots {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #105 : la réponse reprend ce que le souvenir apportait, pas ce que la question
+    /// disait déjà.
+    #[test]
+    fn a_memory_is_useful_when_the_answer_uses_what_it_brought() {
+        let entry = "Martin habite à Lyon depuis 2024.";
+        assert!(used_in_answer(
+            entry,
+            "Où habite Martin ?",
+            "Martin est à Lyon."
+        ));
+        assert!(!used_in_answer(
+            entry,
+            "Où habite Martin ?",
+            "Je ne sais pas où habite Martin."
+        ));
+        let long = "Le déploiement de production passe par CapRover sur le serveur de                     Gravelines, avec une sauvegarde nocturne vers le stockage objet.";
+        assert!(!used_in_answer(
+            long,
+            "comment on déploie ?",
+            "Par le serveur."
+        ));
+        assert!(used_in_answer(
+            long,
+            "comment on déploie ?",
+            "Avec CapRover, sur Gravelines."
+        ));
+        assert!(!used_in_answer("", "question", "réponse"));
+    }
     use crate::index::{IndexedEntry, simple_entry};
     use crate::provenance::Provenance;
     use penelope_kernel::clock::TestClock;

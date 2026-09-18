@@ -298,6 +298,20 @@ impl Daemon {
         self.handle.record_turn();
         // Un tour a pu écrire en mémoire ou créer une intention : vecteurs manquants.
         crate::embeddings::spawn_backfill(self.clone());
+        // Retour d'usage (#105) : un souvenir servi n'est utile que si la réponse le
+        // reprend ; un tour qui attend une approbation garde sa liste pour sa reprise.
+        match &outcome {
+            TurnOutcome::Answered { text: answer, .. } => {
+                let said = turn
+                    .payload
+                    .get("text")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or_default();
+                crate::usage_feedback::judge(&self.services, &turn.session_id, said, answer).await;
+            }
+            TurnOutcome::AwaitingApproval { .. } => {}
+            _ => crate::usage_feedback::forget(&self.services, &turn.session_id).await,
+        }
         // Apprentissage continu (§6.6) : revue de fond des échanges qui le méritent.
         if let (TurnKind::Message, TurnOutcome::Answered { text: answer, .. }) =
             (turn.kind, &outcome)
@@ -472,13 +486,21 @@ impl Daemon {
         };
         // Reprise d'une session froide au-delà du seuil : résumée avant l'appel (issue #40).
         crate::compaction::before_turn(self, &turn.session_id, &model_id, Some(&origin_turn)).await;
-        let mut tiers = crate::conversation::build_tiers_in(
+        let (mut tiers, recalled) = crate::conversation::build_turn_prompt(
             &s,
             &text,
             &mcp_lines,
             None,
             (session.kind == SessionKind::Chat).then_some((turn.session_id.as_str(), episode)),
             vector.clone(),
+        )
+        .await;
+        crate::usage_feedback::served(
+            &s,
+            &turn.session_id,
+            session.kind == SessionKind::Chat,
+            &recalled,
+            &text,
         )
         .await;
         if let Some(block) = self.intents_block(turn, &text, vector.as_deref()).await? {
@@ -1480,6 +1502,54 @@ mod tests {
             "découvert au tour précédent"
         );
         assert!(next.tools.len() <= 21);
+    }
+
+    /// #105 : un souvenir servi par le rappel automatique compte comme rappelé ; il ne
+    /// compte comme utile que si la réponse le reprend.
+    #[tokio::test]
+    async fn a_recalled_memory_counts_as_useful_only_when_the_answer_uses_it() {
+        let (_dir, d, p) = daemon().await;
+        let s = d.services.clone();
+        let vault = crate::conversation::vault_dir(&s);
+        std::fs::create_dir_all(&vault).unwrap();
+        std::fs::write(
+            vault.join("memoire.md"),
+            "# Mémoire de fond\n\n## Clients\n\
+             - Le client Martin est basé à Grenoble <!-- depuis: 2026-06-01 --> ^01MARTIN\n",
+        )
+        .unwrap();
+        crate::vault_ops::reindex(&s, &vault).await.unwrap();
+        // Rien d'office dans l'instantané : le souvenir ne vient que par le rappel.
+        d.publish_config("test", |c| {
+            c.memory.core_budget_tokens = 0;
+            c.memory.project_budget_tokens = 0;
+            Ok(vec!["memory.core_budget_tokens".into()])
+        })
+        .unwrap();
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        let say = |text: &'static str| {
+            let d = d.clone();
+            let sid = sid.clone();
+            async move {
+                d.enqueue_message(&sid, text, &Origin::Cli, None)
+                    .await
+                    .unwrap();
+                let turn = claim(&d).await;
+                d.run_turn(&turn).await;
+                d.services.turns.complete(&turn).await.unwrap();
+            }
+        };
+
+        p.reply("Je n'ai pas cette information.");
+        say("Où est basé le client Martin ?").await;
+        let sig = s.memory.signals_of("01MARTIN").await.unwrap();
+        assert_eq!((sig.recalls, sig.useful_recalls), (1, 0), "{sig:?}");
+
+        p.reply("Martin est à Grenoble.");
+        say("Rappelle-moi où est basé le client Martin").await;
+        let sig = s.memory.signals_of("01MARTIN").await.unwrap();
+        assert_eq!((sig.recalls, sig.useful_recalls), (2, 1), "{sig:?}");
     }
 
     #[tokio::test]

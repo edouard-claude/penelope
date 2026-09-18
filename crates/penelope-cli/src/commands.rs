@@ -514,6 +514,11 @@ pub enum MemCmd {
         #[arg(default_value_t = 7)]
         days: i64,
     },
+    /// Signaux d'usage d'une entrée (rappels, rappels utiles, succès) et le facteur de
+    /// classement qu'ils lui donnent.
+    Signals {
+        uid: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -941,6 +946,7 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Mem(MemCmd::Diff { since }) => (m::MEM_DIFF, json!({"since": since})),
         Command::Mem(MemCmd::Dream { dry_run }) => (m::MEM_DREAM, json!({"dry_run": dry_run})),
         Command::Mem(MemCmd::Learned { days }) => (m::MEM_LEARNED, json!({"days": days})),
+        Command::Mem(MemCmd::Signals { uid }) => (m::MEM_SIGNALS, json!({"uid": uid})),
         Command::Vault(VaultCmd::Sync) => (m::VAULT_SYNC, json!({})),
         Command::Vault(VaultCmd::Check) => (m::VAULT_CHECK, json!({})),
         Command::Vault(VaultCmd::Lint) => (m::VAULT_LINT, json!({})),

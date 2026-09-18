@@ -251,6 +251,21 @@ pub async fn build_tiers_in(
     episode: Option<(&str, i64)>,
     query_vector: Option<Vec<f32>>,
 ) -> Tiers {
+    build_turn_prompt(s, user_text, mcp_lines, run_state, episode, query_vector)
+        .await
+        .0
+}
+
+/// Comme [`build_tiers_in`], avec les uid des souvenirs que le rappel automatique a
+/// servis : le tour les compte et juge leur usage sur la réponse (issue #105).
+pub async fn build_turn_prompt(
+    s: &Services,
+    user_text: &str,
+    mcp_lines: &[String],
+    run_state: Option<&str>,
+    episode: Option<(&str, i64)>,
+    query_vector: Option<Vec<f32>>,
+) -> (Tiers, Vec<String>) {
     let cfg = s.config.config();
     let vault = vault_dir(s);
 
@@ -316,6 +331,7 @@ pub async fn build_tiers_in(
     {
         b = b.volatile(notes);
     }
+    let mut recalled = Vec::new();
     if !user_text.trim().is_empty() {
         // Voie 1 avec ce qu'il faut pour être utile : les pratiques du vault et le
         // contexte du tour, sans quoi aucune règle défaisable n'est rappelée et le
@@ -329,10 +345,13 @@ pub async fn build_tiers_in(
         )
         .path1(user_text, &ctx, query_vector, &practices)
         .await;
-        // Retour d'usage (issue #37) : un souvenir servi au modèle compte comme rappelé.
-        for t in &recall.triggered {
-            let _ = s.memory.record_recall(&t.entry.uid, user_text, true).await;
-        }
+        // Retour d'usage (issues #37 et #105) : servis, comptés par le tour qui les a
+        // demandés, et utiles seulement si la réponse s'en sert.
+        recalled = recall
+            .triggered
+            .iter()
+            .map(|t| t.entry.uid.clone())
+            .collect();
         // Vue sans être retenue : le dénominateur du retrait proposé (issue #86).
         let _ = s.memory.record_seen(&recall.seen).await;
         let rendered = recall.render();
@@ -340,7 +359,7 @@ pub async fn build_tiers_in(
             b = b.volatile(rendered);
         }
     }
-    b.build()
+    (b.build(), recalled)
 }
 
 /// Pratiques du vault, relues seulement quand un fichier a changé (issue #58).

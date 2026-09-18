@@ -194,6 +194,8 @@ pub mod method {
     pub const MEM_CANDIDATES: &str = "mem.candidates";
     pub const MEM_DREAM: &str = "mem.dream";
     pub const MEM_LEARNED: &str = "mem.learned";
+    /// Signaux d'usage d'une entrée et facteur de classement qu'ils donnent (issue #105).
+    pub const MEM_SIGNALS: &str = "mem.signals";
     /// Audit noté sur 100, historisé (issue #23).
     pub const MEM_AUDIT: &str = "mem.audit";
     /// Règles rejetées pour leur seule origine, remises à consolider (issue #24).
@@ -299,6 +301,7 @@ pub mod method {
         MEM_CANDIDATES,
         MEM_DREAM,
         MEM_LEARNED,
+        MEM_SIGNALS,
         MEM_AUDIT,
         MEM_RETRY_REJECTED,
         MEM_DIFF,
