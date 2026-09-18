@@ -608,7 +608,12 @@ par `vision` ou `image`, même sur une session épinglée.
 `sticky` compte plus qu'il n'y paraît : changer de modèle en pleine session casserait le
 cache du provider et ferait payer tout le contexte une seconde fois. Seul le petit modèle
 (`low`) ne colle jamais : un « bonjour » n'enferme pas la session sur `fast`, le message
-suivant est reclassé. Un repli fait par OpenRouter est journalisé
+suivant est reclassé. Le collant tombe aussi là où le cache est froid de toute façon : après
+une pause plus longue que la durée du cache (5 min), une compaction du contexte ou un
+changement d'épisode, le message repasse par le classifieur. Une session montée sur
+`reasoning` pour une question difficile redescend donc au message suivant qui ne l'est pas,
+et une session restée sur `main` monte quand la difficulté arrive ; `/model` dit quand le
+dernier message a été reclassé ainsi. Un repli fait par OpenRouter est journalisé
 (`llm.fallback_used`) et le modèle qui a réellement répondu est celui enregistré.
 
 ### OpenRouter

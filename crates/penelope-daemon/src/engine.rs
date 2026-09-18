@@ -27,6 +27,20 @@ pub(crate) fn last_model_key(session_id: &str) -> String {
     format!("session.model_last.{session_id}")
 }
 
+/// Frontière qui a fait reclasser le dernier message (#82), vide sinon.
+fn last_model_why_key(session_id: &str) -> String {
+    format!("session.model_last.why.{session_id}")
+}
+
+/// Libellé d'une frontière, pour `/model`.
+fn boundary_label(b: &str) -> &'static str {
+    match b {
+        "compaction" => "contexte compacté",
+        "episode" => "nouvel épisode",
+        _ => "pause au-delà de la durée du cache",
+    }
+}
+
 /// Alias proposés pour la conversation : les étages du routage et le rôle
 /// `chat_default`, puis les alias ajoutés à la main, jamais ceux réservés à la
 /// compaction, aux images, aux embeddings ou à la transcription.
@@ -824,10 +838,18 @@ impl Daemon {
                 })
             });
         let pinned = self.pinned_model(session.id.as_str()).await;
+        // Frontière (#82) : cache froid, compaction ou nouvel épisode depuis le dernier
+        // appel. Le préfixe change de toute façon, le collant n'y gagne rien : le message
+        // repasse par le classifieur, qui peut monter ou descendre d'étage.
+        let boundary = match (&sticky, &pinned) {
+            (Some(_), None) => self.model_boundary(session.id.as_str()).await,
+            _ => None,
+        };
         let input = RouteInput {
             message: text.to_string(),
             pinned,
             sticky,
+            at_boundary: boundary.is_some(),
             ..Default::default()
         };
 
@@ -844,6 +866,7 @@ impl Daemon {
             alias = %decision.alias,
             model = %decision.model_id,
             reason = ?decision.reason,
+            frontiere = boundary.unwrap_or("aucune"),
             "modèle choisi"
         );
         // Seul le choix « de conversation » devient collant, pas un détour ponctuel
@@ -858,12 +881,67 @@ impl Daemon {
                 .sessions
                 .set_model(session.id.as_str(), &decision.alias, &decision.model_id)
                 .await;
+        } else if !persist && boundary.is_some() && decision.reason == RouteReason::Classifier {
+            // Reclassé en « simple » à une frontière : l'ancien collant ne revient pas au
+            // message suivant.
+            let _ = s.sessions.clear_model(session.id.as_str()).await;
         }
-        // Dernier choix, pour que `/model` dise qui a répondu en dernier.
+        // Dernier choix, pour que `/model` dise qui a répondu en dernier, et pourquoi il
+        // a pu changer.
         let _ = self
             .kv_set(&last_model_key(session.id.as_str()), &decision.alias)
             .await;
+        let _ = self
+            .kv_set(
+                &last_model_why_key(session.id.as_str()),
+                boundary.map(boundary_label).unwrap_or(""),
+            )
+            .await;
         (decision.alias, decision.model_id)
+    }
+
+    /// Frontière franchie depuis le dernier appel de conversation de la session (#82) :
+    /// cache du fournisseur expiré, contexte compacté, ou épisode clos.
+    async fn model_boundary(&self, session_id: &str) -> Option<&'static str> {
+        let s = &self.services;
+        let previous = crate::cache_audit::previous_call(s, session_id)
+            .await
+            .ok()?;
+        let Some(previous) = previous else {
+            return Some("cache");
+        };
+        if s.clock.now_ms() - previous.ts_ms >= crate::cache_audit::CACHE_TTL_MS {
+            return Some("cache");
+        }
+        let since = chrono::DateTime::from_timestamp_millis(previous.ts_ms)
+            .unwrap_or_default()
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let sid = session_id.to_string();
+        let kinds: Vec<String> = s
+            .store
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT DISTINCT kind FROM events WHERE session_id = ?1 AND ts >= ?2
+                       AND kind IN ('context.compacted', 'memory.episode_closed')",
+                )?;
+                let rows = st.query_map(penelope_store::rusqlite::params![sid, since], |r| {
+                    r.get::<_, String>(0)
+                })?;
+                let mut out = Vec::new();
+                for r in rows {
+                    out.push(r?);
+                }
+                Ok(out)
+            })
+            .await
+            .ok()?;
+        if kinds.iter().any(|k| k == "context.compacted") {
+            Some("compaction")
+        } else if kinds.iter().any(|k| k == "memory.episode_closed") {
+            Some("episode")
+        } else {
+            None
+        }
     }
 
     /// Alias épinglé sur une session, s'il existe encore dans la configuration.
@@ -910,6 +988,10 @@ impl Daemon {
             .kv_get(&last_model_key(session_id))
             .await?
             .filter(|a| !a.is_empty());
+        let why = self
+            .kv_get(&last_model_why_key(session_id))
+            .await?
+            .filter(|a| !a.is_empty());
         let choices: Vec<Value> = conversation_aliases(&cfg)
             .into_iter()
             .map(|a| json!({"alias": a, "model": model_of(&a)}))
@@ -921,6 +1003,7 @@ impl Daemon {
             "pinned_model": pinned.as_ref().map(|p| p.model_id.clone()),
             "last_alias": last,
             "last_model": last.as_deref().and_then(model_of),
+            "last_boundary": why,
             "classifier": cfg.models.routing.classifier,
             "choices": choices,
         }))
@@ -1148,6 +1231,89 @@ mod tests {
         let models: Vec<String> = p.requests().iter().map(|r| r.model.clone()).collect();
         assert_eq!(models.len(), 2, "classifieur puis réponse : {models:?}");
         assert!(!models.contains(&image), "{models:?}");
+    }
+
+    /// #82 : le collant tient hors frontière ; après une compaction, le message suivant
+    /// repasse par le classifieur (et un « simple » ne laisse pas l'ancien collant
+    /// revenir) ; après une pause plus longue que le cache, une question difficile monte
+    /// sur `reasoning`.
+    #[tokio::test]
+    async fn the_sticky_model_is_revisited_at_boundaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = TestClock::default();
+        let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+                .await
+                .unwrap(),
+        );
+        let d = Arc::new(Daemon::from_services(s.clone()));
+        let p = Arc::new(MockProvider::new());
+        d.set_provider_override(p.clone());
+        let cfg = s.config.config();
+        let model = |a: &str| cfg.alias_model(a).unwrap().to_string();
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        let say = |text: &'static str| {
+            let d = d.clone();
+            let sid = sid.clone();
+            async move {
+                d.enqueue_message(&sid, text, &Origin::Cli, None)
+                    .await
+                    .unwrap();
+                let turn = d.services.turns.claim("test").await.unwrap().unwrap();
+                d.run_turn(&turn).await;
+                d.services.turns.complete(&turn).await.unwrap();
+            }
+        };
+
+        // Question difficile : `reasoning`, qui colle.
+        p.reply(r#"{"complexity":"high"}"#);
+        p.reply("démonstration");
+        say("prouve que la somme des angles d'un triangle vaut 180 degrés").await;
+        assert_eq!(p.requests().last().unwrap().model, model("reasoning"));
+
+        // Sans frontière : le collant tient, aucun classifieur.
+        clock.advance_secs(30);
+        p.reply("de rien");
+        let before = p.call_count();
+        say("merci beaucoup pour cette démonstration détaillée").await;
+        assert_eq!(p.call_count(), before + 1, "pas de classifieur");
+        assert_eq!(p.requests().last().unwrap().model, model("reasoning"));
+
+        // Compaction : le message suivant est reclassé, « simple » part sur `fast`.
+        clock.advance_secs(30);
+        s.events
+            .append(
+                penelope_kernel::event::EventDraft::new("context.compacted", json!({}))
+                    .session(&sid),
+            )
+            .await
+            .unwrap();
+        clock.advance_secs(1);
+        p.reply(r#"{"complexity":"low"}"#);
+        p.reply("ok");
+        let before = p.call_count();
+        say("et maintenant on passe à la suite du programme").await;
+        assert_eq!(p.call_count(), before + 2, "classifieur rappelé");
+        assert_eq!(p.requests().last().unwrap().model, model("fast"));
+        let view = d.session_model_view(&sid).await.unwrap();
+        assert_eq!(view["last_boundary"], "contexte compacté");
+        // L'ancien collant ne revient pas : le message suivant est classé lui aussi.
+        clock.advance_secs(10);
+        p.reply(r#"{"complexity":"medium"}"#);
+        p.reply("voilà");
+        say("peux-tu résumer les trois points principaux du chapitre").await;
+        assert_eq!(p.requests().last().unwrap().model, model("main"));
+
+        // `main` colle ; après une pause plus longue que le cache, une question
+        // difficile monte sur `reasoning`.
+        clock.advance_ms(crate::cache_audit::CACHE_TTL_MS + 1_000);
+        p.reply(r#"{"complexity":"high"}"#);
+        p.reply("analyse");
+        say("compare deux architectures de consensus distribué en détail").await;
+        assert_eq!(p.requests().last().unwrap().model, model("reasoning"));
+        let view = d.session_model_view(&sid).await.unwrap();
+        assert_eq!(view["last_boundary"], "pause au-delà de la durée du cache");
     }
 
     #[tokio::test]

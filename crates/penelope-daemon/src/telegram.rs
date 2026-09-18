@@ -1924,9 +1924,13 @@ impl TelegramGateway {
                 } else {
                     "tout passe par `main`"
                 };
+                let why = view["last_boundary"]
+                    .as_str()
+                    .map(|b| format!(" Reclassé à une frontière : {b}."))
+                    .unwrap_or_default();
                 match view["last_alias"].as_str() {
                     Some(last) => format!(
-                        "Automatique ({how}). Dernier message : `{last}` · `{}`.",
+                        "Automatique ({how}). Dernier message : `{last}` · `{}`.{why}",
                         short_model(view["last_model"].as_str().unwrap_or("?"))
                     ),
                     None => format!("Automatique ({how})."),

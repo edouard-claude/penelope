@@ -942,6 +942,13 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   illustration » (ou « an image », « a picture »), jamais en présence d'un mot du logiciel
   (script, test, rapport, fichier, ASCII…), de code ou de chemin. « génère un script »,
   « régénère les tests » et « illustre par un exemple » passent par le classifieur.
+- **Collant revu aux frontières** (#82) : `at_boundary` est enfin posé, quand le dernier
+  appel de conversation de la session est plus vieux que la durée du cache, ou qu'une
+  compaction ou une clôture d'épisode l'a suivi. Le préfixe change de toute façon à ces
+  moments-là : le message repasse par le classifieur, monte sur `reasoning` ou en redescend,
+  et un reclassement en « simple » retire l'ancien collant au lieu de le laisser revenir.
+  `/model` dit quand le dernier message a été reclassé à une frontière ; alias épinglé et
+  `/model auto off` ne sont pas concernés.
 
 ### Routine de livraison
 

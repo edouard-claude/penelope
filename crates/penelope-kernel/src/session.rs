@@ -239,6 +239,21 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Retire l'alias collant : le message suivant repasse par le routage (#82).
+    pub async fn clear_model(&self, id: &str) -> Result<()> {
+        let (id, now) = (id.to_string(), self.clock.now_rfc3339());
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "UPDATE sessions SET model_alias=NULL, model_id=NULL, updated_at=?2 WHERE id=?1",
+                    params![id, now],
+                )?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
+    }
+
     pub async fn touch(&self, id: &str) -> Result<()> {
         let (id, now) = (id.to_string(), self.clock.now_rfc3339());
         self.store

@@ -1262,7 +1262,9 @@ mod tests {
         );
 
         // Un second dépassement dans le même tour n'entraîne pas de boucle : une seule
-        // compaction, puis l'échec est dit. (`medium` colle : pas de classifieur.)
+        // compaction, puis l'échec est dit. La compaction est une frontière : le message
+        // suivant repasse par le classifieur (#82).
+        p.reply(r#"{"complexity":"medium"}"#);
         p.push(Scripted::ContextOverflow);
         p.reply(SUMMARY);
         p.push(Scripted::ContextOverflow);

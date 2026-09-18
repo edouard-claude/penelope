@@ -27,8 +27,9 @@ pub struct RouteInput {
     pub pinned: Option<StickyModel>,
     /// Modèle collant de la session, s'il y en a un.
     pub sticky: Option<StickyModel>,
-    /// Vrai aux frontières où le modèle peut changer (nouvelle session, compaction
-    /// niveau 3, délégation, `/model`).
+    /// Vrai aux frontières où le modèle peut changer : cache du fournisseur froid,
+    /// contexte compacté ou nouvel épisode depuis le dernier appel (le préfixe change de
+    /// toute façon, issue #82). Le collant est alors ignoré, le classifieur décide.
     pub at_boundary: bool,
 }
 
