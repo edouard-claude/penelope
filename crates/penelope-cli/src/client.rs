@@ -10,6 +10,8 @@ pub enum CliError {
     DaemonUnreachable(String),
     /// Connexion acceptée, réponse jamais venue dans le délai (issue #99).
     DaemonUnresponsive(String),
+    /// Ctrl-C : le tour a été arrêté (issue #100).
+    Interrupted,
     Rpc {
         code: i32,
         message: String,
@@ -24,6 +26,7 @@ impl std::fmt::Display for CliError {
         match self {
             CliError::DaemonUnreachable(m) => write!(f, "daemon injoignable : {m}"),
             CliError::DaemonUnresponsive(m) => write!(f, "daemon muet : {m}"),
+            CliError::Interrupted => write!(f, "interrompu : le tour est arrêté"),
             CliError::Rpc { code, message } => write!(f, "{message} (code {code})"),
             CliError::Validation(m) => write!(f, "{m}"),
             CliError::Usage(m) => write!(f, "{m}"),
@@ -40,6 +43,7 @@ impl CliError {
         match self {
             CliError::DaemonUnreachable(_) => c::DAEMON_UNREACHABLE,
             CliError::DaemonUnresponsive(_) => c::DAEMON_UNRESPONSIVE,
+            CliError::Interrupted => c::INTERRUPTED,
             CliError::Validation(_) => c::VALIDATION_FAILED,
             CliError::Usage(_) => c::USAGE,
             CliError::Rpc { code, .. } => match *code {
@@ -269,6 +273,7 @@ mod tests {
             c::VALIDATION_FAILED
         );
         assert_eq!(CliError::Usage("x".into()).exit_code(), c::USAGE);
+        assert_eq!(CliError::Interrupted.exit_code(), 130);
         assert_eq!(
             CliError::Rpc {
                 code: penelope_kernel::api::NOT_FOUND,

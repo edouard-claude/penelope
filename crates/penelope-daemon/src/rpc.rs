@@ -107,7 +107,13 @@ impl Rpc {
             )),
             method::CHAT_STOP => {
                 let sid = self.session_param(p).await?;
-                Ok(json!({"session": sid, "stopped": self.daemon.bus.cancel_session(&sid)}))
+                // Le tour en cours, et ceux qui attendaient derrière lui (#100).
+                let stopped = self.daemon.bus.cancel_session(&sid);
+                let dropped = s
+                    .turns
+                    .cancel_pending(&sid, "arrêté par le propriétaire")
+                    .await?;
+                Ok(json!({"session": sid, "stopped": stopped, "dropped": dropped}))
             }
             method::SESSION_CLOSE => {
                 let query = required_str(p, "session")?;
@@ -1027,16 +1033,43 @@ impl Rpc {
 
     /// Méthodes à réponse en flux : `chat.stream` et `tail`. Les événements partent en
     /// notifications JSON-RPC (sans `id`), la réponse finale clôt l'échange.
-    pub async fn handle_streaming<W: tokio::io::AsyncWrite + Unpin>(
+    /// Le client d'un tour CLI est parti : le tour s'arrête, qu'il tourne déjà ou attende
+    /// encore son tour (#100). Un tour Telegram n'est jamais concerné : il n'a pas de
+    /// client de flux.
+    async fn abandon(&self, session_id: &str, turn_id: &str) {
+        if !self.daemon.bus.cancel_turn(session_id, turn_id) {
+            let _ = self.daemon.services.turns.cancel_if_pending(turn_id).await;
+        }
+        tracing::info!(
+            session = session_id,
+            turn = turn_id,
+            "client parti : tour annulé"
+        );
+    }
+
+    /// Flux d'un tour (`chat.stream`) ou de tous (`tail`). `closed` se résout quand le
+    /// client ferme sa connexion : un tour lancé par la CLI que personne ne lira plus est
+    /// annulé, outils compris, au lieu de tourner et de facturer (issue #100).
+    pub async fn handle_streaming<W, C>(
         &self,
         req: RpcRequest,
         out: &mut W,
-    ) -> anyhow::Result<()> {
+        closed: C,
+    ) -> anyhow::Result<()>
+    where
+        W: tokio::io::AsyncWrite + Unpin,
+        C: std::future::Future<Output = ()>,
+    {
         let params = req.params.clone().unwrap_or(json!({}));
         let mut rx = self.daemon.bus.subscribe();
+        tokio::pin!(closed);
         match req.method.as_str() {
             method::TAIL => loop {
-                let ev = match rx.recv().await {
+                let ev = tokio::select! {
+                    ev = rx.recv() => ev,
+                    _ = &mut closed => return Ok(()),
+                };
+                let ev = match ev {
                     Ok(ev) => ev,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(_) => return Ok(()),
@@ -1069,14 +1102,22 @@ impl Rpc {
                             write_line(out, &serde_json::to_value(resp)?).await?;
                             return Ok(());
                         }
+                        _ = &mut closed => {
+                            self.abandon(&sid, id.as_str()).await;
+                            return Ok(());
+                        }
                         ev = rx.recv() => {
                             match ev {
                                 Ok(ev) if ev.turn_id == id.as_str() => {
                                     if matches!(ev.kind, BusKind::Finished(_)) {
                                         continue;
                                     }
-                                    if let Some(se) = to_stream_event(&ev) {
-                                        write_line(out, &notification(&se)).await?;
+                                    if let Some(se) = to_stream_event(&ev)
+                                        && let Err(e) = write_line(out, &notification(&se)).await
+                                    {
+                                        // Client parti entre deux fragments.
+                                        self.abandon(&sid, id.as_str()).await;
+                                        return Err(e);
                                     }
                                 }
                                 Ok(_) => {}
@@ -1352,7 +1393,9 @@ pub async fn serve_on(
                     }
                     Ok(req) if req.method == method::CHAT_STREAM || req.method == method::TAIL => {
                         let id = req.id.clone();
-                        if let Err(e) = rpc.handle_streaming(req, &mut write).await {
+                        // Fin de la connexion côté client : plus personne ne lira ce flux.
+                        let closed = async { while let Ok(Some(_)) = lines.next_line().await {} };
+                        if let Err(e) = rpc.handle_streaming(req, &mut write, closed).await {
                             let r = RpcResponse::err(id, classify(&e), e.to_string());
                             let _ = write_line(
                                 &mut write,

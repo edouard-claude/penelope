@@ -157,3 +157,69 @@ async fn a_request_without_the_session_token_is_refused() {
     );
     d.handle.shutdown();
 }
+
+/// #100 : un client de flux qui ferme sa connexion (Ctrl-C, terminal fermé, SSH coupé)
+/// arrête son tour : issue `cancelled` en moins de deux secondes, plus aucun appel au
+/// fournisseur ensuite.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stream_client_that_leaves_cancels_its_turn() {
+    use penelope_llm::mock::Scripted;
+    use penelope_llm::types::ToolCall;
+    let (_dir, d, p) = start().await;
+    p.slow(Duration::from_millis(700));
+    p.reply(r#"{"complexity":"low"}"#);
+    p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![ToolCall {
+            id: "c1".into(),
+            name: "time_now".into(),
+            arguments: json!({}),
+        }],
+    ));
+    p.reply("jamais lu");
+
+    let sock = d.services.platform.dirs.socket_path();
+    let stream = penelope_platform::ipc::connect(&sock).await.unwrap();
+    let (_read, mut write) = stream.into_split();
+    let req = RpcRequest::new(
+        9,
+        method::CHAT_STREAM,
+        json!({"text": "liste tout et résume chaque fichier en détail"}),
+    )
+    .with_auth(penelope_platform::ipc::read_token(&sock));
+    let mut body = serde_json::to_string(&req).unwrap();
+    body.push('\n');
+    write.write_all(body.as_bytes()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let turn_id: String = d
+        .services
+        .store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT id FROM turn_queue ORDER BY enqueued_at DESC, rowid DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    let outcome = d.bus.wait_for(&turn_id);
+    let left = std::time::Instant::now();
+    drop(write);
+    drop(_read);
+
+    let out = tokio::time::timeout(Duration::from_secs(5), outcome)
+        .await
+        .expect("le tour s'arrête")
+        .unwrap();
+    assert_eq!(out, penelope_daemon::agent::TurnOutcome::Cancelled);
+    assert!(
+        left.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        left.elapsed()
+    );
+    let calls = p.call_count();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(p.call_count(), calls, "plus d'appel au fournisseur");
+    d.handle.shutdown();
+}

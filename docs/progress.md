@@ -1068,6 +1068,12 @@ l'adresse vérifiée (#93), fichiers lus en flux (#94), secret posé sans `argv`
   sauf `--timeout` explicite), puis la commande sort avec le code 7 (`DAEMON_UNRESPONSIVE`)
   et la marche à suivre. `doctor` rend ses contrôles locaux (binaire, configuration) même
   quand le daemon est absent ou muet, et le nomme en tête comme contrôle critique.
+- **Ctrl-C arrête le tour** (#100) : dans `penelope chat`, Ctrl-C appelle `chat.stop`
+  (qui vide aussi la file de la session) et sort avec 130 ; un second Ctrl-C quitte sans
+  attendre. Côté daemon, un client de flux qui ferme sa connexion (terminal fermé, SSH
+  coupé) fait annuler son tour, qu'il tourne ou attende encore : plus d'outil ni d'appel
+  facturé pour une réponse que personne ne lira. `tail` et les tours Telegram ne sont pas
+  concernés.
 
 ### Routine de livraison
 

@@ -327,6 +327,23 @@ impl TurnQueue {
             .await?)
     }
 
+    /// Annule un tour s'il attend encore d'être réclamé ; un tour déjà parti reste à
+    /// son runner (qui s'arrête par son jeton d'annulation). Vrai s'il a été annulé.
+    pub async fn cancel_if_pending(&self, turn_id: &str) -> Result<bool> {
+        let (id, now) = (turn_id.to_string(), self.clock.now_rfc3339());
+        Ok(self
+            .store
+            .write(move |tx| {
+                Ok(tx.execute(
+                    "UPDATE turn_queue SET state='cancelled', finished_at=?2,
+                        last_error='client parti'
+                     WHERE id=?1 AND state='pending'",
+                    params![id, now],
+                )? > 0)
+            })
+            .await?)
+    }
+
     pub async fn cancel(&self, turn_id: &str) -> Result<()> {
         let (id, now) = (turn_id.to_string(), self.clock.now_rfc3339());
         self.store

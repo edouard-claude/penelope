@@ -1785,13 +1785,25 @@ async fn chat_turn(
         }
         _ => {}
     };
-    let result = crate::client::call_stream(
+    let stream = crate::client::call_stream(
         socket,
         m::CHAT_STREAM,
         json!({"text": text, "session": session}),
         &mut on_event,
-    )
-    .await?;
+    );
+    // Ctrl-C arrête le tour côté daemon, pas seulement l'affichage (issue #100) ; un
+    // second Ctrl-C quitte sans attendre la confirmation.
+    let result = tokio::select! {
+        r = stream => r?,
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!("\n⏹ arrêt demandé");
+            tokio::select! {
+                _ = call(socket, m::CHAT_STOP, json!({"session": session})) => {}
+                _ = tokio::signal::ctrl_c() => {}
+            }
+            return Err(CliError::Interrupted);
+        }
+    };
     let session_id = result["session"].as_str().unwrap_or_default().to_string();
     finish_turn(socket, &result, streamed, &session_id, interactive).await
 }

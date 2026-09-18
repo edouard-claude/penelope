@@ -1484,6 +1484,11 @@ Dans ce mode, `/new` ouvre une nouvelle session, `/stop` arrête la génération
 quitte. Quand un outil demande une autorisation (écrire un fichier, lancer une commande),
 la CLI pose la question et affiche la suite du tour une fois la décision prise.
 
+Ctrl-C pendant une réponse arrête **le tour** sur le daemon, outils compris, et vide sa
+file (code de sortie 130) ; un second Ctrl-C quitte sans attendre. Un terminal fermé ou
+une connexion SSH coupée ont le même effet : un tour lancé par la CLI dont personne ne lit
+plus la réponse est annulé. Un tour venu de Telegram n'est jamais concerné.
+
 `penelope model list` affiche d'abord tes alias, puis la taille du catalogue OpenRouter,
 chargé par le daemon au démarrage. Pour chercher dedans :
 

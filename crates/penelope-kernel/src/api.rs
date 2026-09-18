@@ -446,6 +446,8 @@ pub mod exit_code {
     pub const NOT_FOUND: i32 = 6;
     /// Le daemon accepte la connexion mais ne répond pas dans le délai (issue #99).
     pub const DAEMON_UNRESPONSIVE: i32 = 7;
+    /// Interrompu par Ctrl-C (128 + SIGINT, la convention des shells).
+    pub const INTERRUPTED: i32 = 130;
     pub const INTERNAL: i32 = 70;
 }
 
