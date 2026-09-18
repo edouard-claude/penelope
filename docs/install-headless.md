@@ -869,6 +869,16 @@ Ce que le modèle peut appeler sans serveur MCP, avec la classe de risque qui d�
 l'approbation (`read` : sans approbation ; `write`, `external`, `destructive` : selon la
 politique). Les outils MCP passent par `tool_search`, `tool_describe` et `tool_call`.
 
+En conversation, chaque appel au modèle ne décrit que le noyau d'usage courant (17 outils)
+et ces trois méta-outils : 20 définitions, environ 2 600 tokens de schémas au lieu de
+52 définitions et 6 000 tokens. Les outils marqués « à la demande » dans la table sont
+seulement nommés dans le message système ; `tool_search` les trouve par ce qu'ils font
+(« planifier un rappel » donne `schedule_create`), `tool_describe` donne leur schéma et
+`tool_call` les appelle avec la même classe de risque et la même approbation qu'un appel
+direct. Un outil décrit ou appelé rejoint la liste de la session dès le tour suivant et
+la quitte après dix tours sans usage. Les étapes de workflow et les sous-agents gardent
+leur liste complète.
+
 `fs_read` et `fs_search` lisent en flux : 50 lignes d'un journal de 512 Mio se lisent en
 moins d'une milliseconde et quelques Mio de mémoire. Au-delà de 8 Mio, `fs_read` ne compte
 plus le total des lignes (il le dit) et refuse d'aller chercher une ligne au-delà de 64 Mio
@@ -889,58 +899,58 @@ et `/stop` interrompt tout le lot.
 |---|---|---|
 | `artifact_read` | read | Lecture paginée d'un artefact ; le curseur n'avance que des octets renvoyés. |
 | `ask_user` | read | Pose une question au propriétaire et attend sa réponse. |
-| `config_set` | write | Modifie un réglage de ta propre configuration, appliqué à chaud : chemin pointé et valeur, par exemple `models.aliases.main` = `openrouter:z-ai/glm-5.3`, `models.routing.classifier` = `false`, `budget.daily_usd` = `30`. |
+| `config_set` | write | Modifie un réglage de ta propre configuration, appliqué à chaud : chemin pointé et valeur, par exemple `models.aliases.main` = `openrouter:z-ai/glm-5.3`, `models.routing.classifier` = `false`, `budget.daily_usd` = `30`. (à la demande) |
 | `fs_edit` | write | Remplace une portion exacte d'un fichier. |
 | `fs_list` | read | Liste le contenu d'un répertoire du workspace. |
 | `fs_read` | read | Lit un fichier du workspace autorisé, avec pagination par lignes. |
 | `fs_search` | read | Recherche une expression régulière dans les fichiers du workspace. |
 | `fs_write` | write | Écrit un fichier dans le workspace. |
-| `git_branch` | write | Crée ou change de branche. |
-| `git_clone` | external | Clone un dépôt distant dans le workspace. |
-| `git_commit` | write | Valide les changements indexés. |
-| `git_diff` | read | Diff du dépôt, éventuellement contre une référence. |
-| `git_push` | external | Pousse une branche vers le dépôt distant. |
-| `git_status` | read | État du dépôt : branche, fichiers modifiés. |
-| `history_describe` | read | Manifeste d'un nœud de résumé : tokens, intervalle, enfants. |
-| `history_expand` | read | Contenu paginé d'un nœud ou d'un intervalle brut. |
-| `history_expand_query` | read | Retrouve, dans toutes les sessions y compris fermées, les passages liés à une question en langage naturel : recherche mot significatif par mot significatif, extraits classés par nombre de mots trouvés, avec le titre et la date de leur session. |
+| `git_branch` | write | Crée ou change de branche. (à la demande) |
+| `git_clone` | external | Clone un dépôt distant dans le workspace. (à la demande) |
+| `git_commit` | write | Valide les changements indexés. (à la demande) |
+| `git_diff` | read | Diff du dépôt, éventuellement contre une référence. (à la demande) |
+| `git_push` | external | Pousse une branche vers le dépôt distant. (à la demande) |
+| `git_status` | read | État du dépôt : branche, fichiers modifiés. (à la demande) |
+| `history_describe` | read | Manifeste d'un nœud de résumé : tokens, intervalle, enfants. (à la demande) |
+| `history_expand` | read | Contenu paginé d'un nœud ou d'un intervalle brut. (à la demande) |
+| `history_expand_query` | read | Retrouve, dans toutes les sessions y compris fermées, les passages liés à une question en langage naturel : recherche mot significatif par mot significatif, extraits classés par nombre de mots trouvés, avec le titre et la date de leur session. (à la demande) |
 | `history_grep` | read | Recherche plein texte dans les messages bruts et les résumés. |
 | `http_fetch` | external | Récupère une URL. |
-| `image_generate` | external | Génère une image et la stocke en artefact. |
-| `intent_cancel` | write | Annule une intention. |
-| `intent_create` | write | Arme une intention événementielle : « quand on reparle de X, rappelle-moi Y ». |
-| `intent_list` | read | Liste les intentions armées. |
-| `mem_forget` | destructive | Retire une entrée de mémoire. |
-| `mem_get` | read | Lit une entrée de mémoire par uid ou par slug. |
-| `mem_neighbors` | read | Voisins d'une note dans le graphe du vault : concepts d'une source, sources et entrées de mémoire qui citent un concept (liens `[[slug]]` sortants et entrants). |
+| `image_generate` | external | Génère une image et la stocke en artefact. (à la demande) |
+| `intent_cancel` | write | Annule une intention. (à la demande) |
+| `intent_create` | write | Arme une intention événementielle : « quand on reparle de X, rappelle-moi Y ». (à la demande) |
+| `intent_list` | read | Liste les intentions armées. (à la demande) |
+| `mem_forget` | destructive | Retire une entrée de mémoire. (à la demande) |
+| `mem_get` | read | Lit une entrée de mémoire par uid ou par slug. (à la demande) |
+| `mem_neighbors` | read | Voisins d'une note dans le graphe du vault : concepts d'une source, sources et entrées de mémoire qui citent un concept (liens `[[slug]]` sortants et entrants). (à la demande) |
 | `mem_note` | write | Note une observation dans le journal du jour. |
-| `mem_remember` | write | Écrit directement en mémoire. |
+| `mem_remember` | write | Écrit directement en mémoire. (à la demande) |
 | `mem_search` | read | Recherche dans la mémoire curée, dans les documents ingérés (`vault/sources`, passages encadrés comme non fiables, `slug` pour un seul document) et, sur demande explicite, épisodique. |
 | `return_value` | read | Renvoie le résultat d'une étape de workflow. (dans un workflow) |
-| `schedule_create` | write | Crée un déclencheur planifié, soumis à approbation. |
-| `schedule_delete` | write | Supprime un déclencheur planifié. |
-| `schedule_list` | read | Liste les déclencheurs planifiés. |
-| `self_docs` | read | Documentation de ta propre version, embarquée dans le binaire : le dépôt edouard-claude/penelope est la source de vérité sur toi. |
+| `schedule_create` | write | Crée un déclencheur planifié, soumis à approbation. (à la demande) |
+| `schedule_delete` | write | Supprime un déclencheur planifié. (à la demande) |
+| `schedule_list` | read | Liste les déclencheurs planifiés. (à la demande) |
+| `self_docs` | read | Documentation de ta propre version, embarquée dans le binaire : le dépôt edouard-claude/penelope est la source de vérité sur toi. (à la demande) |
 | `self_status` | read | État complet de Pénélope et de sa machine : version, modèle qui répond à ce tour et routage, configuration effective (alias, rôles, bac à sable, budgets, Telegram, providers, transcription), coûts du jour et de la session, file de travail, chemins, et machine (batterie, secteur, disque, mémoire, charge, démarrage, système). |
-| `send_file` | write | Envoie un fichier au propriétaire. |
+| `send_file` | write | Envoie un fichier au propriétaire. (à la demande) |
 | `send_message` | write | Envoie un message au propriétaire. |
-| `send_voice` | read | Lit un texte en message vocal (voix féminine locale) dans cette conversation. |
-| `session_metadata` | write | Lit ou modifie les métadonnées de session : critères, findings, todos. |
-| `session_notes` | read | Notes de travail de la session, qui survivent aux compactions et au fork : objectif, plan, décisions, fichiers touchés, points ouverts, prochaine étape. |
+| `send_voice` | read | Lit un texte en message vocal (voix féminine locale) dans cette conversation. (à la demande) |
+| `session_metadata` | write | Lit ou modifie les métadonnées de session : critères, findings, todos. (à la demande) |
+| `session_notes` | read | Notes de travail de la session, qui survivent aux compactions et au fork : objectif, plan, décisions, fichiers touchés, points ouverts, prochaine étape. (à la demande) |
 | `shell_exec` | write | Exécute une commande sous bac à sable, avec délai. |
-| `skill_load` | read | Charge une skill dans le tour courant. |
-| `skill_patch` | write | Propose une modification de skill. |
-| `skill_propose` | write | Propose une nouvelle skill. |
-| `skill_search` | read | Cherche une skill par mots-clés. |
+| `skill_load` | read | Charge une skill dans le tour courant. (à la demande) |
+| `skill_patch` | write | Propose une modification de skill. (à la demande) |
+| `skill_propose` | write | Propose une nouvelle skill. (à la demande) |
+| `skill_search` | read | Cherche une skill par mots-clés. (à la demande) |
 | `step_done` | read | Déclare l'étape de workflow terminée. (dans un workflow) |
 | `sub_agent_spawn` | write | Lance un sub-agent à contexte neuf, outils restreints, retour structuré. |
 | `time_now` | read | Date et heure courantes dans le fuseau du propriétaire. |
-| `workflow_author` | write | Rédige un workflow (format décrit dans `docs/workflows.md` : lis-le avec `self_docs` avant d'écrire, n'invente aucun type d'étape ni champ). |
-| `workflow_control` | write | Contrôle un run : pause, reprise, annulation, relance d'étape. |
-| `workflow_describe` | read | Décrit un workflow : étapes, paramètres, budget. |
-| `workflow_list` | read | Liste les workflows disponibles. |
+| `workflow_author` | write | Rédige un workflow (format décrit dans `docs/workflows.md` : lis-le avec `self_docs` avant d'écrire, n'invente aucun type d'étape ni champ). (à la demande) |
+| `workflow_control` | write | Contrôle un run : pause, reprise, annulation, relance d'étape. (à la demande) |
+| `workflow_describe` | read | Décrit un workflow : étapes, paramètres, budget. (à la demande) |
+| `workflow_list` | read | Liste les workflows disponibles. (à la demande) |
 | `workflow_start` | write | Propose le lancement d'un workflow : le propriétaire valide d'un bouton. |
-| `workflow_status` | read | État d'un run. |
+| `workflow_status` | read | État d'un run. (à la demande) |
 <!-- reference:outils:fin -->
 
 ### Serveurs MCP

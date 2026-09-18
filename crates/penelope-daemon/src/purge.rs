@@ -34,6 +34,7 @@ const EPHEMERAL_KEYS: &[&str] = &[
     "turn.",
     "prompt.prefix.",
     "session.model_last.",
+    "session.tools.",
     "session.model_pin.",
     "session.title_asked.",
     "budget.alert.",

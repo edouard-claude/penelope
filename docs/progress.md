@@ -1097,6 +1097,24 @@ l'adresse vérifiée (#93), fichiers lus en flux (#94), secret posé sans `argv`
   méthode RPC `metrics` et `penelope metrics` (texte Prometheus), avec les compteurs de
   tours par issue et leur durée, d'appels d'outils par outil, et les jauges d'approbations,
   d'effets incertains et de mémoire.
+  Les deux tests restés rouges sur Linux sont corrigés : l'arrêt du groupe de processus
+  passe par `kill -s SIG -- -<pgid>` (le `kill` de procps-ng lisait `-<pgid>` comme une
+  option, le groupe d'une commande hors délai survivait), et le test d'instantané garde sa
+  preuve (des écritures aboutissent pendant la copie) avec un plafond de latence adapté au
+  disque d'un runner partagé.
+- **Outils natifs à la demande** (#104) : en conversation, chaque appel ne décrit plus que
+  le noyau de 17 outils d'usage courant et les trois méta-outils, 20 définitions et
+  2 592 tokens de schémas au premier tour (contre 52 et 5 970). Les 35 outils rares
+  (planification, `git_*`, `skill_*`, `intent_*`, gestion des workflows, `history_expand*`,
+  `mem_remember/get/neighbors/forget`, `config_set`, `self_docs`, `session_*`,
+  `send_file`, `send_voice`, `image_generate`) sont nommés dans le message système ;
+  `tool_search` les trouve par racines de mots (« planifier un rappel » donne
+  `schedule_create`), `tool_describe` rend leur schéma, `tool_call` les appelle par le même
+  chemin qu'un appel direct (nom effectif, classe de risque, politique : même carte
+  d'approbation). Un outil décrit ou appelé rejoint la liste de la session au tour suivant
+  et la quitte après dix tours sans usage (`session.tools.<id>`, purgé avec les clés
+  éphémères). Workflows et sous-agents gardent leur liste complète. L'évaluation en
+  direct du choix d'outil (`live_openrouter`) demande une clé et le réseau : non rejouée.
 
 ### Routine de livraison
 

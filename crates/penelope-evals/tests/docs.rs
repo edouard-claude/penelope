@@ -385,6 +385,8 @@ fn every_native_tool_is_documented() {
             .trim();
         let scope = if t.workflow_only {
             " (dans un workflow)"
+        } else if penelope_tools::is_on_demand(t.name) {
+            " (à la demande)"
         } else {
             ""
         };

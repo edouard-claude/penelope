@@ -655,8 +655,9 @@ impl ToolRegistry {
         vec![
             (
                 "tool_search",
-                "Cherche un outil MCP par mots-clés. Renvoie noms, descriptions courtes \
-                 et niveau de risque.",
+                "Cherche un outil par mots-clés : outils natifs à la demande (planification, \
+                 git, configuration, intentions, skills…) et outils MCP. Renvoie noms, \
+                 descriptions courtes et niveau de risque.",
                 json!({
                     "type":"object",
                     "properties":{
@@ -680,8 +681,9 @@ impl ToolRegistry {
             ),
             (
                 "tool_call",
-                "Appelle un outil MCP par son nom qualifié, avec des arguments validés \
-                 contre son schéma.",
+                "Appelle un outil par son nom : natif à la demande (`schedule_create`…) ou \
+                 MCP qualifié (`mcp__serveur__outil`), avec des arguments validés contre son \
+                 schéma.",
                 json!({
                     "type":"object",
                     "properties":{

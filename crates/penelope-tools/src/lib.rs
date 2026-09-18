@@ -18,7 +18,10 @@ pub mod test_output;
 
 pub use error::{ToolError, ToolResult};
 pub use loops::{LoopDetector, LoopVerdict};
-pub use spec::{ToolSpec, all as all_tools, always_exposed, get as tool_spec};
+pub use spec::{
+    ON_DEMAND, ToolSpec, all as all_tools, always_exposed, core_exposed, get as tool_spec,
+    is_on_demand, search_on_demand,
+};
 
 use penelope_kernel::risk::RiskClass;
 use serde_json::Value;

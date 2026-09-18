@@ -90,9 +90,17 @@ trois méta-outils, et découvre le reste à la demande.
 
 | Méta-outil | Rôle |
 |---|---|
-| `tool_search` | Cherche par mots-clés (FTS + repli lexical). Rend noms, descriptions courtes, niveau de risque |
+| `tool_search` | Cherche par mots-clés (FTS + repli lexical). Rend noms, descriptions courtes, niveau de risque ; les outils natifs à la demande d'abord (serveur `natif`) |
 | `tool_describe` | Rend les schémas complets de 20 outils au plus |
-| `tool_call` | Appelle un outil par son nom qualifié `mcp__<serveur>__<outil>`, arguments validés contre son schéma **avant** l'envoi |
+| `tool_call` | Appelle un outil par son nom qualifié `mcp__<serveur>__<outil>`, arguments validés contre son schéma **avant** l'envoi ; un outil natif par son nom, comme un appel direct |
+
+Les mêmes méta-outils mènent aux outils natifs rares (planification, git, skills,
+intentions, gestion des workflows), sortis de la liste de chaque appel de conversation
+pour la garder sous 20 définitions : voir « Outils natifs » dans
+[install-headless.md](install-headless.md#outils-natifs). Contrairement à la promotion
+MCP ci-dessous, un outil natif décrit ou appelé rejoint la liste dès le tour suivant : la
+liste change à son arrivée et à son départ (dix tours sans usage), deux préfixes non
+cachés au lieu de 3 000 tokens de schémas payés à chaque appel.
 
 Un outil réellement utilisé est marqué pour promotion dans l'ensemble « collant », qui
 sera injecté directement au prompt. La promotion ne prend effet **qu'à une frontière de

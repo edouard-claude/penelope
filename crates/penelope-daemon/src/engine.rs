@@ -7,7 +7,7 @@
 use crate::agent::{AgentLoop, TurnEvent, TurnOutcome, TurnSink, TurnSpec};
 use crate::bus::{Bus, BusEvent, BusKind, Origin};
 use crate::conversation::SessionConversation;
-use crate::executor::{NativeToolExecutor, ToolEnv, default_workspaces, tool_defs};
+use crate::executor::{NativeToolExecutor, ToolEnv, chat_tool_defs, default_workspaces};
 use crate::runtime::Daemon;
 use penelope_kernel::ids::TurnId;
 use penelope_kernel::session::SessionKind;
@@ -532,7 +532,10 @@ impl Daemon {
                 .map(|d| d.model_id)
                 .collect(),
             tools: {
-                let mut tools = tool_defs(false, !mcp_lines.is_empty());
+                // Noyau + outils à la demande découverts par la session (#104).
+                let discovered =
+                    crate::tools_on_demand::exposed_for_turn(&s, &turn.session_id).await;
+                let mut tools = chat_tool_defs(&discovered);
                 if let Some(m) = self.hooks.mcp() {
                     tools.extend(m.eager_tools().await);
                 }
@@ -1419,6 +1422,64 @@ mod tests {
         let turn = claim(&d).await;
         d.run_turn(&turn).await;
         assert_eq!(p.call_count(), 5, "un seul appel de plus : la réponse");
+    }
+
+    /// #104 : premier tour d'une session en configuration d'exemple : au plus 20
+    /// définitions d'outils et moins de 3 000 tokens de schémas ; les outils rares sont
+    /// nommés dans le message système. Décrit par `tool_describe`, `schedule_create`
+    /// rejoint la liste dès le tour suivant.
+    #[tokio::test]
+    async fn a_turn_offers_the_core_then_what_the_session_discovered() {
+        let (_dir, d, p) = daemon().await;
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        let say = |text: &'static str| {
+            let d = d.clone();
+            let sid = sid.clone();
+            async move {
+                d.enqueue_message(&sid, text, &Origin::Cli, None)
+                    .await
+                    .unwrap();
+                let turn = claim(&d).await;
+                d.run_turn(&turn).await;
+                d.services.turns.complete(&turn).await.unwrap();
+            }
+        };
+        let offers = |r: &penelope_llm::types::ChatRequest, tool: &str| {
+            r.tools.iter().any(|t| t.name == tool)
+        };
+
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "c1".into(),
+                name: "tool_describe".into(),
+                arguments: json!({"names": ["schedule_create"]}),
+            }],
+        ));
+        p.reply("Je peux le planifier.");
+        say("Bonjour, quel jour sommes-nous ? Et rappelle-moi d'appeler Anne demain.").await;
+        let first = p.requests()[0].clone();
+        let est = penelope_llm::TokenEstimator::new();
+        let schemas: u64 = first
+            .tools
+            .iter()
+            .map(|t| est.tool_tokens(&first.model, t))
+            .sum();
+        assert!(first.tools.len() <= 20, "{} outils", first.tools.len());
+        assert!(schemas < 3_000, "{schemas} tokens de schémas");
+        assert!(offers(&first, "shell_exec") && offers(&first, "tool_search"));
+        assert!(!offers(&first, "schedule_create"));
+        assert!(first.messages[0].text().contains("`schedule_create`"));
+
+        p.reply("Avec plaisir.");
+        say("Merci.").await;
+        let next = p.requests().last().unwrap().clone();
+        assert!(
+            offers(&next, "schedule_create"),
+            "découvert au tour précédent"
+        );
+        assert!(next.tools.len() <= 21);
     }
 
     #[tokio::test]

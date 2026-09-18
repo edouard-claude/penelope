@@ -262,6 +262,10 @@ pub async fn build_tiers_in(
         b = b.agents_md(strip_frontmatter(&agents));
     }
 
+    // Conversation : les outils rares sont nommés, pas décrits (#104).
+    if episode.is_some() {
+        b = b.on_demand(penelope_tools::ON_DEMAND);
+    }
     // T1 : méta-outils MCP seulement s'il y a des serveurs, skills, serveurs connectés.
     if !mcp_lines.is_empty() {
         for (name, desc, _) in penelope_mcp::registry::ToolRegistry::meta_tools() {

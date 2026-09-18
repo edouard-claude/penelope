@@ -261,13 +261,15 @@ impl NativeToolExecutor {
         let s = &self.services;
         let cfg = s.config.config();
 
-        // Les méta-outils MCP n'ont pas de spécification native.
+        // Les méta-outils n'ont pas de spécification native.
         match name {
             "tool_search" => return self.tool_search(args).await,
             "tool_describe" => return self.tool_describe(args).await,
-            "tool_call" => return self.tool_call(args).await,
+            "tool_call" => return Box::pin(self.tool_call(args, cancel)).await,
             _ => {}
         }
+        // Outil à la demande utilisé : il reste dans la liste de la session (#104).
+        crate::tools_on_demand::touch(s, &self.env.session_id, name).await;
         if name.starts_with("mcp__") {
             // Outil promu dans l'ensemble collant : appel direct.
             return self.mcp_call(name, args).await;
@@ -1268,26 +1270,43 @@ impl NativeToolExecutor {
             Some(o) => o.embed_query(&q).await,
             None => None,
         };
+        let limit = u_arg(args, "limit").unwrap_or(10);
+        let server = args.get("server").and_then(|v| v.as_str());
+        // Outils natifs à la demande d'abord (#104) : leur description est la nôtre.
+        let natives: Vec<Value> = if server.is_none() || server == Some("natif") {
+            penelope_tools::search_on_demand(&q, limit)
+                .into_iter()
+                .map(|t| {
+                    json!({
+                        "name": t.name,
+                        "server": "natif",
+                        "description": t.description.chars().take(200).collect::<String>(),
+                        "risk": t.risk.as_str(),
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let hits = self
             .services
             .mcp_tools
-            .search_hybrid(
-                &q,
-                vector.as_deref(),
-                args.get("server").and_then(|v| v.as_str()),
-                u_arg(args, "limit").unwrap_or(10),
-            )
+            .search_hybrid(&q, vector.as_deref(), server, limit)
             .await?;
-        if hits.is_empty() {
+        if hits.is_empty() && natives.is_empty() {
             return Ok(ToolOutcome::ok(json!({
                 "résultats": [],
-                "remarque": "aucun outil MCP ne correspond ; vérifier les serveurs avec /mcp",
+                "remarque": "aucun outil ne correspond ; les serveurs MCP : /mcp",
             })));
+        }
+        if hits.is_empty() {
+            return Ok(ToolOutcome::ok(json!(natives)));
         }
         // Descriptions écrites par les serveurs : encadrées comme tout contenu observé,
         // avec l'alerte du détecteur local s'il y voit une consigne (#92).
-        let value = json!(hits.iter().map(|h| h.tool.short()).collect::<Vec<_>>());
-        Ok(untrusted_listing("mcp tool_search", value))
+        let mut all = natives;
+        all.extend(hits.iter().map(|h| h.tool.short()));
+        Ok(untrusted_listing("mcp tool_search", json!(all)))
     }
 
     async fn tool_describe(&self, args: &Value) -> ToolResult<ToolOutcome> {
@@ -1303,13 +1322,43 @@ impl NativeToolExecutor {
         if names.is_empty() {
             return Err(ToolError::Invalid("`names` est vide".into()));
         }
-        let v = self.services.mcp_tools.describe(&names).await?;
-        Ok(untrusted_listing("mcp tool_describe", json!(v)))
+        // Natifs : schéma du catalogue, et l'outil décrit rejoint la liste de la session.
+        let (natives, mcp): (Vec<String>, Vec<String>) = names
+            .into_iter()
+            .partition(|n| penelope_tools::tool_spec(n).is_some());
+        let mut described: Vec<Value> = Vec::new();
+        for n in &natives {
+            if let Some(t) = penelope_tools::tool_spec(n) {
+                crate::tools_on_demand::touch(&self.services, &self.env.session_id, n).await;
+                described.push(json!({
+                    "name": t.name,
+                    "server": "natif",
+                    "description": t.description,
+                    "inputSchema": t.schema,
+                    "risk": t.risk.as_str(),
+                }));
+            }
+        }
+        if mcp.is_empty() {
+            return Ok(ToolOutcome::ok(json!(described)));
+        }
+        let v = self.services.mcp_tools.describe(&mcp).await?;
+        described.extend(v);
+        Ok(untrusted_listing("mcp tool_describe", json!(described)))
     }
 
-    async fn tool_call(&self, args: &Value) -> ToolResult<ToolOutcome> {
+    /// `tool_call` : un outil natif (à la demande ou non) part par le même chemin qu'un
+    /// appel direct ; sinon, un outil MCP.
+    async fn tool_call(
+        &self,
+        args: &Value,
+        cancel: &penelope_llm::CancelToken,
+    ) -> ToolResult<ToolOutcome> {
         let name = str_arg(args, "name")?;
         let inner = args.get("args").cloned().unwrap_or(json!({}));
+        if penelope_tools::tool_spec(&name).is_some() {
+            return self.dispatch(&name, &inner, cancel).await;
+        }
         self.mcp_call(&name, &inner).await
     }
 
@@ -1389,32 +1438,68 @@ impl ToolExecutor for NativeToolExecutor {
                     .and_then(|v| v.as_str())
                     .unwrap_or("tool_call")
                     .to_string();
+                // Un natif par `tool_call` garde sa classe de risque et sa politique : la
+                // même carte qu'un appel direct (#104).
+                if penelope_tools::tool_spec(&q).is_some() {
+                    let inner = args.get("args").cloned().unwrap_or(json!({}));
+                    return native_info(&q, &inner);
+                }
                 mcp_info(q).await
             }
             n if n.starts_with("mcp__") => mcp_info(n.to_string()).await,
-            "config_set" => {
-                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                CallInfo {
-                    effective_name: name.to_string(),
-                    risk: if crate::selfknow::sensitive_path(path) {
-                        RiskClass::Destructive
-                    } else {
-                        RiskClass::Write
-                    },
-                    idempotent: true,
-                    policy: None,
-                }
-            }
-            _ => CallInfo {
-                effective_name: name.to_string(),
-                risk: penelope_tools::effective_risk(name, &Default::default()),
-                idempotent: penelope_tools::tool_spec(name)
-                    .map(|t| t.idempotent)
-                    .unwrap_or(false),
-                policy: None,
-            },
+            _ => native_info(name, args),
         }
     }
+}
+
+/// Risque et nom effectif d'un appel d'outil natif.
+fn native_info(name: &str, args: &Value) -> CallInfo {
+    match name {
+        "config_set" => {
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            CallInfo {
+                effective_name: name.to_string(),
+                risk: if crate::selfknow::sensitive_path(path) {
+                    RiskClass::Destructive
+                } else {
+                    RiskClass::Write
+                },
+                idempotent: true,
+                policy: None,
+            }
+        }
+        _ => CallInfo {
+            effective_name: name.to_string(),
+            risk: penelope_tools::effective_risk(name, &Default::default()),
+            idempotent: penelope_tools::tool_spec(name)
+                .map(|t| t.idempotent)
+                .unwrap_or(false),
+            policy: None,
+        },
+    }
+}
+
+/// Outils d'un tour de conversation (issue #104) : le noyau, les outils à la demande que
+/// la session a découverts, et les méta-outils qui mènent aux autres. Trié : la liste ne
+/// change qu'avec ce que la session découvre ou oublie.
+pub fn chat_tool_defs(discovered: &[String]) -> Vec<penelope_llm::ToolDef> {
+    let mut specs = penelope_tools::core_exposed();
+    for d in discovered {
+        if let Some(t) = penelope_tools::tool_spec(d)
+            && !specs.iter().any(|s| s.name == t.name)
+        {
+            specs.push(t);
+        }
+    }
+    specs.sort_by(|a, b| a.name.cmp(b.name));
+    let mut v: Vec<penelope_llm::ToolDef> = specs
+        .into_iter()
+        .map(|t| penelope_llm::ToolDef::new(t.name, t.description, t.schema))
+        .collect();
+    for (name, desc, schema) in penelope_mcp::registry::ToolRegistry::meta_tools() {
+        v.push(penelope_llm::ToolDef::new(name, desc, schema));
+    }
+    v
 }
 
 /// Définitions d'outils offertes au modèle pour une session.
@@ -2001,6 +2086,82 @@ mod tests {
             .await
             .unwrap_err();
         assert!(e.to_string().contains("MCP"), "{e}");
+    }
+
+    /// #104 : « planifier un rappel » trouve `schedule_create` sans serveur MCP ; par
+    /// `tool_call`, un outil natif garde le nom, la classe de risque et la politique d'un
+    /// appel direct ; décrit, il rejoint la liste de la session.
+    #[tokio::test]
+    async fn a_rare_native_tool_is_found_and_called_like_a_direct_one() {
+        let (_dir, x) = executor().await;
+        let found = x
+            .execute("tool_search", &json!({"query": "planifier un rappel"}))
+            .await
+            .unwrap();
+        assert_eq!(found.value[0]["name"], "schedule_create", "{}", found.text);
+        assert_eq!(found.value[0]["server"], "natif");
+
+        for (name, args) in [
+            (
+                "schedule_create",
+                json!({"when": "demain 9h", "prompt": "appeler"}),
+            ),
+            (
+                "config_set",
+                json!({"path": "telegram.owner_ids", "value": "1"}),
+            ),
+            (
+                "config_set",
+                json!({"path": "budget.daily_eur", "value": "5"}),
+            ),
+            ("git_push", json!({"remote": "origin"})),
+            ("fs_read", json!({"path": "a.txt"})),
+        ] {
+            let direct = x.describe_call(name, &args).await;
+            let via = x
+                .describe_call("tool_call", &json!({"name": name, "args": args}))
+                .await;
+            assert_eq!(direct, via, "{name}");
+        }
+        let sensitive = x
+            .describe_call(
+                "tool_call",
+                &json!({"name": "config_set", "args": {"path": "sandbox.default_profile"}}),
+            )
+            .await;
+        assert_eq!(sensitive.risk, RiskClass::Destructive);
+
+        assert!(
+            crate::tools_on_demand::exposed_for_turn(&x.services, "s1")
+                .await
+                .is_empty()
+        );
+        let described = x
+            .execute("tool_describe", &json!({"names": ["schedule_create"]}))
+            .await
+            .unwrap();
+        assert!(
+            described.value[0]["inputSchema"].is_object(),
+            "{}",
+            described.text
+        );
+        assert_eq!(
+            crate::tools_on_demand::exposed_for_turn(&x.services, "s1").await,
+            vec!["schedule_create".to_string()]
+        );
+    }
+
+    /// #104 : la liste d'un tour de conversation tient sous 20 définitions, méta-outils
+    /// compris ; un outil découvert s'y ajoute sans doublon.
+    #[test]
+    fn chat_tool_definitions_are_the_core_plus_what_the_session_found() {
+        let base = chat_tool_defs(&[]);
+        assert!(base.len() <= 20, "{} définitions", base.len());
+        assert!(base.iter().any(|t| t.name == "tool_search"));
+        assert!(!base.iter().any(|t| t.name == "schedule_create"));
+        let more = chat_tool_defs(&["schedule_create".into(), "shell_exec".into()]);
+        assert_eq!(more.len(), base.len() + 1);
+        assert!(more.iter().any(|t| t.name == "schedule_create"));
     }
 
     #[test]

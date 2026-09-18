@@ -161,6 +161,8 @@ pub struct TiersBuilder {
     skills_index: Vec<(String, String)>,
     meta_tools: Vec<(String, String)>,
     mcp_servers: Vec<String>,
+    /// Outils natifs à la demande (issue #104) : nommés, pas décrits.
+    on_demand: Vec<String>,
     workflows: Vec<(String, String)>,
     eager_schemas: Vec<String>,
     agents_md: String,
@@ -195,6 +197,11 @@ impl TiersBuilder {
     /// Une ligne par serveur MCP connecté (jamais les schémas, §8.9).
     pub fn mcp_server(mut self, line: impl Into<String>) -> Self {
         self.mcp_servers.push(line.into());
+        self
+    }
+    /// Outils natifs hors de la liste d'outils, joignables par `tool_call` (issue #104).
+    pub fn on_demand(mut self, names: &[&str]) -> Self {
+        self.on_demand = names.iter().map(|n| n.to_string()).collect();
         self
     }
     /// Un workflow disponible : identifiant et ligne (rôle, paramètres requis).
@@ -296,6 +303,20 @@ impl TiersBuilder {
                 "Les outils MCP ne sont pas listés ici : utilise `tool_search`, puis \
                  `tool_describe`, puis `tool_call`.\n",
             );
+        }
+        if !self.on_demand.is_empty() {
+            index.push_str("\n## Outils à la demande\n");
+            index.push_str(&format!(
+                "Hors de ta liste d'outils pour alléger chaque appel : {}. `tool_search` les \
+                 trouve par ce qu'ils font, `tool_describe` donne leur schéma, `tool_call` les \
+                 appelle (même approbation qu'un appel direct) ; un outil décrit ou appelé \
+                 rejoint ta liste pour les tours suivants.\n",
+                self.on_demand
+                    .iter()
+                    .map(|n| format!("`{n}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
         }
         for s in &self.eager_schemas {
             index.push('\n');
