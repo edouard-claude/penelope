@@ -1466,6 +1466,14 @@ penelope stop
 `penelope daemon` lance le processus au premier plan : c'est la forme utile pour déboguer
 en SSH, puisque les journaux partent alors sur le terminal.
 
+`penelope status` donne aussi le nombre de runners vivants sur `runners.count`. Chaque
+boucle de fond (runners, ordonnanceur, pilote de workflows, maintenance, catalogue,
+entretien MCP, passerelle Telegram) est surveillée : une panique est journalisée avec le nom
+de la boucle, comptée, versée au journal d'audit (`daemon.task_panicked`), puis la boucle
+repart après 1 s, 2 s, 4 s… jusqu'à 5 min. Un tour qui panique échoue proprement : son
+runner continue, le verrou de la session est rendu et le message d'échec arrive. `penelope
+doctor` signale toute boucle relancée dans la dernière heure, ou qui ne tourne plus.
+
 ### Coupure de courant
 
 Toute écriture de la base survit à l'arrêt brutal du **processus** (`kill -9`, panique).

@@ -241,23 +241,25 @@ impl McpSupervisor {
 
     /// Premier chargement puis boucle d'entretien, en tâches de fond.
     pub fn start(self: &Arc<Self>) -> Vec<tokio::task::JoinHandle<()>> {
-        let boot = {
-            let me = self.clone();
-            tokio::spawn(async move {
-                let report = me.reload().await;
-                tracing::info!(?report, "serveurs MCP chargés");
-            })
-        };
-        let maintenance = {
-            let me = self.clone();
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(MAINTENANCE_EVERY).await;
-                    me.maintenance().await;
-                }
-            })
-        };
-        vec![boot, maintenance]
+        let maintenance = tokio::spawn(self.clone().maintenance_loop());
+        vec![self.boot(), maintenance]
+    }
+
+    /// Premier chargement de `mcp.d/`, en tâche de fond.
+    pub fn boot(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let me = self.clone();
+        tokio::spawn(async move {
+            let report = me.reload().await;
+            tracing::info!(?report, "serveurs MCP chargés");
+        })
+    }
+
+    /// Entretien périodique des serveurs ; le daemon la lance sous surveillance (#84).
+    pub async fn maintenance_loop(self: Arc<Self>) {
+        loop {
+            tokio::time::sleep(MAINTENANCE_EVERY).await;
+            self.maintenance().await;
+        }
     }
 
     fn now_ms(&self) -> i64 {

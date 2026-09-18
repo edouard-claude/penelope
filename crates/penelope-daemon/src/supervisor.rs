@@ -75,13 +75,27 @@ impl Daemon {
             .set_orchestrator(Arc::new(crate::workflow::WorkflowOrchestrator {
                 daemon: self.clone(),
             }));
+        // Chaque boucle est surveillée : une panique est journalisée, comptée et suivie
+        // d'une relance, au lieu d'arrêter la boucle jusqu'au prochain démarrage (#84).
+        let supervised = |name: &str, f: fn(Arc<Daemon>) -> _| {
+            let d = self.clone();
+            crate::tasks::spawn_supervised(self.clone(), name, move || f(d.clone()))
+        };
         let mut tasks = vec![
             tokio::spawn(crate::runner::run_pool(self.clone())),
-            tokio::spawn(maintenance_loop(self.clone())),
-            tokio::spawn(catalog_loop(self.clone())),
-            tokio::spawn(crate::scheduler::scheduler_loop(self.clone())),
-            tokio::spawn(crate::workflow::driver_loop(self.clone())),
-            tokio::spawn(crate::mcp_auth::callback_server(self.clone())),
+            supervised("maintenance", |d| Box::pin(maintenance_loop(d)) as BoxLoop),
+            supervised("catalog", |d| Box::pin(catalog_loop(d)) as BoxLoop),
+            supervised("scheduler", |d| {
+                Box::pin(crate::scheduler::scheduler_loop(d)) as BoxLoop
+            }),
+            supervised("workflows", |d| {
+                Box::pin(crate::workflow::driver_loop(d)) as BoxLoop
+            }),
+            supervised("mcp.oauth_callback", |d| {
+                Box::pin(async move {
+                    crate::mcp_auth::callback_server(d).await;
+                }) as BoxLoop
+            }),
             tokio::spawn(crate::upgrade::confirm_when_healthy(self.clone())),
         ];
 
@@ -98,7 +112,15 @@ impl Daemon {
             Arc::new(crate::mcp::ProcessConnector::new(self.services.clone())),
         );
         self.hooks.set_mcp(mcp.clone());
-        tasks.extend(mcp.start());
+        tasks.push(mcp.boot());
+        {
+            let mcp = mcp.clone();
+            tasks.push(crate::tasks::spawn_supervised(
+                self.clone(),
+                "mcp.maintenance",
+                move || mcp.clone().maintenance_loop(),
+            ));
+        }
 
         match telegram {
             Ok(Some(gw)) => match gw.start().await {
@@ -143,6 +165,9 @@ impl Daemon {
         Ok(())
     }
 }
+
+/// Boucle de fond, typée pour la table des boucles surveillées.
+type BoxLoop = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
 /// Dort par petites tranches pour réagir vite à l'arrêt.
 async fn sleep_or_shutdown(d: &Daemon, total: Duration) {

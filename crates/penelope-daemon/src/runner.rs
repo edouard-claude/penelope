@@ -18,14 +18,27 @@ pub async fn run_pool(daemon: Arc<Daemon>) {
         .unwrap_or(Duration::from_secs(15));
     let mut tasks = Vec::with_capacity(n);
     for i in 0..n {
-        tasks.push(tokio::spawn(runner_loop(
+        // Un runner qui panique est relancé sous le même nom : le pool garde toujours
+        // `runners.count` runners (#84).
+        let holder = format!("runner-{i}");
+        let d = daemon.clone();
+        tasks.push(crate::tasks::spawn_supervised(
             daemon.clone(),
-            format!("runner-{i}"),
-            heartbeat,
-        )));
+            holder.clone(),
+            move || runner_loop(d.clone(), holder.clone(), heartbeat),
+        ));
     }
     for t in tasks {
         let _ = t.await;
+    }
+}
+
+/// Arrête le battement du bail quoi qu'il arrive au tour, panique comprise.
+struct StopBeat(tokio::task::JoinHandle<()>);
+
+impl Drop for StopBeat {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -71,8 +84,29 @@ pub async fn process(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> T
         })
     };
 
-    let outcome = daemon.run_turn(&turn).await;
-    beat.abort();
+    let beat = StopBeat(beat);
+    // Une panique pendant le tour ne tue ni le runner ni le verrou de session : le tour
+    // échoue, le propriétaire le sait, le bail est rendu (#84).
+    let outcome = {
+        use futures::FutureExt;
+        match std::panic::AssertUnwindSafe(daemon.run_turn(&turn))
+            .catch_unwind()
+            .await
+        {
+            Ok(o) => o,
+            Err(payload) => {
+                let msg = crate::tasks::panic_text(payload.as_ref());
+                crate::tasks::report_panic(daemon, "tour", &msg).await;
+                TurnOutcome::Failed {
+                    error: format!(
+                        "erreur interne pendant le tour ({msg}) : il est arrêté, rien d'autre \
+                         n'est touché. Réessaie ; `penelope doctor` la signale."
+                    ),
+                }
+            }
+        }
+    };
+    drop(beat);
 
     let origin = Origin::from_payload(&turn.payload);
     let stored = match &outcome {
@@ -165,6 +199,67 @@ mod tests {
             }
         );
         assert_eq!(d.services.turns.pending_count().await.unwrap(), 0);
+
+        d.handle.shutdown();
+        d.bus.notify_enqueued();
+        tokio::time::timeout(Duration::from_secs(5), pool)
+            .await
+            .expect("le pool s'arrête")
+            .unwrap();
+    }
+
+    /// #84 : un tour qui panique échoue proprement ; son runner survit, le verrou de
+    /// session est rendu, le tour suivant de la même session est servi, et le pool garde
+    /// `runners.count` runners vivants.
+    #[tokio::test]
+    async fn a_panicking_turn_neither_kills_its_runner_nor_locks_its_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock =
+            Arc::new(penelope_kernel::clock::SystemClock);
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+                .await
+                .unwrap(),
+        );
+        let d = Arc::new(Daemon::from_services(s.clone()));
+        let p = Arc::new(MockProvider::new());
+        p.push(penelope_llm::mock::Scripted::Panic(
+            "boum dans le fournisseur".into(),
+        ));
+        d.set_provider_override(p.clone());
+        let pool = tokio::spawn(run_pool(d.clone()));
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+
+        let id = d
+            .enqueue_message(&sid, "fais le point sur la facturation", &Origin::Cli, None)
+            .await
+            .unwrap()
+            .unwrap();
+        let out = tokio::time::timeout(Duration::from_secs(10), d.bus.wait_for(id.as_str()))
+            .await
+            .expect("le tour se termine")
+            .unwrap();
+        match out {
+            TurnOutcome::Failed { error } => assert!(error.contains("boum"), "{error}"),
+            other => panic!("{other:?}"),
+        }
+
+        p.reply(r#"{"complexity":"low"}"#);
+        p.reply("réponse après la panique");
+        let id = d
+            .enqueue_message(&sid, "et maintenant, où en est-on ?", &Origin::Cli, None)
+            .await
+            .unwrap()
+            .unwrap();
+        let out = tokio::time::timeout(Duration::from_secs(10), d.bus.wait_for(id.as_str()))
+            .await
+            .expect("la session n'est pas verrouillée")
+            .unwrap();
+        assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
+        let expected = s.config.config().runners.count.max(1);
+        assert_eq!(d.tasks.alive("runner-"), expected);
+        assert_eq!(d.tasks.snapshot()["tour"].panics, 1);
+        assert_eq!(d.status().await.unwrap().runners_alive, expected as u64);
 
         d.handle.shutdown();
         d.bus.notify_enqueued();

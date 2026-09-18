@@ -23,6 +23,9 @@ pub enum Scripted {
     Images(String, Vec<String>),
     /// Flux ouvert (HTTP 200) puis erreur réessayable, après un texte éventuel.
     MidStreamError(String, String),
+    /// Panique dans l'appel lui-même : pour vérifier qu'un tour qui panique ne tue ni son
+    /// runner ni le verrou de sa session (issue #84).
+    Panic(String),
 }
 
 #[derive(Clone, Default)]
@@ -199,6 +202,9 @@ impl Provider for MockProvider {
             tokio::time::sleep(latency).await;
         }
         let scripted = self.next();
+        if let Scripted::Panic(msg) = &scripted {
+            panic!("{msg}");
+        }
         if let Scripted::Error(kind, msg) = &scripted {
             return Err(LlmError::new(kind.clone(), msg.clone()));
         }

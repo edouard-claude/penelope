@@ -958,6 +958,13 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   règle n'en naît : `decide_approval` refuse toute règle pour une demande sans arguments
   (budget, effet incertain), et ces cartes n'affichent plus « Toujours » ni « Pour cette
   session ». En ligne de commande : `penelope approve <id> --effect done|retry`.
+- **Boucles de fond surveillées** (#84) : runners, ordonnanceur, pilote de workflows,
+  maintenance, catalogue, rappel OAuth, entretien MCP et boucles Telegram passent par
+  `spawn_supervised` : une panique est journalisée avec le nom de la boucle, comptée,
+  versée au journal (`daemon.task_panicked`) et suivie d'une relance (1 s, 2 s… 5 min),
+  interrompue par l'arrêt. Un tour qui panique échoue proprement (runner vivant, battement
+  du bail arrêté, verrou de session rendu, échec livré). `status` donne les runners vivants,
+  `doctor` les boucles relancées dans l'heure ou finies.
 
 ### Routine de livraison
 

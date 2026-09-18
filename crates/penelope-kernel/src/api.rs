@@ -379,6 +379,11 @@ pub struct StatusReport {
     pub rss_mb: f64,
     pub spent_today_usd: f64,
     pub telegram: String,
+    /// Runners vivants sur `runners.count` configurés (issue #84).
+    #[serde(default)]
+    pub runners_alive: u64,
+    #[serde(default)]
+    pub runners_expected: u64,
 }
 
 /// Une ligne du rapport `doctor` (§2.11).

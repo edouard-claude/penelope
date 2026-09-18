@@ -72,6 +72,8 @@ impl Rpc {
                 checks.push(crate::doctor::schedules_check(s).await);
                 checks.push(crate::voice::doctor_check(&self.daemon).await);
                 checks.push(crate::backup::doctor_check(&self.daemon).await);
+                // Boucles de fond relancées ou mortes (#84).
+                checks.push(crate::tasks::doctor_check(&self.daemon));
                 Ok(json!(checks))
             }
             method::SHUTDOWN => {

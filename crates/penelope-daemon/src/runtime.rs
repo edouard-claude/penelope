@@ -297,6 +297,8 @@ pub struct Daemon {
     pub workflows: crate::workflow::State,
     /// Calcul des embeddings : dernier échec, rattrapage en cours (issue #11).
     pub embeddings: crate::embeddings::State,
+    /// Boucles de fond surveillées : vivantes, paniques, relances (issue #84).
+    pub tasks: Arc<crate::tasks::Tasks>,
     /// Providers construits à la demande (la clé peut arriver après le démarrage).
     providers: tokio::sync::Mutex<Option<Arc<penelope_llm::ProviderSet>>>,
     /// Provider imposé, pour les tests et les suites sans réseau.
@@ -368,6 +370,7 @@ impl Daemon {
             compaction: crate::compaction::State::default(),
             workflows: crate::workflow::State::default(),
             embeddings: crate::embeddings::State::default(),
+            tasks: Arc::new(crate::tasks::Tasks::default()),
             providers: tokio::sync::Mutex::new(None),
             provider_override: std::sync::RwLock::new(None),
         }
@@ -542,6 +545,8 @@ impl Daemon {
             } else {
                 cfg.telegram.mode.clone()
             },
+            runners_alive: self.tasks.alive("runner-") as u64,
+            runners_expected: cfg.runners.count.max(1) as u64,
         })
     }
 }

@@ -37,6 +37,7 @@ pub mod selfknow;
 pub mod session_notes;
 pub mod session_ops;
 pub mod supervisor;
+pub mod tasks;
 pub mod telegram;
 #[cfg(test)]
 mod ticket_to_deploy_e2e;
