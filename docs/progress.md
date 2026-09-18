@@ -8,7 +8,7 @@ Dernière mise à jour : 18 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1467 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1469 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1269,6 +1269,9 @@ ne coûte plus de carte d'approbation (#117).
   même vérification avant sa carte.
 
 ### 0.17.6
+
+La carte d'approbation dit d'abord ce que Pénélope cherche à faire, puis la commande
+telle qu'elle sera exécutée (#116).
 
 - **La carte d'approbation dit ce que Pénélope cherche à faire** (#116) : chaque outil
   natif qui peut demander l'approbation (et `tool_call`) accepte `pourquoi`, une phrase
