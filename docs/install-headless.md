@@ -88,8 +88,11 @@ l'ouvre. `doctor` signale la situation, il ne tranche pas à votre place.
 ## 4. Secrets
 
 Les secrets vivent dans le trousseau macOS, pilotés par `/usr/bin/security` appelé comme
-exécutable, jamais via un shell. Seul l'index des **noms** est stocké en clair :
-`dump-keychain` exigerait un déverrouillage interactif, impossible sans écran.
+exécutable, jamais via un shell. La valeur d'un secret ne lui est jamais passée en
+argument : elle part sur son entrée standard (`security -i`, valeur en hexadécimal), si
+bien qu'aucun `ps` ne la voit passer, même pendant l'écriture. Seul l'index des **noms**
+est stocké en clair : `dump-keychain` exigerait un déverrouillage interactif, impossible
+sans écran.
 
 Les secrets attendus au minimum, sous ces noms exacts :
 

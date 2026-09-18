@@ -119,25 +119,35 @@ impl SecretStore for KeychainStore {
     }
 
     fn set(&self, name: &str, value: &str) -> Result<()> {
-        let out = Command::new("/usr/bin/security")
-            .args([
-                "add-generic-password",
-                "-a",
-                &self.account,
-                "-s",
-                &self.service(name),
-                "-w",
-                value,
-                "-U", // met à jour si l'entrée existe
-            ])
+        use std::io::Write;
+        crate::secrets::validate_secret_name(name)?;
+        // La valeur ne passe jamais en argument : `ps` et `sysctl(KERN_PROCARGS2)` la
+        // liraient depuis tout processus du même utilisateur, bac à sable compris
+        // (issue #95). `security -i` lit la commande sur son entrée standard, la valeur en
+        // hexadécimal (`-X`) : rien à échapper.
+        let (line, hex) = add_command(&self.account, &self.service(name), value);
+        let mut child = Command::new("/usr/bin/security")
+            .arg("-i")
+            .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .output()
+            .spawn()
+            .map_err(|e| PlatformError::Secret(format!("security : {e}")))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(line.as_bytes())
+                .map_err(|e| PlatformError::Secret(format!("security : {e}")))?;
+        }
+        let out = child
+            .wait_with_output()
             .map_err(|e| PlatformError::Secret(format!("security : {e}")))?;
         if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr)
+                .replace(&hex, "…")
+                .replace(value, "…");
             return Err(PlatformError::Secret(format!(
                 "écriture dans le Trousseau refusée : {}",
-                String::from_utf8_lossy(&out.stderr).trim()
+                err.trim()
             )));
         }
         let mut names = self.read_index();
@@ -244,6 +254,21 @@ impl Sandbox for SeatbeltSandbox {
             args: full,
         })
     }
+}
+
+/// Commande `add-generic-password` pour `security -i`, valeur en hexadécimal, et cet
+/// hexadécimal (à retirer d'un message d'erreur). Compte et service sont des noms validés
+/// (`[A-Za-z0-9_.-]`) : aucun guillemet à poser.
+fn add_command(account: &str, service: &str, value: &str) -> (String, String) {
+    let hex: String = value
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    (
+        format!("add-generic-password -a {account} -s {service} -U -X {hex}\n"),
+        hex,
+    )
 }
 
 pub fn sandbox() -> Box<dyn Sandbox> {
@@ -547,6 +572,38 @@ pub fn doctor_checks() -> Vec<crate::DoctorItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #95 : la valeur ne figure qu'en hexadécimal, sur l'entrée standard ; guillemets,
+    /// barres obliques, espaces et `$` n'ont rien à échapper.
+    #[test]
+    fn a_secret_goes_through_stdin_in_hex() {
+        let value = "a \"b\" \\c $HOME é";
+        let (line, hex) = add_command("penelope", "penelope.essai", value);
+        assert!(!line.contains(value) && !line.contains("HOME"), "{line}");
+        assert_eq!(
+            line,
+            format!("add-generic-password -a penelope -s penelope.essai -U -X {hex}\n")
+        );
+        let back: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(String::from_utf8(back).unwrap(), value);
+    }
+
+    /// #95, sur la machine : écrit puis relit un secret d'essai dans le Trousseau de
+    /// session, et vérifie qu'aucun processus ne l'a eu en argument. Touche au Trousseau
+    /// du propriétaire : lancé à la main seulement.
+    #[test]
+    #[ignore]
+    fn a_secret_round_trips_through_the_keychain() {
+        let dir = tempfile::tempdir().unwrap();
+        let k = KeychainStore::new(dir.path());
+        let value = "a \"b\" \\c $HOME fin";
+        k.set("essai-issue-95", value).unwrap();
+        assert_eq!(k.get("essai-issue-95").unwrap().as_deref(), Some(value));
+        k.delete("essai-issue-95").unwrap();
+    }
 
     /// #90 : le profil passe en argument ; aucun fichier n'est écrit, même après cent
     /// enveloppes.

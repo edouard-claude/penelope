@@ -1031,6 +1031,12 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   est tronquée à 64 Kio, un saut au-delà de 64 Mio est refusé avec la marche à suivre.
   Mesuré sur un M2 : 50 lignes d'un journal de 512 Mio en 0,7 ms et 7,6 Mio de mémoire
   résidente, contre 944 ms et 607 Mio.
+- **Secret posé sans `argv`** (#95) : `KeychainStore::set` ne passe plus la valeur en
+  argument de `security add-generic-password -w`, lisible par `ps` depuis tout processus du
+  même utilisateur pendant l'écriture ; la commande part sur l'entrée standard de
+  `security -i`, valeur en hexadécimal (`-X`), sans rien à échapper. Une erreur du
+  Trousseau reste lisible, sans la valeur. Aller-retour réel dans le Trousseau : test
+  ignoré par défaut, à lancer à la main (il écrit un secret d'essai).
 
 ### Routine de livraison
 
