@@ -646,6 +646,64 @@ pub async fn terminate_group(pid: u32, grace: std::time::Duration) {
     let _ = signal_group(pid, "KILL").await;
 }
 
+/// Comment un processus a fini (issue #114) : code de sortie, ou signal qui l'a tué.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExitInfo {
+    pub code: Option<i32>,
+    pub signal: Option<i32>,
+}
+
+impl ExitInfo {
+    pub fn of(status: &std::process::ExitStatus) -> ExitInfo {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            ExitInfo {
+                code: status.code(),
+                signal: status.signal(),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            ExitInfo {
+                code: status.code(),
+                signal: None,
+            }
+        }
+    }
+
+    /// « sorti avec le code 1 », « tué par le signal 9 (SIGKILL) ».
+    pub fn describe(&self) -> String {
+        match (self.code, self.signal) {
+            (Some(c), _) => format!("sorti avec le code {c}"),
+            (None, Some(sig)) => {
+                let name = match sig {
+                    1 => " (SIGHUP)",
+                    2 => " (SIGINT)",
+                    6 => " (SIGABRT)",
+                    9 => " (SIGKILL)",
+                    11 => " (SIGSEGV)",
+                    13 => " (SIGPIPE)",
+                    15 => " (SIGTERM)",
+                    _ => "",
+                };
+                format!("tué par le signal {sig}{name}")
+            }
+            (None, None) => "arrêté".into(),
+        }
+    }
+}
+
+impl Child {
+    /// Attend la fin du processus, au plus `timeout` : `None` s'il tourne encore.
+    pub async fn wait_exit(&mut self, timeout: std::time::Duration) -> Option<ExitInfo> {
+        match tokio::time::timeout(timeout, self.inner.wait()).await {
+            Ok(Ok(status)) => Some(ExitInfo::of(&status)),
+            _ => None,
+        }
+    }
+}
+
 /// Vrai si le PID existe encore (`kill -0`).
 pub fn process_exists(pid: u32) -> bool {
     std::process::Command::new("/bin/kill")

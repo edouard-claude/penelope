@@ -155,14 +155,22 @@ pub fn unwrap_response(r: Response) -> Result<serde_json::Value> {
 
 // ------------------------------------------------------------------ stdio
 
+/// Fin du processus d'un serveur stdio : comment, et après combien de temps (#114).
+#[derive(Debug, Clone, Copy)]
+struct Death {
+    exit: penelope_platform::process::ExitInfo,
+    lived_ms: u128,
+}
+
 /// Transport stdio : processus enfant lancé sous le profil `mcp-stdio` (§8.3).
 pub struct StdioTransport {
     pending: Arc<Pending>,
     stdin: Mutex<Option<tokio::process::ChildStdin>>,
     incoming_tx: broadcast::Sender<Incoming>,
     stderr_buf: Arc<Mutex<Vec<String>>>,
-    child: Mutex<Option<penelope_platform::process::Child>>,
+    child: Arc<Mutex<Option<penelope_platform::process::Child>>>,
     host: Arc<penelope_platform::UnixProcessHost>,
+    death: Arc<std::sync::Mutex<Option<Death>>>,
 }
 
 impl StdioTransport {
@@ -185,18 +193,21 @@ impl StdioTransport {
         let stderr = child.stderr();
 
         let (tx, _) = broadcast::channel(256);
+        let started = std::time::Instant::now();
         let t = Arc::new(StdioTransport {
             pending: Arc::new(Pending::default()),
             stdin: Mutex::new(stdin),
             incoming_tx: tx.clone(),
             stderr_buf: Arc::new(Mutex::new(Vec::new())),
-            child: Mutex::new(Some(child)),
+            child: Arc::new(Mutex::new(Some(child))),
             host,
+            death: Arc::new(std::sync::Mutex::new(None)),
         });
 
         if let Some(out) = stdout {
             let pending = t.pending.clone();
             let tx = tx.clone();
+            let (child, death) = (t.child.clone(), t.death.clone());
             tokio::spawn(async move {
                 let mut lines = BufReader::new(out).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
@@ -208,6 +219,21 @@ impl StdioTransport {
                         Some(other) => pending.publish(&tx, other),
                         None => tracing::debug!(line = %line, "ligne stdio non JSON-RPC ignorée"),
                     }
+                }
+                // Sortie standard fermée : le processus est mort, ou va l'être. Son code
+                // de sortie et sa durée de vie sont notés avant de réveiller les appels en
+                // attente, qui les citent (issue #114).
+                let exit = match child.lock().await.as_mut() {
+                    Some(c) => c.wait_exit(std::time::Duration::from_secs(2)).await,
+                    None => None,
+                };
+                if let Some(exit) = exit
+                    && let Ok(mut g) = death.lock()
+                {
+                    *g = Some(Death {
+                        exit,
+                        lived_ms: started.elapsed().as_millis(),
+                    });
                 }
                 pending.fail_all().await;
             });
@@ -228,6 +254,35 @@ impl StdioTransport {
         }
 
         Ok(t)
+    }
+
+    /// « sorti avec le code 1 après 40 ms », si le processus est mort.
+    fn death_line(&self) -> Option<String> {
+        let d = (*self.death.lock().ok()?)?;
+        let lived = if d.lived_ms < 2_000 {
+            format!("{} ms", d.lived_ms)
+        } else {
+            format!("{:.1} s", d.lived_ms as f64 / 1_000.0)
+        };
+        Some(format!("{} après {lived}", d.exit.describe()))
+    }
+
+    /// Ce qu'on sait de la fermeture de la connexion : la mort du processus et ce qu'il a
+    /// écrit en dernier sur sa sortie d'erreur, ou qu'il n'y a rien écrit.
+    async fn closed_reason(&self) -> String {
+        let Some(death) = self.death_line() else {
+            return "le serveur a fermé la connexion".into();
+        };
+        let stderr = self.stderr_buf.lock().await;
+        match stderr.last() {
+            None => format!(
+                "le serveur s'est arrêté : {death}, sans rien écrire sur sa sortie d'erreur"
+            ),
+            Some(last) => format!(
+                "le serveur s'est arrêté : {death} ; dernière ligne d'erreur : {}",
+                last.chars().take(300).collect::<String>()
+            ),
+        }
     }
 
     async fn write_line(&self, payload: &str) -> Result<()> {
@@ -271,9 +326,7 @@ impl Transport for StdioTransport {
 
         match self.pending.wait(rx, timeout).await {
             Some(Ok(resp)) => unwrap_response(resp),
-            Some(Err(_)) => Err(McpError::Transport(
-                "le serveur a fermé la connexion".into(),
-            )),
+            Some(Err(_)) => Err(McpError::Transport(self.closed_reason().await)),
             None => {
                 self.pending.cancel(id).await;
                 // Notification d'annulation, comme l'exige le protocole.
@@ -330,9 +383,23 @@ impl Transport for StdioTransport {
         Ok(())
     }
 
+    /// Dernières lignes de la sortie d'erreur, suivies de la fin du processus s'il est
+    /// mort ; une sortie vide est dite, jamais rendue en liste vide (issue #114).
     async fn logs(&self, n: usize) -> Vec<String> {
-        let g = self.stderr_buf.lock().await;
-        g.iter().rev().take(n).rev().cloned().collect()
+        let mut lines: Vec<String> = {
+            let g = self.stderr_buf.lock().await;
+            g.iter().rev().take(n).rev().cloned().collect()
+        };
+        let death = self.death_line();
+        if lines.is_empty() {
+            lines.push(match &death {
+                Some(d) => format!("(rien sur la sortie d'erreur ; processus {d})"),
+                None => "(rien sur la sortie d'erreur)".into(),
+            });
+        } else if let Some(d) = death {
+            lines.push(format!("(processus {d})"));
+        }
+        lines
     }
 }
 
@@ -737,6 +804,78 @@ impl Transport for LoopbackTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn dying(script: &str) -> Arc<StdioTransport> {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(penelope_platform::UnixProcessHost::new(
+            dir.path().join("pids"),
+        ));
+        let spec = penelope_platform::ProcessSpec::new("/bin/sh")
+            .arg("-c")
+            .arg(script);
+        StdioTransport::spawn(host, spec, None).await.unwrap()
+    }
+
+    /// #114 : un serveur qui sort aussitôt avec un code non nul le dit, avec sa durée de
+    /// vie et l'absence de sortie d'erreur.
+    #[tokio::test]
+    async fn a_server_that_exits_at_once_says_how() {
+        let t = dying("exit 3").await;
+        let e = t
+            .request(
+                "initialize",
+                serde_json::json!({}),
+                std::time::Duration::from_secs(10),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("sorti avec le code 3 après"), "{e}");
+        assert!(e.contains(" ms") || e.contains(" s"), "{e}");
+        assert!(e.contains("sans rien écrire sur sa sortie d'erreur"), "{e}");
+        let logs = t.logs(10).await;
+        assert_eq!(logs.len(), 1, "{logs:?}");
+        assert!(logs[0].contains("rien sur la sortie d'erreur") && logs[0].contains("code 3"));
+    }
+
+    /// #114 : un serveur tué par un signal le dit.
+    #[tokio::test]
+    async fn a_server_killed_by_a_signal_says_so() {
+        let t = dying("kill -9 $$").await;
+        let e = t
+            .request(
+                "initialize",
+                serde_json::json!({}),
+                std::time::Duration::from_secs(10),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("tué par le signal 9 (SIGKILL)"), "{e}");
+    }
+
+    /// #114 : les lignes écrites sur la sortie d'erreur avant de mourir restent, avec le
+    /// code.
+    #[tokio::test]
+    async fn stderr_lines_are_kept_with_the_exit_code() {
+        let t = dying("echo 'xcrun: error: pont indisponible' >&2; exit 1").await;
+        let e = t
+            .request(
+                "initialize",
+                serde_json::json!({}),
+                std::time::Duration::from_secs(10),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("sorti avec le code 1"), "{e}");
+        let logs = t.logs(10).await;
+        assert!(
+            logs.iter().any(|l| l.contains("pont indisponible")),
+            "{logs:?}"
+        );
+        assert!(logs.last().unwrap().contains("code 1"), "{logs:?}");
+    }
     use serde_json::json;
 
     #[tokio::test]

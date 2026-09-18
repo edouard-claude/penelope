@@ -189,6 +189,20 @@ portées nouvelles sont demandées, en conservant celles déjà accordées.
 - Au démarrage, les processus orphelins d'une vie antérieure sont tués à partir des PID
   laissés dans `state/mcp-pids`.
 
+### Diagnostiquer un serveur qui ne démarre pas
+
+Un serveur stdio qui meurt dit comment : son erreur porte le code de sortie ou le signal
+et sa durée de vie (« le serveur s'est arrêté : sorti avec le code 1 après 40 ms, sans
+rien écrire sur sa sortie d'erreur », « tué par le signal 9 (SIGKILL) après 2.3 s »),
+suivis de sa dernière ligne d'erreur s'il en a écrit une. `penelope mcp show <nom>` et
+`/mcp` gardent cette cause dans `last_error`, pas seulement « connexion fermée ».
+`penelope mcp logs <nom>` et `penelope mcp test <nom>` rendent les lignes de sa sortie
+d'erreur puis la fin du processus ; une sortie vide est dite en toutes lettres (« rien
+sur la sortie d'erreur ; processus sorti avec le code 1 après 40 ms »), jamais rendue en
+liste vide. Un code non nul très rapide sans un mot désigne presque toujours le programme
+lui-même (binaire absent de son `PATH`, dépendance manquante, service tiers arrêté) : le
+lancer à la main avec la même commande le confirme.
+
 ## Tester
 
 La matrice versions × transports × primitives tourne sans réseau ni sous-processus, via

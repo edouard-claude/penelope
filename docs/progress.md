@@ -1240,6 +1240,13 @@ en administrateur anonyme (#113).
   prend le fil, l'ancienne reste active) ou « Fermer (N tours perdus) ». Un bouton de
   commande porte désormais ses arguments (`command_button_with`). Une session en fond
   au-delà de son plafond s'arrête seule.
+- **Un serveur MCP stdio mort dit comment** (#114) : quand sa sortie standard se ferme,
+  le transport attend le processus (deux secondes au plus) et garde `ExitInfo` (code ou
+  signal nommé) et sa durée de vie ; une requête en attente échoue sur « le serveur s'est
+  arrêté : sorti avec le code 1 après 40 ms, sans rien écrire sur sa sortie d'erreur » ou
+  avec sa dernière ligne d'erreur. `logs` ajoute la fin du processus et dit une sortie
+  vide au lieu de rendre `[]` ; `last_error` de `mcp show` et le résultat de `mcp test` le
+  reprennent.
 
 ### Routine de livraison
 

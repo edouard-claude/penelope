@@ -1628,8 +1628,11 @@ fn multi_file(name: &str) -> String {
 /// sable semble en cause, la marche à suivre.
 fn explain(cfg: &ServerConfig, e: &McpError, logs: &[String]) -> String {
     let mut msg = e.to_string();
+    // Les lignes ajoutées par le transport (fin du processus, sortie vide) sont déjà dans
+    // l'erreur (issue #114).
     let tail: Vec<&String> = logs
         .iter()
+        .filter(|l| !l.starts_with("(rien sur la sortie d'erreur") && !l.starts_with("(processus "))
         .rev()
         .take(5)
         .collect::<Vec<_>>()
@@ -2484,7 +2487,55 @@ mod tests {
         assert_eq!(v["content"][2]["text"], "# titre");
     }
 
-    /// Un vrai serveur stdio (script Python), lancé sous le profil `mcp-stdio`. Seatbelt
+    /// #114 : un serveur stdio qui meurt au démarrage laisse dans son état la cause de sa
+    /// mort (code, durée de vie, sortie d'erreur vide dite), et `mcp test` rend la même.
+    #[tokio::test]
+    async fn a_stdio_server_dead_at_start_says_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
+        let s = Arc::new(
+            Services::for_tests(dir.path().to_path_buf(), clock)
+                .await
+                .unwrap(),
+        );
+        let sup = McpSupervisor::new(s.clone(), Arc::new(ProcessConnector::new(s.clone())));
+        std::fs::create_dir_all(sup.dir()).unwrap();
+        std::fs::write(
+            sup.dir().join("pont.toml"),
+            "command = \"/bin/sh\"\nargs = [\"-c\", \"exit 7\"]\ntimeout = \"10s\"\n",
+        )
+        .unwrap();
+        sup.reload().await;
+        let st = &sup.statuses().await[0];
+        let err = st.last_error.clone().unwrap_or_default();
+        assert!(err.contains("sorti avec le code 7 après"), "{err}");
+        assert!(err.contains("sans rien écrire"), "{err}");
+        let shown = sup.show("pont").await.unwrap();
+        assert!(
+            shown["status"]["last_error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("code 7"),
+            "{shown}"
+        );
+        let cfg = sup.config_of("pont").await.unwrap();
+        let tested = sup.test(&cfg).await;
+        assert_eq!(tested["ok"], false);
+        assert!(
+            tested["error"].as_str().unwrap().contains("code 7"),
+            "{tested}"
+        );
+        let logs = tested["logs"].as_array().unwrap();
+        assert!(!logs.is_empty(), "une sortie vide est dite");
+        assert!(
+            logs[0]
+                .as_str()
+                .unwrap()
+                .contains("rien sur la sortie d'erreur")
+        );
+    }
+
+    /// Un vrai serveur stdio (script Python), lancé sous le profil `mcp-stdio`. Seatbelt    /// Un vrai serveur stdio (script Python), lancé sous le profil `mcp-stdio`. Seatbelt
     /// n'existe que sur macOS (issue #102).
     #[cfg(target_os = "macos")]
     #[tokio::test]
