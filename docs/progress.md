@@ -8,7 +8,7 @@ Dernière mise à jour : 18 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1440 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1450 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1165,6 +1165,11 @@ le rouvrir à tout, `penelope config set sandbox.shell_network true`. La migrati
   `context.model_thresholds` disait « sans effet » : elle était lue depuis longtemps.
 
 ### 0.17.3
+
+Un « ok » qui accepte une proposition de Pénélope est relu comme la décision qu'il prend
+(#108), le digest du matin dit ce que la nuit a écarté et pourquoi, nuits blanches
+comprises (#109), et `tool_call` ne perd plus ses arguments : une erreur d'arguments dit
+quoi envoyer, un nom inconnu rend les noms proches (#110).
 
 - **Un « ok » relit la décision qu'il prend** (#108) : un accord court (« ok », « go »,
   « oui », « vas-y », « tu peux publier », 👍 ; ni remerciement, ni question, ni réserve)
