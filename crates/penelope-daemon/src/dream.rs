@@ -386,6 +386,7 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                 if !report.is_noop()
                     || !report.reflections.is_empty()
                     || !report.sorted.is_empty()
+                    || !report.rejected.is_empty()
                     || report.journal_expired > 0
                 {
                     append_dreams(s, &vault, &run_id, &report)?;
@@ -1548,6 +1549,19 @@ fn append_dreams(
                 body.push_str(&format!("- {line}\n"));
             }
         }
+        // Motifs d'écart regroupés : un motif qui revient vingt fois est un réglage à
+        // revoir (issue #109).
+        let families = rejection_families(&report.rejected);
+        if !families.is_empty() {
+            body.push_str(&format!(
+                "\n### Motifs d'écart ({} candidat(s) examiné(s), {} écarté(s))\n",
+                report.candidates_seen,
+                report.rejected.len()
+            ));
+            for (family, n) in &families {
+                body.push_str(&format!("- {family} : {n}\n"));
+            }
+        }
         if !report.reflections.is_empty() {
             body.push_str("\n### Réflexions\n");
             for r in &report.reflections {
@@ -1864,6 +1878,116 @@ pub async fn learned(s: &Services, days: i64) -> anyhow::Result<Vec<Value>> {
 
 // ------------------------------------------------------------------ digest
 
+/// Famille d'un motif de rejet : ce qui précède sa précision (« imprécis : sujet ou
+/// phrase incomplets » donne « imprécis »). Les lignes du rapport ont la forme
+/// `« texte » : motif` ou `opération : motif`.
+pub(crate) fn rejection_family(line: &str) -> String {
+    let reason = match (line.starts_with('«'), line.find("» : ")) {
+        (true, Some(i)) => &line[i + "» : ".len()..],
+        _ => line.split_once(" : ").map(|(_, r)| r).unwrap_or(line),
+    };
+    let family = reason
+        .find(['(', ':', ',', ';'])
+        .map(|i| &reason[..i])
+        .unwrap_or(reason)
+        .trim();
+    if family.is_empty() {
+        return "sans motif".into();
+    }
+    let n = family.chars().count();
+    if n > 60 {
+        format!("{}…", family.chars().take(59).collect::<String>())
+    } else {
+        family.to_string()
+    }
+}
+
+/// Motifs de rejet regroupés par famille, du plus fréquent au plus rare.
+pub(crate) fn rejection_families<'a>(
+    lines: impl IntoIterator<Item = &'a String>,
+) -> Vec<(String, usize)> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for l in lines {
+        *counts.entry(rejection_family(l)).or_default() += 1;
+    }
+    let mut v: Vec<(String, usize)> = counts.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    v
+}
+
+/// Familles montrées au digest ; les autres sont additionnées.
+const DIGEST_FAMILIES: usize = 5;
+
+/// La nuit en trois chiffres et ses motifs d'écart (issue #109). `quiet` : les rapports
+/// des nuits consécutives sans rien promouvoir, la dernière comprise.
+pub(crate) fn night_summary(id: &str, report: &DreamReport, quiet: &[DreamReport]) -> String {
+    let mut t = format!(
+        "📊 {} candidat(s) examiné(s) : {} promu(s), {} écarté(s){}.\n",
+        report.candidates_seen,
+        report.promoted,
+        report.rejected.len(),
+        if report.deferred > 0 {
+            format!(", {} reporté(s)", report.deferred)
+        } else {
+            String::new()
+        }
+    );
+    let families = rejection_families(&report.rejected);
+    if !families.is_empty() {
+        t.push_str("Motifs d'écart :\n");
+        for (family, n) in families.iter().take(DIGEST_FAMILIES) {
+            t.push_str(&format!("- {family} : {n}\n"));
+        }
+        let rest: usize = families.iter().skip(DIGEST_FAMILIES).map(|(_, n)| n).sum();
+        if rest > 0 {
+            t.push_str(&format!("- autres motifs : {rest}\n"));
+        }
+    }
+    if quiet.len() >= 2 {
+        let seen: u32 = quiet.iter().map(|r| r.candidates_seen).sum();
+        let dominant = rejection_families(quiet.iter().flat_map(|r| r.rejected.iter()));
+        t.push_str(&format!(
+            "⚠️ {} nuits de suite sans rien retenir ({seen} candidat(s) examiné(s))",
+            quiet.len()
+        ));
+        match dominant.first() {
+            Some((family, n)) => t.push_str(&format!(
+                ", motif dominant « {family} » ({n} fois) : un réglage à revoir plutôt \
+                 qu'une fatalité.\n"
+            )),
+            None if seen == 0 => {
+                t.push_str(" : aucun candidat noté, la relecture des échanges ne propose rien.\n")
+            }
+            None => t.push_str(".\n"),
+        }
+    }
+    if report.candidates_seen > 0 || !report.rejected.is_empty() {
+        t.push_str(&format!(
+            "Détail : `DREAMS.md` du vault, rêve `{id}` (tri et motifs).\n"
+        ));
+    }
+    t
+}
+
+/// Rapports des dernières passes terminées, la plus récente d'abord.
+async fn recent_reports(s: &Services, n: usize) -> anyhow::Result<Vec<DreamReport>> {
+    let n = n as i64;
+    Ok(s.store
+        .read(move |c| {
+            let mut st = c.prepare(
+                "SELECT stats FROM dream_runs WHERE phase = 'done'
+                 ORDER BY started_at DESC LIMIT ?1",
+            )?;
+            let rows = st.query_map([n], |r| r.get::<_, String>(0))?;
+            let mut v = Vec::new();
+            for r in rows {
+                v.push(serde_json::from_str::<DreamReport>(&r?).unwrap_or_default());
+            }
+            Ok(v)
+        })
+        .await?)
+}
+
 /// Digest du matin (§6.8 sortie, §14.5 `digest`).
 pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
     let s = &d.services;
@@ -1872,9 +1996,15 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
         Some((id, finished, report)) => {
             t.push_str(&format!(
                 "\n🧠 {} _(passe `{id}`, {})_\n",
-                report.render(),
+                report.render_brief(),
                 &finished[..16.min(finished.len())]
             ));
+            let quiet: Vec<DreamReport> = recent_reports(s, 14)
+                .await?
+                .into_iter()
+                .take_while(|r| r.promoted == 0)
+                .collect();
+            t.push_str(&night_summary(&id, &report, &quiet));
             if !report.reflections.is_empty() {
                 t.push_str("\nRéflexions :\n");
                 for r in report.reflections.iter().take(5) {
@@ -2619,6 +2749,103 @@ mod tests {
             o.report.sorted
         );
         assert!(s.candidates.pending(None).await.unwrap().is_empty());
+    }
+
+    /// #109 : une nuit de 24 candidats sans rien promouvoir se lit en trois chiffres et
+    /// en motifs groupés par famille, jamais en liste intégrale.
+    #[test]
+    fn a_night_is_told_in_three_numbers_and_grouped_reasons() {
+        let mut report = DreamReport {
+            candidates_seen: 24,
+            ..Default::default()
+        };
+        for i in 0..18 {
+            report.rejected.push(format!(
+                "« Le client {i} veut ça » : imprécis : sujet ou phrase incomplets"
+            ));
+        }
+        for i in 0..4 {
+            report.rejected.push(format!(
+                "« Ticket {i} corrigé » : retrouvable ailleurs (code, docs, tracker, git)"
+            ));
+        }
+        report
+            .rejected
+            .push("add_entry : contenu interdit : numéro de carte".into());
+        report.rejected.push(
+            "« Source web » : origine non promouvable (contenu non fiable ou système)".into(),
+        );
+        let t = night_summary("d_1", &report, &[report.clone()]);
+        assert!(
+            t.contains("24 candidat(s) examiné(s) : 0 promu(s), 24 écarté(s)"),
+            "{t}"
+        );
+        for line in [
+            "- imprécis : 18",
+            "- retrouvable ailleurs : 4",
+            "- contenu interdit : 1",
+            "- origine non promouvable : 1",
+        ] {
+            assert!(t.contains(line), "{line} :\n{t}");
+        }
+        assert!(!t.contains("Le client 3"), "pas de liste intégrale");
+        assert!(t.contains("`d_1`"));
+        assert!(!t.contains("nuits de suite"), "une seule nuit");
+    }
+
+    /// #109 : cinquante rejets tiennent dans un message Telegram ; deux nuits de suite sans
+    /// rien promouvoir le disent, une nuit normale non.
+    #[tokio::test]
+    async fn quiet_nights_are_said_and_the_digest_stays_short() {
+        let (_dir, d, _p) = daemon().await;
+        let s = &d.services;
+        let night = |n: u32, promoted: u32, rejected: usize| {
+            let mut r = DreamReport {
+                candidates_seen: n,
+                promoted,
+                ..Default::default()
+            };
+            for i in 0..rejected {
+                r.rejected.push(format!(
+                    "« {} » : motif numéro {} : {}",
+                    "une longue phrase de candidat écarté ".repeat(4),
+                    i % 12,
+                    "précision ".repeat(10)
+                ));
+            }
+            r
+        };
+        let insert = |id: &'static str, started: &'static str, r: DreamReport| async move {
+            record_run(s, id, started, "light", None).await.unwrap();
+            finish_run(s, id, "done", &r, None).await.unwrap();
+        };
+
+        insert("d_1", "2026-09-15T01:30:00Z", night(12, 3, 2)).await;
+        insert("d_2", "2026-09-16T01:30:00Z", night(50, 0, 50)).await;
+        let digest = digest_text(&d).await.unwrap();
+        assert!(digest.chars().count() < 4_096, "{}", digest.chars().count());
+        assert!(digest.contains("50 candidat(s) examiné(s) : 0 promu(s), 50 écarté(s)"));
+        assert!(digest.contains("- autres motifs :"), "{digest}");
+        assert!(
+            !digest.contains("nuits de suite"),
+            "une seule nuit vide : {digest}"
+        );
+
+        insert("d_3", "2026-09-17T01:30:00Z", night(2, 0, 2)).await;
+        let digest = digest_text(&d).await.unwrap();
+        assert!(
+            digest.contains("⚠️ 2 nuits de suite sans rien retenir"),
+            "{digest}"
+        );
+        assert!(digest.contains("52 candidat(s) examiné(s)"), "{digest}");
+        assert!(
+            digest.contains("motif dominant « motif numéro 0 »"),
+            "{digest}"
+        );
+
+        insert("d_4", "2026-09-18T01:30:00Z", night(5, 2, 1)).await;
+        let digest = digest_text(&d).await.unwrap();
+        assert!(!digest.contains("nuits de suite"), "{digest}");
     }
 
     /// #105 : l'usage du souvenir proche est montré à la grille comme preuve, et ne décide

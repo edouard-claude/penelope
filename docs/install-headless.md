@@ -1179,7 +1179,13 @@ sinon par les mots). Le modèle choisit : ajouter, mettre à jour, **remplacer**
 une contradiction non tranchée devient une question, un changement de défaut une
 proposition. Chaque décision, avec ses critères et sa justification, est écrite dans la
 section « Tri » de `DREAMS.md`. Le digest du matin (08:00) résume la nuit, les demandes en
-attente, les runs et la dépense de la veille.
+attente, les runs et la dépense de la veille. La nuit s'y lit en trois chiffres
+(candidats examinés, promus, écartés) et en motifs d'écart regroupés par famille avec
+leur compte (« imprécis : 18 », « retrouvable ailleurs : 4 », cinq familles au plus,
+les autres additionnées), jamais en liste intégrale ; le détail, candidat par candidat,
+est dans `DREAMS.md` sous le rêve de la nuit, avec une section « Motifs d'écart ». Deux
+nuits de suite ou plus sans rien promouvoir ajoutent une ligne explicite, avec le motif
+dominant : un motif qui revient vingt fois est un réglage à revoir.
 
 **Journal des états en cours.** Ce qui est vrai aujourd'hui mais pas dans un mois (ticket
 corrigé en dev, document pas encore lu, rendez-vous) va dans `projets.md`, section « États

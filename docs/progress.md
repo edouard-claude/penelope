@@ -1174,6 +1174,15 @@ le rouvrir à tout, `penelope config set sandbox.shell_network true`. La migrati
   acceptée d'un mot se formule depuis la proposition, et ne pousse plus vers la liste
   vide. Un appel au rôle `memory_review` par tour retenu, au plus
   `memory.review_max_candidates` candidats, comme avant.
+- **Le digest dit aussi ce qui est écarté** (#109) : trois chiffres (candidats examinés,
+  promus, écartés, et reportés s'il y en a), les motifs de rejet regroupés par famille
+  (`rejection_family` : ce qui précède la précision du motif ; cinq familles, le reste
+  additionné) et le renvoi au rêve de la nuit dans `DREAMS.md`, qui gagne une section
+  « Motifs d'écart » et s'écrit désormais même quand tout a été écarté avant la grille.
+  Deux nuits consécutives ou plus à zéro promue ajoutent « ⚠️ N nuits de suite sans rien
+  retenir » avec le motif dominant, ou le constat qu'aucun candidat n'a été noté. Le
+  digest reprend `DreamReport::render_brief` (sans la liste des rejets) : cinquante
+  rejets tiennent sous la limite d'un message Telegram.
 
 ### Routine de livraison
 

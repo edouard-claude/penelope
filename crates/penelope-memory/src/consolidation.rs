@@ -681,7 +681,22 @@ impl DreamReport {
         self.promoted == 0 && self.proposals == 0 && self.files_touched.is_empty()
     }
 
+    /// Rapport complet, pour `DREAMS.md` : chaque rejet avec son motif.
     pub fn render(&self) -> String {
+        let mut s = self.render_brief();
+        if !self.rejected.is_empty() {
+            s.push_str(&format!(
+                "\n{} candidats rejetés : {}",
+                self.rejected.len(),
+                self.rejected.join(" ; ")
+            ));
+        }
+        s
+    }
+
+    /// Rapport sans la liste des rejets, pour le digest qui les regroupe par motif
+    /// (issue #109) : cinquante rejets ne font pas déborder un message Telegram.
+    pub fn render_brief(&self) -> String {
         let mut s = format!(
             "Appris cette nuit : {} entrées promues, {} propositions en attente.",
             self.promoted, self.proposals
@@ -724,13 +739,6 @@ impl DreamReport {
             for l in &self.lint {
                 s.push_str(&format!("\n- {l}"));
             }
-        }
-        if !self.rejected.is_empty() {
-            s.push_str(&format!(
-                "\n{} candidats rejetés : {}",
-                self.rejected.len(),
-                self.rejected.join(" ; ")
-            ));
         }
         s
     }
