@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1345 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1346 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -657,7 +657,7 @@ processus ni mémoire derrière lui (#65), liens symboliques bornés au workspac
 « Toujours » borné à l'appel (#67), bac à sable qui ferme les secrets (#68), boucle
 Telegram qui ne bloque plus (#69), brouillons qui ne retardent plus la réponse (#70),
 échecs de commande dits (#71), export d'une session inconnue refusé (#72), boutons
-acquittés tout de suite (#73).
+acquittés tout de suite (#73), latence du premier jeton réduite (#74).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -842,6 +842,11 @@ acquittés tout de suite (#73).
   fond et livre son résultat dans la conversation (carte redessinée, ou message). Une
   vérification de mise à jour ou un redémarrage de serveur MCP laissait le bouton tourner
   jusqu'à ce que Telegram invalide la requête, et le résultat n'arrivait jamais.
+- **Latence avant la réponse** : la classification et le vecteur de rappel mémoire partent
+  en parallèle (ils ne dépendent pas l'un de l'autre), et un message manifestement trivial
+  (« ok », « merci », salutation) ne passe plus par le classifieur : il répond tout de suite
+  avec le modèle par défaut. Deux allers-retours réseau en série avant le premier jeton
+  deviennent une seule attente, ou aucune.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

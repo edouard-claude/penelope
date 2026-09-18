@@ -410,7 +410,19 @@ impl Daemon {
         } else {
             text.clone()
         };
-        let (alias, model_id) = self.select_model(&session, &classified, &origin_turn).await;
+        // Le vecteur du message ne dépend pas du modèle choisi : les deux allers-retours
+        // partent ensemble au lieu de s'attendre (issue #74).
+        let want_vector = turn.kind == TurnKind::Message;
+        let ((alias, model_id), vector) = tokio::join!(
+            self.select_model(&session, &classified, &origin_turn),
+            async {
+                if want_vector {
+                    crate::embeddings::query_vector(self, &text).await
+                } else {
+                    None
+                }
+            }
+        );
 
         // Photos : montrées au modèle de la session s'il lit les images, sinon décrites par
         // le rôle `image_describe` et jointes en texte (§10.4).
@@ -442,12 +454,6 @@ impl Daemon {
         };
         // Reprise d'une session froide au-delà du seuil : résumée avant l'appel (issue #40).
         crate::compaction::before_turn(self, &turn.session_id, &model_id, Some(&origin_turn)).await;
-        // Vecteur du message (délai borné) : rappel mémoire et intentions hybrides.
-        let vector = if turn.kind == TurnKind::Message {
-            crate::embeddings::query_vector(self, &text).await
-        } else {
-            None
-        };
         let mut tiers = crate::conversation::build_tiers_in(
             &s,
             &text,
@@ -1117,13 +1123,19 @@ mod tests {
     #[tokio::test]
     async fn a_message_is_answered_and_the_transcript_persists() {
         let (_dir, d, p) = daemon().await;
-        // Classifieur puis réponse.
+        // Classifieur puis réponse (message non trivial : un « bonjour » seul ne passe
+        // plus par le classifieur, issue #74).
         p.reply(r#"{"complexity":"low"}"#);
         p.reply("Bonjour ! Que puis-je faire ?");
         let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
-        d.enqueue_message(&sid, "bonjour", &Origin::Cli, None)
-            .await
-            .unwrap();
+        d.enqueue_message(
+            &sid,
+            "bonjour, où en est la facturation ?",
+            &Origin::Cli,
+            None,
+        )
+        .await
+        .unwrap();
         let turn = claim(&d).await;
         let out = d.run_turn(&turn).await;
         match out {
@@ -1135,10 +1147,16 @@ mod tests {
 
         let history = d.services.context.history.load(&sid, 0).await.unwrap();
         let texts: Vec<String> = history.iter().map(|e| e.message.text()).collect();
-        assert_eq!(texts, vec!["bonjour", "Bonjour ! Que puis-je faire ?"]);
+        assert_eq!(
+            texts,
+            vec![
+                "bonjour, où en est la facturation ?",
+                "Bonjour ! Que puis-je faire ?"
+            ]
+        );
 
         // Le classifieur a choisi `fast` pour ce message, sans le rendre collant : un
-        // « bonjour » ne doit pas enfermer la session sur le petit modèle.
+        // message simple ne doit pas enfermer la session sur le petit modèle.
         let cfg = d.services.config.config();
         let fast = cfg.alias_model("fast").unwrap().to_string();
         let main = cfg.alias_model("main").unwrap().to_string();
@@ -1156,7 +1174,10 @@ mod tests {
         assert_eq!(by_turn.len(), 1);
         assert_eq!(by_turn[0].key, turn.id.to_string());
         assert_eq!(by_turn[0].calls, 2);
-        assert_eq!(by_turn[0].label.as_deref(), Some("bonjour"));
+        assert_eq!(
+            by_turn[0].label.as_deref(),
+            Some("bonjour, où en est la facturation ?")
+        );
         let by_role = d
             .services
             .budget
@@ -1181,8 +1202,8 @@ mod tests {
         assert_eq!(last.session_id.as_deref(), Some(sid.as_str()));
         let seen: Vec<String> = last.messages.iter().map(|m| m.text()).collect();
         assert!(
-            seen.iter()
-                .any(|t| t.starts_with("<contexte>") && t.ends_with("bonjour")),
+            seen.iter().any(|t| t.starts_with("<contexte>")
+                && t.ends_with("bonjour, où en est la facturation ?")),
             "l'ancien message garde le contexte de son tour : le préfixe ne bouge pas"
         );
         assert!(
@@ -1604,7 +1625,7 @@ mod tests {
         p.reply(r#"{"complexity":"low"}"#);
         p.reply("réponse rapide");
         let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
-        d.enqueue_message(&sid, "salut", &Origin::Cli, None)
+        d.enqueue_message(&sid, "résume la situation du projet", &Origin::Cli, None)
             .await
             .unwrap();
         let turn = claim(&d).await;

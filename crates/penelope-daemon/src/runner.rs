@@ -148,7 +148,7 @@ mod tests {
         let pool = tokio::spawn(run_pool(d.clone()));
         let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
         let id = d
-            .enqueue_message(&sid, "bonjour", &Origin::Cli, None)
+            .enqueue_message(&sid, "bonjour, fais le point", &Origin::Cli, None)
             .await
             .unwrap()
             .unwrap();
@@ -193,7 +193,7 @@ mod tests {
         d.set_provider_override(p.clone());
 
         let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
-        d.enqueue_message(&sid, "bonjour", &Origin::Cli, None)
+        d.enqueue_message(&sid, "bonjour, fais le point", &Origin::Cli, None)
             .await
             .unwrap();
         let turn = s.turns.claim("runner-0").await.unwrap().expect("réclamé");

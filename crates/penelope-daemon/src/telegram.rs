@@ -6322,9 +6322,14 @@ mod tests {
             .unwrap();
         p.reply(r#"{"complexity":"low"}"#);
         p.reply("Bonjour, **Edouard**.");
-        g.process_update(&updates::text_message(1, OWNER, OWNER, "salut"))
-            .await
-            .unwrap();
+        g.process_update(&updates::text_message(
+            1,
+            OWNER,
+            OWNER,
+            "salut, fais le point",
+        ))
+        .await
+        .unwrap();
         drain(&g).await;
 
         let sent = t.calls_to(tg::SEND_MESSAGE).await;
@@ -6729,9 +6734,14 @@ mod tests {
             penelope_llm::types::LlmErrorKind::Other,
             "panne du fournisseur".into(),
         ));
-        g.process_update(&updates::text_message(1, OWNER, OWNER, "salut"))
-            .await
-            .unwrap();
+        g.process_update(&updates::text_message(
+            1,
+            OWNER,
+            OWNER,
+            "salut, fais le point",
+        ))
+        .await
+        .unwrap();
         drain(&g).await;
         let sent = t.calls_to(tg::SEND_MESSAGE).await;
         let failure = sent.last().unwrap();

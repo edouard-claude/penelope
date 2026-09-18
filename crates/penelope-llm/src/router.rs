@@ -62,6 +62,8 @@ pub enum RouteReason {
     Sticky,
     /// Sortie du classifieur.
     Classifier,
+    /// Message manifestement trivial : aucun classifieur appelé (issue #74).
+    Trivial,
     /// Défaut de configuration.
     Default,
     /// Repli après panne.
@@ -127,6 +129,81 @@ pub fn looks_like_image_request(msg: &str) -> bool {
     VERBS.iter().any(|v| m.contains(v))
 }
 
+/// Message trivial : salutation, accusé de réception ou interjection, sans demande.
+///
+/// Rien de lexical au-delà : une phrase qui contient une question, un chemin, une URL, du
+/// code ou plus de six mots n'est pas triviale (issue #74).
+pub fn is_trivial(message: &str) -> bool {
+    let m = message.trim().to_lowercase();
+    if m.is_empty() || m.chars().count() > 40 {
+        return false;
+    }
+    if m.contains('?')
+        || m.contains('/')
+        || m.contains('`')
+        || m.contains("http")
+        || m.contains('\n')
+    {
+        return false;
+    }
+    let words: Vec<&str> = m.split_whitespace().collect();
+    if words.len() > 6 {
+        return false;
+    }
+    const TRIVIAL: &[&str] = &[
+        "ok",
+        "okay",
+        "d'accord",
+        "daccord",
+        "merci",
+        "merci !",
+        "parfait",
+        "super",
+        "génial",
+        "genial",
+        "bien",
+        "très bien",
+        "tres bien",
+        "salut",
+        "bonjour",
+        "bonsoir",
+        "coucou",
+        "hello",
+        "hey",
+        "bonne nuit",
+        "bonne journée",
+        "bonne journee",
+        "à demain",
+        "a demain",
+        "au revoir",
+        "bye",
+        "oui",
+        "non",
+        "yes",
+        "no",
+        "top",
+        "nickel",
+        "ça marche",
+        "ca marche",
+        "c'est noté",
+        "noté",
+        "note",
+        "vu",
+        "compris",
+        "entendu",
+    ];
+    let cleaned = m
+        .trim_end_matches(['.', '!', '…', ' ', ':', ';', ','])
+        .trim();
+    // Renforçateurs admis dans un message par ailleurs trivial (« merci beaucoup »).
+    const MODIFIERS: &[&str] = &["beaucoup", "bien", "très", "tres", "infiniment", "trop"];
+    TRIVIAL.contains(&cleaned)
+        || cleaned.split_whitespace().all(|w| {
+            let w = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
+            TRIVIAL.contains(&w) || MODIFIERS.contains(&w)
+        })
+}
+
 pub struct Router {
     catalog: Catalog,
 }
@@ -187,6 +264,13 @@ impl Router {
         }
         if !cfg.models.routing.classifier {
             return Some(self.default_decision(cfg));
+        }
+        // « ok », « merci », « salut » : pas la peine de payer un aller-retour de
+        // classifieur avant de répondre (issue #74).
+        if is_trivial(&input.message) {
+            let mut d = self.default_decision(cfg);
+            d.reason = RouteReason::Trivial;
+            return Some(d);
         }
         None
     }
@@ -313,6 +397,64 @@ impl Router {
 
 #[cfg(test)]
 mod tests {
+
+    /// #74 : un message trivial ne passe pas par le classifieur, une vraie demande oui.
+    #[test]
+    fn trivial_messages_skip_the_classifier() {
+        for m in [
+            "ok",
+            "OK !",
+            "merci",
+            "Merci beaucoup",
+            "salut",
+            "bonjour",
+            "d'accord",
+            "ça marche",
+            "oui",
+            "non",
+            "parfait, merci",
+            "bonne nuit",
+        ] {
+            assert!(is_trivial(m), "« {m} » doit être trivial");
+        }
+        for m in [
+            "et ensuite ?",
+            "corrige le bug de facturation",
+            "bonjour, où en est la facturation",
+            "lis ~/notes.md",
+            "regarde https://example.com",
+            "ok mais avant ça, relis le ticket 4821 et dis-moi",
+            "",
+        ] {
+            assert!(!is_trivial(m), "« {m} » ne doit pas être trivial");
+        }
+
+        // Routage : un message trivial part sur le modèle par défaut, sans classifieur.
+        let r = router();
+        let cfg = cfg();
+        let d = r
+            .route_deterministic(
+                &cfg,
+                &RouteInput {
+                    message: "merci !".into(),
+                    ..Default::default()
+                },
+            )
+            .expect("décision sans classifieur");
+        assert_eq!(d.reason, RouteReason::Trivial);
+        assert_eq!(d.alias, r.default_decision(&cfg).alias);
+        assert!(
+            r.route_deterministic(
+                &cfg,
+                &RouteInput {
+                    message: "corrige le bug de facturation".into(),
+                    ..Default::default()
+                }
+            )
+            .is_none(),
+            "une vraie demande passe par le classifieur"
+        );
+    }
     use super::*;
     use crate::catalog::ModelInfo;
 

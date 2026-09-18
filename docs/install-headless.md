@@ -518,6 +518,7 @@ fallback = { main = ["fast"], reasoning = ["main"] }
 
 ```
 classifier = true (défaut)
+  « ok », « merci », « salut » ────────────────────► main (aucun appel)
   message ─► classifieur (alias fast) ─┬─ simple    ─► low    (fast)
                                        ├─ ordinaire ─► medium (main)
                                        └─ difficile ─► high   (reasoning)
@@ -530,6 +531,11 @@ flux coupé avant tout texte (429, surcharge)
 flux coupé après du texte
   échec affiché, bouton « Réessayer »
 ```
+
+Un message manifestement trivial (salutation, accusé de réception, moins de sept mots sans
+question, sans chemin ni URL) ne passe pas par le classifieur : il répond tout de suite avec
+le modèle par défaut. Pour les autres, la classification et le calcul du vecteur de rappel
+mémoire partent **en parallèle** : une seule attente avant le premier jeton, pas deux.
 
 Une erreur qui arrive **pendant** le flux, après la réponse HTTP, est traitée comme une
 panne d'avant flux tant que rien n'a été montré (ni texte, ni appel d'outil) : un nouvel

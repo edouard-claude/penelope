@@ -68,7 +68,11 @@ async fn chat_stream_sends_deltas_then_the_final_answer() {
 
     let lines = exchange(
         &d,
-        RpcRequest::new(7, method::CHAT_STREAM, json!({"text": "bonjour"})),
+        RpcRequest::new(
+            7,
+            method::CHAT_STREAM,
+            json!({"text": "bonjour, fais le point"}),
+        ),
     )
     .await;
 
@@ -103,7 +107,11 @@ async fn chat_stream_sends_deltas_then_the_final_answer() {
         .iter()
         .map(|m| m.text())
         .collect();
-    assert!(seen.iter().any(|t| t.ends_with("\n\nbonjour")), "{seen:?}");
+    assert!(
+        seen.iter()
+            .any(|t| t.ends_with("\n\nbonjour, fais le point")),
+        "{seen:?}"
+    );
 
     d.handle.shutdown();
 }
