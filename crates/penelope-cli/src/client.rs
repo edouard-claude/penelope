@@ -62,9 +62,9 @@ impl CliError {
                 Some("démarrer le daemon : penelope install puis penelope start")
             }
             CliError::DaemonUnresponsive(_) => Some(
-                "journal du service : tail -f ~/Library/Logs/Penelope/daemon.err.log ; puis \
-                 penelope restart (ou launchctl kickstart -k gui/$(id -u)/com.penelope.daemon) ; \
-                 --timeout 60 pour attendre plus, --timeout 0 pour attendre sans limite",
+                "journaux : penelope logs ; puis penelope restart (penelope stop, puis \
+                 penelope start, s'il ne répond plus du tout) ; --timeout 60 pour attendre \
+                 plus, --timeout 0 pour attendre sans limite",
             ),
             CliError::Rpc { code, .. } if *code == penelope_kernel::api::METHOD_NOT_FOUND => {
                 Some("cette commande n'est pas encore servie par ce daemon")
