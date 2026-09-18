@@ -361,37 +361,54 @@ impl TelegramGateway {
                 .await
             }
             _ => {
-                let params = action.args["params"].clone();
-                let done = match Box::pin(self.perform(chat_id, topic_id, &action.target, &params))
-                    .await
-                {
-                    Ok(d) => d,
-                    Err(e) => Done::quiet(format!("❌ {e}")),
-                };
-                let toast: String = done.toast.chars().take(190).collect();
-                let _ = self
-                    .bot
-                    .answer_callback(callback_id, Some(&toast), false)
-                    .await;
-                if let Some(note) = &done.note {
-                    self.reply(chat_id, topic_id, None, note).await?;
-                }
-                let back = &action.args["back"];
-                if done.redraw
-                    && let Some(screen) = back["screen"].as_str()
-                {
-                    self.show_screen(
-                        chat_id,
-                        topic_id,
-                        None,
-                        screen,
-                        &back["args"],
-                        Some(message_id),
-                    )
-                    .await?;
-                } else if !done.redraw {
-                    let _ = self.bot.edit_markup(chat_id, message_id, None).await;
-                }
+                // Telegram invalide une `callback_query` en une dizaine de secondes : on
+                // répond d'abord, on travaille ensuite, et l'issue arrive dans le chat
+                // (issue #73).
+                let _ = self.bot.answer_callback(callback_id, None, false).await;
+                let (me, target, params, back) = (
+                    self.clone(),
+                    action.target.clone(),
+                    action.args["params"].clone(),
+                    action.args["back"].clone(),
+                );
+                tokio::spawn(async move {
+                    let done = match Box::pin(me.perform(chat_id, topic_id, &target, &params)).await
+                    {
+                        Ok(d) => d,
+                        Err(e) => Done::quiet(format!("❌ {e}")),
+                    };
+                    // Le toast ne sert plus que d'accusé : ce qui compte est dit dans la
+                    // conversation.
+                    if let Some(note) = &done.note
+                        && let Err(e) = me.reply(chat_id, topic_id, None, note).await
+                    {
+                        tracing::warn!(error = %e, "résultat d'un bouton non livré");
+                    }
+                    if done.redraw
+                        && let Some(screen) = back["screen"].as_str()
+                    {
+                        if let Err(e) = me
+                            .show_screen(
+                                chat_id,
+                                topic_id,
+                                None,
+                                screen,
+                                &back["args"],
+                                Some(message_id),
+                            )
+                            .await
+                        {
+                            tracing::warn!(error = %e, "écran non redessiné");
+                        }
+                    } else if !done.redraw {
+                        let _ = me.bot.edit_markup(chat_id, message_id, None).await;
+                        // Sans écran à redessiner, le toast seul se perdrait : il est
+                        // aussi dit dans la conversation.
+                        if done.note.is_none() && !done.toast.trim().is_empty() {
+                            let _ = me.reply(chat_id, topic_id, None, &done.toast).await;
+                        }
+                    }
+                });
                 Ok(())
             }
         }

@@ -6260,6 +6260,15 @@ mod tests {
         (dir, g, t, p)
     }
 
+    /// Laisse un clic de bouton finir son travail détaché (issue #73).
+    async fn settle_click(g: &TelegramGateway) {
+        for _ in 0..30 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::task::yield_now().await;
+        }
+        let _ = g.flush_outbox().await;
+    }
+
     /// Laisse les traitements détachés (vocal, photo, export, audit : issue #69) arriver
     /// au bout avant d'observer ce qui a été envoyé.
     async fn settle(g: &TelegramGateway) {
@@ -6327,6 +6336,49 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let reactions = t.calls_to(tg::SET_MESSAGE_REACTION).await;
         assert!(reactions.len() >= 2, "{reactions:?}");
+    }
+
+    /// #73 : un bouton dont l'opération traîne est acquitté tout de suite, et son résultat
+    /// arrive dans la conversation.
+    #[tokio::test]
+    async fn a_slow_button_is_acknowledged_immediately() {
+        let (_d, g, t, _p) = gateway().await;
+        g.daemon
+            .kv_set("tg.onboard.proposed", "test")
+            .await
+            .unwrap();
+        // Un serveur MCP qui met du temps à redémarrer : le clic ne doit pas l'attendre.
+        use crate::mcp::testing::{FakeConnector, declare, server, tool};
+        let fake = Arc::new(FakeConnector::default());
+        fake.serve(
+            "lent",
+            server(Arc::new(std::sync::Mutex::new(vec![tool(
+                "ping",
+                json!({"readOnlyHint": true}),
+            )]))),
+        );
+        fake.set_open_delay(Duration::from_millis(1200));
+        let sup = crate::mcp::McpSupervisor::new(g.daemon.services.clone(), fake.clone());
+        declare(&sup, "lent", "");
+        sup.reload().await;
+        g.daemon.hooks.set_mcp(sup.clone());
+
+        g.process_update(&updates::text_message(330, OWNER, OWNER, "/mcp"))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let restart = button(&t, "🔄").await;
+        let started = std::time::Instant::now();
+        g.process_update(&updates::callback(331, OWNER, &restart, 930))
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "le clic doit être acquitté sans attendre : {elapsed:?}"
+        );
+        let answers = t.calls_to(tg::ANSWER_CALLBACK_QUERY).await;
+        assert_eq!(answers.len(), 1, "acquitté une fois : {answers:?}");
     }
 
     /// #71 : une commande dont le traitement échoue le dit, au lieu de se taire.
@@ -6607,6 +6659,7 @@ mod tests {
         g.process_update(&updates::callback(900, OWNER, &token, 7777))
             .await
             .unwrap();
+        settle_click(&g).await;
         for _ in 0..50 {
             tokio::time::sleep(Duration::from_millis(40)).await;
             if crate::conversation::vault_dir(&g.daemon.services)
@@ -6698,6 +6751,7 @@ mod tests {
         g.process_update(&updates::callback(2, OWNER, &token, 1001))
             .await
             .unwrap();
+        settle_click(&g).await;
         drain(&g).await;
         let sent = t.calls_to(tg::SEND_MESSAGE).await;
         assert_eq!(
@@ -6732,6 +6786,7 @@ mod tests {
         g.process_update(&updates::callback(3, OWNER, &token, 1001))
             .await
             .unwrap();
+        settle_click(&g).await;
         drain(&g).await;
         assert_eq!(t.calls_to(tg::SEND_MESSAGE).await.len(), sent.len());
     }
@@ -6796,6 +6851,7 @@ mod tests {
         g.process_update(&updates::callback(4, OWNER, &approve, 1001))
             .await
             .unwrap();
+        settle_click(&g).await;
         drain(&g).await;
 
         let out = texts(&t.calls_to(tg::SEND_MESSAGE).await);
@@ -6813,6 +6869,7 @@ mod tests {
         g.process_update(&updates::callback(5, OWNER, &approve, 1001))
             .await
             .unwrap();
+        settle_click(&g).await;
         drain(&g).await;
         let answers = t.calls_to(tg::ANSWER_CALLBACK_QUERY).await;
         assert_eq!(answers[0]["text"], "Déjà traité.");
@@ -6849,6 +6906,7 @@ mod tests {
         g.process_update(&updates::callback(11, OWNER, &deny_reason, 1001))
             .await
             .unwrap();
+        settle_click(&g).await;
         p.reply("Compris, je garde le dossier build.");
         g.process_update(&updates::text_message(
             12,
@@ -7017,6 +7075,7 @@ mod tests {
         g.process_update(&updates::callback(71, OWNER, &main_token, 700))
             .await
             .unwrap();
+        settle_click(&g).await;
         let answers = t.calls_to(tg::ANSWER_CALLBACK_QUERY).await;
         assert_eq!(answers.last().unwrap()["text"], "Session épinglée sur main");
         let edited = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
@@ -7050,6 +7109,7 @@ mod tests {
         g.process_update(&updates::callback(73, OWNER, &main_token, 700))
             .await
             .unwrap();
+        settle_click(&g).await;
         assert_eq!(
             t.calls_to(tg::ANSWER_CALLBACK_QUERY).await.last().unwrap()["text"],
             "Session épinglée sur main"
@@ -7070,6 +7130,7 @@ mod tests {
         g.process_update(&updates::callback(76, OWNER, &auto_token, 701))
             .await
             .unwrap();
+        settle_click(&g).await;
         assert_eq!(
             t.calls_to(tg::ANSWER_CALLBACK_QUERY).await.last().unwrap()["text"],
             "Session en automatique"
@@ -7334,6 +7395,7 @@ mod tests {
         g.process_update(&updates::callback(91, OWNER, &token, 900))
             .await
             .unwrap();
+        settle_click(&g).await;
         g.flush_outbox().await.unwrap();
         let notes = std::fs::read_to_string(vault.join("notes.md")).unwrap();
         assert!(notes.contains("31 mars 2027"), "{notes}");
@@ -7565,6 +7627,7 @@ mod tests {
         g.process_update(&updates::callback(301, OWNER, &launch, 900))
             .await
             .unwrap();
+        settle_click(&g).await;
         g.flush_outbox().await.unwrap();
         let form = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
         assert!(form.contains("Objectif"), "formulaire ouvert : {form}");
@@ -7586,6 +7649,7 @@ mod tests {
         g.process_update(&updates::callback(303, OWNER, &submit, 901))
             .await
             .unwrap();
+        settle_click(&g).await;
         g.flush_outbox().await.unwrap();
         let run = s
             .runs
@@ -7624,6 +7688,7 @@ mod tests {
         g.process_update(&updates::callback(311, OWNER, &delete, 910))
             .await
             .unwrap();
+        settle_click(&g).await;
         let confirm_screen = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
         assert!(
             texts(&confirm_screen)
@@ -7640,6 +7705,7 @@ mod tests {
         g.process_update(&updates::callback(312, OWNER, &confirm, 910))
             .await
             .unwrap();
+        settle_click(&g).await;
         assert!(
             !s.schedules
                 .list()
@@ -7686,6 +7752,7 @@ mod tests {
         g.process_update(&updates::callback(321, OWNER, &restart, 920))
             .await
             .unwrap();
+        settle_click(&g).await;
         assert_eq!(fake.opened("redmine"), opened + 1, "redémarrage demandé");
         let edits = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
         let last = edits.last().expect("message redessiné");
@@ -7695,13 +7762,11 @@ mod tests {
                 && last["text"].as_str().unwrap().contains("prêt"),
             "{last}"
         );
+        // Le clic est acquitté tout de suite, sans attendre la poignée de main du
+        // serveur : l'issue est dans la carte redessinée (issue #73).
         let answers = t.calls_to(tg::ANSWER_CALLBACK_QUERY).await;
-        assert!(
-            answers
-                .iter()
-                .any(|a| a["text"].as_str().is_some_and(|x| x.contains("redmine"))),
-            "{answers:?}"
-        );
+        assert_eq!(answers.len(), 1, "{answers:?}");
+        assert!(answers[0]["text"].is_null(), "{answers:?}");
     }
 
     /// Issue #32 : une session au plafond relevé à 20 $ n'est pas suspendue à 5 $ ; à 20 $,
@@ -7793,6 +7858,7 @@ mod tests {
         g.process_update(&updates::callback(703, OWNER, &raise, 704))
             .await
             .unwrap();
+        settle_click(&g).await;
         drain(&g).await;
         let session = d.services.sessions.get(&sid).await.unwrap().unwrap();
         assert_eq!(
@@ -7850,6 +7916,7 @@ mod tests {
         g.process_update(&updates::callback(641, OWNER, &token, 642))
             .await
             .unwrap();
+        settle_click(&g).await;
         let turn = d
             .services
             .turns
@@ -8116,6 +8183,7 @@ mod tests {
         g.process_update(&updates::callback(1200, OWNER, &form, 680))
             .await
             .unwrap();
+        settle_click(&g).await;
         g.flush_outbox().await.unwrap();
         let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
         assert!(
@@ -8135,6 +8203,7 @@ mod tests {
         g.process_update(&updates::callback(1210, OWNER, &send, 690))
             .await
             .unwrap();
+        settle_click(&g).await;
         g.flush_outbox().await.unwrap();
         let after = texts(&t.calls_to(tg::SEND_MESSAGE).await);
         let run = s
@@ -8165,6 +8234,7 @@ mod tests {
         g.process_update(&updates::callback(122, OWNER, &token, 700))
             .await
             .unwrap();
+        settle_click(&g).await;
         g.process_update(&updates::text_message(
             123,
             OWNER,
@@ -8302,6 +8372,7 @@ mod tests {
         g.process_update(&updates::callback(141, OWNER, &launch, 1400))
             .await
             .unwrap();
+        settle_click(&g).await;
         drain(&g).await;
         let run = d
             .services
@@ -8396,6 +8467,7 @@ mod tests {
         g.process_update(&updates::callback(151, OWNER, &rerun, 1500))
             .await
             .unwrap();
+        settle_click(&g).await;
         assert_eq!(s.turns.pending_count().await.unwrap(), 1, "relancée");
     }
 
@@ -8553,6 +8625,7 @@ mod tests {
                 g.process_update(&updates::callback(update, OWNER, &token, 4000))
                     .await
                     .unwrap();
+                settle_click(&g).await;
             }
         };
         let say = |text: &'static str, update: i64| {
@@ -8771,6 +8844,7 @@ mod tests {
         g.process_update(&updates::callback(200, OWNER, &b[0].1, card_id))
             .await
             .unwrap();
+        settle_click(&g).await;
         assert_eq!(
             answer(tr.clone(), 8).await,
             json!({"action": "accept", "content": {}})
@@ -8803,6 +8877,7 @@ mod tests {
         g.process_update(&updates::callback(201, OWNER, &fill.1, card_id))
             .await
             .unwrap();
+        settle_click(&g).await;
         let step = t.calls_to(tg::SEND_MESSAGE).await.last().unwrap().clone();
         let high = inline_buttons(&step)
             .into_iter()
@@ -8811,6 +8886,7 @@ mod tests {
         g.process_update(&updates::callback(202, OWNER, &high.1, 3000))
             .await
             .unwrap();
+        settle_click(&g).await;
         g.process_update(&updates::text_message(
             203,
             OWNER,
@@ -8829,6 +8905,7 @@ mod tests {
         g.process_update(&updates::callback(204, OWNER, &send.1, 3001))
             .await
             .unwrap();
+        settle_click(&g).await;
         assert_eq!(
             answer(tr.clone(), 9).await,
             json!({"action": "accept",
@@ -8856,6 +8933,7 @@ mod tests {
         g.process_update(&updates::callback(205, OWNER, &decline.1, card_id))
             .await
             .unwrap();
+        settle_click(&g).await;
         assert_eq!(answer(tr.clone(), 10).await, json!({"action": "decline"}));
 
         // 4. Sans réponse : annulation, carte mise à jour.
@@ -8977,6 +9055,7 @@ mod tests {
         ))
         .await
         .unwrap();
+        settle_click(&g).await;
         let result = call.await.unwrap().unwrap();
         let text = result.to_string();
         assert!(
@@ -9024,6 +9103,7 @@ mod tests {
         ))
         .await
         .unwrap();
+        settle_click(&g).await;
         let edited = t
             .calls_to(tg::EDIT_MESSAGE_TEXT)
             .await
@@ -9045,6 +9125,7 @@ mod tests {
         g.process_update(&updates::callback(302, OWNER, &done.1, card_id))
             .await
             .unwrap();
+        settle_click(&g).await;
         let text = call.await.unwrap().unwrap().to_string();
         assert!(
             text.contains(r#"{\"compte\":{\"action\":\"accept\"}}"#),
@@ -9068,6 +9149,7 @@ mod tests {
         ))
         .await
         .unwrap();
+        settle_click(&g).await;
         for _ in 0..300 {
             if !drive.responses.lock().await.is_empty() {
                 break;
@@ -9171,6 +9253,7 @@ mod tests {
         g.process_update(&updates::callback(91, OWNER, &switch, 1001))
             .await
             .unwrap();
+        settle_click(&g).await;
         let bound = d
             .services
             .sessions
@@ -9202,6 +9285,7 @@ mod tests {
         g.process_update(&updates::callback(92, OWNER, &show_closed, 1001))
             .await
             .unwrap();
+        settle_click(&g).await;
         let edits = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
         let all = buttons(edits.last().unwrap());
         assert!(
@@ -9216,6 +9300,7 @@ mod tests {
         g.process_update(&updates::callback(93, OWNER, &more, 1001))
             .await
             .unwrap();
+        settle_click(&g).await;
         let edits = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
         let close = buttons(edits.last().unwrap())
             .into_iter()
@@ -9225,6 +9310,7 @@ mod tests {
         g.process_update(&updates::callback(94, OWNER, &close, 1001))
             .await
             .unwrap();
+        settle_click(&g).await;
         assert_eq!(
             d.services
                 .sessions
@@ -9254,6 +9340,7 @@ mod tests {
         g.process_update(&updates::callback(95, OWNER, &rows[budget + 1].1, 1001))
             .await
             .unwrap();
+        settle_click(&g).await;
         let edits = t.calls_to(tg::EDIT_MESSAGE_TEXT).await;
         let rename = buttons(edits.last().unwrap())
             .into_iter()
@@ -9263,6 +9350,7 @@ mod tests {
         g.process_update(&updates::callback(96, OWNER, &rename, 1001))
             .await
             .unwrap();
+        settle_click(&g).await;
         g.process_update(&updates::text_message(
             97,
             OWNER,
@@ -9392,6 +9480,7 @@ mod tests {
         g.process_update(&updates::callback(102, OWNER, &switch.1, 5000))
             .await
             .unwrap();
+        settle_click(&g).await;
         g.flush_outbox().await.unwrap();
         assert_eq!(
             d.services
@@ -9523,6 +9612,7 @@ mod tests {
         g.process_update(&updates::callback(91, OWNER, &token, 5000))
             .await
             .unwrap();
+        settle_click(&g).await;
         assert_eq!(states(fork.clone()).await.last().unwrap(), "cancelled");
         assert!(
             d.services
@@ -9618,6 +9708,7 @@ mod tests {
         g.process_update(&updates::callback(u, OWNER, &token, 900))
             .await
             .unwrap();
+        settle_click(&g).await;
         let sent = t.calls_to(tg::SEND_MESSAGE).await;
         assert!(
             sent.last().unwrap()["text"]
@@ -9631,6 +9722,7 @@ mod tests {
         g.process_update(&updates::callback(u, OWNER, &token, 901))
             .await
             .unwrap();
+        settle_click(&g).await;
         let sent = t.calls_to(tg::SEND_MESSAGE).await;
         assert!(
             sent.last().unwrap()["text"]
@@ -9654,6 +9746,7 @@ mod tests {
         g.process_update(&updates::callback(u, OWNER, &token, 902))
             .await
             .unwrap();
+        settle_click(&g).await;
         let sent = t.calls_to(tg::SEND_MESSAGE).await;
         let summary = sent.last().unwrap()["text"].as_str().unwrap().to_string();
         assert!(
@@ -9665,6 +9758,7 @@ mod tests {
         g.process_update(&updates::callback(u, OWNER, &token, 903))
             .await
             .unwrap();
+        settle_click(&g).await;
         g.flush_outbox().await.unwrap();
         assert_eq!(
             crate::workflow::drive(&d, &run.id).await.unwrap(),

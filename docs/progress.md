@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1344 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1345 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -656,7 +656,8 @@ sans redémarrage (#63), redirections HTTP revérifiées (#64), `shell_exec` qui
 processus ni mémoire derrière lui (#65), liens symboliques bornés au workspace (#66),
 « Toujours » borné à l'appel (#67), bac à sable qui ferme les secrets (#68), boucle
 Telegram qui ne bloque plus (#69), brouillons qui ne retardent plus la réponse (#70),
-échecs de commande dits (#71), export d'une session inconnue refusé (#72).
+échecs de commande dits (#71), export d'une session inconnue refusé (#72), boutons
+acquittés tout de suite (#73).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -837,6 +838,10 @@ Telegram qui ne bloque plus (#69), brouillons qui ne retardent plus la réponse 
   (identifiant, préfixe ou titre) et une session inconnue répond « aucune session ne
   correspond », au lieu d'un fichier JSONL vide. La méthode RPC `session.export` suit la
   même règle, donc `penelope export session <id>` aussi.
+- **Boutons d'écran** : le clic est acquitté avant l'opération, qui se poursuit en tâche de
+  fond et livre son résultat dans la conversation (carte redessinée, ou message). Une
+  vérification de mise à jour ou un redémarrage de serveur MCP laissait le bouton tourner
+  jusqu'à ce que Telegram invalide la requête, et le résultat n'arrivait jamais.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

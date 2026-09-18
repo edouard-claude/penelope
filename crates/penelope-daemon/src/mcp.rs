@@ -1636,6 +1636,8 @@ pub(crate) mod testing {
         pub transports: Mutex<Vec<(String, Arc<LoopbackTransport>)>>,
         /// Serveurs qui meurent quand on leur envoie la sonde `server/discover`.
         pub dies_on_probe: Mutex<Vec<String>>,
+        /// Lenteur simulée à l'ouverture (issue #73).
+        pub open_delay: Mutex<Option<std::time::Duration>>,
     }
 
     impl FakeConnector {
@@ -1644,6 +1646,10 @@ pub(crate) mod testing {
                 .lock()
                 .unwrap()
                 .insert(name.to_string(), handler);
+        }
+        /// Fait traîner l'ouverture : de quoi vérifier qu'un clic n'attend pas (#73).
+        pub fn set_open_delay(&self, d: std::time::Duration) {
+            *self.open_delay.lock().unwrap() = Some(d);
         }
         pub fn opened(&self, name: &str) -> usize {
             self.opened
@@ -1669,6 +1675,10 @@ pub(crate) mod testing {
     impl Connector for FakeConnector {
         async fn open(&self, cfg: &ServerConfig) -> Result<Arc<dyn Transport>, String> {
             self.opened.lock().unwrap().push(cfg.name.clone());
+            let delay = *self.open_delay.lock().unwrap();
+            if let Some(d) = delay {
+                tokio::time::sleep(d).await;
+            }
             if let Some(e) = self.fail_open.lock().unwrap().get(&cfg.name) {
                 return Err(e.clone());
             }
