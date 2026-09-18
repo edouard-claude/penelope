@@ -6899,7 +6899,7 @@ mod tests {
             .unwrap();
         g.daemon
             .publish_config("test", |c| {
-                c.telegram.text_group_window_ms = 400;
+                c.telegram.text_group_window_ms = 1_500;
                 Ok(vec!["telegram.text_group_window_ms".into()])
             })
             .unwrap();
@@ -6928,13 +6928,18 @@ mod tests {
         g.process_update(&updates::text_message(2, OWNER, OWNER, &piece))
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(
             g.daemon.services.turns.pending_count().await.unwrap(),
             1,
             "seul le premier tour existe : le morceau attend la fenêtre"
         );
-        tokio::time::sleep(Duration::from_millis(450)).await;
+        for _ in 0..100 {
+            if g.daemon.services.turns.pending_count().await.unwrap() == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         assert_eq!(g.daemon.services.turns.pending_count().await.unwrap(), 2);
     }
 
@@ -7646,7 +7651,14 @@ mod tests {
                 .is_none(),
             "l'album attend ses photos avant de partir"
         );
-        tokio::time::sleep(ALBUM_WINDOW + Duration::from_millis(300)).await;
+        tokio::time::sleep(ALBUM_WINDOW).await;
+        // Téléchargements détachés : sous charge, on attend le tour plutôt qu'un délai fixe.
+        for _ in 0..100 {
+            if g.daemon.services.turns.pending_count().await.unwrap() > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         drain(&g).await;
 
         let requests = p.requests();
