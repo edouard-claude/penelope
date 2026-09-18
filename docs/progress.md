@@ -1385,6 +1385,25 @@ planification dit où elle livre et se déplace sans être recréée (#124).
   seulement. Le digest du matin liste ce qui part dans la journée, avec l'heure locale et
   l'endroit.
 
+### 0.17.12
+
+Pénélope sait pointer un élément dans une image, plus seulement la décrire (#125).
+
+- **Décrire, lire ou pointer** (#125) : pour vérifier une pagination iOS, une session a
+  passé 161 appels à deviner des coordonnées, le bouton visé étant une image sans
+  libellé, absente de l'arbre d'accessibilité ; la seule voie de vision décrivait, en
+  prose française. Le module `vision` porte trois tâches : `describe` (consigne
+  inchangée, photo reçue), `read` (texte recopié tel quel, dans sa langue) et `locate`.
+  L'outil à la demande `image_inspect` les pose sur une photo reçue (son chemin reste
+  dans le message) ou une capture du workspace. En `locate`, le rôle `image_locate`
+  (défaut : l'alias de `image_describe`) reçoit la taille de l'image et le repère
+  attendu, sans langue imposée ; la réponse est rendue brute, avec la taille et
+  `points` en pixels de l'image (lus dans `(x, y)`, `[x1, y1, x2, y2]`, `"x"/"y"`,
+  `<point>`), ramenés depuis les millièmes si `models.locate_frame = "per_mille"`,
+  signalés hors de l'image. Le résultat est encadré comme donnée non fiable. Les rôles
+  d'image ne comptent plus parmi ceux qui appellent des outils : un modèle de pointage
+  sans tool calling peut servir l'alias `vision`.
+
 ### Routine de livraison
 
 Avant chaque tag :

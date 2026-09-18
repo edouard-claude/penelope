@@ -2399,6 +2399,16 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
         crate::images::generate(&self.daemon, prompt, size).await
     }
 
+    async fn inspect_image(
+        &self,
+        session_id: &str,
+        path: &std::path::Path,
+        task: crate::vision::Task,
+        question: &str,
+    ) -> Result<Value, String> {
+        crate::vision::inspect(&self.daemon, session_id, path, task, question).await
+    }
+
     async fn control_run(&self, run_id: &str, op: &str) -> Result<Value, String> {
         let parsed = penelope_workflow::Control::parse(op)
             .ok_or_else(|| format!("opération inconnue : {op}"))?;

@@ -586,6 +586,10 @@ const TOOLLESS_ROLES: &[&str] = &[
     "summarizer",
     "titler",
     "vision",
+    "image_describe",
+    "image_locate",
+    "image_generate",
+    "embedding",
 ];
 
 /// Vrai si cet alias sert un rôle (ou un palier de routage) qui appelle des outils.
@@ -1124,6 +1128,16 @@ mod tests {
         assert_eq!(c.fix.as_deref(), Some("penelope start"));
     }
     use super::*;
+
+    /// #125 : les alias des rôles d'image n'appellent pas d'outils ; un modèle de pointage
+    /// sans tool calling peut les servir. Le modèle de conversation, lui, en a besoin.
+    #[test]
+    fn image_roles_do_not_need_tool_calling() {
+        let cfg = penelope_kernel::config::Config::default();
+        assert!(!alias_needs_tools(&cfg, "vision"));
+        assert!(!alias_needs_tools(&cfg, "image"));
+        assert!(alias_needs_tools(&cfg, "main"));
+    }
     use penelope_kernel::clock::TestClock;
     use std::sync::Arc;
 

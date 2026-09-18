@@ -306,6 +306,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `models.roles.embedding` | `"embedding"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.roles.image_describe` | `"vision"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.roles.image_generate` | `"image"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
+| `models.roles.image_locate` | `"vision"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.roles.memory_review` | `"fast"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.roles.stt` | `"stt"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.roles.tts` | `"tts"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
@@ -316,6 +317,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `models.routing.sticky` | `true` | Garder l'alias choisi pour la session (sauf l'alias `low`). |
 | `models.routing.fallback.main` | `["fast"]` | Alias de repli, dans l'ordre, quand un modèle ne répond pas. |
 | `models.routing.fallback.reasoning` | `["main"]` | Alias de repli, dans l'ordre, quand un modèle ne répond pas. |
+| `models.locate_frame` | `"pixels"` | Repère des coordonnées que rend le modèle du rôle `image_locate` : `pixels` (pixels de l'image reçue, comme UI-TARS) ou `per_mille` (0 à 1000 sur chaque axe, comme Qwen-VL). `image_inspect` les ramène toujours en pixels de l'image. |
 
 **[budget]**
 
@@ -514,8 +516,21 @@ Pénélope ne connaît jamais un modèle par son nom brut, seulement par **alias
  classifier, memory_review ──────► fast ─────────────────► openrouter:deepseek/deepseek-v4-flash
  code ───────────────────────────► reasoning ────────────► openrouter:z-ai/glm-5.2
  compaction ─────────────────────► summarizer ───────────► openrouter:deepseek/deepseek-v4-flash
- image_describe ─────────────────► vision ───────────────► openrouter:google/gemini-3.1-flash-image
+ image_describe, image_locate ───► vision ───────────────► openrouter:google/gemini-3.1-flash-image
  image_generate ─────────────────► image ────────────────► openrouter:google/gemini-3.1-flash-image
+```
+
+Décrire une image et y pointer un élément ne demandent pas le même modèle : le rôle
+`image_locate` (outil `image_inspect`, mode `locate`) peut viser un modèle d'interface qui
+rend des coordonnées, sans toucher à la description. Son repère se déclare
+(`models.locate_frame` : `pixels`, comme UI-TARS, ou `per_mille`, comme Qwen-VL) :
+
+```bash
+penelope model set pointage openrouter:bytedance/ui-tars-1.5-7b
+```
+
+```bash
+penelope config set models.roles.image_locate pointage
 ```
 
 Changer de modèle, c'est donc changer **une** ligne : l'alias. Les workflows, les skills et
@@ -977,6 +992,7 @@ et `/stop` interrompt tout le lot.
 | `history_grep` | read | Recherche plein texte dans les messages bruts et les résumés. |
 | `http_fetch` | external | Récupère une URL. |
 | `image_generate` | external | Génère une image et la stocke en artefact. (à la demande) |
+| `image_inspect` | read | Pose une question au modèle de vision sur une image : photo reçue (son chemin est dans le message) ou capture d'écran du workspace. (à la demande) |
 | `intent_cancel` | write | Annule une intention. (à la demande) |
 | `intent_create` | write | Arme une intention événementielle : « quand on reparle de X, rappelle-moi Y ». (à la demande) |
 | `intent_list` | read | Liste les intentions armées. (à la demande) |
@@ -1200,7 +1216,19 @@ qui en parle (trois fois au plus, une fois par jour au plus).
 Une photo part dans la conversation. Si le modèle de la session lit les images, il la
 voit ; sinon le modèle de l'alias `vision` la décrit (texte visible recopié) et la
 description rejoint le message. Plusieurs photos envoyées d'un coup forment un seul
-message.
+message, qui garde le chemin de chaque photo.
+
+**Travailler sur une interface.** Une description ne dit pas où taper. `image_inspect`
+pose une question sur une image déjà reçue ou sur une capture du workspace
+(`xcrun simctl io booted screenshot ecran.png` pour un simulateur iOS), dans l'un de trois
+modes : `describe` (description, en français), `read` (texte recopié tel quel, dans sa
+langue) ou `locate` (« le bouton de sélection de boutique », même sans libellé ni
+identifiant d'accessibilité). En `locate`, le modèle du rôle `image_locate` reçoit la
+taille de l'image et le repère attendu, sa réponse est rendue telle quelle (ni reformulée
+ni traduite), et `points` donne chaque élément en pixels de l'image, origine en haut à
+gauche ; pour un tap sur simulateur, diviser par l'échelle de l'écran (×3 sur la plupart
+des iPhone). Des coordonnées hors de l'image sont signalées. Dans tous les modes, ce que le
+modèle lit dans l'image reste une donnée, encadrée comme telle.
 
 Un document PDF, DOCX, HTML, Markdown ou texte est ingéré : son texte devient une fiche
 `vault/sources/<nom>.md`, découpée en passages que `mem_search` retrouve, et un résumé

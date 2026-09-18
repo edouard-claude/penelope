@@ -133,6 +133,17 @@ pub trait Orchestrator: Send + Sync {
         cancel: &penelope_llm::CancelToken,
     ) -> Result<Value, String>;
     async fn generate_image(&self, prompt: &str, size: Option<&str>) -> Result<Value, String>;
+    /// Question au modèle de vision sur une image (issue #125).
+    async fn inspect_image(
+        &self,
+        session_id: &str,
+        path: &Path,
+        task: crate::vision::Task,
+        question: &str,
+    ) -> Result<Value, String> {
+        let _ = (session_id, path, task, question);
+        Err("modèle de vision indisponible ici".into())
+    }
     /// Contrôle d'un run (`pause`, `resume`, `cancel`, `retry-step`, `skip-step`, `goto:<étape>`).
     async fn control_run(&self, run_id: &str, op: &str) -> Result<Value, String> {
         let _ = (run_id, op);
@@ -1192,6 +1203,35 @@ impl NativeToolExecutor {
                 return Err(ToolError::Denied(format!(
                     "`{name}` n'a de sens que dans une étape de workflow"
                 )));
+            }
+            "image_inspect" => {
+                let task =
+                    crate::vision::Task::parse(&str_arg(args, "mode")?).ok_or_else(|| {
+                        ToolError::Invalid("`mode` : describe, read ou locate".into())
+                    })?;
+                // Une photo reçue vit dans `{data}/media/photos`, hors des workspaces.
+                let mut roots = self.env.workspaces.clone();
+                roots.push(penelope_platform::sandbox::normalise(
+                    &s.platform.dirs.data().join("media").join("photos"),
+                ));
+                let path = penelope_tools::fs::resolve(&str_arg(args, "path")?, &roots)?;
+                let o = self
+                    .orchestrator
+                    .as_ref()
+                    .ok_or_else(|| ToolError::Other("modèle de vision indisponible".into()))?;
+                let v = o
+                    .inspect_image(
+                        &self.env.session_id,
+                        &path,
+                        task,
+                        args.get("question")
+                            .and_then(|q| q.as_str())
+                            .unwrap_or_default(),
+                    )
+                    .await
+                    .map_err(ToolError::Other)?;
+                // Ce que le modèle de vision a lu dans l'image est une donnée (§13.3).
+                return Ok(untrusted_listing("image", v));
             }
             "image_generate" => {
                 let o = self

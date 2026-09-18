@@ -353,7 +353,14 @@ pub struct Models {
     /// code, images, embeddings, transcription.
     pub roles: BTreeMap<String, String>,
     pub routing: Routing,
+    /// Repère des coordonnées que rend le modèle du rôle `image_locate` : `pixels`
+    /// (pixels de l'image reçue, comme UI-TARS) ou `per_mille` (0 à 1000 sur chaque axe,
+    /// comme Qwen-VL). `image_inspect` les ramène toujours en pixels de l'image.
+    pub locate_frame: String,
 }
+
+/// Repères de coordonnées d'un modèle de pointage (issue #125).
+pub const LOCATE_FRAMES: &[&str] = &["pixels", "per_mille"];
 
 /// Modèle d'embeddings par défaut : multilingue, servi par OpenRouter, sans serveur local
 /// (issue #11).
@@ -391,6 +398,7 @@ impl Default for Models {
             ("code", "reasoning"),
             ("image_generate", "image"),
             ("image_describe", "vision"),
+            ("image_locate", "vision"),
             ("embedding", "embedding"),
             ("stt", "stt"),
             ("tts", "tts"),
@@ -403,6 +411,7 @@ impl Default for Models {
             aliases,
             roles,
             routing: Routing::default(),
+            locate_frame: "pixels".into(),
         }
     }
 }
@@ -1268,6 +1277,13 @@ impl Config {
             }
         }
 
+        if !LOCATE_FRAMES.contains(&self.models.locate_frame.as_str()) {
+            return Err(KernelError::config(format!(
+                "models.locate_frame doit valoir {} (reçu `{}`)",
+                LOCATE_FRAMES.join(", "),
+                self.models.locate_frame
+            )));
+        }
         if !APPROVAL_MODES.contains(&self.tools.approval_mode.as_str()) {
             return Err(KernelError::config(format!(
                 "tools.approval_mode doit valoir {} (reçu `{}`)",

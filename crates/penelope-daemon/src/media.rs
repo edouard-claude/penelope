@@ -36,6 +36,56 @@ pub fn image_mime(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// Largeur et hauteur d'une image, lues dans son en-tête (PNG, JPEG, GIF, WebP) : des
+/// coordonnées rendues par un modèle ne servent qu'avec la taille de l'image qu'il a vue
+/// (issue #125).
+pub fn image_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    let be16 = |b: &[u8], i: usize| Some(u16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?]) as u32);
+    let le16 = |b: &[u8], i: usize| Some(u16::from_le_bytes([*b.get(i)?, *b.get(i + 1)?]) as u32);
+    let be32 = |b: &[u8], i: usize| Some(u32::from_be_bytes(b.get(i..i + 4)?.try_into().ok()?));
+    let le24 = |b: &[u8], i: usize| {
+        Some(u32::from_le_bytes([
+            *b.get(i)?,
+            *b.get(i + 1)?,
+            *b.get(i + 2)?,
+            0,
+        ]))
+    };
+    match image_mime(bytes)? {
+        "image/png" => Some((be32(bytes, 16)?, be32(bytes, 20)?)),
+        "image/gif" => Some((le16(bytes, 6)?, le16(bytes, 8)?)),
+        "image/webp" => match bytes.get(12..16)? {
+            b"VP8 " => Some((le16(bytes, 26)? & 0x3FFF, le16(bytes, 28)? & 0x3FFF)),
+            b"VP8L" => {
+                let b = u32::from_le_bytes(bytes.get(21..25)?.try_into().ok()?);
+                Some(((b & 0x3FFF) + 1, ((b >> 14) & 0x3FFF) + 1))
+            }
+            b"VP8X" => Some((le24(bytes, 24)? + 1, le24(bytes, 27)? + 1)),
+            _ => None,
+        },
+        _ => {
+            // JPEG : segments jusqu'au premier SOFn (hors DHT, JPG, DAC).
+            let mut i = 2;
+            while i + 9 < bytes.len() {
+                if bytes[i] != 0xFF {
+                    return None;
+                }
+                let marker = bytes[i + 1];
+                if marker == 0xFF {
+                    i += 1;
+                    continue;
+                }
+                let len = be16(bytes, i + 2)? as usize;
+                if (0xC0..=0xCF).contains(&marker) && ![0xC4, 0xC8, 0xCC].contains(&marker) {
+                    return Some((be16(bytes, i + 7)?, be16(bytes, i + 5)?));
+                }
+                i += 2 + len;
+            }
+            None
+        }
+    }
+}
+
 fn extension_of(mime: &str) -> &'static str {
     match mime {
         "image/png" => "png",
@@ -168,6 +218,28 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #125 : la taille d'une capture se lit dans son en-tête, sans décoder l'image.
+    #[test]
+    fn image_sizes_are_read_from_headers() {
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&1179u32.to_be_bytes());
+        png.extend_from_slice(&2556u32.to_be_bytes());
+        assert_eq!(image_size(&png), Some((1179, 2556)));
+
+        let gif = [
+            b'G', b'I', b'F', b'8', b'9', b'a', 0x40, 0x01, 0xF0, 0x00, 0, 0,
+        ];
+        assert_eq!(image_size(&gif), Some((320, 240)));
+
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00];
+        jpeg.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x11, 0x08, 0x0A, 0x00, 0x05, 0xA0, 3]);
+        jpeg.extend_from_slice(&[0; 12]);
+        assert_eq!(image_size(&jpeg), Some((1440, 2560)));
+
+        assert_eq!(image_size(b"pas une image"), None);
+    }
 
     #[test]
     fn images_are_recognised_by_their_magic_bytes() {
