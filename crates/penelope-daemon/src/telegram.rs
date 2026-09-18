@@ -270,6 +270,9 @@ impl TelegramGateway {
                         let id = u.get("update_id").and_then(|v| v.as_i64()).unwrap_or(0);
                         if let Err(e) = self.process_update(&u).await {
                             tracing::error!(update = id, error = %e, "update Telegram en échec");
+                            // Jamais de silence : le propriétaire voit l'erreur au lieu de
+                            // retaper ou de croire que c'est fait (issue #71).
+                            self.report_failure(&u, &e).await;
                         }
                         let _ = self.daemon.kv_set("tg.offset", &(id + 1).to_string()).await;
                     }
@@ -280,6 +283,29 @@ impl TelegramGateway {
                     backoff = (backoff * 2).min(Duration::from_secs(60));
                 }
             }
+        }
+    }
+
+    /// Dit au propriétaire qu'un update n'a pas pu être traité, dans la conversation où il
+    /// l'a envoyé (issue #71).
+    async fn report_failure(&self, update: &Value, error: &anyhow::Error) {
+        let msg = update
+            .get("message")
+            .or_else(|| update.get("edited_message"))
+            .or_else(|| update.pointer("/callback_query/message"));
+        let chat_id = msg
+            .and_then(|m| m.pointer("/chat/id"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(self.owner_id);
+        let topic_id = msg
+            .and_then(|m| m.get("message_thread_id"))
+            .and_then(|v| v.as_i64());
+        let reply_to = msg
+            .and_then(|m| m.get("message_id"))
+            .and_then(|v| v.as_i64());
+        let text = format!("⚠️ Ta demande n'a pas pu être traitée : {error}");
+        if let Err(e) = self.reply(chat_id, topic_id, reply_to, &text).await {
+            tracing::warn!(error = %e, "échec non signalé au propriétaire");
         }
     }
 
@@ -6301,6 +6327,62 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let reactions = t.calls_to(tg::SET_MESSAGE_REACTION).await;
         assert!(reactions.len() >= 2, "{reactions:?}");
+    }
+
+    /// #71 : une commande dont le traitement échoue le dit, au lieu de se taire.
+    #[tokio::test]
+    async fn a_failing_command_says_so_to_the_owner() {
+        let (_d, g, t, _p) = gateway().await;
+        // Ce que fait la boucle de polling quand `process_update` remonte une erreur.
+        let update = updates::text_message(95, OWNER, OWNER, "/model auto on");
+        g.report_failure(&update, &anyhow::anyhow!("configuration non inscriptible"))
+            .await;
+        g.flush_outbox().await.unwrap();
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            sent.iter()
+                .any(|m| m.contains("n'a pas pu être traitée") && m.contains("non inscriptible")),
+            "l'échec doit être dit avec sa raison : {sent:?}"
+        );
+        let reply_to =
+            t.calls_to(tg::SEND_MESSAGE).await[0]["reply_parameters"]["message_id"].as_i64();
+        assert_eq!(reply_to, Some(950), "en réponse au message fautif");
+    }
+
+    /// #72 : `/export` d'une session inconnue dit « introuvable » au lieu d'envoyer un
+    /// fichier vide.
+    #[tokio::test]
+    async fn exporting_an_unknown_session_says_so() {
+        let (_d, g, t, _p) = gateway().await;
+        g.daemon
+            .kv_set("tg.onboard.proposed", "test")
+            .await
+            .unwrap();
+        g.process_update(&updates::text_message(
+            96,
+            OWNER,
+            OWNER,
+            "/export s_inexistante",
+        ))
+        .await
+        .unwrap();
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            g.flush_outbox().await.unwrap();
+            if !t.calls_to(tg::SEND_MESSAGE).await.is_empty() {
+                break;
+            }
+        }
+        assert!(
+            t.calls_to("sendDocument").await.is_empty(),
+            "aucun fichier ne doit partir"
+        );
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            sent.iter()
+                .any(|m| m.contains("aucune session ne correspond") || m.contains("introuvable")),
+            "{sent:?}"
+        );
     }
 
     /// #70 : un seul brouillon en vol, et le dernier envoyé porte le dernier texte.

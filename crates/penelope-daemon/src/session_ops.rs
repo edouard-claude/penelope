@@ -264,8 +264,12 @@ pub async fn export(d: &Arc<Daemon>, what: &str, id: Option<&str>) -> anyhow::Re
     std::fs::create_dir_all(&dir)?;
     let (path, lines) = match what {
         "session" => {
-            let id = id.ok_or_else(|| anyhow::anyhow!("identifiant de session attendu"))?;
-            let lines = session_lines(s, id).await?;
+            let query = id.ok_or_else(|| anyhow::anyhow!("identifiant de session attendu"))?;
+            // Session inconnue : on le dit, au lieu d'écrire un fichier vide (issue #72).
+            // Un préfixe ou un titre est accepté, comme pour `/switch` et `/close`.
+            let sess = resolve(s, query).await.map_err(anyhow::Error::msg)?;
+            let id = sess.id.to_string();
+            let lines = session_lines(s, &id).await?;
             (dir.join(format!("session-{id}-{stamp}.jsonl")), lines)
         }
         "run" => {
