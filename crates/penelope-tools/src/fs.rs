@@ -105,35 +105,185 @@ fn real_path(path: &Path) -> PathBuf {
     }
 }
 
-/// `fs_read` : lecture paginée par lignes.
-pub fn read(path: &Path, offset: usize, limit: usize) -> ToolResult<Value> {
-    let raw =
-        std::fs::read(path).map_err(|e| ToolError::Io(format!("{} : {e}", path.display())))?;
-    if raw.iter().take(8000).any(|b| *b == 0) {
+/// Plafonds de lecture des fichiers (issue #94) : un journal de 512 Mio ne passe plus en
+/// mémoire pour rendre 50 lignes.
+#[derive(Debug, Clone, Copy)]
+pub struct ReadCaps {
+    /// En dessous, le nombre total de lignes est compté ; au-delà, il n'est pas lu.
+    pub count_total_below: u64,
+    /// Octets parcourus au plus pour atteindre `offset`.
+    pub max_skip_bytes: u64,
+    /// Au-delà, une ligne est tronquée (un fichier binaire déguisé, un JSON minifié).
+    pub max_line_bytes: usize,
+    /// `fs_search` : fichier ignoré au-delà, et nommé comme tel.
+    pub max_search_file_bytes: u64,
+}
+
+impl Default for ReadCaps {
+    fn default() -> Self {
+        ReadCaps {
+            count_total_below: 8 * 1024 * 1024,
+            max_skip_bytes: 64 * 1024 * 1024,
+            max_line_bytes: 64 * 1024,
+            max_search_file_bytes: 32 * 1024 * 1024,
+        }
+    }
+}
+
+/// Lecteur de lignes à mémoire bornée : jamais plus d'une ligne (tronquée au plafond) et
+/// d'un tampon en mémoire.
+struct Lines<R: std::io::BufRead> {
+    inner: R,
+    max_line: usize,
+    /// Octets consommés depuis le début.
+    consumed: u64,
+    /// Lignes tronquées au plafond.
+    cut: usize,
+}
+
+impl<R: std::io::BufRead> Lines<R> {
+    fn new(inner: R, max_line: usize) -> Self {
+        Lines {
+            inner,
+            max_line,
+            consumed: 0,
+            cut: 0,
+        }
+    }
+
+    /// Ligne suivante, sans son retour à la ligne ; `None` en fin de fichier.
+    fn next_line(&mut self) -> std::io::Result<Option<String>> {
+        let mut line: Vec<u8> = Vec::new();
+        let mut any = false;
+        let mut truncated = false;
+        loop {
+            let buf = self.inner.fill_buf()?;
+            if buf.is_empty() {
+                break;
+            }
+            any = true;
+            let (take, done) = match buf.iter().position(|b| *b == b'\n') {
+                Some(i) => (i + 1, true),
+                None => (buf.len(), false),
+            };
+            let room = self.max_line.saturating_sub(line.len());
+            let keep = if done { take - 1 } else { take };
+            if keep > room {
+                truncated = true;
+            }
+            line.extend_from_slice(&buf[..keep.min(room)]);
+            self.inner.consume(take);
+            self.consumed += take as u64;
+            if done {
+                break;
+            }
+        }
+        if !any {
+            return Ok(None);
+        }
+        if truncated {
+            self.cut += 1;
+        }
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+        Ok(Some(String::from_utf8_lossy(&line).into_owned()))
+    }
+}
+
+/// Ouvre un fichier texte, refuse un binaire (octet nul dans le début).
+fn open_text(path: &Path) -> ToolResult<(std::io::BufReader<std::fs::File>, u64)> {
+    use std::io::BufRead;
+    let f = std::fs::File::open(path)
+        .map_err(|e| ToolError::Io(format!("{} : {e}", path.display())))?;
+    let size = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut r = std::io::BufReader::with_capacity(64 * 1024, f);
+    let head = r
+        .fill_buf()
+        .map_err(|e| ToolError::Io(format!("{} : {e}", path.display())))?;
+    if head.iter().take(8000).any(|b| *b == 0) {
         return Err(ToolError::Invalid(format!(
             "{} est un fichier binaire : utiliser artifact_read après externalisation",
             path.display()
         )));
     }
-    let text = String::from_utf8_lossy(&raw);
-    let lines: Vec<&str> = text.lines().collect();
-    let total = lines.len();
-    let start = offset.min(total);
-    let end = (start + limit.max(1)).min(total);
-    let body: String = lines[start..end]
-        .iter()
-        .enumerate()
-        .map(|(i, l)| format!("{:>6}\t{l}", start + i + 1))
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok(json!({
+    Ok((r, size))
+}
+
+/// `fs_read` : lecture paginée par lignes.
+pub fn read(path: &Path, offset: usize, limit: usize) -> ToolResult<Value> {
+    read_with(path, offset, limit, ReadCaps::default())
+}
+
+/// `fs_read` en flux (issue #94) : saute `offset` lignes sans les garder, prend `limit`
+/// lignes, regarde s'il en reste. Le total n'est compté que pour un petit fichier.
+pub fn read_with(path: &Path, offset: usize, limit: usize, caps: ReadCaps) -> ToolResult<Value> {
+    let (reader, size) = open_text(path)?;
+    let io = |e: std::io::Error| ToolError::Io(format!("{} : {e}", path.display()));
+    let mut lines = Lines::new(reader, caps.max_line_bytes);
+    let mut remarks: Vec<String> = Vec::new();
+
+    let mut index = 0usize;
+    while index < offset {
+        if lines.consumed > caps.max_skip_bytes {
+            return Err(ToolError::Invalid(format!(
+                "ligne {} trop loin dans {} ({} Mo parcourus sans l'atteindre) : pour la fin \
+                 d'un gros fichier, `shell_exec` avec `tail -n`, ou `fs_search`",
+                offset + 1,
+                path.display(),
+                caps.max_skip_bytes / (1024 * 1024)
+            )));
+        }
+        if lines.next_line().map_err(io)?.is_none() {
+            break;
+        }
+        index += 1;
+    }
+    let start = index;
+    let mut body: Vec<String> = Vec::new();
+    while body.len() < limit.max(1) {
+        match lines.next_line().map_err(io)? {
+            Some(l) => body.push(format!("{:>6}\t{l}", start + body.len() + 1)),
+            None => break,
+        }
+    }
+    let end = start + body.len();
+    // Une ligne de plus dit s'il en reste, sans lire la suite.
+    let more = lines.next_line().map_err(io)?.is_some();
+    let total: Option<usize> = if !more {
+        Some(end)
+    } else if size <= caps.count_total_below {
+        let mut n = end + 1;
+        while lines.next_line().map_err(io)?.is_some() {
+            n += 1;
+        }
+        Some(n)
+    } else {
+        remarks.push(format!(
+            "fichier de {} Mo : le nombre total de lignes n'est pas compté",
+            size / (1024 * 1024)
+        ));
+        None
+    };
+    if lines.cut > 0 {
+        remarks.push(format!(
+            "{} ligne(s) tronquée(s) à {} Kio",
+            lines.cut,
+            caps.max_line_bytes / 1024
+        ));
+    }
+    let mut out = json!({
         "path": path.display().to_string(),
         "lines": total,
         "from": start + 1,
         "to": end,
-        "truncated": end < total,
-        "content": body,
-    }))
+        "truncated": more,
+        "content": body.join("\n"),
+    });
+    if !remarks.is_empty() {
+        out["remarque"] = json!(remarks.join(" ; "));
+    }
+    Ok(out)
 }
 
 /// `fs_list`.
@@ -191,9 +341,22 @@ pub fn search(
     glob: Option<&str>,
     max_results: usize,
 ) -> ToolResult<Value> {
+    search_with(root, pattern, glob, max_results, ReadCaps::default())
+}
+
+/// `fs_search` en flux (issue #94) : ligne à ligne, arrêt à `max_results`, fichiers
+/// au-delà du plafond ignorés et nommés.
+pub fn search_with(
+    root: &Path,
+    pattern: &str,
+    glob: Option<&str>,
+    max_results: usize,
+    caps: ReadCaps,
+) -> ToolResult<Value> {
     let re = regex::Regex::new(pattern)
         .map_err(|e| ToolError::Invalid(format!("expression régulière invalide : {e}")))?;
     let mut hits = Vec::new();
+    let mut ignored: Vec<Value> = Vec::new();
     let mut files = Vec::new();
     collect_files(root, glob, 0, &mut files)?;
     files.sort();
@@ -202,25 +365,40 @@ pub fn search(
         if hits.len() >= max_results {
             break;
         }
-        let Ok(raw) = std::fs::read(&f) else { continue };
-        if raw.iter().take(4000).any(|b| *b == 0) {
+        let size = std::fs::metadata(&f).map(|m| m.len()).unwrap_or(0);
+        if size > caps.max_search_file_bytes {
+            ignored.push(json!({
+                "path": f.display().to_string(),
+                "raison": format!("{} Mo, au-delà de {} Mo", size / (1024 * 1024),
+                    caps.max_search_file_bytes / (1024 * 1024)),
+            }));
             continue;
         }
-        let text = String::from_utf8_lossy(&raw);
-        for (i, line) in text.lines().enumerate() {
+        // Binaire ou illisible : ignoré, comme avant.
+        let Ok((reader, _)) = open_text(&f) else {
+            continue;
+        };
+        let mut lines = Lines::new(reader, caps.max_line_bytes);
+        let mut i = 0usize;
+        while let Ok(Some(line)) = lines.next_line() {
+            i += 1;
             if hits.len() >= max_results {
                 break;
             }
-            if re.is_match(line) {
+            if re.is_match(&line) {
                 hits.push(json!({
                     "path": f.display().to_string(),
-                    "line": i + 1,
+                    "line": i,
                     "text": line.chars().take(300).collect::<String>(),
                 }));
             }
         }
     }
-    Ok(json!({"pattern": pattern, "hits": hits.len(), "results": hits}))
+    let mut out = json!({"pattern": pattern, "hits": hits.len(), "results": hits});
+    if !ignored.is_empty() {
+        out["ignorés"] = json!(ignored);
+    }
+    Ok(out)
 }
 
 fn collect_files(
@@ -494,6 +672,102 @@ mod tests {
         let c = r["content"].as_str().unwrap();
         assert!(c.contains("ligne 11"));
         assert!(!c.contains("ligne 16"));
+    }
+
+    fn small_caps() -> ReadCaps {
+        ReadCaps {
+            count_total_below: 1024 * 1024,
+            max_skip_bytes: 1024 * 1024,
+            max_line_bytes: 1024,
+            max_search_file_bytes: 1024 * 1024,
+        }
+    }
+
+    /// Fichier de ~4 Mio, 200 000 lignes.
+    fn big_log(dir: &Path) -> PathBuf {
+        let p = dir.join("gros.log");
+        let mut s = String::with_capacity(4 * 1024 * 1024);
+        for i in 0..200_000 {
+            s.push_str(&format!("{i:08} ligne de journal assez ordinaire\n"));
+        }
+        std::fs::write(&p, s).unwrap();
+        p
+    }
+
+    /// #94 : 50 lignes d'un gros fichier se lisent sans le parcourir : le total n'est
+    /// pas compté (et c'est dit), la suite est signalée.
+    #[test]
+    fn the_head_of_a_big_file_is_read_without_scanning_it() {
+        let (d, _) = ws();
+        let p = big_log(d.path());
+        let t = std::time::Instant::now();
+        let r = read_with(&p, 0, 50, small_caps()).unwrap();
+        assert!(
+            t.elapsed() < std::time::Duration::from_millis(200),
+            "{:?}",
+            t.elapsed()
+        );
+        assert_eq!(r["lines"], Value::Null);
+        assert_eq!(r["truncated"], true);
+        assert_eq!(r["to"], 50);
+        assert!(
+            r["remarque"].as_str().unwrap().contains("pas compté"),
+            "{r}"
+        );
+        assert!(
+            r["content"]
+                .as_str()
+                .unwrap()
+                .ends_with("00000049 ligne de journal assez ordinaire")
+        );
+    }
+
+    /// #94 : un `offset` au-delà de ce qu'on accepte de parcourir est refusé avec la
+    /// marche à suivre ; au-delà de la fin d'un petit fichier, le contenu est vide.
+    #[test]
+    fn a_far_offset_is_bounded() {
+        let (d, _) = ws();
+        let p = big_log(d.path());
+        let e = read_with(&p, 190_000, 10, small_caps()).unwrap_err();
+        assert!(e.to_string().contains("tail -n"), "{e}");
+
+        let small = d.path().join("petit.txt");
+        std::fs::write(&small, "a\nb\n").unwrap();
+        let r = read_with(&small, 10, 5, small_caps()).unwrap();
+        assert_eq!(r["content"], "");
+        assert_eq!(r["lines"], 2);
+        assert_eq!(r["truncated"], false);
+    }
+
+    /// #94 : une ligne unique sans fin (JSON minifié, binaire déguisé) est tronquée, et
+    /// c'est dit.
+    #[test]
+    fn a_single_huge_line_is_truncated() {
+        let (d, _) = ws();
+        let p = d.path().join("minifie.json");
+        std::fs::write(&p, "x".repeat(64 * 1024)).unwrap();
+        let r = read_with(&p, 0, 10, small_caps()).unwrap();
+        assert!(r["content"].as_str().unwrap().len() < 2 * 1024);
+        assert!(r["remarque"].as_str().unwrap().contains("tronquée"), "{r}");
+    }
+
+    /// #94 : `fs_search` ignore un fichier au-delà du plafond et le nomme ; les autres
+    /// donnent les mêmes résultats qu'avant.
+    #[test]
+    fn search_skips_and_names_oversized_files() {
+        let (d, _) = ws();
+        big_log(d.path());
+        std::fs::write(d.path().join("notes.log"), "rien\nerreur fatale ici\n").unwrap();
+        let r = search_with(d.path(), "erreur", Some("*.log"), 10, small_caps()).unwrap();
+        assert_eq!(r["hits"], 1);
+        assert_eq!(r["results"][0]["line"], 2);
+        assert!(
+            r["ignorés"][0]["path"]
+                .as_str()
+                .unwrap()
+                .ends_with("gros.log"),
+            "{r}"
+        );
     }
 
     #[test]

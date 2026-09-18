@@ -860,6 +860,12 @@ Ce que le modèle peut appeler sans serveur MCP, avec la classe de risque qui d�
 l'approbation (`read` : sans approbation ; `write`, `external`, `destructive` : selon la
 politique). Les outils MCP passent par `tool_search`, `tool_describe` et `tool_call`.
 
+`fs_read` et `fs_search` lisent en flux : 50 lignes d'un journal de 512 Mio se lisent en
+moins d'une milliseconde et quelques Mio de mémoire. Au-delà de 8 Mio, `fs_read` ne compte
+plus le total des lignes (il le dit) et refuse d'aller chercher une ligne au-delà de 64 Mio
+parcourus (`tail -n` par `shell_exec` fait mieux) ; une ligne est tronquée à 64 Kio ;
+`fs_search` ignore les fichiers de plus de 32 Mio et les nomme dans `ignorés`.
+
 Quand le modèle demande plusieurs appels d'un coup, les lectures pures consécutives
 (fichiers, git en lecture, mémoire, historique, artefacts, catalogues) partent ensemble,
 par quatre : cinq `fs_read` ou trois `mem_search` coûtent la durée du plus lent, pas la

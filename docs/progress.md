@@ -1025,6 +1025,12 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   métadonnées entre le contrôle et la connexion. SNI, `Host` et certificat restent sur le
   nom. Le garde (`AddressGuard`) est injectable : les tests rejouent un rebinding, une
   redirection vers un nom qui rebinde et le repli sur une seconde adresse vérifiée.
+- **Fichiers lus en flux** (#94) : `fs_read` saute `offset` lignes sans les garder, prend
+  `limit` lignes, regarde s'il en reste, et ne compte le total que sous 8 Mio ; `fs_search`
+  lit ligne à ligne et ignore (en les nommant) les fichiers de plus de 32 Mio ; une ligne
+  est tronquée à 64 Kio, un saut au-delà de 64 Mio est refusé avec la marche à suivre.
+  Mesuré sur un M2 : 50 lignes d'un journal de 512 Mio en 0,7 ms et 7,6 Mio de mémoire
+  résidente, contre 944 ms et 607 Mio.
 
 ### Routine de livraison
 
