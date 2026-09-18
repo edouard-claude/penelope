@@ -336,6 +336,32 @@ pub struct AgentLoop {
 }
 
 /// Résolution des appels en attente.
+/// Lectures lancées ensemble, au plus (issue #85).
+const PARALLEL_READS: usize = 4;
+
+/// Suite d'un appel, décidée avant toute exécution.
+enum Step {
+    /// Résultat connu sans exécuter : refus, avertissement du harnais.
+    Record(ToolCall, String),
+    /// À exécuter ; `parallel` : lecture autorisée d'office, qui peut partir avec ses
+    /// voisines.
+    Execute {
+        call: ToolCall,
+        info: CallInfo,
+        parallel: bool,
+    },
+}
+
+/// Ce qui arrête la liste des appels après l'exécution de ceux qui précèdent.
+enum Terminal {
+    Stop(TurnOutcome),
+    Loop {
+        call: ToolCall,
+        tool: String,
+        message: String,
+    },
+}
+
 enum Pending {
     Nothing,
     Resolved,
@@ -1145,32 +1171,24 @@ impl AgentLoop {
         if pending.is_empty() {
             return Ok(Pending::Nothing);
         }
-        let mut nudge = self.delegation_nudge(spec).await?;
-        // Les résultats de ce groupe d'appels sont admis ensemble à la fin (issue #52).
-        let mut recorded = 0usize;
+        let nudge = self.delegation_nudge(spec).await?;
 
+        // 1. Décisions, dans l'ordre des appels : liste blanche, décision déjà prise,
+        //    boucles, politique. Rien n'est exécuté ici ; un appel qui demande une
+        //    approbation arrête la liste (ceux d'avant partent quand même).
+        let mut steps: Vec<Step> = Vec::new();
+        let mut terminal: Option<Terminal> = None;
         for call in pending {
-            if spec.cancel.is_cancelled() {
-                return Ok(Pending::Stop(TurnOutcome::Cancelled));
-            }
             let info = execute.describe_call(&call.name, &call.arguments).await;
 
-            // 1. Liste blanche de l'étape ou de la skill.
+            // Liste blanche de l'étape ou de la skill.
             if !penelope_tools::is_allowed(&call.name, &spec.allowed_tools) {
-                self.record_result(
-                    conv,
-                    sink,
-                    &call,
-                    false,
-                    format!("Refusé : `{}` n'est pas autorisé ici.", call.name),
-                    false,
-                )
-                .await?;
-                recorded += 1;
+                let text = format!("Refusé : `{}` n'est pas autorisé ici.", call.name);
+                steps.push(Step::Record(call, text));
                 continue;
             }
 
-            // 2. Une décision a-t-elle déjà été prise pour cet appel précis ?
+            // Une décision a-t-elle déjà été prise pour cet appel précis ?
             let prior = s
                 .approvals
                 .find_for_call(&spec.session_id, &call.id)
@@ -1178,9 +1196,10 @@ impl AgentLoop {
             let decided = match &prior {
                 Some(a) => match a.state {
                     ApprovalState::Pending => {
-                        return Ok(Pending::Stop(TurnOutcome::AwaitingApproval {
+                        terminal = Some(Terminal::Stop(TurnOutcome::AwaitingApproval {
                             approval_id: a.id.0.clone(),
                         }));
+                        break;
                     }
                     ApprovalState::Approved => Some(true),
                     _ => Some(false),
@@ -1188,6 +1207,7 @@ impl AgentLoop {
                 None => None,
             };
 
+            let mut parallel = false;
             match decided {
                 Some(false) => {
                     let a = prior.as_ref().expect("décision sans demande");
@@ -1199,15 +1219,10 @@ impl AgentLoop {
                             .map(|r| format!("le propriétaire a refusé : {r}"))
                             .unwrap_or_else(|| "le propriétaire a refusé".to_string()),
                     };
-                    self.record_result(
-                        conv,
-                        sink,
-                        &call,
-                        false,
+                    steps.push(Step::Record(
+                        call,
                         format!("Non exécuté : {why}. Propose une autre approche ou demande."),
-                        false,
-                    )
-                    .await?;
+                    ));
                     continue;
                 }
                 Some(true) => {
@@ -1215,66 +1230,23 @@ impl AgentLoop {
                     let _ = detector.observe(&call.name, &call.arguments);
                 }
                 None => {
-                    // 3. Détecteur de boucles.
+                    // Détecteur de boucles.
                     match detector.observe(&call.name, &call.arguments) {
                         LoopVerdict::Ok => {}
                         LoopVerdict::Warn(m) => {
-                            self.record_result(
-                                conv,
-                                sink,
-                                &call,
-                                false,
+                            steps.push(Step::Record(
+                                call,
                                 format!("[avertissement du harnais] {m}"),
-                                false,
-                            )
-                            .await?;
+                            ));
                             continue;
                         }
                         LoopVerdict::Abort(m) => {
-                            let report = format!("{m}\n\n{}", detector.report());
-                            s.events
-                                .append(
-                                    EventDraft::new("turn.loop_aborted", json!({"report": report}))
-                                        .session(&spec.session_id),
-                                )
-                                .await?;
-                            tracing::warn!(session = %spec.session_id, %report, "boucle d'outil arrêtée");
-                            // L'échec reste dans la conversation (issue #31) : le résultat réel,
-                            // puis la note d'arrêt, pour que le tour suivant ne recommence pas.
-                            let last =
-                                last_result_of(&conv.tail().await?, &call.name, &call.arguments);
-                            let body = match &last {
-                                Some(r) => format!(
-                                    "Dernier résultat réel de l'outil :\n{}",
-                                    r.chars().take(1_500).collect::<String>()
-                                ),
-                                None => "Aucun résultat obtenu.".to_string(),
-                            };
-                            self.record_result(
-                                conv,
-                                sink,
-                                &call,
-                                false,
-                                format!("{body}\n\n{LOOP_STOP_NOTE}"),
-                                false,
-                            )
-                            .await?;
-                            for rest in pending_calls(&conv.tail().await?) {
-                                self.record_result(
-                                    conv,
-                                    sink,
-                                    &rest,
-                                    false,
-                                    "Non exécuté : tour arrêté par le détecteur de boucles.".into(),
-                                    false,
-                                )
-                                .await?;
-                            }
-                            return Ok(Pending::Loop {
-                                report,
+                            terminal = Some(Terminal::Loop {
+                                call,
                                 tool: info.effective_name.clone(),
-                                last_result: last,
+                                message: m,
                             });
+                            break;
                         }
                     }
 
@@ -1315,15 +1287,10 @@ impl AgentLoop {
 
                     match verdict.decision {
                         PolicyDecision::Deny => {
-                            self.record_result(
-                                conv,
-                                sink,
-                                &call,
-                                false,
+                            steps.push(Step::Record(
+                                call,
                                 format!("Refusé par la politique : {}", verdict.reason),
-                                false,
-                            )
-                            .await?;
+                            ));
                             continue;
                         }
                         PolicyDecision::Ask | PolicyDecision::AskTwice => {
@@ -1362,87 +1329,228 @@ impl AgentLoop {
                                 reason: verdict.reason.clone(),
                                 double,
                             });
-                            return Ok(Pending::Stop(TurnOutcome::AwaitingApproval {
+                            terminal = Some(Terminal::Stop(TurnOutcome::AwaitingApproval {
                                 approval_id: approval.id.0,
                             }));
+                            break;
                         }
                         PolicyDecision::Auto => {}
                     }
+                    // Lecture autorisée d'office : elle peut partir avec ses voisines.
+                    parallel = info.risk == RiskClass::Read;
                 }
             }
-
-            // 5. Ledger d'effets **avant** exécution.
-            sink.emit(TurnEvent::ToolCall {
-                name: call.name.clone(),
-                args: penelope_observe::redact_json(&call.arguments),
+            steps.push(Step::Execute {
+                call,
+                info,
+                parallel,
             });
-            let spec_effect = EffectSpec::new(
-                effect_kind(&info.effective_name),
-                info.effective_name.clone(),
-                call.arguments.clone(),
-            )
-            .session(&spec.session_id)
-            .step(&call.id)
-            .idempotent(info.idempotent);
-            let spec_effect = match &spec.run_id {
-                Some(r) => spec_effect.run(r),
-                None => spec_effect,
-            };
+        }
 
-            let outcome = match s.effects.plan(spec_effect).await? {
-                // Rejoué depuis le ledger : **jamais** ré-exécuté.
-                Planned::Replayed(v) => ToolOutcome::ok(v),
-                Planned::NeedsDecision(id) => ToolOutcome {
-                    value: json!({"effect": id.as_str(), "state": "unknown"}),
-                    is_error: true,
-                    text: format!(
-                        "Cet appel a peut-être déjà eu lieu (effet {id}). Une décision du \
-                         propriétaire est requise avant de relancer."
-                    ),
-                    eager: false,
-                },
-                Planned::InFlight(_) => ToolOutcome {
-                    value: json!({"state": "in_flight"}),
-                    is_error: true,
-                    text: "Appel déjà en cours.".into(),
-                    eager: false,
-                },
-                Planned::Fresh(id) => {
-                    s.effects.dispatching(&id).await?;
-                    let result = execute
-                        .execute_cancellable(&call.name, &call.arguments, &spec.cancel)
-                        .await;
-                    match &result {
-                        Ok(o) if !o.is_error => s.effects.complete(&id, o.value.clone()).await?,
-                        Ok(o) => s.effects.fail(&id, o.text.clone()).await?,
-                        Err(e) => s.effects.fail(&id, e.to_string()).await?,
+        // 2. Exécution et résultats, dans l'ordre des appels. Des lectures consécutives
+        //    partent ensemble, par quatre ; toute autre chose attend qu'elles aient fini et
+        //    forme une barrière (issue #85).
+        let mut recorded = 0usize;
+        let mut nudge = nudge;
+        let mut steps = steps.into_iter().peekable();
+        while let Some(step) = steps.next() {
+            if spec.cancel.is_cancelled() {
+                return Ok(Pending::Stop(TurnOutcome::Cancelled));
+            }
+            match step {
+                Step::Record(call, text) => {
+                    self.record_result(conv, sink, &call, false, text, false)
+                        .await?;
+                    recorded += 1;
+                }
+                Step::Execute {
+                    call,
+                    info,
+                    parallel: true,
+                } => {
+                    let mut batch = vec![(call, info)];
+                    while let Some(Step::Execute { parallel: true, .. }) = steps.peek() {
+                        if let Some(Step::Execute { call, info, .. }) = steps.next() {
+                            batch.push((call, info));
+                        }
                     }
-                    match result {
-                        Ok(o) => o,
-                        Err(e) => ToolOutcome::error(&e),
+                    for (call, _) in &batch {
+                        sink.emit(TurnEvent::ToolCall {
+                            name: call.name.clone(),
+                            args: penelope_observe::redact_json(&call.arguments),
+                        });
+                    }
+                    let mut outcomes: Vec<anyhow::Result<ToolOutcome>> = Vec::new();
+                    for chunk in batch.chunks(PARALLEL_READS) {
+                        let mut running = Vec::with_capacity(chunk.len());
+                        for (call, info) in chunk {
+                            running.push(self.run_effect(spec, execute, call, info));
+                        }
+                        outcomes.extend(futures::future::join_all(running).await);
+                    }
+                    for ((call, info), outcome) in batch.iter().zip(outcomes) {
+                        self.finish_call(spec, conv, sink, call, info, outcome?, &mut nudge)
+                            .await?;
+                        recorded += 1;
                     }
                 }
-            };
+                Step::Execute { call, info, .. } => {
+                    sink.emit(TurnEvent::ToolCall {
+                        name: call.name.clone(),
+                        args: penelope_observe::redact_json(&call.arguments),
+                    });
+                    let outcome = self.run_effect(spec, execute, &call, &info).await?;
+                    self.finish_call(spec, conv, sink, &call, &info, outcome, &mut nudge)
+                        .await?;
+                    recorded += 1;
+                }
+            }
+        }
 
-            s.events
-                .append(
-                    EventDraft::new(
-                        "tool.result",
-                        json!({"tool": info.effective_name, "ok": !outcome.is_error}),
+        match terminal {
+            None => {}
+            Some(Terminal::Stop(outcome)) => return Ok(Pending::Stop(outcome)),
+            Some(Terminal::Loop {
+                call,
+                tool,
+                message,
+            }) => {
+                let report = format!("{message}\n\n{}", detector.report());
+                s.events
+                    .append(
+                        EventDraft::new("turn.loop_aborted", json!({"report": report}))
+                            .session(&spec.session_id),
                     )
-                    .session(&spec.session_id),
+                    .await?;
+                tracing::warn!(session = %spec.session_id, %report, "boucle d'outil arrêtée");
+                // L'échec reste dans la conversation (issue #31) : le résultat réel, puis
+                // la note d'arrêt, pour que le tour suivant ne recommence pas.
+                let last = last_result_of(&conv.tail().await?, &call.name, &call.arguments);
+                let body = match &last {
+                    Some(r) => format!(
+                        "Dernier résultat réel de l'outil :\n{}",
+                        r.chars().take(1_500).collect::<String>()
+                    ),
+                    None => "Aucun résultat obtenu.".to_string(),
+                };
+                self.record_result(
+                    conv,
+                    sink,
+                    &call,
+                    false,
+                    format!("{body}\n\n{LOOP_STOP_NOTE}"),
+                    false,
                 )
                 .await?;
-            let mut text = outcome.text.clone();
-            if let Some(n) = nudge.take() {
-                text.push_str(&n);
+                for rest in pending_calls(&conv.tail().await?) {
+                    self.record_result(
+                        conv,
+                        sink,
+                        &rest,
+                        false,
+                        "Non exécuté : tour arrêté par le détecteur de boucles.".into(),
+                        false,
+                    )
+                    .await?;
+                }
+                return Ok(Pending::Loop {
+                    report,
+                    tool,
+                    last_result: last,
+                });
             }
-            self.record_result(conv, sink, &call, !outcome.is_error, text, outcome.eager)
-                .await?;
-            recorded += 1;
         }
         conv.admit_tool_results(recorded).await?;
         Ok(Pending::Resolved)
+    }
+
+    /// Ledger d'effets **avant** exécution, puis l'outil (§4.2) : jamais ré-exécuté s'il
+    /// est déjà fait ; un effet incertain attend la décision du propriétaire.
+    async fn run_effect(
+        &self,
+        spec: &TurnSpec,
+        execute: &(dyn ToolExecutor + Send + Sync),
+        call: &ToolCall,
+        info: &CallInfo,
+    ) -> anyhow::Result<ToolOutcome> {
+        let s = &self.services;
+        let spec_effect = EffectSpec::new(
+            effect_kind(&info.effective_name),
+            info.effective_name.clone(),
+            call.arguments.clone(),
+        )
+        .session(&spec.session_id)
+        .step(&call.id)
+        .idempotent(info.idempotent);
+        let spec_effect = match &spec.run_id {
+            Some(r) => spec_effect.run(r),
+            None => spec_effect,
+        };
+
+        Ok(match s.effects.plan(spec_effect).await? {
+            // Rejoué depuis le ledger : **jamais** ré-exécuté.
+            Planned::Replayed(v) => ToolOutcome::ok(v),
+            Planned::NeedsDecision(id) => ToolOutcome {
+                value: json!({"effect": id.as_str(), "state": "unknown"}),
+                is_error: true,
+                text: format!(
+                    "Cet appel a peut-être déjà eu lieu (effet {id}). Une décision du \
+                     propriétaire est requise avant de relancer."
+                ),
+                eager: false,
+            },
+            Planned::InFlight(_) => ToolOutcome {
+                value: json!({"state": "in_flight"}),
+                is_error: true,
+                text: "Appel déjà en cours.".into(),
+                eager: false,
+            },
+            Planned::Fresh(id) => {
+                s.effects.dispatching(&id).await?;
+                let result = execute
+                    .execute_cancellable(&call.name, &call.arguments, &spec.cancel)
+                    .await;
+                match &result {
+                    Ok(o) if !o.is_error => s.effects.complete(&id, o.value.clone()).await?,
+                    Ok(o) => s.effects.fail(&id, o.text.clone()).await?,
+                    Err(e) => s.effects.fail(&id, e.to_string()).await?,
+                }
+                match result {
+                    Ok(o) => o,
+                    Err(e) => ToolOutcome::error(&e),
+                }
+            }
+        })
+    }
+
+    /// Journalise le résultat d'un appel et l'enregistre dans la conversation.
+    #[allow(clippy::too_many_arguments)]
+    async fn finish_call(
+        &self,
+        spec: &TurnSpec,
+        conv: &dyn Conversation,
+        sink: &dyn TurnSink,
+        call: &ToolCall,
+        info: &CallInfo,
+        outcome: ToolOutcome,
+        nudge: &mut Option<String>,
+    ) -> anyhow::Result<()> {
+        self.services
+            .events
+            .append(
+                EventDraft::new(
+                    "tool.result",
+                    json!({"tool": info.effective_name, "ok": !outcome.is_error}),
+                )
+                .session(&spec.session_id),
+            )
+            .await?;
+        let mut text = outcome.text.clone();
+        if let Some(n) = nudge.take() {
+            text.push_str(&n);
+        }
+        self.record_result(conv, sink, call, !outcome.is_error, text, outcome.eager)
+            .await
     }
 
     /// Plafond d'appels et point de contrôle de coût d'un tour, comptés sur tout le tour
@@ -1985,6 +2093,71 @@ mod tests {
         }
     }
 
+    /// Exécuteur lent qui date le début et la fin de chaque appel (issue #85).
+    struct TimedExecutor {
+        delay: std::time::Duration,
+        log: Mutex<Vec<(String, std::time::Instant, std::time::Instant)>>,
+    }
+
+    impl TimedExecutor {
+        fn new(ms: u64) -> Self {
+            TimedExecutor {
+                delay: std::time::Duration::from_millis(ms),
+                log: Mutex::new(Vec::new()),
+            }
+        }
+        fn span(&self, key: &str) -> (std::time::Instant, std::time::Instant) {
+            let log = self.log.lock().unwrap();
+            let (_, a, b) = log.iter().find(|(k, _, _)| k == key).expect(key);
+            (*a, *b)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ToolExecutor for TimedExecutor {
+        async fn execute(
+            &self,
+            name: &str,
+            args: &Value,
+        ) -> Result<ToolOutcome, penelope_tools::ToolError> {
+            self.execute_cancellable(name, args, &CancelToken::new())
+                .await
+        }
+
+        async fn execute_cancellable(
+            &self,
+            name: &str,
+            args: &Value,
+            cancel: &CancelToken,
+        ) -> Result<ToolOutcome, penelope_tools::ToolError> {
+            let key = args["path"]
+                .as_str()
+                .or(args["command"].as_str())
+                .unwrap_or(name)
+                .to_string();
+            let start = std::time::Instant::now();
+            let deadline = start + self.delay;
+            while std::time::Instant::now() < deadline {
+                if cancel.is_cancelled() {
+                    self.log
+                        .lock()
+                        .unwrap()
+                        .push((key, start, std::time::Instant::now()));
+                    return Err(penelope_tools::ToolError::Io("interrompu".into()));
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            self.log
+                .lock()
+                .unwrap()
+                .push((key.clone(), start, std::time::Instant::now()));
+            if key == "casse.rs" {
+                return Err(penelope_tools::ToolError::Io("fichier illisible".into()));
+            }
+            Ok(ToolOutcome::ok(json!({"lu": key})))
+        }
+    }
+
     fn exec(fail: bool) -> CountingExecutor {
         CountingExecutor {
             calls: AtomicUsize::new(0),
@@ -2082,6 +2255,128 @@ mod tests {
             .unwrap();
         assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
         assert_eq!(e.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// #85 : trois lectures demandées ensemble partent ensemble ; une en échec n'annule
+    /// pas les autres, et les résultats sont enregistrés dans l'ordre des appels.
+    #[tokio::test]
+    async fn reads_requested_together_run_together_and_keep_their_order() {
+        let (_d, s, p) = setup().await;
+        let sid = session(&s).await;
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![
+                call("c1", "fs_read", json!({"path":"a.rs"})),
+                call("c2", "fs_read", json!({"path":"casse.rs"})),
+                call("c3", "fs_read", json!({"path":"c.rs"})),
+            ],
+        ));
+        p.reply("lus");
+        let conv = MemoryConversation::new("Tu es Pénélope.", "lis les trois");
+        let e = TimedExecutor::new(300);
+        let t = std::time::Instant::now();
+        AgentLoop::new(s.clone(), p.clone())
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap();
+        // En série : 900 ms au moins.
+        assert!(
+            t.elapsed() < std::time::Duration::from_millis(600),
+            "{:?}",
+            t.elapsed()
+        );
+        let (a0, _) = e.span("a.rs");
+        let (c0, _) = e.span("c.rs");
+        assert!(
+            c0.duration_since(a0) < std::time::Duration::from_millis(150),
+            "partis ensemble"
+        );
+        let ids: Vec<String> = conv
+            .messages()
+            .iter()
+            .filter_map(|m| m.tool_call_id.clone())
+            .collect();
+        assert_eq!(ids, vec!["c1", "c2", "c3"]);
+        assert!(conv.messages()[3].text().contains("illisible"));
+        assert!(conv.messages()[4].text().contains("c.rs"));
+    }
+
+    /// #85 : une écriture entre deux lectures est une barrière : la lecture d'avant a
+    /// fini quand elle part, celle d'après part quand elle a fini.
+    #[tokio::test]
+    async fn a_write_between_reads_is_a_barrier() {
+        let (_d, s, p) = setup().await;
+        let sid = session(&s).await;
+        s.policies
+            .create_rule(
+                penelope_hitl::RuleScope::Tool,
+                Some("shell_exec"),
+                None,
+                None,
+                PolicyDecision::Auto,
+                PolicyWindow::Always,
+                None,
+            )
+            .await
+            .unwrap();
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![
+                call("c1", "fs_read", json!({"path":"avant.rs"})),
+                call("c2", "shell_exec", json!({"command":"cargo fmt"})),
+                call("c3", "fs_read", json!({"path":"apres.rs"})),
+            ],
+        ));
+        p.reply("fait");
+        let conv = MemoryConversation::new("Tu es Pénélope.", "formate");
+        let e = TimedExecutor::new(100);
+        AgentLoop::new(s.clone(), p.clone())
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap();
+        let (_, avant_fin) = e.span("avant.rs");
+        let (w0, w1) = e.span("cargo fmt");
+        let (apres0, _) = e.span("apres.rs");
+        assert!(
+            avant_fin <= w0,
+            "la lecture d'avant a fini avant l'écriture"
+        );
+        assert!(w1 <= apres0, "la lecture d'après attend l'écriture");
+    }
+
+    /// #85 : `/stop` pendant un lot de lectures les interrompt toutes, vite.
+    #[tokio::test]
+    async fn stop_interrupts_a_whole_batch_of_reads() {
+        let (_d, s, p) = setup().await;
+        let sid = session(&s).await;
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![
+                call("c1", "fs_read", json!({"path":"a.rs"})),
+                call("c2", "fs_read", json!({"path":"b.rs"})),
+                call("c3", "fs_read", json!({"path":"c.rs"})),
+            ],
+        ));
+        let conv = MemoryConversation::new("Tu es Pénélope.", "lis");
+        let e = TimedExecutor::new(10_000);
+        let sp = spec(&sid);
+        let cancel = sp.cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            cancel.cancel();
+        });
+        let t = std::time::Instant::now();
+        let out = AgentLoop::new(s.clone(), p.clone())
+            .run_conversation(&sp, &conv, &e, &NullSink)
+            .await
+            .unwrap();
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            t.elapsed()
+        );
+        assert_eq!(out, TurnOutcome::Cancelled);
+        assert_eq!(e.log.lock().unwrap().len(), 3, "les trois interrompus");
     }
 
     /// §9 : un outil `write` suspend le tour et crée une demande d'approbation.

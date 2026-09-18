@@ -965,6 +965,13 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   interrompue par l'arrêt. Un tour qui panique échoue proprement (runner vivant, battement
   du bail arrêté, verrou de session rendu, échec livré). `status` donne les runners vivants,
   `doctor` les boucles relancées dans l'heure ou finies.
+- **Lectures parallèles** (#85) : `resolve_pending` décide d'abord de chaque appel dans
+  l'ordre (liste blanche, décision prise, boucles, politique), puis exécute. Les lectures
+  consécutives autorisées d'office partent ensemble, par quatre ; écritures, actions
+  externes et appels approuvés restent seuls et forment une barrière. Les résultats sont
+  enregistrés dans l'ordre des appels et admis en groupe (#52), un échec n'annule pas les
+  autres, `/stop` interrompt tout le lot. Trois lectures de 300 ms : moins de 600 ms au lieu
+  de 900.
 
 ### Routine de livraison
 
