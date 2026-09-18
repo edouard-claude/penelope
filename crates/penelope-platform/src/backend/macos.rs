@@ -224,32 +224,24 @@ impl Sandbox for SeatbeltSandbox {
             return Ok(Wrapped {
                 program: program.to_path_buf(),
                 args: args.to_vec(),
-                cleanup: None,
             });
         }
         if !Path::new("/usr/bin/sandbox-exec").is_file() {
             return Err(crate::sandbox::unsupported(profile, OS_NAME));
         }
-        let sbpl = seatbelt_profile(profile);
-        let dir = std::env::temp_dir().join("penelope-sandbox");
-        std::fs::create_dir_all(&dir)?;
-        let file = dir.join(format!(
-            "{}-{}.sb",
-            profile.kind.as_str(),
-            crate::rand_hex(8)
-        ));
-        std::fs::write(&file, sbpl)?;
-
+        // Le profil passe en argument (`-p`), jamais par un fichier : un fichier dans le
+        // dossier temporaire, que les profils autorisent en écriture, pouvait être réécrit
+        // par un processus déjà confiné avant que `sandbox-exec` ne le lise (issue #90).
+        // Quelques Kio, loin d'`ARG_MAX` (1 Mio), sans shell entre les deux.
         let mut full = vec![
-            "-f".to_string(),
-            file.to_string_lossy().to_string(),
+            "-p".to_string(),
+            seatbelt_profile(profile),
             program.to_string_lossy().to_string(),
         ];
         full.extend(args.iter().cloned());
         Ok(Wrapped {
             program: PathBuf::from("/usr/bin/sandbox-exec"),
             args: full,
-            cleanup: Some(file),
         })
     }
 }
@@ -550,4 +542,68 @@ pub fn doctor_checks() -> Vec<crate::DoctorItem> {
     }
 
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #90 : le profil passe en argument ; aucun fichier n'est écrit, même après cent
+    /// enveloppes.
+    #[test]
+    fn the_profile_goes_inline_and_no_file_is_written() {
+        let dir = std::env::temp_dir().join("penelope-sandbox");
+        let count = || std::fs::read_dir(&dir).map(|r| r.count()).unwrap_or(0);
+        let before = count();
+        let profile = Profile::workspace_write("/tmp/ws");
+        let mut last = None;
+        for _ in 0..100 {
+            last = Some(sandbox_wrapper(&profile, Path::new("/bin/echo"), &["x".into()]).unwrap());
+        }
+        let w = last.unwrap();
+        if Path::new("/usr/bin/sandbox-exec").is_file() {
+            assert_eq!(w.program, PathBuf::from("/usr/bin/sandbox-exec"));
+            assert_eq!(w.args[0], "-p");
+            assert!(w.args[1].starts_with("(version 1)"), "{}", w.args[1]);
+            assert_eq!(&w.args[2..], ["/bin/echo", "x"]);
+        }
+        assert_eq!(count(), before, "aucun fichier de profil");
+    }
+
+    /// #89 et #90, sur la machine : un processus confiné ne lit pas un chemin refusé,
+    /// lit le reste, et le profil ne dépend d'aucun fichier qu'un voisin pourrait
+    /// réécrire. Lancé à la main : `cargo test -p penelope-platform seatbelt -- --ignored`.
+    #[test]
+    #[ignore]
+    fn seatbelt_enforces_denied_reads_on_this_mac() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret_dir = dir.path().join("cles");
+        std::fs::create_dir_all(&secret_dir).unwrap();
+        std::fs::write(secret_dir.join("id_ed25519"), "CLE PRIVEE").unwrap();
+        std::fs::write(dir.path().join("public.txt"), "lisible").unwrap();
+        let mut profile = Profile::mcp_stdio(dir.path().join("data"), Vec::new());
+        profile.deny_read = vec![secret_dir.clone()];
+
+        let run = |file: &Path| {
+            let w = sandbox_wrapper(
+                &profile,
+                Path::new("/bin/cat"),
+                &[file.to_string_lossy().to_string()],
+            )
+            .unwrap();
+            std::process::Command::new(&w.program)
+                .args(&w.args)
+                .output()
+                .unwrap()
+        };
+        let denied = run(&secret_dir.join("id_ed25519"));
+        assert!(!denied.status.success());
+        assert!(
+            String::from_utf8_lossy(&denied.stderr).contains("Operation not permitted"),
+            "{}",
+            String::from_utf8_lossy(&denied.stderr)
+        );
+        let allowed = run(&dir.path().join("public.txt"));
+        assert_eq!(String::from_utf8_lossy(&allowed.stdout), "lisible");
+    }
 }

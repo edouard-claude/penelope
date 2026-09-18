@@ -240,13 +240,6 @@ fn free_space_gb(path: &std::path::Path) -> Option<f64> {
     Some(avail_kb / 1024.0 / 1024.0)
 }
 
-/// Aléa hexadécimal court, pour les noms de fichiers temporaires.
-pub(crate) fn rand_hex(bytes: usize) -> String {
-    let mut buf = vec![0u8; bytes];
-    let _ = getrandom::getrandom(&mut buf);
-    buf.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,11 +265,6 @@ mod tests {
         for c in &checks {
             assert!(!c.detail.is_empty(), "contrôle sans détail : {}", c.id);
         }
-    }
-
-    #[test]
-    fn rand_hex_length() {
-        assert_eq!(rand_hex(8).len(), 16);
     }
 
     #[cfg(target_os = "macos")]

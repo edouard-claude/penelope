@@ -108,7 +108,6 @@ impl Sandbox for StubSandbox {
             return Ok(Wrapped {
                 program: program.to_path_buf(),
                 args: args.to_vec(),
-                cleanup: None,
             });
         }
         Err(crate::sandbox::unsupported(profile, OS_NAME))

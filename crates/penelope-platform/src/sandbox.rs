@@ -121,8 +121,6 @@ impl Profile {
 pub struct Wrapped {
     pub program: PathBuf,
     pub args: Vec<String>,
-    /// Fichier temporaire de profil à supprimer après exécution, s'il y en a un.
-    pub cleanup: Option<PathBuf>,
 }
 
 /// Couverture réellement obtenue sur cet OS (`penelope doctor` l'affiche, §2.5).

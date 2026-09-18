@@ -36,6 +36,9 @@ impl Daemon {
 
         let report = self.recover().await?;
         tracing::info!(?report, "reprise terminée");
+        // Profils Seatbelt laissés par les versions qui les écrivaient dans le dossier
+        // temporaire (issue #90) : ils passent désormais en argument.
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("penelope-sandbox"));
         crate::budget_alert::AlertWatcher::install(&self);
         // Skills livrées et de l'utilisateur, disponibles dès le premier tour.
         if let Err(e) = crate::runtime::reload_skills(&self.services).await {

@@ -996,6 +996,12 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   depuis un paquet tiers ; son répertoire de données et ses racines restent lisibles. Le
   trousseau est fermé à tout profil imposé, même avec `deny_read = []`. `doctor` signale un
   serveur confiné sans lecture refusée.
+- **Profil Seatbelt en argument** (#90) : `sandbox-exec -p <profil>` au lieu d'un fichier
+  `.sb` dans `$TMPDIR/penelope-sandbox`, dossier que les profils `workspace-write` et
+  `mcp-stdio` ouvrent en écriture : un processus confiné ne peut plus réécrire le profil du
+  suivant avant sa lecture. Plus aucun fichier écrit (le champ `cleanup`, jamais lu, a
+  disparu) ; le daemon efface au démarrage le dossier laissé par les versions précédentes.
+  Vérifié sur la machine par un test ignoré par défaut (`-- --ignored`).
 
 ### Routine de livraison
 
