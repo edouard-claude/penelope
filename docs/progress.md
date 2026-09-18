@@ -8,7 +8,7 @@ Dernière mise à jour : 18 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1471 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1472 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1313,6 +1313,9 @@ suit le sujet de travail de la session (#119).
   que les entrées sans projet. `/sessions` affiche 📁, `self_status` donne `project`.
 
 ### 0.17.8
+
+Une planification qui n'envoie rien est un échec signalé, et l'état qu'elle a consommé est
+remis (#120).
 
 - **Une planification muette est un échec, et son état est remis** (#120) : la veille de
   8 h 33 avait produit son édition, consommé `seen.json` et rien envoyé, comptée réussie.
