@@ -556,7 +556,11 @@ flux coupé après du texte
 
 Un message manifestement trivial (salutation, accusé de réception, moins de sept mots sans
 question, sans chemin ni URL) ne passe pas par le classifieur : il répond tout de suite avec
-le modèle par défaut. Pour les autres, la classification et le calcul du vecteur de rappel
+le modèle par défaut. Une demande **explicite** d'image (« génère une image de… », « fais-moi
+un dessin de… », « generate an image of… ») part directement sur le modèle d'image ; « génère
+un script », « régénère les tests » ou « dessine l'architecture en ASCII » passent, elles,
+par le classifieur, et toute autre demande d'image par l'outil `image_generate` du modèle
+de conversation. Pour les autres, la classification et le calcul du vecteur de rappel
 mémoire partent **en parallèle** : une seule attente avant le premier jeton, pas deux.
 
 Une erreur qui arrive **pendant** le flux, après la réponse HTTP, est traitée comme une

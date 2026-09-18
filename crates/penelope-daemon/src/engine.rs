@@ -1124,6 +1124,32 @@ mod tests {
         d.services.turns.claim("test").await.unwrap().unwrap()
     }
 
+    /// #81 : « génère le rapport de la semaine » passe par le classifieur et part sur le
+    /// modèle de conversation ; aucune requête ne vise l'alias d'image.
+    #[tokio::test]
+    async fn a_report_request_never_reaches_the_image_model() {
+        let (_dir, d, p) = daemon().await;
+        p.reply(r#"{"complexity":"medium"}"#);
+        p.reply("Voici le rapport.");
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.enqueue_message(&sid, "génère le rapport de la semaine", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        assert!(matches!(
+            d.run_turn(&turn).await,
+            TurnOutcome::Answered { .. }
+        ));
+        let cfg = d.services.config.config();
+        let image = cfg
+            .alias_model(&cfg.role_alias("image_generate"))
+            .unwrap()
+            .to_string();
+        let models: Vec<String> = p.requests().iter().map(|r| r.model.clone()).collect();
+        assert_eq!(models.len(), 2, "classifieur puis réponse : {models:?}");
+        assert!(!models.contains(&image), "{models:?}");
+    }
+
     #[tokio::test]
     async fn a_message_is_answered_and_the_transcript_persists() {
         let (_dir, d, p) = daemon().await;

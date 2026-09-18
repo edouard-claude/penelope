@@ -111,22 +111,86 @@ modèle. Réponds UNIQUEMENT par un objet JSON : \
 `medium` : tâche ordinaire, plusieurs étapes, lecture de code. \
 `high` : raisonnement long, architecture, débogage difficile, arbitrage.";
 
-/// Motifs déterministes de demande de génération d'image (§10.3 règle 1).
+/// Demande **explicite** de génération d'image (§10.3 règle 1) : un verbe de création
+/// suivi, à trois mots au plus, d'« une image », « un dessin », « une illustration »
+/// (ou leur forme anglaise), sur des mots entiers.
+///
+/// La règle court-circuite le classifieur et envoie le tour entier au modèle d'image :
+/// elle ne doit jamais prendre « génère un script », « régénère les tests », « illustre
+/// par un exemple » ou « dessine l'architecture en ASCII » (issue #81). Toute autre
+/// demande d'image passe par le modèle de conversation et son outil `image_generate`.
 pub fn looks_like_image_request(msg: &str) -> bool {
-    let m = msg.to_lowercase();
     const VERBS: &[&str] = &[
         "génère",
         "genere",
+        "générer",
+        "generer",
+        "génères",
+        "crée",
+        "cree",
+        "créer",
+        "creer",
+        "fais",
+        "faire",
+        "fait",
         "dessine",
-        "crée une image",
-        "cree une image",
-        "fais une image",
-        "illustre",
-        "generate an image",
-        "draw me",
-        "make an image",
+        "dessiner",
+        "produis",
+        "generate",
+        "create",
+        "make",
+        "draw",
     ];
-    VERBS.iter().any(|v| m.contains(v))
+    const OBJECTS: &[[&str; 2]] = &[
+        ["une", "image"],
+        ["un", "dessin"],
+        ["une", "illustration"],
+        ["une", "photo"],
+        ["an", "image"],
+        ["a", "picture"],
+        ["a", "drawing"],
+        ["an", "illustration"],
+    ];
+    /// Un mot du logiciel dans la phrase : ce n'est pas une image qu'on attend.
+    const SOFTWARE: &[&str] = &[
+        "script",
+        "test",
+        "tests",
+        "rapport",
+        "fichier",
+        "code",
+        "ascii",
+        "diagramme",
+        "schéma",
+        "schema",
+        "tableau",
+        "markdown",
+        "mermaid",
+        "svg",
+        "json",
+        "csv",
+        "docker",
+        "dockerfile",
+    ];
+    let m = msg.to_lowercase();
+    if m.contains('`') || m.contains("://") || (m.contains('/') && m.contains('.')) {
+        return false;
+    }
+    let words: Vec<&str> = m
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.iter().any(|w| SOFTWARE.contains(w)) {
+        return false;
+    }
+    words.iter().enumerate().any(|(i, w)| {
+        VERBS.contains(w)
+            && (i + 1..(i + 5).min(words.len().saturating_sub(1))).any(|j| {
+                OBJECTS
+                    .iter()
+                    .any(|o| words[j] == o[0] && words[j + 1] == o[1])
+            })
+    })
 }
 
 /// Message trivial : salutation, accusé de réception ou interjection, sans demande.
@@ -502,6 +566,44 @@ mod tests {
         assert_eq!(d.reason, RouteReason::ImageGeneration);
     }
 
+    /// #81 : une demande de code ou de rédaction n'est jamais envoyée au modèle d'image.
+    #[test]
+    fn only_an_explicit_image_request_goes_to_the_image_model() {
+        let r = router();
+        let routed = |m: &str| {
+            r.route_deterministic(
+                &cfg(),
+                &RouteInput {
+                    message: m.into(),
+                    ..Default::default()
+                },
+            )
+            .map(|d| d.reason)
+        };
+        for m in [
+            "génère un script de déploiement",
+            "régénère les tests",
+            "génère le rapport de la semaine",
+            "illustre ta réponse par un exemple",
+            "illustre par un exemple",
+            "dessine l'architecture en ASCII",
+            "dessine-moi l'architecture en ASCII",
+            "fais une image docker de l'appli",
+            "génère une image du fichier `schema.png` depuis le code",
+        ] {
+            assert_eq!(routed(m), None, "{m} : le classifieur décide");
+        }
+        for m in [
+            "génère une image d'un chat",
+            "Crée une image de coucher de soleil",
+            "fais-moi un dessin de phare",
+            "generate an image of a cat on a roof",
+            "draw me a picture of the sea",
+        ] {
+            assert_eq!(routed(m), Some(RouteReason::ImageGeneration), "{m}");
+        }
+    }
+
     #[test]
     fn step_model_wins_over_everything() {
         let d = router()
@@ -560,7 +662,7 @@ mod tests {
         assert_eq!(d.reason, RouteReason::Pinned);
 
         let image = RouteInput {
-            message: "dessine un phare au crépuscule".into(),
+            message: "dessine-moi une image d'un phare au crépuscule".into(),
             ..input
         };
         let d = router().route_deterministic(&cfg(), &image).unwrap();

@@ -936,6 +936,12 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   un `é` ou un emoji à cheval sur deux segments TCP n'abîme plus ni la réponse, ni le
   transcript, ni les arguments d'outils. Testé à chaque offset d'octet et sur des paquets
   de tailles aléatoires ; des octets réellement invalides restent remplacés.
+- **Routage image strict** (#81) : la règle qui envoie tout le tour au modèle d'image ne
+  réagit plus à une sous-chaîne (« génère », « illustre ») mais à une demande explicite,
+  sur mots entiers : verbe de création suivi d'« une image », « un dessin », « une
+  illustration » (ou « an image », « a picture »), jamais en présence d'un mot du logiciel
+  (script, test, rapport, fichier, ASCII…), de code ou de chemin. « génère un script »,
+  « régénère les tests » et « illustre par un exemple » passent par le classifieur.
 
 ### Routine de livraison
 
