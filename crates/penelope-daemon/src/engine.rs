@@ -1632,6 +1632,102 @@ mod tests {
         );
     }
 
+    /// Un tour qui appelle `shell_exec` avec `command` : son issue et le daemon.
+    async fn shell_turn(
+        command: &str,
+        mode: Option<&str>,
+        allow: &[&str],
+    ) -> (tempfile::TempDir, Arc<Daemon>, TurnOutcome) {
+        let (dir, d, p) = daemon().await;
+        let allow: Vec<String> = allow.iter().map(|a| a.to_string()).collect();
+        d.publish_config("test", move |c| {
+            c.tools.shell_allow = allow;
+            Ok(vec!["tools.shell_allow".into()])
+        })
+        .unwrap();
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        if let Some(m) = mode {
+            crate::approval_mode::set(
+                &d.services,
+                &sid,
+                crate::approval_mode::ApprovalMode::parse(m),
+            )
+            .await
+            .unwrap();
+        }
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "c1".into(),
+                name: "shell_exec".into(),
+                arguments: json!({"command": command}),
+            }],
+        ));
+        p.reply("C'est fait.");
+        d.enqueue_message(&sid, "vas-y", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        let out = d.run_turn(&turn).await;
+        (dir, d, out)
+    }
+
+    fn asked(out: &TurnOutcome) -> bool {
+        matches!(out, TurnOutcome::AwaitingApproval { .. })
+    }
+
+    /// #111 : les lectures ne demandent rien en mode par défaut ; écriture, sous-shell,
+    /// redirection, réseau et commande composée demandent ; une commande composée
+    /// approuvée « Toujours » ne crée aucune règle ; « demander tout » redemande même une
+    /// lecture ; « tout sauf le destructif » laisse passer une écriture, jamais `rm` ni
+    /// une commande composée ; une famille déclarée passe sans demande.
+    #[tokio::test]
+    async fn shell_commands_are_classified_before_asking() {
+        for read in ["ls -la /tmp", "cat x", "grep -r foo src"] {
+            let (_dir, _d, out) = shell_turn(read, None, &[]).await;
+            assert!(!asked(&out), "{read} : {out:?}");
+        }
+        for write in [
+            "rm -rf x",
+            "sh -c \"ls\"",
+            "ls > fichier",
+            "curl https://example.com",
+        ] {
+            let (_dir, _d, out) = shell_turn(write, None, &[]).await;
+            assert!(asked(&out), "{write} : {out:?}");
+        }
+
+        let (_dir, d, out) = shell_turn("cd /x && ls", None, &[]).await;
+        let TurnOutcome::AwaitingApproval { approval_id } = out else {
+            panic!("{out:?}");
+        };
+        crate::agent::decide_approval(
+            &d.services,
+            &approval_id,
+            &penelope_hitl::Decision::approve_always("cli"),
+        )
+        .await
+        .unwrap();
+        assert!(
+            d.services.policies.active_rules().await.unwrap().is_empty(),
+            "aucune règle sur `cd`"
+        );
+
+        let (_dir, _d, out) = shell_turn("ls -la /tmp", Some("ask"), &[]).await;
+        assert!(asked(&out), "demander tout : {out:?}");
+        let (_dir, _d, out) = shell_turn("mkdir build", Some("auto"), &[]).await;
+        assert!(!asked(&out), "auto : {out:?}");
+        for risky in ["rm -rf build", "cd build && make"] {
+            let (_dir, _d, out) = shell_turn(risky, Some("auto"), &[]).await;
+            assert!(asked(&out), "auto, {risky} : {out:?}");
+        }
+        let (_dir, _d, out) = shell_turn("cargo test -p x", None, &["cargo test"]).await;
+        assert!(!asked(&out), "famille déclarée : {out:?}");
+        let (_dir, _d, out) = shell_turn("cargo test; rm -rf ~", None, &["cargo test"]).await;
+        assert!(asked(&out), "enchaînement : {out:?}");
+    }
+
     #[tokio::test]
     async fn penelope_reports_her_own_model_and_state() {
         let (_dir, d, p) = daemon().await;

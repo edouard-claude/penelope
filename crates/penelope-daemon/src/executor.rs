@@ -1650,6 +1650,22 @@ fn native_info(name: &str, args: &Value, shell_network: bool) -> CallInfo {
             idempotent: false,
             policy: None,
         },
+        // Une lecture simple (`ls`, `cat`, `grep`, `git status`…) est une lecture : elle ne
+        // demande rien, comme `fs_read` (issue #111).
+        "shell_exec"
+            if !wants_network(name, args)
+                && args
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(penelope_tools::shell::is_read_command) =>
+        {
+            CallInfo {
+                effective_name: name.to_string(),
+                risk: RiskClass::Read,
+                idempotent: true,
+                policy: None,
+            }
+        }
         "config_set" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
             CallInfo {

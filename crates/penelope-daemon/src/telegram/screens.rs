@@ -211,7 +211,11 @@ impl TelegramGateway {
         .await
     }
 
-    async fn command_button(&self, label: &str, command: &str) -> anyhow::Result<ButtonSpec> {
+    pub(super) async fn command_button(
+        &self,
+        label: &str,
+        command: &str,
+    ) -> anyhow::Result<ButtonSpec> {
         let t = self
             .daemon
             .services
@@ -1336,6 +1340,10 @@ impl TelegramGateway {
                         "\n- `{label}`{scope} · {:?} · {:?} · {} usage(s)",
                         r.decision, r.window, r.hits
                     ));
+                    // Une règle qui ne sert à rien se voit (issue #111).
+                    if let Some(note) = crate::approval_mode::rule_note(r, s.clock.now_ms()) {
+                        sc.text.push_str(&format!(" · ⚠️ {note}"));
+                    }
                     sc.rows.push(vec![
                         self.guarded(
                             &format!("🗑 {}", trunc(&label, 40)),

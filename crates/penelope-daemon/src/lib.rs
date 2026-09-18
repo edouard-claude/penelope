@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod agent;
+pub mod approval_mode;
 pub mod backup;
 pub mod budget_alert;
 pub mod bus;

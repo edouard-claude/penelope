@@ -129,6 +129,8 @@ pub mod method {
     pub const SESSION_PURGE: &str = "session.purge";
     /// Modèle d'une session : lecture, épinglage d'un alias, retour à l'automatique.
     pub const SESSION_MODEL: &str = "session.model";
+    /// Mode d'approbation d'une session : `ask`, `reads`, `auto` (issue #111).
+    pub const SESSION_MODE: &str = "session.mode";
     pub const SESSION_BUDGET: &str = "session.budget";
 
     pub const CONFIG_GET: &str = "config.get";
@@ -246,6 +248,7 @@ pub mod method {
         SESSION_EXPORT,
         SESSION_PURGE,
         SESSION_MODEL,
+        SESSION_MODE,
         SESSION_BUDGET,
         CONFIG_GET,
         CONFIG_SET,

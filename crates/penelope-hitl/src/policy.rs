@@ -152,9 +152,11 @@ pub const ORIGIN_OP: &str = "$origin";
 
 /// Caractères qui enchaînent ou détournent une commande : une règle « toujours » sur
 /// `cargo test` ne doit pas couvrir `cargo test; rm -rf ~`.
-const CHAINING: &[char] = &[';', '&', '|', '`', '$', '>', '<', '\n', '\r', '(', ')'];
+pub const CHAINING: &[char] = &[';', '&', '|', '`', '$', '>', '<', '\n', '\r', '(', ')'];
 
-fn command_matches(prefix: &str, candidate: &str) -> bool {
+/// Vrai si `candidate` est une commande de la famille `prefix`, sans enchaînement ni
+/// mot plus long (`cargo testament` n'est pas `cargo test`).
+pub fn command_matches(prefix: &str, candidate: &str) -> bool {
     if candidate.contains(CHAINING) {
         return false;
     }

@@ -1218,6 +1218,21 @@ en administrateur anonyme (#113).
   vrai sans identifiant. Chaque sujet porte sa session, deux sujets travaillent en
   parallèle.
 
+### 0.17.5
+
+- **Les lectures du shell ne demandent plus rien** (#111) : `is_read_command` classe une
+  ligne de lecture (programme connu appelé par son nom, sans enchaînement, redirection,
+  substitution, variable, échappement ni option qui écrive ou lance autre chose : `find
+  -exec`, `sort -o`, `git -c`, `git diff --output`…) ; `shell_exec` y prend la classe
+  `read`, idempotente, et part sans demande. Mode par session (`session.mode`, `/mode`,
+  `penelope session mode`, défaut `tools.approval_mode` = `reads`) : `ask` redemande même
+  une lecture du shell et passe outre les règles, `auto` laisse passer ce que la classe
+  demanderait sauf le destructif, une politique imposée par un serveur MCP et toute
+  commande que `may_destroy` ne peut juger sûre. `tools.shell_allow` et
+  `tools.shell_allow_network` autorisent des familles d'avance. Une commande composée
+  n'a plus de famille : « Toujours » l'autorise une fois sans créer de règle sur `cd`.
+  `penelope policies` et `/policies` marquent les règles inutiles (`rule_note`).
+
 ### Routine de livraison
 
 Avant chaque tag :

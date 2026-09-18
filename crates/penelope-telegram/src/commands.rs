@@ -128,6 +128,13 @@ pub fn all() -> Vec<Command> {
             m::MODEL_LIST,
         ),
         c(
+            "mode",
+            "Session",
+            "Ce qui part sans demande : tout demander, lectures libres, tout sauf le destructif",
+            "/mode auto",
+            m::SESSION_MODE,
+        ),
+        c(
             "budget",
             "Modèles",
             "Coûts : jour, session, requêtes les plus chères",

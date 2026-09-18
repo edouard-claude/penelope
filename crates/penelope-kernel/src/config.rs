@@ -887,7 +887,19 @@ pub struct Tools {
     pub loop_detector_repeats: usize,
     /// Taille maximale d'une sortie de commande gardée telle quelle, en octets.
     pub max_output_bytes: usize,
+    /// Mode d'approbation par défaut d'une session : `ask` (demander tout, lectures du
+    /// shell comprises), `reads` (lectures sans demande, le reste selon la politique),
+    /// `auto` (tout sans demande sauf le destructif). `/mode` le change pour une session.
+    pub approval_mode: String,
+    /// Familles de commandes `shell_exec` autorisées d'avance, sans enchaînement : par
+    /// exemple `cargo test`, `npm run lint`.
+    pub shell_allow: Vec<String>,
+    /// Familles de commandes autorisées d'avance **avec** le réseau : `git push`, `gh pr`.
+    pub shell_allow_network: Vec<String>,
 }
+
+/// Modes d'approbation d'une session (issue #111).
+pub const APPROVAL_MODES: &[&str] = &["ask", "reads", "auto"];
 
 impl Default for Tools {
     fn default() -> Self {
@@ -898,6 +910,9 @@ impl Default for Tools {
             http_block_private_ips: true,
             loop_detector_repeats: 3,
             max_output_bytes: 256 * 1024,
+            approval_mode: "reads".into(),
+            shell_allow: Vec::new(),
+            shell_allow_network: Vec::new(),
         }
     }
 }
@@ -1248,6 +1263,13 @@ impl Config {
             }
         }
 
+        if !APPROVAL_MODES.contains(&self.tools.approval_mode.as_str()) {
+            return Err(KernelError::config(format!(
+                "tools.approval_mode doit valoir {} (reçu `{}`)",
+                APPROVAL_MODES.join(", "),
+                self.tools.approval_mode
+            )));
+        }
         if !(0.1..=0.95).contains(&self.context.compaction_threshold) {
             return Err(KernelError::config(
                 "context.compaction_threshold doit être entre 0.1 et 0.95",

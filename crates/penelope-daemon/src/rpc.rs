@@ -423,6 +423,22 @@ impl Rpc {
                 }
                 self.daemon.session_model_view(&sid).await
             }
+            method::SESSION_MODE => {
+                let sid = self.session_param(p).await?;
+                use crate::approval_mode::{ApprovalMode, of_session, set};
+                match p.get("mode").and_then(|m| m.as_str()).map(str::trim) {
+                    None | Some("") => {}
+                    Some("default" | "config") => set(s, &sid, None).await?,
+                    Some(m) => {
+                        let mode = ApprovalMode::parse(m).ok_or_else(|| {
+                            anyhow::anyhow!("mode inconnu `{m}` : ask, reads ou auto")
+                        })?;
+                        set(s, &sid, Some(mode)).await?;
+                    }
+                }
+                let mode = of_session(s, &sid).await;
+                Ok(json!({"session": sid, "mode": mode.as_str(), "label": mode.label()}))
+            }
             method::MODEL_LIST => {
                 // D'abord ce que l'utilisateur a configuré, ensuite le catalogue du provider.
                 let filter = p
@@ -571,7 +587,24 @@ impl Rpc {
                     Ok(json!({"quiet_hours": s.config.config().telegram.quiet_hours}))
                 }
             }
-            method::POLICIES => Ok(serde_json::to_value(s.policies.active_rules().await?)?),
+            method::POLICIES => {
+                // Chaque règle avec ce qui la rend inutile, s'il y a lieu (issue #111).
+                let now = s.clock.now_ms();
+                let rules: Vec<Value> = s
+                    .policies
+                    .active_rules()
+                    .await?
+                    .iter()
+                    .map(|r| {
+                        let mut v = serde_json::to_value(r).unwrap_or_default();
+                        if let Some(note) = crate::approval_mode::rule_note(r, now) {
+                            v["remarque"] = json!(note);
+                        }
+                        v
+                    })
+                    .collect();
+                Ok(json!(rules))
+            }
             method::POLICY_REVOKE => {
                 let id = required_str(p, "id")?;
                 Ok(json!({"revoked": s.policies.revoke(&id).await?}))
@@ -1838,6 +1871,81 @@ mod tests {
             .to_string();
         assert!(text.contains("penelope_turns_total"), "{text}");
         assert!(text.contains("penelope_approvals_pending"), "{text}");
+    }
+
+    /// #111 : le mode d'approbation d'une session se lit et se change ; les règles
+    /// inutiles portent leur remarque.
+    #[tokio::test]
+    async fn the_approval_mode_and_useless_rules_are_readable() {
+        let (_dir, r) = rpc().await;
+        let s = &r.daemon.services;
+        let sid = r
+            .daemon
+            .chat_session_for(&crate::bus::Origin::Cli)
+            .await
+            .unwrap();
+        let v = call(&r, method::SESSION_MODE, json!({"session": sid}))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(v["mode"], "reads");
+        let v = call(
+            &r,
+            method::SESSION_MODE,
+            json!({"session": sid, "mode": "ask"}),
+        )
+        .await
+        .result
+        .unwrap();
+        assert_eq!(v["mode"], "ask");
+        assert!(
+            call(
+                &r,
+                method::SESSION_MODE,
+                json!({"session": sid, "mode": "yolo"})
+            )
+            .await
+            .error
+            .is_some()
+        );
+        let v = call(
+            &r,
+            method::SESSION_MODE,
+            json!({"session": sid, "mode": "default"}),
+        )
+        .await
+        .result
+        .unwrap();
+        assert_eq!(v["mode"], "reads");
+
+        for family in ["cd", "ls", "cargo test", "PASS=\"$(cut"] {
+            s.policies
+                .create_rule(
+                    penelope_hitl::RuleScope::Tool,
+                    Some("shell_exec"),
+                    None,
+                    Some(json!({"command": {penelope_hitl::policy::CMD_PREFIX_OP: family}})),
+                    penelope_kernel::risk::PolicyDecision::Auto,
+                    penelope_kernel::risk::PolicyWindow::Always,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        let rules = call(&r, method::POLICIES, json!({})).await.result.unwrap();
+        let note = |family: &str| {
+            rules
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|x| x["arg_match"]["command"][penelope_hitl::policy::CMD_PREFIX_OP] == family)
+                .map(|x| x["remarque"].clone())
+                .unwrap()
+        };
+        assert!(note("cd").as_str().unwrap().contains("composée"));
+        assert!(note("ls").as_str().unwrap().contains("lectures"));
+        assert!(note("PASS=\"$(cut").as_str().unwrap().contains("jamais"));
+        assert!(note("cargo test").is_null(), "règle utile, sans remarque");
     }
 
     /// #105 : les signaux d'une entrée se lisent, avec le facteur qu'ils donnent.

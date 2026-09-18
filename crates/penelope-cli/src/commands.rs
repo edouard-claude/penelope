@@ -292,6 +292,15 @@ pub enum SessionCmd {
         #[arg(long)]
         session: Option<String>,
     },
+    /// Mode d'approbation de la session : sans argument l'état, sinon `ask` (demander
+    /// tout), `reads` (lectures sans demande), `auto` (tout sauf le destructif) ou
+    /// `default`.
+    Mode {
+        #[arg(value_parser = ["ask", "reads", "auto", "default"])]
+        mode: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -841,6 +850,9 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         }
         Command::Session(SessionCmd::Compact { session }) => {
             (m::SESSION_COMPACT, json!({"session": session}))
+        }
+        Command::Session(SessionCmd::Mode { mode, session }) => {
+            (m::SESSION_MODE, json!({"mode": mode, "session": session}))
         }
 
         Command::Config(ConfigCmd::Get) => (m::CONFIG_GET, json!({})),
@@ -2118,6 +2130,7 @@ mod tests {
             (vec!["session", "budget", "s_01", "20"], m::SESSION_BUDGET),
             (vec!["session", "model", "main"], m::SESSION_MODEL),
             (vec!["session", "compact"], m::SESSION_COMPACT),
+            (vec!["session", "mode", "ask"], m::SESSION_MODE),
             (vec!["session", "fork"], m::SESSION_FORK),
             (vec!["session", "rewind", "2"], m::SESSION_REWIND),
             (vec!["export", "run", "r_1"], m::EXPORT),

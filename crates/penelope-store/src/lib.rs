@@ -494,8 +494,13 @@ mod tests {
     /// #44 : une panique dans une closure d'écriture ne tue plus l'écrivain. La
     /// transaction est annulée, le demandeur reçoit la panique nommée, et l'écriture
     /// suivante passe.
+    /// Le compteur de paniques de l'écrivain est global : les tests qui en provoquent
+    /// passent l'un après l'autre, sinon l'un voit la panique de l'autre.
+    static WRITER_PANIC_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn a_panicking_write_does_not_kill_the_writer() {
+        let _one_at_a_time = WRITER_PANIC_TESTS.lock().await;
         let s = Store::open_memory().unwrap();
         s.write(|tx| kv_set(tx, "avant", "1")).await.unwrap();
         let avant = writer_panics();
@@ -543,6 +548,7 @@ mod tests {
     /// revient à `NORMAL` (1) ensuite, après un succès, une erreur ou une panique.
     #[tokio::test]
     async fn a_durable_write_runs_under_full_sync_and_restores_normal() {
+        let _one_at_a_time = WRITER_PANIC_TESTS.lock().await;
         let s = Store::open_memory().unwrap();
         let dedans = s
             .write_durable(|tx| {

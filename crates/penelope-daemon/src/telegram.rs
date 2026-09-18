@@ -1210,6 +1210,64 @@ impl TelegramGateway {
                     )
                     .await;
             }
+            // Mode d'approbation de la session (issue #111) : sans argument, l'état et un
+            // bouton par mode.
+            "mode" => {
+                let session = d.chat_session_for(&origin).await?;
+                let wanted = args.trim();
+                let v = rpc
+                    .call(m::SESSION_MODE, json!({"session": session, "mode": wanted}))
+                    .await;
+                match v {
+                    Err(e) => format!("❌ {e}"),
+                    Ok(v) if !wanted.is_empty() => {
+                        format!(
+                            "🛡 Mode de la session : **{}**.",
+                            v["label"].as_str().unwrap_or("?")
+                        )
+                    }
+                    Ok(v) => {
+                        let current = v["mode"].as_str().unwrap_or("reads");
+                        let mut rows = Vec::new();
+                        for (mode, label) in [
+                            ("ask", "Demander tout"),
+                            ("reads", "Lectures sans demande"),
+                            ("auto", "Tout sauf le destructif"),
+                        ] {
+                            let mark = if mode == current { "✅ " } else { "" };
+                            rows.push(vec![
+                                self.command_button(
+                                    &format!("{mark}{label}"),
+                                    &format!("/mode {mode}"),
+                                )
+                                .await?,
+                            ]);
+                        }
+                        let text = format!(
+                            "🛡 Mode de la session : **{}**.\n\nDemander tout : même une lecture \
+                             du shell attend ton accord. Lectures sans demande (défaut) : `ls`, \
+                             `cat`, `grep`, `git status` passent, le reste selon tes règles. \
+                             Tout sauf le destructif : plus de demande, sauf suppression et \
+                             réglages sensibles.",
+                            v["label"].as_str().unwrap_or("?")
+                        );
+                        let mut payload = json!({
+                            "chat_id": chat_id,
+                            "text": markdown_to_html(&text),
+                            "parse_mode": "HTML",
+                            "reply_markup": inline_keyboard(&rows),
+                            "message_thread_id": topic_id,
+                        });
+                        if let Some(r) = reply_to {
+                            payload["reply_parameters"] =
+                                json!({"message_id": r, "allow_sending_without_reply": true});
+                        }
+                        return self
+                            .outbox_push(chat_id, topic_id, "sendMessage", payload)
+                            .await;
+                    }
+                }
+            }
             "schedules" => {
                 let parts: Vec<&str> = args.split_whitespace().collect();
                 let by_id = |method: &'static str, id: &str| rpc.call(method, json!({"id": id}));

@@ -1308,6 +1308,44 @@ impl AgentLoop {
                             forced.as_str()
                         );
                     }
+                    // Autorisation déclarée d'avance, puis mode de la session (#111).
+                    if verdict.rule_id.is_none()
+                        && verdict.decision != PolicyDecision::Deny
+                        && let Some(why) = crate::approval_mode::declared_allow(
+                            &cfg,
+                            &info.effective_name,
+                            &effective_args,
+                        )
+                    {
+                        verdict.decision = PolicyDecision::Auto;
+                        verdict.reason = why;
+                    }
+                    match crate::approval_mode::of_session(s, &spec.session_id).await {
+                        crate::approval_mode::ApprovalMode::Ask
+                            if verdict.decision == PolicyDecision::Auto
+                                && (info.effective_name == "shell_exec"
+                                    || info.risk != RiskClass::Read) =>
+                        {
+                            verdict.decision = PolicyDecision::Ask;
+                            verdict.reason = "mode « demander tout » de la session".into();
+                        }
+                        crate::approval_mode::ApprovalMode::Auto
+                            if verdict.decision == PolicyDecision::Ask
+                                && verdict.rule_id.is_none()
+                                && info.policy.is_none()
+                                && info.risk != RiskClass::Destructive
+                                && !(info.effective_name == "shell_exec"
+                                    && effective_args
+                                        .get("command")
+                                        .and_then(|c| c.as_str())
+                                        .is_none_or(penelope_tools::shell::may_destroy)) =>
+                        {
+                            verdict.decision = PolicyDecision::Auto;
+                            verdict.reason =
+                                "mode « tout sauf le destructif » de la session".into();
+                        }
+                        _ => {}
+                    }
                     // Réseau demandé par une commande : la carte le dit en toutes lettres.
                     if crate::executor::wants_network(&info.effective_name, &effective_args)
                         && info.risk == RiskClass::External
@@ -1770,6 +1808,11 @@ pub(crate) fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
         // Famille de commandes : `cargo test …`, `git log …`, `ls …`.
         "shell_exec" => {
             let command = str_of("command")?;
+            // Une commande composée (`cd /x && ls`) n'a pas de famille : une règle sur
+            // `cd` ne s'appliquerait jamais (issue #111). Pas de motif, donc pas de règle.
+            if command.contains(penelope_hitl::policy::CHAINING) {
+                return None;
+            }
             let words: Vec<&str> = command.split_whitespace().collect();
             let network = crate::executor::wants_network(tool, args);
             const TWO_WORDS: &[&str] = &[
@@ -1928,17 +1971,26 @@ pub async fn decide_approval(
                 // Un « toujours » est borné au contexte de l'appel (famille de commandes,
                 // répertoire, remote), pas à l'outil entier (issue #67).
                 let pattern = arg_pattern(&a.subject, a.payload.get("arguments"));
-                s.policies
-                    .create_rule(
-                        penelope_hitl::RuleScope::Tool,
-                        Some(&a.subject),
-                        server_of(&a.subject).as_deref(),
-                        pattern,
-                        PolicyDecision::Auto,
-                        window,
-                        window_ref.as_deref(),
-                    )
-                    .await?;
+                // Une commande sans famille (composée) : autorisée cette fois, jamais le
+                // shell entier (issue #111).
+                if pattern.is_none() && a.subject == "shell_exec" {
+                    tracing::info!(
+                        approval = approval_id,
+                        "commande composée : autorisée une fois, sans règle"
+                    );
+                } else {
+                    s.policies
+                        .create_rule(
+                            penelope_hitl::RuleScope::Tool,
+                            Some(&a.subject),
+                            server_of(&a.subject).as_deref(),
+                            pattern,
+                            PolicyDecision::Auto,
+                            window,
+                            window_ref.as_deref(),
+                        )
+                        .await?;
+                }
             } else if !decision.approved && decision.window.creates_rule() && rule_allowed {
                 s.policies
                     .create_rule(

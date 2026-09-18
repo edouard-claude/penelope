@@ -448,6 +448,9 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `tools.http_block_private_ips` | `true` | Refuser les adresses privées et locales dans `http_fetch`. |
 | `tools.loop_detector_repeats` | `3` | Appels identiques qui font arrêter une boucle d'outil. |
 | `tools.max_output_bytes` | `262144` | Taille maximale d'une sortie de commande gardée telle quelle, en octets. |
+| `tools.approval_mode` | `"reads"` | Mode d'approbation par défaut d'une session : `ask` (demander tout, lectures du shell comprises), `reads` (lectures sans demande, le reste selon la politique), `auto` (tout sans demande sauf le destructif). `/mode` le change pour une session. |
+| `tools.shell_allow` | `[]` | Familles de commandes `shell_exec` autorisées d'avance, sans enchaînement : par exemple `cargo test`, `npm run lint`. |
+| `tools.shell_allow_network` | `[]` | Familles de commandes autorisées d'avance **avec** le réseau : `git push`, `gh pr`. |
 
 **[workflows]**
 
@@ -759,7 +762,30 @@ penelope config set sandbox.shell_network true
 ```
 
 Une configuration qui porte déjà `shell_network = true` (écrite par une version
-antérieure) le garde à la mise à jour ; sans la clé, le réseau est fermé. Un « Toujours » est **borné à l'appel qu'il autorise**, jamais à l'outil entier :
+antérieure) le garde à la mise à jour ; sans la clé, le réseau est fermé.
+
+**Lectures sans demande, modes et autorisations déclarées.** Une commande qui ne fait que
+lire (`ls`, `cat`, `head`, `grep`, `find` sans `-exec` ni `-delete`, `wc`, `git status`,
+`git log`, `git diff`…), appelée par son nom, sans enchaînement, redirection,
+substitution, variable ni échappement, est classée lecture : elle part sans demande,
+comme `fs_read`. Tout le reste est une écriture. Chaque session a un mode (`/mode` sur
+Telegram, `penelope session mode`, défaut `tools.approval_mode`) : « demander tout »
+(`ask`, même une lecture du shell attend ton accord), « lectures sans demande » (`reads`,
+le défaut) et « tout sauf le destructif » (`auto` : plus de demande, sauf une commande qui
+supprime, écrase, élève ses droits, réécrit git, ou qu'on ne peut juger parce qu'elle
+enchaîne). Des familles peuvent être autorisées d'avance, sans clic :
+
+```bash
+penelope config set tools.shell_allow '["cargo test", "npm run lint"]'
+penelope config set tools.shell_allow_network '["git push", "gh pr"]'
+```
+
+Un « Toujours » sur une commande composée (`cd /x && ls`) l'autorise cette fois, sans
+créer de règle : une famille `cd` ne s'appliquerait jamais. `penelope policies` et
+`/policies` signalent les règles inutiles (famille issue d'une commande composée, lecture
+déjà libre, jamais utilisée depuis une semaine), à retirer d'un bouton.
+
+Un « Toujours » est **borné à l'appel qu'il autorise**, jamais à l'outil entier :
 pour `shell_exec`, à la famille de commandes (`cargo test …`, `git log …`) ; pour `fs_write`
 et `fs_edit`, au répertoire du fichier ; pour `git_push`, au couple remote et branche ; pour
 `http_fetch`, à l'hôte ; pour `config_set`, à la clé. Une autre commande, un autre

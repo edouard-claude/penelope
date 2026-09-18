@@ -61,6 +61,120 @@ impl ShellOutput {
     }
 }
 
+/// Une ligne de commande qui ne fait que lire (issue #111) : un programme de lecture
+/// connu, appelé par son nom, sans enchaînement, redirection, substitution, variable,
+/// échappement ni option qui écrive ou lance autre chose. Tout le reste est une écriture,
+/// approuvée comme telle. Le bac à sable borne de toute façon ce qu'elle peut lire.
+pub fn is_read_command(command: &str) -> bool {
+    const FORBIDDEN: &[char] = &[
+        ';', '&', '|', '`', '$', '>', '<', '\n', '\r', '(', ')', '{', '}', '\\', '!',
+    ];
+    let line = command.trim();
+    if line.is_empty() || line.contains(FORBIDDEN) {
+        return false;
+    }
+    let words: Vec<String> = line
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c| c == '\'' || c == '"').to_string())
+        .collect();
+    let Some(program) = words.first() else {
+        return false;
+    };
+    // `./ls` ou `/tmp/cat` peuvent être n'importe quoi ; `FOO=1 ls` change l'environnement.
+    if program.contains('/') || program.contains('=') {
+        return false;
+    }
+    let has = |bad: &[&str]| {
+        words[1..].iter().any(|w| {
+            bad.iter()
+                .any(|b| w == b || (b.starts_with("--") && w.starts_with(&format!("{b}="))))
+        })
+    };
+    match program.as_str() {
+        "ls" | "cat" | "head" | "tail" | "grep" | "egrep" | "fgrep" | "wc" | "file" | "stat"
+        | "du" | "df" | "pwd" | "which" | "whoami" | "id" | "uname" | "diff" | "cmp" | "uniq"
+        | "cut" | "basename" | "dirname" | "realpath" | "readlink" | "sha256sum" | "sha1sum"
+        | "shasum" | "md5" | "md5sum" | "jq" | "echo" | "printf" | "true" => true,
+        "date" => !has(&["-s", "--set"]),
+        "sort" => !has(&["-o", "--output"]),
+        "tree" => !has(&["-o"]),
+        "rg" => !has(&["--pre"]),
+        "find" => !has(&[
+            "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf",
+            "-fls",
+        ]),
+        "fd" => !has(&["-x", "--exec", "-X", "--exec-batch"]),
+        // Sous-commande de lecture, sans option globale (`git -c …` peut lancer une
+        // commande) ni fichier de sortie.
+        "git" => {
+            let read = matches!(
+                words.get(1).map(String::as_str),
+                Some(
+                    "status"
+                        | "log"
+                        | "diff"
+                        | "show"
+                        | "ls-files"
+                        | "blame"
+                        | "rev-parse"
+                        | "describe"
+                        | "shortlog"
+                        | "grep"
+                )
+            ) || (words.get(1).map(String::as_str) == Some("branch")
+                && words[2..]
+                    .iter()
+                    .all(|w| matches!(w.as_str(), "-a" | "-r" | "-v" | "-vv" | "--list")))
+                || (words.get(1).map(String::as_str) == Some("remote")
+                    && words[2..].iter().all(|w| w == "-v"));
+            read && !has(&["--output", "--ext-diff", "--textconv"])
+        }
+        _ => false,
+    }
+}
+
+/// Une commande qui peut détruire, ou dont on ne peut pas le dire (issue #111) :
+/// enchaînement ou substitution (ce qui suit peut être n'importe quoi), suppression,
+/// écrasement, élévation de droits, git qui réécrit ou efface. Le mode « tout sauf le
+/// destructif » la fait toujours approuver.
+pub fn may_destroy(command: &str) -> bool {
+    let line = command.trim();
+    if line.contains(['|', ';', '&', '`', '$', '>', '(', ')', '{', '}', '\n', '\r']) {
+        return true;
+    }
+    let words: Vec<String> = line
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c| c == '\'' || c == '"').to_string())
+        .collect();
+    let Some(program) = words
+        .first()
+        .map(|p| p.rsplit('/').next().unwrap_or(p).to_string())
+    else {
+        return false;
+    };
+    let has = |bad: &[&str]| words[1..].iter().any(|w| bad.contains(&w.as_str()));
+    match program.as_str() {
+        "rm" | "rmdir" | "dd" | "shred" | "truncate" | "mkfs" | "sudo" | "doas" | "su"
+        | "chown" | "kill" | "killall" | "pkill" | "launchctl" | "diskutil" | "xargs" => true,
+        "chmod" | "mv" | "cp" => has(&["-R", "-r", "-f", "--force"]),
+        "find" => has(&["-delete", "-exec", "-execdir"]),
+        "git" => {
+            has(&[
+                "--force",
+                "-f",
+                "--hard",
+                "-D",
+                "--delete",
+                "--force-with-lease",
+            ]) || matches!(
+                words.get(1).map(String::as_str),
+                Some("clean" | "filter-branch")
+            )
+        }
+        _ => false,
+    }
+}
+
 /// Note ajoutée à l'échec d'une commande lancée sans réseau quand elle en avait
 /// vraisemblablement besoin (issue #106) : l'agent sait quoi changer au lieu de relancer
 /// la même commande.
@@ -464,6 +578,84 @@ mod tests {
         .unwrap();
         assert_eq!(allowed.exit_code, 0, "{allowed:?}");
         assert!(allowed.stdout.contains("dans le workspace"), "{allowed:?}");
+    }
+
+    /// #111 : les lectures simples sont reconnues ; un enchaînement, une redirection, une
+    /// substitution, une écriture ou une option qui lance autre chose ne le sont jamais.
+    #[test]
+    fn read_commands_are_told_apart_from_the_rest() {
+        for read in [
+            "ls -la /tmp",
+            "cat x",
+            "grep -r foo src",
+            "grep -rn \"fn main\" crates",
+            "find . -name '*.rs'",
+            "head -n 50 README.md",
+            "wc -l src/lib.rs",
+            "git status",
+            "git log --oneline -5",
+            "git diff HEAD~1",
+            "git branch -a",
+            "sort notes.txt",
+        ] {
+            assert!(is_read_command(read), "{read}");
+        }
+        for not in [
+            "rm -rf x",
+            "sh -c \"ls\"",
+            "ls > fichier",
+            "curl https://example.com",
+            "cd /x && ls",
+            "cd /x",
+            "ls; rm x",
+            "cat $(ls)",
+            "cat `ls`",
+            "echo $HOME",
+            "find . -delete",
+            "find . -exec rm {} +",
+            "find . '-exec' rm x",
+            "sort -o out.txt in.txt",
+            "git push",
+            "git -c core.pager=x log",
+            "git diff --output=x",
+            "git branch -D main",
+            "./ls",
+            "FOO=1 ls",
+            "l\\s",
+            "export A=1",
+            "",
+        ] {
+            assert!(!is_read_command(not), "{not}");
+        }
+    }
+
+    /// #111 : ce qui peut détruire, ou qu'on ne peut pas juger, n'est jamais automatique.
+    #[test]
+    fn destructive_or_opaque_commands_are_spotted() {
+        for bad in [
+            "rm -rf x",
+            "cd /x && ls",
+            "echo $(rm x)",
+            "git push --force origin main",
+            "git reset --hard HEAD~3",
+            "git clean -fdx",
+            "find . -delete",
+            "sudo ls",
+            "/bin/rm x",
+            "cp -r a b",
+            "ls | xargs rm",
+        ] {
+            assert!(may_destroy(bad), "{bad}");
+        }
+        for fine in [
+            "cargo test",
+            "npm run build",
+            "git commit -m x",
+            "mkdir build",
+            "cp a b",
+        ] {
+            assert!(!may_destroy(fine), "{fine}");
+        }
     }
 
     /// #106 : un échec de résolution ou de connexion, ou une commande qui ne vit que du

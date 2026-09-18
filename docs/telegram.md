@@ -191,7 +191,7 @@ un test vérifie que **toutes** le sont : une commande sans méthode serait une 
 
 ```
 /new /sessions /switch /close /purge /title /fork /rewind /compact /export /stop
-/model /models /budget /usage
+/model /models /mode /budget /usage
 /note /retiens /oublie /recall /appris /pratique /dream /intentions /mien /forget /accueil /audit
 /mcp /mcp auth /p
 /skills /skill
@@ -221,10 +221,11 @@ Workflows (4)
 | `/schedules` | ⚡ déclencher, ⏸/▶️, 🗑 (confirmé) ; dernière erreur de chaque planification ; une exécution en échec arrive en alerte avec « Relancer maintenant » |
 | `/mcp` | par serveur : détail, 🔄 redémarrer, 🧪 tester ; le détail ajoute 📜 journal, ⏻ activer ou désactiver, 🔐 autoriser |
 | `/models` | un modèle, puis l'alias auquel l'affecter ; 🔎 chercher |
+| `/mode` | ce qui part sans demande dans cette session : demander tout, lectures sans demande (défaut), tout sauf le destructif ; le mode actuel coché |
 | `/skills`, `/skill` | 📖 voir, ⏪ version précédente (confirmé) |
 | `/oublie`, `/forget` | une entrée (ou une session) par bouton, puis confirmation |
 | `/appris`, `/pratique` | voir, ✅ valider, 🚫 rejeter |
-| `/intentions`, `/policies` | ❌ annuler une intention, 🗑 retirer une règle (confirmé) |
+| `/intentions`, `/policies` | ❌ annuler une intention, 🗑 retirer une règle (confirmé) ; une règle inutile (famille issue d'une commande composée, lecture déjà libre, jamais utilisée depuis une semaine) porte ⚠️ et la raison |
 | `/status`, `/doctor` | résumé lisible, boutons vers l'écran de chaque alerte (MCP, dépenses, modèles) |
 | `/config`, `/logs` | générations et sous-systèmes ; journal filtré par composant, « Plus » |
 | `/restart`, `/close`, `/rewind` | confirmation |
