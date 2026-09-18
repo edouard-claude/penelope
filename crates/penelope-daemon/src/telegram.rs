@@ -137,6 +137,8 @@ const ALBUM_WINDOW: Duration = Duration::from_millis(1_500);
 /// Un long texte collé arrive découpé par Telegram en messages de 4 096 caractères : un
 /// morceau de cette taille appelle la suite sans séparateur (issue #49).
 const TELEGRAM_TEXT_LIMIT: usize = 4_000;
+/// Silence qui clôt une rafale après un message court, sa fin probable (issue #96).
+const TAIL_QUIET: Duration = Duration::from_millis(300);
 
 /// Morceaux d'un même envoi, en attente de leur fin de fenêtre (issue #49).
 #[derive(Debug, Clone)]
@@ -510,8 +512,9 @@ impl TelegramGateway {
                 };
                 self.react(chat_id, message_id, reaction::RECEIVED);
                 // Les morceaux d'un même envoi attendent la fin de la fenêtre et partent
-                // en un seul tour (issue #49).
-                self.buffer_text(&origin, &session, message_id, update_id, content)
+                // en un seul tour (issue #49) ; un message court tapé part tout de suite
+                // (issue #96).
+                self.buffer_text(&origin, &session, message_id, update_id, content, forwarded)
                     .await?;
             }
             Incoming::Command {
@@ -2084,6 +2087,16 @@ impl TelegramGateway {
 
     /// Met un morceau de côté le temps de la fenêtre de regroupement. Tant que la rafale
     /// n'est pas finie, un nouveau message s'y ajoute au lieu de créer un tour de plus.
+    /// Fenêtre adaptative (issue #96) : seul un morceau qui ressemble à une coupure de
+    /// Telegram (≥ 4 000 caractères) ou un message transféré ouvre ou prolonge une rafale ;
+    /// un message court tapé part aussitôt, ou ferme la rafale ouverte après un court
+    /// silence s'il en est la fin.
+    ///
+    /// ```text
+    ///  court, rien d'ouvert ─────────────► tour tout de suite
+    ///  long ou transféré ────────────────► rafale, attente de la fenêtre (2 s)
+    ///  court, rafale ouverte ────────────► dernier morceau probable : 300 ms de silence
+    /// ```
     async fn buffer_text(
         self: &Arc<Self>,
         origin: &Origin,
@@ -2091,6 +2104,7 @@ impl TelegramGateway {
         message_id: i64,
         update_id: i64,
         text: String,
+        forwarded: bool,
     ) -> anyhow::Result<()> {
         let cfg = self.daemon.services.config.config();
         let window = cfg.telegram.text_group_window_ms;
@@ -2098,13 +2112,24 @@ impl TelegramGateway {
             Origin::Telegram { chat_id, .. } => *chat_id,
             _ => 0,
         };
-        if window == 0 {
+        let piece = forwarded || text.chars().count() >= TELEGRAM_TEXT_LIMIT;
+        let open = self
+            .bursts
+            .lock()
+            .map(|g| g.contains_key(&chat_id))
+            .unwrap_or(false);
+        if window == 0 || (!piece && !open) {
             self.daemon
                 .enqueue_message(session, &text, origin, Some(format!("tg:{update_id}")))
                 .await?;
             return Ok(());
         }
-        let deadline = std::time::Instant::now() + Duration::from_millis(window);
+        let wait = if piece {
+            Duration::from_millis(window)
+        } else {
+            TAIL_QUIET.min(Duration::from_millis(window))
+        };
+        let deadline = std::time::Instant::now() + wait;
         let first = {
             let mut g = self
                 .bursts
@@ -6775,6 +6800,10 @@ mod tests {
                 .await
                 .unwrap();
         }
+        // Le dernier morceau, plus court, ferme la rafale au lieu de partir seul (#96).
+        g.process_update(&updates::text_message(112, OWNER, OWNER, "fin du collage"))
+            .await
+            .unwrap();
         // Rien ne part avant la fin de la fenêtre.
         assert_eq!(g.daemon.services.turns.pending_count().await.unwrap(), 0);
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -6802,6 +6831,56 @@ mod tests {
     }
 
     /// #49 : deux messages espacés ne sont pas regroupés.
+    /// #96 : un message court tapé crée son tour tout de suite, sans attendre la
+    /// fenêtre ; un morceau à la limite de Telegram, seul, attend la fenêtre longue.
+    #[tokio::test]
+    async fn a_short_message_goes_at_once_a_split_piece_waits() {
+        let (_d, g, _t, _p) = gateway().await;
+        g.daemon
+            .kv_set("tg.onboard.proposed", "test")
+            .await
+            .unwrap();
+        g.daemon
+            .publish_config("test", |c| {
+                c.telegram.text_group_window_ms = 400;
+                Ok(vec!["telegram.text_group_window_ms".into()])
+            })
+            .unwrap();
+        g.process_update(&updates::text_message(
+            1,
+            OWNER,
+            OWNER,
+            "tu peux regarder ?",
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            g.daemon.services.turns.pending_count().await.unwrap(),
+            1,
+            "parti sans attendre"
+        );
+        g.daemon
+            .services
+            .turns
+            .claim("test")
+            .await
+            .unwrap()
+            .expect("tour du message court");
+
+        let piece = "b".repeat(TELEGRAM_TEXT_LIMIT + 96);
+        g.process_update(&updates::text_message(2, OWNER, OWNER, &piece))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(
+            g.daemon.services.turns.pending_count().await.unwrap(),
+            1,
+            "seul le premier tour existe : le morceau attend la fenêtre"
+        );
+        tokio::time::sleep(Duration::from_millis(450)).await;
+        assert_eq!(g.daemon.services.turns.pending_count().await.unwrap(), 2);
+    }
+
     #[tokio::test]
     async fn two_messages_far_apart_stay_two_turns() {
         let (_d, g, _t, p) = gateway().await;
@@ -6852,9 +6931,10 @@ mod tests {
             })
             .unwrap();
 
+        // Six messages transférés d'un coup : une rafale, même courts (#96).
         for i in 0..6 {
             let part = format!("paragraphe {i} du document collé, sur la facturation.");
-            g.process_update(&updates::text_message(200 + i, OWNER, OWNER, &part))
+            g.process_update(&updates::forwarded(200 + i, OWNER, OWNER, &part))
                 .await
                 .unwrap();
         }

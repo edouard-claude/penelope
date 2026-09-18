@@ -238,7 +238,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `telegram.draft_interval_ms` | `700` | Intervalle entre deux mises à jour du brouillon de réponse, en millisecondes (300 au moins). |
 | `telegram.webhook_url` | `""` | Adresse du webhook. Sans effet dans cette version. |
 | `telegram.allow_groups` | `false` | Accepter les messages du propriétaire dans les groupes. |
-| `telegram.text_group_window_ms` | `3000` | Fenêtre de regroupement des messages texte reçus coup sur coup, en millisecondes : les morceaux d'un même envoi forment un seul tour. 0 : un message, un tour. |
+| `telegram.text_group_window_ms` | `2000` | Attente après un morceau qui ressemble à une coupure de Telegram (4 000 caractères ou plus) ou un message transféré, en millisecondes : les morceaux d'un même envoi forment un seul tour. Un message court tapé part tout de suite. 0 : un message, un tour. |
 | `telegram.burst_messages` | `5` | Messages regroupés à partir desquels Pénélope demande quoi en faire au lieu de répondre à chacun. 0 : jamais. |
 | `telegram.burst_chars` | `20000` | Caractères cumulés à partir desquels elle demande de même. 0 : jamais. |
 

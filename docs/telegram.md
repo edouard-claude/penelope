@@ -236,11 +236,14 @@ conversation.
 
 ### Messages envoyés coup sur coup
 
-Un long texte collé arrive découpé par Telegram en messages de 4 096 caractères. Les
-morceaux reçus à moins de `telegram.text_group_window_ms` (3 s par défaut) forment **un
-seul tour**, recollés dans l'ordre : un morceau à la limite est la suite du précédent, les
-autres sont séparés par une ligne vide. Tant que le tour n'a pas démarré, un message de
-plus s'y ajoute. Chaque morceau reçoit sa réaction « reçu », mais une seule réponse part.
+Un long texte collé arrive découpé par Telegram en messages de 4 096 caractères. Un
+morceau à la limite, ou un message transféré, ouvre une fenêtre de
+`telegram.text_group_window_ms` (2 s par défaut) : les morceaux qui suivent forment **un
+seul tour**, recollés dans l'ordre (un morceau à la limite est la suite du précédent, les
+autres sont séparés par une ligne vide), et un message court qui arrive pendant la fenêtre
+la ferme après 300 ms de silence, comme dernier morceau. Un message court tapé seul, lui,
+part **tout de suite** : un « merci » n'attend rien. Chaque morceau reçoit sa réaction
+« reçu », mais une seule réponse part.
 
 Au-delà de `telegram.burst_messages` (5) ou de `telegram.burst_chars` (20 000), Pénélope
 ne répond pas d'elle-même : elle dit ce qu'elle a reçu et demande quoi en faire.

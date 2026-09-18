@@ -1048,6 +1048,15 @@ l'adresse vérifiée (#93), fichiers lus en flux (#94), secret posé sans `argv`
   Trousseau reste lisible, sans la valeur. Aller-retour réel dans le Trousseau : test
   ignoré par défaut, à lancer à la main (il écrit un secret d'essai).
 
+### 0.17.2
+
+- **Un message court part tout de suite** (#96) : la fenêtre de regroupement ne s'ouvre
+  plus pour chaque message. Un morceau à la limite de Telegram (4 000 caractères ou plus)
+  ou un message transféré ouvre ou prolonge une rafale (`telegram.text_group_window_ms`,
+  2 s au lieu de 3) ; un message court tapé seul crée son tour aussitôt ; un message court
+  pendant une rafale en est la fin probable et la ferme après 300 ms de silence. Un
+  « merci » ne paie plus 3 s d'attente avant le modèle.
+
 ### Routine de livraison
 
 Avant chaque tag :
