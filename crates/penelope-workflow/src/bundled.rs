@@ -684,18 +684,29 @@ mod tests {
         for id in ["deployer", "verifier", "rollback"] {
             assert!(deploy.step(id).unwrap().network, "{id}");
         }
-        assert!(deploy.render_graph().contains("deployer [shell] (deploy) · réseau"));
+        assert!(
+            deploy
+                .render_graph()
+                .contains("deployer [shell] (deploy) · réseau")
+        );
         let ticket = ticket_to_deploy();
         assert!(ticket.step("checkout").unwrap().network);
         let mut offline = Vec::new();
         for w in all() {
-            for s in w.steps.iter().chain(w.steps.iter().flat_map(|s| s.children.iter())) {
+            for s in w
+                .steps
+                .iter()
+                .chain(w.steps.iter().flat_map(|s| s.children.iter()))
+            {
                 if s.kind == "shell" && !s.network {
                     offline.push(s.id.as_str().to_string());
                 }
             }
         }
-        assert!(offline.iter().all(|id| id == "tests" || id == "lint"), "{offline:?}");
+        assert!(
+            offline.iter().all(|id| id == "tests" || id == "lint"),
+            "{offline:?}"
+        );
     }
 
     #[test]
