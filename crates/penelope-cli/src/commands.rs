@@ -122,6 +122,10 @@ pub enum Command {
         /// Crée une règle « toujours ».
         #[arg(long)]
         always: bool,
+        /// Effet incertain après un arrêt brutal : `done` (vérifié, il a eu lieu) ou
+        /// `retry` (le relancer). `penelope deny` le laisse tel quel.
+        #[arg(long, value_parser = ["done", "retry"])]
+        effect: Option<String>,
     },
     /// Refuse une demande.
     Deny {
@@ -917,7 +921,10 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Skill(SkillCmd::Reload) => (m::SKILL_RELOAD, json!({})),
 
         Command::Approvals => (m::APPROVALS, json!({})),
-        Command::Approve { id, always } => (m::APPROVE, json!({"id": id, "always": always})),
+        Command::Approve { id, always, effect } => (
+            m::APPROVE,
+            json!({"id": id, "always": always, "effect": effect}),
+        ),
         Command::Deny { id, reason } => (m::DENY, json!({"id": id, "reason": reason})),
         Command::Policies => (m::POLICIES, json!({})),
 
@@ -1996,6 +2003,7 @@ mod tests {
             vec!["upgrade", "--rollback"],
             vec!["approvals"],
             vec!["approve", "a_1"],
+            vec!["approve", "a_1", "--effect", "done"],
             vec!["deny", "a_1"],
             vec!["policies"],
             vec!["usage"],

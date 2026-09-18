@@ -504,11 +504,18 @@ impl Rpc {
             method::APPROVE => {
                 let id = required_str(p, "id")?;
                 let always = p.get("always").and_then(|v| v.as_bool()).unwrap_or(false);
-                let d = if always {
+                let mut d = if always {
                     penelope_hitl::Decision::approve_always("cli")
                 } else {
                     penelope_hitl::Decision::approve_once("cli")
                 };
+                // Effet incertain (#83) : « c'est fait » ou « relancer », à dire.
+                match p.get("effect").and_then(|v| v.as_str()) {
+                    Some("done") => d.choice = crate::agent::EFFECT_DONE.into(),
+                    Some("retry") => d.choice = crate::agent::EFFECT_RETRY.into(),
+                    Some(other) => anyhow::bail!("--effect {other} : attendu done ou retry"),
+                    None => {}
+                }
                 self.decide_and_resume(&id, &d).await
             }
             method::DENY => {

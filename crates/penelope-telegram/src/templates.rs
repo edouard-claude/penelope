@@ -519,10 +519,12 @@ pub fn builtin_templates() -> Vec<Template> {
         t(
             "effect_unknown",
             "❔ **Effet incertain**\n\n\
-             {{effet}} a peut-être eu lieu à {{horodatage}}.\n\nRequête :\n```json\n{{requete}}\n```",
+             `{{effet}}` était en cours quand le daemon s'est arrêté ({{horodatage}}) : il a \
+             peut-être eu lieu. Vérifie, puis dis-moi quoi faire ; rien n'est relancé sans \
+             toi.\n\nRequête :\n```json\n{{requete}}\n```",
             &["effet", "horodatage", "requete"],
             vec![vec![
-                b("🔍 Vérifier", k::EFFECT_VERIFY, ""),
+                b("✅ C'est fait", k::EFFECT_VERIFY, "success"),
                 b("🔁 Relancer", k::EFFECT_RETRY, ""),
                 b("⏭ Ignorer", k::EFFECT_IGNORE, ""),
             ]],

@@ -451,7 +451,16 @@ impl Daemon {
             .await?;
 
         // Chaque effet `unknown` devient une demande HITL : jamais de retry silencieux.
+        // Une seule par effet, même après plusieurs redémarrages (#83) ; la passerelle
+        // Telegram la pousse au propriétaire dès qu'elle est prête.
         for e in unknown_effects {
+            if s.approvals
+                .pending_for_effect(e.id.as_str())
+                .await?
+                .is_some()
+            {
+                continue;
+            }
             let _ = s
                 .approvals
                 .create(
@@ -464,8 +473,15 @@ impl Daemon {
                         "effect_id": e.id.as_str(),
                         "request": e.request,
                         "attempts": e.attempts,
+                        // L'appel de conversation qui l'a lancé : la reprise du tour
+                        // retrouve la décision par lui (`find_for_call`).
+                        "call_id": e.step_id,
                     }),
-                    vec!["Vérifier".into(), "Relancer".into(), "Ignorer".into()],
+                    vec![
+                        crate::agent::EFFECT_DONE.into(),
+                        crate::agent::EFFECT_RETRY.into(),
+                        crate::agent::EFFECT_IGNORE.into(),
+                    ],
                     e.session_id.as_deref(),
                     e.run_id.as_deref(),
                     false,

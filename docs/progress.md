@@ -949,6 +949,15 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   et un reclassement en « simple » retire l'ancien collant au lieu de le laisser revenir.
   `/model` dit quand le dernier message a été reclassé à une frontière ; alias épinglé et
   `/model auto off` ne sont pas concernés.
+- **Effet incertain tranché pour de bon** (#83) : au redémarrage, une seule demande
+  `effect_unknown` par effet (plus une de plus par redémarrage), portant l'appel qui l'a
+  lancé ; la passerelle Telegram la pousse au propriétaire dès qu'elle est prête, sans
+  attendre `/approvals`. Sa carte propose « C'est fait », « Relancer », « Ignorer » ; la
+  décision passe au ledger (`resolve_unknown`, enfin branché) avant la reprise du tour, qui
+  rejoue le résultat, relance une fois ou dit au modèle que l'appel reste tel quel. Aucune
+  règle n'en naît : `decide_approval` refuse toute règle pour une demande sans arguments
+  (budget, effet incertain), et ces cartes n'affichent plus « Toujours » ni « Pour cette
+  session ». En ligne de commande : `penelope approve <id> --effect done|retry`.
 
 ### Routine de livraison
 

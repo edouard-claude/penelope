@@ -383,6 +383,27 @@ impl ApprovalStore {
             .await?)
     }
 
+    /// Demande `effect_unknown` encore en attente pour cet effet : une seule par effet,
+    /// quel que soit le nombre de redémarrages (issue #83).
+    pub async fn pending_for_effect(&self, effect_id: &str) -> Result<Option<ApprovalRequest>> {
+        let eid = effect_id.to_string();
+        Ok(self
+            .store
+            .read(move |c| {
+                let mut st = c.prepare(&format!(
+                    "{SELECT} WHERE state = 'pending' AND kind = 'effect_unknown'
+                       AND json_extract(payload, '$.effect_id') = ?1
+                     ORDER BY created_at LIMIT 1"
+                ))?;
+                let mut rows = st.query([eid])?;
+                match rows.next()? {
+                    Some(r) => Ok(Some(row_to_request(r)?)),
+                    None => Ok(None),
+                }
+            })
+            .await?)
+    }
+
     pub async fn pending(&self, limit: i64) -> Result<Vec<ApprovalRequest>> {
         Ok(self
             .store

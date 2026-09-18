@@ -1697,6 +1697,19 @@ Au démarrage suivant, la reprise (§17) s'exécute : les tours interrompus sont
 file, les runs repartent à leur étape courante, les effets restés en vol deviennent des
 questions plutôt que des relances. `penelope approvals` montre ce qui attend une réponse.
 
+Une question d'effet incertain arrive d'elle-même sur Telegram dès que la passerelle est
+prête, une seule par effet quel que soit le nombre de redémarrages, avec la requête telle
+que le ledger l'a enregistrée : « ✅ C'est fait » (vérifié : l'effet a eu lieu, il n'est pas
+relancé, le modèle reçoit ce résultat), « 🔁 Relancer » (exécuté une fois de plus) ou
+« ⏭ Ignorer » (laissé tel quel). Aucune de ces réponses ne crée de règle. En ligne de
+commande :
+
+```bash
+penelope approve <id> --effect done
+```
+
+(`--effect retry` pour relancer, `penelope deny <id>` pour ignorer).
+
 ## 11. Ce qui n'est pas encore branché
 
 Tout ce que décrit ce guide fonctionne. Restent : le mode webhook de Telegram,

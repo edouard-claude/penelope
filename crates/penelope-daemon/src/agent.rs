@@ -1656,14 +1656,96 @@ pub(crate) fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
     }
 }
 
+/// Choix d'une demande `effect_unknown` (#83) : l'appel a eu lieu (vérifié par le
+/// propriétaire), il faut le relancer, ou il reste tel quel.
+pub const EFFECT_DONE: &str = "C'est fait";
+pub const EFFECT_RETRY: &str = "Relancer";
+pub const EFFECT_IGNORE: &str = "Ignorer";
+
+/// Tranche un effet incertain : la décision passe au ledger, **jamais** dans une règle.
+/// La transition est faite avant que le canal ne remette le tour en file : la reprise
+/// trouve l'effet `completed` (rejoué), `planned` (relancé) ou la demande refusée.
+async fn decide_uncertain_effect(
+    s: &Services,
+    a: &penelope_hitl::ApprovalRequest,
+    decision: &Decision,
+) -> anyhow::Result<bool> {
+    use penelope_kernel::effects::UnknownDecision;
+    use penelope_kernel::ids::EffectId;
+    let ledger = match (decision.approved, decision.choice.as_str()) {
+        (true, EFFECT_DONE) => UnknownDecision::MarkCompleted(json!({
+            "statut": "fait",
+            "note": "Le propriétaire a vérifié : cet appel avait bien eu lieu avant l'arrêt \
+                     du daemon. Il n'est pas relancé.",
+        })),
+        (true, EFFECT_RETRY) => UnknownDecision::Retry,
+        (false, _) => UnknownDecision::Ignore,
+        (true, other) => anyhow::bail!(
+            "effet incertain : choisir « {EFFECT_DONE} », « {EFFECT_RETRY} » ou « \
+             {EFFECT_IGNORE} » (reçu « {other} ») ; en ligne de commande, `penelope approve \
+             <id> --effect done|retry` ou `penelope deny <id>`"
+        ),
+    };
+    let effect_id = a.payload["effect_id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("demande {} sans effet", a.id.0))?
+        .to_string();
+    // Pas de règle, quelle que soit la fenêtre demandée.
+    let recorded = Decision {
+        window: PolicyWindow::Once,
+        reason: decision.reason.clone().or_else(|| {
+            (!decision.approved)
+                .then(|| "effet incertain laissé tel quel, sans relance".to_string())
+        }),
+        ..decision.clone()
+    };
+    match s.approvals.decide(a.id.as_str(), &recorded).await {
+        Ok(_) => {
+            s.effects
+                .resolve_unknown(&EffectId(effect_id.clone()), ledger)
+                .await?;
+            s.events
+                .append(EventDraft::new(
+                    "approval.decided",
+                    json!({
+                        "id": a.id.as_str(),
+                        "approved": decision.approved,
+                        "via": decision.via,
+                        "window": "once",
+                        "effect": effect_id,
+                        "choice": decision.choice,
+                    }),
+                ))
+                .await?;
+            Ok(decision.approved)
+        }
+        Err(penelope_hitl::HitlError::AlreadyDecided { .. }) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Tranche une approbation : la première décision gagne, une fenêtre crée une règle.
 pub async fn decide_approval(
     s: &Services,
     approval_id: &str,
     decision: &Decision,
 ) -> anyhow::Result<bool> {
+    if let Some(a) = s.approvals.get(approval_id).await?
+        && a.kind == penelope_hitl::ApprovalKind::EffectUnknown
+    {
+        return decide_uncertain_effect(s, &a, decision).await;
+    }
     match s.approvals.decide(approval_id, decision).await {
         Ok(a) => {
+            // Une règle ne naît que d'un appel d'outil dont on a vu les arguments : une
+            // demande sans arguments (budget, effet incertain…) n'ouvre jamais une
+            // autorisation sur l'outil entier (#83, régression de #67).
+            let rule_allowed = a.payload.get("arguments").is_some()
+                && !matches!(
+                    a.kind,
+                    penelope_hitl::ApprovalKind::BudgetExceeded
+                        | penelope_hitl::ApprovalKind::EffectUnknown
+                );
             // « Toujours », « pour ce run », « pour cette session » : règle visible et
             // révocable dans `/policies`.
             let window_ref = match decision.window {
@@ -1671,7 +1753,7 @@ pub async fn decide_approval(
                 PolicyWindow::Session => a.session_id.clone(),
                 _ => None,
             };
-            if decision.approved && decision.window != PolicyWindow::Once {
+            if decision.approved && decision.window != PolicyWindow::Once && rule_allowed {
                 let window = if decision.window == PolicyWindow::Run && a.run_id.is_none() {
                     PolicyWindow::Session
                 } else {
@@ -1691,7 +1773,7 @@ pub async fn decide_approval(
                         window_ref.as_deref(),
                     )
                     .await?;
-            } else if !decision.approved && decision.window.creates_rule() {
+            } else if !decision.approved && decision.window.creates_rule() && rule_allowed {
                 s.policies
                     .create_rule(
                         penelope_hitl::RuleScope::Tool,
@@ -2140,6 +2222,187 @@ mod tests {
             2,
             "dispatching et completed du seul effet non idempotent"
         );
+    }
+
+    /// Un `git push` était en vol quand le daemon est tombé : l'effet est `dispatching`,
+    /// l'appel n'a pas de résultat. Le « redémarrage » le passe en `unknown`.
+    async fn crashed_push() -> (
+        tempfile::TempDir,
+        Arc<Services>,
+        Arc<MockProvider>,
+        String,
+        MemoryConversation,
+        String,
+    ) {
+        let (d, s, p) = setup().await;
+        let sid = session(&s).await;
+        let conv = MemoryConversation::new("Tu es Pénélope.", "pousse la branche");
+        let args = json!({"command": "git push origin main"});
+        conv.record(
+            &ChatMessage::assistant("").with_tool_calls(vec![call(
+                "c1",
+                "shell_exec",
+                args.clone(),
+            )]),
+            false,
+        )
+        .await
+        .unwrap();
+        let id = match s
+            .effects
+            .plan(
+                EffectSpec::new(effect_kind("shell_exec"), "shell_exec", args)
+                    .session(&sid)
+                    .step("c1"),
+            )
+            .await
+            .unwrap()
+        {
+            Planned::Fresh(id) => id,
+            o => panic!("{o:?}"),
+        };
+        s.effects.dispatching(&id).await.unwrap();
+        let daemon = crate::runtime::Daemon::from_services(s.clone());
+        daemon.recover().await.unwrap();
+        // Un second redémarrage ne crée pas de seconde demande.
+        daemon.recover().await.unwrap();
+        let pending = s.approvals.pending(10).await.unwrap();
+        assert_eq!(pending.len(), 1, "une demande par effet : {pending:?}");
+        assert_eq!(pending[0].kind, penelope_hitl::ApprovalKind::EffectUnknown);
+        let approval = pending[0].id.0.clone();
+        (d, s, p, sid, conv, approval)
+    }
+
+    /// #83 : la reprise attend la décision, « C'est fait » rejoue sans relancer, et
+    /// aucune règle n'est créée, même demandée « toujours ».
+    #[tokio::test]
+    async fn an_uncertain_effect_marked_done_is_replayed_not_rerun() {
+        let (_d, s, p, sid, conv, approval) = crashed_push().await;
+        let e = exec(false);
+        let loop_ = AgentLoop::new(s.clone(), p.clone());
+        assert_eq!(
+            loop_
+                .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+                .await
+                .unwrap(),
+            TurnOutcome::AwaitingApproval {
+                approval_id: approval.clone()
+            },
+            "la reprise attend la décision"
+        );
+        let d = Decision {
+            choice: EFFECT_DONE.into(),
+            ..Decision::approve_always("telegram")
+        };
+        assert!(loop_.decide_approval(&approval, &d).await.unwrap());
+        assert!(
+            s.policies.active_rules().await.unwrap().is_empty(),
+            "aucune règle"
+        );
+
+        p.reply("poussé");
+        let out = loop_
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap();
+        assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
+        assert_eq!(e.calls.load(Ordering::SeqCst), 0, "jamais relancé");
+        let result = conv.messages()[2].text();
+        assert!(result.contains("fait"), "{result}");
+        assert_eq!(
+            s.effects
+                .count_by_state(penelope_kernel::effects::EffectState::Completed)
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    /// #83 : « Relancer » remet l'effet en `planned` : la reprise l'exécute, une fois.
+    #[tokio::test]
+    async fn an_uncertain_effect_retried_runs_once() {
+        let (_d, s, p, sid, conv, approval) = crashed_push().await;
+        let e = exec(false);
+        let loop_ = AgentLoop::new(s.clone(), p.clone());
+        let d = Decision {
+            choice: EFFECT_RETRY.into(),
+            ..Decision::approve_once("cli")
+        };
+        assert!(loop_.decide_approval(&approval, &d).await.unwrap());
+        p.reply("relancé");
+        loop_
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap();
+        assert_eq!(e.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// #83 : « Ignorer » laisse l'effet tel quel (`failed`) et le modèle l'apprend.
+    #[tokio::test]
+    async fn an_uncertain_effect_ignored_is_not_rerun() {
+        let (_d, s, p, sid, conv, approval) = crashed_push().await;
+        let e = exec(false);
+        let loop_ = AgentLoop::new(s.clone(), p.clone());
+        assert!(
+            !loop_
+                .decide_approval(&approval, &Decision::deny("telegram", None))
+                .await
+                .unwrap()
+        );
+        p.reply("compris");
+        loop_
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap();
+        assert_eq!(e.calls.load(Ordering::SeqCst), 0);
+        let result = conv.messages()[2].text();
+        assert!(result.contains("sans relance"), "{result}");
+        assert_eq!(
+            s.effects
+                .count_by_state(penelope_kernel::effects::EffectState::Failed)
+                .await
+                .unwrap(),
+            1
+        );
+        // Un « Autoriser » sans choix d'effet est refusé, sans rien trancher.
+        let (_d2, s2, p2, _sid2, _conv2, approval2) = crashed_push().await;
+        let e2 = decide_approval(&s2, &approval2, &Decision::approve_once("cli"))
+            .await
+            .unwrap_err();
+        assert!(e2.to_string().contains("--effect"), "{e2}");
+        assert_eq!(s2.approvals.pending(10).await.unwrap().len(), 1);
+        drop(p2);
+    }
+
+    /// #83 : une demande sans arguments (budget…) n'ouvre jamais de règle sur un outil,
+    /// quel que soit le bouton (régression de #67).
+    #[tokio::test]
+    async fn a_request_without_arguments_never_creates_a_rule() {
+        let (_d, s, _p) = setup().await;
+        let sid = session(&s).await;
+        for kind in [
+            penelope_hitl::ApprovalKind::BudgetExceeded,
+            penelope_hitl::ApprovalKind::ToolCall,
+        ] {
+            let a = s
+                .approvals
+                .create(
+                    kind,
+                    "shell_exec",
+                    RiskClass::Write,
+                    json!({"reason": "plafond"}),
+                    vec![],
+                    Some(&sid),
+                    None,
+                    false,
+                )
+                .await
+                .unwrap();
+            decide_approval(&s, a.id.as_str(), &Decision::approve_always("cli"))
+                .await
+                .unwrap();
+        }
+        assert!(s.policies.active_rules().await.unwrap().is_empty());
     }
 
     #[tokio::test]

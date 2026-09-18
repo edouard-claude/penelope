@@ -239,6 +239,11 @@ impl TelegramGateway {
             tracing::warn!(error = %e, "setMyCommands refusé");
         }
         self.register();
+        // Effets restés incertains après un arrêt brutal : la question part sans attendre
+        // que le propriétaire pense à `/approvals` (#83).
+        if let Err(e) = self.announce_uncertain_effects().await {
+            tracing::warn!(error = %e, "effets incertains non annoncés");
+        }
         Ok(vec![
             tokio::spawn(self.clone().poll_loop()),
             tokio::spawn(self.clone().draft_loop()),
@@ -248,6 +253,35 @@ impl TelegramGateway {
 
     fn shutting_down(&self) -> bool {
         self.daemon.handle.is_shutting_down()
+    }
+
+    /// Pousse chaque demande `effect_unknown` en attente, une fois : dans le chat de sa
+    /// session, sinon en privé au propriétaire.
+    pub async fn announce_uncertain_effects(&self) -> anyhow::Result<usize> {
+        let s = &self.daemon.services;
+        let mut sent = 0;
+        for a in s.approvals.pending(200).await? {
+            if a.kind != penelope_hitl::ApprovalKind::EffectUnknown {
+                continue;
+            }
+            let flag = format!("tg.card.effect.{}", a.id.as_str());
+            if self.daemon.kv_get(&flag).await?.is_some() {
+                continue;
+            }
+            let session = match &a.session_id {
+                Some(sid) => s.sessions.get(sid).await?,
+                None => None,
+            };
+            let chat_id = session
+                .as_ref()
+                .and_then(|x| x.tg_chat_id)
+                .unwrap_or(self.owner_id);
+            let topic_id = session.as_ref().and_then(|x| x.tg_topic_id);
+            self.send_approval_card(chat_id, topic_id, &a).await?;
+            self.daemon.kv_set(&flag, "1").await?;
+            sent += 1;
+        }
+        Ok(sent)
     }
 
     // ================================================================ réception
@@ -2947,6 +2981,26 @@ impl TelegramGateway {
                 };
                 self.reply(chat_id, topic_id, None, &note).await?;
             }
+            // Effet incertain (#83) : la décision tranche le ledger, sans règle.
+            k::EFFECT_VERIFY | k::EFFECT_RETRY | k::EFFECT_IGNORE => {
+                let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+                let decision = match action.action.as_str() {
+                    k::EFFECT_VERIFY => Decision {
+                        choice: crate::agent::EFFECT_DONE.into(),
+                        ..Decision::approve_once("telegram")
+                    },
+                    k::EFFECT_RETRY => Decision {
+                        choice: crate::agent::EFFECT_RETRY.into(),
+                        ..Decision::approve_once("telegram")
+                    },
+                    _ => Decision {
+                        choice: crate::agent::EFFECT_IGNORE.into(),
+                        ..Decision::deny("telegram", None)
+                    },
+                };
+                self.finalize_decision(&approval_id, &decision, chat_id, topic_id)
+                    .await?;
+            }
             k::DENY_REASON => {
                 let _ = self.bot.edit_markup(chat_id, message_id, None).await;
                 self.daemon
@@ -2984,7 +3038,15 @@ impl TelegramGateway {
         let first = won == decision.approved && a.decided_via.as_deref() == Some("telegram");
         let checkpoint = a.payload["checkpoint"].as_bool() == Some(true);
         let launch = a.subject == "workflow_start";
+        let effect = a.kind == penelope_hitl::ApprovalKind::EffectUnknown;
         let note = match (first, a.state) {
+            (true, _) if effect => match decision.choice.as_str() {
+                crate::agent::EFFECT_DONE => {
+                    format!("✅ Noté : `{}` a eu lieu, je ne le relance pas.", a.subject)
+                }
+                crate::agent::EFFECT_RETRY => format!("🔁 Je relance `{}`.", a.subject),
+                _ => format!("⏭ `{}` reste tel quel, sans relance.", a.subject),
+            },
             (false, st) => format!(
                 "ℹ️ Déjà tranché : {} via {}.",
                 st.as_str(),
@@ -3042,6 +3104,9 @@ impl TelegramGateway {
         }
         if a.subject == "workflow_start" {
             return self.send_launch_card(chat_id, topic_id, a).await;
+        }
+        if a.kind == penelope_hitl::ApprovalKind::EffectUnknown {
+            return self.send_effect_card(chat_id, topic_id, a).await;
         }
         let s = &self.daemon.services;
         // Point de contrôle de coût d'un tour (issue #19) : continuer ou arrêter.
@@ -3127,11 +3192,22 @@ impl TelegramGateway {
             .render(&vars, &tokens, &[])
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         // Le libellé « Pour ce run » du gabarit vaut « pour cette session » en conversation.
+        // Sans arguments vus, pas de fenêtre ni de « Toujours » : une règle couvrirait
+        // l'outil entier (#83, régression de #67).
+        let windows = a.payload.get("arguments").is_some();
+        let windowed = [
+            tokens.get(k::APPROVE_RUN).cloned().unwrap_or_default(),
+            tokens.get(k::APPROVE_ALWAYS).cloned().unwrap_or_default(),
+        ];
         let buttons: Vec<Vec<ButtonSpec>> = rendered
             .buttons
             .iter()
             .map(|row| {
                 row.iter()
+                    .filter(|b| {
+                        windows
+                            || !matches!(&b.action, penelope_telegram::render::ButtonAction::Callback { token } if windowed.contains(token))
+                    })
                     .map(|b| {
                         let mut b = b.clone();
                         if b.label.contains("Pour ce run") {
@@ -3139,8 +3215,9 @@ impl TelegramGateway {
                         }
                         b
                     })
-                    .collect()
+                    .collect::<Vec<_>>()
             })
+            .filter(|row| !row.is_empty())
             .collect();
         let html = markdown_to_html(&substitute(&tpl.body, &vars));
         self.outbox_push(
@@ -3152,6 +3229,67 @@ impl TelegramGateway {
                 "text": html,
                 "parse_mode": "HTML",
                 "reply_markup": inline_keyboard(&buttons),
+                "message_thread_id": topic_id,
+            }),
+        )
+        .await
+    }
+
+    /// Carte d'un effet resté incertain après un arrêt brutal (#83) : « C'est fait »,
+    /// « Relancer » ou « Ignorer », jamais de fenêtre ni de règle.
+    async fn send_effect_card(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        a: &ApprovalRequest,
+    ) -> anyhow::Result<()> {
+        let s = &self.daemon.services;
+        let request = serde_json::to_string_pretty(&a.payload["request"])
+            .unwrap_or_default()
+            .replace("```", "ʼʼʼ");
+        let request: String = if request.chars().count() > 1_500 {
+            format!("{}…", request.chars().take(1_500).collect::<String>())
+        } else {
+            request
+        };
+        let tz = s.config.config().owner.timezone.clone();
+        let when = chrono::DateTime::parse_from_rfc3339(&a.created_at)
+            .ok()
+            .map(|t| match tz.parse::<chrono_tz::Tz>() {
+                Ok(tz) => t.with_timezone(&tz).format("%d/%m à %H:%M").to_string(),
+                Err(_) => t.format("%d/%m à %H:%M UTC").to_string(),
+            })
+            .unwrap_or_default();
+        let mut vars = BTreeMap::new();
+        vars.insert("effet".into(), a.subject.clone());
+        vars.insert("horodatage".into(), when);
+        vars.insert("requete".into(), request);
+        let ttl = 7 * 24 * 3_600_000;
+        let mut tokens = BTreeMap::new();
+        for action in [k::EFFECT_VERIFY, k::EFFECT_RETRY, k::EFFECT_IGNORE] {
+            let t = s
+                .actions
+                .create(action, a.id.as_str(), json!({}), ttl, true)
+                .await?;
+            tokens.insert(action.to_string(), t.token);
+        }
+        let tpl = s
+            .templates
+            .get("effect_unknown")
+            .ok_or_else(|| anyhow::anyhow!("gabarit effect_unknown absent"))?;
+        let rendered = tpl
+            .render(&vars, &tokens, &[])
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let html = markdown_to_html(&substitute(&tpl.body, &vars));
+        self.outbox_push(
+            chat_id,
+            topic_id,
+            "sendMessage",
+            json!({
+                "chat_id": chat_id,
+                "text": html,
+                "parse_mode": "HTML",
+                "reply_markup": inline_keyboard(&rendered.buttons),
                 "message_thread_id": topic_id,
             }),
         )
@@ -6314,6 +6452,64 @@ mod tests {
             .iter()
             .filter_map(|c| c.get("text").and_then(|t| t.as_str()).map(String::from))
             .collect()
+    }
+
+    /// #83 : au démarrage de la passerelle, la demande `effect_unknown` part sans que le
+    /// propriétaire la demande, une fois, avec la requête et trois boutons sans
+    /// « Toujours » ; « C'est fait » tranche le ledger et ne crée aucune règle.
+    #[tokio::test]
+    async fn an_uncertain_effect_is_pushed_then_decided_from_telegram() {
+        let (_d, g, t, _p) = gateway().await;
+        let s = g.daemon.services.clone();
+        let id = match s
+            .effects
+            .plan(penelope_kernel::effects::EffectSpec::new(
+                penelope_kernel::effects::EffectKind::Git,
+                "git_push",
+                json!({"remote": "origin", "branch": "correctif-tva"}),
+            ))
+            .await
+            .unwrap()
+        {
+            penelope_kernel::effects::Planned::Fresh(id) => id,
+            o => panic!("{o:?}"),
+        };
+        s.effects.dispatching(&id).await.unwrap();
+        g.daemon.recover().await.unwrap();
+
+        assert_eq!(g.announce_uncertain_effects().await.unwrap(), 1);
+        assert_eq!(g.announce_uncertain_effects().await.unwrap(), 0, "une fois");
+        g.flush_outbox().await.unwrap();
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        let card = sent.last().expect("carte envoyée").clone();
+        assert_eq!(card["chat_id"], OWNER);
+        let text = card["text"].as_str().unwrap();
+        assert!(
+            text.contains("Effet incertain") && text.contains("correctif-tva"),
+            "{text}"
+        );
+        let buttons = inline_buttons(&card);
+        let labels: Vec<&str> = buttons.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(labels, vec!["✅ C'est fait", "🔁 Relancer", "⏭ Ignorer"]);
+
+        g.process_update(&updates::callback(5, OWNER, &buttons[0].1, 77))
+            .await
+            .unwrap();
+        settle_click(&g).await;
+        let effect = s.effects.get(&id).await.unwrap().unwrap();
+        assert_eq!(
+            effect.state,
+            penelope_kernel::effects::EffectState::Completed
+        );
+        assert!(s.approvals.pending(10).await.unwrap().is_empty());
+        assert!(s.policies.active_rules().await.unwrap().is_empty());
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        assert!(
+            texts(&sent)
+                .iter()
+                .any(|x| x.contains("je ne le relance pas")),
+            "{sent:?}"
+        );
     }
 
     #[tokio::test]

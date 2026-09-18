@@ -70,7 +70,7 @@ variables = ["outil", "serveur"]
 | `mcp_oauth_required` | Un serveur MCP demande une autorisation | Ouvrir, Coller l'URL, Annuler |
 | `mcp_url_elicitation` | Un serveur demande une action à l'humain | Ouvrir le lien, J'ai terminé, Annuler |
 | `sampling_request` | Un serveur demande une génération (non annoncé, toujours refusé) | Autoriser, Refuser |
-| `effect_unknown` | Un effet est resté incertain après un crash | Vérifier, Relancer, Ignorer |
+| `effect_unknown` | Un effet est resté incertain après un crash (poussé au démarrage, une fois par effet) | C'est fait, Relancer, Ignorer (jamais de règle) |
 | `skill_proposal` | Une skill est proposée | Accepter, Refuser |
 | `memory_proposal` | Des souvenirs sont proposés à la promotion (un changement de défaut de pratique, par exemple) | Accepter, Modifier, Refuser |
 | `learned` | Ce qui a été appris récemment | — |
