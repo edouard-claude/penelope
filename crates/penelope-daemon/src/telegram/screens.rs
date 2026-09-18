@@ -1391,6 +1391,12 @@ impl TelegramGateway {
                     st.telegram
                 ));
                 sc.text.push_str(&session_line);
+                if st.outbox_failed > 0 {
+                    sc.text.push_str(&format!(
+                        "\n- Messages non envoyés : {} (journal du daemon)",
+                        st.outbox_failed
+                    ));
+                }
                 let mut row = Vec::new();
                 if st.approvals_pending > 0 {
                     row.push(

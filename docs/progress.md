@@ -1074,6 +1074,12 @@ l'adresse vérifiée (#93), fichiers lus en flux (#94), secret posé sans `argv`
   coupé) fait annuler son tour, qu'il tourne ou attende encore : plus d'outil ni d'appel
   facturé pour une réponse que personne ne lira. `tail` et les tours Telegram ne sont pas
   concernés.
+- **File d'envoi dans l'ordre, échecs dits** (#101) : un envoi qui attend sa nouvelle
+  tentative retient les suivants du même chat, dans le passage et d'un passage à l'autre
+  (les autres chats passent) ; une erreur de transport isolée est reprise tout de suite par
+  `Bot::call`. Un refus définitif est dit dans le chat par une note en texte brut, jamais
+  suivie d'une autre si elle échoue à son tour ; `/status` et `status` comptent les
+  messages non envoyés (`outbox_failed`).
 
 ### Routine de livraison
 

@@ -553,6 +553,16 @@ impl Daemon {
             },
             runners_alive: self.tasks.alive("runner-") as u64,
             runners_expected: cfg.runners.count.max(1) as u64,
+            outbox_failed: s
+                .store
+                .read(|c| {
+                    Ok(c.query_row(
+                        "SELECT count(*) FROM tg_outbox WHERE state = 'failed'",
+                        [],
+                        |r| r.get::<_, i64>(0),
+                    )?)
+                })
+                .await? as u64,
         })
     }
 }

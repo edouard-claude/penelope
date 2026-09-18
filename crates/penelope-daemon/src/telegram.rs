@@ -137,6 +137,8 @@ const ALBUM_WINDOW: Duration = Duration::from_millis(1_500);
 /// Un long texte collé arrive découpé par Telegram en messages de 4 096 caractères : un
 /// morceau de cette taille appelle la suite sans séparateur (issue #49).
 const TELEGRAM_TEXT_LIMIT: usize = 4_000;
+/// Préfixe des notes d'échec d'envoi : elles n'en appellent pas d'autres (issue #101).
+const FAILURE_NOTE: &str = "failnote-";
 /// Silence qui clôt une rafale après un message court, sa fin probable (issue #96).
 const TAIL_QUIET: Duration = Duration::from_millis(300);
 
@@ -5255,10 +5257,19 @@ impl TelegramGateway {
         let rows: Vec<(String, i64, String, String, i64)> = s
             .store
             .read(move |c| {
+                // Tête de file par chat (issue #101) : un message qui attend sa nouvelle
+                // tentative retient ceux qui le suivent dans le même chat, sinon la
+                // réponse se lit dans le désordre. Les autres chats passent.
                 let mut st = c.prepare(
-                    "SELECT id, chat_id, method, payload, attempts FROM tg_outbox
-                     WHERE state = 'pending' AND (not_before IS NULL OR not_before <= ?1)
-                     ORDER BY created_at, rowid LIMIT 25",
+                    "SELECT o.id, o.chat_id, o.method, o.payload, o.attempts FROM tg_outbox o
+                     WHERE o.state = 'pending' AND (o.not_before IS NULL OR o.not_before <= ?1)
+                       AND NOT EXISTS (
+                         SELECT 1 FROM tg_outbox p
+                         WHERE p.chat_id = o.chat_id AND p.state = 'pending'
+                           AND p.not_before > ?1
+                           AND (p.created_at < o.created_at
+                                OR (p.created_at = o.created_at AND p.rowid < o.rowid)))
+                     ORDER BY o.created_at, o.rowid LIMIT 25",
                 )?;
                 let rows = st.query_map([now], |r| {
                     Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
@@ -5271,7 +5282,12 @@ impl TelegramGateway {
             })
             .await?;
         let n = rows.len();
+        let mut held: std::collections::HashSet<i64> = std::collections::HashSet::new();
         for (id, chat_id, method, payload, attempts) in rows {
+            // Un envoi de ce chat a échoué pendant ce passage : la suite attend.
+            if held.contains(&chat_id) {
+                continue;
+            }
             let body: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
             let result = match self.bot.call(&method, Some(chat_id), body.clone()).await {
                 Err(TgError::Api {
@@ -5321,21 +5337,55 @@ impl TelegramGateway {
                             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                     let err = e.to_string();
                     tracing::warn!(error = %err, attempts, give_up, "envoi Telegram en échec");
+                    let row = id.clone();
+                    let stored = err.clone();
                     s.store
                         .write(move |tx| {
                             tx.execute(
                                 "UPDATE tg_outbox SET attempts=?2, error=?3, not_before=?4,
                                     state = CASE WHEN ?5 = 1 THEN 'failed' ELSE state END
                                  WHERE id=?1",
-                                params![id, attempts, err, not_before, give_up as i64],
+                                params![row, attempts, stored, not_before, give_up as i64],
                             )?;
                             Ok(())
                         })
                         .await?;
+                    if !give_up {
+                        held.insert(chat_id);
+                    } else if !id.starts_with(FAILURE_NOTE) {
+                        // Jamais de silence (#71) : le propriétaire sait qu'un message
+                        // n'est pas parti, en texte brut, sans rien qui puisse être refusé
+                        // à nouveau. Une note qui échoue n'en appelle pas une autre.
+                        self.push_failure_note(chat_id, &err).await;
+                    }
                 }
             }
         }
         Ok(n)
+    }
+
+    /// Note d'échec définitif d'un envoi, en texte brut (issue #101).
+    async fn push_failure_note(&self, chat_id: i64, error: &str) {
+        let s = &self.daemon.services;
+        let id = format!("{FAILURE_NOTE}{}", penelope_kernel::ids::Ulid::new());
+        let text = format!(
+            "⚠️ Un message n'a pas pu être envoyé ({}). Le détail est dans le journal du \
+             daemon ; `/status` compte ces échecs.",
+            error.chars().take(200).collect::<String>()
+        );
+        let payload = json!({"chat_id": chat_id, "text": text}).to_string();
+        let now = s.clock.now_rfc3339();
+        let _ = s
+            .store
+            .write(move |tx| {
+                tx.execute(
+                    "INSERT INTO tg_outbox(id, chat_id, method, payload, state, created_at)
+                     VALUES(?1, ?2, 'sendMessage', ?3, 'pending', ?4)",
+                    params![id, chat_id, payload, now],
+                )?;
+                Ok(())
+            })
+            .await;
     }
 
     /// Réaction d'état sur le message du propriétaire, sans jamais bloquer.
@@ -6829,6 +6879,111 @@ mod tests {
             })
             .expect("échec dit dans le chat");
         assert_eq!(failure["reply_parameters"]["message_id"], 900, "{failure}");
+    }
+
+    /// Insère un envoi dans la file, comme `outbox_push`, à une date donnée.
+    async fn queue(g: &TelegramGateway, id: &str, chat: i64, text: &str, at: &str) {
+        let (id, text, at) = (id.to_string(), text.to_string(), at.to_string());
+        g.daemon
+            .services
+            .store
+            .write(move |tx| {
+                tx.execute(
+                    "INSERT INTO tg_outbox(id, chat_id, method, payload, state, created_at)
+                     VALUES(?1, ?2, 'sendMessage', ?3, 'pending', ?4)",
+                    params![
+                        id,
+                        chat,
+                        json!({"chat_id": chat, "text": text}).to_string(),
+                        at
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    /// #101 : un fragment dont l'envoi échoue au transport (deux fois : la tentative et
+    /// sa reprise immédiate) retient les suivants du même chat ; un autre chat passe. Les
+    /// fragments arrivent dans l'ordre.
+    #[tokio::test]
+    async fn a_failed_fragment_holds_the_rest_of_its_chat() {
+        let (_d, g, t, _p) = gateway().await;
+        queue(&g, "f1", OWNER, "fragment 1", "2026-01-01T00:00:00.001Z").await;
+        g.flush_outbox().await.unwrap(); // f1 part
+        t.clear().await;
+        queue(&g, "f2", OWNER, "fragment 2", "2026-01-01T00:00:00.002Z").await;
+        queue(&g, "f3", OWNER, "fragment 3", "2026-01-01T00:00:00.003Z").await;
+        queue(&g, "b1", 777, "autre chat", "2026-01-01T00:00:00.004Z").await;
+        t.fail_transport(2, "connection closed before message completed")
+            .await;
+        g.flush_outbox().await.unwrap(); // f2 échoue, f3 attend, b1 part
+        g.flush_outbox().await.unwrap(); // f2 pas encore dû : f3 attend toujours
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert_eq!(sent, vec!["autre chat"], "{sent:?}");
+
+        // L'heure de la nouvelle tentative arrive.
+        g.daemon
+            .services
+            .store
+            .write(|tx| {
+                tx.execute("UPDATE tg_outbox SET not_before = NULL WHERE id = 'f2'", [])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert_eq!(sent, vec!["autre chat", "fragment 2", "fragment 3"]);
+    }
+
+    /// #101 : une erreur de transport isolée est reprise tout de suite, sans décaler.
+    #[tokio::test]
+    async fn a_single_transport_error_is_retried_at_once() {
+        let (_d, g, t, _p) = gateway().await;
+        queue(&g, "u1", OWNER, "un", "2026-01-01T00:00:00.001Z").await;
+        queue(&g, "u2", OWNER, "deux", "2026-01-01T00:00:00.002Z").await;
+        t.fail_transport(1, "connection reset").await;
+        g.flush_outbox().await.unwrap();
+        assert_eq!(
+            texts(&t.calls_to(tg::SEND_MESSAGE).await),
+            vec!["un", "deux"]
+        );
+    }
+
+    /// #101 : un refus définitif est dit au propriétaire, en texte brut, une seule fois,
+    /// même quand la note elle-même échoue.
+    #[tokio::test]
+    async fn a_definitive_refusal_is_told_once() {
+        let (_d, g, t, _p) = gateway().await;
+        queue(
+            &g,
+            "long",
+            OWNER,
+            "tableau immense",
+            "2026-01-01T00:00:00.001Z",
+        )
+        .await;
+        t.always_fail(400, "Bad Request: message is too long").await;
+        for _ in 0..3 {
+            g.flush_outbox().await.unwrap();
+        }
+        let notes: Vec<Value> = t
+            .calls_to(tg::SEND_MESSAGE)
+            .await
+            .into_iter()
+            .filter(|c| {
+                c["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("n'a pas pu être envoyé")
+            })
+            .collect();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].get("parse_mode").is_none());
+        assert!(notes[0]["text"].as_str().unwrap().contains("too long"));
+        assert_eq!(g.daemon.status().await.unwrap().outbox_failed, 2);
     }
 
     /// #49 : un long texte collé arrive en morceaux de 4 000 caractères. Ils forment un

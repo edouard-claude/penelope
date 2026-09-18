@@ -351,6 +351,13 @@ avec `retry_after` est attendu puis rejoué. La file d'envoi est durable, donc u
 redémarrage ne fait pas disparaître un message en attente. Un `update_id` déjà traité ne
 crée pas un second tour, même après un crash.
 
+Les messages d'un même chat partent dans l'ordre : une erreur de transport isolée est
+reprise tout de suite, et un envoi qui doit attendre sa nouvelle tentative retient ceux qui
+le suivent dans ce chat (les autres chats ne l'attendent pas), si bien qu'une longue
+réponse ne se lit jamais dans le désordre. Un refus définitif (message trop long, chat
+introuvable) est dit dans le chat par une courte note en texte brut, et `/status` compte
+les messages non envoyés.
+
 ## Tester sans réseau
 
 Le mock Bot API implémente le même contrat que le vrai transport :

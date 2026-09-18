@@ -17,6 +17,8 @@ struct Scripted {
 struct State {
     calls: Vec<(String, Value)>,
     failures: VecDeque<Scripted>,
+    /// Erreurs de transport à rendre (connexion fermée), une par appel (issue #101).
+    transport_failures: VecDeque<String>,
     always_fail: Option<Scripted>,
     replies: std::collections::BTreeMap<String, VecDeque<Value>>,
     next_message_id: i64,
@@ -60,6 +62,14 @@ impl MockTransport {
             description: description.to_string(),
             retry_after,
         });
+    }
+
+    /// Les `n` prochains appels échouent au transport, sans atteindre Telegram.
+    pub async fn fail_transport(&self, n: usize, message: &str) {
+        let mut g = self.state.lock().await;
+        for _ in 0..n {
+            g.transport_failures.push_back(message.to_string());
+        }
     }
 
     /// Échoue systématiquement.
@@ -143,6 +153,9 @@ impl BotTransport for MockTransport {
 
     async fn call(&self, method: &str, body: Value) -> TgResult<ApiResponse> {
         let mut g = self.state.lock().await;
+        if let Some(m) = g.transport_failures.pop_front() {
+            return Err(TgError::Transport(m));
+        }
         g.calls.push((method.to_string(), body.clone()));
 
         if let Some(f) = &g.always_fail {

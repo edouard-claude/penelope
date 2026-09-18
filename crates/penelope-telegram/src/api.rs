@@ -298,6 +298,7 @@ impl Bot {
     /// Appel brut, avec gestion de `retry_after` et backoff.
     pub async fn call(&self, method: &str, chat_id: Option<i64>, body: Value) -> TgResult<Value> {
         let mut attempt = 0u32;
+        let mut transport_retried = false;
         let limiter = if is_preview(method) {
             &self.preview_limiter
         } else {
@@ -310,7 +311,16 @@ impl Bot {
                     tokio::time::sleep(std::time::Duration::from_millis(wait as u64)).await;
                 }
             }
-            let resp = self.transport.call(method, body.clone()).await?;
+            let resp = match self.transport.call(method, body.clone()).await {
+                Ok(r) => r,
+                // Connexion du pool fermée par le serveur entre deux envois : une seconde
+                // tentative en ouvre une neuve (issue #101). Une seule, tout de suite.
+                Err(TgError::Transport(_)) if !transport_retried => {
+                    transport_retried = true;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             if resp.ok {
                 return Ok(resp.result.unwrap_or(Value::Null));
             }

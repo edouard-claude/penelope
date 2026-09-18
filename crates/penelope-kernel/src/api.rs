@@ -395,6 +395,9 @@ pub struct StatusReport {
     pub runners_alive: u64,
     #[serde(default)]
     pub runners_expected: u64,
+    /// Messages Telegram abandonnés après leurs tentatives (issue #101).
+    #[serde(default)]
+    pub outbox_failed: u64,
 }
 
 /// Une ligne du rapport `doctor` (§2.11).
