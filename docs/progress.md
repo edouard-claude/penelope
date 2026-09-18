@@ -1002,6 +1002,14 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   suivant avant sa lecture. Plus aucun fichier écrit (le champ `cleanup`, jamais lu, a
   disparu) ; le daemon efface au démarrage le dossier laissé par les versions précédentes.
   Vérifié sur la machine par un test ignoré par défaut (`-- --ignored`).
+- **Socket RPC authentifiée** (#91) : le daemon tire un jeton de session à chaque démarrage
+  (`{state}/rpc.token`, `0600`, écrit avant que la socket n'apparaisse) ; toute requête
+  sans ce jeton, ou avec un autre, reçoit `unauthorized` et n'exécute rien (comparaison à
+  temps constant). La CLI le joint à chaque appel ; il n'apparaît ni dans les journaux ni
+  dans `doctor`. En défense en profondeur, les profils Seatbelt à réseau ouvert refusent
+  les sockets Unix (`(deny network-outbound (remote unix-socket))`) hors `mDNSResponder` et
+  l'agent SSH : un serveur MCP ne joint plus la socket du daemon ni celle de Docker.
+  Vérifié sur la machine par un test ignoré par défaut.
 
 ### Routine de livraison
 

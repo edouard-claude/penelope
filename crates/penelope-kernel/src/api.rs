@@ -16,6 +16,10 @@ pub struct RpcRequest {
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<Value>,
+    /// Jeton de session du daemon (`{state}/rpc.token`, issue #91) : sans lui, la socket
+    /// refuse tout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<String>,
 }
 
 impl RpcRequest {
@@ -25,6 +29,7 @@ impl RpcRequest {
             id: Some(Value::from(id)),
             method: method.into(),
             params: Some(params),
+            auth: None,
         }
     }
     pub fn notification(method: impl Into<String>, params: Value) -> Self {
@@ -33,7 +38,13 @@ impl RpcRequest {
             id: None,
             method: method.into(),
             params: Some(params),
+            auth: None,
         }
+    }
+    /// Joint le jeton de session du daemon.
+    pub fn with_auth(mut self, token: Option<String>) -> Self {
+        self.auth = token;
+        self
     }
     pub fn is_notification(&self) -> bool {
         self.id.is_none()

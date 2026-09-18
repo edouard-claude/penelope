@@ -223,6 +223,22 @@ pub fn seatbelt_profile(p: &Profile) -> String {
 
     if p.allow_network {
         s.push_str("(allow network*)\n");
+        // Une socket Unix n'est pas du réseau à ouvrir : la socket RPC du daemon, celle de
+        // Docker (l'hôte entier) ou d'un autre service local restent fermées (issue #91).
+        // Seules la résolution DNS et l'agent SSH du propriétaire restent joignables.
+        if p.kind != ProfileKind::Full {
+            s.push_str("(deny network-outbound (remote unix-socket))\n");
+            let mut allowed = vec![PathBuf::from("/private/var/run/mDNSResponder")];
+            if let Some(agent) = std::env::var_os("SSH_AUTH_SOCK") {
+                allowed.push(PathBuf::from(agent));
+            }
+            for a in allowed.iter().flat_map(|a| with_real_path(a)) {
+                s.push_str(&format!(
+                    "(allow network-outbound (remote unix-socket (path-literal \"{}\")))\n",
+                    esc(&a)
+                ));
+            }
+        }
     } else {
         s.push_str("(deny network*)\n");
     }
@@ -270,6 +286,29 @@ pub fn unsupported(profile: &Profile, os: &str) -> PlatformError {
 
 #[cfg(test)]
 mod tests {
+
+    /// #91 : le réseau ouvert n'ouvre pas les sockets Unix (daemon, Docker) ; la
+    /// résolution DNS reste permise.
+    #[test]
+    fn open_network_still_closes_unix_sockets() {
+        for p in [
+            Profile::workspace_write("/tmp/ws").with_network(true),
+            Profile::mcp_stdio("/tmp/data", Vec::new()),
+        ] {
+            let sbpl = seatbelt_profile(&p);
+            let open = sbpl.find("(allow network*)").expect("réseau ouvert");
+            let deny = sbpl
+                .find("(deny network-outbound (remote unix-socket))")
+                .unwrap_or_else(|| panic!("{sbpl}"));
+            assert!(deny > open, "{sbpl}");
+            assert!(
+                sbpl.contains("(path-literal \"/private/var/run/mDNSResponder\")"),
+                "{sbpl}"
+            );
+        }
+        // Réseau fermé : tout est déjà refusé ; profil `full` : rien n'est imposé.
+        assert!(!seatbelt_profile(&Profile::workspace_write("/tmp/ws")).contains("unix-socket"));
+    }
 
     /// #89 : le trousseau est fermé à tout profil imposé, même sans lecture refusée.
     #[test]

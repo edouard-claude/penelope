@@ -20,6 +20,11 @@ enveloppe par ligne). Des crates comme `interprocess` unifient les deux.
 - Les permissions comptent : le socket est créé en `0600` et le fichier résiduel est
   retiré avant le `bind`. Ce sont deux gestes explicites que l'on veut voir dans le code,
   pas déduire du comportement d'une abstraction.
+- `0600` ne distingue pas deux processus du même utilisateur. Depuis l'issue #91, chaque
+  requête porte un jeton de session tiré à chaque démarrage (`{state}/rpc.token`, `0600`),
+  que les processus confinés ne peuvent pas lire (`{state}` est dans `sandbox.deny_read`)
+  et qu'ils ne pourraient de toute façon pas présenter : les profils Seatbelt ferment les
+  sockets Unix hors DNS et agent SSH.
 - `tokio` est déjà là. Aucun runtime ni aucune dépendance supplémentaire.
 
 ## Conséquences

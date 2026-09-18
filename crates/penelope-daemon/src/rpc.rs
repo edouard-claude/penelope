@@ -1310,6 +1310,8 @@ pub async fn serve_on(
         "RPC à l'écoute"
     );
     let rpc = Arc::new(Rpc::new(daemon.clone()));
+    // Jeton de session : sans lui, la socket ne sert rien (issue #91).
+    let token: Arc<str> = listener.token().into();
 
     loop {
         if daemon.handle.is_shutting_down() {
@@ -1326,6 +1328,7 @@ pub async fn serve_on(
         };
 
         let rpc = rpc.clone();
+        let token = token.clone();
         tokio::spawn(async move {
             let (read, mut write) = stream.into_split();
             let mut lines = BufReader::new(read).lines();
@@ -1334,6 +1337,19 @@ pub async fn serve_on(
                     continue;
                 }
                 let response = match serde_json::from_str::<RpcRequest>(&line) {
+                    // Même utilisateur ne veut pas dire propriétaire : un processus confiné
+                    // n'a pas le jeton, rien ne s'exécute pour lui.
+                    Ok(req)
+                        if !penelope_platform::ipc::tokens_match(req.auth.as_deref(), &token) =>
+                    {
+                        tracing::warn!(methode = %req.method, "requête RPC sans jeton valide refusée");
+                        RpcResponse::err(
+                            req.id,
+                            penelope_kernel::api::DENIED,
+                            "unauthorized : jeton RPC absent ou invalide (daemon redémarré ? \
+                             relancer la commande)",
+                        )
+                    }
                     Ok(req) if req.method == method::CHAT_STREAM || req.method == method::TAIL => {
                         let id = req.id.clone();
                         if let Err(e) = rpc.handle_streaming(req, &mut write).await {

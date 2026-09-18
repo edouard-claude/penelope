@@ -36,7 +36,14 @@ async fn start() -> (tempfile::TempDir, Arc<Daemon>, Arc<MockProvider>) {
     (dir, d, p)
 }
 
+/// Comme la CLI : le jeton de session du daemon accompagne la requête (#91).
 async fn exchange(d: &Daemon, req: RpcRequest) -> Vec<Value> {
+    let sock = d.services.platform.dirs.socket_path();
+    let req = req.with_auth(penelope_platform::ipc::read_token(&sock));
+    exchange_raw(d, req).await
+}
+
+async fn exchange_raw(d: &Daemon, req: RpcRequest) -> Vec<Value> {
     let sock = d.services.platform.dirs.socket_path();
     let stream = penelope_platform::ipc::connect(&sock).await.unwrap();
     let (read, mut write) = stream.into_split();
@@ -113,5 +120,40 @@ async fn chat_stream_sends_deltas_then_the_final_answer() {
         "{seen:?}"
     );
 
+    d.handle.shutdown();
+}
+
+/// #91 : sans jeton, ou avec un mauvais, la socket refuse et n'exécute rien ; le jeton
+/// n'apparaît pas dans `doctor`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_without_the_session_token_is_refused() {
+    let (_dir, d, _p) = start().await;
+    let set = |auth: Option<&str>| {
+        RpcRequest::new(
+            3,
+            method::CONFIG_SET,
+            json!({"path": "sandbox.default_profile", "value": "full"}),
+        )
+        .with_auth(auth.map(String::from))
+    };
+    for auth in [None, Some("0000"), Some("")] {
+        let lines = exchange_raw(&d, set(auth)).await;
+        let err = lines[0]["error"]["message"].as_str().unwrap_or_default();
+        assert!(err.starts_with("unauthorized"), "{auth:?} : {lines:?}");
+    }
+    assert_eq!(
+        d.services.config.config().sandbox.default_profile,
+        "workspace-write",
+        "rien n'a été écrit"
+    );
+
+    let sock = d.services.platform.dirs.socket_path();
+    let token = penelope_platform::ipc::read_token(&sock).expect("jeton écrit");
+    let lines = exchange(&d, RpcRequest::new(4, method::DOCTOR, json!({}))).await;
+    assert!(lines[0]["result"].is_array(), "{lines:?}");
+    assert!(
+        !lines[0].to_string().contains(&token),
+        "le jeton ne sort pas"
+    );
     d.handle.shutdown();
 }

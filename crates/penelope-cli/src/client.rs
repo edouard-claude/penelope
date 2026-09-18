@@ -60,6 +60,11 @@ impl CliError {
 
 pub type CliResult<T> = Result<T, CliError>;
 
+/// Requête signée du jeton de session du daemon (issue #91).
+pub fn request(socket: &Path, method: &str, params: Value) -> RpcRequest {
+    RpcRequest::new(1, method, params).with_auth(penelope_platform::ipc::read_token(socket))
+}
+
 /// Appelle une méthode du daemon.
 pub async fn call(socket: &Path, method: &str, params: Value) -> CliResult<Value> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -69,7 +74,7 @@ pub async fn call(socket: &Path, method: &str, params: Value) -> CliResult<Value
         .map_err(|e| CliError::DaemonUnreachable(e.to_string()))?;
     let (read, mut write) = stream.into_split();
 
-    let req = RpcRequest::new(1, method, params);
+    let req = request(socket, method, params);
     let mut body = serde_json::to_string(&req).map_err(|e| CliError::Io(e.to_string()))?;
     body.push('\n');
     write
@@ -114,7 +119,7 @@ pub async fn call_stream(
         .await
         .map_err(|e| CliError::DaemonUnreachable(e.to_string()))?;
     let (read, mut write) = stream.into_split();
-    let req = RpcRequest::new(1, method, params);
+    let req = request(socket, method, params);
     let mut body = serde_json::to_string(&req).map_err(|e| CliError::Io(e.to_string()))?;
     body.push('\n');
     write

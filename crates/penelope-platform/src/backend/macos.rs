@@ -606,4 +606,46 @@ mod tests {
         let allowed = run(&dir.path().join("public.txt"));
         assert_eq!(String::from_utf8_lossy(&allowed.stdout), "lisible");
     }
+
+    /// #91, sur la machine : sous `mcp-stdio` (réseau ouvert), une socket Unix locale
+    /// n'est pas joignable ; la résolution de nom l'est. Lancé à la main.
+    #[test]
+    #[ignore]
+    fn seatbelt_closes_unix_sockets_on_this_mac() {
+        let dir = tempfile::Builder::new()
+            .prefix("pnl")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let sock = dir.path().join("s.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let profile = Profile::mcp_stdio(dir.path().join("data"), Vec::new());
+        let python = |code: String| {
+            let w = sandbox_wrapper(
+                &profile,
+                Path::new("/usr/bin/python3"),
+                &["-c".into(), code],
+            )
+            .unwrap();
+            std::process::Command::new(&w.program)
+                .args(&w.args)
+                .output()
+                .unwrap()
+        };
+        let connect = python(format!(
+            "import socket;s=socket.socket(socket.AF_UNIX);s.connect({:?})",
+            sock.to_string_lossy()
+        ));
+        assert!(!connect.status.success());
+        assert!(
+            String::from_utf8_lossy(&connect.stderr).contains("Operation not permitted"),
+            "{}",
+            String::from_utf8_lossy(&connect.stderr)
+        );
+        let dns = python("import socket;socket.getaddrinfo('localhost', 80)".into());
+        assert!(
+            dns.status.success(),
+            "{}",
+            String::from_utf8_lossy(&dns.stderr)
+        );
+    }
 }

@@ -16,6 +16,9 @@ pub struct IpcListener {
     #[cfg(unix)]
     inner: tokio::net::UnixListener,
     path: PathBuf,
+    /// Jeton de session, tiré une fois la socket prise : un second daemon lancé par
+    /// erreur n'écrase pas celui du premier (issue #91).
+    token: String,
 }
 
 /// Connexion acceptée ou établie.
@@ -45,12 +48,16 @@ impl IpcListener {
             if let Some(p) = path.parent() {
                 std::fs::create_dir_all(p)?;
             }
+            // Aucun daemon vivant ici : le jeton est tiré avant la socket, si bien qu'une
+            // socket visible a toujours son jeton.
+            let token = issue_token(path)?;
             let inner = tokio::net::UnixListener::bind(path)
                 .map_err(|e| PlatformError::Ipc(format!("bind {} : {e}", path.display())))?;
             crate::secrets::restrict_permissions(path)?;
             Ok(IpcListener {
                 inner,
                 path: path.to_path_buf(),
+                token,
             })
         }
         #[cfg(not(unix))]
@@ -76,11 +83,17 @@ impl IpcListener {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Jeton que chaque requête doit porter.
+    pub fn token(&self) -> &str {
+        &self.token
+    }
 }
 
 impl Drop for IpcListener {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_file(token_path(&self.path));
     }
 }
 
@@ -103,6 +116,68 @@ pub async fn connect(path: &Path) -> Result<()> {
     )))
 }
 
+// ------------------------------------------------------------------ jeton (#91)
+
+/// Fichier du jeton de session, à côté de la socket (`{state}/rpc.token`, `0600`).
+///
+/// Le mode `0600` de la socket ne distingue pas deux processus du même utilisateur : un
+/// serveur MCP stdio ou une commande confinée pouvait s'y connecter et appeler
+/// `config.set`, `secret.set` ou `approve` au nom du propriétaire. Chaque requête porte
+/// désormais un jeton que seul le propriétaire lit : `{state}` est refusé en lecture aux
+/// processus confinés (`sandbox.deny_read`).
+pub fn token_path(socket: &Path) -> PathBuf {
+    socket.with_file_name("rpc.token")
+}
+
+/// Tire un nouveau jeton et l'écrit (`0600`, écriture atomique). Appelé à chaque
+/// démarrage du daemon : un jeton volé ne survit pas au redémarrage.
+pub fn issue_token(socket: &Path) -> Result<String> {
+    use std::io::Write;
+    let mut raw = [0u8; 32];
+    getrandom::getrandom(&mut raw)
+        .map_err(|e| PlatformError::Ipc(format!("entropie indisponible : {e}")))?;
+    let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    let path = token_path(socket);
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp)?;
+        f.write_all(token.as_bytes())?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, &path)?;
+    Ok(token)
+}
+
+/// Jeton courant du daemon, lu par la CLI. `None` : daemon jamais démarré ici.
+pub fn read_token(socket: &Path) -> Option<String> {
+    std::fs::read_to_string(token_path(socket))
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
+/// Comparaison à temps constant : la durée ne dit pas combien de caractères concordent.
+pub fn tokens_match(given: Option<&str>, expected: &str) -> bool {
+    let Some(given) = given else {
+        return false;
+    };
+    let (a, b) = (given.as_bytes(), expected.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 /// Nom du named pipe Windows, pour la conception de référence.
 pub fn windows_pipe_name(user_sid: &str) -> String {
     format!(r"\\.\pipe\penelope-{user_sid}")
@@ -111,6 +186,29 @@ pub fn windows_pipe_name(user_sid: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #91 : un jeton par démarrage, en `0600`, relu à l'identique ; comparaison stricte.
+    #[cfg(unix)]
+    #[test]
+    fn a_token_is_issued_privately_and_compared_strictly() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("rpc.sock");
+        let a = issue_token(&sock).unwrap();
+        assert_eq!(a.len(), 64);
+        let mode = std::fs::metadata(token_path(&sock))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(read_token(&sock).as_deref(), Some(a.as_str()));
+        let b = issue_token(&sock).unwrap();
+        assert_ne!(a, b, "nouveau jeton à chaque démarrage");
+        assert!(tokens_match(Some(&b), &b));
+        assert!(!tokens_match(Some(&a), &b));
+        assert!(!tokens_match(None, &b));
+        assert!(!tokens_match(Some(""), &b));
+    }
 
     #[cfg(unix)]
     #[tokio::test]

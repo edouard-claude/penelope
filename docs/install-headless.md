@@ -726,8 +726,10 @@ la configuration et l'état. Un workspace situé sous un chemin refusé reste li
 serveurs MCP stdio confinés (`mcp-stdio`, `workspace-write`, `readonly`) suivent la même
 liste et n'ont pas non plus le trousseau : un paquet tiers ne lit pas ce que `shell_exec`
 ne lit pas ; son répertoire de données et ses racines restent lisibles pour lui, et
-`penelope doctor` signale un serveur confiné qui ne refuserait aucune lecture. Pour fermer
-aussi le réseau du shell :
+`penelope doctor` signale un serveur confiné qui ne refuserait aucune lecture. Réseau
+ouvert ou non, les sockets Unix locales restent fermées aux processus confinés (socket du
+daemon, `/var/run/docker.sock`, autres services), sauf la résolution DNS et l'agent SSH
+(`SSH_AUTH_SOCK`). Pour fermer aussi le réseau du shell :
 
 ```bash
 penelope config set sandbox.shell_network false
@@ -1486,6 +1488,13 @@ penelope stop
 
 `penelope daemon` lance le processus au premier plan : c'est la forme utile pour déboguer
 en SSH, puisque les journaux partent alors sur le terminal.
+
+La CLI parle au daemon par la socket `{state}/rpc.sock`. Chaque requête porte un jeton de
+session tiré à chaque démarrage et rangé à côté (`rpc.token`, lisible par le seul
+propriétaire) : un processus du même utilisateur qui n'a pas ce jeton, un serveur MCP ou
+une commande sous bac à sable par exemple, ne peut ni changer un réglage, ni poser un
+secret, ni approuver quoi que ce soit. Juste après un redémarrage, une commande partie
+avec l'ancien jeton est refusée (`unauthorized`) : il suffit de la relancer.
 
 `penelope status` donne aussi le nombre de runners vivants sur `runners.count`. Chaque
 boucle de fond (runners, ordonnanceur, pilote de workflows, maintenance, catalogue,

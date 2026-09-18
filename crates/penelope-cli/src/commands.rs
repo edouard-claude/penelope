@@ -1809,12 +1809,8 @@ async fn follow_session(
         .await
         .map_err(|e| CliError::DaemonUnreachable(e.to_string()))?;
     let (read, mut write) = stream.into_split();
-    let mut body = serde_json::to_string(&penelope_kernel::api::RpcRequest::new(
-        1,
-        m::TAIL,
-        json!({}),
-    ))
-    .unwrap_or_default();
+    let mut body = serde_json::to_string(&crate::client::request(socket, m::TAIL, json!({})))
+        .unwrap_or_default();
     body.push('\n');
     write
         .write_all(body.as_bytes())
