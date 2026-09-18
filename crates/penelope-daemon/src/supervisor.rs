@@ -274,6 +274,11 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
         }
     }
 
+    // Sauvegarde complète à l'heure dite (issue #42).
+    if let Err(e) = crate::backup::nightly_tick(d).await {
+        tracing::warn!(error = %e, "sauvegarde nocturne");
+    }
+
     // Rétention des traces : une passe par jour (issue #46).
     if let Err(e) = crate::purge::retention_tick(d).await {
         tracing::warn!(error = %e, "rétention");

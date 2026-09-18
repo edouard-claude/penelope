@@ -114,6 +114,7 @@ pub struct Config {
     pub upgrade: Upgrade,
     pub voice: Voice,
     pub retention: Retention,
+    pub backup: Backup,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -963,6 +964,40 @@ impl Default for Voice {
     }
 }
 
+/// Sauvegarde complète vers un dépôt privé (issue #42).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Backup {
+    /// Dépôt git privé où pousser les sauvegardes chiffrées ; vide : celui du vault.
+    pub git_remote: String,
+    /// Heure de la sauvegarde nocturne (cron à cinq champs) ; vide : aucune.
+    pub cron: String,
+    /// Sauvegardes quotidiennes gardées.
+    pub keep_daily: u32,
+    /// Sauvegardes hebdomadaires gardées.
+    pub keep_weekly: u32,
+    /// Sauvegardes mensuelles gardées.
+    pub keep_monthly: u32,
+    /// Inclure les artefacts et les médias reçus. Lourd, et reconstructible.
+    pub include_media: bool,
+    /// Taille maximale d'une archive poussée, en octets (limite de fichier de GitHub).
+    pub max_push_bytes: u64,
+}
+
+impl Default for Backup {
+    fn default() -> Self {
+        Backup {
+            git_remote: String::new(),
+            cron: "0 4 * * *".into(),
+            keep_daily: 7,
+            keep_weekly: 4,
+            keep_monthly: 12,
+            include_media: false,
+            max_push_bytes: 100 * 1024 * 1024,
+        }
+    }
+}
+
 /// Rétention des traces (issue #46) : ce qui n'est ni la mémoire ni la chaîne d'audit
 /// finit par disparaître.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1105,6 +1140,9 @@ impl Config {
         }
         parse_duration(&self.tools.shell_timeout)?;
         crate::cron::Cron::parse(&self.memory.dreaming_cron)?;
+        if !self.backup.cron.trim().is_empty() {
+            crate::cron::Cron::parse(&self.backup.cron)?;
+        }
         crate::cron::Cron::parse(&self.memory.digest_cron)?;
 
         if !matches!(self.mcp.registry_mode.as_str(), "lazy" | "eager") {

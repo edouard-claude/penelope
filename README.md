@@ -81,7 +81,7 @@ penelope-platform            penelope-observe ├──► penelope-mcp     ├�
 cargo test --workspace
 ```
 
-1346 tests, tous hors réseau. Les suites nommées du PRD §20.1 sont des filtres sur cette
+1355 tests, tous hors réseau. Les suites nommées du PRD §20.1 sont des filtres sur cette
 même commande, ce qui évite qu'un chemin de test diverge de l'autre :
 
 ```bash

@@ -77,6 +77,10 @@ impl crate::selfknow::Admin for Daemon {
         Ok(g)
     }
 
+    async fn backup_status(&self) -> Result<Value, String> {
+        Ok(crate::backup::status(self).await)
+    }
+
     async fn send_voice(
         &self,
         session_id: &str,

@@ -22,6 +22,11 @@ pub trait Admin: Send + Sync {
         Value::Null
     }
     /// Outil `send_voice` : synthèse, conversion et envoi, repli en texte (issue #41).
+    /// État des sauvegardes (issue #42).
+    async fn backup_status(&self) -> Result<Value, String> {
+        Err("sauvegardes indisponibles".into())
+    }
+
     async fn send_voice(
         &self,
         session_id: &str,
@@ -364,6 +369,14 @@ pub async fn status(
             .await
             .unwrap_or_default();
         out.insert("machine".into(), serde_json::to_value(host)?);
+    }
+
+    // Sauvegardes : de quoi répondre « ta dernière sauvegarde date de cette nuit » (#42).
+    if (all || section == "backup")
+        && let Some(a) = admin
+        && let Ok(v) = a.backup_status().await
+    {
+        out.insert("backup".into(), v);
     }
 
     Ok(Value::Object(out))

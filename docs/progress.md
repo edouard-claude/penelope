@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1346 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1355 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -639,6 +639,28 @@ compaction de fond sur la taille réelle du contexte (#40).
   de run n'arrêtent plus les résumés ; au plafond du jour, une réserve
   `budget.compaction_reserve_usd` (0,50 $). `/status`, `/budget` et `self_status` donnent
   la taille réelle du contexte, le seuil de fond et la dernière compaction.
+
+### 0.17.0
+
+Sauvegarde complète chiffrée et restauration en une commande (#42).
+
+- **`penelope backup --push`** : archive de l'instantané de la base, du vault, des skills,
+  des workflows, des gabarits, de `mcp.d` et de `config.toml` (artefacts et médias exclus
+  sauf `--media`), **chiffrée** par la phrase de passe `backup_passphrase` (Argon2id puis
+  XChaCha20-Poly1305) avant de quitter la machine, poussée dans un dépôt privé avec un
+  `MANIFEST.json` lisible qui dit la date, la version, les tailles, la somme SHA-256 et les
+  **noms** des secrets à ressaisir, jamais leurs valeurs.
+- **Garde-fous** : dépôt public refusé (vérifié par `gh`), archive au-delà de
+  `backup.max_push_bytes` refusée avec la marche à suivre, absence de phrase de passe dite
+  avant tout travail. Rotation 7 quotidiennes, 4 hebdomadaires, 12 mensuelles.
+- **Planification** : une sauvegarde par nuit à `backup.cron` (4 h), échec annoncé sur
+  Telegram.
+- **`penelope restore-all`** : clone le dépôt (ou lit une archive locale), demande la phrase
+  de passe à l'invite, remet base et fichiers en place (l'existant mis de côté), puis dit ce
+  qui reste à faire : service, secrets à ressaisir, `penelope doctor`. `--dry-run` liste sans
+  rien écrire.
+- **Diagnostic** : `doctor` suit l'âge de la dernière sauvegarde (alerte au-delà de 48 h), sa
+  taille et sa destination ; `self_status` porte la même information.
 
 ### 0.16.1
 

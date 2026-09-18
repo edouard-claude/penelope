@@ -464,6 +464,18 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 |---|---|---|
 | `retention.days` | `90` | Jours gardés pour les tours terminés, les requêtes au modèle, les updates Telegram et les clés de travail. 0 : rien n'est effacé. |
 | `retention.memory_history_days` | `30` | Jours gardés pour les pré-images de la mémoire (`mem_history`). 0 : rien n'est effacé. |
+
+**[backup]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `backup.git_remote` | `""` | Dépôt git privé où pousser les sauvegardes chiffrées ; vide : celui du vault. |
+| `backup.cron` | `"0 4 * * *"` | Heure de la sauvegarde nocturne (cron à cinq champs) ; vide : aucune. |
+| `backup.keep_daily` | `7` | Sauvegardes quotidiennes gardées. |
+| `backup.keep_weekly` | `4` | Sauvegardes hebdomadaires gardées. |
+| `backup.keep_monthly` | `12` | Sauvegardes mensuelles gardées. |
+| `backup.include_media` | `false` | Inclure les artefacts et les médias reçus. Lourd, et reconstructible. |
+| `backup.max_push_bytes` | `104857600` | Taille maximale d'une archive poussée, en octets (limite de fichier de GitHub). |
 <!-- reference:config:fin -->
 
 ## 6. Modèles
@@ -1441,6 +1453,45 @@ penelope backup
 
 La sauvegarde est cohérente même pendant l'écriture : elle passe par `VACUUM INTO`,
 exécuté sur le fil écrivain hors transaction, et atterrit dans `backups/`.
+
+### Sauvegarde complète chiffrée, hors de la machine
+
+```bash
+penelope secret set backup_passphrase
+penelope config set backup.git_remote git@github.com:moi/penelope-backups.git
+penelope backup --push
+```
+
+L'archive contient l'instantané de la base, le vault, les skills, les workflows, les
+gabarits, `mcp.d` et `config.toml` ; les artefacts et les médias reçus en sont exclus
+(`--media` les inclut, `backup.include_media` en fait le défaut). Elle est **chiffrée** par
+la phrase de passe du magasin de secrets (Argon2id puis XChaCha20-Poly1305) avant de
+quitter la machine : sans cette phrase, l'archive ne sert à rien. Les valeurs des secrets
+n'y sont jamais ; le `MANIFEST.json` poussé à côté dit la date, la version, les tailles, la
+somme SHA-256 et **les noms** des secrets à ressaisir.
+
+Garde-fous : un dépôt public est refusé (vérifié par `gh` quand il est disponible), une
+archive au-delà de `backup.max_push_bytes` (100 Mo, la limite de fichier de GitHub) est
+refusée avec la marche à suivre, et l'absence de phrase de passe est dite avant tout
+travail. La rotation garde 7 quotidiennes, 4 hebdomadaires et 12 mensuelles dans le dépôt
+de travail, sans réécrire l'historique. Une sauvegarde part chaque nuit à l'heure de
+`backup.cron` (4 h par défaut, vide pour désactiver) ; un échec arrive sur Telegram, jamais
+en silence.
+
+### Remonter une instance sur une machine neuve
+
+```bash
+penelope restore-all git@github.com:moi/penelope-backups.git --dry-run
+penelope restore-all git@github.com:moi/penelope-backups.git
+```
+
+La commande clone le dépôt (ou lit une archive `.tar.gz.enc` locale), demande la phrase de
+passe à l'invite, puis remet la base et les fichiers à leur place, l'existant étant mis de
+côté. Elle se fait **daemon arrêté**. Elle finit par la liste de ce qui reste à faire :
+`penelope install` et `penelope start`, les secrets à ressaisir d'après le manifeste, puis
+`penelope doctor` (serveurs MCP à réautoriser, modèle de transcription à télécharger).
+`penelope doctor` suit aussi l'âge de la dernière sauvegarde et alerte au-delà de 48 h, et
+`self_status` le sait : « ta dernière sauvegarde date de cette nuit ».
 
 ```bash
 penelope audit-verify

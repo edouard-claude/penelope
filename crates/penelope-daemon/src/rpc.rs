@@ -71,6 +71,7 @@ impl Rpc {
                 checks.push(crate::doctor::pending_upgrade_check(s));
                 checks.push(crate::doctor::schedules_check(s).await);
                 checks.push(crate::voice::doctor_check(&self.daemon).await);
+                checks.push(crate::backup::doctor_check(&self.daemon).await);
                 Ok(json!(checks))
             }
             method::SHUTDOWN => {
@@ -888,6 +889,13 @@ impl Rpc {
                 ))
             }
             method::BACKUP => {
+                // Sans `push`, l'ancien comportement : un instantané de la base, local.
+                let push = p.get("push").and_then(|v| v.as_bool()).unwrap_or(false);
+                let full = push || p.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
+                if full {
+                    let media = p.get("media").and_then(|v| v.as_bool());
+                    return crate::backup::run(&self.daemon, push, media).await;
+                }
                 let dest = s.platform.dirs.data().join("backups").join(format!(
                     "penelope-{}.db",
                     s.clock.now_rfc3339().replace(':', "-")
