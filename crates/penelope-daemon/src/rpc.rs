@@ -900,8 +900,8 @@ impl Rpc {
                     "penelope-{}.db",
                     s.clock.now_rfc3339().replace(':', "-")
                 ));
-                s.store.backup_to(&dest)?;
-                Ok(json!({"path": dest}))
+                let took = s.store.snapshot_to(dest.clone()).await?;
+                Ok(json!({"path": dest, "snapshot_ms": took.as_millis() as u64}))
             }
 
             other => Err(anyhow::anyhow!("méthode inconnue : {other}")),

@@ -910,6 +910,11 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   nouvelles d'une version. Le premier démarrage écrit un fichier court (ce qui s'écarte des
   défauts), une relecture n'écrit plus rien, et un fichier complet écrit par la 0.17.0 est
   gardé en fixture pour que les versions suivantes le relisent.
+- **Sauvegarde sans gel** (#77) : l'instantané `VACUUM INTO` part d'une connexion en
+  lecture seule ouverte pour l'occasion au lieu de l'écrivain, qui continue de valider
+  pendant la copie ; copie des fichiers, tar, Argon2id, chiffrement, somme et envoi git
+  s'exécutent sur un thread bloquant au lieu d'un worker tokio. L'événement `store.backup`
+  et `doctor` donnent la durée de l'instantané et de la sauvegarde.
 
 ### Routine de livraison
 

@@ -1472,8 +1472,11 @@ n'en paient aucun.
 penelope backup
 ```
 
-La sauvegarde est cohérente même pendant l'écriture : elle passe par `VACUUM INTO`,
-exécuté sur le fil écrivain hors transaction, et atterrit dans `backups/`.
+La sauvegarde est cohérente même pendant l'écriture : elle passe par `VACUUM INTO` sur
+une connexion en lecture seule, qui lit l'état validé sans prendre l'écrivain, et atterrit
+dans `backups/`. Les tours, les battements de bail et Telegram continuent pendant la copie ;
+l'archive, sa dérivation de clé et son chiffrement tournent sur un thread à part.
+`penelope doctor` donne la durée de la dernière sauvegarde, instantané compris.
 
 ### Sauvegarde complète chiffrée, hors de la machine
 

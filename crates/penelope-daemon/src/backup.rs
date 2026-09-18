@@ -43,85 +43,133 @@ fn entries(d: &Daemon, media: bool) -> Vec<(PathBuf, String)> {
 }
 
 /// Construit l'archive chiffrée. Renvoie son chemin, sa taille et son manifeste.
+///
+/// Tout le travail lourd (instantané de la base, copies, tar, Argon2id, chiffrement,
+/// somme) s'exécute sur un thread bloquant, et l'instantané ne prend pas l'écrivain : les
+/// tours, les battements de bail et Telegram continuent pendant la sauvegarde (#77).
 pub async fn build(d: &Daemon, media: bool) -> anyhow::Result<(PathBuf, Value)> {
     let s = &d.services;
-    let dirs = &s.platform.dirs;
-    let stamp = s.clock.now_rfc3339().replace([':', '.'], "-");
-    let day = s.clock.now_rfc3339().chars().take(10).collect::<String>();
-    let out_dir = dirs.data().join("backups");
-    std::fs::create_dir_all(&out_dir)?;
+    let now = s.clock.now_rfc3339();
+    let job = BuildJob {
+        store: s.store.clone(),
+        platform: s.platform.clone(),
+        entries: entries(d, media),
+        out_dir: s.platform.dirs.data().join("backups"),
+        stamp: now.replace([':', '.'], "-"),
+        day: now.chars().take(10).collect(),
+        created_at: now,
+        media,
+    };
+    let started = std::time::Instant::now();
+    let (sealed, mut report, snapshot) = tokio::task::spawn_blocking(move || job.run())
+        .await
+        .map_err(|e| anyhow::anyhow!("sauvegarde interrompue : {e}"))??;
+    let total = started.elapsed();
+    report["snapshot_ms"] = json!(snapshot.as_millis() as u64);
+    report["duration_ms"] = json!(total.as_millis() as u64);
+    let _ = s
+        .events
+        .append(EventDraft::new(
+            "store.backup",
+            json!({
+                "snapshot_ms": snapshot.as_millis() as u64,
+                "duration_ms": total.as_millis() as u64,
+                "db_bytes": report["manifest"]["db_bytes"],
+            }),
+        ))
+        .await;
+    Ok((sealed, report))
+}
 
-    // Répertoire de travail : tout y est copié, puis l'archive est faite d'un bloc.
-    let work = out_dir.join(format!("work-{stamp}"));
-    let root = work.join("penelope");
-    std::fs::create_dir_all(&root)?;
-    let cleanup = || {
+/// Ce qu'il faut pour construire l'archive hors du runtime async.
+struct BuildJob {
+    store: penelope_store::Store,
+    platform: std::sync::Arc<penelope_platform::Platform>,
+    entries: Vec<(PathBuf, String)>,
+    out_dir: PathBuf,
+    stamp: String,
+    day: String,
+    created_at: String,
+    media: bool,
+}
+
+impl BuildJob {
+    fn run(self) -> anyhow::Result<(PathBuf, Value, std::time::Duration)> {
+        // Sans phrase de passe, rien n'est commencé.
+        let passphrase = secret_passphrase(&self.platform)?;
+        std::fs::create_dir_all(&self.out_dir)?;
+        // Répertoire de travail : tout y est copié, puis l'archive est faite d'un bloc.
+        let work = self.out_dir.join(format!("work-{}", self.stamp));
+        let result = self.assemble(&work, &passphrase);
         let _ = std::fs::remove_dir_all(&work);
-    };
-
-    // Instantané cohérent de la base (§15), jamais une copie à chaud.
-    let db = root.join("penelope.db");
-    if let Err(e) = s.store.backup_to(&db) {
-        cleanup();
-        return Err(e.into());
+        result
     }
 
-    let mut contents: Vec<Value> = Vec::new();
-    for (src, name) in entries(d, media) {
-        let dst = root.join(&name);
-        if let Err(e) = copy_path(&src, &dst) {
-            cleanup();
-            return Err(anyhow::anyhow!("copie de {} : {e}", src.display()));
+    fn assemble(
+        &self,
+        work: &Path,
+        passphrase: &str,
+    ) -> anyhow::Result<(PathBuf, Value, std::time::Duration)> {
+        let root = work.join("penelope");
+        std::fs::create_dir_all(&root)?;
+
+        // Instantané cohérent de la base (§15), jamais une copie à chaud.
+        let db = root.join("penelope.db");
+        let t = std::time::Instant::now();
+        self.store.backup_to(&db)?;
+        let snapshot = t.elapsed();
+
+        let mut contents: Vec<Value> = Vec::new();
+        for (src, name) in &self.entries {
+            let dst = root.join(name);
+            copy_path(src, &dst)
+                .map_err(|e| anyhow::anyhow!("copie de {} : {e}", src.display()))?;
+            contents.push(json!({"name": name, "bytes": dir_size(&dst)}));
         }
-        contents.push(json!({"name": name, "bytes": dir_size(&dst)}));
+
+        // Manifeste : ce qu'il y a dedans, et les secrets à ressaisir (noms seulement).
+        let secrets: Vec<String> = self.platform.secrets.list().unwrap_or_default();
+        let manifest = json!({
+            "version": crate::VERSION,
+            "created_at": self.created_at,
+            "day": self.day,
+            "db_bytes": std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0),
+            "contents": contents,
+            "media_included": self.media,
+            "secrets_expected": secrets,
+        });
+        std::fs::write(
+            root.join("MANIFEST.json"),
+            serde_json::to_vec_pretty(&manifest)?,
+        )?;
+
+        let tar = work.join(format!("penelope-{}.tar.gz", self.stamp));
+        penelope_platform::process::create_tar_gz(&tar, work, &["penelope".into()])
+            .map_err(|e| anyhow::anyhow!("archive : {e}"))?;
+
+        let sealed = self
+            .out_dir
+            .join(format!("penelope-{}.tar.gz.enc", self.stamp));
+        let sealed_bytes = penelope_platform::archive::seal(&tar, &sealed, passphrase)
+            .map_err(|e| anyhow::anyhow!("chiffrement : {e}"))?;
+
+        let report = json!({
+            "archive": sealed.file_name().map(|f| f.to_string_lossy().to_string()),
+            "bytes": sealed_bytes,
+            "sha256": sha256_of(&sealed)?,
+            "manifest": manifest,
+        });
+        Ok((sealed, report, snapshot))
     }
-
-    // Manifeste : ce qu'il y a dedans, et les secrets à ressaisir (noms seulement).
-    let secrets: Vec<String> = s.platform.secrets.list().unwrap_or_default();
-    let manifest = json!({
-        "version": crate::VERSION,
-        "created_at": s.clock.now_rfc3339(),
-        "day": day,
-        "db_bytes": std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0),
-        "contents": contents,
-        "media_included": media,
-        "secrets_expected": secrets,
-    });
-    std::fs::write(
-        root.join("MANIFEST.json"),
-        serde_json::to_vec_pretty(&manifest)?,
-    )?;
-
-    let tar = work.join(format!("penelope-{stamp}.tar.gz"));
-    if let Err(e) = penelope_platform::process::create_tar_gz(&tar, &work, &["penelope".into()]) {
-        cleanup();
-        return Err(anyhow::anyhow!("archive : {e}"));
-    }
-
-    let passphrase = passphrase(d)?;
-    let sealed = out_dir.join(format!("penelope-{stamp}.tar.gz.enc"));
-    let sealed_bytes = match penelope_platform::archive::seal(&tar, &sealed, &passphrase) {
-        Ok(n) => n,
-        Err(e) => {
-            cleanup();
-            return Err(anyhow::anyhow!("chiffrement : {e}"));
-        }
-    };
-    cleanup();
-
-    let manifest = json!({
-        "archive": sealed.file_name().map(|f| f.to_string_lossy().to_string()),
-        "bytes": sealed_bytes,
-        "sha256": sha256_of(&sealed)?,
-        "manifest": manifest,
-    });
-    Ok((sealed, manifest))
 }
 
 /// Phrase de passe des sauvegardes, rangée dans le magasin de secrets.
 fn passphrase(d: &Daemon) -> anyhow::Result<String> {
-    d.services
-        .platform
+    secret_passphrase(&d.services.platform)
+}
+
+fn secret_passphrase(platform: &penelope_platform::Platform) -> anyhow::Result<String> {
+    platform
         .secrets
         .get(PASSPHRASE_SECRET)
         .ok()
@@ -193,25 +241,33 @@ async fn push_archive(d: &Daemon, archive: &Path, report: &Value) -> anyhow::Res
     }
 
     let work = s.platform.dirs.data().join("backups").join("repo");
-    penelope_platform::process::git_sync_repo(&work, &remote)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let name = archive
         .file_name()
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| "penelope.tar.gz.enc".into());
-    std::fs::copy(archive, work.join(&name))?;
-    std::fs::write(
-        work.join("MANIFEST.json"),
-        serde_json::to_vec_pretty(report)?,
-    )?;
-    let removed = rotate(&work, &cfg.backup)?;
-    let pushed = penelope_platform::process::git_commit_push(
-        &work,
-        &format!("Sauvegarde {name}"),
-        "Penelope",
-        "penelope@localhost",
-    )
-    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // Clone, copie et push sont des appels bloquants : hors du runtime (#77).
+    let (archive, report, retention) = (archive.to_path_buf(), report.clone(), cfg.backup.clone());
+    let (remote_c, name_c) = (remote.clone(), name.clone());
+    let (removed, pushed) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        penelope_platform::process::git_sync_repo(&work, &remote_c)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        std::fs::copy(&archive, work.join(&name_c))?;
+        std::fs::write(
+            work.join("MANIFEST.json"),
+            serde_json::to_vec_pretty(&report)?,
+        )?;
+        let removed = rotate(&work, &retention)?;
+        let pushed = penelope_platform::process::git_commit_push(
+            &work,
+            &format!("Sauvegarde {name_c}"),
+            "Penelope",
+            "penelope@localhost",
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok((removed, pushed))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("envoi interrompu : {e}"))??;
     Ok(json!({"remote": remote, "archive": name, "rotated": removed, "commit": pushed}))
 }
 
@@ -398,8 +454,20 @@ pub async fn doctor_check(d: &Daemon) -> penelope_kernel::api::DoctorCheck {
         );
     };
     let age_h = age_hours(d, created);
+    // Durée : l'instantané de la base grossit avec elle, sa dérive se voit ici (#77).
+    let duration = match (
+        st["last"]["duration_ms"].as_u64(),
+        st["last"]["snapshot_ms"].as_u64(),
+    ) {
+        (Some(total), Some(snap)) => format!(
+            ", {:.1} s dont {:.1} s d'instantané",
+            total as f64 / 1000.0,
+            snap as f64 / 1000.0
+        ),
+        _ => String::new(),
+    };
     let detail = format!(
-        "dernière il y a {age_h} h ({} Mo), vers {}",
+        "dernière il y a {age_h} h ({} Mo{duration}), vers {}",
         st["last"]["bytes"].as_u64().unwrap_or(0) / (1024 * 1024),
         st["remote"].as_str().unwrap_or("aucun dépôt")
     );
@@ -543,6 +611,52 @@ mod tests {
             .await
             .unwrap();
         assert!(titles.contains(&"Atlas".to_string()), "{titles:?}");
+    }
+
+    /// #77 : sur un runtime à un seul worker, une sauvegarde complète laisse passer les
+    /// écritures : l'instantané ne prend pas l'écrivain, et le tar, Argon2 et le
+    /// chiffrement ne monopolisent pas le runtime. `doctor` dit sa durée.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_backup_neither_blocks_the_runtime_nor_the_writer() {
+        let (_dir, d) = daemon().await;
+        d.services
+            .platform
+            .secrets
+            .set(PASSPHRASE_SECRET, "phrase de passe")
+            .unwrap();
+        let job = {
+            let d = d.clone();
+            tokio::spawn(async move { run(&d, false, None).await })
+        };
+        let mut during = 0;
+        while !job.is_finished() {
+            d.services
+                .store
+                .write(|tx| penelope_store::kv_set(tx, "battement", "1"))
+                .await
+                .unwrap();
+            if !job.is_finished() {
+                during += 1;
+            }
+            tokio::task::yield_now().await;
+        }
+        let report = job.await.unwrap().unwrap();
+        assert!(during > 0, "aucune écriture pendant la sauvegarde");
+        assert!(report["snapshot_ms"].is_u64(), "{report}");
+        assert!(report["duration_ms"].is_u64(), "{report}");
+
+        let events = d
+            .services
+            .events
+            .range(0, 500)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == "store.backup")
+            .count();
+        assert_eq!(events, 1);
+        let check = doctor_check(&d).await;
+        assert!(check.detail.contains("d'instantané"), "{}", check.detail);
     }
 
     /// #42 : sans phrase de passe, rien n'est écrit et le message dit quoi faire.

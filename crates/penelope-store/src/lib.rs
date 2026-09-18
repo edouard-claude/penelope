@@ -313,28 +313,10 @@ impl Store {
         })
     }
 
-    /// Exécute une opération sur la connexion écrivain **hors transaction**.
-    ///
-    /// Nécessaire pour les ordres que SQLite refuse dans une transaction (`VACUUM`,
-    /// `PRAGMA wal_checkpoint`). À réserver aux opérations de maintenance : le code
-    /// métier utilise `write`, qui garantit l'atomicité.
-    pub fn maintenance_blocking<T, F>(&self, f: F) -> Result<T>
-    where
-        F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
-        T: Send + 'static,
-    {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let job: WriteJob = Box::new(move |conn| {
-            let _ = tx.send(f(conn));
-        });
-        self.inner
-            .writer_tx
-            .send(job)
-            .map_err(|_| StoreError::WriterGone)?;
-        rx.recv().map_err(|_| StoreError::WriterGone)?
-    }
-
-    /// Copie cohérente de la base (sauvegarde §15 `penelope backup`).
+    /// Copie cohérente de la base (sauvegarde §15 `penelope backup`), **sans occuper
+    /// l'écrivain** (issue #77) : `VACUUM INTO` sur une connexion en lecture seule ouverte
+    /// pour l'occasion lit l'état commité (WAL compris) pendant que les écritures
+    /// continuent. Bloquant : depuis un runtime async, passer par `snapshot_to`.
     pub fn backup_to(&self, dest: impl AsRef<Path>) -> Result<()> {
         let dest = dest.as_ref().to_path_buf();
         if let Some(p) = dest.parent() {
@@ -343,12 +325,23 @@ impl Store {
         if dest.exists() {
             std::fs::remove_file(&dest)?;
         }
-        self.maintenance_blocking(move |conn| {
-            conn.execute_batch("PRAGMA wal_checkpoint(FULL);")?;
-            let dest_s = dest.to_string_lossy().replace('\'', "''");
-            conn.execute_batch(&format!("VACUUM INTO '{dest_s}';"))?;
-            Ok(())
+        let conn = open_connection(&self.inner.path, true)?;
+        let dest_s = dest.to_string_lossy().replace('\'', "''");
+        conn.execute_batch(&format!("VACUUM INTO '{dest_s}';"))?;
+        Ok(())
+    }
+
+    /// `backup_to` sur un thread bloquant, hors du runtime async (#77). Renvoie la durée
+    /// de l'instantané.
+    pub async fn snapshot_to(&self, dest: PathBuf) -> Result<std::time::Duration> {
+        let s = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let t = std::time::Instant::now();
+            s.backup_to(&dest)?;
+            Ok(t.elapsed())
         })
+        .await
+        .map_err(|e| StoreError::other(format!("instantané interrompu : {e}")))?
     }
 
     pub fn close(&self) {
@@ -588,6 +581,70 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(perdu, 0);
+    }
+
+    /// #77 : l'instantané ne gèle plus l'écrivain. Pendant la copie d'une base de
+    /// quelques dizaines de Mo, des écritures partent et reviennent en moins de 100 ms ;
+    /// la copie passe `integrity_check`.
+    #[test]
+    fn writes_go_on_while_a_snapshot_is_taken() {
+        let s = Store::open_memory().unwrap();
+        s.write_blocking(|tx| {
+            let blob = "x".repeat(4096);
+            for i in 0..8000 {
+                tx.execute(
+                    "INSERT INTO kv(k, v) VALUES(?1, ?2)",
+                    rusqlite::params![format!("gros{i}"), blob],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("instantane.db");
+
+        let done = Arc::new(AtomicBool::new(false));
+        let snap = {
+            let (s, dest, done) = (s.clone(), dest.clone(), done.clone());
+            std::thread::spawn(move || {
+                s.backup_to(&dest).unwrap();
+                done.store(true, Ordering::SeqCst);
+            })
+        };
+        let mut during = 0;
+        let mut slowest = std::time::Duration::ZERO;
+        let mut i = 0;
+        while !done.load(Ordering::SeqCst) {
+            let t = std::time::Instant::now();
+            let k = format!("pendant{i}");
+            s.write_blocking(move |tx| kv_set(tx, &k, "v")).unwrap();
+            slowest = slowest.max(t.elapsed());
+            if !done.load(Ordering::SeqCst) {
+                during += 1;
+            }
+            i += 1;
+        }
+        snap.join().unwrap();
+        assert!(
+            during > 0,
+            "aucune écriture n'a abouti pendant l'instantané"
+        );
+        assert!(
+            slowest < std::time::Duration::from_millis(100),
+            "écriture la plus lente : {slowest:?}"
+        );
+
+        let c = Connection::open(&dest).unwrap();
+        let ok: String = c
+            .query_row("PRAGMA integrity_check;", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ok, "ok");
+        let n: i64 = c
+            .query_row("SELECT count(*) FROM kv WHERE k LIKE 'gros%'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(n, 8000);
     }
 
     #[test]
