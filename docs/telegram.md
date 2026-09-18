@@ -392,6 +392,17 @@ ce groupe-là, vaut propriétaire. Un autre membre, ou l'anonyme d'une autre con
 est ignoré. Un groupe absent de la liste est ignoré en silence, même avec
 `telegram.allow_groups` : l'interrupteur ne suffit plus, il faut l'identifiant.
 
+## Signes de vie
+
+Pendant qu'un tour travaille, l'indicateur « écrit… » est renvoyé toutes les quatre
+secondes (Telegram l'efface au bout de cinq, ou dès qu'un message du bot arrive), dans le
+sujet de la session : il part dès la mise en file du message, avant même que le tour
+démarre, et s'arrête avec lui. L'action suit ce qui se passe : « envoie un fichier » pour
+`send_file`, « enregistre un vocal » pour `send_voice`, « envoie une photo » pour
+`image_generate`, « écrit… » sinon. Ces appels sont jetables, hors de la file d'envoi
+durable, et leur échec ne touche jamais le tour. En conversation privée, le brouillon
+porte en plus une ligne d'état sur l'outil en cours (« ⚙️ shell_exec · cargo test »).
+
 ## Limites et reprise
 
 Le client respecte les limites de débit de Telegram sans perdre de message : un `429`

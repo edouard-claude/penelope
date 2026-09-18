@@ -1326,6 +1326,17 @@ remis (#120).
   celles de #39, et l'état est remis. Le digest du matin liste les planifications en
   échec. Sans livrable déclaré, rien ne change.
 
+### 0.17.9
+
+- **Des signes de vie pendant un tour** (#121) : `sendChatAction` n'était envoyé qu'une
+  fois, au premier brouillon, sans `message_thread_id` et jamais dans un groupe. Chaque
+  tour d'une session au premier plan a désormais son indicateur (`start_activity`),
+  renvoyé toutes les quatre secondes tant que le bus le dit actif, dans son sujet, arrêté
+  à la fin du tour ; un signe part dès la mise en file du message. L'action suit l'outil
+  en cours (`upload_document`, `record_voice`, `upload_photo`, sinon `typing`). Les appels
+  sont jetables (hors file durable, erreurs ignorées). Le brouillon privé montre l'outil
+  et son argument principal (commande, chemin, requête).
+
 ### Routine de livraison
 
 Avant chaque tag :

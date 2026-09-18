@@ -211,6 +211,47 @@ pub struct TelegramGateway {
     bursts: Arc<std::sync::Mutex<HashMap<i64, TextBurst>>>,
     /// Sorties mises de côté des sessions en arrière-plan : lues et réécrites sous verrou.
     held_lock: tokio::sync::Mutex<()>,
+    /// Indicateurs d'activité des tours en cours, par tour (issue #121).
+    activities: Arc<std::sync::Mutex<HashMap<String, Activity>>>,
+    /// Intervalle de renvoi de l'indicateur, en millisecondes (Telegram l'efface au bout
+    /// de cinq secondes).
+    activity_every_ms: std::sync::atomic::AtomicU64,
+}
+
+/// Indicateur d'activité d'un tour : renvoyé tant qu'il vit, l'action suit ce qu'il fait.
+struct Activity {
+    action: Arc<std::sync::Mutex<&'static str>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+/// Action d'activité d'un outil : un fichier qui part, une voix, une image, sinon « écrit ».
+fn activity_for(tool: &str) -> &'static str {
+    match tool {
+        "send_file" | "artifact_read" => "upload_document",
+        "send_voice" => "record_voice",
+        "image_generate" => "upload_photo",
+        _ => "typing",
+    }
+}
+
+/// Résumé d'un appel d'outil pour la ligne d'état du brouillon : la commande, le
+/// chemin, la requête ou l'adresse, raccourcis (issue #121).
+fn tool_status(name: &str, args: &Value) -> String {
+    let detail = ["command", "path", "query", "url", "name", "id"]
+        .iter()
+        .find_map(|k| args.get(*k).and_then(|v| v.as_str()))
+        .map(|d| {
+            let d = d.split_whitespace().collect::<Vec<_>>().join(" ");
+            if d.chars().count() > 60 {
+                format!("{}…", d.chars().take(59).collect::<String>())
+            } else {
+                d
+            }
+        });
+    match detail {
+        Some(d) => format!("⚙️ {name} · {d}"),
+        None => format!("⚙️ {name}…"),
+    }
 }
 
 /// Sortie d'une session en arrière-plan, mise de côté jusqu'à son retour au focus du chat
@@ -339,9 +380,95 @@ impl TelegramGateway {
             albums: Arc::new(std::sync::Mutex::new(HashMap::new())),
             bursts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             held_lock: tokio::sync::Mutex::new(()),
+            activities: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            activity_every_ms: std::sync::atomic::AtomicU64::new(4_000),
             daemon,
             bot,
         })
+    }
+
+    /// Intervalle de l'indicateur d'activité (tests).
+    pub fn set_activity_every(&self, every: Duration) {
+        self.activity_every_ms.store(
+            every.as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// Un indicateur d'activité, jetable : hors de la file d'envoi durable, et son échec ne
+    /// touche jamais le tour (issue #121).
+    fn chat_action(&self, chat_id: i64, topic_id: Option<i64>, action: &str) {
+        let bot = self.bot.clone();
+        let mut payload = json!({"chat_id": chat_id, "action": action});
+        if let Some(t) = topic_id {
+            payload["message_thread_id"] = json!(t);
+        }
+        tokio::spawn(async move {
+            let _ = bot
+                .call(
+                    penelope_telegram::api::method::SEND_CHAT_ACTION,
+                    None,
+                    payload,
+                )
+                .await;
+        });
+    }
+
+    /// Démarre l'indicateur d'un tour : renvoyé toutes les quatre secondes tant que le tour
+    /// vit, dans son sujet, arrêté avec lui (issue #121).
+    fn start_activity(&self, turn_id: &str, session_id: &str, chat_id: i64, topic_id: Option<i64>) {
+        let action = Arc::new(std::sync::Mutex::new("typing"));
+        let every = Duration::from_millis(
+            self.activity_every_ms
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .max(10),
+        );
+        let (bot, daemon, a, sid) = (
+            self.bot.clone(),
+            self.daemon.clone(),
+            action.clone(),
+            session_id.to_string(),
+        );
+        let task = tokio::spawn(async move {
+            // Un tour dont la fin aurait échappé au bus ne garde pas l'indicateur allumé.
+            while daemon.bus.is_active(&sid) && !daemon.handle.is_shutting_down() {
+                let current = *a.lock().unwrap_or_else(|p| p.into_inner());
+                let mut payload = json!({"chat_id": chat_id, "action": current});
+                if let Some(t) = topic_id {
+                    payload["message_thread_id"] = json!(t);
+                }
+                let _ = bot
+                    .call(
+                        penelope_telegram::api::method::SEND_CHAT_ACTION,
+                        None,
+                        payload,
+                    )
+                    .await;
+                tokio::time::sleep(every).await;
+            }
+        });
+        if let Ok(mut g) = self.activities.lock()
+            && let Some(old) = g.insert(turn_id.to_string(), Activity { action, task })
+        {
+            old.task.abort();
+        }
+    }
+
+    fn set_activity(&self, turn_id: &str, action: &'static str) {
+        if let Ok(g) = self.activities.lock()
+            && let Some(a) = g.get(turn_id)
+            && let Ok(mut current) = a.action.lock()
+        {
+            *current = action;
+        }
+    }
+
+    fn stop_activity(&self, turn_id: &str) {
+        if let Ok(mut g) = self.activities.lock()
+            && let Some(a) = g.remove(turn_id)
+        {
+            a.task.abort();
+        }
     }
 
     /// Branche la passerelle dans le daemon (messages, livraison).
@@ -2482,6 +2609,10 @@ impl TelegramGateway {
             self.daemon
                 .enqueue_message(session, &text, origin, Some(format!("tg:{update_id}")))
                 .await?;
+            // Signe de vie dès la mise en file, avant que le tour démarre (issue #121).
+            if let Some((chat, topic)) = origin.telegram_chat() {
+                self.chat_action(chat, topic, "typing");
+            }
             return Ok(());
         }
         let wait = if piece {
@@ -2575,6 +2706,9 @@ impl TelegramGateway {
                 Some(format!("tg:{}", burst.update_id)),
             )
             .await?;
+        if let Some((chat, topic)) = burst.origin.telegram_chat() {
+            self.chat_action(chat, topic, "typing");
+        }
         Ok(())
     }
 
@@ -5801,6 +5935,22 @@ impl TelegramGateway {
             let Some((chat_id, topic_id)) = ev.origin.telegram_chat() else {
                 continue;
             };
+            // Indicateur d'activité, dans toute conversation, sujet compris (issue #121).
+            match &ev.kind {
+                BusKind::Started => {
+                    if !self.out_of_focus(&ev.session_id, chat_id, topic_id).await {
+                        self.start_activity(&ev.turn_id, &ev.session_id, chat_id, topic_id);
+                    }
+                }
+                BusKind::Event(TurnEvent::ToolCall { name, .. }) => {
+                    self.set_activity(&ev.turn_id, activity_for(name));
+                }
+                BusKind::Event(TurnEvent::ToolResult { .. }) => {
+                    self.set_activity(&ev.turn_id, "typing");
+                }
+                BusKind::Finished(_) => self.stop_activity(&ev.turn_id),
+                _ => {}
+            }
             // `sendMessageDraft` ne vaut que pour une conversation privée.
             if chat_id <= 0 {
                 continue;
@@ -5833,16 +5983,6 @@ impl TelegramGateway {
                             sent: String::new(),
                         },
                     );
-                    let bot = self.bot.clone();
-                    tokio::spawn(async move {
-                        let _ = bot
-                            .call(
-                                penelope_telegram::api::method::SEND_CHAT_ACTION,
-                                None,
-                                json!({"chat_id": chat_id, "action": "typing"}),
-                            )
-                            .await;
-                    });
                 }
                 BusKind::Event(TurnEvent::Delta(t)) => {
                     if let Some(d) = drafts.get_mut(&ev.turn_id) {
@@ -5858,12 +5998,14 @@ impl TelegramGateway {
                         }
                     }
                 }
-                BusKind::Event(TurnEvent::ToolCall { name, .. }) => {
+                BusKind::Event(TurnEvent::ToolCall { name, args }) => {
                     if let Some(d) = drafts.get_mut(&ev.turn_id) {
                         let busy = d.in_flight.as_ref().is_some_and(|h| !h.is_finished());
                         if !busy {
                             d.last = Instant::now();
-                            let preview = format!("{}\n\n⚙️ {name}…", d.text.trim_end());
+                            // Ligne d'état : ce qui tourne, pas seulement son nom (#121).
+                            let preview =
+                                format!("{}\n\n{}", d.text.trim_end(), tool_status(name, args));
                             d.sent = preview.clone();
                             d.in_flight =
                                 self.spawn_draft(d.chat_id, d.topic_id, d.draft_id, preview.trim());
@@ -10898,6 +11040,58 @@ mod tests {
         for b in &bubbles {
             assert!(!b.contains("null") && !b.contains("undefined"), "{b}");
         }
+    }
+
+    /// #121 : l'indicateur d'activité part dès la mise en file, est renvoyé à intervalle
+    /// régulier tant que le tour vit, dans son sujet, puis s'arrête ; un échec d'envoi ne
+    /// touche pas le tour.
+    #[tokio::test]
+    async fn the_activity_indicator_lives_as_long_as_the_turn() {
+        let (_d, g, t, p) = gateway().await;
+        g.set_activity_every(Duration::from_millis(40));
+        let chat: i64 = -1_001_234_567_890;
+        g.daemon
+            .publish_config("test", move |c| {
+                c.telegram.allowed_chats = vec![chat];
+                c.models.routing.classifier = false;
+                Ok(vec!["telegram.allowed_chats".into()])
+            })
+            .unwrap();
+        let loops = tokio::spawn(g.clone().draft_loop());
+        p.slow(Duration::from_millis(500));
+        p.reply("C'est fait.");
+        let mut u = updates::in_topic(updates::text_message(930, chat, OWNER, "vérifie la PR"), 21);
+        u["message"]["chat"] = json!({"id": chat, "type": "supergroup", "title": "Chantiers"});
+        g.process_update(&u).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(
+            !t.calls_to(tg::SEND_CHAT_ACTION).await.is_empty(),
+            "signe de vie dès la mise en file"
+        );
+        t.fail_transport(2, "réseau coupé").await;
+        drain(&g).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let actions = t.calls_to(tg::SEND_CHAT_ACTION).await;
+        assert!(actions.len() >= 6, "{} actions", actions.len());
+        assert!(
+            actions
+                .iter()
+                .all(|a| a["message_thread_id"] == 21 && a["chat_id"] == chat)
+        );
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            sent.iter().any(|x| x == "C'est fait."),
+            "le tour aboutit : {sent:?}"
+        );
+        let after = actions.len();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            t.calls_to(tg::SEND_CHAT_ACTION).await.len(),
+            after,
+            "plus rien une fois le tour fini"
+        );
+        g.daemon.handle.shutdown();
+        let _ = tokio::time::timeout(Duration::from_secs(2), loops).await;
     }
 
     /// #111 : `/mode` montre le mode de la session et le change d'un bouton.
