@@ -5131,6 +5131,11 @@ impl TelegramGateway {
             last: Instant,
             /// Dernière vérification du focus : une session quittée cesse d'écrire.
             checked: Instant,
+            /// Brouillon en vol : un seul à la fois, le suivant porte le dernier texte
+            /// (issue #70).
+            in_flight: Option<tokio::task::JoinHandle<()>>,
+            /// Texte du dernier brouillon effectivement envoyé.
+            sent: String,
         }
         const FOCUS_EVERY: Duration = Duration::from_secs(2);
         let mut rx = self.daemon.bus.subscribe();
@@ -5173,6 +5178,8 @@ impl TelegramGateway {
                             text: String::new(),
                             last: Instant::now() - self.draft_interval,
                             checked: Instant::now(),
+                            in_flight: None,
+                            sent: String::new(),
                         },
                     );
                     let bot = self.bot.clone();
@@ -5189,28 +5196,52 @@ impl TelegramGateway {
                 BusKind::Event(TurnEvent::Delta(t)) => {
                     if let Some(d) = drafts.get_mut(&ev.turn_id) {
                         d.text.push_str(t);
-                        if d.last.elapsed() >= self.draft_interval {
+                        // Un seul brouillon en vol : tant qu'il n'est pas parti, le texte
+                        // continue de s'accumuler et le suivant portera tout (issue #70).
+                        let busy = d.in_flight.as_ref().is_some_and(|h| !h.is_finished());
+                        if !busy && d.last.elapsed() >= self.draft_interval && d.text != d.sent {
                             d.last = Instant::now();
-                            self.spawn_draft(d.chat_id, d.topic_id, d.draft_id, &d.text);
+                            d.sent = d.text.clone();
+                            d.in_flight =
+                                self.spawn_draft(d.chat_id, d.topic_id, d.draft_id, &d.text);
                         }
                     }
                 }
                 BusKind::Event(TurnEvent::ToolCall { name, .. }) => {
                     if let Some(d) = drafts.get_mut(&ev.turn_id) {
-                        d.last = Instant::now();
-                        let preview = format!("{}\n\n⚙️ {name}…", d.text.trim_end());
-                        self.spawn_draft(d.chat_id, d.topic_id, d.draft_id, preview.trim());
+                        let busy = d.in_flight.as_ref().is_some_and(|h| !h.is_finished());
+                        if !busy {
+                            d.last = Instant::now();
+                            let preview = format!("{}\n\n⚙️ {name}…", d.text.trim_end());
+                            d.sent = preview.clone();
+                            d.in_flight =
+                                self.spawn_draft(d.chat_id, d.topic_id, d.draft_id, preview.trim());
+                        }
                     }
                 }
                 BusKind::Finished(_) => {
-                    drafts.remove(&ev.turn_id);
+                    // La réponse finale part tout de suite : le brouillon en vol ne doit
+                    // pas prendre le créneau devant elle (issue #70).
+                    if let Some(d) = drafts.remove(&ev.turn_id)
+                        && let Some(h) = d.in_flight
+                    {
+                        h.abort();
+                    }
                 }
                 _ => {}
             }
         }
     }
 
-    fn spawn_draft(&self, chat_id: i64, topic_id: Option<i64>, draft_id: i64, text: &str) {
+    /// Envoie un brouillon en tâche de fond ; la poignée sert à savoir s'il est encore en
+    /// vol (issue #70).
+    fn spawn_draft(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        draft_id: i64,
+        text: &str,
+    ) -> Option<tokio::task::JoinHandle<()>> {
         let text: String = text
             .chars()
             .rev()
@@ -5220,12 +5251,12 @@ impl TelegramGateway {
             .rev()
             .collect();
         if text.trim().is_empty() {
-            return;
+            return None;
         }
         let bot = self.bot.clone();
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             let _ = bot.send_draft(chat_id, topic_id, draft_id, &text).await;
-        });
+        }))
     }
 }
 
@@ -6270,6 +6301,53 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let reactions = t.calls_to(tg::SET_MESSAGE_REACTION).await;
         assert!(reactions.len() >= 2, "{reactions:?}");
+    }
+
+    /// #70 : un seul brouillon en vol, et le dernier envoyé porte le dernier texte.
+    #[tokio::test]
+    async fn drafts_are_coalesced_and_never_delay_the_answer() {
+        let (_d, g, t, p) = gateway().await;
+        g.daemon
+            .kv_set("tg.onboard.proposed", "test")
+            .await
+            .unwrap();
+        g.daemon
+            .publish_config("test", |c| {
+                c.telegram.draft_interval_ms = 300;
+                Ok(vec!["telegram.draft_interval_ms".into()])
+            })
+            .unwrap();
+        // Réponse longue, découpée en fragments par le provider simulé.
+        p.reply(r#"{"complexity":"low"}"#);
+        p.reply(&"phrase de réponse. ".repeat(60));
+
+        let loops = tokio::spawn(g.clone().draft_loop());
+        g.process_update(&updates::text_message(90, OWNER, OWNER, "raconte"))
+            .await
+            .unwrap();
+        drain(&g).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        g.daemon.handle.shutdown();
+        let _ = tokio::time::timeout(Duration::from_secs(2), loops).await;
+
+        let drafts = t.calls_to(tg::SEND_MESSAGE_DRAFT).await;
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            sent.iter().any(|m| m.contains("phrase de réponse")),
+            "la réponse finale doit partir : {sent:?}"
+        );
+        // Chaque brouillon porte un texte plus long que le précédent : aucun doublon, et
+        // le dernier est un préfixe de la réponse.
+        let texts_of: Vec<String> = drafts
+            .iter()
+            .map(|d| d["text"].as_str().unwrap_or_default().to_string())
+            .collect();
+        for w in texts_of.windows(2) {
+            assert!(
+                w[1].len() >= w[0].len(),
+                "les brouillons doivent progresser : {texts_of:?}"
+            );
+        }
     }
 
     /// #69 : un vocal lent ne bloque plus la boucle des updates : le `/stop` reçu juste

@@ -218,6 +218,15 @@ impl RateLimiter {
     }
 }
 
+/// Appels d'aperçu, hors de la file des messages : ils n'apparaissent pas comme des
+/// messages dans le chat (issue #70).
+fn is_preview(method: &str) -> bool {
+    matches!(
+        method,
+        method::SEND_MESSAGE_DRAFT | method::SET_MESSAGE_REACTION | method::SEND_CHAT_ACTION
+    )
+}
+
 /// Backoff sur 5xx.
 pub fn backoff_ms(attempt: u32) -> u64 {
     (500u64 << attempt.min(6)).min(60_000)
@@ -227,6 +236,10 @@ pub fn backoff_ms(attempt: u32) -> u64 {
 pub struct Bot {
     transport: Arc<dyn BotTransport>,
     limiter: RateLimiter,
+    /// Seau à part pour les aperçus éphémères (brouillon, réaction, « écrit… ») : la
+    /// limite d'un message par seconde vise les messages, et mettre les aperçus dans la
+    /// même file retardait la réponse finale d'autant (issue #70).
+    preview_limiter: RateLimiter,
     clock: penelope_kernel::clock::SharedClock,
 }
 
@@ -275,6 +288,9 @@ impl Bot {
         Bot {
             transport,
             limiter: RateLimiter::new(rate_per_second),
+            // Deux aperçus par seconde : assez pour un brouillon tous les 700 ms et ses
+            // réactions, sans inonder l'API.
+            preview_limiter: RateLimiter::new((rate_per_second * 2.0).max(2.0)),
             clock,
         }
     }
@@ -282,9 +298,14 @@ impl Bot {
     /// Appel brut, avec gestion de `retry_after` et backoff.
     pub async fn call(&self, method: &str, chat_id: Option<i64>, body: Value) -> TgResult<Value> {
         let mut attempt = 0u32;
+        let limiter = if is_preview(method) {
+            &self.preview_limiter
+        } else {
+            &self.limiter
+        };
         loop {
             if let Some(c) = chat_id {
-                let wait = self.limiter.delay_for(c, self.clock.now_ms()).await;
+                let wait = limiter.delay_for(c, self.clock.now_ms()).await;
                 if wait > 0 {
                     tokio::time::sleep(std::time::Duration::from_millis(wait as u64)).await;
                 }
@@ -304,7 +325,9 @@ impl Bot {
                     .and_then(|p| p.retry_after)
                     .unwrap_or(1);
                 if let Some(c) = chat_id {
-                    self.limiter
+                    // Le 429 s'applique au seau de l'appel : un aperçu refusé ne retarde
+                    // pas les messages (issue #70).
+                    limiter
                         .apply_retry_after(c, self.clock.now_ms(), secs)
                         .await;
                 }
@@ -680,6 +703,46 @@ mod tests {
 
     fn bot(mock: Arc<MockTransport>) -> Bot {
         Bot::new(mock, 1000.0, Arc::new(TestClock::default()))
+    }
+
+    /// #70 : les aperçus (brouillon, réaction, « écrit… ») ne prennent pas les créneaux
+    /// des messages : une réponse finale ne fait plus la queue derrière eux.
+    #[tokio::test]
+    async fn previews_do_not_queue_in_front_of_messages() {
+        use penelope_kernel::clock::Clock;
+        assert!(is_preview(method::SEND_MESSAGE_DRAFT));
+        assert!(is_preview(method::SET_MESSAGE_REACTION));
+        assert!(is_preview(method::SEND_CHAT_ACTION));
+        assert!(!is_preview(method::SEND_MESSAGE));
+
+        let m = MockTransport::new();
+        let clock = Arc::new(TestClock::default());
+        let now = clock.now_ms();
+        // Cadence élevée pour ne pas dormir pendant le test ; ce qui compte est le seau.
+        let b = Bot::new(m.clone(), 100.0, clock.clone());
+        let chat = 42;
+        for i in 0..5 {
+            b.send_draft(chat, None, 1, &format!("brouillon {i}"))
+                .await
+                .unwrap();
+        }
+        let _ = b
+            .call(
+                method::SET_MESSAGE_REACTION,
+                Some(chat),
+                json!({"chat_id": chat, "message_id": 1}),
+            )
+            .await;
+
+        assert_eq!(
+            b.limiter.delay_for(chat, now).await,
+            0,
+            "le premier message part tout de suite, pas après les aperçus"
+        );
+        assert!(
+            b.preview_limiter.delay_for(chat, now).await > 0,
+            "les aperçus gardent leur propre cadence"
+        );
     }
 
     #[tokio::test]

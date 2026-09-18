@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1340 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1342 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -655,7 +655,7 @@ décisions des notes de travail récoltées (#61), retour d'usage juste (#62), s
 sans redémarrage (#63), redirections HTTP revérifiées (#64), `shell_exec` qui ne laisse ni
 processus ni mémoire derrière lui (#65), liens symboliques bornés au workspace (#66),
 « Toujours » borné à l'appel (#67), bac à sable qui ferme les secrets (#68), boucle
-Telegram qui ne bloque plus (#69).
+Telegram qui ne bloque plus (#69), brouillons qui ne retardent plus la réponse (#70).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -823,6 +823,12 @@ Telegram qui ne bloque plus (#69).
   trois minutes), une photo, `/export` et `/audit` sont traités dans une tâche à part. `/stop`,
   un clic de carte ou un message d'une autre conversation ne font plus la queue derrière
   eux ; la déduplication par `update_id` garantit qu'un rejeu ne double pas le tour.
+- **Brouillons Telegram** : les aperçus (brouillon, réaction, « écrit… ») ont leur propre
+  seau de cadence, séparé de celui des messages, et un seul brouillon est en vol à la fois,
+  le suivant portant le dernier texte. Une réponse de dix secondes arrivait quatre secondes
+  après la fin de la génération, une de trente secondes treize secondes après ; elle part
+  maintenant dès qu'elle est prête, et le brouillon en vol est abandonné à ce moment-là. Un
+  429 sur un aperçu ne retarde plus les messages.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et
