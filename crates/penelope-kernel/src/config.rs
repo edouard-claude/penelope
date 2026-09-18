@@ -96,7 +96,7 @@ fn parse_hhmm(s: &str) -> Result<u32> {
 // ---------------------------------------------------------------- structures
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Config {
     pub owner: Owner,
     pub telegram: Telegram,
@@ -118,7 +118,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Owner {
     /// Identifiant Telegram du propriétaire : le seul compte auquel le bot répond (0 :
     /// canal fermé).
@@ -140,7 +140,7 @@ impl Default for Owner {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Telegram {
     /// Jeton du bot, par référence au magasin de secrets.
     pub token: String,
@@ -210,7 +210,7 @@ impl Default for Telegram {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Providers {
     pub openrouter: OpenRouter,
     pub local: LocalProvider,
@@ -219,7 +219,7 @@ pub struct Providers {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct OpenRouter {
     /// Clé d'API, par référence au magasin de secrets.
     pub api_key: String,
@@ -262,7 +262,7 @@ impl Default for OpenRouter {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct OpenRouterRouting {
     /// OpenRouter peut passer à un autre provider du même modèle en cas d'échec.
     pub allow_fallbacks: bool,
@@ -302,7 +302,7 @@ impl Default for OpenRouterRouting {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct LocalProvider {
     /// Type d'endpoint (`openai_compat`).
     pub kind: String,
@@ -336,7 +336,7 @@ impl Default for LocalProvider {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Models {
     /// Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2).
     pub aliases: BTreeMap<String, String>,
@@ -399,7 +399,7 @@ impl Default for Models {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Routing {
     /// Classer la complexité d'un message pour choisir l'alias.
     pub classifier: bool,
@@ -434,7 +434,7 @@ impl Default for Routing {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Budget {
     /// Plafond de dépense par jour, en dollars.
     pub daily_usd: f64,
@@ -473,7 +473,7 @@ impl Default for Budget {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Context {
     /// Part de la fenêtre du modèle à partir de laquelle l'historique est compacté.
     pub compaction_threshold: f64,
@@ -523,7 +523,7 @@ impl Default for Context {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Memory {
     /// Répertoire du vault (`{data}` : répertoire de données).
     pub vault_path: String,
@@ -603,7 +603,7 @@ impl Default for Memory {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Promotion {
     /// Occurrences minimales d'un écart pour devenir une exception.
     pub ecart_min_occurrences: u32,
@@ -643,7 +643,7 @@ impl Default for Promotion {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Intents {
     /// Délai minimal entre deux déclenchements d'une intention.
     pub cooldown: String,
@@ -667,7 +667,7 @@ impl Default for Intents {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Mcp {
     /// `lazy` | `eager`. Sans effet dans cette version.
     pub registry_mode: String,
@@ -729,7 +729,7 @@ impl Default for Mcp {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct McpPolicy {
     /// Politique d'un outil MCP en lecture : `auto`, `ask`, `ask_twice` ou `deny`.
     pub read: String,
@@ -756,7 +756,7 @@ impl Default for McpPolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Runners {
     /// Tours traités en parallèle.
     pub count: usize,
@@ -778,7 +778,7 @@ impl Default for Runners {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Sandbox {
     /// Profil du bac à sable de `shell_exec` : `read-only`, `workspace-write` ou `full`.
     pub default_profile: String,
@@ -830,7 +830,7 @@ impl Default for Sandbox {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Observability {
     /// Export OpenTelemetry. Sans effet dans cette version.
     pub otlp_endpoint: String,
@@ -854,7 +854,7 @@ impl Default for Observability {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Tools {
     /// Shell de `shell_exec`, programme puis arguments (`-c` par défaut) ; vide : shell de la
     /// plateforme.
@@ -885,7 +885,7 @@ impl Default for Tools {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Workflows {
     /// Durée de conservation de l'espace de travail d'un run terminé, en jours.
     pub workspace_retention_days: i64,
@@ -906,7 +906,7 @@ impl Default for Workflows {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Upgrade {
     /// Canal de mise à jour. Sans effet dans cette version.
     pub channel: String,
@@ -944,7 +944,7 @@ impl Default for Upgrade {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Voice {
     /// Voix préréglée du modèle de synthèse (rôle `tts`).
     pub tts_voice: String,
@@ -966,7 +966,7 @@ impl Default for Voice {
 
 /// Sauvegarde complète vers un dépôt privé (issue #42).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Backup {
     /// Dépôt git privé où pousser les sauvegardes chiffrées ; vide : celui du vault.
     pub git_remote: String,
@@ -1001,7 +1001,7 @@ impl Default for Backup {
 /// Rétention des traces (issue #46) : ce qui n'est ni la mémoire ni la chaîne d'audit
 /// finit par disparaître.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Retention {
     /// Jours gardés pour les tours terminés, les requêtes au modèle, les updates Telegram
     /// et les clés de travail. 0 : rien n'est effacé.
@@ -1020,15 +1020,149 @@ impl Default for Retention {
     }
 }
 
+// ---------------------------------------------------------------- lecture et écriture
+
+const SAMPLE_HEADER: &str = "\
+# Configuration de Pénélope.
+#
+# Seules les clés qui s'écartent des valeurs par défaut figurent ici. Toutes les clés,
+# leur valeur par défaut et leur rôle : `penelope config get`, ou la référence des clés
+# de docs/install-headless.md. Une modification par `penelope config set` ne touche que
+# la clé visée : commentaires et ordre de ce fichier sont conservés.
+
+";
+
+/// Clés présentes dans `raw` et absentes de la configuration relue : ce que ce binaire
+/// ne connaît pas. Les tables libres (alias, seuils par modèle…) sont relues avec leurs
+/// clés, donc jamais signalées.
+fn unknown_keys(prefix: &str, raw: &toml::Table, known: &toml::Table, out: &mut Vec<String>) {
+    for (k, v) in raw {
+        let path = if prefix.is_empty() {
+            k.clone()
+        } else {
+            format!("{prefix}.{k}")
+        };
+        match (v, known.get(k)) {
+            (_, None) => out.push(path),
+            (toml::Value::Table(r), Some(toml::Value::Table(kn))) => {
+                unknown_keys(&path, r, kn, out)
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Réécrit `existing` en ne touchant que les clés qui changent entre `before` et `after`
+/// (issue #76) : commentaires, ordre, clés inconnues et clés omises par le propriétaire
+/// restent tels quels, et le fichier n'acquiert pas les clés nouvelles d'une version tant
+/// que personne ne les pose.
+pub fn edit_toml(existing: &str, before: &Config, after: &Config) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = existing
+        .parse()
+        .map_err(|e: toml_edit::TomlError| KernelError::config(e.to_string()))?;
+    let b = toml::Value::try_from(before).map_err(|e| KernelError::config(e.to_string()))?;
+    let a = toml::Value::try_from(after).map_err(|e| KernelError::config(e.to_string()))?;
+    if let (Some(b), Some(a)) = (b.as_table(), a.as_table()) {
+        patch_table(doc.as_table_mut(), Some(b), a)?;
+    }
+    Ok(doc.to_string())
+}
+
+fn edit_value(v: &toml::Value) -> Result<toml_edit::Value> {
+    v.to_string()
+        .parse::<toml_edit::Value>()
+        .map_err(|e| KernelError::config(e.to_string()))
+}
+
+/// Remplace une valeur en gardant sa décoration (commentaire en fin de ligne).
+fn set_value(item: &mut toml_edit::Item, v: &toml::Value) -> Result<()> {
+    let mut next = edit_value(v)?;
+    if let Some(old) = item.as_value() {
+        *next.decor_mut() = old.decor().clone();
+    }
+    *item = toml_edit::Item::Value(next);
+    Ok(())
+}
+
+fn patch_table(
+    doc: &mut toml_edit::Table,
+    before: Option<&toml::Table>,
+    after: &toml::Table,
+) -> Result<()> {
+    for (k, av) in after {
+        let bv = before.and_then(|b| b.get(k));
+        if bv == Some(av) {
+            continue;
+        }
+        match (av, doc.get_mut(k)) {
+            (toml::Value::Table(at), Some(toml_edit::Item::Table(t))) => {
+                patch_table(t, bv.and_then(|v| v.as_table()), at)?
+            }
+            (toml::Value::Table(at), None) => {
+                let mut t = toml_edit::Table::new();
+                t.set_implicit(true);
+                patch_table(&mut t, bv.and_then(|v| v.as_table()), at)?;
+                doc.insert(k, toml_edit::Item::Table(t));
+            }
+            // Valeur scalaire, tableau ou table en ligne : remplacée d'un bloc.
+            (_, Some(item)) => set_value(item, av)?,
+            (_, None) => {
+                doc.insert(k, toml_edit::Item::Value(edit_value(av)?));
+            }
+        }
+    }
+    if let Some(b) = before {
+        for k in b.keys() {
+            if !after.contains_key(k) {
+                doc.remove(k);
+            }
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------- validation
 
 impl Config {
+    /// Lecture **tolérante** (issue #76) : une clé que ce binaire ne connaît pas (écrite
+    /// par une version plus récente, ou faute de frappe) est ignorée et renvoyée pour être
+    /// signalée par `doctor`, `config validate` et le démarrage. Un retour arrière ne
+    /// dépend ainsi d'aucun état écrit par la version que l'on quitte. Une valeur mal
+    /// typée reste une erreur.
+    pub fn parse(s: &str) -> Result<(Config, Vec<String>)> {
+        let cfg: Config = toml::from_str(s).map_err(|e| KernelError::config(e.to_string()))?;
+        let raw: toml::Table = toml::from_str(s).map_err(|e| KernelError::config(e.to_string()))?;
+        let known = toml::Value::try_from(&cfg).map_err(|e| KernelError::config(e.to_string()))?;
+        let mut unknown = Vec::new();
+        if let Some(known) = known.as_table() {
+            unknown_keys("", &raw, known, &mut unknown);
+        }
+        Ok((cfg, unknown))
+    }
+
+    /// Lecture **stricte** : toute clé inconnue est une erreur. Pour une saisie, pas pour
+    /// le fichier qu'une autre version a pu écrire.
     pub fn from_toml(s: &str) -> Result<Config> {
-        toml::from_str(s).map_err(|e| KernelError::config(e.to_string()))
+        let (cfg, unknown) = Config::parse(s)?;
+        if !unknown.is_empty() {
+            return Err(KernelError::config(format!(
+                "clé inconnue : {}",
+                unknown.join(", ")
+            )));
+        }
+        Ok(cfg)
     }
 
     pub fn to_toml(&self) -> Result<String> {
         toml::to_string_pretty(self).map_err(|e| KernelError::config(e.to_string()))
+    }
+
+    /// Fichier de premier démarrage : seules les clés qui diffèrent des valeurs par
+    /// défaut, sous un en-tête qui dit où trouver les autres (#76). Un fichier court
+    /// suit les défauts des versions suivantes et se relit par une version antérieure.
+    pub fn sample_toml(owner_id: i64) -> Result<String> {
+        let body = edit_toml("", &Config::default(), &Config::sample(owner_id))?;
+        Ok(format!("{SAMPLE_HEADER}{body}"))
     }
 
     /// Validation sémantique, au-delà du typage TOML (§4.4 étape 2).
@@ -1309,6 +1443,8 @@ pub struct ConfigStore {
     /// publication sous un seul verrou, sinon deux mutations concurrentes s'écrasent et
     /// se volent leur fichier temporaire (issue #45).
     writing: std::sync::Mutex<()>,
+    /// Clés du fichier que ce binaire ne connaît pas, à la dernière lecture (#76).
+    unknown: std::sync::Mutex<Vec<String>>,
 }
 
 impl ConfigStore {
@@ -1335,6 +1471,7 @@ impl ConfigStore {
             results: std::sync::Mutex::new(BTreeMap::new()),
             tx,
             writing: std::sync::Mutex::new(()),
+            unknown: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -1346,9 +1483,17 @@ impl ConfigStore {
         owner_id: i64,
     ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
+        let mut unknown = Vec::new();
         let cfg = if path.exists() {
             let raw = std::fs::read_to_string(&path)?;
-            let mut c = Config::from_toml(&raw)?;
+            let (mut c, u) = Config::parse(&raw)?;
+            if !u.is_empty() {
+                tracing::warn!(
+                    cles = %u.join(", "),
+                    "clés de configuration inconnues de cette version : ignorées"
+                );
+            }
+            unknown = u;
             // L'ancien défaut d'embeddings visait un serveur local désactivé : la recherche
             // restait lexicale sans le dire (issue #11).
             if !c.providers.local.enabled
@@ -1368,10 +1513,27 @@ impl ConfigStore {
             if let Some(p) = path.parent() {
                 std::fs::create_dir_all(p)?;
             }
-            atomic_write(&path, c.to_toml()?.as_bytes())?;
+            atomic_write(&path, Config::sample_toml(owner_id)?.as_bytes())?;
             c
         };
-        Ok(ConfigStore::new(cfg, path, store, clock))
+        let cs = ConfigStore::new(cfg, path, store, clock);
+        cs.set_unknown(unknown);
+        Ok(cs)
+    }
+
+    /// Clés du fichier ignorées à la dernière lecture : `doctor` les nomme (#76).
+    pub fn unknown_keys(&self) -> Vec<String> {
+        match self.unknown.lock() {
+            Ok(g) => g.clone(),
+            Err(p) => p.into_inner().clone(),
+        }
+    }
+
+    fn set_unknown(&self, keys: Vec<String>) {
+        match self.unknown.lock() {
+            Ok(mut g) => *g = keys,
+            Err(p) => *p.into_inner() = keys,
+        }
     }
 
     /// Instantané courant : c'est ce que lit un tour à son démarrage (§4.4).
@@ -1406,7 +1568,7 @@ impl ConfigStore {
         F: FnOnce(&mut Config) -> Result<Vec<String>>,
     {
         let _writing = self.lock_writing();
-        self.apply(source, f)
+        self.apply(source, true, f)
     }
 
     fn lock_writing(&self) -> std::sync::MutexGuard<'_, ()> {
@@ -1416,8 +1578,9 @@ impl ConfigStore {
         }
     }
 
-    /// Corps d'une mutation, verrou déjà tenu.
-    fn apply<F>(&self, source: &str, f: F) -> Result<Arc<Generation>>
+    /// Corps d'une mutation, verrou déjà tenu. `persist` : écrire le fichier (faux pour
+    /// une relecture, dont le fichier est la source).
+    fn apply<F>(&self, source: &str, persist: bool, f: F) -> Result<Arc<Generation>>
     where
         F: FnOnce(&mut Config) -> Result<Vec<String>>,
     {
@@ -1426,8 +1589,22 @@ impl ConfigStore {
         let changed = f(&mut next)?;
         next.validate()?;
 
-        let toml = next.to_toml()?;
-        atomic_write(&self.path, toml.as_bytes())?;
+        if persist {
+            // Seules les clés modifiées sont réécrites (#76) : le fichier garde ses
+            // commentaires, son ordre, ses clés inconnues, et n'acquiert pas les clés
+            // nouvelles de cette version. Sans fichier, on part des valeurs par défaut.
+            let text = match std::fs::read_to_string(&self.path) {
+                Ok(existing) => edit_toml(&existing, &cur.config, &next)?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    format!(
+                        "{SAMPLE_HEADER}{}",
+                        edit_toml("", &Config::default(), &next)?
+                    )
+                }
+                Err(e) => return Err(e.into()),
+            };
+            atomic_write(&self.path, text.as_bytes())?;
+        }
 
         let gen_no = self.counter.fetch_add(1, Ordering::SeqCst) + 1;
         let g = Arc::new(Generation {
@@ -1466,12 +1643,14 @@ impl ConfigStore {
     pub fn reload_from_disk(&self) -> Result<Arc<Generation>> {
         let _writing = self.lock_writing();
         let raw = std::fs::read_to_string(&self.path)?;
-        let parsed = Config::from_toml(&raw)?;
-        self.apply("file", move |c| {
+        let (parsed, unknown) = Config::parse(&raw)?;
+        let g = self.apply("file", false, move |c| {
             let changed = diff_paths(c, &parsed);
             *c = parsed;
             Ok(changed)
-        })
+        })?;
+        self.set_unknown(unknown);
+        Ok(g)
     }
 
     /// Enregistre le résultat d'application d'un sous-système.
@@ -1648,6 +1827,111 @@ mod tests {
     fn unknown_key_is_rejected() {
         let e = Config::from_toml("[owner]\ntelegram_user_id = 1\nnimporte = 2\n").unwrap_err();
         assert!(e.to_string().contains("nimporte"), "{e}");
+    }
+
+    /// #76 : le fichier écrit par une version plus récente se relit. Section et clé
+    /// inconnues sont ignorées et nommées, pas fatales.
+    #[test]
+    fn unknown_sections_and_keys_are_tolerated_and_named() {
+        let raw = "[owner]\ntelegram_user_id = 1\n\n[budget]\ndaily_usd = 9.0\nnouveau_plafond = 3\n\n[futur]\nactif = true\n\n[models.aliases]\nmain = \"x/y\"\n";
+        let (c, unknown) = Config::parse(raw).unwrap();
+        assert_eq!(c.owner.telegram_user_id, 1);
+        assert_eq!(c.budget.daily_usd, 9.0);
+        assert_eq!(
+            c.models.aliases.get("main").map(String::as_str),
+            Some("x/y")
+        );
+        assert_eq!(unknown, vec!["budget.nouveau_plafond", "futur"]);
+        // Une valeur mal typée reste une erreur.
+        assert!(Config::parse("[budget]\ndaily_usd = \"beaucoup\"\n").is_err());
+    }
+
+    /// #76 : une mutation ne touche que la clé visée ; commentaires, ordre, clés
+    /// inconnues et omissions restent, aucune clé nouvelle n'apparaît.
+    #[test]
+    fn a_mutation_edits_only_the_changed_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = "# réglé à la main\n[owner]\ntelegram_user_id = 5 # moi\n\n[futur]\nactif = true\n\n[budget]\n# plafond du jour\ndaily_usd = 20.0\n";
+        std::fs::write(&path, original).unwrap();
+        let cs =
+            ConfigStore::load_or_create(&path, None, std::sync::Arc::new(TestClock::default()), 0)
+                .unwrap();
+        assert_eq!(cs.unknown_keys(), vec!["futur"]);
+
+        cs.mutate("cli", |c| {
+            c.budget.daily_usd = 30.0;
+            Ok(vec!["budget.daily_usd".into()])
+        })
+        .unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after,
+            original.replace("daily_usd = 20.0", "daily_usd = 30.0"),
+            "seule la valeur change"
+        );
+
+        // Une clé absente du fichier est ajoutée dans sa section, rien d'autre.
+        cs.mutate("cli", |c| {
+            c.telegram.quiet_hours = "23:00-06:00".into();
+            Ok(vec!["telegram.quiet_hours".into()])
+        })
+        .unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            after.starts_with(&original.replace("daily_usd = 20.0", "daily_usd = 30.0")),
+            "{after}"
+        );
+        assert!(
+            after.ends_with("[telegram]\nquiet_hours = \"23:00-06:00\"\n"),
+            "{after}"
+        );
+        let (relu, unknown) = Config::parse(&after).unwrap();
+        assert_eq!(relu.telegram.quiet_hours, "23:00-06:00");
+        assert_eq!(relu.budget.daily_usd, 30.0);
+        assert_eq!(unknown, vec!["futur"]);
+    }
+
+    /// #76 : une entrée retirée d'une table libre disparaît du fichier.
+    #[test]
+    fn a_removed_map_entry_leaves_the_file() {
+        let before = cfg();
+        let mut after = before.clone();
+        after.models.aliases.insert("essai".into(), "a/b".into());
+        let text = edit_toml("", &before, &after).unwrap();
+        assert_eq!(text, "[models.aliases]\nessai = \"a/b\"\n");
+        let text2 = edit_toml(&text, &after, &before).unwrap();
+        assert!(!text2.contains("essai"), "{text2}");
+    }
+
+    /// #76 : le fichier de premier démarrage ne porte que ce qui s'écarte des défauts.
+    #[test]
+    fn the_first_file_is_short_and_reads_back() {
+        let text = Config::sample_toml(42).unwrap();
+        assert!(text.starts_with("# Configuration de Pénélope."), "{text}");
+        assert!(text.ends_with("[owner]\ntelegram_user_id = 42\n"), "{text}");
+        let (c, unknown) = Config::parse(&text).unwrap();
+        assert!(unknown.is_empty());
+        assert_eq!(
+            serde_json::to_value(&c).unwrap(),
+            serde_json::to_value(Config::sample(42)).unwrap()
+        );
+    }
+
+    /// #76 : les fichiers complets écrits par les versions publiées se relisent sans
+    /// clé inconnue. Une clé retirée plus tard sera signalée, jamais fatale.
+    #[test]
+    fn files_written_by_released_versions_still_load() {
+        // Une entrée par version publiée dont le schéma a changé.
+        const RELEASED: &[(&str, &str)] = &[(
+            "0.17.0",
+            include_str!("../tests/fixtures/config-0.17.0.toml"),
+        )];
+        for (version, raw) in RELEASED {
+            let (c, unknown) = Config::parse(raw).unwrap_or_else(|e| panic!("{version} : {e}"));
+            assert!(unknown.is_empty(), "{version} : {unknown:?}");
+            c.validate().unwrap_or_else(|e| panic!("{version} : {e}"));
+        }
     }
 
     #[test]

@@ -132,6 +132,9 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     // Paniques de l'écrivain : la base a survécu, mais une écriture a été perdue (#44).
     checks.push(writer_panics_check());
 
+    // Clés du fichier ignorées : version plus récente ou faute de frappe (#76).
+    checks.push(config_unknown_check(s));
+
     // Un alias de conversation vers un modèle sans tool calling ne marchera pas (#54).
     checks.push(tool_calling_check(s).await);
 
@@ -690,6 +693,26 @@ fn writer_panics_check() -> DoctorCheck {
     }
 }
 
+/// #76 : une clé que ce binaire ne connaît pas est ignorée au chargement, pas fatale ;
+/// elle est nommée ici (écrite par une version plus récente, ou faute de frappe).
+fn config_unknown_check(s: &Services) -> DoctorCheck {
+    let unknown = s.config.unknown_keys();
+    if unknown.is_empty() {
+        DoctorCheck::ok("config.unknown", "Clés de configuration", "toutes connues")
+    } else {
+        DoctorCheck::fail(
+            "config.unknown",
+            "Clés de configuration",
+            format!(
+                "ignorée(s) par cette version : {} (écrite(s) par une version plus récente, \
+                 ou faute de frappe)",
+                unknown.join(", ")
+            ),
+            Some("penelope config validate".into()),
+        )
+    }
+}
+
 fn clock_check(s: &Services) -> DoctorCheck {
     let now = s.clock.now_ms();
     let system = std::time::SystemTime::now()
@@ -920,6 +943,27 @@ mod tests {
         for c in &checks {
             assert!(!c.detail.is_empty(), "{} sans détail", c.id);
         }
+    }
+
+    /// #76 : un fichier portant une section d'une version plus récente se charge, et
+    /// `doctor` la nomme au lieu que le daemon refuse de démarrer.
+    #[tokio::test]
+    async fn unknown_config_keys_are_named_not_fatal() {
+        let (_d, s) = services().await;
+        let checks = run(&s).await;
+        assert!(checks.iter().find(|c| c.id == "config.unknown").unwrap().ok);
+
+        let text = format!(
+            "{}\n[futur]\nactif = true\n",
+            penelope_kernel::config::Config::sample_toml(42).unwrap()
+        );
+        std::fs::write(s.config.path(), text).unwrap();
+        s.config
+            .reload_from_disk()
+            .expect("relu malgré la section inconnue");
+        let checks = run(&s).await;
+        let c = checks.iter().find(|c| c.id == "config.unknown").unwrap();
+        assert!(!c.ok && c.detail.contains("futur"), "{c:?}");
     }
 
     #[tokio::test]

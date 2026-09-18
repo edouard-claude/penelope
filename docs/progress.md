@@ -901,6 +901,15 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
   ramène plus la ligne en `planned` : l'effet devient une question au redémarrage. Environ
   8 ms par transition sur un M2, aucune pour les lectures ni le trafic de fond ; le store
   compte ces commits (`durable_commits`).
+- **Retour arrière sûr** (#76) : le chargement de `config.toml` tolère les clés inconnues
+  (écrites par une version plus récente, ou fautes de frappe) et les nomme dans `doctor`,
+  `config validate` et le journal de démarrage, au lieu de refuser de démarrer ; `config set`
+  refuse toujours une clé inexistante. Une mutation n'écrit plus le fichier entier : elle
+  édite le document en place (`toml_edit`) et ne touche que les clés modifiées, si bien que
+  commentaires, ordre et clés inconnues survivent et que le fichier n'acquiert pas les clés
+  nouvelles d'une version. Le premier démarrage écrit un fichier court (ce qui s'écarte des
+  défauts), une relecture n'écrit plus rien, et un fichier complet écrit par la 0.17.0 est
+  gardé en fixture pour que les versions suivantes le relisent.
 
 ### Routine de livraison
 

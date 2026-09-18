@@ -172,6 +172,16 @@ session_usd = 5.0
 Une modification est publiée à chaud, comme une génération immuable : les tours déjà
 commencés gardent l'instantané qu'ils ont lu, les suivants prennent la nouvelle.
 
+**Le fichier reste le vôtre.** `config.toml` ne porte que les clés qui s'écartent des
+valeurs par défaut, et `penelope config set`, `/model` ou un réglage fait depuis Telegram
+ne réécrivent que la clé visée : commentaires, ordre et édition faite en SSH sont
+conservés, et le fichier n'acquiert pas les clés nouvelles d'une version tant que personne
+ne les pose. Une clé que le binaire ne connaît pas (écrite par une version plus récente, ou
+faute de frappe) est ignorée et nommée par `penelope config validate`, `penelope doctor`
+et le journal de démarrage, jamais fatale : un retour à la version précédente
+(`penelope upgrade --rollback`) redémarre donc sur le fichier laissé par la suivante.
+`penelope config set` refuse toujours une clé qui n'existe pas.
+
 **Réglages qui s'annulent.** Un réglage qui annulerait sa propre intention est refusé,
 nommément : rôle ou palier de routage vers un alias absent, repli vers soi-même,
 `budget.alert_ratio` hors de ]0, 1[, adresse privée dans `tools.http_allowlist` alors que

@@ -1608,7 +1608,17 @@ mod tests {
             json!({"path":"budget.inexistant","value":1}),
         )
         .await;
-        assert!(resp.error.is_some());
+        let err = resp.error.expect("refus").message;
+        assert!(err.contains("clé inconnue : budget.inexistant"), "{err}");
+        // La lecture du fichier tolère les clés inconnues (#76), la saisie non.
+        let resp = call(
+            &r,
+            method::CONFIG_SET,
+            json!({"path":"futur.actif","value":true}),
+        )
+        .await;
+        let err = resp.error.expect("refus").message;
+        assert!(err.contains("clé inconnue : futur.actif"), "{err}");
     }
 
     #[tokio::test]

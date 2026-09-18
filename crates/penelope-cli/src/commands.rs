@@ -981,7 +981,8 @@ async fn upgrade_offline(cli: &Cli, p: &Value) -> CliResult<Value> {
     // Sans daemon, la configuration est lue sur disque (clé minisign, adresse des releases).
     let cfg = std::fs::read_to_string(dirs.config_file())
         .ok()
-        .and_then(|raw| penelope_kernel::config::Config::from_toml(&raw).ok())
+        .and_then(|raw| penelope_kernel::config::Config::parse(&raw).ok())
+        .map(|(cfg, _)| cfg)
         .unwrap_or_default();
     let source = up::Source::from_config(&cfg);
     if p["check"].as_bool().unwrap_or(false) {
@@ -1374,10 +1375,17 @@ fn validate_config(cli: &Cli, file: Option<PathBuf>) -> CliResult<()> {
     };
     let raw = std::fs::read_to_string(&path)
         .map_err(|e| CliError::Io(format!("{} : {e}", path.display())))?;
-    let cfg = penelope_kernel::Config::from_toml(&raw)
-        .map_err(|e| CliError::Validation(e.to_string()))?;
+    // Tolérant comme le daemon (#76) : une clé inconnue est nommée, pas fatale.
+    let (cfg, unknown) =
+        penelope_kernel::Config::parse(&raw).map_err(|e| CliError::Validation(e.to_string()))?;
     cfg.validate()
         .map_err(|e| CliError::Validation(e.to_string()))?;
+    for k in &unknown {
+        println!(
+            "⚠️ clé ignorée par cette version : {k} (écrite par une version plus récente, ou \
+             faute de frappe)"
+        );
+    }
     let found = penelope_kernel::coherence::contradictions(&cfg);
     let refusals: Vec<String> = found
         .iter()
@@ -2053,6 +2061,15 @@ mod tests {
             e.exit_code(),
             penelope_kernel::api::exit_code::VALIDATION_FAILED
         );
+
+        // #76 : un fichier écrit par une version plus récente reste valide.
+        let futur = dir.path().join("futur.toml");
+        std::fs::write(
+            &futur,
+            "[owner]\ntelegram_user_id = 42\n\n[futur]\nactif = true\n",
+        )
+        .unwrap();
+        validate_config(&cli, Some(futur)).unwrap();
     }
 
     #[test]
