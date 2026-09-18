@@ -485,19 +485,36 @@ impl TelegramGateway {
                 file_size,
                 ..
             } => {
-                self.voice(
-                    update_id,
-                    chat_id,
-                    topic_id,
-                    message_id,
-                    &file_id,
-                    file_name.as_deref(),
-                    mime_type.as_deref(),
-                    file_size,
-                )
-                .await?;
+                // Téléchargement puis transcription : détachés, sinon `/stop` et les
+                // boutons attendent la fin (issue #69).
+                let me = self.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = me
+                        .voice(
+                            update_id,
+                            chat_id,
+                            topic_id,
+                            message_id,
+                            &file_id,
+                            file_name.as_deref(),
+                            mime_type.as_deref(),
+                            file_size,
+                        )
+                        .await
+                    {
+                        tracing::warn!(error = %e, "vocal Telegram non traité");
+                    }
+                });
             }
-            photo @ Incoming::Photo { .. } => self.photo(photo).await?,
+            photo @ Incoming::Photo { .. } => {
+                // Téléchargement de la photo : détaché aussi (issue #69).
+                let me = self.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = me.photo(photo).await {
+                        tracing::warn!(error = %e, "photo Telegram non traitée");
+                    }
+                });
+            }
             document @ Incoming::Document { .. } => self.document(document).await?,
             Incoming::OAuthCallback { chat_id, url, .. } => {
                 // Adresse de retour collée (§8.5, `paste_back`) : elle ne sert qu'une fois.
@@ -529,7 +546,7 @@ impl TelegramGateway {
     // ================================================================ commandes
 
     async fn command(
-        &self,
+        self: &Arc<Self>,
         chat_id: i64,
         topic_id: Option<i64>,
         message_id: i64,
@@ -771,23 +788,33 @@ impl TelegramGateway {
                 } else {
                     args.to_string()
                 };
-                match crate::session_ops::export(d, "session", Some(&session)).await {
-                    Ok(v) => {
-                        let path = std::path::PathBuf::from(v["path"].as_str().unwrap_or_default());
-                        match self
-                            .bot
-                            .send_document(chat_id, topic_id, &path, Some("Export JSONL"))
-                            .await
-                        {
-                            Ok(_) => return Ok(()),
-                            Err(e) => format!(
-                                "📦 Export écrit dans `{}`, envoi impossible : {e}",
-                                path.display()
-                            ),
+                // Écriture puis téléversement : détachés, la boucle des updates continue
+                // de lire `/stop` et les boutons (issue #69).
+                let (me, d2) = (self.clone(), d.clone());
+                tokio::spawn(async move {
+                    let note = match crate::session_ops::export(&d2, "session", Some(&session))
+                        .await
+                    {
+                        Ok(v) => {
+                            let path =
+                                std::path::PathBuf::from(v["path"].as_str().unwrap_or_default());
+                            match me
+                                .bot
+                                .send_document(chat_id, topic_id, &path, Some("Export JSONL"))
+                                .await
+                            {
+                                Ok(_) => return,
+                                Err(e) => format!(
+                                    "📦 Export écrit dans `{}`, envoi impossible : {e}",
+                                    path.display()
+                                ),
+                            }
                         }
-                    }
-                    Err(e) => format!("❌ {e}"),
-                }
+                        Err(e) => format!("❌ {e}"),
+                    };
+                    let _ = me.reply(chat_id, topic_id, reply_to, &note).await;
+                });
+                return Ok(());
             }
             "upgrade" => {
                 // Installer ou revenir en arrière : toujours confirmé (issue #30).
@@ -1266,8 +1293,16 @@ impl TelegramGateway {
                 self.usage_text(&session, args).await?
             }
             "audit" => {
-                let audit = crate::mem_audit::run(d).await?;
-                crate::mem_audit::summary(&audit)
+                // L'audit relit toute la mémoire : détaché (issue #69).
+                let (me, d2) = (self.clone(), d.clone());
+                tokio::spawn(async move {
+                    let note = match crate::mem_audit::run(&d2).await {
+                        Ok(a) => crate::mem_audit::summary(&a),
+                        Err(e) => format!("❌ {e}"),
+                    };
+                    let _ = me.reply(chat_id, topic_id, reply_to, &note).await;
+                });
+                return Ok(());
             }
             "accueil" => {
                 let part = crate::onboarding::Part::parse(args);
@@ -2632,7 +2667,7 @@ impl TelegramGateway {
     // ================================================================ boutons
 
     async fn callback(
-        &self,
+        self: &Arc<Self>,
         callback_id: &str,
         data: &str,
         chat_id: i64,
@@ -6168,6 +6203,17 @@ mod tests {
         (dir, g, t, p)
     }
 
+    /// Laisse les traitements détachés (vocal, photo, export, audit : issue #69) arriver
+    /// au bout avant d'observer ce qui a été envoyé.
+    async fn settle(g: &TelegramGateway) {
+        for _ in 0..200 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            if g.daemon.services.turns.pending_count().await.unwrap_or(0) > 0 {
+                return;
+            }
+        }
+    }
+
     /// Exécute les tours en file, comme le ferait le pool de runners.
     async fn drain(g: &TelegramGateway) {
         while let Some(turn) = g.daemon.services.turns.claim("test").await.unwrap() {
@@ -6224,6 +6270,42 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let reactions = t.calls_to(tg::SET_MESSAGE_REACTION).await;
         assert!(reactions.len() >= 2, "{reactions:?}");
+    }
+
+    /// #69 : un vocal lent ne bloque plus la boucle des updates : le `/stop` reçu juste
+    /// après est traité tout de suite.
+    #[tokio::test]
+    async fn a_slow_voice_note_does_not_block_the_next_update() {
+        let (_d, g, t, p) = gateway().await;
+        g.daemon
+            .kv_set("tg.onboard.proposed", "test")
+            .await
+            .unwrap();
+        t.set_file("v1", b"OggS\x00fake-opus").await;
+        t.set_download_delay(Duration::from_millis(1500)).await;
+        p.set_transcript(Some("une longue dictée"));
+
+        // Vocal d'abord, `/stop` juste derrière, comme dans un même lot d'updates.
+        g.process_update(&updates::voice(80, OWNER, OWNER))
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        g.process_update(&updates::text_message(81, OWNER, OWNER, "/stop"))
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+        g.flush_outbox().await.unwrap();
+
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "`/stop` a attendu le téléchargement : {elapsed:?}"
+        );
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        assert!(
+            sent.iter()
+                .any(|m| m.contains("arrêter") || m.contains("⏹")),
+            "`/stop` doit avoir répondu : {sent:?}"
+        );
     }
 
     /// #49 : un long texte collé arrive en morceaux de 4 000 caractères. Ils forment un
@@ -6900,6 +6982,7 @@ mod tests {
         g.process_update(&photo_update(70, "ph1", None, Some("combien ?")))
             .await
             .unwrap();
+        settle(&g).await;
         drain(&g).await;
 
         let requests = p.requests();
@@ -7167,6 +7250,7 @@ mod tests {
         g.process_update(&updates::voice(60, OWNER, OWNER))
             .await
             .unwrap();
+        settle(&g).await;
         drain(&g).await;
 
         let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
@@ -7210,7 +7294,14 @@ mod tests {
         g.process_update(&updates::voice(61, OWNER, OWNER))
             .await
             .unwrap();
-        g.flush_outbox().await.unwrap();
+        // Traitement détaché : on attend le message d'explication (issue #69).
+        for _ in 0..200 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            g.flush_outbox().await.unwrap();
+            if !t.calls_to(tg::SEND_MESSAGE).await.is_empty() {
+                break;
+            }
+        }
         let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
         assert!(sent[0].contains("providers.local"), "{sent:?}");
         assert_eq!(g.daemon.services.turns.pending_count().await.unwrap(), 0);
@@ -7664,8 +7755,9 @@ mod tests {
                 Ok(vec!["upgrade.base_url".into()])
             })
             .unwrap();
-        // Réponses différées (résumé, rêve) ou fichier : pas de message immédiat attendu.
-        let deferred = ["compact", "dream", "export"];
+        // Réponses différées (résumé, rêve, audit) ou fichier : pas de message immédiat
+        // attendu ; ces traitements sont détachés de la boucle des updates (issue #69).
+        let deferred = ["compact", "dream", "export", "audit"];
         let mut update = 400;
         for c in penelope_telegram::commands::all() {
             let before = t.calls_to(tg::SEND_MESSAGE).await.len();

@@ -23,6 +23,8 @@ struct State {
     updates: VecDeque<Value>,
     /// Contenu des fichiers téléchargeables, par `file_path`.
     files: std::collections::BTreeMap<String, Vec<u8>>,
+    /// Lenteur simulée d'un téléchargement (issue #69).
+    download_delay: std::time::Duration,
 }
 
 /// Transport simulé.
@@ -96,6 +98,12 @@ impl MockTransport {
             .insert(format!("voice/{file_id}.oga"), bytes.to_vec());
     }
 
+    /// Fait traîner les téléchargements : de quoi vérifier que la boucle des updates
+    /// continue de lire pendant ce temps (issue #69).
+    pub async fn set_download_delay(&self, d: std::time::Duration) {
+        self.state.lock().await.download_delay = d;
+    }
+
     pub async fn clear(&self) {
         let mut g = self.state.lock().await;
         g.calls.clear();
@@ -105,11 +113,14 @@ impl MockTransport {
 #[async_trait::async_trait]
 impl BotTransport for MockTransport {
     async fn download(&self, file_path: &str) -> TgResult<Vec<u8>> {
-        let g = self.state.lock().await;
-        g.files
-            .get(file_path)
-            .cloned()
-            .ok_or_else(|| TgError::Transport(format!("fichier inconnu : {file_path}")))
+        let (delay, bytes) = {
+            let g = self.state.lock().await;
+            (g.download_delay, g.files.get(file_path).cloned())
+        };
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        bytes.ok_or_else(|| TgError::Transport(format!("fichier inconnu : {file_path}")))
     }
 
     async fn upload(

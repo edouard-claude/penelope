@@ -8,7 +8,7 @@ Dernière mise à jour : 17 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1339 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1340 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -654,7 +654,8 @@ consolidation nocturne par lots (#59), état d'un candidat décidé après l'éc
 décisions des notes de travail récoltées (#61), retour d'usage juste (#62), skills relues
 sans redémarrage (#63), redirections HTTP revérifiées (#64), `shell_exec` qui ne laisse ni
 processus ni mémoire derrière lui (#65), liens symboliques bornés au workspace (#66),
-« Toujours » borné à l'appel (#67), bac à sable qui ferme les secrets (#68).
+« Toujours » borné à l'appel (#67), bac à sable qui ferme les secrets (#68), boucle
+Telegram qui ne bloque plus (#69).
 
 - **Jeton de clôture** : `heartbeat` et `finish` n'écrivent que si le bail est encore au
   runner qui l'a réclamé (`WHERE resource = ? AND holder = ?`). Un runner évincé reçoit
@@ -818,6 +819,10 @@ processus ni mémoire derrière lui (#65), liens symboliques bornés au workspac
   (`;`, `&&`, `|`, `$(…)`, redirection) et s'arrête à une frontière de mot, le répertoire
   est comparé sur le chemin normalisé (`..` résolu), et l'URL sur l'origine exacte, jamais
   sur un préfixe de texte.
+- **Boucle des updates Telegram** : un vocal (téléchargement puis transcription, jusqu'à
+  trois minutes), une photo, `/export` et `/audit` sont traités dans une tâche à part. `/stop`,
+  un clic de carte ou un message d'une autre conversation ne font plus la queue derrière
+  eux ; la déduplication par `update_id` garantit qu'un rejeu ne double pas le tour.
 - **Écrivain à l'épreuve des paniques** : une panique dans une closure d'écriture annule sa
   transaction (rien de commité), est journalisée en `error`, comptée
   (`penelope_store_writer_panics_total`, contrôle `doctor` « Écrivain de la base ») et

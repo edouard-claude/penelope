@@ -336,7 +336,7 @@ impl TelegramGateway {
     // ------------------------------------------------------------ clics
 
     pub(super) async fn screen_clicked(
-        &self,
+        self: &std::sync::Arc<Self>,
         callback_id: &str,
         action: &Action,
         chat_id: i64,
@@ -2307,7 +2307,7 @@ impl TelegramGateway {
     /// `/start <charge>` d'un lien profond : une commande du catalogue, sinon un écran
     /// (`runs_stuck` : les runs en pause ou bloqués).
     pub(super) async fn open_deep_link(
-        &self,
+        self: &std::sync::Arc<Self>,
         chat_id: i64,
         topic_id: Option<i64>,
         message_id: i64,
