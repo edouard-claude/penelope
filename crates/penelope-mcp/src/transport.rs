@@ -286,24 +286,37 @@ impl StdioTransport {
     }
 
     async fn write_line(&self, payload: &str) -> Result<()> {
+        match self.write_raw(payload).await {
+            Ok(()) => Ok(()),
+            Err(e) => Err(self.after_write_error(e).await),
+        }
+    }
+
+    async fn write_raw(&self, payload: &str) -> std::result::Result<(), String> {
         use tokio::io::AsyncWriteExt;
         let mut guard = self.stdin.lock().await;
         let stdin = guard
             .as_mut()
-            .ok_or_else(|| McpError::Transport("stdin du serveur fermé".into()))?;
+            .ok_or_else(|| "stdin du serveur fermé".to_string())?;
         stdin
             .write_all(payload.as_bytes())
             .await
-            .map_err(|e| McpError::Transport(e.to_string()))?;
-        stdin
-            .write_all(b"\n")
-            .await
-            .map_err(|e| McpError::Transport(e.to_string()))?;
-        stdin
-            .flush()
-            .await
-            .map_err(|e| McpError::Transport(e.to_string()))?;
-        Ok(())
+            .map_err(|e| e.to_string())?;
+        stdin.write_all(b"\n").await.map_err(|e| e.to_string())?;
+        stdin.flush().await.map_err(|e| e.to_string())
+    }
+
+    /// Une écriture refusée (« Broken pipe ») veut presque toujours dire que le serveur est
+    /// mort avant d'avoir lu : on attend un instant la fin du processus pour la citer au
+    /// lieu du seul code d'erreur (issue #114).
+    async fn after_write_error(&self, e: String) -> McpError {
+        for _ in 0..125 {
+            if self.death_line().is_some() {
+                return McpError::Transport(self.closed_reason().await);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        McpError::Transport(e)
     }
 }
 
@@ -836,6 +849,25 @@ mod tests {
         let logs = t.logs(10).await;
         assert_eq!(logs.len(), 1, "{logs:?}");
         assert!(logs[0].contains("rien sur la sortie d'erreur") && logs[0].contains("code 3"));
+    }
+
+    /// #114 : écrire à un serveur déjà mort (« Broken pipe ») cite sa fin, pas le code
+    /// d'erreur du système.
+    #[tokio::test]
+    async fn writing_to_a_dead_server_says_how_it_died() {
+        let t = dying("exit 5").await;
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let e = t
+            .request(
+                "initialize",
+                serde_json::json!({}),
+                std::time::Duration::from_secs(10),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("sorti avec le code 5"), "{e}");
+        assert!(!e.contains("Broken pipe"), "{e}");
     }
 
     /// #114 : un serveur tué par un signal le dit.

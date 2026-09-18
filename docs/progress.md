@@ -1249,7 +1249,8 @@ travaille en fond (#112) ; un serveur MCP stdio mort dit son code et sa durée d
   le transport attend le processus (deux secondes au plus) et garde `ExitInfo` (code ou
   signal nommé) et sa durée de vie ; une requête en attente échoue sur « le serveur s'est
   arrêté : sorti avec le code 1 après 40 ms, sans rien écrire sur sa sortie d'erreur » ou
-  avec sa dernière ligne d'erreur. `logs` ajoute la fin du processus et dit une sortie
+  avec sa dernière ligne d'erreur ; une écriture refusée (« Broken pipe », serveur mort
+  avant de lire) attend un instant sa fin pour la citer. `logs` ajoute la fin du processus et dit une sortie
   vide au lieu de rendre `[]` ; `last_error` de `mcp show` et le résultat de `mcp test` le
   reprennent.
 - **Plus de `null` dans les bulles** (#115) : une valeur JSON montrée passe par `shown`
