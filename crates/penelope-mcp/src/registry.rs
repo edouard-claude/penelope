@@ -709,6 +709,12 @@ impl ToolRegistry {
                             "type":"string",
                             "description":"les mêmes arguments en chaîne JSON, si l'objet \
                                            `args` arrive vide"
+                        },
+                        "pourquoi":{
+                            "type":"string",
+                            "maxLength":200,
+                            "description":"une phrase simple, pour le propriétaire : ce que \
+                                           tu cherches à faire (carte d'approbation)"
                         }
                     },
                     "required":["name"]

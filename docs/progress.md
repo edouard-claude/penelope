@@ -1268,6 +1268,23 @@ ne coûte plus de carte d'approbation (#117).
   arrête le tour, même si les arguments changent. L'étape `tool` d'un workflow fait la
   même vérification avant sa carte.
 
+### 0.17.6
+
+- **La carte d'approbation dit ce que Pénélope cherche à faire** (#116) : chaque outil
+  natif qui peut demander l'approbation (et `tool_call`) accepte `pourquoi`, une phrase
+  pour le propriétaire, que la règle du harnais demande ; à défaut, la carte reprend le
+  message du propriétaire qui a lancé le tour, jamais la raison de la politique.
+  `tool_approval` devient intention, action (la commande exacte en bloc de code, sinon
+  l'outil et ses valeurs sur une ligne), puis une ligne de qualificatifs (réseau, sortie
+  complète, répertoire, serveur MCP, classe, politique) ; l'alerte réseau tient en quatre
+  mots et « Toujours » dit sa portée (« Toujours pour « gh pr » (réseau) »). `gh` et `go`
+  rejoignent les familles de commandes en deux mots. L'intention est retirée des
+  arguments envoyés à un serveur MCP et de l'empreinte de la garde de boucle ; le champ
+  n'a pas de description dans les schémas (la règle l'explique une fois) : 2 859 tokens de
+  schémas au premier tour, sous le plafond de 3 000 de #104. La règle du
+  harnais qui conseillait d'enchaîner les lectures (`&&`) dit désormais qu'une lecture
+  simple passe sans demande et qu'enchaînée elle demande (#111).
+
 ### Routine de livraison
 
 Avant chaque tag :

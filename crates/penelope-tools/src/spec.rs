@@ -39,15 +39,26 @@ impl ToolSpec {
     }
 }
 
+/// Champ d'intention des appels qui peuvent demander l'approbation du propriétaire : une
+/// phrase, montrée en tête de sa carte (issue #116).
+pub const WHY_FIELD: &str = "pourquoi";
+
 fn spec(
     name: &'static str,
     risk: RiskClass,
     description: &'static str,
-    schema: Value,
+    mut schema: Value,
     idempotent: bool,
     network: bool,
     workflow_only: bool,
 ) -> ToolSpec {
+    if risk != RiskClass::Read
+        && let Some(props) = schema.get_mut("properties").and_then(|p| p.as_object_mut())
+    {
+        // Sans description : la règle du harnais l'explique une fois pour tous les outils,
+        // les schémas envoyés à chaque appel restent courts (#104).
+        props.insert(WHY_FIELD.into(), json!({"type": "string"}));
+    }
     ToolSpec {
         name,
         risk,

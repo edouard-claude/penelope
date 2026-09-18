@@ -1390,6 +1390,8 @@ impl NativeToolExecutor {
 
     async fn mcp_call(&self, qualified: &str, args: &Value) -> ToolResult<ToolOutcome> {
         let s = &self.services;
+        // L'intention est pour la carte, pas pour le serveur (#116).
+        let args = &crate::agent::without_intention(args);
         // Refus local, sans aller au serveur : `explain` y joint son schéma (#110).
         s.mcp_tools
             .validate_args(qualified, args)
@@ -1467,7 +1469,7 @@ impl NativeToolExecutor {
             t if t.starts_with("mcp__") || name == "tool_call" => self
                 .services
                 .mcp_tools
-                .validate_args(t, &inner)
+                .validate_args(t, &crate::agent::without_intention(&inner))
                 .await
                 .map_err(|e| match e {
                     penelope_mcp::McpError::UnknownTool(q) => ToolError::Unknown(q),

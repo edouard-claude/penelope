@@ -342,20 +342,12 @@ pub fn builtin_templates() -> Vec<Template> {
                 b("📌 Mémoriser", k::MEMORISE, ""),
             ]],
         ),
+        // L'intention d'abord, l'action telle qu'elle sera faite, puis une seule ligne de
+        // qualificatifs, classe de risque et politique comprises (issue #116).
         t(
             "tool_approval",
-            "**Approbation demandée**\n\n\
-             Outil : `{{outil}}`\nServeur : {{serveur}}\nRisque : **{{risque}}**\n\n\
-             Arguments :\n```json\n{{arguments}}\n```\n\n\
-             Raison donnée : {{raison}}\n{{alerte}}",
-            &[
-                "outil",
-                "serveur",
-                "risque",
-                "arguments",
-                "raison",
-                "alerte",
-            ],
+            "**Approbation demandée**\n\n{{intention}}\n\n{{action}}\n\n{{details}}\n{{alerte}}",
+            &["intention", "action", "details", "alerte"],
             vec![
                 vec![
                     b("✅ Autoriser", k::APPROVE, "success"),

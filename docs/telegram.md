@@ -49,8 +49,8 @@ chaud.
 ```toml
 # templates/tool_approval.toml
 id = "tool_approval"
-body = "Autoriser **{{outil}}** sur {{serveur}} ?"
-variables = ["outil", "serveur"]
+body = "{{intention}}\n\n{{action}}"
+variables = ["intention", "action"]
 ```
 
 | Identifiant | Quand | Boutons |
@@ -86,27 +86,35 @@ Voici ce que donne `tool_approval` une fois rendu, tel qu'il apparaît dans la
 conversation :
 
 ```
-┌──────────────────────────────────────────────┐
-│ Approbation demandée                         │
-│                                              │
-│ Outil : mcp__forge__create_pr                │
-│ Serveur : forge                              │
-│ Risque : write                               │
-│                                              │
-│ Arguments :                                  │
-│ ┌──────────────────────────────────────────┐ │
-│ │ {                                        │ │
-│ │   "title": "corrige la TVA",             │ │
-│ │   "branch": "penelope/4312"              │ │
-│ │ }                                        │ │
-│ └──────────────────────────────────────────┘ │
-│                                              │
-│ Raison donnée : le ticket 4312 est prêt      │
-├──────────────────────────────────────────────┤
-│ [✅ Autoriser]        [✅ Pour ce run]        │
-│ [♾️ Toujours] [❌ Refuser] [✏️ Avec raison]   │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│ Approbation demandée                             │
+│                                                  │
+│ Je vérifie si la correction du nom d'expéditeur  │
+│ est déjà partie en revue.                        │
+│                                                  │
+│ ┌──────────────────────────────────────────────┐ │
+│ │ gh pr list --repo Fidelatoo/cron-send-add-   │ │
+│ │ sender --state all --limit 10                │ │
+│ └──────────────────────────────────────────────┘ │
+│                                                  │
+│ réseau · sortie complète · classe external ·     │
+│ politique par défaut pour la classe external     │
+│ 🌐 Accès au réseau demandé.                      │
+├──────────────────────────────────────────────────┤
+│ [✅ Autoriser]      [✅ Pour cette session]       │
+│ [♾️ Toujours pour « gh pr » (réseau)] [❌ Refuser] │
+└──────────────────────────────────────────────────┘
 ```
+
+En tête, ce que Pénélope cherche à faire : la phrase qu'elle passe à l'appel
+(`pourquoi`), sinon ton message qui a lancé le tour (« Pour ta demande : … »), jamais la
+raison de la politique. Puis l'action telle qu'elle sera faite : la commande exacte, sans
+échappement JSON, ou l'outil et ses valeurs sur une ligne (`issue_id = 7653 · status =
+Résolu`). La dernière ligne regroupe les qualificatifs (réseau, sortie complète,
+répertoire, serveur MCP), la classe de risque et la politique. « Toujours » dit sur quoi il
+porte : une famille de commandes, un répertoire, un hôte. Variables : `intention`,
+`action`, `details`, `alerte` ; un gabarit surchargé plus ancien garde `outil`, `serveur`,
+`risque`, `arguments` et `raison`.
 
 Une carte restée sans réponse revient : « ⏰ Rappel 1/2 » au bout d'une heure, « Rappel
 2/2 » au bout de six, chaque fois avec des boutons neufs, dans la conversation d'origine.

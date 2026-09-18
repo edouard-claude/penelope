@@ -43,6 +43,114 @@ pub(crate) fn shown(v: &Value) -> String {
     }
 }
 
+/// Carte d'approbation d'un appel d'outil, lisible par le propriétaire (issue #116).
+pub(crate) struct ApprovalCard {
+    /// Ce que Pénélope cherche à faire, en une phrase.
+    pub intention: String,
+    /// L'action telle qu'elle sera faite : la commande exacte, ou l'outil et ses valeurs.
+    pub action: String,
+    /// Une ligne : qualificatifs, classe de risque, politique.
+    pub details: String,
+    /// Portée d'une règle « Toujours » (`« gh pr » avec réseau`), si elle en a une.
+    pub always: Option<String>,
+}
+
+/// Compose la carte d'une demande d'approbation.
+pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
+    let args = crate::agent::without_intention(&a.payload["arguments"]);
+    let intention = a.payload["why"]
+        .as_str()
+        .filter(|w| !w.trim().is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| format!("Pénélope veut utiliser `{}`.", a.subject));
+    let (server, tool) = match crate::agent::server_of(&a.subject) {
+        Some(srv) => {
+            let tool = a
+                .subject
+                .strip_prefix(&format!("mcp__{srv}__"))
+                .unwrap_or(&a.subject)
+                .to_string();
+            (Some(srv), tool)
+        }
+        None => (None, a.subject.clone()),
+    };
+    let mut quals: Vec<String> = Vec::new();
+    let action = match (a.subject.as_str(), args["command"].as_str()) {
+        ("shell_exec", Some(command)) => {
+            if crate::executor::wants_network(&a.subject, &a.payload["arguments"]) {
+                quals.push("réseau".into());
+            }
+            if args["output"].as_str() == Some("full") {
+                quals.push("sortie complète".into());
+            }
+            if let Some(cwd) = args["cwd"].as_str() {
+                quals.push(format!("dans `{cwd}`"));
+            }
+            if let Some(ms) = args["timeout_ms"].as_u64() {
+                quals.push(format!("délai {} s", ms / 1_000));
+            }
+            format!("```\n{}\n```", command.replace("```", "ʼʼʼ"))
+        }
+        _ => {
+            let fields: Vec<String> = args
+                .as_object()
+                .map(|o| {
+                    o.iter()
+                        .map(|(k, v)| {
+                            let v = match v {
+                                Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            };
+                            let v: String = if v.chars().count() > 120 {
+                                format!("{}…", v.chars().take(119).collect::<String>())
+                            } else {
+                                v
+                            };
+                            format!("{k} = {v}")
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if fields.is_empty() {
+                format!("`{tool}`")
+            } else {
+                format!("`{tool}` : {}", fields.join(" · "))
+            }
+        }
+    };
+    if let Some(srv) = server {
+        quals.push(format!("serveur `{srv}`"));
+    }
+    quals.push(format!("classe {}", a.risk.as_str()));
+    if let Some(reason) = a.payload["reason"].as_str().filter(|r| !r.is_empty()) {
+        quals.push(reason.to_string());
+    }
+    let always = crate::agent::arg_pattern(&a.subject, a.payload.get("arguments")).map(|p| {
+        use penelope_hitl::policy::{CMD_PREFIX_OP, ORIGIN_OP, PATH_PREFIX_OP};
+        let op = |k: &str, op: &str| p[k][op].as_str().map(String::from);
+        let network = p["network"] == Value::Bool(true);
+        if let Some(family) = op("command", CMD_PREFIX_OP) {
+            format!("« {family} »{}", if network { " (réseau)" } else { "" })
+        } else if let Some(dir) = op("path", PATH_PREFIX_OP) {
+            if dir.is_empty() {
+                "ce répertoire".into()
+            } else {
+                format!("`{dir}`")
+            }
+        } else if let Some(host) = op("url", ORIGIN_OP) {
+            host
+        } else {
+            penelope_hitl::policy::describe_pattern(&p)
+        }
+    });
+    ApprovalCard {
+        intention,
+        action,
+        details: quals.join(" · "),
+        always,
+    }
+}
+
 /// Mention des messages en attente abandonnés par la fermeture d'une session.
 fn cancelled_note(n: usize) -> String {
     match n {
@@ -3345,7 +3453,12 @@ impl TelegramGateway {
         };
         let server = crate::agent::server_of(&a.subject).unwrap_or_else(|| "natif".into());
         let double = a.payload["double"].as_bool().unwrap_or(false);
+        let card = approval_card(a);
         let mut vars = BTreeMap::new();
+        vars.insert("intention".into(), card.intention);
+        vars.insert("action".into(), card.action);
+        vars.insert("details".into(), card.details);
+        // Anciennes variables, pour un gabarit surchargé écrit avant #116.
         vars.insert("outil".into(), a.subject.clone());
         vars.insert("serveur".into(), server);
         vars.insert("risque".into(), a.risk.as_str().to_string());
@@ -3355,20 +3468,17 @@ impl TelegramGateway {
             a.payload["reason"].as_str().unwrap_or("").to_string(),
         );
         let mut alerte = if double {
-            "⚠️ Action destructive : une seconde confirmation sera demandée.".to_string()
+            "⚠️ Seconde confirmation demandée.".to_string()
         } else {
             String::new()
         };
-        // Réseau demandé par une commande (#106) : « Toujours » le donne à cette famille
-        // de commandes seulement.
+        // Réseau demandé par une commande (#106) : quatre mots ; le bouton « Toujours » dit
+        // sur quoi il porte (#116).
         if crate::executor::wants_network(&a.subject, &a.payload["arguments"]) {
             if !alerte.is_empty() {
                 alerte.push('\n');
             }
-            alerte.push_str(
-                "🌐 Cette commande demande le réseau : elle pourra envoyer ce qu'elle lit. \
-                 « Toujours » l'accorde à cette famille de commandes seulement.",
-            );
+            alerte.push_str("🌐 Accès au réseau demandé.");
         }
         // Outil MCP dont la description porte une consigne : le propriétaire le voit avant
         // d'accepter (#92).
@@ -3434,6 +3544,13 @@ impl TelegramGateway {
                         let mut b = b.clone();
                         if b.label.contains("Pour ce run") {
                             b.label = "✅ Pour cette session".into();
+                        }
+                        // « Toujours » dit sur quoi il porte : la famille de commandes, le
+                        // répertoire, l'hôte (#116).
+                        if b.label.contains("Toujours")
+                            && let Some(scope) = &card.always
+                        {
+                            b.label = format!("♾️ Toujours pour {scope}");
                         }
                         b
                     })
@@ -7628,6 +7745,151 @@ mod tests {
     }
 
     /// Parcours complet : carte, clic « Autoriser », reprise, réponse.
+    /// #116 : la carte dit d'abord ce que Pénélope cherche à faire (sa phrase, sinon le
+    /// message du propriétaire, jamais la politique), puis la commande telle qu'elle sera
+    /// exécutée, puis une ligne de qualificatifs ; « Toujours » dit sur quoi il porte.
+    #[tokio::test]
+    async fn an_approval_card_says_the_intention_first() {
+        let (_d, g, t, p) = gateway().await;
+        g.daemon
+            .publish_config("test", |c| {
+                c.models.routing.classifier = false;
+                Ok(vec!["models.routing.classifier".into()])
+            })
+            .unwrap();
+        let command =
+            r#"gh pr list --repo Fidelatoo/cron-send-add-sender --state all --json "number,title""#;
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "c1".into(),
+                name: "shell_exec".into(),
+                arguments: json!({
+                    "command": command,
+                    "network": true,
+                    "output": "full",
+                    "pourquoi": "Je vérifie si la correction du nom d'expéditeur est déjà partie en revue."
+                }),
+            }],
+        ));
+        g.process_update(&updates::text_message(
+            900,
+            OWNER,
+            OWNER,
+            "où en est la PR ?",
+        ))
+        .await
+        .unwrap();
+        drain(&g).await;
+        let card = t.calls_to(tg::SEND_MESSAGE).await.pop().unwrap();
+        let text = card["text"].as_str().unwrap().to_string();
+        let at = |needle: &str| {
+            text.find(needle)
+                .unwrap_or_else(|| panic!("{needle} absent : {text}"))
+        };
+        assert!(
+            at("Je vérifie si la correction") < at("gh pr list"),
+            "{text}"
+        );
+        assert!(at("gh pr list") < at("classe external"), "{text}");
+        assert!(
+            text.contains(r#"--json "number,title""#),
+            "commande sans échappement JSON : {text}"
+        );
+        assert!(!text.contains("\\\""), "{text}");
+        assert!(
+            text.contains("réseau") && text.contains("sortie complète"),
+            "{text}"
+        );
+        assert!(text.contains("🌐 Accès au réseau demandé."), "{text}");
+        assert!(
+            !text.contains("pourquoi"),
+            "l'intention n'est pas un argument affiché : {text}"
+        );
+        let labels: Vec<String> = inline_buttons(&card).into_iter().map(|(l, _)| l).collect();
+        assert!(
+            labels
+                .iter()
+                .any(|l| l == "♾️ Toujours pour « gh pr » (réseau)"),
+            "{labels:?}"
+        );
+
+        // Sans intention : le message du propriétaire, pas la politique.
+        t.clear().await;
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "c2".into(),
+                name: "fs_write".into(),
+                arguments: json!({"path": "notes/compte-rendu.md", "content": "ok"}),
+            }],
+        ));
+        g.process_update(&updates::text_message(
+            901,
+            OWNER,
+            OWNER,
+            "écris le compte rendu de la réunion",
+        ))
+        .await
+        .unwrap();
+        drain(&g).await;
+        let card = t.calls_to(tg::SEND_MESSAGE).await.pop().unwrap();
+        let text = card["text"].as_str().unwrap().to_string();
+        assert!(
+            text.contains("Pour ta demande : « écris le compte rendu de la réunion »"),
+            "{text}"
+        );
+        let intention = text.find("Pour ta demande").unwrap();
+        assert!(intention < text.find("fs_write").unwrap(), "{text}");
+        assert!(
+            intention < text.find("politique").unwrap_or(usize::MAX),
+            "{text}"
+        );
+    }
+
+    /// #116 : un appel MCP rend la même carte, le serveur en qualificatif.
+    #[tokio::test]
+    async fn an_mcp_approval_card_names_its_server_as_a_qualifier() {
+        let (_d, g, t, _p) = gateway().await;
+        let s = g.daemon.services.clone();
+        let a = s
+            .approvals
+            .create(
+                penelope_hitl::ApprovalKind::ToolCall,
+                "mcp__redmine__update_issue",
+                penelope_kernel::risk::RiskClass::Write,
+                json!({
+                    "tool": "mcp__redmine__update_issue",
+                    "arguments": {"issue_id": 7653, "status": "Résolu"},
+                    "reason": "politique par défaut pour la classe write",
+                    "why": "Je passe le ticket de pagination en résolu.",
+                }),
+                vec!["Autoriser".into(), "Refuser".into()],
+                None,
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        g.send_approval_card(OWNER, None, &a).await.unwrap();
+        g.flush_outbox().await.unwrap();
+        let card = t.calls_to(tg::SEND_MESSAGE).await.pop().unwrap();
+        let text = card["text"].as_str().unwrap().to_string();
+        assert!(
+            text.find("Je passe le ticket").unwrap() < text.find("update_issue").unwrap(),
+            "{text}"
+        );
+        assert!(
+            text.contains("issue_id = 7653") && text.contains("status = Résolu"),
+            "{text}"
+        );
+        assert!(
+            text.contains("serveur <code>redmine</code>") || text.contains("serveur `redmine`"),
+            "{text}"
+        );
+        assert!(!text.contains("null"), "{text}");
+    }
+
     #[tokio::test]
     async fn an_approval_card_click_resumes_the_turn() {
         let (_d, g, t, p) = gateway().await;

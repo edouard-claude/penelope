@@ -1268,8 +1268,9 @@ impl AgentLoop {
                     let _ = detector.observe(&call.name, &call.arguments);
                 }
                 None => {
-                    // Détecteur de boucles.
-                    match detector.observe(&call.name, &call.arguments) {
+                    // Détecteur de boucles, sans l'intention : la reformuler ne change
+                    // pas l'appel (#116).
+                    match detector.observe(&call.name, &without_intention(&call.arguments)) {
                         LoopVerdict::Ok => {}
                         LoopVerdict::Warn(m) => {
                             steps.push(Step::Record(
@@ -1408,6 +1409,13 @@ impl AgentLoop {
                         PolicyDecision::Ask | PolicyDecision::AskTwice => {
                             let double = verdict.decision == PolicyDecision::AskTwice;
                             let arguments = penelope_observe::redact_json(&effective_args);
+                            // Ce que Pénélope cherche à faire, en tête de la carte : sa
+                            // phrase, sinon le message du propriétaire qui a lancé le tour,
+                            // jamais la raison de la politique (issue #116).
+                            let why = call_intention(&call.arguments)
+                                .or(call_intention(&effective_args))
+                                .map(|w| (w, "agent"))
+                                .or(turn_goal(conv).await.map(|g| (g, "tour")));
                             let approval = s
                                 .approvals
                                 .create(
@@ -1418,6 +1426,8 @@ impl AgentLoop {
                                         "tool": info.effective_name,
                                         "arguments": arguments,
                                         "reason": verdict.reason,
+                                        "why": why.as_ref().map(|(w, _)| w),
+                                        "why_from": why.as_ref().map(|(_, f)| f),
                                         "double": double,
                                         "call_id": call.id,
                                         "turn_id": spec.turn_id,
@@ -1827,6 +1837,48 @@ impl AgentLoop {
     }
 }
 
+/// Phrase d'intention d'un appel (`pourquoi`), s'il en porte une (issue #116).
+pub(crate) fn call_intention(args: &Value) -> Option<String> {
+    args.get(penelope_tools::WHY_FIELD)
+        .and_then(|v| v.as_str())
+        .map(|w| w.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|w| !w.is_empty())
+        .map(|w| w.chars().take(200).collect())
+}
+
+/// But du tour, à défaut d'intention : le dernier message du propriétaire, raccourci.
+async fn turn_goal(conv: &dyn Conversation) -> Option<String> {
+    let tail = conv.tail().await.ok()?;
+    let said = tail
+        .iter()
+        .rev()
+        .find(|m| m.role == Role::User)?
+        .text()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if said.is_empty() {
+        return None;
+    }
+    let short: String = said.chars().take(160).collect();
+    let short = if short.chars().count() < said.chars().count() {
+        format!("{short}…")
+    } else {
+        short
+    };
+    Some(format!("Pour ta demande : « {short} »"))
+}
+
+/// Arguments sans l'intention : elle ne change pas l'appel, ni pour la garde de boucle ni
+/// pour le serveur qui l'exécute.
+pub(crate) fn without_intention(args: &Value) -> Value {
+    let mut a = args.clone();
+    if let Some(o) = a.as_object_mut() {
+        o.remove(penelope_tools::WHY_FIELD);
+    }
+    a
+}
+
 /// Motif d'arguments d'une règle « toujours », dérivé de l'appel : ce qui borne
 /// l'autorisation à ce que le propriétaire a vraiment vu (issue #67). `None` : la règle
 /// couvre l'outil (outils MCP, outils sans argument significatif).
@@ -1847,8 +1899,8 @@ pub(crate) fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
             let words: Vec<&str> = command.split_whitespace().collect();
             let network = crate::executor::wants_network(tool, args);
             const TWO_WORDS: &[&str] = &[
-                "cargo", "git", "npm", "pnpm", "yarn", "make", "docker", "kubectl", "brew",
-                "python3", "uv",
+                "cargo", "git", "gh", "npm", "pnpm", "yarn", "make", "docker", "kubectl", "brew",
+                "python3", "uv", "go",
             ];
             let head = match words.as_slice() {
                 [first, second, ..] if TWO_WORDS.contains(first) => format!("{first} {second}"),
