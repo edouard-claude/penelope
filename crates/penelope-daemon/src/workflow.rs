@@ -1555,6 +1555,11 @@ async fn tool_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         "wf-{}-{}-{}-{}",
         ctx.run.id, step.id, ctx.run.iterations, ctx.attempt
     );
+    // Arguments vérifiés avant toute carte : une étape qui ne pourrait pas aboutir échoue
+    // sans rien demander au propriétaire (issue #117).
+    if let Err(e) = exec.precheck(&step.tool, &args).await {
+        return Ok(done(StepResult::Error, json!({"error": e.for_model()})));
+    }
 
     match s
         .approvals

@@ -36,6 +36,8 @@ pub struct LoopDetector {
     repeats_threshold: usize,
     capacity: usize,
     warned: bool,
+    /// Appels refusés pour arguments invalides, par outil (issue #117).
+    invalid: std::collections::BTreeMap<String, usize>,
 }
 
 impl Default for LoopDetector {
@@ -51,7 +53,24 @@ impl LoopDetector {
             repeats_threshold: repeats_threshold.max(2),
             capacity: 40,
             warned: false,
+            invalid: Default::default(),
         }
+    }
+
+    /// Un appel refusé pour arguments invalides, avant toute exécution (issue #117) : le
+    /// deuxième sur le même outil avertit, le suivant arrête le tour, même si les
+    /// arguments changent à chaque fois.
+    pub fn observe_invalid(&mut self, tool: &str) -> LoopVerdict {
+        let n = self.invalid.entry(tool.to_string()).or_default();
+        *n += 1;
+        if *n < 2 {
+            return LoopVerdict::Ok;
+        }
+        let n = *n;
+        self.escalate(format!(
+            "`{tool}` a été appelé {n} fois avec des arguments invalides. Relis les paramètres \
+             attendus avant de réessayer, ou demande au propriétaire."
+        ))
     }
 
     /// Empreinte d'un appel : nom plus arguments canoniques.
@@ -128,6 +147,7 @@ impl LoopDetector {
     pub fn reset(&mut self) {
         self.window.clear();
         self.warned = false;
+        self.invalid.clear();
     }
 
     pub fn calls_in_window(&self) -> usize {

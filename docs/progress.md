@@ -8,7 +8,7 @@ Dernière mise à jour : 18 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1465 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1467 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1223,7 +1223,8 @@ en administrateur anonyme (#113).
 Les lectures du shell passent sans demande, avec un mode d'approbation par session et des
 familles autorisées d'avance (#111) ; quitter une session ne vide plus sa file, elle
 travaille en fond (#112) ; un serveur MCP stdio mort dit son code et sa durée de vie
-(#114) ; plus de `null` dans les bulles Telegram (#115).
+(#114) ; plus de `null` dans les bulles Telegram (#115) ; un appel aux arguments invalides
+ne coûte plus de carte d'approbation (#117).
 
 - **Les lectures du shell ne demandent plus rien** (#111) : `is_read_command` classe une
   ligne de lecture (programme connu appelé par son nom, sans enchaînement, redirection,
@@ -1257,6 +1258,15 @@ travaille en fond (#112) ; un serveur MCP stdio mort dit son code et sa durée d
   (chaîne sans guillemets, nombre tel quel, absence en « ? ») ; quinze sites corrigés dans
   les écrans, les commandes et `doctor`. Un test refuse toute valeur JSON brute passée à
   `format!` dans le code Telegram et parcourt les écrans usuels sans y trouver `null`.
+- **Valider avant de demander** (#117) : en production, un `workflow_start` dont `params`
+  était une chaîne remplie du balisage d'appel du modèle (`<arg_key>…`) a coûté deux
+  cartes pour rien, la validation n'intervenant qu'à l'exécution. `ToolExecutor::precheck`
+  vérifie désormais chaque appel avant la politique et l'approbation (balisage
+  d'appel nommé, outil connu, schéma natif ou MCP, par `tool_call` compris) ; un refus
+  revient au modèle avec les paramètres attendus (#110). Les appels refusés comptent pour
+  la garde de boucle par outil (`observe_invalid`) : le deuxième avertit, le troisième
+  arrête le tour, même si les arguments changent. L'étape `tool` d'un workflow fait la
+  même vérification avant sa carte.
 
 ### Routine de livraison
 

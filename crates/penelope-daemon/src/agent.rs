@@ -286,6 +286,14 @@ pub trait ToolExecutor {
         self.execute(name, args).await
     }
 
+    /// Vérifie un appel **avant** toute demande d'approbation : un appel qui ne pourrait
+    /// pas aboutir ne coûte pas une carte au propriétaire (issue #117). Par défaut : rien
+    /// à vérifier.
+    async fn precheck(&self, name: &str, args: &Value) -> Result<(), penelope_tools::ToolError> {
+        let _ = (name, args);
+        Ok(())
+    }
+
     /// Risque et nom effectif d'un appel. Par défaut : le catalogue natif.
     async fn describe_call(&self, name: &str, args: &Value) -> CallInfo {
         let _ = args;
@@ -1278,6 +1286,29 @@ impl AgentLoop {
                             });
                             break;
                         }
+                    }
+
+                    // Arguments vérifiés avant toute carte : un appel invalide revient au
+                    // modèle avec les paramètres attendus, et compte pour la garde de
+                    // boucle (issue #117).
+                    if let Err(e) = execute.precheck(&call.name, &call.arguments).await {
+                        let mut text = e.for_model();
+                        match detector.observe_invalid(&info.effective_name) {
+                            LoopVerdict::Ok => {}
+                            LoopVerdict::Warn(m) => {
+                                text.push_str(&format!("\n\n[avertissement du harnais] {m}"));
+                            }
+                            LoopVerdict::Abort(m) => {
+                                terminal = Some(Terminal::Loop {
+                                    call,
+                                    tool: info.effective_name.clone(),
+                                    message: m,
+                                });
+                                break;
+                            }
+                        }
+                        steps.push(Step::Record(call, text));
+                        continue;
                     }
 
                     // 4. Politique et approbation, sur les arguments de l'outil visé : par

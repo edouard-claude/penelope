@@ -1568,7 +1568,8 @@ mod tests {
         let (_dir, d, p) = daemon().await;
         let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
         d.pin_model(&sid, Some("main")).await.unwrap();
-        for i in 0..4 {
+        // Trois appels invalides : le deuxième avertit, le troisième arrête (#117).
+        for i in 0..3 {
             p.push(Scripted::ToolCalls(
                 String::new(),
                 vec![ToolCall {
@@ -1629,6 +1630,134 @@ mod tests {
             rule.arg_match.as_ref().unwrap()["command"][penelope_hitl::policy::CMD_PREFIX_OP],
             "cargo test",
             "famille de commandes, pas le shell entier"
+        );
+    }
+
+    /// Un tour qui fait les appels `calls` (un par réponse du modèle) : son issue, le
+    /// daemon et l'historique de la session.
+    async fn tool_turn(
+        calls: Vec<(&str, Value)>,
+    ) -> (tempfile::TempDir, Arc<Daemon>, TurnOutcome, String) {
+        let (dir, d, p) = daemon().await;
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        for (i, (name, args)) in calls.into_iter().enumerate() {
+            p.push(Scripted::ToolCalls(
+                String::new(),
+                vec![ToolCall {
+                    id: format!("c{i}"),
+                    name: name.into(),
+                    arguments: args,
+                }],
+            ));
+        }
+        p.reply("Je m'arrête là.");
+        d.enqueue_message(
+            &sid,
+            "lance la correction de la pagination",
+            &Origin::Cli,
+            None,
+        )
+        .await
+        .unwrap();
+        let turn = claim(&d).await;
+        let out = d.run_turn(&turn).await;
+        (dir, d, out, sid)
+    }
+
+    async fn tool_results(d: &Daemon, sid: &str) -> Vec<String> {
+        d.services
+            .context
+            .history
+            .load(sid, 0)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|e| e.message.role == penelope_llm::types::Role::Tool)
+            .map(|e| e.message.text())
+            .collect()
+    }
+
+    /// #117 : un appel aux arguments invalides ne coûte aucune carte : l'erreur et les
+    /// paramètres attendus reviennent au modèle ; le balisage d'appel laissé dans une valeur
+    /// est nommé ; corrigé, le même appel demande l'approbation normalement ; des appels
+    /// invalides répétés sur le même outil déclenchent la garde de boucle.
+    #[tokio::test]
+    async fn invalid_calls_are_refused_before_any_approval_card() {
+        let (_dir, d, out, sid) = tool_turn(vec![(
+            "workflow_start",
+            json!({"id": "build-verify", "params": "objectif : corriger la pagination"}),
+        )])
+        .await;
+        assert!(
+            !matches!(out, TurnOutcome::AwaitingApproval { .. }),
+            "{out:?}"
+        );
+        assert!(
+            d.services.approvals.pending(10).await.unwrap().is_empty(),
+            "aucune carte"
+        );
+        let results = tool_results(&d, &sid).await;
+        assert!(
+            results
+                .iter()
+                .any(|r| r.contains("params") && r.contains("`params` (object)")),
+            "{results:?}"
+        );
+
+        let (_dir, d, _out, sid) = tool_turn(vec![(
+            "workflow_start",
+            json!({"id": "build-verify",
+                   "params": "<arg_key>objectif</arg_key> <arg_value>Corriger la pagination</arg_value>"}),
+        )])
+        .await;
+        assert!(d.services.approvals.pending(10).await.unwrap().is_empty());
+        let results = tool_results(&d, &sid).await;
+        assert!(
+            results
+                .iter()
+                .any(|r| r.contains("balisage d'appel d'outil") && r.contains("<arg_key>")),
+            "{results:?}"
+        );
+
+        let (_dir, d, out, _sid) = tool_turn(vec![(
+            "workflow_start",
+            json!({"id": "build-verify", "params": {"objectif": "corriger la pagination"}}),
+        )])
+        .await;
+        assert!(
+            matches!(out, TurnOutcome::AwaitingApproval { .. }),
+            "{out:?}"
+        );
+        assert_eq!(d.services.approvals.pending(10).await.unwrap().len(), 1);
+
+        let (_dir, d, out, sid) = tool_turn(vec![
+            (
+                "workflow_start",
+                json!({"id": "build-verify", "params": "a"}),
+            ),
+            (
+                "workflow_start",
+                json!({"id": "build-verify", "params": "b"}),
+            ),
+            (
+                "workflow_start",
+                json!({"id": "build-verify", "params": "c"}),
+            ),
+        ])
+        .await;
+        assert!(d.services.approvals.pending(10).await.unwrap().is_empty());
+        let results = tool_results(&d, &sid).await;
+        assert!(
+            results
+                .iter()
+                .any(|r| r.contains("[avertissement du harnais]")
+                    && r.contains("arguments invalides")),
+            "le deuxième avertit : {results:?}"
+        );
+        assert!(
+            matches!(out, TurnOutcome::LoopAborted { .. }),
+            "le troisième arrête : {out:?}"
         );
     }
 

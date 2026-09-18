@@ -1435,6 +1435,51 @@ impl NativeToolExecutor {
         }
     }
 
+    /// Arguments d'un appel, validés sans rien exécuter (issue #117) : balisage laissé
+    /// par le modèle, outil connu, schéma natif ou MCP.
+    async fn validate_call(&self, name: &str, args: &Value) -> ToolResult<()> {
+        if let Some((path, marker)) = penelope_tools::call_markup(args) {
+            let field = if path.is_empty() {
+                "arguments".to_string()
+            } else {
+                format!("`{path}`")
+            };
+            return Err(ToolError::Invalid(format!(
+                "la valeur de {field} contient le balisage d'appel d'outil du modèle \
+                 (`{marker}`) : l'appel est mal formé, ce n'est pas une valeur ; renvoie les \
+                 arguments en JSON structuré, selon leur type"
+            )));
+        }
+        let (target, inner) = if name == "tool_call" {
+            (
+                args.get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                call_arguments(args)?,
+            )
+        } else {
+            (name.to_string(), args.clone())
+        };
+        match target.as_str() {
+            "tool_search" | "tool_describe" | "tool_call" => Ok(()),
+            t if penelope_tools::tool_spec(t).is_some() => penelope_tools::validate_args(t, &inner),
+            t if t.starts_with("mcp__") || name == "tool_call" => self
+                .services
+                .mcp_tools
+                .validate_args(t, &inner)
+                .await
+                .map_err(|e| match e {
+                    penelope_mcp::McpError::UnknownTool(q) => ToolError::Unknown(q),
+                    penelope_mcp::McpError::InvalidArguments { reason, .. } => {
+                        ToolError::Invalid(reason)
+                    }
+                    other => ToolError::Invalid(other.to_string()),
+                }),
+            t => Err(ToolError::Unknown(t.to_string())),
+        }
+    }
+
     /// Schéma d'arguments d'un outil natif ou MCP.
     async fn schema_of(&self, tool: &str) -> Option<Value> {
         if let Some(t) = penelope_tools::tool_spec(tool) {
@@ -1571,6 +1616,13 @@ pub(crate) fn effective_arguments(tool: &str, args: &Value) -> Value {
 
 #[async_trait::async_trait]
 impl ToolExecutor for NativeToolExecutor {
+    async fn precheck(&self, name: &str, args: &Value) -> Result<(), ToolError> {
+        match self.validate_call(name, args).await {
+            Ok(()) => Ok(()),
+            Err(e) => Err(self.explain(name, args, e).await),
+        }
+    }
+
     async fn execute(&self, name: &str, args: &Value) -> Result<ToolOutcome, ToolError> {
         self.run(name, args, &penelope_llm::CancelToken::new())
             .await

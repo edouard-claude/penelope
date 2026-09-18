@@ -143,6 +143,50 @@ pub fn validate_args(tool: &str, args: &Value) -> ToolResult<()> {
     })
 }
 
+/// Balisage d'appel d'outil qu'un modèle laisse parfois dans une valeur au lieu de
+/// structurer ses arguments (issue #117) : `<arg_key>objectif</arg_key> <arg_value>…`.
+const CALL_MARKUP: &[&str] = &[
+    "<arg_key>",
+    "</arg_key>",
+    "<arg_value>",
+    "</arg_value>",
+    "<tool_call>",
+    "</tool_call>",
+    "<function=",
+    "<parameter=",
+    "<|tool_call",
+    "<|python_tag|>",
+];
+
+/// Premier champ dont la valeur contient du balisage d'appel d'outil : son chemin et la
+/// balise trouvée.
+pub fn call_markup(args: &Value) -> Option<(String, &'static str)> {
+    fn walk(v: &Value, path: &str) -> Option<(String, &'static str)> {
+        match v {
+            Value::String(s) => CALL_MARKUP
+                .iter()
+                .find(|m| s.contains(*m))
+                .map(|m| (path.to_string(), *m)),
+            Value::Array(a) => a
+                .iter()
+                .enumerate()
+                .find_map(|(i, x)| walk(x, &format!("{path}[{i}]"))),
+            Value::Object(o) => o.iter().find_map(|(k, x)| {
+                walk(
+                    x,
+                    &if path.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{path}.{k}")
+                    },
+                )
+            }),
+            _ => None,
+        }
+    }
+    walk(args, "")
+}
+
 /// Plafond des paramètres rendus avec une erreur d'arguments : un gros schéma ne fait pas
 /// exploser le tour (issue #110).
 pub const EXPECTED_ARGS_MAX_CHARS: usize = 1_500;
