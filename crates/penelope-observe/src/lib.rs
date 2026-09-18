@@ -259,6 +259,33 @@ pub fn init(log_dir: &Path, level: &str, retention_days: u32, to_stderr: bool) -
 }
 
 /// Initialisation minimale pour les tests et la CLI hors daemon.
+/// Abonné JSON en mémoire, réglé comme celui des fichiers journaliers (champs du span
+/// courant sur chaque ligne) : de quoi vérifier dans un test ce qu'un tour écrit.
+pub fn capture_json() -> (tracing::Dispatch, Arc<Mutex<Vec<u8>>>) {
+    #[derive(Clone)]
+    struct Shared(Arc<Mutex<Vec<u8>>>);
+    impl Write for Shared {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            if let Ok(mut g) = self.0.lock() {
+                g.extend_from_slice(b);
+            }
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let sink = Shared(buf.clone());
+    let layer = tracing_subscriber::fmt::layer()
+        .json()
+        .with_current_span(true)
+        .with_span_list(false)
+        .with_writer(move || sink.clone());
+    let subscriber = Registry::default().with(EnvFilter::new("info")).with(layer);
+    (tracing::Dispatch::new(subscriber), buf)
+}
+
 pub fn init_test() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(

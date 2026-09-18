@@ -464,7 +464,13 @@ pub async fn drive(d: &Arc<Daemon>, run_id: &str) -> anyhow::Result<RunState> {
     let Some(cancel) = d.workflows.claim(run_id) else {
         return Ok(RunState::Running);
     };
-    let result = drive_claimed(d, run_id, &cancel).await;
+    // Tout ce que le run journalise porte son identifiant (issue #103).
+    let result = {
+        use tracing::Instrument;
+        drive_claimed(d, run_id, &cancel)
+            .instrument(tracing::info_span!("run", run = run_id))
+            .await
+    };
     d.workflows.release(run_id);
     result
 }

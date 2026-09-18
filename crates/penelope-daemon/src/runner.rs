@@ -58,30 +58,69 @@ async fn runner_loop(daemon: Arc<Daemon>, holder: String, heartbeat: Duration) {
 }
 
 /// Exécute un tour réclamé jusqu'au bout et livre son issue.
+///
+/// Tout ce que le tour journalise, outils et fournisseur compris, porte le span `turn`
+/// (identifiant du tour, session) : `penelope logs --turn <id>` le relit d'un bloc
+/// (issue #103).
 pub async fn process(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> TurnOutcome {
+    use tracing::Instrument;
+    let span = tracing::info_span!(
+        "turn",
+        turn = %turn.id,
+        session = %turn.session_id,
+        kind = ?turn.kind,
+    );
+    process_turn(daemon, turn, heartbeat).instrument(span).await
+}
+
+async fn process_turn(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> TurnOutcome {
+    let started = std::time::Instant::now();
+    let outcome = run_and_deliver(daemon, turn, heartbeat).await;
+    let label = match &outcome {
+        TurnOutcome::Answered { .. } => "answered",
+        TurnOutcome::AwaitingApproval { .. } => "awaiting_approval",
+        TurnOutcome::Failed { .. } => "failed",
+        TurnOutcome::Cancelled => "cancelled",
+        _ => "other",
+    };
+    penelope_observe::metrics::counter_inc("penelope_turns_total", &[("outcome", label)], 1.0);
+    penelope_observe::metrics::histogram_observe(
+        "penelope_turn_duration_ms",
+        &[],
+        started.elapsed().as_millis() as f64,
+    );
+    outcome
+}
+
+async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> TurnOutcome {
+    use tracing::Instrument;
     // Lease repris par un autre runner : ce tour n'est plus le nôtre, on l'abandonne sans
     // rien livrer ni écrire (#43).
     let lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let beat = {
         let (d, t, lost) = (daemon.clone(), turn.clone(), lost.clone());
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(heartbeat).await;
-                match d.services.turns.heartbeat(&t).await {
-                    Ok(()) => {}
-                    Err(e) if e.is_lease_lost() => {
-                        tracing::error!(turn = %t.id, holder = %t.holder, error = %e,
+        let span = tracing::Span::current();
+        tokio::spawn(
+            async move {
+                loop {
+                    tokio::time::sleep(heartbeat).await;
+                    match d.services.turns.heartbeat(&t).await {
+                        Ok(()) => {}
+                        Err(e) if e.is_lease_lost() => {
+                            tracing::error!(turn = %t.id, holder = %t.holder, error = %e,
                             "lease perdu : le tour est abandonné");
-                        lost.store(true, std::sync::atomic::Ordering::SeqCst);
-                        d.bus.cancel_turn(&t.session_id, t.id.as_str());
-                        return;
-                    }
-                    Err(e) => {
-                        tracing::warn!(turn = %t.id, error = %e, "battement de lease perdu")
+                            lost.store(true, std::sync::atomic::Ordering::SeqCst);
+                            d.bus.cancel_turn(&t.session_id, t.id.as_str());
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::warn!(turn = %t.id, error = %e, "battement de lease perdu")
+                        }
                     }
                 }
             }
-        })
+            .instrument(span),
+        )
     };
 
     let beat = StopBeat(beat);
@@ -161,6 +200,43 @@ mod tests {
     use super::*;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::MockProvider;
+
+    /// #103 : chaque ligne écrite pendant un tour porte son identifiant et sa session,
+    /// même celles des étapes internes (choix du modèle).
+    #[tokio::test(flavor = "current_thread")]
+    async fn every_log_line_of_a_turn_carries_the_turn() {
+        let (dispatch, buf) = penelope_observe::capture_json();
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock =
+            Arc::new(penelope_kernel::clock::SystemClock);
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+                .await
+                .unwrap(),
+        );
+        let d = Arc::new(Daemon::from_services(s.clone()));
+        let p = Arc::new(MockProvider::new());
+        p.reply(r#"{"complexity":"low"}"#);
+        p.reply("fait");
+        d.set_provider_override(p.clone());
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.enqueue_message(&sid, "fais le point sur la semaine", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = s.turns.claim("runner-0").await.unwrap().unwrap();
+        process(&d, turn.clone(), Duration::from_secs(30)).await;
+
+        let text = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        let chosen: Vec<serde_json::Value> = text
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .filter(|v: &serde_json::Value| v["fields"]["message"] == "modèle choisi")
+            .collect();
+        assert_eq!(chosen.len(), 1, "{text}");
+        assert_eq!(chosen[0]["span"]["turn"], turn.id.to_string());
+        assert_eq!(chosen[0]["span"]["session"], sid);
+    }
 
     #[tokio::test]
     async fn the_pool_answers_queued_turns_and_waiters_get_the_outcome() {

@@ -433,9 +433,9 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | Clé | Défaut | Rôle |
 |---|---|---|
 | `observability.otlp_endpoint` | `""` | Export OpenTelemetry. Sans effet dans cette version. |
-| `observability.prometheus` | `"127.0.0.1:9464"` | Adresse d'exposition Prometheus. Sans effet dans cette version. |
+| `observability.prometheus` | `"127.0.0.1:9464"` | Adresse d'exposition Prometheus. Sans effet dans cette version : les métriques se lisent par `penelope metrics`. |
 | `observability.log_retention_days` | `14` | Durée de conservation des journaux, en jours. |
-| `observability.log_level` | `"info"` | Niveau de journalisation. Sans effet dans cette version. |
+| `observability.log_level` | `"info"` | Niveau de journalisation du daemon (`info`, `debug`, `warn`…), lu au démarrage ; la variable `PENELOPE_LOG` l'emporte. |
 
 **[tools]**
 
@@ -1512,6 +1512,20 @@ penelope stop
 
 `penelope daemon` lance le processus au premier plan : c'est la forme utile pour déboguer
 en SSH, puisque les journaux partent alors sur le terminal.
+
+Les journaux du daemon sont des lignes JSON par jour (`~/Library/Logs/Penelope`), et
+chaque ligne écrite pendant un tour porte l'identifiant du tour et sa session, pendant un
+run l'identifiant du run :
+
+```bash
+penelope logs --turn t_01J9…
+```
+
+(`--session` pour une session entière, sans filtre les 200 dernières lignes). Sous launchd,
+rien n'est plus recopié sur stderr (`daemon.err.log` ne garde que les paniques), et
+`observability.log_level` règle le niveau. `penelope metrics` donne les compteurs du daemon
+en texte Prometheus : tours par issue et leur durée, appels d'outils par outil,
+approbations en attente, effets incertains, mémoire résidente.
 
 La CLI parle au daemon par la socket `{state}/rpc.sock`. Chaque requête porte un jeton de
 session tiré à chaque démarrage et rangé à côté (`rpc.token`, lisible par le seul

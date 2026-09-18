@@ -76,6 +76,29 @@ impl Rpc {
                 checks.push(crate::tasks::doctor_check(&self.daemon));
                 Ok(json!(checks))
             }
+            method::METRICS => {
+                // Les jauges se lisent au moment de la demande ; compteurs et
+                // histogrammes s'accumulent pendant la vie du daemon (issue #103).
+                use penelope_observe::metrics::gauge_set;
+                gauge_set(
+                    "penelope_approvals_pending",
+                    &[],
+                    s.approvals.count_pending().await? as f64,
+                );
+                gauge_set(
+                    "penelope_effects_unknown",
+                    &[],
+                    s.effects
+                        .count_by_state(penelope_kernel::effects::EffectState::Unknown)
+                        .await? as f64,
+                );
+                gauge_set(
+                    "penelope_rss_bytes",
+                    &[],
+                    crate::runtime::rss_mb() * 1024.0 * 1024.0,
+                );
+                Ok(json!({"text": penelope_observe::metrics::render()}))
+            }
             method::SHUTDOWN => {
                 self.daemon.handle.shutdown();
                 Ok(json!({"ok": true}))
@@ -1774,6 +1797,24 @@ mod tests {
         call(&r, method::RESTART, json!({})).await;
         assert!(r.daemon.handle.wants_restart());
         assert!(r.daemon.handle.is_shutting_down());
+    }
+
+    /// #103 : le registre de métriques a un lecteur, et un tour y laisse sa trace.
+    #[tokio::test]
+    async fn metrics_are_readable_over_rpc() {
+        let (_d, r) = rpc().await;
+        penelope_observe::metrics::register_default_metrics();
+        penelope_observe::metrics::counter_inc(
+            "penelope_turns_total",
+            &[("outcome", "answered")],
+            1.0,
+        );
+        let text = call(&r, method::METRICS, json!({})).await.result.unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(text.contains("penelope_turns_total"), "{text}");
+        assert!(text.contains("penelope_approvals_pending"), "{text}");
     }
 
     #[tokio::test]

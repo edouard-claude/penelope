@@ -213,7 +213,11 @@ async fn catalog_loop(d: Arc<Daemon>) {
 /// Maintenance périodique : approbations échues, jetons expirés.
 async fn maintenance_loop(d: Arc<Daemon>) {
     while !d.handle.is_shutting_down() {
-        if let Err(e) = maintenance_pass(&d).await {
+        let pass = {
+            use tracing::Instrument;
+            maintenance_pass(&d).instrument(tracing::info_span!("maintenance"))
+        };
+        if let Err(e) = pass.await {
             tracing::warn!(error = %e, "maintenance");
         }
         // Outils MCP inscrits, vault réindexé : vecteurs manquants.

@@ -1088,6 +1088,15 @@ l'adresse vérifiée (#93), fichiers lus en flux (#94), secret posé sans `argv`
   suite entière sur `ubuntu-latest` et garde sur `macos-14` le format, clippy, les tests de
   la plateforme (Seatbelt réellement appliqué compris), le serveur MCP sous bac à sable,
   launchd et le binaire de release.
+- **Journaux corrélés** (#103) : `runner::process` entre dans un span `turn` (tour,
+  session, genre), le pilote de workflows dans un span `run`, la maintenance dans un span
+  `maintenance` ; avec `with_current_span`, chaque ligne JSON porte le tour ou le run qui
+  l'a causée. `penelope logs --turn <id>` (ou `--session`) relit les journaux du jour et de
+  la veille sans daemon. Sous launchd (`PENELOPE_SERVICE=1`), plus de copie sur stderr ;
+  `observability.log_level` est enfin lu. Le registre de métriques a un lecteur :
+  méthode RPC `metrics` et `penelope metrics` (texte Prometheus), avec les compteurs de
+  tours par issue et leur durée, d'appels d'outils par outil, et les jauges d'approbations,
+  d'effets incertains et de mémoire.
 
 ### Routine de livraison
 

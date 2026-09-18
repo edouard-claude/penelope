@@ -839,11 +839,13 @@ impl Default for Sandbox {
 pub struct Observability {
     /// Export OpenTelemetry. Sans effet dans cette version.
     pub otlp_endpoint: String,
-    /// Adresse d'exposition Prometheus. Sans effet dans cette version.
+    /// Adresse d'exposition Prometheus. Sans effet dans cette version : les métriques se
+    /// lisent par `penelope metrics`.
     pub prometheus: String,
     /// Durée de conservation des journaux, en jours.
     pub log_retention_days: u32,
-    /// Niveau de journalisation. Sans effet dans cette version.
+    /// Niveau de journalisation du daemon (`info`, `debug`, `warn`…), lu au démarrage ;
+    /// la variable `PENELOPE_LOG` l'emporte.
     pub log_level: String,
 }
 

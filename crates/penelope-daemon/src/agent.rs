@@ -1566,6 +1566,14 @@ impl AgentLoop {
         outcome: ToolOutcome,
         nudge: &mut Option<String>,
     ) -> anyhow::Result<()> {
+        penelope_observe::metrics::counter_inc(
+            "penelope_tool_calls_total",
+            &[
+                ("tool", info.effective_name.as_str()),
+                ("ok", if outcome.is_error { "false" } else { "true" }),
+            ],
+            1.0,
+        );
         self.services
             .events
             .append(

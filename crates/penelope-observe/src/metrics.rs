@@ -1,7 +1,8 @@
 //! Métriques au format d'exposition Prometheus (§16).
 //!
-//! Registre minimal : compteurs, jauges et histogrammes à buckets fixes. Servi sur
-//! `127.0.0.1:9464` par le daemon, désactivable par configuration.
+//! Registre minimal : compteurs, jauges et histogrammes à buckets fixes. Lu par la
+//! méthode RPC `metrics` (`penelope metrics`), en texte Prometheus ; aucune exposition
+//! HTTP tant qu'aucun collecteur n'en a besoin (issue #103).
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};

@@ -219,10 +219,13 @@ pub mod method {
     pub const TAIL: &str = "tail";
     pub const EVAL_RUN: &str = "eval.run";
     pub const UPGRADE: &str = "upgrade";
+    /// Métriques au format d'exposition Prometheus (issue #103).
+    pub const METRICS: &str = "metrics";
 
     /// Toutes les méthodes, pour le test de couverture Telegram ↔ CLI (CA 15).
     pub const ALL: &[&str] = &[
         STATUS,
+        METRICS,
         DOCTOR,
         SHUTDOWN,
         RESTART,

@@ -44,6 +44,18 @@ pub enum Command {
     Uninstall,
     /// Lance le daemon au premier plan.
     Daemon,
+    /// Journaux du daemon (JSON du jour et de la veille), filtrés par tour ou par session.
+    Logs {
+        /// Lignes du tour dont c'est l'identifiant.
+        #[arg(long)]
+        turn: Option<String>,
+        /// Lignes de la session dont c'est l'identifiant.
+        #[arg(long)]
+        session: Option<String>,
+        /// Dernières lignes gardées.
+        #[arg(long, default_value_t = 200)]
+        lines: usize,
+    },
     /// Converse avec Pénélope : un message, ou une session interactive sans argument.
     Chat {
         /// Session à utiliser (par défaut : la session courante de la CLI).
@@ -83,6 +95,8 @@ pub enum Command {
     },
     /// État du daemon.
     Status,
+    /// Métriques du daemon, texte Prometheus (tours, outils, approbations, mémoire).
+    Metrics,
     /// Diagnostic complet.
     Doctor,
     /// Répertoires effectifs.
@@ -560,6 +574,11 @@ pub async fn run(cli: Cli) -> CliResult<()> {
             return service(&cli);
         }
         Command::Daemon => return daemon(&cli).await,
+        Command::Logs {
+            turn,
+            session,
+            lines,
+        } => return logs(&cli, turn.as_deref(), session.as_deref(), *lines),
         Command::Upgrade { .. } => return upgrade(&cli).await,
         Command::Chat { session, message } => {
             return chat(&cli, session.clone(), message.clone()).await;
@@ -594,6 +613,9 @@ pub async fn run(cli: Cli) -> CliResult<()> {
     let value = call(&socket, method, params).await?;
 
     match &cli.command {
+        Command::Metrics if !cli.json => {
+            print!("{}", value["text"].as_str().unwrap_or_default());
+        }
         Command::Doctor => {
             let checks: Vec<penelope_kernel::api::DoctorCheck> =
                 serde_json::from_value(value.clone()).unwrap_or_default();
@@ -753,6 +775,7 @@ fn render_model_list(v: &Value) -> String {
 pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
     Ok(match cmd {
         Command::Status => (m::STATUS, json!({})),
+        Command::Metrics => (m::METRICS, json!({})),
         Command::Doctor => (m::DOCTOR, json!({})),
         Command::Restart => (m::RESTART, json!({})),
         Command::Import(ImportCmd::Hermes {
@@ -1380,6 +1403,68 @@ fn set_secret(cli: &Cli, name: String) -> CliResult<()> {
     Ok(())
 }
 
+/// `penelope logs` : lit les journaux JSON du jour et de la veille, sans daemon, et garde
+/// les lignes d'un tour ou d'une session (champ du span ou de l'événement, issue #103).
+fn logs(cli: &Cli, turn: Option<&str>, session: Option<&str>, keep: usize) -> CliResult<()> {
+    let dirs = penelope_platform::resolve_directories(cli.home.clone())
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dirs.logs())
+        .map_err(|e| CliError::Io(format!("{} : {e}", dirs.logs().display())))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy())
+                .is_some_and(|n| n.starts_with("penelope-") && n.ends_with(".jsonl"))
+        })
+        .collect();
+    files.sort();
+    let recent = files.split_off(files.len().saturating_sub(2));
+    let out = filter_log_lines(&recent, turn, session, keep);
+    for l in &out {
+        println!("{l}");
+    }
+    if out.is_empty() {
+        eprintln!("aucune ligne ne correspond dans {}", dirs.logs().display());
+    }
+    Ok(())
+}
+
+/// Lignes JSON dont le span ou les champs portent ce tour ou cette session.
+fn filter_log_lines(
+    files: &[PathBuf],
+    turn: Option<&str>,
+    session: Option<&str>,
+    keep: usize,
+) -> Vec<String> {
+    let matches = |v: &Value, key: &str, want: &str| {
+        v["span"][key].as_str() == Some(want) || v["fields"][key].as_str() == Some(want)
+    };
+    let mut out: Vec<String> = Vec::new();
+    for f in files {
+        let Ok(text) = std::fs::read_to_string(f) else {
+            continue;
+        };
+        for line in text.lines() {
+            let keep_it = match (turn, session) {
+                (None, None) => true,
+                _ => match serde_json::from_str::<Value>(line) {
+                    Ok(v) => {
+                        turn.is_some_and(|t| matches(&v, "turn", t))
+                            || session.is_some_and(|s| matches(&v, "session", s))
+                    }
+                    Err(_) => false,
+                },
+            };
+            if keep_it {
+                out.push(line.to_string());
+            }
+        }
+    }
+    let skip = out.len().saturating_sub(keep.max(1));
+    out.split_off(skip)
+}
+
 /// `doctor` en deux temps (issue #99) : ce qui se vérifie sans le daemon d'abord, puis
 /// ses propres contrôles. Un daemon muet ou absent est un contrôle en échec, en tête du
 /// rapport, pas une commande qui pend.
@@ -1608,11 +1693,15 @@ async fn daemon(cli: &Cli) -> CliResult<()> {
         .await
         .map_err(|e| CliError::Io(e.to_string()))?;
     let cfg = d.services.config.config();
+    // Sous launchd, stderr est `daemon.err.log`, jamais tourné : le JSON à rétention suffit,
+    // `penelope logs` le relit. Une panique y reste visible, elle passe par le crochet de
+    // panique et non par `tracing` (issue #103).
+    let service = std::env::var_os("PENELOPE_SERVICE").is_some_and(|v| v == "1");
     penelope_observe::init(
         &d.services.platform.dirs.logs(),
-        "info",
+        &cfg.observability.log_level,
         cfg.observability.log_retention_days,
-        true,
+        !service,
     );
     tracing::info!(version = penelope_daemon::VERSION, "Pénélope démarre");
     std::sync::Arc::new(d)
@@ -2094,6 +2183,7 @@ mod tests {
             vec!["import", "hermes", "--dry-run"],
             vec!["upgrade", "--rollback"],
             vec!["approvals"],
+            vec!["metrics"],
             vec!["approve", "a_1"],
             vec!["approve", "a_1", "--effect", "done"],
             vec!["deny", "a_1"],
@@ -2158,6 +2248,33 @@ mod tests {
             penelope_kernel::api::exit_code::VALIDATION_FAILED,
             "{e}"
         );
+    }
+
+    /// #103 : `penelope logs --turn` ne garde que les lignes du tour, par le span ou par
+    /// le champ de l'événement.
+    #[test]
+    fn logs_are_filtered_by_turn_and_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("penelope-2026-09-18.jsonl");
+        std::fs::write(
+            &f,
+            concat!(
+                r#"{"fields":{"message":"modèle choisi"},"span":{"name":"turn","turn":"t_1","session":"s_1"}}"#,
+                "\n",
+                r#"{"fields":{"message":"autre tour"},"span":{"name":"turn","turn":"t_2","session":"s_1"}}"#,
+                "\n",
+                r#"{"fields":{"message":"lease perdu","turn":"t_1"}}"#,
+                "\n",
+                "pas du json\n",
+            ),
+        )
+        .unwrap();
+        let files = vec![f];
+        let t1 = filter_log_lines(&files, Some("t_1"), None, 100);
+        assert_eq!(t1.len(), 2, "{t1:?}");
+        assert!(t1.iter().all(|l| l.contains("t_1")));
+        assert_eq!(filter_log_lines(&files, None, Some("s_1"), 100).len(), 2);
+        assert_eq!(filter_log_lines(&files, None, None, 1), vec!["pas du json"]);
     }
 
     #[test]
