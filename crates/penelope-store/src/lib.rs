@@ -10,7 +10,11 @@
 //! - toute écriture est une transaction : `kill -9` ne laisse jamais d'état partiel (§0.2) ;
 //! - une **panique** dans une closure d'écriture annule sa transaction, est journalisée et
 //!   comptée, puis renvoyée à son demandeur : l'écrivain survit et les écritures suivantes
-//!   passent (issue #44).
+//!   passent (issue #44) ;
+//! - les écritures ordinaires sont durables contre le **processus** (`synchronous=NORMAL`
+//!   en WAL) ; `write_durable` l'est contre la **machine** (coupure, panique noyau) pour
+//!   les transitions qui ne doivent jamais être perdues, celles du ledger d'effets
+//!   (issue #75).
 
 #![forbid(unsafe_code)]
 
@@ -123,6 +127,8 @@ struct StoreInner {
     writer_tx: mpsc::UnboundedSender<WriteJob>,
     readers: ReadPool,
     closed: AtomicBool,
+    /// Transactions validées par `write_durable` (`penelope_store_durable_commits_total`).
+    durable_commits: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl std::fmt::Debug for Store {
@@ -175,6 +181,7 @@ impl Store {
                 writer_tx: tx,
                 readers,
                 closed: AtomicBool::new(false),
+                durable_commits: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             }),
         })
     }
@@ -222,6 +229,44 @@ impl Store {
             .send(job)
             .map_err(|_| StoreError::WriterGone)?;
         rx.await.map_err(|_| StoreError::WriterGone)?
+    }
+
+    /// Écriture **durable contre la machine** (issue #75).
+    ///
+    /// En WAL, `synchronous=NORMAL` ne synchronise le journal qu'au checkpoint : un commit
+    /// survit à `kill -9`, pas à une coupure de courant. Cette variante passe la connexion
+    /// en `synchronous=FULL` (et `fullfsync=ON`, sans effet hors macOS, qui force le
+    /// vidage jusqu'au média) le temps d'une transaction, puis rétablit `NORMAL`, y compris
+    /// après une erreur ou une panique. Le fsync du WAL rend aussi durables les commits
+    /// ordinaires qui la précèdent. Réservée aux transitions qu'on ne doit jamais perdre :
+    /// un fsync par appel, jamais sur le trafic de fond.
+    pub async fn write_durable<T, F>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&Transaction<'_>) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        if self.inner.closed.load(Ordering::SeqCst) {
+            return Err(StoreError::WriterGone);
+        }
+        let (tx, rx) = oneshot::channel();
+        let counter = self.inner.durable_commits.clone();
+        let job: WriteJob = Box::new(move |conn| {
+            let res = durable(conn, f);
+            if res.is_ok() {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+            let _ = tx.send(res);
+        });
+        self.inner
+            .writer_tx
+            .send(job)
+            .map_err(|_| StoreError::WriterGone)?;
+        rx.await.map_err(|_| StoreError::WriterGone)?
+    }
+
+    /// Transactions validées par `write_durable` depuis l'ouverture de ce store.
+    pub fn durable_commits(&self) -> u64 {
+        self.inner.durable_commits.load(Ordering::SeqCst)
     }
 
     /// Variante synchrone (utilisée par le thread de démarrage et les outils CLI).
@@ -309,6 +354,20 @@ impl Store {
     pub fn close(&self) {
         self.inner.closed.store(true, Ordering::SeqCst);
     }
+}
+
+/// Transaction sous `synchronous=FULL`, puis retour à `NORMAL` quoi qu'il arrive :
+/// `guarded` rattrape une panique, donc le rétablissement s'exécute toujours.
+fn durable<T, F>(conn: &mut Connection, f: F) -> Result<T>
+where
+    F: FnOnce(&Transaction<'_>) -> Result<T>,
+{
+    conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA fullfsync=ON;")?;
+    let res = guarded(conn, f);
+    if let Err(e) = conn.execute_batch("PRAGMA synchronous=NORMAL; PRAGMA fullfsync=OFF;") {
+        tracing::error!(error = %e, "retour à synchronous=NORMAL impossible");
+    }
+    res
 }
 
 fn run_in_transaction<T, F>(conn: &mut Connection, f: F) -> Result<T>
@@ -480,6 +539,55 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((avant_v.as_str(), apres_v.as_str(), jamais), ("1", "3", 0));
+    }
+
+    fn synchronous(c: &Connection) -> i64 {
+        c.query_row("PRAGMA synchronous;", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// #75 : une écriture durable s'exécute sous `synchronous=FULL` (2) et la connexion
+    /// revient à `NORMAL` (1) ensuite, après un succès, une erreur ou une panique.
+    #[tokio::test]
+    async fn a_durable_write_runs_under_full_sync_and_restores_normal() {
+        let s = Store::open_memory().unwrap();
+        let dedans = s
+            .write_durable(|tx| {
+                kv_set(tx, "effet", "dispatching")?;
+                Ok(synchronous(tx))
+            })
+            .await
+            .unwrap();
+        assert_eq!(dedans, 2, "FULL pendant la transaction durable");
+        assert_eq!(s.write(|tx| Ok(synchronous(tx))).await.unwrap(), 1);
+        assert_eq!(s.durable_commits(), 1);
+
+        // Erreur : rollback, pas de commit compté, NORMAL rétabli.
+        let e = s
+            .write_durable(|tx| -> Result<()> {
+                kv_set(tx, "perdu", "x")?;
+                Err(StoreError::other("refus"))
+            })
+            .await;
+        assert!(e.is_err());
+        assert_eq!(s.write(|tx| Ok(synchronous(tx))).await.unwrap(), 1);
+
+        // Panique : rattrapée, NORMAL rétabli, l'écrivain continue.
+        let e = s
+            .write_durable(|_tx| -> Result<()> {
+                panic!("panique voulue dans une écriture durable")
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(e, StoreError::WriterPanic(_)), "{e}");
+        assert_eq!(s.write(|tx| Ok(synchronous(tx))).await.unwrap(), 1);
+        assert_eq!(s.durable_commits(), 1, "seuls les commits aboutis comptent");
+
+        let perdu: i64 = s
+            .read(|c| Ok(c.query_row("SELECT count(*) FROM kv WHERE k='perdu'", [], |r| r.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(perdu, 0);
     }
 
     #[test]

@@ -892,6 +892,16 @@ Sauvegarde complète chiffrée et restauration en une commande (#42).
 - **Diagnostic** : `doctor` suit l'âge de la dernière sauvegarde (alerte au-delà de 48 h), sa
   taille et sa destination ; `self_status` porte la même information.
 
+### 0.17.1
+
+- **Effets durables contre la machine** (#75) : `dispatching` et `completed` d'un effet non
+  idempotent passent par `Store::write_durable`, qui exécute la transaction sous
+  `synchronous=FULL` et `fullfsync=ON` puis rétablit `NORMAL`, même après une erreur ou une
+  panique. Une coupure secteur entre le départ d'un `git push` et le checkpoint suivant ne
+  ramène plus la ligne en `planned` : l'effet devient une question au redémarrage. Environ
+  8 ms par transition sur un M2, aucune pour les lectures ni le trafic de fond ; le store
+  compte ces commits (`durable_commits`).
+
 ### Routine de livraison
 
 Avant chaque tag :

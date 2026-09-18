@@ -1445,6 +1445,17 @@ penelope stop
 `penelope daemon` lance le processus au premier plan : c'est la forme utile pour déboguer
 en SSH, puisque les journaux partent alors sur le terminal.
 
+### Coupure de courant
+
+Toute écriture de la base survit à l'arrêt brutal du **processus** (`kill -9`, panique).
+Les transitions d'un effet non idempotent (« part », puis « fait ») survivent aussi à
+l'arrêt brutal de la **machine** (coupure secteur, panique noyau, batterie à zéro) : elles
+sont synchronisées jusqu'au disque avant l'exécution de l'outil. Au redémarrage, un
+`git push` ou un commentaire lancé juste avant la coupure devient donc une question, jamais
+un second envoi. Coût mesuré sur un Mac M2 : environ 8 ms par transition, soit une
+quinzaine de millisecondes par appel d'outil qui écrit ; les lectures et le trafic de fond
+n'en paient aucun.
+
 ## 9. Sauvegarde et audit
 
 ```bash

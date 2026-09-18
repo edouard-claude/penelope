@@ -2094,6 +2094,54 @@ mod tests {
         assert_eq!(msgs[3].text(), "compilé");
     }
 
+    /// #75 : un tour paie un fsync par transition d'effet non idempotent, et aucun pour
+    /// ses lectures.
+    #[tokio::test]
+    async fn only_non_idempotent_effects_pay_a_durable_commit() {
+        let (_d, s, p) = setup().await;
+        let sid = session(&s).await;
+        let conv = MemoryConversation::new("Tu es Pénélope.", "compile");
+        let e = exec(false);
+        let loop_ = AgentLoop::new(s.clone(), p.clone());
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![
+                call("c1", "fs_read", json!({"path":"a.rs"})),
+                call("c2", "fs_read", json!({"path":"b.rs"})),
+                call("c3", "shell_exec", json!({"command":"cargo build"})),
+            ],
+        ));
+        let id = match loop_
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap()
+        {
+            TurnOutcome::AwaitingApproval { approval_id } => approval_id,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            s.store.durable_commits(),
+            0,
+            "les lectures n'en paient aucun"
+        );
+        loop_
+            .decide_approval(&id, &Decision::approve_once("telegram"))
+            .await
+            .unwrap();
+        p.reply("compilé");
+        let out = loop_
+            .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+            .await
+            .unwrap();
+        assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
+        assert_eq!(e.calls.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            s.store.durable_commits(),
+            2,
+            "dispatching et completed du seul effet non idempotent"
+        );
+    }
+
     #[tokio::test]
     async fn a_denied_call_is_reported_to_the_model() {
         let (_d, s, p) = setup().await;

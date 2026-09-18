@@ -249,17 +249,54 @@ impl EffectLedger {
             .map_err(KernelError::from)
     }
 
-    /// Transition `planned → dispatching` en compare-and-swap.
-    pub async fn dispatching(&self, id: &EffectId) -> Result<()> {
+    /// Un effet idempotent peut être perdu puis rejoué sans dommage : ses transitions
+    /// n'ont pas besoin d'être durables contre la machine (#75).
+    async fn needs_durability(&self, id: &EffectId) -> Result<bool> {
         let id = id.0.clone();
-        let ts = self.clock.now_rfc3339();
-        let n = self
+        let idempotent: Option<i64> = self
             .store
-            .write(move |tx| {
+            .read(move |c| {
+                Ok(
+                    c.query_row("SELECT idempotent FROM effects WHERE id=?1", [&id], |r| {
+                        r.get(0)
+                    })
+                    .ok(),
+                )
+            })
+            .await?;
+        Ok(idempotent != Some(1))
+    }
+
+    /// Écrit une transition, durablement si l'effet n'est pas idempotent (#75).
+    async fn transition<T, F>(&self, id: &EffectId, f: F) -> Result<T>
+    where
+        F: FnOnce(&penelope_store::rusqlite::Transaction<'_>) -> penelope_store::Result<T>
+            + Send
+            + 'static,
+        T: Send + 'static,
+    {
+        Ok(if self.needs_durability(id).await? {
+            self.store.write_durable(f).await?
+        } else {
+            self.store.write(f).await?
+        })
+    }
+
+    /// Transition `planned → dispatching` en compare-and-swap.
+    ///
+    /// Durable contre la machine pour un effet non idempotent (#75) : si ce commit se
+    /// perdait dans une coupure après l'exécution, la ligne reviendrait en `planned` et
+    /// l'effet serait rejoué sans question. Le fsync rend aussi durable l'insertion de
+    /// `plan`.
+    pub async fn dispatching(&self, id: &EffectId) -> Result<()> {
+        let ts = self.clock.now_rfc3339();
+        let id_s = id.0.clone();
+        let n = self
+            .transition(id, move |tx| {
                 Ok(tx.execute(
                     "UPDATE effects SET state='dispatching', attempts = attempts + 1, updated_at=?2
                      WHERE id=?1 AND state='planned'",
-                    params![id, ts],
+                    params![id_s, ts],
                 )?)
             })
             .await?;
@@ -271,20 +308,20 @@ impl EffectLedger {
         Ok(())
     }
 
+    /// `→ completed`, durable pour un effet non idempotent (#75) : un résultat perdu
+    /// ferait reposer la question d'un effet déjà fait.
     pub async fn complete(&self, id: &EffectId, result: Value) -> Result<()> {
-        let id = id.0.clone();
+        let id_s = id.0.clone();
         let ts = self.clock.now_rfc3339();
-        self.store
-            .write(move |tx| {
-                tx.execute(
-                    "UPDATE effects SET state='completed', result=?2, error=NULL, updated_at=?3
-                     WHERE id=?1",
-                    params![id, canonical_json(&result), ts],
-                )?;
-                Ok(())
-            })
-            .await?;
-        Ok(())
+        self.transition(id, move |tx| {
+            tx.execute(
+                "UPDATE effects SET state='completed', result=?2, error=NULL, updated_at=?3
+                 WHERE id=?1",
+                params![id_s, canonical_json(&result), ts],
+            )?;
+            Ok(())
+        })
+        .await
     }
 
     pub async fn fail(&self, id: &EffectId, error: impl Into<String>) -> Result<()> {
@@ -540,6 +577,36 @@ mod tests {
             Planned::Fresh(_) => {}
             o => panic!("attendu Fresh, obtenu {o:?}"),
         }
+    }
+
+    /// #75 : `dispatching` et `complete` d'un effet non idempotent passent par le chemin
+    /// durable ; `plan`, et les transitions d'un effet idempotent, non.
+    #[tokio::test]
+    async fn dispatch_and_completion_are_durable_planning_is_not() {
+        let store = Store::open_memory().unwrap();
+        let l = ledger(store.clone());
+        let id = match l.plan(spec()).await.unwrap() {
+            Planned::Fresh(id) => id,
+            o => panic!("{o:?}"),
+        };
+        assert_eq!(store.durable_commits(), 0, "plan n'a pas besoin de fsync");
+        l.dispatching(&id).await.unwrap();
+        assert_eq!(store.durable_commits(), 1);
+        l.complete(&id, json!({"ok": true})).await.unwrap();
+        assert_eq!(store.durable_commits(), 2);
+
+        let lecture = spec().idempotent(true).step("autre");
+        let id = match l.plan(lecture).await.unwrap() {
+            Planned::Fresh(id) => id,
+            o => panic!("{o:?}"),
+        };
+        l.dispatching(&id).await.unwrap();
+        l.complete(&id, json!({"lu": true})).await.unwrap();
+        assert_eq!(
+            store.durable_commits(),
+            2,
+            "un effet idempotent se rejoue sans dommage"
+        );
     }
 
     #[tokio::test]
