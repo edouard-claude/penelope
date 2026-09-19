@@ -2113,6 +2113,19 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
             failing.into_iter().take(5).collect::<Vec<_>>().join("\n")
         ));
     }
+    // Sessions qui ne se résument plus : elles coûtent plus cher à chaque tour (#131).
+    let struggling = crate::compaction::struggling_sessions(s).await;
+    if !struggling.is_empty() {
+        t.push_str("\n🗜 Résumé de session en échec :\n");
+        for (title, n, per_turn) in struggling {
+            t.push_str(&format!(
+                "- « {title} » : {n} échec(s) en 24 h{}\n",
+                per_turn
+                    .map(|c| format!(", {c:.3} $ par tour"))
+                    .unwrap_or_default()
+            ));
+        }
+    }
     // Ce qui part aujourd'hui, et où (#124).
     let due = crate::scheduler::due_today(d).await;
     if !due.is_empty() {

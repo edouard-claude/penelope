@@ -1485,7 +1485,8 @@ Une carte d'approbation part toujours, même quand la commande porte `{{…}}` (
 ### 0.17.17
 
 Un tour ne panique plus sur une commande en échec de 40 à 60 lignes, et une panique dit
-où elle a eu lieu (#130).
+où elle a eu lieu (#130). Une session qui ne se résume plus est compactée sans modèle au
+troisième échec, et se voit (#131).
 
 - **Le résumé d'une sortie courte ne découpe plus à l'envers** (#130) : un tour repris
   après « Toujours » est mort sur « slice index starts at 30 but ends at 11 ». La
@@ -1500,6 +1501,19 @@ où elle a eu lieu (#130).
   carte ; une commande multi-lignes reste sans motif, donc sans règle (#67, #111). Le
   tour n'est pas remis en file tout seul : son appel a pu s'exécuter, le relancer le
   rejouerait ; le propriétaire reçoit la raison avec « Réessayer ».
+
+- **Le résumeur qui ne répond plus** (#131) : la session « Fidelatoo » (548 messages)
+  a vu trois résumés expirer à 180 s, et grossissait sans que personne le sache. Pas une
+  régression : délai fixe et modèle lent. Le délai se proportionne au lot (120 s plus
+  une seconde par millier de tokens, 420 s au plus). Un échec passager est relancé une
+  fois sur un lot trois fois plus court ; puis l'alias de repli déclaré pour le résumeur
+  (`models.routing.fallback`), une fois, dans la réserve `budget.compaction_reserve_usd`
+  (un modèle au prix inconnu n'est pas essayé). Au troisième échec de suite, compaction
+  sans modèle : un nœud franc (derniers messages du propriétaire et ancres gardés, le
+  reste relisible), un message au propriétaire avec le coût par tour, un événement
+  `context.compaction_mechanical`. `/status` et le digest disent la session en échec.
+  Seuils (#18, #40), validation du résumé et niveau 4 d'urgence inchangés ; pendant les
+  échecs, rien n'est publié et le préfixe ne bouge pas.
 
 ### Routine de livraison
 

@@ -6602,8 +6602,18 @@ fn context_line(view: &Value) -> String {
         .as_str()
         .map(|t| t.chars().take(16).collect::<String>().replace('T', " "))
         .unwrap_or_else(|| "jamais".into());
+    let failing = match view["compaction_failures"].as_u64().unwrap_or(0) {
+        0 => String::new(),
+        n => format!(
+            " ; ⚠️ le résumé échoue ({n} fois de suite){}",
+            view["cost_per_turn_usd"]
+                .as_f64()
+                .map(|c| format!(", {c:.3} $ par tour"))
+                .unwrap_or_default()
+        ),
+    };
     format!(
-        "Contexte : {prompt}, compaction de fond vers {} k, dernière compaction : {last}",
+        "Contexte : {prompt}, compaction de fond vers {} k, dernière compaction : {last}{failing}",
         view["background_compaction_at"].as_u64().unwrap_or(0) / 1000
     )
 }

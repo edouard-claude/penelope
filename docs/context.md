@@ -127,10 +127,24 @@ de fond, est résumée **avant** l'appel au modèle : le cache est perdu de tout
 
 La sortie du résumeur est validée : un objet JSON, au moins une des sections objectif,
 fait, en cours ou prochaines étapes remplie, sinon elle est rejetée et rien n'est
-publié. Un résumeur muet 180 s est en échec. Après un échec, la compaction de fond attend
+publié. Le résumeur a 120 s, plus une seconde par millier de tokens du lot (420 s au
+plus) ; au-delà, il est en échec. Après un échec, la compaction de fond attend
 `context.cooldown_ms` = `[60000,300000,900000]` : 60 s, puis 5 min, puis 15 min ; les
-niveaux 0 à 2 continuent de protéger la requête. `/compact` (ou `penelope session
-compact`) lève l'attente et force un lot, même petit.
+niveaux 0 à 2 continuent de protéger la requête, et rien n'est publié, donc le préfixe ne
+bouge pas. `/compact` (ou `penelope session compact`) lève l'attente et force un lot, même
+petit.
+
+Avant de compter un échec, un résumeur qui n'a pas répondu à temps (ou erreur passagère :
+flux muet, 5xx, 429) est relancé une fois sur le début du même lot, trois fois plus court.
+Si un alias de repli est déclaré pour le résumeur (`models.routing.fallback`, par exemple
+`summarizer = ["main"]`), il est essayé ensuite, une fois, seulement si son coût estimé
+tient dans la réserve des résumés ; un résumé invalide n'est pas une affaire de taille et
+n'est pas relancé. Au troisième échec de suite, la compaction se fait **sans modèle** :
+un seul nœud, qui garde les derniers messages du propriétaire du passage et ses ancres
+tels quels et dit le reste relisible par `history_expand` ; le propriétaire reçoit un
+message avec le coût moyen des derniers tours, et `context.compaction_mechanical` est
+écrit. `/status` dit une session dont le résumé échoue (échecs de suite, coût par tour),
+et le digest du matin liste celles des dernières 24 h.
 
 Une fois le plafond du jour atteint, les résumés de fond continuent dans la limite de
 `budget.compaction_reserve_usd` = `0.5` : un résumé coûte peu et allège chaque appel

@@ -23,8 +23,15 @@ use std::time::Duration;
 
 /// Lots résumés au plus par compaction ; la suivante reprend le reste.
 const MAX_PASSES: usize = 12;
-/// Au-delà, le résumeur est en échec et le cooldown s'applique.
-const SUMMARY_TIMEOUT: Duration = Duration::from_secs(180);
+/// Échecs consécutifs du résumeur au-delà desquels la compaction se fait sans modèle
+/// (issue #131).
+const MECHANICAL_AFTER: u32 = 3;
+
+/// Délai du résumeur, proportionné au lot : 120 s, plus une seconde par millier de tokens
+/// de source, 420 s au plus. Au-delà, le lot est en échec (issue #131).
+fn summary_timeout(tokens_src: u64) -> Duration {
+    Duration::from_secs((120 + tokens_src / 1_000).min(420))
+}
 /// Attente maximale d'une compaction concurrente, sur dépassement de fenêtre.
 const OVERFLOW_WAIT: Duration = Duration::from_secs(200);
 
@@ -136,6 +143,10 @@ pub struct Report {
     pub cost_usd: f64,
     /// Pourquoi rien n'a été fait.
     pub skipped: Option<String>,
+    /// Reprises faites pour obtenir le résumé (demande plus courte, alias de repli,
+    /// compaction sans modèle), dans l'ordre (issue #131).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recovered: Vec<String>,
 }
 
 /// Résumé calculé, en attente d'une frontière de tour. Persisté : un redémarrage ne
@@ -524,52 +535,80 @@ async fn compact_inner(
         };
         report.remaining_batches = job.remaining_batches();
 
-        let summary = match summarise(d, provider.as_ref(), &model, &job, turn_id).await {
-            Ok((summary, cost)) => {
-                report.cost_usd += cost;
-                summary
-            }
-            Err(error) => {
-                cooldown.record_failure(s.clock.now_ms(), &cfg.context.cooldown_ms);
-                save_cooldown(d, session_id, &cooldown).await;
-                let retry_in_s = (cooldown.until_ms - s.clock.now_ms()).max(0) / 1000;
-                let _ = s
-                    .events
-                    .append(
-                        EventDraft::new(
-                            "context.compaction_failed",
-                            json!({
-                                "error": error,
-                                "trigger": trigger.as_str(),
-                                "failures": cooldown.failures,
-                                "retry_in_s": retry_in_s,
-                                "model": model,
-                            }),
-                        )
-                        .session(session_id),
-                    )
-                    .await;
-                penelope_observe::metrics::counter_inc(
-                    "penelope_compactions_total",
-                    &[("trigger", trigger.as_str()), ("outcome", "failed")],
-                    1.0,
-                );
-                if report.published == 0 {
-                    anyhow::bail!("le résumé a échoué ({error}), nouvel essai dans {retry_in_s} s");
-                }
-                break;
-            }
+        let attempt = Attempt {
+            session_id,
+            params: &params,
+            window,
+            force,
+            turn_id,
         };
+        let (job, summary, used) =
+            match summarise_or_recover(d, provider.as_ref(), &model, job, &attempt, &mut report)
+                .await
+            {
+                Ok(done) => done,
+                Err(failed) => {
+                    let (job, failure) = *failed;
+                    let error = failure.message;
+                    cooldown.record_failure(s.clock.now_ms(), &cfg.context.cooldown_ms);
+                    // Trois échecs de suite : une compaction franche sans modèle plutôt qu'un
+                    // quatrième refroidissement, et le propriétaire le sait (issue #131).
+                    if cooldown.failures >= MECHANICAL_AFTER {
+                        cooldown.clear();
+                        save_cooldown(d, session_id, &cooldown).await;
+                        let pending = Pending {
+                            summary: mechanical_summary(&job),
+                            job,
+                            model: MECHANICAL_MODEL.into(),
+                        };
+                        report.recovered.push(format!(
+                            "compaction sans modèle après {MECHANICAL_AFTER} échecs ({error})"
+                        ));
+                        publish(d, session_id, &pending, trigger, &mut report).await?;
+                        tell_mechanical(d, session_id, &model, &error, &report).await;
+                        break;
+                    }
+                    save_cooldown(d, session_id, &cooldown).await;
+                    let retry_in_s = (cooldown.until_ms - s.clock.now_ms()).max(0) / 1000;
+                    let _ = s
+                        .events
+                        .append(
+                            EventDraft::new(
+                                "context.compaction_failed",
+                                json!({
+                                    "error": error,
+                                    "trigger": trigger.as_str(),
+                                    "failures": cooldown.failures,
+                                    "retry_in_s": retry_in_s,
+                                    "model": model,
+                                }),
+                            )
+                            .session(session_id),
+                        )
+                        .await;
+                    penelope_observe::metrics::counter_inc(
+                        "penelope_compactions_total",
+                        &[("trigger", trigger.as_str()), ("outcome", "failed")],
+                        1.0,
+                    );
+                    if report.published == 0 {
+                        anyhow::bail!(
+                            "le résumé a échoué ({error}), nouvel essai dans {retry_in_s} s"
+                        );
+                    }
+                    break;
+                }
+            };
 
         let pending = Pending {
             job,
             summary,
-            model: model.clone(),
+            model: used.clone(),
         };
         if !trigger.publishes_now() && d.bus.is_active(session_id) {
             save_pending(d, session_id, &pending).await?;
             report.deferred = true;
-            report.model = Some(model.clone());
+            report.model = Some(used.clone());
             // Le tour a pu se terminer pendant l'écriture : sa frontière est passée.
             if !d.bus.is_active(session_id)
                 && let Some(p) = load_pending(d, session_id).await?
@@ -611,13 +650,270 @@ async fn wait_claim<'a>(d: &'a Arc<Daemon>, session_id: &str) -> Option<Claim<'a
 }
 
 /// Fait résumer un lot par le modèle du rôle `compaction` et valide sa sortie.
+/// Échec d'un résumé : passager (délai, 5xx, 429), ou réponse inutilisable.
+struct SummaryFailure {
+    message: String,
+    passing: bool,
+}
+
+impl SummaryFailure {
+    fn passing(message: String) -> Self {
+        SummaryFailure {
+            message,
+            passing: true,
+        }
+    }
+}
+
+/// Ce qu'il faut pour préparer un lot plus court.
+struct Attempt<'a> {
+    session_id: &'a str,
+    params: &'a CompactionParams,
+    window: u64,
+    force: bool,
+    turn_id: Option<&'a str>,
+}
+
+/// Modèle inscrit sur un résumé fait sans modèle.
+const MECHANICAL_MODEL: &str = "sans modèle";
+
+/// Un lot résumé, avec ses reprises (issue #131) : le lot tel quel ; sur un échec
+/// passager, le début du même lot en trois fois plus court ; puis, s'il est déclaré,
+/// l'alias de repli du résumeur (`models.routing.fallback`), si la réserve des résumés
+/// couvre son coût estimé. Rend le lot effectivement résumé et le modèle qui l'a fait,
+/// ou le dernier lot essayé et la raison de l'échec.
+async fn summarise_or_recover(
+    d: &Arc<Daemon>,
+    provider: &dyn Provider,
+    model: &str,
+    job: SummaryJob,
+    at: &Attempt<'_>,
+    report: &mut Report,
+) -> Result<(SummaryJob, Value, String), Box<(SummaryJob, SummaryFailure)>> {
+    let s = &d.services;
+    let first = match summarise(d, provider, model, &job, at.turn_id).await {
+        Ok((summary, cost)) => {
+            report.cost_usd += cost;
+            return Ok((job, summary, model.to_string()));
+        }
+        Err(f) => f,
+    };
+    if !first.passing {
+        return Err(Box::new((job, first)));
+    }
+    let mut job = job;
+    let mut failure = first;
+    if let Ok(Some(short)) = s
+        .context
+        .prepare_summary_capped(
+            at.session_id,
+            at.params,
+            at.window,
+            model,
+            at.force,
+            Some((job.tokens_src / 3).max(1)),
+        )
+        .await
+        && short.to_seq < job.to_seq
+    {
+        report.recovered.push(format!(
+            "demande plus courte ({} tokens au lieu de {}) après : {}",
+            short.tokens_src, job.tokens_src, failure.message
+        ));
+        job = short;
+        match summarise(d, provider, model, &job, at.turn_id).await {
+            Ok((summary, cost)) => {
+                report.cost_usd += cost;
+                return Ok((job, summary, model.to_string()));
+            }
+            Err(f) => failure = f,
+        }
+    }
+    if !failure.passing {
+        return Err(Box::new((job, failure)));
+    }
+    let cfg = s.config.config();
+    let Some(fallback) = cfg
+        .models
+        .routing
+        .fallback
+        .get(&cfg.role_alias("compaction"))
+        .and_then(|v| v.first())
+        .and_then(|a| cfg.alias_model(a))
+        .map(String::from)
+        .filter(|m| m != model)
+    else {
+        return Err(Box::new((job, failure)));
+    };
+    // Un repli coûte plus cher que le résumeur : il reste dans la réserve des résumés.
+    let estimated = s
+        .catalog
+        .get(strip_provider(&fallback))
+        .map(|i| (job.tokens_src + 2_000) as f64 * i.price_prompt + 8_000.0 * i.price_completion)
+        .unwrap_or(f64::INFINITY);
+    let spent = compaction_spent_today(s).await;
+    if spent + estimated > cfg.budget.compaction_reserve_usd {
+        report.recovered.push(format!(
+            "repli `{fallback}` écarté : ~{estimated:.2} $ estimés, {spent:.2} $ déjà dépensés \
+             sur {:.2} $ de réserve (`budget.compaction_reserve_usd`)",
+            cfg.budget.compaction_reserve_usd
+        ));
+        return Err(Box::new((job, failure)));
+    }
+    let Ok(fb) = d.provider_for(&fallback).await else {
+        return Err(Box::new((job, failure)));
+    };
+    report.recovered.push(format!(
+        "repli sur `{fallback}` après : {}",
+        failure.message
+    ));
+    match summarise(d, fb.as_ref(), &fallback, &job, at.turn_id).await {
+        Ok((summary, cost)) => {
+            report.cost_usd += cost;
+            Ok((job, summary, fallback))
+        }
+        Err(f) => Err(Box::new((job, f))),
+    }
+}
+
+/// Résumé fait sans modèle, quand le résumeur a échoué trop souvent : il ne prétend rien
+/// comprendre. Les derniers messages du propriétaire du lot (dans le budget habituel) et
+/// les ancres sont gardés tels quels par le rendu du nœud ; le résumé précédent est
+/// repris.
+fn mechanical_summary(job: &SummaryJob) -> Value {
+    let previous = job
+        .previous_summary
+        .as_deref()
+        .map(penelope_context::compaction::summary_sections_only)
+        .unwrap_or_default();
+    json!({
+        "objectif": "Compaction sans modèle : le résumeur n'a pas répondu à temps plusieurs \
+                     fois de suite. Ce qui suit n'est pas un résumé : les derniers messages du \
+                     propriétaire du passage compacté et ses ancres (chemins, identifiants) \
+                     sont gardés tels quels, le reste se relit avec `history_expand`.",
+        "fait": previous.chars().take(3_500).collect::<String>(),
+        "en_cours": format!(
+            "{} messages compactés sans être relus (séquences {} à {}) : les relire au besoin \
+             avec `history_expand`.",
+            job.messages(),
+            job.chunk_from_seq,
+            job.to_seq
+        ),
+        "prochaines_etapes": "",
+    })
+}
+
+/// Dit au propriétaire qu'une session s'est compactée sans modèle, avec son coût par tour.
+async fn tell_mechanical(
+    d: &Arc<Daemon>,
+    session_id: &str,
+    model: &str,
+    error: &str,
+    report: &Report,
+) {
+    let s = &d.services;
+    let _ = s
+        .events
+        .append(
+            EventDraft::new(
+                "context.compaction_mechanical",
+                json!({"model": model, "error": error, "messages": report.messages}),
+            )
+            .session(session_id),
+        )
+        .await;
+    let title = s
+        .sessions
+        .get(session_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|x| x.title)
+        .unwrap_or_else(|| session_id.to_string());
+    let per_turn = cost_per_turn(s, session_id).await;
+    if let Some(m) = d.hooks.messenger() {
+        let _ = m
+            .send_text(
+                &crate::scheduler::owner_origin(d),
+                &format!(
+                    "⚠️ La session « {title} » ne se résumait plus : le résumeur (`{model}`) a \
+                     échoué {MECHANICAL_AFTER} fois ({error}). {} messages ont été compactés \
+                     sans modèle : tes derniers messages de ce passage et les ancres sont \
+                     gardés tels quels, le reste se relit à la demande.{}",
+                    report.messages,
+                    per_turn
+                        .map(|c| format!(" Coût moyen des derniers tours : {c:.3} $."))
+                        .unwrap_or_default()
+                ),
+            )
+            .await;
+    }
+}
+
+/// Sessions dont la compaction a échoué ces dernières 24 h : titre, échecs, coût moyen
+/// des derniers tours ; pour le digest (issue #131).
+pub async fn struggling_sessions(s: &crate::runtime::Services) -> Vec<(String, u32, Option<f64>)> {
+    let since = chrono::DateTime::from_timestamp_millis(s.clock.now_ms() - 86_400_000)
+        .unwrap_or_default()
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let rows: Vec<(String, u32)> = s
+        .store
+        .read(move |c| {
+            let mut st = c.prepare(
+                "SELECT session_id, COUNT(*) FROM events
+                 WHERE kind = 'context.compaction_failed' AND session_id IS NOT NULL
+                   AND ts >= ?1
+                 GROUP BY session_id ORDER BY COUNT(*) DESC LIMIT 5",
+            )?;
+            let rows = st.query_map([&since], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for (sid, n) in rows {
+        let title = s
+            .sessions
+            .get(&sid)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|x| x.title)
+            .unwrap_or_else(|| sid.clone());
+        out.push((title, n, cost_per_turn(s, &sid).await));
+    }
+    out
+}
+
+/// Coût moyen des cinq derniers tours d'une session.
+async fn cost_per_turn(s: &crate::runtime::Services, session_id: &str) -> Option<f64> {
+    let sid = session_id.to_string();
+    s.store
+        .read(move |c| {
+            let v: Option<f64> = c
+                .query_row(
+                    "SELECT AVG(cost) FROM (SELECT SUM(cost_usd) AS cost FROM usage
+                     WHERE session_id = ?1 AND turn_id IS NOT NULL
+                     GROUP BY turn_id ORDER BY MAX(ts) DESC LIMIT 5)",
+                    [&sid],
+                    |r| r.get(0),
+                )
+                .ok()
+                .flatten();
+            Ok(v)
+        })
+        .await
+        .ok()
+        .flatten()
+}
+
 async fn summarise(
     d: &Arc<Daemon>,
     provider: &dyn Provider,
     model: &str,
     job: &SummaryJob,
     turn_id: Option<&str>,
-) -> Result<(Value, f64), String> {
+) -> Result<(Value, f64), SummaryFailure> {
     let s = &d.services;
     let info = s.catalog.get(strip_provider(model));
     let effort = info.as_ref().and_then(|i| i.lightest_effort());
@@ -640,23 +936,26 @@ async fn summarise(
         session_id: Some(job.session_id.clone()),
         ..Default::default()
     };
+    let failed = |e: penelope_llm::types::LlmError| SummaryFailure {
+        passing: e.kind.is_retryable(),
+        message: e.to_string(),
+    };
     let call = async {
         let rx = provider
             .chat_stream(request, CancelToken::new())
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(failed)?;
         collect_stream(rx, model, provider.name(), &s.catalog)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(failed)
     };
-    let response = tokio::time::timeout(SUMMARY_TIMEOUT, call)
-        .await
-        .map_err(|_| {
-            format!(
-                "le résumeur n'a pas répondu en {} s",
-                SUMMARY_TIMEOUT.as_secs()
-            )
-        })??;
+    let timeout = summary_timeout(job.tokens_src);
+    let response = tokio::time::timeout(timeout, call).await.map_err(|_| {
+        SummaryFailure::passing(format!(
+            "le résumeur n'a pas répondu en {} s",
+            timeout.as_secs()
+        ))
+    })??;
     let _ = s
         .budget
         .record(penelope_kernel::budget::UsageRecord {
@@ -678,7 +977,11 @@ async fn summarise(
             ..Default::default()
         })
         .await;
-    let summary = penelope_context::compaction::validate_summary(&response.message.text())?;
+    let summary = penelope_context::compaction::validate_summary(&response.message.text())
+        .map_err(|message| SummaryFailure {
+            message,
+            passing: false,
+        })?;
     Ok((summary, response.cost_usd))
 }
 
@@ -859,7 +1162,24 @@ pub async fn context_view(
         .await
         .ok()
         .flatten();
+    // Une session qui ne se résume plus se voit, avec son coût par tour (issue #131).
+    let key = cooldown_key(session_id);
+    let cooldown: Cooldown = s
+        .store
+        .read(move |c| penelope_store::kv_get(c, &key))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+    let per_turn = if cooldown.failures > 0 {
+        cost_per_turn(s, session_id).await
+    } else {
+        None
+    };
     Ok(json!({
+        "compaction_failures": cooldown.failures,
+        "cost_per_turn_usd": per_turn,
         "last_compaction": last_compaction,
         "last_prompt_tokens": last.as_ref().map(|l| l.0),
         "last_cached_tokens": last.as_ref().map(|l| l.1),
@@ -1088,6 +1408,199 @@ mod tests {
             publish_pending(&d, &sid).await.unwrap().is_none(),
             "publié une fois"
         );
+    }
+
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Vec<String>>);
+
+    #[async_trait::async_trait]
+    impl crate::executor::Messenger for Recorder {
+        async fn send_text(&self, _o: &Origin, markdown: &str) -> Result<(), String> {
+            self.0.lock().unwrap().push(markdown.to_string());
+            Ok(())
+        }
+        async fn send_file(
+            &self,
+            _o: &Origin,
+            _p: &std::path::Path,
+            _c: Option<&str>,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// #131 : un résumeur qui échoue trois fois de suite ne fait pas attendre un
+    /// quatrième refroidissement : la compaction se fait sans modèle, franche (un nœud),
+    /// avec les messages du propriétaire gardés, et le propriétaire le sait ; `/status` et
+    /// le digest disent la session en échec.
+    #[tokio::test]
+    async fn three_failures_compact_without_a_model_and_say_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = TestClock::default();
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), Arc::new(clock.clone()))
+                .await
+                .unwrap(),
+        );
+        let d = Arc::new(Daemon::from_services(s.clone()));
+        let p = Arc::new(MockProvider::new());
+        d.set_provider_override(p.clone());
+        let rec = Arc::new(Recorder::default());
+        *d.hooks.messenger.write().unwrap() =
+            Some(rec.clone() as Arc<dyn crate::executor::Messenger>);
+        let sid = long_session(&d).await;
+        for _ in 0..3 {
+            p.reply("Désolé, je ne peux pas résumer.");
+        }
+        let conv = SessionConversation::new(
+            s.clone(),
+            &sid,
+            "openrouter:deepseek/deepseek-v4-pro",
+            penelope_context::TiersBuilder::new()
+                .soul("Pénélope.")
+                .build(),
+            0,
+        );
+        let before = conv.request_messages().await.unwrap();
+        for round in 1..=2 {
+            let err = compact(&d, &sid, Trigger::Background, None)
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("résumé a échoué"),
+                "{round} : {err}"
+            );
+            assert!(s.context.lcm.active_nodes(&sid).await.unwrap().is_empty());
+            clock.advance_ms(3_600_000);
+        }
+        assert_eq!(
+            conv.request_messages().await.unwrap(),
+            before,
+            "le préfixe ne bouge pas pendant les échecs"
+        );
+        let view = context_view(&s, &sid, None).await.unwrap();
+        assert_eq!(view["compaction_failures"], 2);
+        assert!(
+            crate::dream::digest_text(&d)
+                .await
+                .unwrap()
+                .contains("Résumé de session en échec"),
+            "le digest signale la session"
+        );
+
+        let r = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+        assert_eq!(r.published, 1, "{r:?}");
+        assert_eq!(r.model.as_deref(), Some(MECHANICAL_MODEL));
+        assert!(
+            r.recovered.iter().any(|x| x.contains("sans modèle")),
+            "{r:?}"
+        );
+        assert_eq!(
+            summarizer_requests(&p).len(),
+            3,
+            "une demande par tentative"
+        );
+        let nodes = s.context.lcm.active_nodes(&sid).await.unwrap();
+        assert_eq!(nodes.len(), 1, "une compaction franche");
+        assert!(
+            nodes[0].summary.contains("Compaction sans modèle"),
+            "{}",
+            nodes[0].summary
+        );
+        assert!(
+            nodes[0].summary.contains("question "),
+            "derniers messages du propriétaire gardés"
+        );
+        assert_eq!(load_cooldown(&d, &sid).await.failures, 0);
+        let sent = rec.0.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(sent[0].contains("ne se résumait plus"), "{sent:?}");
+        let events = s.events.session_events(&sid, 0).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == "context.compaction_mechanical")
+        );
+    }
+
+    /// #131 : un résumeur en délai est d'abord relancé sur une demande trois fois plus
+    /// courte ; un résumé invalide ne l'est pas (ce n'est pas une affaire de taille).
+    #[tokio::test]
+    async fn a_passing_failure_is_retried_on_a_shorter_request() {
+        let (_dir, d, p) = daemon().await;
+        let sid = long_session(&d).await;
+        p.push(Scripted::Error(
+            penelope_llm::types::LlmErrorKind::Transient,
+            "Upstream idle timeout exceeded".into(),
+        ));
+        for _ in 0..4 {
+            p.reply(SUMMARY);
+        }
+        let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+        assert!(r.published >= 1, "{r:?}");
+        assert!(
+            r.recovered
+                .iter()
+                .any(|x| x.contains("demande plus courte")),
+            "{r:?}"
+        );
+        let asked = summarizer_requests(&p);
+        let size = |i: usize| {
+            asked[i]
+                .messages
+                .iter()
+                .map(|m| m.text().len())
+                .sum::<usize>()
+        };
+        assert!(size(1) < size(0), "{} puis {}", size(0), size(1));
+    }
+
+    /// #131 : l'alias de repli déclaré pour le résumeur n'est essayé que si la réserve des
+    /// résumés couvre son coût estimé ; un modèle au prix inconnu n'est pas essayé.
+    #[tokio::test]
+    async fn the_fallback_summarizer_stays_within_the_reserve() {
+        let (_dir, d, p) = daemon().await;
+        d.publish_config("test", |c| {
+            c.models
+                .routing
+                .fallback
+                .insert("summarizer".into(), vec!["main".into()]);
+            Ok(vec!["models.routing.fallback".into()])
+        })
+        .unwrap();
+        let sid = long_session(&d).await;
+        for _ in 0..2 {
+            p.push(Scripted::Error(
+                penelope_llm::types::LlmErrorKind::Transient,
+                "timeout".into(),
+            ));
+        }
+        let err = compact(&d, &sid, Trigger::Manual, None).await.unwrap_err();
+        assert!(err.to_string().contains("résumé a échoué"), "{err}");
+        let cfg = d.services.config.config();
+        let main = cfg.alias_model("main").unwrap().to_string();
+        assert!(
+            !summarizer_requests(&p).iter().any(|r| r.model == main),
+            "prix inconnu : pas de repli"
+        );
+
+        let mut info = ModelInfo::minimal(strip_provider(&main), "deepseek", 128_000);
+        info.price_prompt = 0.000_000_5;
+        info.price_completion = 0.000_002;
+        d.services.catalog.upsert(vec![info]);
+        for _ in 0..2 {
+            p.push(Scripted::Error(
+                penelope_llm::types::LlmErrorKind::Transient,
+                "timeout".into(),
+            ));
+        }
+        for _ in 0..3 {
+            p.reply(SUMMARY);
+        }
+        let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+        assert!(r.published >= 1, "{r:?}");
+        assert!(r.recovered.iter().any(|x| x.contains("repli sur")), "{r:?}");
+        assert!(summarizer_requests(&p).iter().any(|r| r.model == main));
     }
 
     #[tokio::test]

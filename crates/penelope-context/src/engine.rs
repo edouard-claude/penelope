@@ -321,6 +321,21 @@ impl ContextEngine {
         model_id: &str,
         force: bool,
     ) -> penelope_store::Result<Option<SummaryJob>> {
+        self.prepare_summary_capped(session_id, params, summarizer_window, model_id, force, None)
+            .await
+    }
+
+    /// [`prepare_summary`](Self::prepare_summary), le lot borné à `cap` tokens de source :
+    /// une demande plus courte après un résumeur qui n'a pas répondu à temps (issue #131).
+    pub async fn prepare_summary_capped(
+        &self,
+        session_id: &str,
+        params: &CompactionParams,
+        summarizer_window: u64,
+        model_id: &str,
+        force: bool,
+        cap: Option<u64>,
+    ) -> penelope_store::Result<Option<SummaryJob>> {
         let entries = self.history.load(session_id, 0).await?;
         let active = self.lcm.active_nodes(session_id).await?;
         let covered_to = active.iter().filter_map(|n| n.to_seq).max().unwrap_or(0);
@@ -373,6 +388,7 @@ impl ContextEngine {
         let reserve =
             SUMMARIZER_OVERHEAD_TOKENS + previous_tokens + (summarizer_window / 8).min(4_000);
         let budget = summarizer_window.saturating_sub(reserve).max(1);
+        let budget = cap.map_or(budget, |c| budget.min(c.max(1)));
         let sizes: Vec<u64> = rendered
             .iter()
             .map(|r| self.estimator.text_tokens(model_id, r))
