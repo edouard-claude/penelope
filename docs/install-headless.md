@@ -1355,12 +1355,24 @@ nuits de suite ou plus sans rien promouvoir ajoutent une ligne explicite, avec l
 dominant : un motif qui revient vingt fois est un réglage à revoir.
 
 **Les lots et leur coût.** La passe juge les candidats par lots d'au plus
-`memory.dream_batch` = `40`. Une sortie coupée fait rejouer le lot deux fois plus petit ;
-les lots suivants restent ensuite sous la plus petite taille coupée et ne remontent qu'à
-mi-chemin, au lieu de repartir à 40 (un lot sur cinq jugé, quatre appels jetés, avant
-0.17.19). La sortie demandée suit ce que le modèle écrit vraiment par candidat (350
-tokens au départ, la grille en écrit plusieurs centaines), dans la limite du modèle ; un
-lot trop grand pour elle est réduit avant l'appel. Chaque lot laisse un événement
+`memory.dream_batch` = `40`. Une sortie coupée fait rejouer le même début de lot deux
+fois plus petit, sans perdre de candidat ; les lots suivants restent ensuite sous la
+taille coupée et ne remontent qu'à mi-chemin entre elle et la plus grande taille qui a
+tenu depuis, au lieu de repartir à 40 (un lot sur cinq jugé, quatre appels jetés, avant
+0.17.19). Un lot rejoué jusqu'à un seul candidat accuse ce candidat, pas la taille : la
+passe reprend à mi-chemin de la première coupure. Deux fois de suite, c'est la taille qui
+est en cause. Une coupure à 2 candidats ne réduit jamais les lots suivants à 1.
+
+La sortie demandée suit ce que le modèle écrit vraiment par candidat (350 tokens au
+départ, la grille en écrit plusieurs centaines), dans la limite du modèle ; un lot trop
+grand pour elle est réduit avant l'appel. Une coupure enseigne aussi : l'estimation ne
+redescend plus sous ce que le lot coupé a prouvé, et quand c'est le plancher de 2 000
+tokens qui a coupé, il double. Un candidat seul coupé est repris une fois avec une
+sortie doublée ; coupé encore, sa réponse tronquée est gardée et l'appel compté jeté.
+Une passe dont plus de la moitié des lots, sur huit au moins, n'ont tenu qu'à un
+candidat s'arrête et le dit : les candidats restants attendent la passe suivante sans
+consommer de report (avant 0.17.23, une tête de lot bavarde laissait toute la passe
+partir par lots d'un candidat : 121 appels, 45 minutes). Chaque lot laisse un événement
 `memory.dream_batch` et une ligne de journal (taille, durée, sortie, coupé ou non), et le
 rapport comme le digest disent le nombre d'appels, les appels jetés et la durée. Un
 candidat n'est « reporté » que par une passe qui a rendu ses verdicts : une passe arrêtée

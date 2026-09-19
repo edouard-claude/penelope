@@ -205,41 +205,78 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
             // Chaque opération garde les candidats qu'elle sert : leur état se décide
             // après l'écriture (issue #60).
             let mut ops: Vec<(Vec<String>, Operation)> = Vec::new();
+            // Candidats laissés par une passe arrêtée : ni jugés, ni reportés (#140).
+            let mut unjudged: BTreeSet<String> = BTreeSet::new();
+            let (mut lots, mut lone_lots) = (0usize, 0usize);
             let mut i = 0usize;
             while i < items.len() {
+                // Plus de la moitié des lots à un seul candidat : la passe ne converge
+                // pas, elle s'arrête et le dit plutôt que de finir en un appel par
+                // candidat (#140).
+                if lots >= LONE_WATCH && lone_lots * 2 > lots {
+                    let left = &items[i..];
+                    report.warnings.push(format!(
+                        "passe arrêtée : {lone_lots} lots sur {lots} n'ont tenu qu'à un seul \
+                         candidat ; {} candidat(s) restent en attente, sans report consommé",
+                        left.len()
+                    ));
+                    unjudged.extend(
+                        left.iter()
+                            .flat_map(|it| it.group.members.iter().map(|m| m.id.clone())),
+                    );
+                    break;
+                }
                 let mut size = budget.fit(sizer.size(items.len() - i));
+                let mut lone_retried = false;
                 loop {
                     let slice = &items[i..i + size];
                     let started = std::time::Instant::now();
-                    let (response, truncated, completion) = consolidate_retrying(
-                        d,
-                        slice,
-                        &snapshot,
-                        budget.max_tokens(size),
-                        &mut report,
-                    )
-                    .await?;
+                    let requested = budget.max_tokens(size);
+                    let (response, truncated, completion) =
+                        consolidate_retrying(d, slice, &snapshot, requested, &mut report).await?;
                     report.calls += 1;
                     batch_event(d, &run_id, size, started.elapsed(), completion, truncated).await;
+                    if truncated {
+                        budget.cut(size, requested, completion);
+                    }
                     if truncated && size > 1 {
-                        // Sortie coupée : on rejoue tout de suite avec un lot deux fois
-                        // plus petit, en le disant ; les lots suivants restent sous cette
-                        // taille (#135).
+                        // Sortie coupée : on rejoue tout de suite le même début, en lot deux
+                        // fois plus petit, en le disant (#135).
+                        report.wasted_calls += 1;
+                        sizer.cut(size);
+                        let next = budget.fit(sizer.size(items.len() - i));
+                        report.warnings.push(format!(
+                            "consolidation coupée sur {size} candidats : reprise par {next}"
+                        ));
+                        size = next;
+                        continue;
+                    }
+                    if truncated && !lone_retried && budget.max_tokens(1) > requested {
+                        // Un seul candidat coupé : une reprise avec une sortie doublée avant
+                        // de garder une réponse tronquée (#140).
+                        lone_retried = true;
                         report.wasted_calls += 1;
                         report.warnings.push(format!(
-                            "consolidation coupée sur {size} candidats : reprise par {}",
-                            size / 2
+                            "consolidation coupée sur un seul candidat à {requested} tokens : \
+                             reprise à {}",
+                            budget.max_tokens(1)
                         ));
-                        sizer.cut(size);
-                        size = sizer.size(items.len() - i);
                         continue;
                     }
                     sizer.ok(size);
-                    budget.observe(size, completion);
+                    lots += 1;
+                    if size == 1 {
+                        lone_lots += 1;
+                    }
                     if truncated {
-                        report
-                            .warnings
-                            .push("consolidation coupée sur un seul candidat".into());
+                        // Gardée tronquée : ce qu'elle juge compte, l'appel est compté jeté.
+                        report.wasted_calls += 1;
+                        report.warnings.push(format!(
+                            "consolidation coupée sur un seul candidat, même à {requested} \
+                             tokens : réponse tronquée gardée"
+                        ));
+                    } else {
+                        budget.observe(size, completion);
                     }
                     let (batch_ops, updates) =
                         sort_and_plan(slice, &response, &snapshot, &day, &mut report);
@@ -294,7 +331,7 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                 let ids: Vec<String> = g.members.iter().map(|m| m.id.clone()).collect();
                 if ids
                     .iter()
-                    .any(|id| served.contains(id) || decided.contains(id))
+                    .any(|id| served.contains(id) || decided.contains(id) || unjudged.contains(id))
                 {
                     continue;
                 }
@@ -1115,15 +1152,28 @@ async fn consolidate(
     Ok((parsed, truncated, response.usage.completion))
 }
 
-/// Taille des lots d'une passe (issue #135). Après une sortie coupée à `n`, les lots
-/// restent sous `n` pour toute la passe ; après un lot qui tient, la taille remonte à
-/// mi-chemin de la plus petite taille coupée, jamais au-dessus. Sans ça, chaque lot
-/// repartait à `dream_batch` et quatre appels sur cinq étaient jetés.
+/// Taille des lots d'une passe (issues #135, #140). Après une sortie coupée, les lots
+/// restent sous la taille accusée pour toute la passe ; après un lot qui tient, la taille
+/// remonte à mi-chemin entre la plus grande taille qui a tenu depuis et la taille accusée,
+/// jamais au-dessus. Sans ça, chaque lot repartait à `dream_batch` et quatre appels sur
+/// cinq étaient jetés.
+///
+/// Un lot rejoué jusqu'à un seul candidat accuse ce candidat, pas la taille : seule la
+/// première coupure compte. Deux fois de suite, c'est la taille : la plus petite coupure
+/// compte. Une coupure à 2 candidats ou moins n'accuse jamais la taille (c'est la sortie
+/// qui manque, `OutputBudget` s'en charge) : sans ces deux règles, une tête de lot
+/// bavarde posait le plafond à 2, et toute la passe partait par lots d'un candidat.
 #[derive(Debug, Clone)]
 pub(crate) struct BatchSizer {
     max: usize,
-    /// Plus petite taille coupée pendant la passe.
+    /// Taille accusée la plus petite de la passe : les lots restent dessous.
     ceiling: Option<usize>,
+    /// Tailles coupées du lot en cours de rejeu, de la première à la dernière.
+    descent: Vec<usize>,
+    /// Le lot précédent n'a tenu qu'à un candidat, au bout d'un rejeu.
+    lone_before: bool,
+    /// Plus grande taille qui a tenu depuis que le plafond a baissé.
+    held: usize,
     next: usize,
 }
 
@@ -1132,6 +1182,9 @@ impl BatchSizer {
         BatchSizer {
             max: max.max(1),
             ceiling: None,
+            descent: Vec::new(),
+            lone_before: false,
+            held: 0,
             next: max.max(1),
         }
     }
@@ -1141,27 +1194,56 @@ impl BatchSizer {
     }
 
     pub(crate) fn cut(&mut self, size: usize) {
-        self.ceiling = Some(self.ceiling.map_or(size, |c| c.min(size)));
+        self.descent.push(size);
         self.next = (size / 2).max(1);
     }
 
     pub(crate) fn ok(&mut self, size: usize) {
+        let descent = std::mem::take(&mut self.descent);
+        if descent.is_empty() {
+            self.lone_before = false;
+        } else {
+            let lone = size == 1;
+            let blamed = if lone && !self.lone_before {
+                descent.first()
+            } else {
+                descent.iter().rev().find(|&&c| c > 2)
+            };
+            self.lone_before = lone;
+            if let Some(&blamed) = blamed.filter(|&&c| c > 2)
+                && self.ceiling.is_none_or(|c| blamed < c)
+            {
+                self.ceiling = Some(blamed);
+                self.held = 0;
+            }
+        }
+        self.held = self.held.max(size);
         self.next = match self.ceiling {
-            // À mi-chemin de la taille coupée, sans l'atteindre.
-            Some(c) => ((size + c) / 2).min(c - 1).max(1),
+            // À mi-chemin de la taille accusée, sans l'atteindre.
+            Some(c) => ((self.held + c) / 2).min(c - 1).max(1),
             None => self.max,
         }
         .min(self.max);
     }
 }
 
-/// Sortie demandée par lot (issue #135) : estimée d'après les tokens réellement écrits
-/// par candidat aux lots précédents (350 au départ, la grille de #37 en écrit plusieurs
-/// centaines), avec une marge, dans la limite du modèle. Un lot plus grand que ce que la
-/// limite permet est réduit avant l'appel.
+/// Sortie demandée par lot (issues #135, #140) : estimée d'après les tokens réellement
+/// écrits par candidat aux lots précédents (350 au départ, la grille de #37 en écrit
+/// plusieurs centaines), avec une marge, dans la limite du modèle. Un lot plus grand que
+/// ce que la limite permet est réduit avant l'appel.
+///
+/// Une coupure enseigne aussi : elle prouve que le modèle écrit plus que ce qui a été
+/// demandé. Si c'est l'estimation par candidat qui a fixé la demande, elle ne redescend
+/// plus sous cette preuve ; si c'est le plancher (2 000 tokens, ou un seul candidat), il
+/// double. Avant #140, seuls les lots qui tenaient enseignaient, l'estimation tirait vers
+/// le bas, et chaque lot rejoué recevait une demande juste sous ce que le modèle écrivait.
 #[derive(Debug, Clone)]
 pub(crate) struct OutputBudget {
     per_candidate: f64,
+    /// Tokens par candidat prouvés par les coupures : l'estimation reste au-dessus.
+    proven: f64,
+    /// Sortie minimale d'un lot, relevée par ce que le modèle écrit pour un candidat.
+    floor: u32,
     cap: u32,
 }
 
@@ -1169,12 +1251,16 @@ impl OutputBudget {
     pub(crate) fn new(cap: u32) -> Self {
         OutputBudget {
             per_candidate: 350.0,
+            proven: 0.0,
+            floor: 2_000,
             cap: cap.max(2_000),
         }
     }
 
     pub(crate) fn max_tokens(&self, size: usize) -> u32 {
-        ((size as f64 * self.per_candidate * 1.3) as u32).clamp(2_000, self.cap)
+        ((size as f64 * self.per_candidate * 1.3) as u32)
+            .max(self.floor)
+            .min(self.cap)
     }
 
     /// Plus grand lot dont la sortie estimée tient dans la limite.
@@ -1183,14 +1269,38 @@ impl OutputBudget {
         size.min(most.max(1))
     }
 
+    /// Un lot qui a tenu.
     pub(crate) fn observe(&mut self, size: usize, completion: u64) {
         if completion == 0 || size == 0 {
             return;
         }
         let seen = (completion as f64 / size as f64).max(100.0);
-        self.per_candidate = (self.per_candidate + seen) / 2.0;
+        self.per_candidate = ((self.per_candidate + seen) / 2.0).max(self.proven);
+        if size == 1 {
+            self.floor = self
+                .floor
+                .max((completion as f64 * 1.3) as u32)
+                .min(self.cap);
+        }
+    }
+
+    /// Un lot coupé après `completion` tokens, pour `requested` demandés.
+    pub(crate) fn cut(&mut self, size: usize, requested: u32, completion: u64) {
+        if size == 0 {
+            return;
+        }
+        if size == 1 || requested <= self.floor {
+            // Le plancher a coupé : un seul candidat écrit plus que lui.
+            self.floor = requested.saturating_mul(2).max(self.floor).min(self.cap);
+        } else {
+            self.proven = self.proven.max(completion as f64 / size as f64);
+            self.per_candidate = self.per_candidate.max(self.proven);
+        }
     }
 }
+
+/// Lots jugés avant qu'une passe faite surtout de lots d'un candidat soit arrêtée (#140).
+const LONE_WATCH: usize = 8;
 
 /// Limite de sortie du modèle de consolidation : celle du catalogue, sinon 16 000.
 fn output_cap(d: &Arc<Daemon>, cfg: &penelope_kernel::config::Config) -> u32 {
@@ -3029,6 +3139,206 @@ mod tests {
         }
     }
 
+    /// Modèle simulé de #140 : `easy` tokens par candidat, `hard` pour un candidat
+    /// « épineux », coupé à `max_tokens` comme un vrai fournisseur ; au-delà de `garble`
+    /// candidats, une réponse illisible quelle que soit la sortie.
+    fn verbose_model(easy: u64, hard: u64, garble: usize) -> penelope_llm::mock::Responder {
+        Arc::new(move |req: &ChatRequest| {
+            let user = req.messages.last().map(|m| m.text()).unwrap_or_default();
+            let lines: Vec<&str> = user
+                .lines()
+                .filter(|l| {
+                    l.split_once(". [").is_some_and(|(k, _)| {
+                        !k.is_empty() && k.chars().all(|c| c.is_ascii_digit())
+                    })
+                })
+                .collect();
+            let n = lines.len() as u64;
+            let heavy = lines.iter().filter(|l| l.contains("épineux")).count() as u64;
+            let need = easy * (n - heavy) + hard * heavy;
+            let limit = req.max_tokens.map_or(u64::MAX, u64::from);
+            let partial = r#"{"tri": [{"candidat": 1, "dur"#.to_string();
+            if lines.len() > garble {
+                return penelope_llm::mock::Scripted::Written {
+                    text: partial,
+                    completion: easy,
+                    cut: false,
+                };
+            }
+            if need > limit {
+                return penelope_llm::mock::Scripted::Written {
+                    text: partial,
+                    completion: limit,
+                    cut: true,
+                };
+            }
+            let tri: Vec<String> = (1..=n)
+                .map(|k| {
+                    format!(
+                        r#"{{"candidat": {k}, "durable": false, "utile": false, "precis": true,
+                          "introuvable": true, "endosse": true, "justification": "passager"}}"#
+                    )
+                })
+                .collect();
+            penelope_llm::mock::Scripted::Written {
+                text: format!(r#"{{"tri": [{}], "operations": []}}"#, tri.join(",")),
+                completion: need,
+                cut: false,
+            }
+        })
+    }
+
+    /// Candidats de #140 : `n` projets distincts, jugés dans l'ordre, épineux quand
+    /// `thorny` le dit.
+    async fn projects(d: &Arc<Daemon>, n: usize, thorny: impl Fn(usize) -> bool) {
+        for k in 0..n {
+            let thorny = if thorny(k) { ", cas épineux" } else { "" };
+            note(
+                d,
+                CandidateType::Preference,
+                &format!(
+                    "Pour le projet{k:03}, le propriétaire décide seul et sans réunion{thorny}"
+                ),
+                Origin::Owner,
+                "s1",
+                6,
+            )
+            .await;
+        }
+    }
+
+    fn dream_batches(events: &[penelope_kernel::event::Event]) -> Vec<(u64, bool)> {
+        events
+            .iter()
+            .filter(|e| e.kind == "memory.dream_batch")
+            .map(|e| {
+                (
+                    e.payload["size"].as_u64().unwrap(),
+                    e.payload["truncated"] == true,
+                )
+            })
+            .collect()
+    }
+
+    /// #140 : la passe de l'essai à blanc du 19 septembre, rejouée avec un modèle qui
+    /// écrit 250 tokens par candidat facile et 2 400 pour un épineux : trois lots
+    /// faciles tirent l'estimation vers le bas, puis un épineux sur dix. Avant, le
+    /// quatrième lot redescendait jusqu'à 1 sur sa tête épineuse, puis toute la passe
+    /// partait par lots d'un candidat (121 lots, 45 minutes). Elle finit maintenant en
+    /// moins de 20 appels, chaque candidat jugé, aucune réponse tronquée gardée.
+    #[tokio::test]
+    async fn a_verbose_candidate_does_not_leave_the_pass_one_by_one() {
+        let (_dir, d, p) = daemon().await;
+        projects(&d, 160, |k| k >= 115 && k % 10 == 5).await;
+        p.set_responder(Some(verbose_model(250, 2_400, usize::MAX)));
+        let o = run(&d, false).await.unwrap();
+        assert!(o.report.calls < 20, "{:?}", o.report);
+        assert_eq!(o.report.calls as usize, p.call_count());
+        let batches = dream_batches(&d.services.events.range(0, 10_000).await.unwrap());
+        let judged: u64 = batches.iter().filter(|(_, cut)| !cut).map(|(n, _)| n).sum();
+        assert_eq!(judged, 160, "{batches:?}");
+        let lone = batches.iter().filter(|(n, _)| *n == 1).count();
+        assert!(lone <= 2, "{batches:?}");
+        assert!(
+            !o.report
+                .warnings
+                .iter()
+                .any(|w| w.contains("tronquée gardée")),
+            "{:?}",
+            o.report.warnings
+        );
+    }
+
+    /// #140 : un candidat seul coupé au plancher est repris une fois avec une sortie
+    /// doublée ; s'il est coupé encore, la réponse tronquée est gardée et l'appel compté
+    /// jeté.
+    #[tokio::test]
+    async fn a_lone_cut_is_retried_with_twice_the_output() {
+        let (_dir, d, p) = daemon().await;
+        projects(&d, 1, |_| true).await;
+        p.set_responder(Some(verbose_model(250, 2_400, usize::MAX)));
+        let o = run(&d, true).await.unwrap();
+        assert_eq!(
+            (o.report.calls, o.report.wasted_calls),
+            (2, 1),
+            "{:?}",
+            o.report
+        );
+        let limits: Vec<Option<u32>> = p.requests().iter().map(|r| r.max_tokens).collect();
+        assert_eq!(limits, vec![Some(2_000), Some(4_000)]);
+        assert!(
+            o.report
+                .warnings
+                .iter()
+                .any(|w| w.contains("coupée sur un seul candidat à 2000 tokens : reprise à 4000")),
+            "{:?}",
+            o.report.warnings
+        );
+
+        let (_dir, d, p) = daemon().await;
+        projects(&d, 1, |_| true).await;
+        p.set_responder(Some(verbose_model(250, 9_000, usize::MAX)));
+        let o = run(&d, true).await.unwrap();
+        assert_eq!(
+            (o.report.calls, o.report.wasted_calls),
+            (2, 2),
+            "{:?}",
+            o.report
+        );
+        assert!(
+            o.report
+                .warnings
+                .iter()
+                .any(|w| w.contains("même à 4000 tokens : réponse tronquée gardée")),
+            "{:?}",
+            o.report.warnings
+        );
+    }
+
+    /// #140 : un modèle qui ne tient qu'un candidat à la fois ne fait pas une passe d'un
+    /// appel par candidat : elle s'arrête, le dit, et les candidats non jugés restent en
+    /// attente sans consommer de report.
+    #[tokio::test]
+    async fn a_pass_of_lone_lots_stops_and_says_so() {
+        let (_dir, d, p) = daemon().await;
+        projects(&d, 40, |_| false).await;
+        let s = &d.services;
+        let deferrals = || async {
+            s.store
+                .read(|c| {
+                    let mut st =
+                        c.prepare("SELECT id, deferrals, state FROM mem_candidates ORDER BY id")?;
+                    let rows = st.query_map([], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, i64>(1)?,
+                            r.get::<_, String>(2)?,
+                        ))
+                    })?;
+                    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+                })
+                .await
+                .unwrap()
+        };
+        let before = deferrals().await;
+        p.set_responder(Some(verbose_model(250, 2_400, 1)));
+        let o = run(&d, false).await.unwrap();
+        assert!(o.report.calls <= 25, "{:?}", o.report);
+        let stop = o
+            .report
+            .warnings
+            .iter()
+            .find(|w| w.starts_with("passe arrêtée"))
+            .unwrap_or_else(|| panic!("{:?}", o.report.warnings));
+        assert!(stop.contains("sans report consommé"), "{stop}");
+        let batches = dream_batches(&s.events.range(0, 10_000).await.unwrap());
+        let judged = batches.iter().filter(|(_, cut)| !cut).count();
+        assert_eq!(judged, LONE_WATCH, "{batches:?}");
+        let after = deferrals().await;
+        let untouched = before.iter().filter(|b| after.contains(b)).count();
+        assert_eq!(untouched, 40 - LONE_WATCH, "{after:?}");
+    }
+
     /// #135 : un modèle qui coupe au-delà de 10 candidats juge 188 groupes en au plus
     /// 25 appels ; après une descente à 5, le lot suivant part entre 5 et 10.
     #[test]
@@ -3061,6 +3371,80 @@ mod tests {
             "plus que 120 tokens par candidat"
         );
         assert!(budget.fit(40) * 455 <= 16_000 + 455);
+    }
+
+    /// #140 : après des coupures à 40, 20, 10, 5 et 2 sur la même tête de lot, qui ne
+    /// tient qu'à un candidat, le lot suivant ne fait pas 1 : seule la première coupure
+    /// accuse la taille. Deux fois de suite, c'est la taille. Une coupure à 2 ne pose
+    /// jamais un plafond à 1.
+    #[test]
+    fn a_heavy_head_does_not_shrink_every_later_batch() {
+        let mut sizer = BatchSizer::new(40);
+        sizer.ok(40);
+        for size in [40, 20, 10, 5, 2] {
+            assert_eq!(sizer.size(200), size);
+            sizer.cut(size);
+        }
+        assert_eq!(sizer.size(200), 1);
+        sizer.ok(1);
+        assert_eq!(sizer.size(200), 20);
+        sizer.ok(20);
+        assert_eq!(sizer.size(200), 30);
+
+        // Deux rejeux de suite jusqu'à 1 : la taille est en cause, la plus petite coupure
+        // au-dessus de 2 (3) devient le plafond, et le lot suivant fait 2, pas 1.
+        for size in [30, 15, 7, 3] {
+            sizer.cut(size);
+        }
+        sizer.ok(1);
+        for size in [20, 10, 5, 3] {
+            sizer.cut(size);
+        }
+        sizer.ok(1);
+        assert_eq!(sizer.size(200), 2);
+        sizer.cut(2);
+        sizer.ok(1);
+        assert_eq!(
+            sizer.size(200),
+            2,
+            "une coupure à 2 ne pose pas de plafond à 1"
+        );
+    }
+
+    /// #140 : les lots faciles de l'essai à blanc tiraient l'estimation à ~191 tokens par
+    /// candidat ; la coupure du lot de 40 à 9 958 tokens la remonte au-dessus de la
+    /// preuve, et les lots faciles qui suivent ne la font plus redescendre dessous. Le
+    /// plancher double quand c'est lui qui a coupé.
+    #[test]
+    fn a_cut_teaches_the_output_estimate() {
+        let mut budget = OutputBudget::new(32_000);
+        budget.observe(40, 17_927);
+        budget.observe(40, 3_069);
+        budget.observe(40, 5_339);
+        let before = budget.max_tokens(40);
+        assert!((9_800..10_000).contains(&before), "{before}");
+        budget.cut(40, before, 9_958);
+        assert!(budget.max_tokens(20) as f64 >= 20.0 * 9_958.0 / 40.0 * 1.3 - 1.0);
+        budget.observe(40, 3_069);
+        assert!(budget.max_tokens(40) as f64 >= 9_958.0 * 1.3 - 1.0);
+
+        let mut budget = OutputBudget::new(16_000);
+        assert_eq!(budget.max_tokens(1), 2_000);
+        budget.cut(2, 2_000, 2_000);
+        assert_eq!(budget.max_tokens(1), 4_000, "plancher doublé");
+        assert!(
+            budget.fit(40) >= 30,
+            "l'estimation par candidat ne bouge pas"
+        );
+        budget.cut(1, 4_000, 4_000);
+        assert_eq!(budget.max_tokens(1), 8_000);
+        budget.cut(1, 8_000, 8_000);
+        budget.cut(1, 16_000, 16_000);
+        assert_eq!(
+            budget.max_tokens(1),
+            16_000,
+            "jamais au-delà de la limite du modèle"
+        );
     }
 
     /// #135 : la passe entière, avec un modèle qui coupe au-delà de 10 candidats : peu

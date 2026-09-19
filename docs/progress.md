@@ -1635,6 +1635,38 @@ Un tour coupé par son plafond d'appels propose de continuer, pas de réessayer 
   doit passer par la constante, sinon le bouton redevient « Réessayer » (test d'agent qui
   vérifie le préfixe).
 
+### 0.17.23
+
+Consolidation : une tête de lot bavarde ne réduit plus toute la passe à des lots d'un
+candidat (#140, suite de #135).
+
+- **Les coupures enseignent l'estimation de sortie** (#140) : `OutputBudget::observe`
+  n'apprenait que des lots qui tenaient, et les lots faciles tiraient l'estimation à ~191
+  tokens par candidat ; chaque lot rejoué recevait une demande juste sous ce que le
+  modèle écrivait (9 932 pour 9 958, 4 966 pour 4 979, 2 483 pour 2 489). Une coupure
+  prouve maintenant une borne basse : si l'estimation par candidat a fixé la demande,
+  elle ne redescend plus sous `tokens / candidats` ; si c'est le plancher (2 000, ou un
+  lot d'un candidat), il double, dans la limite du modèle. Un lot d'un candidat qui tient
+  relève le plancher à ce qu'il a écrit, marge comprise.
+- **Un candidat seul coupé est repris une fois, sortie doublée** (#140) : il était gardé
+  tronqué dès la première coupure. La réponse tronquée n'est gardée qu'après la reprise,
+  avec un avertissement, et l'appel est compté jeté.
+- **La taille des lots accuse la bonne cause** (#140) : la coupure à 2 posait le plafond à
+  2, et `BatchSizer::ok` rendait `min(c − 1)` = 1 pour toute la passe (121 lots d'un
+  candidat). Un rejeu qui ne tient qu'à un candidat accuse ce candidat : seule la
+  première coupure compte. Deux fois de suite, la plus petite coupure au-dessus de 2
+  compte. Une coupure à 2 ou moins n'accuse jamais la taille. La remontée se fait à
+  mi-chemin entre la taille accusée et la plus grande taille qui a tenu depuis, jamais
+  au-dessus : pas de retour à `dream_batch` (#135).
+- **Une passe de lots d'un candidat s'arrête** (#140) : au-delà de huit lots, si plus de
+  la moitié n'ont tenu qu'à un candidat, la passe s'arrête avec un avertissement ; les
+  candidats non jugés restent en attente sans consommer de report (#59). Les reprises
+  d'erreur passagère (#127) comptent en appels, pas en lots.
+- Rejeu de la passe du 19 septembre avec un modèle simulé (250 tokens par candidat
+  facile, 2 400 pour un épineux) : 53 appels avant, moins de 20 maintenant, chaque
+  candidat jugé. Le mock de fournisseur sait rendre une sortie mesurée et coupée
+  (`Scripted::Written`).
+
 ### Routine de livraison
 
 Avant chaque tag :

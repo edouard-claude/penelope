@@ -26,6 +26,14 @@ pub enum Scripted {
     /// Panique dans l'appel lui-même : pour vérifier qu'un tour qui panique ne tue ni son
     /// runner ni le verrou de sa session (issue #84).
     Panic(String),
+    /// Texte dont la sortie est mesurée : `completion` tokens écrits, fin `Length` quand
+    /// `cut` (la limite de sortie a coupé la réponse). Pour tester ce qui dimensionne
+    /// la sortie demandée (issue #140).
+    Written {
+        text: String,
+        completion: u64,
+        cut: bool,
+    },
 }
 
 #[derive(Clone, Default)]
@@ -239,7 +247,10 @@ impl Provider for MockProvider {
             ));
         }
 
-        let usage = *self.usage.lock().unwrap_or_else(|p| p.into_inner());
+        let mut usage = *self.usage.lock().unwrap_or_else(|p| p.into_inner());
+        if let Scripted::Written { completion, .. } = &scripted {
+            usage.completion = *completion;
+        }
         let model = req.model.clone();
         let (tx, rx) = mpsc::channel(32);
         tokio::spawn(async move {
@@ -285,6 +296,14 @@ impl Provider for MockProvider {
                         let _ = tx.send(StreamChunk::Image { url }).await;
                     }
                     FinishReason::Stop
+                }
+                Scripted::Written { text, cut, .. } => {
+                    let _ = tx.send(StreamChunk::Delta { text }).await;
+                    if cut {
+                        FinishReason::Length
+                    } else {
+                        FinishReason::Stop
+                    }
                 }
                 Scripted::MidStreamError(t, message) => {
                     if !t.is_empty() {
