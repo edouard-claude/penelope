@@ -585,6 +585,9 @@ pub struct Memory {
     pub dream_batch: usize,
     /// Heure de la consolidation nocturne (cron, fuseau du propriétaire).
     pub dreaming_cron: String,
+    /// Attente avant de reprendre un lot de la consolidation après une erreur passagère
+    /// du modèle (flux muet, 5xx, 429), doublée à la seconde reprise.
+    pub dream_retry_wait: String,
     /// Heure du digest du matin (cron, fuseau du propriétaire).
     pub digest_cron: String,
     pub promotion: Promotion,
@@ -616,6 +619,7 @@ impl Default for Memory {
             review_max_candidates: 5,
             dream_batch: 40,
             dreaming_cron: "30 3 * * *".into(),
+            dream_retry_wait: "2m".into(),
             digest_cron: "0 8 * * *".into(),
             promotion: Promotion::default(),
             intents: Intents::default(),
@@ -1314,6 +1318,7 @@ impl Config {
         }
 
         parse_duration(&self.memory.episode_idle)?;
+        parse_duration(&self.memory.dream_retry_wait)?;
         parse_duration(&self.memory.vault_git_autocommit)?;
         parse_duration(&self.memory.intents.cooldown)?;
         parse_duration(&self.memory.intents.expiry)?;

@@ -371,6 +371,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `memory.review_max_candidates` | `5` | Candidats notés au plus par relecture d'un échange ; 0 : relecture désactivée. |
 | `memory.dream_batch` | `40` | Candidats consolidés par appel au modèle, la nuit : au-delà, la réponse ne tient plus dans la fenêtre de sortie et tout le lot est reporté. |
 | `memory.dreaming_cron` | `"30 3 * * *"` | Heure de la consolidation nocturne (cron, fuseau du propriétaire). |
+| `memory.dream_retry_wait` | `"2m"` | Attente avant de reprendre un lot de la consolidation après une erreur passagère du modèle (flux muet, 5xx, 429), doublée à la seconde reprise. |
 | `memory.digest_cron` | `"0 8 * * *"` | Heure du digest du matin (cron, fuseau du propriétaire). |
 | `memory.promotion.ecart_min_occurrences` | `3` | Occurrences minimales d'un écart pour devenir une exception. |
 | `memory.promotion.ecart_min_sessions` | `3` | Sessions distinctes minimales d'un écart. |
@@ -1303,6 +1304,19 @@ les autres additionnées), jamais en liste intégrale ; le détail, candidat par
 est dans `DREAMS.md` sous le rêve de la nuit, avec une section « Motifs d'écart ». Deux
 nuits de suite ou plus sans rien promouvoir ajoutent une ligne explicite, avec le motif
 dominant : un motif qui revient vingt fois est un réglage à revoir.
+
+**Une nuit ratée se dit.** Une erreur passagère du modèle sur un lot (flux devenu muet,
+5xx, 429, lot sans réponse complète en 240 s) fait reprendre ce lot, et lui seul, après
+`memory.dream_retry_wait` (2 min), puis le double ; le rapport de la nuit le note. Rien
+n'est écrit avant que tous les lots aient répondu, et chaque candidat est marqué promu
+dès son entrée écrite : une passe arrêtée ne promeut jamais deux fois. Si le lot échoue
+encore, ou sur une erreur qui n'est pas passagère, la nuit est déclarée ratée : un
+événement `memory.dream_failed`, une ligne datée dans `DREAMS.md` (« Rêve du … : échec »,
+la raison, ce qui a été écrit ou non), un message au propriétaire comme pour la
+sauvegarde, et le digest du matin qui le dit au lieu de reprendre le rapport de la veille.
+Les candidats restent tels quels pour la nuit suivante. Une panne qui dure ne répète pas
+le même message chaque nuit : il revient quand la raison change, et le digest compte les
+nuits.
 
 **Sujet de travail.** Ce qui est injecté d'office (profil, mémoire de fond, projets) suit
 le sujet de la session : le profil et les entrées sans projet toujours, une entrée d'un

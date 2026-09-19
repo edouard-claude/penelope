@@ -1427,6 +1427,23 @@ Les appels d'outils MCP en protocole 2026-07-28 aboutissent (#126).
   version 2026 de la sonde retombe toujours sur `initialize`. Reste ouvert :
   `x-mcp-header` (`Mcp-Param-*`).
 
+### 0.17.14
+
+Une nuit de consolidation ratée ne passe plus en silence, et un flux muet est repris
+(#127).
+
+- **La nuit ratée se dit, le lot muet se reprend** (#127) : la passe du 18 au 19
+  septembre est morte après 1 h 09 sur « Upstream idle timeout exceeded », sans reprise
+  ni message (comportement d'origine : `tokio::spawn` puis `tracing::warn!`). Le lot en
+  erreur passagère (flux muet, 5xx, 429, 240 s sans réponse complète) est repris sur
+  place après `memory.dream_retry_wait` puis le double : les lots déjà faits ne sont pas
+  refaits, et rien n'est encore écrit à ce stade. Un candidat est marqué promu dès son
+  entrée écrite (et non plus en fin de passe) : une passe arrêtée plus loin ne le
+  repromeut pas. Une nuit ratée écrit un événement `memory.dream_failed` et une ligne
+  datée dans `DREAMS.md`, prévient le propriétaire (à la première nuit, puis quand la
+  raison change) et le digest le dit. La fenêtre de la passe suivante part toujours de
+  la dernière passe réussie.
+
 ### Routine de livraison
 
 Avant chaque tag :

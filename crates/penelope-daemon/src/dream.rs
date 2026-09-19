@@ -10,7 +10,7 @@ use crate::runtime::{Daemon, Services};
 use penelope_kernel::event::EventDraft;
 use penelope_llm::catalog::strip_provider;
 use penelope_llm::provider::{CancelToken, collect_stream};
-use penelope_llm::types::{ChatMessage, ChatRequest};
+use penelope_llm::types::{ChatMessage, ChatRequest, LlmError, LlmErrorKind};
 use penelope_memory::candidates::{Candidate, CandidateGroup, group};
 use penelope_memory::consolidation::{
     DreamReport, Gate, Operation, PromotionGates, ValidationContext, gate, validate,
@@ -207,7 +207,8 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                 let mut size = batch.min(items.len() - i);
                 loop {
                     let slice = &items[i..i + size];
-                    let (response, truncated) = consolidate(d, slice, &snapshot).await?;
+                    let (response, truncated) =
+                        consolidate_retrying(d, slice, &snapshot, &mut report).await?;
                     if truncated && size > 1 {
                         // Sortie coupée : on rejoue tout de suite avec un lot deux fois
                         // plus petit, en le disant.
@@ -312,9 +313,10 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                     if !report.files_touched.contains(&file) {
                         report.files_touched.push(file);
                     }
-                    // Écrit : le candidat est traité (issue #60).
+                    // Écrit : le candidat est traité (issue #60), et marqué tout de suite :
+                    // une passe arrêtée plus loin ne le repromouvra pas (issue #127).
                     if !ids.is_empty() {
-                        state_updates.push((ids, "promoted", None));
+                        s.candidates.set_state(&ids, "promoted", None).await?;
                     }
                 }
                 Err(e) => {
@@ -1054,18 +1056,22 @@ async fn consolidate(
         response_format: structured.then(|| json!({"type": "json_object"})),
         ..Default::default()
     };
+    // L'erreur du fournisseur garde son type : une erreur passagère se reprend (#127).
     let call = async {
-        let rx = provider
-            .chat_stream(request, CancelToken::new())
-            .await
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        collect_stream(rx, &model, provider.name(), &s.catalog)
-            .await
-            .map_err(|e| anyhow::anyhow!(e.to_string()))
+        let rx = provider.chat_stream(request, CancelToken::new()).await?;
+        collect_stream(rx, &model, provider.name(), &s.catalog).await
     };
     let response = tokio::time::timeout(LLM_TIMEOUT, call)
         .await
-        .map_err(|_| anyhow::anyhow!("consolidation trop longue"))??;
+        .map_err(|_| {
+            LlmError::new(
+                LlmErrorKind::Transient,
+                format!(
+                    "consolidation sans réponse complète en {} s",
+                    LLM_TIMEOUT.as_secs()
+                ),
+            )
+        })??;
     let _ = s
         .budget
         .record(penelope_kernel::budget::UsageRecord {
@@ -1089,6 +1095,48 @@ async fn consolidate(
     let truncated = matches!(response.finish, penelope_llm::types::FinishReason::Length)
         || (parsed.verdicts.is_empty() && !items.is_empty() && !text.trim().is_empty());
     Ok((parsed, truncated))
+}
+
+/// Un lot, repris après une erreur passagère du modèle (flux muet, 5xx, 429, délai) :
+/// attente `memory.dream_retry_wait`, puis le double. À ce stade rien n'est écrit ni
+/// marqué : la reprise ne peut rien appliquer deux fois, et le travail des lots déjà
+/// faits n'est pas refait (issue #127).
+async fn consolidate_retrying(
+    d: &Arc<Daemon>,
+    items: &[Item<'_>],
+    snap: &VaultSnapshot,
+    report: &mut DreamReport,
+) -> anyhow::Result<(penelope_memory::grid::Consolidation, bool)> {
+    let wait = penelope_kernel::config::parse_duration(
+        &d.services.config.config().memory.dream_retry_wait,
+    )
+    .unwrap_or(Duration::from_secs(120));
+    let mut attempt = 0u32;
+    loop {
+        match consolidate(d, items, snap).await {
+            Err(e) if attempt < RETRIES && passing(&e) => {
+                attempt += 1;
+                let delay = wait * attempt;
+                report.warnings.push(format!(
+                    "lot de {} candidat(s) : erreur passagère ({e}), reprise {attempt}/{RETRIES} \
+                     après {} s",
+                    items.len(),
+                    delay.as_secs()
+                ));
+                tokio::time::sleep(delay).await;
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Reprises d'un lot après une erreur passagère.
+const RETRIES: u32 = 2;
+
+/// Vrai pour une erreur passagère du fournisseur : un flux muet n'est pas un refus.
+fn passing(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<LlmError>()
+        .is_some_and(|l| l.kind.is_retryable())
 }
 
 fn target_file(s: &Services, op: &Operation) -> String {
@@ -1992,7 +2040,35 @@ async fn recent_reports(s: &Services, n: usize) -> anyhow::Result<Vec<DreamRepor
 pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
     let s = &d.services;
     let mut t = format!("☀️ **Digest du {}**\n", today(s));
-    match last_report(s).await? {
+    // Une nuit ratée se dit : le rapport précédent ne passe pas pour celui de la nuit.
+    let failed = last_failure(s).await;
+    if let Some(reason) = &failed {
+        let nights = d
+            .kv_get(FAILED_NIGHTS_KEY)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1)
+            .max(1);
+        let pending = s
+            .candidates
+            .pending(None)
+            .await
+            .map(|c| c.len())
+            .unwrap_or(0);
+        t.push_str(&format!(
+            "\n🧠 Pas de consolidation cette nuit{} : {}. {pending} candidat(s) en attente \
+             pour la prochaine.\n",
+            if nights > 1 {
+                format!(" ({nights} nuits de suite)")
+            } else {
+                String::new()
+            },
+            reason.chars().take(200).collect::<String>()
+        ));
+    }
+    match last_report(s).await?.filter(|_| failed.is_none()) {
         Some((id, finished, report)) => {
             t.push_str(&format!(
                 "\n🧠 {} _(passe `{id}`, {})_\n",
@@ -2012,6 +2088,7 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
                 }
             }
         }
+        None if failed.is_some() => {}
         None => t.push_str("\n🧠 Pas encore de consolidation.\n"),
     }
     // Planifications dont la dernière exécution a échoué, ou n'a rien livré (#39, #120).
@@ -2171,12 +2248,7 @@ pub async fn system_crons(d: &Arc<Daemon>) -> anyhow::Result<()> {
         let d2 = d.clone();
         match name {
             "dream" => {
-                tokio::spawn(async move {
-                    match run(&d2, false).await {
-                        Ok(o) => tracing::info!(run = %o.run_id, "consolidation nocturne terminée"),
-                        Err(e) => tracing::warn!(error = %e, "consolidation nocturne"),
-                    }
-                });
+                tokio::spawn(async move { nightly(&d2).await });
             }
             _ => {
                 tokio::spawn(async move {
@@ -2194,6 +2266,163 @@ pub async fn system_crons(d: &Arc<Daemon>) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Passe nocturne : une nuit ratée ne passe jamais en silence (issue #127).
+pub async fn nightly(d: &Arc<Daemon>) {
+    match run(d, false).await {
+        Ok(o) => {
+            tracing::info!(run = %o.run_id, "consolidation nocturne terminée");
+            let _ = d.kv_delete(FAILED_NIGHTS_KEY).await;
+            let _ = d.kv_delete(FAILED_REASON_KEY).await;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "consolidation nocturne");
+            night_failed(d, &e.to_string()).await;
+        }
+    }
+}
+
+/// Nuits ratées d'affilée, et la raison de la dernière alerte.
+const FAILED_NIGHTS_KEY: &str = "dream.failed_nights";
+const FAILED_REASON_KEY: &str = "dream.failed_reason";
+
+/// Une nuit sans consolidation : événement, ligne datée dans `DREAMS.md` (sinon le vault
+/// laisse croire qu'il n'y avait rien à consolider), et message au propriétaire comme
+/// pour la sauvegarde, à la première nuit ratée ou quand la raison change : une panne
+/// qui dure ne répète pas le même message chaque nuit, le digest la rappelle.
+pub async fn night_failed(d: &Arc<Daemon>, reason: &str) {
+    let s = &d.services;
+    let reason: String = reason.chars().take(300).collect();
+    let nights = d
+        .kv_get(FAILED_NIGHTS_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0)
+        + 1;
+    let _ = d.kv_set(FAILED_NIGHTS_KEY, &nights.to_string()).await;
+    let previous = d.kv_get(FAILED_REASON_KEY).await.ok().flatten();
+    let _ = d.kv_set(FAILED_REASON_KEY, &reason).await;
+    let pending = s
+        .candidates
+        .pending(None)
+        .await
+        .map(|c| c.len())
+        .unwrap_or(0);
+    let (run_id, stats) = last_run(s).await.unwrap_or_default();
+    let wrote = stats.promoted > 0 || stats.journal_expired > 0;
+    let what = if wrote {
+        format!(
+            "{} entrée(s) écrite(s) avant l'arrêt, gardées et marquées ; les {pending} \
+             candidat(s) encore en attente repassent la nuit prochaine",
+            stats.promoted
+        )
+    } else {
+        format!(
+            "rien n'a été écrit ; les {pending} candidat(s) en attente repassent la nuit prochaine"
+        )
+    };
+    let _ = s
+        .events
+        .append(EventDraft::new(
+            "memory.dream_failed",
+            json!({"run": run_id, "error": reason, "nights": nights, "pending": pending}),
+        ))
+        .await;
+    let vault = crate::conversation::vault_dir(s);
+    let day = today(s);
+    let written = crate::vault_ops::update_note(&vault, "DREAMS.md", None, &day, |raw| {
+        let mut body = if raw.trim().is_empty() {
+            "# Revue\n".to_string()
+        } else {
+            raw.to_string()
+        };
+        if !body.ends_with('\n') {
+            body.push('\n');
+        }
+        body.push_str(&format!(
+            "\n## Rêve du {day} : échec (`{run_id}`)\n\nLa passe s'est arrêtée : {reason}. \
+             {}.\n",
+            capitalized(&what)
+        ));
+        Ok(body)
+    });
+    if written.is_ok() {
+        let message = format!("{}{day} ({run_id}) : échec", crate::vault_git::DREAM_PREFIX);
+        if let Err(e) = vault_sync(d, &message).await {
+            tracing::warn!(error = %e, "commit du vault après une nuit ratée");
+        }
+    }
+    if nights == 1 || previous.as_deref() != Some(reason.as_str()) {
+        let streak = if nights > 1 {
+            format!(" ({nights} nuits de suite)")
+        } else {
+            String::new()
+        };
+        if let Some(m) = d.hooks.messenger() {
+            let _ = m
+                .send_text(
+                    &crate::bus::Origin::Internal {
+                        source: "dream".into(),
+                    },
+                    &format!(
+                        "⚠️ La consolidation de cette nuit a échoué{streak} : {reason}. \
+                         {}.",
+                        capitalized(&what)
+                    ),
+                )
+                .await;
+        }
+    }
+}
+
+fn capitalized(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Dernière passe lancée, quelle que soit son issue : identifiant et rapport.
+async fn last_run(s: &Services) -> anyhow::Result<(String, DreamReport)> {
+    Ok(s.store
+        .read(|c| {
+            let mut st = c.prepare(
+                "SELECT id, COALESCE(stats, '{}') FROM dream_runs
+                 ORDER BY started_at DESC, rowid DESC LIMIT 1",
+            )?;
+            let mut rows = st.query([])?;
+            Ok(match rows.next()? {
+                Some(r) => {
+                    let stats: String = r.get(1)?;
+                    (r.get(0)?, serde_json::from_str(&stats).unwrap_or_default())
+                }
+                None => (String::new(), DreamReport::default()),
+            })
+        })
+        .await?)
+}
+
+/// La dernière passe a échoué : sa raison, pour le digest.
+async fn last_failure(s: &Services) -> Option<String> {
+    s.store
+        .read(|c| {
+            let mut st = c.prepare(
+                "SELECT phase, COALESCE(error, '') FROM dream_runs
+                 ORDER BY started_at DESC, rowid DESC LIMIT 1",
+            )?;
+            let mut rows = st.query([])?;
+            Ok(match rows.next()? {
+                Some(r) if r.get::<_, String>(0)? == "failed" => Some(r.get::<_, String>(1)?),
+                _ => None,
+            })
+        })
+        .await
+        .ok()
+        .flatten()
 }
 
 // ------------------------------------------------------------------ vault
@@ -2612,6 +2841,205 @@ mod tests {
             o.report.warnings
         );
         assert_eq!(p.call_count(), 3, "un lot coupé, puis deux lots de deux");
+    }
+
+    /// Réponse « gardé » d'un lot d'un candidat, avec son écriture dans `profil.md`.
+    fn keep(text: &str) -> String {
+        format!(
+            r#"{{"tri": [{{"candidat": 1, "durable": true, "utile": true, "precis": true,
+                "introuvable": true, "endosse": true, "justification": "règle dite"}}],
+              "operations": [{{"op": "add_entry", "candidat": 1, "file": "profil.md",
+                "section": "Préférences", "text": "{text}", "importance": 7,
+                "declencheurs": ["règle"]}}]}}"#
+        )
+    }
+
+    fn passing_error() -> penelope_llm::mock::Scripted {
+        penelope_llm::mock::Scripted::Error(
+            LlmErrorKind::Transient,
+            "Upstream idle timeout exceeded (NextBit)".into(),
+        )
+    }
+
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Vec<String>>);
+
+    #[async_trait::async_trait]
+    impl crate::executor::Messenger for Recorder {
+        async fn send_text(&self, _o: &crate::bus::Origin, markdown: &str) -> Result<(), String> {
+            self.0.lock().unwrap().push(markdown.to_string());
+            Ok(())
+        }
+        async fn send_file(
+            &self,
+            _o: &crate::bus::Origin,
+            _p: &std::path::Path,
+            _c: Option<&str>,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// #127 : un flux muet sur un lot est repris sur ce lot, après l'attente réglée, et le
+    /// rapport le dit ; une erreur qui n'est pas passagère (requête refusée) ne l'est pas.
+    #[tokio::test]
+    async fn a_passing_error_is_retried_on_its_batch() {
+        let (_dir, d, p) = daemon().await;
+        d.publish_config("test", |c| {
+            c.memory.dream_retry_wait = "1ms".into();
+            Ok(vec!["memory.dream_retry_wait".into()])
+        })
+        .unwrap();
+        note(
+            &d,
+            CandidateType::Preference,
+            "Toujours répondre en français",
+            Origin::Owner,
+            "s1",
+            6,
+        )
+        .await;
+        p.push(passing_error());
+        p.reply(&keep("Toujours répondre en français"));
+        let o = run(&d, false).await.unwrap();
+        assert_eq!(o.report.promoted, 1, "{:?}", o.report);
+        assert_eq!(p.call_count(), 2);
+        assert!(
+            o.report
+                .warnings
+                .iter()
+                .any(|w| w.contains("erreur passagère") && w.contains("reprise 1/2")),
+            "{:?}",
+            o.report.warnings
+        );
+
+        note(
+            &d,
+            CandidateType::Preference,
+            "Toujours tutoyer le propriétaire",
+            Origin::Owner,
+            "s1",
+            6,
+        )
+        .await;
+        p.push(penelope_llm::mock::Scripted::Error(
+            LlmErrorKind::BadRequest,
+            "requête refusée".into(),
+        ));
+        assert!(run(&d, false).await.is_err());
+        assert_eq!(p.call_count(), 3, "pas de reprise d'un refus");
+    }
+
+    /// #127 : une nuit dont un lot échoue trois fois n'écrit rien, laisse les candidats tels
+    /// quels, le dit dans `DREAMS.md`, un événement et un message ; une panne qui dure ne
+    /// répète pas le même message ; le digest dit la nuit ratée ; la nuit suivante promeut
+    /// chaque candidat une seule fois.
+    #[tokio::test]
+    async fn a_failed_night_is_said_once_and_writes_nothing_twice() {
+        let (_dir, d, p) = daemon().await;
+        let s = &d.services;
+        let rec = Arc::new(Recorder::default());
+        *d.hooks.messenger.write().unwrap() =
+            Some(rec.clone() as Arc<dyn crate::executor::Messenger>);
+        d.publish_config("test", |c| {
+            c.memory.dream_batch = 1;
+            c.memory.dream_retry_wait = "1ms".into();
+            Ok(vec!["memory.dream_batch".into()])
+        })
+        .unwrap();
+        for text in [
+            "Toujours répondre en français",
+            "Toujours tutoyer le propriétaire",
+        ] {
+            note(&d, CandidateType::Preference, text, Origin::Owner, "s1", 6).await;
+        }
+        let order = submission_order(s).await.unwrap();
+        assert_eq!(order.len(), 2);
+        let states = |c: Vec<Candidate>| {
+            let mut v: Vec<(String, String)> = c
+                .into_iter()
+                .map(|c| (c.id, format!("{:?}", c.state)))
+                .collect();
+            v.sort();
+            v
+        };
+        let before = states(s.candidates.pending(None).await.unwrap());
+
+        p.reply(&keep(&order[0]));
+        for _ in 0..3 {
+            p.push(passing_error());
+        }
+        nightly(&d).await;
+        assert_eq!(p.call_count(), 4, "un lot, puis trois essais du second");
+        let vault = crate::conversation::vault_dir(s);
+        assert!(!vault.join("profil.md").exists(), "rien n'est écrit");
+        assert_eq!(states(s.candidates.pending(None).await.unwrap()), before);
+        assert!(
+            history(s, None, Some("profil.md"))
+                .await
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let dreams = std::fs::read_to_string(vault.join("DREAMS.md")).unwrap();
+        assert!(dreams.contains(": échec"), "{dreams}");
+        assert!(dreams.contains("Upstream idle timeout"), "{dreams}");
+        assert!(dreams.contains("Rien n'a été écrit"), "{dreams}");
+        let failed = s.events.range(0, 1_000).await.unwrap();
+        assert!(
+            failed.iter().any(|e| e.kind == "memory.dream_failed"),
+            "{failed:?}"
+        );
+        let sent = rec.0.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(
+            sent[0].contains("La consolidation de cette nuit a échoué"),
+            "{sent:?}"
+        );
+        let digest = digest_text(&d).await.unwrap();
+        assert!(
+            digest.contains("Pas de consolidation cette nuit"),
+            "{digest}"
+        );
+        assert!(!digest.contains("Appris cette nuit"), "{digest}");
+
+        // Même panne deux nuits de plus : aucun nouveau message ; une autre raison : un.
+        let reason = failed
+            .iter()
+            .find(|e| e.kind == "memory.dream_failed")
+            .unwrap()
+            .payload["error"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        night_failed(&d, &reason).await;
+        night_failed(&d, &reason).await;
+        assert_eq!(rec.0.lock().unwrap().len(), 1);
+        night_failed(&d, "Payment required").await;
+        let sent = rec.0.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2);
+        assert!(sent[1].contains("4 nuits de suite"), "{sent:?}");
+
+        // La nuit suivante réussit : chaque candidat est promu une fois, sans message.
+        let order = submission_order(s).await.unwrap();
+        for text in &order {
+            p.reply(&keep(text));
+        }
+        nightly(&d).await;
+        assert!(s.candidates.pending(None).await.unwrap().is_empty());
+        let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
+        for text in &order {
+            assert_eq!(profil.matches(text.as_str()).count(), 1, "{profil}");
+        }
+        assert_eq!(rec.0.lock().unwrap().len(), 2, "un succès ne dit rien");
+        assert!(d.kv_get(FAILED_NIGHTS_KEY).await.unwrap().is_none());
+        assert!(
+            !digest_text(&d)
+                .await
+                .unwrap()
+                .contains("Pas de consolidation")
+        );
     }
 
     #[tokio::test]
