@@ -2009,6 +2009,108 @@ mod tests {
         assert!(asked(&out), "autre commande derrière le même cd : {out:?}");
     }
 
+    /// #141 : une URL de requête entre guillemets (`?a=1&b=2`) n'enchaîne rien. Le
+    /// « Toujours » d'un appel `glab` crée une règle `glab`, elle couvre l'appel suivant
+    /// de la famille (affectation d'environnement comprise), et une famille déclarée
+    /// d'avance avec réseau la couvre aussi. Un vrai enchaînement redemande.
+    #[tokio::test]
+    async fn a_quoted_query_url_is_ruled_by_its_family() {
+        let (_dir, d, p) = daemon().await;
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        let call = |command: &str, id: &str| {
+            Scripted::ToolCalls(
+                String::new(),
+                vec![ToolCall {
+                    id: id.into(),
+                    name: "shell_exec".into(),
+                    arguments: json!({"command": command}),
+                }],
+            )
+        };
+
+        p.push(call(
+            "glab api --hostname h \"groups?search=14&per_page=20\"",
+            "c1",
+        ));
+        d.enqueue_message(&sid, "liste les groupes", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        let out = d.run_turn(&turn).await;
+        d.services.turns.complete(&turn).await.unwrap();
+        let TurnOutcome::AwaitingApproval { approval_id } = out else {
+            panic!("{out:?}");
+        };
+        crate::agent::decide_approval(
+            &d.services,
+            &approval_id,
+            &penelope_hitl::Decision::approve_always("cli"),
+        )
+        .await
+        .unwrap();
+        let rules = d.services.policies.active_rules().await.unwrap();
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        assert_eq!(
+            rules[0].arg_match,
+            Some(json!({"command": {penelope_hitl::policy::CMD_PREFIX_OP: "glab"}})),
+            "la famille est `glab`, pas la ligne entière"
+        );
+
+        // Reprise : l'appel approuvé part, puis la même famille passe par la règle,
+        // derrière une affectation d'environnement anodine.
+        d.enqueue_resume(&sid, &approval_id, &Origin::Cli)
+            .await
+            .unwrap();
+        p.push(call(
+            "GITLAB_HOST=h glab api \"projects?membership=true&per_page=100\"",
+            "c2",
+        ));
+        p.reply("C'est fait.");
+        let turn = claim(&d).await;
+        let out = d.run_turn(&turn).await;
+        d.services.turns.complete(&turn).await.unwrap();
+        assert!(!asked(&out), "même famille : {out:?}");
+
+        // Un pipe hors guillemets reste un enchaînement : il redemande.
+        p.push(call("glab api h \"p\" | sh", "c3"));
+        d.enqueue_message(&sid, "et ça", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let out = d.run_turn(&claim(&d).await).await;
+        assert!(asked(&out), "enchaînement : {out:?}");
+    }
+
+    /// #141 : `tools.shell_allow_network` couvre une commande dont l'URL porte un `&`.
+    #[tokio::test]
+    async fn a_declared_family_covers_a_quoted_query_url() {
+        let (_dir, d, p) = daemon().await;
+        d.publish_config("test", |c| {
+            c.tools.shell_allow_network = vec!["glab api".into()];
+            Ok(vec!["tools.shell_allow_network".into()])
+        })
+        .unwrap();
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "c1".into(),
+                name: "shell_exec".into(),
+                arguments: json!({
+                    "command": "glab api --hostname h \"projects?membership=true&per_page=100\"",
+                    "network": true
+                }),
+            }],
+        ));
+        p.reply("C'est fait.");
+        d.enqueue_message(&sid, "liste les projets", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let out = d.run_turn(&claim(&d).await).await;
+        assert!(!asked(&out), "famille déclarée avec réseau : {out:?}");
+    }
+
     /// Script de la demande de #130, secrets remplacés : préfixe `cd`, heredoc quoté,
     /// accolades simples, découpes Python, triple guillemet, astérisque.
     const HEREDOC: &str = r#"python3 - <<'PYEOF'

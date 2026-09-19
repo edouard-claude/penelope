@@ -107,7 +107,7 @@ pub fn declared_allow(
 /// une famille qui ne peut rien couvrir, une lecture déjà autorisée d'office, ou aucun
 /// usage depuis une semaine.
 pub fn rule_note(r: &penelope_hitl::PolicyRule, now_ms: i64) -> Option<String> {
-    use penelope_hitl::policy::{CHAINING, CMD_PREFIX_OP};
+    use penelope_hitl::policy::CMD_PREFIX_OP;
     if r.tool.as_deref() == Some("shell_exec")
         && let Some(family) = r
             .arg_match
@@ -116,7 +116,9 @@ pub fn rule_note(r: &penelope_hitl::PolicyRule, now_ms: i64) -> Option<String> {
             .and_then(|c| c.get(CMD_PREFIX_OP))
             .and_then(|f| f.as_str())
     {
-        if family.contains(CHAINING) || family.contains(['"', '\'', '=']) {
+        // Une famille se relit avec le découpage qui l'applique (issue #141) : composée,
+        // vide ou faite d'affectations (`GITLAB_HOST=…`), elle ne couvrira jamais rien.
+        if penelope_hitl::cmdline::family(family).is_none() {
             return Some(
                 "ne peut jamais s'appliquer : famille issue d'une commande composée".into(),
             );

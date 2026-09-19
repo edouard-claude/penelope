@@ -53,6 +53,9 @@ pub(crate) struct ApprovalCard {
     pub details: String,
     /// Portée d'une règle « Toujours » (`« gh pr » avec réseau`), si elle en a une.
     pub always: Option<String>,
+    /// Vrai quand aucune règle n'est possible : « Toujours » n'autoriserait que cette
+    /// fois. Le propriétaire le lit avant de cliquer (issue #141).
+    pub no_rule: bool,
 }
 
 /// Compose la carte d'une demande d'approbation.
@@ -152,11 +155,18 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
             penelope_hitl::policy::describe_pattern(&p)
         }
     });
+    // Une commande composée n'a pas de famille : « Toujours » l'autoriserait une fois,
+    // sans créer de règle (#111). La carte le dit avant le clic (#141).
+    let no_rule = crate::agent::always_creates_no_rule(&a.subject, a.payload.get("arguments"));
+    if no_rule {
+        quals.push("aucune règle possible : commande composée".into());
+    }
     ApprovalCard {
         intention,
         action,
         details: quals.join(" · "),
         always,
+        no_rule,
     }
 }
 
@@ -3808,11 +3818,14 @@ impl TelegramGateway {
                             b.label = "✅ Pour cette session".into();
                         }
                         // « Toujours » dit sur quoi il porte : la famille de commandes, le
-                        // répertoire, l'hôte (#116).
-                        if b.label.contains("Toujours")
-                            && let Some(scope) = &card.always
-                        {
-                            b.label = format!("♾️ Toujours pour {scope}");
+                        // répertoire, l'hôte (#116). Quand il ne peut créer aucune règle, il
+                        // le dit plutôt que de laisser croire au contraire (#141).
+                        if b.label.contains("Toujours") {
+                            if let Some(scope) = &card.always {
+                                b.label = format!("♾️ Toujours pour {scope}");
+                            } else if card.no_rule {
+                                b.label = "✅ Autoriser (pas de règle possible)".into();
+                            }
                         }
                         b
                     })
@@ -8493,6 +8506,63 @@ mod tests {
         let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
         assert!(sent.contains("PYEOF"), "{sent}");
         assert!(!sent.contains("Carte simplifiée"), "{sent}");
+    }
+
+    /// #141 : le bouton « Toujours » dit la famille qu'il réglera ; quand la ligne n'en a
+    /// pas, il dit qu'aucune règle n'est possible, avant le clic. Une URL de requête entre
+    /// guillemets garde sa famille.
+    #[tokio::test]
+    async fn the_always_button_says_when_no_rule_is_possible() {
+        let (_d, g, t, _p) = gateway().await;
+        let s = g.daemon.services.clone();
+        for (command, expected) in [
+            (
+                "glab api --hostname h \"projects?membership=true&per_page=100\"",
+                "Toujours pour « glab »",
+            ),
+            ("GITLAB_HOST=h glab api \"p?x=1\"", "Toujours pour « glab »"),
+            ("cd /ailleurs && ls", "pas de règle possible"),
+            ("ls | sh", "pas de règle possible"),
+        ] {
+            t.clear().await;
+            let a = s
+                .approvals
+                .create(
+                    penelope_hitl::ApprovalKind::ToolCall,
+                    "shell_exec",
+                    penelope_kernel::risk::RiskClass::Write,
+                    json!({"tool": "shell_exec", "arguments": {"command": command}}),
+                    vec![],
+                    None,
+                    None,
+                    false,
+                )
+                .await
+                .unwrap();
+            g.send_approval_card(OWNER, None, &a).await.unwrap();
+            g.flush_outbox().await.unwrap();
+            let card = t
+                .calls_to(tg::SEND_MESSAGE)
+                .await
+                .pop()
+                .expect("carte envoyée");
+            let labels: String = card["reply_markup"]["inline_keyboard"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|r| r.as_array().unwrap().iter())
+                .map(|b| b["text"].as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+                .join(" | ");
+            assert!(labels.contains(expected), "{command} : {labels}");
+            if expected.contains("pas de règle") {
+                let text = card["text"].as_str().unwrap_or_default();
+                assert!(
+                    text.contains("aucune règle possible"),
+                    "la carte le dit aussi en toutes lettres : {text}"
+                );
+            }
+        }
     }
 
     /// #134 : la carte dit combien de valeurs sont masquées ; ce qui entre dans la file

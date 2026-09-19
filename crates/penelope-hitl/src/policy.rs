@@ -117,8 +117,8 @@ impl PolicyRule {
 /// Trois opérateurs bornent un « toujours » au contexte de l'appel (issue #67), chacun
 /// écrit pour ne pas se contourner :
 ///
-/// - [`CMD_PREFIX_OP`] : famille de commandes, **sans** enchaînement (`;`, `&&`, `|`,
-///   `$(…)`, redirection, retour à la ligne), et à la frontière d'un mot ;
+/// - [`CMD_PREFIX_OP`] : famille de commandes, **sans** enchaînement hors guillemets
+///   (`;`, `&&`, `|`, `$(…)`, redirection, retour à la ligne), et à la frontière d'un mot ;
 /// - [`PATH_PREFIX_OP`] : répertoire, comparé sur le chemin normalisé (`..` résolu) ;
 /// - [`ORIGIN_OP`] : schéma et hôte **exacts** d'une URL, jamais un préfixe de texte.
 fn args_match(pattern: &Value, args: &Value) -> bool {
@@ -150,22 +150,20 @@ pub const PATH_PREFIX_OP: &str = "$path_prefix";
 /// Origine d'une URL (`https://example.com`).
 pub const ORIGIN_OP: &str = "$origin";
 
-/// Caractères qui enchaînent ou détournent une commande : une règle « toujours » sur
-/// `cargo test` ne doit pas couvrir `cargo test; rm -rf ~`.
-pub const CHAINING: &[char] = &[';', '&', '|', '`', '$', '>', '<', '\n', '\r', '(', ')'];
-
-/// Vrai si `candidate` est une commande de la famille `prefix`, sans enchaînement ni
-/// mot plus long (`cargo testament` n'est pas `cargo test`).
+/// Vrai si `candidate` est une commande de la famille `prefix` : une ligne simple (aucun
+/// enchaînement, voir [`crate::cmdline`]) dont les premiers mots sont ceux de la famille.
+///
+/// La comparaison porte sur les **mots**, pas sur le texte : `cargo testament` n'est pas
+/// `cargo test` (frontière de mot), et `glab api "p?a=1&b=2"` est bien de la famille
+/// `glab` — le `&` y est un caractère d'URL, pas un enchaînement (issue #141).
 pub fn command_matches(prefix: &str, candidate: &str) -> bool {
-    if candidate.contains(CHAINING) {
-        return false;
-    }
-    let Some(rest) = candidate.strip_prefix(prefix) else {
+    let Some(want) = crate::cmdline::family(prefix) else {
         return false;
     };
-    // La suite commence à une frontière de mot : `cargo testament` ne passe pas pour
-    // `cargo test`.
-    rest.is_empty() || rest.starts_with(char::is_whitespace)
+    let Some(cmd) = crate::cmdline::simple(candidate) else {
+        return false;
+    };
+    cmd.words.len() >= want.len() && cmd.words.iter().zip(&want).all(|(a, b)| a == b)
 }
 
 fn path_matches(prefix: &str, candidate: &str) -> bool {
@@ -491,6 +489,33 @@ mod tests {
             "cargotest",
         ] {
             assert!(!command_matches("cargo test", detour), "{detour}");
+        }
+
+        // #141 : entre guillemets, `&` et `|` sont des caractères. Une URL de requête est
+        // de la famille de son programme, une affectation anodine ne l'en sort pas, et
+        // une famille faite d'affectations ne couvre rien.
+        assert!(command_matches(
+            "glab",
+            "glab api --hostname h \"p?a=1&b=2\""
+        ));
+        assert!(command_matches(
+            "glab api",
+            "GITLAB_HOST=h glab api \"p?x=1\""
+        ));
+        assert!(command_matches("jq", "jq -r '.[] | .path' data.json"));
+        for detour in [
+            "glab api h \"p\" | jq -r '.[].path'",
+            "glab api h \"p\"; rm -rf ~",
+            "DYLD_INSERT_LIBRARIES=x.dylib glab api \"p\"",
+            "glabber api",
+        ] {
+            assert!(!command_matches("glab", detour), "{detour}");
+        }
+        for useless in ["GITLAB_HOST=gitlab.apnl.tech", "", "cd /x && ls"] {
+            assert!(
+                !command_matches(useless, "GITLAB_HOST=gitlab.apnl.tech glab api \"p\""),
+                "{useless:?}"
+            );
         }
 
         // Chemins : `..` résolu avant comparaison.

@@ -1895,6 +1895,14 @@ pub(crate) fn without_intention(args: &Value) -> Value {
     a
 }
 
+/// Vrai quand un « Toujours » sur cet appel n'écrira aucune règle : une commande composée
+/// n'a pas de famille, et une règle sur `shell_exec` entier n'existe pas (issue #111). La
+/// carte et le CLI le disent **avant** le clic, plutôt que de laisser croire au contraire
+/// (issue #141).
+pub fn always_creates_no_rule(subject: &str, args: Option<&Value>) -> bool {
+    args.is_some() && subject == "shell_exec" && arg_pattern(subject, args).is_none()
+}
+
 /// Motif d'arguments d'une règle « toujours », dérivé de l'appel : ce qui borne
 /// l'autorisation à ce que le propriétaire a vraiment vu (issue #67). `None` : la règle
 /// couvre l'outil (outils MCP, outils sans argument significatif).
@@ -1909,20 +1917,28 @@ pub(crate) fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
             let command = str_of("command")?;
             // Une commande composée (`cd /x && ls`) n'a pas de famille : une règle sur
             // `cd` ne s'appliquerait jamais (issue #111). Pas de motif, donc pas de règle.
-            if command.contains(penelope_hitl::policy::CHAINING) {
-                return None;
-            }
-            let words: Vec<&str> = command.split_whitespace().collect();
+            // Le découpage est celui de `cmdline` : un `&` entre guillemets (URL de
+            // requête) n'enchaîne rien, et `VAR=x cmd` a pour famille `cmd` (issue #141).
+            let line = penelope_hitl::cmdline::simple(&command)?;
             let network = crate::executor::wants_network(tool, args);
             const TWO_WORDS: &[&str] = &[
                 "cargo", "git", "gh", "npm", "pnpm", "yarn", "make", "docker", "kubectl", "brew",
                 "python3", "uv", "go",
             ];
-            let head = match words.as_slice() {
-                [first, second, ..] if TWO_WORDS.contains(first) => format!("{first} {second}"),
-                [first, ..] => first.to_string(),
+            let head_words: Vec<String> = match line.words.as_slice() {
+                [first, second, ..] if TWO_WORDS.contains(&first.as_str()) => {
+                    vec![first.clone(), second.clone()]
+                }
+                [first, ..] => vec![first.clone()],
                 [] => return None,
             };
+            let head = head_words.join(" ");
+            // La famille doit se relire comme elle a été écrite, sinon la règle créée ne
+            // couvrirait jamais la commande dont elle vient (régression de #111) : un mot
+            // qui porte une espace ou un guillemet ne fait pas une famille.
+            if penelope_hitl::cmdline::family(&head).is_none_or(|w| w != head_words) {
+                return None;
+            }
             // Le réseau accordé l'est à la famille de commandes, jamais au shell (#106) :
             // « Toujours » sur `git push` avec réseau ne donne rien à `curl`.
             if network {
@@ -3652,6 +3668,77 @@ mod tests {
 
         // Outil MCP : rien n'est dérivé, la règle reste celle de l'outil.
         assert!(arg_pattern("tool_call", Some(&json!({"server": "forge"}))).is_none());
+    }
+
+    /// #141 : une URL de requête entre guillemets n'enchaîne rien. La règle créée par
+    /// « Toujours » et la règle qui reconnaît l'appel suivant viennent du même découpage :
+    /// ce qui est écrit est appliqué.
+    #[test]
+    fn a_quoted_query_url_is_not_chaining_and_its_family_applies() {
+        use penelope_hitl::policy::CMD_PREFIX_OP;
+        let rule_for = |command: &str| {
+            let p = arg_pattern("shell_exec", Some(&json!({"command": command})))?;
+            Some(penelope_hitl::PolicyRule {
+                id: "r".into(),
+                scope: penelope_hitl::RuleScope::Tool,
+                tool: Some("shell_exec".into()),
+                server: None,
+                arg_match: Some(p),
+                decision: penelope_kernel::risk::PolicyDecision::Auto,
+                window: PolicyWindow::Always,
+                window_ref: None,
+                created_at: "2026-09-19T00:00:00Z".into(),
+                hits: 0,
+                revoked_at: None,
+            })
+        };
+        let seen = "glab api --hostname gitlab.apnl.tech \"projects?membership=true&per_page=100\"";
+        let rule = rule_for(seen).expect("une règle naît de la commande vue");
+        assert_eq!(
+            rule.arg_match.as_ref().unwrap()["command"][CMD_PREFIX_OP],
+            "glab"
+        );
+        // La règle couvre la commande dont elle vient, et les appels suivants de la
+        // famille, y compris derrière une affectation d'environnement.
+        for covered in [
+            seen,
+            "glab api --hostname gitlab.apnl.tech \"groups?search=14&per_page=20\"",
+            "GITLAB_HOST=gitlab.apnl.tech glab api \"projects/2593/repository/tree?ref=dev\"",
+        ] {
+            assert!(
+                rule.matches("shell_exec", None, &json!({"command": covered})),
+                "{covered}"
+            );
+        }
+        // Ce que #67 a fermé reste fermé.
+        for detour in [
+            "glab api h \"p\" | jq -r '.[].path'",
+            "glab api h \"p\"; rm -rf ~",
+            "glab api $(cat ~/.netrc)",
+            "DYLD_INSERT_LIBRARIES=x.dylib glab api \"p\"",
+            "glabber api",
+        ] {
+            assert!(
+                !rule.matches("shell_exec", None, &json!({"command": detour})),
+                "{detour}"
+            );
+        }
+        // Une affectation qui détourne l'interpréteur ne donne aucune famille, et une
+        // commande composée non plus : « Toujours » n'y crée pas de règle.
+        for no_family in [
+            "PATH=/tmp ls",
+            "DYLD_INSERT_LIBRARIES=x.dylib glab api \"p\"",
+            "cd /x && ls",
+            "ls | sh",
+        ] {
+            assert!(rule_for(no_family).is_none(), "{no_family}");
+        }
+        // L'affectation anodine laisse la famille à son programme.
+        let env = rule_for("GITLAB_HOST=h glab api \"p?x=1\"").expect("motif");
+        assert_eq!(
+            env.arg_match.as_ref().unwrap()["command"][CMD_PREFIX_OP],
+            "glab"
+        );
     }
 
     /// #50 : avec OpenRouter, une erreur transitoire d'avant flux est réessayée au lieu
