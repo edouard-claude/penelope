@@ -264,13 +264,19 @@ fn error_lines(lines: &[&str]) -> Vec<String> {
 }
 
 fn generic(lines: &[&str]) -> String {
+    // Tête et queue de 30 lignes : sous 60 lignes, elles se recouvrent et il n'y a pas de
+    // milieu. `lines[30..len - 30]` paniquait de 31 à 59 lignes (« slice index starts at
+    // 30 but ends at 11 » pour 41 lignes, issue #130) : la sortie part entière.
+    if lines.len() <= 60 {
+        return format!("--- sortie ---\n{}", lines.join("\n"));
+    }
     let head: Vec<&str> = lines.iter().take(30).copied().collect();
     let tail: Vec<&str> = lines
         .iter()
         .skip(lines.len().saturating_sub(30))
         .copied()
         .collect();
-    let errors = error_lines(&lines[30.min(lines.len())..lines.len().saturating_sub(30)]);
+    let errors = error_lines(&lines[30..lines.len() - 30]);
     let mut t = format!("--- début ---\n{}\n", head.join("\n"));
     if !errors.is_empty() {
         t.push_str(&format!(
@@ -360,6 +366,34 @@ pub fn digest(command: &str, exit_code: i32, stdout: &str, stderr: &str) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #130 : une commande en échec de 40 à 60 lignes, hors suite de tests, ne fait plus
+    /// paniquer le résumé ; au-delà, tête, lignes d'erreur du milieu et queue.
+    #[test]
+    fn a_failing_output_of_any_length_is_digested_without_panic() {
+        for n in [40, 41, 59, 60, 61, 100] {
+            let out: String = (1..=n)
+                .map(|i| {
+                    if i == n / 2 + 1 {
+                        format!("Traceback ligne {i}")
+                    } else {
+                        format!("ligne {i}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let d = digest("python3 - <<'PYEOF'\nprint(1)\nPYEOF", 1, &out, "").expect("résumé");
+            assert!(d.contains(&format!("ligne {n}")), "{n} : fin présente");
+            if n <= 60 {
+                assert!(
+                    d.contains(&format!("Traceback ligne {}", n / 2 + 1)),
+                    "{n} : tout y est"
+                );
+            } else {
+                assert!(d.contains("lignes d'erreur du milieu"), "{n} : {d}");
+            }
+        }
+    }
 
     #[test]
     fn test_runners_are_recognised() {

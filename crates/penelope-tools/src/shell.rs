@@ -666,6 +666,38 @@ mod tests {
         }
     }
 
+    /// #130 : les formes de commande sans test jusqu'ici (multi-lignes, heredoc, guillemet
+    /// non fermé, un seul mot, vide) traversent classement, préfixe `cd` et vérification
+    /// sans paniquer ; une commande multi-lignes n'est jamais une lecture.
+    #[test]
+    fn unusual_command_shapes_never_panic() {
+        let shapes = [
+            "",
+            " ",
+            "ls",
+            "cd",
+            "cd ",
+            "cd /x &&",
+            "echo \"non fermé",
+            "grep 'x",
+            "python3 - <<'PYEOF'\nprint(\"a\"[:10])\nPYEOF",
+            "cd /x && python3 - <<'PYEOF'\nimport json\nPYEOF",
+            "cat <<EOF\n{{.Name}}\nEOF",
+            "ls\nrm -rf /",
+            "\n\n",
+            "é",
+        ];
+        for c in shapes {
+            let _ = split_cd_prefix(c);
+            let _ = may_destroy(c);
+            let _ = check_command(c);
+            if c.contains('\n') {
+                assert!(!is_read_command(c), "{c:?}");
+            }
+        }
+        assert!(check_command("").is_err());
+    }
+
     /// #123 : un `cd <chemin> &&` seul en tête se sépare de la commande qui suit ; tout
     /// ce qui ferait du chemin autre chose qu'un chemin laisse la ligne entière.
     #[test]

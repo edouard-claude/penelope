@@ -126,6 +126,7 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     let beat = StopBeat(beat);
     // Une panique pendant le tour ne tue ni le runner ni le verrou de session : le tour
     // échoue, le propriétaire le sait, le bail est rendu (#84).
+    crate::tasks::install_panic_hook();
     let outcome = {
         use futures::FutureExt;
         match std::panic::AssertUnwindSafe(daemon.run_turn(&turn))
@@ -279,7 +280,11 @@ mod tests {
             .expect("le tour se termine")
             .unwrap();
         match out {
-            TurnOutcome::Failed { error } => assert!(error.contains("boum"), "{error}"),
+            // #130 : l'emplacement de la panique accompagne son message.
+            TurnOutcome::Failed { error } => {
+                assert!(error.contains("boum"), "{error}");
+                assert!(error.contains(".rs:"), "emplacement : {error}");
+            }
             other => panic!("{other:?}"),
         }
 

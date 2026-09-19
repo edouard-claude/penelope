@@ -1482,6 +1482,25 @@ Une carte d'approbation part toujours, même quand la commande porte `{{…}}` (
   rappels de #97 passent par la même carte. Une demande restée bloquée se renvoie par
   `/approvals`.
 
+### 0.17.17
+
+Un tour ne panique plus sur une commande en échec de 40 à 60 lignes, et une panique dit
+où elle a eu lieu (#130).
+
+- **Le résumé d'une sortie courte ne découpe plus à l'envers** (#130) : un tour repris
+  après « Toujours » est mort sur « slice index starts at 30 but ends at 11 ». La
+  commande (un script Python par heredoc) n'y était pour rien : elle a échoué en écrivant
+  41 lignes, et le résumé générique d'une commande en échec (#32, 6785191) prenait le
+  milieu `lines[30..len - 30]`, à l'envers de 31 à 59 lignes. Sous 60 lignes, la sortie
+  part désormais entière. `parse_classification` gagne la même garde (une `}` avant la
+  première `{`). Une panique rattrapée porte maintenant son emplacement dans le code
+  (crochet de panique), dans le message au propriétaire et l'événement
+  `daemon.task_panicked`. Les formes de commande sans test (multi-lignes, heredoc,
+  guillemet non fermé, un mot, vide, préfixe `cd`) traversent classement, motif et
+  carte ; une commande multi-lignes reste sans motif, donc sans règle (#67, #111). Le
+  tour n'est pas remis en file tout seul : son appel a pu s'exécuter, le relancer le
+  rejouerait ; le propriétaire reçoit la raison avec « Réessayer ».
+
 ### Routine de livraison
 
 Avant chaque tag :

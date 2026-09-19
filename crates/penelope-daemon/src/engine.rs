@@ -1142,7 +1142,9 @@ fn classification_schema() -> Value {
 
 pub fn parse_classification(text: &str) -> Option<Classification> {
     let start = text.find('{')?;
-    let end = text.rfind('}')?;
+    // Une réponse coupée peut porter une `}` avant sa première `{` : `text[30..=10]`
+    // paniquerait (« slice index starts at 30 but ends at 11 », issue #130).
+    let end = text.rfind('}').filter(|e| *e > start)?;
     let mut v: Value = serde_json::from_str(&text[start..=end]).ok()?;
     // Un domaine trop bavard ne doit pas invalider la complexité.
     if let Some(d) = v.get("domain").and_then(|d| d.as_str())
@@ -2007,6 +2009,86 @@ mod tests {
         assert!(asked(&out), "autre commande derrière le même cd : {out:?}");
     }
 
+    /// Script de la demande de #130, secrets remplacés : préfixe `cd`, heredoc quoté,
+    /// accolades simples, découpes Python, triple guillemet, astérisque.
+    const HEREDOC: &str = r#"python3 - <<'PYEOF'
+import json, urllib.request
+
+URL = "https://api.example.test/query"
+KEY = "abcdefghijklmnopqrstuvwxyz0123*456789abcdefghijklmnopqrstuv"
+
+def gql(query, variables=None, token=None):
+    body = {"query": query, "variables": variables or {}}
+    req = urllib.request.Request(URL, data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "X-API-Key": KEY})
+    if token: req.add_header("Authorization", f"Bearer {token}")
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+# 1. login
+r = gql("mutation l($e: String!, $p: String!) { login(data: {email: $e, password: $p}) { access refresh } }",
+        {"e": "essai@example.test", "p": "motdepasse"})
+tok = r["data"]["login"]["access"]
+print("LOGIN OK")
+for off in (0, 20):
+    q = """query p($o: Int!) { points(offset: $o) { id nb_points point_created_at } }"""
+    for x in gql(q, {"o": off}, tok)["data"]["points"]:
+        print(f"  {x['point_created_at'][:10]}  {x['nb_points']:>6}  [{x['id'][:8]}]")
+PYEOF"#;
+
+    /// #130 : « Toujours » puis reprise sur la commande exacte de l'incident, avec son
+    /// préfixe `cd` vers un workspace ou ailleurs, réseau demandé : pas de panique, et
+    /// une commande multi-lignes ne crée pas de règle (pas de famille, #67 et #111).
+    #[tokio::test]
+    async fn always_on_a_multiline_heredoc_resumes_without_panic() {
+        for dir in ["{ws}", "/Users/essai/depot"] {
+            let (_dir, d, p) = daemon().await;
+            let ws = crate::executor::default_workspaces(&d.services)[0].clone();
+            let dir = dir.replace("{ws}", &ws.to_string_lossy());
+            let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+            d.pin_model(&sid, Some("main")).await.unwrap();
+            let command = format!("cd {dir} && {HEREDOC}");
+            p.push(Scripted::ToolCalls(
+                String::new(),
+                vec![ToolCall {
+                    id: "c1".into(),
+                    name: "shell_exec".into(),
+                    arguments: json!({"command": command, "network": true}),
+                }],
+            ));
+            d.enqueue_message(&sid, "contre-preuve API", &Origin::Cli, None)
+                .await
+                .unwrap();
+            let turn = claim(&d).await;
+            let out = d.run_turn(&turn).await;
+            d.services.turns.complete(&turn).await.unwrap();
+            let TurnOutcome::AwaitingApproval { approval_id } = out else {
+                panic!("{dir} : {out:?}");
+            };
+            crate::agent::decide_approval(
+                &d.services,
+                &approval_id,
+                &penelope_hitl::Decision::approve_always("cli"),
+            )
+            .await
+            .unwrap();
+            assert!(
+                d.services.policies.active_rules().await.unwrap().is_empty(),
+                "{dir} : pas de règle pour une commande multi-lignes"
+            );
+            d.enqueue_resume(&sid, &approval_id, &Origin::Cli)
+                .await
+                .unwrap();
+            p.reply("Fait.");
+            let turn = claim(&d).await;
+            let out = d.run_turn(&turn).await;
+            assert!(
+                matches!(out, TurnOutcome::Answered { .. }),
+                "{dir} : {out:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn penelope_reports_her_own_model_and_state() {
         let (_dir, d, p) = daemon().await;
@@ -2444,5 +2526,7 @@ mod tests {
         assert_eq!(c.complexity, penelope_llm::Complexity::High);
         assert!(parse_classification("{\"complexity\":\"énorme\"}").is_none());
         assert!(parse_classification("pas de json").is_none());
+        // #130 : une `}` avant la première `{` ne fait pas paniquer.
+        assert!(parse_classification("fin} puis début {\"complexity\": \"hi").is_none());
     }
 }

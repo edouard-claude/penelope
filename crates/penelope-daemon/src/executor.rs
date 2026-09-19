@@ -2055,6 +2055,25 @@ mod tests {
     use super::*;
     use penelope_kernel::clock::TestClock;
 
+    /// #130 : la forme exacte de l'incident, une commande en échec qui écrit 41 lignes,
+    /// passe par le résumé sans paniquer et rend toute sa sortie.
+    #[tokio::test]
+    async fn a_failing_command_of_41_lines_is_returned_whole() {
+        let (dir, e) = executor().await;
+        let ws = dir.path().join("ws");
+        let log: String = (1..=41).map(|i| format!("ligne {i}\n")).collect();
+        std::fs::write(ws.join("sortie.txt"), &log).unwrap();
+        let out = e
+            .execute("shell_exec", &json!({"command": "cat sortie.txt; exit 1"}))
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("ligne 1\n") && out.text.contains("ligne 41"),
+            "{}",
+            out.text
+        );
+    }
+
     /// Issue #32 : `cargo test` avec 2 échecs sur 500 rend au modèle les 2 échecs et le
     /// résumé, moins de 2 000 tokens, et la sortie complète part en artefact.
     #[tokio::test]

@@ -93,13 +93,41 @@ impl Tasks {
     }
 }
 
-/// Message d'une panique, tel que le thread l'aurait affiché.
+/// Message d'une panique, tel que le thread l'aurait affiché, suivi de son emplacement
+/// dans le code quand le crochet l'a vu : sans lui, « slice index starts at 30 but ends
+/// at 11 » ne dit pas où chercher (issue #130).
 pub fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
-    payload
+    let message = payload
         .downcast_ref::<&'static str>()
         .map(|s| s.to_string())
         .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "panique sans message".into())
+        .unwrap_or_else(|| "panique sans message".into());
+    match LAST_PANIC.with(|c| c.borrow_mut().take()) {
+        Some(at) => format!("{message} ({at})"),
+        None => message,
+    }
+}
+
+thread_local! {
+    /// Emplacement de la dernière panique de ce thread : la garde qui la rattrape tourne
+    /// sur le même thread, dans le même `poll`.
+    static LAST_PANIC: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Crochet de panique qui retient l'emplacement, puis laisse faire le crochet d'avant.
+/// Idempotent.
+pub fn install_panic_hook() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if let Some(l) = info.location() {
+                let at = format!("{}:{}", l.file(), l.line());
+                LAST_PANIC.with(|c| *c.borrow_mut() = Some(at));
+            }
+            previous(info);
+        }));
+    });
 }
 
 /// Journalise, compte et date une panique, et la verse au journal d'audit.
@@ -130,6 +158,7 @@ where
     Fut: Future<Output = ()> + Send + 'static,
 {
     let name = name.into();
+    install_panic_hook();
     tokio::spawn(async move {
         let mut backoff = Duration::from_secs(1);
         loop {

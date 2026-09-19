@@ -8280,6 +8280,67 @@ mod tests {
         assert!(!text.contains("Carte simplifiée"), "{text}");
     }
 
+    /// #130 : chaque forme de commande (multi-lignes, heredoc, guillemet non fermé, un mot,
+    /// vide, préfixe `cd`) passe par le motif « Toujours », le relevé du `cd` et la carte
+    /// sans paniquer ; une commande multi-lignes n'a pas de motif, donc pas de règle (#67).
+    #[tokio::test]
+    async fn every_command_shape_reaches_its_card_without_panic() {
+        use crate::agent::ToolExecutor;
+        let (_d, g, t, _p) = gateway().await;
+        let s = g.daemon.services.clone();
+        let ws = crate::executor::default_workspaces(&s)[0].clone();
+        let x = crate::executor::NativeToolExecutor::new(
+            s.clone(),
+            crate::executor::ToolEnv {
+                session_id: "s1".into(),
+                run_id: None,
+                origin: Origin::Cli,
+                workspaces: vec![ws.clone()],
+                in_workflow: false,
+                turn_model: None,
+            },
+        );
+        let heredoc = format!(
+            "cd {} && python3 - <<'PYEOF'\nprint(f\"{{x['id'][:8]}}\")\nPYEOF",
+            ws.display()
+        );
+        for command in [
+            "",
+            "ls",
+            "echo \"non fermé",
+            "python3 - <<'PYEOF'\nprint(1)\nPYEOF",
+            heredoc.as_str(),
+            "cd /ailleurs && make\nmake install",
+        ] {
+            let args = json!({"command": command, "network": true});
+            let _ = x.normalise_call("shell_exec", &args);
+            let pattern = crate::agent::arg_pattern("shell_exec", Some(&args));
+            if command.contains('\n') {
+                assert!(pattern.is_none(), "multi-lignes sans motif : {command:?}");
+            }
+            let a = s
+                .approvals
+                .create(
+                    penelope_hitl::ApprovalKind::ToolCall,
+                    "shell_exec",
+                    penelope_kernel::risk::RiskClass::Write,
+                    json!({"tool": "shell_exec", "arguments": args}),
+                    vec![],
+                    None,
+                    None,
+                    false,
+                )
+                .await
+                .unwrap();
+            let _ = approval_card(&a);
+            g.send_approval_card(OWNER, None, &a).await.unwrap();
+        }
+        g.flush_outbox().await.unwrap();
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
+        assert!(sent.contains("PYEOF"), "{sent}");
+        assert!(!sent.contains("Carte simplifiée"), "{sent}");
+    }
+
     /// #129 : le rappel de #97 passe par la même carte ; il part lui aussi avec la
     /// commande telle quelle, au lieu d'échouer jusqu'à l'expiration.
     #[tokio::test]
