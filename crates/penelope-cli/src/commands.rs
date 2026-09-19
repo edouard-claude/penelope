@@ -2059,6 +2059,18 @@ async fn finish_turn(
                         .unwrap_or_default()
                 );
             }
+            // « Toujours » sur une commande composée n'écrit aucune règle : le dire
+            // avant le clic, comme la carte Telegram (issue #141).
+            let no_rule = penelope_daemon::agent::always_creates_no_rule(
+                detail["subject"].as_str().unwrap_or_default(),
+                detail["payload"].get("arguments"),
+            );
+            if no_rule {
+                println!(
+                    "ℹ️  commande composée : « toujours » l'autorise cette fois, sans créer \
+                     de règle."
+                );
+            }
             if !interactive {
                 println!("→ penelope approve {id}   ou   penelope deny {id}");
                 return Ok(());

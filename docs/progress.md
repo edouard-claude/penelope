@@ -3,12 +3,12 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 18 septembre 2026.
+Dernière mise à jour : 19 septembre 2026.
 
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1540 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1549 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1666,6 +1666,48 @@ candidat (#140, suite de #135).
   facile, 2 400 pour un épineux) : 53 appels avant, moins de 20 maintenant, chaque
   candidat jugé. Le mock de fournisseur sait rendre une sortie mesurée et coupée
   (`Scripted::Written`).
+
+### 0.17.24
+
+Un `&` entre guillemets n'est plus un enchaînement : les règles « Toujours » et les
+lectures se décident sur un seul découpage de ligne (#141).
+
+- **Un seul lexer de ligne de commande** (#141) : `arg_pattern`, `command_matches`,
+  `declared_allow`, `rule_note` et `is_read_command` cherchaient chacun `; & | ( ) $ …`
+  dans le **texte brut**, guillemets compris. Une URL de requête (`glab api --hostname h
+  "projects?membership=true&per_page=100"`) passait donc pour une commande composée :
+  neuf cartes en neuf minutes, huit « Toujours » cliqués, zéro règle créée, zéro règle
+  appliquée. `penelope_hitl::cmdline` découpe désormais la ligne une fois (mots,
+  apostrophes littérales, guillemets doubles littéraux sauf `$`, `` ` `` et `\`) et les
+  cinq appelants s'y branchent : ce qu'un « Toujours » écrit est ce qui s'applique
+  ensuite. Le lexer rend des tokens, jamais des offsets (#130).
+- **Reste composé** (#67 ne se rouvre pas) : un opérateur ou une redirection hors
+  guillemets, une substitution (`$`, `` ` ``) ou un échappement même entre guillemets
+  doubles, un saut de ligne, une négation `!` en tête, des guillemets non fermés.
+  `cargo test; rm -rf ~`, `ls | sh`, `cat x > y`, `echo "$(rm -rf ~)"` redemandent comme
+  avant.
+- **Affectations d'environnement en tête** (#141) : `GITLAB_HOST=h glab api "…"` a pour
+  famille `glab` et `TZ=UTC date` est une lecture ; une variable qui détourne
+  l'interpréteur (`PATH`, `HOME`, `IFS`, `ENV`, `BASH_ENV`, `DYLD_*`, `LD_*`,
+  `GIT_CONFIG*`, `GIT_SSH_COMMAND`, `NODE_OPTIONS`, `PYTHONSTARTUP`, `PERL5OPT`,
+  `RUBYOPT`…) laisse la ligne composée : `PATH=/tmp ls` n'est jamais couvert par une
+  règle `ls`.
+- **La carte dit quand « Toujours » ne réglera rien** (#141) : sur une commande sans
+  famille, le bouton devient « ✅ Autoriser (pas de règle possible) » et la ligne de
+  qualificatifs porte « aucune règle possible : commande composée ». Le propriétaire ne
+  clique plus dans le vide.
+- Les règles déjà en base ne bougent pas : celles tirées d'une affectation
+  (`GITLAB_HOST=…`) restent signalées inutiles par `rule_note`, à retirer d'un bouton
+  dans `/policies`. Une famille créée est désormais vérifiée à l'écriture : si elle ne se
+  relit pas comme elle a été écrite, aucune règle n'est créée (régression de #111).
+- Neuf tests nouveaux : le lexer forme par forme, la famille créée puis appliquée à la
+  commande suivante (le même découpage écrit la règle et la reconnaît, régression de
+  #111), la famille déclarée avec réseau, les lectures entre guillemets, et la carte qui
+  annonce l'absence de règle.
+- Reste ouvert, hors de ce lot : `gh api`/`glab api` en GET, `glab repo|mr list|view`,
+  `gh pr list|view`, `git ls-remote` et `git fetch` en classe lecture **avec** réseau
+  (commentaire de #111), et une règle sans réseau qui couvrirait un appel `network: true`
+  quand `sandbox.shell_network` est déjà ouvert.
 
 ### Routine de livraison
 

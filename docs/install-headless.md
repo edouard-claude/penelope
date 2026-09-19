@@ -801,8 +801,8 @@ antérieure) le garde à la mise à jour ; sans la clé, le réseau est fermé.
 **Lectures sans demande, modes et autorisations déclarées.** Une commande qui ne fait que
 lire (`ls`, `cat`, `head`, `grep`, `find` sans `-exec` ni `-delete`, `wc`, `git status`,
 `git log`, `git diff`…), appelée par son nom, sans enchaînement, redirection,
-substitution, variable ni échappement, est classée lecture : elle part sans demande,
-comme `fs_read`. Tout le reste est une écriture. Chaque session a un mode (`/mode` sur
+substitution ni échappement **hors guillemets**, est classée lecture : elle part sans
+demande, comme `fs_read`. Tout le reste est une écriture. Chaque session a un mode (`/mode` sur
 Telegram, `penelope session mode`, défaut `tools.approval_mode`) : « demander tout »
 (`ask`, même une lecture du shell attend ton accord), « lectures sans demande » (`reads`,
 le défaut) et « tout sauf le destructif » (`auto` : plus de demande, sauf une commande qui
@@ -823,10 +823,31 @@ famille déclarée d'avance qui vaut aussi derrière le `cd`. Hors des workspace
 d'un autre enchaînement (`;`, `|`, `&&`), d'une redirection ou d'une substitution, la
 ligne reste composée. Le modèle a de toute façon le paramètre `cwd` de `shell_exec`.
 
-Un « Toujours » sur une autre commande composée (`cd /x && ls` hors workspace, `ls; pwd`)
-l'autorise cette fois, sans créer de règle : une famille `cd` ne s'appliquerait jamais. `penelope policies` et
-`/policies` signalent les règles inutiles (famille issue d'une commande composée, lecture
-déjà libre, jamais utilisée depuis une semaine), à retirer d'un bouton.
+**Ce qui compte comme enchaînement.** Une ligne est dite *composée* — donc jamais une
+lecture, sans famille, et hors de portée d'une règle ou d'une famille déclarée — quand
+elle porte, **hors guillemets**, un opérateur (`;`, `&`, `&&`, `|`, `(`, `)`) ou une
+redirection (`>`, `<`) ; une substitution (`$(…)`, `` `…` ``, `$VAR`) ou un échappement
+(`\`), même entre guillemets doubles, où ils gardent leur pouvoir dans un shell ; un saut
+de ligne ; une négation (`!` en tête) ; une apostrophe ou un guillemet non fermé ; ou une
+affectation d'environnement qui détourne ce qui sera exécuté (`PATH=`, `HOME=`, `IFS=`,
+`ENV=`, `BASH_ENV=`, `DYLD_*`, `LD_*`, `GIT_CONFIG*`, `GIT_SSH_COMMAND=`, `NODE_OPTIONS=`,
+`PYTHONSTARTUP=`, `PERL5OPT=`, `RUBYOPT=`…).
+
+Entre guillemets, ces caractères ne sont que des caractères : `glab api --hostname
+gitlab.example "projects?membership=true&per_page=100"` est de la famille `glab`, pas un
+enchaînement ; `grep -n 'x | y' fichier` et `echo "a & b"` sont des lectures. Une
+affectation anodine en tête laisse la famille à son programme : `GITLAB_HOST=example glab
+api "…"` est de la famille `glab`, `TZ=UTC date` est une lecture. Le même découpage sert à
+créer la règle, à la reconnaître, à lire `tools.shell_allow` et à classer les lectures :
+ce qu'un « Toujours » écrit est ce qui s'applique ensuite.
+
+Un « Toujours » sur une commande composée (`cd /x && ls` hors workspace, `ls; pwd`)
+l'autorise cette fois, sans créer de règle : une famille `cd` ne s'appliquerait jamais. La
+carte le dit **avant** le clic — le bouton devient « ✅ Autoriser (pas de règle possible) »
+et la ligne de qualificatifs porte « aucune règle possible : commande composée ».
+`penelope policies` et `/policies` signalent les règles inutiles (famille issue d'une
+commande composée ou d'une affectation comme `GITLAB_HOST=…`, lecture déjà libre, jamais
+utilisée depuis une semaine), à retirer d'un bouton.
 
 Un « Toujours » est **borné à l'appel qu'il autorise**, jamais à l'outil entier :
 pour `shell_exec`, à la famille de commandes (`cargo test …`, `git log …`) ; pour `fs_write`
