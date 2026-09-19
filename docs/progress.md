@@ -1558,6 +1558,24 @@ part plus en clair dans une carte d'approbation (#134).
   consigne de `shell_exec` demande de ne pas recopier un secret lu. Ce qui a déjà fui
   (message Telegram, sauvegardes) est à renouveler.
 
+### 0.17.19
+
+La consolidation ne jette plus quatre appels sur cinq, et se voit pendant qu'elle tourne
+(#135).
+
+- **Des lots qui retiennent ce qui a tenu** (#135) : un essai à blanc de deux heures a
+  fait 134 appels (53 000 tokens d'entrée chacun) sans un signe. Après une descente
+  40 → 20 → 10 → 5 sur sortie coupée (#59), chaque lot repartait à 40 ; et la sortie
+  demandée (120 tokens par candidat) était sous ce que la grille de #37 fait écrire.
+  Désormais la taille reste sous la plus petite taille coupée de la passe et remonte à
+  mi-chemin après un lot qui tient (un modèle qui coupe au-delà de 10 juge 188 groupes en
+  au plus 25 appels) ; la sortie est estimée d'après les tokens réellement écrits par
+  candidat (350 au départ), dans la limite du modèle, et un lot trop grand est réduit
+  avant l'appel. Un événement `memory.dream_batch` par lot, une ligne de journal, et le
+  rapport comme le digest disent appels, appels jetés et durée. Une passe arrêtée avant
+  ses verdicts ne consomme aucun report (vérifié) : les 88 candidats déjà reportés ne
+  risquent rien d'une interruption.
+
 ### Routine de livraison
 
 Avant chaque tag :

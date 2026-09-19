@@ -1354,6 +1354,19 @@ est dans `DREAMS.md` sous le rêve de la nuit, avec une section « Motifs d'éca
 nuits de suite ou plus sans rien promouvoir ajoutent une ligne explicite, avec le motif
 dominant : un motif qui revient vingt fois est un réglage à revoir.
 
+**Les lots et leur coût.** La passe juge les candidats par lots d'au plus
+`memory.dream_batch` = `40`. Une sortie coupée fait rejouer le lot deux fois plus petit ;
+les lots suivants restent ensuite sous la plus petite taille coupée et ne remontent qu'à
+mi-chemin, au lieu de repartir à 40 (un lot sur cinq jugé, quatre appels jetés, avant
+0.17.19). La sortie demandée suit ce que le modèle écrit vraiment par candidat (350
+tokens au départ, la grille en écrit plusieurs centaines), dans la limite du modèle ; un
+lot trop grand pour elle est réduit avant l'appel. Chaque lot laisse un événement
+`memory.dream_batch` et une ligne de journal (taille, durée, sortie, coupé ou non), et le
+rapport comme le digest disent le nombre d'appels, les appels jetés et la durée. Un
+candidat n'est « reporté » que par une passe qui a rendu ses verdicts : une passe arrêtée
+avant n'en consomme aucun, et la troisième nuit de report ne vient jamais d'une
+interruption.
+
 **Une nuit ratée se dit.** Une erreur passagère du modèle sur un lot (flux devenu muet,
 5xx, 429, lot sans réponse complète en 240 s) fait reprendre ce lot, et lui seul, après
 `memory.dream_retry_wait` (2 min), puis le double ; le rapport de la nuit le note. Rien

@@ -73,6 +73,7 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
     let vault = crate::conversation::vault_dir(s);
     let run_id = format!("d_{}", penelope_kernel::ids::Ulid::new());
     let started = s.clock.now_rfc3339();
+    let pass_started = std::time::Instant::now();
     let since = last_finished_start(s).await?;
     if !dry_run {
         record_run(s, &run_id, &started, "light", since.as_deref()).await?;
@@ -197,28 +198,44 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
             }
 
             // Lots bornés : au-delà, la réponse du modèle ne tient pas et tout le lot
-            // repart en attente, nuit après nuit (issue #59).
-            let batch = cfg.memory.dream_batch.max(1);
+            // repart en attente, nuit après nuit (issue #59). La taille suit ce qui a
+            // tenu, et la sortie demandée suit ce que le modèle écrit vraiment (#135).
+            let mut sizer = BatchSizer::new(cfg.memory.dream_batch.max(1));
+            let mut budget = OutputBudget::new(output_cap(d, &cfg));
             // Chaque opération garde les candidats qu'elle sert : leur état se décide
             // après l'écriture (issue #60).
             let mut ops: Vec<(Vec<String>, Operation)> = Vec::new();
             let mut i = 0usize;
             while i < items.len() {
-                let mut size = batch.min(items.len() - i);
+                let mut size = budget.fit(sizer.size(items.len() - i));
                 loop {
                     let slice = &items[i..i + size];
-                    let (response, truncated) =
-                        consolidate_retrying(d, slice, &snapshot, &mut report).await?;
+                    let started = std::time::Instant::now();
+                    let (response, truncated, completion) = consolidate_retrying(
+                        d,
+                        slice,
+                        &snapshot,
+                        budget.max_tokens(size),
+                        &mut report,
+                    )
+                    .await?;
+                    report.calls += 1;
+                    batch_event(d, &run_id, size, started.elapsed(), completion, truncated).await;
                     if truncated && size > 1 {
                         // Sortie coupée : on rejoue tout de suite avec un lot deux fois
-                        // plus petit, en le disant.
+                        // plus petit, en le disant ; les lots suivants restent sous cette
+                        // taille (#135).
+                        report.wasted_calls += 1;
                         report.warnings.push(format!(
                             "consolidation coupée sur {size} candidats : reprise par {}",
                             size / 2
                         ));
-                        size /= 2;
+                        sizer.cut(size);
+                        size = sizer.size(items.len() - i);
                         continue;
                     }
+                    sizer.ok(size);
+                    budget.observe(size, completion);
                     if truncated {
                         report
                             .warnings
@@ -381,6 +398,7 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
         Ok(())
     }
     .await;
+    report.duration_ms = pass_started.elapsed().as_millis() as u64;
 
     match outcome {
         Ok(()) => {
@@ -974,7 +992,8 @@ async fn consolidate(
     d: &Arc<Daemon>,
     items: &[Item<'_>],
     snap: &VaultSnapshot,
-) -> anyhow::Result<(penelope_memory::grid::Consolidation, bool)> {
+    max_tokens: u32,
+) -> anyhow::Result<(penelope_memory::grid::Consolidation, bool, u64)> {
     let s = &d.services;
     let cfg = s.config.config();
     let alias = cfg.role_alias("compaction");
@@ -1049,9 +1068,8 @@ async fn consolidate(
             ChatMessage::user(user),
         ],
         stream: true,
-        // Un verdict et son opération font ~90 tokens : la sortie est dimensionnée au
-        // lot, sinon elle est coupée et tout le lot repart en attente (issue #59).
-        max_tokens: Some(((items.len() as u32) * 120).clamp(2_000, 16_000)),
+        // Sortie dimensionnée au lot d'après ce que le modèle écrit vraiment (#59, #135).
+        max_tokens: Some(max_tokens),
         reasoning_effort: effort,
         response_format: structured.then(|| json!({"type": "json_object"})),
         ..Default::default()
@@ -1094,7 +1112,122 @@ async fn consolidate(
     // attendait des verdicts.
     let truncated = matches!(response.finish, penelope_llm::types::FinishReason::Length)
         || (parsed.verdicts.is_empty() && !items.is_empty() && !text.trim().is_empty());
-    Ok((parsed, truncated))
+    Ok((parsed, truncated, response.usage.completion))
+}
+
+/// Taille des lots d'une passe (issue #135). Après une sortie coupée à `n`, les lots
+/// restent sous `n` pour toute la passe ; après un lot qui tient, la taille remonte à
+/// mi-chemin de la plus petite taille coupée, jamais au-dessus. Sans ça, chaque lot
+/// repartait à `dream_batch` et quatre appels sur cinq étaient jetés.
+#[derive(Debug, Clone)]
+pub(crate) struct BatchSizer {
+    max: usize,
+    /// Plus petite taille coupée pendant la passe.
+    ceiling: Option<usize>,
+    next: usize,
+}
+
+impl BatchSizer {
+    pub(crate) fn new(max: usize) -> Self {
+        BatchSizer {
+            max: max.max(1),
+            ceiling: None,
+            next: max.max(1),
+        }
+    }
+
+    pub(crate) fn size(&self, remaining: usize) -> usize {
+        self.next.min(remaining).max(1)
+    }
+
+    pub(crate) fn cut(&mut self, size: usize) {
+        self.ceiling = Some(self.ceiling.map_or(size, |c| c.min(size)));
+        self.next = (size / 2).max(1);
+    }
+
+    pub(crate) fn ok(&mut self, size: usize) {
+        self.next = match self.ceiling {
+            // À mi-chemin de la taille coupée, sans l'atteindre.
+            Some(c) => ((size + c) / 2).min(c - 1).max(1),
+            None => self.max,
+        }
+        .min(self.max);
+    }
+}
+
+/// Sortie demandée par lot (issue #135) : estimée d'après les tokens réellement écrits
+/// par candidat aux lots précédents (350 au départ, la grille de #37 en écrit plusieurs
+/// centaines), avec une marge, dans la limite du modèle. Un lot plus grand que ce que la
+/// limite permet est réduit avant l'appel.
+#[derive(Debug, Clone)]
+pub(crate) struct OutputBudget {
+    per_candidate: f64,
+    cap: u32,
+}
+
+impl OutputBudget {
+    pub(crate) fn new(cap: u32) -> Self {
+        OutputBudget {
+            per_candidate: 350.0,
+            cap: cap.max(2_000),
+        }
+    }
+
+    pub(crate) fn max_tokens(&self, size: usize) -> u32 {
+        ((size as f64 * self.per_candidate * 1.3) as u32).clamp(2_000, self.cap)
+    }
+
+    /// Plus grand lot dont la sortie estimée tient dans la limite.
+    pub(crate) fn fit(&self, size: usize) -> usize {
+        let most = (self.cap as f64 / (self.per_candidate * 1.3)).floor() as usize;
+        size.min(most.max(1))
+    }
+
+    pub(crate) fn observe(&mut self, size: usize, completion: u64) {
+        if completion == 0 || size == 0 {
+            return;
+        }
+        let seen = (completion as f64 / size as f64).max(100.0);
+        self.per_candidate = (self.per_candidate + seen) / 2.0;
+    }
+}
+
+/// Limite de sortie du modèle de consolidation : celle du catalogue, sinon 16 000.
+fn output_cap(d: &Arc<Daemon>, cfg: &penelope_kernel::config::Config) -> u32 {
+    cfg.alias_model(&cfg.role_alias("compaction"))
+        .and_then(|m| d.services.catalog.get(strip_provider(m)))
+        .and_then(|i| i.max_output)
+        .map(|m| m.min(32_000) as u32)
+        .unwrap_or(16_000)
+}
+
+/// Un signe de vie par lot (issue #135) : événement et journal, taille, durée, sortie,
+/// coupé ou non.
+async fn batch_event(
+    d: &Arc<Daemon>,
+    run_id: &str,
+    size: usize,
+    took: Duration,
+    completion: u64,
+    truncated: bool,
+) {
+    tracing::info!(
+        run = run_id,
+        lot = size,
+        ms = took.as_millis() as u64,
+        sortie = completion,
+        coupe = truncated,
+        "lot de consolidation"
+    );
+    let _ = d
+        .services
+        .events
+        .append(EventDraft::new(
+            "memory.dream_batch",
+            json!({"run": run_id, "size": size, "ms": took.as_millis() as u64,
+                   "completion": completion, "truncated": truncated}),
+        ))
+        .await;
 }
 
 /// Un lot, repris après une erreur passagère du modèle (flux muet, 5xx, 429, délai) :
@@ -1105,16 +1238,19 @@ async fn consolidate_retrying(
     d: &Arc<Daemon>,
     items: &[Item<'_>],
     snap: &VaultSnapshot,
+    max_tokens: u32,
     report: &mut DreamReport,
-) -> anyhow::Result<(penelope_memory::grid::Consolidation, bool)> {
+) -> anyhow::Result<(penelope_memory::grid::Consolidation, bool, u64)> {
     let wait = penelope_kernel::config::parse_duration(
         &d.services.config.config().memory.dream_retry_wait,
     )
     .unwrap_or(Duration::from_secs(120));
     let mut attempt = 0u32;
     loop {
-        match consolidate(d, items, snap).await {
+        match consolidate(d, items, snap, max_tokens).await {
             Err(e) if attempt < RETRIES && passing(&e) => {
+                report.calls += 1;
+                report.wasted_calls += 1;
                 attempt += 1;
                 let delay = wait * attempt;
                 report.warnings.push(format!(
@@ -2893,6 +3029,138 @@ mod tests {
         }
     }
 
+    /// #135 : un modèle qui coupe au-delà de 10 candidats juge 188 groupes en au plus
+    /// 25 appels ; après une descente à 5, le lot suivant part entre 5 et 10.
+    #[test]
+    fn batch_sizes_remember_what_held() {
+        let mut sizer = BatchSizer::new(40);
+        let (mut done, mut calls) = (0usize, 0usize);
+        while done < 188 {
+            let size = sizer.size(188 - done);
+            calls += 1;
+            if size > 10 {
+                sizer.cut(size);
+            } else {
+                sizer.ok(size);
+                done += size;
+            }
+        }
+        assert!(calls <= 25, "{calls} appels");
+
+        let mut sizer = BatchSizer::new(40);
+        sizer.cut(40);
+        sizer.cut(20);
+        sizer.cut(10);
+        assert_eq!(sizer.size(100), 5);
+        sizer.ok(5);
+        let next = sizer.size(100);
+        assert!((5..=10).contains(&next), "{next}");
+        let budget = OutputBudget::new(16_000);
+        assert!(
+            budget.max_tokens(40) > 40 * 120,
+            "plus que 120 tokens par candidat"
+        );
+        assert!(budget.fit(40) * 455 <= 16_000 + 455);
+    }
+
+    /// #135 : la passe entière, avec un modèle qui coupe au-delà de 10 candidats : peu
+    /// d'appels jetés, aucun lot jugé au-delà de 10, un événement par lot, et le rapport
+    /// dit appels, appels jetés et durée.
+    #[tokio::test]
+    async fn a_pass_does_not_restart_from_the_full_batch_after_a_cut() {
+        let (_dir, d, p) = daemon().await;
+        const SUJETS: [&str; 30] = [
+            "facturation",
+            "déploiement",
+            "sauvegarde",
+            "revue de code",
+            "veille",
+            "réunions",
+            "voyages",
+            "cuisine",
+            "sport",
+            "musique",
+            "lecture",
+            "jardin",
+            "photo",
+            "vélo",
+            "piano",
+            "café",
+            "thé",
+            "courses",
+            "impôts",
+            "banque",
+            "assurance",
+            "voiture",
+            "maison",
+            "chauffage",
+            "internet",
+            "téléphone",
+            "vacances",
+            "cinéma",
+            "théâtre",
+            "randonnée",
+        ];
+        for sujet in SUJETS {
+            note(
+                &d,
+                CandidateType::Preference,
+                &format!("Pour la {sujet}, le propriétaire décide seul et sans réunion"),
+                Origin::Owner,
+                "s1",
+                6,
+            )
+            .await;
+        }
+        p.set_responder(Some(Arc::new(|req: &ChatRequest| {
+            let user = req.messages.last().map(|m| m.text()).unwrap_or_default();
+            let n = user
+                .lines()
+                .filter(|l| {
+                    l.split_once(". [")
+                        .is_some_and(|(k, _)| k.chars().all(|c| c.is_ascii_digit()))
+                })
+                .count();
+            if n > 10 {
+                return penelope_llm::mock::Scripted::Text(
+                    r#"{"tri": [{"candidat": 1, "dur"#.into(),
+                );
+            }
+            let tri: Vec<String> = (1..=n)
+                .map(|k| {
+                    format!(
+                        r#"{{"candidat": {k}, "durable": false, "utile": false, "precis": true,
+                          "introuvable": true, "endosse": true, "justification": "passager"}}"#
+                    )
+                })
+                .collect();
+            penelope_llm::mock::Scripted::Text(format!(
+                r#"{{"tri": [{}], "operations": []}}"#,
+                tri.join(",")
+            ))
+        })));
+        let o = run(&d, false).await.unwrap();
+        assert!(o.report.calls <= 10, "{:?}", o.report);
+        assert!(o.report.wasted_calls <= 3, "{:?}", o.report);
+        assert_eq!(o.report.calls as usize, p.call_count());
+        let events = d.services.events.range(0, 1_000).await.unwrap();
+        let batches: Vec<&penelope_kernel::event::Event> = events
+            .iter()
+            .filter(|e| e.kind == "memory.dream_batch")
+            .collect();
+        assert_eq!(batches.len(), o.report.calls as usize);
+        for b in &batches {
+            if b.payload["truncated"] == false {
+                assert!(b.payload["size"].as_u64().unwrap() <= 10, "{}", b.payload);
+            }
+        }
+        assert!(
+            o.report.render_brief().contains("appel(s) au modèle"),
+            "{}",
+            o.report.render_brief()
+        );
+    }
+
     /// #127 : un flux muet sur un lot est repris sur ce lot, après l'attente réglée, et le
     /// rapport le dit ; une erreur qui n'est pas passagère (requête refusée) ne l'est pas.
     #[tokio::test]
@@ -2977,6 +3245,20 @@ mod tests {
             v
         };
         let before = states(s.candidates.pending(None).await.unwrap());
+        // #135 : une passe qui s'arrête avant ses verdicts ne consomme aucun report.
+        let deferrals = || async {
+            s.store
+                .read(|c| {
+                    let mut st =
+                        c.prepare("SELECT id, deferrals FROM mem_candidates ORDER BY id")?;
+                    let rows =
+                        st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+                    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+                })
+                .await
+                .unwrap()
+        };
+        let deferrals_before = deferrals().await;
 
         p.reply(&keep(&order[0]));
         for _ in 0..3 {
@@ -2987,6 +3269,7 @@ mod tests {
         let vault = crate::conversation::vault_dir(s);
         assert!(!vault.join("profil.md").exists(), "rien n'est écrit");
         assert_eq!(states(s.candidates.pending(None).await.unwrap()), before);
+        assert_eq!(deferrals().await, deferrals_before, "aucun report consommé");
         assert!(
             history(s, None, Some("profil.md"))
                 .await

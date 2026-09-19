@@ -672,6 +672,15 @@ pub struct DreamReport {
     /// Entrées durables jamais rappelées depuis 60 jours, proposées au retrait.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unused: Vec<String>,
+    /// Appels au modèle de consolidation, dont ceux jetés (sortie coupée) : le coût
+    /// d'une passe se voit (issue #135).
+    #[serde(default)]
+    pub calls: u32,
+    #[serde(default)]
+    pub wasted_calls: u32,
+    /// Durée de la passe, en millisecondes.
+    #[serde(default)]
+    pub duration_ms: u64,
 }
 
 impl DreamReport {
@@ -712,6 +721,18 @@ impl DreamReport {
         }
         for w in &self.warnings {
             s.push_str(&format!("\nAttention : {w}"));
+        }
+        if self.calls > 0 {
+            s.push_str(&format!(
+                "\nPasse : {} appel(s) au modèle{}, {} s.",
+                self.calls,
+                if self.wasted_calls > 0 {
+                    format!(" dont {} jeté(s) (sortie coupée)", self.wasted_calls)
+                } else {
+                    String::new()
+                },
+                self.duration_ms / 1000
+            ));
         }
         if !self.promoted_refs.is_empty() {
             s.push_str(&format!("\nEntrées : {}", self.promoted_refs.join(", ")));

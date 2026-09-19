@@ -47,6 +47,7 @@ pub struct MockProvider {
     name: Arc<std::sync::OnceLock<String>>,
     /// Latence simulée avant la réponse : de quoi faire expirer un délai d'étape (#56).
     latency: Arc<Mutex<std::time::Duration>>,
+    responder: Arc<Mutex<Option<Responder>>>,
 }
 
 /// WAV PCM mono 16 bits à 16 kHz, de silence : ce que renvoie la synthèse simulée
@@ -75,6 +76,10 @@ pub fn silent_wav(seconds: f64) -> Vec<u8> {
 /// Fonction d'embedding d'un faux provider.
 pub type Embedder = Arc<dyn Fn(&str) -> Vec<f32> + Send + Sync>;
 
+/// Réponse calculée d'après la requête, quand le script est vide : de quoi simuler un
+/// modèle qui coupe au-delà d'une taille de lot.
+pub type Responder = Arc<dyn Fn(&ChatRequest) -> Scripted + Send + Sync>;
+
 /// Fichier reçu par `transcribe` : nom, taille en octets, langue demandée.
 pub type TranscribedFile = (String, usize, Option<String>);
 
@@ -100,7 +105,14 @@ impl MockProvider {
             spoken: Arc::new(Mutex::new(Vec::new())),
             name: Arc::new(std::sync::OnceLock::new()),
             latency: Arc::new(Mutex::new(std::time::Duration::ZERO)),
+            responder: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Répond d'après la requête quand le script est vide.
+    pub fn set_responder(&self, r: Option<Responder>) -> &Self {
+        *self.responder.lock().unwrap_or_else(|p| p.into_inner()) = r;
+        self
     }
 
     /// Fait échouer la synthèse vocale (`Some(raison)`), ou la rétablit (`None`).
@@ -201,7 +213,20 @@ impl Provider for MockProvider {
         if !latency.is_zero() {
             tokio::time::sleep(latency).await;
         }
-        let scripted = self.next();
+        let responder = self
+            .responder
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let empty = self
+            .script
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_empty();
+        let scripted = match responder {
+            Some(r) if empty => r(&req),
+            _ => self.next(),
+        };
         if let Scripted::Panic(msg) = &scripted {
             panic!("{msg}");
         }
