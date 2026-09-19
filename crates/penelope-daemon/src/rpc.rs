@@ -1402,7 +1402,12 @@ pub(crate) fn set_config_path(daemon: &Daemon, path: &str, value: Value) -> anyh
                 let obj = cur.as_object_mut().ok_or_else(|| {
                     penelope_kernel::KernelError::config(format!("chemin invalide : {path_owned}"))
                 })?;
-                if !obj.contains_key(*part) {
+                // Une table à clés libres accepte une entrée nouvelle (#128) ; ailleurs,
+                // une clé absente est une faute de frappe.
+                let parent = parts[..i].join(".");
+                if !obj.contains_key(*part)
+                    && !penelope_kernel::config::MAP_PATHS.contains(&parent.as_str())
+                {
                     return Err(penelope_kernel::KernelError::config(format!(
                         "clé inconnue : {path_owned}"
                     )));
@@ -1799,6 +1804,55 @@ mod tests {
         .await;
         let err = resp.error.expect("refus").message;
         assert!(err.contains("clé inconnue : futur.actif"), "{err}");
+    }
+
+    /// #128 : une entrée nouvelle d'une table à clés libres se pose (`image_locate` absent
+    /// d'une configuration écrite avant #125), vérifiée comme les autres ; une clé de
+    /// structure inconnue reste refusée.
+    #[tokio::test]
+    async fn a_new_role_can_be_set_on_an_older_configuration() {
+        let (_dir, r) = rpc().await;
+        let d = r.daemon.clone();
+        d.publish_config("test", |c| {
+            c.models.roles.remove("image_locate");
+            c.models.aliases.insert(
+                "pointage".into(),
+                "openrouter:bytedance/ui-tars-1.5-7b".into(),
+            );
+            Ok(vec!["models.roles".into()])
+        })
+        .unwrap();
+        let resp = call(
+            &r,
+            method::CONFIG_SET,
+            json!({"path": "models.roles.image_locate", "value": "pointage"}),
+        )
+        .await;
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        assert_eq!(
+            d.services
+                .config
+                .config()
+                .models
+                .roles
+                .get("image_locate")
+                .map(String::as_str),
+            Some("pointage")
+        );
+        let resp = call(
+            &r,
+            method::CONFIG_SET,
+            json!({"path": "models.roles.image_describe", "value": "inconnu"}),
+        )
+        .await;
+        assert!(resp.error.is_some(), "un alias inconnu reste refusé");
+        let resp = call(
+            &r,
+            method::CONFIG_SET,
+            json!({"path": "models.inexistant", "value": 1}),
+        )
+        .await;
+        assert!(resp.error.unwrap().message.contains("clé inconnue"));
     }
 
     #[tokio::test]

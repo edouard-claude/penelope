@@ -1444,6 +1444,28 @@ Une nuit de consolidation ratée ne passe plus en silence, et un flux muet est r
   raison change) et le digest le dit. La fenêtre de la passe suivante part toujours de
   la dernière passe réussie.
 
+### 0.17.15
+
+Un point de vision douteux n'est plus servi, le repère se déduit, et la documentation
+embarquée enseigne la méthode (#128).
+
+- **Repère déduit, points contrôlés, méthode enseignée** (#128) : l'alias `vision` sur
+  UI-TARS rendait des millièmes pendant que `models.locate_frame` valait `pixels` ;
+  chaque point servi était faux d'un facteur d'échelle (154 messages, 7,21 $). En cause
+  aussi, la documentation de #125 (c3b3c1e), qui donnait UI-TARS pour un modèle à
+  pixels. `models.locate_frame` vaut désormais `auto` : repère déduit de la famille
+  (UI-TARS et Qwen3-VL en millièmes, Qwen2-VL et Qwen2.5-VL en pixels) et des valeurs
+  (au-delà de 1000 : pas des millièmes ; au-delà de l'image sans dépasser 1000 : des
+  millièmes). Un désaccord entre ces indices et un repère déclaré, ou un point hors de
+  l'image, fait refuser les points (`refused`, avec le repère et la commande) au lieu de
+  les servir ; `model_frame` dit comment la réponse a été lue. Une section « Travailler
+  sur une interface » enseigne l'ordre (identifiant d'abord, coordonnées en dernier), le
+  repère, la conversion pour un tap et la règle des deux taps ; la description de
+  `image_inspect` y renvoie. `config set` accepte une entrée nouvelle dans les tables à
+  clés libres (`models.roles.image_locate` sur une configuration d'avant #125). La
+  confrontation à l'arbre d'accessibilité reste à l'agent : Pénélope ne le détient pas,
+  la méthode le lui dit.
+
 ### Routine de livraison
 
 Avant chaque tag :

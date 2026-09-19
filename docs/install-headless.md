@@ -317,7 +317,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `models.routing.sticky` | `true` | Garder l'alias choisi pour la session (sauf l'alias `low`). |
 | `models.routing.fallback.main` | `["fast"]` | Alias de repli, dans l'ordre, quand un modèle ne répond pas. |
 | `models.routing.fallback.reasoning` | `["main"]` | Alias de repli, dans l'ordre, quand un modèle ne répond pas. |
-| `models.locate_frame` | `"pixels"` | Repère des coordonnées que rend le modèle du rôle `image_locate` : `pixels` (pixels de l'image reçue, comme UI-TARS) ou `per_mille` (0 à 1000 sur chaque axe, comme Qwen-VL). `image_inspect` les ramène toujours en pixels de l'image. |
+| `models.locate_frame` | `"auto"` | Repère des coordonnées que rend le modèle du rôle `image_locate` : `auto` (déduit de la famille du modèle et des valeurs rendues), `pixels` (pixels de l'image) ou `per_mille` (0 à 1000 sur chaque axe, comme UI-TARS et Qwen3-VL). `image_inspect` ramène toujours les points en pixels de l'image, et refuse ceux qui ne tiennent pas dans le repère. |
 
 **[budget]**
 
@@ -523,8 +523,12 @@ Pénélope ne connaît jamais un modèle par son nom brut, seulement par **alias
 
 Décrire une image et y pointer un élément ne demandent pas le même modèle : le rôle
 `image_locate` (outil `image_inspect`, mode `locate`) peut viser un modèle d'interface qui
-rend des coordonnées, sans toucher à la description. Son repère se déclare
-(`models.locate_frame` : `pixels`, comme UI-TARS, ou `per_mille`, comme Qwen-VL) :
+rend des coordonnées, sans toucher à la description. Son repère (`models.locate_frame`)
+vaut `auto` par défaut : déduit de la famille du modèle (UI-TARS et Qwen3-VL rendent des
+millièmes, Qwen2-VL et Qwen2.5-VL des pixels) et des valeurs rendues (une valeur qui
+dépasse l'image sans dépasser 1000 est un millième). `pixels` ou `per_mille` le
+déclarent ; un désaccord avec ces indices fait refuser les points plutôt que de les
+servir faux. Voir « Travailler sur une interface ».
 
 ```bash
 penelope model set pointage openrouter:bytedance/ui-tars-1.5-7b
@@ -1217,19 +1221,8 @@ qui en parle (trois fois au plus, une fois par jour au plus).
 Une photo part dans la conversation. Si le modèle de la session lit les images, il la
 voit ; sinon le modèle de l'alias `vision` la décrit (texte visible recopié) et la
 description rejoint le message. Plusieurs photos envoyées d'un coup forment un seul
-message, qui garde le chemin de chaque photo.
-
-**Travailler sur une interface.** Une description ne dit pas où taper. `image_inspect`
-pose une question sur une image déjà reçue ou sur une capture du workspace
-(`xcrun simctl io booted screenshot ecran.png` pour un simulateur iOS), dans l'un de trois
-modes : `describe` (description, en français), `read` (texte recopié tel quel, dans sa
-langue) ou `locate` (« le bouton de sélection de boutique », même sans libellé ni
-identifiant d'accessibilité). En `locate`, le modèle du rôle `image_locate` reçoit la
-taille de l'image et le repère attendu, sa réponse est rendue telle quelle (ni reformulée
-ni traduite), et `points` donne chaque élément en pixels de l'image, origine en haut à
-gauche ; pour un tap sur simulateur, diviser par l'échelle de l'écran (×3 sur la plupart
-des iPhone). Des coordonnées hors de l'image sont signalées. Dans tous les modes, ce que le
-modèle lit dans l'image reste une donnée, encadrée comme telle.
+message, qui garde le chemin de chaque photo ; `image_inspect` y revient (voir
+« Travailler sur une interface »).
 
 Un document PDF, DOCX, HTML, Markdown ou texte est ingéré : son texte devient une fiche
 `vault/sources/<nom>.md`, découpée en passages que `mem_search` retrouve, et un résumé
@@ -1250,6 +1243,40 @@ bilan arrive sur Telegram et la boîte est vidée (un format refusé part dans
 `inbox/refusés/`). Un PDF scanné, sans couche texte, est lu par l'OCR de macOS
 (Vision) : la première fois, le petit lecteur est compilé en quelques secondes, ce qui
 demande les outils de développement Xcode (`xcode-select --install`) ; 50 pages au plus.
+
+### Travailler sur une interface
+
+Pour agir sur une application (simulateur iOS, navigateur), l'ordre est toujours le
+même, et les coordonnées viennent en dernier :
+
+1. **Viser par identifiant.** Un élément qui a un `testID` (`accessibilityIdentifier`) ou
+   un libellé d'accessibilité se touche par lui, via l'arbre d'accessibilité de l'outil
+   qui pilote l'application. C'est exact, stable d'une taille d'écran à l'autre, et ça
+   ne coûte aucune image.
+2. **Pointer seulement ce que l'arbre ne montre pas** : une image sans libellé, un dessin.
+   Prendre une capture (`xcrun simctl io booted screenshot ecran.png` dans le workspace),
+   puis `image_inspect` en mode `locate` avec l'élément décrit en une phrase (« le bouton
+   de sélection de boutique »).
+3. **Lire le repère.** `points` est toujours en pixels de l'image, origine en haut à
+   gauche, x vers la droite, y vers le bas ; `image` donne sa taille, `model_frame` dit
+   comment la réponse brute du modèle a été lue (`pixels` ou `per_mille`). Un modèle
+   d'interface rend souvent des millièmes (UI-TARS, Qwen3-VL) : Pénélope les ramène en
+   pixels. Quand le repère est douteux (valeur hors de l'image, désaccord avec
+   `models.locate_frame`), aucun point n'est servi et `refused` dit pourquoi : corriger
+   le réglage (`auto` par défaut) plutôt que deviner.
+4. **Convertir pour un tap.** Un simulateur attend des points d'écran, pas des pixels :
+   diviser par l'échelle de l'écran (×3 sur la plupart des iPhone, ×2 sur un iPad).
+   `(588, 1273)` px sur une capture 1179×2556 donnent `(196, 424)` pt.
+5. **Vérifier.** Le point doit tomber dans le cadre d'un nœud voisin cohérent de l'arbre
+   d'accessibilité (la rangée au-dessus, en dessous) ; après le tap, une nouvelle
+   capture ou l'arbre dit si l'effet a eu lieu.
+6. **Changer d'approche au lieu d'affiner.** Après deux taps par coordonnées sans effet
+   vérifiable, ne pas corriger le point de quelques pour cent : revenir à l'arbre, faire
+   défiler, reprendre une capture, demander un `testID` au propriétaire, ou demander.
+
+`image_inspect` a deux autres modes : `describe` (description, en français) et `read`
+(texte recopié tel quel, dans sa langue). Dans tous les modes, ce que le modèle lit dans
+l'image reste une donnée, encadrée comme telle.
 
 ### Mémoire qui apprend
 

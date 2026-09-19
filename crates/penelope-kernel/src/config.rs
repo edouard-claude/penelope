@@ -353,14 +353,27 @@ pub struct Models {
     /// code, images, embeddings, transcription.
     pub roles: BTreeMap<String, String>,
     pub routing: Routing,
-    /// Repère des coordonnées que rend le modèle du rôle `image_locate` : `pixels`
-    /// (pixels de l'image reçue, comme UI-TARS) ou `per_mille` (0 à 1000 sur chaque axe,
-    /// comme Qwen-VL). `image_inspect` les ramène toujours en pixels de l'image.
+    /// Repère des coordonnées que rend le modèle du rôle `image_locate` : `auto` (déduit
+    /// de la famille du modèle et des valeurs rendues), `pixels` (pixels de l'image) ou
+    /// `per_mille` (0 à 1000 sur chaque axe, comme UI-TARS et Qwen3-VL). `image_inspect`
+    /// ramène toujours les points en pixels de l'image, et refuse ceux qui ne tiennent
+    /// pas dans le repère.
     pub locate_frame: String,
 }
 
-/// Repères de coordonnées d'un modèle de pointage (issue #125).
-pub const LOCATE_FRAMES: &[&str] = &["pixels", "per_mille"];
+/// Repères de coordonnées d'un modèle de pointage (issues #125 et #128).
+pub const LOCATE_FRAMES: &[&str] = &["auto", "pixels", "per_mille"];
+
+/// Tables de la configuration dont les clés sont libres : `config set` y ajoute une
+/// entrée nouvelle (`models.roles.image_locate`), là où une clé de structure inconnue
+/// reste une faute de frappe refusée.
+pub const MAP_PATHS: &[&str] = &[
+    "models.aliases",
+    "models.roles",
+    "models.routing.fallback",
+    "context.model_thresholds",
+    "providers.extra",
+];
 
 /// Modèle d'embeddings par défaut : multilingue, servi par OpenRouter, sans serveur local
 /// (issue #11).
@@ -411,7 +424,7 @@ impl Default for Models {
             aliases,
             roles,
             routing: Routing::default(),
-            locate_frame: "pixels".into(),
+            locate_frame: "auto".into(),
         }
     }
 }
@@ -2014,6 +2027,16 @@ mod tests {
         let (fresh, _) = Config::parse("[owner]\nname = \"Anne\"\n").unwrap();
         assert!(!fresh.sandbox.shell_network, "défaut fermé");
         assert!(!Config::default().sandbox.shell_network);
+    }
+
+    /// #128 : chaque table déclarée libre est bien une table de la configuration.
+    #[test]
+    fn map_paths_are_maps() {
+        let v = serde_json::to_value(Config::default()).unwrap();
+        for path in MAP_PATHS {
+            let node = path.split('.').fold(&v, |n, k| &n[k]);
+            assert!(node.is_object(), "{path} : {node}");
+        }
     }
 
     #[test]

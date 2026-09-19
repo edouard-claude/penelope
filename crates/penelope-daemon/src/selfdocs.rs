@@ -365,6 +365,40 @@ mod tests {
     /// `self_docs search "sous-groupe"` renvoie la section de `docs/workflows.md`, sans
     /// réseau, avec le lien à la version compilée.
     #[test]
+    fn the_interface_method_is_taught_where_the_agent_reads() {
+        // #128 : l'agent apprend en lisant sa documentation embarquée. La page citée par
+        // `image_inspect` enseigne le repère, la conversion pour un tap, la préférence
+        // pour les identifiants et la règle des deux taps.
+        // La description de l'outil renvoie à cette section par son titre.
+        let hits = search("Travailler sur une interface", 3);
+        assert_eq!(hits[0]["section"], "Travailler sur une interface", "{hits}");
+        let page = read(
+            hits[0]["file"].as_str().unwrap(),
+            Some("Travailler sur une interface"),
+            0,
+        )
+        .unwrap();
+        let text = page.to_string();
+        for want in [
+            "testID",
+            "libellé d'accessibilité",
+            "origine en haut à",
+            "millièmes",
+            "diviser par l'échelle",
+            "deux taps",
+            "refused",
+        ] {
+            assert!(text.contains(want), "{want} absent : {text}");
+        }
+        assert!(
+            penelope_tools::tool_spec("image_inspect")
+                .unwrap()
+                .description
+                .contains("Travailler sur une interface")
+        );
+    }
+
+    #[test]
     fn search_finds_the_workflow_subgroups_section() {
         let hits = search("sous-groupe", 5);
         let first = &hits[0];

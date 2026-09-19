@@ -245,8 +245,8 @@ pub async fn inspect(
         },
     });
     if task == Task::Locate {
-        let per_mille = d.services.config.config().models.locate_frame == "per_mille";
-        let points = points_in(&answer.text, per_mille, size);
+        let setting = d.services.config.config().models.locate_frame.clone();
+        let served = serve_points(&answer.text, &setting, &answer.model, size);
         out["frame"] = json!(match size {
             Some((w, h)) => format!(
                 "pixels de l'image ({w}×{h}), origine en haut à gauche, x vers la droite, y \
@@ -254,21 +254,168 @@ pub async fn inspect(
             ),
             None => "pixels de l'image (taille inconnue), origine en haut à gauche".into(),
         });
-        if points.iter().any(|p| p["outside"] == true) {
-            out["note"] = json!(
-                "des coordonnées tombent hors de l'image : le modèle rend peut-être un autre \
-                 repère (`models.locate_frame` : pixels ou per_mille)"
-            );
+        if let Some(f) = served.read_as {
+            out["model_frame"] = json!(f.as_str());
         }
-        out["points"] = Value::Array(points);
+        if let Some(why) = served.refused {
+            out["refused"] = json!(why);
+        }
+        out["points"] = Value::Array(served.points);
     }
     Ok(out)
 }
 
-/// Points et boîtes lus dans la réponse d'un modèle de pointage, dans l'ordre : `(x, y)`,
-/// `[x1, y1, x2, y2]`, `"x": …, "y": …`, `<point>x y</point>`. Une boîte donne son centre.
-/// `per_mille` : valeurs de 0 à 1000 ramenées en pixels de l'image.
-pub fn points_in(answer: &str, per_mille: bool, size: Option<(u32, u32)>) -> Vec<Value> {
+/// Repère des nombres rendus par un modèle de pointage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Frame {
+    Pixels,
+    PerMille,
+}
+
+impl Frame {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Frame::Pixels => "pixels",
+            Frame::PerMille => "per_mille",
+        }
+    }
+}
+
+/// Repère connu d'une famille de modèles de pointage. UI-TARS et Qwen3-VL rendent des
+/// millièmes (constaté pour UI-TARS 1.5 servi par OpenRouter : issue #128) ; Qwen2-VL et
+/// Qwen2.5-VL des pixels de l'image reçue.
+pub fn family_frame(model: &str) -> Option<Frame> {
+    let m = model.to_lowercase();
+    if m.contains("ui-tars") || m.contains("qwen3-vl") {
+        Some(Frame::PerMille)
+    } else if m.contains("qwen2.5-vl") || m.contains("qwen2-vl") {
+        Some(Frame::Pixels)
+    } else {
+        None
+    }
+}
+
+/// Points servis : convertis en pixels de l'image, ou refusés avec la raison.
+pub struct Served {
+    pub points: Vec<Value>,
+    pub read_as: Option<Frame>,
+    pub refused: Option<String>,
+}
+
+/// Lit les nombres de la réponse et décide de leur repère, sans jamais servir un point
+/// douteux comme une vérité (issue #128) :
+///
+/// ```text
+///  valeur > 1000                      ─► pas des millièmes
+///  valeur > taille de l'image, ≤ 1000 ─► pas des pixels (aveu de millièmes)
+///  famille connue du modèle           ─► son repère
+///  `models.locate_frame` déclaré      ─► doit s'accorder avec les deux indices
+///  point hors de l'image après calcul ─► refusé
+/// ```
+pub fn serve_points(answer: &str, setting: &str, model: &str, size: Option<(u32, u32)>) -> Served {
+    let raw = raw_points(answer);
+    if raw.is_empty() {
+        return Served {
+            points: Vec::new(),
+            read_as: None,
+            refused: None,
+        };
+    }
+    let values = || raw.iter().flatten().copied();
+    let over_thousand = values().any(|v| v > 1000.0);
+    let beyond_image = size.is_some_and(|(w, h)| {
+        raw.iter().any(|n| {
+            n.iter()
+                .enumerate()
+                .any(|(i, v)| *v > f64::from(if i % 2 == 0 { w } else { h }))
+        })
+    });
+    let admits_per_mille = beyond_image && !over_thousand;
+    let family = family_frame(model);
+    let refuse = |why: String| Served {
+        points: Vec::new(),
+        read_as: None,
+        refused: Some(why),
+    };
+    let frame = match setting {
+        "pixels" => {
+            if family == Some(Frame::PerMille) {
+                return refuse(format!(
+                    "`{model}` rend des millièmes, mais `models.locate_frame` vaut `pixels` : \
+                     points non servis (`penelope config set models.locate_frame auto`)"
+                ));
+            }
+            if admits_per_mille {
+                return refuse(
+                    "des valeurs dépassent la taille de l'image sans dépasser 1000 : ce sont \
+                     des millièmes, pas les pixels attendus par `models.locate_frame` ; points \
+                     non servis (`penelope config set models.locate_frame auto`)"
+                        .into(),
+                );
+            }
+            Frame::Pixels
+        }
+        "per_mille" => {
+            if over_thousand || family == Some(Frame::Pixels) {
+                return refuse(
+                    "des valeurs dépassent 1000 ou le modèle rend des pixels, alors que \
+                     `models.locate_frame` attend des millièmes : points non servis \
+                     (`penelope config set models.locate_frame auto`)"
+                        .into(),
+                );
+            }
+            Frame::PerMille
+        }
+        _ => match (over_thousand, admits_per_mille, family) {
+            (true, _, Some(Frame::PerMille)) => {
+                return refuse(format!(
+                    "`{model}` devrait rendre des millièmes, mais des valeurs dépassent 1000 : \
+                     repère incertain, points non servis"
+                ));
+            }
+            (true, _, _) => Frame::Pixels,
+            (false, true, _) => Frame::PerMille,
+            (false, false, f) => f.unwrap_or(Frame::Pixels),
+        },
+    };
+    let scale = |v: f64, axis: usize| match (frame, size) {
+        (Frame::PerMille, Some((w, h))) => v * f64::from(if axis == 0 { w } else { h }) / 1000.0,
+        _ => v,
+    };
+    let mut points = Vec::new();
+    for n in &raw {
+        let px: Vec<f64> = n
+            .iter()
+            .enumerate()
+            .map(|(i, v)| scale(*v, i % 2).round())
+            .collect();
+        let (x, y, bbox) = match px.as_slice() {
+            [x, y] => (*x, *y, None),
+            [x1, y1, x2, y2] => ((x1 + x2) / 2.0, (y1 + y2) / 2.0, Some(px.clone())),
+            _ => continue,
+        };
+        if size.is_some_and(|(w, h)| x < 0.0 || y < 0.0 || x > f64::from(w) || y > f64::from(h)) {
+            return refuse(format!(
+                "un point tombe hors de l'image lu en {} : repère incertain, points non servis",
+                frame.as_str()
+            ));
+        }
+        let mut p = json!({"x": x.round() as i64, "y": y.round() as i64});
+        if let Some(b) = bbox {
+            p["box"] = json!(b.iter().map(|v| *v as i64).collect::<Vec<_>>());
+        }
+        points.push(p);
+    }
+    Served {
+        points,
+        read_as: Some(frame),
+        refused: None,
+    }
+}
+
+/// Nombres des points et boîtes lus dans la réponse d'un modèle de pointage, dans
+/// l'ordre : `(x, y)`, `[x1, y1, x2, y2]`, `"x": …, "y": …`, `<point>x y</point>`.
+pub fn raw_points(answer: &str) -> Vec<Vec<f64>> {
     const NUM: &str = r"(-?\d+(?:\.\d+)?)";
     let patterns = [
         format!(r"[\(\[]\s*{NUM}\s*,\s*{NUM}(?:\s*,\s*{NUM}\s*,\s*{NUM})?\s*[\)\]]"),
@@ -286,41 +433,13 @@ pub fn points_in(answer: &str, per_mille: bool, size: Option<(u32, u32)>) -> Vec
                 .filter_map(|m| m.as_str().parse().ok())
                 .collect();
             let start = c.get(0).map(|m| m.start()).unwrap_or(0);
-            if !found.iter().any(|(s, _)| *s == start) {
+            if matches!(nums.len(), 2 | 4) && !found.iter().any(|(s, _)| *s == start) {
                 found.push((start, nums));
             }
         }
     }
     found.sort_by_key(|(s, _)| *s);
-    let scale = |v: f64, axis: usize| match (per_mille, size) {
-        (true, Some((w, h))) => v * f64::from(if axis == 0 { w } else { h }) / 1000.0,
-        _ => v,
-    };
-    found
-        .into_iter()
-        .filter_map(|(_, n)| {
-            let px: Vec<f64> = n
-                .iter()
-                .enumerate()
-                .map(|(i, v)| scale(*v, i % 2).round())
-                .collect();
-            let (x, y, bbox) = match px.as_slice() {
-                [x, y] => (*x, *y, None),
-                [x1, y1, x2, y2] => ((x1 + x2) / 2.0, (y1 + y2) / 2.0, Some(px.clone())),
-                _ => return None,
-            };
-            let outside = size
-                .is_some_and(|(w, h)| x < 0.0 || y < 0.0 || x > f64::from(w) || y > f64::from(h));
-            let mut p = json!({"x": x.round() as i64, "y": y.round() as i64});
-            if let Some(b) = bbox {
-                p["box"] = json!(b.iter().map(|v| *v as i64).collect::<Vec<_>>());
-            }
-            if outside {
-                p["outside"] = json!(true);
-            }
-            Some(p)
-        })
-        .collect()
+    found.into_iter().map(|(_, n)| n).collect()
 }
 
 #[cfg(test)]
@@ -343,34 +462,93 @@ mod tests {
         }
     }
 
+    const SCREEN: Option<(u32, u32)> = Some((1179, 2556));
+
     #[test]
     fn points_are_read_from_the_usual_answers() {
-        let size = Some((1179, 2556));
-        let ui_tars = points_in(
-            "click(start_box='<|box_start|>(588,1274)<|box_end|>')",
-            false,
-            size,
+        let serve = |a: &str| serve_points(a, "pixels", "autre/vision", SCREEN).points;
+        assert_eq!(
+            serve("click(start_box='<|box_start|>(588,1274)<|box_end|>')"),
+            vec![json!({"x": 588, "y": 1274})]
         );
-        assert_eq!(ui_tars, vec![json!({"x": 588, "y": 1274})]);
-
-        let boxed = points_in("Le bouton : [100, 200, 300, 260]", false, size);
+        let boxed = serve("Le bouton : [100, 200, 300, 260]");
         assert_eq!(boxed[0]["x"], 200);
         assert_eq!(boxed[0]["y"], 230);
         assert_eq!(boxed[0]["box"], json!([100, 200, 300, 260]));
-
-        let json_like = points_in(r#"{"x": 40, "y": 80.5}"#, false, size);
-        assert_eq!(json_like, vec![json!({"x": 40, "y": 81})]);
-
-        let qwen = points_in("<point>500 900</point>", true, size);
         assert_eq!(
-            qwen,
+            serve(r#"{"x": 40, "y": 80.5}"#),
+            vec![json!({"x": 40, "y": 81})]
+        );
+        let qwen = serve_points("<point>500 900</point>", "per_mille", "autre", SCREEN);
+        assert_eq!(
+            qwen.points,
             vec![json!({"x": 590, "y": 2300})],
-            "millièmes ramenés en pixels"
+            "millièmes ramenés"
+        );
+        assert!(serve("Rien de tel à l'écran.").is_empty());
+    }
+
+    /// #128 : le cas vécu. UI-TARS rend des millièmes ; déclaré `pixels`, ses points sont
+    /// refusés en nommant le repère ; en `auto`, ils tombent dans les bonnes rangées.
+    #[test]
+    fn a_per_mille_model_read_as_pixels_is_refused() {
+        let answer = "click(start_box='(500,625)')";
+        let wrong = serve_points(
+            answer,
+            "pixels",
+            "openrouter:bytedance/ui-tars-1.5-7b",
+            SCREEN,
+        );
+        assert!(wrong.points.is_empty());
+        let why = wrong.refused.unwrap();
+        assert!(
+            why.contains("millièmes") && why.contains("locate_frame"),
+            "{why}"
         );
 
-        let off = points_in("(2000, 3000)", false, size);
-        assert_eq!(off[0]["outside"], true);
-        assert!(points_in("Rien de tel à l'écran.", false, size).is_empty());
+        let auto = serve_points(
+            answer,
+            "auto",
+            "openrouter:bytedance/ui-tars-1.5-7b",
+            SCREEN,
+        );
+        assert_eq!(auto.read_as, Some(Frame::PerMille));
+        assert_eq!(auto.points, vec![json!({"x": 590, "y": 1598})]);
+    }
+
+    /// #128 : un modèle inconnu qui rend des pixels marche sans réglage ; une valeur qui
+    /// dépasse l'image sans dépasser 1000 est un aveu de millièmes ; un point hors de
+    /// l'image est refusé en nommant le repère ; une valeur > 1000 n'est pas un millième.
+    #[test]
+    fn the_frame_is_deduced_and_checked() {
+        let small = Some((800, 600));
+        let pixels = serve_points("(120, 340)", "auto", "autre/vision", small);
+        assert_eq!(pixels.read_as, Some(Frame::Pixels));
+        assert_eq!(pixels.points, vec![json!({"x": 120, "y": 340})]);
+
+        let admits = serve_points("(900, 500)", "auto", "autre/vision", small);
+        assert_eq!(admits.read_as, Some(Frame::PerMille));
+        assert_eq!(admits.points, vec![json!({"x": 720, "y": 300})]);
+        let declared = serve_points("(900, 500)", "pixels", "autre/vision", small);
+        assert!(declared.refused.unwrap().contains("millièmes"));
+
+        let outside = serve_points("(1500, 3000)", "auto", "autre/vision", SCREEN);
+        let why = outside.refused.unwrap();
+        assert!(
+            why.contains("hors de l'image") && why.contains("pixels"),
+            "{why}"
+        );
+
+        let not_mille = serve_points("(1500, 20)", "per_mille", "autre/vision", SCREEN);
+        assert!(not_mille.refused.unwrap().contains("millièmes"));
+        assert_eq!(
+            family_frame("qwen/qwen2.5-vl-72b-instruct"),
+            Some(Frame::Pixels)
+        );
+        assert_eq!(
+            family_frame("qwen/qwen3-vl-235b-a22b-instruct"),
+            Some(Frame::PerMille)
+        );
     }
 
     #[test]
