@@ -492,17 +492,10 @@ async fn drive_claimed(
             return finish(d, &run, RunState::Failed, "workflow retiré du registre").await;
         };
         let run = refresh_spent(s, run).await?;
-        let limit = check_limits(&run, &wf.settings.budget, s.clock.now_ms());
+        let budget = effective_budget(s, &run, &wf.settings.budget).await;
+        let limit = check_limits(&run, &budget, s.clock.now_ms());
         if limit != Limit::Ok {
-            let reason = match limit {
-                Limit::IterationsExhausted => "itérations épuisées".to_string(),
-                Limit::BudgetUsd => {
-                    format!("budget de {:.2} $ atteint", wf.settings.budget.max_usd)
-                }
-                Limit::BudgetTokens => "budget de tokens atteint".to_string(),
-                Limit::WallClock => "durée maximale atteinte".to_string(),
-                Limit::Ok => unreachable!(),
-            };
+            let reason = limit_reason(&limit, &run, &budget);
             return finish(d, &run, RunState::Blocked, &reason).await;
         }
         let Some(step_id) = run.current_step.clone() else {
@@ -673,14 +666,17 @@ async fn finish(
     Ok(state)
 }
 
-/// Coût du run d'après le ledger d'usage, pour les bornes de budget.
+/// Coût du run d'après le ledger d'usage, pour les bornes de budget. Les tokens sont
+/// ceux **facturés** : l'entrée hors cache plus la sortie. Un préfixe servi par le cache
+/// (décision 0008, #40) est l'économie voulue, pas une dépense (issue #136).
 async fn refresh_spent(s: &Services, mut run: Run) -> anyhow::Result<Run> {
     let id = run.id.clone();
     let (usd, tokens): (f64, i64) = s
         .store
         .read(move |c| {
             Ok(c.query_row(
-                "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(prompt + completion), 0)
+                "SELECT COALESCE(SUM(cost_usd), 0),
+                        COALESCE(SUM(MAX(prompt - cached, 0) + completion), 0)
                  FROM usage WHERE run_id = ?1",
                 [id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
@@ -693,6 +689,113 @@ async fn refresh_spent(s: &Services, mut run: Run) -> anyhow::Result<Run> {
         run.spent_tokens = tokens as u64;
     }
     Ok(run)
+}
+
+fn budget_key(run_id: &str) -> String {
+    format!("run.budget.{run_id}")
+}
+
+/// Plafonds d'un run : ceux du workflow, relevés au besoin pour ce run seul par
+/// `wf control <run> budget` (issue #136).
+pub async fn effective_budget(
+    s: &Services,
+    run: &Run,
+    declared: &penelope_workflow::model::Budget,
+) -> penelope_workflow::model::Budget {
+    let mut b = *declared;
+    if let Ok(Some(raw)) = kv_get(s, &budget_key(&run.id)).await
+        && let Ok(v) = serde_json::from_str::<Value>(&raw)
+    {
+        if let Some(usd) = v["max_usd"].as_f64() {
+            b.max_usd = usd;
+        }
+        if let Some(tokens) = v["max_tokens"].as_u64() {
+            b.max_tokens = tokens;
+        }
+    }
+    b
+}
+
+/// Borne atteinte, avec ses chiffres et la commande qui la relève (issue #136).
+fn limit_reason(limit: &Limit, run: &Run, b: &penelope_workflow::model::Budget) -> String {
+    let raise = |what: &str| format!("`penelope wf control {} budget {what}`", run.id);
+    match limit {
+        Limit::IterationsExhausted => format!(
+            "itérations épuisées ({} sur {})",
+            run.iterations, run.max_iterations
+        ),
+        Limit::BudgetUsd => format!(
+            "budget de {:.2} $ atteint ({:.2} $ dépensés) : {}",
+            b.max_usd,
+            run.spent_usd,
+            raise("--usd <montant>")
+        ),
+        Limit::BudgetTokens => format!(
+            "budget de tokens atteint ({} tokens facturés sur {}) : {}",
+            run.spent_tokens,
+            b.max_tokens,
+            raise("--tokens <nombre>")
+        ),
+        Limit::WallClock => format!("durée maximale atteinte ({} min)", b.max_wall_ms / 60_000),
+        Limit::Ok => String::new(),
+    }
+}
+
+/// Relève les plafonds d'un run, pour lui seul et avec trace (issue #136) : l'équivalent
+/// de `session budget` pour un run. Un run bloqué par la borne relevée redevient
+/// reprenable ; la reprise repart de l'étape courante, sans rejouer les effets faits.
+pub async fn raise_budget(
+    d: &Arc<Daemon>,
+    run_id: &str,
+    usd: Option<f64>,
+    tokens: Option<u64>,
+) -> anyhow::Result<Value> {
+    let s = &d.services;
+    let run = s
+        .runs
+        .get(run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("run {run_id} introuvable"))?;
+    if usd.is_none() && tokens.is_none() {
+        anyhow::bail!("rien à relever : `--usd <montant>` et/ou `--tokens <nombre>`");
+    }
+    let wf = s
+        .workflows
+        .get(&run.workflow_id)
+        .ok_or_else(|| anyhow::anyhow!("workflow retiré du registre"))?;
+    let mut b = effective_budget(s, &run, &wf.settings.budget).await;
+    if let Some(u) = usd {
+        b.max_usd = u;
+    }
+    if let Some(t) = tokens {
+        b.max_tokens = t;
+    }
+    kv_set(
+        s,
+        &budget_key(run_id),
+        &json!({"max_usd": b.max_usd, "max_tokens": b.max_tokens}).to_string(),
+    )
+    .await?;
+    let _ = s
+        .events
+        .append(
+            EventDraft::new(
+                "workflow.budget_raised",
+                json!({"run": run_id, "max_usd": b.max_usd, "max_tokens": b.max_tokens}),
+            )
+            .session(&run.session_id),
+        )
+        .await;
+    let run = refresh_spent(s, run).await?;
+    let limit = check_limits(&run, &b, s.clock.now_ms());
+    Ok(json!({
+        "run": run_id,
+        "max_usd": b.max_usd,
+        "max_tokens": b.max_tokens,
+        "spent_usd": run.spent_usd,
+        "spent_tokens": run.spent_tokens,
+        "still_blocked": (limit != Limit::Ok).then(|| limit_reason(&limit, &run, &b)),
+    }))
 }
 
 async fn session_metadata(s: &Services, session_id: &str) -> Value {
@@ -722,6 +825,22 @@ pub async fn control(
         .ok_or_else(|| anyhow::anyhow!("run {run_id} introuvable"))?;
     if run.state.is_terminal() {
         anyhow::bail!("run {run_id} déjà {}", run.state.as_str());
+    }
+    // Reprendre un run toujours au-dessus de sa borne le re-bloquerait dans la seconde :
+    // on le dit au lieu de le faire (issue #136).
+    if *op == Control::Resume
+        && run.state == RunState::Blocked
+        && let Some(wf) = s.workflows.get(&run.workflow_id)
+    {
+        let current = refresh_spent(s, run.clone()).await?;
+        let budget = effective_budget(s, &current, &wf.settings.budget).await;
+        let limit = check_limits(&current, &budget, s.clock.now_ms());
+        if matches!(limit, Limit::BudgetUsd | Limit::BudgetTokens) {
+            anyhow::bail!(
+                "toujours bloqué : {}",
+                limit_reason(&limit, &current, &budget)
+            );
+        }
     }
     let state = match op {
         Control::Pause | Control::Cancel => {
@@ -2637,6 +2756,85 @@ mod tests {
             .await
             .unwrap();
         assert!(task_id.is_some(), "tâche suivie dans mcp_tasks");
+    }
+
+    /// #136 : le budget de tokens d'un run compte les tokens facturés (entrée hors cache
+    /// et sortie) ; la borne atteinte se dit avec ses chiffres ; `Resume` sur un run
+    /// toujours au-dessus répond sans changer l'état ; `budget` relève le plafond du run et
+    /// le rend reprenable.
+    #[tokio::test]
+    async fn a_run_budget_counts_billed_tokens_and_can_be_raised() {
+        let e = env().await;
+        let s = &e.d.services;
+        let raw = json!({
+            "metadata": {"id": "cache", "name": "Cache", "parameters": []},
+            "entryStep": "choisir",
+            "settings": {"maxIterations": 10,
+                         "budget": {"maxUsd": 5.0, "maxTokens": 300000, "maxWallMs": 3600000}},
+            "steps": [{"id": "choisir", "name": "On continue ?", "type": "user",
+                       "template": "question", "choices": ["Oui", "Non"],
+                       "transitions": [{"goto": "$done"}]}]
+        });
+        install(&e.d, raw).await;
+        let run = start_run(&e.d, "cache", json!({}), &owner(), None, 0)
+            .await
+            .unwrap();
+        let spend = |n: usize| {
+            let (s, run) = (s.clone(), run.clone());
+            async move {
+                for _ in 0..n {
+                    s.budget
+                        .record(penelope_kernel::budget::UsageRecord {
+                            session_id: Some(run.session_id.clone()),
+                            run_id: Some(run.id.clone()),
+                            model: "m".into(),
+                            provider: "p".into(),
+                            prompt: 44_000,
+                            cached: 40_000,
+                            completion: 400,
+                            cost_usd: 0.01,
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap();
+                }
+            }
+        };
+        spend(50).await;
+        assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Running);
+        let now = s.runs.get(&run.id).await.unwrap().unwrap();
+        assert_eq!(
+            now.spent_tokens, 220_000,
+            "90 % servis par le cache ne comptent pas"
+        );
+
+        spend(50).await;
+        assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Blocked);
+        let blocked = s.runs.get(&run.id).await.unwrap().unwrap();
+        let why = blocked.error.clone().unwrap_or_default();
+        assert!(why.contains("440000 tokens facturés sur 300000"), "{why}");
+        assert!(why.contains("wf control"), "{why}");
+
+        let err = control(&e.d, &run.id, &penelope_workflow::Control::Resume)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("toujours bloqué"), "{err}");
+        assert_eq!(
+            s.runs.get(&run.id).await.unwrap().unwrap().state,
+            RunState::Blocked
+        );
+
+        let raised = raise_budget(&e.d, &run.id, None, Some(1_000_000))
+            .await
+            .unwrap();
+        assert!(raised["still_blocked"].is_null(), "{raised}");
+        assert_eq!(
+            control(&e.d, &run.id, &penelope_workflow::Control::Resume)
+                .await
+                .unwrap(),
+            RunState::Running
+        );
+        assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Running);
     }
 
     #[tokio::test]

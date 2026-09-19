@@ -92,6 +92,32 @@ disponibles : `{{workdir}}`, `{{run.id}}`, `{{now}}`, `{{os}}`, `{{arch}}`, `{{r
 Un budget global est **obligatoire** : au moins un des trois plafonds doit être non nul.
 Un workflow sans plafond est un workflow qui peut coûter n'importe quoi.
 
+Ce que mesure chaque plafond :
+
+| Plafond | Mesure |
+|---|---|
+| `maxUsd` | Coût facturé des appels du run, d'après le ledger d'usage : la borne de référence |
+| `maxTokens` | Tokens **facturés** : entrée hors cache plus sortie. Un préfixe servi par le cache (au dixième du prix) ne compte pas : c'est l'économie voulue (décision 0008) |
+| `maxWallMs` | Durée depuis le démarrage du run |
+| `maxIterations` | Étapes exécutées |
+
+Avant 0.17.20, `maxTokens` comptait l'entrée entière : un run d'agent qui renvoie un
+préfixe de 40 000 tokens à chaque appel se bloquait vers 2 millions de tokens à moins de
+10 % de son plafond en dollars. Les quatre workflows livrés gardent `maxTokens: 2000000` :
+avec la nouvelle mesure, ce même run en compte environ 220 000.
+
+Un run bloqué par une borne le dit avec ses chiffres (« budget de tokens atteint (440000
+tokens facturés sur 300000) ») et la commande qui la relève, pour ce run seul :
+
+```bash
+penelope wf control <run> budget --tokens 4000000 --usd 10
+```
+
+Le relèvement laisse une trace (`workflow.budget_raised`) ; `resume` reprend ensuite à
+l'étape courante, sans rejouer les effets faits. Un `resume` sur un run encore au-dessus de
+sa borne répond « toujours bloqué : … » sans changer son état. Relever le plafond de la
+session (`session budget`) ne relève pas celui d'un run.
+
 `admission` décide de ce qui arrive quand un run du même workflow tourne déjà :
 
 | Valeur | Effet |

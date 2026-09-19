@@ -1576,6 +1576,21 @@ La consolidation ne jette plus quatre appels sur cinq, et se voit pendant qu'ell
   ses verdicts ne consomme aucun report (vérifié) : les 88 candidats déjà reportés ne
   risquent rien d'une interruption.
 
+### 0.17.20
+
+Le budget de tokens d'un run compte ce qui est facturé, se relève pour un run seul, et
+se dit (#136).
+
+- **Tokens facturés, plafond relevable** (#136) : un run `build-verify` s'est bloqué
+  « budget de tokens atteint » à 2,23 M tokens pour 0,48 $ sur 5 $, travail fait ; son
+  `Resume` re-bloquait dans la seconde, et relever le plafond de la session n'y pouvait
+  rien. Le comptage d'origine (`prompt + completion`) prenait plein pot le préfixe servi
+  par le cache. `maxTokens` compte désormais l'entrée hors cache plus la sortie. `wf
+  control <run> budget --usd … --tokens …` relève les plafonds du run seul, avec trace
+  (`workflow.budget_raised`). La borne atteinte se dit avec ses chiffres et la commande ;
+  `resume` sur un run encore au-dessus répond « toujours bloqué » sans changer son état.
+  Le plafond en dollars reste la référence ; les workflows livrés gardent 2 M tokens.
+
 ### Routine de livraison
 
 Avant chaque tag :

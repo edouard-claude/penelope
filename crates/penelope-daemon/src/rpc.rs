@@ -898,6 +898,16 @@ impl Rpc {
                     .await?;
                     return Ok(json!({"run": run, "answered": choice}));
                 }
+                // Plafonds propres au run (issue #136).
+                if op == "budget" {
+                    return crate::workflow::raise_budget(
+                        &self.daemon,
+                        &run,
+                        p.get("usd").and_then(|v| v.as_f64()),
+                        p.get("tokens").and_then(|v| v.as_u64()),
+                    )
+                    .await;
+                }
                 let control = penelope_workflow::Control::parse(&op)
                     .ok_or_else(|| anyhow::anyhow!("opération inconnue : {op}"))?;
                 let state = crate::workflow::control(&self.daemon, &run, &control).await?;

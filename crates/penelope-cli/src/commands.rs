@@ -438,8 +438,9 @@ pub enum WfCmd {
     Trace {
         run: String,
     },
-    /// `pause`, `resume`, `cancel`, `retry-step`, `skip-step`, `goto:<étape>`, ou
-    /// `answer --choice <choix> [--input <texte>]` pour une étape qui pose une question.
+    /// `pause`, `resume`, `cancel`, `retry-step`, `skip-step`, `goto:<étape>`,
+    /// `answer --choice <choix> [--input <texte>]` pour une étape qui pose une question, ou
+    /// `budget --usd <montant> --tokens <nombre>` pour relever les plafonds du run.
     Control {
         run: String,
         op: String,
@@ -447,6 +448,10 @@ pub enum WfCmd {
         choice: Option<String>,
         #[arg(long)]
         input: Option<String>,
+        #[arg(long)]
+        usd: Option<f64>,
+        #[arg(long)]
+        tokens: Option<u64>,
     },
 }
 
@@ -987,9 +992,12 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
             op,
             choice,
             input,
+            usd,
+            tokens,
         }) => (
             m::WF_CONTROL,
-            json!({"run": run, "op": op, "choice": choice, "input": input}),
+            json!({"run": run, "op": op, "choice": choice, "input": input,
+                   "usd": usd, "tokens": tokens}),
         ),
 
         Command::Schedule(ScheduleCmd::List) => (m::SCHEDULE_LIST, json!({})),
