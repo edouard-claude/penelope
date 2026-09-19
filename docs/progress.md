@@ -1466,6 +1466,22 @@ embarquée enseigne la méthode (#128).
   confrontation à l'arbre d'accessibilité reste à l'agent : Pénélope ne le détient pas,
   la méthode le lui dit.
 
+### 0.17.16
+
+Une carte d'approbation part toujours, même quand la commande porte `{{…}}` (#129).
+
+- **Une valeur n'est jamais relue comme une variable** (#129) : deux cartes n'ont jamais
+  atteint Telegram, la commande contenant `{{.Name}}` d'un `docker compose ps --format`.
+  Le moteur de gabarits cherchait les variables manquantes dans le texte déjà rempli, et
+  substituait variable par variable (une valeur portant `{{autre}}` était remplie à son
+  tour) ; #116 insère la commande telle quelle sur la carte, d'où la régression. Les
+  variables se cherchent désormais dans le gabarit, et la substitution se fait en un
+  seul passage (moteur des gabarits et rendu HTML du démon). Une vraie variable
+  manquante reste refusée ; une carte d'approbation qui ne se rend pas part en texte
+  brut, avec « Approuver » et « Refuser », et un événement `telegram.card_degraded`. Les
+  rappels de #97 passent par la même carte. Une demande restée bloquée se renvoie par
+  `/approvals`.
+
 ### Routine de livraison
 
 Avant chaque tag :

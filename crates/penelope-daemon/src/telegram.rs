@@ -3766,9 +3766,16 @@ impl TelegramGateway {
             .templates
             .get("tool_approval")
             .ok_or_else(|| anyhow::anyhow!("gabarit tool_approval absent"))?;
-        let rendered = tpl
-            .render(&vars, &tokens, &[])
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let rendered = match tpl.render(&vars, &tokens, &[]) {
+            Ok(r) => r,
+            // Une carte qui ne se rend pas part quand même, en texte brut : une demande
+            // invisible bloque le tour sans que personne le sache (issue #129).
+            Err(e) => {
+                return self
+                    .send_plain_approval(chat_id, topic_id, a, &vars, &tokens, &e.to_string())
+                    .await;
+            }
+        };
         // Le libellé « Pour ce run » du gabarit vaut « pour cette session » en conversation.
         // Sans arguments vus, pas de fenêtre ni de « Toujours » : une règle couvrirait
         // l'outil entier (#83, régression de #67).
@@ -3814,6 +3821,59 @@ impl TelegramGateway {
                 "text": html,
                 "parse_mode": "HTML",
                 "reply_markup": inline_keyboard(&buttons),
+                "message_thread_id": topic_id,
+            }),
+        )
+        .await
+    }
+
+    /// Demande d'approbation en texte brut, quand son gabarit ne se rend pas : le
+    /// propriétaire la voit, sait qu'elle est simplifiée, et peut répondre ; l'échec
+    /// laisse un événement (issue #129).
+    async fn send_plain_approval(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        a: &ApprovalRequest,
+        vars: &BTreeMap<String, String>,
+        tokens: &BTreeMap<String, String>,
+        error: &str,
+    ) -> anyhow::Result<()> {
+        let s = &self.daemon.services;
+        tracing::warn!(approval = %a.id.as_str(), error, "carte d'approbation simplifiée");
+        let _ = s
+            .events
+            .append(penelope_kernel::event::EventDraft::new(
+                "telegram.card_degraded",
+                json!({"approval": a.id.as_str(), "template": "tool_approval", "error": error}),
+            ))
+            .await;
+        let part = |k: &str| vars.get(k).cloned().unwrap_or_default();
+        let mut text = format!(
+            "⚠️ Carte simplifiée : son gabarit ne se rend pas ({error}).\n\n{}\n\n{}\n\n{}",
+            part("intention"),
+            part("action"),
+            part("details")
+        );
+        if text.chars().count() > 3_800 {
+            text = format!("{}…", text.chars().take(3_800).collect::<String>());
+        }
+        let row: Vec<ButtonSpec> = [("✅ Approuver", k::APPROVE), ("❌ Refuser", k::DENY)]
+            .into_iter()
+            .filter_map(|(label, action)| {
+                tokens
+                    .get(action)
+                    .map(|t| ButtonSpec::callback(label, t, ""))
+            })
+            .collect();
+        self.outbox_push(
+            chat_id,
+            topic_id,
+            "sendMessage",
+            json!({
+                "chat_id": chat_id,
+                "text": text,
+                "reply_markup": inline_keyboard(&[row]),
                 "message_thread_id": topic_id,
             }),
         )
@@ -6640,13 +6700,9 @@ fn normalise_model_id(raw: &str) -> String {
     }
 }
 
-/// Remplace les `{{variables}}` d'un gabarit.
+/// Remplace les `{{variables}}` d'un gabarit, en un seul passage (issue #129).
 fn substitute(body: &str, vars: &BTreeMap<String, String>) -> String {
-    let mut out = body.to_string();
-    for (k, v) in vars {
-        out = out.replace(&format!("{{{{{k}}}}}"), v);
-    }
-    out
+    penelope_telegram::templates::substitute(body, vars)
 }
 
 /// `openrouter:z-ai/glm-5.3` devient `glm-5.3` : assez pour reconnaître un modèle.
@@ -8181,6 +8237,154 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("null"), "{text}");
+    }
+
+    /// #129 : une commande qui porte un gabarit Go (`{{.Name}}`) part sur la carte telle
+    /// quelle, sans passer pour une variable manquante.
+    #[tokio::test]
+    async fn a_command_with_go_templates_reaches_its_approval_card() {
+        let (_d, g, t, _p) = gateway().await;
+        let s = g.daemon.services.clone();
+        let command = r#"docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}""#;
+        let a = s
+            .approvals
+            .create(
+                penelope_hitl::ApprovalKind::ToolCall,
+                "shell_exec",
+                penelope_kernel::risk::RiskClass::Write,
+                json!({"tool": "shell_exec", "arguments": {"command": command},
+                       "why": "Je regarde l'état des conteneurs {{corps}}."}),
+                vec!["Autoriser".into(), "Refuser".into()],
+                None,
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        g.send_approval_card(OWNER, None, &a).await.unwrap();
+        g.flush_outbox().await.unwrap();
+        let card = t
+            .calls_to(tg::SEND_MESSAGE)
+            .await
+            .pop()
+            .expect("carte envoyée");
+        let text = card["text"].as_str().unwrap().to_string();
+        assert!(
+            text.contains("{{.Name}}") && text.contains("{{.Ports}}"),
+            "{text}"
+        );
+        assert!(
+            text.contains("{{corps}}"),
+            "une valeur n'est pas relue : {text}"
+        );
+        assert!(!text.contains("Carte simplifiée"), "{text}");
+    }
+
+    /// #129 : le rappel de #97 passe par la même carte ; il part lui aussi avec la
+    /// commande telle quelle, au lieu d'échouer jusqu'à l'expiration.
+    #[tokio::test]
+    async fn the_reminder_of_a_go_template_command_is_delivered() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = TestClock::default();
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), Arc::new(clock.clone()))
+                .await
+                .unwrap(),
+        );
+        let d = Arc::new(Daemon::from_services(s.clone()));
+        d.publish_config("test", |c| {
+            c.telegram.rate_per_chat_per_s = 1_000.0;
+            Ok(vec!["telegram.rate_per_chat_per_s".into()])
+        })
+        .unwrap();
+        let t = MockTransport::new();
+        let g = TelegramGateway::with_transport(d.clone(), t.clone());
+        g.register();
+        s.approvals
+            .create(
+                penelope_hitl::ApprovalKind::ToolCall,
+                "shell_exec",
+                penelope_kernel::risk::RiskClass::Write,
+                json!({"tool": "shell_exec",
+                       "arguments": {"command": "kubectl get pods -o go-template='{{.metadata.name}}'"}}),
+                vec![],
+                None,
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        clock.advance_ms(3_600_000 + 1);
+        crate::supervisor::maintenance_pass(&d).await.unwrap();
+        g.flush_outbox().await.unwrap();
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
+        assert!(sent.contains("Rappel 1/2"), "{sent}");
+        assert!(
+            sent.contains("{{.metadata.name}}"),
+            "carte du rappel : {sent}"
+        );
+    }
+
+    /// #129 : une carte qui ne se rend pas part en texte brut, avec ses boutons, et
+    /// laisse un événement ; jamais un silence.
+    #[tokio::test]
+    async fn an_unrenderable_card_is_sent_plain_and_recorded() {
+        let (_d, g, t, _p) = gateway().await;
+        let s = g.daemon.services.clone();
+        let a = s
+            .approvals
+            .create(
+                penelope_hitl::ApprovalKind::ToolCall,
+                "shell_exec",
+                penelope_kernel::risk::RiskClass::Write,
+                json!({"tool": "shell_exec", "arguments": {"command": "make"}}),
+                vec!["Autoriser".into(), "Refuser".into()],
+                None,
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        let vars: BTreeMap<String, String> = [
+            ("intention".to_string(), "Je compile.".to_string()),
+            ("action".to_string(), "```\nmake\n```".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let tokens: BTreeMap<String, String> = [
+            (k::APPROVE.to_string(), "jeton-oui".to_string()),
+            (k::DENY.to_string(), "jeton-non".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        g.send_plain_approval(
+            OWNER,
+            None,
+            &a,
+            &vars,
+            &tokens,
+            "variables non fournies : x",
+        )
+        .await
+        .unwrap();
+        g.flush_outbox().await.unwrap();
+        let card = t
+            .calls_to(tg::SEND_MESSAGE)
+            .await
+            .pop()
+            .expect("carte envoyée");
+        let text = card["text"].as_str().unwrap();
+        assert!(
+            text.contains("Carte simplifiée") && text.contains("Je compile."),
+            "{text}"
+        );
+        assert!(card.get("parse_mode").is_none(), "texte brut : {card}");
+        assert!(
+            card["reply_markup"].to_string().contains("jeton-oui"),
+            "{card}"
+        );
+        let events = s.events.range(0, 1_000).await.unwrap();
+        assert!(events.iter().any(|e| e.kind == "telegram.card_degraded"));
     }
 
     #[tokio::test]

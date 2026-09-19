@@ -100,8 +100,14 @@ impl Template {
         tokens: &BTreeMap<String, String>,
         disabled: &[String],
     ) -> Result<Rendered, TemplateError> {
+        // Les variables se cherchent dans le gabarit, jamais dans le texte rempli : une
+        // commande `docker … --format "{{.Name}}"` est une donnée, pas une variable
+        // (issue #129, régression de #116 qui insère la commande telle quelle).
+        let missing: Vec<String> = placeholders(&self.body)
+            .into_iter()
+            .filter(|v| !vars.contains_key(v))
+            .collect();
         let body = substitute(&self.body, vars);
-        let missing: Vec<String> = placeholders(&body);
         if !missing.is_empty() {
             return Err(TemplateError {
                 id: self.id.clone(),
@@ -180,11 +186,26 @@ pub fn placeholders(s: &str) -> Vec<String> {
     out
 }
 
-fn substitute(s: &str, vars: &BTreeMap<String, String>) -> String {
-    let mut out = s.to_string();
-    for (k, v) in vars {
-        out = out.replace(&format!("{{{{{k}}}}}"), v);
+/// Remplace les `{{variables}}` du gabarit en un seul passage : une valeur insérée n'est
+/// jamais relue, même si elle contient `{{…}}` ou le nom d'une autre variable (issue
+/// #129). Une variable sans valeur reste telle quelle.
+pub fn substitute(s: &str, vars: &BTreeMap<String, String>) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        match vars.get(after[..end].trim()) {
+            Some(v) => out.push_str(v),
+            None => out.push_str(&rest[start..start + 2 + end + 2]),
+        }
+        rest = &after[end + 2..];
     }
+    out.push_str(rest);
     out
 }
 
@@ -627,6 +648,44 @@ pub fn builtin_templates() -> Vec<Template> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #129 : les variables se cherchent dans le gabarit ; une valeur qui porte `{{…}}`
+    /// (gabarit Go, nom d'une autre variable) passe telle quelle ; une vraie variable
+    /// manquante est toujours refusée.
+    #[test]
+    fn values_are_never_read_as_variables() {
+        let t = Template {
+            id: "essai".into(),
+            body: "{{intention}}\n\n{{action}}".into(),
+            variables: vec!["intention".into(), "action".into()],
+            ..Default::default()
+        };
+        let vars: BTreeMap<String, String> = [
+            ("intention".to_string(), "voir {{action}}".to_string()),
+            (
+                "action".to_string(),
+                r#"docker ps --format "{{.Name}}""#.to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let r = t.render(&vars, &BTreeMap::new(), &[]).unwrap();
+        assert!(r.html.contains("voir {{action}}"), "{}", r.html);
+        assert!(r.html.contains("{{.Name}}"), "{}", r.html);
+        let mut partial = vars.clone();
+        partial.remove("action");
+        let e = t.render(&partial, &BTreeMap::new(), &[]).unwrap_err();
+        assert!(e.message.contains("action"), "{}", e.message);
+        assert_eq!(
+            substitute(
+                "a {{ x }} b {{y}}",
+                &[("x".to_string(), "{{y}}".to_string())]
+                    .into_iter()
+                    .collect()
+            ),
+            "a {{y}} b {{y}}"
+        );
+    }
 
     fn vars(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
