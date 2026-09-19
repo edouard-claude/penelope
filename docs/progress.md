@@ -1619,6 +1619,22 @@ Une valeur seule remplit un champ liste, dans `mcp edit` comme dans `config set`
   "b"]`, ou une valeur seule »). Même règle pour `config set` (#122) ; ce que `roots`
   autorise ne change pas.
 
+### 0.17.22
+
+Un tour coupé par son plafond d'appels propose de continuer, pas de réessayer (#139).
+
+- **« ▶️ Continuer (24 appels de plus) »** (#139) : un tour arrêté par le plafond de 24
+  appels au modèle arrivait avec « ❌ le tour n'a pas convergé… » et « 🔁 Réessayer »,
+  qui laissait croire que tout serait refait. Le message dit maintenant que les 24 appels
+  sont utilisés, que « Continuer » en redonne 24 en reprenant ce qui est fait (dernier
+  résultat compris), donne le coût du tour coupé et rappelle la délégation à un
+  sous-agent. Seuls le libellé et le texte changent : même bouton, même `enqueue_retry`,
+  même tour de reprise. Une vraie erreur (panne du fournisseur, réponse vide) garde
+  « ❌ » et « Réessayer ». La passerelle reconnaît le plafond au préfixe
+  `CALLS_EXHAUSTED` des deux messages de l'agent : un changement de ce texte côté agent
+  doit passer par la constante, sinon le bouton redevient « Réessayer » (test d'agent qui
+  vérifie le préfixe).
+
 ### Routine de livraison
 
 Avant chaque tag :

@@ -4720,7 +4720,7 @@ impl TelegramGateway {
                     }
                 }
                 Held::Failure { error, reply_to } => {
-                    self.send_failure(chat_id, topic_id, *reply_to, session_id, error)
+                    self.send_failure(chat_id, topic_id, *reply_to, session_id, error, None)
                         .await?;
                 }
                 Held::File { path, caption } => {
@@ -5496,6 +5496,7 @@ impl TelegramGateway {
         reply_to: Option<i64>,
         session_id: &str,
         error: &str,
+        turn_cost: Option<f64>,
     ) -> anyhow::Result<()> {
         let token = self
             .daemon
@@ -5510,13 +5511,32 @@ impl TelegramGateway {
             )
             .await?;
         let error: String = error.chars().take(3_500).collect();
+        // Plafond d'appels atteint : ce n'est pas un échec, et le même bouton continue
+        // avec tout ce qui est déjà fait (issue #139).
+        let (text, label) = if error.starts_with(crate::agent::CALLS_EXHAUSTED) {
+            let n = crate::agent::TURN_CALLS;
+            (
+                format!(
+                    "⏸ J'ai utilisé mes {n} appels pour ce tour et je m'arrête là. « Continuer » \
+                     m'en redonne {n} : je reprends avec ce que j'ai déjà fait, dernier résultat \
+                     compris.{} Pour une tâche longue, je peux aussi déléguer à un sous-agent.",
+                    turn_cost
+                        .filter(|c| *c > 0.0)
+                        .map(|c| format!(" Coût de ce tour : {c:.2} $."))
+                        .unwrap_or_default()
+                ),
+                format!("▶️ Continuer ({n} appels de plus)"),
+            )
+        } else {
+            (format!("❌ {error}"), "🔁 Réessayer".to_string())
+        };
         let mut payload = json!({
             "chat_id": chat_id,
-            "text": markdown_to_html(&format!("❌ {error}")),
+            "text": markdown_to_html(&text),
             "parse_mode": "HTML",
             "link_preview_options": {"is_disabled": true},
             "reply_markup": inline_keyboard(&[vec![ButtonSpec::callback(
-                "🔁 Réessayer",
+                &label,
                 &token.token,
                 "",
             )]]),
@@ -6226,7 +6246,7 @@ impl ChannelDelivery for TelegramGateway {
 
     async fn deliver(
         &self,
-        _turn_id: &str,
+        turn_id: &str,
         session_id: &str,
         origin: &Origin,
         outcome: &TurnOutcome,
@@ -6340,7 +6360,15 @@ impl ChannelDelivery for TelegramGateway {
                     }
                 }
                 TurnOutcome::Failed { error } => {
-                    self.send_failure(chat_id, topic_id, message_id, session_id, error)
+                    let cost = self
+                        .daemon
+                        .services
+                        .budget
+                        .turn_totals(turn_id)
+                        .await
+                        .ok()
+                        .map(|(_, c)| c);
+                    self.send_failure(chat_id, topic_id, message_id, session_id, error, cost)
                         .await?;
                     if let Some(mid) = message_id {
                         self.react(chat_id, mid, reaction::ERROR);
@@ -8022,6 +8050,101 @@ mod tests {
 
     /// Issue #5 : un tour échoué porte un bouton « Réessayer » qui relance la réponse sur
     /// le même transcript, sans dupliquer le message.
+    /// #139 : un tour arrêté par son plafond d'appels propose « Continuer », dit ce que
+    /// fait le bouton et le coût du tour ; une vraie erreur garde « Réessayer ». Le clic
+    /// reprend le même transcript, dernier résultat d'outil compris.
+    #[tokio::test]
+    async fn a_turn_out_of_calls_offers_to_continue() {
+        let (_d, g, t, p) = gateway().await;
+        let s = g.daemon.services.clone();
+        let sid = g
+            .daemon
+            .chat_session_for(&Origin::Telegram {
+                chat_id: OWNER,
+                topic_id: None,
+                message_id: None,
+            })
+            .await
+            .unwrap();
+        let h = &s.context.history;
+        h.append(
+            &sid,
+            &penelope_llm::types::ChatMessage::user("lance le test Maestro"),
+            10,
+            0,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        let mut call = penelope_llm::types::ChatMessage::assistant("");
+        call.tool_calls = vec![ToolCall {
+            id: "m1".into(),
+            name: "shell_exec".into(),
+            arguments: json!({"command": "maestro test flow.yaml"}),
+        }];
+        h.append(&sid, &call, 10, 0, false, None).await.unwrap();
+        h.append(
+            &sid,
+            &penelope_llm::types::ChatMessage::tool_result(
+                "m1",
+                "shell_exec",
+                "résultat Maestro : 3 écrans verts",
+            ),
+            10,
+            0,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        g.send_failure(
+            OWNER,
+            None,
+            None,
+            &sid,
+            "le tour n'a pas convergé en 24 appels au modèle (reprises après approbation comprises)",
+            Some(0.42),
+        )
+        .await
+        .unwrap();
+        g.send_failure(OWNER, None, None, &sid, "panne du fournisseur", None)
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let sent = t.calls_to(tg::SEND_MESSAGE).await;
+        let out_of_calls = &sent[sent.len() - 2];
+        let text = out_of_calls["text"].as_str().unwrap();
+        assert!(
+            text.contains("24 appels") && text.contains("0.42 $"),
+            "{text}"
+        );
+        assert!(!text.contains("❌"), "{text}");
+        let button = &out_of_calls["reply_markup"]["inline_keyboard"][0][0];
+        assert_eq!(button["text"], "▶️ Continuer (24 appels de plus)");
+        assert_eq!(
+            sent.last().unwrap()["reply_markup"]["inline_keyboard"][0][0]["text"],
+            "🔁 Réessayer"
+        );
+
+        p.reply("Les 3 écrans sont verts : la pagination tient.");
+        let token = button["callback_data"].as_str().unwrap().to_string();
+        g.process_update(&updates::callback(3, OWNER, &token, 1002))
+            .await
+            .unwrap();
+        settle_click(&g).await;
+        drain(&g).await;
+        let asked = p.requests().last().cloned().expect("tour repris");
+        let seen: String = asked
+            .messages
+            .iter()
+            .map(|m| m.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(seen.contains("résultat Maestro : 3 écrans verts"), "{seen}");
+    }
+
     #[tokio::test]
     async fn a_failed_turn_offers_a_retry_button() {
         let (_d, g, t, p) = gateway().await;

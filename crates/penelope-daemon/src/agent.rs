@@ -479,12 +479,20 @@ pub fn split_choices(text: &str) -> (String, Vec<String>) {
     (lines.join("\n").trim().to_string(), choices)
 }
 
+/// Appels au modèle par tour : au-delà, le tour s'arrête ; « Continuer » en redonne
+/// autant sur le même transcript.
+pub const TURN_CALLS: u32 = 24;
+
+/// Début du message d'un tour arrêté par son plafond d'appels (pas une erreur) : Telegram
+/// le reconnaît pour proposer « Continuer » plutôt que « Réessayer » (issue #139).
+pub const CALLS_EXHAUSTED: &str = "le tour n'a pas convergé";
+
 impl AgentLoop {
     pub fn new(services: Arc<Services>, provider: Arc<dyn Provider>) -> Self {
         AgentLoop {
             services,
             provider,
-            max_iterations: 24,
+            max_iterations: TURN_CALLS,
         }
     }
 
@@ -855,10 +863,7 @@ impl AgentLoop {
         }
 
         Ok(TurnOutcome::Failed {
-            error: format!(
-                "le tour n'a pas convergé en {} itérations",
-                self.max_iterations
-            ),
+            error: format!("{CALLS_EXHAUSTED} en {} itérations", self.max_iterations),
         })
     }
 
@@ -1713,7 +1718,7 @@ impl AgentLoop {
         if calls >= self.max_iterations as i64 {
             return Ok(Some(TurnOutcome::Failed {
                 error: format!(
-                    "le tour n'a pas convergé en {} appels au modèle (reprises après \
+                    "{CALLS_EXHAUSTED} en {} appels au modèle (reprises après \
                      approbation comprises)",
                     self.max_iterations
                 ),
@@ -3406,7 +3411,10 @@ mod tests {
                 assert!(
                     error.contains("reprises après approbation comprises"),
                     "{error}"
-                )
+                );
+                // #139 : la passerelle reconnaît le plafond à ce préfixe pour proposer
+                // « Continuer » plutôt que « Réessayer ».
+                assert!(error.starts_with(CALLS_EXHAUSTED), "{error}");
             }
             other => panic!("{other:?}"),
         }

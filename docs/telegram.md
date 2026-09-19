@@ -317,7 +317,12 @@ dans la conversation, pour que le tour suivant ne recommence pas à l'identique 
 rapport technique (compteurs d'appels) reste dans les événements et `/logs`.
 
 Un tour qui échoue arrive avec un bouton « 🔁 Réessayer » : la réponse est relancée sur
-la même conversation, sans renvoyer le message. Quand le plafond d'une session, du jour
+la même conversation, sans renvoyer le message. Un tour arrêté par son plafond de 24
+appels au modèle n'est pas une erreur : le message le dit (« J'ai utilisé mes 24 appels
+pour ce tour et je m'arrête là »), donne le coût du tour coupé et propose « ▶️ Continuer
+(24 appels de plus) ». Le clic suit le même chemin que « Réessayer » : un nouveau tour
+sur la même conversation, dernier résultat d'outil compris, avec son propre compteur
+d'appels. Quand le plafond d'une session, du jour
 ou d'un run est atteint, le message donne la clé exacte à relever (`budget.session_usd`,
 `budget.daily_usd` ou `budget.run_usd`).
 
