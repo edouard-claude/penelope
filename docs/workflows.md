@@ -146,7 +146,7 @@ par identifiant.
 | `parallel` | `children` (non vide), `maxConcurrency` | Plusieurs enfants en parallèle |
 | `workflow` | `workflowId` (obligatoire), `params` | Un sous-workflow, profondeur bornée |
 | `wait` | `on` | Attend un événement, un cron, un délai ou une tâche MCP |
-| `verify` | `verifier` ou `checks`, `criteriaKey` | Vérifications mécaniques puis jugement du modèle |
+| `verify` | `verifier` ou `checks`, `criteriaKey` | Vérifications mécaniques puis jugement du modèle ; un contrôle `{"type": "project_tests"}` lance les tests du projet déclaré (`session_metadata.project` : `dir`, `test_command`), sinon ceux déduits du dépôt |
 
 Les enfants d'un `parallel` sont limités à `sub_agent`, `shell` et `tool` : un `agent` ou
 un `user` en parallèle rendrait la conversation incompréhensible.
@@ -325,6 +325,22 @@ cargo test -p penelope-evals --test resilience
 Ils sont validés au chargement comme n'importe quel fichier utilisateur : un workflow
 livré qui deviendrait invalide ferait échouer les tests plutôt que de se charger à moitié.
 Un workflow utilisateur de même identifiant remplace celui livré.
+
+**Le contrat des critères** (`build-verify`, `ticket-to-deploy`). Le plan pose la liste
+avec `session_metadata` op=`set` key=`criteria` entry=`[{"id": "…", "text": "…",
+"status": "pending"}, …]` ; `label` vaut `text`, un statut absent vaut `pending`. On coche
+un critère rempli par op=`update` entry=`{"id": "<id>", "status": "completed"}`. Les
+statuts sont `pending`, `completed`, `passed` et `failed` ; `completed` et `passed`
+cochent. Une entrée sans `id` connu, un `id` en double ou un statut hors vocabulaire sont
+refusés avec ce qu'il faut, au lieu d'être écrits pour rien. La boucle `build` part vers
+`verify` quand tous sont cochés ; sinon l'événement `workflow.step` et le journal disent
+lesquels la retiennent (« tests (pending) », « doc (absent) »). `session_metadata`
+n'écrit que l'état de la session et passe sans approbation, comme `session_notes`.
+
+`build-verify` fait aussi déclarer le projet par son plan : op=`set` key=`project`
+entry=`{"dir": "<dépôt>", "test_command": "<commande>"}`. Son `verify` lance cette
+commande dans ce répertoire ; sans elle, la cible `make test`, sinon `cargo test`, `npm
+test` ou `go test ./...` selon le dépôt. `review` reste écrit pour un dépôt Rust.
 
 `ticket-to-deploy` enchaîne : lecture du ticket par un sous-agent dans son tracker,
 dépôt et forge résolus par un sous-agent (question si besoin, puis nouvelle résolution),

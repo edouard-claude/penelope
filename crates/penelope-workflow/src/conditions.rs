@@ -275,7 +275,12 @@ impl TemplateVars<'_> {
                             .get("status")
                             .and_then(|s| s.as_str())
                             .unwrap_or("pending");
-                        let text = c.get("text").and_then(|s| s.as_str()).unwrap_or("");
+                        // `text`, ou `label` : le plan écrivait l'un ou l'autre (#137).
+                        let text = c
+                            .get("text")
+                            .or_else(|| c.get("label"))
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("");
                         let mark = if matches!(status, "completed" | "passed") {
                             "x"
                         } else {
@@ -311,6 +316,9 @@ impl TemplateVars<'_> {
         }
         if let Some(path) = name.strip_prefix("params.") {
             return json_path(self.params, path).map(|v| as_text(&v));
+        }
+        if let Some(path) = name.strip_prefix("metadata.") {
+            return json_path(self.metadata, path).map(|v| as_text(&v));
         }
         // Forme courte : `{{ticket_url}}` vaut `{{params.ticket_url}}`.
         json_path(self.params, name).map(|v| as_text(&v))
@@ -363,9 +371,71 @@ pub fn is_dynamic_var(name: &str) -> bool {
     name.starts_with("stepOutput.") || name.starts_with("steps.")
 }
 
+/// Éléments qui retiennent une condition `metadata_all_in` : `id` (ou texte) et valeur du
+/// champ, « absent » s'il manque. Pour dire au journal pourquoi une boucle recommence
+/// (issue #137).
+pub fn unmet_items(cond: &Value, metadata: &Value) -> Vec<String> {
+    if cond.get("type").and_then(|t| t.as_str()) != Some("metadata_all_in") {
+        return Vec::new();
+    }
+    let (Some(key), Some(field)) = (
+        cond.get("key").and_then(|k| k.as_str()),
+        cond.get("field").and_then(|f| f.as_str()),
+    ) else {
+        return Vec::new();
+    };
+    let allowed: Vec<String> = cond
+        .get("values")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    list(metadata, key)
+        .iter()
+        .filter_map(|i| {
+            let value = field_of(i, field);
+            if value.as_ref().is_some_and(|v| allowed.contains(v)) {
+                return None;
+            }
+            let name = i
+                .get("id")
+                .or_else(|| i.get("text"))
+                .or_else(|| i.get("label"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            Some(format!(
+                "{name} ({})",
+                value.unwrap_or_else(|| "absent".into())
+            ))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #137 : une boucle dit ce qui la retient : les critères sans statut coché, avec
+    /// leur statut ou « absent ».
+    #[test]
+    fn unmet_items_name_what_holds_a_loop() {
+        let cond = json!({"type": "metadata_all_in", "key": "criteria", "field": "status",
+                          "values": ["completed", "passed"]});
+        let meta = json!({"criteria": [
+            {"id": "build", "status": "completed"},
+            {"id": "tests", "status": "pending"},
+            {"id": "doc"},
+            {"status": "all_passed", "summary": "7/7"}
+        ]});
+        assert_eq!(
+            unmet_items(&cond, &meta),
+            vec!["tests (pending)", "doc (absent)", "? (all_passed)"]
+        );
+        assert!(unmet_items(&json!({"type": "always"}), &meta).is_empty());
+    }
     use serde_json::json;
 
     fn ctx<'a>(result: &'a StepResult, output: &'a Value, metadata: &'a Value) -> EvalContext<'a> {

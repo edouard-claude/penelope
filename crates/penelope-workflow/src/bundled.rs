@@ -37,15 +37,21 @@ pub fn build_verify() -> Workflow {
         start_condition: json!({"type":"always"}),
         steps: vec![
             Step {
-                prompt: "Objectif : {{objectif}}.\nAnalyse le code, écris les critères de \
-                         succès dans `session_metadata.criteria`, puis appelle `step_done()`."
+                prompt: "Objectif : {{objectif}}.\nAnalyse le code. Déclare le projet : \
+                         `session_metadata` op=set key=project entry={\"dir\": \"<chemin \
+                         absolu du dépôt>\", \"test_command\": \"<commande qui lance ses \
+                         tests>\"}. Écris les critères de succès : op=set key=criteria \
+                         entry=[{\"id\": \"…\", \"text\": \"…\", \"status\": \
+                         \"pending\"}, …]. Puis appelle `step_done()`."
                     .into(),
                 model: "reasoning".into(),
                 transitions: vec![Transition::always("build")],
                 ..step("plan", "agent", Phase::Plan)
             },
             Step {
-                prompt: "Implémente. Coche chaque critère au fur et à mesure.\n\
+                prompt: "Implémente. Quand un critère est rempli, coche-le : \
+                         `session_metadata` op=update key=criteria entry={\"id\": \"<id>\", \
+                         \"status\": \"completed\"}.\n\
                          {{pendingCount}} critère(s) restant(s) :\n{{criteriaList}}"
                     .into(),
                 nudge_prompt: "Continue : {{pendingCount}} critère(s) restant(s).".into(),
@@ -66,7 +72,8 @@ pub fn build_verify() -> Workflow {
             Step {
                 verifier: "verifier".into(),
                 criteria_key: "criteria".into(),
-                checks: vec![json!({"type":"shell","command":"cargo test"})],
+                // Les tests du projet déclaré par le plan, jamais `cargo test` en dur (#137).
+                checks: vec![json!({"type":"project_tests"})],
                 transitions: vec![
                     Transition::on_result(DONE, "passed"),
                     Transition::always("build"),
@@ -371,9 +378,10 @@ pub fn ticket_to_deploy() -> Workflow {
                 prompt: "Ticket {{ticket_id}} ({{ticket_url}}) : « {{steps.fetch_ticket.data.title}} »\n\
                          {{steps.fetch_ticket.data.description}}\n\n\
                          Brief de la conversation qui a lancé le run :\n{{brief}}\n\n\
-                         Lis le code, localise le problème, écris les critères dans \
-                         `session_metadata.criteria`, puis propose un plan de correctif via \
-                         `return_value`."
+                         Lis le code, localise le problème, écris les critères : \
+                         `session_metadata` op=set key=criteria entry=[{\"id\": \"…\", \
+                         \"text\": \"…\", \"status\": \"pending\"}, …], puis propose un \
+                         plan de correctif via `return_value`."
                     .into(),
                 transitions: vec![Transition::always("propose")],
                 ..step("analyze", "agent", Phase::Plan)
@@ -393,7 +401,10 @@ pub fn ticket_to_deploy() -> Workflow {
             // 6
             Step {
                 model: "reasoning".into(),
-                prompt: "Implémente le correctif. Coche les critères.\n{{criteriaList}}".into(),
+                prompt: "Implémente le correctif. Quand un critère est rempli, coche-le : \
+                         `session_metadata` op=update key=criteria entry={\"id\": \"<id>\", \
+                         \"status\": \"completed\"}.\n{{criteriaList}}"
+                    .into(),
                 nudge_prompt: "Continue : {{pendingCount}} critère(s) restant(s).".into(),
                 transitions: vec![
                     Transition {

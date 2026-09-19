@@ -191,6 +191,110 @@ pub fn denied_reads(s: &Services) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Statuts d'un critère de workflow ; `completed` et `passed` le cochent (issue #137).
+pub const CRITERION_STATUSES: [&str; 4] = ["pending", "completed", "passed", "failed"];
+
+/// Contrat des critères (`session_metadata`, clé `criteria`, issue #137) : chaque critère a
+/// un `id` unique et un `text` (ou `label`), un `status` parmi [`CRITERION_STATUSES`]
+/// (`pending` s'il manque) ; on coche par `update` sur un `id` existant. Une entrée hors
+/// contrat est refusée avec ce qu'il faut, au lieu d'être écrite pour rien.
+fn criteria_entry(
+    op: penelope_kernel::session::MetadataOp,
+    entry: Value,
+    current: &Value,
+) -> Result<Value, String> {
+    use penelope_kernel::session::MetadataOp;
+    let known: Vec<String> = current
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| c.get("id").and_then(|i| i.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let vocabulary = CRITERION_STATUSES.join(", ");
+    let status_ok = |c: &Value| -> Result<(), String> {
+        match c.get("status") {
+            None => Ok(()),
+            Some(Value::String(st)) if CRITERION_STATUSES.contains(&st.as_str()) => Ok(()),
+            Some(other) => Err(format!(
+                "`status` {other} hors vocabulaire : {vocabulary} (`completed` ou `passed` \
+                 cochent un critère)"
+            )),
+        }
+    };
+    let criterion = |c: Value| -> Result<Value, String> {
+        let mut c = c;
+        let o = c
+            .as_object_mut()
+            .ok_or("un critère est un objet {id, text, status}")?;
+        let id_ok = o
+            .get("id")
+            .and_then(|i| i.as_str())
+            .is_some_and(|i| !i.trim().is_empty());
+        if !id_ok {
+            return Err("chaque critère a un `id` (chaîne non vide)".into());
+        }
+        if !o.contains_key("text")
+            && let Some(label) = o.get("label").cloned()
+        {
+            o.insert("text".into(), label);
+        }
+        if !o.get("text").is_some_and(|t| t.is_string()) {
+            return Err("chaque critère a un `text` qui dit ce qu'il faut obtenir".into());
+        }
+        o.entry("status").or_insert_with(|| json!("pending"));
+        status_ok(&c)?;
+        Ok(c)
+    };
+    match op {
+        MetadataOp::Set => {
+            let items = entry
+                .as_array()
+                .cloned()
+                .ok_or("`set` sur `criteria` attend la liste [{id, text, status}]")?;
+            let mut seen = std::collections::BTreeSet::new();
+            let mut out = Vec::new();
+            for c in items {
+                let c = criterion(c)?;
+                let id = c["id"].as_str().unwrap_or_default().to_string();
+                if !seen.insert(id.clone()) {
+                    return Err(format!("`id` en double : `{id}`"));
+                }
+                out.push(c);
+            }
+            Ok(Value::Array(out))
+        }
+        MetadataOp::Append => {
+            let c = criterion(entry)?;
+            let id = c["id"].as_str().unwrap_or_default();
+            if known.iter().any(|k| k == id) {
+                return Err(format!(
+                    "le critère `{id}` existe déjà : `update` pour le modifier"
+                ));
+            }
+            Ok(c)
+        }
+        MetadataOp::Update => {
+            let id = entry.get("id").and_then(|i| i.as_str()).unwrap_or_default();
+            if !known.iter().any(|k| k == id) {
+                return Err(format!(
+                    "`update` sur `criteria` vise un critère par son `id` ; critères connus : {}. \
+                     Pour cocher : entry={{\"id\": \"<id>\", \"status\": \"completed\"}}",
+                    if known.is_empty() {
+                        "aucun".to_string()
+                    } else {
+                        known.join(", ")
+                    }
+                ));
+            }
+            status_ok(&entry)?;
+            Ok(entry)
+        }
+        MetadataOp::Remove => Ok(entry),
+    }
+}
+
 /// Résultat dont le texte vient des serveurs MCP (descriptions, schémas) : la valeur reste
 /// structurée, le texte montré au modèle est encadré comme non fiable (#92).
 fn untrusted_listing(source: &str, value: Value) -> ToolOutcome {
@@ -1137,13 +1241,21 @@ impl NativeToolExecutor {
             "session_metadata" => {
                 let op = penelope_kernel::session::MetadataOp::parse(&str_arg(args, "op")?)
                     .ok_or_else(|| ToolError::Invalid("op inconnue".into()))?;
+                let key = str_arg(args, "key")?;
+                let mut entry = args.get("entry").cloned().unwrap_or(Value::Null);
+                if key == "criteria" {
+                    let current = s
+                        .sessions
+                        .get(&self.env.session_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|x| x.metadata["criteria"].clone())
+                        .unwrap_or(Value::Null);
+                    entry = criteria_entry(op, entry, &current).map_err(ToolError::Invalid)?;
+                }
                 s.sessions
-                    .metadata(
-                        &self.env.session_id,
-                        op,
-                        &str_arg(args, "key")?,
-                        args.get("entry").cloned().unwrap_or(Value::Null),
-                    )
+                    .metadata(&self.env.session_id, op, &key, entry)
                     .await
                     .map_err(|e| ToolError::Other(e.to_string()))?
             }
@@ -2191,6 +2303,58 @@ mod tests {
             turn_model: None,
         };
         (dir, NativeToolExecutor::new(s, env))
+    }
+
+    /// #137 : le contrat des critères. `label` devient `text`, un statut manquant vaut
+    /// `pending` ; cocher passe par `update` sur un `id` connu ; une entrée sans `id` ou un
+    /// statut hors vocabulaire sont refusés avec ce qu'il faut.
+    #[test]
+    fn criteria_follow_their_contract() {
+        use penelope_kernel::session::MetadataOp;
+        let set = criteria_entry(
+            MetadataOp::Set,
+            json!([{"id": "build", "label": "compile"}, {"id": "tests", "text": "tests verts"}]),
+            &Value::Null,
+        )
+        .unwrap();
+        assert_eq!(set[0]["text"], "compile");
+        assert_eq!(set[0]["status"], "pending");
+        let e = criteria_entry(
+            MetadataOp::Update,
+            json!({"status": "all_passed", "summary": "7/7"}),
+            &set,
+        )
+        .unwrap_err();
+        assert!(e.contains("build, tests") && e.contains("completed"), "{e}");
+        let e = criteria_entry(
+            MetadataOp::Update,
+            json!({"id": "build", "status": "all_passed"}),
+            &set,
+        )
+        .unwrap_err();
+        assert!(e.contains("pending, completed, passed, failed"), "{e}");
+        criteria_entry(
+            MetadataOp::Update,
+            json!({"id": "build", "status": "completed"}),
+            &set,
+        )
+        .unwrap();
+        assert!(
+            criteria_entry(
+                MetadataOp::Append,
+                json!({"id": "build", "text": "x"}),
+                &set
+            )
+            .is_err()
+        );
+        assert!(
+            criteria_entry(
+                MetadataOp::Set,
+                json!([{"id": "a", "text": "x"}, {"id": "a", "text": "y"}]),
+                &Value::Null
+            )
+            .is_err()
+        );
     }
 
     /// #124 : `schedule_move` déplace une planification vers la conversation de l'appel

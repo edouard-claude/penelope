@@ -548,6 +548,17 @@ async fn drive_claimed(
                 )
                 .await;
         }
+        // Une boucle qui recommence dit ce qui la retient : les critères non cochés d'une
+        // transition `metadata_all_in` écartée (issue #137).
+        let unmet: Vec<String> = step
+            .transitions
+            .iter()
+            .take_while(|t| t.goto != next)
+            .flat_map(|t| penelope_workflow::conditions::unmet_items(&t.condition, &metadata))
+            .collect();
+        if !unmet.is_empty() {
+            tracing::info!(run = %run.id, step = %step.id, next = %next, ?unmet, "transition retenue");
+        }
         let phase = wf.step(&next).map(|n| n.phase.as_str());
         let run = s
             .runs
@@ -558,7 +569,8 @@ async fn drive_claimed(
             .append(
                 EventDraft::new(
                     "workflow.step",
-                    json!({"run": run.id, "step": step.id, "result": result.as_str(), "next": next}),
+                    json!({"run": run.id, "step": step.id, "result": result.as_str(),
+                           "next": next, "unmet": unmet}),
                 )
                 .session(&run.session_id),
             )
@@ -2248,14 +2260,20 @@ async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     let mut checks_out = serde_json::Map::new();
     let mut checks_ok = true;
     for (i, check) in step.checks.iter().enumerate() {
-        let child = Step {
+        let kind = check
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("shell")
+            .to_string();
+        let mut child = Step {
             id: format!("{}-check-{}", step.id, i + 1),
-            kind: check
-                .get("type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("shell")
-                .to_string(),
+            kind: kind.clone(),
             command: check.get("command").cloned().unwrap_or(Value::Null),
+            cwd: check
+                .get("cwd")
+                .and_then(|c| c.as_str())
+                .unwrap_or_default()
+                .to_string(),
             tool: check
                 .get("tool")
                 .and_then(|t| t.as_str())
@@ -2264,6 +2282,25 @@ async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
             args: check.get("args").cloned().unwrap_or(Value::Null),
             ..Default::default()
         };
+        // Les tests du projet, pas ceux de Pénélope (issue #137) : le répertoire et la
+        // commande déclarés par le plan (`project.dir`, `project.test_command`), sinon la
+        // commande déduite du dépôt (Makefile, Cargo.toml, package.json, go.mod).
+        if kind == "project_tests" {
+            let meta = session_metadata(s, &ctx.run.session_id).await;
+            let declared = |k: &str| {
+                meta["project"][k]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(String::from)
+            };
+            child.kind = "shell".into();
+            child.command = json!(
+                declared("test_command")
+                    .unwrap_or_else(|| penelope_workflow::bundled::TEST_COMMAND.to_string())
+            );
+            child.cwd = declared("dir").unwrap_or_default();
+        }
         // Une vérification qui expire n'emporte pas les suivantes (issue #56).
         let child_cancel = ctx.cancel.child();
         let child_ctx = StepCtx {
@@ -2756,6 +2793,96 @@ mod tests {
             .await
             .unwrap();
         assert!(task_id.is_some(), "tâche suivie dans mcp_tasks");
+    }
+
+    /// #137 : le cas du constat, rejoué sur le `build-verify` livré. Le plan déclare le
+    /// projet et sept critères ; `build` les coche un à un et atteint `verify` en une seule
+    /// itération ; `verify` lance les tests du projet déclaré, pas `cargo test`.
+    #[tokio::test]
+    async fn build_verify_reaches_verify_once_its_criteria_are_ticked() {
+        let e = env().await;
+        let s = &e.d.services;
+        let ws = crate::executor::default_workspaces(s)[0].clone();
+        let project = ws.join("serveur-go");
+        std::fs::create_dir_all(&project).unwrap();
+        let ids: Vec<String> = (1..=7).map(|i| format!("c{i}")).collect();
+        let tool = |id: &str, name: &str, args: Value| ToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments: args,
+        };
+        let criteria: Vec<Value> = ids
+            .iter()
+            .map(|id| json!({"id": id, "label": format!("critère {id}")}))
+            .collect();
+        e.p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![
+                tool("p1", "session_metadata", json!({"op": "set", "key": "project",
+                     "entry": {"dir": project.to_string_lossy(), "test_command": "echo tests-du-projet"}})),
+                tool("p2", "session_metadata", json!({"op": "set", "key": "criteria", "entry": criteria})),
+                tool("p3", "step_done", json!({})),
+            ],
+        ));
+        e.p.reply("Plan posé.");
+        let mut ticks: Vec<ToolCall> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                tool(
+                    &format!("b{i}"),
+                    "session_metadata",
+                    json!({"op": "update", "key": "criteria", "entry": {"id": id, "status": "completed"}}),
+                )
+            })
+            .collect();
+        ticks.push(tool("b9", "step_done", json!({})));
+        e.p.push(Scripted::ToolCalls(String::new(), ticks));
+        e.p.reply("Implémenté.");
+        let verdict: Vec<Value> = ids
+            .iter()
+            .map(|id| json!({"id": id, "status": "passed", "note": "vu"}))
+            .collect();
+        e.p.reply(&json!({"criteria": verdict, "verdict": "passed"}).to_string());
+
+        let run = start_run(
+            &e.d,
+            "build-verify",
+            json!({"objectif": "ajouter un outil"}),
+            &owner(),
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+        let mut state = RunState::Running;
+        for _ in 0..10 {
+            state = drive(&e.d, &run.id).await.unwrap();
+            if state != RunState::Running {
+                break;
+            }
+        }
+        let done = s.runs.get(&run.id).await.unwrap().unwrap();
+        let events = s.events.session_events(&run.session_id, 0).await.unwrap();
+        let steps: Vec<String> = events
+            .iter()
+            .filter(|ev| ev.kind == "workflow.step")
+            .map(|ev| {
+                format!(
+                    "{}→{}",
+                    ev.payload["step"].as_str().unwrap_or(""),
+                    ev.payload["next"].as_str().unwrap_or("")
+                )
+            })
+            .collect();
+        assert_eq!(state, RunState::Done, "{steps:?} {:?}", done.error);
+        assert_eq!(
+            steps,
+            ["plan→build", "build→verify", "verify→$done"],
+            "une seule itération de build"
+        );
+        let checks = done.step_outputs["verify"]["checks"].to_string();
+        assert!(checks.contains("tests-du-projet"), "{checks}");
     }
 
     /// #136 : le budget de tokens d'un run compte les tokens facturés (entrée hors cache

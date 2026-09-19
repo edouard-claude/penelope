@@ -1030,7 +1030,7 @@ et `/stop` interrompt tout le lot.
 | `send_file` | write | Envoie un fichier au propriétaire. (à la demande) |
 | `send_message` | write | Envoie un message au propriétaire. |
 | `send_voice` | read | Lit un texte en message vocal (voix féminine locale) dans cette conversation. (à la demande) |
-| `session_metadata` | write | Lit ou modifie les métadonnées de session : critères, findings, todos. (à la demande) |
+| `session_metadata` | read | Lit ou modifie les métadonnées de session : critères, findings, todos. (à la demande) |
 | `session_notes` | read | Notes de travail de la session, qui survivent aux compactions et au fork : objectif, plan, décisions, fichiers touchés, points ouverts, prochaine étape. (à la demande) |
 | `shell_exec` | write | Exécute une commande sous bac à sable, avec délai. |
 | `skill_load` | read | Charge une skill dans le tour courant. (à la demande) |

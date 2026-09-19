@@ -1579,7 +1579,7 @@ La consolidation ne jette plus quatre appels sur cinq, et se voit pendant qu'ell
 ### 0.17.20
 
 Le budget de tokens d'un run compte ce qui est facturé, se relève pour un run seul, et
-se dit (#136).
+se dit (#136). `build-verify` atteint `verify` et vérifie le projet, pas Pénélope (#137).
 
 - **Tokens facturés, plafond relevable** (#136) : un run `build-verify` s'est bloqué
   « budget de tokens atteint » à 2,23 M tokens pour 0,48 $ sur 5 $, travail fait ; son
@@ -1590,6 +1590,21 @@ se dit (#136).
   (`workflow.budget_raised`). La borne atteinte se dit avec ses chiffres et la commande ;
   `resume` sur un run encore au-dessus répond « toujours bloqué » sans changer son état.
   Le plafond en dollars reste la référence ; les workflows livrés gardent 2 M tokens.
+
+- **Le contrat des critères, et les tests du projet** (#137) : le run du constat n'a
+  jamais atteint `verify`. Les critères du plan n'avaient pas de `status`, l'agent
+  « cochait » par une entrée `{"status": "all_passed"}` hors vocabulaire (un `update`
+  sans `id` ne faisait rien, en silence), et `verify` lançait `cargo test` en dur sur un
+  dépôt Go. `session_metadata` vérifie désormais le contrat pour `criteria` (`id` unique,
+  `text` ou `label`, `status` parmi pending, completed, passed, failed, `pending` par
+  défaut, cocher par `update` sur un `id` connu) et refuse le reste avec ce qu'il faut ;
+  sa description et les consignes de `build-verify` et `ticket-to-deploy` disent le geste
+  exact. `session_metadata` passe sans approbation, comme `session_notes` (sinon chaque
+  critère coché demandait une carte). Le plan de `build-verify` déclare le projet
+  (`project.dir`, `project.test_command`) ; son `verify` lance ce contrôle
+  `project_tests`, sinon la commande déduite du dépôt. Une boucle qui recommence dit
+  quels critères la retiennent (`workflow.step`, journal). Les gabarits lisent
+  `{{metadata.…}}`, et `criteriaList` montre `label` comme `text`. `review` reste Rust.
 
 ### Routine de livraison
 

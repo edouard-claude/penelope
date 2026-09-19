@@ -747,10 +747,17 @@ pub fn all() -> Vec<ToolSpec> {
             false,
             false,
         ),
+        // N'écrit que l'état de la session (critères, projet, findings), sans effet hors de
+        // Pénélope : comme `session_notes`, sans approbation, sinon chaque critère coché
+        // d'un workflow demanderait une carte (issue #137).
         spec(
             "session_metadata",
-            RiskClass::Write,
-            "Lit ou modifie les métadonnées de session : critères, findings, todos.",
+            RiskClass::Read,
+            "Lit ou modifie les métadonnées de session : critères, findings, todos. Critères \
+             (`key: criteria`) : `set` avec la liste [{id, text, status}], `status` parmi \
+             pending, completed, passed, failed ; pour cocher un critère rempli : `update` \
+             avec entry={id, status: \"completed\"}. Projet à vérifier (`key: project`) : \
+             `set` avec {dir, test_command}.",
             obj(
                 json!({
                     "op": {"type":"string","enum":["set","append","update","remove"]},
@@ -759,7 +766,7 @@ pub fn all() -> Vec<ToolSpec> {
                 }),
                 &["op", "key"],
             ),
-            false,
+            true,
             false,
             false,
         ),

@@ -315,7 +315,7 @@
         "checks": {
           "type": "array",
           "items": { "type": "object" },
-          "description": "`verify` : vérifications mécaniques exécutées avant le jugement du modèle."
+          "description": "`verify` : vérifications mécaniques exécutées avant le jugement du modèle. `{\"type\": \"shell\", \"command\": …, \"cwd\": …}`, `{\"type\": \"tool\", …}`, ou `{\"type\": \"project_tests\"}` : les tests du projet déclaré dans `session_metadata.project` ({dir, test_command}), sinon la commande déduite du dépôt."
         }
       }
     }
