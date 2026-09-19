@@ -1499,7 +1499,14 @@ impl NativeToolExecutor {
     ) -> Result<ToolOutcome, ToolError> {
         match self.dispatch(name, args, cancel).await {
             Err(e) => Err(self.explain(name, args, e).await),
-            ok => ok,
+            Ok(o) => {
+                // Un secret lu (fichier, sortie de commande, page) devient une valeur
+                // connue : recopié plus tard dans une commande ou un message, il est
+                // masqué partout où la rédaction passe (issue #134). Rien n'est modifié
+                // de ce qui s'exécute.
+                penelope_observe::redact::learn_secrets(&o.text);
+                Ok(o)
+            }
         }
     }
 

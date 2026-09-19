@@ -2089,6 +2089,82 @@ PYEOF"#;
         }
     }
 
+    /// #134 : une clé recopiée dans une commande est masquée dans la demande stockée, et
+    /// la commande exécutée reste entière ; un `fs_write` d'un fichier qui porte une clé
+    /// n'est pas altéré.
+    #[tokio::test]
+    async fn a_copied_key_is_stored_masked_and_executed_whole() {
+        let key = "Zx9kQ2mV7pLr4TbW1nHs8YcD3fGa6JuE0oIq5RtKyNw2BvXe7LmPz4SdHj1Ua";
+        let (_dir, d, p) = daemon().await;
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "c1".into(),
+                name: "shell_exec".into(),
+                arguments: json!({"command": format!("echo {key}; touch trace")}),
+            }],
+        ));
+        d.enqueue_message(&sid, "teste l'API", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        let out = d.run_turn(&turn).await;
+        d.services.turns.complete(&turn).await.unwrap();
+        let TurnOutcome::AwaitingApproval { approval_id } = out else {
+            panic!("{out:?}");
+        };
+        let a = d
+            .services
+            .approvals
+            .get(&approval_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let stored = a.payload.to_string();
+        assert!(!stored.contains(key), "{stored}");
+        assert!(stored.contains(penelope_observe::redact::MASK), "{stored}");
+
+        crate::agent::decide_approval(
+            &d.services,
+            &approval_id,
+            &penelope_hitl::Decision::approve_once("cli"),
+        )
+        .await
+        .unwrap();
+        d.enqueue_resume(&sid, &approval_id, &Origin::Cli)
+            .await
+            .unwrap();
+        p.reply("Fait.");
+        let turn = claim(&d).await;
+        let _ = d.run_turn(&turn).await;
+        let ran = tool_results(&d, &sid).await.join("\n");
+        assert!(
+            ran.contains(key),
+            "la commande exécutée garde la clé : {ran}"
+        );
+
+        let ws = default_workspaces(&d.services)[0].clone();
+        let config = format!("API_KEY={key}\n");
+        let exec = crate::executor::NativeToolExecutor::new(
+            d.services.clone(),
+            crate::executor::ToolEnv {
+                session_id: sid.clone(),
+                run_id: None,
+                origin: Origin::Cli,
+                workspaces: vec![ws.clone()],
+                in_workflow: false,
+                turn_model: None,
+            },
+        );
+        use crate::agent::ToolExecutor;
+        exec.execute("fs_write", &json!({"path": ".env", "content": config}))
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(ws.join(".env")).unwrap(), config);
+    }
+
     #[tokio::test]
     async fn penelope_reports_her_own_model_and_state() {
         let (_dir, d, p) = daemon().await;

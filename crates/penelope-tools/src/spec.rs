@@ -175,7 +175,9 @@ pub fn all() -> Vec<ToolSpec> {
              les échecs seulement, la sortie complète en artefact (`artifact_read`) ; \
              `output: \"full\"` rend la sortie brute. Le réseau est coupé sauf `network: true` \
              (git push/pull/clone, gh, installation de paquets, curl) : l'approbation le dit. \
-             Répertoire de travail : `cwd` (dans un workspace), pas de préfixe `cd … &&`.",
+             Répertoire de travail : `cwd` (dans un workspace), pas de préfixe `cd … &&`. \
+             Ne recopie jamais un secret lu (clé, mot de passe) dans la commande : lis-le \
+             dans son fichier ou une variable d'environnement.",
             obj(
                 json!({
                     "command": {"type":"string"},

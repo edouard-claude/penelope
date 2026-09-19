@@ -1529,7 +1529,8 @@ numéro de carte (#132).
 
 ### 0.17.18
 
-Une veille planifiée n'arrive plus deux fois (#133).
+Une veille planifiée n'arrive plus deux fois (#133), et une clé recopiée par l'agent ne
+part plus en clair dans une carte d'approbation (#134).
 
 - **La réponse finale est le livrable, une fois** (#133) : la veille du 19 est arrivée
   deux fois, la skill l'envoyant par `send_message` et le tour livrant en plus sa réponse
@@ -1541,6 +1542,21 @@ Une veille planifiée n'arrive plus deux fois (#133).
   s'ajoute ; un `send_message` en échec ne retient rien. `send_message` vise l'origine du
   tour, donc la même cible après `/schedules ici` (#124). La skill `veille-agents-ia` vit
   sur l'instance, pas dans ce dépôt : sa consigne a été réécrite là-bas.
+
+- **Une clé recopiée reste masquée là où elle est stockée** (#134) : une clé lue dans
+  `apollo.config.js` et un mot de passe, recopiés dans un script Python, sont partis en
+  clair dans une carte d'approbation (#116 affiche la commande exacte) et dans la
+  demande stockée. La demande passait pourtant par la rédaction : c'est la détection qui
+  ne reconnaissait ni `KEY = "…"`, ni `"password": "…"`, ni une clé sans préfixe connu.
+  Elle reconnaît désormais les affectations entre guillemets (`'x-api-key': '…'`,
+  `"password": "…"`, `key = …`), les jetons longs et aléatoires (trois familles de
+  caractères, entropie élevée, hors chemins, URL et identifiants lisibles), et retient
+  comme valeur connue ce qu'elle repère dans un résultat d'outil : recopiée ensuite, la
+  valeur est masquée. La file Telegram est rédigée à l'écriture ; la carte dit combien
+  de valeurs sont masquées ; `doctor` gagne `stored_secrets` (demandes et file des 30
+  derniers jours). Rien de ce qui s'exécute n'est modifié (commande, `fs_write`). La
+  consigne de `shell_exec` demande de ne pas recopier un secret lu. Ce qui a déjà fui
+  (message Telegram, sauvegardes) est à renouveler.
 
 ### Routine de livraison
 

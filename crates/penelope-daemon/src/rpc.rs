@@ -65,6 +65,7 @@ impl Rpc {
                 checks.push(crate::doctor::vault_index_check(s).await);
                 checks.extend(crate::doctor::coherence_checks(s).await);
                 checks.push(crate::doctor::logs_secret_check(s));
+                checks.push(crate::doctor::stored_secret_check(s).await);
                 checks.push(crate::vault_git::doctor_check(s));
                 checks.push(crate::doctor::binary_signature_check(s));
                 checks.push(crate::doctor::install_mode_check());

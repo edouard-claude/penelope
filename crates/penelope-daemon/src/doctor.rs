@@ -389,6 +389,68 @@ fn pending_upgrade(state: &std::path::Path, now_ms: i64) -> DoctorCheck {
     .critical()
 }
 
+/// Secret en clair dans une demande d'approbation ou la file Telegram des 30 derniers
+/// jours (issue #134) : ce qui a été écrit avant la rédaction de ces deux chemins.
+pub async fn stored_secret_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "stored_secrets";
+    const LABEL: &str = "Aucun secret dans les demandes ni la file Telegram";
+    let since = chrono::DateTime::from_timestamp_millis(s.clock.now_ms() - 30 * 86_400_000)
+        .unwrap_or_default()
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let rows: Vec<(String, String, String)> = s
+        .store
+        .read(move |c| {
+            let mut out = Vec::new();
+            for (table, sql) in [
+                (
+                    "approval_requests",
+                    "SELECT id, payload FROM approval_requests WHERE created_at >= ?1 LIMIT 5000",
+                ),
+                (
+                    "tg_outbox",
+                    "SELECT id, payload FROM tg_outbox WHERE created_at >= ?1 LIMIT 5000",
+                ),
+            ] {
+                let mut st = c.prepare(sql)?;
+                let rows = st.query_map([&since], |r| {
+                    Ok((
+                        table.to_string(),
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                    ))
+                })?;
+                for r in rows {
+                    out.push(r?);
+                }
+            }
+            Ok(out)
+        })
+        .await
+        .unwrap_or_default();
+    let mut found: Vec<String> = Vec::new();
+    for (table, id, payload) in rows {
+        if let Some(k) = penelope_observe::redact::stored_secret_kind(&payload) {
+            found.push(format!("{table} {id} ({k})"));
+        }
+    }
+    if found.is_empty() {
+        return DoctorCheck::ok(ID, LABEL, "30 derniers jours vérifiés");
+    }
+    let shown: Vec<String> = found.iter().take(5).cloned().collect();
+    DoctorCheck::fail(
+        ID,
+        LABEL,
+        format!(
+            "{} ligne(s) en clair : {}{}. Considérer ces secrets comme exposés (ils sont \
+             aussi dans l'historique Telegram et les sauvegardes)",
+            found.len(),
+            shown.join(" ; "),
+            if found.len() > 5 { " ; …" } else { "" }
+        ),
+        Some("renouveler les secrets exposés ; les lignes partent avec la rétention".into()),
+    )
+}
+
 /// Secret en clair dans un journal existant (issue #26) : purger le fichier et révoquer.
 pub fn logs_secret_check(s: &Services) -> DoctorCheck {
     use std::io::BufRead;

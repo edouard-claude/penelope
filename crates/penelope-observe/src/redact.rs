@@ -51,9 +51,10 @@ fn patterns() -> &'static Patterns {
         add(r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b", "jeton telegram");
         // Le même, collé au préfixe `bot` d'une URL de la Bot API (issue #26).
         add(r"bot\d{6,12}:[A-Za-z0-9_-]{30,}", "jeton telegram");
-        // Affectation explicite d'un secret dans un texte de configuration.
+        // Affectation explicite d'un secret dans un texte de configuration ou du code :
+        // `password = x`, `"password": "x"`, `'x-api-key': 'x'`, `KEY = "x"` (issue #134).
         add(
-            r#"(?i)\b(?:api[_-]?key|secret|password|passwd|token|private[_-]?key)\b\s*[:=]\s*["']?(?P<v>[^\s"',]{8,})"#,
+            r#"(?i)\b(?:(?:x[_-])?api[_-]?key|apikey|key|client[_-]?secret|secret|password|passwd|pwd|access[_-]?token|auth[_-]?token|token|private[_-]?key)\b["']?\s*[:=]\s*["']?(?P<v>[^\s"',)}]{8,})"#,
             "affectation de secret",
         );
         Patterns { rules }
@@ -101,6 +102,24 @@ pub fn register_secret(value: &str) {
     }
 }
 
+/// Valeurs apprises dans ce que l'agent a lu (issue #134), bornées : les plus anciennes
+/// cèdent la place, jamais un secret enregistré.
+static LEARNED: OnceLock<RwLock<std::collections::VecDeque<Arc<str>>>> = OnceLock::new();
+const LEARNED_MAX: usize = 2_000;
+
+fn learned() -> &'static RwLock<std::collections::VecDeque<Arc<str>>> {
+    LEARNED.get_or_init(|| RwLock::new(std::collections::VecDeque::new()))
+}
+
+/// Secrets enregistrés et valeurs apprises, à masquer ou à reconnaître.
+fn known_values() -> Vec<Arc<str>> {
+    let mut v: Vec<Arc<str>> = known().read().map(|g| g.clone()).unwrap_or_default();
+    if let Ok(g) = learned().read() {
+        v.extend(g.iter().cloned());
+    }
+    v
+}
+
 pub fn forget_secret(value: &str) {
     if let Ok(mut g) = known().write() {
         g.retain(|v| &**v != value);
@@ -127,11 +146,9 @@ pub fn redact(input: &str) -> String {
     }
     let mut out = input.to_string();
 
-    if let Ok(g) = known().read() {
-        for v in g.iter() {
-            if out.contains(&**v) {
-                out = out.replace(&**v, MASK);
-            }
+    for v in known_values() {
+        if out.contains(&*v) {
+            out = out.replace(&*v, MASK);
         }
     }
 
@@ -140,7 +157,81 @@ pub fn redact(input: &str) -> String {
             out = re.replace_all(&out, MASK).into_owned();
         }
     }
-    redact_card_numbers(&out)
+    redact_random_tokens(&redact_card_numbers(&out))
+}
+
+/// Jeton long et aléatoire (clé sans préfixe connu, recopiée d'un fichier) : 40
+/// caractères au moins, trois familles de caractères, entropie élevée. Masqué dans les
+/// journaux, les événements et les demandes stockées ; jamais dans ce qui s'exécute, et
+/// pas dans le filtre d'écriture de la mémoire (#132). Un hachage hexadécimal, un chemin
+/// ou un identifiant court ne passent pas ces tests (issue #134).
+fn redact_random_tokens(s: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re =
+        RE.get_or_init(|| Regex::new(r"[A-Za-z0-9+=_*~!$-]{40,}").expect("motif de jeton valide"));
+    re.replace_all(s, |c: &regex::Captures<'_>| {
+        let t = &c[0];
+        if looks_random(t) {
+            MASK.to_string()
+        } else {
+            t.to_string()
+        }
+    })
+    .into_owned()
+}
+
+/// Trois familles parmi minuscules, majuscules, chiffres et symboles (hors `-` et `_`,
+/// qui font les identifiants lisibles), et une entropie élevée. Un chemin, une URL ou un
+/// nom en `snake_case` n'y ressemblent pas.
+fn looks_random(t: &str) -> bool {
+    let classes = [
+        t.chars().any(|c| c.is_ascii_lowercase()),
+        t.chars().any(|c| c.is_ascii_uppercase()),
+        t.chars().any(|c| c.is_ascii_digit()),
+        t.chars()
+            .any(|c| !c.is_ascii_alphanumeric() && c != '-' && c != '_'),
+    ]
+    .iter()
+    .filter(|b| **b)
+    .count();
+    if classes < 3 {
+        return false;
+    }
+    let mut counts = std::collections::HashMap::new();
+    for c in t.chars() {
+        *counts.entry(c).or_insert(0usize) += 1;
+    }
+    let n = t.chars().count() as f64;
+    let entropy: f64 = counts
+        .values()
+        .map(|k| {
+            let p = *k as f64 / n;
+            -p * p.log2()
+        })
+        .sum();
+    entropy >= 4.3
+}
+
+/// Retient comme secrets connus les valeurs repérées par motif dans un texte lu par
+/// l'agent (fichier, sortie de commande) : recopiées ensuite dans une commande, un
+/// message ou une demande, elles sont masquées partout où la rédaction passe (issue
+/// #134). Rien n'est rangé ni écrit : la liste vit le temps du processus.
+pub fn learn_secrets(text: &str) {
+    let clean = &*without_references(text);
+    for span in secret_spans(clean) {
+        let value = &clean[span.start..span.end];
+        if span.kind == "secret enregistré" || value.len() < 6 {
+            continue;
+        }
+        if let Ok(mut g) = learned().write()
+            && !g.iter().any(|v| &**v == value)
+        {
+            if g.len() >= LEARNED_MAX {
+                g.pop_front();
+            }
+            g.push_back(Arc::from(value));
+        }
+    }
 }
 
 fn card_re() -> &'static Regex {
@@ -252,9 +343,7 @@ pub fn luhn(digits: &str) -> bool {
 /// filtre d'écriture mémoire (§6.10), qui **refuse** l'écriture au lieu de masquer.
 pub fn contains_secret(input: &str) -> bool {
     let input = &*without_references(input);
-    if let Ok(g) = known().read()
-        && g.iter().any(|v| input.contains(&**v))
-    {
+    if known_values().iter().any(|v| input.contains(&**v)) {
         return true;
     }
     if patterns().rules.iter().any(|(re, _)| re.is_match(input)) {
@@ -268,9 +357,7 @@ pub fn contains_secret(input: &str) -> bool {
 /// traces légitimes.
 pub fn leaked_secret_kind(line: &str) -> Option<&'static str> {
     let line = &*without_references(line);
-    if let Ok(g) = known().read()
-        && g.iter().any(|v| line.contains(&**v))
-    {
+    if known_values().iter().any(|v| line.contains(&**v)) {
         return Some("secret enregistré");
     }
     patterns()
@@ -279,6 +366,20 @@ pub fn leaked_secret_kind(line: &str) -> Option<&'static str> {
         .filter(|(_, label)| *label != "affectation de secret")
         .find(|(re, _)| re.is_match(line))
         .map(|(_, label)| *label)
+}
+
+/// Secret resté en clair dans ce qui est stocké (demandes d'approbation, file Telegram) :
+/// valeur connue, motif (affectations comprises) ou jeton long et aléatoire. Pour
+/// `doctor` (issue #134).
+pub fn stored_secret_kind(text: &str) -> Option<&'static str> {
+    let text = &*without_references(text);
+    if known_values().iter().any(|v| text.contains(&**v)) {
+        return Some("secret enregistré");
+    }
+    if let Some((_, label)) = patterns().rules.iter().find(|(re, _)| re.is_match(text)) {
+        return Some(label);
+    }
+    (redact_random_tokens(text) != text).then_some("jeton aléatoire")
 }
 
 /// Secret repéré dans un texte : position de la **valeur** (sans le mot-clé qui la
@@ -308,9 +409,9 @@ pub fn secret_spans(input: &str) -> Vec<SecretSpan> {
             });
         }
     }
-    if let Ok(g) = known().read() {
-        for v in g.iter() {
-            for (start, _) in input.match_indices(&**v) {
+    {
+        for v in known_values() {
+            for (start, _) in input.match_indices(&*v) {
                 found.push(SecretSpan {
                     start,
                     end: start + v.len(),
@@ -459,6 +560,38 @@ mod tests {
         assert_eq!(r["api_key"], MASK);
         assert_eq!(r["nested"]["token"], MASK);
         assert_eq!(r["ok"], "visible");
+    }
+
+    /// #134 : une clé sans préfixe connu, recopiée d'un fichier dans une commande, est
+    /// masquée quand elle est stockée ou journalisée : par son affectation (`KEY = "…"`,
+    /// `'x-api-key': '…'`, `"password": "…"`), par sa forme (jeton long et aléatoire), ou
+    /// parce qu'elle a été lue plus tôt. Un chemin, une URL, un hachage, un identifiant
+    /// lisible restent intacts.
+    #[test]
+    fn a_key_copied_from_a_file_is_masked_where_it_is_stored() {
+        let key = "Zx9kQ2mV7pLr4TbW1nHs8YcD3fGa6JuE0oIq5*RtKyNw2BvXe7LmPz4SdHj1Ua";
+        let command = format!("python3 - <<'EOF'\nKEY = \"{key}\"\nprint(1)\nEOF");
+        assert!(!redact(&command).contains(key), "{}", redact(&command));
+        let js = "headers: { 'x-api-key': 'dev-secret-aaaa1111' }";
+        assert!(
+            !redact(js).contains("dev-secret-aaaa1111"),
+            "{}",
+            redact(js)
+        );
+        let py = r#"login({"email": "a@b.fr", "password": "Motdepasse2026"})"#;
+        assert!(!redact(py).contains("Motdepasse2026"), "{}", redact(py));
+        // Une valeur lue plus tôt, recopiée seule, est masquée aussi.
+        learn_secrets("const cfg = { apiKey: 'ab12cd34ef56gh78' };");
+        assert!(!redact(r#"{"p": "ab12cd34ef56gh78"}"#).contains("ab12cd34ef56gh78"));
+        for kept in [
+            "https://github.com/edouard-claude/penelope/releases/tag/v0.17.10",
+            "/Users/essai/Code/agent/penelope/crates/penelope-daemon/src/executor.rs",
+            "a_failing_command_of_41_lines_is_returned_whole_and_more",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "s_01M2TAQFBTN50F030S73RWZFME",
+        ] {
+            assert_eq!(redact(kept), kept, "{kept}");
+        }
     }
 
     /// #132 : un nombre collé à un identifiant n'est pas une carte pour le filtre

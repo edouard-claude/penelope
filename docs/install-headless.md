@@ -48,6 +48,19 @@ connus (jeton du bot Telegram, clés d'API) sont masqués sur **toutes** les sor
 compris ; `penelope doctor` (contrôle `logs_secrets`) cherche un secret resté en clair dans
 un journal plus ancien et dit quoi révoquer.
 
+**Ce qui est rédigé, et où.** Journaux, événements, demandes d'approbation stockées et
+textes de la file Telegram passent par la même rédaction : secrets enregistrés, formats
+connus (clés de fournisseurs, bearer, JWT, clé privée), affectations (`password = …`,
+`"password": "…"`, `'x-api-key': '…'`, `KEY = "…"`), numéros de carte, jetons longs et
+aléatoires, et toute valeur que l'agent a lue ainsi plus tôt (un fichier de configuration,
+une sortie de commande) puis recopiée ailleurs. La carte d'approbation montre la commande
+exacte, valeurs masquées (« 🔒 2 valeur(s) masquée(s) ») ; la commande **exécutée**, un
+`fs_write` ou tout ce qui s'exécute ne sont jamais modifiés. La consigne de `shell_exec`
+demande de ne pas recopier un secret lu dans une commande, mais de le lire dans son fichier
+ou une variable d'environnement. `penelope doctor` (contrôle `stored_secrets`) cherche un
+secret en clair dans les demandes et la file des 30 derniers jours : écrit avant cette
+rédaction, il est à considérer comme exposé.
+
 `install` inscrit dans le service le PATH du terminal qui la lance, complété des
 emplacements usuels (Homebrew, `~/.local/bin`, Docker, nvm) : sans cela, `launchd` ne
 fournit que les répertoires système, et le daemon ne trouverait ni `npx`, ni `uvx`, ni

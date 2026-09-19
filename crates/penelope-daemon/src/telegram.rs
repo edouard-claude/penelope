@@ -121,6 +121,15 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
     if let Some(srv) = server {
         quals.push(format!("serveur `{srv}`"));
     }
+    // La demande est stockée rédigée : la carte dit combien de valeurs sont masquées,
+    // la commande exécutée, elle, reste entière (issue #134).
+    let masked = args
+        .to_string()
+        .matches(penelope_observe::redact::MASK)
+        .count();
+    if masked > 0 {
+        quals.push(format!("🔒 {masked} valeur(s) masquée(s)"));
+    }
     quals.push(format!("classe {}", a.risk.as_str()));
     if let Some(reason) = a.payload["reason"].as_str().filter(|r| !r.is_empty()) {
         quals.push(reason.to_string());
@@ -5802,6 +5811,18 @@ impl TelegramGateway {
     ) -> anyhow::Result<()> {
         if let Some(o) = payload.as_object_mut() {
             o.retain(|_, v| !v.is_null());
+            // Ce qui part sur Telegram et reste dans la file est rédigé comme les
+            // journaux : clés, mots de passe, valeurs lues (issue #134).
+            for k in ["text", "caption"] {
+                if let Some(v) = o.get_mut(k)
+                    && let Some(t) = v.as_str()
+                {
+                    let red = penelope_observe::redact(t);
+                    if red != t {
+                        *v = Value::String(red);
+                    }
+                }
+            }
         }
         let s = &self.daemon.services;
         let (id, method, now) = (
@@ -8349,6 +8370,56 @@ mod tests {
         let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
         assert!(sent.contains("PYEOF"), "{sent}");
         assert!(!sent.contains("Carte simplifiée"), "{sent}");
+    }
+
+    /// #134 : la carte dit combien de valeurs sont masquées ; ce qui entre dans la file
+    /// Telegram est rédigé ; `doctor` signale une ligne restée en clair.
+    #[tokio::test]
+    async fn stored_and_sent_secrets_are_masked_and_checked() {
+        let (_d, g, t, _p) = gateway().await;
+        let s = g.daemon.services.clone();
+        let a = s
+            .approvals
+            .create(
+                penelope_hitl::ApprovalKind::ToolCall,
+                "shell_exec",
+                penelope_kernel::risk::RiskClass::Write,
+                json!({"tool": "shell_exec", "arguments": {"command": penelope_observe::redact(
+                    "KEY = \"Zx9kQ2mV7pLr4TbW1nHs8YcD3fGa6JuE0oIq5RtKyNw2BvXe7LmPz4SdHj1Ua\""
+                )}}),
+                vec![],
+                None,
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        g.send_approval_card(OWNER, None, &a).await.unwrap();
+        let key = "sk-or-v1-0123456789abcdef0123456789";
+        g.reply(OWNER, None, None, &format!("voici la clé {key}"))
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
+        assert!(sent.contains("valeur(s) masquée(s)"), "{sent}");
+        assert!(!sent.contains(key), "{sent}");
+        assert!(crate::doctor::stored_secret_check(&s).await.ok);
+
+        let now = s.clock.now_rfc3339();
+        let leaked = json!({"text": format!("clé {key}")}).to_string();
+        s.store
+            .write(move |tx| {
+                tx.execute(
+                    "INSERT INTO tg_outbox(id, chat_id, method, payload, state, created_at)
+                     VALUES('o_ancien', 1, 'sendMessage', ?1, 'sent', ?2)",
+                    penelope_store::rusqlite::params![leaked, now],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let c = crate::doctor::stored_secret_check(&s).await;
+        assert!(!c.ok && c.detail.contains("o_ancien"), "{c:?}");
     }
 
     /// #133 : pour un tour planifié, la réponse finale est le livrable, livrée une fois.
