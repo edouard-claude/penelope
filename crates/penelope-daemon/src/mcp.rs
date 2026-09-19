@@ -1533,16 +1533,30 @@ impl McpSupervisor {
         let Some(fields) = patch.as_object() else {
             return Err("les modifications doivent être un objet JSON".into());
         };
+        let before = v.clone();
         for (k, val) in fields {
             if k == "name" {
                 return Err("le nom d'un serveur ne change pas : le retirer puis l'ajouter".into());
             }
-            if v.get(k).is_none() {
+            let Some(current) = v.get(k) else {
                 return Err(format!("champ inconnu : `{k}`"));
-            }
-            v[k] = val.clone();
+            };
+            // Une valeur seule vaut une liste d'un élément (`roots "/a"`), comme pour
+            // `config set` (issue #138).
+            v[k] = penelope_kernel::config::list_value(k, current, val.clone())?;
         }
-        let updated: ServerConfig = serde_json::from_value(v).map_err(|e| e.to_string())?;
+        let updated: ServerConfig = serde_json::from_value(v).map_err(|_| {
+            fields
+                .keys()
+                .map(|k| {
+                    format!(
+                        "`{k}` attend {}",
+                        penelope_kernel::config::expected_shape(&before[k])
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ; ")
+        })?;
         self.add(updated, true).await
     }
 
@@ -2091,6 +2105,39 @@ mod tests {
         assert!(deny > allow, "{sbpl}");
         assert!(sbpl.contains("secrets.enc"), "{sbpl}");
         assert!(sbpl.contains("com.apple.SecurityServer"), "{sbpl}");
+    }
+
+    /// #138 : `mcp edit` sur un champ liste accepte une valeur seule, sans la découper, et
+    /// nomme la forme attendue au lieu de l'erreur du désérialiseur.
+    #[tokio::test]
+    async fn a_list_field_takes_a_single_value() {
+        let (_d, _s, _c, fake, sup) = setup().await;
+        fake.serve("pont", server(two_tools()));
+        declare(&sup, "pont", "");
+        sup.reload().await;
+        sup.edit("pont", &json!({"roots": "/a"})).await.unwrap();
+        let single = sup.config_of("pont").await.unwrap().roots;
+        sup.edit("pont", &json!({"roots": ["/a"]})).await.unwrap();
+        assert_eq!(sup.config_of("pont").await.unwrap().roots, single);
+        assert_eq!(single, vec!["/a".to_string()]);
+        sup.edit("pont", &json!({"args": "--mode lecture"}))
+            .await
+            .unwrap();
+        assert_eq!(
+            sup.config_of("pont").await.unwrap().args,
+            vec!["--mode lecture".to_string()],
+            "une valeur seule n'est jamais découpée"
+        );
+        let e = sup.edit("pont", &json!({"roots": 42})).await.unwrap_err();
+        assert!(e.contains("`roots` attend une liste"), "{e}");
+        let e = sup
+            .edit("pont", &json!({"timeout": ["30s"]}))
+            .await
+            .unwrap_err();
+        assert!(
+            e.contains("`timeout` attend une chaîne") && !e.contains("invalid type"),
+            "{e}"
+        );
     }
 
     /// #126 : `mcp test` appelle vraiment un outil en lecture sans argument ; un serveur

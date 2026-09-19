@@ -364,6 +364,40 @@ pub struct Models {
 /// Repères de coordonnées d'un modèle de pointage (issues #125 et #128).
 pub const LOCATE_FRAMES: &[&str] = &["auto", "pixels", "per_mille"];
 
+/// Forme attendue d'une valeur, d'après la valeur en place : pour un message qui dit quoi
+/// écrire au lieu de l'erreur brute du désérialiseur (issue #138).
+pub fn expected_shape(current: &serde_json::Value) -> &'static str {
+    match current {
+        serde_json::Value::Array(_) => "une liste : `[\"a\", \"b\"]`, ou une valeur seule",
+        serde_json::Value::Number(_) => "un nombre",
+        serde_json::Value::Bool(_) => "`true` ou `false`",
+        serde_json::Value::Object(_) => "une table : `{\"clé\": \"valeur\"}`",
+        _ => "une chaîne",
+    }
+}
+
+/// Valeur donnée à un champ liste : une valeur seule vaut une liste d'un élément, jamais
+/// découpée (`"a b"` donne `["a b"]`, pas deux éléments) ; une liste passe telle quelle ;
+/// le reste est refusé en nommant la forme attendue. Même règle pour `config set` et
+/// `mcp edit` (issue #138).
+pub fn list_value(
+    field: &str,
+    current: &serde_json::Value,
+    new: serde_json::Value,
+) -> std::result::Result<serde_json::Value, String> {
+    if !current.is_array() {
+        return Ok(new);
+    }
+    match new {
+        serde_json::Value::Array(_) => Ok(new),
+        serde_json::Value::String(_) => Ok(serde_json::Value::Array(vec![new])),
+        other => Err(format!(
+            "`{field}` attend {} ; reçu `{other}`",
+            expected_shape(current)
+        )),
+    }
+}
+
 /// Tables de la configuration dont les clés sont libres : `config set` y ajoute une
 /// entrée nouvelle (`models.roles.image_locate`), là où une clé de structure inconnue
 /// reste une faute de frappe refusée.
@@ -2027,6 +2061,31 @@ mod tests {
         let (fresh, _) = Config::parse("[owner]\nname = \"Anne\"\n").unwrap();
         assert!(!fresh.sandbox.shell_network, "défaut fermé");
         assert!(!Config::default().sandbox.shell_network);
+    }
+
+    /// #138 : une valeur seule vaut une liste d'un élément, sans découpage ; une liste
+    /// passe ; un autre type est refusé en nommant la forme attendue.
+    #[test]
+    fn a_single_value_fills_a_list_field() {
+        let list = serde_json::json!(["x"]);
+        assert_eq!(
+            list_value("roots", &list, serde_json::json!("/a")).unwrap(),
+            serde_json::json!(["/a"])
+        );
+        assert_eq!(
+            list_value("args", &list, serde_json::json!("a b")).unwrap(),
+            serde_json::json!(["a b"])
+        );
+        assert_eq!(
+            list_value("roots", &list, serde_json::json!(["/a"])).unwrap(),
+            serde_json::json!(["/a"])
+        );
+        let e = list_value("roots", &list, serde_json::json!(42)).unwrap_err();
+        assert!(e.contains("une liste") && e.contains("`roots`"), "{e}");
+        assert_eq!(
+            list_value("timeout", &serde_json::json!("30s"), serde_json::json!(42)).unwrap(),
+            serde_json::json!(42)
+        );
     }
 
     /// #128 : chaque table déclarée libre est bien une table de la configuration.

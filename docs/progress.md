@@ -1606,6 +1606,19 @@ se dit (#136). `build-verify` atteint `verify` et vérifie le projet, pas Péné
   quels critères la retiennent (`workflow.step`, journal). Les gabarits lisent
   `{{metadata.…}}`, et `criteriaList` montre `label` comme `text`. `review` reste Rust.
 
+### 0.17.21
+
+Une valeur seule remplit un champ liste, dans `mcp edit` comme dans `config set` (#138).
+
+- **Une valeur seule vaut une liste d'un élément** (#138) : `penelope mcp edit mailbridge
+  roots "/chemin"` répondait par l'erreur brute du désérialiseur, et seule la forme
+  `'["/chemin"]'` passait, sans que rien ne le dise. Pour un champ liste (`args`,
+  `scopes`, `roots`, et toute liste de la configuration), une chaîne devient une liste
+  d'un élément, jamais découpée sur les espaces ; une liste passe telle quelle ; un autre
+  type est refusé en nommant la forme attendue (« `roots` attend une liste : `["a",
+  "b"]`, ou une valeur seule »). Même règle pour `config set` (#122) ; ce que `roots`
+  autorise ne change pas.
+
 ### Routine de livraison
 
 Avant chaque tag :

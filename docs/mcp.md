@@ -82,6 +82,19 @@ redémarrage.
 `roots` mérite une seconde de réflexion : ce sont les répertoires exposés au serveur par
 `roots/list`. Jamais le home entier.
 
+Un champ se modifie sans rouvrir le fichier : `penelope mcp edit <nom> <champ> <valeur>`.
+Pour un champ liste (`args`, `scopes`, `roots`), une valeur seule vaut une liste d'un
+élément, jamais découpée (`args "--mode lecture"` donne `["--mode lecture"]`) ; plusieurs
+valeurs s'écrivent en JSON :
+
+```bash
+penelope mcp edit mailbridge roots '["/Users/moi/pieces", "/Users/moi/brouillons"]'
+```
+
+Une valeur de mauvaise forme est refusée en nommant la forme attendue. `penelope config
+set` suit la même règle pour les listes de la configuration
+(`sandbox.allow_keychain_for mailbridge`).
+
 ## Bac à sable
 
 Un serveur stdio tourne sous le profil de sa déclaration (`sandbox_profile`, `mcp-stdio`

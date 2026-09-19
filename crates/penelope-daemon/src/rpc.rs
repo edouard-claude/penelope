@@ -1423,7 +1423,16 @@ pub(crate) fn set_config_path(daemon: &Daemon, path: &str, value: Value) -> anyh
                         "clé inconnue : {path_owned}"
                     )));
                 }
-                obj.insert((*part).to_string(), value.clone());
+                // Une valeur seule vaut une liste d'un élément, comme pour `mcp edit`
+                // (issue #138).
+                let value = match obj.get(*part) {
+                    Some(current) => {
+                        penelope_kernel::config::list_value(&path_owned, current, value.clone())
+                            .map_err(penelope_kernel::KernelError::config)?
+                    }
+                    None => value.clone(),
+                };
+                obj.insert((*part).to_string(), value);
             } else {
                 cur = cur.get_mut(part).ok_or_else(|| {
                     penelope_kernel::KernelError::config(format!("clé inconnue : {path_owned}"))
@@ -1864,6 +1873,31 @@ mod tests {
         )
         .await;
         assert!(resp.error.unwrap().message.contains("clé inconnue"));
+    }
+
+    /// #138 : `config set` suit la même règle que `mcp edit` : une valeur seule remplit
+    /// une liste.
+    #[tokio::test]
+    async fn config_set_takes_a_single_value_for_a_list() {
+        let (_dir, r) = rpc().await;
+        let resp = call(
+            &r,
+            method::CONFIG_SET,
+            json!({"path": "sandbox.allow_keychain_for", "value": "mailbridge"}),
+        )
+        .await;
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        assert_eq!(
+            r.daemon.services.config.config().sandbox.allow_keychain_for,
+            vec!["mailbridge".to_string()]
+        );
+        let resp = call(
+            &r,
+            method::CONFIG_SET,
+            json!({"path": "sandbox.allow_keychain_for", "value": 3}),
+        )
+        .await;
+        assert!(resp.error.unwrap().message.contains("une liste"));
     }
 
     #[tokio::test]

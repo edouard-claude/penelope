@@ -375,7 +375,9 @@ pub enum McpCmd {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Modifie un champ : `penelope mcp edit redmine timeout 60s`.
+    /// Modifie un champ : `penelope mcp edit redmine timeout 60s` ; pour une liste
+    /// (`args`, `scopes`, `roots`), une valeur seule (`roots /chemin`) ou
+    /// `'["/a", "/b"]'`.
     Edit {
         name: String,
         field: String,
