@@ -1363,7 +1363,12 @@ date, puis retiré tout seul la nuit suivante. Rien de passager n'entre dans `me
 dans le magasin de secrets dès la relecture, sous un nom tiré du contexte (par exemple
 `cle-stripe-projet-atlas-1f2e3d4c`). La mémoire ne garde que la référence
 `${SECRET:cle-stripe-projet-atlas-1f2e3d4c}`, jamais la valeur. `DREAMS.md` liste les
-noms rangés. Un numéro de carte, lui, est refusé.
+noms rangés. Un numéro de carte, lui, est refusé (13 à 19 chiffres, clé de Luhn), et le
+refus cite le fragment en cause, masqué (« …6467 »), pour retirer ce qu'il faut. Un
+nombre collé à un identifiant (`command-output:38228-1743576040856618`, `id=…`, `run/…`)
+n'est pas pris pour une carte à l'écriture, sauf si le mot collé en nomme une (`carte:…`,
+`cb=…`). Les journaux et les événements, eux, masquent tout nombre qui passe les deux
+tests, identifiant ou non : un faux positif y coûte peu, une fuite beaucoup.
 
 **Rappel automatique.** Un souvenir est servi d'office quand il est **pertinent** pour le
 message (`memory.trigger_threshold`, sur le rang de recherche seul) ; sa récence

@@ -44,7 +44,7 @@ pub fn write_filter(text: &str) -> Result<(), String> {
         return Err("une entrée de mémoire tient sur une ligne".into());
     }
     if let Some(kind) = penelope_observe::redact::secret_kind(t) {
-        return Err(format!("refusé : le texte contient un {kind}"));
+        return Err(refusal(kind, t));
     }
     if penelope_observe::is_suspicious(t) {
         return Err("refusé : le texte ressemble à une consigne injectée".into());
@@ -52,10 +52,19 @@ pub fn write_filter(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Refus nommé : la nature et le fragment masqué au milieu, pour retirer ce qu'il faut
+/// au lieu de tronquer au hasard (issue #132).
+fn refusal(kind: &str, text: &str) -> String {
+    match penelope_observe::redact::secret_fragment(text) {
+        Some(f) => format!("refusé : le texte contient un {kind} (« {f} »)"),
+        None => format!("refusé : le texte contient un {kind}"),
+    }
+}
+
 /// Comme [`write_filter`], pour un bloc de plusieurs lignes (notes de travail).
 pub fn write_filter_block(text: &str) -> Result<(), String> {
     if let Some(kind) = penelope_observe::redact::secret_kind(text) {
-        return Err(format!("refusé : le texte contient un {kind}"));
+        return Err(refusal(kind, text));
     }
     if penelope_observe::is_suspicious(text) {
         return Err("refusé : le texte ressemble à une consigne injectée".into());
@@ -541,6 +550,17 @@ fn today(s: &Services) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #132 : une note qui cite un identifiant d'artefact passe ; une vraie carte est
+    /// refusée, et le refus cite le fragment masqué pour savoir quoi retirer.
+    #[test]
+    fn an_artifact_id_passes_and_a_card_refusal_names_its_fragment() {
+        write_filter("artefact command-output:38228-1743576040856618 illisible").unwrap();
+        write_filter_block("sortie : command-output:38228-1743576040856618\nà relire").unwrap();
+        let e = write_filter("payé avec la carte 4539 1488 0343 6467").unwrap_err();
+        assert!(e.contains("numéro de carte") && e.contains("…6467"), "{e}");
+        assert!(!e.contains("4539"), "le refus n'expose pas la carte : {e}");
+    }
     use penelope_kernel::clock::TestClock;
     use std::sync::Arc;
 

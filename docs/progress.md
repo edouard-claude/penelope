@@ -1486,7 +1486,8 @@ Une carte d'approbation part toujours, même quand la commande porte `{{…}}` (
 
 Un tour ne panique plus sur une commande en échec de 40 à 60 lignes, et une panique dit
 où elle a eu lieu (#130). Une session qui ne se résume plus est compactée sans modèle au
-troisième échec, et se voit (#131).
+troisième échec, et se voit (#131). Un identifiant d'artefact n'est plus pris pour un
+numéro de carte (#132).
 
 - **Le résumé d'une sortie courte ne découpe plus à l'envers** (#130) : un tour repris
   après « Toujours » est mort sur « slice index starts at 30 but ends at 11 ». La
@@ -1514,6 +1515,17 @@ troisième échec, et se voit (#131).
   `context.compaction_mechanical`. `/status` et le digest disent la session en échec.
   Seuils (#18, #40), validation du résumé et niveau 4 d'urgence inchangés ; pendant les
   échecs, rien n'est publié et le préfixe ne bouge pas.
+
+- **Un identifiant n'est pas une carte** (#132) : une note citant
+  `command-output:38228-1743576040856618` était refusée pour « numéro de carte » (seize
+  chiffres après un tiret, Luhn vrai une fois sur dix), et l'agent tronquait l'identifiant
+  à l'aveugle. Pas une régression : motif d'origine. Le filtre d'écriture (mémoire,
+  notes, titres, contrôle du vault) écarte un nombre collé à un identifiant (`:`, `-`,
+  `_`, `/`, `=`, `#`, `@` ou une lettre), sauf si le mot collé nomme une carte ; longueurs
+  et Luhn inchangés. Le refus cite le fragment masqué (« …6467 », « sk-0… »). Le
+  masquage des journaux et des événements (#26) ne change pas : il masque toujours tout
+  nombre qui passe les deux tests. Les cartes ne se rangent toujours pas, elles se
+  refusent (#37).
 
 ### Routine de livraison
 

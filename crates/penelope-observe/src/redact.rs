@@ -143,12 +143,17 @@ pub fn redact(input: &str) -> String {
     redact_card_numbers(&out)
 }
 
-/// Numéros de carte : détectés par longueur **et** clé de Luhn, pour ne pas masquer
-/// un identifiant numérique quelconque.
-fn redact_card_numbers(s: &str) -> String {
+fn card_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re =
-        RE.get_or_init(|| Regex::new(r"\b(?:\d[ -]?){12,18}\d\b").expect("motif de carte valide"));
+    RE.get_or_init(|| Regex::new(r"\b(?:\d[ -]?){12,18}\d\b").expect("motif de carte valide"))
+}
+
+/// Numéros de carte : détectés par longueur **et** clé de Luhn, pour ne pas masquer
+/// un identifiant numérique quelconque. Masquage des journaux et des événements (#26) :
+/// tout nombre qui passe les deux tests est masqué, identifiant ou non ; un faux positif
+/// y coûte peu, un faux négatif fuirait.
+fn redact_card_numbers(s: &str) -> String {
+    let re = card_re();
     re.replace_all(s, |c: &regex::Captures<'_>| {
         let raw = &c[0];
         let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
@@ -159,6 +164,68 @@ fn redact_card_numbers(s: &str) -> String {
         }
     })
     .into_owned()
+}
+
+/// Premier numéro de carte d'un texte, pour le **refus d'écriture** (issue #132) : même
+/// longueur, même clé de Luhn que le masquage, mais un nombre collé à un identifiant
+/// (`command-output:38228-1743576040856618`, `id=…`, `run/…`, `…_x`) n'en est pas un,
+/// sauf si le mot collé désigne une carte (`carte:…`, `cb=…`). Rend la plage du nombre.
+fn card_to_refuse(input: &str) -> Option<std::ops::Range<usize>> {
+    const GLUE: &[char] = &[':', '-', '_', '/', '=', '#', '@'];
+    const CARD_WORDS: &[&str] = &[
+        "carte",
+        "card",
+        "cb",
+        "cc",
+        "visa",
+        "mastercard",
+        "amex",
+        "pan",
+        "numero",
+        "numéro",
+    ];
+    card_re().find_iter(input).find_map(|m| {
+        let digits: String = m.as_str().chars().filter(|c| c.is_ascii_digit()).collect();
+        if !(13..=19).contains(&digits.len()) || !luhn(&digits) {
+            return None;
+        }
+        let before = input[..m.start()].chars().next_back();
+        let after = input[m.end()..].chars().next();
+        let glued = |c: Option<char>| c.is_some_and(|c| GLUE.contains(&c) || c.is_alphabetic());
+        if glued(before) || glued(after) {
+            // `carte:4539…` reste une carte : le mot collé la nomme.
+            let word: String = input[..m.start()]
+                .trim_end_matches(GLUE)
+                .chars()
+                .rev()
+                .take_while(|c| c.is_alphanumeric())
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<String>()
+                .to_lowercase();
+            if !CARD_WORDS.contains(&word.as_str()) {
+                return None;
+            }
+        }
+        Some(m.range())
+    })
+}
+
+/// Fragment d'un secret détecté, masqué au milieu, pour qu'un refus dise quoi retirer
+/// sans l'exposer (issue #132) : les quatre derniers chiffres d'une carte, les quatre
+/// premiers caractères d'une clé.
+pub fn secret_fragment(input: &str) -> Option<String> {
+    let clean = &*without_references(input);
+    if let Some(span) = secret_spans(clean).first() {
+        let value = &clean[span.start..span.end];
+        let head: String = value.chars().take(4).collect();
+        return Some(format!("{head}…"));
+    }
+    card_to_refuse(clean).map(|r| {
+        let digits: String = clean[r].chars().filter(|c| c.is_ascii_digit()).collect();
+        format!("…{}", &digits[digits.len() - 4..])
+    })
 }
 
 /// Clé de Luhn.
@@ -193,7 +260,7 @@ pub fn contains_secret(input: &str) -> bool {
     if patterns().rules.iter().any(|(re, _)| re.is_match(input)) {
         return true;
     }
-    redact_card_numbers(input) != input
+    card_to_refuse(input).is_some()
 }
 
 /// Secret laissé en clair dans un journal : valeur enregistrée ou jeton reconnaissable.
@@ -274,7 +341,7 @@ pub fn secret_kind(input: &str) -> Option<&'static str> {
             return Some(label);
         }
     }
-    if redact_card_numbers(input) != input {
+    if card_to_refuse(input).is_some() {
         return Some("numéro de carte");
     }
     None
@@ -392,6 +459,37 @@ mod tests {
         assert_eq!(r["api_key"], MASK);
         assert_eq!(r["nested"]["token"], MASK);
         assert_eq!(r["ok"], "visible");
+    }
+
+    /// #132 : un nombre collé à un identifiant n'est pas une carte pour le filtre
+    /// d'écriture ; une vraie carte, isolée ou nommée, l'est toujours ; les journaux
+    /// masquent toujours tout nombre qui passe Luhn et la longueur (#26).
+    #[test]
+    fn a_number_inside_an_identifier_is_not_a_card() {
+        let id = "command-output:38228-1743576040856618";
+        assert!(luhn("1743576040856618"), "le cas vécu passe bien Luhn");
+        assert!(!contains_secret(id), "{id}");
+        assert_eq!(secret_kind(id), None);
+        assert_eq!(secret_kind("id=4539148803436467"), None);
+        assert_eq!(secret_kind("run/4539148803436467/log"), None);
+        for card in [
+            "4539 1488 0343 6467",
+            "ma carte 4539148803436467.",
+            "carte 4539148803436467",
+            "carte:4539148803436467",
+            "cb=4539-1488-0343-6467",
+        ] {
+            assert_eq!(secret_kind(card), Some("numéro de carte"), "{card}");
+        }
+        assert_eq!(
+            secret_fragment("ma carte 4539 1488 0343 6467").as_deref(),
+            Some("…6467")
+        );
+        assert_eq!(
+            secret_fragment("clé sk-0123456789abcdefgh").as_deref(),
+            Some("sk-0…")
+        );
+        assert!(redact(id).contains(MASK), "journaux : masqué quand même");
     }
 
     #[test]
