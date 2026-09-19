@@ -1173,6 +1173,15 @@ reste dans `last_error`, visible dans `/schedules` et `penelope doctor`. Créer 
 planification identique à une planification active (même déclencheur, prompt quasi
 identique) est signalé dans la réponse de création.
 
+**Ce qui est livré, et une seule fois.** Pour un prompt planifié, la réponse finale du
+tour est le livrable : elle part dans la conversation (et le sujet) de la planification,
+même sans `send_message`. `send_message` sert aux messages intermédiaires (« limite
+GitHub atteinte, je continue ») ; s'il a déjà envoyé le même contenu que la réponse
+finale (à la mise en forme ou à l'en-tête près), celle-ci ne repart pas, et l'événement
+`schedule.final_not_repeated` le note. Un `send_message` en échec n'empêche jamais la
+réponse finale. Une skill planifiée met donc son digest dans sa réponse finale, et
+consomme son état « déjà vu » en fin de tour.
+
 **Ce qu'une exécution doit livrer.** Un prompt planifié peut déclarer son livrable dans sa
 cible : `"livrable": "message"` (une réponse non vide dans le chat d'origine, ou un
 `send_message`), `"fichier:veille/2026-09-18.md"` (écrit pendant l'exécution) ou `"run"`

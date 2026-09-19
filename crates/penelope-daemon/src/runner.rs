@@ -171,13 +171,32 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     }
     // Prompt planifié : l'exécution compte à la fin de son tour, un échec prévient
     // (issue #39).
-    if turn.kind == penelope_kernel::turn::TurnKind::Trigger
-        && let Some(schedule) = turn.payload["schedule"].as_str()
-    {
+    let scheduled = turn.kind == penelope_kernel::turn::TurnKind::Trigger;
+    if scheduled && let Some(schedule) = turn.payload["schedule"].as_str() {
         crate::scheduler::trigger_outcome_of(daemon, schedule, &outcome, &turn).await;
     }
 
-    daemon.deliver(&turn, &origin, &outcome).await;
+    // Tour planifié : la réponse finale est le livrable, livrée une fois ; si l'agent a
+    // déjà envoyé le même contenu pendant le tour, elle ne repart pas (issue #133). Le
+    // livrable a été évalué avant, sur ce qui est réellement parti.
+    let repeated = scheduled
+        && matches!(&outcome, TurnOutcome::Answered { text, .. }
+            if crate::scheduler::final_already_sent(daemon, &turn.session_id, text).await);
+    if repeated {
+        let _ = daemon
+            .services
+            .events
+            .append(
+                penelope_kernel::event::EventDraft::new(
+                    "schedule.final_not_repeated",
+                    serde_json::json!({"turn": turn.id.as_str()}),
+                )
+                .session(&turn.session_id),
+            )
+            .await;
+    } else {
+        daemon.deliver(&turn, &origin, &outcome).await;
+    }
     daemon
         .bus
         .finish(turn.id.as_str(), &turn.session_id, &origin, outcome.clone());

@@ -8351,7 +8351,79 @@ mod tests {
         assert!(!sent.contains("Carte simplifiée"), "{sent}");
     }
 
-    /// #129 : le rappel de #97 passe par la même carte ; il part lui aussi avec la
+    /// #133 : pour un tour planifié, la réponse finale est le livrable, livrée une fois.
+    /// Un `send_message` du même contenu la remplace ; un message intermédiaire différent
+    /// s'y ajoute ; un `send_message` en échec ne l'empêche pas.
+    #[tokio::test]
+    async fn a_scheduled_digest_is_delivered_once() {
+        const DIGEST: &str = "🧭 Veille agents IA — 19/09\n\n6 retenus sur 41 : récit par projet.";
+        for (case, sent, expected) in [
+            ("même contenu", json!({"text": DIGEST}), 1),
+            (
+                "intermédiaire",
+                json!({"text": "Limite GitHub atteinte, je continue."}),
+                2,
+            ),
+            ("échec", json!({}), 1),
+        ] {
+            let (_d, g, t, p) = gateway().await;
+            let s = g.daemon.services.clone();
+            g.daemon
+                .publish_config("test", |c| {
+                    c.models.routing.classifier = false;
+                    Ok(vec!["models.routing.classifier".into()])
+                })
+                .unwrap();
+            // Comme sur l'instance : `send_message` autorisé par une règle.
+            s.policies
+                .create_rule(
+                    penelope_hitl::policy::RuleScope::Tool,
+                    Some("send_message"),
+                    None,
+                    None,
+                    penelope_kernel::risk::PolicyDecision::Auto,
+                    penelope_kernel::risk::PolicyWindow::Always,
+                    None,
+                )
+                .await
+                .unwrap();
+            let sched = s
+                .schedules
+                .create(
+                    penelope_workflow::TriggerKind::Cron,
+                    json!({"expr": "33 8 * * *"}),
+                    json!({"type": "prompt", "prompt": "Fais la veille",
+                           "origin": {"channel": "telegram", "chat_id": OWNER}}),
+                    json!({}),
+                )
+                .await
+                .unwrap();
+            p.push(Scripted::ToolCalls(
+                String::new(),
+                vec![ToolCall {
+                    id: "c1".into(),
+                    name: "send_message".into(),
+                    arguments: sent,
+                }],
+            ));
+            p.reply(&format!(
+                "Veille du 19/09\n{}",
+                DIGEST.split_once('\n').unwrap().1
+            ));
+            crate::scheduler::run_now(&g.daemon, &sched.id)
+                .await
+                .unwrap();
+            let turn = s.turns.claim("t").await.unwrap().expect("tour planifié");
+            crate::runner::process(&g.daemon, turn, Duration::from_secs(30)).await;
+            g.flush_outbox().await.unwrap();
+            let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+            let digests = sent.iter().filter(|x| x.contains("6 retenus")).count();
+            assert_eq!(digests, 1, "{case} : {sent:?}");
+            assert_eq!(sent.len(), expected, "{case} : {sent:?}");
+        }
+    }
+
+    /// #129 : le rappel de #97 passe par la même carte ; il part lui aussi avec la    /// #129 : le rappel de #97 passe par la même carte ; il part lui aussi avec la
     /// commande telle quelle, au lieu d'échouer jusqu'à l'expiration.
     #[tokio::test]
     async fn the_reminder_of_a_go_template_command_is_delivered() {

@@ -1527,6 +1527,21 @@ numéro de carte (#132).
   nombre qui passe les deux tests. Les cartes ne se rangent toujours pas, elles se
   refusent (#37).
 
+### 0.17.18
+
+Une veille planifiée n'arrive plus deux fois (#133).
+
+- **La réponse finale est le livrable, une fois** (#133) : la veille du 19 est arrivée
+  deux fois, la skill l'envoyant par `send_message` et le tour livrant en plus sa réponse
+  finale (chemin d'origine, #39) ; #120 comptait l'un ou l'autre sans trancher. Pour un
+  tour planifié, la réponse finale part toujours, sauf si l'agent a déjà envoyé le même
+  contenu pendant le tour (même texte à la mise en forme près, l'un dans l'autre, ou le
+  même corps sous un autre en-tête) : événement `schedule.final_not_repeated`. Le
+  livrable est évalué avant, sur ce qui est parti ; un message intermédiaire différent
+  s'ajoute ; un `send_message` en échec ne retient rien. `send_message` vise l'origine du
+  tour, donc la même cible après `/schedules ici` (#124). La skill `veille-agents-ia` vit
+  sur l'instance, pas dans ce dépôt : sa consigne a été réécrite là-bas.
+
 ### Routine de livraison
 
 Avant chaque tag :

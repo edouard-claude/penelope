@@ -740,6 +740,71 @@ pub async fn trigger_outcome_of(
     }
 }
 
+/// Textes envoyés avec succès par `send_message` pendant le tour d'une session planifiée
+/// (chaque exécution a sa session : tout son historique est ce tour).
+async fn sent_during_turn(d: &Daemon, session_id: &str) -> Vec<String> {
+    let history = d
+        .services
+        .context
+        .history
+        .load(session_id, 0)
+        .await
+        .unwrap_or_default();
+    let failed: std::collections::BTreeSet<String> = history
+        .iter()
+        .filter(|e| e.message.name.as_deref() == Some("send_message"))
+        .filter(|e| e.message.text().starts_with("Erreur"))
+        .filter_map(|e| e.message.tool_call_id.clone())
+        .collect();
+    history
+        .iter()
+        .flat_map(|e| e.message.tool_calls.iter())
+        .filter(|c| c.name == "send_message" && !failed.contains(&c.id))
+        .filter_map(|c| {
+            c.arguments
+                .get("text")
+                .and_then(|t| t.as_str())
+                .map(String::from)
+        })
+        .collect()
+}
+
+/// Texte ramené à ses mots : casse, ponctuation, emoji et mise en forme retirés.
+fn words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_lowercase())
+        .collect()
+}
+
+/// Vrai si `final_text` répète un message déjà parti (issue #133) : même texte à la mise
+/// en forme près, l'un contenu dans l'autre, ou le même corps sous une autre première
+/// ligne (un en-tête).
+pub fn repeats(final_text: &str, sent: &str) -> bool {
+    let (a, b) = (words(final_text), words(sent));
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    let (ja, jb) = (a.join(" "), b.join(" "));
+    if ja == jb || ja.contains(&jb) || jb.contains(&ja) {
+        return true;
+    }
+    let body = |t: &str| words(t.split_once('\n').map(|(_, rest)| rest).unwrap_or("")).join(" ");
+    let (ba, bb) = (body(final_text), body(sent));
+    !ba.is_empty() && ba == bb
+}
+
+/// Pour un tour planifié, la réponse finale est le livrable (issue #133) : elle part,
+/// sauf si l'agent a déjà envoyé le même contenu à la même cible pendant le tour
+/// (`send_message` part toujours vers l'origine du tour). Un message intermédiaire
+/// différent, ou un `send_message` en échec, n'empêche jamais la réponse finale.
+pub async fn final_already_sent(d: &Daemon, session_id: &str, final_text: &str) -> bool {
+    sent_during_turn(d, session_id)
+        .await
+        .iter()
+        .any(|m| repeats(final_text, m))
+}
+
 /// Fin du tour d'un prompt planifié : l'exécution compte si le modèle a répondu, sinon la
 /// raison est gardée et le propriétaire prévenu (issue #39).
 pub async fn trigger_outcome(
@@ -1442,6 +1507,22 @@ mod tests {
         let digest = crate::dream::digest_text(&d).await.unwrap();
         assert!(digest.contains("Aujourd'hui"), "{digest}");
         assert!(digest.contains("groupe « Équipe »"), "{digest}");
+    }
+
+    /// #133 : répéter un message déjà parti, c'est le même texte à la mise en forme près,
+    /// l'un dans l'autre, ou le même corps sous un autre en-tête ; un autre message n'en
+    /// est pas un.
+    #[test]
+    fn a_repeated_final_answer_is_recognised() {
+        let digest = "🧭 **Veille** — 19/09\n\n6 retenus sur 41.";
+        assert!(repeats(digest, "🧭 Veille — 19/09\n6 retenus sur 41."));
+        assert!(
+            repeats("Veille du 19/09\n6 retenus sur 41.", digest),
+            "autre en-tête"
+        );
+        assert!(repeats("6 retenus sur 41.", digest), "contenu dans l'autre");
+        assert!(!repeats(digest, "Limite GitHub atteinte, je continue."));
+        assert!(!repeats(digest, ""));
     }
 
     /// Issue #39 : un tour planifié annulé dans la file ou en échec n'est jamais silencieux.
