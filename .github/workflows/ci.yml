@@ -47,7 +47,7 @@ jobs:
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-registry-
 
-      # 1501 tests, tous hors réseau. Les suites nommées du §20.1 sont des filtres sur
+      # 1506 tests, tous hors réseau. Les suites nommées du §20.1 sont des filtres sur
       # cette commande : `arch`, `ctx-safety`, `mcp-conformance`, `hot-reload`,
       # `resilience` et `security` en font partie.
       - name: Tests
