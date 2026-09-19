@@ -1404,6 +1404,29 @@ Pénélope sait pointer un élément dans une image, plus seulement la décrire 
   d'image ne comptent plus parmi ceux qui appellent des outils : un modèle de pointage
   sans tool calling peut servir l'alias `vision`.
 
+### 0.17.13
+
+Les appels d'outils MCP en protocole 2026-07-28 aboutissent (#126).
+
+- **`Mcp-Name` reprend le corps** (#126) : depuis l'implémentation initiale (5aceb59),
+  toute requête Streamable HTTP partait avec `Mcp-Method` et `Mcp-Name: penelope` en dur,
+  quelle que soit la version, et jamais avec `MCP-Protocol-Version`. Un serveur 2026-07-28
+  conforme (ClickUp) refuse le désaccord en 400 `-32020` : il se connectait et listait ses
+  outils (sans `params.name`), mais aucun appel n'aboutissait. La suite de conformance,
+  montée sur un transport en mémoire, ne produisait aucune requête HTTP, donc aucun
+  en-tête. Désormais, les en-têtes d'une requête 2026 sont tirés de son corps
+  (`MCP-Protocol-Version` du `_meta`, `Mcp-Method`, `Mcp-Name` = `params.name` pour
+  `tools/call` et `prompts/get`, `params.uri` pour `resources/read`, encodé
+  `=?base64?…?=` hors ASCII) ; une requête d'avant 2026 n'en porte aucun, mais porte à
+  partir de 2025-06-18 la version négociée par `initialize`. Une erreur JSON-RPC dans
+  une réponse 4xx garde son code (une version refusée à `initialize` en HTTP repart
+  enfin sur la meilleure version annoncée). `mcp test` appelle un outil en lecture sans
+  argument et échoue sur une faute de protocole, pas sur un refus de l'outil ; un
+  `-32020` en conversation passe le serveur en `degraded` et dit au modèle de ne pas
+  réessayer. Stdio, OAuth et négociation inchangés ; un serveur 2025 qui refuse la
+  version 2026 de la sonde retombe toujours sur `initialize`. Reste ouvert :
+  `x-mcp-header` (`Mcp-Param-*`).
+
 ### Routine de livraison
 
 Avant chaque tag :

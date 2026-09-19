@@ -460,6 +460,10 @@ async fn initialize_with(
                 .and_then(|s| s.as_str())
                 .and_then(ProtocolVersion::parse)
                 .unwrap_or(version);
+            // En HTTP, chaque requête suivante porte la version (2025-06-18 et après).
+            if agreed >= ProtocolVersion::V20250618 {
+                transport.set_protocol_version(agreed.as_str()).await;
+            }
             Ok(Negotiated {
                 version: agreed,
                 capabilities: ServerCapabilities::parse(

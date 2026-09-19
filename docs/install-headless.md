@@ -1094,7 +1094,7 @@ penelope mcp list
 ```
 
 `show <nom>` détaille état, déclaration et outils ; `test <nom>` (ou `--file x.toml`)
-essaie une connexion à blanc ; `logs <nom>` donne le stderr du serveur ; `add <fichier>`,
+essaie une connexion à blanc, jusqu'à l'appel d'un outil en lecture sans argument ; `logs <nom>` donne le stderr du serveur ; `add <fichier>`,
 `edit <nom> <champ> <valeur>`, `enable`, `disable` et `rm` modifient `mcp.d` ; `penelope
 doctor` signale les serveurs en panne et les secrets manquants.
 

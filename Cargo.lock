@@ -1364,6 +1364,7 @@ name = "penelope-evals"
 version = "0.17.12"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "futures",
  "penelope-context",

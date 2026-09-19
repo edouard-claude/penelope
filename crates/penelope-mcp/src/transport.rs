@@ -30,6 +30,9 @@ pub trait Transport: Send + Sync {
     async fn logs(&self, _n: usize) -> Vec<String> {
         Vec::new()
     }
+    /// Version négociée par `initialize` : en HTTP, à partir de 2025-06-18, chaque requête
+    /// suivante la porte dans `MCP-Protocol-Version`. Sans effet hors HTTP.
+    async fn set_protocol_version(&self, _version: &str) {}
 }
 
 /// Plafond d'une attente prolongée par des requêtes du serveur.
@@ -424,6 +427,76 @@ pub struct HttpHeaders {
     pub session_id: Option<String>,
     pub extra: Vec<(String, String)>,
     pub authorization: Option<String>,
+    /// Version négociée par `initialize` (2025-06-18 à 2025-11-25).
+    pub protocol_version: Option<String>,
+}
+
+/// En-têtes miroirs du corps d'une requête 2026-07-28 : `MCP-Protocol-Version` (la
+/// version de son `_meta`), `Mcp-Method` (sa méthode) et, pour `tools/call`,
+/// `prompts/get` et `resources/read`, `Mcp-Name` (`params.name` ou `params.uri`). Le
+/// corps fait foi : le serveur refuse tout désaccord (-32020, issue #126). Une requête
+/// d'une version antérieure, sans version dans son `_meta`, n'en porte aucun.
+pub fn mirrored_headers(body: &serde_json::Value) -> Vec<(&'static str, String)> {
+    let Some(method) = body.get("method").and_then(|m| m.as_str()) else {
+        return Vec::new();
+    };
+    let params = body.get("params");
+    let Some(version) = params
+        .and_then(|p| p.get("_meta"))
+        .and_then(|m| m.get("io.modelcontextprotocol/protocolVersion"))
+        .and_then(|v| v.as_str())
+    else {
+        return Vec::new();
+    };
+    let mut out = vec![
+        ("MCP-Protocol-Version", version.to_string()),
+        ("Mcp-Method", header_value(method)),
+    ];
+    let name = match method {
+        "tools/call" | "prompts/get" => params.and_then(|p| p.get("name")),
+        "resources/read" => params.and_then(|p| p.get("uri")),
+        _ => None,
+    };
+    if let Some(name) = name.and_then(|n| n.as_str()) {
+        out.push(("Mcp-Name", header_value(name)));
+    }
+    out
+}
+
+/// Valeur d'en-tête : telle quelle en ASCII visible sans espace au bord, sinon (et pour
+/// une valeur qui ressemble à la sentinelle) en `=?base64?…?=` de son UTF-8.
+pub fn header_value(v: &str) -> String {
+    use base64::Engine;
+    let safe = !v.is_empty()
+        && v.bytes()
+            .all(|b| b == b' ' || b == b'\t' || (0x21..=0x7E).contains(&b))
+        && !v.starts_with([' ', '\t'])
+        && !v.ends_with([' ', '\t'])
+        && !(v.starts_with("=?base64?") && v.ends_with("?="));
+    if safe {
+        v.to_string()
+    } else {
+        format!(
+            "=?base64?{}?=",
+            base64::engine::general_purpose::STANDARD.encode(v.as_bytes())
+        )
+    }
+}
+
+/// Erreur JSON-RPC portée par une réponse HTTP 4xx (2026-07-28 : version refusée,
+/// désaccord d'en-têtes, méthode inconnue) : son code reste lisible par l'appelant.
+fn rpc_error_in(body: &str) -> Option<McpError> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let e = v.get("error")?;
+    Some(McpError::Rpc {
+        code: i32::try_from(e.get("code")?.as_i64()?).ok()?,
+        message: e
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        data: e.get("data").cloned(),
+    })
 }
 
 /// Transport Streamable HTTP (2025-03-26 et suivantes) et HTTP+SSE historique.
@@ -435,7 +508,8 @@ pub struct HttpTransport {
     pending: Arc<Pending>,
     /// Vrai pour le transport historique GET SSE + POST endpoint.
     legacy_sse: bool,
-    /// En 2026-07-28, les en-têtes `Mcp-Method` et `Mcp-Name` accompagnent la requête.
+    /// Streamable HTTP : en-têtes miroirs du corps et version négociée (le transport
+    /// historique n'en porte aucun).
     send_mcp_headers: bool,
 }
 
@@ -478,17 +552,17 @@ impl HttpTransport {
         self.headers.lock().await.session_id.clone()
     }
 
-    pub fn set_protocol_headers(&mut self, on: bool) {
-        self.send_mcp_headers = on;
-    }
-
     async fn post(
         &self,
         body: serde_json::Value,
-        method_name: &str,
         timeout: std::time::Duration,
     ) -> Result<reqwest::Response> {
         let h = self.headers.lock().await.clone();
+        let mirrored = if self.send_mcp_headers {
+            mirrored_headers(&body)
+        } else {
+            Vec::new()
+        };
         let mut req = self
             .client
             .post(&self.url)
@@ -496,10 +570,14 @@ impl HttpTransport {
             .header("Accept", "application/json, text/event-stream")
             .timeout(timeout)
             .json(&body);
-        if self.send_mcp_headers {
-            req = req
-                .header("Mcp-Method", method_name)
-                .header("Mcp-Name", "penelope");
+        if mirrored.is_empty()
+            && self.send_mcp_headers
+            && let Some(v) = &h.protocol_version
+        {
+            req = req.header("MCP-Protocol-Version", v);
+        }
+        for (k, v) in &mirrored {
+            req = req.header(*k, v);
         }
         if let Some(s) = &h.session_id {
             req = req.header("Mcp-Session-Id", s);
@@ -538,6 +616,11 @@ impl HttpTransport {
         }
         if status >= 400 {
             let body = resp.text().await.unwrap_or_default();
+            if status < 500
+                && let Some(e) = rpc_error_in(&body)
+            {
+                return Err(e);
+            }
             return Err(McpError::Http { status, body });
         }
 
@@ -629,9 +712,7 @@ impl Transport for HttpTransport {
         let req = Request::new(id, method, params);
         let exchange = async {
             // Délai tenu par `Pending::wait`, suspendu tant que le serveur attend le client.
-            let resp = self
-                .post(serde_json::to_value(&req)?, method, MAX_WAIT)
-                .await?;
+            let resp = self.post(serde_json::to_value(&req)?, MAX_WAIT).await?;
             self.read_response(id, resp).await
         };
         match self.pending.wait(exchange, timeout).await {
@@ -648,7 +729,6 @@ impl Transport for HttpTransport {
         let resp = self
             .post(
                 serde_json::to_value(&n)?,
-                method,
                 std::time::Duration::from_secs(30),
             )
             .await?;
@@ -673,9 +753,7 @@ impl Transport for HttpTransport {
                 "error":{"code": e.rpc_code(),"message": e.to_string()}
             }),
         };
-        let _ = self
-            .post(body, "response", std::time::Duration::from_secs(30))
-            .await?;
+        let _ = self.post(body, std::time::Duration::from_secs(30)).await?;
         Ok(())
     }
 
@@ -686,6 +764,10 @@ impl Transport for HttpTransport {
     async fn close(&self) -> Result<()> {
         self.pending.fail_all().await;
         Ok(())
+    }
+
+    async fn set_protocol_version(&self, version: &str) {
+        self.headers.lock().await.protocol_version = Some(version.to_string());
     }
 }
 
@@ -817,6 +899,60 @@ impl Transport for LoopbackTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #126 : les en-têtes reprennent le corps ; `Mcp-Name` seulement pour les méthodes
+    /// qui nomment une cible ; rien pour une requête d'avant 2026.
+    #[test]
+    fn mirrored_headers_follow_the_body() {
+        let meta = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28"});
+        let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": "clickup_search", "arguments": {}, "_meta": meta}});
+        assert_eq!(
+            mirrored_headers(&call),
+            vec![
+                ("MCP-Protocol-Version", "2026-07-28".to_string()),
+                ("Mcp-Method", "tools/call".to_string()),
+                ("Mcp-Name", "clickup_search".to_string()),
+            ]
+        );
+        let read =
+            json!({"method": "resources/read", "params": {"uri": "file:///a", "_meta": meta}});
+        assert_eq!(
+            mirrored_headers(&read)[2],
+            ("Mcp-Name", "file:///a".to_string())
+        );
+        let list = json!({"method": "tools/list", "params": {"_meta": meta}});
+        assert_eq!(mirrored_headers(&list).len(), 2, "pas de Mcp-Name");
+        let old = json!({"method": "tools/call", "params": {"name": "x"}});
+        assert!(mirrored_headers(&old).is_empty(), "avant 2026 : rien");
+        let response = json!({"jsonrpc": "2.0", "id": 1, "result": {}});
+        assert!(mirrored_headers(&response).is_empty());
+    }
+
+    #[test]
+    fn unsafe_header_values_use_the_base64_sentinel() {
+        assert_eq!(header_value("us-west1"), "us-west1");
+        assert_eq!(
+            header_value("Hello, 世界"),
+            "=?base64?SGVsbG8sIOS4lueVjA==?="
+        );
+        assert_eq!(header_value(" padded "), "=?base64?IHBhZGRlZCA=?=");
+        assert_eq!(header_value("line1\nline2"), "=?base64?bGluZTEKbGluZTI=?=");
+        assert_eq!(
+            header_value("=?base64?literal?="),
+            "=?base64?PT9iYXNlNjQ/bGl0ZXJhbD89?="
+        );
+    }
+
+    #[test]
+    fn a_json_rpc_error_in_a_4xx_keeps_its_code() {
+        let e = rpc_error_in(r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32020,"message":"x"}}"#);
+        assert!(
+            matches!(e, Some(McpError::Rpc { code: -32020, .. })),
+            "{e:?}"
+        );
+        assert!(rpc_error_in("<html>Bad Request</html>").is_none());
+    }
 
     async fn dying(script: &str) -> Arc<StdioTransport> {
         let dir = tempfile::tempdir().unwrap();

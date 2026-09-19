@@ -1762,9 +1762,13 @@ impl TelegramGateway {
                     },
                     ["test", name] => match call(m::MCP_TEST, name).await {
                         Ok(v) if v["ok"].as_bool() == Some(true) => format!(
-                            "✅ `{name}` répond : protocole {}, {} outil(s), {} ms.",
+                            "✅ `{name}` répond : protocole {}, {} outil(s){}, {} ms.",
                             v["protocol"].as_str().unwrap_or("?"),
                             shown(&v["tools"]),
+                            match v["call"]["tool"].as_str() {
+                                Some(t) => format!(", appel de `{t}` réussi"),
+                                None => ", aucun outil en lecture sans argument à essayer".into(),
+                            },
                             shown(&v["ms"])
                         ),
                         Ok(v) => {

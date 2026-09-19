@@ -42,7 +42,7 @@ peuvent vivre derrière la même URL et sont chacun traités selon la sienne.
 | Transport | Quand | Notes |
 |---|---|---|
 | `stdio` | Serveur local lancé par Pénélope | Le processus tourne dans son propre groupe, sous profil de bac à sable `mcp-stdio` : lectures de `sandbox.deny_read` refusées (clés, secrets, base), trousseau fermé sauf déclaration (voir [Bac à sable](#bac-à-sable)) ; les orphelins sont récupérés au démarrage |
-| Streamable HTTP | Serveur distant, ≥ 2025-03-26 | Session par en-tête, reprise de flux |
+| Streamable HTTP | Serveur distant, ≥ 2025-03-26 | Session par en-tête, reprise de flux ; en 2026-07-28, en-têtes miroirs du corps (`MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` = nom de l'outil, du prompt ou URI de la ressource), à partir de 2025-06-18 la version négociée dans `MCP-Protocol-Version` |
 | SSE historique | Serveur distant < 2025-03-26 | Conservé pour les serveurs anciens, jamais choisi spontanément |
 
 `transport = "auto"` (défaut) choisit d'après les champs présents : `command` ⇒ stdio,
@@ -264,11 +264,30 @@ un transport en boucle qui implémente le même contrat que les vrais :
 cargo test -p penelope-evals --test mcp_conformance
 ```
 
-19 tests : négociation sur toute la matrice, versions mélangées derrière une URL,
+22 tests : négociation sur toute la matrice, versions mélangées derrière une URL,
 annotations vers risque, sortie structurée validée, `isError` transmis, ressources,
 gabarits, complétions, abonnements, journalisation, santé, tâches, élicitation
 `input_required`, découverte OAuth, PKCE, rejet d'un `iss` invalide, consentement
 incrémental, et le flux `paste_back` de bout en bout à travers le mock Telegram.
+
+Le transport en boucle ne produit aucune requête HTTP, donc aucun en-tête : il n'a pas vu
+qu'en 2026-07-28 chaque appel partait avec `Mcp-Name: penelope` au lieu du nom de l'outil,
+refusé en `-32020` par un serveur conforme (issue #126). Trois tests passent donc par un
+vrai serveur HTTP local qui, comme ClickUp, refuse tout désaccord entre en-têtes et
+corps : `tools/call`, `resources/read` (URI hors ASCII, encodée `=?base64?…?=`),
+`server/discover` et `tools/list` sans `Mcp-Name` ; un `-32020` gardé comme tel ; un
+serveur 2025-11-25 qui refuse une version d'en-tête inconnue, et reçoit ensuite sa
+version négociée sans `Mcp-Method` ni `Mcp-Name`.
+
+`penelope mcp test <nom>` va jusqu'à un appel d'outil : un outil en lecture (annotation
+`readOnlyHint`), sans argument requis ni politique `deny`, les `list`, `get` et `whoami`
+d'abord. Une requête refusée pour sa forme (`-32020`, `-32600`, transport, HTTP) fait
+échouer le test ; un refus de l'outil lui-même (arguments, erreur métier) le laisse
+passer, avec une note. Un `-32020` en conversation passe le serveur en `degraded` et dit
+au modèle que ce n'est pas une affaire d'arguments, sans l'inviter à réessayer.
+
+Pas encore couvert : les en-têtes `Mcp-Param-*` qu'un serveur peut exiger par
+`x-mcp-header` dans le schéma d'un outil.
 
 ## Administration
 

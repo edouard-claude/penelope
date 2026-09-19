@@ -1048,6 +1048,17 @@ impl McpSupervisor {
                 });
                 match &e {
                     McpError::Transport(_) => self.connection_lost(&slot, &e).await,
+                    // Le serveur répond mais refuse nos requêtes : `mcp list` et `doctor`
+                    // doivent le dire, un état « prêt » mentirait (issue #126).
+                    McpError::Rpc { code, .. }
+                        if *code == penelope_mcp::protocol::HEADER_MISMATCH =>
+                    {
+                        slot.info(|i| {
+                            i.state = ServerState::Degraded;
+                            i.last_error = Some(e.to_string());
+                        });
+                        self.persist(&slot).await;
+                    }
                     McpError::Timeout { .. } => {
                         slot.info(|i| {
                             i.state = ServerState::Degraded;
@@ -1057,7 +1068,7 @@ impl McpSupervisor {
                     }
                     _ => self.persist(&slot).await,
                 }
-                let mut message = format!("`{qualified}` : {e}");
+                let mut message = format!("`{qualified}` : {}", call_error(&e));
                 if let Some(hint) = keychain_hint(&self.services, &slot.config(), &message) {
                     message.push('\n');
                     message.push_str(&hint);
@@ -1412,16 +1423,70 @@ impl McpSupervisor {
         match self.connect(&probe, cfg).await {
             Ok((client, pump)) => {
                 let tools = client.list_tools().await;
+                // Un vrai appel d'outil : `initialize` et `tools/list` ne disent rien des
+                // en-têtes d'un `tools/call` (issue #126).
+                let call = match &tools {
+                    Ok(t) => match probe_tool(cfg, t) {
+                        Some(name) => {
+                            let r = client
+                                .call_tool(&name, json!({}), None, Some(cfg.timeout_for(&name)))
+                                .await;
+                            Some(match r {
+                                Ok(res) if res.is_error => json!({
+                                    "tool": name, "ok": true,
+                                    "note": "l'outil répond en erreur, le protocole passe",
+                                }),
+                                Ok(_) => json!({"tool": name, "ok": true}),
+                                // Réponse structurée du serveur à l'appel (arguments, erreur
+                                // métier) : l'échange a eu lieu, le protocole passe.
+                                Err(McpError::Rpc { code, message, .. })
+                                    if !PROTOCOL_FAULTS.contains(&code) =>
+                                {
+                                    json!({
+                                        "tool": name, "ok": true,
+                                        "note": format!(
+                                            "le serveur refuse cet appel sans argument ({code} : \
+                                             {message}), le protocole passe"
+                                        ),
+                                    })
+                                }
+                                Err(e) => json!({
+                                    "tool": name, "ok": false,
+                                    "error": call_error(&e),
+                                }),
+                            })
+                        }
+                        None => None,
+                    },
+                    Err(_) => None,
+                };
                 let logs = client.transport().logs(10).await;
                 let _ = client.close().await;
                 pump.abort();
                 match tools {
+                    Ok(t) if call.as_ref().is_some_and(|c| c["ok"] == false) => {
+                        let c = call.unwrap_or_default();
+                        json!({
+                            "ok": false,
+                            "protocol": client.version().as_str(),
+                            "tools": t.len(),
+                            "error": format!(
+                                "{} outil(s) listés, mais l'appel de `{}` échoue : {}",
+                                t.len(),
+                                c["tool"].as_str().unwrap_or("?"),
+                                c["error"].as_str().unwrap_or("?")
+                            ),
+                            "call": c,
+                            "logs": logs,
+                        })
+                    }
                     Ok(t) => json!({
                         "ok": true,
                         "protocol": client.version().as_str(),
                         "server_info": client.server_info(),
                         "tools": t.len(),
                         "names": t.iter().take(30).map(|d| d.name.clone()).collect::<Vec<_>>(),
+                        "call": call,
                         "ms": started.elapsed().as_millis() as u64,
                         "logs": logs,
                     }),
@@ -1723,6 +1788,60 @@ fn multi_file(name: &str) -> String {
     )
 }
 
+/// Erreurs JSON-RPC qui disent que la requête elle-même est fautive (en-têtes, forme) :
+/// `mcp test` échoue sur elles, pas sur un refus de l'outil (issue #126).
+const PROTOCOL_FAULTS: [i32; 2] = [
+    penelope_mcp::protocol::HEADER_MISMATCH,
+    penelope_mcp::protocol::INVALID_REQUEST,
+];
+
+/// Outil qu'essaie `penelope mcp test` : en lecture d'après ses annotations (et sans
+/// surcharge contraire de la déclaration), sans argument requis, jamais refusé par la
+/// politique ; les `list`, `get` et `whoami` d'abord.
+fn probe_tool(
+    cfg: &ServerConfig,
+    tools: &[penelope_mcp::protocol::ToolDescriptor],
+) -> Option<String> {
+    let mut candidates: Vec<&penelope_mcp::protocol::ToolDescriptor> = tools
+        .iter()
+        .filter(|t| {
+            t.annotations["readOnlyHint"] == true && t.annotations["destructiveHint"] != true
+        })
+        .filter(|t| {
+            t.input_schema["required"]
+                .as_array()
+                .is_none_or(|r| r.is_empty())
+        })
+        .filter(|t| cfg.tool_risk.get(&t.name).is_none_or(|r| r == "read"))
+        .filter(|t| cfg.tool_policy.get(&t.name).is_none_or(|p| p != "deny"))
+        .collect();
+    let rank = |n: &str| {
+        let n = n.to_lowercase();
+        if ["whoami", "list", "get"].iter().any(|k| n.contains(k)) {
+            0
+        } else {
+            1
+        }
+    };
+    candidates.sort_by_key(|t| (rank(&t.name), t.name.clone()));
+    candidates.first().map(|t| t.name.clone())
+}
+
+/// Erreur d'un appel d'outil, pour le modèle et pour `mcp test` : un désaccord d'en-têtes
+/// (-32020) est un défaut du client, pas des arguments (issue #126).
+fn call_error(e: &McpError) -> String {
+    match e {
+        McpError::Rpc { code, .. } if *code == penelope_mcp::protocol::HEADER_MISMATCH => {
+            format!(
+                "{e}\n[Pénélope : le serveur refuse les en-têtes HTTP de la requête (-32020). \
+                 C'est un défaut du client MCP de Pénélope, pas des arguments : ne réessaie \
+                 pas et ne reformule pas l'appel, signale-le au propriétaire.]"
+            )
+        }
+        other => other.to_string(),
+    }
+}
+
 /// Message d'échec de connexion, avec les dernières lignes de stderr et, si le bac à
 /// sable semble en cause, la marche à suivre.
 fn explain(cfg: &ServerConfig, e: &McpError, logs: &[String]) -> String {
@@ -1972,6 +2091,96 @@ mod tests {
         assert!(deny > allow, "{sbpl}");
         assert!(sbpl.contains("secrets.enc"), "{sbpl}");
         assert!(sbpl.contains("com.apple.SecurityServer"), "{sbpl}");
+    }
+
+    /// #126 : `mcp test` appelle vraiment un outil en lecture sans argument ; un serveur
+    /// qui refuse les appels (-32020) échoue au test au lieu de passer pour sain, et
+    /// l'erreur rendue au modèle dit que ce n'est pas une affaire d'arguments.
+    #[tokio::test]
+    async fn mcp_test_really_calls_a_read_tool() {
+        let (_d, _s, _c, fake, sup) = setup().await;
+        let tools = Arc::new(Mutex::new(vec![
+            tool("create_task", json!({})),
+            tool("clickup_search", json!({"readOnlyHint": true})),
+            tool("get_workspace_hierarchy", json!({"readOnlyHint": true})),
+        ]));
+        fake.serve("sain", server(tools.clone()));
+        let base = server(tools);
+        fake.serve(
+            "refuse",
+            Arc::new(move |m, p| {
+                if m == "tools/call" {
+                    return Err(McpError::Rpc {
+                        code: penelope_mcp::protocol::HEADER_MISMATCH,
+                        message: "the body carries params.name but the Mcp-Name header \
+                                  names \"penelope\""
+                            .into(),
+                        data: None,
+                    });
+                }
+                base(m, p)
+            }),
+        );
+        let base = server(Arc::new(Mutex::new(vec![tool(
+            "list_items",
+            json!({"readOnlyHint": true}),
+        )])));
+        fake.serve(
+            "exigeant",
+            Arc::new(move |m, p| {
+                if m == "tools/call" {
+                    return Err(McpError::Rpc {
+                        code: penelope_mcp::protocol::INVALID_PARAMS,
+                        message: "workspace_id manquant".into(),
+                        data: None,
+                    });
+                }
+                base(m, p)
+            }),
+        );
+        declare(&sup, "sain", "");
+        declare(&sup, "refuse", "");
+        declare(&sup, "exigeant", "");
+        sup.reload().await;
+
+        // Un refus de l'outil (arguments) n'est pas une faute de protocole.
+        let picky = sup.test(&sup.config_of("exigeant").await.unwrap()).await;
+        assert_eq!(picky["ok"], true, "{picky}");
+        assert!(
+            picky["call"]["note"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("workspace_id manquant"),
+            "{picky}"
+        );
+
+        let ok = sup.test(&sup.config_of("sain").await.unwrap()).await;
+        assert_eq!(ok["ok"], true, "{ok}");
+        assert_eq!(ok["call"]["tool"], "get_workspace_hierarchy", "{ok}");
+        assert_eq!(ok["call"]["ok"], true, "{ok}");
+
+        let ko = sup.test(&sup.config_of("refuse").await.unwrap()).await;
+        assert_eq!(ko["ok"], false, "{ko}");
+        let error = ko["error"].as_str().unwrap();
+        assert!(error.contains("3 outil(s) listés"), "{error}");
+        assert!(error.contains("-32020"), "{error}");
+
+        let e = sup
+            .call("mcp__refuse__clickup_search", &json!({}))
+            .await
+            .unwrap_err();
+        assert!(e.contains("ne réessaie pas"), "{e}");
+        assert!(e.contains("pas des arguments"), "{e}");
+        let st = sup.statuses().await;
+        let refuse = st.iter().find(|x| x.name == "refuse").unwrap();
+        assert_eq!(refuse.state, ServerState::Degraded);
+        assert!(
+            refuse
+                .last_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("-32020")
+        );
     }
 
     /// #122 : un serveur déclaré dans `sandbox.allow_keychain_for` joint le trousseau et
