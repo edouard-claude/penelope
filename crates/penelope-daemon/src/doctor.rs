@@ -56,6 +56,16 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
             "openrouter_api_key",
             cfg.providers.openrouter.api_key.as_str(),
         ),
+        // La connexion Codex vit dans le magasin comme un secret (#142) : sans elle, le
+        // fournisseur activé ne sert rien.
+        (
+            crate::codex_auth::SECRET,
+            if cfg.providers.codex.enabled {
+                "${SECRET:codex.oauth}"
+            } else {
+                ""
+            },
+        ),
     ] {
         let needed = placeholder.contains("${SECRET:");
         if !needed {
@@ -68,6 +78,10 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
                  identifiant (owner.telegram_user_id)",
                 "dans Telegram, écrire à @BotFather puis /newbot ; puis \
                  `penelope secret set telegram_bot_token` et coller le jeton à l'invite",
+            ),
+            "codex.oauth" => (
+                "absent du magasin : le fournisseur `codex` est activé sans compte connecté",
+                "penelope model auth codex",
             ),
             _ => (
                 "absent du magasin",
@@ -211,12 +225,125 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
         )
     });
 
+    // Fournisseur Codex : connexion, jetons, périmètre, identité empruntée (#142).
+    checks.extend(codex_checks(s).await);
+
     // Réseau : hôtes indispensables.
-    for host in ["api.telegram.org", "openrouter.ai"] {
+    let mut hosts = vec!["api.telegram.org", "openrouter.ai"];
+    if cfg.providers.codex.enabled {
+        hosts.extend(["chatgpt.com", "auth.openai.com"]);
+    }
+    for host in hosts {
         checks.push(reachable_check(host).await);
     }
 
     checks
+}
+
+/// #142 : état du fournisseur `codex` — connexion, fraîcheur des jetons, périmètre des
+/// alias, et l'avertissement permanent sur l'identité empruntée.
+pub async fn codex_checks(s: &Services) -> Vec<DoctorCheck> {
+    let cfg = s.config.config();
+    let c = &cfg.providers.codex;
+    let mut out = Vec::new();
+    let codex_aliases: Vec<(&String, &String)> = cfg
+        .models
+        .aliases
+        .iter()
+        .filter(|(_, m)| crate::codex_scope::is_codex(m))
+        .collect();
+    if !c.enabled && codex_aliases.is_empty() {
+        return out;
+    }
+
+    // Connexion et jetons.
+    out.push(match crate::codex_auth::status(s) {
+        Ok(Some(st)) if st.connected => {
+            let now = s.clock.now_ms();
+            let expires_in = (st.expires_at_ms - now) / 60_000;
+            let age_days = (now - st.last_refresh_ms) / 86_400_000;
+            DoctorCheck::ok(
+                "provider.codex",
+                "Fournisseur Codex",
+                format!(
+                    "connecté : compte {}, plan {}, jeton valable {expires_in} min, \
+                     rafraîchi il y a {age_days} j",
+                    st.account, st.plan
+                ),
+            )
+        }
+        Ok(Some(st)) => DoctorCheck::fail(
+            "provider.codex",
+            "Fournisseur Codex",
+            format!(
+                "compte déconnecté ({}) : les alias `codex:` se replient",
+                st.disconnected.unwrap_or_default()
+            ),
+            Some("penelope model auth codex".into()),
+        ),
+        Ok(None) => DoctorCheck::fail(
+            "provider.codex",
+            "Fournisseur Codex",
+            "activé, mais aucun compte ChatGPT connecté",
+            Some("penelope model auth codex".into()),
+        ),
+        Err(e) => DoctorCheck::fail(
+            "provider.codex",
+            "Fournisseur Codex",
+            format!("connexion illisible : {e}"),
+            Some("penelope model auth codex --logout puis se reconnecter".into()),
+        ),
+    });
+
+    // Identité empruntée : un avertissement qui ne se tait jamais.
+    out.push(DoctorCheck::ok(
+        "provider.codex.identity",
+        "Identité Codex",
+        format!(
+            "`originator: {}`, client {} — Pénélope emprunte l'identité de Codex CLI. \
+             Usage toléré par OpenAI, jamais garanti : il peut cesser du jour au \
+             lendemain (repli : une clé d'API sur `openai_compat`).",
+            c.originator, c.client_version
+        ),
+    ));
+
+    // Périmètre : un alias de rôle de fond qui vise l'abonnement l'aurait contourné.
+    let mut hors: Vec<String> = Vec::new();
+    for (alias, model) in &codex_aliases {
+        let roles = crate::codex_scope::background_roles_of(&cfg, alias);
+        if !roles.is_empty() {
+            hors.push(format!("`{alias}` → `{model}` ({})", roles.join(", ")));
+        }
+    }
+    if !hors.is_empty() {
+        out.push(DoctorCheck::fail(
+            "provider.codex.scope",
+            "Périmètre Codex",
+            format!(
+                "{} : ces rôles tournent sans le propriétaire ; l'abonnement ne les sert \
+                 pas, chaque appel se replie",
+                hors.join(", ")
+            ),
+            Some("penelope model set <alias> openrouter:<modèle>".into()),
+        ));
+    }
+
+    // Jauges du plan : ce qui borne vraiment, puisque le coût est nul.
+    if let Some(q) = crate::codex_quota::snapshot(s).await {
+        let line = crate::codex_quota::gauge_line(&q, s.clock.now_ms());
+        let ratio = q.worst_ratio();
+        out.push(if ratio < c.quota_stop_ratio {
+            DoctorCheck::ok("provider.codex.quota", "Quota du plan ChatGPT", line)
+        } else {
+            DoctorCheck::fail(
+                "provider.codex.quota",
+                "Quota du plan ChatGPT",
+                format!("{line} : Pénélope est en retrait, les tours passent par OpenRouter"),
+                None,
+            )
+        });
+    }
+    out
 }
 
 /// Signature du binaire en cours (issue #28) : en ad hoc, macOS redemande l'accès au

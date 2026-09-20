@@ -8,7 +8,7 @@ Dernière mise à jour : 19 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1549 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1572 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1720,8 +1720,7 @@ lectures se décident sur un seul découpage de ligne (#141).
 
 ### 0.17.25
 
-Fournisseur `codex` : les modèles d'un abonnement ChatGPT, à côté d'OpenRouter (#142,
-lot 1 sur 3 — registre, connexion, fournisseur).
+Fournisseur `codex` : les modèles d'un abonnement ChatGPT, à côté d'OpenRouter (#142).
 
 - **Un troisième fournisseur** (#142) : `ProviderSet` a un emplacement `codex`, et un
   modèle `codex:` n'est **jamais** servi par un autre — avant, un préfixe inconnu partait
@@ -1762,9 +1761,37 @@ lot 1 sur 3 — registre, connexion, fournisseur).
 - Livré derrière `providers.codex.enabled = false` : sans compte connecté, rien ne change.
   Le catalogue `/models` du plan est rafraîchi comme celui d'OpenRouter (`upsert`, jamais
   `replace`), avec repli sur la liste embarquée.
-- Reste des lots 2 et 3 : la garde de périmètre (seuls les tours du propriétaire ; rêve,
-  veille, compaction, workflows se replient), les alertes de quota et les lignes d'usage,
-  puis `doctor`, l'ADR `0010` et la référence complète.
+- **L'abonnement ne sert que les tours du propriétaire** (#142, décision 2) : une garde
+  unique, posée juste avant le choix du fournisseur. Un message Telegram ou CLI et les
+  sous-agents de ce tour passent par `codex:` ; planification à cible `prompt`, rêve,
+  veille, compaction, relecture d'épisode, consolidation, classifieur, embeddings,
+  transcription, synthèse vocale, titre automatique et runs de workflow se replient sur le
+  modèle OpenRouter de l'alias, sans carte ni bruit, avec l'événement
+  `llm.codex_scope_fallback`. Le sous-agent hérite du périmètre de son tour
+  (`spawn_sub_agent` reçoit désormais l'origine). `penelope model set` refuse un alias de
+  rôle de fond (`classifier`, `compaction`, `memory_review`, `embedding`, `stt`, `tts`) en
+  disant pourquoi, et un préfixe mal écrit (`codx:`) est refusé au lieu de partir chez
+  OpenRouter. Un seul compte à la fois : une seconde connexion demande d'abord
+  `--logout`.
+- **Le quota du plan remplace le budget en dollars** (#142, décision 3) : un appel par
+  abonnement coûte 0 $, et les lignes d'usage le disent (`provider = codex`,
+  `cost_usd = 0`, `estimated = false` — le coût est **connu**). Les jauges `x-codex-*` et
+  l'événement `codex.rate_limits` sont rangés en `kv` à chaque réponse, affichés dans
+  `/budget`, `penelope model list` et `self_status` (`primary 42 % · retour 18:05`). Une
+  alerte par fenêtre à `quota_alert_ratio`, un retrait à `quota_stop_ratio` : le
+  fournisseur répond `RateLimited` avant l'appel, le routeur se replie, et le message
+  distingue un quota d'une panne (#139). Les plafonds jour, session et run ne comptent
+  rien pour ce fournisseur, et la documentation le dit.
+- **`doctor` dit tout** (#142, lot 3) : `provider.codex` (connecté, plan, compte,
+  fraîcheur du jeton, dernier rafraîchissement), `provider.codex.identity` — un
+  avertissement permanent sur l'identité empruntée, toléré mais jamais garanti —,
+  `provider.codex.scope` (un alias de rôle de fond qui l'aurait contournée),
+  `provider.codex.quota`, le secret `codex.oauth` dans la boucle des secrets attendus, et
+  `chatgpt.com` et `auth.openai.com` dans les hôtes joignables quand le fournisseur est
+  actif.
+- ADR [0010](decisions/0010-fournisseur-codex-oauth.md) : les trois décisions, le statut
+  « toléré, jamais garanti », et la sortie écrite d'avance (clé d'API sur `openai_compat`).
+  Section « Codex » de `install-headless.md`, ligne de comparaison au README.
 
 ### Routine de livraison
 

@@ -730,12 +730,32 @@ reconnecter).
 penelope model set code codex:gpt-6-astra
 ```
 
-**Ce que ça coûte.** Rien à l'appel : les lignes d'usage portent `cost_usd = 0`. La vraie
-limite est le quota du plan, que le backend annonce à chaque réponse (une fenêtre de 5 h,
-une fenêtre hebdomadaire) : Pénélope les lit, alerte à `providers.codex.quota_alert_ratio`
-et se met en retrait à `quota_stop_ratio`, en laissant le repli OpenRouter jouer plutôt
-que d'aller chercher un refus. Un quota atteint n'est pas une panne : le message dit
-l'heure de retour.
+**Pour quels tours.** L'abonnement ne sert que ce que le propriétaire ouvre lui-même : un
+message Telegram ou CLI, et les sous-agents de ce tour. Tout ce qui tourne sans lui —
+planification à cible `prompt`, rêve nocturne, veille, résumeur de compaction, relecture
+d'épisode, consolidation, classifieur, embeddings, transcription, synthèse vocale, titre
+automatique, run de workflow — repasse par le modèle OpenRouter de l'alias, sans carte ni
+message, en laissant l'événement `llm.codex_scope_fallback`. C'est la contrepartie de la
+tolérance d'OpenAI : un compte, un humain, un usage interactif.
+
+Conséquence pratique : `penelope model set <alias> codex:<modèle>` **refuse** les alias qui
+servent un rôle de fond (`classifier`, `compaction`, `memory_review`, `embedding`, `stt`,
+`tts`) en disant pourquoi, et `penelope doctor` signale une configuration déjà en place qui
+l'aurait contournée. Un seul compte à la fois : se connecter à un autre demande d'abord
+`penelope model auth codex --logout`.
+
+**Ce que ça coûte.** Rien à l'appel : les lignes d'usage portent `provider = codex`,
+`cost_usd = 0` et `estimated = false` — le coût est connu, il vaut zéro. Les plafonds en
+dollars (`budget.daily_usd`, `budget.session_usd`, `budget.run_usd`) ne comptent donc rien
+pour ce fournisseur et ne le freinent pas.
+
+La vraie limite est le quota du plan, que le backend annonce à chaque réponse (une fenêtre
+de 5 h, une fenêtre hebdomadaire). Pénélope le lit, le range, et l'affiche dans `/budget`,
+`penelope model list` et `self_status` (`primary 42 % · retour 18:05`). À
+`providers.codex.quota_alert_ratio` (0,8 par défaut) : une alerte, une seule par fenêtre. À
+`quota_stop_ratio` (0,95) : Pénélope se met en retrait **avant** l'appel et laisse le repli
+OpenRouter jouer, plutôt que d'aller chercher un refus. Un quota atteint n'est pas une
+panne : le message dit l'heure de retour.
 
 ### Coûts
 

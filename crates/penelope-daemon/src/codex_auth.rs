@@ -581,6 +581,11 @@ pub async fn refresh_loop(d: Arc<Daemon>) {
         if !s.config.config().providers.codex.enabled {
             continue;
         }
+        // Les jauges du plan sont lues à chaque réponse ; l'alerte part d'ici, une fois
+        // par fenêtre (#142).
+        if let Err(e) = crate::codex_quota::check_alert(&d).await {
+            tracing::warn!(error = %e, "alerte de quota Codex non vérifiée");
+        }
         let Ok(Some(grant)) = load(s) else { continue };
         if grant.disconnected.is_some() {
             notify_disconnected(&d, &grant).await;

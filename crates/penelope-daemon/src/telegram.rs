@@ -3369,6 +3369,16 @@ impl TelegramGateway {
                 ));
             }
         }
+        // L'abonnement ChatGPT ne facture pas l'appel : sa limite est le quota du plan,
+        // que les plafonds en dollars ne voient pas (#142).
+        if cfg.providers.codex.enabled
+            && let Some(q) = crate::codex_quota::snapshot(s).await
+        {
+            t.push_str(&format!(
+                "\n**Abonnement ChatGPT** (hors plafonds en dollars)\n\n- {}\n",
+                crate::codex_quota::gauge_line(&q, s.clock.now_ms())
+            ));
+        }
         t.push_str(
             "\nDétail : `/budget sessions`, `/budget requêtes`, `/budget modèles` · plafond de \
              cette session : `/budget session 20`",

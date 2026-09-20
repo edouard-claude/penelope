@@ -511,11 +511,26 @@ impl Rpc {
                     "classifier_model": model_of(&cfg.role_alias("classifier")),
                     "fallback": routing.fallback,
                 });
+                // Abonnement ChatGPT : plan, compte et jauge, là où on regarde les
+                // modèles — son coût en dollars est nul par construction (#142).
+                let codex = match crate::codex_auth::status(s).ok().flatten() {
+                    Some(st) => json!({
+                        "connected": st.connected,
+                        "plan": st.plan,
+                        "account": st.account,
+                        "disconnected": st.disconnected,
+                        "quota": crate::codex_quota::snapshot(s)
+                            .await
+                            .map(|q| crate::codex_quota::gauge_line(&q, s.clock.now_ms())),
+                    }),
+                    None => Value::Null,
+                };
                 Ok(json!({
                     "aliases": aliases,
                     "routing": routing_view,
                     "catalog_size": s.catalog.len(),
                     "models": models,
+                    "codex": codex,
                     "note": if s.catalog.is_empty() {
                         "catalogue pas encore chargé : le daemon le télécharge au démarrage dès qu'une clé est posée"
                     } else if filter.is_none() {
@@ -526,6 +541,16 @@ impl Rpc {
             method::MODEL_SET => {
                 let alias = required_str(p, "alias")?;
                 let model = required_str(p, "model")?;
+                // Un identifiant mal écrit (`codx:`) partait en silence chez OpenRouter
+                // (#142) : il est refusé ici comme à la validation de configuration.
+                penelope_kernel::config::check_model_id(&model).map_err(anyhow::Error::msg)?;
+                // L'abonnement ChatGPT ne sert que les tours du propriétaire (décision 2
+                // de #142) : un alias de rôle de fond ne peut pas le viser.
+                let background =
+                    crate::codex_scope::background_roles_of(&s.config.config(), &alias);
+                if crate::codex_scope::is_codex(&model) && !background.is_empty() {
+                    anyhow::bail!(crate::codex_scope::refusal(&alias, &model, &background));
+                }
                 // Un alias qui sert un rôle à outils doit viser un modèle qui en appelle :
                 // l'émulation n'existe plus (issue #54, décision 0009).
                 let bare_new = penelope_llm::catalog::strip_provider(&model);
@@ -587,6 +612,19 @@ impl Rpc {
                         Ok(json!({"provider": provider, "connected": false, "generation": g}))
                     }
                     "start" => {
+                        // Un seul compte à la fois : un second exigerait une rotation de
+                        // jetons que rien ne surveille, et OpenAI traque exactement ça.
+                        if let Some(st) =
+                            crate::codex_auth::status(s).map_err(anyhow::Error::msg)?
+                            && st.connected
+                        {
+                            anyhow::bail!(
+                                "déjà connecté au compte {} (plan {}) : se déconnecter \
+                                 d'abord avec `penelope model auth codex --logout`",
+                                st.account,
+                                st.plan
+                            );
+                        }
                         let login = crate::codex_auth::start_pending(s)
                             .await
                             .map_err(anyhow::Error::msg)?;
@@ -1693,6 +1731,164 @@ mod tests {
             .find(|c| c.id == "models.tools")
             .expect("contrôle des outils");
         assert!(!tools.ok, "{tools:?}");
+    }
+
+    /// #142 : l'abonnement ChatGPT ne sert que les tours du propriétaire — un alias de
+    /// rôle de fond ne peut pas le viser, et un préfixe mal écrit est refusé au lieu de
+    /// partir en silence chez OpenRouter.
+    #[tokio::test]
+    async fn a_background_alias_cannot_aim_at_the_subscription() {
+        let (_d, r) = rpc().await;
+        for alias in ["stt", "embedding", "tts", "summarizer"] {
+            let refus = call(
+                &r,
+                method::MODEL_SET,
+                json!({"alias": alias, "model": "codex:gpt-6-astra"}),
+            )
+            .await;
+            let message = refus
+                .error
+                .unwrap_or_else(|| panic!("{alias} : refus attendu"))
+                .message;
+            assert!(
+                message.contains("abonnement ChatGPT"),
+                "{alias} : {message}"
+            );
+        }
+        // La conversation, elle, a le droit : c'est le propriétaire qui parle.
+        let ok = call(
+            &r,
+            method::MODEL_SET,
+            json!({"alias": "main", "model": "codex:gpt-6-astra"}),
+        )
+        .await;
+        assert!(ok.error.is_none(), "{:?}", ok.error);
+
+        // Un préfixe inconnu est une faute de frappe, pas un modèle OpenRouter.
+        let refus = call(
+            &r,
+            method::MODEL_SET,
+            json!({"alias": "main", "model": "codx:gpt-6"}),
+        )
+        .await;
+        assert!(
+            refus.error.expect("refus").message.contains("codx"),
+            "le préfixe est nommé"
+        );
+    }
+
+    /// #142 (lot 3) : `doctor` dit l'état du fournisseur Codex, signale un alias de rôle
+    /// de fond qui l'aurait contourné, et ne se tait jamais sur l'identité empruntée.
+    #[tokio::test]
+    async fn doctor_reports_the_codex_provider() {
+        let (_d, r) = rpc().await;
+        let s = &r.daemon.services;
+        // Éteint et sans alias : rien à dire.
+        assert!(crate::doctor::codex_checks(s).await.is_empty());
+
+        r.daemon
+            .publish_config("test", |c| {
+                c.providers.codex.enabled = true;
+                c.models
+                    .aliases
+                    .insert("summarizer".into(), "codex:gpt-6-astra".into());
+                Ok(vec!["providers.codex.enabled".into()])
+            })
+            .unwrap();
+        let checks = crate::doctor::codex_checks(s).await;
+        let by = |id: &str| {
+            checks
+                .iter()
+                .find(|c| c.id == id)
+                .unwrap_or_else(|| panic!("contrôle `{id}` attendu"))
+                .clone()
+        };
+        let provider = by("provider.codex");
+        assert!(!provider.ok, "activé sans compte connecté");
+        assert!(provider.detail.contains("aucun compte"), "{provider:?}");
+
+        let identity = by("provider.codex.identity");
+        assert!(identity.detail.contains("codex_cli_rs"), "{identity:?}");
+        assert!(
+            identity.detail.contains("toléré") && identity.detail.contains("jamais garanti"),
+            "l'avertissement ne se tait pas : {identity:?}"
+        );
+
+        let scope = by("provider.codex.scope");
+        assert!(!scope.ok);
+        assert!(scope.detail.contains("compaction"), "{scope:?}");
+
+        // Connecté : l'état le dit, et le périmètre reste signalé.
+        crate::codex_auth::store(
+            s,
+            &crate::codex_auth::Grant {
+                access_token: "a".into(),
+                refresh_token: "rr".into(),
+                plan_type: "pro".into(),
+                email: "moi@example.test".into(),
+                expires_at: s.clock.now_ms() + 3_600_000,
+                last_refresh: s.clock.now_ms(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let checks = crate::doctor::codex_checks(s).await;
+        let provider = checks
+            .iter()
+            .find(|c| c.id == "provider.codex")
+            .expect("contrôle");
+        assert!(provider.ok, "{provider:?}");
+        assert!(provider.detail.contains("plan pro"), "{provider:?}");
+    }
+
+    /// #142 : sans compte connecté, `model auth codex --status` le dit ; connecté, une
+    /// seconde connexion exige une déconnexion explicite.
+    #[tokio::test]
+    async fn only_one_chatgpt_account_at_a_time() {
+        let (_d, r) = rpc().await;
+        let empty = call(
+            &r,
+            method::MODEL_AUTH,
+            json!({"provider": "codex", "action": "status"}),
+        )
+        .await;
+        assert!(empty.error.is_none());
+        assert!(empty.result.expect("état")["status"].is_null());
+
+        crate::codex_auth::store(
+            &r.daemon.services,
+            &crate::codex_auth::Grant {
+                access_token: "a".into(),
+                refresh_token: "r".into(),
+                account_id: "acc_1".into(),
+                plan_type: "pro".into(),
+                email: "moi@example.test".into(),
+                expires_at: r.daemon.services.clock.now_ms() + 3_600_000,
+                last_refresh: r.daemon.services.clock.now_ms(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let busy = call(
+            &r,
+            method::MODEL_AUTH,
+            json!({"provider": "codex", "action": "start"}),
+        )
+        .await;
+        let message = busy.error.expect("refus").message;
+        assert!(
+            message.contains("moi@example.test") && message.contains("logout"),
+            "{message}"
+        );
+
+        // Un autre fournisseur ne se connecte pas par compte.
+        let other = call(
+            &r,
+            method::MODEL_AUTH,
+            json!({"provider": "openrouter", "action": "status"}),
+        )
+        .await;
+        assert!(other.error.expect("refus").message.contains("seul `codex`"));
     }
 
     #[tokio::test]
