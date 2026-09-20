@@ -1486,6 +1486,7 @@ version = "0.17.27"
 dependencies = [
  "chrono",
  "chrono-tz",
+ "flate2",
  "lopdf",
  "penelope-kernel",
  "penelope-llm",
@@ -1542,6 +1543,7 @@ name = "penelope-skills"
 version = "0.17.27"
 dependencies = [
  "chrono",
+ "flate2",
  "penelope-kernel",
  "penelope-observe",
  "penelope-platform",

@@ -49,12 +49,15 @@ unicode-width = "0.2"
 libc = "0.2"
 
 # --- documents (§6.13) ---
-# Sans fonctionnalités par défaut : ni `rayon` ni horloges, lecture seule. Le moteur de
-# déflation est nommé en entier : `deflate-flate2` seul laisse `flate2` sans dorsale, et
-# ne compilait que par l'unification des features d'un autre crate du graphe (#146).
-# `zlib-rs` est écrit en Rust, sans dépendance C.
+# Sans fonctionnalités par défaut : ni `rayon` ni horloges, lecture seule.
 lopdf = { version = "0.45", default-features = false }
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
+# `zip` active `flate2` **sans dorsale** : la déflation ne compile alors que si un autre
+# crate du graphe en choisit une, par unification (#146). Chaque crate qui dépend de `zip`
+# nomme donc aussi `flate2` ici, pour `rust_backend` — c'est-à-dire `miniz_oxide`, en Rust
+# et sous licence MIT. Les autres dorsales de `zip` tireraient `zlib-rs`, sous licence
+# Zlib, que `cargo deny` refuse.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 # --- dev ---
 tempfile = "3"

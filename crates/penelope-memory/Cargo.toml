@@ -17,6 +17,8 @@ regex.workspace = true
 sha2.workspace = true
 lopdf.workspace = true
 zip.workspace = true
+# Dorsale de déflation de `zip` (voir le Cargo.toml du workspace).
+flate2.workspace = true
 penelope-kernel.workspace = true
 penelope-store.workspace = true
 penelope-llm.workspace = true

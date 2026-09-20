@@ -1888,9 +1888,12 @@ vocabulaire et leurs dépendances nommées (#146).
   ces lignes est refusé, pas échappé.
 - Deux réglages de fond au passage : le répartiteur RPC met son futur sur le tas (il porte
   l'état de toutes les méthodes servies, et sa pile débordait au test dès qu'une branche
-  s'ajoutait), et le crate `zip` nomme enfin sa dorsale de déflation (`deflate-flate2` seul
-  laissait `flate2` sans moteur, et ne compilait que par l'unification des features d'un
-  autre crate du graphe).
+  s'ajoutait), et la dorsale de déflation de `zip` est nommée là où elle doit l'être.
+  `zip` active `flate2` **sans moteur** : jusqu'ici la déflation ne compilait que par
+  l'unification des features avec `lopdf`, et `cargo build -p penelope-skills` échouait
+  seul. Chaque crate qui dépend de `zip` déclare donc aussi `flate2` en `rust_backend`
+  (`miniz_oxide`, en Rust, MIT) ; les dorsales que `zip` propose tireraient `zlib-rs`, sous
+  licence Zlib, que `cargo deny` refuse.
 
 ### Routine de livraison
 

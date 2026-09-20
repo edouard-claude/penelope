@@ -14,6 +14,8 @@ tokio.workspace = true
 chrono.workspace = true
 regex.workspace = true
 zip.workspace = true
+# Dorsale de déflation de `zip` (voir le Cargo.toml du workspace).
+flate2.workspace = true
 penelope-kernel.workspace = true
 penelope-store.workspace = true
 penelope-platform.workspace = true
