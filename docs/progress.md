@@ -3,12 +3,12 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 18 septembre 2026.
+Dernière mise à jour : 19 septembre 2026.
 
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1540 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1572 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1666,6 +1666,132 @@ candidat (#140, suite de #135).
   facile, 2 400 pour un épineux) : 53 appels avant, moins de 20 maintenant, chaque
   candidat jugé. Le mock de fournisseur sait rendre une sortie mesurée et coupée
   (`Scripted::Written`).
+
+### 0.17.24
+
+Un `&` entre guillemets n'est plus un enchaînement : les règles « Toujours » et les
+lectures se décident sur un seul découpage de ligne (#141).
+
+- **Un seul lexer de ligne de commande** (#141) : `arg_pattern`, `command_matches`,
+  `declared_allow`, `rule_note` et `is_read_command` cherchaient chacun `; & | ( ) $ …`
+  dans le **texte brut**, guillemets compris. Une URL de requête (`glab api --hostname h
+  "projects?membership=true&per_page=100"`) passait donc pour une commande composée :
+  neuf cartes en neuf minutes, huit « Toujours » cliqués, zéro règle créée, zéro règle
+  appliquée. `penelope_hitl::cmdline` découpe désormais la ligne une fois (mots,
+  apostrophes littérales, guillemets doubles littéraux sauf `$`, `` ` `` et `\`) et les
+  cinq appelants s'y branchent : ce qu'un « Toujours » écrit est ce qui s'applique
+  ensuite. Le lexer rend des tokens, jamais des offsets (#130).
+- **Reste composé** (#67 ne se rouvre pas) : un opérateur ou une redirection hors
+  guillemets, une substitution (`$`, `` ` ``) ou un échappement même entre guillemets
+  doubles, un saut de ligne, une négation `!` en tête, des guillemets non fermés.
+  `cargo test; rm -rf ~`, `ls | sh`, `cat x > y`, `echo "$(rm -rf ~)"` redemandent comme
+  avant.
+- **Affectations d'environnement en tête** (#141) : `GITLAB_HOST=h glab api "…"` a pour
+  famille `glab` et `TZ=UTC date` est une lecture ; une variable qui détourne
+  l'interpréteur (`PATH`, `HOME`, `IFS`, `ENV`, `BASH_ENV`, `DYLD_*`, `LD_*`,
+  `GIT_CONFIG*`, `GIT_SSH_COMMAND`, `NODE_OPTIONS`, `PYTHONSTARTUP`, `PERL5OPT`,
+  `RUBYOPT`…) laisse la ligne composée : `PATH=/tmp ls` n'est jamais couvert par une
+  règle `ls`.
+- **La carte dit quand « Toujours » ne réglera rien** (#141) : sur une commande sans
+  famille, le bouton devient « ✅ Autoriser (pas de règle possible) » et la ligne de
+  qualificatifs porte « aucune règle possible : commande composée ». Le propriétaire ne
+  clique plus dans le vide.
+- Les règles déjà en base ne bougent pas : celles tirées d'une affectation
+  (`GITLAB_HOST=…`) restent signalées inutiles par `rule_note`, à retirer d'un bouton
+  dans `/policies`. Une famille créée est désormais vérifiée à l'écriture : si elle ne se
+  relit pas comme elle a été écrite, aucune règle n'est créée (régression de #111).
+- **Un tube vers une lecture pure n'est plus un enchaînement** (#141, second constat du
+  20/09 : neuf cartes en cinq minutes, huit « Toujours » cliqués, zéro règle, sur des
+  `glab api … | jq -r '…'`). Ce qui agit est la première étape ; les suivantes ne peuvent
+  que lire. La famille est celle de la tête (une règle `glab` couvre `glab api …` comme
+  `glab api … | jq …`), et une lecture qui traverse un tel tube reste une lecture.
+  Acceptées : `jq` (sans `-f`, `--rawfile`, `--slurpfile`), `cat` sans fichier, `grep`,
+  `egrep`, `fgrep`, `rg` sans `--pre`, `head`, `tail`, `cut`, `sort` sans `-o`, `wc`,
+  `uniq`, `tr`, `nl`, `rev`, `column`. `| sh`, `| xargs`, `| tee`, `| python`, `| sed`,
+  `||`, une redirection ou une substitution restent composés.
+- Onze tests nouveaux : le lexer forme par forme, le tube dans les deux sens, la famille
+  créée puis appliquée à la commande suivante (le même découpage écrit la règle et la
+  reconnaît, régression de #111), la famille déclarée avec réseau, les lectures entre
+  guillemets, et la carte qui annonce l'absence de règle.
+- Reste ouvert, hors de ce lot : `gh api`/`glab api` en GET, `glab repo|mr list|view`,
+  `gh pr list|view`, `git ls-remote` et `git fetch` en classe lecture **avec** réseau
+  (commentaire de #111), et une règle sans réseau qui couvrirait un appel `network: true`
+  quand `sandbox.shell_network` est déjà ouvert.
+
+### 0.17.25
+
+Fournisseur `codex` : les modèles d'un abonnement ChatGPT, à côté d'OpenRouter (#142).
+
+- **Un troisième fournisseur** (#142) : `ProviderSet` a un emplacement `codex`, et un
+  modèle `codex:` n'est **jamais** servi par un autre — avant, un préfixe inconnu partait
+  en silence chez OpenRouter, identifiant complet en nom de modèle. La liste des préfixes
+  vit désormais dans `penelope-kernel` (`PROVIDER_PREFIXES`), lue par le découpage
+  (`provider_of`, `strip_provider`) **et** par la validation de configuration : un alias
+  `codx:gpt-6` est refusé en nommant le préfixe, là où `x-ai/grok-4:free` reste une
+  variante OpenRouter.
+- **Dialecte Responses** (#142) : `CodexProvider` parle l'API Responses en flux — items
+  typés en entrée (`message`, `function_call`, `function_call_output`, `reasoning`),
+  outils à plat, `store: false`, `include: ["reasoning.encrypted_content"]`,
+  `prompt_cache_key` = session. Le backend est sans état : le raisonnement chiffré est
+  réinjecté au tour suivant, sinon il est perdu sans erreur visible. Les événements
+  `response.*` rendent les mêmes `StreamChunk` que `chat/completions` (accumulateur
+  distinct, transport et `SseDecoder` communs, issues #51 et #80 inchangées) ; un appel
+  d'outil vient de `response.output_item.done` avec le `call_id` du serveur (#54), et une
+  fermeture sans `response.completed` est une coupure, pas une fin.
+- **Connexion par code d'appareil** (#142) : `penelope model auth codex` (et `/model auth
+  codex`) affiche une adresse et un code, attend la validation, range les jetons dans le
+  magasin de secrets sous `codex.oauth` — jamais `~/.codex/auth.json`. Le rafraîchissement
+  est sérialisé et la rotation écrite avant tout usage : le `refresh_token` est à usage
+  unique, deux rafraîchissements concurrents déconnecteraient le compte pour de bon. Un
+  échec permanent (`refresh_token_reused`, `refresh_token_expired`, 401) marque la
+  connexion morte, prévient le propriétaire une fois et laisse le repli OpenRouter jouer.
+  Les trois jetons sont masqués dans les journaux à l'obtention **et** à chaque rotation
+  (#26).
+- **Identité assumée** (#142) : `originator`, `User-Agent` et `x-codex-installation-id`
+  sont identiques sur `/responses` et sur `/models` — une identité incohérente vaut des
+  heures de « servers overloaded » chez un client tiers. Tout est en configuration
+  (`providers.codex.originator`, `client_version`) : une liste blanche qui change se
+  rattrape sans recompiler, et un 403 nomme la cause probable.
+- **Erreurs et quota** (#142) : 429 `usage_limit_reached` → `RateLimited` avec l'heure de
+  retour, jamais rejoué ; `usage_not_included` → `PaymentRequired` ;
+  `context_length_exceeded` → `ContextLength` ; 401 → un rafraîchissement et **un** rejeu.
+  Les jauges `x-codex-*` et l'événement `codex.rate_limits` sont lus à chaque réponse, et
+  le fournisseur se met en retrait au-delà de `quota_stop_ratio` plutôt que d'aller
+  chercher un refus.
+- Livré derrière `providers.codex.enabled = false` : sans compte connecté, rien ne change.
+  Le catalogue `/models` du plan est rafraîchi comme celui d'OpenRouter (`upsert`, jamais
+  `replace`), avec repli sur la liste embarquée.
+- **L'abonnement ne sert que les tours du propriétaire** (#142, décision 2) : une garde
+  unique, posée juste avant le choix du fournisseur. Un message Telegram ou CLI et les
+  sous-agents de ce tour passent par `codex:` ; planification à cible `prompt`, rêve,
+  veille, compaction, relecture d'épisode, consolidation, classifieur, embeddings,
+  transcription, synthèse vocale, titre automatique et runs de workflow se replient sur le
+  modèle OpenRouter de l'alias, sans carte ni bruit, avec l'événement
+  `llm.codex_scope_fallback`. Le sous-agent hérite du périmètre de son tour
+  (`spawn_sub_agent` reçoit désormais l'origine). `penelope model set` refuse un alias de
+  rôle de fond (`classifier`, `compaction`, `memory_review`, `embedding`, `stt`, `tts`) en
+  disant pourquoi, et un préfixe mal écrit (`codx:`) est refusé au lieu de partir chez
+  OpenRouter. Un seul compte à la fois : une seconde connexion demande d'abord
+  `--logout`.
+- **Le quota du plan remplace le budget en dollars** (#142, décision 3) : un appel par
+  abonnement coûte 0 $, et les lignes d'usage le disent (`provider = codex`,
+  `cost_usd = 0`, `estimated = false` — le coût est **connu**). Les jauges `x-codex-*` et
+  l'événement `codex.rate_limits` sont rangés en `kv` à chaque réponse, affichés dans
+  `/budget`, `penelope model list` et `self_status` (`primary 42 % · retour 18:05`). Une
+  alerte par fenêtre à `quota_alert_ratio`, un retrait à `quota_stop_ratio` : le
+  fournisseur répond `RateLimited` avant l'appel, le routeur se replie, et le message
+  distingue un quota d'une panne (#139). Les plafonds jour, session et run ne comptent
+  rien pour ce fournisseur, et la documentation le dit.
+- **`doctor` dit tout** (#142, lot 3) : `provider.codex` (connecté, plan, compte,
+  fraîcheur du jeton, dernier rafraîchissement), `provider.codex.identity` — un
+  avertissement permanent sur l'identité empruntée, toléré mais jamais garanti —,
+  `provider.codex.scope` (un alias de rôle de fond qui l'aurait contournée),
+  `provider.codex.quota`, le secret `codex.oauth` dans la boucle des secrets attendus, et
+  `chatgpt.com` et `auth.openai.com` dans les hôtes joignables quand le fournisseur est
+  actif.
+- ADR [0010](decisions/0010-fournisseur-codex-oauth.md) : les trois décisions, le statut
+  « toléré, jamais garanti », et la sortie écrite d'avance (clé d'API sur `openai_compat`).
+  Section « Codex » de `install-headless.md`, ligne de comparaison au README.
 
 ### Routine de livraison
 

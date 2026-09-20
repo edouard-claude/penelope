@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cmdline;
 pub mod policy;
 
 pub use policy::{PolicyEngine, PolicyRule, RuleScope};

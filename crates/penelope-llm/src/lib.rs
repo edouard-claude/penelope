@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod catalog;
+pub mod codex;
 pub mod json_scan;
 pub mod mock;
 pub mod provider;
@@ -13,6 +14,7 @@ pub mod tokens;
 pub mod types;
 
 pub use catalog::{Catalog, ModelInfo};
+pub use codex::{CodexOptions, CodexProvider, CodexToken, Quota, QuotaSink, TokenSource};
 pub use provider::{
     CancelToken, ChunkStream, OpenAiCompatProvider, OpenRouterProvider, Provider, ProviderSet,
     collect_stream, collect_stream_observed,
@@ -40,6 +42,7 @@ pub fn build_providers(
     cfg: &penelope_kernel::config::Config,
     secrets: &dyn penelope_platform::SecretStore,
     catalog: Catalog,
+    codex_access: Option<CodexAccess>,
 ) -> Result<ProviderSet> {
     let openrouter = if cfg.providers.openrouter.enabled {
         let key = secrets
@@ -76,11 +79,49 @@ pub fn build_providers(
         None
     };
 
+    // Codex : le daemon détient la connexion au compte ChatGPT (jetons, rotation,
+    // verrou) ; ici, on ne branche que ce qu'il fournit (issue #142).
+    let codex = match (cfg.providers.codex.enabled, codex_access) {
+        (true, Some(access)) => {
+            let c = &cfg.providers.codex;
+            Some(std::sync::Arc::new(
+                CodexProvider::new(
+                    CodexOptions {
+                        base_url: c.base_url.clone(),
+                        originator: c.originator.clone(),
+                        client_version: c.client_version.clone(),
+                        reasoning_summary: c.reasoning_summary.clone(),
+                        verbosity: c.verbosity.clone(),
+                        stream_idle: idle_of(&c.stream_idle_timeout),
+                        models: c.models.clone(),
+                        quota_stop_ratio: c.quota_stop_ratio,
+                    },
+                    access.tokens,
+                    catalog.clone(),
+                    access.installation_id,
+                )?
+                .maybe_quota_sink(access.quota_sink),
+            ))
+        }
+        _ => None,
+    };
+
     Ok(ProviderSet {
         openrouter,
         compat,
+        codex,
         catalog,
     })
+}
+
+/// Ce que le daemon apporte au fournisseur Codex : la source de jetons (il tient le
+/// magasin de secrets et le verrou de rotation) et l'identifiant d'installation, stable,
+/// envoyé sur toutes les requêtes.
+pub struct CodexAccess {
+    pub tokens: std::sync::Arc<dyn TokenSource>,
+    pub installation_id: String,
+    /// Où publier les jauges du plan lues à chaque réponse.
+    pub quota_sink: Option<std::sync::Arc<dyn QuotaSink>>,
 }
 
 /// Préférences de provider OpenRouter (`provider`). Seuls les écarts au comportement
@@ -133,7 +174,7 @@ mod tests {
     fn providers_resolve_secrets_at_the_boundary() {
         let secrets = MemorySecretStore::with(&[("openrouter_api_key", "sk-or-v1-test123456789")]);
         let cfg = Config::sample(1);
-        let set = build_providers(&cfg, &secrets, Catalog::new()).unwrap();
+        let set = build_providers(&cfg, &secrets, Catalog::new(), None).unwrap();
         assert!(set.openrouter.is_some());
         assert!(
             set.compat.is_none(),
@@ -147,7 +188,7 @@ mod tests {
     fn missing_secret_is_an_auth_error() {
         let secrets = MemorySecretStore::new();
         let cfg = Config::sample(1);
-        let e = build_providers(&cfg, &secrets, Catalog::new())
+        let e = build_providers(&cfg, &secrets, Catalog::new(), None)
             .err()
             .expect("un secret absent doit faire échouer la construction");
         assert_eq!(e.kind, LlmErrorKind::Auth);
@@ -179,7 +220,7 @@ mod tests {
         let secrets = MemorySecretStore::with(&[("openrouter_api_key", "sk-or-v1-x123456789")]);
         let mut cfg = Config::sample(1);
         cfg.providers.local.enabled = true;
-        let set = build_providers(&cfg, &secrets, Catalog::new()).unwrap();
+        let set = build_providers(&cfg, &secrets, Catalog::new(), None).unwrap();
         assert_eq!(set.get("openrouter:a/b").unwrap().name(), "openrouter");
         assert_eq!(
             set.get("openai_compat:whisper").unwrap().name(),

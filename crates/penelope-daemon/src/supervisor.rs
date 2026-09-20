@@ -94,6 +94,9 @@ impl Daemon {
             supervised("workflows", |d| {
                 Box::pin(crate::workflow::driver_loop(d)) as BoxLoop
             }),
+            supervised("codex.refresh", |d| {
+                Box::pin(crate::codex_auth::refresh_loop(d)) as BoxLoop
+            }),
             supervised("mcp.oauth_callback", |d| {
                 Box::pin(async move {
                     crate::mcp_auth::callback_server(d).await;
@@ -193,12 +196,28 @@ async fn catalog_loop(d: Arc<Daemon>) {
             .alias_model(&cfg.role_alias("chat_default"))
             .unwrap_or("openrouter:x")
             .to_string();
-        match d.provider_for(&default).await {
-            Ok(p) => match p.fetch_models().await {
-                Ok(models) => tracing::info!(n = models.len(), "catalogue de modèles à jour"),
-                Err(e) => tracing::warn!(error = %e, "catalogue de modèles indisponible"),
-            },
-            Err(e) => tracing::info!(error = %e, "catalogue en attente d'une clé"),
+        // Le fournisseur de `chat_default`, plus Codex dès qu'un alias le vise : son
+        // catalogue dit la fenêtre réelle et les efforts acceptés du plan (#142). Chacun
+        // fait un `upsert` : le catalogue OpenRouter n'est jamais écrasé.
+        let mut wanted = vec![default];
+        if cfg.providers.codex.enabled
+            && let Some(codex_alias) = cfg
+                .models
+                .aliases
+                .values()
+                .find(|m| penelope_llm::catalog::provider_of(m) == "codex")
+            && penelope_llm::catalog::provider_of(&wanted[0]) != "codex"
+        {
+            wanted.push(codex_alias.clone());
+        }
+        for model in &wanted {
+            match d.provider_for(model).await {
+                Ok(p) => match p.fetch_models().await {
+                    Ok(models) => tracing::info!(n = models.len(), "catalogue de modèles à jour"),
+                    Err(e) => tracing::warn!(error = %e, "catalogue de modèles indisponible"),
+                },
+                Err(e) => tracing::info!(error = %e, "catalogue en attente d'une clé"),
+            }
         }
         // Sans clé, on réessaie vite : elle peut arriver pendant que le daemon tourne.
         let wait = if d.services.catalog.is_empty() {

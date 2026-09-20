@@ -358,6 +358,18 @@ pub enum ModelCmd {
         alias: String,
         model: String,
     },
+    /// Connecte un fournisseur à compte (`codex` : abonnement ChatGPT).
+    Auth {
+        /// Fournisseur à connecter.
+        #[arg(default_value = "codex")]
+        provider: String,
+        /// Déconnecte au lieu de connecter : le jeton est révoqué puis oublié.
+        #[arg(long)]
+        logout: bool,
+        /// Affiche l'état de la connexion, sans rien changer.
+        #[arg(long)]
+        status: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -624,6 +636,14 @@ pub async fn run(cli: Cli) -> CliResult<()> {
             return chat(&cli, session.clone(), message.clone()).await;
         }
         Command::Onboard { part } => return onboard(&cli, part.clone()).await,
+        // Connexion d'un compte : le code s'affiche, puis Pénélope attend la validation.
+        Command::Model(ModelCmd::Auth {
+            provider,
+            logout,
+            status,
+        }) if !cli.json && !*logout && !*status => {
+            return model_auth(&cli, provider.clone()).await;
+        }
         _ => {}
     }
 
@@ -980,6 +1000,19 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Model(ModelCmd::Set { alias, model }) => {
             (m::MODEL_SET, json!({"alias": alias, "model": model}))
         }
+        // `model auth` sans option passe par `model_auth` (code affiché, puis attente) ;
+        // cette route sert la parité CLI↔RPC et le mode `--json`.
+        Command::Model(ModelCmd::Auth {
+            provider,
+            logout,
+            status,
+        }) => (
+            m::MODEL_AUTH,
+            json!({
+                "provider": provider,
+                "action": if *logout { "logout" } else if *status { "status" } else { "start" },
+            }),
+        ),
 
         Command::Wf(WfCmd::List) => (m::WF_LIST, json!({})),
         Command::Wf(WfCmd::Show { id }) => (m::WF_SHOW, json!({"id": id})),
@@ -1918,6 +1951,45 @@ async fn onboard(cli: &Cli, part: Option<String>) -> CliResult<()> {
     }
 }
 
+/// Connexion d'un fournisseur à compte (issue #142) : Pénélope demande un code
+/// d'appareil, l'affiche avec l'adresse à ouvrir, puis attend que le propriétaire l'ait
+/// saisi. Le code ne vaut que quinze minutes.
+async fn model_auth(cli: &Cli, provider: String) -> CliResult<()> {
+    let socket = socket_path(cli.home.clone())?;
+    let start = call(
+        &socket,
+        m::MODEL_AUTH,
+        json!({"provider": provider, "action": "start"}),
+    )
+    .await?;
+    println!(
+        "🔐 Ouvrir {}
+   et saisir le code : {}
+",
+        start["url"].as_str().unwrap_or_default(),
+        start["user_code"].as_str().unwrap_or_default()
+    );
+    println!("J'attends la validation (quinze minutes)…");
+    // L'attente dure autant que le propriétaire : pas de délai côté client.
+    crate::client::set_timeout(Some(0));
+    let done = call(
+        &socket,
+        m::MODEL_AUTH,
+        json!({"provider": provider, "action": "wait"}),
+    )
+    .await?;
+    println!(
+        "✅ Connecté : plan {}, compte {}",
+        done["plan"].as_str().unwrap_or("?"),
+        done["account"].as_str().unwrap_or("?")
+    );
+    println!(
+        "Le fournisseur `{provider}` est actif. Pour lui donner un alias :\n  \
+         penelope model set code codex:gpt-6-astra"
+    );
+    Ok(())
+}
+
 async fn chat(cli: &Cli, session: Option<String>, message: Vec<String>) -> CliResult<()> {
     use std::io::Write;
     use tokio::io::{AsyncBufReadExt, BufReader};
@@ -2057,6 +2129,18 @@ async fn finish_turn(
                     "{}",
                     serde_json::to_string_pretty(&detail["payload"]["arguments"])
                         .unwrap_or_default()
+                );
+            }
+            // « Toujours » sur une commande composée n'écrit aucune règle : le dire
+            // avant le clic, comme la carte Telegram (issue #141).
+            let no_rule = penelope_daemon::agent::always_creates_no_rule(
+                detail["subject"].as_str().unwrap_or_default(),
+                detail["payload"].get("arguments"),
+            );
+            if no_rule {
+                println!(
+                    "ℹ️  commande composée : « toujours » l'autorise cette fois, sans créer \
+                     de règle."
                 );
             }
             if !interactive {
@@ -2280,6 +2364,7 @@ mod tests {
             (vec!["config", "get"], m::CONFIG_GET),
             (vec!["secret", "list"], m::SECRET_LIST),
             (vec!["model", "list"], m::MODEL_LIST),
+            (vec!["model", "auth", "codex"], m::MODEL_AUTH),
             (vec!["wf", "list"], m::WF_LIST),
             (vec!["schedule", "list"], m::SCHEDULE_LIST),
             (vec!["mem", "search", "x"], m::MEM_SEARCH),

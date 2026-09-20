@@ -291,6 +291,19 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `providers.local.models` | `[]` | Modèles servis par l'endpoint. |
 | `providers.local.stream_idle_timeout` | `"120s"` | Silence toléré pendant un flux, comme pour OpenRouter. |
 | `providers.local.context_window` | `32768` | Fenêtre de contexte annoncée pour les modèles servis par cet endpoint, quand `GET /models` ne la donne pas. |
+| `providers.codex.enabled` | `false` | Fournisseur actif. Faux tant que le compte n'est pas connecté (`penelope model auth codex`). |
+| `providers.codex.base_url` | `"https://chatgpt.com/backend-api/codex"` | Adresse du backend Codex. |
+| `providers.codex.issuer` | `"https://auth.openai.com"` | Serveur d'autorisation du compte ChatGPT. |
+| `providers.codex.client_id` | `"app_EMoamEEZ73f0CkXaXp7hrann"` | Identifiant du client OAuth, celui de Codex CLI. |
+| `providers.codex.originator` | `"codex_cli_rs"` | En-tête `originator` envoyé au backend. Le serveur filtre cette valeur : la changer sans raison donne un 403 sur toutes les requêtes. |
+| `providers.codex.client_version` | `"0.104.0"` | Version de client annoncée (`User-Agent`, `?client_version=`). Épinglée, mise à jour à la main quand le backend exige plus récent. |
+| `providers.codex.stream_idle_timeout` | `"120s"` | Silence toléré pendant un flux, comme pour OpenRouter. |
+| `providers.codex.request_retries` | `3` | Nouvelles tentatives sur erreur transitoire avant le flux (5xx, coupure). Un 429 de quota n'est jamais rejoué. |
+| `providers.codex.reasoning_summary` | `"auto"` | Résumé de raisonnement demandé (`auto`, `concise`, `detailed`, ou vide). |
+| `providers.codex.verbosity` | `"medium"` | Verbosité du texte rendu (`low`, `medium`, `high`). |
+| `providers.codex.quota_alert_ratio` | `0.8` | Part de la fenêtre de quota qui déclenche une alerte (0 à 1). |
+| `providers.codex.quota_stop_ratio` | `0.95` | Part de la fenêtre de quota au-delà de laquelle le fournisseur se met en retrait et laisse le repli jouer (0 à 1). |
+| `providers.codex.models` | `["gpt-6-astra","gpt-5.6-sol","gpt-5.6-terra","gpt-5.6-luna","gpt-5.5","gpt-5.4"]` | Modèles servis, en repli quand `GET /models` ne répond pas. |
 | `providers.extra.<nom>.kind` | – | Type d'endpoint (`openai_compat`). |
 | `providers.extra.<nom>.base_url` | – | Adresse de l'endpoint OpenAI-compatible. |
 | `providers.extra.<nom>.api_key` | – | Clé éventuelle, par référence au magasin de secrets. |
@@ -680,6 +693,70 @@ quantizations = []         # par exemple ["fp8", "bf16"]
 order = []                 # à éviter : un ordre imposé désactive le routage collant
 ```
 
+### Codex : les modèles d'un abonnement ChatGPT
+
+Un abonnement ChatGPT (Plus, Pro, Business) ne donne ni clé d'API ni crédits Platform,
+mais il ouvre le backend Codex : les modèles du plan (`gpt-6-astra`, `gpt-5.6-*`), 272 k
+de contexte, outils et images, sans facturation à l'appel. Pénélope sait s'y connecter, à
+côté d'OpenRouter.
+
+**Ce que c'est, juridiquement.** Cet usage est **toléré** par OpenAI (page « Codex for
+Open Source », déclarations publiques sur les clients tiers), **jamais garanti par
+contrat**, et révocable du jour au lendemain. Pénélope emprunte l'identité du client Codex
+CLI (`originator`, `User-Agent`, identifiant d'installation), parce que le backend filtre
+cet en-tête et sert un catalogue qui en dépend ; c'est une usurpation assumée, la même sur
+toutes les requêtes — une identité incohérente vaut des heures de « servers overloaded ».
+Le repli, si la porte se ferme : une clé d'API sur `openai_compat` vers `api.openai.com`.
+
+**Se connecter** (la machine n'a pas besoin de navigateur) :
+
+```bash
+penelope model auth codex          # affiche une adresse et un code à six caractères
+penelope model auth codex --status # plan, compte, état du jeton
+penelope model auth codex --logout # révoque le jeton et l'oublie
+```
+
+Sur Telegram : `/model auth codex`, `/model auth codex status`, `/model auth codex
+logout`. Le code vaut quinze minutes ; Pénélope confirme dès qu'il est saisi, puis active
+`providers.codex.enabled`. Les jetons vivent dans le magasin de secrets sous `codex.oauth`
+— jamais dans `~/.codex/auth.json`, qui appartient à Codex CLI — et sont rafraîchis en
+fond, hors tour. Le jeton de rafraîchissement est **à usage unique** : Pénélope sérialise
+ses rotations, et un jeton rejoué déconnecte le compte pour de bon (il faut alors
+reconnecter).
+
+**Donner un alias**, comme pour tout autre fournisseur :
+
+```bash
+penelope model set code codex:gpt-6-astra
+```
+
+**Pour quels tours.** L'abonnement ne sert que ce que le propriétaire ouvre lui-même : un
+message Telegram ou CLI, et les sous-agents de ce tour. Tout ce qui tourne sans lui —
+planification à cible `prompt`, rêve nocturne, veille, résumeur de compaction, relecture
+d'épisode, consolidation, classifieur, embeddings, transcription, synthèse vocale, titre
+automatique, run de workflow — repasse par le modèle OpenRouter de l'alias, sans carte ni
+message, en laissant l'événement `llm.codex_scope_fallback`. C'est la contrepartie de la
+tolérance d'OpenAI : un compte, un humain, un usage interactif.
+
+Conséquence pratique : `penelope model set <alias> codex:<modèle>` **refuse** les alias qui
+servent un rôle de fond (`classifier`, `compaction`, `memory_review`, `embedding`, `stt`,
+`tts`) en disant pourquoi, et `penelope doctor` signale une configuration déjà en place qui
+l'aurait contournée. Un seul compte à la fois : se connecter à un autre demande d'abord
+`penelope model auth codex --logout`.
+
+**Ce que ça coûte.** Rien à l'appel : les lignes d'usage portent `provider = codex`,
+`cost_usd = 0` et `estimated = false` — le coût est connu, il vaut zéro. Les plafonds en
+dollars (`budget.daily_usd`, `budget.session_usd`, `budget.run_usd`) ne comptent donc rien
+pour ce fournisseur et ne le freinent pas.
+
+La vraie limite est le quota du plan, que le backend annonce à chaque réponse (une fenêtre
+de 5 h, une fenêtre hebdomadaire). Pénélope le lit, le range, et l'affiche dans `/budget`,
+`penelope model list` et `self_status` (`primary 42 % · retour 18:05`). À
+`providers.codex.quota_alert_ratio` (0,8 par défaut) : une alerte, une seule par fenêtre. À
+`quota_stop_ratio` (0,95) : Pénélope se met en retrait **avant** l'appel et laisse le repli
+OpenRouter jouer, plutôt que d'aller chercher un refus. Un quota atteint n'est pas une
+panne : le message dit l'heure de retour.
+
 ### Coûts
 
 Chaque appel au modèle est enregistré avec le coût **facturé** annoncé par OpenRouter
@@ -801,8 +878,8 @@ antérieure) le garde à la mise à jour ; sans la clé, le réseau est fermé.
 **Lectures sans demande, modes et autorisations déclarées.** Une commande qui ne fait que
 lire (`ls`, `cat`, `head`, `grep`, `find` sans `-exec` ni `-delete`, `wc`, `git status`,
 `git log`, `git diff`…), appelée par son nom, sans enchaînement, redirection,
-substitution, variable ni échappement, est classée lecture : elle part sans demande,
-comme `fs_read`. Tout le reste est une écriture. Chaque session a un mode (`/mode` sur
+substitution ni échappement **hors guillemets**, est classée lecture : elle part sans
+demande, comme `fs_read`. Tout le reste est une écriture. Chaque session a un mode (`/mode` sur
 Telegram, `penelope session mode`, défaut `tools.approval_mode`) : « demander tout »
 (`ask`, même une lecture du shell attend ton accord), « lectures sans demande » (`reads`,
 le défaut) et « tout sauf le destructif » (`auto` : plus de demande, sauf une commande qui
@@ -823,10 +900,41 @@ famille déclarée d'avance qui vaut aussi derrière le `cd`. Hors des workspace
 d'un autre enchaînement (`;`, `|`, `&&`), d'une redirection ou d'une substitution, la
 ligne reste composée. Le modèle a de toute façon le paramètre `cwd` de `shell_exec`.
 
-Un « Toujours » sur une autre commande composée (`cd /x && ls` hors workspace, `ls; pwd`)
-l'autorise cette fois, sans créer de règle : une famille `cd` ne s'appliquerait jamais. `penelope policies` et
-`/policies` signalent les règles inutiles (famille issue d'une commande composée, lecture
-déjà libre, jamais utilisée depuis une semaine), à retirer d'un bouton.
+**Ce qui compte comme enchaînement.** Une ligne est dite *composée* — donc jamais une
+lecture, sans famille, et hors de portée d'une règle ou d'une famille déclarée — quand
+elle porte, **hors guillemets**, un opérateur (`;`, `&`, `&&`, `||`, `(`, `)`) ou une
+redirection (`>`, `<`) ; une substitution (`$(…)`, `` `…` ``, `$VAR`) ou un échappement
+(`\`), même entre guillemets doubles, où ils gardent leur pouvoir dans un shell ; un saut
+de ligne ; une négation (`!` en tête) ; une apostrophe ou un guillemet non fermé ; ou une
+affectation d'environnement qui détourne ce qui sera exécuté (`PATH=`, `HOME=`, `IFS=`,
+`ENV=`, `BASH_ENV=`, `DYLD_*`, `LD_*`, `GIT_CONFIG*`, `GIT_SSH_COMMAND=`, `NODE_OPTIONS=`,
+`PYTHONSTARTUP=`, `PERL5OPT=`, `RUBYOPT=`…).
+
+**Un tube vers une lecture pure n'est pas un enchaînement.** `glab api … | jq -r '…'`,
+`cat f | grep x | head -20`, `ls | wc -l` : ce qui agit est la première étape, et les
+suivantes ne peuvent que lire. La famille est donc celle de la première étape (une règle
+`glab` couvre `glab api …` comme `glab api … | jq …`), et une lecture qui traverse un tel
+tube reste une lecture. Les étapes acceptées sont `jq` (sans `-f`, `--rawfile`,
+`--slurpfile`), `cat` (sans fichier), `grep`, `egrep`, `fgrep`, `rg` (sans `--pre`),
+`head`, `tail`, `cut`, `sort` (sans `-o`), `wc`, `uniq`, `tr`, `nl`, `rev`, `column`. Tout
+le reste — `| sh`, `| xargs`, `| tee`, `| python`, `| sed`, un `||`, une redirection —
+laisse la ligne composée.
+
+Entre guillemets, ces caractères ne sont que des caractères : `glab api --hostname
+gitlab.example "projects?membership=true&per_page=100"` est de la famille `glab`, pas un
+enchaînement ; `grep -n 'x | y' fichier` et `echo "a & b"` sont des lectures. Une
+affectation anodine en tête laisse la famille à son programme : `GITLAB_HOST=example glab
+api "…"` est de la famille `glab`, `TZ=UTC date` est une lecture. Le même découpage sert à
+créer la règle, à la reconnaître, à lire `tools.shell_allow` et à classer les lectures :
+ce qu'un « Toujours » écrit est ce qui s'applique ensuite.
+
+Un « Toujours » sur une commande composée (`cd /x && ls` hors workspace, `ls; pwd`)
+l'autorise cette fois, sans créer de règle : une famille `cd` ne s'appliquerait jamais. La
+carte le dit **avant** le clic — le bouton devient « ✅ Autoriser (pas de règle possible) »
+et la ligne de qualificatifs porte « aucune règle possible : commande composée ».
+`penelope policies` et `/policies` signalent les règles inutiles (famille issue d'une
+commande composée ou d'une affectation comme `GITLAB_HOST=…`, lecture déjà libre, jamais
+utilisée depuis une semaine), à retirer d'un bouton.
 
 Un « Toujours » est **borné à l'appel qu'il autorise**, jamais à l'outil entier :
 pour `shell_exec`, à la famille de commandes (`cargo test …`, `git log …`) ; pour `fs_write`

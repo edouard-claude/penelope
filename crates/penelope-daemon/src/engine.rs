@@ -480,7 +480,9 @@ impl Daemon {
             }
         }
 
-        // 3. Provider.
+        // 3. Provider. L'abonnement ChatGPT ne sert que les tours du propriétaire : une
+        // planification ou un travail interne se replie ici, sans bruit (#142).
+        let model_id = crate::codex_scope::for_origin(self, &model_id, origin).await;
         let provider = match self.provider_for(&model_id).await {
             Ok(p) => p,
             Err(error) => return Ok(TurnOutcome::Failed { error }),
@@ -663,6 +665,7 @@ impl Daemon {
                  openrouter:openai/whisper-large-v3`"
             ));
         }
+        let model = crate::codex_scope::background(self, &model, "transcription").await;
         let provider = self.provider_for(&model).await?;
         let language = Some(cfg.owner.language.clone()).filter(|l| !l.is_empty());
         let t = tokio::time::timeout(
@@ -1009,6 +1012,7 @@ impl Daemon {
         let cfg = s.config.config();
         let alias = cfg.role_alias("classifier");
         let model_id = cfg.alias_model(&alias)?.to_string();
+        let model_id = crate::codex_scope::background(self, &model_id, "classifieur").await;
         let provider = self.provider_for(&model_id).await.ok()?;
         let info = s
             .catalog
@@ -1857,7 +1861,14 @@ mod tests {
     /// une commande composée ; une famille déclarée passe sans demande.
     #[tokio::test]
     async fn shell_commands_are_classified_before_asking() {
-        for read in ["ls -la /tmp", "cat x", "grep -r foo src"] {
+        for read in [
+            "ls -la /tmp",
+            "cat x",
+            "grep -r foo src",
+            // #141 : un tube vers une lecture pure reste une lecture.
+            "grep -rn foo src | head -20",
+            "cat x | wc -l",
+        ] {
             let (_dir, _d, out) = shell_turn(read, None, &[]).await;
             assert!(!asked(&out), "{read} : {out:?}");
         }
@@ -2007,6 +2018,245 @@ mod tests {
             .unwrap();
         let out = d.run_turn(&claim(&d).await).await;
         assert!(asked(&out), "autre commande derrière le même cd : {out:?}");
+    }
+
+    /// #141 : une URL de requête entre guillemets (`?a=1&b=2`) n'enchaîne rien. Le
+    /// « Toujours » d'un appel `glab` crée une règle `glab`, elle couvre l'appel suivant
+    /// de la famille (affectation d'environnement comprise), et une famille déclarée
+    /// d'avance avec réseau la couvre aussi. Un vrai enchaînement redemande.
+    #[tokio::test]
+    async fn a_quoted_query_url_is_ruled_by_its_family() {
+        let (_dir, d, p) = daemon().await;
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        let call = |command: &str, id: &str| {
+            Scripted::ToolCalls(
+                String::new(),
+                vec![ToolCall {
+                    id: id.into(),
+                    name: "shell_exec".into(),
+                    arguments: json!({"command": command}),
+                }],
+            )
+        };
+
+        p.push(call(
+            "glab api --hostname h \"groups?search=14&per_page=20\"",
+            "c1",
+        ));
+        d.enqueue_message(&sid, "liste les groupes", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        let out = d.run_turn(&turn).await;
+        d.services.turns.complete(&turn).await.unwrap();
+        let TurnOutcome::AwaitingApproval { approval_id } = out else {
+            panic!("{out:?}");
+        };
+        crate::agent::decide_approval(
+            &d.services,
+            &approval_id,
+            &penelope_hitl::Decision::approve_always("cli"),
+        )
+        .await
+        .unwrap();
+        let rules = d.services.policies.active_rules().await.unwrap();
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        assert_eq!(
+            rules[0].arg_match,
+            Some(json!({"command": {penelope_hitl::policy::CMD_PREFIX_OP: "glab"}})),
+            "la famille est `glab`, pas la ligne entière"
+        );
+
+        // Reprise : l'appel approuvé part, puis la même famille passe par la règle,
+        // derrière une affectation d'environnement anodine.
+        d.enqueue_resume(&sid, &approval_id, &Origin::Cli)
+            .await
+            .unwrap();
+        p.push(call(
+            "GITLAB_HOST=h glab api \"projects?membership=true&per_page=100\"",
+            "c2",
+        ));
+        p.reply("C'est fait.");
+        let turn = claim(&d).await;
+        let out = d.run_turn(&turn).await;
+        d.services.turns.complete(&turn).await.unwrap();
+        assert!(!asked(&out), "même famille : {out:?}");
+
+        // Le tube vers une lecture pure passe par la même règle : c'est `glab` qui agit,
+        // `jq` ne fait que formater (commentaire de #141). Huit « Toujours » cliqués pour
+        // rien en cinq minutes venaient de là.
+        p.push(call(
+            "glab api --hostname h \"pipelines?per_page=30\" | jq -r '.[].id'",
+            "c3",
+        ));
+        p.reply("Voilà.");
+        d.enqueue_message(&sid, "les pipelines", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        let out = d.run_turn(&turn).await;
+        d.services.turns.complete(&turn).await.unwrap();
+        assert!(!asked(&out), "tube de lecture pure : {out:?}");
+
+        // Un tube vers autre chose qu'une lecture reste un enchaînement : il redemande.
+        p.push(call("glab api h \"p\" | sh", "c4"));
+        d.enqueue_message(&sid, "et ça", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let out = d.run_turn(&claim(&d).await).await;
+        assert!(asked(&out), "enchaînement : {out:?}");
+    }
+
+    /// #141 : `tools.shell_allow_network` couvre une commande dont l'URL porte un `&`.
+    #[tokio::test]
+    async fn a_declared_family_covers_a_quoted_query_url() {
+        let (_dir, d, p) = daemon().await;
+        d.publish_config("test", |c| {
+            c.tools.shell_allow_network = vec!["glab api".into()];
+            Ok(vec!["tools.shell_allow_network".into()])
+        })
+        .unwrap();
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "c1".into(),
+                name: "shell_exec".into(),
+                arguments: json!({
+                    "command": "glab api --hostname h \"projects?membership=true&per_page=100\"",
+                    "network": true
+                }),
+            }],
+        ));
+        p.reply("C'est fait.");
+        d.enqueue_message(&sid, "liste les projets", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let out = d.run_turn(&claim(&d).await).await;
+        assert!(!asked(&out), "famille déclarée avec réseau : {out:?}");
+    }
+
+    /// #142 (décision 2) : l'abonnement ChatGPT ne sert que les tours ouverts par le
+    /// propriétaire. Une planification, qui tourne sans lui, se replie sur OpenRouter,
+    /// sans carte ni bruit, et laisse un événement.
+    #[tokio::test]
+    async fn the_subscription_only_serves_the_owner() {
+        let (_dir, d, p) = daemon().await;
+        d.publish_config("test", |c| {
+            c.models
+                .aliases
+                .insert("main".into(), "codex:gpt-6-astra".into());
+            c.models
+                .aliases
+                .insert("fast".into(), "openrouter:vendeur/rapide".into());
+            c.models
+                .routing
+                .fallback
+                .insert("main".into(), vec!["fast".into()]);
+            c.providers.codex.enabled = true;
+            Ok(vec!["models.aliases.main".into()])
+        })
+        .unwrap();
+
+        // Le propriétaire parle : son abonnement répond.
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        p.reply("Bonjour.");
+        d.enqueue_message(&sid, "salut", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        let out = d.run_turn(&turn).await;
+        d.services.turns.complete(&turn).await.unwrap();
+        assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
+        assert_eq!(
+            p.requests().last().expect("appel").model,
+            "codex:gpt-6-astra"
+        );
+
+        // Une planification vise le même alias : elle repasse par OpenRouter.
+        let origin = Origin::Internal {
+            source: "schedule".into(),
+        };
+        let sid = d.chat_session_for(&origin).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+        p.reply("Rapport prêt.");
+        d.enqueue_message(&sid, "le rapport", &origin, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        let out = d.run_turn(&turn).await;
+        d.services.turns.complete(&turn).await.unwrap();
+        assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
+        assert_eq!(
+            p.requests().last().expect("appel").model,
+            "openrouter:vendeur/rapide",
+            "la planification ne passe pas par l'abonnement"
+        );
+        let events = d.services.events.range(0, 500).await.unwrap();
+        let fallback = events
+            .iter()
+            .find(|e| e.kind == "llm.codex_scope_fallback")
+            .expect("l'événement trace le repli");
+        assert_eq!(fallback.payload["work"], "schedule");
+        assert_eq!(fallback.payload["replaced"], true);
+        // Aucune carte : le repli est silencieux.
+        assert!(d.services.approvals.pending(10).await.unwrap().is_empty());
+    }
+
+    /// #142 (décision 3) : la jauge du plan alerte une fois par fenêtre, et distingue un
+    /// quota d'une panne.
+    #[tokio::test]
+    async fn the_plan_gauge_alerts_once_per_window() {
+        use penelope_llm::codex::QuotaWindow;
+        let (_dir, d, _p) = daemon().await;
+        d.publish_config("test", |c| {
+            c.providers.codex.enabled = true;
+            Ok(vec!["providers.codex.enabled".into()])
+        })
+        .unwrap();
+        let s = &d.services;
+        let quota = |used: f64, reset_at: i64| penelope_llm::Quota {
+            primary: Some(QuotaWindow {
+                used_percent: used,
+                window_minutes: 300,
+                reset_at,
+            }),
+            plan_type: "pro".into(),
+            ..Default::default()
+        };
+
+        // Sous le seuil : rien.
+        crate::codex_quota::store(s, &quota(40.0, 1_790_000_000))
+            .await
+            .unwrap();
+        assert!(crate::codex_quota::check_alert(&d).await.unwrap().is_none());
+
+        // Au-delà : une alerte, une seule.
+        crate::codex_quota::store(s, &quota(81.0, 1_790_000_000))
+            .await
+            .unwrap();
+        let first = crate::codex_quota::check_alert(&d)
+            .await
+            .unwrap()
+            .expect("alerte");
+        assert!(first.contains("81 %"), "{first}");
+        assert!(first.contains("pas une panne"), "{first}");
+        crate::codex_quota::store(s, &quota(90.0, 1_790_000_000))
+            .await
+            .unwrap();
+        assert!(
+            crate::codex_quota::check_alert(&d).await.unwrap().is_none(),
+            "une seule alerte par fenêtre"
+        );
+
+        // Fenêtre suivante : l'alerte reprend son droit.
+        crate::codex_quota::store(s, &quota(85.0, 1_790_018_000))
+            .await
+            .unwrap();
+        assert!(crate::codex_quota::check_alert(&d).await.unwrap().is_some());
     }
 
     /// Script de la demande de #130, secrets remplacés : préfixe `cd`, heredoc quoté,

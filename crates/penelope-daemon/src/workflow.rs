@@ -1229,6 +1229,7 @@ async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         Ok(m) => m,
         Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
     };
+    let model_id = crate::codex_scope::background(ctx.d, &model_id, "workflow").await;
     let provider = match ctx.d.provider_for(&model_id).await {
         Ok(p) => p,
         Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
@@ -1508,6 +1509,7 @@ async fn sub_agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         Ok(m) => m,
         Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
     };
+    let model_id = crate::codex_scope::background(ctx.d, &model_id, "workflow").await;
     let mut prompt = with_brief(ctx, ctx.render(&step.prompt).await).await;
     if let Some(schema) = &step.output_schema {
         prompt.push_str(&format!(
@@ -2364,6 +2366,7 @@ async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
             Ok(m) => m,
             Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
         };
+        let model_id = crate::codex_scope::background(ctx.d, &model_id, "workflow").await;
         match run_sub_agent(
             ctx.d,
             SubAgentTask {
@@ -2521,6 +2524,7 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
         prompt: &str,
         model: Option<&str>,
         tools: Vec<String>,
+        origin: &Origin,
         cancel: &CancelToken,
     ) -> Result<Value, String> {
         let cfg = self.daemon.services.config.config();
@@ -2532,6 +2536,9 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
             .map(String::from)
             .or_else(|| alias.contains(':').then(|| alias.clone()))
             .ok_or_else(|| format!("alias de modèle inconnu `{alias}`"))?;
+        // Le sous-agent hérite du périmètre de son tour : l'abonnement ChatGPT sert ceux
+        // du propriétaire, pas une planification qui passerait par là (#142).
+        let model_id = crate::codex_scope::for_origin(&self.daemon, &model_id, origin).await;
         let text = run_sub_agent(
             &self.daemon,
             SubAgentTask {
@@ -3432,7 +3439,14 @@ mod tests {
         let parent = CancelToken::new();
         parent.cancel();
         let _ = orchestrator
-            .spawn_sub_agent(&sid, "cherche la cause", None, vec![], &parent)
+            .spawn_sub_agent(
+                &sid,
+                "cherche la cause",
+                None,
+                vec![],
+                &Origin::Cli,
+                &parent,
+            )
             .await;
         assert_eq!(e.p.call_count(), 0, "aucun appel après l'arrêt");
 

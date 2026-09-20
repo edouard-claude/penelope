@@ -62,26 +62,26 @@ impl ShellOutput {
 }
 
 /// Une ligne de commande qui ne fait que lire (issue #111) : un programme de lecture
-/// connu, appelé par son nom, sans enchaînement, redirection, substitution, variable,
-/// échappement ni option qui écrive ou lance autre chose. Tout le reste est une écriture,
-/// approuvée comme telle. Le bac à sable borne de toute façon ce qu'elle peut lire.
+/// connu, appelé par son nom, sur une ligne simple (aucun enchaînement, redirection,
+/// substitution ni échappement hors apostrophes, voir `penelope_hitl::cmdline`), sans
+/// option qui écrive ou lance autre chose. Tout le reste est une écriture, approuvée
+/// comme telle. Le bac à sable borne de toute façon ce qu'elle peut lire.
+///
+/// Le découpage est celui des règles (issue #141) : un `&`, un `|` ou une parenthèse
+/// entre guillemets (`grep -n 'x | y' f`) est un caractère, pas un enchaînement ; une
+/// affectation de tête (`TZ=UTC date`) laisse la lecture à son programme, sauf quand elle
+/// détourne l'interpréteur (`PATH=/tmp ls`) ; et un tube vers une lecture pure
+/// (`cat f | grep x`) ne change ni ce qui agit, ni ce que ça touche.
 pub fn is_read_command(command: &str) -> bool {
-    const FORBIDDEN: &[char] = &[
-        ';', '&', '|', '`', '$', '>', '<', '\n', '\r', '(', ')', '{', '}', '\\', '!',
-    ];
-    let line = command.trim();
-    if line.is_empty() || line.contains(FORBIDDEN) {
+    let Some(line) = penelope_hitl::cmdline::pipeline(command) else {
         return false;
-    }
-    let words: Vec<String> = line
-        .split_whitespace()
-        .map(|w| w.trim_matches(|c| c == '\'' || c == '"').to_string())
-        .collect();
+    };
+    let words = line.head.words;
     let Some(program) = words.first() else {
         return false;
     };
-    // `./ls` ou `/tmp/cat` peuvent être n'importe quoi ; `FOO=1 ls` change l'environnement.
-    if program.contains('/') || program.contains('=') {
+    // `./ls` ou `/tmp/cat` peuvent être n'importe quoi.
+    if program.contains('/') {
         return false;
     }
     let has = |bad: &[&str]| {
@@ -634,6 +634,18 @@ mod tests {
             "git diff HEAD~1",
             "git branch -a",
             "sort notes.txt",
+            // #141 : un opérateur entre guillemets est un caractère, et une affectation
+            // de tête qui ne détourne rien laisse la lecture à son programme.
+            "grep -n 'x | y' f",
+            "echo \"a & b\"",
+            "printf \"(%s)\" x",
+            "jq -r '.[] | .path' data.json",
+            "FOO=1 ls",
+            "TZ=UTC date",
+            // Un tube vers une lecture pure reste une lecture.
+            "cat f | grep -n x",
+            "git log --oneline -20 | head -5",
+            "ls -la | wc -l",
         ] {
             assert!(is_read_command(read), "{read}");
         }
@@ -657,7 +669,17 @@ mod tests {
             "git diff --output=x",
             "git branch -D main",
             "./ls",
-            "FOO=1 ls",
+            // #141 : une affectation qui détourne l'interpréteur n'est jamais une lecture.
+            "PATH=/tmp ls",
+            "LD_PRELOAD=/tmp/x.so cat f",
+            "DYLD_INSERT_LIBRARIES=x.dylib ls",
+            "IFS=, ls",
+            "cat f | sh",
+            "cat f | xargs rm",
+            "cat f | tee /tmp/x",
+            "cat f | sed -i s/a/b/ g",
+            "ls | sort -o out.txt",
+            "glab api h \"p\" | jq -r '.x'",
             "l\\s",
             "export A=1",
             "",

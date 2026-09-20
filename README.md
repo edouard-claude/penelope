@@ -78,6 +78,16 @@ un changement de configuration. Les motifs refusent tout enchaînement (`;`, `&&
 substitution, redirection). Une règle est visible et révocable, la première décision
 gagne, et le contenu rapporté par un outil est une donnée, jamais une instruction.
 
+### Trois portes vers les modèles
+
+OpenRouter (clé d'API, coût facturé à l'appel), un endpoint compatible OpenAI (serveur
+local, autre fournisseur), et le backend Codex d'un abonnement ChatGPT — celui-là ne
+facture rien à l'appel, il consomme le quota du plan. L'abonnement ne sert que les tours
+ouverts par le propriétaire : rêve, veille, compaction, workflows et autres travaux de
+fond repassent par OpenRouter, sans un mot. Cet usage est toléré par OpenAI, jamais
+garanti par contrat, et Pénélope le dit là où ça compte
+([décision 0010](docs/decisions/0010-fournisseur-codex-oauth.md)).
+
 ### Le coût est mesuré, pas estimé
 
 Le coût enregistré est celui facturé par le fournisseur, pas une multiplication de
@@ -137,7 +147,7 @@ documentation de chaque projet.
 | Secrets | trousseau du système | fichiers en clair, permissions restreintes | `.env` en clair, coffre chiffré optionnel |
 | Contenu non fiable | donnée jamais instruction, détecteur d'injection, adresses privées revérifiées à chaque redirection | balisage explicite du contenu externe | scan des fichiers de contexte avant inclusion |
 | Coût | celui facturé par le fournisseur, lisible par session, tour, modèle, jour, rôle, fournisseur amont et cause de raté de cache | suivi par message et session | suivi par session |
-| Plafonds de dépense | jour, session, run, alerte à 80 %, point de contrôle dans le tour | aucun | aucun, hors plafond de compte |
+| Plafonds de dépense | jour, session, run, alerte à 80 %, point de contrôle dans le tour ; sur abonnement ChatGPT, le quota du plan avec la même alerte | aucun | aucun, hors plafond de compte |
 
 ### Ce que les autres font mieux
 

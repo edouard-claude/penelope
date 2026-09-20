@@ -53,6 +53,9 @@ pub(crate) struct ApprovalCard {
     pub details: String,
     /// Portée d'une règle « Toujours » (`« gh pr » avec réseau`), si elle en a une.
     pub always: Option<String>,
+    /// Vrai quand aucune règle n'est possible : « Toujours » n'autoriserait que cette
+    /// fois. Le propriétaire le lit avant de cliquer (issue #141).
+    pub no_rule: bool,
 }
 
 /// Compose la carte d'une demande d'approbation.
@@ -152,12 +155,42 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
             penelope_hitl::policy::describe_pattern(&p)
         }
     });
+    // Une commande composée n'a pas de famille : « Toujours » l'autoriserait une fois,
+    // sans créer de règle (#111). La carte le dit avant le clic (#141).
+    let no_rule = crate::agent::always_creates_no_rule(&a.subject, a.payload.get("arguments"));
+    if no_rule {
+        quals.push("aucune règle possible : commande composée".into());
+    }
     ApprovalCard {
         intention,
         action,
         details: quals.join(" · "),
         always,
+        no_rule,
     }
+}
+
+/// État d'une connexion de fournisseur à compte, en une bulle (issue #142).
+fn codex_status_text(v: &Value) -> String {
+    let status = &v["status"];
+    if status.is_null() {
+        return "🔌 Aucun compte ChatGPT connecté. `/model auth codex` pour le faire.".into();
+    }
+    if let Some(why) = status["disconnected"].as_str() {
+        return format!(
+            "🔌 Compte ChatGPT déconnecté ({why}). `/model auth codex` pour reconnecter."
+        );
+    }
+    format!(
+        "✅ Compte ChatGPT connecté : plan {}, compte {}{}.",
+        shown(&status["plan"]),
+        shown(&status["account"]),
+        if v["enabled"] == Value::Bool(true) {
+            ""
+        } else {
+            " — fournisseur éteint (`providers.codex.enabled`)"
+        }
+    )
 }
 
 /// Mention des messages en attente abandonnés par la fermeture d'une session.
@@ -1498,6 +1531,64 @@ impl TelegramGateway {
                                 } else {
                                     "📌 Routage fixe : les sessions non épinglées passent par `main`.".into()
                                 }
+                            }
+                        }
+                    }
+                    // Connexion d'un fournisseur à compte (#142) : le code s'affiche
+                    // ici, et Pénélope confirme dès qu'il est saisi. Ni le code ni les
+                    // jetons ne passent par une carte ni par une demande (#134).
+                    ["auth", rest @ ..] => {
+                        let provider = rest
+                            .iter()
+                            .find(|w| !w.starts_with('-') && **w != "status" && **w != "logout")
+                            .copied()
+                            .unwrap_or("codex")
+                            .to_string();
+                        let action = if rest.iter().any(|w| w.trim_start_matches('-') == "logout") {
+                            "logout"
+                        } else if rest.iter().any(|w| w.trim_start_matches('-') == "status") {
+                            "status"
+                        } else {
+                            "start"
+                        };
+                        let params = json!({"provider": provider, "action": action});
+                        match (action, rpc.call(m::MODEL_AUTH, params).await) {
+                            (_, Err(e)) => format!("❌ {e}"),
+                            ("logout", Ok(_)) => {
+                                format!("🔌 `{provider}` déconnecté : jeton révoqué et oublié.")
+                            }
+                            ("status", Ok(v)) => codex_status_text(&v),
+                            (_, Ok(v)) => {
+                                // L'attente se fait en fond : le tour Telegram ne reste
+                                // pas suspendu un quart d'heure.
+                                let g = self.clone();
+                                let daemon = d.clone();
+                                tokio::spawn(async move {
+                                    let text = match crate::rpc::Rpc::new(daemon)
+                                        .call(
+                                            m::MODEL_AUTH,
+                                            json!({"provider": "codex", "action": "wait"}),
+                                        )
+                                        .await
+                                    {
+                                        Ok(v) => format!(
+                                            "✅ Connecté : plan {}, compte {}.\nDonner un \
+                                             alias : `/model code codex:gpt-6-astra`",
+                                            shown(&v["plan"]),
+                                            shown(&v["account"])
+                                        ),
+                                        Err(e) => format!("❌ Connexion abandonnée : {e}"),
+                                    };
+                                    if let Err(e) = g.reply(chat_id, topic_id, None, &text).await {
+                                        tracing::warn!(error = %e, "confirmation de connexion non envoyée");
+                                    }
+                                });
+                                format!(
+                                    "🔐 Ouvrir {}\net saisir le code : `{}`\n\nJe confirme ici \
+                                     dès que c'est validé (quinze minutes).",
+                                    shown(&v["url"]),
+                                    shown(&v["user_code"])
+                                )
                             }
                         }
                     }
@@ -3278,6 +3369,16 @@ impl TelegramGateway {
                 ));
             }
         }
+        // L'abonnement ChatGPT ne facture pas l'appel : sa limite est le quota du plan,
+        // que les plafonds en dollars ne voient pas (#142).
+        if cfg.providers.codex.enabled
+            && let Some(q) = crate::codex_quota::snapshot(s).await
+        {
+            t.push_str(&format!(
+                "\n**Abonnement ChatGPT** (hors plafonds en dollars)\n\n- {}\n",
+                crate::codex_quota::gauge_line(&q, s.clock.now_ms())
+            ));
+        }
         t.push_str(
             "\nDétail : `/budget sessions`, `/budget requêtes`, `/budget modèles` · plafond de \
              cette session : `/budget session 20`",
@@ -3808,11 +3909,14 @@ impl TelegramGateway {
                             b.label = "✅ Pour cette session".into();
                         }
                         // « Toujours » dit sur quoi il porte : la famille de commandes, le
-                        // répertoire, l'hôte (#116).
-                        if b.label.contains("Toujours")
-                            && let Some(scope) = &card.always
-                        {
-                            b.label = format!("♾️ Toujours pour {scope}");
+                        // répertoire, l'hôte (#116). Quand il ne peut créer aucune règle, il
+                        // le dit plutôt que de laisser croire au contraire (#141).
+                        if b.label.contains("Toujours") {
+                            if let Some(scope) = &card.always {
+                                b.label = format!("♾️ Toujours pour {scope}");
+                            } else if card.no_rule {
+                                b.label = "✅ Autoriser (pas de règle possible)".into();
+                            }
                         }
                         b
                     })
@@ -8493,6 +8597,63 @@ mod tests {
         let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
         assert!(sent.contains("PYEOF"), "{sent}");
         assert!(!sent.contains("Carte simplifiée"), "{sent}");
+    }
+
+    /// #141 : le bouton « Toujours » dit la famille qu'il réglera ; quand la ligne n'en a
+    /// pas, il dit qu'aucune règle n'est possible, avant le clic. Une URL de requête entre
+    /// guillemets garde sa famille.
+    #[tokio::test]
+    async fn the_always_button_says_when_no_rule_is_possible() {
+        let (_d, g, t, _p) = gateway().await;
+        let s = g.daemon.services.clone();
+        for (command, expected) in [
+            (
+                "glab api --hostname h \"projects?membership=true&per_page=100\"",
+                "Toujours pour « glab »",
+            ),
+            ("GITLAB_HOST=h glab api \"p?x=1\"", "Toujours pour « glab »"),
+            ("cd /ailleurs && ls", "pas de règle possible"),
+            ("ls | sh", "pas de règle possible"),
+        ] {
+            t.clear().await;
+            let a = s
+                .approvals
+                .create(
+                    penelope_hitl::ApprovalKind::ToolCall,
+                    "shell_exec",
+                    penelope_kernel::risk::RiskClass::Write,
+                    json!({"tool": "shell_exec", "arguments": {"command": command}}),
+                    vec![],
+                    None,
+                    None,
+                    false,
+                )
+                .await
+                .unwrap();
+            g.send_approval_card(OWNER, None, &a).await.unwrap();
+            g.flush_outbox().await.unwrap();
+            let card = t
+                .calls_to(tg::SEND_MESSAGE)
+                .await
+                .pop()
+                .expect("carte envoyée");
+            let labels: String = card["reply_markup"]["inline_keyboard"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|r| r.as_array().unwrap().iter())
+                .map(|b| b["text"].as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+                .join(" | ");
+            assert!(labels.contains(expected), "{command} : {labels}");
+            if expected.contains("pas de règle") {
+                let text = card["text"].as_str().unwrap_or_default();
+                assert!(
+                    text.contains("aucune règle possible"),
+                    "la carte le dit aussi en toutes lettres : {text}"
+                );
+            }
+        }
     }
 
     /// #134 : la carte dit combien de valeurs sont masquées ; ce qui entre dans la file

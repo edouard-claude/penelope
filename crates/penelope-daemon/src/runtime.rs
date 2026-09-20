@@ -419,14 +419,28 @@ impl Daemon {
         if guard.is_none() {
             let s = &self.services;
             let cfg = s.config.config();
-            let set =
-                penelope_llm::build_providers(&cfg, s.platform.secrets.as_ref(), s.catalog.clone())
-                    .map_err(|e| {
-                        format!(
-                            "aucun provider utilisable : {e}. Poser la clé avec \
+            // Le fournisseur Codex ne vit que si un compte ChatGPT est connecté : c'est
+            // le daemon qui tient les jetons et leur rotation (issue #142).
+            let codex = match crate::codex_auth::load(s) {
+                Ok(Some(g)) if g.disconnected.is_none() => Some(penelope_llm::CodexAccess {
+                    tokens: Arc::new(crate::codex_auth::DaemonTokens::new(s.clone())),
+                    installation_id: crate::codex_auth::installation_id(s).await,
+                    quota_sink: Some(Arc::new(crate::codex_quota::QuotaWriter::new(s.clone()))),
+                }),
+                _ => None,
+            };
+            let set = penelope_llm::build_providers(
+                &cfg,
+                s.platform.secrets.as_ref(),
+                s.catalog.clone(),
+                codex,
+            )
+            .map_err(|e| {
+                format!(
+                    "aucun provider utilisable : {e}. Poser la clé avec \
                          `penelope secret set openrouter_api_key`"
-                        )
-                    })?;
+                )
+            })?;
             *guard = Some(Arc::new(set));
         }
         let set = guard.as_ref().expect("providers construits");

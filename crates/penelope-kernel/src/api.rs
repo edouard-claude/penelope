@@ -148,6 +148,9 @@ pub mod method {
     pub const MODEL_LIST: &str = "model.list";
     pub const MODEL_SET: &str = "model.set";
     pub const MODEL_ROUTE_TEST: &str = "model.route_test";
+    /// Connexion d'un fournisseur à compte (Codex/ChatGPT) : `start`, `wait`, `status`,
+    /// `logout` (issue #142).
+    pub const MODEL_AUTH: &str = "model.auth";
 
     pub const MCP_LIST: &str = "mcp.list";
     pub const MCP_SHOW: &str = "mcp.show";
@@ -265,6 +268,7 @@ pub mod method {
         MODEL_LIST,
         MODEL_SET,
         MODEL_ROUTE_TEST,
+        MODEL_AUTH,
         MCP_LIST,
         MCP_SHOW,
         MCP_ADD,

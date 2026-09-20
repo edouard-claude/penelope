@@ -96,6 +96,7 @@ const LONG: &[&str] = &[
     "mcp.test",
     "mcp.restart",
     "mcp.auth",
+    "model.auth",
     "wf.run",
     "schedule.run_now",
     "onboard.answer",

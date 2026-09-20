@@ -112,7 +112,10 @@ raison de la politique. Puis l'action telle qu'elle sera faite : la commande exa
 échappement JSON, ou l'outil et ses valeurs sur une ligne (`issue_id = 7653 · status =
 Résolu`). La dernière ligne regroupe les qualificatifs (réseau, sortie complète,
 répertoire, serveur MCP), la classe de risque et la politique. « Toujours » dit sur quoi il
-porte : une famille de commandes, un répertoire, un hôte. Variables : `intention`,
+porte : une famille de commandes, un répertoire, un hôte. Quand la ligne n'a pas de famille
+(commande composée), il le dit avant le clic : le bouton devient « ✅ Autoriser (pas de
+règle possible) » et les qualificatifs portent « aucune règle possible : commande
+composée ». Variables : `intention`,
 `action`, `details`, `alerte` ; un gabarit surchargé plus ancien garde `outil`, `serveur`,
 `risque`, `arguments` et `raison`.
 
