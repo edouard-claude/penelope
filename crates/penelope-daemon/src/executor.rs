@@ -98,7 +98,14 @@ pub trait Messenger: Send + Sync {
 #[async_trait::async_trait]
 pub trait McpGateway: Send + Sync {
     /// Appelle un outil par son nom qualifié `mcp__<serveur>__<outil>`.
-    async fn call_tool(&self, qualified: &str, args: &Value) -> Result<Value, String>;
+    /// `from` : la conversation qui appelle — une élicitation du serveur y revient
+    /// plutôt que d'atterrir dans le chat privé (issue #143).
+    async fn call_tool(
+        &self,
+        qualified: &str,
+        args: &Value,
+        from: crate::elicitation::Destination,
+    ) -> Result<Value, String>;
     /// Une ligne par serveur prêt, pour la tuile T1.
     async fn server_lines(&self) -> Vec<String>;
     /// Politique imposée à un outil par la déclaration de son serveur (`tool_policy`).
@@ -330,6 +337,20 @@ pub fn default_workspaces(s: &Services) -> Vec<PathBuf> {
 }
 
 impl NativeToolExecutor {
+    /// Conversation à qui rendre une élicitation née de cet appel (issue #143) : celle
+    /// du tour, quand il vient de Telegram ; sinon rien, et le canal choisit son repli.
+    fn elicitation_destination(&self) -> crate::elicitation::Destination {
+        let (chat_id, topic_id) = match self.env.origin.telegram_chat() {
+            Some((c, t)) => (Some(c), t),
+            None => (None, None),
+        };
+        crate::elicitation::Destination {
+            session_id: Some(self.env.session_id.clone()),
+            chat_id,
+            topic_id,
+        }
+    }
+
     pub fn new(services: Arc<Services>, env: ToolEnv) -> Self {
         NativeToolExecutor {
             services,
@@ -1591,7 +1612,7 @@ impl NativeToolExecutor {
             .as_ref()
             .ok_or_else(|| ToolError::Other("aucun serveur MCP n'est démarré".into()))?;
         let v = gw
-            .call_tool(qualified, args)
+            .call_tool(qualified, args, self.elicitation_destination())
             .await
             .map_err(ToolError::Other)?;
         let is_error = v.get("isError").and_then(|b| b.as_bool()).unwrap_or(false);
@@ -2683,7 +2704,12 @@ mod tests {
 
     #[async_trait::async_trait]
     impl McpGateway for RecordingGateway {
-        async fn call_tool(&self, qualified: &str, args: &Value) -> Result<Value, String> {
+        async fn call_tool(
+            &self,
+            qualified: &str,
+            args: &Value,
+            _from: crate::elicitation::Destination,
+        ) -> Result<Value, String> {
             self.calls
                 .lock()
                 .unwrap()

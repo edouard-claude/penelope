@@ -233,6 +233,9 @@ pub mod kind {
     pub const ELICIT_DECLINE: &str = "elicit_decline";
     pub const ELICIT_CANCEL: &str = "elicit_cancel";
     pub const ELICIT_DONE: &str = "elicit_done";
+    /// Relance une demande annulée par le délai : le tour reprend dans la session qui
+    /// l'avait provoquée (issue #143).
+    pub const ELICIT_RETRY: &str = "elicit_retry";
     pub const SCHEDULE_ENABLE: &str = "schedule_enable";
     pub const WORKFLOW_SAVE: &str = "workflow_save";
     pub const WORKFLOW_RUN_ONCE: &str = "workflow_run_once";

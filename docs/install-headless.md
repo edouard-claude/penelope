@@ -261,6 +261,8 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `telegram.text_group_window_ms` | `2000` | Attente après un morceau qui ressemble à une coupure de Telegram (4 000 caractères ou plus) ou un message transféré, en millisecondes : les morceaux d'un même envoi forment un seul tour. Un message court tapé part tout de suite. 0 : un message, un tour. |
 | `telegram.burst_messages` | `5` | Messages regroupés à partir desquels Pénélope demande quoi en faire au lieu de répondre à chacun. 0 : jamais. |
 | `telegram.burst_chars` | `20000` | Caractères cumulés à partir desquels elle demande de même. 0 : jamais. |
+| `telegram.home.chat` | `0` | Identifiant du chat (un groupe : `-100…`). 0 : le chat privé du propriétaire. |
+| `telegram.home.topic` | `0` | Sujet du groupe (`message_thread_id`). 0 : le sujet « Général ». |
 
 **[providers]**
 

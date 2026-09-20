@@ -1793,6 +1793,34 @@ Fournisseur `codex` : les modèles d'un abonnement ChatGPT, à côté d'OpenRout
   « toléré, jamais garanti », et la sortie écrite d'avance (clé d'API sur `openai_compat`).
   Section « Codex » de `install-headless.md`, ligne de comparaison au README.
 
+### 0.17.26
+
+Les confirmations MCP reviennent là où la conversation vit, et les avis sans session ont
+un foyer (#143).
+
+- **La carte d'élicitation suit la session** (#143) : elle partait dans le chat privé du
+  propriétaire, en appel direct. Depuis que la conversation vit dans un groupe à sujets,
+  personne ne la voyait : six demandes Redmine les 19 et 20/09, cinq annulées au bout de
+  dix minutes, « write aborted », rien d'écrit. La conversation de l'appel d'outil est
+  désormais posée le temps de l'appel (`Broker::scope`, un garde qui tombe avec l'appel),
+  et la carte y revient — chat et sujet —, par la file `tg_outbox` comme les cartes
+  d'approbation (#101). Sans session, elle va au foyer.
+- **Un rappel, puis une relance** (#143) : à mi-délai, une ligne au même endroit
+  (« la confirmation attend toujours, 5 min restantes ») ; à l'annulation, le message dit
+  que rien n'a été écrit et porte un bouton « 🔄 Relancer » qui remet la demande dans la
+  session. Trois demandes identiques cliquées dans le vide coûtaient trois fois dix
+  minutes.
+- **Le foyer du propriétaire** (#143) : `telegram.home` (`{chat, topic}`) et un seul point
+  de résolution, `home_chat()`, remplacent les sept retombées sur le chat privé — alertes
+  de budget, rappels d'approbation, digest, veille, cartes OAuth MCP, élicitations sans
+  session. `/home` dans un sujet l'y règle, `/home off` revient au privé ; une session
+  garde toujours son propre chat et son propre sujet. `penelope doctor` réclame un foyer
+  dès que `telegram.allowed_chats` n'est pas vide, et dit lequel est réglé.
+- La carte n'a plus d'identifiant de message à l'envoi (la file n'en rend pas) : elle est
+  modifiée en place au clic, et l'issue arrive en message dans la même conversation quand
+  personne n'a cliqué. `Orchestrator`, `McpGateway::call_tool` et `OwnerChannel::close`
+  prennent un paramètre de plus (la conversation, la possibilité de relancer).
+
 ### Routine de livraison
 
 Avant chaque tag :

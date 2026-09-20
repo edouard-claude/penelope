@@ -16,6 +16,23 @@ use tokio::sync::oneshot;
 /// Durée de conservation des issues, pour les annotations.
 const NOTE_TTL: Duration = Duration::from_secs(3600);
 
+/// Où présenter une demande : la conversation qui a déclenché l'appel d'outil (issue
+/// #143). Vide : la demande n'a pas de session — serveur relancé par le superviseur,
+/// tâche de fond —, le canal choisit alors son repli.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Destination {
+    pub session_id: Option<String>,
+    pub chat_id: Option<i64>,
+    pub topic_id: Option<i64>,
+}
+
+impl Destination {
+    /// Vrai si la demande sait où revenir.
+    pub fn is_known(&self) -> bool {
+        self.chat_id.is_some()
+    }
+}
+
 /// Une demande présentée au propriétaire.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Request {
@@ -25,6 +42,8 @@ pub struct Request {
     pub kind: Kind,
     /// Attente maximale avant annulation.
     pub timeout: Duration,
+    /// Conversation qui a déclenché l'appel : la carte y retourne (issue #143).
+    pub to: Destination,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -114,8 +133,33 @@ impl Outcome {
 pub trait OwnerChannel: Send + Sync {
     /// Présente la demande ; rend l'identifiant de la carte, pour la mettre à jour.
     async fn show(&self, request: &Request) -> Result<Option<i64>, String>;
-    /// Remplace la carte par une issue (délai dépassé, lien terminé).
-    async fn close(&self, request: &Request, card: Option<i64>, markdown: &str);
+    /// Remplace la carte par une issue (délai dépassé, lien terminé). `retry` : la
+    /// demande peut être relancée — le canal propose alors un bouton (issue #143).
+    async fn close(&self, request: &Request, card: Option<i64>, markdown: &str, retry: bool);
+    /// Rappelle la demande à mi-délai, là où elle a été présentée (issue #143, patron
+    /// des rappels d'approbation de #97). Une seule fois ; sans effet par défaut.
+    async fn remind(&self, request: &Request, card: Option<i64>) {
+        let _ = (request, card);
+    }
+}
+
+/// Retire la conversation d'un appel d'outil quand il se termine, quoi qu'il arrive.
+pub struct ScopeGuard {
+    broker: Arc<Broker>,
+    server: String,
+}
+
+impl Drop for ScopeGuard {
+    fn drop(&mut self) {
+        if let Ok(mut c) = self.broker.contexts.lock()
+            && let Some(stack) = c.get_mut(&self.server)
+        {
+            stack.pop();
+            if stack.is_empty() {
+                c.remove(&self.server);
+            }
+        }
+    }
 }
 
 struct Waiting {
@@ -135,6 +179,12 @@ type LinkKey = (String, String);
 
 #[derive(Default)]
 pub struct Broker {
+    /// Conversation en cours par serveur : posée pendant l'appel d'outil, pour que
+    /// l'élicitation qui en naît revienne au bon endroit (issue #143). Le protocole ne
+    /// rattache pas une élicitation à l'appel qui l'a provoquée : la pile suffit, et
+    /// deux sessions qui appellent le même serveur en même temps se partagent la
+    /// dernière posée — les deux sont sous les yeux du propriétaire.
+    contexts: Mutex<HashMap<String, Vec<Destination>>>,
     channel: RwLock<Option<Arc<dyn OwnerChannel>>>,
     /// Canal configuré mais pas encore branché (démarrage) : les serveurs qui se connectent
     /// entre-temps peuvent déjà compter sur lui.
@@ -165,6 +215,27 @@ impl Broker {
         self.channel.read().ok().and_then(|g| g.clone())
     }
 
+    /// Pose la conversation d'un appel d'outil, le temps de cet appel : l'élicitation
+    /// qui en naît y revient. Le garde retire la destination à sa chute, même si l'appel
+    /// échoue.
+    pub fn scope(self: &Arc<Self>, server: &str, to: Destination) -> ScopeGuard {
+        if let Ok(mut c) = self.contexts.lock() {
+            c.entry(server.to_string()).or_default().push(to);
+        }
+        ScopeGuard {
+            broker: self.clone(),
+            server: server.to_string(),
+        }
+    }
+
+    fn destination(&self, server: &str) -> Destination {
+        self.contexts
+            .lock()
+            .ok()
+            .and_then(|c| c.get(server).and_then(|v| v.last().cloned()))
+            .unwrap_or_default()
+    }
+
     /// Présente une demande `elicitation/create` et attend l'issue. `Err` : paramètres
     /// invalides (−32602 pour le serveur).
     pub async fn ask(
@@ -173,7 +244,8 @@ impl Broker {
         params: &Value,
         timeout: Duration,
     ) -> Result<Outcome, String> {
-        let request = parse(server, params, timeout)?;
+        let mut request = parse(server, params, timeout)?;
+        request.to = self.destination(server);
         let outcome = self.present(&request).await;
         self.note(&request, &outcome);
         Ok(outcome)
@@ -210,7 +282,21 @@ impl Broker {
             action,
             by: By::Owner,
         };
-        match tokio::time::timeout(request.timeout, &mut rx).await {
+        // Un rappel à mi-délai, une seule fois : sans lui, le propriétaire ne découvre
+        // l'attente qu'à l'annulation (issue #143, patron de #97).
+        let half = request.timeout / 2;
+        let rest = request.timeout - half;
+        if !half.is_zero() {
+            match tokio::time::timeout(half, &mut rx).await {
+                Ok(Ok(action)) => return answered(action),
+                Ok(Err(_)) => return Outcome::auto("demande abandonnée"),
+                Err(_) => {
+                    let card = self.lock_waiting().get(&request.id).and_then(|w| w.card);
+                    channel.remind(request, card).await;
+                }
+            }
+        }
+        match tokio::time::timeout(rest, &mut rx).await {
             Ok(Ok(action)) => answered(action),
             Ok(Err(_)) => Outcome::auto("demande abandonnée"),
             Err(_) => match self.take(&request.id) {
@@ -221,10 +307,11 @@ impl Broker {
                             w.card,
                             &format!(
                                 "⏱ Sans réponse après {}, la demande est annulée : `{}` en est \
-                                 informé.",
+                                 informé. Rien n'a été écrit.",
                                 human(request.timeout),
                                 request.server
                             ),
+                            true,
                         )
                         .await;
                     Outcome {
@@ -310,6 +397,7 @@ impl Broker {
                         "✅ `{}` signale que l'interaction via le lien est terminée.",
                         link.request.server
                     ),
+                    false,
                 )
                 .await;
         }
@@ -427,7 +515,21 @@ pub fn parse(server: &str, params: &Value, timeout: Duration) -> Result<Request,
         message,
         kind,
         timeout,
+        // Posée par `ask` d'après l'appel d'outil en cours (issue #143).
+        to: Destination::default(),
     })
+}
+
+/// Première ligne d'un message de serveur, tronquée : de quoi reconnaître la demande
+/// dans un rappel, sans recopier tout le formulaire.
+pub fn first_line(message: &str) -> String {
+    let line = message.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let line = line.trim();
+    if line.chars().count() > 80 {
+        format!("{}…", line.chars().take(79).collect::<String>())
+    } else {
+        line.to_string()
+    }
 }
 
 /// Phrase pour le modèle : qui a répondu, et comment.
@@ -477,9 +579,12 @@ pub fn human(d: Duration) -> String {
 mod tests {
     use super::*;
 
+    #[derive(Default)]
     struct Recorder {
         shown: Mutex<Vec<Request>>,
-        closed: Mutex<Vec<String>>,
+        /// Texte de l'issue, et si elle proposait de relancer (issue #143).
+        closed: Mutex<Vec<(String, bool)>>,
+        reminders: Mutex<Vec<String>>,
     }
 
     #[async_trait::async_trait]
@@ -488,17 +593,20 @@ mod tests {
             self.shown.lock().unwrap().push(request.clone());
             Ok(Some(42))
         }
-        async fn close(&self, _request: &Request, card: Option<i64>, markdown: &str) {
+        async fn close(&self, _request: &Request, card: Option<i64>, markdown: &str, retry: bool) {
             assert_eq!(card, Some(42));
-            self.closed.lock().unwrap().push(markdown.to_string());
+            self.closed
+                .lock()
+                .unwrap()
+                .push((markdown.to_string(), retry));
+        }
+        async fn remind(&self, request: &Request, _card: Option<i64>) {
+            self.reminders.lock().unwrap().push(request.id.clone());
         }
     }
 
     fn recorder() -> Arc<Recorder> {
-        Arc::new(Recorder {
-            shown: Mutex::new(Vec::new()),
-            closed: Mutex::new(Vec::new()),
-        })
+        Arc::new(Recorder::default())
     }
 
     #[tokio::test]
@@ -564,7 +672,7 @@ mod tests {
             .unwrap();
         assert_eq!(o.by, By::Timeout(Duration::from_millis(50)));
         assert_eq!(o.result(), json!({"action": "cancel"}));
-        assert!(r.closed.lock().unwrap()[0].contains("Sans réponse"));
+        assert!(r.closed.lock().unwrap()[0].0.contains("Sans réponse"));
         assert!(b.notes_since("redmine", since)[0].contains("il n'a rien refusé"));
     }
 
@@ -604,7 +712,7 @@ mod tests {
         b.complete("drive", "inconnu").await;
         b.complete("drive", "e-1").await;
         assert!(waiting.await.unwrap());
-        assert!(r.closed.lock().unwrap()[0].contains("terminée"));
+        assert!(r.closed.lock().unwrap()[0].0.contains("terminée"));
         assert!(
             b.wait_completion("drive", "e-1", Duration::from_millis(10))
                 .await
@@ -620,5 +728,49 @@ mod tests {
         let confirm = parse("s", &json!({"message": "ok ?"}), t).unwrap();
         assert_eq!(confirm.field_count(), 0);
         assert_eq!(human(Duration::from_secs(600)), "10 min");
+    }
+
+    /// #143 : la carte revient dans la conversation qui a déclenché l'appel ; sans
+    /// conversation, la destination reste vide et le canal prend son repli.
+    #[tokio::test]
+    async fn a_request_goes_back_to_the_calling_conversation() {
+        let broker = Arc::new(Broker::default());
+        let to = Destination {
+            session_id: Some("s1".into()),
+            chat_id: Some(-100_394),
+            topic_id: Some(17),
+        };
+        {
+            let _scope = broker.scope("redmine", to.clone());
+            assert_eq!(broker.destination("redmine"), to);
+            // Un autre serveur ne voit rien de cette conversation.
+            assert_eq!(broker.destination("autre"), Destination::default());
+        }
+        // Le garde tombe avec l'appel : plus de destination.
+        assert_eq!(broker.destination("redmine"), Destination::default());
+        assert!(!Destination::default().is_known());
+        assert!(to.is_known());
+    }
+
+    /// #143 : un rappel à mi-délai, une seule fois, puis l'annulation.
+    #[tokio::test(start_paused = true)]
+    async fn a_pending_request_is_reminded_once_then_cancelled() {
+        let broker = Arc::new(Broker::default());
+        let rec = Arc::new(Recorder::default());
+        broker.attach(rec.clone());
+        let out = broker
+            .ask(
+                "redmine",
+                &json!({"message": "Modifier le ticket 42 ?"}),
+                Duration::from_secs(600),
+            )
+            .await
+            .expect("demande valide");
+        assert_eq!(out.action, Action::Cancel);
+        assert_eq!(rec.reminders.lock().unwrap().len(), 1, "un seul rappel");
+        let closed = rec.closed.lock().unwrap().clone();
+        assert_eq!(closed.len(), 1);
+        assert!(closed[0].0.contains("Sans réponse"), "{closed:?}");
+        assert!(closed[0].1, "l'annulation propose de relancer");
     }
 }

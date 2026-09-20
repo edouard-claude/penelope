@@ -194,6 +194,30 @@ Avec des champs, « 📝 Remplir » ouvre le formulaire ; le récapitulatif gard
 Pour un lien, la carte montre le domaine et l'adresse entière, et le bouton d'ouverture
 n'apparaît qu'après accord. Détails dans [mcp.md](mcp.md#élicitation).
 
+**Où elle arrive** : dans le chat et le sujet de la session qui a déclenché l'appel
+d'outil, comme une carte d'approbation — pas dans le chat privé. Sans session (serveur
+relancé par le superviseur, `mcp_poll`), elle arrive au foyer (voir `/home` ci-dessous).
+Elle passe par la file d'envoi : une coupure réseau ne la perd plus.
+
+À mi-délai, un rappel d'une ligne arrive au même endroit. Sans réponse au bout des dix
+minutes, la demande est annulée, le serveur en est informé (« rien n'a été écrit »), et le
+message d'annulation porte un bouton « 🔄 Relancer » qui redemande la même chose dans la
+session : trois demandes identiques cliquées dans le vide, c'est trois attentes de dix
+minutes.
+
+### Le foyer : `/home`
+
+Tout ce qui n'appartient à aucune session — alertes de budget, rappels d'approbation,
+digest du rêve, veille, cartes d'autorisation MCP, élicitations sans conversation —
+arrivait dans le chat privé du propriétaire. Dès que la conversation vit dans un groupe à
+sujets, ce chat n'est plus lu.
+
+`/home`, tapé dans le sujet voulu, en fait le **foyer** : ces avis y arrivent désormais.
+`/home off` revient au chat privé. La clé équivalente est `telegram.home`
+(`{ chat = -100…, topic = <id du sujet> }`). Une session, elle, garde toujours son propre
+chat et son propre sujet : le foyer ne sert qu'à ce qui n'en a pas. Le chat privé reste
+écouté, et `penelope doctor` réclame un foyer dès que des groupes sont autorisés.
+
 ## Commandes
 
 Une quarantaine de commandes, groupées par famille : session, modèles, mémoire, MCP,
@@ -201,7 +225,7 @@ skills, workflows, planification, HITL, système. Chacune est reliée à une mé
 un test vérifie que **toutes** le sont : une commande sans méthode serait une impasse.
 
 ```
-/new /sessions /switch /close /purge /title /fork /rewind /compact /export /stop
+/new /sessions /switch /close /purge /title /fork /rewind /compact /export /stop /home
 /model /models /mode /projet /budget /usage
 /note /retiens /oublie /recall /appris /pratique /dream /intentions /mien /forget /accueil /audit
 /mcp /mcp auth /p

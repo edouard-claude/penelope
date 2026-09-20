@@ -142,6 +142,13 @@ pub fn all() -> Vec<Command> {
             m::SESSION_MODE,
         ),
         c(
+            "home",
+            "Session",
+            "Fait de ce sujet le foyer : les avis sans session y arriveront",
+            "/home",
+            m::CONFIG_SET,
+        ),
+        c(
             "budget",
             "Modèles",
             "Coûts : jour, session, requêtes les plus chères",

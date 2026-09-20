@@ -189,6 +189,28 @@ pub struct Telegram {
     pub burst_messages: usize,
     /// Caractères cumulés à partir desquels elle demande de même. 0 : jamais.
     pub burst_chars: usize,
+    /// Foyer du propriétaire : le chat (et le sujet) où arrivent les notifications qui
+    /// n'appartiennent à aucune session — alertes de budget, rappels, digest du rêve,
+    /// veille, cartes OAuth, élicitations sans conversation. Vide : le chat privé.
+    pub home: TelegramHome,
+}
+
+/// Foyer du propriétaire sur Telegram (issue #143) : le chat privé n'est plus lu dès que
+/// la conversation vit dans un groupe à sujets.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct TelegramHome {
+    /// Identifiant du chat (un groupe : `-100…`). 0 : le chat privé du propriétaire.
+    pub chat: i64,
+    /// Sujet du groupe (`message_thread_id`). 0 : le sujet « Général ».
+    pub topic: i64,
+}
+
+impl TelegramHome {
+    /// Foyer réglé, sous la forme attendue par l'envoi.
+    pub fn resolved(&self) -> Option<(i64, Option<i64>)> {
+        (self.chat != 0).then(|| (self.chat, (self.topic != 0).then_some(self.topic)))
+    }
 }
 
 impl Default for Telegram {
@@ -214,6 +236,7 @@ impl Default for Telegram {
             text_group_window_ms: 2_000,
             burst_messages: 5,
             burst_chars: 20_000,
+            home: TelegramHome::default(),
         }
     }
 }

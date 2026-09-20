@@ -331,9 +331,16 @@ dans une carte qui nomme le serveur et cite son message :
   propriétaire. Après accord, un bouton ouvre le lien ; la fin signalée par le serveur
   (`notifications/elicitation/complete`) met la carte à jour.
 
-Sans réponse avant `elicitation_timeout` (10 min par défaut, réglable par serveur), la
-demande est annulée (`cancel`) et la carte le dit. Pendant l'attente, le délai de l'appel
-d'outil qui a déclenché la demande est suspendu.
+La carte arrive **dans la conversation qui a déclenché l'appel d'outil** — le chat et le
+sujet de la session, comme une carte d'approbation. Une demande sans session (serveur
+relancé par le superviseur, `mcp_poll`) arrive au foyer du propriétaire (`telegram.home`,
+voir [telegram.md](telegram.md#le-foyer--home)), le chat privé à défaut.
+
+À mi-délai, un rappel arrive au même endroit. Sans réponse avant `elicitation_timeout`
+(10 min par défaut, réglable par serveur), la demande est annulée (`cancel`), le serveur
+en est informé, et le message d'annulation porte un bouton « Relancer » qui redemande la
+même chose dans la session. Pendant l'attente, le délai de l'appel d'outil qui a déclenché
+la demande est suspendu.
 
 ```toml
 # mcp.d/redmine.toml

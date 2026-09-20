@@ -943,7 +943,12 @@ impl McpSupervisor {
     // -------------------------------------------------------------- appels
 
     /// Appelle un outil par son nom qualifié.
-    pub async fn call(&self, qualified: &str, args: &Value) -> Result<Value, String> {
+    pub async fn call(
+        &self,
+        qualified: &str,
+        args: &Value,
+        from: crate::elicitation::Destination,
+    ) -> Result<Value, String> {
         let tool = self
             .services
             .mcp_tools
@@ -956,6 +961,10 @@ impl McpSupervisor {
             .await
             .ok_or_else(|| format!("le serveur `{}` n'est plus déclaré dans mcp.d", tool.server))?;
         let client = self.ensure_live(&slot).await?;
+        // Le serveur peut demander une confirmation pendant l'appel : elle doit revenir
+        // dans la conversation qui l'a provoqué (issue #143). Le garde tombe avec
+        // l'appel, réussi ou non.
+        let _scope = self.services.elicitations.scope(&tool.server, from);
         let timeout = slot.config().timeout_for(&tool.name);
         let started = std::time::Instant::now();
         let call = |input: Option<Value>, state: Option<String>| {
@@ -1717,8 +1726,13 @@ impl Info {
 
 #[async_trait::async_trait]
 impl crate::executor::McpGateway for McpSupervisor {
-    async fn call_tool(&self, qualified: &str, args: &Value) -> Result<Value, String> {
-        self.call(qualified, args).await
+    async fn call_tool(
+        &self,
+        qualified: &str,
+        args: &Value,
+        from: crate::elicitation::Destination,
+    ) -> Result<Value, String> {
+        self.call(qualified, args, from).await
     }
 
     /// Une ligne par serveur qui a des outils, sans état volatil : le préfixe du prompt
@@ -2213,7 +2227,11 @@ mod tests {
         assert!(error.contains("-32020"), "{error}");
 
         let e = sup
-            .call("mcp__refuse__clickup_search", &json!({}))
+            .call(
+                "mcp__refuse__clickup_search",
+                &json!({}),
+                Default::default(),
+            )
             .await
             .unwrap_err();
         assert!(e.contains("ne réessaie pas"), "{e}");
@@ -2321,7 +2339,11 @@ mod tests {
         sup.reload().await;
 
         let v = sup
-            .call("mcp__mailbridge__search_emails", &json!({}))
+            .call(
+                "mcp__mailbridge__search_emails",
+                &json!({}),
+                Default::default(),
+            )
             .await
             .unwrap();
         assert_eq!(v["isError"], true);
@@ -2333,7 +2355,11 @@ mod tests {
         assert!(!said.contains("allow_full_for"), "{said}");
 
         let v = sup
-            .call("mcp__mailbridge__list_accounts", &json!({}))
+            .call(
+                "mcp__mailbridge__list_accounts",
+                &json!({}),
+                Default::default(),
+            )
             .await
             .unwrap();
         assert!(!v["content"].to_string().contains("bac à sable"), "{v}");
@@ -2345,7 +2371,11 @@ mod tests {
             })
             .unwrap();
         let v = sup
-            .call("mcp__mailbridge__search_emails", &json!({}))
+            .call(
+                "mcp__mailbridge__search_emails",
+                &json!({}),
+                Default::default(),
+            )
             .await
             .unwrap();
         assert!(!v["content"].to_string().contains("bac à sable"), "{v}");
@@ -2361,12 +2391,20 @@ mod tests {
         declare(&sup, "mailbridge", "");
         declare(&sup, "redmine", "");
         sup.reload().await;
-        sup.call("mcp__mailbridge__list_issues", &json!({}))
-            .await
-            .unwrap();
-        sup.call("mcp__mailbridge__list_issues", &json!({}))
-            .await
-            .unwrap();
+        sup.call(
+            "mcp__mailbridge__list_issues",
+            &json!({}),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        sup.call(
+            "mcp__mailbridge__list_issues",
+            &json!({}),
+            Default::default(),
+        )
+        .await
+        .unwrap();
         let opened = fake.opened("mailbridge");
         let keychain = |sts: &[ServerStatus], name: &str| {
             sts.iter().find(|st| st.name == name).unwrap().keychain
@@ -2379,13 +2417,21 @@ mod tests {
                 Ok(vec!["sandbox.allow_keychain_for".into()])
             })
             .unwrap();
-        sup.call("mcp__mailbridge__list_issues", &json!({}))
-            .await
-            .unwrap();
+        sup.call(
+            "mcp__mailbridge__list_issues",
+            &json!({}),
+            Default::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(fake.opened("mailbridge"), opened + 1, "relancé une fois");
-        sup.call("mcp__mailbridge__list_issues", &json!({}))
-            .await
-            .unwrap();
+        sup.call(
+            "mcp__mailbridge__list_issues",
+            &json!({}),
+            Default::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(fake.opened("mailbridge"), opened + 1, "puis gardé");
         let sts = sup.statuses().await;
         assert!(keychain(&sts, "mailbridge"));
@@ -2408,9 +2454,13 @@ mod tests {
                 Ok(vec!["sandbox.allow_keychain_for".into()])
             })
             .unwrap();
-        sup.call("mcp__mailbridge__list_issues", &json!({}))
-            .await
-            .unwrap();
+        sup.call(
+            "mcp__mailbridge__list_issues",
+            &json!({}),
+            Default::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             fake.opened("mailbridge"),
             opened + 2,
@@ -2515,7 +2565,11 @@ mod tests {
         assert_eq!(sup.server_lines().await, vec!["redmine : 2 outils"]);
 
         let v = sup
-            .call("mcp__redmine__list_issues", &json!({"project": "penelope"}))
+            .call(
+                "mcp__redmine__list_issues",
+                &json!({"project": "penelope"}),
+                Default::default(),
+            )
             .await
             .unwrap();
         assert!(
@@ -2571,7 +2625,7 @@ mod tests {
         assert_eq!(sup2.server_lines().await, vec!["redmine : 2 outils"]);
         assert_eq!(sup2.statuses().await[0].state, ServerState::Configured);
 
-        sup2.call("mcp__redmine__create_issue", &json!({}))
+        sup2.call("mcp__redmine__create_issue", &json!({}), Default::default())
             .await
             .unwrap();
         assert_eq!(fake2.opened("redmine"), 1, "démarrage au premier appel");
@@ -2930,7 +2984,7 @@ mod tests {
         sup.reload().await;
 
         let e = sup
-            .call("mcp__a__list_issues", &json!({}))
+            .call("mcp__a__list_issues", &json!({}), Default::default())
             .await
             .unwrap_err();
         assert!(e.contains("fermé la connexion"), "{e}");
@@ -2941,7 +2995,9 @@ mod tests {
         );
 
         clock.advance_ms(5_000);
-        sup.call("mcp__a__list_issues", &json!({})).await.unwrap();
+        sup.call("mcp__a__list_issues", &json!({}), Default::default())
+            .await
+            .unwrap();
         assert_eq!(fake.opened("a"), 2);
         assert_eq!(sup.statuses().await[0].state, ServerState::Ready);
     }
@@ -3124,7 +3180,11 @@ mod tests {
         assert_eq!(st.tool_count, 1);
 
         let v = sup
-            .call("mcp__pyfake__echo", &json!({"text": "salut"}))
+            .call(
+                "mcp__pyfake__echo",
+                &json!({"text": "salut"}),
+                Default::default(),
+            )
             .await
             .unwrap();
         assert_eq!(v["content"][0]["text"], "bonjour salut");

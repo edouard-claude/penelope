@@ -225,6 +225,9 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
         )
     });
 
+    // Foyer du propriétaire (#143) : là où arrivent les avis sans session.
+    checks.push(home_check(s));
+
     // Fournisseur Codex : connexion, jetons, périmètre, identité empruntée (#142).
     checks.extend(codex_checks(s).await);
 
@@ -238,6 +241,34 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     }
 
     checks
+}
+
+/// #143 : le chat privé n'est plus lu dès que la conversation vit dans un groupe à
+/// sujets. Sans `telegram.home`, tout ce qui n'a pas de session y retombe pourtant.
+pub fn home_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "telegram.home";
+    const LABEL: &str = "Foyer des avis sans session";
+    let cfg = s.config.config();
+    match cfg.telegram.home.resolved() {
+        Some((chat, topic)) => DoctorCheck::ok(
+            ID,
+            LABEL,
+            match topic {
+                Some(t) => format!("chat {chat}, sujet {t}"),
+                None => format!("chat {chat}"),
+            },
+        ),
+        // Des groupes autorisés mais pas de foyer : les avis partent en privé, que le
+        // propriétaire ne lit plus.
+        None if !cfg.telegram.allowed_chats.is_empty() => DoctorCheck::fail(
+            ID,
+            LABEL,
+            "aucun foyer réglé alors que des groupes sont autorisés : les alertes de \
+             budget, rappels, digest et cartes MCP sans session partent dans le chat privé",
+            Some("dans le sujet voulu : /home".into()),
+        ),
+        None => DoctorCheck::ok(ID, LABEL, "chat privé du propriétaire"),
+    }
 }
 
 /// #142 : état du fournisseur `codex` — connexion, fraîcheur des jetons, périmètre des

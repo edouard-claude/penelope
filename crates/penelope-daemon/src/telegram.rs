@@ -583,11 +583,19 @@ impl TelegramGateway {
                 Some(sid) => s.sessions.get(sid).await?,
                 None => None,
             };
+            // La session garde son chat et son sujet ; sans session, le foyer (#143).
+            let (home_chat, home_topic) = self.home_chat();
             let chat_id = session
                 .as_ref()
                 .and_then(|x| x.tg_chat_id)
-                .unwrap_or(self.owner_id);
-            let topic_id = session.as_ref().and_then(|x| x.tg_topic_id);
+                .unwrap_or(home_chat);
+            let topic_id = session.as_ref().and_then(|x| x.tg_topic_id).or(
+                if session.as_ref().and_then(|x| x.tg_chat_id).is_some() {
+                    None
+                } else {
+                    home_topic
+                },
+            );
             self.send_approval_card(chat_id, topic_id, &a).await?;
             self.daemon.kv_set(&flag, "1").await?;
             sent += 1;
@@ -1617,6 +1625,35 @@ impl TelegramGateway {
                             Err(e) => format!("❌ {e}"),
                         }
                     }
+                }
+            }
+            // Foyer du propriétaire (issue #143) : ce qui n'appartient à aucune session
+            // — alertes de budget, rappels, digest du rêve, cartes OAuth — arrive ici
+            // plutôt que dans un chat privé que plus personne ne lit.
+            "home" | "foyer" => {
+                let reset = matches!(args.trim(), "off" | "non" | "privé" | "prive");
+                let (chat, topic) = if reset {
+                    (0, 0)
+                } else {
+                    (chat_id, topic_id.unwrap_or(0))
+                };
+                match rpc
+                    .call(
+                        m::CONFIG_SET,
+                        json!({"path": "telegram.home", "value": {"chat": chat, "topic": topic}}),
+                    )
+                    .await
+                {
+                    Err(e) => format!("❌ {e}"),
+                    Ok(_) if reset => "🏠 Foyer effacé : les avis sans session repartent \
+                                       dans le chat privé."
+                        .into(),
+                    Ok(_) => format!(
+                        "🏠 Foyer réglé sur ce {}. Les avis sans session (budget, rappels, \
+                         digest, cartes MCP) arriveront ici. `/home off` pour revenir au \
+                         chat privé.",
+                        if topic_id.is_some() { "sujet" } else { "chat" }
+                    ),
                 }
             }
             "models" => {
@@ -3492,6 +3529,13 @@ impl TelegramGateway {
                 .await;
         }
         if let ClickOutcome::Accepted(action) = &outcome
+            && action.action == k::ELICIT_RETRY
+        {
+            let _ = self.bot.answer_callback(callback_id, None, false).await;
+            let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+            return self.elicitation_retry_clicked(action, chat_id).await;
+        }
+        if let ClickOutcome::Accepted(action) = &outcome
             && matches!(
                 action.action.as_str(),
                 k::ELICIT_ACCEPT | k::ELICIT_DECLINE | k::ELICIT_CANCEL | k::ELICIT_DONE
@@ -5035,6 +5079,7 @@ impl TelegramGateway {
                             crate::elicitation::Action::Cancel,
                             "✖️ Formulaire abandonné : `{server}` reçoit une annulation.",
                             true,
+                            None,
                         )
                         .await;
                 }
@@ -5100,6 +5145,7 @@ impl TelegramGateway {
                             crate::elicitation::Action::Accept(Some(values)),
                             "✔️ Formulaire envoyé à `{server}`.",
                             true,
+                            None,
                         )
                         .await;
                 }
@@ -5419,24 +5465,123 @@ impl TelegramGateway {
             Self::elicitation_html(r),
             markdown_to_html(note)
         );
+        let (chat_id, topic_id) = self.elicitation_chat(r).await;
         if let Some(id) = card
             && self
                 .bot
-                .edit_text(self.owner_id, id, &html, keyboard.clone())
+                .edit_text(chat_id, id, &html, keyboard.clone())
                 .await
                 .is_ok()
         {
             return Ok(());
         }
-        self.bot
-            .send_text(self.owner_id, None, &html, keyboard, None)
+        self.outbox_push(
+            chat_id,
+            topic_id,
+            "sendMessage",
+            json!({
+                "chat_id": chat_id,
+                "text": html,
+                "parse_mode": "HTML",
+                "reply_markup": keyboard,
+                "message_thread_id": topic_id,
+            }),
+        )
+        .await
+    }
+
+    /// Bouton « Relancer » d'une demande annulée.
+    async fn elicit_retry_button(
+        &self,
+        r: &crate::elicitation::Request,
+        session: &str,
+    ) -> Option<ButtonSpec> {
+        let t = self
+            .daemon
+            .services
+            .actions
+            .create(
+                k::ELICIT_RETRY,
+                &r.id,
+                json!({
+                    "session": session,
+                    "server": r.server,
+                    "what": crate::elicitation::first_line(&r.message),
+                }),
+                24 * 3_600_000,
+                true,
+            )
             .await
-            .map(|_| ())
-            .map_err(|e| anyhow::anyhow!(e.to_string()))
+            .ok()?;
+        Some(ButtonSpec::callback("🔄 Relancer", &t.token, ""))
+    }
+
+    /// Relance demandée depuis le message d'annulation : le texte repart comme un
+    /// message du propriétaire dans **sa** session, et le modèle refait l'appel (#143).
+    async fn elicitation_retry_clicked(
+        &self,
+        action: &penelope_telegram::actions::Action,
+        chat_id: i64,
+    ) -> anyhow::Result<()> {
+        let d = &self.daemon;
+        let session = action.args["session"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let server = action.args["server"].as_str().unwrap_or("le serveur");
+        let what = action.args["what"].as_str().unwrap_or_default();
+        if session.is_empty() {
+            let (c, t) = self.home_chat();
+            return self
+                .reply(
+                    c,
+                    t,
+                    None,
+                    "Cette demande n'a pas de conversation à relancer.",
+                )
+                .await
+                .map(|_| ());
+        }
+        let topic_id = d
+            .services
+            .sessions
+            .get(&session)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|s| s.tg_topic_id);
+        let text = format!(
+            "Relance la demande `{server}` qui a expiré{}. Cette fois je réponds tout de \
+             suite à la confirmation.",
+            if what.is_empty() {
+                String::new()
+            } else {
+                format!(" ({what})")
+            }
+        );
+        let origin = Origin::Telegram {
+            chat_id,
+            topic_id,
+            message_id: None,
+        };
+        d.enqueue_message(&session, &text, &origin, None).await?;
+        Ok(())
+    }
+
+    /// Où poser une carte d'élicitation : la conversation de l'appel, sinon le foyer du
+    /// propriétaire (issue #143).
+    async fn elicitation_chat(&self, r: &crate::elicitation::Request) -> (i64, Option<i64>) {
+        match r.to.chat_id {
+            Some(chat_id) => (chat_id, r.to.topic_id),
+            None => self.home_chat(),
+        }
     }
 
     /// Répond au serveur, met la carte à jour et le dit dans le chat. `note` : `{server}`
     /// est remplacé par le nom du serveur.
+    /// `card` : le message à modifier en place. La file ne rend pas d'identifiant à
+    /// l'envoi (issue #143) : celui du message cliqué fait l'affaire, et l'issue reste
+    /// écrite là où la carte se trouve.
     async fn finish_elicitation(
         &self,
         chat_id: i64,
@@ -5444,9 +5589,10 @@ impl TelegramGateway {
         answer: crate::elicitation::Action,
         note: &str,
         echo: bool,
+        card: Option<i64>,
     ) -> anyhow::Result<()> {
         let broker = &self.daemon.services.elicitations;
-        let card = broker.request(id).and_then(|(_, c)| c);
+        let card = broker.request(id).and_then(|(_, c)| c).or(card);
         match broker.resolve(id, answer) {
             Ok(request) => {
                 if let Some(raw) = self.daemon.kv_get(&form_key(chat_id)).await?
@@ -5587,7 +5733,7 @@ impl TelegramGateway {
                 }
             },
         };
-        self.finish_elicitation(chat_id, &request.id, answer, note, elsewhere)
+        self.finish_elicitation(chat_id, &request.id, answer, note, elsewhere, card)
             .await
     }
 
@@ -6288,7 +6434,7 @@ impl ChannelDelivery for TelegramGateway {
         schedule_id: &str,
         text: &str,
     ) -> Result<(), String> {
-        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or((self.owner_id, None));
+        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
         let s = &self.daemon.services;
         let ttl = 7 * 24 * 3_600_000;
         let rerun = s
@@ -6489,6 +6635,25 @@ impl ChannelDelivery for TelegramGateway {
 }
 
 /// Demandes d'élicitation MCP : une carte dans le chat privé du propriétaire.
+impl TelegramGateway {
+    /// Foyer du propriétaire : le chat et le sujet où arrivent les notifications qui
+    /// n'appartiennent à aucune session (issue #143). Réglé par `telegram.home` ; sans
+    /// lui, le chat privé, comme avant.
+    ///
+    /// Une session, elle, garde toujours son propre chat et son propre sujet : ce repli
+    /// ne s'applique qu'à ce qui n'en a pas.
+    pub fn home_chat(&self) -> (i64, Option<i64>) {
+        self.daemon
+            .services
+            .config
+            .config()
+            .telegram
+            .home
+            .resolved()
+            .unwrap_or((self.owner_id, None))
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::elicitation::OwnerChannel for TelegramGateway {
     async fn show(&self, r: &crate::elicitation::Request) -> Result<Option<i64>, String> {
@@ -6519,23 +6684,63 @@ impl crate::elicitation::OwnerChannel for TelegramGateway {
             Self::elicitation_html(r),
             crate::elicitation::human(r.timeout)
         );
-        let sent = self
-            .bot
-            .send_text(
-                self.owner_id,
-                None,
-                &html,
-                Some(inline_keyboard(&rows)),
-                None,
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(sent["message_id"].as_i64())
+        // La carte va **dans la conversation qui a déclenché l'appel** (issue #143) :
+        // avant, elle partait dans le chat privé, que le propriétaire ne lit plus depuis
+        // qu'il travaille dans un sujet de groupe. Elle passe par la file, comme les
+        // cartes d'approbation : une coupure réseau ne la perd plus (#101).
+        let (chat_id, topic_id) = self.elicitation_chat(r).await;
+        self.outbox_push(
+            chat_id,
+            topic_id,
+            "sendMessage",
+            json!({
+                "chat_id": chat_id,
+                "text": html,
+                "parse_mode": "HTML",
+                "reply_markup": inline_keyboard(&rows),
+                "message_thread_id": topic_id,
+            }),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        // La file ne rend pas l'identifiant du message : la carte ne sera pas modifiée
+        // en place, l'issue arrive en message dans le même sujet.
+        Ok(None)
     }
 
-    async fn close(&self, r: &crate::elicitation::Request, card: Option<i64>, markdown: &str) {
-        if let Err(e) = self.elicitation_update(r, card, markdown, None).await {
+    async fn close(
+        &self,
+        r: &crate::elicitation::Request,
+        card: Option<i64>,
+        markdown: &str,
+        retry: bool,
+    ) {
+        // Une demande annulée par le délai se relance d'un bouton, dans la conversation
+        // où elle a échoué : trois demandes identiques en une session coûtaient trois
+        // cartes et autant d'attentes (issue #143).
+        let keyboard = match (retry, r.to.session_id.as_deref()) {
+            (true, Some(session)) => self
+                .elicit_retry_button(r, session)
+                .await
+                .map(|b| inline_keyboard(&[vec![b]])),
+            _ => None,
+        };
+        if let Err(e) = self.elicitation_update(r, card, markdown, keyboard).await {
             tracing::warn!(error = %e, "carte d'élicitation non mise à jour");
+        }
+    }
+
+    /// Rappel à mi-délai, dans la conversation où la carte a été posée (issue #143).
+    async fn remind(&self, r: &crate::elicitation::Request, _card: Option<i64>) {
+        let (chat_id, topic_id) = self.elicitation_chat(r).await;
+        let text = format!(
+            "⏳ La confirmation demandée par `{}` attend toujours ({} restantes) : {}",
+            r.server,
+            crate::elicitation::human(r.timeout / 2),
+            crate::elicitation::first_line(&r.message)
+        );
+        if let Err(e) = self.reply(chat_id, topic_id, None, &text).await {
+            tracing::warn!(error = %e, "rappel d'élicitation non envoyé");
         }
     }
 }
@@ -6543,7 +6748,7 @@ impl crate::elicitation::OwnerChannel for TelegramGateway {
 #[async_trait::async_trait]
 impl Messenger for TelegramGateway {
     async fn send_text(&self, origin: &Origin, markdown: &str) -> Result<(), String> {
-        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or((self.owner_id, None));
+        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
         self.reply(chat_id, topic_id, None, markdown)
             .await
             .map_err(|e| e.to_string())
@@ -6555,7 +6760,7 @@ impl Messenger for TelegramGateway {
         path: &Path,
         caption: Option<&str>,
     ) -> Result<(), String> {
-        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or((self.owner_id, None));
+        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
         self.bot
             .send_document(chat_id, topic_id, path, caption)
             .await
@@ -6616,7 +6821,7 @@ impl Messenger for TelegramGateway {
         duration_s: u32,
         caption: Option<&str>,
     ) -> Result<(), String> {
-        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or((self.owner_id, None));
+        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
         if self.out_of_focus(session_id, chat_id, topic_id).await {
             let item = Held::Voice {
                 path: path.display().to_string(),
@@ -6649,7 +6854,7 @@ impl Messenger for TelegramGateway {
         wants_input: bool,
         form: Option<&Value>,
     ) -> Result<(), String> {
-        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or((self.owner_id, None));
+        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
         let s = &self.daemon.services;
         let ttl = 7 * 24 * 3_600_000;
         let labels: Vec<String> = if choices.is_empty() {
@@ -6698,7 +6903,7 @@ impl Messenger for TelegramGateway {
     }
 
     async fn upsert_card(&self, origin: &Origin, key: &str, markdown: &str) -> Result<(), String> {
-        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or((self.owner_id, None));
+        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
         let html = markdown_to_html(markdown);
         let kv_key = format!("tg.card.{key}");
         let known = self
@@ -6729,7 +6934,7 @@ impl Messenger for TelegramGateway {
     }
 
     async fn send_approval(&self, origin: &Origin, approval_id: &str) -> Result<(), String> {
-        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or((self.owner_id, None));
+        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
         let a = self
             .daemon
             .services
@@ -10946,12 +11151,16 @@ mod tests {
             }
             panic!("aucune réponse à la requête {id}");
         };
+        // La carte part par la file, comme les cartes d'approbation (issue #143) : le
+        // test la pousse, puis la lit. La file ne rend pas d'identifiant de message ;
+        // celui du clic suffit, et c'est lui qui sera modifié en place.
         let card = |needle: &'static str| {
-            let (t, broker) = (t.clone(), broker.clone());
+            let (t, broker, g) = (t.clone(), broker.clone(), g.clone());
             async move {
-                for _ in 0..300 {
+                for i in 0..300 {
+                    let _ = g.flush_outbox().await;
                     let open = broker.open();
-                    if let Some((req, id)) = open.iter().find(|(r, _)| r.message.contains(needle))
+                    if let Some((req, _)) = open.iter().find(|(r, _)| r.message.contains(needle))
                         && let Some(sent) = t
                             .calls_to(tg::SEND_MESSAGE)
                             .await
@@ -10959,7 +11168,7 @@ mod tests {
                             .rev()
                             .find(|c| c["text"].as_str().is_some_and(|x| x.contains(needle)))
                     {
-                        return (req.clone(), id.unwrap(), sent);
+                        return (req.clone(), 9_000 + i, sent);
                     }
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
@@ -11084,12 +11293,19 @@ mod tests {
             json!({"message": "Toujours là ?"}),
         );
         assert_eq!(answer(slow.clone(), 11).await, json!({"action": "cancel"}));
-        let edits = texts(&t.calls_to(tg::EDIT_MESSAGE_TEXT).await);
+        // Sans clic, la file n'a pas d'identifiant de message à modifier : l'issue arrive
+        // en message, dans la conversation où la carte a été posée (issue #143), avec un
+        // bouton « Relancer » quand la demande a une session.
+        let _ = g.flush_outbox().await;
+        let seen = [
+            texts(&t.calls_to(tg::EDIT_MESSAGE_TEXT).await),
+            texts(&t.calls_to(tg::SEND_MESSAGE).await),
+        ]
+        .concat();
         assert!(
-            edits
-                .iter()
+            seen.iter()
                 .any(|e| e.contains("Toujours là") && e.contains("Sans réponse")),
-            "{edits:?}"
+            "{seen:?}"
         );
     }
 
@@ -11156,10 +11372,11 @@ mod tests {
         g.daemon.hooks.set_mcp(sup.clone());
         let broker = g.daemon.services.elicitations.clone();
         let card = |needle: &'static str| {
-            let (t, broker) = (t.clone(), broker.clone());
+            let (t, broker, g) = (t.clone(), broker.clone(), g.clone());
             async move {
-                for _ in 0..300 {
-                    if let Some((req, Some(id))) = broker
+                for i in 0..300 {
+                    let _ = g.flush_outbox().await;
+                    if let Some((req, _)) = broker
                         .open()
                         .into_iter()
                         .find(|(r, _)| r.message.contains(needle))
@@ -11170,7 +11387,7 @@ mod tests {
                             .rev()
                             .find(|c| c["text"].as_str().is_some_and(|x| x.contains(needle)))
                     {
-                        return (req, id, sent);
+                        return (req, 9_500 + i, sent);
                     }
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
@@ -11182,7 +11399,7 @@ mod tests {
         let call = {
             let sup = sup.clone();
             tokio::spawn(async move {
-                sup.call_tool("mcp__tracker__close_ticket", &json!({}))
+                sup.call_tool("mcp__tracker__close_ticket", &json!({}), Default::default())
                     .await
             })
         };
@@ -11224,8 +11441,12 @@ mod tests {
         let call = {
             let sup = sup.clone();
             tokio::spawn(async move {
-                sup.call_tool("mcp__tracker__close_ticket", &json!({"lien": true}))
-                    .await
+                sup.call_tool(
+                    "mcp__tracker__close_ticket",
+                    &json!({"lien": true}),
+                    Default::default(),
+                )
+                .await
             })
         };
         let (_, card_id, sent) = card("Relie ton compte").await;
@@ -11306,7 +11527,15 @@ mod tests {
         );
         let mut finished = false;
         for _ in 0..300 {
-            if texts(&t.calls_to(tg::EDIT_MESSAGE_TEXT).await)
+            let _ = g.flush_outbox().await;
+            // La carte posée par la file n'a pas d'identifiant : l'issue arrive en
+            // message dans la même conversation (issue #143).
+            let seen = [
+                texts(&t.calls_to(tg::EDIT_MESSAGE_TEXT).await),
+                texts(&t.calls_to(tg::SEND_MESSAGE).await),
+            ]
+            .concat();
+            if seen
                 .iter()
                 .any(|e| e.contains("Autorise Drive") && e.contains("terminée"))
             {
@@ -11315,7 +11544,69 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert!(finished, "carte mise à jour à la fin du lien");
+        assert!(finished, "issue du lien dite dans la conversation");
+    }
+
+    /// #143 : sans foyer, les avis sans session vont au chat privé ; avec `telegram.home`,
+    /// au sujet du groupe. Une session, elle, garde toujours sa conversation.
+    #[tokio::test]
+    async fn notices_without_a_session_go_to_the_home_topic() {
+        let (_d, g, t, _p) = gateway().await;
+        let internal = Origin::Internal {
+            source: "budget".into(),
+        };
+        // Sans foyer : le chat privé, comme avant.
+        assert_eq!(g.home_chat(), (OWNER, None));
+        g.send_text(&internal, "alerte").await.unwrap();
+        g.flush_outbox().await.unwrap();
+        let sent = t.calls_to(tg::SEND_MESSAGE).await.pop().expect("envoi");
+        assert_eq!(sent["chat_id"], OWNER);
+        assert!(sent.get("message_thread_id").is_none_or(|v| v.is_null()));
+
+        // `/home` depuis un sujet de groupe : le foyer suit.
+        g.daemon
+            .publish_config("test", |c| {
+                c.telegram.home = penelope_kernel::config::TelegramHome {
+                    chat: -100_394,
+                    topic: 17,
+                };
+                Ok(vec!["telegram.home".into()])
+            })
+            .unwrap();
+        assert_eq!(g.home_chat(), (-100_394, Some(17)));
+        t.clear().await;
+        g.send_text(&internal, "alerte").await.unwrap();
+        g.flush_outbox().await.unwrap();
+        let sent = t.calls_to(tg::SEND_MESSAGE).await.pop().expect("envoi");
+        assert_eq!(sent["chat_id"], -100_394);
+        assert_eq!(sent["message_thread_id"], 17);
+
+        // Une session garde son chat et son sujet : le foyer ne les remplace pas.
+        let with_session = Origin::Telegram {
+            chat_id: -100_999,
+            topic_id: Some(5),
+            message_id: None,
+        };
+        t.clear().await;
+        g.send_text(&with_session, "réponse").await.unwrap();
+        g.flush_outbox().await.unwrap();
+        let sent = t.calls_to(tg::SEND_MESSAGE).await.pop().expect("envoi");
+        assert_eq!(sent["chat_id"], -100_999);
+        assert_eq!(sent["message_thread_id"], 5);
+
+        // `doctor` ne réclame un foyer que si des groupes sont autorisés.
+        let check = crate::doctor::home_check(&g.daemon.services);
+        assert!(check.ok, "{check:?}");
+        g.daemon
+            .publish_config("test", |c| {
+                c.telegram.home = Default::default();
+                c.telegram.allowed_chats = vec![-100_394];
+                Ok(vec!["telegram.home".into()])
+            })
+            .unwrap();
+        let check = crate::doctor::home_check(&g.daemon.services);
+        assert!(!check.ok, "{check:?}");
+        assert!(check.detail.contains("chat privé"), "{check:?}");
     }
 
     /// Issue #14 : `/sessions` rend un bouton par session ; un clic lie le chat à la session

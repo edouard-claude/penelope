@@ -217,7 +217,13 @@ async fn poll(d: &Arc<Daemon>, sched: &Schedule) -> anyhow::Result<bool> {
         .mcp_supervisor()
         .ok_or_else(|| anyhow::anyhow!("superviseur MCP non démarré"))?;
     let result = sup
-        .call(&qualified, spec.get("args").unwrap_or(&json!({})))
+        // Un `mcp_poll` tourne sans le propriétaire : une élicitation n'aurait pas de
+        // conversation où revenir, le canal prendra son repli (issue #143).
+        .call(
+            &qualified,
+            spec.get("args").unwrap_or(&json!({})),
+            Default::default(),
+        )
         .await
         .map_err(anyhow::Error::msg)?;
     let payload = tool_payload(&result);
