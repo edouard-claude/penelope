@@ -1918,8 +1918,9 @@ pub(crate) fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
             // Une commande composée (`cd /x && ls`) n'a pas de famille : une règle sur
             // `cd` ne s'appliquerait jamais (issue #111). Pas de motif, donc pas de règle.
             // Le découpage est celui de `cmdline` : un `&` entre guillemets (URL de
-            // requête) n'enchaîne rien, et `VAR=x cmd` a pour famille `cmd` (issue #141).
-            let line = penelope_hitl::cmdline::simple(&command)?;
+            // requête) n'enchaîne rien, `VAR=x cmd` a pour famille `cmd`, et un tube vers
+            // une lecture pure (`… | jq`) celle de sa première étape (issue #141).
+            let line = penelope_hitl::cmdline::pipeline(&command)?.head;
             let network = crate::executor::wants_network(tool, args);
             const TWO_WORDS: &[&str] = &[
                 "cargo", "git", "gh", "npm", "pnpm", "yarn", "make", "docker", "kubectl", "brew",
@@ -3710,9 +3711,17 @@ mod tests {
                 "{covered}"
             );
         }
+        // Un tube vers une lecture pure garde la famille de sa première étape : c'est
+        // elle qui agit, `jq` ne fait que formater (commentaire de #141).
+        assert!(rule.matches(
+            "shell_exec",
+            None,
+            &json!({"command": "glab api h \"p\" | jq -r '.[].path'"})
+        ));
         // Ce que #67 a fermé reste fermé.
         for detour in [
-            "glab api h \"p\" | jq -r '.[].path'",
+            "glab api h \"p\" | sh",
+            "glab api h \"p\" | tee /tmp/x",
             "glab api h \"p\"; rm -rf ~",
             "glab api $(cat ~/.netrc)",
             "DYLD_INSERT_LIBRARIES=x.dylib glab api \"p\"",

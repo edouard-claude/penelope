@@ -150,20 +150,24 @@ pub const PATH_PREFIX_OP: &str = "$path_prefix";
 /// Origine d'une URL (`https://example.com`).
 pub const ORIGIN_OP: &str = "$origin";
 
-/// Vrai si `candidate` est une commande de la famille `prefix` : une ligne simple (aucun
-/// enchaînement, voir [`crate::cmdline`]) dont les premiers mots sont ceux de la famille.
+/// Vrai si `candidate` est une commande de la famille `prefix` : une ligne utilisable
+/// (aucun enchaînement, voir [`crate::cmdline`]) dont les premiers mots sont ceux de la
+/// famille.
 ///
 /// La comparaison porte sur les **mots**, pas sur le texte : `cargo testament` n'est pas
 /// `cargo test` (frontière de mot), et `glab api "p?a=1&b=2"` est bien de la famille
-/// `glab` — le `&` y est un caractère d'URL, pas un enchaînement (issue #141).
+/// `glab` — le `&` y est un caractère d'URL, pas un enchaînement (issue #141). Un tube
+/// vers une lecture pure (`… | jq -r '…'`) garde la famille de sa première étape : c'est
+/// elle qui agit.
 pub fn command_matches(prefix: &str, candidate: &str) -> bool {
     let Some(want) = crate::cmdline::family(prefix) else {
         return false;
     };
-    let Some(cmd) = crate::cmdline::simple(candidate) else {
+    let Some(line) = crate::cmdline::pipeline(candidate) else {
         return false;
     };
-    cmd.words.len() >= want.len() && cmd.words.iter().zip(&want).all(|(a, b)| a == b)
+    let words = &line.head.words;
+    words.len() >= want.len() && words.iter().zip(&want).all(|(a, b)| a == b)
 }
 
 fn path_matches(prefix: &str, candidate: &str) -> bool {
@@ -503,8 +507,15 @@ mod tests {
             "GITLAB_HOST=h glab api \"p?x=1\""
         ));
         assert!(command_matches("jq", "jq -r '.[] | .path' data.json"));
+        // Le tube vers une lecture pure garde la famille de sa première étape.
+        assert!(command_matches(
+            "glab",
+            "glab api h \"p\" | jq -r '.[].path'"
+        ));
+        assert!(command_matches("cargo test", "cargo test | grep -c ok"));
         for detour in [
-            "glab api h \"p\" | jq -r '.[].path'",
+            "glab api h \"p\" | sh",
+            "glab api h \"p\" | tee /tmp/x",
             "glab api h \"p\"; rm -rf ~",
             "DYLD_INSERT_LIBRARIES=x.dylib glab api \"p\"",
             "glabber api",

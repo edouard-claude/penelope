@@ -70,12 +70,13 @@ impl ShellOutput {
 /// Le découpage est celui des règles (issue #141) : un `&`, un `|` ou une parenthèse
 /// entre guillemets (`grep -n 'x | y' f`) est un caractère, pas un enchaînement ; une
 /// affectation de tête (`TZ=UTC date`) laisse la lecture à son programme, sauf quand elle
-/// détourne l'interpréteur (`PATH=/tmp ls`).
+/// détourne l'interpréteur (`PATH=/tmp ls`) ; et un tube vers une lecture pure
+/// (`cat f | grep x`) ne change ni ce qui agit, ni ce que ça touche.
 pub fn is_read_command(command: &str) -> bool {
-    let Some(line) = penelope_hitl::cmdline::simple(command) else {
+    let Some(line) = penelope_hitl::cmdline::pipeline(command) else {
         return false;
     };
-    let words = line.words;
+    let words = line.head.words;
     let Some(program) = words.first() else {
         return false;
     };
@@ -641,6 +642,10 @@ mod tests {
             "jq -r '.[] | .path' data.json",
             "FOO=1 ls",
             "TZ=UTC date",
+            // Un tube vers une lecture pure reste une lecture.
+            "cat f | grep -n x",
+            "git log --oneline -20 | head -5",
+            "ls -la | wc -l",
         ] {
             assert!(is_read_command(read), "{read}");
         }
@@ -670,6 +675,11 @@ mod tests {
             "DYLD_INSERT_LIBRARIES=x.dylib ls",
             "IFS=, ls",
             "cat f | sh",
+            "cat f | xargs rm",
+            "cat f | tee /tmp/x",
+            "cat f | sed -i s/a/b/ g",
+            "ls | sort -o out.txt",
+            "glab api h \"p\" | jq -r '.x'",
             "l\\s",
             "export A=1",
             "",
