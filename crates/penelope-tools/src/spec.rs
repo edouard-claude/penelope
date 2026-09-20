@@ -176,6 +176,10 @@ pub fn all() -> Vec<ToolSpec> {
              `output: \"full\"` rend la sortie brute. Le réseau est coupé sauf `network: true` \
              (git push/pull/clone, gh, installation de paquets, curl) : l'approbation le dit. \
              Répertoire de travail : `cwd` (dans un workspace), pas de préfixe `cd … &&`. \
+             **Une commande par appel** ; plusieurs commandes = plusieurs appels, en \
+             parallèle si indépendants. `&&` seulement entre commandes de même nature : \
+             `;`, `||`, `$(…)` et redirections empêchent toute règle, donc redemandent à \
+             chaque appel. \
              Ne recopie jamais un secret lu (clé, mot de passe) dans la commande : lis-le \
              dans son fichier ou une variable d'environnement.",
             obj(

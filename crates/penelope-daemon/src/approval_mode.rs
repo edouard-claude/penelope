@@ -97,10 +97,30 @@ pub fn declared_allow(
     } else {
         (&cfg.tools.shell_allow, "tools.shell_allow")
     };
-    families
-        .iter()
-        .find(|f| penelope_hitl::policy::command_matches(f.trim(), command))
-        .map(|f| format!("autorisé d'avance : famille « {f} » de `{key}`"))
+    // Une liste `a && b` est autorisée d'avance quand **chaque** étape l'est, comme pour
+    // les règles (issue #150) : une famille déclarée ne couvre pas ses voisines.
+    let list = penelope_hitl::cmdline::list(command)?;
+    let mut matched: Vec<String> = Vec::new();
+    for step in &list.steps {
+        // Une seule commande : la famille déclarée doit la couvrir, lecture comprise —
+        // en mode « demander tout », `tools.shell_allow` vaut aussi pour `ls` (#111).
+        if list.steps.len() > 1 && penelope_hitl::cmdline::needs_no_rule(step) {
+            continue;
+        }
+        let f = families
+            .iter()
+            .find(|f| penelope_hitl::policy::family_covers(f.trim(), step))?;
+        if !matched.contains(f) {
+            matched.push(f.clone());
+        }
+    }
+    if matched.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "autorisé d'avance : famille(s) « {} » de `{key}`",
+        matched.join(" », « ")
+    ))
 }
 
 /// Ce qui rend une règle inutile, pour `penelope policies` et `/policies` (issue #111) :
@@ -141,4 +161,57 @@ pub fn rule_note(r: &penelope_hitl::PolicyRule, now_ms: i64) -> Option<String> {
         return Some("jamais utilisée depuis sa création, il y a plus d'une semaine".into());
     }
     None
+}
+
+#[cfg(test)]
+mod list_allow_tests {
+    use super::*;
+
+    fn cfg_with(allow: &[&str], network: &[&str]) -> penelope_kernel::config::Config {
+        let mut c = penelope_kernel::config::Config::default();
+        c.tools.shell_allow = allow.iter().map(|s| s.to_string()).collect();
+        c.tools.shell_allow_network = network.iter().map(|s| s.to_string()).collect();
+        c
+    }
+
+    fn allowed(cfg: &penelope_kernel::config::Config, command: &str, network: bool) -> bool {
+        declared_allow(
+            cfg,
+            "shell_exec",
+            &serde_json::json!({"command": command, "network": network}),
+        )
+        .is_some()
+    }
+
+    /// #150 : une autorisation déclarée suit la même règle qu'un « Toujours » — chaque
+    /// étape, ou rien. Une famille déclarée ne couvre pas ses voisines.
+    #[test]
+    fn a_declared_family_covers_a_list_only_when_every_step_is_covered() {
+        let c = cfg_with(&["cargo", "ls"], &[]);
+        assert!(allowed(&c, "cargo test", false), "une commande simple");
+        assert!(allowed(&c, "ls -la", false), "une lecture déclarée (#111)");
+        assert!(
+            allowed(&c, "cd /x && cargo build && ls", false),
+            "`cd` et `ls` ne demandent rien, `cargo` est déclaré"
+        );
+        assert!(
+            !allowed(&c, "cargo build && rm -rf cible", false),
+            "`rm` n'est pas déclaré : la liste entière repart en carte"
+        );
+        assert!(
+            !allowed(&c, "cargo build; rm -rf ~", false),
+            "`;` reste composé (#67)"
+        );
+        // Le réseau garde sa liste à lui (#106).
+        let n = cfg_with(&["yt-dlp"], &["yt-dlp"]);
+        assert!(allowed(
+            &n,
+            "yt-dlp https://y && yt-dlp -o a https://y",
+            true
+        ));
+        assert!(
+            !allowed(&cfg_with(&["yt-dlp"], &[]), "yt-dlp https://y", true),
+            "le réseau ne s'hérite pas de `tools.shell_allow`"
+        );
+    }
 }

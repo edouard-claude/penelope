@@ -160,14 +160,30 @@ pub const ORIGIN_OP: &str = "$origin";
 /// vers une lecture pure (`… | jq -r '…'`) garde la famille de sa première étape : c'est
 /// elle qui agit.
 pub fn command_matches(prefix: &str, candidate: &str) -> bool {
+    crate::cmdline::pipeline(candidate).is_some_and(|l| family_covers(prefix, &l))
+}
+
+/// La même question sur une ligne déjà découpée : les premiers mots sont ceux de la
+/// famille. C'est la seule forme utilisable pour une étape de liste, qui n'a pas de texte
+/// à elle (issue #150).
+pub fn family_covers(prefix: &str, line: &crate::cmdline::Pipeline) -> bool {
     let Some(want) = crate::cmdline::family(prefix) else {
-        return false;
-    };
-    let Some(line) = crate::cmdline::pipeline(candidate) else {
         return false;
     };
     let words = &line.head.words;
     words.len() >= want.len() && words.iter().zip(&want).all(|(a, b)| a == b)
+}
+
+/// Étapes d'une liste `a && b`, déjà découpées, quand la ligne en porte plusieurs.
+/// `None` pour une ligne simple (chemin ordinaire) ou composée.
+///
+/// Les étapes ne sont **jamais** réécrites en texte pour être rejugées : les guillemets
+/// sont retirés par le découpage, et `--print "%(title)s"` redeviendrait un sous-shell.
+/// C'est la règle de #141 — des tokens, jamais du texte reconstruit.
+fn separable_steps(args: &Value) -> Option<Vec<crate::cmdline::Pipeline>> {
+    let command = args.get("command")?.as_str()?;
+    let list = crate::cmdline::list(command)?;
+    (list.steps.len() >= 2).then_some(list.steps)
 }
 
 fn path_matches(prefix: &str, candidate: &str) -> bool {
@@ -286,6 +302,18 @@ impl PolicyEngine {
         session_id: Option<&str>,
     ) -> penelope_store::Result<Verdict> {
         let rules = self.active_rules().await?;
+        // Une liste `a && b` n'est couverte par aucune règle seule : elle l'est quand
+        // **chaque** étape l'est (issue #150). Les étapes sont jugées une par une, avec
+        // les mêmes règles et le même réseau ; il suffit qu'une seule manque pour que la
+        // ligne entière reparte en carte.
+        if tool == "shell_exec"
+            && let Some(steps) = separable_steps(args)
+            && let Some(v) = self
+                .cover_each_step(cfg, &rules, &steps, args, risk, run_id, session_id)
+                .await?
+        {
+            return Ok(v);
+        }
         let mut best: Option<&PolicyRule> = None;
         for r in &rules {
             if !r.matches(tool, server, args) {
@@ -328,6 +356,78 @@ impl PolicyEngine {
             reason: format!("politique par défaut pour la classe `{}`", risk.as_str()),
             rule_id: None,
         })
+    }
+
+    /// Vérifie qu'une règle couvre chaque étape d'une liste. `None` : ce n'est pas le
+    /// cas, l'appel suit le chemin ordinaire (donc la politique par défaut, donc la
+    /// carte). Une étape de lecture pure ne demande rien (#111).
+    #[allow(clippy::too_many_arguments)]
+    async fn cover_each_step(
+        &self,
+        _cfg: &penelope_kernel::config::McpPolicy,
+        rules: &[PolicyRule],
+        steps: &[crate::cmdline::Pipeline],
+        args: &Value,
+        risk: RiskClass,
+        run_id: Option<&str>,
+        session_id: Option<&str>,
+    ) -> penelope_store::Result<Option<Verdict>> {
+        let network = args.get("network") == Some(&Value::Bool(true));
+        let mut used: Vec<String> = Vec::new();
+        for step in steps {
+            if crate::cmdline::needs_no_rule(step) {
+                continue;
+            }
+            let mut found: Option<&PolicyRule> = None;
+            for r in rules {
+                if r.tool.as_deref() != Some("shell_exec") || !r.in_window(run_id, session_id) {
+                    continue;
+                }
+                // La règle doit nommer une famille : une règle sur l'outil entier ne
+                // couvre pas une étape (elle aurait déjà répondu au chemin ordinaire).
+                let Some(pattern) = &r.arg_match else {
+                    continue;
+                };
+                let Some(prefix) = pattern["command"][CMD_PREFIX_OP].as_str() else {
+                    continue;
+                };
+                if !family_covers(prefix, step) {
+                    continue;
+                }
+                // Le réseau ne s'hérite jamais (#106) : une règle qui ne le nomme pas ne
+                // couvre pas une ligne qui le demande.
+                if network && pattern.get("network") != Some(&Value::Bool(true)) {
+                    continue;
+                }
+                // Une seule étape refusée suffit à refuser la ligne : on ne fabrique pas
+                // un « autorisé » à partir de règles qui disent non.
+                if r.decision != PolicyDecision::Auto {
+                    return Ok(None);
+                }
+                found = Some(r);
+                break;
+            }
+            let Some(r) = found else {
+                return Ok(None);
+            };
+            if !used.contains(&r.id) {
+                used.push(r.id.clone());
+            }
+        }
+        // Aucune étape n'a demandé de règle : la ligne est une suite de lectures, la
+        // politique par défaut de la classe `read` s'en charge comme d'habitude.
+        if used.is_empty() {
+            return Ok(None);
+        }
+        for id in &used {
+            self.bump(id).await?;
+        }
+        Ok(Some(Verdict {
+            decision: PolicyDecision::Auto,
+            risk,
+            reason: format!("règles {} (chaque étape de la liste)", used.join(", ")),
+            rule_id: used.first().cloned(),
+        }))
     }
 
     /// Crée une règle à partir d'une décision « toujours », « pour ce run » ou

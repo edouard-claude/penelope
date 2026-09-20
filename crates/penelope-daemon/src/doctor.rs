@@ -228,6 +228,9 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     // Formulaires Telegram restés ouverts (#149).
     checks.push(open_forms_check(s).await);
 
+    // Part des lignes `shell_exec` collées, sur sept jours (#150).
+    checks.push(glued_lines_check(s).await);
+
     // Magasin de secrets : un aller-retour de 8 Ko, la taille d'un Grant (#148).
     checks.push(secret_roundtrip_check(s));
 
@@ -253,6 +256,67 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     }
 
     checks
+}
+
+/// #150 : la part des appels `shell_exec` qui collent plusieurs commandes. Sept jours
+/// d'appels, pour voir la consigne « une commande par appel » agir — le 20/09, 383 des
+/// 549 appels portaient un `&&`, et 129 des 166 cartes portaient sur une ligne collée.
+///
+/// Une `liste` (`a && b`) est autorisable une fois pour toutes ; une `composee` (`;`,
+/// `$(…)`, redirection) ne l'est pas, et redemande à chaque appel : c'est elle qu'on
+/// compte.
+pub async fn glued_lines_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "shell_lines";
+    const LABEL: &str = "Lignes de commande collées";
+    let since = (s.clock.now_utc() - chrono::Duration::days(7))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let rows: Vec<(String, i64)> = s
+        .store
+        .read(move |c| {
+            let mut st = c.prepare(
+                "SELECT COALESCE(json_extract(payload, '$.shape'), 'inconnue'), COUNT(*)
+                 FROM events
+                 WHERE kind = 'tool.result' AND ts >= ?1
+                   AND json_extract(payload, '$.tool') = 'shell_exec'
+                 GROUP BY 1",
+            )?;
+            let r = st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(r.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .unwrap_or_default();
+    let count = |k: &str| {
+        rows.iter()
+            .find(|(s, _)| s == k)
+            .map(|(_, n)| *n)
+            .unwrap_or(0)
+    };
+    let (simple, list, composed) = (count("simple"), count("liste"), count("composee"));
+    let total = simple + list + composed;
+    if total == 0 {
+        return DoctorCheck::ok(ID, LABEL, "aucun appel `shell_exec` en sept jours");
+    }
+    let share = |n: i64| (n as f64 * 100.0 / total as f64).round() as i64;
+    let detail = format!(
+        "{total} appels en 7 jours : {}% une commande, {}% listes `&&`, {}% composées",
+        share(simple),
+        share(list),
+        share(composed)
+    );
+    // Une ligne composée sur cinq : la consigne n'agit pas, et chaque appel redemande.
+    if share(composed) > 20 {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            detail,
+            Some(
+                "une commande composée ne peut porter aucune règle : elle redemande à \
+                 chaque fois. Demander une commande par appel"
+                    .into(),
+            ),
+        );
+    }
+    DoctorCheck::ok(ID, LABEL, detail)
 }
 
 /// #149 : un formulaire en cours retient le texte tapé dans son sujet. Oublié ouvert, il

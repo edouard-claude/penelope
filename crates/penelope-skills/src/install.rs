@@ -392,7 +392,8 @@ pub fn portage_note(skill: &Skill) -> Option<String> {
         .iter()
         .filter(|(claude, _)| mentions_word(&skill.body, claude))
         .collect();
-    if mapped.is_empty() {
+    let glued = glued_examples(&skill.body);
+    if mapped.is_empty() && glued.is_empty() {
         return None;
     }
     let mut lines = vec![
@@ -404,18 +405,70 @@ pub fn portage_note(skill: &Skill) -> Option<String> {
             dir.display()
         ),
         String::new(),
-        "Le corps ci-dessous est écrit pour Claude Code. Correspondance des outils :".to_string(),
-        String::new(),
     ];
-    // Deux noms amont peuvent viser le même outil (`Glob` et `Grep`) : les deux lignes
-    // sont utiles, c'est le vocabulaire du corps qu'il faut traduire.
-    for (claude, ours) in mapped {
-        lines.push(format!("- `{claude}` → `{ours}`"));
+    if !mapped.is_empty() {
+        lines.push(
+            "Le corps ci-dessous est écrit pour Claude Code. Correspondance des outils :"
+                .to_string(),
+        );
+        lines.push(String::new());
+        // Deux noms amont peuvent viser le même outil (`Glob` et `Grep`) : les deux lignes
+        // sont utiles, c'est le vocabulaire du corps qu'il faut traduire.
+        for (claude, ours) in mapped {
+            lines.push(format!("- `{claude}` → `{ours}`"));
+        }
+        lines.push(String::new());
     }
-    lines.push(String::new());
+    // La routine YouTube lançait ses trois commandes en une ligne : le propriétaire ne
+    // pouvait l'autoriser qu'une fois, et redemandait à chaque vidéo (issue #150).
+    if !glued.is_empty() {
+        lines.push(format!(
+            "**Une commande par appel `shell_exec`.** {} exemple(s) de cette skill collent \
+             plusieurs commandes sur une ligne (`{}`…) : lance-les en appels séparés, en \
+             parallèle si elles sont indépendantes. Une ligne collée ne peut porter aucune \
+             règle : le propriétaire la réautorise à chaque fois.",
+            glued.len(),
+            glued[0]
+        ));
+        lines.push(String::new());
+    }
     lines.push("---".into());
     lines.push(String::new());
     Some(lines.join("\n"))
+}
+
+/// Exemples de la skill qui collent plusieurs commandes sur une ligne (issue #150), en
+/// extrait tronqué.
+///
+/// Seuls les blocs marqués shell sont lus : un bloc Rust finit chaque ligne par `;` et
+/// une prose qui parle de `&&` n'est pas un exemple.
+pub fn glued_examples(body: &str) -> Vec<String> {
+    const SHELL: &[&str] = &["bash", "sh", "shell", "zsh", "console", "terminal"];
+    let mut out = Vec::new();
+    let mut in_shell = false;
+    let mut in_code = false;
+    for line in body.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("```") {
+            if in_code {
+                in_code = false;
+                in_shell = false;
+            } else {
+                in_code = true;
+                in_shell = SHELL.contains(&rest.trim().to_ascii_lowercase().as_str());
+            }
+            continue;
+        }
+        if !in_shell || t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        // Un `;` ou un `&&` dans un exemple : c'est une ligne que le propriétaire ne
+        // pourra autoriser qu'une fois, ou pas du tout.
+        if t.contains("&&") || t.contains(';') {
+            out.push(t.chars().take(60).collect::<String>());
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -540,6 +593,39 @@ mod tests {
 
     /// #146 : la table de correspondance se lit en mots entiers, et le préambule dit le
     /// dossier absolu sans toucher au fichier.
+    /// #150 : une skill dont les exemples collent des commandes reçoit la consigne au
+    /// chargement. La routine YouTube lançait ses trois commandes en une ligne, et le
+    /// propriétaire réautorisait à chaque vidéo.
+    #[test]
+    fn a_skill_whose_examples_glue_commands_is_told_at_load() {
+        let body = "Routine\n\n```bash\nyt-dlp --print x URL \\\n  && yt-dlp -o tmp/z URL\n```\n";
+        let found = glued_examples(body);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("yt-dlp"), "{found:?}");
+
+        // Un bloc qui n'est pas du shell ne compte pas : chaque ligne de Rust finit par
+        // un `;`.
+        let rust = "```rust\nlet a = 1;\nlet b = 2;\n```\n";
+        assert!(glued_examples(rust).is_empty());
+        // Une prose qui parle de `&&` non plus.
+        assert!(glued_examples("On évite `a && b` dans les exemples.\n").is_empty());
+        // Un commentaire de bloc shell non plus.
+        assert!(glued_examples("```sh\n# a && b\nls\n```\n").is_empty());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yt/SKILL.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let raw =
+            format!("---\nname: yt\ndescription: transcription\nversion: 1.0.0\n---\n\n{body}");
+        let mut skill = parse_skill(&path, &raw, Scope::User).unwrap();
+        skill.path = path.clone();
+        let note = portage_note(&skill).expect("une note");
+        assert!(
+            note.contains("Une commande par appel"),
+            "la consigne est dans la note : {note}"
+        );
+    }
+
     #[test]
     fn the_portage_note_translates_tools_and_names_the_directory() {
         assert_eq!(tools_used("Use Read and Bash"), ["fs_read", "shell_exec"]);

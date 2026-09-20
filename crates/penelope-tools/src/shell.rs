@@ -61,76 +61,16 @@ impl ShellOutput {
     }
 }
 
-/// Une ligne de commande qui ne fait que lire (issue #111) : un programme de lecture
-/// connu, appelé par son nom, sur une ligne simple (aucun enchaînement, redirection,
-/// substitution ni échappement hors apostrophes, voir `penelope_hitl::cmdline`), sans
-/// option qui écrive ou lance autre chose. Tout le reste est une écriture, approuvée
-/// comme telle. Le bac à sable borne de toute façon ce qu'elle peut lire.
-///
-/// Le découpage est celui des règles (issue #141) : un `&`, un `|` ou une parenthèse
-/// entre guillemets (`grep -n 'x | y' f`) est un caractère, pas un enchaînement ; une
-/// affectation de tête (`TZ=UTC date`) laisse la lecture à son programme, sauf quand elle
-/// détourne l'interpréteur (`PATH=/tmp ls`) ; et un tube vers une lecture pure
-/// (`cat f | grep x`) ne change ni ce qui agit, ni ce que ça touche.
+/// Une ligne de commande qui ne fait que lire (issue #111). La classification vit dans
+/// `penelope_hitl::cmdline`, avec le découpage : une liste `&&` doit poser la même
+/// question à chacune de ses étapes (issue #150), et deux listes divergeraient.
 pub fn is_read_command(command: &str) -> bool {
-    let Some(line) = penelope_hitl::cmdline::pipeline(command) else {
-        return false;
-    };
-    let words = line.head.words;
-    let Some(program) = words.first() else {
-        return false;
-    };
-    // `./ls` ou `/tmp/cat` peuvent être n'importe quoi.
-    if program.contains('/') {
-        return false;
-    }
-    let has = |bad: &[&str]| {
-        words[1..].iter().any(|w| {
-            bad.iter()
-                .any(|b| w == b || (b.starts_with("--") && w.starts_with(&format!("{b}="))))
-        })
-    };
-    match program.as_str() {
-        "ls" | "cat" | "head" | "tail" | "grep" | "egrep" | "fgrep" | "wc" | "file" | "stat"
-        | "du" | "df" | "pwd" | "which" | "whoami" | "id" | "uname" | "diff" | "cmp" | "uniq"
-        | "cut" | "basename" | "dirname" | "realpath" | "readlink" | "sha256sum" | "sha1sum"
-        | "shasum" | "md5" | "md5sum" | "jq" | "echo" | "printf" | "true" => true,
-        "date" => !has(&["-s", "--set"]),
-        "sort" => !has(&["-o", "--output"]),
-        "tree" => !has(&["-o"]),
-        "rg" => !has(&["--pre"]),
-        "find" => !has(&[
-            "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf",
-            "-fls",
-        ]),
-        "fd" => !has(&["-x", "--exec", "-X", "--exec-batch"]),
-        // Sous-commande de lecture, sans option globale (`git -c …` peut lancer une
-        // commande) ni fichier de sortie.
-        "git" => {
-            let read = matches!(
-                words.get(1).map(String::as_str),
-                Some(
-                    "status"
-                        | "log"
-                        | "diff"
-                        | "show"
-                        | "ls-files"
-                        | "blame"
-                        | "rev-parse"
-                        | "describe"
-                        | "shortlog"
-                        | "grep"
-                )
-            ) || (words.get(1).map(String::as_str) == Some("branch")
-                && words[2..]
-                    .iter()
-                    .all(|w| matches!(w.as_str(), "-a" | "-r" | "-v" | "-vv" | "--list")))
-                || (words.get(1).map(String::as_str) == Some("remote")
-                    && words[2..].iter().all(|w| w == "-v"));
-            read && !has(&["--output", "--ext-diff", "--textconv"])
-        }
-        _ => false,
-    }
+    penelope_hitl::cmdline::is_read_command(command)
+}
+
+/// Même question sur une ligne déjà découpée.
+pub fn is_read_pipeline(line: &penelope_hitl::cmdline::Pipeline) -> bool {
+    penelope_hitl::cmdline::is_read(line)
 }
 
 /// Préfixe `cd <répertoire> && ` d'une ligne de commande (issue #123) : le modèle se place

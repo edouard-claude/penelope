@@ -51,11 +51,10 @@ pub(crate) struct ApprovalCard {
     pub action: String,
     /// Une ligne : qualificatifs, classe de risque, politique.
     pub details: String,
-    /// Portée d'une règle « Toujours » (`« gh pr » avec réseau`), si elle en a une.
+    /// Portée d'une règle « Toujours » : les familles qu'un clic réglerait
+    /// (`« yt-dlp », « ffmpeg » (réseau)`). `None` : aucune règle n'est possible, et le
+    /// bouton n'est pas posé du tout — la carte dit ce qui l'empêche (issues #141, #150).
     pub always: Option<String>,
-    /// Vrai quand aucune règle n'est possible : « Toujours » n'autoriserait que cette
-    /// fois. Le propriétaire le lit avant de cliquer (issue #141).
-    pub no_rule: bool,
 }
 
 /// Compose la carte d'une demande d'approbation.
@@ -137,12 +136,14 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
     if let Some(reason) = a.payload["reason"].as_str().filter(|r| !r.is_empty()) {
         quals.push(reason.to_string());
     }
-    let always = crate::agent::arg_pattern(&a.subject, a.payload.get("arguments")).map(|p| {
+    // Le libellé nomme **toutes** les familles qu'un clic autoriserait : une liste
+    // `a && b` en crée une par famille, et le propriétaire doit les voir avant (#150).
+    let patterns = crate::agent::arg_patterns(&a.subject, a.payload.get("arguments"));
+    let describe = |p: &Value| {
         use penelope_hitl::policy::{CMD_PREFIX_OP, ORIGIN_OP, PATH_PREFIX_OP};
         let op = |k: &str, op: &str| p[k][op].as_str().map(String::from);
-        let network = p["network"] == Value::Bool(true);
         if let Some(family) = op("command", CMD_PREFIX_OP) {
-            format!("« {family} »{}", if network { " (réseau)" } else { "" })
+            format!("« {family} »")
         } else if let Some(dir) = op("path", PATH_PREFIX_OP) {
             if dir.is_empty() {
                 "ce répertoire".into()
@@ -152,21 +153,36 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
         } else if let Some(host) = op("url", ORIGIN_OP) {
             host
         } else {
-            penelope_hitl::policy::describe_pattern(&p)
+            penelope_hitl::policy::describe_pattern(p)
         }
+    };
+    let always = (!patterns.is_empty()).then(|| {
+        let network = patterns.iter().any(|p| p["network"] == Value::Bool(true));
+        let names: Vec<String> = patterns.iter().map(&describe).collect();
+        format!(
+            "{}{}",
+            names.join(", "),
+            if network { " (réseau)" } else { "" }
+        )
     });
     // Une commande composée n'a pas de famille : « Toujours » l'autoriserait une fois,
     // sans créer de règle (#111). La carte le dit avant le clic (#141).
-    let no_rule = crate::agent::always_creates_no_rule(&a.subject, a.payload.get("arguments"));
-    if no_rule {
-        quals.push("aucune règle possible : commande composée".into());
+    if crate::agent::always_creates_no_rule(&a.subject, a.payload.get("arguments")) {
+        // Dire *ce qui* empêche la règle, et par où sortir : une commande par appel
+        // (issue #150). Sans cela, « pas de règle possible » se lit comme une fatalité.
+        let why = a.payload["arguments"]["command"]
+            .as_str()
+            .and_then(penelope_hitl::cmdline::why_composed)
+            .unwrap_or_else(|| "commande composée".into());
+        quals.push(format!(
+            "pas de règle possible ({why}) — demande-lui une commande par appel"
+        ));
     }
     ApprovalCard {
         intention,
         action,
         details: quals.join(" · "),
         always,
-        no_rule,
     }
 }
 
@@ -4003,6 +4019,13 @@ impl TelegramGateway {
                         windows
                             || !matches!(&b.action, penelope_telegram::render::ButtonAction::Callback { token } if windowed.contains(token))
                     })
+                    // Aucune règle possible : pas de bouton dans la case de « Toujours ».
+                    // Une coche verte à sa place se lisait comme un « Toujours » nouvelle
+                    // formule, et n'autorisait qu'une fois (issue #150).
+                    .filter(|b| {
+                        card.always.is_some()
+                            || !matches!(&b.action, penelope_telegram::render::ButtonAction::Callback { token } if Some(token) == tokens.get(k::APPROVE_ALWAYS))
+                    })
                     .map(|b| {
                         let mut b = b.clone();
                         if b.label.contains("Pour ce run") {
@@ -4011,12 +4034,10 @@ impl TelegramGateway {
                         // « Toujours » dit sur quoi il porte : la famille de commandes, le
                         // répertoire, l'hôte (#116). Quand il ne peut créer aucune règle, il
                         // le dit plutôt que de laisser croire au contraire (#141).
-                        if b.label.contains("Toujours") {
-                            if let Some(scope) = &card.always {
-                                b.label = format!("♾️ Toujours pour {scope}");
-                            } else if card.no_rule {
-                                b.label = "✅ Autoriser (pas de règle possible)".into();
-                            }
+                        if b.label.contains("Toujours")
+                            && let Some(scope) = &card.always
+                        {
+                            b.label = format!("♾️ Toujours pour {scope}");
                         }
                         b
                     })
@@ -9074,9 +9095,10 @@ mod tests {
         assert!(!sent.contains("Carte simplifiée"), "{sent}");
     }
 
-    /// #141 : le bouton « Toujours » dit la famille qu'il réglera ; quand la ligne n'en a
-    /// pas, il dit qu'aucune règle n'est possible, avant le clic. Une URL de requête entre
-    /// guillemets garde sa famille.
+    /// #141 : le bouton « Toujours » dit la famille qu'il réglera. #150 : il nomme
+    /// **toutes** les familles d'une liste `&&`, et quand aucune règle n'est possible il
+    /// n'y a **pas de bouton** à sa place — une coche verte s'y lisait comme un
+    /// « Toujours » nouvelle formule —, la carte disant ce qui l'empêche.
     #[tokio::test]
     async fn the_always_button_says_when_no_rule_is_possible() {
         let (_d, g, t, _p) = gateway().await;
@@ -9087,8 +9109,24 @@ mod tests {
                 "Toujours pour « glab »",
             ),
             ("GITLAB_HOST=h glab api \"p?x=1\"", "Toujours pour « glab »"),
+            // La ligne de la routine YouTube : deux `yt-dlp` et une lecture, une famille.
+            (
+                "yt-dlp --print x https://y && yt-dlp -o tmp/z https://y && ls -la tmp/z*",
+                "Toujours pour « yt-dlp »",
+            ),
+            // Deux familles : le clic les nomme toutes les deux avant d'écrire.
+            (
+                "yt-dlp -o tmp/z https://y && ffmpeg -i tmp/z out.mp3",
+                "Toujours pour « yt-dlp », « ffmpeg »",
+            ),
+            // `cd` ne fait que régler le shell : la famille est celle qui agit (#123).
+            ("cd /ailleurs && cargo test", "Toujours pour « cargo test »"),
             ("cd /ailleurs && ls", "pas de règle possible"),
             ("ls | sh", "pas de règle possible"),
+            ("cargo test; rm -rf ~", "pas de règle possible"),
+            ("a && $(b)", "pas de règle possible"),
+            ("a && b > f", "pas de règle possible"),
+            ("a && sh -c \"b\"", "pas de règle possible"),
         ] {
             t.clear().await;
             let a = s
@@ -9120,13 +9158,21 @@ mod tests {
                 .map(|b| b["text"].as_str().unwrap_or_default().to_string())
                 .collect::<Vec<_>>()
                 .join(" | ");
-            assert!(labels.contains(expected), "{command} : {labels}");
+            let text = card["text"].as_str().unwrap_or_default();
             if expected.contains("pas de règle") {
-                let text = card["text"].as_str().unwrap_or_default();
+                // Pas de bouton dans la case de « Toujours », et jamais une coche verte
+                // qui s'y substitue.
                 assert!(
-                    text.contains("aucune règle possible"),
-                    "la carte le dit aussi en toutes lettres : {text}"
+                    !labels.contains("Toujours") && !labels.contains("pas de règle"),
+                    "{command} : aucun bouton ne prend la place de « Toujours » : {labels}"
                 );
+                assert!(
+                    text.contains("pas de règle possible")
+                        && text.contains("une commande par appel"),
+                    "{command} : la carte dit ce qui l'empêche et par où sortir : {text}"
+                );
+            } else {
+                assert!(labels.contains(expected), "{command} : {labels}");
             }
         }
     }

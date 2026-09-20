@@ -8,7 +8,7 @@ Dernière mise à jour : 20 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1596 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1604 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1995,6 +1995,53 @@ réponse au formulaire — avalé, jamais arrivé à sa session.
 - L'erreur de validation dit maintenant où répondre (« réponds **ici**, ou ✖️ Abandonner »).
 - `penelope doctor` (`telegram_forms`) signale un formulaire ouvert depuis plus d'une heure,
   avec son sujet : il retient le texte tapé là.
+
+### 0.17.31
+
+#### Les listes `&&` ont des familles (#150)
+
+Le 20/09, le propriétaire colle deux liens YouTube dans « Mindset ». La skill de
+transcription lance trois commandes sur une ligne ; la carte propose
+`✅ Autoriser (pas de règle possible)`, qu'il lit comme le nouveau « Toujours » ; la
+deuxième vidéo redemande exactement la même chose. Le ledger note `Toujours`, la table
+des règles ne reçoit rien.
+
+Ce n'était pas un cas isolé : sur l'instance, 383 des 549 appels `shell_exec` portaient
+un `&&` (70 %), 129 des 166 cartes portaient sur une ligne collée, et 107 clics
+« Toujours » avaient produit 27 règles, dont 20 mortes (`cd`, `echo`, `export`, `set`).
+
+- **Le découpage sait rendre une liste** : `a && b && c` où chaque étape est nommable est
+  une liste d'étapes, pas une ligne composée. `&&` est le seul opérateur admis — `;` et
+  `||` lancent la suite quoi qu'il arrive (`cargo test; rm -rf ~`, #67), une substitution
+  ou une redirection change ce qui est lancé.
+- **Une règle par famille** : « Toujours » sur la ligne YouTube écrit
+  `{"command": {"$cmd_prefix": "yt-dlp"}, "network": true}` ; la vidéo suivante passe sans
+  carte. Trois familles au plus d'un seul clic, et le bouton les nomme toutes avant :
+  `♾️ Toujours pour « yt-dlp », « ffmpeg » (réseau)`.
+- **Couverture par étape** : la ligne n'est autorisée que si **chaque** étape l'est.
+  `yt-dlp … && curl …` redemande tant que `curl` n'est pas couvert.
+  `tools.shell_allow` et `shell_allow_network` suivent la même règle.
+- **Ce qui ne demande aucune règle** : une lecture (`ls -la tmp/x*`), et un mot-clé qui ne
+  fait que régler le shell (`cd`, `export`, `set`). C'est d'où venaient les vingt règles
+  mortes ; `cd /x && cargo test` règle désormais `cargo test`, jamais `cd`.
+- **Ce qui reste composé, en plus** : une étape qui ne nomme pas ce qu'elle lance —
+  `sh -c`, `sudo`, `env`, `xargs`, `timeout`, `python3 -c`, `node -e`. Sans cela, admettre
+  `&&` aurait laissé `a && sh -c "…"` créer une règle de famille `sh`, qui aurait couvert
+  n'importe quel code.
+- **Le bouton honnête n'est plus un bouton** : quand aucune règle n'est possible, rien ne
+  prend la place de « Toujours ». La carte dit ce qui l'empêche et par où sortir : « pas de
+  règle possible (`;`) — demande-lui une commande par appel ». Et `rule_created` ne vaut
+  `always` que si une règle a été écrite.
+- **Une commande par appel** : la description de `shell_exec` le demande, dans le budget de
+  schémas de #104 (vérifié : 3 000 jetons). `penelope doctor` (`shell_lines`) donne la part
+  de lignes collées sur sept jours et signale au-delà d'une sur cinq composées ; la forme de
+  chaque ligne (`simple`, `liste`, `composee`) est journalée, jamais la commande.
+- **Les skills installées reçoivent la consigne** au chargement, sans réécriture de leur
+  fichier : les exemples de blocs shell qui collent des commandes sont comptés et la note
+  de portage demande des appels séparés.
+- Un seul endroit pour classer une lecture : `is_read_command` a rejoint le découpage dans
+  `penelope-hitl::cmdline`, comme #141 l'avait fait pour le lexer. Deux listes de
+  programmes de lecture auraient divergé.
 
 ### Routine de livraison
 

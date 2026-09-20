@@ -292,6 +292,24 @@ impl ApprovalStore {
 
     /// Tranche une demande. **La première décision gagne** : un second appel échoue avec
     /// le détail de la décision déjà enregistrée.
+    /// Corrige ce que la décision a vraiment écrit (issue #150) : `decide` note la
+    /// fenêtre demandée, avant de savoir si une règle est possible. Un « Toujours » sur
+    /// une ligne composée n'en écrit aucune ; le ledger doit le dire, sinon
+    /// `penelope approvals` compte 107 « Toujours » pour 27 règles.
+    pub async fn note_rules(&self, id: &str, created: usize) -> Result<()> {
+        let (id_s, value) = (id.to_string(), (created > 0).then(|| "always".to_string()));
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "UPDATE approval_requests SET rule_created=?2 WHERE id=?1",
+                    params![id_s, value],
+                )?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
+    }
+
     pub async fn decide(&self, id: &str, d: &Decision) -> Result<ApprovalRequest> {
         let (id_s, now) = (id.to_string(), self.clock.now_rfc3339());
         let state = if d.approved {

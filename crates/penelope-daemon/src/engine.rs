@@ -1854,6 +1854,141 @@ mod tests {
         matches!(out, TurnOutcome::AwaitingApproval { .. })
     }
 
+    /// #150 : une liste `&&` a des familles, un « Toujours » écrit une règle par famille,
+    /// et la même ligne repasse ensuite sans carte. La scène est celle du 20/09 : la
+    /// routine YouTube colle trois commandes, le propriétaire clique, et la vidéo
+    /// suivante redemandait.
+    #[tokio::test]
+    async fn an_and_list_gets_a_rule_per_family_and_stops_asking() {
+        let (_dir, d, p) = daemon().await;
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        d.pin_model(&sid, Some("main")).await.unwrap();
+
+        let turn_with = |command: String| {
+            let (d, p, sid) = (d.clone(), p.clone(), sid.clone());
+            async move {
+                p.push(Scripted::ToolCalls(
+                    String::new(),
+                    vec![ToolCall {
+                        id: "c1".into(),
+                        name: "shell_exec".into(),
+                        arguments: json!({"command": command, "network": true}),
+                    }],
+                ));
+                p.reply("C'est fait.");
+                d.enqueue_message(&sid, "vas-y", &Origin::Cli, None)
+                    .await
+                    .unwrap();
+                let turn = claim(&d).await;
+                d.run_turn(&turn).await
+            }
+        };
+
+        let line = |id: &str| {
+            format!(
+                "yt-dlp --skip-download --print \"TITLE: %(title)s\" https://youtu.be/{id} \
+                 && yt-dlp --skip-download --write-subs -o tmp/yt-{id} https://youtu.be/{id} \
+                 && ls -la tmp/yt-{id}*"
+            )
+        };
+
+        // Première vidéo : une carte, et un « Toujours » qui écrit vraiment.
+        let out = turn_with(line("F2iVKgQh_TU")).await;
+        let TurnOutcome::AwaitingApproval { approval_id } = out else {
+            panic!("la première ligne doit demander : {out:?}");
+        };
+        crate::agent::decide_approval(
+            &d.services,
+            &approval_id,
+            &penelope_hitl::Decision::approve_always("cli"),
+        )
+        .await
+        .unwrap();
+        let rules = d.services.policies.active_rules().await.unwrap();
+        assert_eq!(rules.len(), 1, "une règle par famille : {rules:?}");
+        assert_eq!(
+            rules[0].arg_match,
+            Some(json!({"command": {"$cmd_prefix": "yt-dlp"}, "network": true})),
+            "la règle porte la famille et son réseau"
+        );
+        // Le ledger dit qu'une règle a été écrite, pas seulement qu'on a cliqué.
+        let a = d.services.approvals.get(&approval_id).await.unwrap();
+        assert_eq!(a.unwrap().rule_created.as_deref(), Some("always"));
+
+        // La règle couvre maintenant la ligne entière : chaque étape l'est, la lecture
+        // finale n'en demande pas. Deuxième vidéo, autre identifiant, plus de carte.
+        let cfg = d.services.config.config();
+        let verdict = |command: String| {
+            let (d, cfg) = (d.clone(), cfg.clone());
+            async move {
+                d.services
+                    .policies
+                    .evaluate(
+                        &cfg.mcp.policy,
+                        "shell_exec",
+                        None,
+                        &json!({"command": command, "network": true}),
+                        penelope_kernel::risk::RiskClass::External,
+                        None,
+                        None,
+                    )
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(
+            verdict(line("dQw4w9WgXcQ")).await.decision,
+            penelope_kernel::risk::PolicyDecision::Auto,
+            "la même ligne, autre URL, ne redemande pas"
+        );
+        // Une étape hors des familles couvertes fait repartir la ligne entière en carte.
+        assert_ne!(
+            verdict(format!("{} && curl https://x", line("abc")))
+                .await
+                .decision,
+            penelope_kernel::risk::PolicyDecision::Auto,
+            "`curl` n'est pas couvert : la liste redemande"
+        );
+        // Et le `;` de #67 n'est jamais couvert, quelles que soient les règles.
+        assert_ne!(
+            verdict("yt-dlp https://y; rm -rf ~".into()).await.decision,
+            penelope_kernel::risk::PolicyDecision::Auto,
+            "`;` reste composé"
+        );
+    }
+
+    /// #150 : un « Toujours » qui n'écrit rien le dit au ledger. Le 20/09, 107 clics
+    /// « Toujours » pour 27 règles, sans que rien ne distingue les deux.
+    #[tokio::test]
+    async fn a_composed_line_records_that_no_rule_was_written() {
+        let (_dir, d, out) = shell_turn("cargo test; rm -rf ~", None, &[]).await;
+        let TurnOutcome::AwaitingApproval { approval_id } = out else {
+            panic!("{out:?}");
+        };
+        crate::agent::decide_approval(
+            &d.services,
+            &approval_id,
+            &penelope_hitl::Decision::approve_always("cli"),
+        )
+        .await
+        .unwrap();
+        assert!(
+            d.services.policies.active_rules().await.unwrap().is_empty(),
+            "`;` reste composé (#67)"
+        );
+        let a = d
+            .services
+            .approvals
+            .get(&approval_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            a.rule_created, None,
+            "aucune règle écrite : le ledger ne dit pas « always »"
+        );
+    }
+
     /// #111 : les lectures ne demandent rien en mode par défaut ; écriture, sous-shell,
     /// redirection, réseau et commande composée demandent ; une commande composée
     /// approuvée « Toujours » ne crée aucune règle ; « demander tout » redemande même une

@@ -920,9 +920,27 @@ famille déclarée d'avance qui vaut aussi derrière le `cd`. Hors des workspace
 d'un autre enchaînement (`;`, `|`, `&&`), d'une redirection ou d'une substitution, la
 ligne reste composée. Le modèle a de toute façon le paramètre `cwd` de `shell_exec`.
 
+**Les listes `&&` ont des familles.** `a && b && c`, où chaque étape est une commande
+nommable, n'est plus composée : c'est une **liste**, et chacune de ses étapes est jugée
+pour elle-même (issue #150). Conséquences :
+
+- « Toujours » écrit **une règle par famille**, trois au plus d'un seul clic, et le bouton
+  les nomme toutes avant : `♾️ Toujours pour « yt-dlp », « ffmpeg » (réseau)` ;
+- la ligne n'est couverte que si **chaque** étape l'est, par une règle ou parce qu'elle
+  lit ; `tools.shell_allow` et `tools.shell_allow_network` suivent la même règle. Une
+  seule étape non couverte fait repartir la ligne entière en carte ;
+- une étape qui ne fait que lire (`ls -la tmp/x*`) ou que régler le shell (`cd`, `export`,
+  `set`) n'a besoin d'aucune règle : c'est ce qui créait vingt règles mortes sur vingt-sept ;
+- une étape qui ne nomme pas ce qu'elle lance — `sh -c`, `sudo`, `env`, `xargs`,
+  `timeout`, `python3 -c` — laisse la ligne composée : une règle `sh` couvrirait n'importe
+  quel code.
+
+`&&` est le seul opérateur admis, et c'est délibéré : `;` et `||` lancent la suite quoi
+qu'il arrive (`cargo test; rm -rf ~`).
+
 **Ce qui compte comme enchaînement.** Une ligne est dite *composée* — donc jamais une
 lecture, sans famille, et hors de portée d'une règle ou d'une famille déclarée — quand
-elle porte, **hors guillemets**, un opérateur (`;`, `&`, `&&`, `||`, `(`, `)`) ou une
+elle porte, **hors guillemets**, un opérateur (`;`, `&`, `||`, `(`, `)`) ou une
 redirection (`>`, `<`) ; une substitution (`$(…)`, `` `…` ``, `$VAR`) ou un échappement
 (`\`), même entre guillemets doubles, où ils gardent leur pouvoir dans un shell ; un saut
 de ligne ; une négation (`!` en tête) ; une apostrophe ou un guillemet non fermé ; ou une
@@ -948,13 +966,22 @@ api "…"` est de la famille `glab`, `TZ=UTC date` est une lecture. Le même dé
 créer la règle, à la reconnaître, à lire `tools.shell_allow` et à classer les lectures :
 ce qu'un « Toujours » écrit est ce qui s'applique ensuite.
 
-Un « Toujours » sur une commande composée (`cd /x && ls` hors workspace, `ls; pwd`)
-l'autorise cette fois, sans créer de règle : une famille `cd` ne s'appliquerait jamais. La
-carte le dit **avant** le clic — le bouton devient « ✅ Autoriser (pas de règle possible) »
-et la ligne de qualificatifs porte « aucune règle possible : commande composée ».
+Un « Toujours » sur une commande composée (`ls; pwd`, `a > f`, `$(…)`) l'autorise cette
+fois, sans créer de règle. La carte le dit **avant** le clic, et depuis #150 **aucun
+bouton ne prend la place de « Toujours »** : une coche verte à cet endroit se lisait comme
+un « Toujours » nouvelle formule, et n'autorisait qu'une fois. La ligne de qualificatifs
+nomme ce qui l'empêche et la sortie : « pas de règle possible (`;`) — demande-lui une
+commande par appel ». Le ledger suit : `rule_created` ne vaut `always` que si une règle a
+vraiment été écrite (`penelope approvals`).
 `penelope policies` et `/policies` signalent les règles inutiles (famille issue d'une
 commande composée ou d'une affectation comme `GITLAB_HOST=…`, lecture déjà libre, jamais
 utilisée depuis une semaine), à retirer d'un bouton.
+
+La description de `shell_exec` demande au modèle **une commande par appel** : plusieurs
+commandes font plusieurs appels, en parallèle si elles sont indépendantes. `penelope
+doctor` (`shell_lines`) donne la part de lignes collées sur sept jours, et signale
+au-dessus d'une sur cinq composées. Une skill installée dont les exemples collent des
+commandes reçoit la consigne au chargement, sans que son fichier soit réécrit.
 
 Un « Toujours » est **borné à l'appel qu'il autorise**, jamais à l'outil entier :
 pour `shell_exec`, à la famille de commandes (`cargo test …`, `git log …`) ; pour `fs_write`
