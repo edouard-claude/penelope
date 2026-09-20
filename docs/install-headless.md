@@ -291,6 +291,19 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `providers.local.models` | `[]` | Modèles servis par l'endpoint. |
 | `providers.local.stream_idle_timeout` | `"120s"` | Silence toléré pendant un flux, comme pour OpenRouter. |
 | `providers.local.context_window` | `32768` | Fenêtre de contexte annoncée pour les modèles servis par cet endpoint, quand `GET /models` ne la donne pas. |
+| `providers.codex.enabled` | `false` | Fournisseur actif. Faux tant que le compte n'est pas connecté (`penelope model auth codex`). |
+| `providers.codex.base_url` | `"https://chatgpt.com/backend-api/codex"` | Adresse du backend Codex. |
+| `providers.codex.issuer` | `"https://auth.openai.com"` | Serveur d'autorisation du compte ChatGPT. |
+| `providers.codex.client_id` | `"app_EMoamEEZ73f0CkXaXp7hrann"` | Identifiant du client OAuth, celui de Codex CLI. |
+| `providers.codex.originator` | `"codex_cli_rs"` | En-tête `originator` envoyé au backend. Le serveur filtre cette valeur : la changer sans raison donne un 403 sur toutes les requêtes. |
+| `providers.codex.client_version` | `"0.104.0"` | Version de client annoncée (`User-Agent`, `?client_version=`). Épinglée, mise à jour à la main quand le backend exige plus récent. |
+| `providers.codex.stream_idle_timeout` | `"120s"` | Silence toléré pendant un flux, comme pour OpenRouter. |
+| `providers.codex.request_retries` | `3` | Nouvelles tentatives sur erreur transitoire avant le flux (5xx, coupure). Un 429 de quota n'est jamais rejoué. |
+| `providers.codex.reasoning_summary` | `"auto"` | Résumé de raisonnement demandé (`auto`, `concise`, `detailed`, ou vide). |
+| `providers.codex.verbosity` | `"medium"` | Verbosité du texte rendu (`low`, `medium`, `high`). |
+| `providers.codex.quota_alert_ratio` | `0.8` | Part de la fenêtre de quota qui déclenche une alerte (0 à 1). |
+| `providers.codex.quota_stop_ratio` | `0.95` | Part de la fenêtre de quota au-delà de laquelle le fournisseur se met en retrait et laisse le repli jouer (0 à 1). |
+| `providers.codex.models` | `["gpt-6-astra","gpt-5.6-sol","gpt-5.6-terra","gpt-5.6-luna","gpt-5.5","gpt-5.4"]` | Modèles servis, en repli quand `GET /models` ne répond pas. |
 | `providers.extra.<nom>.kind` | – | Type d'endpoint (`openai_compat`). |
 | `providers.extra.<nom>.base_url` | – | Adresse de l'endpoint OpenAI-compatible. |
 | `providers.extra.<nom>.api_key` | – | Clé éventuelle, par référence au magasin de secrets. |
@@ -679,6 +692,50 @@ ignore = []                # providers à éviter, par exemple ["deepinfra"]
 quantizations = []         # par exemple ["fp8", "bf16"]
 order = []                 # à éviter : un ordre imposé désactive le routage collant
 ```
+
+### Codex : les modèles d'un abonnement ChatGPT
+
+Un abonnement ChatGPT (Plus, Pro, Business) ne donne ni clé d'API ni crédits Platform,
+mais il ouvre le backend Codex : les modèles du plan (`gpt-6-astra`, `gpt-5.6-*`), 272 k
+de contexte, outils et images, sans facturation à l'appel. Pénélope sait s'y connecter, à
+côté d'OpenRouter.
+
+**Ce que c'est, juridiquement.** Cet usage est **toléré** par OpenAI (page « Codex for
+Open Source », déclarations publiques sur les clients tiers), **jamais garanti par
+contrat**, et révocable du jour au lendemain. Pénélope emprunte l'identité du client Codex
+CLI (`originator`, `User-Agent`, identifiant d'installation), parce que le backend filtre
+cet en-tête et sert un catalogue qui en dépend ; c'est une usurpation assumée, la même sur
+toutes les requêtes — une identité incohérente vaut des heures de « servers overloaded ».
+Le repli, si la porte se ferme : une clé d'API sur `openai_compat` vers `api.openai.com`.
+
+**Se connecter** (la machine n'a pas besoin de navigateur) :
+
+```bash
+penelope model auth codex          # affiche une adresse et un code à six caractères
+penelope model auth codex --status # plan, compte, état du jeton
+penelope model auth codex --logout # révoque le jeton et l'oublie
+```
+
+Sur Telegram : `/model auth codex`, `/model auth codex status`, `/model auth codex
+logout`. Le code vaut quinze minutes ; Pénélope confirme dès qu'il est saisi, puis active
+`providers.codex.enabled`. Les jetons vivent dans le magasin de secrets sous `codex.oauth`
+— jamais dans `~/.codex/auth.json`, qui appartient à Codex CLI — et sont rafraîchis en
+fond, hors tour. Le jeton de rafraîchissement est **à usage unique** : Pénélope sérialise
+ses rotations, et un jeton rejoué déconnecte le compte pour de bon (il faut alors
+reconnecter).
+
+**Donner un alias**, comme pour tout autre fournisseur :
+
+```bash
+penelope model set code codex:gpt-6-astra
+```
+
+**Ce que ça coûte.** Rien à l'appel : les lignes d'usage portent `cost_usd = 0`. La vraie
+limite est le quota du plan, que le backend annonce à chaque réponse (une fenêtre de 5 h,
+une fenêtre hebdomadaire) : Pénélope les lit, alerte à `providers.codex.quota_alert_ratio`
+et se met en retrait à `quota_stop_ratio`, en laissant le repli OpenRouter jouer plutôt
+que d'aller chercher un refus. Un quota atteint n'est pas une panne : le message dit
+l'heure de retour.
 
 ### Coûts
 

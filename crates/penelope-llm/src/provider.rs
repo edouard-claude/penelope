@@ -5,7 +5,7 @@
 //! en-têtes pour distinguer `dispatching` de `response_started`.
 
 use crate::catalog::{Catalog, ModelInfo, parse_openrouter_models, strip_provider};
-use crate::sse::{SseDecoder, StreamAccumulator};
+use crate::sse::{EventAccumulator, SseDecoder, StreamAccumulator};
 use crate::types::*;
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -444,7 +444,14 @@ impl Provider for OpenRouterProvider {
             .await
             .map_err(map_reqwest_error)?;
 
-        stream_from_response(resp, cancel, self.name().to_string(), self.stream_idle).await
+        stream_from_response(
+            resp,
+            cancel,
+            self.name().to_string(),
+            self.stream_idle,
+            Box::new(StreamAccumulator::new()),
+        )
+        .await
     }
 
     async fn transcribe(
@@ -655,7 +662,14 @@ impl Provider for OpenAiCompatProvider {
             r = r.bearer_auth(&self.api_key);
         }
         let resp = r.send().await.map_err(map_reqwest_error)?;
-        stream_from_response(resp, cancel, self.label.clone(), self.stream_idle).await
+        stream_from_response(
+            resp,
+            cancel,
+            self.label.clone(),
+            self.stream_idle,
+            Box::new(StreamAccumulator::new()),
+        )
+        .await
     }
 
     async fn fetch_models(&self) -> Result<Vec<ModelInfo>> {
@@ -888,11 +902,12 @@ fn local_window(m: &Value, configured: u64) -> u64 {
 /// Transforme une réponse HTTP en flux de fragments.
 ///
 /// Les en-têtes sont déjà reçus à ce stade : l'appel passe en `response_started` (§4.3).
-async fn stream_from_response(
+pub(crate) async fn stream_from_response(
     resp: reqwest::Response,
     cancel: CancelToken,
     provider: String,
     idle: std::time::Duration,
+    mut acc: Box<dyn EventAccumulator>,
 ) -> Result<ChunkStream> {
     let status = resp.status().as_u16();
     if status >= 400 {
@@ -915,7 +930,6 @@ async fn stream_from_response(
     let (tx, rx) = mpsc::channel::<StreamChunk>(64);
     tokio::spawn(async move {
         let mut decoder = SseDecoder::new();
-        let mut acc = StreamAccumulator::new();
         let mut bytes = resp.bytes_stream();
         let mut finished = false;
         let mut last_data = std::time::Instant::now();
@@ -990,8 +1004,8 @@ async fn stream_from_response(
         }
 
         if !finished {
-            // Flux coupé sans `[DONE]` : on clôt proprement avec ce qui a été reçu.
-            for out in acc.push_payload("[DONE]") {
+            // Flux coupé avant sa fin : à l'accumulateur de dire ce que ça vaut.
+            for out in acc.on_eof() {
                 if tx.send(out).await.is_err() {
                     return;
                 }
@@ -1123,12 +1137,19 @@ pub async fn collect_stream_observed(
 pub struct ProviderSet {
     pub openrouter: Option<Arc<OpenRouterProvider>>,
     pub compat: Option<Arc<OpenAiCompatProvider>>,
+    /// Backend Codex d'un abonnement ChatGPT, quand un compte est connecté (issue #142).
+    pub codex: Option<Arc<crate::codex::CodexProvider>>,
     pub catalog: Catalog,
 }
 
 impl ProviderSet {
     pub fn get(&self, model_id: &str) -> Option<Arc<dyn Provider>> {
         match crate::catalog::provider_of(model_id) {
+            // Un modèle `codex:` ne part **jamais** ailleurs : aucun autre fournisseur ne
+            // le sert, et un repli silencieux enverrait `codex:gpt-6-astra` comme nom de
+            // modèle à OpenRouter (issue #142). Sans compte connecté, pas de provider :
+            // le routeur se replie sur l'alias suivant, en le disant.
+            "codex" => self.codex.clone().map(|p| p as Arc<dyn Provider>),
             "openrouter" => self
                 .openrouter
                 .clone()
@@ -1146,6 +1167,33 @@ impl ProviderSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #142 : un modèle `codex:` n'est servi que par le fournisseur Codex. Sans compte
+    /// connecté, aucun provider : le routeur se replie sur l'alias suivant plutôt que
+    /// d'envoyer `codex:gpt-6-astra` à OpenRouter comme nom de modèle.
+    #[test]
+    fn a_codex_model_never_falls_back_to_another_provider() {
+        let catalog = Catalog::new();
+        let set = ProviderSet {
+            openrouter: Some(Arc::new(
+                OpenRouterProvider::new("https://x", "k", catalog.clone()).unwrap(),
+            )),
+            compat: Some(Arc::new(
+                OpenAiCompatProvider::new("http://127.0.0.1:1", "", catalog.clone()).unwrap(),
+            )),
+            codex: None,
+            catalog,
+        };
+        assert!(set.get("codex:gpt-6-astra").is_none());
+        assert_eq!(
+            set.get("openrouter:a/b").map(|p| p.name().to_string()),
+            Some("openrouter".into())
+        );
+        assert_eq!(
+            set.get("openai_compat:x").map(|p| p.name().to_string()),
+            Some("openai_compat".into())
+        );
+    }
 
     #[test]
     fn reasoning_goes_back_only_with_tool_calls() {

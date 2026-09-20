@@ -170,6 +170,29 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
     }
 }
 
+/// État d'une connexion de fournisseur à compte, en une bulle (issue #142).
+fn codex_status_text(v: &Value) -> String {
+    let status = &v["status"];
+    if status.is_null() {
+        return "🔌 Aucun compte ChatGPT connecté. `/model auth codex` pour le faire.".into();
+    }
+    if let Some(why) = status["disconnected"].as_str() {
+        return format!(
+            "🔌 Compte ChatGPT déconnecté ({why}). `/model auth codex` pour reconnecter."
+        );
+    }
+    format!(
+        "✅ Compte ChatGPT connecté : plan {}, compte {}{}.",
+        shown(&status["plan"]),
+        shown(&status["account"]),
+        if v["enabled"] == Value::Bool(true) {
+            ""
+        } else {
+            " — fournisseur éteint (`providers.codex.enabled`)"
+        }
+    )
+}
+
 /// Mention des messages en attente abandonnés par la fermeture d'une session.
 fn cancelled_note(n: usize) -> String {
     match n {
@@ -1508,6 +1531,64 @@ impl TelegramGateway {
                                 } else {
                                     "📌 Routage fixe : les sessions non épinglées passent par `main`.".into()
                                 }
+                            }
+                        }
+                    }
+                    // Connexion d'un fournisseur à compte (#142) : le code s'affiche
+                    // ici, et Pénélope confirme dès qu'il est saisi. Ni le code ni les
+                    // jetons ne passent par une carte ni par une demande (#134).
+                    ["auth", rest @ ..] => {
+                        let provider = rest
+                            .iter()
+                            .find(|w| !w.starts_with('-') && **w != "status" && **w != "logout")
+                            .copied()
+                            .unwrap_or("codex")
+                            .to_string();
+                        let action = if rest.iter().any(|w| w.trim_start_matches('-') == "logout") {
+                            "logout"
+                        } else if rest.iter().any(|w| w.trim_start_matches('-') == "status") {
+                            "status"
+                        } else {
+                            "start"
+                        };
+                        let params = json!({"provider": provider, "action": action});
+                        match (action, rpc.call(m::MODEL_AUTH, params).await) {
+                            (_, Err(e)) => format!("❌ {e}"),
+                            ("logout", Ok(_)) => {
+                                format!("🔌 `{provider}` déconnecté : jeton révoqué et oublié.")
+                            }
+                            ("status", Ok(v)) => codex_status_text(&v),
+                            (_, Ok(v)) => {
+                                // L'attente se fait en fond : le tour Telegram ne reste
+                                // pas suspendu un quart d'heure.
+                                let g = self.clone();
+                                let daemon = d.clone();
+                                tokio::spawn(async move {
+                                    let text = match crate::rpc::Rpc::new(daemon)
+                                        .call(
+                                            m::MODEL_AUTH,
+                                            json!({"provider": "codex", "action": "wait"}),
+                                        )
+                                        .await
+                                    {
+                                        Ok(v) => format!(
+                                            "✅ Connecté : plan {}, compte {}.\nDonner un \
+                                             alias : `/model code codex:gpt-6-astra`",
+                                            shown(&v["plan"]),
+                                            shown(&v["account"])
+                                        ),
+                                        Err(e) => format!("❌ Connexion abandonnée : {e}"),
+                                    };
+                                    if let Err(e) = g.reply(chat_id, topic_id, None, &text).await {
+                                        tracing::warn!(error = %e, "confirmation de connexion non envoyée");
+                                    }
+                                });
+                                format!(
+                                    "🔐 Ouvrir {}\net saisir le code : `{}`\n\nJe confirme ici \
+                                     dès que c'est validé (quinze minutes).",
+                                    shown(&v["url"]),
+                                    shown(&v["user_code"])
+                                )
                             }
                         }
                     }

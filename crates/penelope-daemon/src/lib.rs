@@ -8,6 +8,7 @@ pub mod backup;
 pub mod budget_alert;
 pub mod bus;
 pub mod cache_audit;
+pub mod codex_auth;
 pub mod compaction;
 pub mod concepts;
 pub mod conversation;

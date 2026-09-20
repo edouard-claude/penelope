@@ -223,8 +223,121 @@ impl Default for Telegram {
 pub struct Providers {
     pub openrouter: OpenRouter,
     pub local: LocalProvider,
+    /// Backend Codex d'un abonnement ChatGPT (issue #142).
+    pub codex: Codex,
     /// Endpoints OpenAI-compatibles supplémentaires (embeddings, STT…).
     pub extra: BTreeMap<String, LocalProvider>,
+}
+
+/// Préfixes de fournisseur reconnus dans un identifiant `fournisseur:modèle` (§10.2).
+///
+/// La liste vit ici parce que `penelope-llm` (qui découpe les identifiants) et la
+/// validation de configuration (qui refuse un préfixe inconnu) doivent dire la même
+/// chose. Un identifiant dont la partie gauche n'est pas de cette liste **et** porte un
+/// `/` reste un modèle OpenRouter à suffixe (`x-ai/grok-4:free`).
+pub const PROVIDER_PREFIXES: &[&str] = &["openrouter", "openai_compat", "local", "codex"];
+
+/// Vrai si `p` nomme un fournisseur.
+pub fn is_provider_prefix(p: &str) -> bool {
+    PROVIDER_PREFIXES.contains(&p)
+}
+
+/// Vérifie un identifiant de modèle d'alias. Un préfixe inconnu est une faute de frappe
+/// (`openroutr:`, `codx:`) : avant, il partait en silence chez OpenRouter, identifiant
+/// complet en nom de modèle (issue #142).
+pub fn check_model_id(id: &str) -> std::result::Result<(), String> {
+    let Some((prefix, rest)) = id.split_once(':') else {
+        return Err(format!(
+            "`{id}` doit être de la forme `fournisseur:modèle` ({})",
+            PROVIDER_PREFIXES.join(", ")
+        ));
+    };
+    if is_provider_prefix(prefix) {
+        return if rest.trim().is_empty() {
+            Err(format!("`{id}` : aucun modèle après `{prefix}:`"))
+        } else {
+            Ok(())
+        };
+    }
+    // `x-ai/grok-4:free` : pas un préfixe de fournisseur, un identifiant OpenRouter qui
+    // porte un suffixe de variante. Le `/` du vendeur le distingue d'une faute de frappe.
+    if prefix.contains('/') {
+        return Ok(());
+    }
+    Err(format!(
+        "`{id}` : fournisseur `{prefix}` inconnu (attendu {})",
+        PROVIDER_PREFIXES.join(", ")
+    ))
+}
+
+/// Backend Codex d'un abonnement ChatGPT (issue #142) : les modèles du plan (`gpt-6-astra`,
+/// `gpt-5.6-*`) par « Sign in with ChatGPT », sans clé d'API.
+///
+/// Usage **toléré** par OpenAI (page « Codex for Open Source », déclarations publiques),
+/// jamais garanti par contrat : Pénélope emprunte l'identité du client Codex CLI, et le
+/// fournisseur peut être coupé du jour au lendemain. Repli documenté : une clé d'API sur
+/// `openai_compat`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Codex {
+    /// Fournisseur actif. Faux tant que le compte n'est pas connecté
+    /// (`penelope model auth codex`).
+    pub enabled: bool,
+    /// Adresse du backend Codex.
+    pub base_url: String,
+    /// Serveur d'autorisation du compte ChatGPT.
+    pub issuer: String,
+    /// Identifiant du client OAuth, celui de Codex CLI.
+    pub client_id: String,
+    /// En-tête `originator` envoyé au backend. Le serveur filtre cette valeur : la changer
+    /// sans raison donne un 403 sur toutes les requêtes.
+    pub originator: String,
+    /// Version de client annoncée (`User-Agent`, `?client_version=`). Épinglée, mise à
+    /// jour à la main quand le backend exige plus récent.
+    pub client_version: String,
+    /// Silence toléré pendant un flux, comme pour OpenRouter.
+    pub stream_idle_timeout: String,
+    /// Nouvelles tentatives sur erreur transitoire avant le flux (5xx, coupure). Un 429
+    /// de quota n'est jamais rejoué.
+    pub request_retries: u32,
+    /// Résumé de raisonnement demandé (`auto`, `concise`, `detailed`, ou vide).
+    pub reasoning_summary: String,
+    /// Verbosité du texte rendu (`low`, `medium`, `high`).
+    pub verbosity: String,
+    /// Part de la fenêtre de quota qui déclenche une alerte (0 à 1).
+    pub quota_alert_ratio: f64,
+    /// Part de la fenêtre de quota au-delà de laquelle le fournisseur se met en retrait et
+    /// laisse le repli jouer (0 à 1).
+    pub quota_stop_ratio: f64,
+    /// Modèles servis, en repli quand `GET /models` ne répond pas.
+    pub models: Vec<String>,
+}
+
+impl Default for Codex {
+    fn default() -> Self {
+        Codex {
+            enabled: false,
+            base_url: "https://chatgpt.com/backend-api/codex".into(),
+            issuer: "https://auth.openai.com".into(),
+            client_id: "app_EMoamEEZ73f0CkXaXp7hrann".into(),
+            originator: "codex_cli_rs".into(),
+            client_version: "0.104.0".into(),
+            stream_idle_timeout: "120s".into(),
+            request_retries: 3,
+            reasoning_summary: "auto".into(),
+            verbosity: "medium".into(),
+            quota_alert_ratio: 0.8,
+            quota_stop_ratio: 0.95,
+            models: vec![
+                "gpt-6-astra".into(),
+                "gpt-5.6-sol".into(),
+                "gpt-5.6-terra".into(),
+                "gpt-5.6-luna".into(),
+                "gpt-5.5".into(),
+                "gpt-5.4".into(),
+            ],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1321,11 +1434,8 @@ impl Config {
             }
         }
         for (alias, id) in &self.models.aliases {
-            if !id.contains(':') {
-                return Err(KernelError::config(format!(
-                    "alias `{alias}` : identifiant `{id}` doit être de la forme `provider:model`"
-                )));
-            }
+            check_model_id(id)
+                .map_err(|e| KernelError::config(format!("alias `{alias}` : {e}")))?;
         }
 
         if !LOCATE_FRAMES.contains(&self.models.locate_frame.as_str()) {
@@ -1374,6 +1484,23 @@ impl Config {
         parse_duration(&self.providers.openrouter.catalog_refresh)?;
         parse_duration(&self.providers.openrouter.stream_idle_timeout)?;
         parse_duration(&self.providers.local.stream_idle_timeout)?;
+        parse_duration(&self.providers.codex.stream_idle_timeout)?;
+        for (field, value) in [
+            ("quota_alert_ratio", self.providers.codex.quota_alert_ratio),
+            ("quota_stop_ratio", self.providers.codex.quota_stop_ratio),
+        ] {
+            if !(0.0..=1.0).contains(&value) {
+                return Err(KernelError::config(format!(
+                    "providers.codex.{field} doit être entre 0 et 1 (reçu {value})"
+                )));
+            }
+        }
+        if self.providers.codex.quota_alert_ratio > self.providers.codex.quota_stop_ratio {
+            return Err(KernelError::config(
+                "providers.codex.quota_alert_ratio doit valoir au plus quota_stop_ratio : \
+                 alerter après s'être mis en retrait n'avertit de rien",
+            ));
+        }
         let lease_ttl = parse_duration(&self.runners.lease_ttl)?;
         let heartbeat = parse_duration(&self.runners.heartbeat)?;
         // Il faut au moins deux battements par bail : sinon un tour un peu long expire et
@@ -1909,6 +2036,52 @@ mod tests {
         let c = Config::default();
         let e = c.validate().unwrap_err().to_string();
         assert!(e.contains("telegram_user_id"), "{e}");
+    }
+
+    /// #142 : un préfixe de fournisseur inconnu est une faute de frappe, refusée en
+    /// nommant le préfixe — avant, elle partait en silence chez OpenRouter, identifiant
+    /// complet en nom de modèle. Une variante OpenRouter (`:free`) reste acceptée.
+    #[test]
+    fn an_unknown_provider_prefix_is_refused_by_name() {
+        check_model_id("codex:gpt-6-astra").unwrap();
+        check_model_id("openrouter:deepseek/deepseek-v4-pro").unwrap();
+        check_model_id("x-ai/grok-4:free").expect("une variante, pas un fournisseur");
+        for (id, said) in [
+            ("openroutr:a/b", "openroutr"),
+            ("codx:gpt-6", "codx"),
+            ("gpt-6-astra", "fournisseur:modèle"),
+            ("codex:", "aucun modèle"),
+        ] {
+            let e = check_model_id(id).expect_err(id);
+            assert!(e.contains(said), "{id} : {e}");
+        }
+        let mut c = cfg();
+        c.models.aliases.insert("code".into(), "codx:gpt-6".into());
+        let e = c.validate().unwrap_err().to_string();
+        assert!(e.contains("codx") && e.contains("code"), "{e}");
+    }
+
+    /// #142 : les seuils de quota Codex sont des parts, et alerter après s'être mis en
+    /// retrait n'avertit de rien.
+    #[test]
+    fn codex_quota_ratios_are_checked() {
+        let mut c = cfg();
+        c.providers.codex.quota_alert_ratio = 1.5;
+        assert!(
+            c.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("entre 0 et 1")
+        );
+        let mut c = cfg();
+        c.providers.codex.quota_alert_ratio = 0.99;
+        c.providers.codex.quota_stop_ratio = 0.5;
+        assert!(
+            c.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("au plus quota_stop_ratio")
+        );
     }
 
     #[test]
