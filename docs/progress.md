@@ -1858,7 +1858,12 @@ entrée de mémoire porte un fait (#145).
   données financières personnelles : une carte, jamais une écriture. `penelope doctor`
   liste les entrées actives au-delà de la borne et le Cœur au-delà de son budget.
 
-### 0.17.28
+### 0.17.29
+
+Deux chantiers dans la même release : l'import de skills tierces, et la fuite de jetons du
+Trousseau (#146, #148).
+
+#### Skills tierces (#146)
 
 Les skills d'un dépôt tiers s'installent en une commande, avec leurs fichiers, leur
 vocabulaire et leurs dépendances nommées (#146).
@@ -1895,7 +1900,7 @@ vocabulaire et leurs dépendances nommées (#146).
   (`miniz_oxide`, en Rust, MIT) ; les dorsales que `zip` propose tireraient `zlib-rs`, sous
   licence Zlib, que `cargo deny` refuse.
 
-### 0.17.29
+#### Trousseau et fuite de jetons (#148)
 
 Un secret de plusieurs kilo-octets entre dans le Trousseau, et un échec d'écriture ne
 recopie plus ce qu'il refusait (#148).
