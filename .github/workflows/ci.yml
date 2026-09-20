@@ -130,3 +130,59 @@ jobs:
       # Avis de sécurité, licences autorisées, dépendances interdites, provenance.
       - name: Vérifier
         run: cargo deny check
+
+  # Le tag et la release se posent tout seuls (issue #147). Trois lots fusionnés le 20/09
+  # sont restés une heure sans release parce que personne n'avait taggé, puis deux sessions
+  # ont livré en parallèle. Ici : un seul job à la fois, après les suites, sur `main`, et
+  # seulement quand la version du workspace n'a pas encore son tag.
+  livraison:
+    name: Tag et release
+    needs: [tests, verification, dependances]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: livraison
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Version du workspace
+        id: version
+        run: |
+          set -euo pipefail
+          v=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          echo "tag=v${v}" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v${v}" >/dev/null; then
+            echo "v${v} existe déjà : rien à poser"
+            echo "poser=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "poser=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Un tag posé par `GITHUB_TOKEN` ne déclenche pas `on: push: tags` : la release est
+      # donc appelée explicitement juste après (`workflow_dispatch` est l'exception).
+      - name: Poser le tag
+        if: steps.version.outputs.poser == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Version ${TAG#v}"
+          git push origin "$TAG"
+
+      - name: Lancer la release
+        if: steps.version.outputs.poser == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml -f tag="$TAG" --ref main

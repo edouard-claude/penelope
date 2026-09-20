@@ -2155,6 +2155,12 @@ pas sa santé dans la minute, l'ancien binaire revient tout seul et Telegram le 
 `penelope upgrade --check` indique seulement la dernière version, `--tag v0.3.1` en
 choisit une, `--rollback` revient au binaire précédent.
 
+**Le délai.** Un lot fusionné sur `main` n'est pas immédiatement installable : la CI
+rejoue les suites, pose le tag de la version du workspace, puis la release construit le
+binaire universel. Compter une douzaine de minutes entre la fusion et l'apparition dans
+`penelope upgrade` (#147). Tant que la release n'est pas publiée, `--check` dit
+« à jour » : c'est vrai du dernier binaire publié, pas du dernier commit.
+
 Signature : quand les releases sont signées, `penelope upgrade` vérifie `SHA256SUMS`
 avec minisign avant de faire confiance aux sommes. La clé publique vient de
 `upgrade.minisign_pubkey`, sinon de celle intégrée au binaire de release ; dès qu'une clé

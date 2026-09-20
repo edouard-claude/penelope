@@ -8,7 +8,7 @@ Dernière mise à jour : 20 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1594 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1595 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1952,9 +1952,35 @@ La vérification de release de la `v0.17.29` échouait sur un seul test, alors q
   processus que les autres — précisément la condition qui fait apparaître ce genre de
   couplage.
 
+#### Livraison automatique (#147)
+
+Le tag et la release ne se posaient pas tout seuls : trois lots fermés le 20/09 sont
+restés plus d'une heure en `0.17.23`, puis deux sessions ont livré en parallèle.
+
+- **La CI pose le tag** : job `livraison` de `ci.yml`, après les trois suites, sur `main`
+  seulement, `concurrency: livraison` (un seul à la fois, dans l'ordre des pushes). Il lit
+  la version du workspace ; si `v<version>` n'existe pas, il la pose et appelle
+  `release.yml` par `workflow_dispatch` — un tag posé par `GITHUB_TOKEN` ne déclenche pas
+  `on: push: tags`. Un push qui ne change pas la version ne fait rien, un tag présent n'est
+  jamais déplacé.
+- **Le bump sans friction** : `make bump V=0.17.31` (ou `scripts/bump.sh`) vérifie que
+  `docs/progress.md` a la section, réécrit les seize lignes de `Cargo.toml`, met le
+  `Cargo.lock` à jour et commite « Version 0.17.31 ». Refuse sur un arbre sale, sur une
+  version déjà posée, ou si la section manque.
+- **Le test `docs` vérifie les deux sens** : la section la plus haute de `progress.md` doit
+  être la version du workspace. Une section écrite sans bump — ce qui est arrivé trois fois
+  le 20/09 — fait maintenant échouer la CI, avec la commande à passer.
+- **La règle est dans le dépôt** : `CLAUDE.md` à la racine (un lot = code + section +
+  version ; le tag est à la CI ; un conflit sur `Cargo.toml` au rebase est la serrure entre
+  deux sessions), et une case de plus dans le gabarit de pull request.
+- Pas fait, et assumé : le contrôle `doctor` « tag sans release depuis 30 min ». Il
+  demanderait au daemon d'interroger la liste des tags GitHub, pour une panne dont la cause
+  — un tag posé sans release — disparaît avec ce lot ; l'état se lit dans l'onglet Actions.
+
 ### Routine de livraison
 
-Avant chaque tag :
+Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #147) :
+rien à taguer à la main. Dans le lot, avant de pousser :
 
 1. `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
    `cargo test --workspace`, `cargo deny check`.
@@ -1968,7 +1994,16 @@ Avant chaque tag :
    `docs` vérifie aussi l'index `docs/README.md`, les liens et ancres, les commandes
    Telegram et la section de version) ; `UPDATE_CA_MATRIX=1` si un test `ca_*` a été
    ajouté. Le modèle de pull request reprend ces cases.
-5. CI verte sur `main`, puis tag annoncé, release suivie jusqu'aux artefacts.
+5. `make bump V=x.y.z` : la section de `progress.md` est vérifiée, les seize lignes de
+   `Cargo.toml` et le `Cargo.lock` sont réécrits, le commit « Version x.y.z » est posé.
+   Une section de version sans bump fait échouer la CI (le test `docs` vérifie les deux
+   sens depuis #147).
+6. Pousser. La CI rejoue les suites, pose le tag `vx.y.z` et appelle `release.yml` ; la
+   release apparaît une douzaine de minutes plus tard. Un push qui ne change pas la
+   version ne pose rien.
+
+Deux sessions qui livrent en même temps se heurtent au conflit sur `Cargo.toml` : c'est
+la serrure, prendre le numéro suivant.
 
 ### Encore à brancher
 

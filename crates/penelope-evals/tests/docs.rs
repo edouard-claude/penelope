@@ -509,6 +509,35 @@ fn the_workspace_version_has_its_progress_section() {
     );
 }
 
+/// #147 : et l'inverse. Trois sections `0.17.24`, `0.17.25`, `0.17.26` ont existé le
+/// 20/09 pendant que le workspace restait en `0.17.23` : des lots fermés, documentés,
+/// et aucune release — `penelope upgrade` disait « à jour » à une instance qui avait
+/// trois versions de retard. Une section écrite sans bump fait donc échouer la CI.
+#[test]
+fn the_highest_progress_section_is_the_workspace_version() {
+    let progress = read(&root().join("docs/progress.md"));
+    let parse = |s: &str| -> Option<(u64, u64, u64)> {
+        let mut it = s.split('.');
+        let mut next = || it.next()?.parse::<u64>().ok();
+        let v = (next()?, next()?, next()?);
+        it.next().is_none().then_some(v)
+    };
+    let highest = progress
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("### ").and_then(parse))
+        .max()
+        .expect("au moins une section de version dans docs/progress.md");
+    let v = penelope_daemon::VERSION;
+    let current = parse(v).unwrap_or_else(|| panic!("version du workspace illisible : {v}"));
+    let (a, b, c) = highest;
+    assert!(
+        highest <= current,
+        "docs/progress.md décrit la version {a}.{b}.{c}, le workspace est en {v} : poser \
+         la version avant de fusionner (`make bump V={a}.{b}.{c}`), sinon le lot part sans \
+         release"
+    );
+}
+
 // ------------------------------------------------------------------ limites
 
 /// Sections dont le titre annonce un manque : (titre, corps).

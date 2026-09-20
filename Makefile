@@ -28,7 +28,7 @@ SIGN_IDENTIFIER ?= io.github.edouard-claude.penelope
 SIGN_FLAGS      ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help pull build sign update install restart deploy test clean
+.PHONY: help pull build sign update install restart deploy test clean bump
 
 help:
 	@echo "make pull     git pull (avance rapide uniquement)"
@@ -40,9 +40,16 @@ help:
 	@echo "make deploy   update + install + restart"
 	@echo "make test     tests de tout le workspace"
 	@echo "make clean    cargo clean (libère plusieurs Go)"
+	@echo "make bump V=x.y.z  pose la version du workspace (la CI tague et publie)"
 
 pull:
 	git pull --ff-only
+
+# Version du workspace (issue #147) : seize lignes de Cargo.toml, le lock, et le commit.
+# Refuse si `docs/progress.md` n'a pas la section de cette version.
+bump:
+	@test -n "$(V)" || { echo "usage : make bump V=0.17.31"; exit 2; }
+	@scripts/bump.sh "$(V)"
 
 build:
 	$(CARGO) build --release --locked
