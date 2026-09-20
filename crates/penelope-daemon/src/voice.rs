@@ -234,6 +234,7 @@ pub async fn synthesize(d: &Daemon, text: &str, voice: &str) -> Result<Wav, Stri
              activé : `penelope config set providers.local.enabled true`"
         ));
     }
+    let model = crate::codex_scope::background(d, &model, "synthèse vocale").await;
     let provider = d.provider_for(&model).await?;
     let mut parts = Vec::new();
     for chunk in chunks(text, CHUNK_CHARS) {

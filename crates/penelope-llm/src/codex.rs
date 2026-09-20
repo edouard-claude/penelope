@@ -183,6 +183,12 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Où vont les jauges du plan, lues à chaque réponse : le daemon les range et alerte.
+/// Appelé depuis le flux, donc **sans attente** : à l'implémentation de faire vite.
+pub trait QuotaSink: Send + Sync {
+    fn record(&self, quota: Quota);
+}
+
 #[derive(Clone)]
 pub struct CodexProvider {
     http: reqwest::Client,
@@ -193,6 +199,8 @@ pub struct CodexProvider {
     installation_id: String,
     /// Dernier instantané de quota lu, en en-tête ou en événement.
     quota: Arc<Mutex<Quota>>,
+    /// Où le publier, quand quelqu'un l'écoute.
+    sink: Option<Arc<dyn QuotaSink>>,
 }
 
 impl CodexProvider {
@@ -217,7 +225,20 @@ impl CodexProvider {
             catalog,
             installation_id: installation_id.into(),
             quota: Arc::new(Mutex::new(Quota::default())),
+            sink: None,
         })
+    }
+
+    /// Publie chaque jauge lue (kv, alerte au propriétaire).
+    pub fn with_quota_sink(mut self, sink: Arc<dyn QuotaSink>) -> Self {
+        self.sink = Some(sink);
+        self
+    }
+
+    /// Idem, quand l'appelant n'a peut-être personne à prévenir.
+    pub fn maybe_quota_sink(mut self, sink: Option<Arc<dyn QuotaSink>>) -> Self {
+        self.sink = sink;
+        self
     }
 
     /// Dernier état des jauges du plan, vide tant qu'aucun appel n'a abouti.
@@ -230,7 +251,10 @@ impl CodexProvider {
             return;
         }
         if let Ok(mut slot) = self.quota.lock() {
-            *slot = q;
+            *slot = q.clone();
+        }
+        if let Some(sink) = &self.sink {
+            sink.record(q);
         }
     }
 
@@ -349,7 +373,10 @@ impl Provider for CodexProvider {
             cancel,
             self.name().to_string(),
             self.opts.stream_idle,
-            Box::new(ResponsesAccumulator::new(served, self.quota.clone())),
+            Box::new(
+                ResponsesAccumulator::new(served, self.quota.clone())
+                    .with_quota_sink(self.sink.clone()),
+            ),
         )
         .await
     }
@@ -651,6 +678,7 @@ pub struct ResponsesAccumulator {
     completed: bool,
     finish: Option<FinishReason>,
     quota: Arc<Mutex<Quota>>,
+    sink: Option<Arc<dyn QuotaSink>>,
 }
 
 impl ResponsesAccumulator {
@@ -662,7 +690,14 @@ impl ResponsesAccumulator {
             completed: false,
             finish: None,
             quota: quota.clone(),
+            sink: None,
         }
+    }
+
+    /// Publie les jauges lues en cours de flux (`codex.rate_limits`).
+    pub fn with_quota_sink(mut self, sink: Option<Arc<dyn QuotaSink>>) -> Self {
+        self.sink = sink;
+        self
     }
 
     /// Accumulateur nu, pour les tests et les appels sans jauge partagée.
@@ -832,10 +867,13 @@ impl EventAccumulator for ResponsesAccumulator {
                 });
             }
             "codex.rate_limits" => {
-                if let Ok(mut slot) = self.quota.lock() {
-                    let q = quota_from_event(&v, now_ms());
-                    if !q.is_empty() {
-                        *slot = q;
+                let q = quota_from_event(&v, now_ms());
+                if !q.is_empty() {
+                    if let Ok(mut slot) = self.quota.lock() {
+                        *slot = q.clone();
+                    }
+                    if let Some(sink) = &self.sink {
+                        sink.record(q);
                     }
                 }
             }
@@ -1121,6 +1159,39 @@ mod tests {
             "{}",
             reqs[0]
         );
+    }
+
+    /// #142 (décision 3) : l'abonnement ne facture pas l'appel — le coût est **connu**,
+    /// il vaut zéro, et n'est donc pas une estimation. Les tokens, eux, sont complets :
+    /// c'est d'eux que vit la compaction (#40, #136).
+    #[tokio::test]
+    async fn a_subscription_call_costs_nothing_and_says_so() {
+        let sse = "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\"}}\n\n\
+                   data: {\"type\":\"response.output_text.delta\",\"delta\":\"bon\"}\n\n\
+                   data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\
+                   \"input_tokens\":1200,\"input_tokens_details\":{\"cached_tokens\":1000},\
+                   \"output_tokens\":80,\"output_tokens_details\":{\"reasoning_tokens\":60}}}}\n\n";
+        let (url, _) = scripted_server(vec![(200, sse.to_string())]).await;
+        let p = provider(&url, Default::default());
+        let rx = p
+            .chat_stream(request("codex:gpt-6-astra"), CancelToken::new())
+            .await
+            .expect("flux");
+        let resp = crate::provider::collect_stream_observed(
+            rx,
+            "codex:gpt-6-astra",
+            "codex",
+            &Catalog::new(),
+            &|_| {},
+        )
+        .await
+        .expect("réponse");
+        assert_eq!(resp.provider, "codex");
+        assert_eq!(resp.cost_usd, 0.0);
+        assert!(!resp.cost_estimated, "le coût est connu : il vaut zéro");
+        assert_eq!((resp.usage.prompt, resp.usage.cached), (1200, 1000));
+        assert_eq!((resp.usage.completion, resp.usage.reasoning), (80, 60));
+        assert_eq!(resp.message.text(), "bon");
     }
 
     /// #142 : un 401 vaut **un** rafraîchissement et **un** rejeu, pas deux.

@@ -124,12 +124,15 @@ pub trait Orchestrator: Send + Sync {
     ) -> Result<Value, String>;
     /// `cancel` : le jeton du tour parent. Le sous-agent en reçoit un enfant, pour que
     /// `/stop` l'arrête aussi (issue #57).
+    /// `origin` : l'origine du tour parent — le sous-agent en hérite le périmètre du
+    /// fournisseur (issue #142).
     async fn spawn_sub_agent(
         &self,
         session_id: &str,
         prompt: &str,
         model: Option<&str>,
         tools: Vec<String>,
+        origin: &Origin,
         cancel: &penelope_llm::CancelToken,
     ) -> Result<Value, String>;
     async fn generate_image(&self, prompt: &str, size: Option<&str>) -> Result<Value, String>;
@@ -1230,6 +1233,7 @@ impl NativeToolExecutor {
                                 .collect()
                         })
                         .unwrap_or_default(),
+                    &self.env.origin,
                     cancel,
                 )
                 .await

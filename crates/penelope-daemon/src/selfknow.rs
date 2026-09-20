@@ -170,6 +170,26 @@ async fn inventory_section(
 
 /// Rapport d'état. `section` : `all`, `model`, `config`, `costs`, `machine`, une partie de
 /// l'inventaire ([`INVENTORY`]), ou `inventory` pour tout l'inventaire.
+/// État du fournisseur `codex` : compte, plan, jauges du plan (issue #142). Le coût en
+/// dollars n'y veut rien dire — un abonnement ne facture pas l'appel —, c'est le quota
+/// qui borne.
+async fn codex_view(s: &Services, cfg: &penelope_kernel::config::Config) -> Value {
+    let status = crate::codex_auth::status(s).ok().flatten();
+    let quota = crate::codex_quota::snapshot(s).await;
+    json!({
+        "enabled": cfg.providers.codex.enabled,
+        "connected": status.as_ref().map(|st| st.connected).unwrap_or(false),
+        "plan": status.as_ref().map(|st| st.plan.clone()),
+        "account": status.as_ref().map(|st| st.account.clone()),
+        "disconnected": status.as_ref().and_then(|st| st.disconnected.clone()),
+        "quota": quota
+            .as_ref()
+            .map(|q| crate::codex_quota::gauge_line(q, s.clock.now_ms())),
+        "note": "l'abonnement ne facture pas l'appel : la limite est le quota du plan, \
+                 pas `budget.*`",
+    })
+}
+
 pub async fn status(
     s: &Services,
     session_id: &str,
@@ -280,6 +300,7 @@ pub async fn status(
                     "enabled": cfg.providers.local.enabled,
                     "base_url": cfg.providers.local.base_url,
                 },
+                "codex": codex_view(s, &cfg).await,
                 "speech_to_text": {
                     "alias": cfg.role_alias("stt"),
                     "model": cfg.alias_model(&cfg.role_alias("stt")),

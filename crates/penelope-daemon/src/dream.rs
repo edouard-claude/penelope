@@ -1038,6 +1038,7 @@ async fn consolidate(
         .alias_model(&alias)
         .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}` du rôle `compaction`"))?
         .to_string();
+    let model = crate::codex_scope::background(d, &model, "rêve").await;
     let provider = d.provider_for(&model).await.map_err(anyhow::Error::msg)?;
 
     let mut user = String::from("Candidats :\n");

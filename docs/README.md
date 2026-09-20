@@ -45,3 +45,4 @@ d'outils sont à jour.
 - [0007](decisions/0007-deploiement-par-makefile.md) : `deploy-generic` passe par les cibles `make` du dépôt.
 - [0008](decisions/0008-cache-de-prompt.md) : cache de prompt, rien ne bouge avant le dernier message.
 - [0009](decisions/0009-pas-d-emulation-d-outils.md) : pas d'émulation d'outils, un modèle sans tool calling est refusé.
+- [0010](decisions/0010-fournisseur-codex-oauth.md) : fournisseur Codex — identité empruntée, périmètre du propriétaire, quota du plan.

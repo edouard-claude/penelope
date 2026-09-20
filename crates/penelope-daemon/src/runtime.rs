@@ -425,6 +425,7 @@ impl Daemon {
                 Ok(Some(g)) if g.disconnected.is_none() => Some(penelope_llm::CodexAccess {
                     tokens: Arc::new(crate::codex_auth::DaemonTokens::new(s.clone())),
                     installation_id: crate::codex_auth::installation_id(s).await,
+                    quota_sink: Some(Arc::new(crate::codex_quota::QuotaWriter::new(s.clone()))),
                 }),
                 _ => None,
             };

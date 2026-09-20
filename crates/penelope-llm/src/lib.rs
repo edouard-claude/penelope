@@ -14,7 +14,7 @@ pub mod tokens;
 pub mod types;
 
 pub use catalog::{Catalog, ModelInfo};
-pub use codex::{CodexOptions, CodexProvider, CodexToken, Quota, TokenSource};
+pub use codex::{CodexOptions, CodexProvider, CodexToken, Quota, QuotaSink, TokenSource};
 pub use provider::{
     CancelToken, ChunkStream, OpenAiCompatProvider, OpenRouterProvider, Provider, ProviderSet,
     collect_stream, collect_stream_observed,
@@ -84,21 +84,24 @@ pub fn build_providers(
     let codex = match (cfg.providers.codex.enabled, codex_access) {
         (true, Some(access)) => {
             let c = &cfg.providers.codex;
-            Some(std::sync::Arc::new(CodexProvider::new(
-                CodexOptions {
-                    base_url: c.base_url.clone(),
-                    originator: c.originator.clone(),
-                    client_version: c.client_version.clone(),
-                    reasoning_summary: c.reasoning_summary.clone(),
-                    verbosity: c.verbosity.clone(),
-                    stream_idle: idle_of(&c.stream_idle_timeout),
-                    models: c.models.clone(),
-                    quota_stop_ratio: c.quota_stop_ratio,
-                },
-                access.tokens,
-                catalog.clone(),
-                access.installation_id,
-            )?))
+            Some(std::sync::Arc::new(
+                CodexProvider::new(
+                    CodexOptions {
+                        base_url: c.base_url.clone(),
+                        originator: c.originator.clone(),
+                        client_version: c.client_version.clone(),
+                        reasoning_summary: c.reasoning_summary.clone(),
+                        verbosity: c.verbosity.clone(),
+                        stream_idle: idle_of(&c.stream_idle_timeout),
+                        models: c.models.clone(),
+                        quota_stop_ratio: c.quota_stop_ratio,
+                    },
+                    access.tokens,
+                    catalog.clone(),
+                    access.installation_id,
+                )?
+                .maybe_quota_sink(access.quota_sink),
+            ))
         }
         _ => None,
     };
@@ -117,6 +120,8 @@ pub fn build_providers(
 pub struct CodexAccess {
     pub tokens: std::sync::Arc<dyn TokenSource>,
     pub installation_id: String,
+    /// Où publier les jauges du plan lues à chaque réponse.
+    pub quota_sink: Option<std::sync::Arc<dyn QuotaSink>>,
 }
 
 /// Préférences de provider OpenRouter (`provider`). Seuls les écarts au comportement
