@@ -233,8 +233,10 @@ pub fn provider_of(id: &str) -> &str {
     }
 }
 
+/// Un préfixe de fournisseur, tel que la configuration les connaît : la liste vit dans
+/// `penelope-kernel` pour que le découpage et la validation disent la même chose (#142).
 fn is_provider_prefix(p: &str) -> bool {
-    matches!(p, "openrouter" | "openai_compat" | "local")
+    penelope_kernel::config::is_provider_prefix(p)
 }
 
 /// Analyse la réponse `GET /api/v1/models` d'OpenRouter.
@@ -435,6 +437,12 @@ mod tests {
         assert_eq!(strip_provider("openrouter:a/b"), "a/b");
         // Un identifiant qui contient `:` sans être un préfixe connu reste intact.
         assert_eq!(strip_provider("modele:v2"), "modele:v2");
+        // #142 : le backend Codex est un fournisseur à part entière.
+        assert_eq!(provider_of("codex:gpt-6-astra"), "codex");
+        assert_eq!(strip_provider("codex:gpt-6-astra"), "gpt-6-astra");
+        // Une variante OpenRouter (`:free`) n'est pas un préfixe de fournisseur.
+        assert_eq!(provider_of("x-ai/grok-4:free"), "openrouter");
+        assert_eq!(strip_provider("x-ai/grok-4:free"), "x-ai/grok-4:free");
     }
 
     #[test]

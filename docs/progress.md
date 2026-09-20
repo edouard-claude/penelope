@@ -1709,6 +1709,54 @@ lectures se décident sur un seul découpage de ligne (#141).
   (commentaire de #111), et une règle sans réseau qui couvrirait un appel `network: true`
   quand `sandbox.shell_network` est déjà ouvert.
 
+### 0.17.25
+
+Fournisseur `codex` : les modèles d'un abonnement ChatGPT, à côté d'OpenRouter (#142,
+lot 1 sur 3 — registre, connexion, fournisseur).
+
+- **Un troisième fournisseur** (#142) : `ProviderSet` a un emplacement `codex`, et un
+  modèle `codex:` n'est **jamais** servi par un autre — avant, un préfixe inconnu partait
+  en silence chez OpenRouter, identifiant complet en nom de modèle. La liste des préfixes
+  vit désormais dans `penelope-kernel` (`PROVIDER_PREFIXES`), lue par le découpage
+  (`provider_of`, `strip_provider`) **et** par la validation de configuration : un alias
+  `codx:gpt-6` est refusé en nommant le préfixe, là où `x-ai/grok-4:free` reste une
+  variante OpenRouter.
+- **Dialecte Responses** (#142) : `CodexProvider` parle l'API Responses en flux — items
+  typés en entrée (`message`, `function_call`, `function_call_output`, `reasoning`),
+  outils à plat, `store: false`, `include: ["reasoning.encrypted_content"]`,
+  `prompt_cache_key` = session. Le backend est sans état : le raisonnement chiffré est
+  réinjecté au tour suivant, sinon il est perdu sans erreur visible. Les événements
+  `response.*` rendent les mêmes `StreamChunk` que `chat/completions` (accumulateur
+  distinct, transport et `SseDecoder` communs, issues #51 et #80 inchangées) ; un appel
+  d'outil vient de `response.output_item.done` avec le `call_id` du serveur (#54), et une
+  fermeture sans `response.completed` est une coupure, pas une fin.
+- **Connexion par code d'appareil** (#142) : `penelope model auth codex` (et `/model auth
+  codex`) affiche une adresse et un code, attend la validation, range les jetons dans le
+  magasin de secrets sous `codex.oauth` — jamais `~/.codex/auth.json`. Le rafraîchissement
+  est sérialisé et la rotation écrite avant tout usage : le `refresh_token` est à usage
+  unique, deux rafraîchissements concurrents déconnecteraient le compte pour de bon. Un
+  échec permanent (`refresh_token_reused`, `refresh_token_expired`, 401) marque la
+  connexion morte, prévient le propriétaire une fois et laisse le repli OpenRouter jouer.
+  Les trois jetons sont masqués dans les journaux à l'obtention **et** à chaque rotation
+  (#26).
+- **Identité assumée** (#142) : `originator`, `User-Agent` et `x-codex-installation-id`
+  sont identiques sur `/responses` et sur `/models` — une identité incohérente vaut des
+  heures de « servers overloaded » chez un client tiers. Tout est en configuration
+  (`providers.codex.originator`, `client_version`) : une liste blanche qui change se
+  rattrape sans recompiler, et un 403 nomme la cause probable.
+- **Erreurs et quota** (#142) : 429 `usage_limit_reached` → `RateLimited` avec l'heure de
+  retour, jamais rejoué ; `usage_not_included` → `PaymentRequired` ;
+  `context_length_exceeded` → `ContextLength` ; 401 → un rafraîchissement et **un** rejeu.
+  Les jauges `x-codex-*` et l'événement `codex.rate_limits` sont lus à chaque réponse, et
+  le fournisseur se met en retrait au-delà de `quota_stop_ratio` plutôt que d'aller
+  chercher un refus.
+- Livré derrière `providers.codex.enabled = false` : sans compte connecté, rien ne change.
+  Le catalogue `/models` du plan est rafraîchi comme celui d'OpenRouter (`upsert`, jamais
+  `replace`), avec repli sur la liste embarquée.
+- Reste des lots 2 et 3 : la garde de périmètre (seuls les tours du propriétaire ; rêve,
+  veille, compaction, workflows se replient), les alertes de quota et les lignes d'usage,
+  puis `doctor`, l'ADR `0010` et la référence complète.
+
 ### Routine de livraison
 
 Avant chaque tag :

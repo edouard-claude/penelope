@@ -109,6 +109,27 @@ fn find_event_end(s: &str) -> Option<(usize, usize)> {
     None
 }
 
+/// Accumulateur d'un flux SSE : reçoit les charges utiles `data:` dans l'ordre et rend
+/// les fragments à publier. Un dialecte par implémentation (`chat/completions` ici,
+/// l'API Responses du backend Codex dans `crate::codex`), un seul transport.
+pub trait EventAccumulator: Send {
+    /// Traite une charge utile `data:`.
+    fn push_payload(&mut self, data: &str) -> Vec<StreamChunk>;
+    /// Le serveur a fermé le flux sans fin explicite : à chacun de dire si c'est une
+    /// clôture propre ou une erreur.
+    fn on_eof(&mut self) -> Vec<StreamChunk>;
+}
+
+impl EventAccumulator for StreamAccumulator {
+    fn push_payload(&mut self, data: &str) -> Vec<StreamChunk> {
+        StreamAccumulator::push_payload(self, data)
+    }
+    /// `chat/completions` : on clôt proprement avec ce qui a été reçu.
+    fn on_eof(&mut self) -> Vec<StreamChunk> {
+        StreamAccumulator::push_payload(self, "[DONE]")
+    }
+}
+
 /// Accumule les fragments d'un flux chat completions.
 #[derive(Default)]
 pub struct StreamAccumulator {
