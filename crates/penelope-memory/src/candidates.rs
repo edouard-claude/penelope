@@ -353,6 +353,30 @@ impl CandidateStore {
             .await
     }
 
+    /// Candidats en attente d'une réponse du propriétaire (`question`) : la consolidation
+    /// ne les rejoue pas, mais `penelope mem candidates` les montre — sans quoi une
+    /// question sans réponse disparaîtrait de toute vue (issue #145).
+    pub async fn in_question(&self) -> penelope_store::Result<Vec<Candidate>> {
+        self.store
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT id, ctype, text, quand, importance, origin, session_id, session_kind,
+                            observed_at, day, subject_key, target_slug, state, reject_reason,
+                            source_ref, from_memory
+                     FROM mem_candidates
+                     WHERE state = 'question'
+                     ORDER BY observed_at",
+                )?;
+                let rows = st.query_map([], row_to_candidate)?;
+                let mut v = Vec::new();
+                for r in rows {
+                    v.push(r?);
+                }
+                Ok(v)
+            })
+            .await
+    }
+
     /// Candidats confirmés par le propriétaire : origine `owner`, de nouveau à consolider.
     pub async fn confirm_by_owner(&self, ids: &[String]) -> penelope_store::Result<usize> {
         let ids = ids.to_vec();

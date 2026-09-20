@@ -1455,14 +1455,50 @@ sinon par les mots). Le modèle choisit : ajouter, mettre à jour, **remplacer**
 `depuis`) ou ne rien faire. Un texte déjà en mémoire n'est jamais ajouté une seconde fois ;
 une contradiction non tranchée devient une question, un changement de défaut une
 proposition. Chaque décision, avec ses critères et sa justification, est écrite dans la
-section « Tri » de `DREAMS.md`. Le digest du matin (08:00) résume la nuit, les demandes en
-attente, les runs et la dépense de la veille. La nuit s'y lit en trois chiffres
-(candidats examinés, promus, écartés) et en motifs d'écart regroupés par famille avec
-leur compte (« imprécis : 18 », « retrouvable ailleurs : 4 », cinq familles au plus,
-les autres additionnées), jamais en liste intégrale ; le détail, candidat par candidat,
-est dans `DREAMS.md` sous le rêve de la nuit, avec une section « Motifs d'écart ». Deux
-nuits de suite ou plus sans rien promouvoir ajoutent une ligne explicite, avec le motif
-dominant : un motif qui revient vingt fois est un réglage à revoir.
+section « Tri » de `DREAMS.md`.
+
+**La forme du digest.** Le digest du matin (08:00, `memory.digest_cron`) part au foyer
+(`telegram.home`) et tient en **une bulle**. Il dit, dans cet ordre : ce que la nuit a
+appris (le compte, puis cinq exemples au plus, tronqués à 80 caractères, avec leur
+fichier), les fichiers touchés, combien de questions attendent une réponse, le seul
+avertissement qui demande une action du propriétaire (le niveau Cœur au-delà de
+`memory.core_budget_tokens`), les entrées trop longues avec la commande qui en propose le
+découpage, les entrées jamais rappelées depuis soixante jours (trois exemples), les
+motifs d'écart regroupés par famille avec leur compte (« imprécis : 18 »,
+« retrouvable ailleurs : 4 », cinq familles au plus, les autres additionnées), la
+dépense de la veille et l'agenda du jour. Deux nuits de suite ou plus sans rien promouvoir
+ajoutent une ligne explicite, avec le motif dominant : un motif qui revient vingt fois est
+un réglage à revoir.
+
+Ce qui n'y est **pas** : les entrées promues en wikilinks bruts, les relances de lot et
+autres avertissements internes de la passe, le lint détaillé, le journal et les secrets
+rangés. Leur place est `DREAMS.md` et le journal du vault, que le digest cite en dernière
+ligne (« Détail : `DREAMS.md`, rêve `d_…` ») ; les avertissements internes se relisent
+aussi dans `penelope doctor`. Au-delà de `telegram.max_fragments`, le message part en
+**document** avec une légende d'une ligne plutôt qu'en six bulles.
+
+**Les questions se tranchent au bouton.** Une contradiction ne part jamais en texte libre :
+elle devient une carte `memory_proposal` à part du digest, qui cite les deux entrées
+tronquées à 80 caractères avec leur wikilink, et porte trois boutons — **Remplacer**
+(l'ancienne entrée est retirée), **Exception** (les deux cohabitent, la nouvelle porte son
+contexte), **Ignorer** (le candidat est écarté, la mémoire ne bouge pas). Le digest n'en
+donne que le compte. Sans réponse, la carte n'est pas reposée le lendemain : elle est
+rappelée puis rangée dans `DREAMS.md` sous « Questions sans réponse », et le candidat
+reste listé par `penelope mem candidates`.
+
+Une contradiction, c'est **deux règles opposées sur le même sujet** : la polarité se lit en
+tête de la première phrase (« Toujours… », « Jamais… », « Ne pas… »), pas au fil du texte ;
+le sujet commun se mesure en Jaccard (0,4) **et** par la similarité d'embedding du voisin
+(0,80) ; deux énoncés au-delà de la borne d'une entrée, ou dont les longueurs sont dans un
+rapport de plus de trois, ne se comparent pas ; un `fait` et un `écart` ne contredisent
+rien, ils se datent.
+
+**Une entrée, un fait.** `mem_remember` refuse un texte de plus de 300 caractères et
+demande de le découper ; `mem_note` (notes de travail) reste sans borne. Pour les entrées
+déjà écrites, `penelope mem split <uid>` propose un découpage en faits courts — les
+données financières personnelles (solde, salaire, épargne) restent hors de la mémoire de
+fond — par une carte, jamais par une écriture directe. `penelope doctor` liste les entrées
+actives au-delà de la borne et le Cœur au-delà de son budget.
 
 **Les lots et leur coût.** La passe juge les candidats par lots d'au plus
 `memory.dream_batch` = `40`. Une sortie coupée fait rejouer le même début de lot deux
@@ -1687,8 +1723,9 @@ penelope vault lint
 
 liens non résolus, notes orphelines et impasses, alias et noms en double, identifiants de
 bloc invalides ou dupliqués, propriétés mal typées, puis les entrées expirées et les
-contradictions à trancher (proposées, jamais corrigées en silence). Le digest du matin
-cite les entrées du rêve (`[[memoire#^…]]`) et le journal de la veille. Un vault d'une
+contradictions à trancher (proposées, jamais corrigées en silence). Les entrées du rêve
+(`[[memoire#^…]]`) et le journal de la veille sont écrits dans `DREAMS.md` et le journal du
+vault, pas dans le digest. Un vault d'une
 version antérieure est converti au premier démarrage (et par `penelope mem reindex`) :
 uid en identifiants de bloc, `alias` en `aliases`, noms d'accueil et d'audit (wikilinks
 réécrits), originaux déplacés dans `attachments/`, propriétés posées ; les uid et leur

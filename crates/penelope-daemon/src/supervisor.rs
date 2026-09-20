@@ -340,6 +340,8 @@ async fn approval_origin(d: &Daemon, a: &penelope_hitl::ApprovalRequest) -> Orig
 pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     let s = &d.services;
     for a in s.approvals.expire_due().await? {
+        // Une question de contradiction sans réponse est rangée, pas reposée (issue #145).
+        crate::dream::file_unanswered_clash(s, &a).await;
         let Some(sid) = &a.session_id else { continue };
         if a.payload.get("call_id").is_none() {
             continue;

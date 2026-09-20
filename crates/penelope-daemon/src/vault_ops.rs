@@ -61,6 +61,26 @@ fn refusal(kind: &str, text: &str) -> String {
     }
 }
 
+/// Une entrée, un fait (issue #145) : les dossiers de 3 000 caractères écrits d'un bloc
+/// le 19/09 ont ensuite « contredit » tout ce qui les approchait, et se sont recopiés
+/// entiers dans le digest du matin. La borne porte sur ce qui **entre en mémoire** ; le
+/// journal et la revue s'écrivent librement, et `mem_note` (note de travail) aussi.
+pub fn size_filter(level: Level, text: &str) -> Result<(), String> {
+    if matches!(level, Level::Episodic | Level::Revue) {
+        return Ok(());
+    }
+    let n = text.trim().chars().count();
+    if n > penelope_memory::quality::MAX_ENTRY_CHARS {
+        return Err(format!(
+            "entrée trop longue ({n} caractères, maximum {}) : une entrée par fait. \
+             Découper en plusieurs `mem_remember`, ou écrire la matière en note de \
+             travail (`mem_note`).",
+            penelope_memory::quality::MAX_ENTRY_CHARS
+        ));
+    }
+    Ok(())
+}
+
 /// Comme [`write_filter`], pour un bloc de plusieurs lignes (notes de travail).
 pub fn write_filter_block(text: &str) -> Result<(), String> {
     if let Some(kind) = penelope_observe::redact::secret_kind(text) {
@@ -93,6 +113,7 @@ pub async fn remember_with(
     prov: Provenance,
 ) -> Result<String, String> {
     write_filter(text)?;
+    size_filter(level, text)?;
     let day = today(s);
     let rel = file_for(level, &day);
     let path = vault.join(&rel);
@@ -839,5 +860,22 @@ mod tests {
         assert!(raw.contains("type: profil"), "{raw}");
         let hits = s.memory.by_level(Level::Profil).await.unwrap();
         assert_eq!(hits.len(), 2);
+    }
+
+    /// #145 : une entrée, un fait. Un dossier de 3 000 caractères écrit d'un bloc a
+    /// ensuite « contredit » tout ce qui l'approchait et s'est recopié dans le digest.
+    #[test]
+    fn a_memory_entry_holds_one_fact() {
+        let long = "Dossier complet du client, chiffres et échéances. ".repeat(80);
+        let e = size_filter(Level::Projet, &long).expect_err("trop long");
+        assert!(e.contains("300"), "{e}");
+        assert!(e.contains("une entrée par fait"), "{e}");
+        assert!(e.contains("mem_note"), "il dit quoi faire à la place : {e}");
+        // Ce qui tient dans la borne passe, et le journal reste libre.
+        size_filter(Level::Coeur, "Le propriétaire préfère les réponses courtes")
+            .expect("entrée courte");
+        size_filter(Level::Episodic, &long).expect("le journal n'est pas une règle");
+        // `mem_note` ne passe pas par là : une note de travail reste sans borne.
+        write_filter(&long.replace('\n', " ")).expect("note de travail");
     }
 }

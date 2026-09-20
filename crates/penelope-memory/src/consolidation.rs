@@ -519,6 +519,11 @@ pub fn detect_contradiction(
     if candidate.origin != Origin::Owner {
         return None;
     }
+    // Une contradiction oppose deux **règles**. Un fait observé et un écart n'en sont
+    // pas : ils ne se contredisent pas, ils se datent (issue #145).
+    if matches!(candidate.ctype, CandidateType::Fait | CandidateType::Ecart) {
+        return None;
+    }
     let contradicts = negates(existing_text, &candidate.text);
     if !contradicts {
         return None;
@@ -544,7 +549,33 @@ pub fn contradicts(a: &str, b: &str) -> bool {
     negates(a, b)
 }
 
+/// Part de sujet commun exigée, en Jaccard (dénominateur : l'union). Le containment
+/// d'avant prenait le plus petit énoncé comme dénominateur : face à un dossier de 3 000
+/// caractères, deux mots communs suffisaient à « contredire » n'importe quoi (#145).
+const SUBJECT_JACCARD: f64 = 0.4;
+/// Écart de longueur admis entre deux énoncés comparés : un dossier n'est pas une règle.
+const MAX_LENGTH_RATIO: f64 = 3.0;
+/// Similarité d'embedding exigée avant de dire deux énoncés contradictoires : le Jaccard
+/// dit le vocabulaire commun, la similarité dit le sujet commun, et les deux ensemble
+/// écartent le voisin lointain qu'aucun seuil ne filtrait (#145). Elle ne s'applique que
+/// si la similarité a pu être mesurée ; sans vecteur, le Jaccard décide seul.
+pub const CONTRADICTION_SIMILARITY: f64 = 0.80;
+/// Mots de tête où se lit la directive : « Toujours répondre… », « Ne jamais… ». Un
+/// « toujours payé » au milieu d'un dossier n'est pas une polarité.
+const DIRECTIVE_WORDS: usize = 6;
+
 fn negates(a: &str, b: &str) -> bool {
+    // Deux règles, pas un dossier : au-delà de la borne d'une entrée, ou d'un rapport de
+    // longueur de trois, la comparaison n'a pas de sens (issue #145).
+    let (la, lb) = (a.chars().count(), b.chars().count());
+    if la == 0
+        || lb == 0
+        || la > crate::quality::MAX_ENTRY_CHARS
+        || lb > crate::quality::MAX_ENTRY_CHARS
+        || la.max(lb) as f64 / la.min(lb) as f64 > MAX_LENGTH_RATIO
+    {
+        return false;
+    }
     let (pa, pb) = (polarity(a), polarity(b));
     if pa == 0 || pb == 0 || pa == pb {
         return false;
@@ -554,15 +585,25 @@ fn negates(a: &str, b: &str) -> bool {
         return false;
     }
     let inter = wa.intersection(&wb).count() as f64;
-    let denom = wa.len().min(wb.len()) as f64;
-    inter / denom >= 0.25
+    let union = wa.union(&wb).count() as f64;
+    inter / union >= SUBJECT_JACCARD
 }
 
+/// Polarité d'une **directive** : le marqueur se lit en tête de la première phrase, là où
+/// une règle s'énonce. Ailleurs dans le texte, c'est une tournure, pas une consigne.
 fn polarity(s: &str) -> i8 {
-    let s = s.to_lowercase();
-    if s.contains("jamais") || s.contains("éviter") || s.contains("ne pas") {
+    let head: String = s
+        .split(['.', ';', '\n'])
+        .next()
+        .unwrap_or_default()
+        .to_lowercase()
+        .split_whitespace()
+        .take(DIRECTIVE_WORDS)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if head.contains("jamais") || head.contains("éviter") || head.contains("ne pas") {
         -1
-    } else if s.contains("toujours") || s.contains("préférer") {
+    } else if head.contains("toujours") || head.contains("préférer") {
         1
     } else {
         0
@@ -597,8 +638,9 @@ fn significant_words(s: &str) -> std::collections::BTreeSet<String> {
         .collect::<String>()
         .split_whitespace()
         .filter(|w| w.chars().count() > 3 && !IGNORED.contains(w))
-        // Rapproche « réponse » et « répondre ».
-        .map(|w| w.chars().take(6).collect::<String>())
+        // Rapproche « réponse » et « répondre », « client » et « clientèle » : cinq
+        // lettres suffisent, et le seuil de Jaccard fait le reste (issue #145).
+        .map(|w| w.chars().take(5).collect::<String>())
         .collect()
 }
 
@@ -672,6 +714,14 @@ pub struct DreamReport {
     /// Entrées durables jamais rappelées depuis 60 jours, proposées au retrait.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unused: Vec<String>,
+    /// Ce que la nuit a appris, en clair : cinq lignes au plus, tronquées, avec leur
+    /// fichier. C'est ce que le digest montre à la place des wikilinks (issue #145).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub promoted_examples: Vec<String>,
+    /// Nettoyage **proposé**, jamais exécuté : entrées au-delà de la borne, avec la
+    /// commande qui en propose le découpage (issue #145).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cleanup: Vec<String>,
     /// Appels au modèle de consolidation, dont ceux jetés (sortie coupée) : le coût
     /// d'une passe se voit (issue #135).
     #[serde(default)]
@@ -699,6 +749,65 @@ impl DreamReport {
                 self.rejected.len(),
                 self.rejected.join(" ; ")
             ));
+        }
+        s
+    }
+
+    /// Ce que le digest du matin en dit : court, lisible sur un téléphone, sans un seul
+    /// wikilink brut (issue #145).
+    ///
+    /// Le digest du 20/09 faisait 11 300 caractères en six messages, dont la moitié en
+    /// `[[memoire#^01M2…]]` : les références promues, les avertissements internes de la
+    /// passe, le journal, les secrets rangés et le lint ont leur place dans `DREAMS.md`
+    /// et le journal du vault, pas sur Telegram. Ce qui reste : ce qui a été appris,
+    /// combien de questions attendent, et où lire le détail.
+    pub fn render_digest(&self) -> String {
+        let mut s = format!(
+            "Appris cette nuit : {} entrées promues, {} propositions en attente.",
+            self.promoted, self.proposals
+        );
+        for e in self.promoted_examples.iter().take(5) {
+            s.push_str(&format!("\n- {e}"));
+        }
+        if !self.files_touched.is_empty() {
+            s.push_str(&format!("\nFichiers : {}", self.files_touched.join(", ")));
+        }
+        if !self.questions.is_empty() {
+            s.push_str(&format!(
+                "\n{} question(s) en attente de ta réponse.",
+                self.questions.len()
+            ));
+        }
+        // Un seul avertissement peut demander une action du propriétaire : le Cœur au-delà
+        // de son budget, et il porte alors la commande. Les autres (relances, lots coupés)
+        // vont au journal du vault et à `penelope doctor`.
+        for w in self.warnings.iter().filter(|w| w.contains("Cœur")) {
+            s.push_str(&format!(
+                "\n⚠️ {w} — `penelope config set memory.core_budget_tokens <n>`"
+            ));
+        }
+        // Nettoyage proposé, jamais lancé tout seul : la commande est dans la ligne.
+        if !self.cleanup.is_empty() {
+            s.push_str(&format!(
+                "\n{} entrée(s) trop longues faussent la consolidation :",
+                self.cleanup.len()
+            ));
+            for c in self.cleanup.iter().take(3) {
+                s.push_str(&format!("\n- {c}"));
+            }
+            if self.cleanup.len() > 3 {
+                s.push_str(&format!("\n- … et {} autres", self.cleanup.len() - 3));
+            }
+        }
+        // Ce qui attend une décision : trois exemples, jamais la liste entière.
+        if !self.unused.is_empty() {
+            s.push_str("\nJamais rappelées depuis 60 jours, à retirer ?");
+            for u in self.unused.iter().take(3) {
+                s.push_str(&format!("\n- {u}"));
+            }
+            if self.unused.len() > 3 {
+                s.push_str(&format!("\n- … et {} autres", self.unused.len() - 3));
+            }
         }
         s
     }
@@ -1224,6 +1333,74 @@ mod tests {
             "t",
         );
         assert!(detect_contradiction(&c, "Toujours répondre en français", None).is_none());
+    }
+
+    /// #145 : les deux fausses contradictions du digest du 20/09. Un dossier de 3 188
+    /// caractères qui contient « toujours payé » ne contredit pas une phrase sur un JWT ;
+    /// deux directives sans rapport ne se contredisent pas davantage.
+    #[test]
+    fn a_file_is_not_a_rule_and_two_unrelated_directives_do_not_clash() {
+        let dossier = format!(
+            "DOSSIER FREELANCE — étiquette & situation économique. SIREN 000. Les clients \
+             ont toujours payé ; un lot est toujours « unpaid » tant qu'il n'est pas \
+             facturé. {}",
+            "Détail du dossier, chiffres, échéances, soldes, clients. ".repeat(60)
+        );
+        assert!(dossier.chars().count() > 3_000);
+        let jwt = Candidate::new(
+            CandidateType::Preference,
+            "Le JWT ne porte jamais que le rôle global de users",
+            Origin::Owner,
+            "interactive",
+            "t",
+        );
+        assert!(
+            detect_contradiction(&jwt, &dossier, None).is_none(),
+            "un dossier n'est pas une règle"
+        );
+
+        // La polarité se lit en tête : « jamais d'URL » en fin de phrase n'en fait pas une.
+        let vocal = Candidate::new(
+            CandidateType::Preference,
+            "Réponses vocales réservées au propos qui se comprend à l'oreille : jamais d'URL",
+            Origin::Owner,
+            "interactive",
+            "t",
+        );
+        assert!(
+            detect_contradiction(
+                &vocal,
+                "GitHub toujours pour Penelope ; Redmine réservé aux projets clients",
+                None
+            )
+            .is_none(),
+            "deux directives sans sujet commun"
+        );
+
+        // Un fait ne contredit pas : il se date.
+        let fait = Candidate::new(
+            CandidateType::Fait,
+            "Jamais de réponse en anglais",
+            Origin::Owner,
+            "interactive",
+            "t",
+        );
+        assert!(
+            detect_contradiction(&fait, "Toujours répondre en anglais aux clients", None).is_none()
+        );
+
+        // Et la vraie contradiction passe toujours.
+        let vraie = Candidate::new(
+            CandidateType::Preference,
+            "Jamais de réponse en anglais",
+            Origin::Owner,
+            "interactive",
+            "t",
+        );
+        assert!(matches!(
+            detect_contradiction(&vraie, "Toujours répondre en anglais aux clients", None),
+            Some(Contradiction::NeedsQuestion { .. })
+        ));
     }
 
     #[test]

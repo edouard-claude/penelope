@@ -538,8 +538,12 @@ pub enum MemCmd {
     Forget {
         uid: String,
     },
-    /// Candidats en attente de consolidation.
+    /// Candidats en attente de consolidation, et questions sans réponse.
     Candidates,
+    /// Propose le découpage d'une entrée trop longue : une carte, jamais une écriture.
+    Split {
+        uid: String,
+    },
     /// Audit de la mémoire noté sur 100, avec la prochaine action par axe.
     Audit,
     /// Remet à consolider les règles rejetées pour leur seule origine : elles seront
@@ -1091,6 +1095,7 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         }
         Command::Mem(MemCmd::Forget { uid }) => (m::MEM_FORGET, json!({"uid": uid})),
         Command::Mem(MemCmd::Candidates) => (m::MEM_CANDIDATES, json!({})),
+        Command::Mem(MemCmd::Split { uid }) => (m::MEM_SPLIT, json!({"uid": uid})),
         Command::Mem(MemCmd::Audit) => (m::MEM_AUDIT, json!({})),
         Command::Mem(MemCmd::RetryRejected) => (m::MEM_RETRY_REJECTED, json!({})),
         Command::Mem(MemCmd::Diff { since }) => (m::MEM_DIFF, json!({"since": since})),

@@ -868,7 +868,10 @@ impl Rpc {
                     .map_err(anyhow::Error::msg)?;
                 Ok(json!({"uid": uid, "forgotten": done}))
             }
-            method::MEM_CANDIDATES => Ok(serde_json::to_value(s.candidates.pending(None).await?)?),
+            // Ces deux branches passent par une fonction à part, sur le tas : le
+            // dispatcher porte déjà des dizaines d'états, et sa pile déborde (issue #145).
+            method::MEM_SPLIT => Box::pin(mem_split(&self.daemon, p)).await,
+            method::MEM_CANDIDATES => Box::pin(mem_candidates(s)).await,
             method::MEM_DREAM => {
                 let dry_run = p.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
                 let outcome = crate::dream::run(&self.daemon, dry_run).await?;
@@ -1493,6 +1496,21 @@ fn required_str(p: &Value, key: &str) -> anyhow::Result<String> {
         .and_then(|v| v.as_str())
         .map(String::from)
         .ok_or_else(|| anyhow::anyhow!("paramètre `{key}` manquant"))
+}
+
+/// Candidats en attente, **et** questions sans réponse : elles ne repassent pas en
+/// consolidation, elles doivent rester visibles (issue #145).
+async fn mem_candidates(s: &Services) -> anyhow::Result<Value> {
+    let mut v = s.candidates.pending(None).await?;
+    v.extend(s.candidates.in_question().await?);
+    Ok(serde_json::to_value(v)?)
+}
+
+/// Propose le découpage d'une entrée fourre-tout : une carte, jamais une écriture (#145).
+async fn mem_split(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
+    let uid = required_str(p, "uid")?;
+    let id = crate::mem_split::propose(d, &uid).await?;
+    Ok(json!({"approval": id}))
 }
 
 fn classify(e: &anyhow::Error) -> i32 {

@@ -200,6 +200,8 @@ pub mod method {
     pub const MEM_REINDEX: &str = "mem.reindex";
     pub const MEM_FORGET: &str = "mem.forget";
     pub const MEM_CANDIDATES: &str = "mem.candidates";
+    /// Propose le découpage d'une entrée fourre-tout, par carte (issue #145).
+    pub const MEM_SPLIT: &str = "mem.split";
     pub const MEM_DREAM: &str = "mem.dream";
     pub const MEM_LEARNED: &str = "mem.learned";
     /// Signaux d'usage d'une entrée et facteur de classement qu'ils donnent (issue #105).
@@ -311,6 +313,7 @@ pub mod method {
         MEM_REINDEX,
         MEM_FORGET,
         MEM_CANDIDATES,
+        MEM_SPLIT,
         MEM_DREAM,
         MEM_LEARNED,
         MEM_SIGNALS,

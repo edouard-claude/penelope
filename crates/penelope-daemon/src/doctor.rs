@@ -225,6 +225,9 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
         )
     });
 
+    // Mémoire : entrées au-delà de la borne, Cœur au-delà de son budget (#145).
+    checks.push(memory_size_check(s).await);
+
     // Foyer du propriétaire (#143) : là où arrivent les avis sans session.
     checks.push(home_check(s));
 
@@ -241,6 +244,54 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     }
 
     checks
+}
+
+/// #145 : une entrée fourre-tout fausse la consolidation (elle « contredit » tout ce
+/// qu'elle approche) et déborde dans le digest ; un Cœur au-delà de son budget n'est pas
+/// injecté en entier.
+pub async fn memory_size_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "memory.size";
+    const LABEL: &str = "Taille des entrées de mémoire";
+    let max = penelope_memory::quality::MAX_ENTRY_CHARS;
+    let long: Vec<String> = crate::mem_split::oversized(s)
+        .await
+        .iter()
+        .map(|e| {
+            format!(
+                "`{}` ({} caractères, {})",
+                e.uid,
+                e.text.chars().count(),
+                e.file
+            )
+        })
+        .collect();
+    let budget = s.config.config().memory.core_budget_tokens as u64;
+    let overflow = crate::dream::core_overflow(s, budget).await;
+
+    if long.is_empty() && overflow.is_none() {
+        return DoctorCheck::ok(
+            ID,
+            LABEL,
+            format!("toutes sous {max} caractères, Cœur dans son budget de {budget} jetons"),
+        );
+    }
+    let mut detail = Vec::new();
+    if !long.is_empty() {
+        detail.push(format!(
+            "{} entrée(s) au-delà de {max} caractères : {}",
+            long.len(),
+            long.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    if let Some(w) = overflow {
+        detail.push(w);
+    }
+    DoctorCheck::fail(
+        ID,
+        LABEL,
+        detail.join(" ; "),
+        Some("`penelope mem split <uid>` propose le découpage en un fait par entrée".into()),
+    )
 }
 
 /// #143 : le chat privé n'est plus lu dès que la conversation vit dans un groupe à

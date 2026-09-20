@@ -150,6 +150,9 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
         let day = today(s);
         let mut admitted: Vec<&CandidateGroup> = Vec::new();
         let mut state_updates: Vec<(Vec<String>, &'static str, Option<String>)> = Vec::new();
+        // Contradictions trouvées : une carte à trois boutons chacune, posée après
+        // l'écriture (issue #145).
+        let mut clashes: Vec<(Clash, Vec<String>)> = Vec::new();
         for g in &groups {
             let ids: Vec<String> = g.members.iter().map(|m| m.id.clone()).collect();
             for name in crate::secret_shelf::references(&g.representative.text) {
@@ -278,10 +281,11 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                     } else {
                         budget.observe(size, completion);
                     }
-                    let (batch_ops, updates) =
+                    let (batch_ops, updates, batch_clashes) =
                         sort_and_plan(slice, &response, &snapshot, &day, &mut report);
                     ops.extend(batch_ops);
                     state_updates.extend(updates);
+                    clashes.extend(batch_clashes);
                     break;
                 }
                 i += size;
@@ -419,6 +423,28 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
             .filter(|(uid, _)| penelope_memory::vault::is_valid_block_id(uid))
             .map(|(uid, file)| format!("[[{}#^{uid}]]", resolver.link_target(file)))
             .collect();
+        // Ce que la nuit a appris, en clair : le digest montre ces lignes à la place des
+        // wikilinks bruts (issue #145).
+        for (uid, file) in touched.iter().take(5) {
+            if let Ok(Some(e)) = s.memory.get(uid).await {
+                report
+                    .promoted_examples
+                    .push(format!("{} ({file})", short(&e.text.replace('\n', " "))));
+            }
+        }
+        // Entrées fourre-tout : le digest propose le découpage, il ne le lance pas.
+        report.cleanup = crate::mem_split::oversized(s)
+            .await
+            .iter()
+            .map(|e| {
+                format!(
+                    "{} ({} caractères) — `penelope mem split {}`",
+                    short(&e.text.replace('\n', " ")),
+                    e.text.chars().count(),
+                    e.uid
+                )
+            })
+            .collect();
         let (lint, proposals) = wiki_review(s, &vault).await;
         report.lint = lint.summary();
         report.lint_problems = lint.problems() as u32;
@@ -427,6 +453,13 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
             s.candidates
                 .set_state(&ids, state, reason.as_deref())
                 .await?;
+        }
+        // Une question sans bouton n'a pas de réponse possible : chaque contradiction
+        // devient une carte, envoyée à part du digest (issue #145).
+        for (clash, ids) in &clashes {
+            if let Err(e) = ask_about_clash(s, clash, ids).await {
+                tracing::warn!(error = %e, "carte de contradiction non posée");
+            }
         }
         // Élagage (§6.8) : écarts non promus depuis longtemps.
         s.candidates
@@ -496,7 +529,7 @@ pub async fn submission_order(s: &Services) -> anyhow::Result<Vec<String>> {
 
 /// Budget du niveau Cœur, mesuré sur ce qui est réellement injecté (hors entrées
 /// expirées) : un dépassement est signalé dans `DREAMS.md` (issue #25).
-async fn core_overflow(s: &Services, budget: u64) -> Option<String> {
+pub(crate) async fn core_overflow(s: &Services, budget: u64) -> Option<String> {
     let hidden = s.memory.hidden_uids().await.ok()?;
     let mut entries = s.memory.by_level(Level::Coeur).await.ok()?;
     entries.retain(|e| !hidden.contains(&e.uid));
@@ -518,22 +551,52 @@ fn short(text: &str) -> String {
     }
 }
 
+/// Contradiction trouvée : de quoi poser une carte à trois boutons (issue #145), et la
+/// phrase qui la résume.
+pub(crate) struct Clash {
+    pub question: String,
+    /// Entrée déjà en mémoire, et son identifiant : « Remplacer » la retire.
+    pub existing_uid: String,
+    pub existing: String,
+    pub proposed: String,
+    /// Contexte du candidat, s'il en a un : « Exception » s'en sert.
+    pub quand: Option<String>,
+}
+
 /// Contradiction avec un souvenir proche, sans contexte distinct : une question (§6.8),
 /// jamais un doublon (issue #37).
-fn contradiction(candidate: &Candidate, text: &str, nearby: &[IndexedEntry]) -> Option<String> {
+fn contradiction(candidate: &Candidate, text: &str, nearby: &[Neighbour]) -> Option<Clash> {
+    use penelope_memory::consolidation::CONTRADICTION_SIMILARITY;
     let mut probe = candidate.clone();
     probe.text = text.to_string();
-    for e in nearby {
+    for n in nearby {
+        // Le voisin lointain ne contredit pas : le 5ᵉ résultat était comparé comme le
+        // premier, sans seuil (issue #145). Sans vecteur des deux côtés, la similarité
+        // n'est pas mesurable et le Jaccard décide seul.
+        if n.similarity.is_some_and(|s| s < CONTRADICTION_SIMILARITY) {
+            continue;
+        }
+        let e = &n.entry;
         if let Some(penelope_memory::consolidation::Contradiction::NeedsQuestion {
             existing,
-            candidate,
+            candidate: proposed,
         }) =
             penelope_memory::consolidation::detect_contradiction(&probe, &e.text, e.quand.as_ref())
         {
-            return Some(format!(
-                "Tu as dit « {candidate} », j'avais « {existing} » : je remplace, j'ajoute une \
-                 exception, ou j'ignore ?"
-            ));
+            // Les deux entrées **tronquées** : une question qui recopie un dossier de
+            // 3 000 caractères n'est pas une question (issue #145).
+            return Some(Clash {
+                question: format!(
+                    "Tu as dit « {} », j'avais « {} » : je remplace, j'ajoute une \
+                     exception, ou j'ignore ?",
+                    short(&proposed),
+                    short(&existing)
+                ),
+                existing_uid: e.uid.clone(),
+                existing: existing.clone(),
+                proposed: proposed.clone(),
+                quand: candidate.quand.as_ref().map(|w| w.render()),
+            });
         }
     }
     None
@@ -542,12 +605,20 @@ fn contradiction(candidate: &Candidate, text: &str, nearby: &[IndexedEntry]) -> 
 /// Candidat soumis au modèle, avec ses souvenirs proches.
 struct Item<'a> {
     group: &'a CandidateGroup,
-    nearby: Vec<IndexedEntry>,
+    nearby: Vec<Neighbour>,
+}
+
+/// Souvenir proche d'un candidat, avec la similarité qui l'a rapproché quand elle a pu
+/// être mesurée (issue #145) : `None` quand la recherche est restée lexicale.
+#[derive(Debug, Clone)]
+struct Neighbour {
+    entry: IndexedEntry,
+    similarity: Option<f64>,
 }
 
 /// Souvenirs proches de chaque candidat, avec **un seul** appel d'embeddings pour tout le
 /// lot (issue #59).
-async fn nearby_batch(d: &Arc<Daemon>, texts: &[String]) -> Vec<Vec<IndexedEntry>> {
+async fn nearby_batch(d: &Arc<Daemon>, texts: &[String]) -> Vec<Vec<Neighbour>> {
     let vectors = match crate::embeddings::embed_texts(d, texts).await {
         Ok((_, v)) => v,
         Err(e) => {
@@ -565,19 +636,29 @@ async fn nearby_batch(d: &Arc<Daemon>, texts: &[String]) -> Vec<Vec<IndexedEntry
 
 /// Souvenirs proches d'un candidat : recherche par le sens quand les embeddings répondent,
 /// sinon lexicale ; ni journal, ni documents ingérés.
-async fn nearby_with(d: &Arc<Daemon>, text: &str, vector: Option<Vec<f32>>) -> Vec<IndexedEntry> {
+async fn nearby_with(d: &Arc<Daemon>, text: &str, vector: Option<Vec<f32>>) -> Vec<Neighbour> {
     let s = &d.services;
     let filter = penelope_memory::SearchFilter {
         limit: 8,
         ..Default::default()
     };
+    // Sans vecteur de requête, aucune similarité n'est mesurable : le voisin est retenu
+    // sans seuil, comme avant (issue #145).
+    let measured = vector.is_some();
     s.memory
         .search(text, vector, &filter, &[])
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|h| h.entry)
-        .filter(|e| e.level != Level::Episodic && e.etype != penelope_memory::ingest::SOURCE_ETYPE)
+        .filter(|h| {
+            h.entry.level != Level::Episodic
+                && h.entry.etype != penelope_memory::ingest::SOURCE_ETYPE
+        })
+        .map(|h| Neighbour {
+            // Une entrée jamais vectorisée sort à 0 : la similarité reste inconnue.
+            similarity: (measured && h.similarity > 0.0).then_some(h.similarity),
+            entry: h.entry,
+        })
         .take(5)
         .collect()
 }
@@ -629,9 +710,11 @@ fn sort_and_plan(
 ) -> (
     Vec<(Vec<String>, Operation)>,
     Vec<(Vec<String>, &'static str, Option<String>)>,
+    Vec<(Clash, Vec<String>)>,
 ) {
     use penelope_memory::grid::{JOURNAL_SECTION, Placement, normalized};
     let mut updates = Vec::new();
+    let mut clashes: Vec<(Clash, Vec<String>)> = Vec::new();
     let mut placements: Vec<Option<Placement>> = Vec::new();
     for (i, item) in items.iter().enumerate() {
         let g = item.group;
@@ -698,15 +781,16 @@ fn sort_and_plan(
                             .push(format!("＝ déjà en mémoire « {} »", short(text)));
                         continue;
                     }
-                    if let Some(question) =
+                    if let Some(clash) =
                         contradiction(&item.group.representative, text, &item.nearby)
                     {
-                        report.questions.push(question);
-                        updates.push((
-                            item.group.members.iter().map(|m| m.id.clone()).collect(),
-                            "question",
-                            None,
-                        ));
+                        let ids: Vec<String> =
+                            item.group.members.iter().map(|m| m.id.clone()).collect();
+                        report.questions.push(clash.question.clone());
+                        // Une carte à trois boutons, à part du digest : une question sans
+                        // bouton n'a pas de réponse possible (issue #145).
+                        clashes.push((clash, ids.clone()));
+                        updates.push((ids, "question", None));
                         continue;
                     }
                 }
@@ -769,7 +853,109 @@ fn sort_and_plan(
             ));
         }
     }
-    (ops, updates)
+    (ops, updates, clashes)
+}
+
+/// Pose la carte d'une contradiction : les deux entrées tronquées, leur fichier, et les
+/// trois boutons (remplacer, exception, ignorer). Le digest n'en donne que le compte
+/// (issue #145).
+async fn ask_about_clash(s: &Services, clash: &Clash, ids: &[String]) -> anyhow::Result<()> {
+    let file = s
+        .memory
+        .get(&clash.existing_uid)
+        .await
+        .ok()
+        .flatten()
+        .map(|e| e.file)
+        .unwrap_or_default();
+    s.approvals
+        .create(
+            penelope_hitl::ApprovalKind::MemoryProposal,
+            "mémoire",
+            penelope_kernel::risk::RiskClass::Write,
+            serde_json::json!({
+                "contradiction": true,
+                "existing_uid": clash.existing_uid,
+                "existing": short(&clash.existing),
+                "proposed": clash.proposed,
+                "quand": clash.quand,
+                "file": file,
+                "candidates": ids,
+                "source": if file.is_empty() { "mémoire".into() } else { file.clone() },
+                "items": [format!(
+                    "Nouveau : « {} »",
+                    short(&clash.proposed)
+                ), format!("En mémoire : « {} »", short(&clash.existing))],
+            }),
+            vec!["Remplacer".into(), "Exception".into(), "Ignorer".into()],
+            None,
+            None,
+            false,
+        )
+        .await?;
+    Ok(())
+}
+
+/// Une carte de contradiction expirée sans réponse. Elle **ne se repose pas** le
+/// lendemain : le candidat garde l'état `question` (hors de `pending`, donc hors de la
+/// passe suivante) et reste listé par `penelope mem candidates` ; la question, elle, est
+/// rangée dans `DREAMS.md` (issue #145).
+pub async fn file_unanswered_clash(s: &Services, a: &penelope_hitl::ApprovalRequest) {
+    if a.kind != penelope_hitl::ApprovalKind::MemoryProposal
+        || a.payload.get("contradiction").and_then(|v| v.as_bool()) != Some(true)
+    {
+        return;
+    }
+    let text = |k: &str| {
+        a.payload
+            .get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let (uid, existing, proposed) = (text("existing_uid"), text("existing"), text("proposed"));
+    let day = today(s);
+    let vault = crate::conversation::vault_dir(s);
+    let line = format!(
+        "- {day} · sans réponse · nouveau « {} » contre [[memoire#^{uid}]] « {} »\n",
+        short(&proposed),
+        short(&existing)
+    );
+    let r = crate::vault_ops::update_note(&vault, "DREAMS.md", None, &day, |raw| {
+        const SECTION: &str = "## Questions sans réponse";
+        let mut body = if raw.trim().is_empty() {
+            "# Revue\n".to_string()
+        } else {
+            raw.to_string()
+        };
+        if !body.ends_with('\n') {
+            body.push('\n');
+        }
+        match body.find(SECTION) {
+            // Sous la section, avant ce qui suit : les questions restent groupées.
+            Some(at) => {
+                let start = at + SECTION.len();
+                let end = body[start..]
+                    .find("\n## ")
+                    .map(|i| start + i + 1)
+                    .unwrap_or(body.len());
+                body.insert_str(end, &line);
+            }
+            None => body.push_str(&format!("\n{SECTION}\n\n{line}")),
+        }
+        Ok(body)
+    });
+    if let Err(e) = r {
+        tracing::warn!(error = %e, "question sans réponse non rangée dans DREAMS.md");
+        return;
+    }
+    let _ = s
+        .events
+        .append(EventDraft::new(
+            "memory.clash_unanswered",
+            json!({"approval": a.id.as_str(), "uid": uid}),
+        ))
+        .await;
 }
 
 /// Retraits des états passagers expirés du journal (`projets.md`, « États en cours »).
@@ -1070,7 +1256,8 @@ async fn consolidate(
             user.push_str("   Souvenirs proches : aucun\n");
         } else {
             user.push_str("   Souvenirs proches :\n");
-            for e in &item.nearby {
+            for n in &item.nearby {
+                let e = &n.entry;
                 let usage = s.memory.signals_of(&e.uid).await.unwrap_or_default();
                 user.push_str(&format!(
                     "   - uid {} · {} · depuis {} · {} : {}\n",
@@ -2319,7 +2506,7 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
         Some((id, finished, report)) => {
             t.push_str(&format!(
                 "\n🧠 {} _(passe `{id}`, {})_\n",
-                report.render_brief(),
+                report.render_digest(),
                 &finished[..16.min(finished.len())]
             ));
             let quiet: Vec<DreamReport> = recent_reports(s, 14)
@@ -2515,7 +2702,11 @@ pub async fn system_crons(d: &Arc<Daemon>) -> anyhow::Result<()> {
                     match digest_text(&d2).await {
                         Ok(text) => {
                             if let Some(m) = d2.hooks.messenger() {
-                                let origin = crate::scheduler::owner_origin(&d2);
+                                // Avis sans session : il part au foyer (`telegram.home`,
+                                // issue #143), pas au chat privé (issue #145).
+                                let origin = crate::bus::Origin::Internal {
+                                    source: "digest".into(),
+                                };
                                 let _ = m.send_text(&origin, &text).await;
                             }
                         }
@@ -4575,5 +4766,125 @@ mod tests {
             sync["git"], false,
             "autocommit désactivé : le vault reste hors git"
         );
+    }
+
+    /// #145 : un voisin lointain ne contredit pas. Le 5ᵉ résultat d'une recherche était
+    /// comparé comme le 1ᵉʳ ; désormais la similarité mesurée doit tenir le seuil.
+    #[test]
+    fn a_distant_neighbour_does_not_clash() {
+        let candidate = penelope_memory::candidates::Candidate::new(
+            penelope_memory::candidates::CandidateType::Preference,
+            "Jamais de réponse en anglais",
+            penelope_memory::Origin::Owner,
+            "interactive",
+            "t",
+        );
+        let text = "Toujours répondre en anglais aux clients";
+        let entry = penelope_memory::index::simple_entry("u1", text, Level::Profil, "2026-09-20");
+        let neighbour = |similarity| Neighbour {
+            entry: entry.clone(),
+            similarity,
+        };
+
+        assert!(
+            contradiction(
+                &candidate,
+                "Jamais de réponse en anglais",
+                &[neighbour(Some(0.42))]
+            )
+            .is_none(),
+            "sous le seuil : pas de question"
+        );
+        assert!(
+            contradiction(
+                &candidate,
+                "Jamais de réponse en anglais",
+                &[neighbour(Some(0.91))]
+            )
+            .is_some(),
+            "au-dessus du seuil : la vraie contradiction passe"
+        );
+        assert!(
+            contradiction(
+                &candidate,
+                "Jamais de réponse en anglais",
+                &[neighbour(None)]
+            )
+            .is_some(),
+            "sans vecteur, le Jaccard décide seul"
+        );
+    }
+
+    /// #145 : le digest du matin tient en une bulle — pas de wikilink brut, pas
+    /// d'avertissement interne, pas de journal ni de secrets rangés ; le détail reste
+    /// dans `DREAMS.md`.
+    #[test]
+    fn the_morning_digest_is_short_and_readable() {
+        let mut report = DreamReport {
+            promoted: 113,
+            proposals: 0,
+            ..Default::default()
+        };
+        report.files_touched = vec!["memoire.md".into(), "projets.md".into()];
+        report.promoted_refs = (0..113)
+            .map(|i| format!("[[memoire#^01M2Y1QK{i}]]"))
+            .collect();
+        report.questions = vec!["Tu as dit « a », j'avais « b » : ?".into(); 2];
+        report.warnings = vec![
+            "consolidation coupée sur 40 candidats : reprise par 20".into(),
+            "erreur passagère (Transient) reprise 1/2 après 120 s".into(),
+            "niveau Cœur à ~3021 jetons pour un budget de 1200".into(),
+        ];
+        report.journal = 4;
+        report.secrets = vec!["cle_api".into()];
+        report.lint = vec!["43 liens non résolus".into()];
+        // Ce que la nuit a appris, en clair, et le nettoyage proposé.
+        report.promoted_examples = (0..5)
+            .map(|i| format!("Yobbu ouvre son catalogue le {i} octobre (memoire.md)"))
+            .collect();
+        report.cleanup = (0..6)
+            .map(|i| {
+                format!("PROJET N°{i} … (3 188 caractères) — `penelope mem split 01M2Y1QK{i}`")
+            })
+            .collect();
+
+        let digest = report.render_digest();
+        assert!(
+            digest.chars().count() <= 1_500,
+            "{} caractères",
+            digest.chars().count()
+        );
+        assert!(
+            !digest.contains("[[memoire#^"),
+            "aucun wikilink brut : {digest}"
+        );
+        assert!(
+            !digest.contains("Transient"),
+            "pas de journal interne : {digest}"
+        );
+        assert!(!digest.contains("Secrets rangés"), "{digest}");
+        assert!(!digest.contains("liens non résolus"), "{digest}");
+        assert!(digest.contains("113 entrées promues"), "{digest}");
+        assert!(
+            digest.contains("2 question(s)"),
+            "le compte, pas les questions"
+        );
+        // Le seul avertissement qui demande une action du propriétaire reste.
+        assert!(digest.contains("Cœur"), "{digest}");
+        // Ce qui a été appris se lit, et le nettoyage est proposé, jamais lancé.
+        assert!(
+            digest.contains("Yobbu ouvre son catalogue le 0"),
+            "{digest}"
+        );
+        assert!(digest.contains("penelope mem split"), "{digest}");
+        assert!(
+            digest.contains("… et 3 autres"),
+            "six entrées, trois montrées : {digest}"
+        );
+
+        // Le rapport complet, lui, garde tout : c'est ce qui va dans `DREAMS.md`.
+        let full = report.render();
+        assert!(full.contains("[[memoire#^01M2Y1QK0]]"));
+        assert!(full.contains("Transient"));
     }
 }

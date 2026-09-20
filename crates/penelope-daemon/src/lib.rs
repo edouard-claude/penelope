@@ -28,6 +28,7 @@ pub mod mcp;
 pub mod mcp_auth;
 pub mod media;
 pub mod mem_audit;
+pub mod mem_split;
 pub mod onboarding;
 pub mod purge;
 pub mod review;

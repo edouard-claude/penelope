@@ -473,11 +473,16 @@ pub fn all() -> Vec<ToolSpec> {
             "mem_remember",
             RiskClass::Write,
             "Écrit directement en mémoire. Refusé si le message courant ne le demande pas \
-             explicitement.",
+             explicitement. Une entrée par fait, 300 caractères au plus : pour de la \
+             matière longue, `mem_note`.",
             obj(
                 json!({
                     "niveau": {"type":"string","enum":["profil","coeur","projet","cure"]},
-                    "texte": {"type":"string"}
+                    "texte": {
+                        "type": "string",
+                        "maxLength": penelope_memory::quality::MAX_ENTRY_CHARS,
+                        "description": "un seul fait, 300 caractères au plus"
+                    }
                 }),
                 &["niveau", "texte"],
             ),

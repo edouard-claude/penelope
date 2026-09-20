@@ -3,7 +3,7 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 19 septembre 2026.
+Dernière mise à jour : 20 septembre 2026.
 
 ## Résumé
 
@@ -1820,6 +1820,43 @@ un foyer (#143).
   modifiée en place au clic, et l'issue arrive en message dans la même conversation quand
   personne n'a cliqué. `Orchestrator`, `McpGateway::call_tool` et `OwnerChannel::close`
   prennent un paramètre de plus (la conversation, la possibilité de relancer).
+
+### 0.17.27
+
+Le digest du matin tient en une bulle, une contradiction se tranche au bouton, et une
+entrée de mémoire porte un fait (#145).
+
+- **Un digest court** (#145) : celui du 20/09 faisait 11 300 caractères en six messages,
+  dont la moitié en `[[memoire#^01M2…]]` bruts, avec cinq lignes de journal interne. Le
+  digest dit maintenant ce que la nuit a appris (le compte, cinq exemples tronqués à 80
+  caractères avec leur fichier), combien de questions attendent, le seul avertissement
+  qui demande une action (le Cœur au-delà de `memory.core_budget_tokens`), le nettoyage
+  proposé et où lire la suite. Les références promues, les relances de lot, le lint, le
+  journal et les secrets rangés restent dans `DREAMS.md` et le journal du vault. Au-delà
+  de `telegram.max_fragments`, le texte part en document (`should_send_as_document`,
+  jusque-là appelé nulle part).
+- **Une question, une carte, trois boutons** (#145) : « je remplace, j'ajoute une
+  exception, ou j'ignore ? » n'avait aucune réponse cliquable. Chaque contradiction
+  devient une carte `memory_proposal` à part du digest, citant les deux entrées tronquées
+  (80 caractères) ; le digest n'en donne que le compte. « Remplacer » retire l'ancienne,
+  « Exception » écrit la nouvelle avec son contexte, « Ignorer » écarte le candidat. Sans
+  réponse, la carte n'est pas reposée le lendemain : le candidat reste à l'état
+  `question` — listé par `penelope mem candidates` — et la question est rangée dans
+  `DREAMS.md` sous « Questions sans réponse ».
+- **Une contradiction, c'est deux règles opposées sur le même sujet** (#145) : la polarité
+  se lisait par sous-chaîne n'importe où dans le texte (un dossier de 3 188 caractères
+  contenant « toujours payé » contredisait une phrase sur un JWT), et le sujet commun par
+  containment sur le plus petit énoncé, seuil 0,25. Elle se lit désormais en tête de la
+  première phrase, sur six mots ; le sujet commun se mesure en Jaccard (union) à 0,4 **et**
+  par la similarité d'embedding du voisin (0,80) ; deux énoncés au-delà de la borne d'une
+  entrée, ou dont les longueurs sont dans un rapport de plus de trois, ne se comparent
+  pas ; un `fait` et un `écart` ne contredisent rien, ils se datent.
+- **Une entrée, un fait** (#145) : `mem_remember` refuse au-delà de
+  `penelope_memory::quality::MAX_ENTRY_CHARS` (300) avec la consigne de découper, et le
+  schéma de l'outil porte la borne ; `mem_note` reste sans borne. Pour les entrées déjà
+  écrites, `penelope mem split <uid>` propose un découpage en faits courts, sans les
+  données financières personnelles : une carte, jamais une écriture. `penelope doctor`
+  liste les entrées actives au-delà de la borne et le Cœur au-delà de son budget.
 
 ### Routine de livraison
 

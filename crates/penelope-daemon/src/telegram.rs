@@ -3646,6 +3646,45 @@ impl TelegramGateway {
                 )
                 .await?;
             }
+            // Contradiction (#145) : remplacer, garder les deux avec un contexte, ou
+            // ignorer. Les trois passent par le même chemin d'application.
+            k::MEMORY_ACCEPT | k::MEMORY_AS_EXCEPTION | k::MEMORY_REJECT
+                if approval.payload["contradiction"].as_bool() == Some(true) =>
+            {
+                let _ = self.bot.edit_markup(chat_id, message_id, None).await;
+                let keep = action.action != k::MEMORY_REJECT;
+                let decision = if keep {
+                    Decision {
+                        choice: if action.action == k::MEMORY_ACCEPT {
+                            "Remplacer".into()
+                        } else {
+                            "Exception".into()
+                        },
+                        ..Decision::approve_once("telegram")
+                    }
+                } else {
+                    Decision {
+                        choice: "Ignorer".into(),
+                        ..Decision::deny("telegram", None)
+                    }
+                };
+                let won = decide_approval(s, &approval_id, &decision).await?;
+                let note = if !won {
+                    "ℹ️ Déjà tranché.".to_string()
+                } else {
+                    match crate::ingest::apply_contradiction(
+                        &self.daemon,
+                        &approval_id,
+                        &action.action,
+                    )
+                    .await
+                    {
+                        Ok(note) => note,
+                        Err(e) => format!("❌ {e}"),
+                    }
+                };
+                self.reply(chat_id, topic_id, None, &note).await?;
+            }
             k::MEMORY_ACCEPT | k::MEMORY_REJECT => {
                 let _ = self.bot.edit_markup(chat_id, message_id, None).await;
                 let accept = action.action == k::MEMORY_ACCEPT;
@@ -5962,13 +6001,15 @@ impl TelegramGateway {
         let rendered = tpl
             .render(&vars, &tokens, &[])
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        // Un fait tiré d'un document n'a pas de contexte d'exception : « Tout » ou « Rien ».
+        // Un fait tiré d'un document n'a pas de contexte d'exception : « Tout » ou
+        // « Rien ». Une contradiction, si : elle garde les trois boutons (issue #145).
+        let clash = a.payload["contradiction"].as_bool() == Some(true);
         let buttons: Vec<Vec<ButtonSpec>> = rendered
             .buttons
             .iter()
             .map(|row| {
                 row.iter()
-                    .filter(|b| !b.label.contains("exception"))
+                    .filter(|b| clash || !b.label.contains("exception"))
                     .cloned()
                     .collect::<Vec<_>>()
             })
@@ -6049,10 +6090,8 @@ impl TelegramGateway {
         } else {
             markdown.to_string()
         };
-        for (i, fragment) in penelope_telegram::split_message(&body, FRAGMENT_CHARS)
-            .iter()
-            .enumerate()
-        {
+        let fragments = penelope_telegram::split_message(&body, FRAGMENT_CHARS);
+        for (i, fragment) in fragments.iter().enumerate() {
             let mut payload = json!({
                 "chat_id": chat_id,
                 "text": markdown_to_html(fragment),
@@ -6070,6 +6109,69 @@ impl TelegramGateway {
                 .await?;
         }
         Ok(())
+    }
+
+    /// Envoie un texte, ou le joint en document quand il déborderait en chapelet de
+    /// messages (§14.1, `telegram.max_fragments`). Le digest du matin s'en sert : six
+    /// messages dont un qui coupe un identifiant en deux ne se lisent pas (issue #145).
+    pub async fn reply_or_document(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        markdown: &str,
+    ) -> anyhow::Result<()> {
+        let fragments = penelope_telegram::split_message(markdown, FRAGMENT_CHARS);
+        let max_fragments = self.daemon.services.config.config().telegram.max_fragments;
+        if max_fragments > 0
+            && penelope_telegram::render::should_send_as_document(fragments.len(), max_fragments)
+            && let Some(first) = fragments.first()
+            && self
+                .send_long_as_document(chat_id, topic_id, markdown, first)
+                .await
+                .is_ok()
+        {
+            return Ok(());
+        }
+        self.reply(chat_id, topic_id, None, markdown).await
+    }
+
+    /// Texte trop long pour une bulle : un fichier joint, et une ligne qui dit ce que
+    /// c'est (issue #145). Le fichier vit dans le répertoire de données, pas dans `/tmp`.
+    async fn send_long_as_document(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        body: &str,
+        head: &str,
+    ) -> anyhow::Result<()> {
+        let dirs = &self.daemon.services.platform.dirs;
+        let dir = dirs.data().join("outgoing");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!(
+            "penelope-{}.md",
+            self.daemon.services.clock.now_rfc3339().replace(':', "-")
+        ));
+        std::fs::write(&path, penelope_observe::redact(body))?;
+        let caption: String = head
+            .lines()
+            .next()
+            .unwrap_or("Rapport")
+            .chars()
+            .take(180)
+            .collect();
+        // Un document part en `multipart`, pas en JSON : il ne passe pas par la file.
+        let sent = self
+            .bot
+            .send_document(
+                chat_id,
+                topic_id,
+                &path,
+                Some(&format!("{caption} (texte complet en pièce jointe)")),
+            )
+            .await;
+        // Telegram garde le fichier : le nôtre n'a plus de raison de traîner.
+        let _ = std::fs::remove_file(&path);
+        sent.map(|_| ()).map_err(|e| anyhow::anyhow!(e.to_string()))
     }
 
     async fn outbox_push(
@@ -6749,7 +6851,9 @@ impl crate::elicitation::OwnerChannel for TelegramGateway {
 impl Messenger for TelegramGateway {
     async fn send_text(&self, origin: &Origin, markdown: &str) -> Result<(), String> {
         let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
-        self.reply(chat_id, topic_id, None, markdown)
+        // Un avis interne (digest, rapport de veille) qui déborde part en document
+        // plutôt qu'en six bulles (issue #145).
+        self.reply_or_document(chat_id, topic_id, markdown)
             .await
             .map_err(|e| e.to_string())
     }
