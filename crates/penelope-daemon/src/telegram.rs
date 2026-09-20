@@ -233,8 +233,19 @@ fn fmt_usd(x: f64) -> String {
     s.replace('.', ",")
 }
 
-fn form_key(chat_id: i64) -> String {
-    format!("tg.form.{chat_id}")
+/// Clé du formulaire en cours, **par sujet** (issue #149). Un seul formulaire par chat,
+/// quel que soit le sujet, faisait qu'un formulaire ouvert dans un sujet avalait le texte
+/// tapé dans un autre, et répondait dans Général.
+fn form_key(chat_id: i64, topic_id: Option<i64>) -> String {
+    match topic_id {
+        Some(t) => format!("tg.form.{chat_id}.{t}"),
+        None => format!("tg.form.{chat_id}"),
+    }
+}
+
+/// Sujet où vit un formulaire, d'après sa charge : toutes ses phrases y retournent.
+fn form_topic(pending: &Value) -> Option<i64> {
+    pending["topic"].as_i64()
 }
 
 /// Durée de validité du bouton « Réessayer » d'un tour échoué.
@@ -777,7 +788,7 @@ impl TelegramGateway {
                     };
                 }
                 // Un formulaire d'étape `user` est en cours : ce message remplit le champ.
-                if let Some(raw) = self.daemon.kv_get(&form_key(chat_id)).await?
+                if let Some(raw) = self.form_pending(chat_id, topic_id).await?
                     && !raw.is_empty()
                 {
                     return self.form_input(chat_id, &raw, Some(&text)).await;
@@ -2638,6 +2649,7 @@ impl TelegramGateway {
         callback_id: &str,
         action: &penelope_telegram::actions::Action,
         chat_id: i64,
+        topic_id: Option<i64>,
         message_id: i64,
     ) -> anyhow::Result<()> {
         let run = action.target.as_str();
@@ -2654,7 +2666,7 @@ impl TelegramGateway {
                 return self
                     .reply(
                         chat_id,
-                        None,
+                        topic_id,
                         None,
                         "ℹ️ cette question n'est plus d'actualité",
                     )
@@ -2662,11 +2674,16 @@ impl TelegramGateway {
             };
             let state = match penelope_telegram::forms::FormState::new(visit, schema) {
                 Ok(st) => st,
-                Err(e) => return self.reply(chat_id, None, None, &format!("❌ {e}")).await,
+                Err(e) => {
+                    return self
+                        .reply(chat_id, topic_id, None, &format!("❌ {e}"))
+                        .await;
+                }
             };
-            let pending = json!({"run": run, "visit": visit, "choice": choice, "state": state});
+            let pending = json!({"run": run, "visit": visit, "choice": choice, "state": state,
+                       "topic": topic_id, "since": self.daemon.services.clock.now_rfc3339()});
             self.daemon
-                .kv_set(&form_key(chat_id), &pending.to_string())
+                .kv_set(&form_key(chat_id, topic_id), &pending.to_string())
                 .await?;
             return self.send_form_step(chat_id, &pending).await;
         }
@@ -2684,7 +2701,7 @@ impl TelegramGateway {
                 Err(e) => format!("ℹ️ {e}"),
             }
         };
-        self.reply(chat_id, None, None, &note).await
+        self.reply(chat_id, topic_id, None, &note).await
     }
 
     async fn model_pin_clicked(
@@ -3553,7 +3570,7 @@ impl TelegramGateway {
         {
             let _ = self.bot.answer_callback(callback_id, None, false).await;
             let _ = self.bot.edit_markup(chat_id, message_id, None).await;
-            return self.form_clicked(action, chat_id).await;
+            return self.form_clicked(action, chat_id, topic_id).await;
         }
         if let ClickOutcome::Accepted(action) = &outcome
             && action.action == k::REGENERATE
@@ -3567,7 +3584,7 @@ impl TelegramGateway {
             && action.args.get("visit").is_some()
         {
             return self
-                .workflow_choice_clicked(callback_id, action, chat_id, message_id)
+                .workflow_choice_clicked(callback_id, action, chat_id, topic_id, message_id)
                 .await;
         }
         // `answerCallbackQuery` d'abord : Telegram attend une réponse sous une seconde.
@@ -5046,6 +5063,33 @@ impl TelegramGateway {
             .map_err(|e| anyhow::anyhow!(e.to_string()))
     }
 
+    /// Formulaire en cours dans ce sujet. Une clé d'avant #149 (`tg.form.{chat}`, tous
+    /// sujets confondus) est reprise une dernière fois, puis réécrite par sujet.
+    async fn form_pending(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+    ) -> anyhow::Result<Option<String>> {
+        let d = &self.daemon;
+        let here = d.kv_get(&form_key(chat_id, topic_id)).await?;
+        if here.as_deref().is_some_and(|r| !r.is_empty()) || topic_id.is_none() {
+            return Ok(here);
+        }
+        let Some(legacy) = d
+            .kv_get(&form_key(chat_id, None))
+            .await?
+            .filter(|r| !r.is_empty())
+        else {
+            return Ok(here);
+        };
+        let mut pending: Value = serde_json::from_str(&legacy)?;
+        pending["topic"] = json!(topic_id);
+        d.kv_set(&form_key(chat_id, None), "").await?;
+        d.kv_set(&form_key(chat_id, topic_id), &pending.to_string())
+            .await?;
+        Ok(Some(pending.to_string()))
+    }
+
     /// Une réponse au champ courant (message ou bouton ; `None` : passer le champ).
     async fn form_input(
         &self,
@@ -5055,36 +5099,52 @@ impl TelegramGateway {
     ) -> anyhow::Result<()> {
         use penelope_telegram::forms::FormState;
         let mut pending: Value = serde_json::from_str(raw)?;
+        let topic = form_topic(&pending);
         let mut state: FormState = serde_json::from_value(pending["state"].clone())?;
         let applied = match answer {
             Some(a) => state.answer(a),
             None => state.skip(),
         };
         if let Err(e) = applied {
-            self.reply(chat_id, None, None, &format!("⚠️ {e}")).await?;
+            // L'erreur de validation retourne là où la carte vit, et dit où répondre :
+            // un formulaire ne lit que son propre sujet (issue #149).
+            let here = if topic.is_some() {
+                " — réponds **ici**, ou « ✖️ Abandonner »"
+            } else {
+                ""
+            };
+            self.reply(chat_id, topic, None, &format!("⚠️ {e}{here}"))
+                .await?;
             return self.send_form_step(chat_id, &pending).await;
         }
         pending["state"] = serde_json::to_value(&state)?;
         self.daemon
-            .kv_set(&form_key(chat_id), &pending.to_string())
+            .kv_set(&form_key(chat_id, topic), &pending.to_string())
             .await?;
         self.send_form_step(chat_id, &pending).await
     }
 
     /// Boutons d'un formulaire : passer, revenir, envoyer, abandonner.
-    async fn form_clicked(&self, action: &Action, chat_id: i64) -> anyhow::Result<()> {
+    async fn form_clicked(
+        &self,
+        action: &Action,
+        chat_id: i64,
+        topic_id: Option<i64>,
+    ) -> anyhow::Result<()> {
         use penelope_telegram::forms::FormState;
         let d = &self.daemon;
-        let Some(raw) = d
-            .kv_get(&form_key(chat_id))
+        let Some(raw) = self
+            .form_pending(chat_id, topic_id)
             .await?
             .filter(|r| !r.is_empty())
         else {
             return self
-                .reply(chat_id, None, None, "ℹ️ aucun formulaire en cours")
+                .reply(chat_id, topic_id, None, "ℹ️ aucun formulaire en cours")
                 .await;
         };
         let mut pending: Value = serde_json::from_str(&raw)?;
+        // Le sujet du formulaire prime sur celui du clic : la carte peut être ailleurs.
+        let topic_id = form_topic(&pending).or(topic_id);
         let mut state: FormState = serde_json::from_value(pending["state"].clone())?;
         match action.action.as_str() {
             k::FORM_NEXT => {
@@ -5095,11 +5155,12 @@ impl TelegramGateway {
             k::FORM_PREV => {
                 state.prev();
                 pending["state"] = serde_json::to_value(&state)?;
-                d.kv_set(&form_key(chat_id), &pending.to_string()).await?;
+                d.kv_set(&form_key(chat_id, topic_id), &pending.to_string())
+                    .await?;
                 self.send_form_step(chat_id, &pending).await
             }
             k::FORM_DECLINE => {
-                d.kv_set(&form_key(chat_id), "").await?;
+                d.kv_set(&form_key(chat_id, topic_id), "").await?;
                 if pending["workflow"].is_string() || pending["prompt"].is_object() {
                     return self
                         .reply(
@@ -5124,7 +5185,7 @@ impl TelegramGateway {
                 }
                 self.reply(
                     chat_id,
-                    None,
+                    topic_id,
                     None,
                     "✖️ Formulaire abandonné : la question du workflow reste ouverte \
                      (`/runs`).",
@@ -5135,16 +5196,17 @@ impl TelegramGateway {
                 let values = match state.submit() {
                     Ok(v) => v,
                     Err(e) => {
-                        self.reply(chat_id, None, None, &format!("⚠️ {e}")).await?;
+                        self.reply(chat_id, topic_id, None, &format!("⚠️ {e}"))
+                            .await?;
                         return self.send_form_step(chat_id, &pending).await;
                     }
                 };
-                d.kv_set(&form_key(chat_id), "").await?;
+                d.kv_set(&form_key(chat_id, topic_id), "").await?;
                 // Paramètres d'un workflow lancé depuis `/wf` ou `/run` (issue #30).
                 if let Some(workflow) = pending["workflow"].as_str() {
                     let origin = Origin::Telegram {
                         chat_id,
-                        topic_id: pending["topic"].as_i64(),
+                        topic_id,
                         message_id: None,
                     };
                     let note =
@@ -5158,7 +5220,7 @@ impl TelegramGateway {
                             ),
                             Err(e) => format!("❌ {e}"),
                         };
-                    return self.reply(chat_id, None, None, &note).await;
+                    return self.reply(chat_id, topic_id, None, &note).await;
                 }
                 // Arguments d'un prompt MCP (`/p`).
                 if let (Some(server), Some(prompt)) = (
@@ -5166,7 +5228,7 @@ impl TelegramGateway {
                     pending["prompt"]["name"].as_str(),
                 ) {
                     let note = match self
-                        .run_mcp_prompt(chat_id, None, server, prompt, values)
+                        .run_mcp_prompt(chat_id, topic_id, server, prompt, values)
                         .await
                     {
                         Ok(n) => {
@@ -5174,7 +5236,7 @@ impl TelegramGateway {
                         }
                         Err(e) => format!("❌ {e}"),
                     };
-                    return self.reply(chat_id, None, None, &note).await;
+                    return self.reply(chat_id, topic_id, None, &note).await;
                 }
                 if let Some(id) = pending["elicitation"].as_str() {
                     return self
@@ -5200,7 +5262,7 @@ impl TelegramGateway {
                     Ok(()) => "✔️ Formulaire transmis au workflow.".to_string(),
                     Err(e) => format!("ℹ️ {e}"),
                 };
-                self.reply(chat_id, None, None, &note).await
+                self.reply(chat_id, topic_id, None, &note).await
             }
         }
     }
@@ -5634,11 +5696,12 @@ impl TelegramGateway {
         let card = broker.request(id).and_then(|(_, c)| c).or(card);
         match broker.resolve(id, answer) {
             Ok(request) => {
-                if let Some(raw) = self.daemon.kv_get(&form_key(chat_id)).await?
+                let topic = self.elicitation_chat(&request).await.1;
+                if let Some(raw) = self.form_pending(chat_id, topic).await?
                     && serde_json::from_str::<Value>(&raw)
                         .is_ok_and(|p| p["elicitation"].as_str() == Some(id))
                 {
-                    self.daemon.kv_set(&form_key(chat_id), "").await?;
+                    self.daemon.kv_set(&form_key(chat_id, topic), "").await?;
                 }
                 let note = note.replace("{server}", &request.server);
                 self.elicitation_update(&request, card, &note, None).await?;
@@ -5702,13 +5765,18 @@ impl TelegramGateway {
                             }
                         };
                     let title: String = request.message.chars().take(80).collect();
+                    // Le formulaire vit là où la carte est arrivée (#143), pas dans le
+                    // chat tout entier (#149).
+                    let topic = self.elicitation_chat(&request).await.1;
                     let pending = json!({
                         "elicitation": request.id,
                         "choice": format!("{} · {title}", request.server),
                         "state": state,
+                        "topic": topic,
+                        "since": self.daemon.services.clock.now_rfc3339(),
                     });
                     self.daemon
-                        .kv_set(&form_key(chat_id), &pending.to_string())
+                        .kv_set(&form_key(chat_id, topic), &pending.to_string())
                         .await?;
                     let rows = vec![vec![
                         self.elicit_button("🚫 Refuser", k::ELICIT_DECLINE, &request)
@@ -7719,6 +7787,83 @@ mod tests {
     /// #113 : un groupe à sujets autorisé par son identifiant ; l'administrateur anonyme y
     /// ouvre une session par sujet, deux sujets travaillent en parallèle ; un groupe non
     /// listé est ignoré mais son identifiant est gardé pour `doctor` ; un tiers est ignoré.
+    /// #149 : un formulaire ouvert dans un sujet n'avale pas le texte tapé dans un autre,
+    /// et ses phrases reviennent dans **son** sujet. Le 20/09, « re test » tapé ailleurs
+    /// est parti remplir un formulaire Redmine, et l'erreur de validation est arrivée dans
+    /// Général.
+    #[tokio::test]
+    async fn a_form_lives_in_its_topic_and_swallows_nothing_from_another() {
+        let (_d, g, t, _p) = gateway().await;
+        let chat: i64 = -1_001_234_567_890;
+        let group = |update_id: i64, topic: i64, text: &str| {
+            let mut u = updates::in_topic(updates::text_message(update_id, 0, OWNER, text), topic);
+            u["message"]["chat"] = json!({
+                "id": chat, "type": "supergroup", "title": "Chantiers", "is_forum": true
+            });
+            u
+        };
+        g.daemon
+            .publish_config("test", |c| {
+                c.telegram.allowed_chats = vec![chat];
+                Ok(vec!["telegram.allowed_chats".into()])
+            })
+            .unwrap();
+
+        // Un formulaire à un champ booléen, ouvert dans le sujet 3.
+        let schema = json!({
+            "type": "object",
+            "properties": {"publier": {"type": "boolean", "title": "Publier ?"}},
+            "required": ["publier"],
+        });
+        let state = penelope_telegram::forms::FormState::new("redmine", schema).unwrap();
+        let pending = json!({"choice": "redmine · commentaire", "state": state, "topic": 3});
+        g.daemon
+            .kv_set(&form_key(chat, Some(3)), &pending.to_string())
+            .await
+            .unwrap();
+
+        // Un texte dans le sujet 552 : le formulaire du sujet 3 n'y touche pas.
+        g.process_update(&group(600, 552, "re test")).await.unwrap();
+        settle(&g).await;
+        let raw = g
+            .daemon
+            .kv_get(&form_key(chat, Some(3)))
+            .await
+            .unwrap()
+            .unwrap_or_default();
+        assert!(
+            raw.contains("\"cursor\":0"),
+            "le formulaire du sujet 3 a bougé : {raw}"
+        );
+        assert!(
+            g.daemon
+                .kv_get(&form_key(chat, Some(552)))
+                .await
+                .unwrap()
+                .unwrap_or_default()
+                .is_empty(),
+            "aucun formulaire n'a été ouvert dans le sujet 552"
+        );
+
+        // Un texte qui ne vaut pas un booléen, tapé dans le sujet du formulaire :
+        // l'avertissement revient dans le sujet 3, jamais dans Général.
+        g.process_update(&group(601, 3, "re test")).await.unwrap();
+        settle(&g).await;
+        let _ = g.flush_outbox().await;
+        let warned: Vec<Option<i64>> = t
+            .calls_to("sendMessage")
+            .await
+            .into_iter()
+            .filter(|p| p["text"].as_str().is_some_and(|x| x.contains("booléen")))
+            .map(|p| p["message_thread_id"].as_i64())
+            .collect();
+        assert_eq!(
+            warned,
+            [Some(3)],
+            "l'erreur de validation reste dans le sujet du formulaire"
+        );
+    }
+
     #[tokio::test]
     async fn a_topic_group_listed_by_id_accepts_the_anonymous_admin() {
         let (_d, g, t, _p) = gateway().await;

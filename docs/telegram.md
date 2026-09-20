@@ -177,6 +177,17 @@ alphabétique, pour que l'ordre soit stable d'une fois sur l'autre.
 Un champ à la fois, avec sa valeur par défaut préremplie et sa progression affichée. Les
 saisies sont validées contre le schéma avant d'être acceptées.
 
+**Un formulaire vit dans son sujet.** La carte, les invites de champ, les erreurs de
+validation, le récapitulatif et l'issue restent dans le chat et le sujet où le formulaire
+s'est ouvert ; rien ne repart dans Général. Un formulaire ne lit que **son** sujet : un
+message tapé ailleurs va à la session de ce sujet-là, il n'est jamais pris pour une
+réponse. Deux formulaires peuvent donc être ouverts en même temps dans deux sujets (#149).
+Avant, un seul formulaire existait par chat : celui ouvert dans un sujet avalait le texte
+tapé dans un autre, et répondait dans Général.
+
+Un formulaire oublié ouvert retient le texte de son sujet : `penelope doctor` signale
+(`telegram_forms`) ceux qui attendent depuis plus d'une heure, avec leur sujet.
+
 Depuis Bot API 9.3, un brouillon est proposé dans la zone de saisie plutôt que dans un
 message : la réponse se corrige avant envoi.
 

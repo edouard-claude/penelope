@@ -8,7 +8,7 @@ Dernière mise à jour : 20 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1595 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1596 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1976,6 +1976,25 @@ restés plus d'une heure en `0.17.23`, puis deux sessions ont livré en parallè
 - Pas fait, et assumé : le contrôle `doctor` « tag sans release depuis 30 min ». Il
   demanderait au daemon d'interroger la liste des tags GitHub, pour une panne dont la cause
   — un tag posé sans release — disparaît avec ce lot ; l'état se lit dans l'onglet Actions.
+
+#### Formulaires Telegram par sujet (#149)
+
+La carte de confirmation MCP arrivait dans le bon sujet depuis #143 ; ce qui la suivait,
+non. Le 20/09, « Accepter » sur une carte Redmine du sujet 3 a fait partir l'erreur de
+validation dans Général, et « re test », tapé dans un autre sujet, a été pris pour la
+réponse au formulaire — avalé, jamais arrivé à sa session.
+
+- **La clé porte le sujet** : `tg.form.{chat}.{sujet}` (le chat seul en privé). Une clé
+  d'avant est reprise une dernière fois puis réécrite par sujet, rien à migrer à la main.
+- **Toutes les phrases du flux** — invite de champ, erreur de validation, récapitulatif,
+  issue, « aucun formulaire en cours » — partent dans le sujet du formulaire, que la
+  charge transporte. Onze envois sans sujet corrigés, sur les trois chemins (élicitation
+  MCP, paramètres de workflow, écran de prompt MCP).
+- **La capture du texte entrant est bornée au sujet** du formulaire : un message tapé
+  ailleurs va à sa session. Deux formulaires peuvent vivre en parallèle dans deux sujets.
+- L'erreur de validation dit maintenant où répondre (« réponds **ici**, ou ✖️ Abandonner »).
+- `penelope doctor` (`telegram_forms`) signale un formulaire ouvert depuis plus d'une heure,
+  avec son sujet : il retient le texte tapé là.
 
 ### Routine de livraison
 

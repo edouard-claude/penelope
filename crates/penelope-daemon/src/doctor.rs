@@ -225,6 +225,9 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
         )
     });
 
+    // Formulaires Telegram restés ouverts (#149).
+    checks.push(open_forms_check(s).await);
+
     // Magasin de secrets : un aller-retour de 8 Ko, la taille d'un Grant (#148).
     checks.push(secret_roundtrip_check(s));
 
@@ -250,6 +253,56 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     }
 
     checks
+}
+
+/// #149 : un formulaire en cours retient le texte tapé dans son sujet. Oublié ouvert, il
+/// avale les messages du propriétaire sans que rien ne le dise. Au-delà d'une heure, il
+/// est signalé avec son sujet.
+pub async fn open_forms_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "telegram_forms";
+    const LABEL: &str = "Formulaires Telegram en cours";
+    const STALE_MS: i64 = 3_600_000;
+    let rows: Vec<(String, String)> = s
+        .store
+        .read(|c| {
+            let mut st = c.prepare("SELECT k, v FROM kv WHERE k LIKE 'tg.form.%' AND v != ''")?;
+            let r = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(r.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .unwrap_or_default();
+    let now = s.clock.now_ms();
+    let mut stale: Vec<String> = Vec::new();
+    for (key, raw) in &rows {
+        let pending: serde_json::Value = serde_json::from_str(raw).unwrap_or_default();
+        let since = pending["since"]
+            .as_str()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.timestamp_millis());
+        // Sans horodatage (formulaire ouvert avant #149), on ne présume rien.
+        if since.is_some_and(|t| now - t > STALE_MS) {
+            let place = key.rsplit_once('.').map(|(_, t)| t).unwrap_or_default();
+            stale.push(format!(
+                "{} (sujet {place}, depuis {})",
+                pending["choice"].as_str().unwrap_or("formulaire"),
+                pending["since"].as_str().unwrap_or("?")
+            ));
+        }
+    }
+    if stale.is_empty() {
+        return DoctorCheck::ok(ID, LABEL, format!("{} en cours, aucun oublié", rows.len()));
+    }
+    DoctorCheck::fail(
+        ID,
+        LABEL,
+        format!(
+            "{} ouvert(s) depuis plus d'une heure : {}. Ils retiennent le texte tapé dans \
+             leur sujet",
+            stale.len(),
+            stale.join(" ; ")
+        ),
+        Some("les abandonner depuis leur carte (« ✖️ Abandonner »)".into()),
+    )
 }
 
 /// #148 : le magasin de secrets acceptait les clés d'API et refusait un `Grant` de 4 Ko,

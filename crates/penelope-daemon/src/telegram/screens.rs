@@ -2334,8 +2334,11 @@ impl TelegramGateway {
                         "prompt": {"server": server, "name": prompt},
                         "choice": format!("{server} · {prompt}"),
                         "state": state,
+                        "topic": topic_id,
+                        "since": d.services.clock.now_rfc3339(),
                     });
-                    d.kv_set(&form_key(chat_id), &pending.to_string()).await?;
+                    d.kv_set(&form_key(chat_id, topic_id), &pending.to_string())
+                        .await?;
                     self.send_form_step(chat_id, &pending).await?;
                     Done::quiet(format!("Arguments de {prompt}"))
                 } else {
@@ -2411,10 +2414,10 @@ impl TelegramGateway {
         let state = penelope_telegram::forms::FormState::new(workflow, schema)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         // Le sujet d'origine suit le formulaire : le run y parlera (issue #35).
-        let pending =
-            json!({"workflow": workflow, "choice": title, "state": state, "topic": topic_id});
+        let pending = json!({"workflow": workflow, "choice": title, "state": state, "topic": topic_id,
+                   "since": self.daemon.services.clock.now_rfc3339()});
         self.daemon
-            .kv_set(&form_key(chat_id), &pending.to_string())
+            .kv_set(&form_key(chat_id, topic_id), &pending.to_string())
             .await?;
         self.send_form_step(chat_id, &pending).await
     }
