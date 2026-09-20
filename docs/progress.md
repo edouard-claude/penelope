@@ -1858,10 +1858,12 @@ entrée de mémoire porte un fait (#145).
   données financières personnelles : une carte, jamais une écriture. `penelope doctor`
   liste les entrées actives au-delà de la borne et le Cœur au-delà de son budget.
 
-### 0.17.29
+### 0.17.30
 
-Deux chantiers dans la même release : l'import de skills tierces, et la fuite de jetons du
-Trousseau (#146, #148).
+Trois chantiers dans la même release : l'import de skills tierces, la fuite de jetons du
+Trousseau, et le test qui bloquait la livraison (#146, #148, #151). Les versions 0.17.28
+et 0.17.29 n'ont jamais été publiées — la première faute de tag, la seconde parce que sa
+vérification de release est tombée sur le test de #151 ; leurs notes sont ici.
 
 #### Skills tierces (#146)
 
@@ -1930,6 +1932,25 @@ recopie plus ce qu'il refusait (#148).
   les cinq lignes du 20/09 n'attendent pas les quatre-vingt-dix jours de rétention.
 - `penelope doctor` écrit, relit et efface un secret de 8 Ko (`secret_roundtrip`), et
   `providers.codex.client_version` passe à `0.149.0` (le catalogue en dépend).
+
+#### Livraison débloquée (#151)
+
+La vérification de release de la `v0.17.29` échouait sur un seul test, alors que la CI de
+`main` était verte sur le même commit.
+
+- **Le test mesurait un état de processus** : `purge::messages_already_queued_are_redacted_again`
+  (ajouté par #148) comptait les lignes réécrites par `reredact_outbox`. Le rédacteur de
+  secrets est global au binaire de test ; `a_real_stdio_server_runs_under_the_sandbox`,
+  réservé à macOS, lui apprend des valeurs en lançant un vrai serveur MCP, et une ligne
+  ordinaire se retrouvait réécrite elle aussi : 2 au lieu de 1. Le test vérifie désormais
+  **ses** deux lignes, et ses attentes passent par `redact` elles aussi — quoi que le
+  rédacteur ait appris, une ligne en file vaut exactement ce qu'il en fait. Vérifié en
+  simulant la pollution : l'ancienne forme échoue, la nouvelle passe.
+- **La CI de `main` lance la suite complète sur macOS**, comme la vérification de release.
+  Elle ne lançait que deux tests filtrés : une release pouvait donc découvrir rouge ce que
+  `main` avait dit vert, et les tests réservés à macOS ne tournaient jamais dans le même
+  processus que les autres — précisément la condition qui fait apparaître ce genre de
+  couplage.
 
 ### Routine de livraison
 

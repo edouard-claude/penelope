@@ -522,10 +522,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            reredact_outbox(&d).await.unwrap(),
-            1,
-            "la ligne fautive, pas l'autre"
+        assert!(
+            reredact_outbox(&d).await.unwrap() >= 1,
+            "la ligne fautive est réécrite"
         );
         let rows: Vec<String> = d
             .services
@@ -537,8 +536,22 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(!rows[0].contains("7b22616363657373"), "{}", rows[0]);
-        assert!(rows[1].contains("bonjour"), "message ordinaire intact");
+        // Ce sont **ces deux lignes** qui comptent, jamais un total : le rédacteur est un
+        // état de processus, qu'un autre test du même binaire alimente (issue #151). Les
+        // attentes passent donc par `redact` elles aussi : quoi qu'il ait appris, une
+        // ligne en file doit valoir exactement ce que le rédacteur en fait.
+        let ordinaire = r#"{"chat_id":1,"text":"bonjour"}"#;
+        assert!(
+            !rows[0].contains("7b22616363657373"),
+            "hexadécimal resté en file : {}",
+            rows[0]
+        );
+        assert_eq!(rows[0], penelope_observe::redact(&payload));
+        assert_eq!(
+            rows[1],
+            penelope_observe::redact(ordinaire),
+            "un message ordinaire n'est pas réécrit autrement que par le rédacteur"
+        );
 
         // Une seule fois : la passe suivante ne relit rien.
         assert_eq!(reredact_outbox(&d).await.unwrap(), 0);
