@@ -1857,7 +1857,14 @@ mod tests {
     /// une commande composée ; une famille déclarée passe sans demande.
     #[tokio::test]
     async fn shell_commands_are_classified_before_asking() {
-        for read in ["ls -la /tmp", "cat x", "grep -r foo src"] {
+        for read in [
+            "ls -la /tmp",
+            "cat x",
+            "grep -r foo src",
+            // #141 : un tube vers une lecture pure reste une lecture.
+            "grep -rn foo src | head -20",
+            "cat x | wc -l",
+        ] {
             let (_dir, _d, out) = shell_turn(read, None, &[]).await;
             assert!(!asked(&out), "{read} : {out:?}");
         }
@@ -2072,8 +2079,24 @@ mod tests {
         d.services.turns.complete(&turn).await.unwrap();
         assert!(!asked(&out), "même famille : {out:?}");
 
-        // Un pipe hors guillemets reste un enchaînement : il redemande.
-        p.push(call("glab api h \"p\" | sh", "c3"));
+        // Le tube vers une lecture pure passe par la même règle : c'est `glab` qui agit,
+        // `jq` ne fait que formater (commentaire de #141). Huit « Toujours » cliqués pour
+        // rien en cinq minutes venaient de là.
+        p.push(call(
+            "glab api --hostname h \"pipelines?per_page=30\" | jq -r '.[].id'",
+            "c3",
+        ));
+        p.reply("Voilà.");
+        d.enqueue_message(&sid, "les pipelines", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        let out = d.run_turn(&turn).await;
+        d.services.turns.complete(&turn).await.unwrap();
+        assert!(!asked(&out), "tube de lecture pure : {out:?}");
+
+        // Un tube vers autre chose qu'une lecture reste un enchaînement : il redemande.
+        p.push(call("glab api h \"p\" | sh", "c4"));
         d.enqueue_message(&sid, "et ça", &Origin::Cli, None)
             .await
             .unwrap();

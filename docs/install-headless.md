@@ -882,13 +882,23 @@ ligne reste composée. Le modèle a de toute façon le paramètre `cwd` de `shel
 
 **Ce qui compte comme enchaînement.** Une ligne est dite *composée* — donc jamais une
 lecture, sans famille, et hors de portée d'une règle ou d'une famille déclarée — quand
-elle porte, **hors guillemets**, un opérateur (`;`, `&`, `&&`, `|`, `(`, `)`) ou une
+elle porte, **hors guillemets**, un opérateur (`;`, `&`, `&&`, `||`, `(`, `)`) ou une
 redirection (`>`, `<`) ; une substitution (`$(…)`, `` `…` ``, `$VAR`) ou un échappement
 (`\`), même entre guillemets doubles, où ils gardent leur pouvoir dans un shell ; un saut
 de ligne ; une négation (`!` en tête) ; une apostrophe ou un guillemet non fermé ; ou une
 affectation d'environnement qui détourne ce qui sera exécuté (`PATH=`, `HOME=`, `IFS=`,
 `ENV=`, `BASH_ENV=`, `DYLD_*`, `LD_*`, `GIT_CONFIG*`, `GIT_SSH_COMMAND=`, `NODE_OPTIONS=`,
 `PYTHONSTARTUP=`, `PERL5OPT=`, `RUBYOPT=`…).
+
+**Un tube vers une lecture pure n'est pas un enchaînement.** `glab api … | jq -r '…'`,
+`cat f | grep x | head -20`, `ls | wc -l` : ce qui agit est la première étape, et les
+suivantes ne peuvent que lire. La famille est donc celle de la première étape (une règle
+`glab` couvre `glab api …` comme `glab api … | jq …`), et une lecture qui traverse un tel
+tube reste une lecture. Les étapes acceptées sont `jq` (sans `-f`, `--rawfile`,
+`--slurpfile`), `cat` (sans fichier), `grep`, `egrep`, `fgrep`, `rg` (sans `--pre`),
+`head`, `tail`, `cut`, `sort` (sans `-o`), `wc`, `uniq`, `tr`, `nl`, `rev`, `column`. Tout
+le reste — `| sh`, `| xargs`, `| tee`, `| python`, `| sed`, un `||`, une redirection —
+laisse la ligne composée.
 
 Entre guillemets, ces caractères ne sont que des caractères : `glab api --hostname
 gitlab.example "projects?membership=true&per_page=100"` est de la famille `glab`, pas un

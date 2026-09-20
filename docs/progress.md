@@ -1700,10 +1700,19 @@ lectures se décident sur un seul découpage de ligne (#141).
   (`GITLAB_HOST=…`) restent signalées inutiles par `rule_note`, à retirer d'un bouton
   dans `/policies`. Une famille créée est désormais vérifiée à l'écriture : si elle ne se
   relit pas comme elle a été écrite, aucune règle n'est créée (régression de #111).
-- Neuf tests nouveaux : le lexer forme par forme, la famille créée puis appliquée à la
-  commande suivante (le même découpage écrit la règle et la reconnaît, régression de
-  #111), la famille déclarée avec réseau, les lectures entre guillemets, et la carte qui
-  annonce l'absence de règle.
+- **Un tube vers une lecture pure n'est plus un enchaînement** (#141, second constat du
+  20/09 : neuf cartes en cinq minutes, huit « Toujours » cliqués, zéro règle, sur des
+  `glab api … | jq -r '…'`). Ce qui agit est la première étape ; les suivantes ne peuvent
+  que lire. La famille est celle de la tête (une règle `glab` couvre `glab api …` comme
+  `glab api … | jq …`), et une lecture qui traverse un tel tube reste une lecture.
+  Acceptées : `jq` (sans `-f`, `--rawfile`, `--slurpfile`), `cat` sans fichier, `grep`,
+  `egrep`, `fgrep`, `rg` sans `--pre`, `head`, `tail`, `cut`, `sort` sans `-o`, `wc`,
+  `uniq`, `tr`, `nl`, `rev`, `column`. `| sh`, `| xargs`, `| tee`, `| python`, `| sed`,
+  `||`, une redirection ou une substitution restent composés.
+- Onze tests nouveaux : le lexer forme par forme, le tube dans les deux sens, la famille
+  créée puis appliquée à la commande suivante (le même découpage écrit la règle et la
+  reconnaît, régression de #111), la famille déclarée avec réseau, les lectures entre
+  guillemets, et la carte qui annonce l'absence de règle.
 - Reste ouvert, hors de ce lot : `gh api`/`glab api` en GET, `glab repo|mr list|view`,
   `gh pr list|view`, `git ls-remote` et `git fetch` en classe lecture **avec** réseau
   (commentaire de #111), et une règle sans réseau qui couvrirait un appel `network: true`

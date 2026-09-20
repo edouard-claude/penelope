@@ -11,11 +11,17 @@
 //! calculé sur une chaîne puis appliqué à une autre est la cause de #130.
 //!
 //! Ce qui reste **composé**, et ne peut donc ni avoir de famille ni être une lecture :
-//! un opérateur hors guillemets (`;`, `&`, `|`, `<`, `>`, `(`, `)`), une substitution
+//! un opérateur hors guillemets (`;`, `&`, `<`, `>`, `(`, `)`, `||`), une substitution
 //! (`$`, `` ` ``) ou un échappement (`\`) hors apostrophes — donc même entre guillemets
 //! doubles, où ils gardent leur pouvoir —, un saut de ligne, une négation (`!` en tête),
 //! des guillemets non fermés, ou une affectation d'environnement qui détourne
 //! l'interpréteur (`PATH=`, `LD_PRELOAD=`, `NODE_OPTIONS=`…).
+//!
+//! Un **tube vers une lecture pure** fait exception (commentaire de #141) : `glab api … |
+//! jq -r '…'` prend la famille de sa première étape, parce que `jq`, `grep`, `head`,
+//! `cat`, `wc` et consorts ne peuvent ni écrire ni lancer autre chose. Huit « Toujours »
+//! cliqués pour rien en cinq minutes venaient de là. `| sh`, `| xargs`, `| tee`,
+//! `| python` ou une option qui écrit (`sort -o`, `jq --rawfile`) restent composés.
 
 /// Une ligne de commande simple : les affectations d'environnement qui la précèdent, puis
 /// le programme et ses arguments, guillemets retirés.
@@ -40,8 +46,45 @@ const OPERATORS: &[char] = &[';', '&', '|', '<', '>', '(', ')', '\n', '\r'];
 /// une ligne qui en porte reste composée où qu'ils soient, sauf entre apostrophes.
 const EXPANSION: &[char] = &['$', '`', '\\'];
 
-/// Découpe une ligne simple. `None` si elle est composée (voir l'en-tête du module).
+/// Une ligne de commande utilisable : une commande, et les filtres de lecture pure dans
+/// lesquels sa sortie est éventuellement versée.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pipeline {
+    /// Première étape : c'est elle qui agit, et qui donne la famille.
+    pub head: SimpleCommand,
+    /// Étapes suivantes, toutes des filtres de lecture pure.
+    pub filters: Vec<SimpleCommand>,
+}
+
+/// Découpe une ligne, tube de lectures pures compris. `None` si elle est composée.
+pub fn pipeline(line: &str) -> Option<Pipeline> {
+    let mut stages = scan(line)?.into_iter();
+    let head = command_of(stages.next()?)?;
+    let mut filters = Vec::new();
+    for stage in stages {
+        let c = command_of(stage)?;
+        // Une étape qui peut écrire, lancer autre chose, ou porter un environnement, rend
+        // la ligne composée : seule la lecture pure se laisse traverser.
+        if !is_pure_filter(&c) {
+            return None;
+        }
+        filters.push(c);
+    }
+    Some(Pipeline { head, filters })
+}
+
+/// Découpe une ligne **d'une seule commande**. `None` si elle est composée, tube compris.
 pub fn simple(line: &str) -> Option<SimpleCommand> {
+    let mut stages = scan(line)?;
+    if stages.len() != 1 {
+        return None;
+    }
+    command_of(stages.pop()?)
+}
+
+/// Étapes d'une ligne, en mots. `None` dès qu'un opérateur autre que le tube paraît.
+fn scan(line: &str) -> Option<Vec<Vec<String>>> {
+    let mut stages: Vec<Vec<String>> = Vec::new();
     let mut words: Vec<String> = Vec::new();
     let mut word = String::new();
     // Un mot peut être vide (`""`) : il faut le distinguer de « pas de mot en cours ».
@@ -72,6 +115,20 @@ pub fn simple(line: &str) -> Option<SimpleCommand> {
                     }
                 }
             }
+            // Tube : une étape de plus. `||` est un enchaînement, pas un tube.
+            '|' => {
+                if chars.as_str().starts_with('|') {
+                    return None;
+                }
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+                if words.is_empty() {
+                    return None;
+                }
+                stages.push(std::mem::take(&mut words));
+            }
             c if OPERATORS.contains(&c) || EXPANSION.contains(&c) => return None,
             c if c.is_whitespace() => {
                 if started {
@@ -88,10 +145,21 @@ pub fn simple(line: &str) -> Option<SimpleCommand> {
     if started {
         words.push(word);
     }
+    // Un tube sans dernière étape (`ls |`) ne s'exécute pas : il ne se classe pas non plus.
+    if words.is_empty() && !stages.is_empty() {
+        return None;
+    }
+    stages.push(words);
+    Some(stages)
+}
+
+/// Une étape, une fois ses mots connus : ses affectations de tête, puis son programme.
+fn command_of(words: Vec<String>) -> Option<SimpleCommand> {
     // `! cmd` nie le code de retour d'un pipeline : la ligne n'est pas celle qu'on lit.
     if words.first().is_some_and(|w| w == "!") {
         return None;
     }
+    let mut words = words;
     let mut assignments = Vec::new();
     let mut i = 0;
     while let Some((name, value)) = words.get(i).and_then(|w| split_assignment(w)) {
@@ -105,6 +173,44 @@ pub fn simple(line: &str) -> Option<SimpleCommand> {
     }
     let words = words.split_off(i);
     Some(SimpleCommand { assignments, words })
+}
+
+/// Une étape de tube qui ne peut que lire : ni écriture, ni exécution, ni environnement.
+///
+/// La liste est courte et explicite (commentaire de #141) ; tout le reste — `sh`, `xargs`,
+/// `tee`, `python`, `sed` (qui écrit avec `-i` et `w`) — laisse la ligne composée.
+fn is_pure_filter(c: &SimpleCommand) -> bool {
+    if !c.assignments.is_empty() {
+        return false;
+    }
+    let Some(program) = c.program() else {
+        return false;
+    };
+    let args = &c.words[1..];
+    let has = |bad: &[&str]| {
+        args.iter().any(|w| {
+            bad.iter()
+                .any(|b| w == b || (b.starts_with("--") && w.starts_with(&format!("{b}="))))
+        })
+    };
+    match program {
+        "grep" | "egrep" | "fgrep" | "head" | "tail" | "cut" | "wc" | "uniq" | "tr" | "nl"
+        | "rev" | "column" => true,
+        // Un `cat` de fin de tube ne sert qu'à dérouler la sortie ; avec un fichier, il
+        // lit autre chose que ce que la première étape a produit.
+        "cat" => args.iter().all(|a| a.starts_with('-')),
+        "jq" => !has(&[
+            "-f",
+            "--from-file",
+            "--rawfile",
+            "--slurpfile",
+            "--args",
+            "--jsonargs",
+        ]),
+        "sort" => !has(&["-o", "--output"]),
+        "rg" => !has(&["--pre"]),
+        _ => false,
+    }
 }
 
 /// Famille de commandes d'une règle (`cargo test`, `glab`) : ses mots, ou `None` si elle
@@ -193,7 +299,6 @@ mod tests {
             "cargo test; rm -rf ~",
             "cargo test && curl https://exfil.example",
             "ls | sh",
-            "glab api h \"p\" | jq -r '.[].path'",
             "cat x > y",
             "cat < x",
             "echo $(rm -rf ~)",
@@ -212,6 +317,51 @@ mod tests {
         ] {
             assert!(simple(composed).is_none(), "{composed}");
         }
+    }
+
+    /// Commentaire de #141 : un tube dont toutes les étapes suivantes ne font que lire
+    /// garde la famille de sa première étape ; une étape qui écrit ou lance autre chose
+    /// compose la ligne.
+    #[test]
+    fn a_pipe_into_pure_reads_keeps_the_family_of_its_first_stage() {
+        let p = pipeline("glab api --hostname h \"pipelines?per_page=30\" | jq -r '.[].id'")
+            .expect("tube de lecture");
+        assert_eq!(p.head.program(), Some("glab"));
+        assert_eq!(p.head.words[1], "api");
+        assert_eq!(p.filters.len(), 1);
+        assert_eq!(p.filters[0].program(), Some("jq"));
+
+        for read in [
+            "glab api h \"p\" | cat",
+            "glab api h \"p\" | grep -inE \"error|failed\"",
+            "cat f | grep x | head -20 | wc -l",
+            "ls | sort | uniq -c",
+            "git log | tr -d x | cut -c1-20",
+        ] {
+            let p = pipeline(read).unwrap_or_else(|| panic!("{read}"));
+            assert!(!p.filters.is_empty(), "{read}");
+        }
+        // Ce qui écrit, lance autre chose, ou lit ailleurs, reste composé.
+        for composed in [
+            "glab api h \"p\" | sh",
+            "glab api h \"p\" | xargs rm",
+            "glab api h \"p\" | tee /tmp/x",
+            "glab api h \"p\" | python3 -",
+            "glab api h \"p\" | sed -i s/a/b/ f",
+            "cat f | jq --rawfile x /etc/passwd .",
+            "cat f | sort -o /tmp/vol",
+            "cat f | cat /etc/passwd",
+            "cat f | rg --pre danger x",
+            "cat f | grep x > sortie",
+            "cat f || rm -rf ~",
+            "ls |",
+            "| ls",
+            "cat f | TZ=UTC grep x",
+        ] {
+            assert!(pipeline(composed).is_none(), "{composed}");
+        }
+        // `simple` reste strict : une seule commande, pas de tube.
+        assert!(simple("cat f | grep x").is_none());
     }
 
     /// Les affectations de tête : la famille est celle du programme, sauf quand la
