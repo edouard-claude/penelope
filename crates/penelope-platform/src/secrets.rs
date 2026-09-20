@@ -13,6 +13,60 @@ use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// Découpage d'un secret trop long pour être écrit d'un bloc (issue #148).
+///
+/// `security -i`, sur macOS, n'accepte que 4 096 octets par ligne : au-delà, la fin de la
+/// ligne est relue comme des commandes, et `security` en recopie des morceaux — donc du
+/// secret — dans sa sortie d'erreur. Le `Grant` Codex (#142), premier secret de plusieurs
+/// kilo-octets, a fait sortir cinq messages de jetons en clair sur Telegram.
+///
+/// La valeur est donc écrite en plusieurs items, et un item de tête dit combien. Un
+/// secret court garde sa forme d'avant : la lecture reste compatible.
+pub mod chunks {
+    /// Longueur maximale d'une commande envoyée à `security -i` ; la limite réelle est de
+    /// 4 096 octets, la marge couvre les variantes de version.
+    pub const MAX_LINE_BYTES: usize = 4_000;
+    /// Nombre de morceaux admis : 64 × ~1,9 Ko, bien au-delà du plus gros secret connu.
+    pub const MAX_CHUNKS: usize = 64;
+    /// Marque de l'item de tête d'un secret découpé. Le caractère de contrôle en tête la
+    /// rend impossible à confondre avec une clé d'API ou un JSON.
+    pub const MARK: &str = "\u{1}penelope-chunks:v1:";
+
+    pub fn header(count: usize) -> String {
+        format!("{MARK}{count}")
+    }
+
+    /// Nombre de morceaux annoncé par un item de tête, s'il en est un.
+    pub fn count(head: &str) -> Option<usize> {
+        head.strip_prefix(MARK)?
+            .parse::<usize>()
+            .ok()
+            .filter(|n| *n > 0 && *n <= MAX_CHUNKS)
+    }
+
+    /// Découpe une valeur en morceaux d'au plus `budget` octets, sans couper un caractère
+    /// UTF-8 en deux.
+    pub fn split(value: &str, budget: usize) -> Vec<String> {
+        let budget = budget.max(1);
+        let mut parts = Vec::new();
+        let mut rest = value;
+        while !rest.is_empty() {
+            if rest.len() <= budget {
+                parts.push(rest.to_string());
+                break;
+            }
+            let mut cut = budget;
+            while cut > 0 && !rest.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            let (head, tail) = rest.split_at(cut.max(1).min(rest.len()));
+            parts.push(head.to_string());
+            rest = tail;
+        }
+        parts
+    }
+}
+
 pub trait SecretStore: Send + Sync {
     /// Nom du backend actif (`penelope secret backend`).
     fn backend(&self) -> String;
@@ -350,6 +404,55 @@ mod tests {
                 "accepté à tort : {bad:?}"
             );
         }
+    }
+
+    /// #148 : un secret de plusieurs kilo-octets passe la borne d'une ligne `security`
+    /// en morceaux, et une valeur courte garde la forme d'avant (lecture compatible).
+    #[test]
+    fn a_long_value_is_cut_into_readable_chunks() {
+        use chunks::{MAX_CHUNKS, count, header, split};
+
+        // L'en-tête se relit, et rien d'autre ne passe pour un en-tête.
+        assert_eq!(count(&header(3)), Some(3));
+        for bad in [
+            "",
+            "sk-or-v1-abcdef",
+            "{\"access_token\":\"…\"}",
+            &header(0),
+        ] {
+            assert_eq!(count(bad), None, "`{bad}` n'est pas un en-tête");
+        }
+        assert_eq!(count(&header(MAX_CHUNKS + 1)), None, "borne du nombre");
+
+        // Découpe : morceaux bornés, concaténation fidèle.
+        let value = "a".repeat(16 * 1024);
+        let parts = split(&value, 1_800);
+        assert_eq!(parts.len(), 10);
+        assert!(parts.iter().all(|p| p.len() <= 1_800));
+        assert_eq!(parts.concat(), value);
+
+        // Jamais un caractère UTF-8 coupé en deux : « é » fait deux octets.
+        let accents = "é".repeat(100);
+        let parts = split(&accents, 7);
+        assert!(parts.iter().all(|p| p.len() <= 7));
+        assert_eq!(parts.concat(), accents, "reconstruction exacte");
+    }
+
+    /// #148 : le contrat d'un magasin de secrets ne dépend pas de la taille de la valeur.
+    /// Le `Grant` Codex fait 4 Ko ; ce test en prend 16.
+    #[test]
+    fn a_store_holds_a_sixteen_kilobyte_secret() {
+        let s = MemorySecretStore::new();
+        let big = format!(
+            "{{\"access_token\":\"{}\",\"refresh_token\":\"{}\"}}",
+            "e".repeat(8 * 1024),
+            "r".repeat(8 * 1024)
+        );
+        s.set("codex.oauth", &big).unwrap();
+        assert_eq!(s.get("codex.oauth").unwrap().as_deref(), Some(big.as_str()));
+        assert_eq!(s.list().unwrap(), ["codex.oauth"], "un seul nom logique");
+        s.delete("codex.oauth").unwrap();
+        assert_eq!(s.get("codex.oauth").unwrap(), None);
     }
 
     #[test]

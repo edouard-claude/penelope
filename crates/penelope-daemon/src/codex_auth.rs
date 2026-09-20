@@ -107,18 +107,63 @@ pub fn load(s: &Services) -> Result<Option<Grant>, String> {
 /// Écrit la connexion, et masque ses jetons dans les journaux **à chaque rotation**
 /// (issue #26) : un jeton neuf non enregistré finirait en clair dans une trace.
 pub fn store(s: &Services, g: &Grant) -> Result<(), String> {
+    let json = serde_json::to_string(g).map_err(|e| e.to_string())?;
     for token in [&g.access_token, &g.refresh_token, &g.id_token] {
         if !token.is_empty() {
             penelope_observe::register_secret(token);
         }
     }
+    // Le magasin écrit la valeur **en hexadécimal** ; c'est sous cette forme qu'elle est
+    // ressortie en clair quand l'écriture a échoué (issue #148). Les deux formes sont donc
+    // connues du rédacteur **avant** la première tentative.
+    penelope_observe::register_secret(&json);
+    penelope_observe::register_secret(&hex(&json));
     s.platform
         .secrets
-        .set(
-            SECRET,
-            &serde_json::to_string(g).map_err(|e| e.to_string())?,
-        )
+        .set(SECRET, &json)
         .map_err(|e| e.to_string())
+}
+
+fn hex(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Révoque les jetons d'une connexion côté OpenAI. Appelée quand le rangement échoue :
+/// une session d'appareil ouverte que Pénélope ne sait plus joindre reste utilisable par
+/// quiconque a vu les jetons passer (issue #148).
+pub async fn revoke(s: &Services, g: &Grant) -> bool {
+    let cfg = s.config.config();
+    let c = &cfg.providers.codex;
+    let Ok(client) = http() else {
+        return false;
+    };
+    let mut done = false;
+    for token in [&g.refresh_token, &g.access_token] {
+        if token.is_empty() {
+            continue;
+        }
+        let sent = client
+            .post(format!("{}/oauth/revoke", c.issuer))
+            .form(&[
+                ("client_id", c.client_id.as_str()),
+                ("token", token.as_str()),
+            ])
+            .send()
+            .await;
+        done |= sent.is_ok_and(|r| r.status().is_success());
+    }
+    let _ = s
+        .events
+        .append(EventDraft::new(
+            "llm.provider_tokens_revoked",
+            json!({"provider": "codex", "ok": done}),
+        ))
+        .await;
+    done
 }
 
 /// Identifiant d'installation, créé au premier besoin puis stable.
@@ -285,7 +330,24 @@ pub async fn wait_for(s: &Services, login: &DeviceLogin) -> Result<Grant, String
             return Err(format!("échange du code refusé ({status}) : {tokens}"));
         }
         let grant = grant_from_tokens(&tokens, None, s.clock.now_ms())?;
-        store(s, &grant)?;
+        // Connexion réussie mais rangement impossible : ne rien laisser d'ouvert côté
+        // OpenAI, et ne jamais recopier la raison brute — elle a déjà contenu les jetons
+        // (issue #148).
+        if let Err(e) = store(s, &grant) {
+            tracing::error!(error = %penelope_observe::redact(&e), "rangement de la connexion Codex");
+            let revoked = revoke(s, &grant).await;
+            return Err(format!(
+                "connexion annulée : les jetons n'ont pas pu être rangés dans le magasin \
+                 de secrets, {}. Détail dans le journal ; relancer `penelope model auth \
+                 codex` une fois le magasin réparé (`penelope doctor`).",
+                if revoked {
+                    "ils ont été révoqués, rien à faire de ton côté"
+                } else {
+                    "et leur révocation a échoué : révoquer la session d'appareil dans \
+                     les réglages de sécurité ChatGPT"
+                }
+            ));
+        }
         s.events
             .append(EventDraft::new(
                 "llm.provider_connected",

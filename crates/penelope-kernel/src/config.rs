@@ -316,7 +316,9 @@ pub struct Codex {
     /// sans raison donne un 403 sur toutes les requêtes.
     pub originator: String,
     /// Version de client annoncée (`User-Agent`, `?client_version=`). Épinglée, mise à
-    /// jour à la main quand le backend exige plus récent.
+    /// jour à la main quand le backend exige plus récent : le catalogue et certains
+    /// identifiants de modèle en dépendent, et une version trop ancienne en fait
+    /// disparaître (issue #148).
     pub client_version: String,
     /// Silence toléré pendant un flux, comme pour OpenRouter.
     pub stream_idle_timeout: String,
@@ -344,7 +346,7 @@ impl Default for Codex {
             issuer: "https://auth.openai.com".into(),
             client_id: "app_EMoamEEZ73f0CkXaXp7hrann".into(),
             originator: "codex_cli_rs".into(),
-            client_version: "0.104.0".into(),
+            client_version: "0.149.0".into(),
             stream_idle_timeout: "120s".into(),
             request_retries: 3,
             reasoning_summary: "auto".into(),

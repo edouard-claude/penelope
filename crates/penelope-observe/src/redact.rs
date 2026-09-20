@@ -163,21 +163,38 @@ pub fn redact(input: &str) -> String {
 /// Jeton long et aléatoire (clé sans préfixe connu, recopiée d'un fichier) : 40
 /// caractères au moins, trois familles de caractères, entropie élevée. Masqué dans les
 /// journaux, les événements et les demandes stockées ; jamais dans ce qui s'exécute, et
-/// pas dans le filtre d'écriture de la mémoire (#132). Un hachage hexadécimal, un chemin
-/// ou un identifiant court ne passent pas ces tests (issue #134).
+/// pas dans le filtre d'écriture de la mémoire (#132). Un chemin ou un identifiant court
+/// ne passent pas ces tests (issue #134).
+///
+/// Une longue suite **hexadécimale** est masquée à part : elle n'a que deux familles de
+/// caractères, donc les règles ci-dessus la laissaient passer, et c'est sous cette forme
+/// qu'un `Grant` de 4 Ko est parti en clair sur Telegram (issue #148). Seule exception,
+/// une suite de **64 caractères exactement** : c'est une empreinte SHA-256, qui a sa place
+/// dans un journal.
 fn redact_random_tokens(s: &str) -> String {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re =
         RE.get_or_init(|| Regex::new(r"[A-Za-z0-9+=_*~!$-]{40,}").expect("motif de jeton valide"));
     re.replace_all(s, |c: &regex::Captures<'_>| {
         let t = &c[0];
-        if looks_random(t) {
+        if looks_random(t) || looks_hex_blob(t) {
             MASK.to_string()
         } else {
             t.to_string()
         }
     })
     .into_owned()
+}
+
+/// Longueur d'une empreinte SHA-256 en hexadécimal : la seule suite hexadécimale longue
+/// qu'on laisse passer.
+const SHA256_HEX_LEN: usize = 64;
+
+/// Suite hexadécimale assez longue pour être une valeur encodée, pas une empreinte.
+fn looks_hex_blob(t: &str) -> bool {
+    let n = t.len();
+    // Strictement plus long qu'une empreinte : 64 caractères exactement restent lisibles.
+    n > SHA256_HEX_LEN && t.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Trois familles parmi minuscules, majuscules, chiffres et symboles (hors `-` et `_`,
@@ -529,6 +546,35 @@ mod tests {
         let ident = "1234567890123456";
         assert!(!luhn(ident));
         assert!(redact(&format!("ref {ident}")).contains(ident));
+    }
+
+    /// #148 : le `Grant` Codex est parti en clair parce qu'il était **en hexadécimal** :
+    /// deux familles de caractères seulement, donc invisible aux règles d'entropie. Une
+    /// empreinte SHA-256, elle, reste lisible.
+    #[test]
+    fn a_long_hex_run_is_masked_but_a_sha256_digest_is_not() {
+        let grant = "7b22616363657373".repeat(200);
+        assert!(grant.len() > 3_000);
+        let red = redact(&format!("security: unknown command \"{grant}"));
+        assert!(
+            !red.contains("7b22616363657373"),
+            "hexadécimal en clair : {red}"
+        );
+        assert!(red.contains(MASK), "{red}");
+
+        // 64 caractères exactement : une empreinte, on la garde.
+        let digest = "a3f1".repeat(16);
+        assert_eq!(digest.len(), 64);
+        let line = format!("skill revue-de-code body_hash {digest}");
+        assert_eq!(redact(&line), line, "une empreinte reste lisible");
+
+        // 65 et plus : ce n'est plus une empreinte.
+        let long = format!("{digest}b");
+        assert!(redact(&long).contains(MASK), "{long}");
+
+        // Ce qui n'est pas de l'hexadécimal n'est pas concerné par cette règle.
+        let path = "/Users/edouard/Library/Application-Support/Penelope/secret-names.json";
+        assert_eq!(redact(path), path);
     }
 
     #[test]

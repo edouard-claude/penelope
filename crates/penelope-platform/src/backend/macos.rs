@@ -2,6 +2,7 @@
 
 use crate::dirs::{Dir, Directories, home_dir};
 use crate::sandbox::{Coverage, Profile, Sandbox, Wrapped, seatbelt_profile};
+use crate::secrets::chunks::{self, MAX_CHUNKS, MAX_LINE_BYTES};
 use crate::secrets::{EncryptedFileStore, SecretStore};
 use crate::service::{SERVICE_LABEL, ServiceManager, ServiceStatus, launchd_plist};
 use crate::{PlatformError, Result};
@@ -52,12 +53,18 @@ pub fn native_directories() -> Result<Box<dyn Directories>> {
 
 // ------------------------------------------------------------------ secrets
 
+/// Chemin du binaire du Trousseau.
+const SECURITY: &str = "/usr/bin/security";
+
 /// Trousseau macOS piloté par `/usr/bin/security` (exécutable, jamais un shell).
 pub struct KeychainStore {
     account: String,
     /// Index des noms (jamais les valeurs) : `dump-keychain` demanderait un
     /// déverrouillage interactif, impossible en headless.
     index: PathBuf,
+    /// `/usr/bin/security`, sauf en test : de quoi vérifier que l'échec d'écriture ne
+    /// recopie rien de la valeur (issue #148).
+    program: PathBuf,
 }
 
 impl KeychainStore {
@@ -65,6 +72,15 @@ impl KeychainStore {
         KeychainStore {
             account: "penelope".into(),
             index: data_dir.join("secret-names.json"),
+            program: PathBuf::from(SECURITY),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_program(data_dir: &Path, program: &Path) -> Self {
+        KeychainStore {
+            program: program.to_path_buf(),
+            ..Self::new(data_dir)
         }
     }
 
@@ -89,48 +105,47 @@ impl KeychainStore {
 
     /// Vrai si le binaire `security` est disponible et le trousseau accessible.
     pub fn available() -> bool {
-        Path::new("/usr/bin/security").is_file()
+        Path::new(SECURITY).is_file()
     }
 }
 
-impl SecretStore for KeychainStore {
-    fn backend(&self) -> String {
-        "Trousseau macOS (security)".into()
-    }
-
-    fn get(&self, name: &str) -> Result<Option<String>> {
-        let out = Command::new("/usr/bin/security")
+impl KeychainStore {
+    /// Lit un item du trousseau, par son service exact.
+    fn read_item(&self, service: &str) -> Option<String> {
+        let out = Command::new(&self.program)
             .args([
                 "find-generic-password",
                 "-a",
                 &self.account,
                 "-s",
-                &self.service(name),
+                service,
                 "-w",
             ])
             .stderr(Stdio::null())
             .output()
-            .map_err(|e| PlatformError::Secret(format!("security : {e}")))?;
-        if !out.status.success() {
-            return Ok(None);
-        }
-        let v = String::from_utf8_lossy(&out.stdout).trim_end().to_string();
-        Ok(Some(v))
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim_end().to_string())
     }
 
-    fn set(&self, name: &str, value: &str) -> Result<()> {
+    /// Écrit un item. **La sortie de `security` n'est jamais recopiée** : elle contient
+    /// des morceaux de la ligne envoyée, donc du secret lui-même (issue #148).
+    fn write_item(&self, service: &str, value: &str) -> Result<()> {
         use std::io::Write;
-        crate::secrets::validate_secret_name(name)?;
-        // La valeur ne passe jamais en argument : `ps` et `sysctl(KERN_PROCARGS2)` la
-        // liraient depuis tout processus du même utilisateur, bac à sable compris
-        // (issue #95). `security -i` lit la commande sur son entrée standard, la valeur en
-        // hexadécimal (`-X`) : rien à échapper.
-        let (line, hex) = add_command(&self.account, &self.service(name), value);
-        let mut child = Command::new("/usr/bin/security")
+        let line = add_command(&self.account, service, value);
+        if line.len() > MAX_LINE_BYTES {
+            return Err(PlatformError::Secret(format!(
+                "valeur trop longue pour le Trousseau ({} octets une fois en hexadécimal, \
+                 maximum {MAX_LINE_BYTES} par commande)",
+                line.len()
+            )));
+        }
+        let mut child = Command::new(&self.program)
             .arg("-i")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::null())
             .spawn()
             .map_err(|e| PlatformError::Secret(format!("security : {e}")))?;
         if let Some(mut stdin) = child.stdin.take() {
@@ -142,13 +157,81 @@ impl SecretStore for KeychainStore {
             .wait_with_output()
             .map_err(|e| PlatformError::Secret(format!("security : {e}")))?;
         if !out.status.success() {
-            let err = String::from_utf8_lossy(&out.stderr)
-                .replace(&hex, "…")
-                .replace(value, "…");
             return Err(PlatformError::Secret(format!(
-                "écriture dans le Trousseau refusée : {}",
-                err.trim()
+                "écriture dans le Trousseau refusée (security, code {}) ; trousseau \
+                 verrouillé, ou item protégé par une autre application",
+                out.status.code().unwrap_or(-1)
             )));
+        }
+        Ok(())
+    }
+
+    fn remove_item(&self, service: &str) -> bool {
+        Command::new(&self.program)
+            .args([
+                "delete-generic-password",
+                "-a",
+                &self.account,
+                "-s",
+                service,
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|st| st.success())
+            .unwrap_or(false)
+    }
+
+    fn chunk_service(&self, name: &str, i: usize) -> String {
+        format!("{}#{i}", self.service(name))
+    }
+}
+
+impl SecretStore for KeychainStore {
+    fn backend(&self) -> String {
+        "Trousseau macOS (security)".into()
+    }
+
+    fn get(&self, name: &str) -> Result<Option<String>> {
+        let Some(head) = self.read_item(&self.service(name)) else {
+            return Ok(None);
+        };
+        // Item unique écrit par une version antérieure : rendu tel quel.
+        let Some(count) = chunks::count(&head) else {
+            return Ok(Some(head));
+        };
+        let mut out = String::new();
+        for i in 0..count {
+            let service = self.chunk_service(name, i);
+            let part = self.read_item(&service).ok_or_else(|| {
+                PlatformError::Secret(format!(
+                    "secret `{name}` incomplet : morceau {i} sur {count} introuvable"
+                ))
+            })?;
+            out.push_str(&part);
+        }
+        Ok(Some(out))
+    }
+
+    fn set(&self, name: &str, value: &str) -> Result<()> {
+        crate::secrets::validate_secret_name(name)?;
+        // `security -i` n'accepte que 4 096 octets par ligne : au-delà, le reste de la
+        // ligne est relu comme des commandes, et `security` recopie ces morceaux — donc
+        // le secret — dans sa sortie d'erreur (issue #148). Une valeur trop longue est
+        // donc découpée, et chaque morceau tient dans sa propre commande.
+        let head = self.service(name);
+        let fits = add_command(&self.account, &head, value).len() <= MAX_LINE_BYTES
+            && chunks::count(value).is_none();
+        // Les morceaux d'une écriture précédente ne doivent pas survivre à celle-ci.
+        self.drop_chunks(name);
+        if fits {
+            self.write_item(&head, value)?;
+        } else {
+            let parts = chunks::split(value, self.chunk_budget(name));
+            for (i, part) in parts.iter().enumerate() {
+                self.write_item(&self.chunk_service(name, i), part)?;
+            }
+            self.write_item(&head, &chunks::header(parts.len()))?;
         }
         let mut names = self.read_index();
         if !names.iter().any(|n| n == name) {
@@ -160,17 +243,8 @@ impl SecretStore for KeychainStore {
     }
 
     fn delete(&self, name: &str) -> Result<()> {
-        let _ = Command::new("/usr/bin/security")
-            .args([
-                "delete-generic-password",
-                "-a",
-                &self.account,
-                "-s",
-                &self.service(name),
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        self.drop_chunks(name);
+        self.remove_item(&self.service(name));
         let mut names = self.read_index();
         names.retain(|n| n != name);
         self.write_index(&names)
@@ -178,6 +252,31 @@ impl SecretStore for KeychainStore {
 
     fn list(&self) -> Result<Vec<String>> {
         Ok(self.read_index())
+    }
+}
+
+impl KeychainStore {
+    /// Octets de valeur par morceau, d'après la longueur de la commande une fois le nom
+    /// posé : l'hexadécimal double la taille.
+    fn chunk_budget(&self, name: &str) -> usize {
+        let overhead = add_command(&self.account, &self.chunk_service(name, MAX_CHUNKS), "").len();
+        (MAX_LINE_BYTES - overhead) / 2
+    }
+
+    /// Retire les morceaux d'un secret, s'il en avait.
+    fn drop_chunks(&self, name: &str) {
+        let known = self
+            .read_item(&self.service(name))
+            .as_deref()
+            .and_then(chunks::count);
+        // Sans en-tête lisible, on balaie jusqu'au premier manquant : un secret écrit
+        // puis interrompu ne doit pas laisser de morceaux derrière lui.
+        let upper = known.unwrap_or(MAX_CHUNKS);
+        for i in 0..upper {
+            if !self.remove_item(&self.chunk_service(name, i)) && known.is_none() {
+                break;
+            }
+        }
     }
 }
 
@@ -256,19 +355,16 @@ impl Sandbox for SeatbeltSandbox {
     }
 }
 
-/// Commande `add-generic-password` pour `security -i`, valeur en hexadécimal, et cet
-/// hexadécimal (à retirer d'un message d'erreur). Compte et service sont des noms validés
-/// (`[A-Za-z0-9_.-]`) : aucun guillemet à poser.
-fn add_command(account: &str, service: &str, value: &str) -> (String, String) {
+/// Commande `add-generic-password` pour `security -i`, valeur en hexadécimal. Compte et
+/// service sont des noms validés (`[A-Za-z0-9_.-]`, plus `#` pour les morceaux) : aucun
+/// guillemet à poser.
+fn add_command(account: &str, service: &str, value: &str) -> String {
     let hex: String = value
         .as_bytes()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    (
-        format!("add-generic-password -a {account} -s {service} -U -X {hex}\n"),
-        hex,
-    )
+    format!("add-generic-password -a {account} -s {service} -U -X {hex}\n")
 }
 
 pub fn sandbox() -> Box<dyn Sandbox> {
@@ -578,8 +674,14 @@ mod tests {
     #[test]
     fn a_secret_goes_through_stdin_in_hex() {
         let value = "a \"b\" \\c $HOME é";
-        let (line, hex) = add_command("penelope", "penelope.essai", value);
+        let line = add_command("penelope", "penelope.essai", value);
         assert!(!line.contains(value) && !line.contains("HOME"), "{line}");
+        let hex = line
+            .trim_end()
+            .rsplit(' ')
+            .next()
+            .expect("hexadécimal en fin de commande")
+            .to_string();
         assert_eq!(
             line,
             format!("add-generic-password -a penelope -s penelope.essai -U -X {hex}\n")
@@ -745,5 +847,72 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&dns.stderr)
         );
+    }
+
+    /// #148 : le 20/09, `security` a recopié des morceaux de la ligne reçue — donc du
+    /// secret — dans sa sortie d'erreur, et cette sortie est partie sur Telegram. Ici un
+    /// faux `security` fait exactement cela : le message rendu ne doit rien en garder.
+    #[test]
+    fn a_failing_security_never_leaks_the_value_into_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("faux-security");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ncat >&2\necho 'security: unknown command' >&2\nexit 1\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let store = KeychainStore::with_program(dir.path(), &fake);
+        let value = "jeton-tres-secret-0123456789";
+        let err = store.set("essai", value).unwrap_err().to_string();
+
+        assert!(!err.contains(value), "valeur en clair : {err}");
+        let hex: String = value.bytes().map(|b| format!("{b:02x}")).collect();
+        for n in (8..=hex.len()).step_by(8) {
+            assert!(
+                !err.contains(&hex[..n]),
+                "fragment hexadécimal de {n} caractères : {err}"
+            );
+        }
+        assert!(!err.contains("unknown command"), "sortie recopiée : {err}");
+        assert!(err.contains("Trousseau"), "{err}");
+    }
+
+    /// #148 : le vrai Trousseau, avec un secret de 16 Ko. Écrit un item réel, donc
+    /// `#[ignore]` : `cargo test -p penelope-platform -- --ignored keychain`.
+    #[test]
+    #[ignore = "écrit dans le Trousseau de l'utilisateur"]
+    fn keychain_holds_a_long_secret_and_forgets_it() {
+        if !KeychainStore::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let store = KeychainStore::new(dir.path());
+        let name = "penelope.test.gros-secret";
+        let value = format!(
+            "{{\"access_token\":\"{}\",\"refresh_token\":\"{}\"}}",
+            "e".repeat(8 * 1024),
+            "r".repeat(8 * 1024)
+        );
+
+        store.set(name, &value).expect("écriture");
+        assert_eq!(store.get(name).unwrap().as_deref(), Some(value.as_str()));
+        assert_eq!(store.list().unwrap(), [name], "un seul nom logique");
+
+        // Réécriture plus courte : les morceaux de la version longue ne survivent pas.
+        store.set(name, "court").expect("réécriture");
+        assert_eq!(store.get(name).unwrap().as_deref(), Some("court"));
+        assert!(
+            store.read_item(&store.chunk_service(name, 0)).is_none(),
+            "morceau resté derrière"
+        );
+
+        store.delete(name).expect("suppression");
+        assert_eq!(store.get(name).unwrap(), None);
+        assert!(store.list().unwrap().is_empty());
     }
 }

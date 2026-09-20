@@ -158,6 +158,24 @@ instance d'essai qui ne doit pas y toucher, forcer le fichier chiffré :
 Un fichier `mcp.d/*.toml` référence un secret par `${SECRET:nom}` dans ses en-têtes ou son
 environnement : la valeur n'apparaît jamais dans la configuration ni dans un journal.
 
+**Les secrets longs.** `security`, le binaire du Trousseau, n'accepte que 4 096 octets par
+commande. Au-delà, la fin était relue comme des commandes et `security` en recopiait des
+morceaux dans sa sortie d'erreur : c'est ainsi qu'un `Grant` Codex de 4 Ko est parti en
+clair sur Telegram le 20/09 (#148). Une valeur trop longue est désormais écrite en
+plusieurs items (`penelope.<nom>#0`, `#1`, …) avec un item de tête qui dit combien ;
+`penelope secret list` ne montre que le nom logique, `get` réassemble et `rm` efface tout.
+Les secrets courts gardent leur forme d'avant : rien à migrer. Une écriture refusée ne
+recopie **jamais** la sortie de `security`, seulement son code de retour.
+
+`penelope doctor` écrit, relit et efface un secret de 8 Ko (`secret_roundtrip`) : un
+Trousseau verrouillé se voit avant qu'un vrai secret le rencontre.
+
+**Si un secret est parti en clair.** `penelope doctor` le signale (`stored_secrets`,
+`logs_secrets`). Dans l'ordre : révoquer ou renouveler le secret à la source, supprimer les
+messages concernés dans la conversation Telegram, et laisser le passage d'entretien
+réécrire les lignes déjà en file — il repasse le rédacteur sur `tg_outbox` une fois, avec
+les règles du jour, sans attendre les quatre-vingt-dix jours de rétention.
+
 ## 5. Configuration
 
 ```bash
@@ -298,7 +316,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `providers.codex.issuer` | `"https://auth.openai.com"` | Serveur d'autorisation du compte ChatGPT. |
 | `providers.codex.client_id` | `"app_EMoamEEZ73f0CkXaXp7hrann"` | Identifiant du client OAuth, celui de Codex CLI. |
 | `providers.codex.originator` | `"codex_cli_rs"` | En-tête `originator` envoyé au backend. Le serveur filtre cette valeur : la changer sans raison donne un 403 sur toutes les requêtes. |
-| `providers.codex.client_version` | `"0.104.0"` | Version de client annoncée (`User-Agent`, `?client_version=`). Épinglée, mise à jour à la main quand le backend exige plus récent. |
+| `providers.codex.client_version` | `"0.149.0"` | Version de client annoncée (`User-Agent`, `?client_version=`). Épinglée, mise à jour à la main quand le backend exige plus récent : le catalogue et certains identifiants de modèle en dépendent, et une version trop ancienne en fait disparaître (issue #148). |
 | `providers.codex.stream_idle_timeout` | `"120s"` | Silence toléré pendant un flux, comme pour OpenRouter. |
 | `providers.codex.request_retries` | `3` | Nouvelles tentatives sur erreur transitoire avant le flux (5xx, coupure). Un 429 de quota n'est jamais rejoué. |
 | `providers.codex.reasoning_summary` | `"auto"` | Résumé de raisonnement demandé (`auto`, `concise`, `detailed`, ou vide). |

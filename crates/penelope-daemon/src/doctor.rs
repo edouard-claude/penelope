@@ -225,6 +225,9 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
         )
     });
 
+    // Magasin de secrets : un aller-retour de 8 Ko, la taille d'un Grant (#148).
+    checks.push(secret_roundtrip_check(s));
+
     // Dépendances des skills tierces : listées, jamais installées (#146).
     checks.push(skill_requirements_check(s).await);
 
@@ -247,6 +250,65 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     }
 
     checks
+}
+
+/// #148 : le magasin de secrets acceptait les clés d'API et refusait un `Grant` de 4 Ko,
+/// en recopiant ses jetons dans le message d'erreur. Le contrôle écrit, relit et efface
+/// un secret de 8 Ko : la panne se voit avant qu'un secret la rencontre.
+pub fn secret_roundtrip_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "secret_roundtrip";
+    const LABEL: &str = "Magasin de secrets : aller-retour de 8 Ko";
+    const NAME: &str = "penelope.doctor.roundtrip";
+    let value = "x".repeat(8 * 1024);
+    let store = &s.platform.secrets;
+    // L'essai ne laisse rien derrière lui, quelle que soit l'étape qui échoue.
+    let fail = |detail: String| {
+        let _ = store.delete(NAME);
+        DoctorCheck::fail(
+            ID,
+            LABEL,
+            detail,
+            Some(
+                "déverrouiller le Trousseau (`security unlock-keychain`), ou forcer le \
+                 repli fichier chiffré avec `PENELOPE_SECRETS=file`"
+                    .into(),
+            ),
+        )
+    };
+    if let Err(e) = store.set(NAME, &value) {
+        return fail(format!(
+            "écriture refusée : {}",
+            penelope_observe::redact(&e.to_string())
+        ));
+    }
+    match store.get(NAME) {
+        Ok(Some(back)) if back == value => {}
+        Ok(Some(back)) => {
+            return fail(format!(
+                "relecture différente : {} octets écrits, {} relus",
+                value.len(),
+                back.len()
+            ));
+        }
+        Ok(None) => return fail("écrit puis introuvable".into()),
+        Err(e) => {
+            return fail(format!(
+                "relecture refusée : {}",
+                penelope_observe::redact(&e.to_string())
+            ));
+        }
+    }
+    if let Err(e) = store.delete(NAME) {
+        return fail(format!(
+            "suppression refusée : {}",
+            penelope_observe::redact(&e.to_string())
+        ));
+    }
+    DoctorCheck::ok(
+        ID,
+        LABEL,
+        format!("{} : 8 Ko écrits, relus, effacés", store.backend()),
+    )
 }
 
 /// #146 : une skill importée déclare ses dépendances (`requires: [pip:…, npm:…, bin:…]`).
@@ -703,7 +765,12 @@ pub async fn stored_secret_check(s: &Services) -> DoctorCheck {
             shown.join(" ; "),
             if found.len() > 5 { " ; …" } else { "" }
         ),
-        Some("renouveler les secrets exposés ; les lignes partent avec la rétention".into()),
+        Some(
+            "renouveler ou révoquer les secrets exposés, puis supprimer les messages \
+             correspondants dans la conversation Telegram ; les lignes de la file sont \
+             réécrites par le rédacteur au prochain passage d'entretien (#148)"
+                .into(),
+        ),
     )
 }
 

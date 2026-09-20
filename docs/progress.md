@@ -8,7 +8,7 @@ Dernière mise à jour : 20 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1589 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1594 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1894,6 +1894,37 @@ vocabulaire et leurs dépendances nommées (#146).
   seul. Chaque crate qui dépend de `zip` déclare donc aussi `flate2` en `rust_backend`
   (`miniz_oxide`, en Rust, MIT) ; les dorsales que `zip` propose tireraient `zlib-rs`, sous
   licence Zlib, que `cargo deny` refuse.
+
+### 0.17.29
+
+Un secret de plusieurs kilo-octets entre dans le Trousseau, et un échec d'écriture ne
+recopie plus ce qu'il refusait (#148).
+
+- **La fuite** (#148) : `security -i` n'accepte que 4 096 octets par ligne. Le `Grant`
+  Codex (#142), ≈ 4 Ko, soit ≈ 8 Ko en hexadécimal, dépassait la limite ; `security`
+  relisait la fin de la ligne comme des commandes et en recopiait des morceaux dans sa
+  sortie d'erreur, que Pénélope envoyait au propriétaire : cinq messages Telegram, les
+  trois jetons en clair, rien de stocké donc rien à révoquer.
+- **Stockage en morceaux** : au-delà de la borne, la valeur est écrite en plusieurs items
+  (`penelope.<nom>#0`, `#1`, …) derrière un item de tête qui dit combien ; `get`
+  réassemble, `delete` efface tout, `list` ne montre que le nom logique, et un secret court
+  garde la forme d'avant (lecture compatible, rien à migrer). Une réécriture plus courte ne
+  laisse pas de morceau derrière elle.
+- **Plus jamais la sortie de `security`** : le message d'échec ne porte que le code de
+  retour et la marche à suivre. Un test avec un faux `security` qui recopie son entrée
+  vérifie qu'aucun fragment de la valeur, ni de son hexadécimal, n'atteint le message.
+- **Le rédacteur voit l'hexadécimal** : une suite hexadécimale de plus de 64 caractères est
+  masquée, quelle que soit sa classe de caractères (les règles d'entropie en exigeaient
+  trois, l'hexadécimal n'en a que deux). Une empreinte SHA-256, 64 caractères exactement,
+  reste lisible. `doctor stored_secrets` en hérite, et le `Grant` est enregistré comme
+  secret connu **sous ses deux formes** avant la première tentative d'écriture.
+- **Rien d'ouvert derrière** : si le rangement échoue après une connexion réussie, les
+  jetons sont révoqués côté OpenAI et le message le dit. Un message d'échec de plus de 500
+  caractères est tronqué avant l'envoi, avec renvoi au journal.
+- **Le passage d'entretien repasse le rédacteur** sur les lignes déjà en file, une fois :
+  les cinq lignes du 20/09 n'attendent pas les quatre-vingt-dix jours de rétention.
+- `penelope doctor` écrit, relit et efface un secret de 8 Ko (`secret_roundtrip`), et
+  `providers.codex.client_version` passe à `0.149.0` (le catalogue en dépend).
 
 ### Routine de livraison
 

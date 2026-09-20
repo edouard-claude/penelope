@@ -389,6 +389,11 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
         tracing::warn!(error = %e, "sauvegarde nocturne");
     }
 
+    // Messages déjà en file, rédigés avec les règles du jour : une seule fois (#148).
+    if let Err(e) = crate::purge::reredact_outbox(d).await {
+        tracing::warn!(error = %e, "relecture du rédacteur sur la file Telegram");
+    }
+
     // Rétention des traces : une passe par jour (issue #46).
     if let Err(e) = crate::purge::retention_tick(d).await {
         tracing::warn!(error = %e, "rétention");

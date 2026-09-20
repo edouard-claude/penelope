@@ -6190,8 +6190,15 @@ impl TelegramGateway {
                     && let Some(t) = v.as_str()
                 {
                     let red = penelope_observe::redact(t);
-                    if red != t {
-                        *v = Value::String(red);
+                    // Un message d'échec ne se lit pas sur cinq bulles, et une erreur
+                    // bavarde recopie ce qu'elle n'aurait pas dû voir : le détail reste
+                    // au journal (issue #148).
+                    let cut = shorten_failure(&red);
+                    if cut != t {
+                        if cut != red {
+                            tracing::warn!(error = %red, "échec tronqué avant envoi");
+                        }
+                        *v = Value::String(cut);
                     }
                 }
             }
@@ -6845,6 +6852,20 @@ impl crate::elicitation::OwnerChannel for TelegramGateway {
             tracing::warn!(error = %e, "rappel d'élicitation non envoyé");
         }
     }
+}
+
+/// Longueur au-delà de laquelle un message d'échec est tronqué (issue #148).
+const MAX_FAILURE_CHARS: usize = 500;
+
+/// Tronque un message d'échec — par convention, ceux qui commencent par ❌ — en renvoyant
+/// au journal pour le détail. Les autres messages passent intacts : une réponse longue du
+/// modèle part en document, elle ne se coupe pas ici.
+fn shorten_failure(text: &str) -> String {
+    if !text.trim_start().starts_with('❌') || text.chars().count() <= MAX_FAILURE_CHARS {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(MAX_FAILURE_CHARS).collect();
+    format!("{head}…\n\n(message tronqué ; détail dans `penelope logs`)")
 }
 
 #[async_trait::async_trait]
@@ -12783,6 +12804,28 @@ mod tests {
         assert_eq!(sent.len(), 2);
         assert_eq!(sent[1]["text"], "a b c");
         assert!(sent[1].get("parse_mode").is_none());
+    }
+
+    /// #148 : un échec bavard ne part pas en cinq bulles. Le message est coupé et renvoie
+    /// au journal ; une réponse ordinaire, même longue, n'est pas touchée.
+    #[test]
+    fn a_long_failure_is_cut_and_points_at_the_log() {
+        let long = format!("❌ Connexion abandonnée : {}", "détail ".repeat(400));
+        let cut = shorten_failure(&long);
+        assert!(
+            cut.chars().count() < 600,
+            "{} caractères",
+            cut.chars().count()
+        );
+        assert!(cut.starts_with("❌ Connexion abandonnée"), "{cut}");
+        assert!(cut.contains("penelope logs"), "{cut}");
+
+        let court = "❌ Modèle inconnu";
+        assert_eq!(shorten_failure(court), court);
+
+        // Une réponse du modèle n'est pas un échec : elle passe entière.
+        let reponse = "Voici le plan détaillé. ".repeat(400);
+        assert_eq!(shorten_failure(&reponse), reponse);
     }
 
     #[tokio::test]

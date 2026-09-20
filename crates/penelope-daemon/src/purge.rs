@@ -410,6 +410,50 @@ pub async fn retention(d: &Daemon) -> anyhow::Result<Value> {
 }
 
 /// Une passe de rétention par jour, appelée par le superviseur.
+/// Repasse le rédacteur sur les messages déjà en file (issue #148).
+///
+/// Le 20/09, cinq lignes de `tg_outbox` ont gardé un `Grant` Codex en hexadécimal :
+/// `redact` ne reconnaissait pas cette forme, et la rétention les aurait laissées quatre-
+/// vingt-dix jours. Les règles ont changé ; les lignes déjà écrites, non. Une passe, une
+/// fois, les réécrit avec les règles du jour.
+pub async fn reredact_outbox(d: &Daemon) -> anyhow::Result<usize> {
+    const FLAG: &str = "outbox.reredacted.v1";
+    if d.kv_get(FLAG).await?.is_some() {
+        return Ok(0);
+    }
+    let fixed = d
+        .services
+        .store
+        .write(|tx| {
+            let rows: Vec<(String, String)> = {
+                let mut st = tx.prepare("SELECT id, payload FROM tg_outbox")?;
+                let r = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                r.collect::<Result<Vec<_>, _>>()?
+            };
+            let mut n = 0;
+            for (id, payload) in rows {
+                let red = penelope_observe::redact(&payload);
+                if red != payload {
+                    tx.execute(
+                        "UPDATE tg_outbox SET payload = ?2 WHERE id = ?1",
+                        params![id, red],
+                    )?;
+                    n += 1;
+                }
+            }
+            Ok(n)
+        })
+        .await?;
+    d.kv_set(FLAG, &fixed.to_string()).await?;
+    if fixed > 0 {
+        tracing::warn!(
+            lignes = fixed,
+            "messages déjà en file réécrits par le rédacteur : les considérer comme exposés"
+        );
+    }
+    Ok(fixed)
+}
+
 pub async fn retention_tick(d: &Daemon) -> anyhow::Result<()> {
     let now = d.services.clock.now_ms();
     let last = d
@@ -446,6 +490,58 @@ mod tests {
                 .unwrap(),
         );
         (dir, Arc::new(Daemon::from_services(s)), test_clock)
+    }
+
+    /// #148 : les lignes déjà en file sont repassées au rédacteur, une seule fois. Le
+    /// `Grant` du 20/09 y était en hexadécimal, forme que `redact` ignorait.
+    #[tokio::test]
+    async fn messages_already_queued_are_redacted_again() {
+        let (_dir, d, _clock) = daemon().await;
+        let grant_hex = "7b22616363657373".repeat(200);
+        let payload = format!(
+            r#"{{"chat_id":1,"text":"❌ Connexion abandonnée : security: unknown command \"{grant_hex}"}}"#
+        );
+        let now = d.services.clock.now_rfc3339();
+        let p2 = payload.clone();
+        d.services
+            .store
+            .write(move |tx| {
+                for (id, body) in [
+                    ("o_1", p2.as_str()),
+                    ("o_2", r#"{"chat_id":1,"text":"bonjour"}"#),
+                ] {
+                    tx.execute(
+                        "INSERT INTO tg_outbox(id, chat_id, method, payload, state, attempts,
+                            not_before, created_at)
+                         VALUES(?1, 1, 'sendMessage', ?2, 'sent', 0, ?3, ?3)",
+                        params![id, body, now],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            reredact_outbox(&d).await.unwrap(),
+            1,
+            "la ligne fautive, pas l'autre"
+        );
+        let rows: Vec<String> = d
+            .services
+            .store
+            .read(|c| {
+                let mut st = c.prepare("SELECT payload FROM tg_outbox ORDER BY id")?;
+                let r = st.query_map([], |r| r.get::<_, String>(0))?;
+                Ok(r.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await
+            .unwrap();
+        assert!(!rows[0].contains("7b22616363657373"), "{}", rows[0]);
+        assert!(rows[1].contains("bonjour"), "message ordinaire intact");
+
+        // Une seule fois : la passe suivante ne relit rien.
+        assert_eq!(reredact_outbox(&d).await.unwrap(), 0);
     }
 
     /// Le mot du transcript ne doit plus exister nulle part : neuf tables, l'index plein
