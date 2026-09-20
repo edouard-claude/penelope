@@ -6,6 +6,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod install;
+
 use penelope_kernel::frontmatter;
 use penelope_store::{Store, rusqlite::params};
 use serde::{Deserialize, Serialize};
@@ -56,6 +58,10 @@ pub struct Skill {
     /// Déclencheurs de rappel contextuel (§7, « skills = mémoire procédurale »).
     pub activation: Vec<String>,
     pub sub_agent: bool,
+    /// Dépendances de la machine, `npm:`, `pip:` ou `bin:` (issue #146) : déclarées par
+    /// la skill, vérifiées par `penelope doctor`, jamais installées toutes seules.
+    #[serde(default)]
+    pub requires: Vec<String>,
     pub scope: Scope,
     pub path: PathBuf,
     pub body: String,
@@ -134,6 +140,13 @@ pub fn parse_skill(path: &Path, raw: &str, scope: Scope) -> Result<Skill, SkillE
             a
         },
         sub_agent: fm.bool("sub_agent", false),
+        requires: {
+            let mut r = fm.list("requires");
+            r.extend(fm.list("dependances"));
+            r.sort();
+            r.dedup();
+            r
+        },
         scope,
         path: path.to_path_buf(),
         body: fm.body,

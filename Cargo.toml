@@ -49,10 +49,12 @@ unicode-width = "0.2"
 libc = "0.2"
 
 # --- documents (§6.13) ---
-# Sans fonctionnalités par défaut : ni `rayon` ni horloges, lecture seule. `deflate-flate2`
-# garde le moteur `miniz_oxide`, en Rust et sous licence MIT.
+# Sans fonctionnalités par défaut : ni `rayon` ni horloges, lecture seule. Le moteur de
+# déflation est nommé en entier : `deflate-flate2` seul laisse `flate2` sans dorsale, et
+# ne compilait que par l'unification des features d'un autre crate du graphe (#146).
+# `zlib-rs` est écrit en Rust, sans dépendance C.
 lopdf = { version = "0.45", default-features = false }
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 # --- dev ---
 tempfile = "3"

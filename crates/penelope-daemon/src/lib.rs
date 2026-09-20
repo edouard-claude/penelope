@@ -42,6 +42,8 @@ pub mod selfknow;
 pub mod session_notes;
 pub mod session_ops;
 pub mod session_project;
+pub mod skill_deps;
+pub mod skill_install;
 pub mod supervisor;
 pub mod tasks;
 pub mod telegram;

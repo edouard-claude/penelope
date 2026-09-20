@@ -1119,7 +1119,17 @@ impl NativeToolExecutor {
                     .skills
                     .get(&name)
                     .ok_or_else(|| ToolError::Invalid(format!("skill `{name}` introuvable")))?;
-                json!({"name": sk.name, "allowed_tools": sk.allowed_tools, "content": sk.body})
+                // Un corps venu d'ailleurs parle en outils Claude Code et en chemins
+                // relatifs : la table de correspondance et le dossier absolu sont posés
+                // devant, sans toucher au fichier (issue #146).
+                let content = match penelope_skills::install::portage_note(&sk) {
+                    Some(note) => format!("{note}{}", sk.body),
+                    None => sk.body.clone(),
+                };
+                json!({
+                    "name": sk.name, "allowed_tools": sk.allowed_tools,
+                    "requires": sk.requires, "content": content
+                })
             }
             "skill_propose" | "skill_patch" => {
                 let skill_name = str_arg(args, "name")?;

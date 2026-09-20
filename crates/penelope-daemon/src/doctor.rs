@@ -225,6 +225,9 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
         )
     });
 
+    // Dépendances des skills tierces : listées, jamais installées (#146).
+    checks.push(skill_requirements_check(s).await);
+
     // Mémoire : entrées au-delà de la borne, Cœur au-delà de son budget (#145).
     checks.push(memory_size_check(s).await);
 
@@ -244,6 +247,50 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     }
 
     checks
+}
+
+/// #146 : une skill importée déclare ses dépendances (`requires: [pip:…, npm:…, bin:…]`).
+/// Elles ne sont jamais installées : `doctor` dit ce qui manque et avec quoi le poser.
+pub async fn skill_requirements_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "skills.requirements";
+    const LABEL: &str = "Dépendances des skills";
+    let declared: Vec<String> = s
+        .skills
+        .all()
+        .into_iter()
+        .flat_map(|k| k.requires)
+        .collect();
+    if declared.is_empty() {
+        return DoctorCheck::ok(ID, LABEL, "aucune skill n'en déclare");
+    }
+    let missing = crate::skill_deps::missing_for(&declared).await;
+    if missing.is_empty() {
+        return DoctorCheck::ok(
+            ID,
+            LABEL,
+            format!("{} déclarée(s), toutes présentes", declared.len()),
+        );
+    }
+    DoctorCheck::fail(
+        ID,
+        LABEL,
+        format!(
+            "{} manquante(s) : {}",
+            missing.len(),
+            missing
+                .iter()
+                .map(|m| m.requirement.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Some(
+            missing
+                .iter()
+                .map(|m| m.how.clone())
+                .collect::<Vec<_>>()
+                .join(" ; "),
+        ),
+    )
 }
 
 /// #145 : une entrée fourre-tout fausse la consolidation (elle « contredit » tout ce

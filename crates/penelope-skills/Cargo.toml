@@ -13,6 +13,7 @@ tracing.workspace = true
 tokio.workspace = true
 chrono.workspace = true
 regex.workspace = true
+zip.workspace = true
 penelope-kernel.workspace = true
 penelope-store.workspace = true
 penelope-platform.workspace = true

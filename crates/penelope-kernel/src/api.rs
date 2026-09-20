@@ -169,6 +169,8 @@ pub mod method {
     pub const SKILL_ROLLBACK: &str = "skill.rollback";
     /// Relit les dossiers de skills tout de suite (issue #63).
     pub const SKILL_RELOAD: &str = "skill.reload";
+    /// Import de skills tierces depuis un dépôt GitHub (issue #146).
+    pub const SKILL_INSTALL: &str = "skill.install";
 
     pub const WF_LIST: &str = "wf.list";
     pub const WF_SHOW: &str = "wf.show";
@@ -286,6 +288,7 @@ pub mod method {
         SKILL_SHOW,
         SKILL_ROLLBACK,
         SKILL_RELOAD,
+        SKILL_INSTALL,
         WF_LIST,
         WF_SHOW,
         WF_VALIDATE,

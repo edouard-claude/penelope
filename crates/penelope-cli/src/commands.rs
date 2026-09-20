@@ -595,6 +595,15 @@ pub enum SkillCmd {
     },
     /// Relit les dossiers de skills tout de suite (après un dépôt par `scp`).
     Reload,
+    /// Installe des skills depuis un dépôt GitHub : `anthropics/skills:docx,pdf`,
+    /// `anthropics/skills@v2`, ou le dépôt entier.
+    Install {
+        /// `proprietaire/depot[@revision][:skill,skill]`.
+        source: String,
+        /// Remplace une skill du même nom déjà installée.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// Exécute la commande.
@@ -714,6 +723,9 @@ pub async fn run(cli: Cli) -> CliResult<()> {
             if !cli.json =>
         {
             println!("{}", value["text"].as_str().unwrap_or_default());
+        }
+        Command::Skill(SkillCmd::Install { .. }) if !cli.json => {
+            println!("{}", value["report"].as_str().unwrap_or_default());
         }
         Command::Mcp(McpCmd::Logs { .. }) if !cli.json => {
             for l in value["lines"].as_array().cloned().unwrap_or_default() {
@@ -1110,6 +1122,9 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Skill(SkillCmd::Show { name }) => (m::SKILL_SHOW, json!({"name": name})),
         Command::Skill(SkillCmd::Rollback { name }) => (m::SKILL_ROLLBACK, json!({"name": name})),
         Command::Skill(SkillCmd::Reload) => (m::SKILL_RELOAD, json!({})),
+        Command::Skill(SkillCmd::Install { source, force }) => {
+            (m::SKILL_INSTALL, json!({"source": source, "force": force}))
+        }
 
         Command::Approvals => (m::APPROVALS, json!({})),
         Command::Approve { id, always, effect } => (

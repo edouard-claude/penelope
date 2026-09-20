@@ -1261,6 +1261,60 @@ penelope skill reload
 Un `SKILL.md` invalide est ignoré, sans effacer les autres, et signalé par
 `penelope doctor`.
 
+### Importer des skills d'un dépôt
+
+Le format `agentskills.io` est celui des skills publiées ailleurs : un `SKILL.md` amont se
+charge tel quel. Pour ne pas le faire à la main :
+
+```bash
+penelope skill install anthropics/skills:docx,xlsx,pptx,pdf
+penelope skill install anthropics/skills@v2          # une révision
+penelope skill install owner/repo --force            # remplace ce qui porte le même nom
+```
+
+L'archive du dépôt est téléchargée en HTTPS (aucun `git` requis), et **le dossier entier**
+de chaque skill est copié dans `{data}/skills/` : les documentaires embarquent des scripts
+et des schémas de validation, qui ne servent à rien sans leurs fichiers. Sans liste après
+le `:`, toutes les skills du dépôt sont posées. Une skill dont le `SKILL.md` ne se charge
+pas est refusée avant la moindre écriture, comme une archive qui porte un lien symbolique
+ou un chemin remontant hors de son dossier.
+
+Deux compléments sont écrits dans le frontmatter, le reste du fichier étant laissé mot
+pour mot (une mise à jour du dépôt reste lisible en diff) : `version: 1.0.0` s'il n'y en a
+pas, et `allowed_tools` déduit du corps. Sans `allowed_tools`, une skill a droit à **tous**
+les outils : pour une skill venue d'ailleurs, ce défaut est trop large, donc Pénélope y
+écrit ce que le corps réclame. `penelope skill show <nom>` le montre ; si la skill se voit
+refuser un outil dont elle a besoin, la ligne est à élargir à la main.
+
+**Le vocabulaire.** Un corps écrit pour Claude Code parle de `Read`, `Bash`, `Grep`. Rien
+n'est réécrit dans le fichier : au chargement (`skill_load`), Pénélope pose devant le corps
+le dossier absolu de la skill et la table de correspondance.
+
+| Claude Code | Pénélope |
+|---|---|
+| `Read` | `fs_read` |
+| `Write` | `fs_write` |
+| `Edit`, `MultiEdit`, `NotebookEdit` | `fs_edit` |
+| `Bash`, `BashOutput` | `shell_exec` |
+| `Glob`, `Grep` | `fs_search` |
+| `WebFetch`, `WebSearch` | `http_fetch` |
+
+**Les dépendances.** Une skill déclare ce que sa machine doit avoir :
+
+```yaml
+requires: [pip:openpyxl, npm:docx, bin:pandoc]
+```
+
+Pénélope **n'installe rien**. `penelope skill install` liste à la fin ce qui manque avec la
+commande qui le pose, et `penelope doctor` refait le contrôle (`skills.requirements`) :
+`bin:` est cherché dans le `PATH`, `pip:` par un `import`, `npm:` par un
+`require.resolve` avec `NODE_PATH` réglé sur `npm root -g`. Sur macOS, PEP 668 interdit le
+`pip` système : la consigne rendue propose un environnement dédié.
+
+Ce qui reste à faire à la main : lire la licence du dépôt d'origine. Les skills
+documentaires d'Anthropic sont « Proprietary, source-available », publiées comme référence
+— l'import à la demande les télécharge depuis la source, il ne les redistribue pas.
+
 ### Venir d'Hermes
 
 Une instance Hermes se reprend en une commande, d'abord à blanc :

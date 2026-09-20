@@ -8,7 +8,7 @@ Dernière mise à jour : 20 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1582 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1589 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -1857,6 +1857,40 @@ entrée de mémoire porte un fait (#145).
   écrites, `penelope mem split <uid>` propose un découpage en faits courts, sans les
   données financières personnelles : une carte, jamais une écriture. `penelope doctor`
   liste les entrées actives au-delà de la borne et le Cœur au-delà de son budget.
+
+### 0.17.28
+
+Les skills d'un dépôt tiers s'installent en une commande, avec leurs fichiers, leur
+vocabulaire et leurs dépendances nommées (#146).
+
+- **`penelope skill install <depot>[:skill,…]`** (#146) : le portage manuel de six skills
+  officielles Anthropic, le 20/09, a demandé un script ad hoc. La commande télécharge
+  l'archive du dépôt en HTTPS (aucun `git`, aucun sous-processus) et copie **le dossier
+  entier** de chaque skill dans `{data}/skills/` — un documentaire embarque ses scripts et
+  ses schémas de validation, inertes sans leurs fichiers. `owner/repo`, `owner/repo@revision`,
+  `:skill,skill` pour choisir, `--force` pour remplacer. Une archive qui remonte hors de son
+  dossier, qui porte un lien symbolique, qui dépasse les bornes de taille, ou dont le
+  `SKILL.md` ne se charge pas, est refusée **avant la moindre écriture**.
+- **Le frontmatter complété, le reste mot pour mot** (#146) : `version: 1.0.0` s'il manque,
+  et `allowed_tools` déduit du corps. Sans cette clé une skill a droit à tous les outils :
+  pour une skill venue d'ailleurs, ce défaut est trop large. Le corps n'est pas touché, une
+  mise à jour du dépôt reste lisible en diff.
+- **Le vocabulaire traduit au chargement** (#146) : un corps écrit pour Claude Code parle de
+  `Read`, `Bash`, `Grep`. `skill_load` pose devant lui le dossier absolu de la skill et la
+  table de correspondance (`Read` → `fs_read`, `Bash` → `shell_exec`, `Glob`/`Grep` →
+  `fs_search`, `WebFetch` → `http_fetch`…), sans rien réécrire dans le fichier : un bloc de
+  portage collé à la main disparaissait à la mise à jour suivante.
+- **Les dépendances nommées, jamais installées** (#146) : `requires: [pip:openpyxl,
+  npm:docx, bin:pandoc]` dans le frontmatter. L'installation liste ce qui manque avec la
+  commande qui le pose, et `penelope doctor` refait le contrôle (`skills.requirements`) :
+  `bin:` par le `PATH`, `pip:` par un `import`, `npm:` par un `require.resolve` avec
+  `NODE_PATH` réglé sur `npm root -g`. Un nom de paquet qui pourrait s'échapper dans une de
+  ces lignes est refusé, pas échappé.
+- Deux réglages de fond au passage : le répartiteur RPC met son futur sur le tas (il porte
+  l'état de toutes les méthodes servies, et sa pile débordait au test dès qu'une branche
+  s'ajoutait), et le crate `zip` nomme enfin sa dorsale de déflation (`deflate-flate2` seul
+  laissait `flate2` sans moteur, et ne compilait que par l'unification des features d'un
+  autre crate du graphe).
 
 ### Routine de livraison
 

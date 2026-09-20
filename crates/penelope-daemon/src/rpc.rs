@@ -29,7 +29,7 @@ impl Rpc {
     pub async fn handle(&self, req: RpcRequest) -> RpcResponse {
         let id = req.id.clone();
         let params = req.params.clone().unwrap_or(json!({}));
-        match self.dispatch(&req.method, &params).await {
+        match Box::pin(self.dispatch(&req.method, &params)).await {
             Ok(v) => RpcResponse::ok(id, v),
             Err(e) => {
                 let code = classify(&e);
@@ -40,9 +40,13 @@ impl Rpc {
 
     /// Appel en processus, pour les canaux qui vivent dans le daemon (Telegram).
     pub async fn call(&self, method: &str, params: Value) -> anyhow::Result<Value> {
-        self.dispatch(method, &params).await
+        Box::pin(self.dispatch(method, &params)).await
     }
 
+    /// Le futur du répartiteur porte l'état de **toutes** les méthodes servies : construit
+    /// sur la pile de l'appelant, il la faisait déborder au test dès qu'une branche
+    /// s'ajoutait (issues #145 et #146). Ses deux appelants le mettent donc sur le tas —
+    /// une allocation par appel RPC, et une méthode de plus ne coûte plus rien.
     async fn dispatch(&self, method: &str, p: &Value) -> anyhow::Result<Value> {
         let s = self.services();
         match method {
@@ -868,10 +872,8 @@ impl Rpc {
                     .map_err(anyhow::Error::msg)?;
                 Ok(json!({"uid": uid, "forgotten": done}))
             }
-            // Ces deux branches passent par une fonction à part, sur le tas : le
-            // dispatcher porte déjà des dizaines d'états, et sa pile déborde (issue #145).
-            method::MEM_SPLIT => Box::pin(mem_split(&self.daemon, p)).await,
-            method::MEM_CANDIDATES => Box::pin(mem_candidates(s)).await,
+            method::MEM_SPLIT => mem_split(&self.daemon, p).await,
+            method::MEM_CANDIDATES => mem_candidates(s).await,
             method::MEM_DREAM => {
                 let dry_run = p.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
                 let outcome = crate::dream::run(&self.daemon, dry_run).await?;
@@ -1097,6 +1099,7 @@ impl Rpc {
                     }))
                     .collect::<Vec<_>>()
             )),
+            method::SKILL_INSTALL => skill_install(&self.daemon, p).await,
             method::SKILL_SHOW => {
                 let name = required_str(p, "name")?;
                 Ok(serde_json::to_value(s.skills.get(&name))?)
@@ -1496,6 +1499,19 @@ fn required_str(p: &Value, key: &str) -> anyhow::Result<String> {
         .and_then(|v| v.as_str())
         .map(String::from)
         .ok_or_else(|| anyhow::anyhow!("paramètre `{key}` manquant"))
+}
+
+/// Installe des skills tierces et rend ce qui a été posé, avec ce qui manque (#146).
+async fn skill_install(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
+    let source = required_str(p, "source")?;
+    let force = p.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+    let (src, installed, missing) = crate::skill_install::install(d, &source, force).await?;
+    Ok(json!({
+        "source": src.label(),
+        "installed": installed,
+        "missing": missing,
+        "report": crate::skill_install::report(&src, &installed, &missing),
+    }))
 }
 
 /// Candidats en attente, **et** questions sans réponse : elles ne repassent pas en
