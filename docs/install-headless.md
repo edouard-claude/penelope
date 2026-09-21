@@ -418,8 +418,8 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `memory.dream_batch` | `40` | Candidats consolidés par appel au modèle, la nuit : au-delà, la réponse ne tient plus dans la fenêtre de sortie et tout le lot est reporté. |
 | `memory.dreaming_cron` | `"30 3 * * *"` | Heure de la consolidation nocturne (cron, fuseau du propriétaire). |
 | `memory.dream_retry_wait` | `"2m"` | Attente avant de reprendre un lot de la consolidation après une erreur passagère du modèle (flux muet, 5xx, 429), doublée à la seconde reprise. |
-| `memory.consolidation_reasoning` | `"auto"` | Raisonnement du modèle de consolidation : `auto` le garde et le budgète (le tri d'un candidat gagne à être réfléchi), `off` l'éteint pour rendre tout le budget de sortie au JSON. |
-| `memory.consolidation_reasoning_tokens` | `16000` | Plafond du budget de raisonnement d'un appel de consolidation, en jetons. Le budget part à 8 000 et double quand le modèle s'y heurte ; `max_tokens` vaut ce budget plus la sortie estimée du lot. |
+| `memory.consolidation_reasoning` | `"auto"` | Raisonnement du modèle de consolidation : `auto` le garde et le budgète (le tri d'un candidat gagne à être réfléchi), `off` l'éteint pour rendre tout le budget de sortie au JSON. Le défaut est `auto` (issue #152). |
+| `memory.consolidation_reasoning_tokens` | `16000` | Plafond du budget de raisonnement d'un appel de consolidation, en jetons. Le budget part plus bas et monte quand le modèle s'y heurte ; `max_tokens` de l'appel vaut ce budget plus la sortie estimée du lot. |
 | `memory.digest_cron` | `"0 8 * * *"` | Heure du digest du matin (cron, fuseau du propriétaire). |
 | `memory.promotion.ecart_min_occurrences` | `3` | Occurrences minimales d'un écart pour devenir une exception. |
 | `memory.promotion.ecart_min_sessions` | `3` | Sessions distinctes minimales d'un écart. |
