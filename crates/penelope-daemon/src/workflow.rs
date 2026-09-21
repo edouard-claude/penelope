@@ -1032,7 +1032,17 @@ impl StepCtx<'_> {
     }
 
     /// Substitue les variables `{{…}}` d'un texte (§12.5).
+    /// Rend un gabarit sans citation : prompt, `cwd`, champ JSON.
     async fn render(&self, template: &str) -> String {
+        self.render_quoted(template, penelope_workflow::conditions::Quoting::Raw)
+            .await
+    }
+
+    async fn render_quoted(
+        &self,
+        template: &str,
+        quoting: penelope_workflow::conditions::Quoting,
+    ) -> String {
         let metadata = session_metadata(self.s(), &self.run.session_id).await;
         let workdir = self.workdir().to_string_lossy().to_string();
         let now = self.s().clock.now_rfc3339();
@@ -1063,11 +1073,24 @@ impl StepCtx<'_> {
             criteria_key: &self.step.criteria_key,
             brief: &brief,
         };
-        let (out, unknown) = substitute(template, &vars);
+        let (out, unknown) =
+            penelope_workflow::conditions::substitute_with(template, &vars, quoting);
         if !unknown.is_empty() {
             tracing::warn!(run = %self.run.id, step = %self.step.id, ?unknown, "variables inconnues");
         }
         out
+    }
+
+    /// Rend un gabarit destiné à un shell : les valeurs substituées y sont citées, sauf si
+    /// l'étape le refuse (`quote: false`). Sans cela, un `{{workdir}}` qui contient une
+    /// espace — « Application Support » sur tout Mac — casse la commande (issue #154).
+    async fn render_command(&self, template: &str) -> String {
+        let quoting = if self.step.quote {
+            penelope_workflow::conditions::Quoting::Shell
+        } else {
+            penelope_workflow::conditions::Quoting::Raw
+        };
+        self.render_quoted(template, quoting).await
     }
 
     /// Substitue récursivement les chaînes d'une valeur JSON.
@@ -1578,7 +1601,7 @@ async fn shell_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
             json!({"error": format!("pas de commande pour {}", s.platform.os_name())}),
         ));
     };
-    let command = ctx.render(&raw).await;
+    let command = ctx.render_command(&raw).await;
     let workdir = ctx.workdir();
     let cwd = if step.cwd.is_empty() {
         workdir.clone()

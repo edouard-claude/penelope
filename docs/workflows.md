@@ -78,6 +78,22 @@ disponibles : `{{workdir}}`, `{{run.id}}`, `{{now}}`, `{{os}}`, `{{arch}}`, `{{r
 `{{pendingCount}}`, `{{modifiedFiles}}`, `{{stepOutput.…}}`, `{{steps.<étape>.…}}` et
 `{{brief}}`, le résumé de la conversation qui a lancé le run (vide sinon).
 
+**Dans une `command`, les valeurs sont citées par le moteur.** `{{workdir}}` contient des
+espaces sur macOS, où le répertoire de données est `~/Library/Application Support/Penelope`
+(issue #154). Écrire simplement :
+
+```json
+"command": "git clone -b dev https://gitlab.example.com/{{repo}}.git {{workdir}}/repo"
+```
+
+La valeur part entre apostrophes, donc en **un seul** argument, et une apostrophe qu'elle
+contiendrait est échappée. Un gabarit qui cite déjà (`"{{workdir}}/repo"`) n'est pas cité
+deux fois. Les `prompt`, `cwd` et `args` ne passent par aucun shell : rien n'y est cité.
+
+Pour le cas rare d'une variable qui porte une **liste d'arguments** (`{{extra_args}}`),
+où citer ferait un seul argument de plusieurs, l'étape déclare `"quote": false` et
+l'auteur reprend la citation à sa charge.
+
 ## Réglages
 
 ```json

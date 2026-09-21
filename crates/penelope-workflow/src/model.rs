@@ -212,6 +212,14 @@ pub struct Step {
     /// Déclaré dans le workflow, montré dans l'aperçu validé au lancement (issue #106).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub network: bool,
+    /// `shell` : citer les valeurs substituées pour le shell. Vrai par défaut (issue #154) ;
+    /// `false` pour le gabarit rare qui met une **liste d'arguments** dans une variable,
+    /// où la citation ferait un seul argument de plusieurs.
+    #[serde(
+        default = "crate::model::yes",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub quote: bool,
 
     // --- tool ---
     pub tool: String,
@@ -254,6 +262,7 @@ impl Default for Step {
             transitions: Vec::new(),
             budget: None,
             retry: None,
+            quote: true,
             timeout_ms: None,
             model: String::new(),
             agent_id: String::new(),
@@ -606,4 +615,10 @@ mod tests {
         assert!(Transition::always("x").is_always());
         assert!(!Transition::on_result("x", "success").is_always());
     }
+}
+
+/// Défaut de [`Step::quote`] : citer (issue #154). Une fonction, parce que `serde` ne sait
+/// pas donner `true` comme défaut d'un booléen.
+pub(crate) fn yes() -> bool {
+    true
 }

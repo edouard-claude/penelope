@@ -197,8 +197,39 @@ pub fn choose(transitions: &[Transition], ctx: &EvalContext<'_>) -> String {
 
 // ------------------------------------------------------------------ templates
 
+/// Comment une valeur substituée entre dans le texte rendu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Quoting {
+    /// Telle quelle : un `prompt`, un `cwd`, un champ JSON — rien n'interprète le texte.
+    Raw,
+    /// Citée pour le shell (issue #154).
+    Shell,
+}
+
+/// Cite une valeur pour un shell POSIX : apostrophes autour, apostrophes internes
+/// échappées. `/a b/c` devient `'/a b/c'`, un seul argument.
+fn shell_quote(v: &str) -> String {
+    format!("'{}'", v.replace('\'', r"'\''"))
+}
+
 /// Substitue les variables `{{…}}` (§12.5).
 pub fn substitute(template: &str, vars: &TemplateVars<'_>) -> (String, Vec<String>) {
+    substitute_with(template, vars, Quoting::Raw)
+}
+
+/// Substitue les variables `{{…}}`, en citant les valeurs si le contexte l'exige.
+///
+/// Le 21/09, `git clone … {{workdir}}/repo` a échoué sur « Too many arguments » : le
+/// répertoire de données de macOS s'appelle « Application Support », avec une espace, et
+/// la valeur partait non citée. Le workflow était juste, la substitution non — c'est donc
+/// le moteur qui cite, pas l'auteur du workflow (issue #154).
+///
+/// Une valeur que le gabarit entoure déjà de guillemets n'est pas citée deux fois.
+pub fn substitute_with(
+    template: &str,
+    vars: &TemplateVars<'_>,
+    quoting: Quoting,
+) -> (String, Vec<String>) {
     let mut out = String::with_capacity(template.len());
     let mut unknown = Vec::new();
     let mut rest = template;
@@ -212,7 +243,15 @@ pub fn substitute(template: &str, vars: &TemplateVars<'_>) -> (String, Vec<Strin
         };
         let name = after[..end].trim();
         match vars.resolve(name) {
-            Some(v) => out.push_str(&v),
+            Some(v) => {
+                // Déjà entre guillemets dans le gabarit : l'auteur s'en est chargé.
+                let already = matches!(out.chars().last(), Some('\'') | Some('"'));
+                if quoting == Quoting::Shell && !already {
+                    out.push_str(&shell_quote(&v));
+                } else {
+                    out.push_str(&v);
+                }
+            }
             None => {
                 unknown.push(name.to_string());
                 // Variable inconnue : chaîne vide, avec avertissement (§12.5).
@@ -597,6 +636,53 @@ mod tests {
         assert_eq!(json_path(&v, "a.b[1].c"), Some(json!(2)));
         assert_eq!(json_path(&v, "$.a.b[0].c"), Some(json!(1)));
         assert_eq!(json_path(&v, "a.absent"), None);
+    }
+
+    /// #154 : le 21/09, `git clone … {{workdir}}/repo` a rendu « Too many arguments » sur
+    /// le Mac : le répertoire de données s'appelle « Application Support », avec une
+    /// espace, et la valeur partait non citée. Le workflow était juste ; c'est le moteur
+    /// qui doit citer.
+    #[test]
+    fn a_path_with_a_space_stays_one_argument() {
+        let (p, o, m, st) = (json!({}), json!({}), json!({}), json!({}));
+        let mut v = vars(&p, &o, &m, &st);
+        v.workdir = "/Users/edouard/Library/Application Support/Penelope/state/runs/r_1";
+
+        let (raw, _) = substitute("git clone x {{workdir}}/repo", &v);
+        assert_eq!(
+            raw,
+            "git clone x /Users/edouard/Library/Application Support/Penelope/state/runs/r_1/repo",
+            "sans citation, c'est la panne du 21/09"
+        );
+
+        let (cmd, _) = substitute_with("git clone x {{workdir}}/repo", &v, Quoting::Shell);
+        assert_eq!(
+            cmd,
+            "git clone x '/Users/edouard/Library/Application Support/Penelope/state/runs/r_1'/repo"
+        );
+        // Un `prompt` ou un `cwd` ne passe pas par un shell : rien n'est cité.
+        let (prompt, _) = substitute_with("dossier : {{workdir}}", &v, Quoting::Raw);
+        assert!(!prompt.contains('\''), "{prompt}");
+    }
+
+    /// #154 : un gabarit qui cite déjà n'est pas cité deux fois, et une apostrophe dans
+    /// une valeur ne casse pas la commande.
+    #[test]
+    fn quoting_is_never_doubled_and_survives_an_apostrophe() {
+        let (o, m, st) = (json!({}), json!({}), json!({}));
+        let p = json!({"name": "l'équipe", "args": "--depth 50"});
+        let mut v = vars(&p, &o, &m, &st);
+        v.workdir = "/a b/c";
+
+        // Déjà cité par l'auteur : inchangé.
+        let (out, _) = substitute_with(r#"cd "{{workdir}}/repo""#, &v, Quoting::Shell);
+        assert_eq!(out, r#"cd "/a b/c/repo""#);
+        let (out, _) = substitute_with("cd '{{workdir}}'", &v, Quoting::Shell);
+        assert_eq!(out, "cd '/a b/c'");
+
+        // Apostrophe dans la valeur : échappée, la commande reste un seul argument.
+        let (out, _) = substitute_with("echo {{params.name}}", &v, Quoting::Shell);
+        assert_eq!(out, r#"echo 'l'\''équipe'"#);
     }
 
     fn vars<'a>(
