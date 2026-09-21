@@ -229,6 +229,30 @@ pub async fn start_run(
 }
 
 /// [`start_run`] avec le résumé de la conversation qui décide du lancement (issue #35).
+/// Attend le premier verdict d'un run : un état qui n'est plus `running`, ou la fin de sa
+/// première étape. Rend `None` si rien n'a bougé dans le délai (issue #154).
+///
+/// Cinq secondes au plus : l'outil rend la main même si l'étape est longue, mais il aura
+/// vu l'échec d'un `git clone` qui casse en une seconde — le cas du 21/09.
+async fn first_verdict(
+    d: &Arc<Daemon>,
+    run_id: &str,
+    within: Duration,
+) -> Option<penelope_workflow::runs::Run> {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        if let Ok(Some(r)) = d.services.runs.get(run_id).await
+            && (r.state != RunState::Running || r.step_outputs.get("__last").is_some())
+        {
+            return Some(r);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
 pub async fn start_run_briefed(
     d: &Arc<Daemon>,
     workflow_id: &str,
@@ -2538,7 +2562,43 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
         origin: &Origin,
     ) -> Result<Value, String> {
         let run = start_run_briefed(&self.daemon, id, params, origin, None, 0, brief).await?;
-        Ok(json!({"run_id": run.id, "state": run.state.as_str(), "workflow": id}))
+        // Le tour ne doit pas annoncer un état qu'il n'a pas vérifié (issue #154). Le
+        // 21/09, « 🚀 Lancé — en cours » est parti dans le sujet pendant que le run mourait
+        // à `git clone` quinze secondes plus tôt : l'outil avait rendu `running` avant que
+        // la première étape ne tourne. On attend son verdict, au plus cinq secondes.
+        let settled = first_verdict(&self.daemon, &run.id, Duration::from_secs(5)).await;
+        let state = settled.as_ref().map_or(run.state, |r| r.state);
+        let mut out = json!({"run_id": run.id, "state": state.as_str(), "workflow": id});
+        match state {
+            RunState::Blocked | RunState::Failed => {
+                let step = settled
+                    .as_ref()
+                    .and_then(|r| r.step_outputs.get("__last"))
+                    .and_then(|v| v.get("error").or_else(|| v.get("stderr")))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                out["remarque"] = json!(format!(
+                    "Le run est déjà `{}` : ne l'annonce pas « en cours ». Dis ce qui a \
+                     échoué{} et renvoie à la carte du run pour réessayer ou passer \
+                     l'étape.",
+                    state.as_str(),
+                    if step.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", penelope_observe::redact(step.trim()))
+                    }
+                ));
+            }
+            RunState::Running if settled.is_some() => {
+                out["remarque"] = json!(
+                    "Première étape passée, le run continue. Relaie cet état tel quel : \
+                     n'invente pas la liste des étapes à venir ni leur avancement."
+                );
+            }
+            _ => {}
+        }
+        Ok(out)
     }
 
     async fn spawn_sub_agent(
