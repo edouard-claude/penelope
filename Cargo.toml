@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.17.34"
+version = "0.17.35"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -63,21 +63,21 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 tempfile = "3"
 
 # --- internal ---
-penelope-platform = { path = "crates/penelope-platform", version = "0.17.34" }
-penelope-store    = { path = "crates/penelope-store", version = "0.17.34" }
-penelope-kernel   = { path = "crates/penelope-kernel", version = "0.17.34" }
-penelope-observe  = { path = "crates/penelope-observe", version = "0.17.34" }
-penelope-llm      = { path = "crates/penelope-llm", version = "0.17.34" }
-penelope-context  = { path = "crates/penelope-context", version = "0.17.34" }
-penelope-memory   = { path = "crates/penelope-memory", version = "0.17.34" }
-penelope-mcp      = { path = "crates/penelope-mcp", version = "0.17.34" }
-penelope-skills   = { path = "crates/penelope-skills", version = "0.17.34" }
-penelope-tools    = { path = "crates/penelope-tools", version = "0.17.34" }
-penelope-hitl     = { path = "crates/penelope-hitl", version = "0.17.34" }
-penelope-telegram = { path = "crates/penelope-telegram", version = "0.17.34" }
-penelope-workflow = { path = "crates/penelope-workflow", version = "0.17.34" }
-penelope-evals    = { path = "crates/penelope-evals", version = "0.17.34" }
-penelope-daemon   = { path = "crates/penelope-daemon", version = "0.17.34" }
+penelope-platform = { path = "crates/penelope-platform", version = "0.17.35" }
+penelope-store    = { path = "crates/penelope-store", version = "0.17.35" }
+penelope-kernel   = { path = "crates/penelope-kernel", version = "0.17.35" }
+penelope-observe  = { path = "crates/penelope-observe", version = "0.17.35" }
+penelope-llm      = { path = "crates/penelope-llm", version = "0.17.35" }
+penelope-context  = { path = "crates/penelope-context", version = "0.17.35" }
+penelope-memory   = { path = "crates/penelope-memory", version = "0.17.35" }
+penelope-mcp      = { path = "crates/penelope-mcp", version = "0.17.35" }
+penelope-skills   = { path = "crates/penelope-skills", version = "0.17.35" }
+penelope-tools    = { path = "crates/penelope-tools", version = "0.17.35" }
+penelope-hitl     = { path = "crates/penelope-hitl", version = "0.17.35" }
+penelope-telegram = { path = "crates/penelope-telegram", version = "0.17.35" }
+penelope-workflow = { path = "crates/penelope-workflow", version = "0.17.35" }
+penelope-evals    = { path = "crates/penelope-evals", version = "0.17.35" }
+penelope-daemon   = { path = "crates/penelope-daemon", version = "0.17.35" }
 
 [profile.release]
 opt-level = 3
