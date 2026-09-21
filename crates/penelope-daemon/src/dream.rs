@@ -4087,8 +4087,10 @@ mod tests {
             Ok(vec!["memory.consolidation_reasoning".into()])
         })
         .unwrap();
-        let seen: Arc<std::sync::Mutex<Vec<(Option<String>, Option<u32>)>>> =
-            Arc::new(std::sync::Mutex::new(vec![]));
+        // Ce qui est demandé au modèle à chaque appel : l'effort, et le budget de
+        // raisonnement.
+        type Asked = Vec<(Option<String>, Option<u32>)>;
+        let seen: Arc<std::sync::Mutex<Asked>> = Arc::new(std::sync::Mutex::new(vec![]));
         let log = seen.clone();
         p.set_responder(Some(Arc::new(move |req: &ChatRequest| {
             log.lock()
@@ -4541,7 +4543,7 @@ mod tests {
     /// répète pas le même message ; le digest dit la nuit ratée ; la nuit suivante promeut
     /// chaque candidat une seule fois.
     #[tokio::test]
-    async fn a_failed_night_is_said_once_and_writes_nothing_twice() {
+    async fn a_failed_night_keeps_what_it_wrote_and_is_said_once() {
         let (_dir, d, p) = daemon().await;
         let s = &d.services;
         let rec = Arc::new(Recorder::default());
@@ -4592,21 +4594,42 @@ mod tests {
         nightly(&d).await;
         assert_eq!(p.call_count(), 4, "un lot, puis trois essais du second");
         let vault = crate::conversation::vault_dir(s);
-        assert!(!vault.join("profil.md").exists(), "rien n'est écrit");
-        assert_eq!(states(s.candidates.pending(None).await.unwrap()), before);
+        // #152 : le lot qui a abouti est écrit avant que le suivant soit tenté. Jusqu'ici
+        // la passe accumulait tout jusqu'à la fin, et une erreur au deuxième lot jetait le
+        // premier — le 21/09, sept lots et 126 candidats perdus de cette façon.
+        let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
+        assert!(profil.contains(order[0].as_str()), "{profil}");
+        let left = s.candidates.pending(None).await.unwrap();
+        assert_eq!(
+            left.len(),
+            1,
+            "le candidat écrit est marqué, l'autre attend"
+        );
+        assert_eq!(
+            left[0].text, order[1],
+            "c'est bien le lot non jugé qui reste"
+        );
+        assert_ne!(states(left), before);
+        // #135 : la passe s'est arrêtée avant les verdicts du second lot, qui ne consomme
+        // donc aucun report.
         assert_eq!(deferrals().await, deferrals_before, "aucun report consommé");
-        assert!(
+        assert_eq!(
             history(s, None, Some("profil.md"))
                 .await
                 .unwrap()
                 .as_array()
                 .unwrap()
-                .is_empty()
+                .len(),
+            1,
+            "l'écriture du premier lot est dans l'historique"
         );
         let dreams = std::fs::read_to_string(vault.join("DREAMS.md")).unwrap();
         assert!(dreams.contains(": échec"), "{dreams}");
         assert!(dreams.contains("Upstream idle timeout"), "{dreams}");
-        assert!(dreams.contains("Rien n'a été écrit"), "{dreams}");
+        assert!(
+            dreams.contains("1 entrée(s) écrite(s) avant l'arrêt"),
+            "l'échec dit ce qui a été gardé : {dreams}"
+        );
         let failed = s.events.range(0, 1_000).await.unwrap();
         assert!(
             failed.iter().any(|e| e.kind == "memory.dream_failed"),

@@ -2168,6 +2168,10 @@ prévu pour la réponse, et que la passe prenait ça pour une sortie trop longue
   connues du lot suivant, et la garde anti-doublon vaut donc aussi entre deux passes.
 - Une passe interrompue est close en `interrupted` avec le compte de ses lots ; la
   suivante reprend sur les candidats restants et le dit. Rejouer ne peut rien dédoubler.
+- **Contrat de #135 remplacé** : « une passe qui échoue n'écrit rien » devient « une passe
+  qui échoue garde ce qu'elle a écrit, et le dit ». Ce qui reste de #135 : elle ne consomme
+  aucun report pour les lots qu'elle n'a pas jugés. Le message d'échec et `DREAMS.md`
+  annoncent le nombre d'entrées gardées.
 - Une coupure réseau ou une machine endormie n'est plus un abandon : le lot est rejoué au
   retour, avec une attente de cinq minutes, dans la limite du temps de la nuit. Le tri est
   étroit : notre propre délai et les erreurs de connexion locales, jamais « timeout » tout
