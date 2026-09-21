@@ -30,6 +30,9 @@ allow = [
     "BSL-1.0",
     # Magasin de racines Mozilla (`webpki-roots`) : licence de données permissive.
     "CDLA-Permissive-2.0",
+    # `foldhash`, tiré par `hashbrown` via `hashlink` depuis rusqlite 0.37 : permissive
+    # sans clause de réciprocité, donc conforme à la règle ci-dessus.
+    "Zlib",
 ]
 confidence-threshold = 0.9
 

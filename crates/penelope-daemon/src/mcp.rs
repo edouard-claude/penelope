@@ -3254,6 +3254,7 @@ mod tests {
         assert_eq!(st.state, ServerState::Ready);
     }
 
+    #[cfg(target_os = "macos")]
     const FAKE_PY: &str = r#"
 import json, os, sys
 print("pyfake prêt", file=sys.stderr, flush=True)

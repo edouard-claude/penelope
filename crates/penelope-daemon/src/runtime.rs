@@ -657,14 +657,13 @@ pub fn rss_mb() -> f64 {
     }
     #[cfg(target_os = "linux")]
     {
-        if let Ok(s) = std::fs::read_to_string("/proc/self/statm") {
-            if let Some(pages) = s
+        if let Ok(s) = std::fs::read_to_string("/proc/self/statm")
+            && let Some(pages) = s
                 .split_whitespace()
                 .nth(1)
                 .and_then(|p| p.parse::<f64>().ok())
-            {
-                return pages * 4096.0 / 1_048_576.0;
-            }
+        {
+            return pages * 4096.0 / 1_048_576.0;
         }
     }
     0.0

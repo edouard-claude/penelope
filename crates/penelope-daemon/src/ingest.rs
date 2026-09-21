@@ -976,9 +976,17 @@ mod tests {
         let (_dir, d, p, _r) = daemon().await;
         p.reply(r#"{"resume": "Page de test OCR.", "faits": []}"#);
         let scan = include_bytes!("../../penelope-platform/tests/fixtures/scan.pdf").to_vec();
-        let doc = ingest(&d, "scan.pdf", scan, "telegram", Origin::Owner, None)
-            .await
-            .unwrap();
+        let doc = ingest(
+            &d,
+            "scan.pdf",
+            scan,
+            "telegram",
+            Origin::Owner,
+            None,
+            &penelope_llm::CancelToken::new(),
+        )
+        .await
+        .unwrap();
         assert_eq!(doc.format, "pdf (OCR)");
         let vault = crate::conversation::vault_dir(&d.services);
         let fiche =

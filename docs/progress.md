@@ -2427,6 +2427,29 @@ Un appelant de `ingest` vivait dans les tests de `penelope-evals`, que
 leçon que pour `macos.rs` plus tôt — une vérification partielle laisse croire que tout
 compile.
 
+### 0.17.41
+
+#### La 0.17.40 n'a pas été publiée : deux vérifications manquantes
+
+Le job `livraison` a été sauté, `cargo deny` et le job macOS étant rouges. Rien à reprendre
+dans le code de la 0.17.40 ; ce sont deux angles morts de la vérification locale.
+
+- **Un test `#[cfg(target_os = "macos")]` appelait `ingest` à six arguments**
+  (`ingest.rs:979`). Sous Linux il n'est compilé par rien : ni `cargo test --workspace`, ni
+  `cargo clippy --all-targets`, ni la ligne `--target aarch64-apple-darwin` de `CLAUDE.md`,
+  qui ne couvre que `penelope-platform`. Les crates qui embarquent SQLite ne se compilent
+  pas en croisé ici, faute de SDK C : l'arité des dix-sept appels a été vérifiée
+  statiquement, et les cinq blocs macOS de `penelope-daemon` relus un par un.
+- **`foldhash` est sous licence Zlib** et entre par `hashbrown` → `hashlink` → rusqlite 0.37.
+  C'est une conséquence directe de la montée SQLite de la 0.17.40. Zlib est permissive, sans
+  clause de réciprocité : elle entre dans l'autorisation avec sa raison écrite, la règle du
+  fichier étant inchangée.
+
+Deux lints réels ont été corrigés au passage (`FAKE_PY` inutilisée hors macOS,
+un `if` imbriqué dans le bloc Linux de `rss_mb`). La CI ne les voyait pas — elle ne lance
+clippy que sur macOS — mais ils faisaient échouer la commande que `CLAUDE.md` prescrit
+avant de pousser.
+
 ### Routine de livraison
 
 Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #147) :

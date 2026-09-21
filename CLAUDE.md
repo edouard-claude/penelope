@@ -46,6 +46,12 @@ ajouté.
 Le code macOS (`crates/penelope-platform/src/backend/macos.rs`) n'est pas compilé sous
 Linux : `cargo check -p penelope-platform --target aarch64-apple-darwin` le relit.
 
+Cette ligne ne couvre pas tout : les **tests** sous `#[cfg(target_os = "macos")]`, nombreux
+dans `penelope-daemon`, ne sont compilés par aucune commande locale, et les crates qui
+embarquent SQLite ne se compilent pas en croisé faute de SDK C. La CI macOS, elle, les
+compile. Quand une signature change, relis-en les appels à la main :
+`grep -rn 'cfg(target_os = "macos")' crates/`. La 0.17.40 a manqué sa release ainsi.
+
 ## Conventions
 
 - Commentaires, messages de commit et documentation en français ; noms de code en anglais.
