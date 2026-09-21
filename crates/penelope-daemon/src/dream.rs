@@ -1897,13 +1897,17 @@ fn network_stall(e: &anyhow::Error) -> bool {
         return false;
     }
     let m = l.to_string().to_lowercase();
+    // Notre propre délai, ou une erreur de connexion locale. Surtout pas « timeout » tout
+    // court : un `Upstream idle timeout` est une erreur du fournisseur (#127), qui se
+    // reprend vite, pas une machine endormie qu'il faut attendre.
     m.contains("sans réponse complète")
         || m.contains("error sending request")
-        || m.contains("connection")
+        || m.contains("connection refused")
+        || m.contains("connection reset")
         || m.contains("connexion")
         || m.contains("dns")
-        || m.contains("timed out")
-        || m.contains("timeout")
+        || m.contains("network is unreachable")
+        || m.contains("réseau")
 }
 
 /// Reprises d'un lot après une erreur passagère.

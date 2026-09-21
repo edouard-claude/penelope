@@ -2169,7 +2169,11 @@ prévu pour la réponse, et que la passe prenait ça pour une sortie trop longue
 - Une passe interrompue est close en `interrupted` avec le compte de ses lots ; la
   suivante reprend sur les candidats restants et le dit. Rejouer ne peut rien dédoubler.
 - Une coupure réseau ou une machine endormie n'est plus un abandon : le lot est rejoué au
-  retour, avec une attente de cinq minutes, dans la limite du temps de la nuit.
+  retour, avec une attente de cinq minutes, dans la limite du temps de la nuit. Le tri est
+  étroit : notre propre délai et les erreurs de connexion locales, jamais « timeout » tout
+  court. Un `Upstream idle timeout` est une erreur du fournisseur (#127), qui se reprend
+  en deux minutes ; la confondre avec une machine endormie faisait attendre cinq minutes
+  pour rien.
 - Une passe lancée à la main qui échoue émet `memory.dream_failed` et prévient au foyer,
   comme une passe planifiée. Le 21/09, le propriétaire a dû demander pour l'apprendre.
 
