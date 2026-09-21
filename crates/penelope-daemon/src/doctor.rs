@@ -561,53 +561,73 @@ pub async fn open_forms_check(s: &Services) -> DoctorCheck {
 /// en recopiant ses jetons dans le message d'erreur. Le contrôle écrit, relit et efface
 /// un secret de 8 Ko : la panne se voit avant qu'un secret la rencontre.
 pub fn secret_roundtrip_check(s: &Services) -> DoctorCheck {
+    secret_roundtrip_of(s.platform.secrets.as_ref())
+}
+
+/// Le contrôle, sur un magasin quelconque : c'est ce qui le rend vérifiable sans toucher
+/// au Trousseau de la machine.
+pub fn secret_roundtrip_of(store: &dyn penelope_platform::secrets::SecretStore) -> DoctorCheck {
     const ID: &str = "secret_roundtrip";
     const LABEL: &str = "Magasin de secrets : aller-retour de 8 Ko";
     const NAME: &str = "penelope.doctor.roundtrip";
     let value = "x".repeat(8 * 1024);
-    let store = &s.platform.secrets;
+    const UNLOCK: &str = "déverrouiller le Trousseau (`security unlock-keychain`), ou forcer \
+                          le repli fichier chiffré avec `PENELOPE_SECRETS=file`";
     // L'essai ne laisse rien derrière lui, quelle que soit l'étape qui échoue.
-    let fail = |detail: String| {
+    let fail = |detail: String, fix: &str| {
         let _ = store.delete(NAME);
-        DoctorCheck::fail(
-            ID,
-            LABEL,
-            detail,
-            Some(
-                "déverrouiller le Trousseau (`security unlock-keychain`), ou forcer le \
-                 repli fichier chiffré avec `PENELOPE_SECRETS=file`"
-                    .into(),
-            ),
-        )
+        DoctorCheck::fail(ID, LABEL, detail, Some(fix.to_string()))
     };
     if let Err(e) = store.set(NAME, &value) {
-        return fail(format!(
-            "écriture refusée : {}",
-            penelope_observe::redact(&e.to_string())
-        ));
+        return fail(
+            format!(
+                "écriture refusée : {}",
+                penelope_observe::redact(&e.to_string())
+            ),
+            UNLOCK,
+        );
     }
     match store.get(NAME) {
         Ok(Some(back)) if back == value => {}
+        // Le magasin a répondu, et il a répondu autre chose : ce n'est pas un Trousseau
+        // verrouillé — proposer de le déverrouiller envoie chercher là où il n'y a rien
+        // (issue #157). La forme de ce qui revient nomme le vrai coupable.
         Ok(Some(back)) => {
-            return fail(format!(
-                "relecture différente : {} octets écrits, {} relus",
-                value.len(),
-                back.len()
-            ));
+            let hexa = back.len() >= 2
+                && back.len().is_multiple_of(2)
+                && back.bytes().all(|b| b.is_ascii_hexdigit());
+            return fail(
+                format!(
+                    "relecture altérée : {} octets écrits, {} relus{}. Le magasin répond, \
+                     il rend une autre valeur : le Trousseau n'est pas en cause.",
+                    value.len(),
+                    back.len(),
+                    if hexa { ", en hexadécimal" } else { "" }
+                ),
+                "signaler l'anomalie : un secret long est écrit puis relu faux (issue \
+                 #157) ; en attendant, `PENELOPE_SECRETS=file` écrit hors du Trousseau",
+            );
         }
-        Ok(None) => return fail("écrit puis introuvable".into()),
+        Ok(None) => return fail("écrit puis introuvable".into(), UNLOCK),
+        // `security` n'a pas répondu : verrouillé, absent, ou refusé.
         Err(e) => {
-            return fail(format!(
-                "relecture refusée : {}",
-                penelope_observe::redact(&e.to_string())
-            ));
+            return fail(
+                format!(
+                    "relecture refusée : {}",
+                    penelope_observe::redact(&e.to_string())
+                ),
+                UNLOCK,
+            );
         }
     }
     if let Err(e) = store.delete(NAME) {
-        return fail(format!(
-            "suppression refusée : {}",
-            penelope_observe::redact(&e.to_string())
-        ));
+        return fail(
+            format!(
+                "suppression refusée : {}",
+                penelope_observe::redact(&e.to_string())
+            ),
+            UNLOCK,
+        );
     }
     DoctorCheck::ok(
         ID,
@@ -1842,6 +1862,100 @@ pub fn render(checks: &[DoctorCheck]) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// #157 : `doctor` accusait un Trousseau verrouillé alors que le Trousseau répondait
+    /// parfaitement — il rendait juste autre chose. Une correction fausse envoie chercher
+    /// là où il n'y a rien : le 21/09, sur l'instance, « déverrouiller le Trousseau »
+    /// pendant qu'un secret long était relu en hexadécimal.
+    mod secret_roundtrip {
+        use penelope_platform::Result;
+        use penelope_platform::secrets::SecretStore;
+
+        /// Un magasin qui rend une autre valeur que celle écrite : la panne de #157.
+        struct Altered(String);
+        impl SecretStore for Altered {
+            fn backend(&self) -> String {
+                "essai".into()
+            }
+            fn get(&self, _: &str) -> Result<Option<String>> {
+                Ok(Some(self.0.clone()))
+            }
+            fn set(&self, _: &str, _: &str) -> Result<()> {
+                Ok(())
+            }
+            fn delete(&self, _: &str) -> Result<()> {
+                Ok(())
+            }
+            fn list(&self) -> Result<Vec<String>> {
+                Ok(vec![])
+            }
+        }
+
+        /// Un magasin qui ne répond pas : le Trousseau verrouillé, lui.
+        struct Locked;
+        impl SecretStore for Locked {
+            fn backend(&self) -> String {
+                "essai".into()
+            }
+            fn get(&self, _: &str) -> Result<Option<String>> {
+                Err(penelope_platform::PlatformError::Secret(
+                    "security : trousseau verrouillé".into(),
+                ))
+            }
+            fn set(&self, _: &str, _: &str) -> Result<()> {
+                Ok(())
+            }
+            fn delete(&self, _: &str) -> Result<()> {
+                Ok(())
+            }
+            fn list(&self) -> Result<Vec<String>> {
+                Ok(vec![])
+            }
+        }
+
+        #[test]
+        fn an_altered_read_is_not_blamed_on_a_locked_keychain() {
+            // Les 42 caractères d'hexadécimal du rapport du 21/09.
+            let hexa = "0170656e656c6f70652d6368756e6b733a76313a33".to_string();
+            let c = super::super::secret_roundtrip_of(&Altered(hexa));
+            assert!(!c.ok);
+            assert!(c.detail.contains("relecture altérée"), "{}", c.detail);
+            assert!(c.detail.contains("42 relus"), "{}", c.detail);
+            assert!(c.detail.contains("hexadécimal"), "{}", c.detail);
+            assert!(
+                c.detail.contains("Trousseau n'est pas en cause"),
+                "{}",
+                c.detail
+            );
+            let fix = c.fix.unwrap_or_default();
+            assert!(
+                !fix.contains("unlock-keychain"),
+                "correction fausse : {fix}"
+            );
+            assert!(fix.contains("#157"), "{fix}");
+        }
+
+        /// Une valeur altérée qui n'est pas de l'hexadécimal ne doit pas être annoncée
+        /// comme telle : le diagnostic dit ce qu'il voit, rien de plus.
+        #[test]
+        fn an_altered_read_only_says_hex_when_it_is_hex() {
+            let c = super::super::secret_roundtrip_of(&Altered("tronqué".into()));
+            assert!(c.detail.contains("relecture altérée"), "{}", c.detail);
+            assert!(!c.detail.contains("hexadécimal"), "{}", c.detail);
+        }
+
+        #[test]
+        fn a_locked_keychain_is_still_told_to_unlock() {
+            let c = super::super::secret_roundtrip_of(&Locked);
+            assert!(!c.ok);
+            assert!(c.detail.contains("relecture refusée"), "{}", c.detail);
+            assert!(
+                c.fix.unwrap_or_default().contains("unlock-keychain"),
+                "{}",
+                c.detail
+            );
+        }
+    }
 
     /// Issue #36 : un service qui lance `target/release` est signalé ; un chemin stable
     /// lancé par le service est sain.

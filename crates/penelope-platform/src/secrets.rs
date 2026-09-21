@@ -28,20 +28,52 @@ pub mod chunks {
     pub const MAX_LINE_BYTES: usize = 4_000;
     /// Nombre de morceaux admis : 64 × ~1,9 Ko, bien au-delà du plus gros secret connu.
     pub const MAX_CHUNKS: usize = 64;
-    /// Marque de l'item de tête d'un secret découpé. Le caractère de contrôle en tête la
-    /// rend impossible à confondre avec une clé d'API ou un JSON.
-    pub const MARK: &str = "\u{1}penelope-chunks:v1:";
+    /// Marque de l'item de tête d'un secret découpé.
+    ///
+    /// **Imprimable, et ce n'est pas un détail** (issue #157) : `security -w` ne rend un
+    /// mot de passe en clair que s'il l'est. Dès qu'il porte un octet de contrôle, il
+    /// l'imprime en hexadécimal — la tête revenait en 42 caractères que `get` prenait
+    /// pour la valeur du secret. Une valeur qui commencerait par cette marque ne peut pas
+    /// être confondue pour autant : `set` la force sur le chemin découpé.
+    pub const MARK: &str = "penelope-chunks:v1:";
+
+    /// La marque des versions 0.17.26 à 0.17.35, avec son caractère de contrôle en tête.
+    /// Relue, jamais écrite : les secrets déjà posés dans le Trousseau restent lisibles.
+    pub const LEGACY_MARK: &str = "\u{1}penelope-chunks:v1:";
 
     pub fn header(count: usize) -> String {
         format!("{MARK}{count}")
     }
 
-    /// Nombre de morceaux annoncé par un item de tête, s'il en est un.
+    /// Nombre de morceaux annoncé par un item de tête, s'il en est un. Les deux marques
+    /// sont acceptées ; l'ancienne est testée en second, la nouvelle étant son suffixe.
     pub fn count(head: &str) -> Option<usize> {
-        head.strip_prefix(MARK)?
+        head.strip_prefix(MARK)
+            .or_else(|| head.strip_prefix(LEGACY_MARK))?
             .parse::<usize>()
             .ok()
             .filter(|n| *n > 0 && *n <= MAX_CHUNKS)
+    }
+
+    /// Décode une sortie de `security -w` qui est arrivée en hexadécimal (issue #157).
+    ///
+    /// N'accepte que ce qui redonne une tête de morceaux : une valeur entièrement
+    /// hexadécimale est un secret parfaitement ordinaire (empreinte, clé brute), et la
+    /// décoder au hasard rendrait faux ce qui était juste.
+    pub fn decode_hex_head(raw: &str) -> Option<String> {
+        if raw.len() < 2 || !raw.len().is_multiple_of(2) {
+            return None;
+        }
+        if !raw.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let bytes: Vec<u8> = (0..raw.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&raw[i..i + 2], 16))
+            .collect::<std::result::Result<_, _>>()
+            .ok()?;
+        let text = String::from_utf8(bytes).ok()?;
+        count(&text).is_some().then_some(text)
     }
 
     /// Découpe une valeur en morceaux d'au plus `budget` octets, sans couper un caractère
@@ -436,6 +468,56 @@ mod tests {
         let parts = split(&accents, 7);
         assert!(parts.iter().all(|p| p.len() <= 7));
         assert_eq!(parts.concat(), accents, "reconstruction exacte");
+    }
+
+    /// #157 : la marque d'en-tête doit être **imprimable**. `security -w` rend en
+    /// hexadécimal tout mot de passe qui ne l'est pas : la tête revenait en 42 caractères
+    /// que `get` prenait pour la valeur du secret.
+    #[test]
+    fn the_chunk_mark_is_printable_and_the_old_one_is_still_read() {
+        use chunks::{LEGACY_MARK, MARK, count, decode_hex_head, header};
+
+        assert!(
+            MARK.chars().all(|c| !c.is_control()),
+            "aucun caractère de contrôle : {MARK:?}"
+        );
+        assert_eq!(header(3), "penelope-chunks:v1:3");
+
+        // L'ancienne marque reste lue : les secrets déjà posés n'ont pas à migrer.
+        assert_eq!(count(&format!("{LEGACY_MARK}3")), Some(3));
+        assert_eq!(count(&header(3)), Some(3));
+
+        // L'hexadécimal que rendait le vrai `security` pour l'ancienne tête.
+        let hexa: String = format!("{LEGACY_MARK}3")
+            .bytes()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(hexa, "0170656e656c6f70652d6368756e6b733a76313a33");
+        assert_eq!(hexa.len(), 42, "les 42 caractères du rapport de doctor");
+        assert_eq!(count(&hexa), None, "ce n'est pas un en-tête tel quel");
+        assert_eq!(
+            decode_hex_head(&hexa).as_deref(),
+            Some(format!("{LEGACY_MARK}3").as_str()),
+            "mais il se décode en un en-tête"
+        );
+
+        // Ce qui ne redonne pas un en-tête n'est jamais décodé : une empreinte, une clé
+        // brute, un jeton hexadécimal sont des secrets parfaitement ordinaires.
+        for ordinary in [
+            "deadbeef",
+            "0123456789abcdef0123456789abcdef",
+            &"a".repeat(64),
+        ] {
+            assert_eq!(
+                decode_hex_head(ordinary),
+                None,
+                "`{ordinary}` reste tel quel"
+            );
+        }
+        // Ni ce qui n'est pas de l'hexadécimal, ou de longueur impaire.
+        assert_eq!(decode_hex_head("sk-or-v1-abcdef"), None);
+        assert_eq!(decode_hex_head("0170656"), None);
+        assert_eq!(decode_hex_head(""), None);
     }
 
     /// #148 : le contrat d'un magasin de secrets ne dépend pas de la taille de la valeur.

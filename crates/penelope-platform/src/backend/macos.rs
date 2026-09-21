@@ -124,9 +124,14 @@ impl KeychainStore {
             .stderr(Stdio::null())
             .output()
             .ok()?;
-        out.status
+        let raw = out
+            .status
             .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+            .then(|| String::from_utf8_lossy(&out.stdout).trim_end().to_string())?;
+        // `security -w` rend en hexadécimal tout mot de passe non imprimable (#157). Une
+        // tête écrite par une version antérieure revient ainsi en 42 caractères ; elle
+        // est décodée ici, et seulement si elle redonne bien une tête de morceaux.
+        Some(chunks::decode_hex_head(&raw).unwrap_or(raw))
     }
 
     /// Écrit un item. **La sortie de `security` n'est jamais recopiée** : elle contient
@@ -196,8 +201,20 @@ impl SecretStore for KeychainStore {
         let Some(head) = self.read_item(&self.service(name)) else {
             return Ok(None);
         };
-        // Item unique écrit par une version antérieure : rendu tel quel.
         let Some(count) = chunks::count(&head) else {
+            // Des morceaux existent : cette tête devrait en annoncer le nombre. Illisible,
+            // elle ne doit surtout pas passer pour la valeur du secret — c'est ce que
+            // faisait la version précédente, qui rendait 42 caractères d'hexadécimal à la
+            // place d'un `Grant` de 8 Ko (issue #157).
+            if self.read_item(&self.chunk_service(name, 0)).is_some() {
+                return Err(PlatformError::Secret(format!(
+                    "secret `{name}` : en-tête de morceaux illisible ({} caractères) alors \
+                     que des morceaux existent ; la valeur n'est pas rendue plutôt que \
+                     rendue fausse",
+                    head.chars().count()
+                )));
+            }
+            // Item unique écrit par une version antérieure : rendu tel quel.
             return Ok(Some(head));
         };
         let mut out = String::new();
@@ -880,6 +897,153 @@ mod tests {
         }
         assert!(!err.contains("unknown command"), "sortie recopiée : {err}");
         assert!(err.contains("Trousseau"), "{err}");
+    }
+
+    /// Un faux `security` **fidèle** : il range les items dans un dossier, et surtout il
+    /// rend `-w` comme le vrai — en clair si le mot de passe est imprimable, **en
+    /// hexadécimal sinon** (issue #157).
+    ///
+    /// C'est toute la leçon de ce lot : le faux `security` de #148 rendait la valeur telle
+    /// quelle, donc la suite était verte pendant qu'un `Grant` de 8 Ko était relu faux sur
+    /// la machine. Un double de test qui ment sur le point qui compte ne prouve rien.
+    #[cfg(unix)]
+    fn faithful_security(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let store = dir.join("items");
+        std::fs::create_dir_all(&store).unwrap();
+        let fake = dir.join("faux-security");
+        // `-i` lit la ligne `add-generic-password … -X <hex>` sur l'entrée standard.
+        let script = format!(
+            r#"#!/usr/bin/env python3
+import os, re, sys
+STORE = {store:?}
+def path(service):
+    return os.path.join(STORE, service.replace("/", "_"))
+args = sys.argv[1:]
+if args[:1] == ["-i"]:
+    args = sys.stdin.readline().split()
+cmd = args[0] if args else ""
+def opt(flag):
+    return args[args.index(flag) + 1] if flag in args else ""
+service = opt("-s")
+if cmd == "add-generic-password":
+    open(path(service), "wb").write(bytes.fromhex(opt("-X")))
+    sys.exit(0)
+if cmd == "find-generic-password":
+    try:
+        raw = open(path(service), "rb").read()
+    except FileNotFoundError:
+        sys.stderr.write("could not be found\n"); sys.exit(44)
+    # Le vrai `security` : en clair si imprimable, sinon en hexadécimal.
+    try:
+        text = raw.decode("utf-8")
+        printable = all(c == "\n" or c == "\t" or ord(c) >= 32 for c in text)
+    except UnicodeDecodeError:
+        printable = False
+    sys.stdout.write(text if printable else raw.hex())
+    sys.exit(0)
+if cmd == "delete-generic-password":
+    try:
+        os.remove(path(service)); sys.exit(0)
+    except FileNotFoundError:
+        sys.exit(44)
+sys.exit(1)
+"#,
+            store = store.to_string_lossy()
+        );
+        std::fs::write(&fake, script).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        fake
+    }
+
+    /// #157 : un secret assez long pour être découpé était écrit juste et relu faux. La
+    /// tête portait un caractère de contrôle, `security -w` la rendait en hexadécimal, et
+    /// `get` rendait ces 42 caractères comme valeur du secret.
+    #[cfg(unix)]
+    #[test]
+    fn a_chunked_secret_survives_a_security_that_prints_hex() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = faithful_security(dir.path());
+        let store = KeychainStore::with_program(dir.path(), &fake);
+
+        let value = format!("{{\"access_token\":\"{}\"}}", "e".repeat(8 * 1024));
+        store.set("grant", &value).expect("écriture");
+        let back = store.get("grant").expect("relecture");
+        let relus = back.as_deref().map(str::len).unwrap_or(0);
+        assert_eq!(
+            back.as_deref(),
+            Some(value.as_str()),
+            "{} octets écrits, {relus} relus",
+            value.len()
+        );
+
+        // La tête écrite est bien imprimable : c'est ce qui la fait revenir intacte.
+        let head = store.read_item(&store.service("grant")).unwrap();
+        assert_eq!(head, chunks::header(chunks::count(&head).unwrap()));
+        assert!(
+            head.chars().all(|c| !c.is_control()),
+            "aucun caractère de contrôle dans la tête : {head:?}"
+        );
+
+        // Un secret court garde sa forme d'avant.
+        store.set("court", "sk-abc").unwrap();
+        assert_eq!(store.get("court").unwrap().as_deref(), Some("sk-abc"));
+        store.delete("grant").unwrap();
+        assert_eq!(store.get("grant").unwrap(), None);
+    }
+
+    /// #157 : un secret posé par une version antérieure porte l'ancienne marque, avec son
+    /// caractère de contrôle. Il doit rester lisible après la mise à jour, sans migration.
+    #[cfg(unix)]
+    #[test]
+    fn a_secret_written_with_the_old_mark_is_still_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = faithful_security(dir.path());
+        let store = KeychainStore::with_program(dir.path(), &fake);
+
+        // Écrit à la main comme le faisait 0.17.35 : morceaux, puis tête marquée `\x01`.
+        store
+            .write_item(&store.chunk_service("ancien", 0), "début-")
+            .unwrap();
+        store
+            .write_item(&store.chunk_service("ancien", 1), "fin")
+            .unwrap();
+        let old_head = format!("{}{}", chunks::LEGACY_MARK, 2);
+        store
+            .write_item(&store.service("ancien"), &old_head)
+            .unwrap();
+
+        // Le faux `security` la rend en hexadécimal, comme le vrai.
+        assert_eq!(
+            store.get("ancien").unwrap().as_deref(),
+            Some("début-fin"),
+            "l'ancienne marque reste lisible"
+        );
+    }
+
+    /// #157 : une tête illisible alors que des morceaux existent ne doit **jamais** passer
+    /// pour la valeur. Mieux vaut une erreur qu'un jeton faux qui rendra 401 plus tard.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_head_is_an_error_not_a_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = faithful_security(dir.path());
+        let store = KeychainStore::with_program(dir.path(), &fake);
+
+        store
+            .write_item(&store.chunk_service("casse", 0), "morceau")
+            .unwrap();
+        store
+            .write_item(&store.service("casse"), "tête-abîmée")
+            .unwrap();
+        let err = store.get("casse").unwrap_err().to_string();
+        assert!(err.contains("en-tête de morceaux illisible"), "{err}");
+
+        // Sans morceau, la même tête est un secret ordinaire d'une version antérieure.
+        store
+            .write_item(&store.service("simple"), "tête-abîmée")
+            .unwrap();
+        assert_eq!(store.get("simple").unwrap().as_deref(), Some("tête-abîmée"));
     }
 
     /// #148 : le vrai Trousseau, avec un secret de 16 Ko. Écrit un item réel, donc

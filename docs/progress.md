@@ -2238,6 +2238,46 @@ URLs **au lieu d'utiliser gh** ») vit dans la mémoire de l'instance, pas dans 
 reformulation revient à la consolidation, réparée par #152. Le réflexe ajouté ici ne la
 contredit pas — il porte sur la lecture d'une forge, pas sur la déclaration d'un serveur MCP.
 
+### 0.17.36
+
+#### Un secret long était écrit juste et relu faux (#157)
+
+`penelope doctor` sur l'instance, le 21/09 : « aller-retour de 8 Ko — relecture différente :
+8192 octets écrits, **42 relus** », avec pour correction proposée de déverrouiller le
+Trousseau. Le Trousseau n'était pas verrouillé : il répondait, et il rendait autre chose.
+
+- **La cause** : la tête d'un secret découpé (#148) portait `\x01penelope-chunks:v1:N`. Ce
+  premier octet est un caractère de contrôle, et `security -w` n'imprime un mot de passe en
+  clair **que s'il est imprimable** : il rendait la tête de 21 octets en 42 caractères
+  d'hexadécimal. `count` n'y reconnaissait plus sa marque, et `get` concluait « item unique
+  d'une version antérieure » — il rendait l'hexadécimal **comme valeur du secret**. Tout
+  secret assez long pour être découpé était donc illisible : le `Grant` Codex de #142 aurait
+  rendu 401 au premier appel.
+- **La marque devient imprimable** (`penelope-chunks:v1:`). L'ancienne est encore **lue**,
+  jamais écrite : les secrets déjà posés n'ont pas à migrer. Une valeur qui commencerait par
+  la marque n'est pas confondue pour autant, `set` la force sur le chemin découpé.
+- **`read_item` décode l'hexadécimal**, et seulement s'il redonne une tête de morceaux : une
+  empreinte ou une clé brute sont des secrets entièrement hexadécimaux parfaitement
+  ordinaires, les décoder rendrait faux ce qui était juste.
+- **Une tête illisible n'est plus une valeur** : quand des morceaux existent, `get` rend une
+  erreur explicite. Mieux vaut un secret qui manque qu'un jeton faux qui échouera plus tard,
+  ailleurs, sans rapport apparent.
+- **`doctor` ne se trompe plus de coupable** : « relecture refusée » (le magasin ne répond
+  pas) reste « déverrouiller le Trousseau » ; « relecture altérée » (il répond autre chose)
+  dit la longueur relue, si elle ressemble à de l'hexadécimal, et que le Trousseau n'est pas
+  en cause.
+
+**Ce que ce lot corrige vraiment, c'est le test.** Les tests de #148 passaient parce que le
+faux `security` rendait la valeur telle quelle ; seul le vrai hexadécimalise. Le double de
+test mentait sur le point qui comptait. Il rend maintenant `-w` comme le vrai — en clair si
+imprimable, en hexadécimal sinon — et c'est lui qui tient les trois cas : un `Grant` de 8 Ko
+qui revient identique, un secret posé avec l'ancienne marque qui reste lisible, une tête
+abîmée qui devient une erreur.
+
+Rappel pour ce dossier : `crates/penelope-platform/src/backend/macos.rs` n'est pas compilé
+sous Linux. `cargo check -p penelope-platform --target aarch64-apple-darwin --all-targets`
+est la seule relecture possible depuis le conteneur, et elle a servi.
+
 ### Routine de livraison
 
 Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #147) :
