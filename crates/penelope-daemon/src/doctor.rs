@@ -1819,6 +1819,18 @@ async fn reachable_check(host: &str) -> DoctorCheck {
 /// Serveurs MCP : état de chacun, secrets manquants, déclarations invalides.
 pub async fn mcp_checks(s: &Services, sup: &crate::mcp::McpSupervisor) -> Vec<DoctorCheck> {
     let mut out = Vec::new();
+    // L'URL enregistrée chez le fournisseur doit être exactement celle-ci.
+    let mcfg = &s.config.config().mcp;
+    let redirect = if mcfg.oauth_redirect_mode == "public_callback" {
+        mcfg.public_callback_url.clone()
+    } else {
+        penelope_mcp::oauth::loopback_redirect(&mcfg.callback_host, mcfg.callback_port)
+    };
+    out.push(DoctorCheck::ok(
+        "mcp.oauth.redirect",
+        "Retour OAuth MCP",
+        format!("{redirect} (à enregistrer tel quel chez le fournisseur)"),
+    ));
     for st in sup.statuses().await {
         let id = format!("mcp.{}", st.name);
         let label = format!("Serveur MCP `{}`", st.name);

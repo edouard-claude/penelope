@@ -279,7 +279,7 @@ fn ca_8_3_oauth_discovery_and_pkce() {
     // 3. PKCE S256 et URL d'autorisation.
     let pkce = Pkce::generate();
     let state = random_state();
-    let redirect = loopback_redirect(7777);
+    let redirect = loopback_redirect("127.0.0.1", 7777);
     let url = authorize_url(
         &meta,
         "client-1",
@@ -330,7 +330,7 @@ fn ca_8_3_invalid_issuer_is_rejected() {
         issuer: auth.issuer.clone(),
         state: state.clone(),
         verifier: "v".into(),
-        redirect_uri: loopback_redirect(7777),
+        redirect_uri: loopback_redirect("127.0.0.1", 7777),
         resource: auth.resource.clone(),
         scopes: vec![],
         authorize_url: String::new(),
@@ -358,17 +358,17 @@ fn ca_8_3_incremental_consent_and_registration() {
 
     // Ordre d'enregistrement : CIMD, puis pré-enregistré, puis DCR.
     assert!(matches!(
-        choose_registration("https://penelope.example/cimd.json", None, &meta).unwrap(),
+        choose_registration("https://penelope.example/cimd.json", None, &meta, "srv").unwrap(),
         ClientRegistration::Cimd { .. }
     ));
     assert!(matches!(
-        choose_registration("", Some("client-1"), &meta).unwrap(),
+        choose_registration("", Some("client-1"), &meta, "srv").unwrap(),
         ClientRegistration::PreRegistered { .. }
     ));
-    let dcr = choose_registration("", None, &meta).unwrap();
+    let dcr = choose_registration("", None, &meta, "srv").unwrap();
     assert!(matches!(dcr, ClientRegistration::Dynamic { .. }));
 
-    let registered = auth.register(&dcr_body(&loopback_redirect(7777), &merged));
+    let registered = auth.register(&dcr_body(&loopback_redirect("127.0.0.1", 7777), &merged));
     assert_eq!(registered["client_id"], "client-dyn-1");
 }
 
@@ -396,7 +396,7 @@ async fn ca_8_3_paste_back_flow_over_telegram() {
         issuer: auth.issuer.clone(),
         state,
         verifier: "verifier-de-test-1234567890123456789012".into(),
-        redirect_uri: loopback_redirect(7777),
+        redirect_uri: loopback_redirect("127.0.0.1", 7777),
         resource: auth.resource.clone(),
         scopes: vec![],
         authorize_url: String::new(),

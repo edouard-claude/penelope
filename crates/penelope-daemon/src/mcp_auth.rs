@@ -177,16 +177,29 @@ pub async fn start(
         .and_then(|w| w.resource_metadata.clone())
         .filter(|u| check_endpoint(u).is_ok())
         .unwrap_or_else(|| oauth::protected_resource_url(&cfg.url));
-    let from_prm = match check_endpoint(&prm_url) {
-        Ok(()) => get_json(&client, &prm_url).await.ok().and_then(|v| {
-            v["authorization_servers"]
-                .as_array()
-                .and_then(|a| a.first())
-                .and_then(|x| x.as_str())
-                .map(String::from)
-        }),
+    let prm = match check_endpoint(&prm_url) {
+        Ok(()) => get_json(&client, &prm_url).await.ok(),
         Err(_) => None,
     };
+    let from_prm = prm.as_ref().and_then(|v| {
+        v["authorization_servers"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|x| x.as_str())
+            .map(String::from)
+    });
+    // Portées annoncées par la ressource : dernier recours quand ni la déclaration ni le
+    // défi 401 n'en donnent (Slack n'en met pas dans le défi).
+    let prm_scopes: Vec<String> = prm
+        .as_ref()
+        .and_then(|v| v["scopes_supported"].as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
     let issuer = from_prm
         .or_else(|| origin(&cfg.url))
         .ok_or_else(|| format!("URL du serveur `{}` illisible", cfg.name))?;
@@ -226,7 +239,9 @@ pub async fn start(
     let mode = RedirectMode::parse(&mcfg.oauth_redirect_mode);
     let redirect_uri = match mode {
         RedirectMode::PublicCallback => mcfg.public_callback_url.clone(),
-        RedirectMode::PasteBack => oauth::loopback_redirect(mcfg.callback_port),
+        RedirectMode::PasteBack => {
+            oauth::loopback_redirect(&mcfg.callback_host, mcfg.callback_port)
+        }
     };
     check_endpoint(&redirect_uri)?;
     if !mcfg.cimd_url.is_empty() && !mcfg.cimd_url.starts_with("https://") {
@@ -240,42 +255,54 @@ pub async fn start(
         .and_then(|w| w.scope.clone())
         .map(|sc| sc.split_whitespace().map(String::from).collect())
         .unwrap_or_default();
-    let scopes = oauth::incremental_scopes(&cfg.scopes, &missing);
+    let mut scopes = oauth::incremental_scopes(&cfg.scopes, &missing);
+    // Une demande sans portée est refusée par certains serveurs d'autorisation, dont
+    // Slack. `penelope mcp edit <srv> scopes '[…]'` garde la main, et une app n'accorde
+    // que ce qu'elle déclare : restreindre là plutôt qu'ici.
+    if scopes.is_empty() && !prm_scopes.is_empty() {
+        scopes = prm_scopes;
+        tracing::info!(
+            serveur = %cfg.name,
+            portees = %scopes.join(" "),
+            "aucune portée configurée : celles annoncées par la ressource sont demandées"
+        );
+    }
 
     // 4. Client : CIMD, client configuré, ou enregistrement dynamique par issuer.
-    let client_id = match oauth::choose_registration(&mcfg.cimd_url, Some(&cfg.client_id), &meta)
-        .map_err(|e| e.to_string())?
-    {
-        ClientRegistration::Cimd { url } => url,
-        ClientRegistration::PreRegistered { client_id } => client_id,
-        ClientRegistration::Dynamic { endpoint } => {
-            let key = format!(
-                "mcp.oauth.client.{}",
-                &penelope_kernel::canonical::sha256_hex(
-                    format!("{issuer}|{redirect_uri}").as_bytes()
-                )[..24]
-            );
-            match d.kv_get(&key).await.map_err(|e| e.to_string())? {
-                Some(id) if !id.is_empty() => id,
-                _ => {
-                    check_endpoint(&endpoint)?;
-                    let resp = client
-                        .post(&endpoint)
-                        .json(&oauth::dcr_body(&redirect_uri, &scopes))
-                        .send()
-                        .await
-                        .map_err(|e| format!("enregistrement du client : {e}"))?;
-                    let v: Value = resp.json().await.unwrap_or(Value::Null);
-                    let id = v["client_id"]
-                        .as_str()
-                        .ok_or("enregistrement du client refusé (pas de `client_id`)")?
-                        .to_string();
-                    d.kv_set(&key, &id).await.map_err(|e| e.to_string())?;
-                    id
+    let client_id =
+        match oauth::choose_registration(&mcfg.cimd_url, Some(&cfg.client_id), &meta, &cfg.name)
+            .map_err(|e| e.to_string())?
+        {
+            ClientRegistration::Cimd { url } => url,
+            ClientRegistration::PreRegistered { client_id } => client_id,
+            ClientRegistration::Dynamic { endpoint } => {
+                let key = format!(
+                    "mcp.oauth.client.{}",
+                    &penelope_kernel::canonical::sha256_hex(
+                        format!("{issuer}|{redirect_uri}").as_bytes()
+                    )[..24]
+                );
+                match d.kv_get(&key).await.map_err(|e| e.to_string())? {
+                    Some(id) if !id.is_empty() => id,
+                    _ => {
+                        check_endpoint(&endpoint)?;
+                        let resp = client
+                            .post(&endpoint)
+                            .json(&oauth::dcr_body(&redirect_uri, &scopes))
+                            .send()
+                            .await
+                            .map_err(|e| format!("enregistrement du client : {e}"))?;
+                        let v: Value = resp.json().await.unwrap_or(Value::Null);
+                        let id = v["client_id"]
+                            .as_str()
+                            .ok_or("enregistrement du client refusé (pas de `client_id`)")?
+                            .to_string();
+                        d.kv_set(&key, &id).await.map_err(|e| e.to_string())?;
+                        id
+                    }
                 }
             }
-        }
-    };
+        };
 
     // 5. PKCE, `state`, demande mémorisée.
     let pkce = Pkce::generate();
@@ -527,7 +554,9 @@ async fn handle_callback(
     } else if cimd_path.as_deref() == Some(target.as_str()) {
         let redirect = match RedirectMode::parse(&cfg.mcp.oauth_redirect_mode) {
             RedirectMode::PublicCallback => cfg.mcp.public_callback_url.clone(),
-            RedirectMode::PasteBack => oauth::loopback_redirect(cfg.mcp.callback_port),
+            RedirectMode::PasteBack => {
+                oauth::loopback_redirect(&cfg.mcp.callback_host, cfg.mcp.callback_port)
+            }
         };
         (
             "200 OK",
@@ -580,6 +609,13 @@ mod tests {
 
     /// Faux serveur d'autorisation : métadonnées, enregistrement, jetons.
     async fn fake_authorization_server() -> (String, Seen) {
+        fake_authorization_server_opts(false).await
+    }
+
+    /// `prereg` : à la manière de Slack, la ressource annonce ses portées, le défi 401
+    /// n'en porte aucune et le serveur d'autorisation n'offre pas d'enregistrement
+    /// dynamique. Seul un client pré-enregistré passe.
+    async fn fake_authorization_server_opts(prereg: bool) -> (String, Seen) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let seen: Seen = Arc::new(Mutex::new(Vec::new()));
@@ -627,9 +663,22 @@ mod tests {
                         .unwrap()
                         .push((method.clone(), path.clone(), body.clone()));
                     let json = match (method.as_str(), path.as_str()) {
+                        ("GET", "/.well-known/oauth-protected-resource/mcp") if prereg => {
+                            json!({
+                                "resource": format!("{b}/mcp"),
+                                "authorization_servers": [b],
+                                "scopes_supported": ["channels:history", "chat:write"],
+                            })
+                        }
                         ("GET", "/.well-known/oauth-protected-resource/mcp") => {
                             json!({"resource": format!("{b}/mcp"), "authorization_servers": [b]})
                         }
+                        ("GET", "/.well-known/oauth-authorization-server") if prereg => json!({
+                            "issuer": b,
+                            "authorization_endpoint": format!("{b}/authorize"),
+                            "token_endpoint": format!("{b}/token"),
+                            "code_challenge_methods_supported": ["S256"],
+                        }),
                         ("GET", "/.well-known/oauth-authorization-server") => json!({
                             "issuer": b,
                             "authorization_endpoint": format!("{b}/authorize"),
@@ -842,5 +891,119 @@ mod tests {
             Some("https://mcp.example:8443")
         );
         assert_eq!(origin("http://localhost@evil.example/x"), None);
+    }
+
+    /// #159 : Slack ne met pas de `scope` dans son défi 401 et n'en a pas dans sa
+    /// déclaration ; sans repli, l'autorisation partirait sans portée et serait refusée.
+    #[tokio::test]
+    async fn scopes_fall_back_to_those_advertised_by_the_resource() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = TestClock::new(1_789_516_800_000);
+        let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+                .await
+                .unwrap(),
+        );
+        let d = Daemon::from_services(s.clone());
+        let (base, _) = fake_authorization_server_opts(true).await;
+        let cfg = ServerConfig {
+            name: "slack".into(),
+            transport: "http".into(),
+            url: format!("{base}/mcp"),
+            client_id: "client-preenregistre".into(),
+            scopes: vec![],
+            ..Default::default()
+        };
+
+        let start = start(&d, &cfg, Some(r#"Bearer realm="slack""#))
+            .await
+            .unwrap();
+        let scope = param(&start.url, "scope");
+        assert_eq!(scope, "channels%3Ahistory%20chat%3Awrite", "{}", start.url);
+        assert_eq!(param(&start.url, "client_id"), "client-preenregistre");
+    }
+
+    /// Sans `client_id`, le message doit dire quoi faire plutôt que constater l'impasse.
+    #[tokio::test]
+    async fn a_server_without_registration_names_the_command_to_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = TestClock::new(1_789_516_800_000);
+        let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+                .await
+                .unwrap(),
+        );
+        let d = Daemon::from_services(s.clone());
+        let (base, _) = fake_authorization_server_opts(true).await;
+        let cfg = ServerConfig {
+            name: "slack".into(),
+            transport: "http".into(),
+            url: format!("{base}/mcp"),
+            ..Default::default()
+        };
+
+        let e = start(&d, &cfg, None).await.unwrap_err();
+        assert!(e.contains("penelope mcp edit slack client_id"), "{e}");
+        assert!(e.contains("docs/mcp.md"), "{e}");
+    }
+
+    /// #159 : Slack n'enregistre que `localhost` ; l'URL envoyée doit être exactement
+    /// celle enregistrée, à l'autorisation comme à l'échange.
+    #[tokio::test]
+    async fn the_callback_host_is_configurable() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = TestClock::new(1_789_516_800_000);
+        let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+                .await
+                .unwrap(),
+        );
+        s.config
+            .mutate("test", |c| {
+                c.mcp.callback_host = "localhost".into();
+                Ok(vec!["mcp.callback_host".into()])
+            })
+            .unwrap();
+        let d = Daemon::from_services(s.clone());
+        let (base, seen) = fake_authorization_server_opts(true).await;
+        let cfg = ServerConfig {
+            name: "slack".into(),
+            transport: "http".into(),
+            url: format!("{base}/mcp"),
+            client_id: "client-preenregistre".into(),
+            ..Default::default()
+        };
+
+        let start = start(&d, &cfg, None).await.unwrap();
+        assert_eq!(
+            param(&start.url, "redirect_uri"),
+            "http%3A%2F%2Flocalhost%3A7777%2Foauth%2Fcallback",
+            "{}",
+            start.url
+        );
+
+        let code = "code-1";
+        let url = format!(
+            "http://localhost:7777/oauth/callback?code={code}&state={}",
+            param(&start.url, "state")
+        );
+        complete(&d, &url).await.unwrap();
+        let exchange = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(m, p, _)| m == "POST" && p == "/token")
+            .cloned()
+            .expect("échange de jeton");
+        assert!(
+            exchange
+                .2
+                .contains("redirect_uri=http%3A%2F%2Flocalhost%3A7777"),
+            "{}",
+            exchange.2
+        );
     }
 }

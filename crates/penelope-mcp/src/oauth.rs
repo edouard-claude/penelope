@@ -465,6 +465,7 @@ pub fn choose_registration(
     cimd_url: &str,
     configured_client_id: Option<&str>,
     meta: &AsMetadata,
+    server: &str,
 ) -> Result<ClientRegistration> {
     if !cimd_url.is_empty() {
         return Ok(ClientRegistration::Cimd {
@@ -481,11 +482,11 @@ pub fn choose_registration(
             endpoint: ep.clone(),
         });
     }
-    Err(McpError::OAuth(
-        "aucun moyen d'enregistrer le client : ni CIMD, ni client pré-enregistré, \
-         ni endpoint d'enregistrement dynamique"
-            .into(),
-    ))
+    Err(McpError::OAuth(format!(
+        "ce serveur exige un client pré-enregistré : ni CIMD, ni enregistrement dynamique. \
+         Créer l'app chez le fournisseur, puis `penelope mcp edit {server} client_id <id>` ; \
+         voir docs/mcp.md § Client pré-enregistré"
+    )))
 }
 
 /// Corps d'enregistrement dynamique (RFC 7591).
@@ -529,9 +530,11 @@ pub fn incremental_scopes(granted: &[String], missing: &[String]) -> Vec<String>
     v
 }
 
-/// Adresse de redirection locale.
-pub fn loopback_redirect(port: u16) -> String {
-    format!("http://127.0.0.1:{port}/oauth/callback")
+/// Adresse de redirection locale. `host` vaut `127.0.0.1` ou `localhost` ; la
+/// configuration le valide, et l'URL doit correspondre exactement à celle enregistrée
+/// chez le fournisseur.
+pub fn loopback_redirect(host: &str, port: u16) -> String {
+    format!("http://{host}:{port}/oauth/callback")
 }
 
 fn urlencode(s: &str) -> String {
@@ -691,7 +694,7 @@ mod tests {
             issuer: "https://auth.example.com".into(),
             state: "etat-123".into(),
             verifier: "v".into(),
-            redirect_uri: loopback_redirect(7777),
+            redirect_uri: loopback_redirect("127.0.0.1", 7777),
             resource: "https://api.example.com/mcp".into(),
             scopes: vec![],
             authorize_url: String::new(),
@@ -742,26 +745,27 @@ mod tests {
     fn registration_preference_order() {
         let m = meta();
         assert_eq!(
-            choose_registration("https://penelope.example/cimd.json", Some("id"), &m).unwrap(),
+            choose_registration("https://penelope.example/cimd.json", Some("id"), &m, "srv")
+                .unwrap(),
             ClientRegistration::Cimd {
                 url: "https://penelope.example/cimd.json".into()
             }
         );
         assert_eq!(
-            choose_registration("", Some("id-preenregistre"), &m).unwrap(),
+            choose_registration("", Some("id-preenregistre"), &m, "srv").unwrap(),
             ClientRegistration::PreRegistered {
                 client_id: "id-preenregistre".into()
             }
         );
         assert_eq!(
-            choose_registration("", None, &m).unwrap(),
+            choose_registration("", None, &m, "srv").unwrap(),
             ClientRegistration::Dynamic {
                 endpoint: "https://auth.example.com/register".into()
             }
         );
         let mut sans = m.clone();
         sans.registration_endpoint = None;
-        assert!(choose_registration("", None, &sans).is_err());
+        assert!(choose_registration("", None, &sans, "srv").is_err());
     }
 
     #[test]

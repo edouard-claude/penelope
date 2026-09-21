@@ -919,6 +919,9 @@ pub struct Mcp {
     pub eager_total_max_bytes: usize,
     /// Port local du retour OAuth.
     pub callback_port: u16,
+    /// Hôte local du retour OAuth : `127.0.0.1` ou `localhost`. Slack n'enregistre que
+    /// `localhost` dans les URL de rappel d'une app (cf. #159).
+    pub callback_host: String,
     pub policy: McpPolicy,
     /// Attente maximale entre deux redémarrages d'un serveur. Sans effet dans cette
     /// version.
@@ -943,6 +946,7 @@ impl Default for Mcp {
             schema_max_bytes: 8 * 1024,
             eager_total_max_bytes: 64 * 1024,
             callback_port: 7777,
+            callback_host: "127.0.0.1".into(),
             policy: McpPolicy::default(),
             restart_backoff_max: "5m".into(),
             max_failures: 8,
@@ -1586,6 +1590,13 @@ impl Config {
                 "mcp.public_callback_url est requis en mode public_callback",
             ));
         }
+        // Un autre hôte ne serait pas une adresse de bouclage : le code d'autorisation
+        // partirait sur le réseau.
+        if !matches!(self.mcp.callback_host.as_str(), "127.0.0.1" | "localhost") {
+            return Err(KernelError::config(
+                "mcp.callback_host doit valoir `127.0.0.1` ou `localhost`",
+            ));
+        }
         for (k, v) in [
             ("read", &self.mcp.policy.read),
             ("write", &self.mcp.policy.write),
@@ -2083,6 +2094,23 @@ mod tests {
         let c = Config::default();
         let e = c.validate().unwrap_err().to_string();
         assert!(e.contains("telegram_user_id"), "{e}");
+    }
+
+    /// #159 : seule une adresse de bouclage convient, et Slack n'enregistre que
+    /// `localhost` dans les URL de rappel d'une app.
+    #[test]
+    fn the_oauth_callback_host_must_be_a_loopback_name() {
+        for host in ["127.0.0.1", "localhost"] {
+            let mut c = cfg();
+            c.mcp.callback_host = host.into();
+            c.validate().expect(host);
+        }
+        for host in ["0.0.0.0", "penelope.example", "127.0.0.2", ""] {
+            let mut c = cfg();
+            c.mcp.callback_host = host.into();
+            let e = c.validate().unwrap_err().to_string();
+            assert!(e.contains("mcp.callback_host"), "{host} : {e}");
+        }
     }
 
     /// #142 : un préfixe de fournisseur inconnu est une faute de frappe, refusée en

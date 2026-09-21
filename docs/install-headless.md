@@ -454,6 +454,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `mcp.schema_max_bytes` | `8192` | Taille maximale d'un schéma d'outil exposé directement au modèle, en octets. |
 | `mcp.eager_total_max_bytes` | `65536` | Taille totale des schémas exposés directement au modèle, en octets. |
 | `mcp.callback_port` | `7777` | Port local du retour OAuth. |
+| `mcp.callback_host` | `"127.0.0.1"` | Hôte local du retour OAuth : `127.0.0.1` ou `localhost`. Slack n'enregistre que `localhost` dans les URL de rappel d'une app (cf. #159). |
 | `mcp.policy.read` | `"auto"` | Politique d'un outil MCP en lecture : `auto`, `ask`, `ask_twice` ou `deny`. |
 | `mcp.policy.write` | `"ask"` | Politique d'un outil MCP en écriture. |
 | `mcp.policy.destructive` | `"ask_twice"` | Politique d'un outil MCP destructif. |

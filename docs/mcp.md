@@ -244,6 +244,67 @@ Deux modes de redirection, réglés par `mcp.oauth_redirect_mode` :
 Le consentement incrémental est géré : si un appel exige une portée manquante, seules les
 portées nouvelles sont demandées, en conservant celles déjà accordées.
 
+L'hôte du retour local se règle par `mcp.callback_host` : `127.0.0.1` par défaut,
+`localhost` accepté, rien d'autre. `penelope doctor` affiche l'URL de rappel effective ;
+c'est exactement celle à enregistrer chez le fournisseur.
+
+Les portées demandées viennent, dans l'ordre : de `scopes` dans la déclaration du serveur,
+des portées manquantes annoncées par le défi 401, et à défaut de `scopes_supported` de la
+ressource protégée (RFC 9728). Ce dernier recours évite une demande sans portée, que
+certains serveurs refusent.
+
+### Client pré-enregistré : Slack
+
+`mcp.slack.com` n'offre ni CIMD ni enregistrement dynamique, et n'accepte que les apps
+internes ou publiées au Marketplace. Il faut donc créer une app, une par espace de travail.
+Elle ne sert que de porteur d'identité OAuth : le jeton obtenu est un jeton **utilisateur**
+(`xoxp-`), et Pénélope ne voit que ce que voit le compte qui a autorisé. Le bot user du
+manifeste n'est jamais utilisé ; Slack l'exige seulement pour que `oauth/v2_user/authorize`
+accepte l'installation.
+
+api.slack.com/apps → Create New App → From a manifest :
+
+```json
+{
+  "display_information": { "name": "Pénélope" },
+  "features": { "bot_user": { "display_name": "Pénélope", "always_online": false } },
+  "oauth_config": {
+    "pkce_enabled": true,
+    "redirect_urls": ["http://localhost:7777/oauth/callback"],
+    "scopes": {
+      "user": ["channels:history", "channels:read", "groups:history", "groups:read",
+               "im:history", "im:read", "mpim:history", "mpim:read",
+               "search:read.public", "search:read.private", "search:read.im",
+               "search:read.mpim", "search:read.files", "search:read.users",
+               "users:read", "users:read.email", "files:read", "reactions:read",
+               "canvases:read", "lists:read", "emoji:read", "chat:write",
+               "reactions:write"]
+    }
+  },
+  "settings": { "is_mcp_enabled": true, "token_rotation_enabled": false,
+                "org_deploy_enabled": false }
+}
+```
+
+Puis, dans cet ordre :
+
+```bash
+penelope config set mcp.callback_host localhost   # Slack refuse 127.0.0.1
+penelope mcp edit slack client_id <Client ID de Basic Information>
+penelope mcp edit slack scopes '["channels:history", "…"]'   # les portées du manifeste
+penelope mcp auth slack
+```
+
+La troisième ligne n'est pas facultative : à défaut, Pénélope demande les
+`scopes_supported` de la ressource, que Slack annonce plus largement que ce que le
+manifeste déclare, et l'autorisation est refusée. **Les portées demandées doivent être
+celles du manifeste, ou un sous-ensemble.**
+
+Trois réglages font échouer l'autorisation s'ils manquent : `pkce_enabled` (sinon Slack
+réclame un `client_secret`), `is_mcp_enabled` (sinon `HTTP 400 — App is not enabled for
+Slack MCP server access`), et le bot user (sinon « doesn't have a bot user to install »).
+Si l'espace de travail restreint les installations, un administrateur doit approuver l'app.
+
 ## Supervision
 
 - Démarrage paresseux par défaut, extinction après `idle_timeout`.
