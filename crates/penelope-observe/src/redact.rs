@@ -132,18 +132,30 @@ pub fn registered_count() -> usize {
 
 /// Masque tout secret détecté. Idempotent : appliquer deux fois donne le même texte.
 pub fn redact(input: &str) -> String {
-    // Les références `${SECRET:nom}` traversent la redaction intactes.
-    if input.contains("${SECRET:") {
-        let mut out = String::with_capacity(input.len());
-        let mut last = 0;
-        for m in reference_re().find_iter(input) {
-            out.push_str(&redact(&input[last..m.start()]));
-            out.push_str(m.as_str());
-            last = m.end();
-        }
-        out.push_str(&redact(&input[last..]));
-        return out;
+    // Les références `${SECRET:nom}` traversent la rédaction intactes (issue #37). Le
+    // découpage est **linéaire** : chaque segment entre deux références est rédigé par
+    // `redact_segment`, qui ne se rappelle jamais.
+    //
+    // Cette fonction s'appelait elle-même sur les segments (issue #153). Un texte portant
+    // `${SECRET:` sans référence complète derrière — `${SECRET:…}` avec le caractère « … »,
+    // ou une ligne coupée au milieu d'une référence — passait le `contains`, `find_iter` ne
+    // trouvait rien, et `redact(&input[0..])` repartait sur le **même** texte, sans fin. Six
+    // lignes de ce genre, écrites par Pénélope en expliquant la syntaxe, ont fait déborder
+    // la pile du thread écrivain au démarrage et revenir en arrière les 0.17.30 et 0.17.31.
+    let mut out = String::with_capacity(input.len());
+    let mut last = 0;
+    for m in reference_re().find_iter(input) {
+        out.push_str(&redact_segment(&input[last..m.start()]));
+        out.push_str(m.as_str());
+        last = m.end();
     }
+    out.push_str(&redact_segment(&input[last..]));
+    out
+}
+
+/// Rédige un texte qui ne contient **aucune** référence complète : c'est le seul endroit
+/// où les règles s'appliquent, et il ne se rappelle pas lui-même.
+fn redact_segment(input: &str) -> String {
     let mut out = input.to_string();
 
     for v in known_values() {
@@ -505,6 +517,42 @@ pub fn redact_json(v: &serde_json::Value) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+
+    /// #153 : une référence `${SECRET:` **sans** accolade fermante ne doit pas faire
+    /// boucler la rédaction. Six lignes de ce genre, écrites par Pénélope en expliquant
+    /// la syntaxe, ont fait déborder la pile du thread écrivain au démarrage et revenir
+    /// en arrière les versions 0.17.30 et 0.17.31.
+    ///
+    /// Le test ne peut pas observer l'ancien comportement : un débordement de pile abat
+    /// le processus (`abort`), il ne se rattrape pas. Il vérifie donc que la rédaction
+    /// **rend**, et que les références complètes traversent toujours intactes.
+    #[test]
+    fn an_orphan_secret_reference_never_loops() {
+        for orphan in [
+            "secrets via ${SECRET:…}",
+            "${SECRET:timeperformance</pre>",
+            "<code>${SECRET:…}</code> supporté dans",
+            "${SECRET:",
+            "${SECRET:nom sans accolade",
+            "${SECRET:a} puis ${SECRET:",
+        ] {
+            let out = redact(orphan);
+            assert!(!out.is_empty(), "« {orphan} » doit rendre un texte");
+        }
+        // Ce que #37 garantit ne bouge pas : une référence complète traverse intacte,
+        // même à côté d'une orpheline.
+        // Une orpheline est un texte comme un autre : ni référence, ni secret à masquer
+        // quand rien derrière elle n'en a la forme.
+        assert_eq!(
+            redact("${SECRET:telegram_bot_token} et ${SECRET:"),
+            "${SECRET:telegram_bot_token} et ${SECRET:"
+        );
+        assert_eq!(
+            redact("avant ${SECRET:a} milieu ${SECRET:b} après"),
+            "avant ${SECRET:a} milieu ${SECRET:b} après"
+        );
+    }
+
     use super::*;
     use serde_json::json;
 

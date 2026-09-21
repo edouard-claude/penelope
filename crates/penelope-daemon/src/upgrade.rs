@@ -567,8 +567,12 @@ pub fn on_boot(state_dir: &Path, running_version: &str, now_ms: i64) -> Boot {
         } else {
             Err(format!("{} introuvable", p.previous.display()))
         };
+        // Pourquoi l'essai a échoué (issue #153) : la carte disait seulement « n'a pas
+        // démarré correctement », et il a fallu lire `daemon.err.log` à la main pour
+        // trouver un débordement de pile. La dernière ligne utile y est reprise.
+        let why = last_error_line(state_dir).unwrap_or_default();
         let note = match &outcome {
-            Ok(()) => format!("{}\n{}\n", p.to_version, p.from_version),
+            Ok(()) => format!("{}\n{}\n{why}\n", p.to_version, p.from_version),
             Err(e) => format!("{}\n\n{e}\n", p.to_version),
         };
         let _ = std::fs::write(rolled_back_note(state_dir), note);
@@ -612,9 +616,57 @@ pub fn arm_watchdog(after: Duration) {
 /// Ce qu'il faut annoncer au propriétaire après un démarrage sain.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Confirmation {
-    Upgraded { from: String, to: String },
-    RolledBack { from: String, to: String },
-    RollbackFailed { from: String, error: String },
+    Upgraded {
+        from: String,
+        to: String,
+    },
+    RolledBack {
+        from: String,
+        to: String,
+        /// Dernière ligne d'erreur du binaire à l'essai, quand on a pu la lire (#153).
+        why: Option<String>,
+    },
+    RollbackFailed {
+        from: String,
+        error: String,
+    },
+}
+
+/// Dernière ligne parlante de la sortie d'erreur du daemon : c'est là qu'un abandon
+/// écrit ce qu'il a à dire (`stack overflow`, `fatal runtime error`), sans passer par le
+/// journal JSON que le processus meurt avant d'écrire (issue #153).
+fn last_error_line(state_dir: &Path) -> Option<String> {
+    // `<state>/../Logs/Penelope/daemon.err.log` sur macOS, `<state>/daemon.err.log`
+    // ailleurs : les deux sont tentés, le premier lisible gagne.
+    let candidates = [
+        state_dir.join("daemon.err.log"),
+        state_dir.join("../Logs/Penelope/daemon.err.log"),
+    ];
+    for path in candidates {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        // Les dernières lignes seulement : le fichier grossit sans fin.
+        let line = text
+            .lines()
+            .rev()
+            .take(40)
+            .map(str::trim)
+            .find(|l| {
+                !l.is_empty()
+                    && (l.contains("overflow")
+                        || l.contains("fatal")
+                        || l.contains("panic")
+                        || l.contains("erreur")
+                        || l.contains("error"))
+            })
+            .map(|l| l.chars().take(200).collect::<String>());
+        if line.is_some() {
+            // La ligne part dans un message : elle passe par le rédacteur (#148).
+            return line.map(|l| penelope_observe::redact(&l));
+        }
+    }
+    None
 }
 
 impl Confirmation {
@@ -623,9 +675,16 @@ impl Confirmation {
             Confirmation::Upgraded { from, to } => {
                 format!("⬆️ Pénélope est passée de {from} à {to}.")
             }
-            Confirmation::RolledBack { from, to } => format!(
-                "⚠️ La version {from} n'a pas démarré correctement : retour automatique à {to}."
-            ),
+            Confirmation::RolledBack { from, to, why } => match why {
+                Some(w) if !w.is_empty() => format!(
+                    "⚠️ La version {from} n'a pas démarré : retour automatique à {to}.\n\n\
+                     Dernière erreur du binaire à l'essai :\n`{w}`"
+                ),
+                _ => format!(
+                    "⚠️ La version {from} n'a pas démarré correctement : retour automatique \
+                     à {to}."
+                ),
+            },
             Confirmation::RollbackFailed { from, error } => format!(
                 "❌ La version {from} ne démarre pas et le retour arrière a échoué ({error}) : \
                  réinstaller à la main."
@@ -642,13 +701,15 @@ pub fn confirm(state_dir: &Path, running_version: &str) -> Option<Confirmation> 
         let mut lines = note.lines();
         let from = lines.next().unwrap_or("?").to_string();
         let to = lines.next().unwrap_or_default().to_string();
+        let rest = lines.collect::<Vec<_>>().join(" ").trim().to_string();
         return Some(if to.is_empty() {
-            Confirmation::RollbackFailed {
-                from,
-                error: lines.collect::<Vec<_>>().join(" ").trim().to_string(),
-            }
+            Confirmation::RollbackFailed { from, error: rest }
         } else {
-            Confirmation::RolledBack { from, to }
+            Confirmation::RolledBack {
+                from,
+                to,
+                why: (!rest.is_empty()).then_some(rest),
+            }
         });
     }
     let p = pending(state_dir)?;
@@ -688,9 +749,9 @@ pub async fn confirm_when_healthy(d: Arc<Daemon>) {
         Confirmation::Upgraded { from, to } => {
             ("upgrade.confirmed", json!({"from": from, "to": to}))
         }
-        Confirmation::RolledBack { from, to } => (
+        Confirmation::RolledBack { from, to, why } => (
             "upgrade.rolled_back",
-            json!({"from": from, "to": to, "automatic": true}),
+            json!({"from": from, "to": to, "automatic": true, "why": why}),
         ),
         Confirmation::RollbackFailed { from, error } => (
             "upgrade.rollback_failed",
@@ -1176,6 +1237,42 @@ mod tests {
     }
 
     /// CA 2 : un upgrade volontairement cassé est annulé automatiquement.
+    /// #153 : quand la sortie d'erreur du binaire à l'essai dit pourquoi, la carte le
+    /// répète. Deux versions sont revenues en arrière sans que rien ne dise « stack
+    /// overflow » ailleurs que dans un fichier que personne ne lit.
+    #[test]
+    fn the_rollback_card_repeats_the_last_error_of_the_failed_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().to_path_buf();
+        std::fs::write(
+            state.join("daemon.err.log"),
+            "démarrage\nthread 'penelope-store-writer' has overflowed its stack\n\
+             fatal runtime error: stack overflow, aborting\n",
+        )
+        .unwrap();
+        let why = last_error_line(&state).expect("une ligne d'erreur");
+        assert!(why.contains("stack overflow"), "{why}");
+
+        let card = Confirmation::RolledBack {
+            from: "0.17.31".into(),
+            to: "0.17.27".into(),
+            why: Some(why),
+        }
+        .text();
+        assert!(
+            card.contains("0.17.31") && card.contains("0.17.27"),
+            "{card}"
+        );
+        assert!(
+            card.contains("stack overflow"),
+            "la carte dit pourquoi : {card}"
+        );
+
+        // Sans fichier lisible, la phrase d'avant, sans rien inventer.
+        let vide = tempfile::tempdir().unwrap();
+        assert!(last_error_line(vide.path()).is_none());
+    }
+
     #[cfg(unix)]
     #[test]
     fn ca_2_8_a_broken_upgrade_is_rolled_back_automatically() {
@@ -1209,7 +1306,10 @@ mod tests {
             confirm(&state, "1.0.0"),
             Some(Confirmation::RolledBack {
                 from: "1.1.0".into(),
-                to: "1.0.0".into()
+                to: "1.0.0".into(),
+                // Aucune sortie d'erreur lisible dans ce bac à sable de test : la carte
+                // retombe sur sa phrase d'avant (#153).
+                why: None,
             })
         );
         assert!(confirm(&state, "1.0.0").is_none());

@@ -8,7 +8,7 @@ Dernière mise à jour : 20 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1604 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1606 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2042,6 +2042,44 @@ un `&&` (70 %), 129 des 166 cartes portaient sur une ligne collée, et 107 clics
 - Un seul endroit pour classer une lecture : `is_read_command` a rejoint le découpage dans
   `penelope-hitl::cmdline`, comme #141 l'avait fait pour le lexer. Deux listes de
   programmes de lecture auraient divergé.
+
+### 0.17.32
+
+#### Les mises à jour revenaient en arrière : boucle du rédacteur (#153)
+
+Sur l'instance, **0.17.30 puis 0.17.31 sont revenues en arrière toutes seules** ; le Mac
+est resté en 0.17.27, sans le Trousseau de #148, les formulaires de #149 ni la livraison
+de #147. Le mécanisme de #36 a fait exactement son travail : cinq essais, retour au
+binaire précédent, message au propriétaire.
+
+- **La cause** : `redact()` s'appelait elle-même sur les segments autour des références
+  `${SECRET:nom}`. Un texte portant `${SECRET:` **sans** référence complète derrière
+  passait le `contains`, la recherche ne trouvait rien, et la fonction repartait sur le
+  **même** texte : récursion infinie. Six lignes de ce genre dormaient dans `tg_outbox`,
+  écrites par Pénélope elle-même en expliquant la syntaxe. Défaut latent depuis #37.
+- **Le déclencheur, c'était #148** : `reredact_outbox` repassait toute la file au
+  rédacteur au premier démarrage, dans une seule transaction, sur le thread écrivain. La
+  première ligne orpheline faisait déborder sa pile, le processus était **abattu**
+  (`abort`, pas une panique : le filet de #44 ne le voit pas), avant d'avoir écrit une
+  ligne de journal.
+- **Le rédacteur est linéaire** : un découpage sur les références trouvées, chaque segment
+  rédigé par une fonction qui ne se rappelle pas. Une référence orpheline est un texte
+  comme un autre. Les références complètes traversent toujours intactes (#37).
+- **La passe est hors transaction** : lecture, rédaction dans la tâche courante, écriture
+  par paquets de cent. Un paquet qui échoue est journalisé et n'arrête pas la passe ; le
+  drapeau n'est posé qu'à la fin.
+- **Le thread écrivain a 8 Mio de pile**, explicitement : il porte des travaux de
+  maintenance qui traversent des tables entières, et un débordement y abat tout.
+- **La carte de retour arrière dit pourquoi** : la dernière ligne parlante de
+  `daemon.err.log` du binaire à l'essai (ici « stack overflow »), rédigée avant l'envoi.
+  Elle disait seulement « n'a pas démarré correctement ».
+- **`penelope doctor` (`redactor`)** passe neuf formes connues — références complètes,
+  orphelines, hexadécimal, JSON — avec un délai de cinq secondes : une boucle est vue
+  avant d'atteindre un démarrage.
+
+Reproduit hors suite de tests (un débordement de pile abat le processus, il ne se
+rattrape pas) : sonde sur les six lignes, `fatal runtime error: stack overflow` sur
+l'ancien code, sept lignes rendues sur le nouveau.
 
 ### Routine de livraison
 

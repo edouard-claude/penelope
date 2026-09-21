@@ -231,6 +231,9 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     // Part des lignes `shell_exec` collées, sur sept jours (#150).
     checks.push(glued_lines_check(s).await);
 
+    // Le rédacteur rend, sur toutes les formes connues (#153).
+    checks.push(redactor_check().await);
+
     // Magasin de secrets : un aller-retour de 8 Ko, la taille d'un Grant (#148).
     checks.push(secret_roundtrip_check(s));
 
@@ -256,6 +259,60 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     }
 
     checks
+}
+
+/// #153 : le rédacteur rend, sur un corpus fixe, dans un délai.
+///
+/// Une récursion infinie sur une référence `${SECRET:` orpheline a fait déborder la pile
+/// du thread écrivain au démarrage, et revenir en arrière deux versions de suite. Le
+/// processus était abattu (`abort`) avant d'écrire une ligne de journal : rien ne pouvait
+/// le dire. Ce contrôle passe le corpus dans un thread à **petite** pile, à part : une
+/// boucle y meurt sans emporter le daemon, et l'absence de réponse est l'alerte.
+pub async fn redactor_check() -> DoctorCheck {
+    const ID: &str = "redactor";
+    const LABEL: &str = "Rédacteur de secrets";
+    const CORPUS: &[&str] = &[
+        "${SECRET:telegram_bot_token}",
+        "secrets via ${SECRET:…}",
+        "${SECRET:timeperformance</pre>",
+        "${SECRET:",
+        "${SECRET:a} puis ${SECRET:",
+        "sk-proj-0123456789abcdef0123456789abcdef0123456789abcdef",
+        "deadbeef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "{\"token\": \"ghp_0123456789abcdef0123456789abcdef0123\"}",
+        "ligne ordinaire, sans rien à masquer",
+    ];
+    // Le travail part dans un processus léger à lui : un débordement de pile abat le
+    // processus entier, on ne peut donc pas l'exécuter ici et espérer le rattraper. Le
+    // délai attrape aussi bien une boucle infinie qu'une lenteur pathologique.
+    let work = tokio::task::spawn_blocking(|| {
+        for c in CORPUS {
+            let _ = penelope_observe::redact(c);
+        }
+    });
+    match tokio::time::timeout(std::time::Duration::from_secs(5), work).await {
+        Ok(Ok(())) => DoctorCheck::ok(
+            ID,
+            LABEL,
+            format!("{} formes rendues, références orphelines comprises", CORPUS.len()),
+        ),
+        Ok(Err(e)) => DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!("le rédacteur a échoué : {e}"),
+            Some("`penelope doctor --json` et ouvrir une issue : rien ne doit faire échouer le rédacteur".into()),
+        ),
+        Err(_) => DoctorCheck::fail(
+            ID,
+            LABEL,
+            "le rédacteur n'a pas rendu en 5 s sur un corpus de neuf textes".to_string(),
+            Some(
+                "boucle probable : le daemon mourra au prochain texte de cette forme. \
+                 Ne pas mettre à jour avant correction"
+                    .into(),
+            ),
+        ),
+    }
 }
 
 /// #150 : la part des appels `shell_exec` qui collent plusieurs commandes. Sept jours

@@ -156,6 +156,12 @@ impl Store {
         let (tx, mut rx) = mpsc::unbounded_channel::<WriteJob>();
         std::thread::Builder::new()
             .name("penelope-store-writer".into())
+            // Pile explicite et généreuse (issue #153) : ce thread porte des travaux de
+            // maintenance qui traversent toute une table, et un débordement de pile
+            // **abat le processus** — ce n'est pas une panique, le filet de #44 ne le
+            // voit pas. Le défaut de 2 Mio a suffi à faire revenir en arrière deux
+            // versions de suite.
+            .stack_size(8 * 1024 * 1024)
             .spawn(move || {
                 while let Some(job) = rx.blocking_recv() {
                     // Second filet : une panique hors transaction (maintenance) ne doit

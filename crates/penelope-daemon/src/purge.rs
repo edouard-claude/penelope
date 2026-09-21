@@ -421,29 +421,53 @@ pub async fn reredact_outbox(d: &Daemon) -> anyhow::Result<usize> {
     if d.kv_get(FLAG).await?.is_some() {
         return Ok(0);
     }
-    let fixed = d
+    // La rédaction se fait **hors** transaction, et hors du thread écrivain (issue
+    // #153) : elle traversait toute la file dans une seule écriture, et le premier texte
+    // qui la faisait boucler emportait le processus au démarrage. Ici, une lecture, un
+    // calcul dans la tâche courante, puis des écritures par paquets.
+    let rows: Vec<(String, String)> = d
         .services
         .store
-        .write(|tx| {
-            let rows: Vec<(String, String)> = {
-                let mut st = tx.prepare("SELECT id, payload FROM tg_outbox")?;
-                let r = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-                r.collect::<Result<Vec<_>, _>>()?
-            };
-            let mut n = 0;
-            for (id, payload) in rows {
-                let red = penelope_observe::redact(&payload);
-                if red != payload {
+        .read(|c| {
+            let mut st = c.prepare("SELECT id, payload FROM tg_outbox")?;
+            let r = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(r.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await?;
+    let changed: Vec<(String, String)> = rows
+        .into_iter()
+        .filter_map(|(id, payload)| {
+            let red = penelope_observe::redact(&payload);
+            (red != payload).then_some((id, red))
+        })
+        .collect();
+    let mut fixed = 0usize;
+    // Par paquets : une transaction par centaine de lignes, pour qu'un redémarrage au
+    // milieu ne perde que le paquet en cours. La passe est idempotente — rédiger une
+    // ligne déjà rédigée ne la change plus.
+    for lot in changed.chunks(100) {
+        let lot: Vec<(String, String)> = lot.to_vec();
+        let n = lot.len();
+        match d
+            .services
+            .store
+            .write(move |tx| {
+                for (id, red) in &lot {
                     tx.execute(
                         "UPDATE tg_outbox SET payload = ?2 WHERE id = ?1",
                         params![id, red],
                     )?;
-                    n += 1;
                 }
-            }
-            Ok(n)
-        })
-        .await?;
+                Ok(())
+            })
+            .await
+        {
+            Ok(()) => fixed += n,
+            // Un paquet qui échoue est dit, il n'arrête pas la passe : le drapeau n'est
+            // posé qu'à la fin, la prochaine reprendra ce qui reste.
+            Err(e) => tracing::error!(erreur = %e, lignes = n, "paquet non réécrit"),
+        }
+    }
     d.kv_set(FLAG, &fixed.to_string()).await?;
     if fixed > 0 {
         tracing::warn!(
