@@ -113,6 +113,7 @@ async fn fourteen_days_of_conversations_become_scoped_rules() {
                 "telegram",
                 penelope_memory::Origin::Untrusted,
                 None,
+                &penelope_llm::CancelToken::new(),
             )
             .await;
         }
