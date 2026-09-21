@@ -8,7 +8,7 @@ Dernière mise à jour : 20 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1637 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1638 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2398,6 +2398,34 @@ d'une coupure réseau, plafond de trois tentatives, trace par tentative (0.17.37
 d'une passe manuelle annoncé au foyer, ligne `doctor` sur le budget envoyé, alerte batterie
 (0.17.34) ; les trois cas — sortie coupée, raisonnement plein, coupure réseau et lot rejoué
 — sortent dans les avertissements du rapport.
+
+### 0.17.40
+
+#### Les trois points laissés de côté, faits (#155, #158)
+
+Ils étaient écrits dans les issues fermées plutôt que réalisés. Les voici.
+
+- **L'ingestion est réellement interruptible** (#155). `ingest.rs` lançait son appel au
+  modèle avec un `CancelToken::new()` que personne ne tenait : `/stop tout` promettait de
+  la mettre en pause et ne touchait rien. J'avais retiré la promesse — honnête, mais pas
+  mieux. Le bus porte désormais un registre des ingestions par session (`start_ingest`,
+  `end_ingest`, `cancel_ingests`), le jeton traverse `ingest` → `summarise` →
+  `chat_stream`, `/stop` les compte et `/stop tout` les annule. La phrase est de retour,
+  tenue cette fois.
+- **Les boutons** (#155). La machinerie existait : l'écran des runs porte ⏸, ▶️ et ⏹ par
+  run, l'arrêt sous confirmation. Quand `/stop tout` laisse des runs ouverts, cet écran
+  suit la réponse. « Laisser », c'est ne pas cliquer — la commande ne décide pas à la
+  place du propriétaire.
+- **SQLite à jour** (#158). `rusqlite` 0.32 → 0.37, SQLite 3.46.0 → ≥ 3.50, la raison
+  écrite dans `Cargo.toml` : 3.46.1 a corrigé un faux positif de l'`integrity-check` FTS5,
+  c'est-à-dire **la source** du verdict que la 0.17.37 apprenait à ne pas croire sur
+  parole. Les deux bouts sont maintenant traités. Aucun changement de code n'a été
+  nécessaire ; un test verrouille la version embarquée.
+
+Un appelant de `ingest` vivait dans les tests de `penelope-evals`, que
+`cargo check -p penelope-daemon` ne compile pas : seule la suite complète l'a vu. Même
+leçon que pour `macos.rs` plus tôt — une vérification partielle laisse croire que tout
+compile.
 
 ### Routine de livraison
 
