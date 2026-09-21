@@ -8,7 +8,7 @@ Dernière mise à jour : 20 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1606 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1607 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2080,6 +2080,36 @@ binaire précédent, message au propriétaire.
 Reproduit hors suite de tests (un débordement de pile abat le processus, il ne se
 rattrape pas) : sonde sur les six lignes, `fatal runtime error: stack overflow` sur
 l'ancien code, sept lignes rendues sur le nouveau.
+
+### 0.17.33
+
+#### La consolidation ne pense plus à la place d'écrire (#152)
+
+Nuit du 20 au 21/09 : passe en échec, 224 candidats examinés, zéro promu. Sur un **seul**
+candidat, avec 8 000 tokens de sortie autorisés, le modèle a dépensé les 8 000 en
+raisonnement et n'a rendu aucune opération. Deuxième nuit sur trois à échouer.
+
+- **La cause** : `lightest_effort` prenait le plus faible niveau **de la liste déclarée**.
+  Pour `deepseek-v4-flash`, OpenRouter annonce `["xhigh","high"]` avec
+  `mandatory: false` : la consolidation partait donc en `high`. Le raisonnement n'était
+  pas obligatoire, rien ne permettait de le couper par ce chemin.
+- **Raisonnement facultatif = coupé**, quelle que soit la liste ; obligatoire = le plus
+  faible déclaré. Et `none` n'est plus envoyé comme un effort : c'est
+  `reasoning: {enabled: false, exclude: true}`, que le fournisseur entend vraiment.
+- **Le plafond porte les deux** quand le modèle impose de réfléchir : `max_tokens` compte
+  le raisonnement chez OpenRouter, le budget de sortie est donc doublé dans ce cas, et
+  laissé tel quel quand le raisonnement est coupé.
+- **« Raisonnement plein » n'est pas « coupé »** : sortie utile vide et budget parti en
+  réflexion, ce n'est pas une réponse trop longue. L'échelle de lots de #135 ne s'applique
+  plus (réduire le lot n'y change rien) ; le premier cas est dit, le second bascule sur
+  l'alias de repli (`memoire`) pour le reste de la passe, et si le repli s'affame aussi,
+  la passe s'arrête en le disant, candidats non jugés reportés.
+- **Le lot affamé ne compte plus comme jugé** : l'événement `memory.dream_batch` porte
+  `reasoning`, `reasoning_starved` et `judged`. Il passait pour un lot abouti.
+- `penelope doctor` (`reasoning_effort`) annonce l'effort qui partira pour le rôle
+  `compaction` et la part de raisonnement observée sur sept jours ; au-delà de 50 %, c'est
+  une alerte. `penelope model set` prévient quand un alias de consolidation ou de relecture
+  reçoit un modèle qui impose de réfléchir — un avertissement, pas un refus.
 
 ### Routine de livraison
 

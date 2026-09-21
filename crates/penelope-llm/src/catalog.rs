@@ -48,18 +48,17 @@ impl ModelInfo {
     /// n'expose aucun réglage : rien n'est alors envoyé.
     pub fn lightest_effort(&self) -> Option<String> {
         let efforts = self.reasoning_efforts.as_ref()?;
-        if efforts.is_empty() {
-            return Some(
-                if self.reasoning_mandatory {
-                    "minimal"
-                } else {
-                    "none"
-                }
-                .into(),
-            );
-        }
-        if !self.reasoning_mandatory && efforts.iter().any(|e| e == "none") {
+        // Raisonnement facultatif : on le **coupe**, même quand la liste déclarée n'offre
+        // aucun niveau bas (issue #152). `deepseek-v4-flash` annonce
+        // `supported_efforts: ["xhigh","high"]` avec `mandatory: false` : chercher le plus
+        // faible de la liste rendait `high`, et la consolidation dépensait tout son budget
+        // de sortie à réfléchir — 8 000 tokens pour un seul candidat, zéro opération. Le
+        // fournisseur traduit `none` en ce qu'il faut (`reasoning: {enabled: false}`).
+        if !self.reasoning_mandatory {
             return Some("none".into());
+        }
+        if efforts.is_empty() {
+            return Some("minimal".into());
         }
         efforts.iter().rev().find(|e| *e != "none").cloned()
     }
@@ -416,6 +415,22 @@ mod tests {
         assert_eq!(m.lightest_effort().as_deref(), Some("low"));
         m.reasoning_efforts = Some(Vec::new());
         assert_eq!(m.lightest_effort().as_deref(), Some("minimal"));
+
+        // #152 : une liste sans niveau bas ne force pas à réfléchir quand le
+        // raisonnement est facultatif. C'est le cas de `deepseek-v4-flash`
+        // (`["xhigh","high"]`, `mandatory: false`), qui dépensait tout son budget de
+        // sortie en raisonnement une nuit sur deux.
+        let mut flash = models[0].clone();
+        flash.reasoning_efforts = Some(vec!["xhigh".into(), "high".into()]);
+        flash.reasoning_mandatory = false;
+        assert_eq!(flash.lightest_effort().as_deref(), Some("none"));
+        // Obligatoire : le plus faible déclaré, jamais `none`.
+        flash.reasoning_mandatory = true;
+        assert_eq!(flash.lightest_effort().as_deref(), Some("high"));
+        // Liste vide et facultatif : coupé aussi.
+        flash.reasoning_efforts = Some(Vec::new());
+        flash.reasoning_mandatory = false;
+        assert_eq!(flash.lightest_effort().as_deref(), Some("none"));
     }
 
     #[test]

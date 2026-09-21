@@ -34,6 +34,13 @@ pub enum Scripted {
         completion: u64,
         cut: bool,
     },
+    /// Le modèle a dépensé son budget de sortie en raisonnement : fin `Length`, aucun
+    /// texte, `completion` et `reasoning` pleins. Ce n'est pas une réponse trop longue
+    /// (issue #152).
+    ReasonedOnly {
+        completion: u64,
+        reasoning: u64,
+    },
 }
 
 #[derive(Clone, Default)]
@@ -251,6 +258,14 @@ impl Provider for MockProvider {
         if let Scripted::Written { completion, .. } = &scripted {
             usage.completion = *completion;
         }
+        if let Scripted::ReasonedOnly {
+            completion,
+            reasoning,
+        } = &scripted
+        {
+            usage.completion = *completion;
+            usage.reasoning = *reasoning;
+        }
         let model = req.model.clone();
         let (tx, rx) = mpsc::channel(32);
         tokio::spawn(async move {
@@ -305,6 +320,7 @@ impl Provider for MockProvider {
                         FinishReason::Stop
                     }
                 }
+                Scripted::ReasonedOnly { .. } => FinishReason::Length,
                 Scripted::MidStreamError(t, message) => {
                     if !t.is_empty() {
                         let _ = tx.send(StreamChunk::Delta { text: t }).await;

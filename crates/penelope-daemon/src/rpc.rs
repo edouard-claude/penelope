@@ -567,6 +567,25 @@ impl Rpc {
                          modèle à un alias sans outils."
                     );
                 }
+                // Un rôle d'extraction structurée (consolidation, relecture d'épisode)
+                // donné à un modèle qui ne sait pas couper son raisonnement dépense son
+                // budget de sortie à réfléchir et ne rend rien (issue #152) : c'est un
+                // avertissement, pas un refus — le propriétaire peut avoir ses raisons.
+                let reasoning_note = s
+                    .catalog
+                    .get(bare_new)
+                    .filter(|_| crate::doctor::alias_serves_extraction(&s.config.config(), &alias))
+                    .and_then(|i| {
+                        (i.lightest_effort().as_deref() != Some("none")).then(|| {
+                            format!(
+                                "`{model}` impose un raisonnement (effort le plus faible : {}) \
+                                 et l'alias `{alias}` sert la consolidation : son budget de \
+                                 sortie partira en réflexion, et la passe nocturne peut ne \
+                                 rien rendre",
+                                i.lightest_effort().unwrap_or_else(|| "?".into())
+                            )
+                        })
+                    });
                 let g = self.daemon.publish_config("cli", |c| {
                     c.models.aliases.insert(alias.clone(), model.clone());
                     Ok(vec![format!("models.aliases.{alias}")])
@@ -575,7 +594,16 @@ impl Rpc {
                 // Un catalogue chargé permet de prévenir d'une faute de frappe.
                 let bare = penelope_llm::catalog::strip_provider(&model);
                 let known = s.catalog.is_empty() || s.catalog.get(bare).is_some();
-                Ok(json!({"generation": g, "alias": alias, "model": model, "known": known}))
+                let mut out = json!({"generation": g, "alias": alias, "model": model,
+                                     "known": known});
+                // La clé n'apparaît que s'il y a quelque chose à dire : le rendu générique
+                // du CLI imprime toutes les clés, un `null` ferait une ligne vide.
+                if let Some(w) = reasoning_note
+                    && let Some(o) = out.as_object_mut()
+                {
+                    o.insert("avertissement".into(), json!(w));
+                }
+                Ok(out)
             }
             // Connexion d'un fournisseur à compte : aujourd'hui Codex (issue #142). Ni le
             // code d'appareil ni les jetons ne passent par une carte d'approbation ou par

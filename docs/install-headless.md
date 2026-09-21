@@ -2182,6 +2182,18 @@ pas sa santé dans la minute, l'ancien binaire revient tout seul et Telegram le 
 `penelope upgrade --check` indique seulement la dernière version, `--tag v0.3.1` en
 choisit une, `--rollback` revient au binaire précédent.
 
+**Raisonnement des rôles de fond.** La consolidation nocturne, la compaction et la
+relecture d'épisode rendent du JSON : leur budget de sortie doit servir à écrire, pas à
+réfléchir. Pénélope coupe donc le raisonnement quand le modèle le permet
+(`reasoning: {enabled: false}`), et prend le niveau le plus faible déclaré quand il est
+obligatoire ; dans ce cas le plafond de sortie est doublé, le fournisseur comptant le
+raisonnement dedans. Un modèle qui dépense quand même son budget à réfléchir sans rien
+écrire n'est plus traité comme une réponse trop longue : la passe le dit
+(« raisonnement plein »), et bascule sur l'alias de repli au deuxième appel de ce genre.
+`penelope doctor` (`reasoning_effort`) annonce l'effort qui partira et la part de
+raisonnement observée sur sept jours, et `penelope model set` prévient quand un alias de
+ces rôles reçoit un modèle qui impose de réfléchir (#152).
+
 **Le délai.** Un lot fusionné sur `main` n'est pas immédiatement installable : la CI
 rejoue les suites, pose le tag de la version du workspace, puis la release construit le
 binaire universel. Compter une douzaine de minutes entre la fusion et l'apparition dans

@@ -777,7 +777,16 @@ pub fn to_openai_body(req: &ChatRequest) -> Value {
         obj.insert("max_tokens".into(), json!(m));
     }
     if let Some(r) = &req.reasoning_effort {
-        obj.insert("reasoning".into(), json!({ "effort": r }));
+        // `none` n'est pas un niveau d'effort : c'est l'extinction du raisonnement
+        // (issue #152). OpenRouter l'entend par `enabled: false` ; envoyé comme
+        // `effort: "none"`, plusieurs modèles l'ignorent et réfléchissent quand même,
+        // jusqu'à dépenser tout `max_tokens` avant d'écrire la moindre réponse.
+        let value = if r == "none" {
+            json!({"enabled": false, "exclude": true})
+        } else {
+            json!({ "effort": r })
+        };
+        obj.insert("reasoning".into(), value);
     }
     if let Some(f) = &req.response_format {
         obj.insert("response_format".into(), f.clone());
@@ -1359,6 +1368,24 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(to_openai_body(&req)["reasoning"]["effort"], "high");
+
+        // #152 : `none` éteint le raisonnement, il ne le règle pas au plus bas. Envoyé
+        // comme un effort, `deepseek-v4-flash` continuait de réfléchir jusqu'à épuiser
+        // `max_tokens` sans rien écrire.
+        let off = ChatRequest {
+            model: "deepseek/deepseek-v4-flash".into(),
+            messages: vec![],
+            reasoning_effort: Some("none".into()),
+            ..Default::default()
+        };
+        let body = to_openai_body(&off);
+        assert_eq!(body["reasoning"]["enabled"], false);
+        assert_eq!(body["reasoning"]["exclude"], true);
+        assert!(
+            body["reasoning"]["effort"].is_null(),
+            "pas d'effort quand le raisonnement est coupé : {}",
+            body["reasoning"]
+        );
     }
 
     #[test]

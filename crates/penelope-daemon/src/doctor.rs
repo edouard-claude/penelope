@@ -234,6 +234,9 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     // Le rédacteur rend, sur toutes les formes connues (#153).
     checks.push(redactor_check().await);
 
+    // Effort de raisonnement du rôle de consolidation, et ce qu'il coûte (#152).
+    checks.push(reasoning_effort_check(s).await);
+
     // Magasin de secrets : un aller-retour de 8 Ko, la taille d'un Grant (#148).
     checks.push(secret_roundtrip_check(s));
 
@@ -259,6 +262,79 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     }
 
     checks
+}
+
+/// Un alias qui sert un rôle d'extraction structurée : il rend du JSON, pas de la prose,
+/// et son budget de sortie ne doit pas partir en raisonnement (issue #152).
+pub fn alias_serves_extraction(cfg: &penelope_kernel::config::Config, alias: &str) -> bool {
+    ["compaction", "memory_review"]
+        .iter()
+        .any(|role| cfg.role_alias(role) == alias)
+}
+
+/// #152 : ce que le modèle du rôle `compaction` fera de son budget de sortie.
+///
+/// La nuit du 20/09, il a dépensé 8 000 tokens à réfléchir sur un seul candidat et n'a
+/// rendu aucune opération : `lightest_effort` renvoyait `high` parce qu'OpenRouter ne
+/// déclare que `["xhigh","high"]` pour ce modèle. Une nuit sur deux échouait.
+pub async fn reasoning_effort_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "reasoning_effort";
+    const LABEL: &str = "Raisonnement de la consolidation";
+    let cfg = s.config.config();
+    let alias = cfg.role_alias("compaction");
+    let Some(model) = cfg.alias_model(&alias).map(str::to_string) else {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!("aucun modèle pour l'alias `{alias}` du rôle `compaction`"),
+            Some(format!("penelope model set {alias} <fournisseur:modèle>")),
+        );
+    };
+    let effort = s
+        .catalog
+        .get(model.split_once(':').map_or(model.as_str(), |(_, m)| m))
+        .and_then(|i| i.lightest_effort());
+    let sent = match effort.as_deref() {
+        Some("none") => "raisonnement coupé".to_string(),
+        Some(e) => format!("effort `{e}` (le modèle l'impose)"),
+        None => "aucun réglage exposé".to_string(),
+    };
+    // Part de raisonnement réellement observée sur sept jours.
+    let since = (s.clock.now_utc() - chrono::Duration::days(7))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let (reasoning, completion): (i64, i64) = s
+        .store
+        .read(move |c| {
+            Ok(c.query_row(
+                "SELECT COALESCE(SUM(reasoning), 0), COALESCE(SUM(completion), 0)
+                 FROM usage WHERE ts >= ?1 AND role = 'consolidation'",
+                [since],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .await
+        .unwrap_or((0, 0));
+    if completion == 0 {
+        return DoctorCheck::ok(
+            ID,
+            LABEL,
+            format!("{alias} : {sent} ; aucune passe en 7 jours"),
+        );
+    }
+    let share = (reasoning as f64 * 100.0 / completion as f64).round() as i64;
+    let detail = format!("{alias} : {sent} ; {share}% de la sortie en raisonnement sur 7 jours");
+    if share > 50 {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            detail,
+            Some(format!(
+                "plus de la moitié du budget part en réflexion : la consolidation échouera. \
+                 Choisir un modèle qui accepte de la couper (`penelope model set {alias} …`)"
+            )),
+        );
+    }
+    DoctorCheck::ok(ID, LABEL, detail)
 }
 
 /// #153 : le rédacteur rend, sur un corpus fixe, dans un délai.

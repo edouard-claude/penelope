@@ -211,6 +211,10 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
             // Candidats laissés par une passe arrêtée : ni jugés, ni reportés (#140).
             let mut unjudged: BTreeSet<String> = BTreeSet::new();
             let (mut lots, mut lone_lots) = (0usize, 0usize);
+            // Appels « raisonnement plein » de la passe, et alias de repli une fois qu'on
+            // y a basculé (issue #152).
+            let mut starved = 0usize;
+            let mut fallback_alias: Option<String> = None;
             let mut i = 0usize;
             while i < items.len() {
                 // Plus de la moitié des lots à un seul candidat : la passe ne converge
@@ -235,10 +239,62 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                     let slice = &items[i..i + size];
                     let started = std::time::Instant::now();
                     let requested = budget.max_tokens(size);
-                    let (response, truncated, completion) =
-                        consolidate_retrying(d, slice, &snapshot, requested, &mut report).await?;
+                    let out = consolidate_retrying(
+                        d,
+                        slice,
+                        &snapshot,
+                        requested,
+                        &mut report,
+                        fallback_alias.as_deref(),
+                    )
+                    .await?;
                     report.calls += 1;
-                    batch_event(d, &run_id, size, started.elapsed(), completion, truncated).await;
+                    batch_event(d, &run_id, size, started.elapsed(), &out).await;
+                    let (response, truncated, completion) =
+                        (out.parsed, out.truncated, out.completion);
+                    // Raisonnement plein, sortie vide : réduire le lot n'y changerait
+                    // rien (issue #152). Le premier est dit, le second fait basculer sur
+                    // l'alias de repli pour le reste de la passe.
+                    if out.reasoning_starved {
+                        report.wasted_calls += 1;
+                        starved += 1;
+                        let model_note = fallback_alias
+                            .as_deref()
+                            .map(|a| format!(" (déjà sur `{a}`)"))
+                            .unwrap_or_default();
+                        report.warnings.push(format!(
+                            "raisonnement plein sur {size} candidat(s) : {} tokens dépensés \
+                             à réfléchir, aucune opération rendue{model_note}",
+                            out.reasoning
+                        ));
+                        if starved == 1 && fallback_alias.is_none() {
+                            continue;
+                        }
+                        if starved >= 2 && fallback_alias.is_none() {
+                            let next = d.services.config.config().role_alias("memoire");
+                            report.warnings.push(format!(
+                                "bascule sur l'alias `{next}` pour le reste de la passe : le \
+                                 modèle du rôle `compaction` dépense son budget en \
+                                 raisonnement"
+                            ));
+                            fallback_alias = Some(next);
+                            continue;
+                        }
+                        // Déjà sur le repli, et toujours affamé : on s'arrête là plutôt
+                        // que de tourner.
+                        report.warnings.push(
+                            "l'alias de repli dépense lui aussi son budget en raisonnement : \
+                             passe arrêtée"
+                                .into(),
+                        );
+                        unjudged.extend(
+                            items[i..]
+                                .iter()
+                                .flat_map(|it| it.group.members.iter().map(|m| m.id.clone())),
+                        );
+                        i = items.len();
+                        break;
+                    }
                     if truncated {
                         budget.cut(size, requested, completion);
                     }
@@ -1211,15 +1267,34 @@ pub(crate) fn usage_note(s: &penelope_memory::index::Signals) -> String {
 }
 
 /// Verdicts et opérations du modèle du rôle `compaction` (issue #37).
+/// Ce qu'un appel de consolidation a rendu (issue #152). « Coupé » et « raisonnement
+/// plein » étaient confondus : le second faisait réduire les lots, ce qui ne sert à rien
+/// — la réflexion ne dépend pas du nombre de candidats.
+#[derive(Debug, Default)]
+struct CallOutcome {
+    parsed: penelope_memory::grid::Consolidation,
+    /// Sortie trop longue : le JSON n'a pas tenu dans le budget.
+    truncated: bool,
+    /// Budget dépensé en raisonnement, sortie utile vide : réduire le lot n'y changera
+    /// rien, il faut baisser l'effort ou changer de modèle.
+    reasoning_starved: bool,
+    completion: u64,
+    reasoning: u64,
+}
+
 async fn consolidate(
     d: &Arc<Daemon>,
     items: &[Item<'_>],
     snap: &VaultSnapshot,
     max_tokens: u32,
-) -> anyhow::Result<(penelope_memory::grid::Consolidation, bool, u64)> {
+    alias_override: Option<&str>,
+) -> anyhow::Result<CallOutcome> {
     let s = &d.services;
     let cfg = s.config.config();
-    let alias = cfg.role_alias("compaction");
+    let alias = match alias_override {
+        Some(a) => a.to_string(),
+        None => cfg.role_alias("compaction"),
+    };
     let model = cfg
         .alias_model(&alias)
         .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}` du rôle `compaction`"))?
@@ -1282,6 +1357,16 @@ async fn consolidate(
 
     let info = s.catalog.get(strip_provider(&model));
     let effort = info.as_ref().and_then(|i| i.lightest_effort());
+    // `max_tokens` borne la sortie **raisonnement compris** chez OpenRouter (issue #152) :
+    // quand le raisonnement ne peut pas être coupé, le plafond doit porter les deux,
+    // sinon le modèle n'a plus de place pour répondre. Coupé, le budget reste celui de la
+    // réponse utile.
+    let thinks = effort.as_deref().is_some_and(|e| e != "none");
+    let max_tokens = if thinks {
+        max_tokens.saturating_mul(2)
+    } else {
+        max_tokens
+    };
     let structured = info
         .as_ref()
         .map(|i| i.supports_structured_output())
@@ -1333,11 +1418,25 @@ async fn consolidate(
         .await;
     let text = response.message.text();
     let parsed = penelope_memory::grid::parse(&text);
+    let hit_cap = matches!(response.finish, penelope_llm::types::FinishReason::Length);
+    // Budget dépensé à réfléchir, rien d'écrit : ce n'est pas une sortie trop longue,
+    // c'est un modèle qui pense jusqu'au plafond (issue #152). Réduire le lot n'y change
+    // rien ; c'est l'effort ou le modèle qu'il faut changer.
+    let reasoning_starved = hit_cap
+        && text.trim().is_empty()
+        && response.usage.reasoning > response.usage.completion / 2;
     // Réponse coupée : le fournisseur le dit, ou le JSON ne se lit pas alors qu'on
     // attendait des verdicts.
-    let truncated = matches!(response.finish, penelope_llm::types::FinishReason::Length)
-        || (parsed.verdicts.is_empty() && !items.is_empty() && !text.trim().is_empty());
-    Ok((parsed, truncated, response.usage.completion))
+    let truncated = !reasoning_starved
+        && (hit_cap
+            || (parsed.verdicts.is_empty() && !items.is_empty() && !text.trim().is_empty()));
+    Ok(CallOutcome {
+        parsed,
+        truncated,
+        reasoning_starved,
+        completion: response.usage.completion,
+        reasoning: response.usage.reasoning,
+    })
 }
 
 /// Taille des lots d'une passe (issues #135, #140). Après une sortie coupée, les lots
@@ -1506,15 +1605,20 @@ async fn batch_event(
     run_id: &str,
     size: usize,
     took: Duration,
-    completion: u64,
-    truncated: bool,
+    out: &CallOutcome,
 ) {
+    // `coupe` reste ce qu'il a toujours été : la réponse n'a pas tenu dans le budget.
+    // `raisonnement` dit l'autre échec, où rien n'a été écrit du tout (issue #152) : les
+    // deux étaient comptés pareil, et un lot affamé passait pour un lot jugé.
+    let starved = out.reasoning_starved;
     tracing::info!(
         run = run_id,
         lot = size,
         ms = took.as_millis() as u64,
-        sortie = completion,
-        coupe = truncated,
+        sortie = out.completion,
+        raisonnement = out.reasoning,
+        coupe = out.truncated,
+        affame = starved,
         "lot de consolidation"
     );
     let _ = d
@@ -1523,7 +1627,10 @@ async fn batch_event(
         .append(EventDraft::new(
             "memory.dream_batch",
             json!({"run": run_id, "size": size, "ms": took.as_millis() as u64,
-                   "completion": completion, "truncated": truncated}),
+                   "completion": out.completion, "reasoning": out.reasoning,
+                   "truncated": out.truncated, "reasoning_starved": starved,
+                   // Un lot affamé n'a rien jugé : il ne compte pas comme abouti.
+                   "judged": !starved}),
         ))
         .await;
 }
@@ -1538,14 +1645,15 @@ async fn consolidate_retrying(
     snap: &VaultSnapshot,
     max_tokens: u32,
     report: &mut DreamReport,
-) -> anyhow::Result<(penelope_memory::grid::Consolidation, bool, u64)> {
+    alias_override: Option<&str>,
+) -> anyhow::Result<CallOutcome> {
     let wait = penelope_kernel::config::parse_duration(
         &d.services.config.config().memory.dream_retry_wait,
     )
     .unwrap_or(Duration::from_secs(120));
     let mut attempt = 0u32;
     loop {
-        match consolidate(d, items, snap, max_tokens).await {
+        match consolidate(d, items, snap, max_tokens, alias_override).await {
             Err(e) if attempt < RETRIES && passing(&e) => {
                 report.calls += 1;
                 report.wasted_calls += 1;
@@ -3399,6 +3507,8 @@ mod tests {
         }
     }
 
+    /// `(taille, « rien à en tirer »)` : coupé, ou affamé de raisonnement (#152) — dans
+    /// les deux cas le lot n'a pas jugé ses candidats.
     fn dream_batches(events: &[penelope_kernel::event::Event]) -> Vec<(u64, bool)> {
         events
             .iter()
@@ -3406,7 +3516,7 @@ mod tests {
             .map(|e| {
                 (
                     e.payload["size"].as_u64().unwrap(),
-                    e.payload["truncated"] == true,
+                    e.payload["truncated"] == true || e.payload["reasoning_starved"] == true,
                 )
             })
             .collect()
@@ -3439,6 +3549,80 @@ mod tests {
             "{:?}",
             o.report.warnings
         );
+    }
+
+    /// #152 : un modèle qui dépense tout son budget de sortie en raisonnement ne fait
+    /// **pas** réduire les lots — réfléchir ne dépend pas du nombre de candidats. La nuit
+    /// du 20/09, 8 000 tokens sur un seul candidat, zéro opération, et l'échelle de #135
+    /// descendait jusqu'à l'échec. La passe bascule maintenant sur l'alias de repli.
+    #[tokio::test]
+    async fn a_model_that_spends_its_budget_thinking_switches_alias() {
+        let (_dir, d, p) = daemon().await;
+        projects(&d, 6, |_| false).await;
+        // Le modèle du rôle pense jusqu'au plafond et n'écrit rien ; celui du repli
+        // répond normalement.
+        let fallback = d.services.config.config().role_alias("memoire");
+        let fallback_model = d
+            .services
+            .config
+            .config()
+            .alias_model(&fallback)
+            .unwrap_or_default()
+            .to_string();
+        p.set_responder(Some(Arc::new(move |req: &ChatRequest| {
+            if req.model == fallback_model {
+                let n = req
+                    .messages
+                    .last()
+                    .map(|m| m.text())
+                    .unwrap_or_default()
+                    .lines()
+                    .filter(|l| {
+                        l.split_once(". [").is_some_and(|(k, _)| {
+                            !k.is_empty() && k.chars().all(|c| c.is_ascii_digit())
+                        })
+                    })
+                    .count() as u64;
+                let tri: Vec<String> = (1..=n)
+                    .map(|k| {
+                        format!(
+                            r#"{{"candidat": {k}, "durable": false, "utile": false, "precis": true,
+                              "introuvable": true, "endosse": true, "justification": "passager"}}"#
+                        )
+                    })
+                    .collect();
+                return penelope_llm::mock::Scripted::Written {
+                    text: format!(r#"{{"tri": [{}], "operations": []}}"#, tri.join(",")),
+                    completion: 200,
+                    cut: false,
+                };
+            }
+            let cap = req.max_tokens.map_or(8_000, u64::from);
+            penelope_llm::mock::Scripted::ReasonedOnly {
+                completion: cap,
+                reasoning: cap,
+            }
+        })));
+
+        let o = run(&d, false).await.unwrap();
+        let w = o.report.warnings.join(" | ");
+        assert!(
+            w.contains("raisonnement plein"),
+            "l'avertissement nomme la vraie cause : {w}"
+        );
+        assert!(
+            w.contains("bascule sur l'alias"),
+            "la passe change de modèle plutôt que de réduire les lots : {w}"
+        );
+        // Le vocabulaire de #135 ne doit pas s'appliquer : ce n'est pas une sortie coupée.
+        assert!(
+            !w.contains("consolidation coupée"),
+            "un raisonnement plein n'est pas une sortie trop longue : {w}"
+        );
+        // Et la passe aboutit sur le repli, tous les candidats jugés.
+        let batches = dream_batches(&d.services.events.range(0, 10_000).await.unwrap());
+        let judged: u64 = batches.iter().filter(|(_, cut)| !cut).map(|(n, _)| n).sum();
+        assert_eq!(judged, 6, "{batches:?}");
     }
 
     /// #140 : un candidat seul coupé au plancher est repris une fois avec une sortie
