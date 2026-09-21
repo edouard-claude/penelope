@@ -28,7 +28,31 @@ use std::time::Duration;
 /// Verrou de passe : au-delà, une passe interrompue est considérée morte.
 const LOCK_TTL_MS: i64 = 2 * 3_600_000;
 const LOCK_KEY: &str = "dream.lock";
+/// Délai d'un appel de consolidation quand rien ne le dimensionne (modèle sans
+/// raisonnement, budget inconnu).
 const LLM_TIMEOUT: Duration = Duration::from_secs(240);
+/// Débit prudent d'un modèle de consolidation, en tokens par seconde. Mesuré le 21/09 :
+/// 15 344 tokens en 306 s (50/s), 19 700 en 110 s (179/s). Le plancher sert à *majorer*
+/// le temps nécessaire, pas à le prédire.
+const TOKENS_PER_SEC: f64 = 15.0;
+/// Bornes du délai dérivé : assez long pour un lot qui réfléchit vraiment, assez court
+/// pour ne pas immobiliser la nuit sur un seul appel.
+const CALL_TIMEOUT_MIN: Duration = Duration::from_secs(240);
+const CALL_TIMEOUT_MAX: Duration = Duration::from_secs(900);
+
+/// Combien de temps laisser à un appel qui doit rendre `max_tokens` au plus.
+///
+/// 240 s fixes tuaient tout appel qui réfléchissait vraiment (issue #152) : avec 8 000 à
+/// 16 000 tokens de raisonnement autorisés, un lot demande cinq à onze minutes. L'appel
+/// était tué à quatre, classé « réseau coupé », rejoué après 300 s, indéfiniment.
+fn call_timeout(max_tokens: u32, remaining: Duration) -> Duration {
+    let derived = Duration::from_secs_f64(f64::from(max_tokens) / TOKENS_PER_SEC);
+    derived
+        .clamp(CALL_TIMEOUT_MIN, CALL_TIMEOUT_MAX)
+        // Jamais au-delà de ce qu'il reste à la passe : un appel qui déborderait la nuit
+        // ne sert à rien.
+        .min(remaining.max(CALL_TIMEOUT_MIN))
+}
 /// Taille maximale d'un fichier cible montré au modèle, en caractères.
 const FILE_EXCERPT_CHARS: usize = 6_000;
 /// Fichiers où le modèle peut ajouter une entrée.
@@ -304,6 +328,7 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                         &mut report,
                         fallback_alias.as_deref(),
                         deadline,
+                        &run_id,
                     )
                     .await?;
                     report.calls += 1;
@@ -1414,17 +1439,14 @@ async fn consolidate(
         let rx = provider.chat_stream(request, CancelToken::new()).await?;
         collect_stream(rx, &model, provider.name(), &s.catalog).await
     };
-    let response = tokio::time::timeout(LLM_TIMEOUT, call)
-        .await
-        .map_err(|_| {
-            LlmError::new(
-                LlmErrorKind::Transient,
-                format!(
-                    "consolidation sans réponse complète en {} s",
-                    LLM_TIMEOUT.as_secs()
-                ),
-            )
-        })??;
+    // Le délai suit le budget demandé, pas une constante (issue #152).
+    let budget = call_timeout(max_tokens, CALL_TIMEOUT_MAX);
+    let response = tokio::time::timeout(budget, call).await.map_err(|_| {
+        LlmError::new(
+            LlmErrorKind::Transient,
+            format!("{OWN_TIMEOUT} : rien de complet en {} s", budget.as_secs()),
+        )
+    })??;
     let _ = s
         .budget
         .record(penelope_kernel::budget::UsageRecord {
@@ -1832,6 +1854,7 @@ async fn consolidate_retrying(
     report: &mut DreamReport,
     alias_override: Option<&str>,
     deadline: std::time::Instant,
+    run_id: &str,
 ) -> anyhow::Result<CallOutcome> {
     let wait = penelope_kernel::config::parse_duration(
         &d.services.config.config().memory.dream_retry_wait,
@@ -1842,40 +1865,62 @@ async fn consolidate_retrying(
     loop {
         match consolidate(d, items, snap, max_tokens, reasoning_budget, alias_override).await {
             Err(e) if passing(&e) => {
-                // Machine endormie ou réseau coupé (Mac sur batterie le 21/09 : trou de
-                // journal de douze minutes) : le lot attend le retour plutôt que de
-                // consommer ses deux reprises et d'abandonner la passe (issue #152). La
-                // patience s'arrête au temps de la nuit.
-                let stall = network_stall(&e);
-                let over = if stall { stalls } else { attempt } >= RETRIES;
+                // Un appel tué par **notre** délai n'est pas une coupure réseau : c'est un
+                // budget trop court. Une vraie coupure se prouve par une sonde, sans quoi
+                // la passe attendait 300 s et rejouait sans fin (issue #152).
+                let stall = network_stall(&e) || (own_timeout(&e) && !network_is_up().await);
                 let delay = if stall {
                     STALL_WAIT
                 } else {
                     wait * (attempt + 1)
                 };
-                let room = std::time::Instant::now() + delay + LLM_TIMEOUT < deadline;
-                if over && !(stall && room) {
+                // Un plafond **global** : quelle qu'en soit la cause, un lot ne monopolise
+                // pas la nuit. Au-delà, il est reporté et la passe continue.
+                let total = attempt + stalls + 1;
+                let room = std::time::Instant::now() + delay + CALL_TIMEOUT_MIN < deadline;
+                let over = total > MAX_ATTEMPTS
+                    || if stall {
+                        stalls >= RETRIES
+                    } else {
+                        attempt >= RETRIES
+                    };
+                if (over && !(stall && room && total <= MAX_ATTEMPTS)) || !room {
                     return Err(e);
                 }
                 report.calls += 1;
                 report.wasted_calls += 1;
-                if stall {
+                let why = if stall {
                     stalls += 1;
-                    report.warnings.push(format!(
-                        "lot de {} candidat(s) : réseau coupé ou machine endormie ({e}), lot \
-                         rejoué dans {} s",
-                        items.len(),
+                    format!(
+                        "réseau coupé ou machine endormie ({e}), lot rejoué dans {} s",
                         delay.as_secs()
-                    ));
+                    )
                 } else {
                     attempt += 1;
-                    report.warnings.push(format!(
-                        "lot de {} candidat(s) : erreur passagère ({e}), reprise \
-                         {attempt}/{RETRIES} après {} s",
-                        items.len(),
+                    format!(
+                        "{e}, reprise {attempt}/{RETRIES} après {} s",
                         delay.as_secs()
-                    ));
-                }
+                    )
+                };
+                report
+                    .warnings
+                    .push(format!("lot de {} candidat(s) : {why}", items.len()));
+                // Chaque tentative laisse une trace : sans cela, la passe du 21/09 a
+                // tourné une heure sans une ligne de journal ni un événement (issue #152).
+                tracing::warn!(lot = items.len(), attempt = total, stall, "{why}");
+                let _ = d
+                    .services
+                    .events
+                    .append(EventDraft::new(
+                        "memory.dream_retry",
+                        json!({"run": run_id, "size": items.len(), "attempt": total,
+                               "stall": stall, "delay_s": delay.as_secs(),
+                               "error": e.to_string()}),
+                    ))
+                    .await;
+                // Et l'état de la passe avance à chaque tentative, pas seulement après un
+                // lot écrit : les avertissements restaient en mémoire, invisibles.
+                let _ = save_stats(&d.services, run_id, report).await;
                 tokio::time::sleep(delay).await;
             }
             other => return other,
@@ -1883,9 +1928,32 @@ async fn consolidate_retrying(
     }
 }
 
+/// Tentatives d'un même lot, toutes causes confondues. Au-delà, le lot est reporté et la
+/// passe continue : une nuit entière sur un seul lot ne vaut pas mieux qu'un échec.
+const MAX_ATTEMPTS: u32 = 3;
+
 /// Attente entre deux reprises d'un lot coupé par le réseau ou la veille : assez longue
 /// pour laisser la machine revenir, assez courte pour reprendre la nuit (issue #152).
 const STALL_WAIT: Duration = Duration::from_secs(300);
+
+/// Marque de notre propre délai, par opposition à une erreur venue du réseau.
+const OWN_TIMEOUT: &str = "appel trop long pour son budget";
+
+/// Le réseau répond-il ? Sonde TCP vers le fournisseur, cinq secondes.
+///
+/// Sans elle, « notre appel a dépassé son délai » et « la machine dormait » se
+/// confondaient, et un appel simplement trop lent partait pour une attente de cinq
+/// minutes, sans fin (issue #152).
+async fn network_is_up() -> bool {
+    matches!(
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::net::TcpStream::connect(("openrouter.ai", 443)),
+        )
+        .await,
+        Ok(Ok(_))
+    )
+}
 
 /// Coupure réseau ou machine endormie, par opposition à une erreur passagère du
 /// fournisseur : le lot est rejoué au retour, pas compté dans les deux reprises.
@@ -1897,17 +1965,26 @@ fn network_stall(e: &anyhow::Error) -> bool {
         return false;
     }
     let m = l.to_string().to_lowercase();
-    // Notre propre délai, ou une erreur de connexion locale. Surtout pas « timeout » tout
-    // court : un `Upstream idle timeout` est une erreur du fournisseur (#127), qui se
-    // reprend vite, pas une machine endormie qu'il faut attendre.
-    m.contains("sans réponse complète")
-        || m.contains("error sending request")
+    // Notre propre délai n'en est **pas** une : un appel trop long pour son budget est un
+    // problème de budget, pas de réseau. Le confondre coûtait 300 s d'attente puis un
+    // rejeu, sans fin (issue #152). Surtout pas « timeout » tout court non plus : un
+    // `Upstream idle timeout` est une erreur du fournisseur (#127), qui se reprend vite.
+    if m.contains(OWN_TIMEOUT) {
+        return false;
+    }
+    m.contains("error sending request")
         || m.contains("connection refused")
         || m.contains("connection reset")
         || m.contains("connexion")
         || m.contains("dns")
         || m.contains("network is unreachable")
         || m.contains("réseau")
+}
+
+/// Notre appel a dépassé le temps qu'on lui avait accordé.
+fn own_timeout(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<LlmError>()
+        .is_some_and(|l| l.to_string().contains(OWN_TIMEOUT))
 }
 
 /// Reprises d'un lot après une erreur passagère.
@@ -4127,9 +4204,12 @@ mod tests {
             // Trois coupures réseau d'affilée : plus que les deux reprises d'une erreur
             // passagère ordinaire.
             if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 3 {
+                // Une vraie coupure locale. Surtout pas notre propre délai : le
+                // confondre avec une coupure faisait attendre 300 s par tentative,
+                // indéfiniment (issue #152).
                 return penelope_llm::mock::Scripted::Error(
                     LlmErrorKind::Transient,
-                    "consolidation sans réponse complète en 240 s".into(),
+                    "error sending request for url (openrouter.ai)".into(),
                 );
             }
             penelope_llm::mock::Scripted::Written {
@@ -4147,8 +4227,8 @@ mod tests {
             "la coupure est nommée pour elle-même : {w}"
         );
         assert!(
-            !w.contains("erreur passagère"),
-            "ce n'est pas un 5xx du fournisseur : {w}"
+            !w.contains("reprise 1/"),
+            "ce n'est pas une erreur passagère ordinaire : {w}"
         );
         // Les trois candidats ont fini par être jugés.
         let batches = dream_batches(&d.services.events.range(0, 10_000).await.unwrap());
@@ -4516,7 +4596,9 @@ mod tests {
             o.report
                 .warnings
                 .iter()
-                .any(|w| w.contains("erreur passagère") && w.contains("reprise 1/2")),
+                // L'avertissement nomme l'erreur du fournisseur telle quelle : c'est
+                // elle qu'on lit au matin, pas une catégorie (issue #152).
+                .any(|w| w.contains("Upstream idle timeout") && w.contains("reprise 1/2")),
             "{:?}",
             o.report.warnings
         );
@@ -4540,6 +4622,68 @@ mod tests {
 
     /// #127 : une nuit dont un lot échoue trois fois n'écrit rien, laisse les candidats tels
     /// quels, le dit dans `DREAMS.md`, un événement et un message ; une panne qui dure ne
+    /// #152 : 240 s fixes tuaient tout appel qui réfléchissait vraiment. Le 21/09, avec
+    /// 8 000 à 16 000 tokens de raisonnement autorisés, chaque lot demandait cinq à onze
+    /// minutes : tué à quatre, classé « réseau coupé », rejoué après 300 s, sans fin.
+    #[test]
+    fn the_call_deadline_follows_the_budget_it_was_given() {
+        let hour = Duration::from_secs(3600);
+        // Un petit budget garde le plancher : rien ne justifie d'attendre plus.
+        assert_eq!(call_timeout(1_000, hour), CALL_TIMEOUT_MIN);
+        // Le budget qui a fait échouer la nuit : 16 000 de raisonnement + la sortie.
+        assert!(
+            call_timeout(24_000, hour) > Duration::from_secs(240),
+            "un lot qui réfléchit a plus de quatre minutes"
+        );
+        // Mais jamais sans borne : un seul appel n'immobilise pas la nuit.
+        assert_eq!(call_timeout(1_000_000, hour), CALL_TIMEOUT_MAX);
+        // Ni au-delà de ce qu'il reste à la passe.
+        assert_eq!(
+            call_timeout(1_000_000, Duration::from_secs(300)),
+            Duration::from_secs(300),
+            "le reste de la nuit borne le délai"
+        );
+        // Mais le plancher tient : un reste dérisoire ne donne pas un appel mort-né.
+        assert_eq!(
+            call_timeout(1_000_000, Duration::from_secs(10)),
+            CALL_TIMEOUT_MIN
+        );
+    }
+
+    /// #152 : « notre appel a dépassé son délai » n'est pas « la machine dormait ». Les
+    /// confondre coûtait 300 s d'attente par tentative, indéfiniment.
+    #[test]
+    fn our_own_deadline_is_not_a_network_cut() {
+        let mine: anyhow::Error = LlmError::new(
+            LlmErrorKind::Transient,
+            format!("{OWN_TIMEOUT} : rien de complet en 600 s"),
+        )
+        .into();
+        assert!(own_timeout(&mine));
+        assert!(
+            !network_stall(&mine),
+            "sans sonde réseau, notre délai ne prouve aucune coupure"
+        );
+
+        // Une vraie coupure locale, elle, reste reconnue.
+        let cut: anyhow::Error = LlmError::new(
+            LlmErrorKind::Transient,
+            "error sending request for url".to_string(),
+        )
+        .into();
+        assert!(network_stall(&cut));
+        assert!(!own_timeout(&cut));
+
+        // Et l'erreur du fournisseur de #127 n'est ni l'un ni l'autre.
+        let upstream: anyhow::Error = LlmError::new(
+            LlmErrorKind::Transient,
+            "Upstream idle timeout exceeded".to_string(),
+        )
+        .into();
+        assert!(!network_stall(&upstream));
+        assert!(!own_timeout(&upstream));
+    }
+
     /// répète pas le même message ; le digest dit la nuit ratée ; la nuit suivante promeut
     /// chaque candidat une seule fois.
     #[tokio::test]
