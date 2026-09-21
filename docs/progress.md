@@ -2332,6 +2332,49 @@ conversations perdues si la consigne était suivie, et l'option n'existe pas. Le
 Reste ouvert sur #152 : reprise idempotente lot par lot, troisième cas du digest, ligne
 `doctor` sur le budget de raisonnement envoyé.
 
+### 0.17.38
+
+#### Un `{{workdir}}` avec une espace cassait tout workflow sur macOS (#154)
+
+Run `apnl-task-to-pr` bloqué en quinze secondes sur `fatal: Too many arguments`.
+`{{workdir}}` vaut `/Users/edouard/Library/Application Support/Penelope/…` : le répertoire
+de données de macOS contient une espace. Substituée telle quelle dans
+`git clone … {{workdir}}/repo`, la valeur donne deux arguments. Juste sur Linux
+(`~/.local/share/penelope`), faux sur tout Mac par défaut — le workflow livré compris.
+
+- **Le moteur cite**, pas l'auteur : toute valeur substituée dans une `command` d'étape
+  `shell` part entre apostrophes, apostrophes internes échappées. Un gabarit qui cite déjà
+  n'est pas cité deux fois. Les workflows existants restent valides sans réécriture.
+- `prompt`, `cwd` et `args` ne passent par aucun shell : rien n'y est cité.
+- `quote: false` par étape, pour le gabarit rare qui met une **liste d'arguments** dans une
+  variable, où citer ferait un seul argument de plusieurs.
+
+**Et le run n'est plus annoncé sans avoir été regardé.** La carte disait « ⛔ bloqué » à
+05:58:32 ; à 05:59:06 la réponse du tour annonçait « 🚀 Lancé — en cours » avec un tableau
+d'étapes. `workflow_start` rendait `running` avant que la première étape ne tourne. Il
+attend désormais le premier verdict (au plus cinq secondes) et joint une remarque quand le
+run est `blocked` ou `failed`. Cette consigne vit dans le résultat, pas dans la description
+de l'outil : celle-ci entre dans le préfixe mis en cache, et le contrôle de budget de #104
+refusait l'ajout. Une consigne qui n'apparaît qu'au moment utile ne coûte rien.
+
+#### `/stop tout` disait « Rien à arrêter » avec un run bloqué ouvert (#155)
+
+Seuls les runs `running` étaient regardés. Un run `blocked` — celui qui *paraît* en cours,
+carte « ⛔ bloqué » et message « en cours » — n'était ni touché ni nommé.
+
+- Tous les runs ouverts du chat sont pris : les `running` mis en pause, les autres
+  **nommés** avec leur état. Jamais annulés à la place du propriétaire, puisqu'un run
+  annulé ne se reprend pas.
+- « Rien à arrêter » n'est plus possible quand un run est ouvert ; `/stop` sans `tout`
+  nomme ce qui continue.
+- `/stop tout` vide aussi les sessions de **sous-agents** dont le parent est dans ce chat :
+  sans `tg_chat_id`, elles étaient sautées.
+- La phrase qui promettait de mettre l'ingestion en pause est retirée : elle n'était pas
+  tenue. Pas de promesse sans code.
+
+La construction du message sort du transport Telegram (`StopReport::render`), donc se
+vérifie : deux tests, dont la reproduction du cas du 21/09.
+
 ### Routine de livraison
 
 Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #147) :
