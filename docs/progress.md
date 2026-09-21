@@ -8,7 +8,7 @@ Dernière mise à jour : 20 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1638 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1642 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2449,6 +2449,39 @@ Deux lints réels ont été corrigés au passage (`FAKE_PY` inutilisée hors mac
 un `if` imbriqué dans le bloc Linux de `rss_mb`). La CI ne les voyait pas — elle ne lance
 clippy que sur macOS — mais ils faisaient échouer la commande que `CLAUDE.md` prescrit
 avant de pousser.
+
+### 0.17.42
+
+#### `penelope mcp auth slack` : ce qui manquait (#159)
+
+La commande échouait sur « aucun moyen d'enregistrer le client », sans dire la suite.
+Trois manques, tous visibles sur `mcp.slack.com`, aucun spécifique à Slack.
+
+- **`mcp.callback_host`**, `127.0.0.1` par défaut, `localhost` accepté, rien d'autre : une
+  valeur qui ne soit pas de bouclage ferait partir le code d'autorisation sur le réseau.
+  Slack n'enregistre que `localhost` dans les URL de rappel d'une app, et l'URL envoyée
+  doit être **exactement** celle enregistrée. `doctor` affiche l'URL effective.
+- **Portées par défaut.** La ressource protégée n'était lue que pour
+  `authorization_servers` ; ses `scopes_supported` (RFC 9728) servent désormais de dernier
+  recours quand la déclaration et le défi 401 sont muets. Slack ne met pas de `scope` dans
+  son défi et refuse une demande sans portée. La liste demandée est journalisée.
+- **Le message dit la suite** : `choose_registration` reçoit le nom du serveur et nomme la
+  commande, `penelope mcp edit <srv> client_id <id>`, avec le renvoi à `docs/mcp.md`.
+
+`docs/mcp.md` § « Client pré-enregistré : Slack » donne le manifeste et l'ordre des
+commandes. Il insiste sur un point que l'issue laissait implicite : **les portées demandées
+doivent être celles du manifeste, ou un sous-ensemble**. Le repli sur `scopes_supported`
+demanderait plus que ce que l'app déclare, et Slack refuserait. Pénélope ne peut pas
+connaître les portées d'une app tierce, donc c'est à la déclaration du serveur de trancher ;
+la documentation le dit plutôt que le code ne le devine.
+
+L'app Slack reste nécessaire, Slack n'offrant ni CIMD ni enregistrement dynamique et
+n'ouvrant le MCP qu'aux apps internes ou publiées. Elle ne sert que de porteur d'identité :
+le jeton obtenu est un jeton **utilisateur** (`xoxp-`), et Pénélope ne voit que ce que voit
+le compte qui a autorisé. Le bot user du manifeste n'est jamais utilisé.
+
+Reste ouvert dans l'issue : le `client_secret` optionnel, inutile tant que l'app active
+PKCE, et l'audit des deux entrées à jeton neuf de #155.
 
 ### Routine de livraison
 
