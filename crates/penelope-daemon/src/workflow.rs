@@ -22,7 +22,7 @@ use penelope_kernel::risk::PolicyDecision;
 use penelope_kernel::session::{MetadataOp, SessionKind};
 use penelope_llm::provider::CancelToken;
 use penelope_llm::types::ChatMessage;
-use penelope_workflow::conditions::{EvalContext, TemplateVars, choose, substitute};
+use penelope_workflow::conditions::{EvalContext, TemplateVars, choose};
 use penelope_workflow::model::{BLOCKED, DONE, Step, StepResult, Workflow};
 use penelope_workflow::runs::{Admission, Limit, check_limits};
 use penelope_workflow::{Run, RunState};

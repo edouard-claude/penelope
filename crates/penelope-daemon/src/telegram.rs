@@ -412,6 +412,81 @@ impl TextBurst {
         out
     }
 }
+/// Ce que `/stop` a trouvé, et ce qu'il en dit (issue #155).
+///
+/// Le 21/09, `/stop` puis `/stop tout` ont répondu « Rien à arrêter » alors qu'un run était
+/// **bloqué** dans le sujet depuis vingt minutes et que la dernière réponse le disait « en
+/// cours ». Seuls les runs `running` étaient regardés ; un run bloqué — précisément celui
+/// qui *paraît* en cours — n'était ni touché ni même nommé.
+#[derive(Debug, Default)]
+pub(crate) struct StopReport {
+    pub running: bool,
+    pub queued: usize,
+    pub burst: usize,
+    pub sessions: usize,
+    /// Runs mis en pause.
+    pub paused: usize,
+    /// Runs laissés ouverts, nommés : ils ne sont pas annulés à la place du propriétaire.
+    pub left: Vec<String>,
+    /// Tous les runs ouverts du chat : identifiant et état.
+    pub open: Vec<(String, String)>,
+    pub tout: bool,
+}
+
+impl StopReport {
+    pub(crate) fn render(&self) -> String {
+        let mut note = match (self.running, self.queued) {
+            // « Rien à arrêter » seulement quand il n'y a vraiment rien : un run ouvert
+            // compte, quel que soit son état.
+            (false, 0) if self.open.is_empty() => "Rien à arrêter.".to_string(),
+            (false, 0) => "⏹ Aucun tour en cours.".to_string(),
+            (true, 0) => "⏹ Tour arrêté.".to_string(),
+            (false, n) => format!("⏹ {n} message(s) en attente annulé(s)."),
+            (true, n) => format!("⏹ Tour arrêté, {n} message(s) en attente annulé(s)."),
+        };
+        if self.burst > 0 {
+            note.push_str(&format!(
+                " {} morceau(x) reçus à l'instant écartés.",
+                self.burst
+            ));
+        }
+        if self.sessions > 0 {
+            note.push_str(&format!(
+                " {} autre(s) session(s) de ce chat vidée(s).",
+                self.sessions
+            ));
+        }
+        if self.paused > 0 {
+            note.push_str(&format!(
+                " {} run(s) de workflow mis en pause.",
+                self.paused
+            ));
+        }
+        if !self.left.is_empty() {
+            note.push_str(&format!(
+                "\n\nRun(s) laissé(s) ouvert(s) : {}. Ils ne sont pas annulés à ta place : \
+                 `/run cancel <id>` pour en finir, la carte du run pour réessayer ou passer \
+                 l'étape.",
+                self.left.join(", ")
+            ));
+        }
+        // Ne promettre que ce qui est fait : l'ingestion n'était pas interrompue malgré la
+        // phrase qui l'annonçait, et les runs ouverts n'étaient pas nommés.
+        if !self.tout && !self.open.is_empty() {
+            note.push_str(&format!(
+                "\n\nContinue : {} run(s) ouvert(s) ({}). `/stop tout` met en pause ce qui \
+                 tourne et nomme le reste.",
+                self.open.len(),
+                self.open
+                    .iter()
+                    .map(|(id, st)| format!("`{id}` {st}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        note
+    }
+}
 
 impl TelegramGateway {
     /// Construit la passerelle depuis la configuration. `Ok(None)` : Telegram n'est
@@ -1397,54 +1472,83 @@ impl TelegramGateway {
                 let mut queued = crate::session_ops::silence(d, &session, "arrêt demandé").await?;
                 let mut sessions = 0;
                 let mut runs = 0;
+                // Les runs ouverts de ce chat, quel que soit leur état : un run `blocked`
+                // paraît « en cours » au propriétaire, et c'est précisément celui que
+                // `/stop tout` ignorait en répondant « Rien à arrêter » (issue #155).
+                let open: Vec<penelope_workflow::runs::Run> = s
+                    .runs
+                    .list(None, 50)
+                    .await?
+                    .into_iter()
+                    .filter(|r| {
+                        matches!(
+                            r.state,
+                            penelope_workflow::RunState::Running
+                                | penelope_workflow::RunState::Blocked
+                                | penelope_workflow::RunState::Paused
+                        )
+                    })
+                    .collect();
+                let mut left: Vec<String> = Vec::new();
                 if tout {
-                    for other in s.sessions.list(None, 200).await? {
+                    // Sessions du chat, **et** sous-agents dont le parent est dans ce chat :
+                    // une session de sous-agent n'a pas de chat Telegram, elle était sautée.
+                    let all = s.sessions.list(None, 200).await?;
+                    let here: std::collections::HashSet<String> = all
+                        .iter()
+                        .filter(|x| x.tg_chat_id == Some(chat_id))
+                        .map(|x| x.id.to_string())
+                        .collect();
+                    for other in &all {
                         let id = other.id.to_string();
-                        if other.tg_chat_id != Some(chat_id) || id == session {
+                        if id == session {
                             continue;
                         }
+                        let mine = other.tg_chat_id == Some(chat_id)
+                            || other.parent_id.as_ref().is_some_and(|p| here.contains(p));
+                        if !mine {
+                            continue;
+                        }
+                        d.bus.cancel_session(&id);
                         let n = crate::session_ops::silence(d, &id, "arrêt demandé").await?;
                         if n > 0 || d.bus.is_active(&id) {
                             sessions += 1;
                         }
                         queued += n;
                     }
-                    for run in s.runs.list(None, 50).await? {
-                        if run.state != penelope_workflow::RunState::Running {
-                            continue;
-                        }
-                        if crate::workflow::control(d, &run.id, &penelope_workflow::Control::Pause)
+                    for run in &open {
+                        if run.state == penelope_workflow::RunState::Running {
+                            if crate::workflow::control(
+                                d,
+                                &run.id,
+                                &penelope_workflow::Control::Pause,
+                            )
                             .await
                             .is_ok()
-                        {
-                            runs += 1;
+                            {
+                                runs += 1;
+                            }
+                        } else {
+                            // Ni mis en pause (il l'est déjà ou il attend), ni annulé à la
+                            // place du propriétaire : nommé, avec de quoi décider.
+                            left.push(format!("`{}` ({})", run.id, run.state.as_str()));
                         }
                     }
                 }
-                let mut note = match (running, queued) {
-                    (false, 0) => "Rien à arrêter.".to_string(),
-                    (true, 0) => "⏹ Tour arrêté.".to_string(),
-                    (false, n) => format!("⏹ {n} message(s) en attente annulé(s)."),
-                    (true, n) => format!("⏹ Tour arrêté, {n} message(s) en attente annulé(s)."),
-                };
-                if burst > 0 {
-                    note.push_str(&format!(" {burst} morceau(x) reçus à l'instant écartés."));
+                StopReport {
+                    running,
+                    queued,
+                    burst,
+                    sessions,
+                    paused: runs,
+                    left,
+                    open: open
+                        .iter()
+                        .map(|r| (r.id.clone(), r.state.as_str().to_string()))
+                        .collect(),
+                    tout,
                 }
-                if sessions > 0 {
-                    note.push_str(&format!(
-                        " {sessions} autre(s) session(s) de ce chat vidée(s)."
-                    ));
-                }
-                if runs > 0 {
-                    note.push_str(&format!(" {runs} run(s) de workflow mis en pause."));
-                }
-                if !tout {
-                    note.push_str(
-                        " Les workflows et l'ingestion en cours continuent (`/stop tout` les \
-                         met en pause).",
-                    );
-                }
-                note
+                .render()
             }
             "switch" => {
                 if args.is_empty() {
@@ -10533,6 +10637,65 @@ mod tests {
         assert!(
             sent.contains("je reprends la suite"),
             "tour repris : {sent}"
+        );
+    }
+
+    /// #155 : le 21/09, `/stop` puis `/stop tout` ont répondu « Rien à arrêter » alors
+    /// qu'un run était **bloqué** dans le sujet depuis vingt minutes, et que la dernière
+    /// réponse le disait « en cours ». Un run ouvert n'est jamais « rien ».
+    #[test]
+    fn an_open_run_is_never_nothing_to_stop() {
+        use super::StopReport;
+
+        // Rien du tout : la réponse d'avant reste juste.
+        assert_eq!(StopReport::default().render(), "Rien à arrêter.");
+
+        // Le cas de l'incident : aucun tour, mais un run bloqué dans le chat.
+        let blocked = StopReport {
+            open: vec![("r_01M318PC88".into(), "blocked".into())],
+            ..Default::default()
+        };
+        let out = blocked.render();
+        assert!(!out.contains("Rien à arrêter"), "{out}");
+        assert!(
+            out.contains("r_01M318PC88") && out.contains("blocked"),
+            "{out}"
+        );
+        assert!(out.contains("/stop tout"), "{out}");
+
+        // `/stop tout` sur ce même run : il est nommé, pas annulé à la place du
+        // propriétaire — un run annulé ne se reprend pas.
+        let all = StopReport {
+            left: vec!["`r_01M318PC88` (blocked)".into()],
+            open: vec![("r_01M318PC88".into(), "blocked".into())],
+            tout: true,
+            ..Default::default()
+        };
+        let out = all.render();
+        assert!(out.contains("laissé(s) ouvert(s)"), "{out}");
+        assert!(out.contains("/run cancel"), "{out}");
+        assert!(!out.contains("Rien à arrêter"), "{out}");
+    }
+
+    /// #155 : `/stop` ne promet plus l'ingestion, qui n'était pas interrompue. Ce qui est
+    /// annoncé est ce qui a été fait.
+    #[test]
+    fn stop_promises_only_what_it_did() {
+        use super::StopReport;
+
+        let r = StopReport {
+            running: true,
+            queued: 3,
+            paused: 2,
+            tout: true,
+            ..Default::default()
+        };
+        let out = r.render();
+        assert!(out.contains("Tour arrêté, 3 message(s)"), "{out}");
+        assert!(out.contains("2 run(s) de workflow mis en pause"), "{out}");
+        assert!(
+            !out.to_lowercase().contains("ingestion"),
+            "aucune promesse sans code : {out}"
         );
     }
 

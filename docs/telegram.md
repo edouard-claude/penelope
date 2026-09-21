@@ -311,9 +311,18 @@ ne répond pas d'elle-même : elle dit ce qu'elle a reçu et demande quoi en fai
 passages indexés, propositions de mémoire, sans réponse par morceau.
 
 `/stop` arrête le tour en cours **et** vide la file de la session, puis dit ce qui a été
-arrêté (« ⏹ Tour arrêté, 26 message(s) en attente annulé(s). ») et ce qui continue.
-`/stop tout` vide en plus les files des autres sessions du chat et met en pause les runs
-de workflow en cours.
+arrêté (« ⏹ Tour arrêté, 26 message(s) en attente annulé(s). ») et nomme les runs qui
+restent ouverts, avec leur identifiant et leur état.
+
+`/stop tout` vide en plus les files des autres sessions du chat **et des sous-agents dont
+le parent est dans ce chat**, met en pause les runs `running`, et **nomme** les runs
+ouverts qu'il ne touche pas (`blocked`, `paused`) : ceux-là ne sont jamais annulés à ta
+place, puisqu'un run annulé ne se reprend pas. `/run cancel <id>` en finit, la carte du
+run permet de réessayer ou de passer l'étape.
+
+Un run ouvert, quel que soit son état, empêche la réponse « Rien à arrêter » : c'est
+précisément le run **bloqué** qui paraît « en cours » (issue #155). L'ingestion en cours,
+elle, n'est pas interrompue et n'est plus annoncée comme telle.
 
 Une session reçoit un titre de quelques mots après son premier échange ; `/title
 <texte>` renomme la session courante. `/sessions` rend un bouton par session (▶️ celle du
