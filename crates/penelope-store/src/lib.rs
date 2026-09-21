@@ -122,8 +122,46 @@ pub struct Store {
     inner: Arc<StoreInner>,
 }
 
+/// Ce que l'intégrité de la base dit, et de quelle bouche (issue #158).
+#[derive(Debug, Clone)]
+pub struct IntegrityReport {
+    /// Le verdict d'un lecteur du pool.
+    pub pool: String,
+    /// Celui d'une connexion neuve, demandé seulement si le pool a accusé la base. C'est
+    /// lui qui fait foi sur l'état du **fichier**.
+    pub fresh: Option<String>,
+    /// Âge et service de la connexion du pool interrogée.
+    pub reader: crate::pool::ReaderStats,
+}
+
+impl IntegrityReport {
+    /// Le verdict qui fait foi : celui de la connexion neuve dès qu'on l'a demandé.
+    pub fn verdict(&self) -> &str {
+        self.fresh.as_deref().unwrap_or(&self.pool)
+    }
+
+    /// Tout va bien, des deux côtés.
+    pub fn sound(&self) -> bool {
+        self.verdict() == "ok"
+    }
+
+    /// Le pool accuse une base que le fichier dément : c'est la connexion qui ment.
+    pub fn reader_lied(&self) -> bool {
+        self.pool != "ok" && self.fresh.as_deref() == Some("ok")
+    }
+
+    /// Les index dérivés nommés par le verdict qui fait foi, s'il ne parle que d'eux.
+    pub fn fts_only(&self) -> Option<Vec<String>> {
+        (!self.sound())
+            .then(|| fts_tables(self.verdict()))
+            .flatten()
+    }
+}
+
 struct StoreInner {
     path: PathBuf,
+    /// Index FTS5 reconstruits à l'ouverture (issue #158).
+    repaired_fts: Vec<String>,
     writer_tx: mpsc::UnboundedSender<WriteJob>,
     readers: ReadPool,
     closed: AtomicBool,
@@ -148,7 +186,7 @@ impl Store {
         }
 
         let mut writer = open_connection(&path, false)?;
-        integrity_check(&writer)?;
+        let repaired_fts = ensure_sound(&writer)?;
         migrations::migrate(&mut writer)?;
 
         let readers = ReadPool::new(&path, 4)?;
@@ -184,6 +222,7 @@ impl Store {
         Ok(Store {
             inner: Arc::new(StoreInner {
                 path,
+                repaired_fts,
                 writer_tx: tx,
                 readers,
                 closed: AtomicBool::new(false),
@@ -313,9 +352,40 @@ impl Store {
 
     /// `PRAGMA integrity_check` : utilisé par le mode `recovery` (§17).
     pub fn integrity(&self) -> Result<String> {
-        self.read_blocking(|c| {
-            let s: String = c.query_row("PRAGMA integrity_check;", [], |r| r.get(0))?;
-            Ok(s)
+        self.read_blocking(|c| check_lines(c, "PRAGMA integrity_check;"))
+    }
+
+    /// Les index FTS5 reconstruits à l'ouverture, s'il y en a eu (issue #158).
+    pub fn repaired_fts(&self) -> &[String] {
+        &self.inner.repaired_fts
+    }
+
+    /// `PRAGMA integrity_check`, **et ce qu'en dit une connexion neuve** si le pool
+    /// n'est pas d'accord (issue #158).
+    ///
+    /// Le 21/09, un lecteur ouvert depuis trois heures a rendu « malformed inverted index »
+    /// sur une base que sept connexions neuves relisaient intègre, en nommant une table
+    /// différente d'un appel à l'autre. C'est le fichier qui fait foi, pas une connexion :
+    /// comme `backup_to` (#77), on en ouvre une pour l'occasion. La connexion qui a menti
+    /// est fermée et remplacée.
+    pub fn integrity_report(&self) -> Result<IntegrityReport> {
+        let (pool, reader) = self.inner.readers.with_audit(|c| {
+            let v = check_lines(c, "PRAGMA integrity_check;")?;
+            // Une connexion qui accuse la base ne revient dans le pool que si le fichier
+            // lui donne raison ; le verdict du fichier est demandé juste après.
+            let keep = v == "ok";
+            Ok((v, keep))
+        })?;
+        let fresh = if pool == "ok" {
+            None
+        } else {
+            let c = open_connection(&self.inner.path, true)?;
+            Some(check_lines(&c, "PRAGMA integrity_check;")?)
+        };
+        Ok(IntegrityReport {
+            pool,
+            fresh,
+            reader,
         })
     }
 
@@ -408,11 +478,139 @@ pub(crate) fn open_connection(path: &Path, read_only: bool) -> Result<Connection
     Ok(conn)
 }
 
-fn integrity_check(conn: &Connection) -> Result<()> {
-    let r: String = conn.query_row("PRAGMA quick_check;", [], |r| r.get(0))?;
-    if r != "ok" {
-        return Err(StoreError::Corrupt(r));
+/// Toutes les lignes d'un `PRAGMA …_check`, pas seulement la première.
+///
+/// `query_row` n'en lisait qu'une (issue #158). Avec plusieurs griefs, une vraie
+/// corruption de données pouvait se cacher derrière une ligne d'index FTS5 — et c'est
+/// précisément sur cette distinction que tout le reste repose.
+fn check_lines(conn: &Connection, pragma: &str) -> Result<String> {
+    let mut st = conn.prepare(pragma)?;
+    let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+    let lines: Vec<String> = rows.collect::<std::result::Result<_, _>>()?;
+    Ok(lines.join("\n"))
+}
+
+/// Les tables FTS5 nommées par un verdict qui ne parle **que** d'index dérivés.
+///
+/// `malformed inverted index for FTS5 table main.messages_fts` désigne un index
+/// reconstructible, pas une donnée perdue : aucune donnée première ne vit dans un index
+/// FTS — `messages_fts` se refait de `messages`, `mem_fts` du vault. Une seule ligne qui
+/// parle d'autre chose, et ce n'est plus vrai : on ne touche alors à rien.
+pub fn fts_tables(verdict: &str) -> Option<Vec<String>> {
+    const MARK: &str = "malformed inverted index for FTS5 table ";
+    let mut out = Vec::new();
+    for line in verdict.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let name = line.strip_prefix(MARK)?.trim();
+        // Le nom vient de SQLite, mais il finit dans une requête : rien d'autre qu'un
+        // identifiant, éventuellement qualifié par son schéma.
+        let bare = name.rsplit('.').next().unwrap_or(name);
+        if bare.is_empty() || !bare.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return None;
+        }
+        if !out.contains(&bare.to_string()) {
+            out.push(bare.to_string());
+        }
     }
+    (!out.is_empty()).then_some(out)
+}
+
+/// Refuse d'ouvrir une base abîmée — **sauf** si seuls des index dérivés le sont, auquel
+/// cas ils sont reconstruits et la base rouverte normalement (issue #158).
+///
+/// Depuis SQLite 3.44, `quick_check` vérifie aussi les index FTS5. Refuser de démarrer
+/// pour eux revenait à mettre le daemon en panne pour quelque chose qui se rebâtit en une
+/// commande — et, après cinq démarrages ratés, `upgrade` serait revenu au binaire
+/// précédent (#153). Rend les tables reconstruites, pour que l'appelant le dise.
+fn ensure_sound(conn: &Connection) -> Result<Vec<String>> {
+    let tables = match check_lines(conn, "PRAGMA quick_check;") {
+        Ok(v) if v == "ok" => return Ok(Vec::new()),
+        Ok(v) => fts_tables(&v).ok_or(StoreError::Corrupt(v))?,
+        // Un index si abîmé que SQLite ne construit même plus sa table virtuelle : le
+        // contrôle n'a pas de verdict à rendre, il échoue. C'est toujours un index
+        // dérivé, donc toujours réparable — à condition que ce soit bien de lui qu'on
+        // parle, ce que la déclaration de la table confirme.
+        Err(e) => match unconstructible_fts(conn, &e) {
+            Some(t) => vec![t],
+            None => return Err(e),
+        },
+    };
+    for t in &tables {
+        repair_fts(conn, t)?;
+    }
+    let after = check_lines(conn, "PRAGMA quick_check;")?;
+    if after != "ok" {
+        return Err(StoreError::Corrupt(after));
+    }
+    Ok(tables)
+}
+
+/// La table FTS5 nommée par une erreur « vtable constructor failed », si c'en est bien une.
+///
+/// Le message vient de SQLite, mais on ne se fie pas qu'à lui : la table doit exister dans
+/// le schéma **et** être déclarée `USING fts5`. Sinon on laisse l'erreur remonter.
+fn unconstructible_fts(conn: &Connection, err: &StoreError) -> Option<String> {
+    const MARK: &str = "vtable constructor failed: ";
+    let text = err.to_string();
+    let name = text.split(MARK).nth(1)?.trim();
+    let name = name.split_whitespace().next()?;
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let ddl: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [name],
+            |r| r.get(0),
+        )
+        .ok()?;
+    ddl.to_lowercase()
+        .contains("using fts5")
+        .then(|| name.to_string())
+}
+
+/// Remet un index FTS5 d'aplomb.
+///
+/// `INSERT INTO t(t) VALUES('rebuild')` suffit quand l'index est lisible. Quand il ne
+/// l'est plus, SQLite refuse jusqu'à **construire** la table virtuelle
+/// (« vtable constructor failed ») : il n'y a plus rien à reconstruire depuis elle. La
+/// table est alors recréée vide à partir de sa propre déclaration, et son contenu revient
+/// de la source de vérité — `messages` pour `messages_fts`, le vault pour `mem_fts` —,
+/// ce que font `penelope store rebuild` et `penelope mem reindex`.
+fn repair_fts(conn: &Connection, table: &str) -> Result<()> {
+    if conn
+        .execute_batch(&format!("INSERT INTO {table}({table}) VALUES('rebuild');"))
+        .is_ok()
+    {
+        return Ok(());
+    }
+    let ddl: String = conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |r| r.get(0),
+    )?;
+    // `DROP TABLE` échoue pour la même raison que `rebuild` : il construit la table
+    // virtuelle avant de la détruire. On retire donc sa déclaration du schéma, ce qui
+    // laisse ses tables d'ombre (`%_data`, `%_content`, …) en tables ordinaires, puis on
+    // les supprime et on recrée la table vide. Aucune donnée première n'y vit.
+    let shadows: Vec<String> = {
+        let mut st = conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ?1 ESCAPE '\\'",
+        )?;
+        let like = format!("{}\\_%", table.replace('_', "\\_"));
+        let rows = st.query_map([like], |r| r.get::<_, String>(0))?;
+        rows.collect::<std::result::Result<_, _>>()?
+    };
+    let mut sql = String::from("PRAGMA writable_schema = ON;\n");
+    sql.push_str(&format!(
+        "DELETE FROM sqlite_master WHERE type = 'table' AND name = '{table}';\n"
+    ));
+    // `RESET` relit le schéma : sans lui, la connexion croit encore à la table virtuelle.
+    sql.push_str("PRAGMA writable_schema = RESET;\n");
+    for sh in &shadows {
+        sql.push_str(&format!("DROP TABLE IF EXISTS {sh};\n"));
+    }
+    sql.push_str(&format!("{ddl};\n"));
+    conn.execute_batch(&sql)?;
     Ok(())
 }
 
@@ -674,5 +872,150 @@ mod tests {
             .query_row("SELECT v FROM kv WHERE k='a'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, "b");
+    }
+}
+
+#[cfg(test)]
+mod integrity_tests {
+    use super::*;
+
+    /// #158 : un verdict qui ne parle que d'index FTS5 désigne du **dérivé**, pas des
+    /// données. Une seule ligne qui parle d'autre chose, et on ne touche plus à rien.
+    #[test]
+    fn only_a_verdict_about_derived_indexes_is_repairable() {
+        let one = "malformed inverted index for FTS5 table main.messages_fts";
+        assert_eq!(fts_tables(one), Some(vec!["messages_fts".to_string()]));
+
+        // Les deux tables vues le 21/09, d'un appel à l'autre.
+        let two = "malformed inverted index for FTS5 table main.mem_fts\n\
+                   malformed inverted index for FTS5 table main.messages_fts";
+        assert_eq!(
+            fts_tables(two),
+            Some(vec!["mem_fts".to_string(), "messages_fts".to_string()])
+        );
+
+        // Une vraie atteinte, seule ou mêlée à une ligne FTS : rien n'est reconstruit.
+        assert_eq!(fts_tables("ok"), None);
+        assert_eq!(
+            fts_tables("row 12 missing from index messages_session"),
+            None
+        );
+        let mixed = "malformed inverted index for FTS5 table main.mem_fts\n\
+                     row 12 missing from index messages_session";
+        assert_eq!(
+            fts_tables(mixed),
+            None,
+            "une corruption de données cachée derrière une ligne d'index ne passe pas"
+        );
+        // Un nom qui n'est pas un identifiant n'entre pas dans une requête.
+        assert_eq!(
+            fts_tables("malformed inverted index for FTS5 table main.x\"; DROP TABLE y--"),
+            None
+        );
+    }
+
+    /// #158 : `quick_check` rend **plusieurs** lignes. N'en lire qu'une cachait une
+    /// corruption de données derrière une ligne d'index.
+    #[test]
+    fn every_line_of_a_verdict_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let c = open_connection(&path, false).unwrap();
+        assert_eq!(check_lines(&c, "PRAGMA quick_check;").unwrap(), "ok");
+        assert_eq!(check_lines(&c, "PRAGMA integrity_check;").unwrap(), "ok");
+    }
+
+    /// #158 : le fichier fait foi, pas une connexion. Sur une base saine, les deux
+    /// verdicts concordent et le rapport le dit sans ouvrir de connexion neuve.
+    #[test]
+    fn a_sound_database_needs_no_second_opinion() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("t.db")).unwrap();
+        let r = store.integrity_report().unwrap();
+        assert_eq!(r.pool, "ok");
+        assert!(
+            r.fresh.is_none(),
+            "connexion neuve inutile quand le pool dit ok"
+        );
+        assert!(r.sound());
+        assert!(!r.reader_lied());
+        assert_eq!(r.fts_only(), None);
+        assert!(store.repaired_fts().is_empty());
+    }
+
+    /// #158 : un lecteur qui accuse une base que le fichier dément ne ment qu'une fois —
+    /// il est fermé, et le pool en rouvre un à sa place.
+    #[test]
+    fn a_lying_reader_is_recognised_and_replaced() {
+        let r = IntegrityReport {
+            pool: "malformed inverted index for FTS5 table main.mem_fts".into(),
+            fresh: Some("ok".into()),
+            reader: crate::pool::ReaderStats {
+                age_s: 11_000,
+                served: 4_200,
+            },
+        };
+        assert!(r.reader_lied(), "le fichier dément le lecteur");
+        assert!(r.sound(), "c'est le fichier qui fait foi");
+        assert_eq!(r.verdict(), "ok");
+        assert_eq!(r.fts_only(), None, "rien à reconstruire : rien n'est cassé");
+    }
+
+    /// #158 : quand les deux sont d'accord sur un index dérivé, il y a bien quelque chose
+    /// à reconstruire — et toujours rien à restaurer.
+    #[test]
+    fn a_confirmed_index_fault_names_the_table() {
+        let bad = "malformed inverted index for FTS5 table main.messages_fts";
+        let r = IntegrityReport {
+            pool: bad.into(),
+            fresh: Some(bad.into()),
+            reader: crate::pool::ReaderStats {
+                age_s: 10,
+                served: 1,
+            },
+        };
+        assert!(!r.sound());
+        assert!(!r.reader_lied());
+        assert_eq!(r.fts_only(), Some(vec!["messages_fts".to_string()]));
+
+        // Une atteinte aux données, elle, n'est pas reconstructible.
+        let hard = IntegrityReport {
+            pool: "row 12 missing from index messages_session".into(),
+            fresh: Some("row 12 missing from index messages_session".into()),
+            reader: crate::pool::ReaderStats {
+                age_s: 10,
+                served: 1,
+            },
+        };
+        assert_eq!(hard.fts_only(), None);
+    }
+
+    /// #158 : une base dont **seul** un index FTS5 est abîmé s'ouvre, se répare et le
+    /// dit. Refuser de démarrer pour ça aurait déclenché le retour arrière de #153.
+    #[test]
+    fn a_broken_search_index_does_not_stop_the_daemon() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        {
+            let store = Store::open(&path).unwrap();
+            assert!(store.repaired_fts().is_empty());
+        }
+        // L'index inversé de `messages_fts` est vidé sous les pieds de SQLite : la table
+        // `%_data` porte l'index, `%_content` le texte. C'est exactement la panne décrite.
+        {
+            let c = open_connection(&path, false).unwrap();
+            c.execute_batch(
+                "INSERT INTO messages_fts(content, session_id, msg_id) VALUES('bonjour', 's1', 1);
+                 DELETE FROM messages_fts_data WHERE id > 1;",
+            )
+            .unwrap();
+            let verdict = check_lines(&c, "PRAGMA quick_check;").unwrap();
+            assert_ne!(verdict, "ok", "l'index est bien abîmé : {verdict}");
+            assert!(fts_tables(&verdict).is_some(), "{verdict}");
+        }
+        // Et pourtant la base s'ouvre, parce que l'index se reconstruit.
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.repaired_fts(), ["messages_fts"]);
+        assert_eq!(store.integrity().unwrap(), "ok");
     }
 }

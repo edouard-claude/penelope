@@ -36,6 +36,19 @@ impl Daemon {
 
         let report = self.recover().await?;
         tracing::info!(?report, "reprise terminée");
+        // Un index de recherche abîmé a été reconstruit à l'ouverture au lieu d'empêcher
+        // le démarrage (issue #158) : le dire, sans quoi la réparation est invisible.
+        for table in self.services.store.repaired_fts() {
+            tracing::warn!(table, "index de recherche reconstruit à l'ouverture");
+            let _ = self
+                .services
+                .events
+                .append(penelope_kernel::event::EventDraft::new(
+                    "store.fts_rebuilt",
+                    serde_json::json!({"table": table, "reason": "quick_check à l'ouverture"}),
+                ))
+                .await;
+        }
         // Profils Seatbelt laissés par les versions qui les écrivaient dans le dossier
         // temporaire (issue #90) : ils passent désormais en argument.
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join("penelope-sandbox"));

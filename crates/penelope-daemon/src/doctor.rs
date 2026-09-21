@@ -106,21 +106,7 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     }
 
     // Intégrité de la base et chaîne d'audit.
-    match s.store.integrity() {
-        Ok(v) if v == "ok" => checks.push(DoctorCheck::ok("db", "Base SQLite", "intègre")),
-        Ok(v) => checks.push(
-            DoctorCheck::fail(
-                "db",
-                "Base SQLite",
-                v,
-                Some("penelope restore --latest".into()),
-            )
-            .critical(),
-        ),
-        Err(e) => {
-            checks.push(DoctorCheck::fail("db", "Base SQLite", e.to_string(), None).critical())
-        }
-    }
+    checks.push(integrity_check_of(s));
     match s.events.verify().await {
         Ok(r) if r.ok => checks.push(DoctorCheck::ok(
             "audit",
@@ -555,6 +541,99 @@ pub async fn open_forms_check(s: &Services) -> DoctorCheck {
         ),
         Some("les abandonner depuis leur carte (« ✖️ Abandonner »)".into()),
     )
+}
+
+/// #158 : l'intégrité de la base, **confirmée avant d'accuser**.
+///
+/// Le 21/09, trois `doctor` d'affilée ont rendu « malformed inverted index for FTS5 », sur
+/// une table différente à chaque fois, avec pour seule correction proposée
+/// `penelope restore --latest` : onze heures de conversations perdues si le propriétaire
+/// la suivait — et l'option n'existe même pas (`penelope restore <fichier>`). Le fichier
+/// était intègre : sept connexions neuves le relisaient sans rien trouver. Seul un lecteur
+/// du pool, ouvert depuis des heures, mentait.
+///
+/// D'où trois verdicts au lieu d'un, et jamais de restauration proposée pour un index.
+pub fn integrity_check_of(s: &Services) -> DoctorCheck {
+    const ID: &str = "db";
+    const LABEL: &str = "Base SQLite";
+    let report = match s.store.integrity_report() {
+        Ok(r) => r,
+        Err(e) => return DoctorCheck::fail(ID, LABEL, e.to_string(), None).critical(),
+    };
+
+    if report.sound() && report.pool == "ok" {
+        return DoctorCheck::ok(ID, LABEL, "intègre");
+    }
+
+    // Le fichier dément le lecteur : ce n'est pas la base qui est malade, c'est une
+    // connexion. Elle vient d'être fermée ; les suivantes repartiront d'une neuve.
+    if report.reader_lied() {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!(
+                "le fichier est intègre — un lecteur du pool rendait un verdict faux \
+                 (connexion ouverte depuis {} s, {} requêtes servies) : « {} ». Cette \
+                 connexion a été fermée et sera remplacée ; un redémarrage les renouvelle \
+                 toutes.",
+                report.reader.age_s,
+                report.reader.served,
+                first_line(&report.pool)
+            ),
+            Some("penelope restart".into()),
+        );
+    }
+
+    // Les deux sont d'accord, mais sur des index dérivés seulement : rien de perdu.
+    if let Some(tables) = report.fts_only() {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!(
+                "index de recherche à reconstruire ({}) — aucune donnée première n'y vit, \
+                 la recherche se rebâtit des messages et du vault",
+                tables.join(", ")
+            ),
+            Some("penelope store rebuild".into()),
+        );
+    }
+
+    // Là seulement, la base est vraiment atteinte. La consigne dit ce qu'on perd, et
+    // nomme une commande qui existe : `restore --latest` n'a jamais existé.
+    let archive = latest_archive(&s.platform.dirs.data().join("backups"));
+    let lost = match &archive {
+        Some(a) => format!(" ; dernière sauvegarde : {a}, tout ce qui suit serait perdu"),
+        None => " ; aucune sauvegarde n'a été trouvée".to_string(),
+    };
+    DoctorCheck::fail(
+        ID,
+        LABEL,
+        format!("{}{lost}", report.verdict()),
+        Some(match &archive {
+            Some(a) => format!("penelope stop, puis penelope restore {a}"),
+            None => "penelope stop, puis penelope restore <fichier de sauvegarde>".into(),
+        }),
+    )
+    .critical()
+}
+
+/// La sauvegarde la plus récente du dépôt local, par son nom (horodaté).
+fn latest_archive(dir: &std::path::Path) -> Option<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| {
+            let n = e.file_name().to_string_lossy().to_string();
+            n.ends_with(".tar.gz.enc").then_some(n)
+        })
+        .collect();
+    names.sort();
+    names.pop()
+}
+
+/// La première ligne d'un verdict, pour un message qui tient sur une ligne.
+fn first_line(verdict: &str) -> &str {
+    verdict.lines().next().unwrap_or(verdict).trim()
 }
 
 /// #148 : le magasin de secrets acceptait les clés d'API et refusait un `Grant` de 4 Ko,
