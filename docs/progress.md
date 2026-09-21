@@ -2278,6 +2278,60 @@ Rappel pour ce dossier : `crates/penelope-platform/src/backend/macos.rs` n'est p
 sous Linux. `cargo check -p penelope-platform --target aarch64-apple-darwin --all-targets`
 est la seule relecture possible depuis le conteneur, et elle a servi.
 
+### 0.17.37
+
+#### La consolidation tournait à vide, en silence (#152)
+
+Passe du 21/09 en 0.17.34 puis 0.17.36 : un lot écrit, puis des cycles muets de 240 s
+d'appel tué et 300 s d'attente, pendant une heure, sans un événement ni une ligne de
+journal, `stats` figés. Régression du lot précédent, livrée par moi.
+
+- **La cause** : `LLM_TIMEOUT = 240 s` enveloppait l'appel entier. Avec 8 000 à 16 000
+  tokens de raisonnement autorisés à ~25 tokens/s, un lot demande cinq à onze minutes :
+  tout appel qui réfléchissait vraiment était tué à quatre. Et `network_stall` comptait
+  **notre propre délai** comme une coupure réseau, donc la reprise attendait 300 s et
+  rejouait, tant qu'il restait du temps avant le verrou de deux heures.
+- **Le délai suit le budget** (`call_timeout`) : `(R + sortie) / débit prudent`, borné à
+  [4 min, 15 min] et par le temps restant de la nuit. Le délai d'inactivité du fournisseur
+  (`stream_idle_timeout`, #51) continue de couvrir le flux muet : l'un borne le silence,
+  l'autre la durée totale.
+- **Notre délai n'est pas le réseau** : une coupure se prouve par une sonde TCP vers le
+  fournisseur. Sinon c'est « appel trop long pour son budget », repris avec l'attente
+  ordinaire.
+- **Trois tentatives par lot**, toutes causes confondues : au-delà, le lot est reporté et
+  la passe continue. Une nuit entière sur un seul lot ne vaut pas mieux qu'un échec.
+- **Chaque tentative laisse une trace** : événement `memory.dream_retry`, ligne de journal,
+  et `save_stats`. Les avertissements restaient en mémoire jusqu'au premier lot écrit ;
+  c'est pourquoi la dérive a été invisible une heure durant.
+
+Deux tests de 0.17.34 encodaient le mauvais comportement : celui de la coupure réseau
+injectait notre propre message de délai, et validait donc la confusion qui a causé la
+panne. Un double de test qui ment sur le point qui compte ne prouve rien — deuxième fois
+dans ce dossier après le faux `security` de #157.
+
+#### La base n'est plus accusée sur la parole d'un seul lecteur (#158)
+
+Trois `doctor` d'affilée : « malformed inverted index for FTS5 », sur une table différente
+à chaque fois, avec pour seule correction `penelope restore --latest` — onze heures de
+conversations perdues si la consigne était suivie, et l'option n'existe pas. Le fichier
+était intègre : sept connexions neuves le relisaient sans rien trouver.
+
+- **Une connexion neuve tranche** : quand un lecteur du pool accuse la base, le verdict lui
+  est redemandé (même idée que `backup_to`, #77). La connexion qui a menti est fermée, le
+  pool en rouvre une.
+- **Trois verdicts au lieu d'un** : fichier intègre et lecteur fautif (« redémarrer »,
+  jamais de restauration) ; index dérivé confirmé abîmé (`penelope store rebuild`) ; vraie
+  atteinte aux données (critique, et la consigne nomme la sauvegarde et ce qu'elle ferait
+  perdre).
+- **Toutes les lignes d'un `PRAGMA`** sont lues : n'en lire qu'une laissait une corruption
+  de données se cacher derrière une ligne d'index.
+- **Un index dérivé n'empêche plus le démarrage** : `Store::open` le reconstruit puis
+  revérifie, et émet `store.fts_rebuilt`. Refuser, c'était mettre le daemon en panne pour
+  ce qui se rebâtit en une commande, et déclencher le retour arrière de #153.
+
+Reste ouvert sur #152 : reprise idempotente lot par lot, troisième cas du digest, ligne
+`doctor` sur le budget de raisonnement envoyé.
+
 ### Routine de livraison
 
 Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #147) :
