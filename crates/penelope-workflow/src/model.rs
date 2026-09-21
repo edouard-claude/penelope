@@ -215,10 +215,7 @@ pub struct Step {
     /// `shell` : citer les valeurs substituées pour le shell. Vrai par défaut (issue #154) ;
     /// `false` pour le gabarit rare qui met une **liste d'arguments** dans une variable,
     /// où la citation ferait un seul argument de plusieurs.
-    #[serde(
-        default = "crate::model::yes",
-        skip_serializing_if = "std::ops::Not::not"
-    )]
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub quote: bool,
 
     // --- tool ---
@@ -249,6 +246,18 @@ pub struct Step {
     pub criteria_key: String,
     pub verifier: String,
     pub checks: Vec<Value>,
+}
+
+/// Défaut de [`Step::quote`] : citer (issue #154). Une fonction, parce que `serde` ne sait
+/// pas donner `true` comme défaut d'un booléen.
+fn yes() -> bool {
+    true
+}
+
+/// `quote` n'est écrit que lorsqu'il s'écarte du défaut : un workflow n'a pas à porter une
+/// propriété qu'il ne demande pas.
+fn is_yes(v: &bool) -> bool {
+    *v
 }
 
 impl Default for Step {
@@ -615,10 +624,4 @@ mod tests {
         assert!(Transition::always("x").is_always());
         assert!(!Transition::on_result("x", "success").is_always());
     }
-}
-
-/// Défaut de [`Step::quote`] : citer (issue #154). Une fonction, parce que `serde` ne sait
-/// pas donner `true` comme défaut d'un booléen.
-pub(crate) fn yes() -> bool {
-    true
 }

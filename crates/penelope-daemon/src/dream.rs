@@ -28,9 +28,6 @@ use std::time::Duration;
 /// Verrou de passe : au-delà, une passe interrompue est considérée morte.
 const LOCK_TTL_MS: i64 = 2 * 3_600_000;
 const LOCK_KEY: &str = "dream.lock";
-/// Délai d'un appel de consolidation quand rien ne le dimensionne (modèle sans
-/// raisonnement, budget inconnu).
-const LLM_TIMEOUT: Duration = Duration::from_secs(240);
 /// Débit prudent d'un modèle de consolidation, en tokens par seconde. Mesuré le 21/09 :
 /// 15 344 tokens en 306 s (50/s), 19 700 en 110 s (179/s). Le plancher sert à *majorer*
 /// le temps nécessaire, pas à le prédire.
