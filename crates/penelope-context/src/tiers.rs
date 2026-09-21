@@ -167,6 +167,9 @@ pub struct TiersBuilder {
     /// Outils natifs à la demande (issue #104) : nommés, pas décrits.
     on_demand: Vec<String>,
     workflows: Vec<(String, String)>,
+    /// Une ligne sur la machine et ses binaires (issue #156). En T1 : elle ne change que
+    /// si l'inventaire change, sinon le cache de préfixe tombe à chaque tour.
+    machine: String,
     eager_schemas: Vec<String>,
     agents_md: String,
     profile: String,
@@ -210,6 +213,12 @@ impl TiersBuilder {
     /// Un workflow disponible : identifiant et ligne (rôle, paramètres requis).
     pub fn workflow(mut self, id: impl Into<String>, line: impl Into<String>) -> Self {
         self.workflows.push((id.into(), line.into()));
+        self
+    }
+    /// Ce que la machine sait faire : binaires installés, forges connectées, réflexes de
+    /// routage (issue #156). Une seule ligne, sans version ni date.
+    pub fn machine(mut self, line: impl Into<String>) -> Self {
+        self.machine = line.into();
         self
     }
     /// Schémas `eager` d'un petit serveur critique (comptent dans le budget T1).
@@ -324,6 +333,13 @@ impl TiersBuilder {
         for s in &self.eager_schemas {
             index.push('\n');
             index.push_str(s);
+            index.push('\n');
+        }
+        // Après les outils, avant la mémoire : le modèle sait ce qu'il peut lancer avant
+        // de se rabattre sur le réseau brut (issue #156).
+        if !self.machine.trim().is_empty() {
+            index.push_str("\n## Machine\n");
+            index.push_str(self.machine.trim());
             index.push('\n');
         }
 

@@ -503,6 +503,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `tools.approval_mode` | `"reads"` | Mode d'approbation par défaut d'une session : `ask` (demander tout, lectures du shell comprises), `reads` (lectures sans demande, le reste selon la politique), `auto` (tout sans demande sauf le destructif). `/mode` le change pour une session. |
 | `tools.shell_allow` | `[]` | Familles de commandes `shell_exec` autorisées d'avance, sans enchaînement : par exemple `cargo test`, `npm run lint`. |
 | `tools.shell_allow_network` | `[]` | Familles de commandes autorisées d'avance **avec** le réseau : `git push`, `gh pr`. |
+| `tools.inventory_extra` | `[]` | Binaires à ajouter à l'inventaire de la machine (issue #156), en plus de la liste connue : ce que le modèle apprend qu'il peut lancer au lieu de bricoler. |
 
 **[workflows]**
 
@@ -1102,6 +1103,59 @@ toujours soumis à approbation. Le bac à sable, les providers, Telegram, les ou
 politiques exigent une double confirmation à chaque fois : une règle « Toujours » ne les
 couvre pas. Les secrets et l'identifiant du propriétaire sont refusés : ils ne se règlent
 qu'en ligne de commande.
+
+### Ce que Pénélope sait de sa machine
+
+Savoir qu'un binaire est là change ce qu'elle tente. Sans cette connaissance, un lien
+GitHub donnait deux `http_fetch` refusés sur `api.github.com`, puis un
+`curl … | python3` cassé par le shell ; `gh` était installé et connecté. Il fallait le
+lui dire, à chaque nouveau sujet.
+
+Une passe d'inventaire tourne **au démarrage, toutes les heures et à chaque
+`penelope doctor`**. Elle cherche dans le PATH `gh`, `glab`, `git`, `docker`, `yt-dlp`,
+`ffmpeg`, `brew`, `node`, `npx`, `python3`, `uvx`, `go`, `cargo`, `jq`, `rg`, `make`,
+`ssh`, plus ce que tu ajoutes dans `tools.inventory_extra`. Pour chacun, elle relève sa
+version ; pour les forges, son **état de connexion** (`gh auth status`,
+`glab auth status`) ; pour Docker, si le démon répond. Une sonde a trois secondes et
+l'entrée fermée : une commande qui réclame une saisie meurt au délai. L'option qui
+afficherait un jeton n'est jamais passée, et ce qui est gardé traverse le rédacteur.
+
+Le résultat va dans `machine.inventory` et sort par `self_status` (section `machine`,
+champ `inventory`, avec les versions) et par `doctor`, qui donne une ligne pour ce qui est
+présent, une pour ce qui manque, et une par forge installée mais **déconnectée** — celle-là
+ne sert à rien tant qu'elle n'est pas connectée.
+
+Dans le message système, l'inventaire tient en **une ligne**, juste après les outils :
+
+```text
+Machine : macOS 27 arm64, bac à sable `workspace-write`, réseau accordé par appel ·
+installés et connectés : gh (edouard-claude), glab (gitlab.apnl.tech), docker (joignable) ·
+installés : git, ffmpeg, brew, node, jq · absents : yt-dlp
+Lance la commande installée plutôt que le réseau brut : GitHub (github.com, api.github.com)
+→ `gh api …` ; GitLab → `glab` ; images et conteneurs → `docker`. Jamais `curl` ni
+`http_fetch` vers une forge dont le client est connecté […]
+```
+
+Deux règles tiennent cette ligne :
+
+- **Ni version, ni date, ni chemin.** Elle est en T1, dans le préfixe mis en cache ; un
+  `brew upgrade gh` ne doit pas la changer, sinon le cache tombe à chaque tour. Les
+  versions restent dans `self_status`. Une déconnexion, elle, la change une fois.
+- **Un réflexe n'est émis que pour ce qui est utilisable.** Une forge installée mais
+  déconnectée n'apparaît pas dans les règles de routage : l'envoyer sur `glab` alors que
+  `glab` n'est pas connecté rend « not logged in », et elle repart sur `http_fetch`.
+
+En complément, un `http_fetch` vers une forge dont le client est connecté porte une
+remarque (« `gh` est installé et connecté : préfère `gh api …` »). Elle ne bloque rien :
+la lecture a déjà eu lieu, et `http_fetch` reste le bon outil pour une page publique.
+
+Une skill qui déclare `requires: [bin:yt-dlp]` sur une machine sans `yt-dlp` est annotée
+dans `skill_search` et dans `skill_load` (`binaires_manquants`), et `doctor` le dit. Elle
+reste listée et rien n'est installé à ton insu : la machine est la tienne.
+
+L'accueil (`penelope onboard outils`) propose désormais l'inventaire détecté comme point
+de départ au lieu d'une page blanche. Ce que tu déclares reste prioritaire sur ce qui est
+détecté.
 
 ### Outils natifs
 

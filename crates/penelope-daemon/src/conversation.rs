@@ -311,6 +311,12 @@ pub async fn build_turn_prompt(
         b = b.workflow(m.id.clone(), line);
     }
 
+    // Ce que la machine sait faire, en une ligne stable (issue #156) : lue du dernier
+    // inventaire, jamais sondée ici — un tour de conversation ne lance pas de processus.
+    if let Some(inv) = crate::machine::cached(s).await {
+        b = b.machine(inv.prompt_line());
+    }
+
     // T2 : instantanés mémoire, figés par épisode quand il y en a un.
     let [profile, core, project] = match episode {
         Some((session_id, n)) => frozen_snapshot(s, session_id, n, user_text).await,

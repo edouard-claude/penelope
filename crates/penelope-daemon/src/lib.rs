@@ -24,6 +24,7 @@ pub mod executor;
 pub mod hermes;
 pub mod images;
 pub mod ingest;
+pub mod machine;
 pub mod mcp;
 pub mod mcp_auth;
 pub mod media;

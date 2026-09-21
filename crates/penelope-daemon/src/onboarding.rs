@@ -640,6 +640,30 @@ pub fn question_json(s: &Sitting, q: &Question) -> Value {
     })
 }
 
+/// La question, plus ce que la machine sait déjà (issue #156).
+///
+/// La question « quels outils utilises-tu ? » partait d'une page blanche alors que
+/// Pénélope avait l'inventaire sous la main. Ce qui est détecté est **proposé**, pas
+/// écrit : le propriétaire confirme ou complète, et ce qu'il déclare reste prioritaire
+/// sur ce qui est détecté (§ accueil, issue #21).
+pub async fn question_payload(d: &Daemon, s: &Sitting, q: &Question) -> Value {
+    let mut v = question_json(s, q);
+    if q.part == Part::Outils
+        && let Some(inv) = crate::machine::cached(&d.services).await
+    {
+        let installed: Vec<&str> = inv.present.iter().map(|t| t.name.as_str()).collect();
+        if !installed.is_empty() {
+            v["detected"] = json!(installed);
+            v["detected_hint"] = json!(format!(
+                "Sur cette machine je vois : {}. Dis-moi ce que tu utilises vraiment, et \
+                 ce qui manque.",
+                installed.join(", ")
+            ));
+        }
+    }
+    v
+}
+
 /// RPC `onboard.*`.
 pub async fn rpc(d: &std::sync::Arc<Daemon>, method: &str, p: &Value) -> anyhow::Result<Value> {
     use penelope_kernel::api::method as m;
@@ -648,7 +672,7 @@ pub async fn rpc(d: &std::sync::Arc<Daemon>, method: &str, p: &Value) -> anyhow:
         m::ONBOARD_NEXT => {
             let s = start(d, part).await?;
             Ok(match s.next() {
-                Some(q) => json!({"question": question_json(&s, q)}),
+                Some(q) => json!({"question": question_payload(d, &s, q).await}),
                 None => {
                     let plan = plan(d, &s).await?;
                     json!({"done": true, "rel": s.rel, "plan": plan, "text": plan_text(&plan)})
@@ -659,7 +683,11 @@ pub async fn rpc(d: &std::sync::Arc<Daemon>, method: &str, p: &Value) -> anyhow:
             let rel = p["rel"].as_str().unwrap_or_default();
             let n = p["n"].as_u64().unwrap_or(0) as u32;
             let s = answer(d, rel, n, p.get("answer").and_then(|a| a.as_str())).await?;
-            Ok(json!({"next": s.next().map(|q| question_json(&s, q))}))
+            let next = match s.next() {
+                Some(q) => Some(question_payload(d, &s, q).await),
+                None => None,
+            };
+            Ok(json!({ "next": next }))
         }
         _ => {
             let rel = p["rel"].as_str().unwrap_or_default();

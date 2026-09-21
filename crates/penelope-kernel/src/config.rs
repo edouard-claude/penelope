@@ -1109,6 +1109,9 @@ pub struct Tools {
     pub shell_allow: Vec<String>,
     /// Familles de commandes autorisées d'avance **avec** le réseau : `git push`, `gh pr`.
     pub shell_allow_network: Vec<String>,
+    /// Binaires à ajouter à l'inventaire de la machine (issue #156), en plus de la liste
+    /// connue : ce que le modèle apprend qu'il peut lancer au lieu de bricoler.
+    pub inventory_extra: Vec<String>,
 }
 
 /// Modes d'approbation d'une session (issue #111).
@@ -1126,6 +1129,7 @@ impl Default for Tools {
             approval_mode: "reads".into(),
             shell_allow: Vec::new(),
             shell_allow_network: Vec::new(),
+            inventory_extra: Vec::new(),
         }
     }
 }

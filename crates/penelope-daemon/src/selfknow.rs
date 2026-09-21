@@ -390,7 +390,16 @@ pub async fn status(
         let host = tokio::task::spawn_blocking(move || platform.host_status(now))
             .await
             .unwrap_or_default();
-        out.insert("machine".into(), serde_json::to_value(host)?);
+        let mut machine = serde_json::to_value(host)?;
+        // Ce que la machine sait faire (issue #156) : binaires, versions, connexions.
+        // Le dernier inventaire connu, sans sonder — `penelope doctor` le rafraîchit.
+        if let Some(inv) = crate::machine::cached(s).await
+            && let Value::Object(m) = &mut machine
+        {
+            m.insert("inventory".into(), serde_json::to_value(&inv)?);
+            m.insert("prompt_line".into(), json!(inv.prompt_line()));
+        }
+        out.insert("machine".into(), machine);
     }
 
     // Sauvegardes : de quoi répondre « ta dernière sauvegarde date de cette nuit » (#42).
@@ -590,6 +599,65 @@ mod tests {
             first.prefix_hash(),
             second.prefix_hash(),
             "préfixe identique"
+        );
+    }
+
+    /// #156 : l'inventaire de la machine sort par `self_status`, et sa ligne entre dans
+    /// le message système sans casser le préfixe mis en cache (#104, décision 0008).
+    #[tokio::test]
+    async fn the_machine_inventory_reaches_the_model_and_keeps_the_prefix() {
+        let (_d, s) = services().await;
+        // Avant la première passe, rien : le prompt ne parle pas de la machine plutôt que
+        // d'en inventer une.
+        let blank = crate::conversation::build_tiers(&s, "bonjour", &[], None).await;
+        assert!(!blank.index.contains("## Machine"), "{}", blank.index);
+
+        let inv = crate::machine::Inventory {
+            os: "macOS 27".into(),
+            arch: "arm64".into(),
+            sandbox_profile: "workspace-write".into(),
+            shell_network: false,
+            present: vec![crate::machine::Tool {
+                name: "gh".into(),
+                version: Some("gh version 2.62.0".into()),
+                account: Some("edouard-claude".into()),
+            }],
+            missing: vec!["glab".into()],
+            checked_at: "2026-09-21T09:00:00+04:00".into(),
+        };
+        crate::workflow::kv_set(
+            &s,
+            crate::machine::KV_KEY,
+            &serde_json::to_string(&inv).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let v = status(&s, "s1", None, None, "machine").await.unwrap();
+        assert_eq!(v["machine"]["inventory"]["present"][0]["name"], "gh");
+        assert_eq!(
+            v["machine"]["inventory"]["present"][0]["version"], "gh version 2.62.0",
+            "la version sort ici, jamais dans le prompt"
+        );
+        assert_eq!(v["machine"]["inventory"]["missing"][0], "glab");
+
+        let first = crate::conversation::build_tiers(&s, "bonjour", &[], None).await;
+        assert!(first.index.contains("## Machine"), "{}", first.index);
+        assert!(
+            first.index.contains("gh (edouard-claude)"),
+            "{}",
+            first.index
+        );
+        assert!(
+            !first.index.contains("2.62.0"),
+            "aucune version dans le prompt : {}",
+            first.index
+        );
+        let second = crate::conversation::build_tiers(&s, "autre message", &[], None).await;
+        assert_eq!(
+            first.prefix_hash(),
+            second.prefix_hash(),
+            "le préfixe tient d'un tour à l'autre"
         );
     }
 

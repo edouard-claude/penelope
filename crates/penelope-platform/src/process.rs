@@ -186,12 +186,42 @@ pub fn merge_paths(current: Option<&std::ffi::OsStr>, extras: &[PathBuf]) -> std
     std::env::join_paths(out).unwrap_or_default()
 }
 
-/// Lance `<programme> --version` et renvoie la première ligne, ou `None` s'il ne répond
-/// pas dans le délai. Sert au diagnostic : présent dans le PATH ne veut pas dire utilisable.
-pub fn probe_version(program: &Path, timeout: std::time::Duration) -> Option<String> {
+/// Sortie d'une sonde : code de retour et flux, sans interprétation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Probe {
+    /// Le programme a rendu 0.
+    pub ok: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl Probe {
+    /// Le flux qui porte le message : `stdout` s'il dit quelque chose, `stderr` sinon.
+    /// `gh auth status` a écrit sur l'un puis sur l'autre selon les versions.
+    pub fn text(&self) -> &str {
+        if self.stdout.trim().is_empty() {
+            self.stderr.trim()
+        } else {
+            self.stdout.trim()
+        }
+    }
+}
+
+/// Lance `<programme> <arguments>` sans entrée et renvoie sa sortie, ou `None` s'il ne
+/// démarre pas ou ne répond pas dans le délai.
+///
+/// L'entrée est fermée : un programme qui réclame une saisie (`gh auth login`) meurt au
+/// délai au lieu de retenir l'appelant. Le délai est court par construction — ces sondes
+/// tournent au démarrage et dans `doctor`, jamais dans un tour de conversation.
+pub fn probe_command(program: &Path, args: &[&str], timeout: std::time::Duration) -> Option<Probe> {
     let mut child = std::process::Command::new(program)
-        .arg("--version")
+        .args(args)
         .env("PATH", search_path())
+        // Une sonde ne doit jamais ouvrir de pager : `gh` en lance un dès que la sortie
+        // ressemble à un terminal.
+        .env("PAGER", "cat")
+        .env("GH_PAGER", "cat")
+        .env("NO_COLOR", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -202,13 +232,11 @@ pub fn probe_version(program: &Path, timeout: std::time::Duration) -> Option<Str
         match child.try_wait() {
             Ok(Some(status)) => {
                 let out = child.wait_with_output().ok()?;
-                let text = if out.stdout.is_empty() {
-                    String::from_utf8_lossy(&out.stderr).to_string()
-                } else {
-                    String::from_utf8_lossy(&out.stdout).to_string()
-                };
-                let first = text.lines().next().unwrap_or("").trim().to_string();
-                return (status.success() && !first.is_empty()).then_some(first);
+                return Some(Probe {
+                    ok: status.success(),
+                    stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+                    stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+                });
             }
             Ok(None) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(25));
@@ -220,6 +248,14 @@ pub fn probe_version(program: &Path, timeout: std::time::Duration) -> Option<Str
             }
         }
     }
+}
+
+/// Lance `<programme> --version` et renvoie la première ligne, ou `None` s'il ne répond
+/// pas dans le délai. Sert au diagnostic : présent dans le PATH ne veut pas dire utilisable.
+pub fn probe_version(program: &Path, timeout: std::time::Duration) -> Option<String> {
+    let p = probe_command(program, &["--version"], timeout)?;
+    let first = p.text().lines().next().unwrap_or("").trim().to_string();
+    (p.ok && !first.is_empty()).then_some(first)
 }
 
 /// PATH effectif de Pénélope et de tout ce qu'elle lance.

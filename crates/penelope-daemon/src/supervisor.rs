@@ -88,6 +88,7 @@ impl Daemon {
             tokio::spawn(crate::runner::run_pool(self.clone())),
             supervised("maintenance", |d| Box::pin(maintenance_loop(d)) as BoxLoop),
             supervised("catalog", |d| Box::pin(catalog_loop(d)) as BoxLoop),
+            supervised("machine", |d| Box::pin(machine_loop(d)) as BoxLoop),
             supervised("scheduler", |d| {
                 Box::pin(crate::scheduler::scheduler_loop(d)) as BoxLoop
             }),
@@ -226,6 +227,26 @@ async fn catalog_loop(d: Arc<Daemon>) {
             every
         };
         sleep_or_shutdown(&d, wait).await;
+    }
+}
+
+/// Inventaire de la machine (issue #156) : au démarrage, puis toutes les heures.
+///
+/// Toutes les heures et pas plus souvent : l'inventaire ne bouge qu'à un `brew install`
+/// ou un `gh auth login`, et chaque passe lance une poignée de processus. Une passe qui
+/// échoue laisse le dernier inventaire en place — une ligne système périmée vaut mieux
+/// qu'un modèle qui ne sait plus rien de sa machine.
+async fn machine_loop(d: Arc<Daemon>) {
+    while !d.handle.is_shutting_down() {
+        match crate::machine::refresh(&d.services).await {
+            Ok(inv) => tracing::info!(
+                present = inv.present.len(),
+                missing = inv.missing.len(),
+                "inventaire de la machine"
+            ),
+            Err(e) => tracing::warn!(error = %e, "inventaire de la machine"),
+        }
+        sleep_or_shutdown(&d, Duration::from_secs(3600)).await;
     }
 }
 

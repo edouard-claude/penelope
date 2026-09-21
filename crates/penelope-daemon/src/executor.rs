@@ -1109,7 +1109,20 @@ impl NativeToolExecutor {
                     .search(&str_arg(args, "query")?, u_arg(args, "limit").unwrap_or(5));
                 json!(
                     hits.iter()
-                        .map(|(k, score)| json!({"name": k.name, "description": k.description, "score": score}))
+                        .map(|(k, score)| {
+                            // Une skill dont un binaire requis manque est annoncée telle
+                            // quelle (issue #156) : elle reste listée — c'est au
+                            // propriétaire d'installer, jamais à Pénélope (#146) — mais
+                            // le modèle sait avant de l'appliquer qu'elle échouera.
+                            let mut o = json!({
+                                "name": k.name, "description": k.description, "score": score
+                            });
+                            let missing = crate::machine::missing_binaries(&k.requires);
+                            if !missing.is_empty() {
+                                o["binaires_manquants"] = json!(missing);
+                            }
+                            o
+                        })
                         .collect::<Vec<_>>()
                 )
             }
@@ -1126,10 +1139,22 @@ impl NativeToolExecutor {
                     Some(note) => format!("{note}{}", sk.body),
                     None => sk.body.clone(),
                 };
-                json!({
+                let mut out = json!({
                     "name": sk.name, "allowed_tools": sk.allowed_tools,
                     "requires": sk.requires, "content": content
-                })
+                });
+                // Dit avant l'application, pas au premier échec de commande (issue #156).
+                let missing = crate::machine::missing_binaries(&sk.requires);
+                if !missing.is_empty() {
+                    out["binaires_manquants"] = json!(missing);
+                    out["remarque"] = json!(format!(
+                        "Binaire(s) absent(s) de cette machine : {}. Les étapes qui les \
+                         appellent échoueront ; dis-le au propriétaire plutôt que de \
+                         contourner.",
+                        missing.join(", ")
+                    ));
+                }
+                out
             }
             "skill_propose" | "skill_patch" => {
                 let skill_name = str_arg(args, "name")?;
@@ -1438,6 +1463,16 @@ impl NativeToolExecutor {
             v["body"] = json!(text);
             v["format"] = json!("texte extrait du HTML");
             v["raw_artifact"] = json!(raw.id);
+        }
+        // Une forge dont le client est connecté : le dire au lieu de laisser le modèle
+        // réapprendre à chaque sujet (issue #156). La lecture a déjà eu lieu, rien n'est
+        // bloqué — c'est une remarque, comme celle du réseau coupé (#106).
+        let hint = match crate::machine::cached(s).await {
+            Some(inv) => crate::machine::forge_hint(&inv, url),
+            None => None,
+        };
+        if let Some(h) = &hint {
+            v["remarque"] = json!(h);
         }
         let mut shown = penelope_tools::render(&v);
         if let Some(id) = v["raw_artifact"].as_str() {

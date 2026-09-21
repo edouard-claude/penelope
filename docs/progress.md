@@ -2193,6 +2193,51 @@ prévu pour la réponse, et que la passe prenait ça pour une sortie trop longue
   longue), « raisonnement plein » (budget parti en réflexion), « réseau coupé ou machine
   endormie, lot rejoué ».
 
+### 0.17.35
+
+#### Pénélope ne connaissait pas sa machine (#156)
+
+Le 20/09, le propriétaire colle un lien GitHub. Deux `http_fetch` sur `api.github.com`,
+refusés faute de User-Agent, puis un `curl … | python3` cassé par un `===` que zsh
+interprète, avant qu'il ne demande « pourquoi tu n'utilises pas `gh` ? ça devrait être ton
+réflexe ». `gh` était installé **et connecté**. Même scène avec `glab`. Elle ne s'améliorait
+que parce qu'on la corrigeait en séance, et la correction dictée dormait trois fois dans
+`mem_candidates`, les deux passes de nuit ayant échoué (#152).
+
+- **La cause** : rien, dans le message système, ne parlait de la machine. Ni les binaires,
+  ni leur état de connexion. `doctor` vérifiait bien `git`, `npx`, `docker` pour lui-même ;
+  ce résultat n'atteignait jamais le modèle. La ligne « Machine : MBP M1 » venait du profil,
+  donc de ce que le propriétaire avait tapé à l'accueil, pas d'une détection.
+- **Une passe d'inventaire** au démarrage, toutes les heures et à chaque `doctor` : `which`
+  sur dix-sept binaires connus plus `tools.inventory_extra`, la version par une commande
+  courte, et pour les forges l'état de connexion (`gh auth status`, `glab auth status`).
+  Sonde à trois secondes, entrée fermée — une commande qui réclame une saisie meurt au
+  délai ; l'option qui afficherait un jeton n'est jamais passée et ce qui est gardé traverse
+  le rédacteur.
+- **Une ligne dans le message système**, après les outils : ce qui est installé, ce qui est
+  connecté et à quel compte, ce qui manque. **Ni version, ni date, ni chemin** : elle est en
+  T1, dans le préfixe mis en cache (#104, décision 0008), et un `brew upgrade gh` ne doit
+  pas la changer. Une déconnexion, elle, la change une fois.
+- **Le routage n'est émis que pour ce qui est utilisable** : GitHub → `gh api`, GitLab →
+  `glab`, YouTube → `yt-dlp`, conteneurs → `docker`, et jamais `curl` ni `http_fetch` vers
+  une forge dont le client est connecté. Une forge installée mais **déconnectée** ne produit
+  aucune règle : envoyer le modèle sur `glab` non connecté rend « not logged in », et il
+  repart sur `http_fetch`.
+- **`http_fetch` vers une forge connectée** porte une remarque (« `gh` est installé et
+  connecté : préfère `gh api …` »), comme celle du réseau coupé de #106. Elle ne bloque
+  rien : la lecture a déjà eu lieu, et `http_fetch` reste bon pour une page publique.
+- **`self_status`** (section `machine`, champ `inventory`) porte les versions ; **`doctor`**
+  donne une ligne pour les présents, une pour les absents, et une par forge installée mais
+  déconnectée. Une skill dont un `bin:` requis manque est annotée dans `skill_search` et
+  `skill_load` ; rien n'est installé à l'insu du propriétaire (#146 tient).
+- **L'accueil `outils`** propose l'inventaire détecté au lieu d'une page blanche ; ce que le
+  propriétaire déclare reste prioritaire sur ce qui est détecté.
+
+Non traité, et pourquoi : la règle `profil.md:38` (« pour installer un MCP, demander les
+URLs **au lieu d'utiliser gh** ») vit dans la mémoire de l'instance, pas dans ce dépôt ; sa
+reformulation revient à la consolidation, réparée par #152. Le réflexe ajouté ici ne la
+contredit pas — il porte sur la lecture d'une forge, pas sur la déclaration d'un serveur MCP.
+
 ### Routine de livraison
 
 Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #147) :

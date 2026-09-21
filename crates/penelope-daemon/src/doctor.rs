@@ -241,6 +241,10 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     // Magasin de secrets : un aller-retour de 8 Ko, la taille d'un Grant (#148).
     checks.push(secret_roundtrip_check(s));
 
+    // Ce que Pénélope sait de sa machine (#156) : l'inventaire est refait ici, puisque
+    // `doctor` est ce qu'on lance après avoir installé ou connecté quelque chose.
+    checks.extend(machine_checks(s).await);
+
     // Dépendances des skills tierces : listées, jamais installées (#146).
     checks.push(skill_requirements_check(s).await);
 
@@ -610,6 +614,78 @@ pub fn secret_roundtrip_check(s: &Services) -> DoctorCheck {
         LABEL,
         format!("{} : 8 Ko écrits, relus, effacés", store.backend()),
     )
+}
+
+/// #156 : les binaires de la machine, et pour les forges leur état de connexion.
+///
+/// Le 20/09, `gh` était installé et connecté pendant que Pénélope faisait des `http_fetch`
+/// refusés sur `api.github.com` : elle ne savait pas qu'il existait. Deux contrôles — ce
+/// qui est là, ce qui manque — plus une ligne par forge non connectée, puisqu'un `gh`
+/// installé mais déconnecté ne sert à rien et n'émet aucun réflexe.
+pub async fn machine_checks(s: &Services) -> Vec<DoctorCheck> {
+    const ID: &str = "machine.inventory";
+    const LABEL: &str = "Binaires de la machine";
+    let inv = match crate::machine::refresh(s).await {
+        Ok(inv) => inv,
+        Err(e) => {
+            return vec![DoctorCheck::fail(
+                ID,
+                LABEL,
+                format!("inventaire impossible : {e}"),
+                None,
+            )];
+        }
+    };
+
+    let mut out = Vec::new();
+    let present: Vec<String> = inv
+        .present
+        .iter()
+        .map(|t| match (&t.account, &t.version) {
+            (Some(a), _) => format!("{} ({a})", t.name),
+            (None, Some(v)) => format!("{} ({v})", t.name),
+            (None, None) => t.name.clone(),
+        })
+        .collect();
+    out.push(DoctorCheck::ok(
+        ID,
+        LABEL,
+        if present.is_empty() {
+            "aucun binaire connu trouvé dans le PATH".to_string()
+        } else {
+            format!("{} présent(s) : {}", present.len(), present.join(", "))
+        },
+    ));
+
+    if !inv.missing.is_empty() {
+        out.push(DoctorCheck::fail(
+            "machine.missing",
+            "Binaires attendus absents",
+            format!(
+                "{} absent(s) : {}",
+                inv.missing.len(),
+                inv.missing.join(", ")
+            ),
+            Some(format!("brew install {}", inv.missing.join(" "))),
+        ));
+    }
+
+    // Une forge installée mais déconnectée : le réflexe n'est pas émis, le modèle
+    // repartira sur `http_fetch`. C'est exactement l'incident de #156.
+    for bin in ["gh", "glab"] {
+        if inv.tool(bin).is_some() && !inv.connected(bin) {
+            out.push(DoctorCheck::fail(
+                &format!("machine.{bin}"),
+                &format!("Connexion `{bin}`"),
+                format!(
+                    "`{bin}` est installé mais non connecté : aucune règle de routage ne \
+                     sera donnée au modèle, qui repartira sur `http_fetch`"
+                ),
+                Some(format!("{bin} auth login")),
+            ));
+        }
+    }
+    out
 }
 
 /// #146 : une skill importée déclare ses dépendances (`requires: [pip:…, npm:…, bin:…]`).
