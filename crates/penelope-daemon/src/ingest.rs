@@ -155,6 +155,7 @@ pub async fn ingest(
     canal: &str,
     origin: Origin,
     session_id: Option<&str>,
+    cancel: &CancelToken,
 ) -> Result<Ingested, String> {
     let s = &d.services;
     let vault = crate::conversation::vault_dir(s);
@@ -196,6 +197,7 @@ pub async fn ingest(
         extracted.pages,
         &text,
         session_id,
+        cancel,
     )
     .await
     {
@@ -405,6 +407,7 @@ async fn summarise(
     pages: Option<usize>,
     text: &str,
     session_id: Option<&str>,
+    cancel: &CancelToken,
 ) -> Result<Summary, String> {
     let s = &d.services;
     let cfg = s.config.config();
@@ -451,7 +454,7 @@ async fn summarise(
     };
     let call = async {
         let rx = provider
-            .chat_stream(request, CancelToken::new())
+            .chat_stream(request, cancel.clone())
             .await
             .map_err(|e| e.to_string())?;
         collect_stream(rx, &model, provider.name(), &s.catalog)
@@ -807,7 +810,19 @@ pub async fn scan_inbox(d: &Arc<Daemon>) -> anyhow::Result<usize> {
             Err("fichier de plus de 50 Mo".into())
         } else {
             match std::fs::read(&path) {
-                Ok(bytes) => ingest(d, &name, bytes, "inbox", Origin::Untrusted, None).await,
+                Ok(bytes) => {
+                    // Dépôt de fichier hors conversation : rien à annuler par `/stop`.
+                    ingest(
+                        d,
+                        &name,
+                        bytes,
+                        "inbox",
+                        Origin::Untrusted,
+                        None,
+                        &CancelToken::new(),
+                    )
+                    .await
+                }
                 Err(e) => Err(e.to_string()),
             }
         };
@@ -982,6 +997,7 @@ mod tests {
             "telegram",
             Origin::Untrusted,
             None,
+            &CancelToken::new(),
         )
         .await
         .unwrap();
@@ -1016,6 +1032,7 @@ mod tests {
             "telegram",
             Origin::Untrusted,
             None,
+            &CancelToken::new(),
         )
         .await
         .unwrap();

@@ -795,6 +795,7 @@ mod tests {
             "cli",
             Origin::Owner,
             Some(&sid),
+            &penelope_llm::CancelToken::new(),
         )
         .await
         .unwrap();
@@ -810,6 +811,7 @@ mod tests {
             "cli",
             Origin::Owner,
             Some(&sid),
+            &penelope_llm::CancelToken::new(),
         )
         .await
         .unwrap();

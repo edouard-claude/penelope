@@ -430,6 +430,10 @@ pub(crate) struct StopReport {
     pub left: Vec<String>,
     /// Tous les runs ouverts du chat : identifiant et état.
     pub open: Vec<(String, String)>,
+    /// Ingestions de documents en cours (issue #155).
+    pub ingests: usize,
+    /// Celles que `/stop tout` vient d'interrompre.
+    pub cancelled_ingests: usize,
     pub tout: bool,
 }
 
@@ -438,7 +442,9 @@ impl StopReport {
         let mut note = match (self.running, self.queued) {
             // « Rien à arrêter » seulement quand il n'y a vraiment rien : un run ouvert
             // compte, quel que soit son état.
-            (false, 0) if self.open.is_empty() => "Rien à arrêter.".to_string(),
+            (false, 0) if self.open.is_empty() && self.ingests == 0 => {
+                "Rien à arrêter.".to_string()
+            }
             (false, 0) => "⏹ Aucun tour en cours.".to_string(),
             (true, 0) => "⏹ Tour arrêté.".to_string(),
             (false, n) => format!("⏹ {n} message(s) en attente annulé(s)."),
@@ -462,6 +468,12 @@ impl StopReport {
                 self.paused
             ));
         }
+        if self.cancelled_ingests > 0 {
+            note.push_str(&format!(
+                " {} ingestion(s) de document interrompue(s).",
+                self.cancelled_ingests
+            ));
+        }
         if !self.left.is_empty() {
             note.push_str(&format!(
                 "\n\nRun(s) laissé(s) ouvert(s) : {}. Ils ne sont pas annulés à ta place : \
@@ -472,16 +484,26 @@ impl StopReport {
         }
         // Ne promettre que ce qui est fait : l'ingestion n'était pas interrompue malgré la
         // phrase qui l'annonçait, et les runs ouverts n'étaient pas nommés.
-        if !self.tout && !self.open.is_empty() {
+        if !self.tout && (!self.open.is_empty() || self.ingests > 0) {
+            let mut rest: Vec<String> = Vec::new();
+            if !self.open.is_empty() {
+                rest.push(format!(
+                    "{} run(s) ouvert(s) ({})",
+                    self.open.len(),
+                    self.open
+                        .iter()
+                        .map(|(id, st)| format!("`{id}` {st}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if self.ingests > 0 {
+                rest.push(format!("{} ingestion(s) de document", self.ingests));
+            }
             note.push_str(&format!(
-                "\n\nContinue : {} run(s) ouvert(s) ({}). `/stop tout` met en pause ce qui \
-                 tourne et nomme le reste.",
-                self.open.len(),
-                self.open
-                    .iter()
-                    .map(|(id, st)| format!("`{id}` {st}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                "\n\nContinue : {}. `/stop tout` met en pause ce qui tourne, interrompt les \
+                 ingestions et nomme le reste.",
+                rest.join(", ")
             ));
         }
         note
@@ -1469,6 +1491,14 @@ impl TelegramGateway {
                     .map(|b| b.parts.len())
                     .unwrap_or(0);
                 let running = d.bus.cancel_session(&session);
+                // Ingestions en cours de cette session : comptées pour toute forme de
+                // `/stop`, annulées par `/stop tout` (issue #155).
+                let mut ingests = d.bus.ingests_of(&session);
+                let mut cancelled_ingests = if tout {
+                    d.bus.cancel_ingests(&session)
+                } else {
+                    0
+                };
                 let mut queued = crate::session_ops::silence(d, &session, "arrêt demandé").await?;
                 let mut sessions = 0;
                 let mut runs = 0;
@@ -1510,6 +1540,8 @@ impl TelegramGateway {
                             continue;
                         }
                         d.bus.cancel_session(&id);
+                        ingests += d.bus.ingests_of(&id);
+                        cancelled_ingests += d.bus.cancel_ingests(&id);
                         let n = crate::session_ops::silence(d, &id, "arrêt demandé").await?;
                         if n > 0 || d.bus.is_active(&id) {
                             sessions += 1;
@@ -1535,7 +1567,8 @@ impl TelegramGateway {
                         }
                     }
                 }
-                StopReport {
+                let has_left = !left.is_empty();
+                let note = StopReport {
                     running,
                     queued,
                     burst,
@@ -1546,9 +1579,21 @@ impl TelegramGateway {
                         .iter()
                         .map(|r| (r.id.clone(), r.state.as_str().to_string()))
                         .collect(),
+                    ingests,
+                    cancelled_ingests,
                     tout,
                 }
-                .render()
+                .render();
+                // Des runs sont restés ouverts : l'écran `runs` porte un bouton par run
+                // (⏸ ▶️ ⏹, l'arrêt sous confirmation). « Laisser », c'est ne pas cliquer.
+                // Le propriétaire décide, la commande ne décide pas pour lui (issue #155).
+                if tout && has_left {
+                    let _ = self.reply(chat_id, topic_id, reply_to, &note).await;
+                    return self
+                        .show_screen(chat_id, topic_id, reply_to, "runs", &json!({}), None)
+                        .await;
+                }
+                note
             }
             "switch" => {
                 if args.is_empty() {
@@ -3249,16 +3294,21 @@ impl TelegramGateway {
                 } else {
                     penelope_memory::Origin::Untrusted
                 };
-                match crate::ingest::ingest(
+                // L'ingestion est déclarée pour cette session : `/stop tout` peut
+                // l'interrompre (issue #155). Le jeton est retiré quoi qu'il arrive.
+                let (ingest_id, cancel) = daemon.bus.start_ingest(&session);
+                let outcome = crate::ingest::ingest(
                     &daemon,
                     &file_name,
                     bytes,
                     "telegram",
                     trust,
                     Some(&session),
+                    &cancel,
                 )
-                .await
-                {
+                .await;
+                daemon.bus.end_ingest(&session, ingest_id);
+                match outcome {
                     Ok(doc) => {
                         say(doc.report()).await;
                         if let (Some(m), Some(id)) = (&messenger, &doc.approval_id) {
@@ -10677,26 +10727,52 @@ mod tests {
         assert!(!out.contains("Rien à arrêter"), "{out}");
     }
 
-    /// #155 : `/stop` ne promet plus l'ingestion, qui n'était pas interrompue. Ce qui est
-    /// annoncé est ce qui a été fait.
+    /// #155 : ce qui est annoncé est ce qui a été fait. L'ingestion n'était pas
+    /// interrompue malgré la phrase qui l'annonçait ; elle l'est désormais, et n'est dite
+    /// que lorsqu'il y en avait une.
     #[test]
     fn stop_promises_only_what_it_did() {
         use super::StopReport;
 
-        let r = StopReport {
+        // Sans ingestion en cours, le mot n'apparaît pas.
+        let plain = StopReport {
             running: true,
             queued: 3,
             paused: 2,
             tout: true,
             ..Default::default()
         };
-        let out = r.render();
+        let out = plain.render();
         assert!(out.contains("Tour arrêté, 3 message(s)"), "{out}");
         assert!(out.contains("2 run(s) de workflow mis en pause"), "{out}");
         assert!(
             !out.to_lowercase().contains("ingestion"),
-            "aucune promesse sans code : {out}"
+            "rien à dire sur l'ingestion : {out}"
         );
+
+        // Avec, elle est comptée et dite comme interrompue.
+        let with = StopReport {
+            running: true,
+            ingests: 2,
+            cancelled_ingests: 2,
+            tout: true,
+            ..Default::default()
+        };
+        let out = with.render();
+        assert!(
+            out.contains("2 ingestion(s) de document interrompue(s)"),
+            "{out}"
+        );
+
+        // `/stop` simple ne l'interrompt pas : il la nomme, et dit quoi faire.
+        let simple = StopReport {
+            ingests: 1,
+            ..Default::default()
+        };
+        let out = simple.render();
+        assert!(!out.contains("Rien à arrêter"), "{out}");
+        assert!(out.contains("1 ingestion(s) de document"), "{out}");
+        assert!(out.contains("interrompt les ingestions"), "{out}");
     }
 
     /// Issue #31 : la réponse d'une boucle arrêtée arrive avec ses suites en boutons, sans

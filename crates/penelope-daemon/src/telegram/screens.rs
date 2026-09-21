@@ -2016,7 +2016,9 @@ impl TelegramGateway {
                         );
                         let chan = origin.clone();
                         tokio::spawn(async move {
-                            let note = match crate::ingest::ingest(
+                            // Déclarée pour la session : `/stop tout` l'interrompt (#155).
+                            let (ingest_id, cancel) = daemon.bus.start_ingest(&sess);
+                            let outcome = crate::ingest::ingest(
                                 &daemon,
                                 &name,
                                 joined.into_bytes(),
@@ -2024,9 +2026,11 @@ impl TelegramGateway {
                                 // Texte écrit par le propriétaire lui-même.
                                 penelope_memory::Origin::Owner,
                                 Some(&sess),
+                                &cancel,
                             )
-                            .await
-                            {
+                            .await;
+                            daemon.bus.end_ingest(&sess, ingest_id);
+                            let note = match outcome {
                                 Ok(i) => i.report(),
                                 Err(e) => format!("📄 Ingestion impossible : {e}"),
                             };

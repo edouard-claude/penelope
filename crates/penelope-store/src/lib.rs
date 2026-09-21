@@ -879,6 +879,21 @@ mod tests {
 mod integrity_tests {
     use super::*;
 
+    /// #158 : SQLite embarqué à jour. La 3.46.0 (mai 2024) portait un faux positif de
+    /// l'`integrity-check` FTS5, corrigé en 3.46.1 ; c'est la source du verdict que le
+    /// reste de ce lot apprend à ne pas croire sur parole.
+    #[test]
+    fn the_bundled_sqlite_is_recent_enough() {
+        let v = rusqlite::version();
+        let parts: Vec<u32> = v.split('.').filter_map(|p| p.parse().ok()).collect();
+        assert!(parts.len() >= 2, "version illisible : {v}");
+        let (major, minor) = (parts[0], parts[1]);
+        assert!(
+            (major, minor) >= (3, 50),
+            "SQLite {v} : au moins 3.50 attendu (issue #158)"
+        );
+    }
+
     /// #158 : un verdict qui ne parle que d'index FTS5 désigne du **dérivé**, pas des
     /// données. Une seule ligne qui parle d'autre chose, et on ne touche plus à rien.
     #[test]

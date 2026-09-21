@@ -185,6 +185,7 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
         "telegram",
         Origin::Owner,
         Some(&sid),
+        &penelope_llm::CancelToken::new(),
     )
     .await
     .unwrap();

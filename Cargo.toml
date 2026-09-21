@@ -21,7 +21,11 @@ toml = "0.8"
 toml_edit = "0.22"
 
 # --- infra ---
-rusqlite = { version = "0.32", features = ["bundled", "blob", "functions", "limits"] }
+# SQLite embarqué : monté de 3.46.0 (rusqlite 0.32) à ≥ 3.50 (issue #158). 3.46.1 a
+# corrigé un faux positif de l'integrity-check FTS5, et les versions suivantes
+# plusieurs défauts de FTS5 ; le lot #158 corrige le comportement côté Pénélope, celui-ci
+# corrige la source.
+rusqlite = { version = "0.37", features = ["bundled", "blob", "functions", "limits"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
 arc-swap = "1"
 tracing = "0.1"

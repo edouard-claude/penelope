@@ -320,9 +320,14 @@ ouverts qu'il ne touche pas (`blocked`, `paused`) : ceux-là ne sont jamais annu
 place, puisqu'un run annulé ne se reprend pas. `/run cancel <id>` en finit, la carte du
 run permet de réessayer ou de passer l'étape.
 
+Quand des runs restent ouverts, l'écran des runs suit la réponse : un bouton par run
+(⏸ mettre en pause, ▶️ reprendre, ⏹ arrêter sous confirmation). « Laisser », c'est ne pas
+cliquer.
+
 Un run ouvert, quel que soit son état, empêche la réponse « Rien à arrêter » : c'est
-précisément le run **bloqué** qui paraît « en cours » (issue #155). L'ingestion en cours,
-elle, n'est pas interrompue et n'est plus annoncée comme telle.
+précisément le run **bloqué** qui paraît « en cours » (issue #155). Les **ingestions de
+document** en cours sont comptées par `/stop` et **interrompues** par `/stop tout` : leur
+appel au modèle porte désormais le jeton d'annulation de leur session.
 
 Une session reçoit un titre de quelques mots après son premier échange ; `/title
 <texte>` renomme la session courante. `/sessions` rend un bouton par session (▶️ celle du

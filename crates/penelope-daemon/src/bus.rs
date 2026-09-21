@@ -119,6 +119,12 @@ pub struct Bus {
     waiters: Mutex<HashMap<String, Vec<oneshot::Sender<TurnOutcome>>>>,
     recent: Mutex<VecDeque<(String, TurnOutcome)>>,
     active: Mutex<HashMap<String, ActiveTurn>>,
+    /// Ingestions de documents en cours, par session (issue #155). Elles vivent hors d'un
+    /// tour — le document arrive, le résumé part au modèle en tâche détachée — donc
+    /// `cancel_session` ne les voyait pas : `/stop tout` promettait de les mettre en pause
+    /// et ne touchait rien.
+    ingests: Mutex<HashMap<String, Vec<(u64, CancelToken)>>>,
+    next_ingest: std::sync::atomic::AtomicU64,
     enqueued: Notify,
 }
 
@@ -136,6 +142,8 @@ impl Bus {
             waiters: Mutex::new(HashMap::new()),
             recent: Mutex::new(VecDeque::new()),
             active: Mutex::new(HashMap::new()),
+            ingests: Mutex::new(HashMap::new()),
+            next_ingest: std::sync::atomic::AtomicU64::new(1),
             enqueued: Notify::new(),
         }
     }
@@ -232,6 +240,49 @@ impl Bus {
             }
             None => false,
         }
+    }
+
+    /// Déclare une ingestion en cours pour cette session : rend son identifiant et son
+    /// jeton. L'identifiant sert à la retirer, `CancelToken` n'étant pas comparable.
+    pub fn start_ingest(&self, session_id: &str) -> (u64, CancelToken) {
+        let id = self
+            .next_ingest
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let token = CancelToken::new();
+        lock(&self.ingests)
+            .entry(session_id.to_string())
+            .or_default()
+            .push((id, token.clone()));
+        (id, token)
+    }
+
+    /// Retire une ingestion terminée.
+    pub fn end_ingest(&self, session_id: &str, id: u64) {
+        let mut g = lock(&self.ingests);
+        if let Some(v) = g.get_mut(session_id) {
+            v.retain(|(k, _)| *k != id);
+            if v.is_empty() {
+                g.remove(session_id);
+            }
+        }
+    }
+
+    /// Annule les ingestions en cours d'une session, et rend leur nombre (issue #155).
+    pub fn cancel_ingests(&self, session_id: &str) -> usize {
+        match lock(&self.ingests).get(session_id) {
+            Some(v) => {
+                for (_, t) in v {
+                    t.cancel();
+                }
+                v.len()
+            }
+            None => 0,
+        }
+    }
+
+    /// Combien d'ingestions tournent pour cette session.
+    pub fn ingests_of(&self, session_id: &str) -> usize {
+        lock(&self.ingests).get(session_id).map_or(0, |v| v.len())
     }
 
     /// Annule un tour précis, s'il est bien celui qui tourne pour cette session. Vrai
