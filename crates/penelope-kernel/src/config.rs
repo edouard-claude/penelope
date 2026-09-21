@@ -773,6 +773,14 @@ pub struct Memory {
     /// Attente avant de reprendre un lot de la consolidation après une erreur passagère
     /// du modèle (flux muet, 5xx, 429), doublée à la seconde reprise.
     pub dream_retry_wait: String,
+    /// Raisonnement du modèle de consolidation : `auto` le garde et le budgète (le tri
+    /// d'un candidat gagne à être réfléchi), `off` l'éteint pour rendre tout le budget
+    /// de sortie au JSON. Le défaut est `auto` (issue #152).
+    pub consolidation_reasoning: String,
+    /// Plafond du budget de raisonnement d'un appel de consolidation, en jetons. Le
+    /// budget part plus bas et monte quand le modèle s'y heurte ; `max_tokens` de
+    /// l'appel vaut ce budget plus la sortie estimée du lot.
+    pub consolidation_reasoning_tokens: u32,
     /// Heure du digest du matin (cron, fuseau du propriétaire).
     pub digest_cron: String,
     pub promotion: Promotion,
@@ -805,6 +813,8 @@ impl Default for Memory {
             dream_batch: 40,
             dreaming_cron: "30 3 * * *".into(),
             dream_retry_wait: "2m".into(),
+            consolidation_reasoning: "auto".into(),
+            consolidation_reasoning_tokens: 16_000,
             digest_cron: "0 8 * * *".into(),
             promotion: Promotion::default(),
             intents: Intents::default(),
@@ -1501,6 +1511,14 @@ impl Config {
 
         parse_duration(&self.memory.episode_idle)?;
         parse_duration(&self.memory.dream_retry_wait)?;
+        // Une valeur mal écrite éteindrait ou garderait le raisonnement au hasard : elle
+        // est refusée ici plutôt que devinée à 3 h du matin (issue #152).
+        if !matches!(self.memory.consolidation_reasoning.as_str(), "auto" | "off") {
+            return Err(KernelError::config(format!(
+                "memory.consolidation_reasoning : `{}` inconnu (attendu `auto` ou `off`)",
+                self.memory.consolidation_reasoning
+            )));
+        }
         parse_duration(&self.memory.vault_git_autocommit)?;
         parse_duration(&self.memory.intents.cooldown)?;
         parse_duration(&self.memory.intents.expiry)?;

@@ -236,6 +236,7 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
 
     // Effort de raisonnement du rôle de consolidation, et ce qu'il coûte (#152).
     checks.push(reasoning_effort_check(s).await);
+    checks.push(dream_power_check(s).await);
 
     // Magasin de secrets : un aller-retour de 8 Ko, la taille d'un Grant (#148).
     checks.push(secret_roundtrip_check(s));
@@ -290,14 +291,25 @@ pub async fn reasoning_effort_check(s: &Services) -> DoctorCheck {
             Some(format!("penelope model set {alias} <fournisseur:modèle>")),
         );
     };
-    let effort = s
+    let info = s
         .catalog
-        .get(model.split_once(':').map_or(model.as_str(), |(_, m)| m))
-        .and_then(|i| i.lightest_effort());
-    let sent = match effort.as_deref() {
-        Some("none") => "raisonnement coupé".to_string(),
-        Some(e) => format!("effort `{e}` (le modèle l'impose)"),
-        None => "aucun réglage exposé".to_string(),
+        .get(model.split_once(':').map_or(model.as_str(), |(_, m)| m));
+    // Ce qui partira vraiment : le budget quand le raisonnement est gardé (le défaut),
+    // l'effort quand la configuration l'éteint (issue #152).
+    // Inconnu du catalogue : on suppose qu'il réfléchit, comme la passe (issue #152).
+    let sent = if info.as_ref().is_some_and(|i| !i.reasons()) {
+        "modèle sans raisonnement".to_string()
+    } else if cfg.memory.consolidation_reasoning == "off" {
+        match info.as_ref().and_then(|i| i.lightest_effort()).as_deref() {
+            Some("none") => "raisonnement éteint".to_string(),
+            Some(e) => format!("éteint demandé, mais le modèle l'impose : effort `{e}`"),
+            None => "raisonnement éteint".to_string(),
+        }
+    } else {
+        format!(
+            "raisonnement gardé, budget jusqu'à {} jetons",
+            cfg.memory.consolidation_reasoning_tokens
+        )
     };
     // Part de raisonnement réellement observée sur sept jours.
     let since = (s.clock.now_utc() - chrono::Duration::days(7))
@@ -323,15 +335,54 @@ pub async fn reasoning_effort_check(s: &Services) -> DoctorCheck {
     }
     let share = (reasoning as f64 * 100.0 / completion as f64).round() as i64;
     let detail = format!("{alias} : {sent} ; {share}% de la sortie en raisonnement sur 7 jours");
-    if share > 50 {
+    // Gardé et budgété, une part haute est normale (la nuit réussie du 19/09 était à
+    // 73 %) ; c'est éteint qu'elle trahit un modèle qui n'écoute pas.
+    if cfg.memory.consolidation_reasoning == "off" && share > 10 {
         return DoctorCheck::fail(
             ID,
             LABEL,
             detail,
             Some(format!(
-                "plus de la moitié du budget part en réflexion : la consolidation échouera. \
-                 Choisir un modèle qui accepte de la couper (`penelope model set {alias} …`)"
+                "le raisonnement est éteint mais le modèle réfléchit quand même : lui donner \
+                 un modèle qui l'accepte (`penelope model set {alias} …`), ou repasser à \
+                 `memory.consolidation_reasoning = \"auto\"`"
             )),
+        );
+    }
+    DoctorCheck::ok(ID, LABEL, detail)
+}
+
+/// #152 : la consolidation tombe à l'heure où le Mac dort. La nuit du 21/09, un trou de
+/// journal de douze minutes (« Now drawing from 'Battery Power' ») a coupé un lot en
+/// vol ; la passe attend maintenant le retour du réseau, mais une machine sur batterie à
+/// l'heure du rêve reste un avertissement.
+pub async fn dream_power_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "dream_power";
+    const LABEL: &str = "Alimentation à l'heure du rêve";
+    let cfg = s.config.config();
+    let cron = cfg.memory.dreaming_cron.clone();
+    // Sonde bloquante (`pmset`) : hors du fil asynchrone.
+    let platform = s.platform.clone();
+    let now = s.clock.now_ms() / 1_000;
+    let on_ac = tokio::task::spawn_blocking(move || platform.host_status(now).on_ac_power())
+        .await
+        .ok()
+        .flatten();
+    let detail = match on_ac {
+        Some(false) => format!("sur batterie ; consolidation prévue à `{cron}`"),
+        Some(true) => format!("sur secteur ; consolidation prévue à `{cron}`"),
+        None => format!("alimentation inconnue ; consolidation prévue à `{cron}`"),
+    };
+    if on_ac == Some(false) {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            detail,
+            Some(
+                "une machine sur batterie s'endort et coupe un lot en vol : la brancher avant \
+                 la nuit, ou décaler `memory.dreaming_cron`"
+                    .into(),
+            ),
         );
     }
     DoctorCheck::ok(ID, LABEL, detail)
@@ -1821,6 +1872,8 @@ mod tests {
             "effects",
             "workflows",
             "skills",
+            "reasoning_effort",
+            "dream_power",
         ] {
             assert!(ids.contains(&expected), "contrôle manquant : {expected}");
         }
@@ -1828,6 +1881,49 @@ mod tests {
         for c in &checks {
             assert!(!c.detail.is_empty(), "{} sans détail", c.id);
         }
+    }
+
+    /// #152 : `doctor` dit ce qui partira en raisonnement pour la consolidation, et la
+    /// part réellement observée. La nuit du 19/09 tournait à 73 % de raisonnement et
+    /// passait de justesse ; celle du 20/09 à 100 % et échouait.
+    #[tokio::test]
+    async fn doctor_reports_the_reasoning_share_of_the_consolidation() {
+        let (_d, s) = services().await;
+        // Sept jours d'appels de consolidation : 73 % de la sortie en raisonnement.
+        for _ in 0..3 {
+            s.budget
+                .record(penelope_kernel::budget::UsageRecord {
+                    model: "deepseek/deepseek-v4-flash".into(),
+                    provider: "openrouter".into(),
+                    role: Some("consolidation".into()),
+                    prompt: 10_000,
+                    completion: 10_000,
+                    reasoning: 7_300,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+        }
+        let c = reasoning_effort_check(&s).await;
+        assert!(c.detail.contains("73%"), "part observée : {}", c.detail);
+        // Gardé et budgété (le défaut) : une part haute est normale, pas une alerte.
+        assert!(c.ok, "{c:?}");
+        assert!(
+            c.detail.contains("raisonnement gardé"),
+            "ce qui partira : {}",
+            c.detail
+        );
+
+        // Éteint, la même part trahit un modèle qui n'écoute pas.
+        s.config
+            .mutate("test", |cfg| {
+                cfg.memory.consolidation_reasoning = "off".into();
+                Ok(vec!["memory.consolidation_reasoning".into()])
+            })
+            .unwrap();
+        let c = reasoning_effort_check(&s).await;
+        assert!(!c.ok, "éteint mais toujours 73 % : {}", c.detail);
+        assert!(c.fix.is_some(), "une sortie est proposée");
     }
 
     /// #76 : un fichier portant une section d'une version plus récente se charge, et

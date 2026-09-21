@@ -776,17 +776,29 @@ pub fn to_openai_body(req: &ChatRequest) -> Value {
     if let Some(m) = req.max_tokens {
         obj.insert("max_tokens".into(), json!(m));
     }
-    if let Some(r) = &req.reasoning_effort {
-        // `none` n'est pas un niveau d'effort : c'est l'extinction du raisonnement
-        // (issue #152). OpenRouter l'entend par `enabled: false` ; envoyé comme
-        // `effort: "none"`, plusieurs modèles l'ignorent et réfléchissent quand même,
-        // jusqu'à dépenser tout `max_tokens` avant d'écrire la moindre réponse.
-        let value = if r == "none" {
-            json!({"enabled": false, "exclude": true})
-        } else {
-            json!({ "effort": r })
-        };
-        obj.insert("reasoning".into(), value);
+    // Raisonnement : soit éteint, soit budgété (issue #152). `max_tokens` borne la
+    // sortie raisonnement compris chez OpenRouter ; un budget de raisonnement à part est
+    // ce qui empêche la réflexion de manger la réponse.
+    match (&req.reasoning_effort, req.reasoning_max_tokens) {
+        // `none` n'est pas un niveau d'effort : c'est l'extinction. OpenRouter l'entend
+        // par `enabled: false` ; envoyé comme `effort: "none"`, plusieurs modèles
+        // l'ignorent et réfléchissent quand même, jusqu'à dépenser tout `max_tokens`
+        // avant d'écrire la moindre réponse.
+        (Some(r), _) if r == "none" => {
+            obj.insert(
+                "reasoning".into(),
+                json!({"enabled": false, "exclude": true}),
+            );
+        }
+        // `max_tokens` et `effort` s'excluent dans le paramètre unifié : le budget, plus
+        // précis, gagne.
+        (_, Some(budget)) => {
+            obj.insert("reasoning".into(), json!({"max_tokens": budget}));
+        }
+        (Some(r), None) => {
+            obj.insert("reasoning".into(), json!({ "effort": r }));
+        }
+        (None, None) => {}
     }
     if let Some(f) = &req.response_format {
         obj.insert("response_format".into(), f.clone());
@@ -1386,6 +1398,35 @@ mod tests {
             "pas d'effort quand le raisonnement est coupé : {}",
             body["reasoning"]
         );
+
+        // #152 : gardé, le raisonnement reçoit son propre budget, et `max_tokens` porte
+        // la somme — sinon la réflexion mange la place de la réponse.
+        let budgeted = ChatRequest {
+            model: "deepseek/deepseek-v4-flash".into(),
+            messages: vec![],
+            reasoning_max_tokens: Some(8_000),
+            max_tokens: Some(10_600),
+            ..Default::default()
+        };
+        let body = to_openai_body(&budgeted);
+        assert_eq!(body["reasoning"]["max_tokens"], 8_000);
+        assert_eq!(body["max_tokens"], 10_600);
+        assert!(
+            body["reasoning"]["effort"].is_null() && body["reasoning"]["enabled"].is_null(),
+            "un budget se suffit : {}",
+            body["reasoning"]
+        );
+
+        // L'extinction gagne sur le budget : `off` ne doit pas réserver des jetons de
+        // réflexion.
+        let both = ChatRequest {
+            model: "m".into(),
+            messages: vec![],
+            reasoning_effort: Some("none".into()),
+            reasoning_max_tokens: Some(8_000),
+            ..Default::default()
+        };
+        assert_eq!(to_openai_body(&both)["reasoning"]["enabled"], false);
     }
 
     #[test]

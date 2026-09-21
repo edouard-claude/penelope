@@ -728,6 +728,10 @@ pub struct DreamReport {
     pub calls: u32,
     #[serde(default)]
     pub wasted_calls: u32,
+    /// Lots écrits : opérations appliquées et candidats marqués. Une passe interrompue
+    /// garde ce compte, et la suivante reprend sur le reste (issue #152).
+    #[serde(default)]
+    pub lots: u32,
     /// Durée de la passe, en millisecondes.
     #[serde(default)]
     pub duration_ms: u64,

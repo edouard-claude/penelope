@@ -214,6 +214,11 @@ pub struct ChatRequest {
     /// Effort de raisonnement transmis quand le modèle le supporte (§10.1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Jetons réservés au raisonnement, à part de la sortie utile. `max_tokens` borne les
+    /// deux chez OpenRouter : sans ce partage, un modèle qui réfléchit beaucoup dépense
+    /// tout le budget avant d'écrire la moindre réponse (issue #152).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_max_tokens: Option<u32>,
     /// Sortie structurée exigée (classifieur, sub-agents avec `outputSchema`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<Value>,

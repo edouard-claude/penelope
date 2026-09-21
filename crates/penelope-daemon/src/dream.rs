@@ -46,7 +46,24 @@ pub struct DreamOutcome {
 
 /// Lance une passe de consolidation. `dry_run` : rien n'est écrit, le rapport dit ce qui
 /// serait fait.
+/// Qui a lancé la passe : une passe planifiée ne répète pas le même message d'échec
+/// chaque nuit, une passe lancée à la main rend toujours compte — le 21/09 elle a échoué
+/// en silence, et le propriétaire a dû demander (issue #152).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trigger {
+    Scheduled,
+    Manual,
+}
+
 pub async fn run(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutcome> {
+    run_as(d, dry_run, Trigger::Manual).await
+}
+
+pub async fn run_as(
+    d: &Arc<Daemon>,
+    dry_run: bool,
+    trigger: Trigger,
+) -> anyhow::Result<DreamOutcome> {
     let s = &d.services;
     let now = s.clock.now_ms();
     if !dry_run {
@@ -64,6 +81,18 @@ pub async fn run(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutcome>
     if !dry_run {
         let _ = d.kv_delete(LOCK_KEY).await;
     }
+    match &result {
+        Ok(_) if !dry_run => {
+            let _ = d.kv_delete(FAILED_NIGHTS_KEY).await;
+            let _ = d.kv_delete(FAILED_REASON_KEY).await;
+        }
+        // L'échec part au foyer d'où que vienne la passe : planifiée, il ne se répète pas
+        // de nuit en nuit ; lancée à la main, il part toujours (issue #152).
+        Err(e) if !dry_run => {
+            failure_reported(d, &e.to_string(), trigger == Trigger::Manual).await;
+        }
+        _ => {}
+    }
     result
 }
 
@@ -74,11 +103,24 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
     let run_id = format!("d_{}", penelope_kernel::ids::Ulid::new());
     let started = s.clock.now_rfc3339();
     let pass_started = std::time::Instant::now();
+    // Temps de la nuit : au-delà, un lot coupé par le réseau n'est plus rejoué et la
+    // passe rend la main avec ce qu'elle a écrit (issue #152). C'est la même borne que
+    // le verrou de passe.
+    let deadline = pass_started + Duration::from_millis(LOCK_TTL_MS as u64);
     let since = last_finished_start(s).await?;
     if !dry_run {
         record_run(s, &run_id, &started, "light", since.as_deref()).await?;
     }
     let mut report = DreamReport::default();
+    // Passe précédente tuée en vol (machine endormie, démon arrêté) : elle est close en
+    // `interrupted` avec ce qu'elle avait écrit, et la nuit reprend sur les candidats
+    // restants — ils sont encore `new` ou `deferred`, rien n'est à rejouer (issue #152).
+    if !dry_run && let Some((prev, lots, promoted)) = close_interrupted(s, &run_id).await? {
+        report.warnings.push(format!(
+            "reprise après la passe `{prev}` interrompue : {lots} lot(s) déjà écrit(s), \
+             {promoted} entrée(s) gardée(s), les candidats restants repassent ici"
+        ));
+    }
 
     let outcome = async {
         // ---------------------------------------------------------------- Light
@@ -149,10 +191,9 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
         let gates = PromotionGates::from_config(&cfg.memory.promotion);
         let day = today(s);
         let mut admitted: Vec<&CandidateGroup> = Vec::new();
-        let mut state_updates: Vec<(Vec<String>, &'static str, Option<String>)> = Vec::new();
-        // Contradictions trouvées : une carte à trois boutons chacune, posée après
-        // l'écriture (issue #145).
-        let mut clashes: Vec<(Clash, Vec<String>)> = Vec::new();
+        // Verdicts de la grille : ils ne dépendent d'aucun appel au modèle, et sont
+        // écrits avant le premier lot (issue #152).
+        let mut gated: Vec<(Vec<String>, &'static str, Option<String>)> = Vec::new();
         for g in &groups {
             let ids: Vec<String> = g.members.iter().map(|m| m.id.clone()).collect();
             for name in crate::secret_shelf::references(&g.representative.text) {
@@ -168,21 +209,27 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                         "Proposition : « {} » ({reason})",
                         short(&g.representative.text)
                     ));
-                    state_updates.push((ids, "proposed", Some(reason)));
+                    gated.push((ids, "proposed", Some(reason)));
                 }
                 Gate::Reject(reason) => {
                     report
                         .rejected
                         .push(format!("« {} » : {reason}", short(&g.representative.text)));
-                    state_updates.push((ids, "rejected", Some(reason)));
+                    gated.push((ids, "rejected", Some(reason)));
                 }
             }
         }
 
-        let mut applied_ops: Vec<Operation> = Vec::new();
-        let mut applied_ids: Vec<Vec<String>> = Vec::new();
+        if !dry_run {
+            for (ids, state, reason) in &gated {
+                s.candidates
+                    .set_state(ids, state, reason.as_deref())
+                    .await?;
+            }
+        }
+
         if !admitted.is_empty() {
-            let snapshot = VaultSnapshot::read(s, &vault).await?;
+            let mut snapshot = VaultSnapshot::read(s, &vault).await?;
             // Souvenirs proches : un seul appel d'embeddings pour tout le lot (issue #59).
             let nearby_all = nearby_batch(
                 d,
@@ -205,15 +252,24 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
             // tenu, et la sortie demandée suit ce que le modèle écrit vraiment (#135).
             let mut sizer = BatchSizer::new(cfg.memory.dream_batch.max(1));
             let mut budget = OutputBudget::new(output_cap(d, &cfg));
-            // Chaque opération garde les candidats qu'elle sert : leur état se décide
-            // après l'écriture (issue #60).
-            let mut ops: Vec<(Vec<String>, Operation)> = Vec::new();
+            // Budget de raisonnement de la nuit : il part bas et monte quand le modèle
+            // s'y heurte, plafonné par la configuration (issue #152). Réfléchir ne dépend
+            // pas du nombre de candidats : c'est ce budget qu'on relève, pas le lot qu'on
+            // réduit.
+            let reasoning_cap = cfg
+                .memory
+                .consolidation_reasoning_tokens
+                .max(REASONING_START);
+            let mut reasoning = REASONING_START.min(reasoning_cap);
+            // Famines survenues alors que le budget était déjà au plafond.
+            let mut at_cap = 0usize;
+            // Lots effectivement écrits : ce que la reprise n'aura pas à refaire.
+            let mut lots_written = 0usize;
             // Candidats laissés par une passe arrêtée : ni jugés, ni reportés (#140).
             let mut unjudged: BTreeSet<String> = BTreeSet::new();
             let (mut lots, mut lone_lots) = (0usize, 0usize);
             // Appels « raisonnement plein » de la passe, et alias de repli une fois qu'on
             // y a basculé (issue #152).
-            let mut starved = 0usize;
             let mut fallback_alias: Option<String> = None;
             let mut i = 0usize;
             while i < items.len() {
@@ -244,47 +300,65 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                         slice,
                         &snapshot,
                         requested,
+                        reasoning,
                         &mut report,
                         fallback_alias.as_deref(),
+                        deadline,
                     )
                     .await?;
                     report.calls += 1;
                     batch_event(d, &run_id, size, started.elapsed(), &out).await;
-                    let (response, truncated, completion) =
-                        (out.parsed, out.truncated, out.completion);
-                    // Raisonnement plein, sortie vide : réduire le lot n'y changerait
-                    // rien (issue #152). Le premier est dit, le second fait basculer sur
-                    // l'alias de repli pour le reste de la passe.
+                    // La sortie utile seule dimensionne les lots suivants : mesurer la
+                    // complétion entière faisait apprendre le raisonnement comme si
+                    // c'était du JSON (issue #152).
+                    let (response, truncated, useful) = (out.parsed, out.truncated, out.useful);
+                    // Raisonnement plein, sortie utile vide : réduire le lot n'y changerait
+                    // rien, réfléchir ne dépend pas du nombre de candidats (issue #152).
+                    // On relève le budget de réflexion et on rejoue le même lot ; au
+                    // plafond deux fois, on passe à l'alias de repli pour la nuit.
                     if out.reasoning_starved {
                         report.wasted_calls += 1;
-                        starved += 1;
-                        let model_note = fallback_alias
-                            .as_deref()
-                            .map(|a| format!(" (déjà sur `{a}`)"))
-                            .unwrap_or_default();
+                        let on_fallback = fallback_alias.is_some();
+                        let quiet = cfg.memory.consolidation_reasoning == "off";
                         report.warnings.push(format!(
                             "raisonnement plein sur {size} candidat(s) : {} tokens dépensés \
-                             à réfléchir, aucune opération rendue{model_note}",
+                             à réfléchir, aucune opération rendue",
                             out.reasoning
                         ));
-                        if starved == 1 && fallback_alias.is_none() {
+                        // Raisonnement éteint par configuration et le modèle réfléchit
+                        // quand même : relever un budget qu'on n'envoie pas ne sert à
+                        // rien, c'est le modèle qu'il faut changer.
+                        if !quiet && reasoning < reasoning_cap {
+                            reasoning = reasoning.saturating_mul(2).min(reasoning_cap);
+                            report.warnings.push(format!(
+                                "budget de raisonnement relevé à {reasoning} tokens, même lot \
+                                 rejoué"
+                            ));
                             continue;
                         }
-                        if starved >= 2 && fallback_alias.is_none() {
-                            let next = d.services.config.config().role_alias("memoire");
+                        at_cap += 1;
+                        if at_cap < 2 && !quiet {
+                            report.warnings.push(format!(
+                                "budget de raisonnement au plafond ({reasoning_cap} tokens) : \
+                                 même lot rejoué une fois"
+                            ));
+                            continue;
+                        }
+                        if !on_fallback && let Some(next) = reasoning_fallback(&cfg) {
                             report.warnings.push(format!(
                                 "bascule sur l'alias `{next}` pour le reste de la passe : le \
                                  modèle du rôle `compaction` dépense son budget en \
                                  raisonnement"
                             ));
                             fallback_alias = Some(next);
+                            reasoning = REASONING_START.min(reasoning_cap);
+                            at_cap = 0;
                             continue;
                         }
-                        // Déjà sur le repli, et toujours affamé : on s'arrête là plutôt
-                        // que de tourner.
+                        // Déjà sur le repli, ou pas de repli déclaré : on s'arrête là
+                        // plutôt que de tourner, les candidats restants sont reportés.
                         report.warnings.push(
-                            "l'alias de repli dépense lui aussi son budget en raisonnement : \
-                             passe arrêtée"
+                            "plus rien à relever : passe arrêtée, candidats restants reportés"
                                 .into(),
                         );
                         unjudged.extend(
@@ -296,7 +370,7 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                         break;
                     }
                     if truncated {
-                        budget.cut(size, requested, completion);
+                        budget.cut(size, requested, useful);
                     }
                     if truncated && size > 1 {
                         // Sortie coupée : on rejoue tout de suite le même début, en lot deux
@@ -335,113 +409,47 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                              tokens : réponse tronquée gardée"
                         ));
                     } else {
-                        budget.observe(size, completion);
+                        budget.observe(size, useful);
                     }
                     let (batch_ops, updates, batch_clashes) =
                         sort_and_plan(slice, &response, &snapshot, &day, &mut report);
-                    ops.extend(batch_ops);
-                    state_updates.extend(updates);
-                    clashes.extend(batch_clashes);
+                    // Le lot est une unité de travail complète : validé, écrit, ses
+                    // candidats marqués, avant le suivant (issue #152). Accumuler
+                    // jusqu'à la fin faisait tout perdre sur une coupure — 126 candidats
+                    // traités puis jetés le 21/09.
+                    write_batch(
+                        d,
+                        &vault,
+                        &run_id,
+                        &day,
+                        &gates,
+                        &snapshot,
+                        slice,
+                        batch_ops,
+                        updates,
+                        batch_clashes,
+                        &mut report,
+                        dry_run,
+                    )
+                    .await?;
+                    if !dry_run {
+                        // Ce qui vient d'être écrit est connu du lot suivant : les
+                        // nouveaux UID, et les textes qui ne doivent pas se dédoubler.
+                        snapshot = VaultSnapshot::read(s, &vault).await?;
+                        save_stats(s, &run_id, &report).await?;
+                    }
+                    lots_written += 1;
+                    report.lots = lots_written as u32;
                     break;
                 }
                 i += size;
             }
-            let manually_modified = snapshot.changed_since_read(&vault);
-            let by_op = ops.clone();
-            let ids_of = move |op: &Operation| -> Vec<String> { ids_for(&by_op, op) };
-            let validation = validate(
-                ops.iter().map(|(_, o)| o.clone()).collect(),
-                &ValidationContext {
-                    known_uids: &snapshot.uids,
-                    entries_per_file: &snapshot.entries_per_file,
-                    uid_files: &snapshot.uid_file,
-                    manually_modified: &manually_modified,
-                    known_practices: &snapshot.practices,
-                    today: &day,
-                },
-                &gates,
-            );
-            report.deferred = validation.deferred.len() as u32;
-            report.proposals += validation.proposals.len() as u32;
-            // Opération refusée, reportée ou à confirmer : le candidat retourne en
-            // attente avec la raison, au lieu d'être marqué promu sans écriture (#60).
-            for (op, reason) in &validation.rejected {
-                report.rejected.push(format!("{} : {reason}", op.kind()));
-                state_updates.push((ids_of(op), "deferred", Some(reason.clone())));
-            }
-            for (op, reason) in &validation.deferred {
-                state_updates.push((ids_of(op), "deferred", Some(reason.clone())));
-            }
-            for (op, reason) in &validation.proposals {
-                report.questions.push(format!(
-                    "Proposition ({}) : {} ({reason})",
-                    op.kind(),
-                    op.text().unwrap_or_default()
-                ));
-                state_updates.push((ids_of(op), "question", Some(reason.clone())));
-            }
-            // Candidat retenu par la grille pour lequel le modèle n'a rien proposé :
-            // rien n'a été écrit, il repasse la nuit prochaine.
-            let served: BTreeSet<String> = ops.iter().flat_map(|(ids, _)| ids.clone()).collect();
-            let decided: BTreeSet<String> = state_updates
-                .iter()
-                .flat_map(|(ids, _, _)| ids.clone())
-                .collect();
-            for g in &admitted {
-                let ids: Vec<String> = g.members.iter().map(|m| m.id.clone()).collect();
-                if ids
-                    .iter()
-                    .any(|id| served.contains(id) || decided.contains(id) || unjudged.contains(id))
-                {
-                    continue;
-                }
-                report.sorted.push(format!(
-                    "⏳ en attente « {} » : aucune opération proposée",
-                    short(&g.representative.text)
-                ));
-                state_updates.push((ids, "deferred", Some("aucune opération proposée".into())));
-            }
-            applied_ops = validation.applied;
-            applied_ids = applied_ops.iter().map(ids_of).collect();
         }
 
         if dry_run {
-            report.promoted = applied_ops.len() as u32;
-            report.files_touched = applied_ops
-                .iter()
-                .map(|o| target_file(s, o))
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
             return Ok::<(), anyhow::Error>(());
         }
 
-        for (i, op) in applied_ops.iter().enumerate() {
-            let ids = applied_ids.get(i).cloned().unwrap_or_default();
-            match apply(d, &vault, op, &run_id).await {
-                Ok(file) => {
-                    report.promoted += 1;
-                    if is_journal(op) {
-                        report.journal += 1;
-                    }
-                    if !report.files_touched.contains(&file) {
-                        report.files_touched.push(file);
-                    }
-                    // Écrit : le candidat est traité (issue #60), et marqué tout de suite :
-                    // une passe arrêtée plus loin ne le repromouvra pas (issue #127).
-                    if !ids.is_empty() {
-                        s.candidates.set_state(&ids, "promoted", None).await?;
-                    }
-                }
-                Err(e) => {
-                    report.rejected.push(format!("{} : {e}", op.kind()));
-                    // L'écriture a échoué : le candidat sera rejoué la nuit prochaine.
-                    if !ids.is_empty() {
-                        state_updates.push((ids, "deferred", Some(e.to_string())));
-                    }
-                }
-            }
-        }
         // États passagers expirés : retirés du journal, sans question (issue #37).
         for op in expired_journal(s, &vault, &day).await {
             match apply(d, &vault, &op, &run_id).await {
@@ -505,18 +513,6 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
         report.lint = lint.summary();
         report.lint_problems = lint.problems() as u32;
         report.questions.extend(proposals);
-        for (ids, state, reason) in state_updates {
-            s.candidates
-                .set_state(&ids, state, reason.as_deref())
-                .await?;
-        }
-        // Une question sans bouton n'a pas de réponse possible : chaque contradiction
-        // devient une carte, envoyée à part du digest (issue #145).
-        for (clash, ids) in &clashes {
-            if let Err(e) = ask_about_clash(s, clash, ids).await {
-                tracing::warn!(error = %e, "carte de contradiction non posée");
-            }
-        }
         // Élagage (§6.8) : écarts non promus depuis longtemps.
         s.candidates
             .expire_stale(cfg.memory.expire_ecart_days.max(1))
@@ -1280,6 +1276,10 @@ struct CallOutcome {
     reasoning_starved: bool,
     completion: u64,
     reasoning: u64,
+    /// Sortie utile seule (`completion − reasoning`) : c'est elle qui dimensionne les
+    /// lots suivants. Mesurer la complétion entière faisait apprendre le raisonnement
+    /// comme si c'était du JSON (issue #152).
+    useful: u64,
 }
 
 async fn consolidate(
@@ -1287,6 +1287,7 @@ async fn consolidate(
     items: &[Item<'_>],
     snap: &VaultSnapshot,
     max_tokens: u32,
+    reasoning_budget: u32,
     alias_override: Option<&str>,
 ) -> anyhow::Result<CallOutcome> {
     let s = &d.services;
@@ -1356,16 +1357,39 @@ async fn consolidate(
     }
 
     let info = s.catalog.get(strip_provider(&model));
-    let effort = info.as_ref().and_then(|i| i.lightest_effort());
-    // `max_tokens` borne la sortie **raisonnement compris** chez OpenRouter (issue #152) :
-    // quand le raisonnement ne peut pas être coupé, le plafond doit porter les deux,
-    // sinon le modèle n'a plus de place pour répondre. Coupé, le budget reste celui de la
-    // réponse utile.
-    let thinks = effort.as_deref().is_some_and(|e| e != "none");
-    let max_tokens = if thinks {
-        max_tokens.saturating_mul(2)
+    // Le tri d'un candidat gagne à être réfléchi : le raisonnement est gardé et budgété,
+    // et seul `memory.consolidation_reasoning = "off"` l'éteint (décision du 21/09,
+    // issue #152). `max_tokens` borne la sortie **raisonnement compris** chez OpenRouter :
+    // sans budget séparé, le modèle dépense tout à réfléchir et n'écrit rien.
+    // Modèle inconnu du catalogue (catalogue vide au démarrage, modèle récent) : on
+    // suppose qu'il réfléchit. Ne rien envoyer « dans le doute » est précisément ce qui a
+    // laissé `deepseek-v4-flash` dépenser tout son budget en réflexion.
+    let reasons = info.as_ref().is_none_or(|i| i.reasons());
+    let off = cfg.memory.consolidation_reasoning == "off";
+    let (effort, reasoning_max, max_tokens) = if !reasons {
+        (None, None, max_tokens)
+    } else if off {
+        // Inconnu : on demande l'extinction, que le fournisseur traduit par
+        // `reasoning: {enabled: false}` et qu'un modèle sans raisonnement ignore.
+        let e = info
+            .as_ref()
+            .and_then(|i| i.lightest_effort())
+            .or_else(|| Some("none".into()));
+        // Éteint quand le modèle l'accepte ; imposé, il reste à son effort minimal et le
+        // plafond doit porter les deux.
+        let quiet = e.as_deref() == Some("none");
+        let cap = if quiet {
+            max_tokens
+        } else {
+            max_tokens.saturating_add(reasoning_budget)
+        };
+        (e, None, cap)
     } else {
-        max_tokens
+        (
+            None,
+            Some(reasoning_budget),
+            max_tokens.saturating_add(reasoning_budget),
+        )
     };
     let structured = info
         .as_ref()
@@ -1381,6 +1405,7 @@ async fn consolidate(
         // Sortie dimensionnée au lot d'après ce que le modèle écrit vraiment (#59, #135).
         max_tokens: Some(max_tokens),
         reasoning_effort: effort,
+        reasoning_max_tokens: reasoning_max,
         response_format: structured.then(|| json!({"type": "json_object"})),
         ..Default::default()
     };
@@ -1422,9 +1447,15 @@ async fn consolidate(
     // Budget dépensé à réfléchir, rien d'écrit : ce n'est pas une sortie trop longue,
     // c'est un modèle qui pense jusqu'au plafond (issue #152). Réduire le lot n'y change
     // rien ; c'est l'effort ou le modèle qu'il faut changer.
+    // Le seuil est celui de l'issue : sortie utile vide et raisonnement à 80 % au moins
+    // de la complétion. Sur la nuit du 20/09 la part allait de 85 à 100 %.
+    let useful = response
+        .usage
+        .completion
+        .saturating_sub(response.usage.reasoning);
     let reasoning_starved = hit_cap
         && text.trim().is_empty()
-        && response.usage.reasoning > response.usage.completion / 2;
+        && response.usage.reasoning * 5 >= response.usage.completion * 4;
     // Réponse coupée : le fournisseur le dit, ou le JSON ne se lit pas alors qu'on
     // attendait des verdicts.
     let truncated = !reasoning_starved
@@ -1436,6 +1467,7 @@ async fn consolidate(
         reasoning_starved,
         completion: response.usage.completion,
         reasoning: response.usage.reasoning,
+        useful,
     })
 }
 
@@ -1586,6 +1618,157 @@ impl OutputBudget {
     }
 }
 
+/// Un lot jugé, rendu durable : opérations validées puis écrites, candidats marqués,
+/// contradictions posées. Rien n'attend la fin de la passe (issue #152) — avant, une
+/// coupure au 8ᵉ lot rendait les sept premiers à l'état d'avant, 126 candidats jetés.
+#[allow(clippy::too_many_arguments)]
+async fn write_batch(
+    d: &Arc<Daemon>,
+    vault: &Path,
+    run_id: &str,
+    day: &str,
+    gates: &PromotionGates,
+    snap: &VaultSnapshot,
+    slice: &[Item<'_>],
+    ops: Vec<(Vec<String>, Operation)>,
+    updates: Vec<(Vec<String>, &'static str, Option<String>)>,
+    clashes: Vec<(Clash, Vec<String>)>,
+    report: &mut DreamReport,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    let s = &d.services;
+    let mut state_updates = updates;
+    let manually_modified = snap.changed_since_read(vault);
+    let by_op = ops.clone();
+    let ids_of = move |op: &Operation| -> Vec<String> { ids_for(&by_op, op) };
+    let validation = validate(
+        ops.iter().map(|(_, o)| o.clone()).collect(),
+        &ValidationContext {
+            known_uids: &snap.uids,
+            entries_per_file: &snap.entries_per_file,
+            uid_files: &snap.uid_file,
+            manually_modified: &manually_modified,
+            known_practices: &snap.practices,
+            today: day,
+        },
+        gates,
+    );
+    report.deferred += validation.deferred.len() as u32;
+    report.proposals += validation.proposals.len() as u32;
+    // Opération refusée, reportée ou à confirmer : le candidat retourne en attente avec
+    // la raison, au lieu d'être marqué promu sans écriture (#60).
+    for (op, reason) in &validation.rejected {
+        report.rejected.push(format!("{} : {reason}", op.kind()));
+        state_updates.push((ids_of(op), "deferred", Some(reason.clone())));
+    }
+    for (op, reason) in &validation.deferred {
+        state_updates.push((ids_of(op), "deferred", Some(reason.clone())));
+    }
+    for (op, reason) in &validation.proposals {
+        report.questions.push(format!(
+            "Proposition ({}) : {} ({reason})",
+            op.kind(),
+            op.text().unwrap_or_default()
+        ));
+        state_updates.push((ids_of(op), "question", Some(reason.clone())));
+    }
+    // Candidat retenu par la grille pour lequel le modèle n'a rien proposé : rien n'a été
+    // écrit, il repasse la nuit prochaine.
+    let served: BTreeSet<String> = ops.iter().flat_map(|(ids, _)| ids.clone()).collect();
+    let decided: BTreeSet<String> = state_updates
+        .iter()
+        .flat_map(|(ids, _, _)| ids.clone())
+        .collect();
+    for it in slice {
+        let ids: Vec<String> = it.group.members.iter().map(|m| m.id.clone()).collect();
+        if ids
+            .iter()
+            .any(|id| served.contains(id) || decided.contains(id))
+        {
+            continue;
+        }
+        report.sorted.push(format!(
+            "⏳ en attente « {} » : aucune opération proposée",
+            short(&it.group.representative.text)
+        ));
+        state_updates.push((ids, "deferred", Some("aucune opération proposée".into())));
+    }
+
+    let applied: Vec<Operation> = validation.applied;
+    if dry_run {
+        // Rien n'est écrit : le rapport dit ce qui l'aurait été.
+        report.promoted += applied.len() as u32;
+        for op in &applied {
+            let file = target_file(s, op);
+            if !report.files_touched.contains(&file) {
+                report.files_touched.push(file);
+            }
+        }
+        return Ok(());
+    }
+
+    for op in &applied {
+        let ids = ids_of(op);
+        match apply(d, vault, op, run_id).await {
+            Ok(file) => {
+                report.promoted += 1;
+                if is_journal(op) {
+                    report.journal += 1;
+                }
+                if !report.files_touched.contains(&file) {
+                    report.files_touched.push(file);
+                }
+                // Écrit : le candidat est traité (issue #60), et marqué tout de suite :
+                // une passe arrêtée plus loin ne le repromouvra pas (issue #127).
+                if !ids.is_empty() {
+                    s.candidates.set_state(&ids, "promoted", None).await?;
+                }
+            }
+            Err(e) => {
+                report.rejected.push(format!("{} : {e}", op.kind()));
+                // L'écriture a échoué : le candidat sera rejoué la nuit prochaine.
+                if !ids.is_empty() {
+                    state_updates.push((ids, "deferred", Some(e.to_string())));
+                }
+            }
+        }
+    }
+    for (ids, state, reason) in state_updates {
+        s.candidates
+            .set_state(&ids, state, reason.as_deref())
+            .await?;
+    }
+    // Une question sans bouton n'a pas de réponse possible : chaque contradiction devient
+    // une carte, envoyée à part du digest (issue #145).
+    for (clash, ids) in &clashes {
+        if let Err(e) = ask_about_clash(s, clash, ids).await {
+            tracing::warn!(error = %e, "carte de contradiction non posée");
+        }
+    }
+    Ok(())
+}
+
+/// Budget de raisonnement au premier appel de la nuit : de quoi trier un lot en
+/// réfléchissant, sans immobiliser la sortie utile (issue #152).
+const REASONING_START: u32 = 8_000;
+
+/// Alias de repli du rôle de consolidation : le premier de la chaîne déclarée pour son
+/// alias, sinon celui du rôle `memoire`.
+fn reasoning_fallback(cfg: &penelope_kernel::config::Config) -> Option<String> {
+    let alias = cfg.role_alias("compaction");
+    if let Some(next) = cfg
+        .models
+        .routing
+        .fallback
+        .get(&alias)
+        .and_then(|chain| chain.first())
+    {
+        return Some(next.clone());
+    }
+    let memoire = cfg.role_alias("memoire");
+    (memoire != alias).then_some(memoire)
+}
+
 /// Lots jugés avant qu'une passe faite surtout de lots d'un candidat soit arrêtée (#140).
 const LONE_WATCH: usize = 8;
 
@@ -1639,37 +1822,88 @@ async fn batch_event(
 /// attente `memory.dream_retry_wait`, puis le double. À ce stade rien n'est écrit ni
 /// marqué : la reprise ne peut rien appliquer deux fois, et le travail des lots déjà
 /// faits n'est pas refait (issue #127).
+#[allow(clippy::too_many_arguments)]
 async fn consolidate_retrying(
     d: &Arc<Daemon>,
     items: &[Item<'_>],
     snap: &VaultSnapshot,
     max_tokens: u32,
+    reasoning_budget: u32,
     report: &mut DreamReport,
     alias_override: Option<&str>,
+    deadline: std::time::Instant,
 ) -> anyhow::Result<CallOutcome> {
     let wait = penelope_kernel::config::parse_duration(
         &d.services.config.config().memory.dream_retry_wait,
     )
     .unwrap_or(Duration::from_secs(120));
     let mut attempt = 0u32;
+    let mut stalls = 0u32;
     loop {
-        match consolidate(d, items, snap, max_tokens, alias_override).await {
-            Err(e) if attempt < RETRIES && passing(&e) => {
+        match consolidate(d, items, snap, max_tokens, reasoning_budget, alias_override).await {
+            Err(e) if passing(&e) => {
+                // Machine endormie ou réseau coupé (Mac sur batterie le 21/09 : trou de
+                // journal de douze minutes) : le lot attend le retour plutôt que de
+                // consommer ses deux reprises et d'abandonner la passe (issue #152). La
+                // patience s'arrête au temps de la nuit.
+                let stall = network_stall(&e);
+                let over = if stall { stalls } else { attempt } >= RETRIES;
+                let delay = if stall {
+                    STALL_WAIT
+                } else {
+                    wait * (attempt + 1)
+                };
+                let room = std::time::Instant::now() + delay + LLM_TIMEOUT < deadline;
+                if over && !(stall && room) {
+                    return Err(e);
+                }
                 report.calls += 1;
                 report.wasted_calls += 1;
-                attempt += 1;
-                let delay = wait * attempt;
-                report.warnings.push(format!(
-                    "lot de {} candidat(s) : erreur passagère ({e}), reprise {attempt}/{RETRIES} \
-                     après {} s",
-                    items.len(),
-                    delay.as_secs()
-                ));
+                if stall {
+                    stalls += 1;
+                    report.warnings.push(format!(
+                        "lot de {} candidat(s) : réseau coupé ou machine endormie ({e}), lot \
+                         rejoué dans {} s",
+                        items.len(),
+                        delay.as_secs()
+                    ));
+                } else {
+                    attempt += 1;
+                    report.warnings.push(format!(
+                        "lot de {} candidat(s) : erreur passagère ({e}), reprise \
+                         {attempt}/{RETRIES} après {} s",
+                        items.len(),
+                        delay.as_secs()
+                    ));
+                }
                 tokio::time::sleep(delay).await;
             }
             other => return other,
         }
     }
+}
+
+/// Attente entre deux reprises d'un lot coupé par le réseau ou la veille : assez longue
+/// pour laisser la machine revenir, assez courte pour reprendre la nuit (issue #152).
+const STALL_WAIT: Duration = Duration::from_secs(300);
+
+/// Coupure réseau ou machine endormie, par opposition à une erreur passagère du
+/// fournisseur : le lot est rejoué au retour, pas compté dans les deux reprises.
+fn network_stall(e: &anyhow::Error) -> bool {
+    let Some(l) = e.downcast_ref::<LlmError>() else {
+        return false;
+    };
+    if l.kind != LlmErrorKind::Transient {
+        return false;
+    }
+    let m = l.to_string().to_lowercase();
+    m.contains("sans réponse complète")
+        || m.contains("error sending request")
+        || m.contains("connection")
+        || m.contains("connexion")
+        || m.contains("dns")
+        || m.contains("timed out")
+        || m.contains("timeout")
 }
 
 /// Reprises d'un lot après une erreur passagère.
@@ -2297,6 +2531,71 @@ async fn set_phase(s: &Services, id: &str, phase: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Passe restée ouverte (processus tué, machine endormie) : close en `interrupted` avec
+/// ce qu'elle avait écrit, pour que la nuit suivante sache d'où elle repart (issue #152).
+/// Rend la passe close, ses lots écrits et ses entrées gardées.
+async fn close_interrupted(
+    s: &Services,
+    current: &str,
+) -> anyhow::Result<Option<(String, u32, u32)>> {
+    let current = current.to_string();
+    let found: Option<(String, String)> = s
+        .store
+        .read(move |c| {
+            use penelope_store::rusqlite::OptionalExtension;
+            Ok(c.query_row(
+                "SELECT id, COALESCE(stats, '{}') FROM dream_runs
+                 WHERE finished_at IS NULL AND id <> ?1
+                 ORDER BY started_at DESC LIMIT 1",
+                [current],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+        })
+        .await?;
+    let Some((id, stats)) = found else {
+        return Ok(None);
+    };
+    let report: DreamReport = serde_json::from_str(&stats).unwrap_or_default();
+    let (lots, promoted) = (report.lots, report.promoted);
+    let ts = s.clock.now_rfc3339();
+    let closed = id.clone();
+    s.store
+        .write(move |tx| {
+            tx.execute(
+                "UPDATE dream_runs SET phase = 'interrupted', error = ?2, finished_at = ?3
+                 WHERE id = ?1",
+                params![
+                    closed,
+                    format!("passe interrompue après {lots} lot(s) écrit(s)"),
+                    ts
+                ],
+            )?;
+            Ok(())
+        })
+        .await?;
+    Ok(Some((id, lots, promoted)))
+}
+
+/// État de la passe après un lot écrit : `stats` avance au fil de l'eau, pas à la fin
+/// (issue #152). Une passe tuée en cours laisse ainsi le compte de ce qu'elle a fait.
+async fn save_stats(s: &Services, id: &str, report: &DreamReport) -> anyhow::Result<()> {
+    let (id, stats) = (
+        id.to_string(),
+        serde_json::to_string(report).unwrap_or_default(),
+    );
+    s.store
+        .write(move |tx| {
+            tx.execute(
+                "UPDATE dream_runs SET stats = ?2 WHERE id = ?1",
+                params![id, stats],
+            )?;
+            Ok(())
+        })
+        .await?;
+    Ok(())
+}
+
 async fn finish_run(
     s: &Services,
     id: &str,
@@ -2830,14 +3129,9 @@ pub async fn system_crons(d: &Arc<Daemon>) -> anyhow::Result<()> {
 /// Passe nocturne : une nuit ratée ne passe jamais en silence (issue #127).
 pub async fn nightly(d: &Arc<Daemon>) {
     match run(d, false).await {
-        Ok(o) => {
-            tracing::info!(run = %o.run_id, "consolidation nocturne terminée");
-            let _ = d.kv_delete(FAILED_NIGHTS_KEY).await;
-            let _ = d.kv_delete(FAILED_REASON_KEY).await;
-        }
+        Ok(o) => tracing::info!(run = %o.run_id, "consolidation nocturne terminée"),
         Err(e) => {
             tracing::warn!(error = %e, "consolidation nocturne");
-            night_failed(d, &e.to_string()).await;
         }
     }
 }
@@ -2851,6 +3145,12 @@ const FAILED_REASON_KEY: &str = "dream.failed_reason";
 /// pour la sauvegarde, à la première nuit ratée ou quand la raison change : une panne
 /// qui dure ne répète pas le même message chaque nuit, le digest la rappelle.
 pub async fn night_failed(d: &Arc<Daemon>, reason: &str) {
+    failure_reported(d, reason, false).await;
+}
+
+/// `always` : le message part même si la raison n'a pas changé — une passe lancée à la
+/// main doit rendre compte à qui vient de la lancer (issue #152).
+pub async fn failure_reported(d: &Arc<Daemon>, reason: &str, always: bool) {
     let s = &d.services;
     let reason: String = reason.chars().take(300).collect();
     let nights = d
@@ -2914,7 +3214,7 @@ pub async fn night_failed(d: &Arc<Daemon>, reason: &str) {
             tracing::warn!(error = %e, "commit du vault après une nuit ratée");
         }
     }
-    if nights == 1 || previous.as_deref() != Some(reason.as_str()) {
+    if always || nights == 1 || previous.as_deref() != Some(reason.as_str()) {
         let streak = if nights > 1 {
             format!(" ({nights} nuits de suite)")
         } else {
@@ -3402,6 +3702,55 @@ mod tests {
         assert_eq!(p.call_count(), 3, "un lot coupé, puis deux lots de deux");
     }
 
+    /// Réponses « gardé » pour `n` candidats d'un lot, chacune écrite dans `projets.md` :
+    /// de quoi vérifier ce qu'une passe a réellement posé dans le vault (issue #152).
+    fn promotions(user: &str) -> String {
+        let lines = candidate_lines(user);
+        let tri: Vec<String> = (1..=lines.len())
+            .map(|k| {
+                format!(
+                    r#"{{"candidat": {k}, "durable": true, "utile": true, "precis": true,
+                      "introuvable": true, "endosse": true, "justification": "fait stable"}}"#
+                )
+            })
+            .collect();
+        // Le texte écrit reprend celui du candidat : deux lots ne doivent pas proposer la
+        // même entrée, sinon c'est la garde anti-doublon qu'on mesure, pas l'écriture.
+        let ops: Vec<String> = lines
+            .iter()
+            .enumerate()
+            .map(|(i, text)| {
+                format!(
+                    r#"{{"op": "add_entry", "candidat": {}, "file": "projets.md",
+                      "section": "Infrastructure", "text": "{text}",
+                      "importance": 7, "declencheurs": ["port"]}}"#,
+                    i + 1
+                )
+            })
+            .collect();
+        format!(
+            r#"{{"tri": [{}], "operations": [{}]}}"#,
+            tri.join(","),
+            ops.join(",")
+        )
+    }
+
+    /// Textes des candidats d'un prompt de consolidation, dans l'ordre où ils sont
+    /// soumis.
+    fn candidate_lines(user: &str) -> Vec<String> {
+        user.lines()
+            .filter_map(|l| {
+                let (n, rest) = l.split_once(". [")?;
+                (!n.is_empty() && n.chars().all(|c| c.is_ascii_digit())).then(|| {
+                    rest.split_once("] ")
+                        .map(|(_, t)| t.trim().to_string())
+                        .unwrap_or_default()
+                })
+            })
+            .filter(|t| !t.is_empty())
+            .collect()
+    }
+
     /// Réponse « gardé » d'un lot d'un candidat, avec son écriture dans `profil.md`.
     fn keep(text: &str) -> String {
         format!(
@@ -3456,7 +3805,12 @@ mod tests {
             let n = lines.len() as u64;
             let heavy = lines.iter().filter(|l| l.contains("épineux")).count() as u64;
             let need = easy * (n - heavy) + hard * heavy;
-            let limit = req.max_tokens.map_or(u64::MAX, u64::from);
+            // La requête partage son plafond : `reasoning.max_tokens` pour réfléchir, le
+            // reste pour écrire (issue #152). Ce modèle-ci ne réfléchit pas, mais il
+            // honore le partage demandé — c'est la sortie utile que #140 mesure.
+            let limit = req.max_tokens.map_or(u64::MAX, |m| {
+                u64::from(m.saturating_sub(req.reasoning_max_tokens.unwrap_or(0)))
+            });
             let partial = r#"{"tri": [{"candidat": 1, "dur"#.to_string();
             if lines.len() > garble {
                 return penelope_llm::mock::Scripted::Written {
@@ -3486,6 +3840,20 @@ mod tests {
                 cut: false,
             }
         })
+    }
+
+    /// Verdicts « rien à garder » pour `n` candidats : de quoi faire aboutir un lot sans
+    /// écrire dans le vault.
+    fn verdicts(n: u64) -> String {
+        let tri: Vec<String> = (1..=n)
+            .map(|k| {
+                format!(
+                    r#"{{"candidat": {k}, "durable": false, "utile": false, "precis": true,
+                      "introuvable": true, "endosse": true, "justification": "passager"}}"#
+                )
+            })
+            .collect();
+        format!(r#"{{"tri": [{}], "operations": []}}"#, tri.join(","))
     }
 
     /// Candidats de #140 : `n` projets distincts, jugés dans l'ordre, épineux quand
@@ -3551,56 +3919,33 @@ mod tests {
         );
     }
 
-    /// #152 : un modèle qui dépense tout son budget de sortie en raisonnement ne fait
-    /// **pas** réduire les lots — réfléchir ne dépend pas du nombre de candidats. La nuit
-    /// du 20/09, 8 000 tokens sur un seul candidat, zéro opération, et l'échelle de #135
-    /// descendait jusqu'à l'échec. La passe bascule maintenant sur l'alias de repli.
+    /// #152 : un modèle qui dépense son budget de sortie en raisonnement ne fait **pas**
+    /// réduire les lots — réfléchir ne dépend pas du nombre de candidats. La nuit du
+    /// 20/09, 8 000 tokens sur un seul candidat, zéro opération, et l'échelle de #135
+    /// descendait jusqu'à l'échec. La passe relève maintenant le budget de réflexion et
+    /// rejoue le même lot.
     #[tokio::test]
-    async fn a_model_that_spends_its_budget_thinking_switches_alias() {
+    async fn a_starved_batch_raises_the_reasoning_budget_instead_of_shrinking() {
         let (_dir, d, p) = daemon().await;
         projects(&d, 6, |_| false).await;
-        // Le modèle du rôle pense jusqu'au plafond et n'écrit rien ; celui du repli
-        // répond normalement.
-        let fallback = d.services.config.config().role_alias("memoire");
-        let fallback_model = d
-            .services
-            .config
-            .config()
-            .alias_model(&fallback)
-            .unwrap_or_default()
-            .to_string();
+        // Le modèle ne rend rien tant qu'il n'a pas 16 000 jetons pour réfléchir.
+        let seen: Arc<std::sync::Mutex<Vec<(u32, u32)>>> = Arc::new(std::sync::Mutex::new(vec![]));
+        let log = seen.clone();
         p.set_responder(Some(Arc::new(move |req: &ChatRequest| {
-            if req.model == fallback_model {
-                let n = req
-                    .messages
-                    .last()
-                    .map(|m| m.text())
-                    .unwrap_or_default()
-                    .lines()
-                    .filter(|l| {
-                        l.split_once(". [").is_some_and(|(k, _)| {
-                            !k.is_empty() && k.chars().all(|c| c.is_ascii_digit())
-                        })
-                    })
-                    .count() as u64;
-                let tri: Vec<String> = (1..=n)
-                    .map(|k| {
-                        format!(
-                            r#"{{"candidat": {k}, "durable": false, "utile": false, "precis": true,
-                              "introuvable": true, "endosse": true, "justification": "passager"}}"#
-                        )
-                    })
-                    .collect();
-                return penelope_llm::mock::Scripted::Written {
-                    text: format!(r#"{{"tri": [{}], "operations": []}}"#, tri.join(",")),
-                    completion: 200,
-                    cut: false,
+            let budget = req.reasoning_max_tokens.unwrap_or(0);
+            log.lock()
+                .unwrap()
+                .push((budget, req.max_tokens.unwrap_or(0)));
+            if budget < 16_000 {
+                return penelope_llm::mock::Scripted::ReasonedOnly {
+                    completion: budget as u64,
+                    reasoning: budget as u64,
                 };
             }
-            let cap = req.max_tokens.map_or(8_000, u64::from);
-            penelope_llm::mock::Scripted::ReasonedOnly {
-                completion: cap,
-                reasoning: cap,
+            penelope_llm::mock::Scripted::Written {
+                text: verdicts(6),
+                completion: 1_500,
+                cut: false,
             }
         })));
 
@@ -3611,18 +3956,225 @@ mod tests {
             "l'avertissement nomme la vraie cause : {w}"
         );
         assert!(
-            w.contains("bascule sur l'alias"),
-            "la passe change de modèle plutôt que de réduire les lots : {w}"
+            w.contains("budget de raisonnement relevé"),
+            "le budget monte, le lot ne rétrécit pas : {w}"
         );
-        // Le vocabulaire de #135 ne doit pas s'appliquer : ce n'est pas une sortie coupée.
         assert!(
             !w.contains("consolidation coupée"),
             "un raisonnement plein n'est pas une sortie trop longue : {w}"
         );
-        // Et la passe aboutit sur le repli, tous les candidats jugés.
+        // Le lot n'a jamais été réduit, et `max_tokens` porte bien les deux budgets.
+        let calls = seen.lock().unwrap().clone();
+        assert_eq!(calls.len(), 2, "un rejeu, pas une descente d'échelle");
+        assert_eq!(calls[0].0, 8_000, "budget de départ");
+        assert_eq!(calls[1].0, 16_000, "budget doublé");
+        for (r, max) in &calls {
+            assert!(max > r, "max_tokens = raisonnement + sortie : {r} / {max}");
+        }
         let batches = dream_batches(&d.services.events.range(0, 10_000).await.unwrap());
-        let judged: u64 = batches.iter().filter(|(_, cut)| !cut).map(|(n, _)| n).sum();
+        let judged: u64 = batches
+            .iter()
+            .filter(|(_, lost)| !lost)
+            .map(|(n, _)| n)
+            .sum();
         assert_eq!(judged, 6, "{batches:?}");
+    }
+
+    /// #152 : une passe coupée en vol garde ce qu'elle a écrit. Le 21/09, sept lots
+    /// réussis (126 candidats) ont été jetés parce que le huitième n'a jamais répondu :
+    /// rien n'était écrit avant la fin. Chaque lot est maintenant une unité complète.
+    #[tokio::test]
+    async fn batches_are_written_one_by_one_and_survive_a_failure() {
+        let (_dir, d, p) = daemon().await;
+        // Douze lots d'un candidat : le huitième échoue sans relâche.
+        let n = 12usize;
+        for k in 0..n {
+            note(
+                &d,
+                CandidateType::Fait,
+                &format!("Le serveur de production du projet{k:03} écoute sur le port 8{k:03}"),
+                Origin::Owner,
+                "s1",
+                8,
+            )
+            .await;
+        }
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        p.set_responder(Some(Arc::new(move |req: &ChatRequest| {
+            let k = seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // Les sept premiers lots passent, le huitième ne répond jamais.
+            if k >= 7 {
+                return penelope_llm::mock::Scripted::Error(
+                    LlmErrorKind::BadRequest,
+                    "le modèle refuse".into(),
+                );
+            }
+            let user = req.messages.last().map(|m| m.text()).unwrap_or_default();
+            penelope_llm::mock::Scripted::Written {
+                text: promotions(&user),
+                completion: 400,
+                cut: false,
+            }
+        })));
+        // Un lot par candidat : la taille de lot descend à 1.
+        d.publish_config("test", |c| {
+            c.memory.dream_batch = 1;
+            Ok(vec!["memory.dream_batch".into()])
+        })
+        .unwrap();
+
+        let err = run(&d, false).await.unwrap_err();
+        assert!(format!("{err}").contains("refuse"), "{err}");
+
+        // Ce que les sept premiers lots ont écrit est gardé, et leurs candidats marqués.
+        let entries = d.services.memory.by_level(Level::Projet).await.unwrap();
+        assert_eq!(entries.len(), 7, "sept lots écrits avant l'échec");
+        let left = d.services.candidates.pending(None).await.unwrap();
+        assert_eq!(left.len(), n - 7, "seuls les candidats non jugés restent");
+
+        // La passe échouée porte le compte de ses lots, et l'échec est annoncé.
+        let (_, stats) = last_run(&d.services).await.unwrap();
+        assert_eq!(stats.lots, 7, "les lots écrits sont comptés");
+        let events = d.services.events.range(0, 10_000).await.unwrap();
+        assert!(
+            events.iter().any(|e| e.kind == "memory.dream_failed"),
+            "une passe lancée à la main qui échoue le dit aussi"
+        );
+
+        // Relance : les sept premiers ne sont pas rejoués, et rien ne se dédouble.
+        calls.store(0, std::sync::atomic::Ordering::SeqCst);
+        let p2 = p.clone();
+        p2.set_responder(Some(Arc::new(move |req: &ChatRequest| {
+            let user = req.messages.last().map(|m| m.text()).unwrap_or_default();
+            penelope_llm::mock::Scripted::Written {
+                text: promotions(&user),
+                completion: 400,
+                cut: false,
+            }
+        })));
+        let o = run(&d, false).await.unwrap();
+        assert_eq!(
+            o.report.candidates_seen as usize,
+            n - 7,
+            "reprise sur le reste"
+        );
+        let entries = d.services.memory.by_level(Level::Projet).await.unwrap();
+        assert_eq!(entries.len(), n, "aucune entrée en double");
+        assert!(
+            d.services
+                .candidates
+                .pending(None)
+                .await
+                .unwrap()
+                .is_empty(),
+            "tous les candidats sont jugés"
+        );
+    }
+
+    /// #152 : `memory.consolidation_reasoning = "off"` éteint vraiment le raisonnement —
+    /// `reasoning: {enabled: false}`, pas un effort — et rend tout le budget à la sortie.
+    #[tokio::test]
+    async fn switching_reasoning_off_sends_the_kill_switch() {
+        let (_dir, d, p) = daemon().await;
+        projects(&d, 3, |_| false).await;
+        d.publish_config("test", |c| {
+            c.memory.consolidation_reasoning = "off".into();
+            Ok(vec!["memory.consolidation_reasoning".into()])
+        })
+        .unwrap();
+        let seen: Arc<std::sync::Mutex<Vec<(Option<String>, Option<u32>)>>> =
+            Arc::new(std::sync::Mutex::new(vec![]));
+        let log = seen.clone();
+        p.set_responder(Some(Arc::new(move |req: &ChatRequest| {
+            log.lock()
+                .unwrap()
+                .push((req.reasoning_effort.clone(), req.reasoning_max_tokens));
+            penelope_llm::mock::Scripted::Written {
+                text: verdicts(3),
+                completion: 900,
+                cut: false,
+            }
+        })));
+        run(&d, false).await.unwrap();
+        let calls = seen.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].0.as_deref(),
+            Some("none"),
+            "éteint, pas réglé au plus bas"
+        );
+        assert_eq!(calls[0].1, None, "aucun budget réservé à la réflexion");
+    }
+
+    /// #152 : un lot coupé par le réseau ou par une machine qui s'endort est rejoué au
+    /// retour, pas compté dans les deux reprises d'une erreur passagère. Le 21/09, un trou
+    /// de journal de douze minutes (Mac sur batterie) a conclu « sans réponse complète en
+    /// 240 s » et la passe a tout abandonné.
+    #[tokio::test(start_paused = true)]
+    async fn a_network_stall_replays_the_batch_instead_of_giving_up() {
+        let (_dir, d, p) = daemon().await;
+        projects(&d, 3, |_| false).await;
+        let tries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = tries.clone();
+        p.set_responder(Some(Arc::new(move |_: &ChatRequest| {
+            // Trois coupures réseau d'affilée : plus que les deux reprises d'une erreur
+            // passagère ordinaire.
+            if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 3 {
+                return penelope_llm::mock::Scripted::Error(
+                    LlmErrorKind::Transient,
+                    "consolidation sans réponse complète en 240 s".into(),
+                );
+            }
+            penelope_llm::mock::Scripted::Written {
+                text: verdicts(3),
+                completion: 900,
+                cut: false,
+            }
+        })));
+
+        let o = run(&d, false).await.unwrap();
+        assert_eq!(tries.load(std::sync::atomic::Ordering::SeqCst), 4);
+        let w = o.report.warnings.join(" | ");
+        assert!(
+            w.contains("réseau coupé ou machine endormie"),
+            "la coupure est nommée pour elle-même : {w}"
+        );
+        assert!(
+            !w.contains("erreur passagère"),
+            "ce n'est pas un 5xx du fournisseur : {w}"
+        );
+        // Les trois candidats ont fini par être jugés.
+        let batches = dream_batches(&d.services.events.range(0, 10_000).await.unwrap());
+        let judged: u64 = batches
+            .iter()
+            .filter(|(_, lost)| !lost)
+            .map(|(n, _)| n)
+            .sum();
+        assert_eq!(judged, 3, "{batches:?}");
+    }
+
+    /// #152 : la sortie utile seule dimensionne les lots suivants. Un appel où le
+    /// raisonnement a écrit 10 000 jetons et le JSON 600 ne doit pas faire croire que
+    /// chaque candidat coûte des milliers de jetons.
+    #[tokio::test]
+    async fn the_output_budget_ignores_what_was_spent_thinking() {
+        let mut b = OutputBudget::new(16_000);
+        let before = b.max_tokens(10);
+        // 600 jetons utiles pour 10 candidats, le reste en réflexion.
+        b.observe(10, 600);
+        let after = b.max_tokens(10);
+        assert!(
+            after < before + 500,
+            "la sortie utile tire l'estimation vers le bas : {before} → {after}"
+        );
+        // La même complétion comptée en entier (10 600) la ferait exploser.
+        let mut naive = OutputBudget::new(16_000);
+        naive.observe(10, 10_600);
+        assert!(
+            naive.max_tokens(10) > after * 2,
+            "c'est bien la mesure qui change, pas le hasard"
+        );
     }
 
     /// #140 : un candidat seul coupé au plancher est repris une fois avec une sortie
@@ -3640,8 +4192,17 @@ mod tests {
             "{:?}",
             o.report
         );
-        let limits: Vec<Option<u32>> = p.requests().iter().map(|r| r.max_tokens).collect();
-        assert_eq!(limits, vec![Some(2_000), Some(4_000)]);
+        // Sortie utile demandée, hors budget de raisonnement (issue #152).
+        let limits: Vec<u32> = p
+            .requests()
+            .iter()
+            .map(|r| {
+                r.max_tokens
+                    .unwrap_or(0)
+                    .saturating_sub(r.reasoning_max_tokens.unwrap_or(0))
+            })
+            .collect();
+        assert_eq!(limits, vec![2_000, 4_000]);
         assert!(
             o.report
                 .warnings

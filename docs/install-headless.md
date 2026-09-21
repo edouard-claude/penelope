@@ -418,6 +418,8 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `memory.dream_batch` | `40` | Candidats consolidés par appel au modèle, la nuit : au-delà, la réponse ne tient plus dans la fenêtre de sortie et tout le lot est reporté. |
 | `memory.dreaming_cron` | `"30 3 * * *"` | Heure de la consolidation nocturne (cron, fuseau du propriétaire). |
 | `memory.dream_retry_wait` | `"2m"` | Attente avant de reprendre un lot de la consolidation après une erreur passagère du modèle (flux muet, 5xx, 429), doublée à la seconde reprise. |
+| `memory.consolidation_reasoning` | `"auto"` | Raisonnement du modèle de consolidation : `auto` le garde et le budgète (le tri d'un candidat gagne à être réfléchi), `off` l'éteint pour rendre tout le budget de sortie au JSON. |
+| `memory.consolidation_reasoning_tokens` | `16000` | Plafond du budget de raisonnement d'un appel de consolidation, en jetons. Le budget part à 8 000 et double quand le modèle s'y heurte ; `max_tokens` vaut ce budget plus la sortie estimée du lot. |
 | `memory.digest_cron` | `"0 8 * * *"` | Heure du digest du matin (cron, fuseau du propriétaire). |
 | `memory.promotion.ecart_min_occurrences` | `3` | Occurrences minimales d'un écart pour devenir une exception. |
 | `memory.promotion.ecart_min_sessions` | `3` | Sessions distinctes minimales d'un écart. |
@@ -2182,17 +2184,27 @@ pas sa santé dans la minute, l'ancien binaire revient tout seul et Telegram le 
 `penelope upgrade --check` indique seulement la dernière version, `--tag v0.3.1` en
 choisit une, `--rollback` revient au binaire précédent.
 
-**Raisonnement des rôles de fond.** La consolidation nocturne, la compaction et la
-relecture d'épisode rendent du JSON : leur budget de sortie doit servir à écrire, pas à
-réfléchir. Pénélope coupe donc le raisonnement quand le modèle le permet
-(`reasoning: {enabled: false}`), et prend le niveau le plus faible déclaré quand il est
-obligatoire ; dans ce cas le plafond de sortie est doublé, le fournisseur comptant le
-raisonnement dedans. Un modèle qui dépense quand même son budget à réfléchir sans rien
-écrire n'est plus traité comme une réponse trop longue : la passe le dit
-(« raisonnement plein »), et bascule sur l'alias de repli au deuxième appel de ce genre.
-`penelope doctor` (`reasoning_effort`) annonce l'effort qui partira et la part de
-raisonnement observée sur sept jours, et `penelope model set` prévient quand un alias de
-ces rôles reçoit un modèle qui impose de réfléchir (#152).
+**Raisonnement de la consolidation.** Le tri d'un candidat gagne à être réfléchi : le
+raisonnement est **gardé** et budgété, pas éteint. L'appel porte deux budgets, un pour la
+réflexion (8 000 jetons au départ, plafond `memory.consolidation_reasoning_tokens`) et un
+pour la sortie utile ; `max_tokens` vaut la somme, le fournisseur comptant le raisonnement
+dedans. Quand le modèle dépense tout son budget à réfléchir sans rien écrire, ce n'est pas
+une réponse trop longue : la passe le dit (« raisonnement plein »), **relève** le budget de
+réflexion et rejoue le même lot, au lieu de réduire le lot (réduire le travail ne réduit
+pas la réflexion). Au plafond atteint deux fois, elle passe à l'alias de repli pour le
+reste de la nuit. `memory.consolidation_reasoning = "off"` éteint le raisonnement
+(`reasoning: {enabled: false}`) pour les modèles qui l'acceptent. `penelope doctor`
+(`reasoning_effort`) annonce ce qui partira et la part de raisonnement observée sur sept
+jours, `dream_power` prévient si la machine est sur batterie à l'heure du rêve, et
+`penelope model set` prévient quand un alias d'extraction reçoit un modèle qui impose de
+réfléchir (#152).
+
+**Une passe nocturne écrit lot par lot.** Chaque lot est une unité complète : opérations
+appliquées au vault, candidats marqués, état de la passe mis à jour, puis seulement le lot
+suivant. Une coupure réseau ou une machine qui s'endort ne fait plus perdre le travail
+déjà fait : le lot en cours est rejoué au retour, dans la limite du temps de la nuit, et
+la passe suivante reprend sur les candidats restants en le disant. Une passe lancée à la
+main (`penelope mem dream`) qui échoue prévient au foyer comme une passe planifiée (#152).
 
 **Le délai.** Un lot fusionné sur `main` n'est pas immédiatement installable : la CI
 rejoue les suites, pose le tag de la version du workspace, puis la release construit le

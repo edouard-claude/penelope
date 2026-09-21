@@ -46,6 +46,12 @@ impl ModelInfo {
     /// Effort le plus léger pour un appel utilitaire (classifieur) : `none` quand le
     /// raisonnement peut être coupé, sinon le plus faible accepté. `None` si le modèle
     /// n'expose aucun réglage : rien n'est alors envoyé.
+    /// Le modèle réfléchit : il déclare des niveaux d'effort, ou l'impose. Un modèle sans
+    /// raisonnement n'a ni budget ni effort à recevoir (issue #152).
+    pub fn reasons(&self) -> bool {
+        self.reasoning_mandatory || self.reasoning_efforts.is_some()
+    }
+
     pub fn lightest_effort(&self) -> Option<String> {
         let efforts = self.reasoning_efforts.as_ref()?;
         // Raisonnement facultatif : on le **coupe**, même quand la liste déclarée n'offre

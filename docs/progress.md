@@ -2083,33 +2083,72 @@ l'ancien code, sept lignes rendues sur le nouveau.
 
 ### 0.17.33
 
-#### La consolidation ne pense plus à la place d'écrire (#152)
+#### La consolidation garde son raisonnement, mais le budgète (#152)
 
 Nuit du 20 au 21/09 : passe en échec, 224 candidats examinés, zéro promu. Sur un **seul**
 candidat, avec 8 000 tokens de sortie autorisés, le modèle a dépensé les 8 000 en
-raisonnement et n'a rendu aucune opération. Deuxième nuit sur trois à échouer.
+raisonnement et n'a rendu aucune opération. Deuxième nuit sur trois à échouer. Relancée à
+la main au matin, la passe a écrit sept lots (126 candidats), puis le Mac est passé sur
+batterie, un lot est resté sans réponse, et **tout a été jeté** : 226 candidats en attente,
+zéro promu, aucun message.
 
-- **La cause** : `lightest_effort` prenait le plus faible niveau **de la liste déclarée**.
-  Pour `deepseek-v4-flash`, OpenRouter annonce `["xhigh","high"]` avec
-  `mandatory: false` : la consolidation partait donc en `high`. Le raisonnement n'était
-  pas obligatoire, rien ne permettait de le couper par ce chemin.
-- **Raisonnement facultatif = coupé**, quelle que soit la liste ; obligatoire = le plus
-  faible déclaré. Et `none` n'est plus envoyé comme un effort : c'est
-  `reasoning: {enabled: false, exclude: true}`, que le fournisseur entend vraiment.
-- **Le plafond porte les deux** quand le modèle impose de réfléchir : `max_tokens` compte
-  le raisonnement chez OpenRouter, le budget de sortie est donc doublé dans ce cas, et
-  laissé tel quel quand le raisonnement est coupé.
-- **« Raisonnement plein » n'est pas « coupé »** : sortie utile vide et budget parti en
-  réflexion, ce n'est pas une réponse trop longue. L'échelle de lots de #135 ne s'applique
-  plus (réduire le lot n'y change rien) ; le premier cas est dit, le second bascule sur
-  l'alias de repli (`memoire`) pour le reste de la passe, et si le repli s'affame aussi,
-  la passe s'arrête en le disant, candidats non jugés reportés.
-- **Le lot affamé ne compte plus comme jugé** : l'événement `memory.dream_batch` porte
-  `reasoning`, `reasoning_starved` et `judged`. Il passait pour un lot abouti.
-- `penelope doctor` (`reasoning_effort`) annonce l'effort qui partira pour le rôle
-  `compaction` et la part de raisonnement observée sur sept jours ; au-delà de 50 %, c'est
-  une alerte. `penelope model set` prévient quand un alias de consolidation ou de relecture
-  reçoit un modèle qui impose de réfléchir — un avertissement, pas un refus.
+**La cause**
+
+`lightest_effort` prenait le plus faible niveau **de la liste déclarée**. Pour
+`deepseek-v4-flash`, OpenRouter annonce `["xhigh","high"]` avec `mandatory: false` : la
+consolidation partait en `high`. Le raisonnement était facultatif, mais rien ne permettait
+de le couper par ce chemin. Le contournement évident (passer à un modèle qui déclare
+`low`) a été vérifié et ne change rien : `effort: low` n'est pas honoré, la part de
+raisonnement reste entre 85 et 100 %.
+
+**Le raisonnement est gardé, et dimensionné**
+
+Le tri d'un candidat (règle ou fait, durable ou passager, contradiction ou exception)
+gagne à être réfléchi : la nuit du 19/09, à 73 % de raisonnement, a produit 113
+promotions de bonne qualité. Ce qui cassait, c'est que la réflexion mangeait le budget
+prévu pour la réponse, et que la passe prenait ça pour une sortie trop longue.
+
+- **Deux budgets** : `reasoning.max_tokens` pour la réflexion (8 000 au départ, plafond
+  `memory.consolidation_reasoning_tokens`), et `max_tokens` qui vaut la somme des deux ;
+  OpenRouter compte le raisonnement dans le plafond de sortie.
+- **« Raisonnement plein » relève le budget de réflexion** et rejoue le même lot, au lieu
+  de réduire le lot : réduire le travail ne réduit pas la réflexion, et l'échelle de #135
+  descendait jusqu'à l'échec. Au plafond atteint deux fois, repli sur l'alias suivant pour
+  le reste de la nuit.
+- **La sortie utile seule dimensionne les lots** (`completion − reasoning`) : `OutputBudget`
+  apprenait le raisonnement comme si c'était du JSON et dérivait. L'échelle de lots de
+  #135 et #140 raisonne désormais sur cette sortie utile, pas sur le plafond envoyé, qui
+  porte les deux budgets.
+- **Éteindre reste possible** : `memory.consolidation_reasoning = "off"` envoie
+  `reasoning: {enabled: false, exclude: true}`, qu'un modèle entend vraiment ; en
+  `effort: "none"`, plusieurs continuent de réfléchir.
+- **Un modèle inconnu du catalogue est supposé réfléchir** : ne rien envoyer « dans le
+  doute » est précisément ce qui a laissé `deepseek-v4-flash` dépenser tout son budget en
+  réflexion. Le budget est inoffensif pour un modèle qui ne réfléchit pas.
+
+**Un lot est une unité de travail complète**
+
+- Opérations appliquées au vault, candidats marqués, état de la passe enregistré, **puis**
+  le lot suivant. Le snapshot du vault est relu entre deux lots : les entrées écrites sont
+  connues du lot suivant, et la garde anti-doublon vaut donc aussi entre deux passes.
+- Une passe interrompue est close en `interrupted` avec le compte de ses lots ; la
+  suivante reprend sur les candidats restants et le dit. Rejouer ne peut rien dédoubler.
+- Une coupure réseau ou une machine endormie n'est plus un abandon : le lot est rejoué au
+  retour, avec une attente de cinq minutes, dans la limite du temps de la nuit.
+- Une passe lancée à la main qui échoue émet `memory.dream_failed` et prévient au foyer,
+  comme une passe planifiée. Le 21/09, le propriétaire a dû demander pour l'apprendre.
+
+**Ce qui se voit**
+
+- `penelope doctor` : `reasoning_effort` annonce ce qui partira et la part de raisonnement
+  sur sept jours ; `dream_power` prévient si la machine est sur batterie à l'heure du rêve.
+- `penelope model set` prévient quand un alias d'extraction reçoit un modèle qui impose de
+  réfléchir. Un avertissement, pas un refus.
+- L'événement `memory.dream_batch` porte `reasoning`, `reasoning_starved` et `judged` : un
+  lot affamé ne passe plus pour un lot jugé.
+- Le digest et `DREAMS.md` distinguent trois cas : « consolidation coupée » (sortie trop
+  longue), « raisonnement plein » (budget parti en réflexion), « réseau coupé ou machine
+  endormie, lot rejoué ».
 
 ### Routine de livraison
 
