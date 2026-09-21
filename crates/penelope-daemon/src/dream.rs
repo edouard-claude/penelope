@@ -4619,6 +4619,62 @@ mod tests {
 
     /// #127 : une nuit dont un lot échoue trois fois n'écrit rien, laisse les candidats tels
     /// quels, le dit dans `DREAMS.md`, un événement et un message ; une panne qui dure ne
+    /// #152 : rejouer un lot déjà écrit ne doit rien dédoubler. La garde « un texte déjà
+    /// en mémoire ne s'ajoute pas » part de l'instantané du vault, relu à chaque lot :
+    /// elle tient donc aussi **entre deux passes**, y compris après une passe tuée en vol.
+    #[tokio::test]
+    async fn replaying_a_written_batch_adds_nothing_twice() {
+        let (_dir, d, p) = daemon().await;
+        let s = &d.services;
+        let texte = "Toujours répondre en français";
+        note(&d, CandidateType::Preference, texte, Origin::Owner, "s1", 6).await;
+
+        // Première passe : le candidat est promu, le texte entre dans le vault.
+        p.reply(&keep(texte));
+        let first = run(&d, false).await.unwrap();
+        assert_eq!(first.report.promoted, 1, "{:?}", first.report);
+        let vault = crate::conversation::vault_dir(s);
+        let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
+        assert_eq!(profil.matches(texte).count(), 1, "{profil}");
+
+        // Le candidat promu ne repasse pas : il n'est plus en attente.
+        assert!(
+            s.candidates.pending(None).await.unwrap().is_empty(),
+            "un candidat promu ne revient pas dans la file"
+        );
+
+        // Seconde passe sur un candidat neuf dont le modèle propose **le même texte** :
+        // c'est le cas d'un lot rejoué après une interruption au milieu de l'écriture.
+        note(
+            &d,
+            CandidateType::Preference,
+            "Parler français au bureau",
+            Origin::Owner,
+            "s2",
+            6,
+        )
+        .await;
+        p.reply(&keep(texte));
+        let second = run(&d, false).await.unwrap();
+
+        let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
+        assert_eq!(
+            profil.matches(texte).count(),
+            1,
+            "aucune entrée en double après rejeu : {profil}"
+        );
+        assert!(
+            second
+                .report
+                .sorted
+                .iter()
+                .any(|l| l.contains("déjà en mémoire")),
+            "le rejeu est dit, pas silencieux : {:?}",
+            second.report.sorted
+        );
+        assert_eq!(second.report.promoted, 0, "{:?}", second.report);
+    }
+
     /// #152 : 240 s fixes tuaient tout appel qui réfléchissait vraiment. Le 21/09, avec
     /// 8 000 à 16 000 tokens de raisonnement autorisés, chaque lot demandait cinq à onze
     /// minutes : tué à quatre, classé « réseau coupé », rejoué après 300 s, sans fin.

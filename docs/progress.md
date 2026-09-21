@@ -2375,6 +2375,30 @@ carte « ⛔ bloqué » et message « en cours » — n'était ni touché ni nom
 La construction du message sort du transport Telegram (`StopReport::render`), donc se
 vérifie : deux tests, dont la reproduction du cas du 21/09.
 
+### 0.17.39
+
+#### Consolidation : la reprise est idempotente, et prouvée (#152)
+
+Dernier lot de #152. Les points de robustesse demandés le 21/09 sont maintenant tous
+couverts, et celui qui manquait d'une preuve en a une.
+
+- **Rejouer un lot déjà écrit n'ajoute rien deux fois.** La garde « un texte déjà en
+  mémoire ne s'ajoute pas » part de l'instantané du vault, relu à chaque lot depuis
+  0.17.34 : elle tient donc aussi **entre deux passes**, y compris après une passe tuée au
+  milieu d'une écriture. Un test le montre de bout en bout : un texte promu, puis une
+  seconde passe où le modèle propose le même texte — une seule entrée dans le vault, et le
+  rejeu est dit (« ＝ déjà en mémoire ») au lieu d'être silencieux.
+- Un candidat promu ne revient pas dans la file : la passe suivante ne reprend que les
+  candidats encore en attente.
+
+**État des exigences de l'issue**, vérifié plutôt que supposé : écriture lot par lot,
+marqueur `interrupted` et reprise (0.17.34) ; défaut `auto`, budget de raisonnement séparé,
+`OutputBudget` sur la sortie utile (0.17.34) ; délai dérivé du budget, notre délai distingué
+d'une coupure réseau, plafond de trois tentatives, trace par tentative (0.17.37) ; échec
+d'une passe manuelle annoncé au foyer, ligne `doctor` sur le budget envoyé, alerte batterie
+(0.17.34) ; les trois cas — sortie coupée, raisonnement plein, coupure réseau et lot rejoué
+— sortent dans les avertissements du rapport.
+
 ### Routine de livraison
 
 Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #147) :
