@@ -7,6 +7,105 @@ use serde_json::{Value, json};
 use std::path::Path;
 use std::process::Stdio;
 
+/// Accepte uniquement une source Git explicite, ou le raccourci `owner/repo` de GitHub.
+/// La validation précède toute création de dossier ou invocation de `git` (#160).
+pub fn normalize_clone_url(source: &str) -> ToolResult<String> {
+    let valid_component = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+    };
+    if let Some((owner, repo)) = source.split_once('/')
+        && valid_component(owner)
+        && valid_component(repo)
+    {
+        return Ok(format!("https://github.com/{owner}/{repo}.git"));
+    }
+    if source.contains(char::is_whitespace) || source.chars().any(char::is_control) {
+        return Err(ToolError::Invalid(
+            "source Git invalide : utiliser https://, ssh://, git://, file:// ou user@hôte:chemin"
+                .into(),
+        ));
+    }
+    if let Ok(url) = url::Url::parse(source)
+        && matches!(url.scheme(), "https" | "ssh" | "git" | "file")
+        && (url.scheme() == "file" || url.host_str().is_some())
+        && !url.path().is_empty()
+    {
+        return Ok(source.to_string());
+    }
+    if let Some((user_host, path)) = source.split_once(':')
+        && let Some((user, host)) = user_host.split_once('@')
+        && !user.is_empty()
+        && !host.is_empty()
+        && !host.contains('/')
+        && !path.is_empty()
+        && !path.starts_with('-')
+    {
+        return Ok(source.to_string());
+    }
+    Err(ToolError::Invalid(format!(
+        "source Git `{source}` invalide : utiliser https://, ssh://, git://, file://, \
+         user@hôte:chemin ou owner/repo (GitHub)"
+    )))
+}
+
+fn remote_identity(source: &str) -> Option<(String, String)> {
+    let (host, path) = if let Ok(url) = url::Url::parse(source) {
+        (url.host_str()?.to_ascii_lowercase(), url.path().to_string())
+    } else {
+        let (user_host, path) = source.split_once(':')?;
+        let (_, host) = user_host.split_once('@')?;
+        (host.to_ascii_lowercase(), path.to_string())
+    };
+    let path = path.trim_start_matches('/').trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let path = if host == "github.com" {
+        path.to_ascii_lowercase()
+    } else {
+        path.to_string()
+    };
+    (!path.is_empty()).then_some((host, path))
+}
+
+/// Cherche un dépôt existant sans suivre les liens ni parcourir indéfiniment le workspace.
+async fn existing_clone(workspace: &Path, source: &str) -> Option<(String, String)> {
+    let wanted = remote_identity(source)?;
+    let mut pending = vec![(workspace.to_path_buf(), 0usize)];
+    let mut seen = 0usize;
+    while let Some((dir, depth)) = pending.pop() {
+        seen += 1;
+        if seen > 512 {
+            break;
+        }
+        if dir.join(".git").exists()
+            && let Some(origin) = origin_remote(&dir).await
+            && remote_identity(&origin) == Some(wanted.clone())
+        {
+            return Some((dir.to_string_lossy().to_string(), origin));
+        }
+        if depth >= 4 {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut children: Vec<_> = entries
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.file_type().is_ok_and(|kind| kind.is_dir())
+                    && !entry.file_name().to_string_lossy().starts_with('.')
+                    && entry.file_name() != "target"
+            })
+            .map(|entry| entry.path())
+            .collect();
+        children.sort();
+        pending.extend(children.into_iter().rev().map(|path| (path, depth + 1)));
+    }
+    None
+}
+
 /// Exécute une commande git et renvoie (code, stdout, stderr).
 pub async fn run(cwd: &Path, args: &[&str]) -> ToolResult<(i32, String, String)> {
     let git = penelope_platform::which("git")
@@ -135,12 +234,47 @@ pub async fn clone(url: &str, dest: &Path, depth: Option<u32>) -> ToolResult<Val
     let parent = dest
         .parent()
         .ok_or_else(|| ToolError::Invalid("destination sans répertoire parent".into()))?;
+    clone_in(url, dest, &[parent.to_path_buf()], depth).await
+}
+
+/// Variante appelée par le daemon avec toutes les racines de workspace autorisées.
+pub async fn clone_in(
+    url: &str,
+    dest: &Path,
+    workspaces: &[std::path::PathBuf],
+    depth: Option<u32>,
+) -> ToolResult<Value> {
+    let url = normalize_clone_url(url)?;
+    let parent = dest
+        .parent()
+        .ok_or_else(|| ToolError::Invalid("destination sans répertoire parent".into()))?;
+    for workspace in workspaces {
+        if workspace.exists()
+            && let Some((existing, origin)) = existing_clone(workspace, &url).await
+        {
+            return Ok(json!({
+                "ok": true, "already": true, "dest": existing, "url": url, "origin": origin,
+                "stdout": "dépôt déjà présent dans le workspace"
+            }));
+        }
+    }
     std::fs::create_dir_all(parent).map_err(|e| ToolError::Io(e.to_string()))?;
     let depth_s = depth.unwrap_or(50).to_string();
     let dest_s = dest.to_string_lossy().to_string();
-    let args = vec!["clone", "--depth", depth_s.as_str(), url, dest_s.as_str()];
+    let args = vec![
+        "clone",
+        "--depth",
+        depth_s.as_str(),
+        url.as_str(),
+        dest_s.as_str(),
+    ];
     let (code, out, err) = run(parent, &args).await?;
-    ok_or_err(code, out, err, json!({"dest": dest_s}))
+    ok_or_err(
+        code,
+        out,
+        err,
+        json!({"dest": dest_s, "url": url, "already": false}),
+    )
 }
 
 pub async fn push(cwd: &Path, remote: &str, branch_name: &str) -> ToolResult<Value> {
@@ -306,5 +440,110 @@ mod tests {
     async fn commit_refuses_an_empty_message() {
         let d = tempfile::tempdir().unwrap();
         assert!(commit(d.path(), "   ", false).await.is_err());
+    }
+
+    #[test]
+    fn clone_sources_accept_remotes_and_expand_a_github_shortcut() {
+        assert_eq!(
+            normalize_clone_url("Fidelatoo/imap").unwrap(),
+            "https://github.com/Fidelatoo/imap.git"
+        );
+        assert_eq!(
+            normalize_clone_url("git@github.com:o/r.git").unwrap(),
+            "git@github.com:o/r.git"
+        );
+        assert_eq!(
+            normalize_clone_url("https://gitlab.apnl.tech/g/p.git").unwrap(),
+            "https://gitlab.apnl.tech/g/p.git"
+        );
+        for source in ["../autre", "/tmp/x", "imap", "-option", "Fidelatoo/../imap"] {
+            assert!(
+                matches!(normalize_clone_url(source), Err(ToolError::Invalid(_))),
+                "{source}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn clone_reuses_an_existing_workspace_repo_with_an_equivalent_origin() {
+        let workspace = tempfile::tempdir().unwrap();
+        let existing = workspace.path().join("Fidelatoo/imap");
+        std::fs::create_dir_all(&existing).unwrap();
+        run(&existing, &["init", "-q"]).await.unwrap();
+        run(
+            &existing,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:Fidelatoo/imap.git",
+            ],
+        )
+        .await
+        .unwrap();
+        let dest = workspace.path().join("imap-src");
+        let result = clone("Fidelatoo/imap", &dest, None).await.unwrap();
+        assert_eq!(result["already"], true);
+        assert_eq!(result["url"], "https://github.com/Fidelatoo/imap.git");
+        assert_eq!(result["dest"], existing.to_string_lossy().as_ref());
+        assert!(!dest.exists());
+    }
+
+    #[tokio::test]
+    async fn clone_searches_the_workspace_even_when_destination_is_nested() {
+        let workspace = tempfile::tempdir().unwrap();
+        let existing = workspace.path().join("Fidelatoo/imap");
+        std::fs::create_dir_all(&existing).unwrap();
+        run(&existing, &["init", "-q"]).await.unwrap();
+        run(
+            &existing,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:Fidelatoo/imap.git",
+            ],
+        )
+        .await
+        .unwrap();
+        let dest = workspace.path().join("other/imap-src");
+        let result = clone_in(
+            "Fidelatoo/imap",
+            &dest,
+            &[workspace.path().to_path_buf()],
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["already"], true);
+        assert_eq!(result["dest"], existing.to_string_lossy().as_ref());
+        assert!(!dest.parent().unwrap().exists());
+    }
+
+    #[tokio::test]
+    async fn clone_rejects_local_paths_before_starting_git() {
+        let workspace = tempfile::tempdir().unwrap();
+        let dest = workspace.path().join("new/dest");
+        for source in ["../autre", "/tmp/x", "imap"] {
+            assert!(matches!(
+                clone(source, &dest, None).await,
+                Err(ToolError::Invalid(_))
+            ));
+            assert!(!workspace.path().join("new").exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn an_explicit_file_url_clones_and_reports_the_actual_source() {
+        let workspace = tempfile::tempdir().unwrap();
+        let source = workspace.path().join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        run(&source, &["init", "-q"]).await.unwrap();
+        let url = url::Url::from_file_path(&source).unwrap().to_string();
+        let dest = workspace.path().join("cloned");
+        let result = clone(&url, &dest, None).await.unwrap();
+        assert_eq!(result["url"], url);
+        assert_eq!(result["already"], false);
+        assert!(dest.join(".git").exists());
     }
 }

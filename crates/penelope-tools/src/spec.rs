@@ -245,9 +245,9 @@ pub fn all() -> Vec<ToolSpec> {
         spec(
             "git_clone",
             RiskClass::External,
-            "Clone un dépôt distant dans le workspace.",
+            "Clone un dépôt distant dans le workspace, ou retrouve un clone existant de la même origine. `owner/repo` désigne GitHub ; un chemin local est refusé.",
             obj(
-                json!({"url": {"type":"string"}, "dest": {"type":"string"}, "depth": {"type":"integer"}}),
+                json!({"url": {"type":"string", "description":"URL Git (https://github.com/owner/repo.git, git@github.com:owner/repo.git) ou raccourci owner/repo ; pas de chemin local", "examples":["https://github.com/owner/repo.git", "git@github.com:owner/repo.git", "owner/repo"]}, "dest": {"type":"string"}, "depth": {"type":"integer"}}),
                 &["url", "dest"],
             ),
             false,

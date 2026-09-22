@@ -674,9 +674,10 @@ impl NativeToolExecutor {
             }
             "git_clone" => {
                 let dest = self.path_arg(args, "dest")?;
-                penelope_tools::git::clone(
+                penelope_tools::git::clone_in(
                     &str_arg(args, "url")?,
                     &dest,
+                    &self.workspaces(),
                     u_arg(args, "depth").map(|d| d as u32),
                 )
                 .await?
@@ -1834,6 +1835,11 @@ impl NativeToolExecutor {
         };
         match target.as_str() {
             "tool_search" | "tool_describe" | "tool_call" => Ok(()),
+            "git_clone" => {
+                penelope_tools::validate_args(&target, &inner)?;
+                penelope_tools::git::normalize_clone_url(&str_arg(&inner, "url")?)?;
+                Ok(())
+            }
             t if penelope_tools::tool_spec(t).is_some() => penelope_tools::validate_args(t, &inner),
             t if t.starts_with("mcp__") || name == "tool_call" => self
                 .services
@@ -2362,6 +2368,23 @@ async fn with_session_labels(s: &Services, hits: &mut Value) {
 mod tests {
     use super::*;
     use penelope_kernel::clock::TestClock;
+
+    #[tokio::test]
+    async fn invalid_clone_source_is_rejected_before_approval_even_via_tool_call() {
+        let (_dir, executor) = executor().await;
+        let args = json!({"url":"../autre", "dest":"imap-src"});
+        let direct = executor.precheck("git_clone", &args).await;
+        assert!(
+            matches!(direct, Err(ToolError::BadArguments { .. })),
+            "{direct:?}"
+        );
+        assert!(matches!(
+            executor
+                .precheck("tool_call", &json!({"name":"git_clone", "args":args}))
+                .await,
+            Err(ToolError::BadArguments { .. })
+        ));
+    }
 
     /// #130 : la forme exacte de l'incident, une commande en échec qui écrit 41 lignes,
     /// passe par le résumé sans paniquer et rend toute sa sortie.

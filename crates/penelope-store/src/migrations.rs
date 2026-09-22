@@ -79,6 +79,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0016_turn_merge",
         sql: SQL_0016,
     },
+    Migration {
+        version: "0017_clone_source",
+        sql: SQL_0017,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -941,6 +945,15 @@ CREATE UNIQUE INDEX messages_source_turn ON messages(source_turn_id)
   WHERE source_turn_id IS NOT NULL;
 "#;
 
+/// Révoque les anciennes autorisations globales de `git_clone` : elles pouvaient
+/// accepter un chemin local à la place d'un dépôt distant (#160).
+const SQL_0017: &str = r#"
+UPDATE policies
+SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+WHERE tool = 'git_clone' AND arg_match IS NULL AND window = 'always'
+  AND revoked_at IS NULL;
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1032,6 +1045,70 @@ mod tests {
             )
             .unwrap();
         assert_eq!(row, (0, 0, "2026-09-01T10:00:00Z".into(), 4));
+    }
+
+    #[test]
+    fn a_legacy_unbounded_clone_rule_is_revoked_on_upgrade() {
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE schema_migrations(version TEXT PRIMARY KEY,
+             applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));",
+        )
+        .unwrap();
+        {
+            let tx = c.transaction().unwrap();
+            for m in MIGRATIONS
+                .iter()
+                .take_while(|m| m.version != "0017_clone_source")
+            {
+                tx.execute_batch(m.sql).unwrap();
+                tx.execute(
+                    "INSERT INTO schema_migrations(version) VALUES(?1)",
+                    [m.version],
+                )
+                .unwrap();
+            }
+            for (id, pattern) in [
+                ("legacy", None),
+                (
+                    "scoped",
+                    Some(r#"{"url":{"$origin":"https://github.com"}}"#),
+                ),
+            ] {
+                tx.execute(
+                    "INSERT INTO policies(id,scope,tool,arg_match,decision,window,created_at)
+                     VALUES(?1,'tool','git_clone',?2,'auto','always','2026-09-18T00:00:00Z')",
+                    rusqlite::params![id, pattern],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+        migrate(&mut c).unwrap();
+        let revoked: Option<String> = c
+            .query_row(
+                "SELECT revoked_at FROM policies WHERE id='legacy'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let scoped: Option<String> = c
+            .query_row(
+                "SELECT revoked_at FROM policies WHERE id='scoped'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(revoked.is_some());
+        assert!(scoped.is_none());
+        let visible: i64 = c
+            .query_row(
+                "SELECT count(*) FROM policies WHERE tool='git_clone' AND revoked_at IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(visible, 1);
     }
 
     #[test]
