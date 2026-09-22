@@ -1201,6 +1201,14 @@ filet : le même appel rejoué à l'identique est arrêté quoi que dise l'erreu
 `tool_call`, la politique, la carte d'approbation et « Toujours » portent sur les
 arguments de l'outil visé, jamais sur l'enveloppe.
 
+`git_clone` accepte une URL `https://`, `ssh://`, `git://`, `file://`, la forme
+`git@hôte:owner/repo.git` ou le raccourci GitHub `owner/repo`. Ce dernier devient
+`https://github.com/owner/repo.git` avant le clone ; un chemin local relatif ou absolu
+est refusé. Si la même origine existe déjà dans un workspace (SSH et HTTPS GitHub
+équivalents), l'outil rend son chemin avec `already: true` et l'URL demandée. Une
+approbation « Toujours » est bornée au schéma et à l'hôte ; les anciennes règles
+`git_clone` sans motif sont révoquées lors de la mise à jour.
+
 `fs_read` et `fs_search` lisent en flux : 50 lignes d'un journal de 512 Mio se lisent en
 moins d'une milliseconde et quelques Mio de mémoire. Au-delà de 8 Mio, `fs_read` ne compte
 plus le total des lignes (il le dit) et refuse d'aller chercher une ligne au-delà de 64 Mio
@@ -1228,7 +1236,7 @@ et `/stop` interrompt tout le lot.
 | `fs_search` | read | Recherche une expression régulière dans les fichiers du workspace. |
 | `fs_write` | write | Écrit un fichier dans le workspace. |
 | `git_branch` | write | Crée ou change de branche. (à la demande) |
-| `git_clone` | external | Clone un dépôt distant dans le workspace. (à la demande) |
+| `git_clone` | external | Clone un dépôt distant dans le workspace, ou retrouve un clone existant de la même origine. (à la demande) |
 | `git_commit` | write | Valide les changements indexés. (à la demande) |
 | `git_diff` | read | Diff du dépôt, éventuellement contre une référence. (à la demande) |
 | `git_push` | external | Pousse une branche vers le dépôt distant. (à la demande) |

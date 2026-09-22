@@ -2060,6 +2060,22 @@ pub(crate) fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
             }
             (!m.is_empty()).then(|| Value::Object(m))
         }
+        "git_clone" => {
+            let source = str_of("url")?;
+            let url = penelope_tools::git::normalize_clone_url(&source).ok()?;
+            if url.starts_with("file://") {
+                return None;
+            }
+            let origin = if let Some((scheme, rest)) = url.split_once("://") {
+                let host = rest.split('/').next()?.to_ascii_lowercase();
+                format!("{}://{host}", scheme.to_ascii_lowercase())
+            } else {
+                let (user_host, _) = url.split_once(':')?;
+                let (_, host) = user_host.split_once('@')?;
+                format!("ssh://{}", host.to_ascii_lowercase())
+            };
+            prefix("url", ORIGIN_OP, origin)
+        }
         // Hôte visé, schéma compris.
         "http_fetch" => {
             let url = str_of("url")?;
@@ -2073,6 +2089,64 @@ pub(crate) fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
         }
         "config_set" => str_of("path").map(|p| json!({"path": p})),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod clone_policy_tests {
+    use super::*;
+
+    #[test]
+    fn clone_always_rule_is_limited_to_the_source_origin() {
+        use penelope_hitl::policy::ORIGIN_OP;
+        assert_eq!(
+            arg_pattern("git_clone", Some(&json!({"url":"Fidelatoo/imap"}))),
+            Some(json!({"url":{ORIGIN_OP:"https://github.com"}}))
+        );
+        assert_eq!(
+            arg_pattern("git_clone", Some(&json!({"url":"git@github.com:o/r.git"}))),
+            Some(json!({"url":{ORIGIN_OP:"ssh://github.com"}}))
+        );
+        assert!(arg_pattern("git_clone", Some(&json!({"url":"file:///tmp/repo"}))).is_none());
+        assert!(arg_pattern("git_clone", Some(&json!({"url":"../local"}))).is_none());
+    }
+
+    #[tokio::test]
+    async fn approving_clone_always_creates_only_a_scoped_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = crate::runtime::Services::for_tests(
+            dir.path().to_path_buf(),
+            Arc::new(penelope_kernel::clock::TestClock::default()),
+        )
+        .await
+        .unwrap();
+        let approval = services
+            .approvals
+            .create(
+                penelope_hitl::ApprovalKind::ToolCall,
+                "git_clone",
+                penelope_kernel::risk::RiskClass::External,
+                json!({"arguments":{"url":"Fidelatoo/imap","dest":"imap-src"}}),
+                Vec::new(),
+                None,
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        decide_approval(
+            &services,
+            approval.id.as_str(),
+            &Decision::approve_always("cli"),
+        )
+        .await
+        .unwrap();
+        let rules = services.policies.active_rules().await.unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0].arg_match,
+            Some(json!({"url":{penelope_hitl::policy::ORIGIN_OP:"https://github.com"}}))
+        );
     }
 }
 
@@ -2185,10 +2259,10 @@ pub async fn decide_approval(
                 let patterns = arg_patterns(&a.subject, a.payload.get("arguments"));
                 // Une commande sans famille (composée) : autorisée cette fois, jamais le
                 // shell entier (issue #111).
-                if patterns.is_empty() && a.subject == "shell_exec" {
+                if patterns.is_empty() && matches!(a.subject.as_str(), "shell_exec" | "git_clone") {
                     tracing::info!(
                         approval = approval_id,
-                        "commande composée : autorisée une fois, sans règle"
+                        "appel sans motif sûr : autorisé une fois, sans règle"
                     );
                     s.approvals.note_rules(approval_id, 0).await?;
                 } else {
@@ -2215,17 +2289,24 @@ pub async fn decide_approval(
                     s.approvals.note_rules(approval_id, created).await?;
                 }
             } else if !decision.approved && decision.window.creates_rule() && rule_allowed {
-                s.policies
-                    .create_rule(
-                        penelope_hitl::RuleScope::Tool,
-                        Some(&a.subject),
-                        server_of(&a.subject).as_deref(),
-                        None,
-                        PolicyDecision::Deny,
-                        decision.window,
-                        None,
-                    )
-                    .await?;
+                let pattern = if a.subject == "git_clone" {
+                    arg_pattern(&a.subject, a.payload.get("arguments"))
+                } else {
+                    None
+                };
+                if a.subject != "git_clone" || pattern.is_some() {
+                    s.policies
+                        .create_rule(
+                            penelope_hitl::RuleScope::Tool,
+                            Some(&a.subject),
+                            server_of(&a.subject).as_deref(),
+                            pattern,
+                            PolicyDecision::Deny,
+                            decision.window,
+                            None,
+                        )
+                        .await?;
+                }
             }
             s.events
                 .append(EventDraft::new(

@@ -272,9 +272,27 @@ fn normalise_text(p: &str) -> String {
 
 /// Schéma et hôte d'une URL : `https://example.com/a` donne `https://example.com`.
 fn origin_of(url: &str) -> Option<String> {
-    let (scheme, rest) = url.split_once("://")?;
-    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    (!host.is_empty()).then(|| format!("{}://{}", scheme.to_lowercase(), host.to_lowercase()))
+    if let Some((scheme, rest)) = url.split_once("://") {
+        let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        return (!host.is_empty())
+            .then(|| format!("{}://{}", scheme.to_lowercase(), host.to_lowercase()));
+    }
+    if let Some((user_host, path)) = url.split_once(':')
+        && let Some((user, host)) = user_host.split_once('@')
+        && !user.is_empty()
+        && !host.is_empty()
+        && !path.is_empty()
+    {
+        return Some(format!("ssh://{}", host.to_lowercase()));
+    }
+    let (owner, repo) = url.split_once('/')?;
+    let valid = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+    };
+    (valid(owner) && valid(repo)).then(|| "https://github.com".to_string())
 }
 
 /// Motif rendu lisible pour une carte ou `/policies`.
@@ -709,6 +727,25 @@ mod tests {
         assert!(origin_of("https://example.com/a?b=1").as_deref() == Some("https://example.com"));
         assert!(origin_of("HTTPS://Example.COM/a").as_deref() == Some("https://example.com"));
         assert!(origin_of("pas-une-url").is_none());
+    }
+
+    #[test]
+    fn clone_origin_pattern_understands_scp_and_github_shortcuts() {
+        assert!(args_match_in(
+            &json!({"url":{ORIGIN_OP:"ssh://github.com"}}),
+            &json!({"url":"git@github.com:o/r.git"}),
+            None,
+        ));
+        assert!(args_match_in(
+            &json!({"url":{ORIGIN_OP:"https://github.com"}}),
+            &json!({"url":"Fidelatoo/imap"}),
+            None,
+        ));
+        assert!(!args_match_in(
+            &json!({"url":{ORIGIN_OP:"https://github.com"}}),
+            &json!({"url":"../imap"}),
+            None,
+        ));
     }
     use super::*;
     use penelope_kernel::clock::TestClock;

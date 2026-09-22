@@ -8,7 +8,7 @@ Dernière mise à jour : 22 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1694 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
+- **1704 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2582,6 +2582,22 @@ message absorbé. Les seuils de rafale ouvrent la carte de choix, même pendant 
 et le moment de l'absorption. Les tests couvrent la réclamation, la projection, la
 reprise, la déduplication, les bornes, la livraison et l'annulation. Un message avec
 photo conserve son traitement visuel séparé.
+
+### 0.17.49
+
+#### `git_clone` valide sa source et retrouve les clones existants (#160)
+
+`owner/repo` devient une URL HTTPS GitHub avant tout appel Git ; les chemins locaux
+relatifs ou absolus sont refusés avec les formes admises. Le résultat rend l'URL
+réellement utilisée. Un appel invalide est rejeté avant la carte d'approbation, y
+compris via `tool_call`. Avant de cloner, l'outil cherche dans les workspaces autorisés
+une origine équivalente, y compris SSH/HTTPS sur GitHub, et retourne son chemin.
+
+La migration révoque les anciennes règles « Toujours » de `git_clone` sans motif.
+Les nouvelles règles sont bornées au schéma et à l'hôte ; `file://` ne crée pas de
+règle durable. Le schéma de l'outil donne des exemples. Les tests couvrent les URLs,
+les chemins refusés avant lancement, la réutilisation d'un clone, un vrai clone local
+explicite, la migration et la portée des règles.
 
 ### Routine de livraison
 
