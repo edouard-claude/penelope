@@ -64,21 +64,16 @@ pub fn resolve(path: &str, workspaces: &[PathBuf]) -> ToolResult<PathBuf> {
                 .join(", ")
         ))
     };
-    if !is_within(&candidate, workspaces) {
+    // La première barrière compare les formes que le système de fichiers voit : une
+    // différence de casse sur APFS usuel ne doit pas refuser le même dossier (#164).
+    // Le plus proche ancêtre existant est résolu pour les fichiers à créer. La même
+    // comparaison refuse un lien symbolique qui quitte le workspace (#66).
+    let real_roots: Vec<PathBuf> = workspaces.iter().map(|w| real_path(w)).collect();
+    let real_candidate = real_path(&candidate);
+    if !is_within(&real_candidate, &real_roots) {
         return Err(refuse());
     }
-    // Le chemin **et** sa forme réelle doivent rester dans un workspace : un lien
-    // symbolique déposé dans le workspace ne doit pas ouvrir le reste du disque. Les
-    // outils `fs_*` tournent dans le processus du daemon, sans bac à sable de l'OS
-    // (issue #66).
-    let real_roots: Vec<PathBuf> = workspaces
-        .iter()
-        .map(|w| std::fs::canonicalize(w).unwrap_or_else(|_| normalise(w)))
-        .collect();
-    if !is_within(&real_path(&candidate), &real_roots) {
-        return Err(refuse());
-    }
-    Ok(candidate)
+    Ok(real_candidate)
 }
 
 /// Forme réelle d'un chemin : le plus long préfixe existant est canonicalisé (liens
@@ -646,6 +641,27 @@ mod tests {
         let e = resolve("../../etc/passwd", &roots).unwrap_err();
         assert!(e.to_string().contains("hors des workspaces"));
         assert!(resolve("/etc/passwd", &roots).is_err());
+    }
+
+    /// #164 : la casse suit le volume. Sur APFS usuel, les deux écritures sont le
+    /// même dossier ; sur Linux ou APFS sensible, elles peuvent désigner deux dossiers.
+    #[test]
+    fn resolve_uses_the_filesystems_case_rules() {
+        let d = tempfile::tempdir().unwrap();
+        let actual = d.path().join("penelope");
+        let typed = d.path().join("Penelope");
+        std::fs::create_dir(&actual).unwrap();
+        let roots = vec![actual.clone()];
+        let requested = typed.join("new.txt");
+        if std::fs::canonicalize(&typed).is_ok() {
+            assert_eq!(
+                resolve(requested.to_str().unwrap(), &roots).unwrap(),
+                actual.canonicalize().unwrap().join("new.txt")
+            );
+        } else {
+            std::fs::create_dir(&typed).unwrap();
+            assert!(resolve(requested.to_str().unwrap(), &roots).is_err());
+        }
     }
 
     #[test]

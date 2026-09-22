@@ -222,7 +222,10 @@ routage déjà choisis), pas les gardes des outils.
 
 `config_set` rend ce moment dans `applied`. Pour `sandbox.workspaces`, le nouvel espace est
 donc utilisable par `fs_*`, `git_*`, `shell_exec` et `image_inspect` dès l'appel suivant du
-même tour. Le modèle déjà choisi pour le tour ne change jamais au milieu de sa réponse.
+même tour. Un chemin existant est enregistré sous sa forme réelle (casse et liens
+symboliques résolus) ; le résultat signale cette correction. Un chemin inexistant reste
+accepté avec un avertissement. Le modèle déjà choisi pour le tour ne change jamais au
+milieu de sa réponse.
 
 **Le fichier reste le vôtre.** `config.toml` ne porte que les clés qui s'écartent des
 valeurs par défaut, et `penelope config set`, `/model` ou un réglage fait depuis Telegram

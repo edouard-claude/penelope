@@ -1750,13 +1750,33 @@ pub struct ConfigStore {
     unknown: std::sync::Mutex<Vec<String>>,
 }
 
+/// Les racines absolues existantes prennent la forme réelle du volume. Les chemins
+/// encore absents et les gabarits (`~`, `{data}`) restent tels quels ; ils seront
+/// résolus au moment de l'usage. Aucune comparaison de casse artificielle (#164).
+fn canonicalise_workspace_paths(config: &mut Config) {
+    for raw in &mut config.sandbox.workspaces {
+        let path = Path::new(raw);
+        if !path.is_absolute() {
+            continue;
+        }
+        match std::fs::canonicalize(path) {
+            Ok(real) => *raw = real.to_string_lossy().into_owned(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tracing::warn!(workspace = %raw, "workspace configuré inexistant");
+            }
+            Err(e) => tracing::warn!(workspace = %raw, error = %e, "workspace non canonicalisé"),
+        }
+    }
+}
+
 impl ConfigStore {
     pub fn new(
-        config: Config,
+        mut config: Config,
         path: impl AsRef<Path>,
         store: Option<Store>,
         clock: SharedClock,
     ) -> Self {
+        canonicalise_workspace_paths(&mut config);
         let boot = Generation {
             generation: 1,
             config: Arc::new(config),
@@ -1890,6 +1910,7 @@ impl ConfigStore {
         let cur = self.current.load_full();
         let mut next = (*cur.config).clone();
         let changed = f(&mut next)?;
+        canonicalise_workspace_paths(&mut next);
         next.validate()?;
 
         if persist {
@@ -2592,6 +2613,35 @@ mod tests {
             "{:?}",
             g.changed
         );
+    }
+
+    /// #164 : une racine existante est conservée sous la forme réelle du volume,
+    /// au chargement puis lors de `config_set` (mutation persistée).
+    #[test]
+    fn workspace_paths_are_canonicalised_at_load_and_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let actual = dir.path().join("penelope");
+        let alias = dir.path().join("Penelope");
+        std::fs::create_dir(&actual).unwrap();
+        if std::fs::canonicalize(&alias).is_err() {
+            std::os::unix::fs::symlink(&actual, &alias).unwrap();
+        }
+        let mut initial = cfg();
+        initial.sandbox.workspaces = vec![alias.to_string_lossy().into_owned()];
+        let cs = ConfigStore::new(
+            initial,
+            dir.path().join("config.toml"),
+            None,
+            std::sync::Arc::new(TestClock::default()),
+        );
+        let expected = actual.canonicalize().unwrap().to_string_lossy().to_string();
+        assert_eq!(cs.config().sandbox.workspaces, vec![expected.clone()]);
+        cs.mutate("test", |c| {
+            c.sandbox.workspaces = vec![alias.to_string_lossy().into_owned()];
+            Ok(vec!["sandbox.workspaces".into()])
+        })
+        .unwrap();
+        assert_eq!(cs.config().sandbox.workspaces, vec![expected]);
     }
 
     #[test]

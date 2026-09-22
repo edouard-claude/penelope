@@ -322,6 +322,10 @@ fn untrusted_listing(source: &str, value: Value) -> ToolOutcome {
 }
 
 /// Workspaces autorisés : configuration, sinon `{data}/workspace`.
+fn canonical_workspace(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| penelope_platform::sandbox::normalise(path))
+}
+
 pub fn default_workspaces(s: &Services) -> Vec<PathBuf> {
     let cfg = s.config.config();
     let mut v: Vec<PathBuf> = cfg
@@ -335,9 +339,7 @@ pub fn default_workspaces(s: &Services) -> Vec<PathBuf> {
         let _ = std::fs::create_dir_all(&ws);
         v.push(ws);
     }
-    v.into_iter()
-        .map(|p| penelope_platform::sandbox::normalise(&p))
-        .collect()
+    v.iter().map(|p| canonical_workspace(p)).collect()
 }
 
 /// Moment promis par `config_set`. La configuration est publiée immédiatement, mais les
@@ -376,7 +378,12 @@ impl NativeToolExecutor {
         }
     }
 
-    pub fn new(services: Arc<Services>, env: ToolEnv) -> Self {
+    pub fn new(services: Arc<Services>, mut env: ToolEnv) -> Self {
+        env.workspaces = env
+            .workspaces
+            .iter()
+            .map(|root| canonical_workspace(root))
+            .collect();
         let configured_workspaces_at_start = default_workspaces(&services);
         NativeToolExecutor {
             services,
@@ -745,16 +752,39 @@ impl NativeToolExecutor {
                     .set_config(&path, value.clone())
                     .await
                     .map_err(ToolError::Invalid)?;
-                let warnings: Vec<String> =
+                let mut warnings: Vec<String> =
                     penelope_kernel::coherence::contradictions(&s.config.config())
                         .into_iter()
                         .filter(|c| c.concerns(&path))
                         .map(|c| c.message)
                         .collect();
+                let applied_value = if path == "sandbox.workspaces" {
+                    let stored = s.config.config().sandbox.workspaces.clone();
+                    let requested: Vec<&str> = match &value {
+                        Value::Array(items) => items.iter().filter_map(Value::as_str).collect(),
+                        Value::String(item) => vec![item],
+                        _ => Vec::new(),
+                    };
+                    for (asked, actual) in requested.iter().zip(&stored) {
+                        if asked != actual {
+                            warnings.push(format!(
+                                "workspace `{asked}` enregistré sous sa forme réelle `{actual}`"
+                            ));
+                        }
+                    }
+                    for root in &stored {
+                        if !s.platform.dirs.expand(root).exists() {
+                            warnings.push(format!("workspace `{root}` n'existe pas encore"));
+                        }
+                    }
+                    json!(stored)
+                } else {
+                    value
+                };
                 let (applied, note) = config_application_time(&path);
                 json!({
                     "path": path,
-                    "value": value,
+                    "value": applied_value,
                     "generation": generation,
                     "applied": applied,
                     "remarque": note,
@@ -1948,6 +1978,10 @@ pub(crate) fn lift_cd(args: &Value, workspaces: &[PathBuf]) -> Option<Value> {
 
 #[async_trait::async_trait]
 impl ToolExecutor for NativeToolExecutor {
+    fn policy_workspace(&self) -> Option<PathBuf> {
+        self.workspaces().into_iter().next()
+    }
+
     fn normalise_call(&self, name: &str, args: &Value) -> Option<Value> {
         let workspaces = self.workspaces();
         match name {
@@ -2543,6 +2577,50 @@ mod tests {
             .expect("le tour suivant voit le workspace sans autre action");
     }
 
+    #[tokio::test]
+    async fn config_set_reports_canonical_and_missing_workspaces() {
+        let (dir, mut x) = executor().await;
+        with_config_admin(&mut x);
+        let actual = dir.path().join("penelope");
+        let alias = dir.path().join("Penelope");
+        std::fs::create_dir(&actual).unwrap();
+        if std::fs::canonicalize(&alias).is_err() {
+            std::os::unix::fs::symlink(&actual, &alias).unwrap();
+        }
+        let changed = x
+            .execute(
+                "config_set",
+                &json!({"path": "sandbox.workspaces",
+                        "value": json!([alias.to_string_lossy()]).to_string()}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            changed.value["value"][0],
+            actual.canonicalize().unwrap().to_string_lossy().to_string()
+        );
+        assert!(
+            changed.value["avertissements"]
+                .to_string()
+                .contains("forme réelle")
+        );
+
+        let missing = dir.path().join("missing");
+        let changed = x
+            .execute(
+                "config_set",
+                &json!({"path": "sandbox.workspaces",
+                        "value": json!([missing.to_string_lossy()]).to_string()}),
+            )
+            .await
+            .unwrap();
+        assert!(
+            changed.value["avertissements"]
+                .to_string()
+                .contains("n'existe pas")
+        );
+    }
+
     /// #163 : un refus décrit les racines réellement lues, pas le snapshot du début du tour.
     #[tokio::test]
     async fn a_workspace_refusal_lists_the_live_roots() {
@@ -2564,7 +2642,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains(&live.to_string_lossy().to_string()),
+            error.contains(&live.canonicalize().unwrap().to_string_lossy().to_string()),
             "{error}"
         );
         assert!(
@@ -2733,18 +2811,32 @@ mod tests {
     async fn a_cd_into_a_workspace_becomes_the_cwd() {
         let (_dir, x) = executor().await;
         let ws = x.env.workspaces[0].clone();
+        let real_ws = ws.canonicalize().unwrap();
+        let alias = ws.with_file_name(ws.file_name().unwrap().to_string_lossy().to_uppercase());
+        if alias != ws && std::fs::canonicalize(&alias).is_ok() {
+            let lifted = x.normalise_call(
+                "shell_exec",
+                &json!({"command": format!("cd {} && pwd", alias.display())}),
+            );
+            assert_eq!(lifted.unwrap()["cwd"], json!(real_ws.to_string_lossy()));
+            let result = x
+                .execute("shell_exec", &json!({"command": "pwd", "cwd": alias}))
+                .await
+                .unwrap();
+            assert!(result.text.contains(&real_ws.to_string_lossy().to_string()));
+        }
         let line = format!("cd {} && grep -rn foo src", ws.display());
         let lifted = x
             .normalise_call("shell_exec", &json!({"command": line, "network": false}))
             .expect("relevé");
         assert_eq!(
             lifted,
-            json!({"command": "grep -rn foo src", "cwd": ws.to_string_lossy(), "network": false})
+            json!({"command": "grep -rn foo src", "cwd": real_ws.to_string_lossy(), "network": false})
         );
         let sub = x
             .normalise_call("shell_exec", &json!({"command": "cd app && ls"}))
             .expect("chemin relatif au workspace");
-        assert_eq!(sub["cwd"], json!(ws.join("app").to_string_lossy()));
+        assert_eq!(sub["cwd"], json!(real_ws.join("app").to_string_lossy()));
 
         let via = x
             .normalise_call(
@@ -2756,7 +2848,7 @@ mod tests {
         assert!(via.get("args_json").is_none(), "{via}");
         assert_eq!(
             effective_arguments("tool_call", &via)["cwd"],
-            json!(ws.to_string_lossy())
+            json!(real_ws.to_string_lossy())
         );
 
         for kept in [
