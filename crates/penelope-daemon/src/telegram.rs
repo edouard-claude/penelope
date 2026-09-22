@@ -12911,8 +12911,8 @@ mod tests {
         assert!(d.kv_get(&held_key(&first)).await.unwrap().is_none());
     }
 
-    /// #112 : deux tours en file dans A, bascule vers B : les tours de A s'exécutent en
-    /// fond, leurs réponses sont retenues puis délivrées au retour dans A ; A au-delà de
+    /// #112 et #161 : deux messages en file dans A, bascule vers B : A répond une fois
+    /// en fond, sa réponse est retenue puis délivrée au retour ; A au-delà de
     /// son plafond s'arrête sans toucher à B.
     #[tokio::test]
     async fn a_left_session_keeps_working_and_answers_on_return() {
@@ -12955,8 +12955,7 @@ mod tests {
             "{notice}"
         );
 
-        p.reply("rapport de fond");
-        p.reply("synthèse de fond");
+        p.reply("rapport et synthèse de fond");
         drain(&g).await;
         let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
         assert!(!sent.iter().any(|x| x.contains("de fond")), "{sent:?}");
@@ -12971,12 +12970,11 @@ mod tests {
         .unwrap();
         g.flush_outbox().await.unwrap();
         let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
-        for answer in ["rapport de fond", "synthèse de fond"] {
-            assert!(
-                sent.iter().any(|x| x.contains(answer)),
-                "{answer} : {sent:?}"
-            );
-        }
+        assert!(
+            sent.iter()
+                .any(|x| x.contains("rapport et synthèse de fond")),
+            "{sent:?}"
+        );
 
         // A en fond au-delà de son plafond de session : elle s'arrête, B répond.
         g.process_update(&updates::text_message(
@@ -13303,8 +13301,7 @@ mod tests {
             "{notice}"
         );
 
-        p.reply("réponse de fond 1");
-        p.reply("réponse de fond 2");
+        p.reply("réponse de fond 1 et 2");
         for i in 0..3 {
             p.reply(&format!("réponse {i}"));
             g.process_update(&updates::text_message(
@@ -13315,8 +13312,8 @@ mod tests {
             ))
             .await
             .unwrap();
+            drain(&g).await;
         }
-        drain(&g).await;
 
         let states = |sid: String| {
             let store = d.services.store.clone();
@@ -13335,7 +13332,7 @@ mod tests {
         };
         assert_eq!(
             states(first.clone()).await,
-            vec!["done", "done"],
+            vec!["done", "merged"],
             "exécutés en fond"
         );
         assert_eq!(states(fork.clone()).await, vec!["done", "done", "done"]);
