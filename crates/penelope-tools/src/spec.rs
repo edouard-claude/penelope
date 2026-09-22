@@ -930,13 +930,15 @@ pub fn all() -> Vec<ToolSpec> {
         spec(
             "config_set",
             RiskClass::Write,
-            "Modifie un réglage de ta propre configuration, appliqué à chaud : chemin \
-             pointé et valeur, par exemple `models.aliases.main` = \
-             `openrouter:z-ai/glm-5.3`, `models.routing.classifier` = `false`, \
-             `budget.daily_usd` = `30`. Lire d'abord `self_status` (section config). \
-             Jamais de secret : une clé se pose en SSH avec `penelope secret set`. \
-             Approbation du propriétaire requise, double pour le bac à sable, les \
-             providers et Telegram.",
+            "Modifie un réglage de sa propre configuration et indique son moment d'effet. \
+             Dès le prochain appel : `sandbox.workspaces`, les autres gardes du bac à \
+             sable, `tools.*`, `models.aliases.*`, `budget.*`. Au prochain tour : \
+             `owner.language`, `models.roles.chat_default`, `models.routing.*` ; les outils \
+             du tour gardent alors l'ancienne valeur. Au redémarrage : `store.path`, \
+             `rpc.socket`, `telegram.token` (ces secrets restent refusés ici). Lire d'abord \
+             `self_status` (section config). Jamais de secret : une clé se pose en SSH avec \
+             `penelope secret set`. Approbation du propriétaire requise, double pour le bac \
+             à sable, les providers et Telegram.",
             obj(
                 json!({
                     "path": {"type": "string", "description": "Chemin pointé, ex. `models.aliases.main`."},

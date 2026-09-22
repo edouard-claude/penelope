@@ -8,7 +8,7 @@ Dernière mise à jour : 20 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1642 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1645 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2482,6 +2482,21 @@ le compte qui a autorisé. Le bot user du manifeste n'est jamais utilisé.
 
 Reste ouvert dans l'issue : le `client_secret` optionnel, inutile tant que l'app active
 PKCE, et l'audit des deux entrées à jeton neuf de #155.
+
+### 0.17.43
+
+#### Les workspaces changent réellement au prochain appel (#163)
+
+`config_set sandbox.workspaces` disait « dès le prochain appel », mais l'exécuteur gardait
+les racines copiées au début du tour. Les résolutions de chemins, les `cwd`, les commandes
+`cd … && …` et `image_inspect` relisent désormais la génération vivante. Les racines propres
+à un workflow restent stables et une liste volontairement restreinte de sous-agent n'est
+jamais élargie.
+
+Le résultat de `config_set` distingue maintenant l'appel suivant, le tour suivant et le
+redémarrage. La référence des clés documente ces moments ; les refus de chemin citent les
+racines réellement utilisées. Trois tests couvrent le changement dans le même tour, le tour
+suivant, le message rendu et le maintien du cloisonnement.
 
 ### Routine de livraison
 
