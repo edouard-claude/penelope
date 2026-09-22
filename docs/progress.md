@@ -8,7 +8,7 @@ Dernière mise à jour : 22 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1704 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
+- **1709 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -26,7 +26,7 @@ Dernière mise à jour : 22 septembre 2026.
 | 3 | `context` (tuiles, ancres, niveaux 0 à 4, LCM) | fait | 73 |
 | 4 | `telegram` (transport, rendu, gabarits, CTA, formulaires) | fait, passerelle lancée par le daemon | 85 |
 | 5 | `hitl` + bac à sable + `tools` | fait | 16 hitl, 64 tools, 54 platform |
-| 6 | `mcp` (négociation, transports, primitives, OAuth, registre, supervision) | fait, superviseur et OAuth branchés | 96 + 19 conformité + 13 daemon |
+| 6 | `mcp` (négociation, transports, primitives, OAuth, registre, supervision) | fait, superviseur et OAuth branchés | 98 + 19 conformité + 16 daemon |
 | 7 | `memory` + `skills` | fait | 97 memory, 12 skills |
 | 8 | `workflow` + déclencheurs + workflows livrés | fait, ordonnanceur et pilote des runs lancés | 74 |
 | 9 | Routage par complexité, budgets, images, STT | fait, alimenté par Telegram (vocaux, photos, documents) | inclus en llm |
@@ -2598,6 +2598,21 @@ Les nouvelles règles sont bornées au schéma et à l'hôte ; `file://` ne cré
 règle durable. Le schéma de l'outil donne des exemples. Les tests couvrent les URLs,
 les chemins refusés avant lancement, la réutilisation d'un clone, un vrai clone local
 explicite, la migration et la portée des règles.
+
+### 0.17.50
+
+#### Les clients MCP OAuth confidentiels gardent leur secret hors configuration (#174)
+
+Une déclaration MCP peut référencer un `client_secret` par `${SECRET:nom}` ; toute valeur
+en clair et toute référence autre que le magasin de secrets sont refusées. La valeur est
+résolue seulement lors de l'échange du code et du rafraîchissement, puis enregistrée dans
+le rédacteur avant l'appel réseau. Les demandes et autorisations persistées ne conservent
+que la référence.
+
+Pénélope lit `token_endpoint_auth_methods_supported`, prend en charge
+`client_secret_basic` et `client_secret_post`, et conserve le client public PKCE par
+défaut. Les tests simulent les deux méthodes, l'échange, le rafraîchissement et vérifient
+que la valeur du secret n'est pas persistée.
 
 ### Routine de livraison
 

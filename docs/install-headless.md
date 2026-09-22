@@ -1303,6 +1303,21 @@ REDMINE_API_KEY = "${SECRET:redmine_api_key}"
 delete_issue = "deny"
 ```
 
+Pour un serveur HTTP dont le client OAuth pré-enregistré est confidentiel, la
+configuration ne contient que la référence au secret :
+
+```toml
+transport = "http"
+url = "https://mcp.exemple.fr/mcp"
+client_id = "penelope"
+client_secret = "${SECRET:mcp_exemple_client_secret}"
+```
+
+La valeur se pose séparément avec
+`penelope secret set mcp_exemple_client_secret`. Pénélope accepte
+`client_secret_basic` et `client_secret_post` selon les métadonnées du serveur
+d'autorisation.
+
 Le daemon lit `mcp.d` au démarrage puis dès qu'un fichier change (quelques secondes). Un
 serveur dont les outils sont inconnus est lancé une fois pour les lister ; ensuite, il ne
 démarre qu'au premier appel et s'arrête après `idle_timeout` d'inactivité. Une panne est

@@ -253,6 +253,23 @@ des portées manquantes annoncées par le défi 401, et à défaut de `scopes_su
 ressource protégée (RFC 9728). Ce dernier recours évite une demande sans portée, que
 certains serveurs refusent.
 
+### Client confidentiel
+
+Un serveur d'autorisation peut imposer un secret au client pré-enregistré. Sa valeur ne
+doit jamais être écrite dans `mcp.d` : seule une référence au magasin de secrets y figure.
+
+```bash
+penelope secret set mon_mcp_client_secret
+penelope mcp edit mon-serveur client_id <identifiant>
+penelope mcp edit mon-serveur client_secret '${SECRET:mon_mcp_client_secret}'
+```
+
+Pénélope suit `token_endpoint_auth_methods_supported` et prend en charge
+`client_secret_basic` et `client_secret_post`, à l'échange du code comme au
+rafraîchissement. Sans `client_secret`, le client public PKCE reste le comportement par
+défaut. Si la propriété de métadonnées manque pour un client confidentiel,
+`client_secret_basic` est utilisé conformément à RFC 8414.
+
 ### Client pré-enregistré : Slack
 
 `mcp.slack.com` n'offre ni CIMD ni enregistrement dynamique, et n'accepte que les apps
