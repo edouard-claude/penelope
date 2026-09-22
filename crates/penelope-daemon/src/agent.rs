@@ -301,6 +301,11 @@ pub trait ToolExecutor {
         None
     }
 
+    /// Racine pour les motifs de chemins relatifs des règles d'approbation.
+    fn policy_workspace(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
     /// Risque et nom effectif d'un appel. Par défaut : le catalogue natif.
     async fn describe_call(&self, name: &str, args: &Value) -> CallInfo {
         let _ = args;
@@ -1333,9 +1338,10 @@ impl AgentLoop {
                     // « Toujours » couvrirait l'outil entier.
                     let effective_args =
                         crate::executor::effective_arguments(&call.name, &call.arguments);
+                    let policy_workspace = execute.policy_workspace();
                     let mut verdict = s
                         .policies
-                        .evaluate(
+                        .evaluate_in(
                             &cfg.mcp.policy,
                             &info.effective_name,
                             server_of(&info.effective_name).as_deref(),
@@ -1343,6 +1349,7 @@ impl AgentLoop {
                             info.risk,
                             spec.run_id.as_deref(),
                             Some(&spec.session_id),
+                            policy_workspace.as_deref(),
                         )
                         .await?;
                     // La déclaration du serveur MCP peut imposer sa politique à un outil :

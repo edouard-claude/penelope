@@ -16,6 +16,7 @@ use penelope_store::Store;
 use penelope_store::rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -72,6 +73,16 @@ pub struct PolicyRule {
 impl PolicyRule {
     /// Vrai si la règle s'applique à cet appel.
     pub fn matches(&self, tool: &str, server: Option<&str>, args: &Value) -> bool {
+        self.matches_in(tool, server, args, None)
+    }
+
+    fn matches_in(
+        &self,
+        tool: &str,
+        server: Option<&str>,
+        args: &Value,
+        workspace: Option<&Path>,
+    ) -> bool {
         if let Some(t) = &self.tool
             && t != tool
         {
@@ -83,7 +94,7 @@ impl PolicyRule {
             return false;
         }
         if let Some(pattern) = &self.arg_match
-            && !args_match(pattern, args)
+            && !args_match_in(pattern, args, workspace)
         {
             return false;
         }
@@ -121,7 +132,7 @@ impl PolicyRule {
 ///   (`;`, `&&`, `|`, `$(…)`, redirection, retour à la ligne), et à la frontière d'un mot ;
 /// - [`PATH_PREFIX_OP`] : répertoire, comparé sur le chemin normalisé (`..` résolu) ;
 /// - [`ORIGIN_OP`] : schéma et hôte **exacts** d'une URL, jamais un préfixe de texte.
-fn args_match(pattern: &Value, args: &Value) -> bool {
+fn args_match_in(pattern: &Value, args: &Value, workspace: Option<&Path>) -> bool {
     if let Value::Object(p) = pattern
         && p.len() == 1
         && let Some((op, Value::String(expected))) = p.iter().next()
@@ -129,14 +140,14 @@ fn args_match(pattern: &Value, args: &Value) -> bool {
         let candidate = args.as_str().unwrap_or_default();
         match op.as_str() {
             CMD_PREFIX_OP => return command_matches(expected, candidate),
-            PATH_PREFIX_OP => return path_matches(expected, candidate),
+            PATH_PREFIX_OP => return path_matches_in(expected, candidate, workspace),
             ORIGIN_OP => return origin_of(candidate).as_deref() == Some(expected.as_str()),
             _ => {}
         }
     }
     match (pattern, args) {
         (Value::Object(p), Value::Object(a)) => p.iter().all(|(k, v)| match a.get(k) {
-            Some(av) => args_match(v, av),
+            Some(av) => args_match_in(v, av, workspace),
             None => false,
         }),
         (p, a) => p == a,
@@ -186,7 +197,47 @@ fn separable_steps(args: &Value) -> Option<Vec<crate::cmdline::Pipeline>> {
     (list.steps.len() >= 2).then_some(list.steps)
 }
 
+#[cfg(test)]
 fn path_matches(prefix: &str, candidate: &str) -> bool {
+    path_matches_in(prefix, candidate, None)
+}
+
+fn path_matches_in(prefix: &str, candidate: &str, workspace: Option<&Path>) -> bool {
+    if (Path::new(prefix).is_absolute() && Path::new(candidate).is_absolute())
+        || workspace.is_some()
+    {
+        let resolve = |path: &str| -> Option<PathBuf> {
+            let base = if Path::new(path).is_absolute() {
+                PathBuf::from("/")
+            } else {
+                std::fs::canonicalize(workspace?).ok()?
+            };
+            let mut out = base;
+            for component in Path::new(path).components() {
+                match component {
+                    Component::RootDir | Component::CurDir => {}
+                    Component::ParentDir => {
+                        out.pop();
+                    }
+                    Component::Normal(part) => {
+                        out.push(part);
+                        if let Ok(real) = std::fs::canonicalize(&out) {
+                            out = real;
+                        }
+                    }
+                    Component::Prefix(_) => return None,
+                }
+            }
+            Some(out)
+        };
+        if let (Some(want), Some(got)) = (resolve(prefix), resolve(candidate)) {
+            if prefix.is_empty() {
+                return got.parent() == Some(want.as_path());
+            }
+            return got.starts_with(&want);
+        }
+        return false;
+    }
     // `src/../../etc/passwd` commence textuellement par `src/` : la comparaison se fait
     // sur le chemin normalisé, jamais sur le texte brut.
     let norm = normalise_text(candidate);
@@ -301,6 +352,23 @@ impl PolicyEngine {
         run_id: Option<&str>,
         session_id: Option<&str>,
     ) -> penelope_store::Result<Verdict> {
+        self.evaluate_in(cfg, tool, server, args, risk, run_id, session_id, None)
+            .await
+    }
+
+    /// Évalue les chemins relatifs dans le workspace effectif de l'appel.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn evaluate_in(
+        &self,
+        cfg: &penelope_kernel::config::McpPolicy,
+        tool: &str,
+        server: Option<&str>,
+        args: &Value,
+        risk: RiskClass,
+        run_id: Option<&str>,
+        session_id: Option<&str>,
+        workspace: Option<&Path>,
+    ) -> penelope_store::Result<Verdict> {
         let rules = self.active_rules().await?;
         // Une liste `a && b` n'est couverte par aucune règle seule : elle l'est quand
         // **chaque** étape l'est (issue #150). Les étapes sont jugées une par une, avec
@@ -316,7 +384,7 @@ impl PolicyEngine {
         }
         let mut best: Option<&PolicyRule> = None;
         for r in &rules {
-            if !r.matches(tool, server, args) {
+            if !r.matches_in(tool, server, args, workspace) {
                 continue;
             }
             if !r.in_window(run_id, session_id) {
@@ -647,6 +715,76 @@ mod tests {
     use penelope_kernel::config::McpPolicy;
     use serde_json::json;
     use std::sync::Arc;
+
+    #[test]
+    fn path_rule_uses_workspace_filesystem_case_and_refuses_symlink_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("workspace");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/a.rs"), "x").unwrap();
+        let alias = root.join("Src/a.rs");
+        let same_file = std::fs::canonicalize(&alias).is_ok();
+        assert_eq!(path_matches_in("src/", "Src/a.rs", Some(&root)), same_file);
+        assert!(path_matches_in("src/", "src/a.rs", Some(&root)));
+        assert!(path_matches_in("", "a.rs", Some(&root)));
+        assert!(!path_matches_in("", "src/a.rs", Some(&root)));
+        assert!(!path_matches_in("src/", "src/../../outside", Some(&root)));
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.path(), root.join("src/link")).unwrap();
+            assert!(!path_matches_in("src/", "src/link/outside", Some(&root)));
+        }
+    }
+
+    #[tokio::test]
+    async fn evaluation_resolves_relative_path_rule_in_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("workspace");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/a.rs"), "x").unwrap();
+        let engine = engine();
+        engine
+            .create_rule(
+                RuleScope::Tool,
+                Some("fs_write"),
+                None,
+                Some(json!({"path": {PATH_PREFIX_OP: "src/"}})),
+                PolicyDecision::Auto,
+                PolicyWindow::Always,
+                None,
+            )
+            .await
+            .unwrap();
+        let cfg = McpPolicy::default();
+        let verdict = |path: &'static str| {
+            let engine = &engine;
+            let cfg = &cfg;
+            let root = &root;
+            async move {
+                engine
+                    .evaluate_in(
+                        cfg,
+                        "fs_write",
+                        None,
+                        &json!({"path": path}),
+                        RiskClass::Write,
+                        None,
+                        None,
+                        Some(root),
+                    )
+                    .await
+                    .unwrap()
+                    .decision
+            }
+        };
+        let alias_is_real = std::fs::canonicalize(root.join("Src/a.rs")).is_ok();
+        assert_eq!(
+            verdict("Src/a.rs").await == PolicyDecision::Auto,
+            alias_is_real
+        );
+        assert_eq!(verdict("src/a.rs").await, PolicyDecision::Auto);
+        assert_ne!(verdict("src/../../outside").await, PolicyDecision::Auto);
+    }
 
     fn engine() -> PolicyEngine {
         PolicyEngine::new(

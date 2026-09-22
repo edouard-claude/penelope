@@ -2116,7 +2116,7 @@ mod tests {
         assert_eq!(a.payload["arguments"]["command"], "make check");
         assert_eq!(
             a.payload["arguments"]["cwd"],
-            json!(ws.to_string_lossy()),
+            json!(ws.canonicalize().unwrap().to_string_lossy()),
             "{}",
             a.payload
         );

@@ -8,7 +8,7 @@ Dernière mise à jour : 22 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1652 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1671 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2530,6 +2530,19 @@ la même résolution. Les raisons de refus sont isolées par sujet ; une carte d
 incertain renvoyée après redémarrage retrouve aussi l'origine du run. Deux tests couvrent
 le clic après redémarrage, deux sujets du même groupe, les décisions répétées et les
 cartes de budget et d'effet incertain.
+
+### 0.17.46
+
+#### Les workspaces suivent la casse réelle du volume (#164)
+
+Les racines existantes de `sandbox.workspaces` sont canonicalisées au chargement et à
+l'enregistrement. `config_set` rend la valeur enregistrée et avertit quand elle diffère
+de la demande ou quand le répertoire n'existe pas. La garde des fichiers compare les
+chemins réels, y compris pour un fichier à créer ; un lien symbolique sortant reste refusé.
+
+Le `cwd` du shell, le relèvement de `cd … && …` et les règles `$path_prefix` utilisent
+la même résolution. Les tests exercent un alias de casse selon le système de fichiers,
+un volume sensible à la casse, la persistance de la configuration et un lien sortant.
 
 ### Routine de livraison
 

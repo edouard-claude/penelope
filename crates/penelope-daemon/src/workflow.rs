@@ -1764,7 +1764,7 @@ async fn tool_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         None => {
             let verdict = s
                 .policies
-                .evaluate(
+                .evaluate_in(
                     &cfg.mcp.policy,
                     &info.effective_name,
                     crate::agent::server_of(&info.effective_name).as_deref(),
@@ -1772,6 +1772,7 @@ async fn tool_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
                     info.risk,
                     Some(&ctx.run.id),
                     Some(&ctx.run.session_id),
+                    Some(&ctx.workdir()),
                 )
                 .await?;
             let decision = match info.policy {
