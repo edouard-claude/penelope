@@ -182,6 +182,10 @@ pub struct ToolEnv {
 pub struct NativeToolExecutor {
     pub services: Arc<Services>,
     pub env: ToolEnv,
+    /// Racines de configuration présentes à la construction du tour. Elles sont remplacées
+    /// par la génération vivante à chaque appel ; les racines propres au contexte (workdir
+    /// d'un workflow, par exemple) restent stables.
+    configured_workspaces_at_start: Vec<PathBuf>,
     pub http: reqwest::Client,
     pub locks: Arc<penelope_tools::fs::FileLocks>,
     pub messenger: Option<Arc<dyn Messenger>>,
@@ -336,6 +340,27 @@ pub fn default_workspaces(s: &Services) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Moment promis par `config_set`. La configuration est publiée immédiatement, mais les
+/// choix collants d'un tour ne sont pas recalculés au milieu de celui-ci (#163).
+fn config_application_time(path: &str) -> (&'static str, Option<&'static str>) {
+    if penelope_kernel::config::restart_allowed(path) {
+        return (
+            "au redémarrage",
+            Some("ce réglage ne modifie pas le processus déjà démarré"),
+        );
+    }
+    if path == "owner.language"
+        || path == "models.roles.chat_default"
+        || path.starts_with("models.routing.")
+    {
+        return (
+            "au prochain tour",
+            Some("les outils de ce tour gardent l'ancienne valeur"),
+        );
+    }
+    ("à chaud, dès le prochain appel", None)
+}
+
 impl NativeToolExecutor {
     /// Conversation à qui rendre une élicitation née de cet appel (issue #143) : celle
     /// du tour, quand il vient de Telegram ; sinon rien, et le canal choisit son repli.
@@ -352,9 +377,11 @@ impl NativeToolExecutor {
     }
 
     pub fn new(services: Arc<Services>, env: ToolEnv) -> Self {
+        let configured_workspaces_at_start = default_workspaces(&services);
         NativeToolExecutor {
             services,
             env,
+            configured_workspaces_at_start,
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(60))
                 // Aucune redirection suivie par le client : `http::fetch` les suit lui-même pour
@@ -371,22 +398,49 @@ impl NativeToolExecutor {
         }
     }
 
-    fn workspace(&self) -> PathBuf {
-        self.env
+    /// Racines réellement autorisées pour cet appel : les racines propres au contexte restent
+    /// en tête, celles issues de `sandbox.workspaces` suivent la configuration vivante (#163).
+    fn workspaces(&self) -> Vec<PathBuf> {
+        let follows_config = self
+            .env
             .workspaces
-            .first()
+            .iter()
+            .any(|root| self.configured_workspaces_at_start.contains(root));
+        if !follows_config {
+            // Un sous-agent peut recevoir une liste volontairement restreinte : ne jamais
+            // l'élargir avec les workspaces généraux de la configuration.
+            return self.env.workspaces.clone();
+        }
+        let mut roots: Vec<PathBuf> = self
+            .env
+            .workspaces
+            .iter()
+            .filter(|root| !self.configured_workspaces_at_start.contains(root))
             .cloned()
+            .collect();
+        for root in default_workspaces(&self.services) {
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+        roots
+    }
+
+    fn workspace(&self) -> PathBuf {
+        self.workspaces()
+            .into_iter()
+            .next()
             .unwrap_or_else(std::env::temp_dir)
     }
 
     fn path_arg(&self, args: &Value, key: &str) -> ToolResult<PathBuf> {
         let raw = str_arg(args, key)?;
-        penelope_tools::fs::resolve(&raw, &self.env.workspaces)
+        penelope_tools::fs::resolve(&raw, &self.workspaces())
     }
 
     fn cwd_arg(&self, args: &Value) -> ToolResult<PathBuf> {
         match args.get("cwd").and_then(|v| v.as_str()) {
-            Some(c) if !c.is_empty() => penelope_tools::fs::resolve(c, &self.env.workspaces),
+            Some(c) if !c.is_empty() => penelope_tools::fs::resolve(c, &self.workspaces()),
             _ => Ok(self.workspace()),
         }
     }
@@ -459,9 +513,7 @@ impl NativeToolExecutor {
             }
             "fs_search" => {
                 let root = match args.get("path").and_then(|v| v.as_str()) {
-                    Some(p) if !p.is_empty() => {
-                        penelope_tools::fs::resolve(p, &self.env.workspaces)?
-                    }
+                    Some(p) if !p.is_empty() => penelope_tools::fs::resolve(p, &self.workspaces())?,
                     _ => self.workspace(),
                 };
                 let pattern = str_arg(args, "pattern")?;
@@ -699,11 +751,13 @@ impl NativeToolExecutor {
                         .filter(|c| c.concerns(&path))
                         .map(|c| c.message)
                         .collect();
+                let (applied, note) = config_application_time(&path);
                 json!({
                     "path": path,
                     "value": value,
                     "generation": generation,
-                    "applied": "à chaud, dès le prochain appel",
+                    "applied": applied,
+                    "remarque": note,
                     "avertissements": warnings,
                 })
             }
@@ -1382,7 +1436,7 @@ impl NativeToolExecutor {
                         ToolError::Invalid("`mode` : describe, read ou locate".into())
                     })?;
                 // Une photo reçue vit dans `{data}/media/photos`, hors des workspaces.
-                let mut roots = self.env.workspaces.clone();
+                let mut roots = self.workspaces();
                 roots.push(penelope_platform::sandbox::normalise(
                     &s.platform.dirs.data().join("media").join("photos"),
                 ));
@@ -1895,11 +1949,12 @@ pub(crate) fn lift_cd(args: &Value, workspaces: &[PathBuf]) -> Option<Value> {
 #[async_trait::async_trait]
 impl ToolExecutor for NativeToolExecutor {
     fn normalise_call(&self, name: &str, args: &Value) -> Option<Value> {
+        let workspaces = self.workspaces();
         match name {
-            "shell_exec" => lift_cd(args, &self.env.workspaces),
+            "shell_exec" => lift_cd(args, &workspaces),
             // Par `tool_call`, l'appel interne ; `args_json` cède la place à l'objet.
             "tool_call" if args.get("name").and_then(|v| v.as_str()) == Some("shell_exec") => {
-                let inner = lift_cd(&call_arguments(args).ok()?, &self.env.workspaces)?;
+                let inner = lift_cd(&call_arguments(args).ok()?, &workspaces)?;
                 let mut out = args.as_object()?.clone();
                 out.remove("args_json");
                 out.insert("args".into(), inner);
@@ -2364,6 +2419,12 @@ mod tests {
         );
         let ws = dir.path().join("ws");
         std::fs::create_dir_all(&ws).unwrap();
+        s.config
+            .mutate("test", |cfg| {
+                cfg.sandbox.workspaces = vec![ws.to_string_lossy().into_owned()];
+                Ok(vec!["sandbox.workspaces".into()])
+            })
+            .unwrap();
         let env = ToolEnv {
             session_id: "s1".into(),
             run_id: None,
@@ -2373,6 +2434,190 @@ mod tests {
             turn_model: None,
         };
         (dir, NativeToolExecutor::new(s, env))
+    }
+
+    struct TestConfigAdmin {
+        config: Arc<penelope_kernel::config::ConfigStore>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::selfknow::Admin for TestConfigAdmin {
+        fn uptime_s(&self) -> u64 {
+            0
+        }
+
+        async fn set_config(&self, path: &str, value: Value) -> Result<u64, String> {
+            let generation = self
+                .config
+                .mutate("test", |cfg| {
+                    match path {
+                        "sandbox.workspaces" => {
+                            cfg.sandbox.workspaces = serde_json::from_value(value)
+                                .map_err(penelope_kernel::KernelError::Json)?;
+                        }
+                        "models.aliases.main" => {
+                            cfg.models.aliases.insert(
+                                "main".into(),
+                                value
+                                    .as_str()
+                                    .ok_or_else(|| {
+                                        penelope_kernel::KernelError::config(
+                                            "models.aliases.main attend une chaîne",
+                                        )
+                                    })?
+                                    .to_string(),
+                            );
+                        }
+                        _ => {
+                            return Err(penelope_kernel::KernelError::config(format!(
+                                "chemin de test inconnu : {path}"
+                            )));
+                        }
+                    }
+                    Ok(vec![path.to_string()])
+                })
+                .map_err(|e| e.to_string())?;
+            Ok(generation.generation)
+        }
+    }
+
+    fn with_config_admin(x: &mut NativeToolExecutor) {
+        x.admin = Some(Arc::new(TestConfigAdmin {
+            config: x.services.config.clone(),
+        }));
+    }
+
+    /// #163 : une modification des workspaces prend effet pour les outils suivants du même
+    /// tour, y compris la normalisation du shell ; un nouveau tour n'a rien à recharger.
+    #[tokio::test]
+    async fn config_set_workspaces_applies_to_the_next_tool_call_and_turn() {
+        let (dir, mut x) = executor().await;
+        with_config_admin(&mut x);
+        let added = dir.path().join("added-workspace");
+        std::fs::create_dir_all(&added).unwrap();
+        std::fs::write(added.join("visible.txt"), "ok").unwrap();
+
+        let changed = x
+            .execute(
+                "config_set",
+                &json!({
+                    "path": "sandbox.workspaces",
+                    "value": json!([added.to_string_lossy()]).to_string(),
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(changed.value["applied"], "à chaud, dès le prochain appel");
+
+        let listed = x
+            .execute("fs_list", &json!({"path": added}))
+            .await
+            .expect("le nouvel espace est visible dans le même tour");
+        assert!(listed.text.contains("visible.txt"), "{}", listed.text);
+        let shell = x
+            .execute("shell_exec", &json!({"command": "pwd", "cwd": added}))
+            .await
+            .expect("le nouvel espace est accepté comme cwd dans le même tour");
+        assert!(shell.text.contains("added-workspace"), "{}", shell.text);
+
+        let line = format!("cd {} && pwd", added.display());
+        assert!(
+            x.normalise_call("shell_exec", &json!({"command": line}))
+                .is_some(),
+            "la normalisation relit les workspaces vivants"
+        );
+
+        let next = NativeToolExecutor::new(
+            x.services.clone(),
+            ToolEnv {
+                session_id: "s2".into(),
+                run_id: None,
+                origin: Origin::Cli,
+                workspaces: default_workspaces(&x.services),
+                in_workflow: false,
+                turn_model: None,
+            },
+        );
+        next.execute("fs_read", &json!({"path": added.join("visible.txt")}))
+            .await
+            .expect("le tour suivant voit le workspace sans autre action");
+    }
+
+    /// #163 : un refus décrit les racines réellement lues, pas le snapshot du début du tour.
+    #[tokio::test]
+    async fn a_workspace_refusal_lists_the_live_roots() {
+        let (dir, x) = executor().await;
+        let old = x.env.workspaces[0].clone();
+        let live = dir.path().join("live-workspace");
+        std::fs::create_dir_all(&live).unwrap();
+        x.services
+            .config
+            .mutate("test", |cfg| {
+                cfg.sandbox.workspaces = vec![live.to_string_lossy().into_owned()];
+                Ok(vec!["sandbox.workspaces".into()])
+            })
+            .unwrap();
+
+        let error = x
+            .execute("fs_read", &json!({"path": dir.path().join("outside.txt")}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(&live.to_string_lossy().to_string()),
+            "{error}"
+        );
+        assert!(
+            !error.contains(&old.to_string_lossy().to_string()),
+            "{error}"
+        );
+
+        let restricted = dir.path().join("restricted-agent");
+        std::fs::create_dir_all(&restricted).unwrap();
+        let restricted_executor = NativeToolExecutor::new(
+            x.services.clone(),
+            ToolEnv {
+                session_id: "restricted".into(),
+                run_id: None,
+                origin: Origin::Cli,
+                workspaces: vec![restricted],
+                in_workflow: false,
+                turn_model: None,
+            },
+        );
+        restricted_executor
+            .execute("fs_list", &json!({"path": live}))
+            .await
+            .expect_err("une liste restreinte ne s'élargit pas aux workspaces généraux");
+    }
+
+    /// #163 : les réglages réellement dynamiques gardent leur promesse au prochain appel.
+    #[tokio::test]
+    async fn config_set_reports_the_actual_application_time() {
+        let (_dir, mut x) = executor().await;
+        with_config_admin(&mut x);
+        let changed = x
+            .execute(
+                "config_set",
+                &json!({
+                    "path": "models.aliases.main",
+                    "value": "openrouter:z-ai/glm-5.3",
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(changed.value["applied"], "à chaud, dès le prochain appel");
+        assert_eq!(
+            config_application_time("models.routing.classifier"),
+            (
+                "au prochain tour",
+                Some("les outils de ce tour gardent l'ancienne valeur")
+            )
+        );
+        assert_eq!(
+            config_application_time("telegram.token").0,
+            "au redémarrage"
+        );
     }
 
     /// #137 : le contrat des critères. `label` devient `text`, un statut manquant vaut

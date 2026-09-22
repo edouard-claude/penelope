@@ -209,8 +209,20 @@ daily_usd = 20.0
 session_usd = 5.0
 ```
 
-Une modification est publiée à chaud, comme une génération immuable : les tours déjà
-commencés gardent l'instantané qu'ils ont lu, les suivants prennent la nouvelle.
+Une modification est publiée comme une génération immuable. Les consommateurs relisent la
+valeur au moment indiqué ci-dessous : un tour garde seulement ses choix collants (modèle et
+routage déjà choisis), pas les gardes des outils.
+
+| Clés acceptées par `config_set` | Effet | Garantie |
+|---|---|---|
+| `sandbox.workspaces`, `sandbox.default_profile`, `sandbox.shell_network`, `sandbox.deny_read` | appel suivant | Les chemins, le profil, le réseau et les lectures interdites sont recalculés avant chaque outil. |
+| `tools.*`, `models.aliases.*`, `models.roles.*` hors `chat_default`, `budget.*`, autres clés lues par leur sous-système | appel suivant | La génération publiée est lue au prochain appel concerné ; un appel déjà parti n'est pas interrompu. |
+| `owner.language`, `models.roles.chat_default`, `models.routing.*` | tour suivant | Le résultat dit `au prochain tour` et précise que les outils du tour gardent l'ancienne valeur. |
+| `store.path`, `rpc.socket`, `telegram.token` | redémarrage | Seuls chemins autorisés à demander un redémarrage ; les secrets et l'identité restent refusés par `config_set`. |
+
+`config_set` rend ce moment dans `applied`. Pour `sandbox.workspaces`, le nouvel espace est
+donc utilisable par `fs_*`, `git_*`, `shell_exec` et `image_inspect` dès l'appel suivant du
+même tour. Le modèle déjà choisi pour le tour ne change jamais au milieu de sa réponse.
 
 **Le fichier reste le vôtre.** `config.toml` ne porte que les clés qui s'écartent des
 valeurs par défaut, et `penelope config set`, `/model` ou un réglage fait depuis Telegram
@@ -1204,7 +1216,7 @@ et `/stop` interrompt tout le lot.
 |---|---|---|
 | `artifact_read` | read | Lecture paginée d'un artefact ; le curseur n'avance que des octets renvoyés. |
 | `ask_user` | read | Pose une question au propriétaire et attend sa réponse. |
-| `config_set` | write | Modifie un réglage de ta propre configuration, appliqué à chaud : chemin pointé et valeur, par exemple `models.aliases.main` = `openrouter:z-ai/glm-5.3`, `models.routing.classifier` = `false`, `budget.daily_usd` = `30`. (à la demande) |
+| `config_set` | write | Modifie un réglage de sa propre configuration et indique son moment d'effet. (à la demande) |
 | `fs_edit` | write | Remplace une portion exacte d'un fichier. |
 | `fs_list` | read | Liste le contenu d'un répertoire du workspace. |
 | `fs_read` | read | Lit un fichier du workspace autorisé, avec pagination par lignes. |
