@@ -12,8 +12,8 @@ peut relire et corriger à la main, appelle des serveurs MCP, exécute des workf
 survivent à un redémarrage, et demande l'accord de son propriétaire avant tout ce qui
 engage.
 
-Rust, 17 crates, `#![forbid(unsafe_code)]` dans chacun, 1540 tests qui ne touchent pas
-au réseau.
+Rust, 17 crates, `#![forbid(unsafe_code)]` dans chacun, 1682 tests verts hors
+réseau externe.
 
 ## Pourquoi celle-ci
 
@@ -68,6 +68,8 @@ par un ledger avant exécution ; un effet dont l'issue est incertaine devient un
 question posée au propriétaire, jamais une relance automatique. Un run de workflow écrit
 son étape courante, ses sorties et son journal dans la même transaction, et reprend à
 cette étape après un redémarrage. Le tour interrompu est remis en file une seule fois.
+Le [flux runtime](docs/runtime-events.md) permet à un observateur local authentifié de
+suivre ces événements en direct et de les rejouer depuis un identifiant durable.
 
 ### Une autorisation a des bornes
 
@@ -234,7 +236,7 @@ penelope-platform            penelope-observe ├──► penelope-mcp     ├�
   appel shell, un signal Unix ou une API Keychain ailleurs fait échouer le test
   d'architecture.
 - Le client MCP, le client Bot API, le validateur JSON Schema, la recherche vectorielle
-  et la surveillance de fichiers sont écrits ici : 31 dépendances directes, aucun
+  et la surveillance de fichiers sont écrits ici : aucun
   framework d'agent, aucune bibliothèque C ajoutée.
 - Chaque écart assumé par rapport à la spécification est un fichier de
   [docs/decisions/](docs/decisions/), avec son contexte, ses conséquences et parfois son
@@ -246,9 +248,9 @@ penelope-platform            penelope-observe ├──► penelope-mcp     ├�
 cargo test --workspace
 ```
 
-1540 tests, aucun ne touche au réseau, donc la CI n'a besoin d'aucun secret. Les suites
-nommées sont des filtres sur cette même commande, ce qui évite qu'un chemin de test
-diverge de l'autre.
+Les 1682 tests verts, y compris ceux du WebSocket local, n'ont besoin d'aucun
+secret en CI. Les suites nommées sont des filtres sur cette même commande, ce qui évite
+qu'un chemin de test diverge de l'autre.
 
 ```bash
 cargo test -p penelope-evals --test mcp_conformance
@@ -282,6 +284,7 @@ cargo deny check
 - [docs/mcp.md](docs/mcp.md) : versions, transports, OAuth, registre paresseux.
 - [docs/workflows.md](docs/workflows.md) : schéma complet et cycle de vie d'un run.
 - [docs/telegram.md](docs/telegram.md) : commandes, gabarits, rendu.
+- [docs/runtime-events.md](docs/runtime-events.md) : flux runtime local, replay et démonstration Pathlayer.
 - [docs/ca-matrix.md](docs/ca-matrix.md) : critères d'acceptation et tests qui les
   couvrent.
 - [docs/progress.md](docs/progress.md) : avancement, décisions, reste à faire.
