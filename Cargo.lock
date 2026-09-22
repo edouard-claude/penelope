@@ -1270,7 +1270,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-archtest"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "regex",
  "tempfile",
@@ -1280,7 +1280,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-cli"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1305,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-context"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "chrono",
  "penelope-kernel",
@@ -1324,7 +1324,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-daemon"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1362,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-evals"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "anyhow",
  "base64",
@@ -1394,7 +1394,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-hitl"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "chrono",
  "penelope-kernel",
@@ -1411,7 +1411,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-kernel"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1433,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-llm"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1456,7 +1456,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-mcp"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "async-trait",
  "base64",
@@ -1483,7 +1483,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-memory"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1507,7 +1507,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-observe"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "chrono",
  "regex",
@@ -1522,7 +1522,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-platform"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "argon2",
  "async-trait",
@@ -1541,7 +1541,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-skills"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "chrono",
  "flate2",
@@ -1561,7 +1561,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-store"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "rusqlite",
  "serde",
@@ -1574,7 +1574,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-telegram"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1599,7 +1599,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-tools"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1628,7 +1628,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-workflow"
-version = "0.17.50"
+version = "0.17.51"
 dependencies = [
  "chrono",
  "chrono-tz",
