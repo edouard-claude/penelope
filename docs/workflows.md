@@ -162,7 +162,7 @@ par identifiant.
 | `parallel` | `children` (non vide), `maxConcurrency` | Plusieurs enfants en parallèle |
 | `workflow` | `workflowId` (obligatoire), `params` | Un sous-workflow, profondeur bornée |
 | `wait` | `on` | Attend un événement, un cron, un délai ou une tâche MCP |
-| `verify` | `verifier` ou `checks`, `criteriaKey` | Vérifications mécaniques puis jugement du modèle ; un contrôle `{"type": "project_tests"}` lance les tests du projet déclaré (`session_metadata.project` : `dir`, `test_command`), sinon ceux déduits du dépôt |
+| `verify` | `verifier` ou `checks`, `criteriaKey` | Vérifications mécaniques puis jugement du modèle ; `project_tests` relit la commande validée dans `session_metadata.verification`, sinon celle de `project` |
 
 Les enfants d'un `parallel` sont limités à `sub_agent`, `shell` et `tool` : un `agent` ou
 un `user` en parallèle rendrait la conversation incompréhensible.
@@ -357,6 +357,19 @@ n'écrit que l'état de la session et passe sans approbation, comme `session_not
 entry=`{"dir": "<dépôt>", "test_command": "<commande>"}`. Son `verify` lance cette
 commande dans ce répertoire ; sans elle, la cible `make test`, sinon `cargo test`, `npm
 test` ou `go test ./...` selon le dépôt. `review` reste écrit pour un dépôt Rust.
+
+Pendant `build`, l'agent pose ou actualise `session_metadata.verification` avec `dir`,
+`test_command` (la commande **effectivement validée**, prérequis PATH ou `ulimit`
+explicites), `prerequisites` et `evidence` : liste de `{kind, ref, sha}`. Les preuves
+`pr` et `ci` portent le SHA de la révision contrôlée. Les références de TDD portent un
+artefact ou un chemin lisible. Le contrat persiste avec la session en cas de redémarrage ;
+il ne contient pas d'environnement complet ni de secrets. Le vérificateur reçoit
+l'objectif, les critères, ce contrat, les sorties des contrôles et les règles
+`AGENTS.md`/`CLAUDE.md` du dépôt. Il consulte les preuves et peut les contester ; un
+SHA périmé est refusé avant son jugement. Les tests passent par `shell_exec` avec ses
+politiques d'approbation et son bac à sable. Le résultat distingue `prerequisite_missing`,
+`evidence_missing`, `stale_evidence`, `test_failed` et `criterion_failed`, afin que la
+boucle `build` corrige la bonne cause.
 
 `ticket-to-deploy` enchaîne : lecture du ticket par un sous-agent dans son tracker,
 dépôt et forge résolus par un sous-agent (question si besoin, puis nouvelle résolution),
