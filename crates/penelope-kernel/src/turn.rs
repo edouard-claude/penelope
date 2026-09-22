@@ -89,7 +89,9 @@ pub struct TurnMessage {
 /// même chat et du même sujet partagent un tour, mais jamais deux sujets.
 fn origin_key(payload: &Value) -> Option<Value> {
     let origin = payload.get("origin")?;
-    payload.get("text")?.as_str()?;
+    if payload.get("text")?.as_str()?.trim().is_empty() {
+        return None;
+    }
     if payload
         .get("images")
         .and_then(Value::as_array)
@@ -908,6 +910,35 @@ mod tests {
         assert_ne!(first.id, second.id);
         assert_eq!(second.payload["text"], "après");
         assert!(second.merged_messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_photo_message_is_not_absorbed_as_text() {
+        let q = queue(Store::open_memory().unwrap(), TestClock::default());
+        let origin = json!({"channel":"telegram", "chat_id":10});
+        q.enqueue(
+            "s1",
+            TurnKind::Message,
+            json!({"text":"question", "origin":origin}),
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+        q.enqueue(
+            "s1",
+            TurnKind::Message,
+            json!({"text":"regarde", "images":["photo.jpg"], "origin":origin}),
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+        let first = q.claim("r1").await.unwrap().unwrap();
+        assert!(first.merged_messages.is_empty());
+        q.complete(&first).await.unwrap();
+        let second = q.claim("r1").await.unwrap().unwrap();
+        assert_eq!(second.payload["images"][0], "photo.jpg");
     }
 
     #[tokio::test]

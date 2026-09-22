@@ -8,7 +8,7 @@ Dernière mise à jour : 22 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1693 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
+- **1694 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2580,7 +2580,8 @@ outils et signale ce qui a déjà été exécuté. La réponse Telegram vise le 
 message absorbé. Les seuils de rafale ouvrent la carte de choix, même pendant un tour ;
 `/stop` annule le porteur et toutes ses lignes absorbées. `turn.merged` indique le nombre
 et le moment de l'absorption. Les tests couvrent la réclamation, la projection, la
-reprise, la déduplication, les bornes, la livraison et l'annulation.
+reprise, la déduplication, les bornes, la livraison et l'annulation. Un message avec
+photo conserve son traitement visuel séparé.
 
 ### Routine de livraison
 
