@@ -231,6 +231,9 @@ fn path_matches_in(prefix: &str, candidate: &str, workspace: Option<&Path>) -> b
             Some(out)
         };
         if let (Some(want), Some(got)) = (resolve(prefix), resolve(candidate)) {
+            if prefix.is_empty() {
+                return got.parent() == Some(want.as_path());
+            }
             return got.starts_with(&want);
         }
         return false;
@@ -723,6 +726,8 @@ mod tests {
         let same_file = std::fs::canonicalize(&alias).is_ok();
         assert_eq!(path_matches_in("src/", "Src/a.rs", Some(&root)), same_file);
         assert!(path_matches_in("src/", "src/a.rs", Some(&root)));
+        assert!(path_matches_in("", "a.rs", Some(&root)));
+        assert!(!path_matches_in("", "src/a.rs", Some(&root)));
         assert!(!path_matches_in("src/", "src/../../outside", Some(&root)));
         #[cfg(unix)]
         {
