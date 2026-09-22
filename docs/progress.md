@@ -8,7 +8,7 @@ Dernière mise à jour : 22 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1704 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
+- **1709 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -26,7 +26,7 @@ Dernière mise à jour : 22 septembre 2026.
 | 3 | `context` (tuiles, ancres, niveaux 0 à 4, LCM) | fait | 73 |
 | 4 | `telegram` (transport, rendu, gabarits, CTA, formulaires) | fait, passerelle lancée par le daemon | 85 |
 | 5 | `hitl` + bac à sable + `tools` | fait | 16 hitl, 64 tools, 54 platform |
-| 6 | `mcp` (négociation, transports, primitives, OAuth, registre, supervision) | fait, superviseur et OAuth branchés | 96 + 19 conformité + 13 daemon |
+| 6 | `mcp` (négociation, transports, primitives, OAuth, registre, supervision) | fait, superviseur et OAuth branchés | 98 + 19 conformité + 16 daemon |
 | 7 | `memory` + `skills` | fait | 97 memory, 12 skills |
 | 8 | `workflow` + déclencheurs + workflows livrés | fait, ordonnanceur et pilote des runs lancés | 74 |
 | 9 | Routage par complexité, budgets, images, STT | fait, alimenté par Telegram (vocaux, photos, documents) | inclus en llm |
