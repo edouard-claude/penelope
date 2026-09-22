@@ -274,6 +274,21 @@ impl Daemon {
 
     /// Exécute un tour complet et publie son issue.
     pub async fn run_turn(self: &Arc<Self>, turn: &Turn) -> TurnOutcome {
+        if !turn.merged_messages.is_empty()
+            && let Err(error) = self
+                .services
+                .events
+                .append(
+                    penelope_kernel::event::EventDraft::new(
+                        "turn.merged",
+                        json!({"turn": turn.id.as_str(), "count": turn.merged_messages.len(), "phase": "queued"}),
+                    )
+                    .session(&turn.session_id),
+                )
+                .await
+        {
+            tracing::warn!(turn = %turn.id, %error, "événement de fusion non enregistré");
+        }
         let origin = Origin::from_payload(&turn.payload);
         let active = self.bus.begin(turn.id.as_str(), &turn.session_id, &origin);
         let sink = BusSink {
@@ -409,18 +424,51 @@ impl Daemon {
                     _ => text.clone(),
                 };
                 let tokens = s.context.estimator.text_tokens("default", &content);
+                if turn.kind == TurnKind::Message {
+                    s.context
+                        .history
+                        .append_user_turn_at(
+                            &turn.session_id,
+                            turn.id.as_str(),
+                            &content,
+                            &turn.enqueued_at,
+                            tokens,
+                            episode,
+                        )
+                        .await?;
+                } else {
+                    s.context
+                        .history
+                        .append(
+                            &turn.session_id,
+                            &ChatMessage::user(content),
+                            tokens,
+                            episode,
+                            false,
+                            None,
+                        )
+                        .await?;
+                }
+                self.kv_set(&flag, "1").await?;
+            }
+        }
+        if turn.kind == TurnKind::Message {
+            for merged in &turn.merged_messages {
+                let Some(message) = merged.payload.get("text").and_then(Value::as_str) else {
+                    continue;
+                };
+                let tokens = s.context.estimator.text_tokens("default", message);
                 s.context
                     .history
-                    .append(
+                    .append_user_turn_at(
                         &turn.session_id,
-                        &ChatMessage::user(content),
+                        merged.id.as_str(),
+                        message,
+                        &merged.enqueued_at,
                         tokens,
                         episode,
-                        false,
-                        None,
                     )
                     .await?;
-                self.kv_set(&flag, "1").await?;
             }
         }
 
@@ -525,11 +573,15 @@ impl Daemon {
         if let Err(e) = crate::compaction::publish_pending(self, &turn.session_id).await {
             tracing::warn!(session = %turn.session_id, error = %e, "résumé en attente non publié");
         }
-        let conv = SessionConversation::new(s.clone(), &turn.session_id, &model_id, tiers, episode)
-            .with_compactor(Arc::new(crate::compaction::OverflowCompactor {
-                daemon: self.clone(),
-                turn_id: Some(origin_turn.clone()),
-            }));
+        let mut conv =
+            SessionConversation::new(s.clone(), &turn.session_id, &model_id, tiers, episode)
+                .with_compactor(Arc::new(crate::compaction::OverflowCompactor {
+                    daemon: self.clone(),
+                    turn_id: Some(origin_turn.clone()),
+                }));
+        if turn.kind == TurnKind::Message {
+            conv = conv.with_merge_turn(turn.clone(), self.hooks.telegram(), cancel.clone());
+        }
 
         // 5. Outils.
         let mut exec = NativeToolExecutor::new(
@@ -1167,7 +1219,8 @@ pub fn parse_classification(text: &str) -> Option<Classification> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use penelope_kernel::clock::TestClock;
+    use crate::agent::Conversation;
+    use penelope_kernel::clock::{Clock, TestClock};
     use penelope_llm::mock::{MockProvider, Scripted};
     use penelope_llm::types::ToolCall;
 
@@ -1187,6 +1240,133 @@ mod tests {
 
     async fn claim(d: &Daemon) -> Turn {
         d.services.turns.claim("test").await.unwrap().unwrap()
+    }
+
+    /// #161 : la projection du modèle et la base gardent trois messages `user`
+    /// distincts, avec les dates de réception et non la date de réclamation.
+    #[tokio::test]
+    async fn claimed_messages_keep_separate_user_entries_and_arrival_times() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = TestClock::default();
+        let services = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), Arc::new(clock.clone()))
+                .await
+                .unwrap(),
+        );
+        let daemon = Arc::new(Daemon::from_services(services.clone()));
+        let provider = Arc::new(MockProvider::new());
+        provider.reply("Une réponse.");
+        daemon.set_provider_override(provider.clone());
+        let sid = daemon.chat_session_for(&Origin::Cli).await.unwrap();
+        let mut arrivals = Vec::new();
+        for text in ["premier", "complément", "correction"] {
+            arrivals.push(clock.now_rfc3339());
+            daemon
+                .enqueue_message(&sid, text, &Origin::Cli, None)
+                .await
+                .unwrap();
+            clock.advance_ms(1000);
+        }
+        let turn = claim(&daemon).await;
+        assert_eq!(turn.merged_messages.len(), 2);
+        assert!(matches!(
+            daemon.run_turn(&turn).await,
+            TurnOutcome::Answered { .. }
+        ));
+        let request = provider.requests().pop().unwrap();
+        let user: Vec<String> = request
+            .messages
+            .iter()
+            .filter(|m| m.role == penelope_llm::types::Role::User)
+            .map(|m| m.text())
+            .collect();
+        assert_eq!(user.len(), 3, "{user:?}");
+        assert!(user[0].ends_with("premier"), "{user:?}");
+        assert_eq!(user[1], "complément");
+        assert!(user[2].ends_with("correction"), "{user:?}");
+        let times: Vec<String> = services
+            .store
+            .read({
+                let sid = sid.clone();
+                move |c| {
+                    let mut statement = c.prepare(
+                        "SELECT ts FROM messages WHERE session_id=?1 AND role='user' ORDER BY seq",
+                    )?;
+                    let rows = statement.query_map([sid], |r| r.get(0))?;
+                    Ok(rows.collect::<penelope_store::rusqlite::Result<Vec<_>>>()?)
+                }
+            })
+            .await
+            .unwrap();
+        assert_eq!(times, arrivals);
+        let merge_events: i64 = services
+            .store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM events WHERE kind='turn.merged'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(merge_events, 1);
+    }
+
+    /// #161 : le message reçu pendant un outil rejoint la prochaine projection,
+    /// après le résultat, et un second appel ne le rejoue pas.
+    #[tokio::test]
+    async fn a_running_turn_absorbs_a_new_message_before_the_next_model_call() {
+        let (_dir, daemon, _provider) = daemon().await;
+        let sid = daemon.chat_session_for(&Origin::Cli).await.unwrap();
+        daemon
+            .enqueue_message(&sid, "initial", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&daemon).await;
+        let tiers = crate::conversation::build_tiers(&daemon.services, "initial", &[], None).await;
+        let conv = SessionConversation::new(
+            daemon.services.clone(),
+            &sid,
+            "openrouter:mock/model",
+            tiers,
+            0,
+        )
+        .with_merge_turn(turn.clone(), None, CancelToken::new());
+        conv.record(&ChatMessage::user("initial"), false)
+            .await
+            .unwrap();
+        conv.record(
+            &ChatMessage::tool_result("call-1", "test", "résultat"),
+            false,
+        )
+        .await
+        .unwrap();
+        daemon
+            .enqueue_message(&sid, "nouvelle consigne", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let first = conv.request_messages().await.unwrap();
+        let second = conv.request_messages().await.unwrap();
+        for request in [&first, &second] {
+            let text: Vec<_> = request.iter().map(ChatMessage::text).collect();
+            let tool = text.iter().position(|t| t.contains("résultat")).unwrap();
+            let user = text
+                .iter()
+                .position(|t| t.contains("nouvelle consigne"))
+                .unwrap();
+            assert!(tool < user, "{text:?}");
+            assert_eq!(
+                text.iter()
+                    .filter(|t| t.contains("nouvelle consigne"))
+                    .count(),
+                1
+            );
+            assert!(
+                text.iter().any(|t| t.contains("nouveau message")),
+                "{text:?}"
+            );
+        }
     }
 
     /// #81 : « génère le rapport de la semaine » passe par le classifieur et part sur le

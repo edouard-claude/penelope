@@ -3048,7 +3048,7 @@ impl TelegramGateway {
     }
 
     /// Carte de rafale : ce qui est arrivé, et quatre façons de le traiter.
-    async fn ask_about_burst(self: &Arc<Self>, burst: TextBurst) -> anyhow::Result<()> {
+    async fn ask_about_burst(&self, burst: TextBurst) -> anyhow::Result<()> {
         let (chat_id, topic_id, reply_to) = match burst.origin {
             Origin::Telegram {
                 chat_id,
@@ -6816,6 +6816,26 @@ impl TelegramGateway {
 
 #[async_trait::async_trait]
 impl ChannelDelivery for TelegramGateway {
+    async fn offer_burst(
+        &self,
+        session_id: &str,
+        origin: &Origin,
+        parts: Vec<String>,
+    ) -> Result<(), String> {
+        let chars = parts.iter().map(|part| part.chars().count()).sum();
+        self.ask_about_burst(TextBurst {
+            origin: origin.clone(),
+            session: session_id.to_string(),
+            parts,
+            message_ids: Vec::new(),
+            update_id: 0,
+            chars,
+            deadline: std::time::Instant::now(),
+        })
+        .await
+        .map_err(|error| error.to_string())
+    }
+
     async fn schedule_alert(
         &self,
         origin: &Origin,

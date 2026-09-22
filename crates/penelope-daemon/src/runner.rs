@@ -75,7 +75,48 @@ pub async fn process(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> T
 
 async fn process_turn(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> TurnOutcome {
     let started = std::time::Instant::now();
-    let outcome = run_and_deliver(daemon, turn, heartbeat).await;
+    let outcome = if let Some(parts) = oversized_telegram_merge(daemon, &turn) {
+        let _ = daemon
+            .services
+            .events
+            .append(
+                penelope_kernel::event::EventDraft::new(
+                    "turn.merged",
+                    serde_json::json!({"turn": turn.id.as_str(), "count": turn.merged_messages.len(), "phase": "queued"}),
+                )
+                .session(&turn.session_id),
+            )
+            .await;
+        let origin = turn
+            .merged_messages
+            .last()
+            .map(|message| Origin::from_payload(&message.payload))
+            .unwrap_or_else(|| Origin::from_payload(&turn.payload));
+        let offered = match daemon.hooks.telegram() {
+            Some(channel) => channel.offer_burst(&turn.session_id, &origin, parts).await,
+            None => Err("canal Telegram indisponible".into()),
+        };
+        let outcome = match offered {
+            Ok(()) => TurnOutcome::Cancelled,
+            Err(error) => TurnOutcome::Failed { error },
+        };
+        let stored = match &outcome {
+            TurnOutcome::Failed { error } => daemon.services.turns.fail(&turn, error).await,
+            _ => daemon.services.turns.cancel_leased(&turn).await,
+        };
+        if let Err(error) = stored {
+            tracing::error!(turn = %turn.id, %error, "rafale non clôturée");
+        }
+        if matches!(outcome, TurnOutcome::Failed { .. }) {
+            daemon.deliver(&turn, &origin, &outcome).await;
+        }
+        daemon
+            .bus
+            .finish(turn.id.as_str(), &turn.session_id, &origin, outcome.clone());
+        outcome
+    } else {
+        run_and_deliver(daemon, turn, heartbeat).await
+    };
     let label = match &outcome {
         TurnOutcome::Answered { .. } => "answered",
         TurnOutcome::AwaitingApproval { .. } => "awaiting_approval",
@@ -90,6 +131,22 @@ async fn process_turn(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> 
         started.elapsed().as_millis() as f64,
     );
     outcome
+}
+
+fn oversized_telegram_merge(daemon: &Daemon, turn: &Turn) -> Option<Vec<String>> {
+    if !matches!(Origin::from_payload(&turn.payload), Origin::Telegram { .. }) {
+        return None;
+    }
+    let cfg = daemon.services.config.config();
+    let parts: Vec<String> = std::iter::once(&turn.payload)
+        .chain(turn.merged_messages.iter().map(|message| &message.payload))
+        .filter_map(|payload| payload.get("text").and_then(|text| text.as_str()))
+        .map(ToString::to_string)
+        .collect();
+    let chars: usize = parts.iter().map(|part| part.chars().count()).sum();
+    let too_many = cfg.telegram.burst_messages > 0 && parts.len() >= cfg.telegram.burst_messages;
+    let too_long = cfg.telegram.burst_chars > 0 && chars >= cfg.telegram.burst_chars;
+    (too_many || too_long).then_some(parts)
 }
 
 async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> TurnOutcome {
@@ -148,9 +205,18 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     };
     drop(beat);
 
-    let origin = Origin::from_payload(&turn.payload);
+    let origin = daemon
+        .services
+        .turns
+        .last_merged_payload(turn.id.as_str())
+        .await
+        .ok()
+        .flatten()
+        .map(|payload| Origin::from_payload(&payload))
+        .unwrap_or_else(|| Origin::from_payload(&turn.payload));
     let stored = match &outcome {
         TurnOutcome::Failed { error } => daemon.services.turns.fail(&turn, error).await,
+        TurnOutcome::Cancelled => daemon.services.turns.cancel_leased(&turn).await,
         _ => daemon.services.turns.complete(&turn).await,
     };
     let lost = lost.load(std::sync::atomic::Ordering::SeqCst)
@@ -182,6 +248,12 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     let repeated = scheduled
         && matches!(&outcome, TurnOutcome::Answered { text, .. }
             if crate::scheduler::final_already_sent(daemon, &turn.session_id, text).await);
+    let burst_card_sent = matches!(outcome, TurnOutcome::Cancelled)
+        && crate::workflow::kv_get(&daemon.services, &format!("turn.burst_card.{}", turn.id))
+            .await
+            .ok()
+            .flatten()
+            .is_some();
     if repeated {
         let _ = daemon
             .services
@@ -194,7 +266,8 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
                 .session(&turn.session_id),
             )
             .await;
-    } else {
+    }
+    if !repeated && !burst_card_sent {
         daemon.deliver(&turn, &origin, &outcome).await;
     }
     daemon
@@ -218,8 +291,228 @@ impl Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::Conversation;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::MockProvider;
+
+    struct BurstChannel(std::sync::Mutex<Vec<String>>);
+
+    struct DeliveryChannel(std::sync::Mutex<Option<Origin>>);
+
+    #[async_trait::async_trait]
+    impl crate::bus::ChannelDelivery for DeliveryChannel {
+        async fn deliver(
+            &self,
+            _turn_id: &str,
+            _session_id: &str,
+            origin: &Origin,
+            _outcome: &TurnOutcome,
+        ) {
+            *self.0.lock().unwrap() = Some(origin.clone());
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::bus::ChannelDelivery for BurstChannel {
+        async fn deliver(
+            &self,
+            _turn_id: &str,
+            _session_id: &str,
+            _origin: &Origin,
+            _outcome: &TurnOutcome,
+        ) {
+        }
+
+        async fn offer_burst(
+            &self,
+            _session_id: &str,
+            _origin: &Origin,
+            parts: Vec<String>,
+        ) -> Result<(), String> {
+            *self.0.lock().unwrap() = parts;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn six_pending_telegram_messages_show_a_card_without_calling_the_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = Arc::new(
+            crate::runtime::Services::for_tests(
+                dir.path().to_path_buf(),
+                Arc::new(TestClock::default()),
+            )
+            .await
+            .unwrap(),
+        );
+        let daemon = Arc::new(Daemon::from_services(services.clone()));
+        let provider = Arc::new(MockProvider::new());
+        daemon.set_provider_override(provider.clone());
+        let channel = Arc::new(BurstChannel(std::sync::Mutex::new(Vec::new())));
+        *daemon.hooks.telegram.write().unwrap() = Some(channel.clone());
+        let origin = Origin::Telegram {
+            chat_id: 10,
+            topic_id: None,
+            message_id: Some(1),
+        };
+        let sid = daemon.chat_session_for(&origin).await.unwrap();
+        for i in 0..6 {
+            let origin = Origin::Telegram {
+                chat_id: 10,
+                topic_id: None,
+                message_id: Some(i + 1),
+            };
+            daemon
+                .enqueue_message(
+                    &sid,
+                    &format!("message {i}"),
+                    &origin,
+                    Some(format!("tg:{i}")),
+                )
+                .await
+                .unwrap();
+        }
+        let turn = services.turns.claim("test").await.unwrap().unwrap();
+        assert_eq!(turn.merged_messages.len(), 5);
+        let outcome = process(&daemon, turn, Duration::from_secs(60)).await;
+        assert_eq!(outcome, TurnOutcome::Cancelled);
+        assert_eq!(channel.0.lock().unwrap().len(), 6);
+        assert!(provider.requests().is_empty());
+        let cancelled: i64 = services
+            .store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM turn_queue WHERE state='cancelled'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(cancelled, 6);
+    }
+
+    #[tokio::test]
+    async fn messages_arriving_during_tools_hit_the_burst_limit_before_another_model_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = Arc::new(
+            crate::runtime::Services::for_tests(
+                dir.path().to_path_buf(),
+                Arc::new(TestClock::default()),
+            )
+            .await
+            .unwrap(),
+        );
+        let daemon = Arc::new(Daemon::from_services(services.clone()));
+        let channel = Arc::new(BurstChannel(std::sync::Mutex::new(Vec::new())));
+        let origin = Origin::Telegram {
+            chat_id: 10,
+            topic_id: None,
+            message_id: Some(1),
+        };
+        let sid = daemon.chat_session_for(&origin).await.unwrap();
+        daemon
+            .enqueue_message(&sid, "début", &origin, None)
+            .await
+            .unwrap();
+        let turn = services.turns.claim("test").await.unwrap().unwrap();
+        let tiers = crate::conversation::build_tiers(&services, "début", &[], None).await;
+        let cancel = penelope_llm::CancelToken::new();
+        let conv = crate::conversation::SessionConversation::new(
+            services.clone(),
+            &sid,
+            "openrouter:mock/model",
+            tiers,
+            0,
+        )
+        .with_merge_turn(turn.clone(), Some(channel.clone()), cancel.clone());
+        conv.record(&penelope_llm::types::ChatMessage::user("début"), false)
+            .await
+            .unwrap();
+        conv.record(
+            &penelope_llm::types::ChatMessage::tool_result("call-1", "test", "outil fini"),
+            false,
+        )
+        .await
+        .unwrap();
+        for i in 2..=5 {
+            let origin = Origin::Telegram {
+                chat_id: 10,
+                topic_id: None,
+                message_id: Some(i),
+            };
+            daemon
+                .enqueue_message(&sid, &format!("suite {i}"), &origin, None)
+                .await
+                .unwrap();
+        }
+        conv.request_messages().await.unwrap();
+        assert!(cancel.is_cancelled());
+        assert_eq!(channel.0.lock().unwrap().len(), 5);
+        assert!(
+            crate::workflow::kv_get(&services, &format!("turn.burst_card.{}", turn.id))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        services.turns.cancel_leased(&turn).await.unwrap();
+        assert_eq!(services.turns.pending_count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_merged_reply_targets_the_last_telegram_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = Arc::new(
+            crate::runtime::Services::for_tests(
+                dir.path().to_path_buf(),
+                Arc::new(TestClock::default()),
+            )
+            .await
+            .unwrap(),
+        );
+        let daemon = Arc::new(Daemon::from_services(services.clone()));
+        let provider = Arc::new(MockProvider::new());
+        provider.reply(r#"{"complexity":"low"}"#);
+        provider.reply("réponse unique");
+        daemon.set_provider_override(provider);
+        let channel = Arc::new(DeliveryChannel(std::sync::Mutex::new(None)));
+        *daemon.hooks.telegram.write().unwrap() = Some(channel.clone());
+        let first = Origin::Telegram {
+            chat_id: 10,
+            topic_id: None,
+            message_id: Some(1),
+        };
+        let sid = daemon.chat_session_for(&first).await.unwrap();
+        for i in 1..=3 {
+            daemon
+                .enqueue_message(
+                    &sid,
+                    &format!("message {i}"),
+                    &Origin::Telegram {
+                        chat_id: 10,
+                        topic_id: None,
+                        message_id: Some(i),
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        let turn = services.turns.claim("test").await.unwrap().unwrap();
+        assert_eq!(turn.merged_messages.len(), 2);
+        assert!(matches!(
+            process(&daemon, turn, Duration::from_secs(60)).await,
+            TurnOutcome::Answered { .. }
+        ));
+        assert_eq!(
+            *channel.0.lock().unwrap(),
+            Some(Origin::Telegram {
+                chat_id: 10,
+                topic_id: None,
+                message_id: Some(3)
+            })
+        );
+    }
 
     #[tokio::test]
     async fn the_pool_answers_queued_turns_and_waiters_get_the_outcome() {

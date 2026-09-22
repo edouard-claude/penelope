@@ -286,7 +286,7 @@ Workflows (4)
 `/secret` liste ou supprime, jamais ne saisit : un secret ne transite pas par une
 conversation.
 
-### Messages envoyés coup sur coup
+### Rafales et messages pendant un tour
 
 Un long texte collé arrive découpé par Telegram en messages de 4 096 caractères. Un
 morceau à la limite, ou un message transféré, ouvre une fenêtre de
@@ -297,8 +297,20 @@ la ferme après 300 ms de silence, comme dernier morceau. Un message court tapé
 part **tout de suite** : un « merci » n'attend rien. Chaque morceau reçoit sa réaction
 « reçu », mais une seule réponse part.
 
-Au-delà de `telegram.burst_messages` (5) ou de `telegram.burst_chars` (20 000), Pénélope
-ne répond pas d'elle-même : elle dit ce qu'elle a reçu et demande quoi en faire.
+Des messages distincts arrivés après cette fenêtre restent des entrées séparées. Si
+plusieurs attendent dans la même session et le même chat/sujet, Pénélope les réclame
+ensemble : chaque texte garde sa date de réception dans le transcript, mais une seule
+réponse est envoyée en réponse au dernier message. Les reprises d'approbation et les
+déclencheurs planifiés gardent leur priorité. Si un message arrive pendant les outils,
+il rejoint le tour avant le prochain appel au modèle, qui voit les outils déjà exécutés
+et la nouvelle consigne. Après la réponse finale, le message forme un nouveau tour.
+
+Les réactions « reçu » restent attachées à chaque message Telegram d'origine. `/stop`
+annule aussi toutes les lignes absorbées par un tour fusionné.
+
+Au-delà de `telegram.burst_messages` (5) ou de `telegram.burst_chars` (20 000), y compris
+pour plusieurs messages déjà en file, Pénélope ne répond pas d'elle-même : elle dit ce
+qu'elle a reçu et demande quoi en faire.
 
 ```
 📥 Tu m'as envoyé 41 messages (150 000 caractères). Qu'est-ce que j'en fais ?

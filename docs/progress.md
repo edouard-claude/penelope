@@ -2565,6 +2565,23 @@ quatre lectures réelles ; le relais de 48 lignes les a transmis au `HttpIngestA
 de Pathlayer, qui a détecté la boucle à 0,50, 0,75 puis 0,88. Le schéma réserve
 `actuation: null` sans accepter de commande de retour en V1.
 
+### 0.17.48
+
+#### Un tour absorbe les messages suivants de sa session (#161)
+
+À la réclamation, les messages textuels en attente de la même session et de la même
+origine sont liés au tour porteur sans perdre leur ID ni leur clé de déduplication. Le
+transcript écrit chaque message séparément, dans l'ordre et à son heure de réception ;
+la reprise après incident n'en écrit aucun deux fois. Les reprises d'approbation, les
+déclencheurs et les autres origines gardent leur priorité et leur propre tour.
+
+Avant chaque nouvel appel au modèle, le tour absorbe les messages arrivés pendant les
+outils et signale ce qui a déjà été exécuté. La réponse Telegram vise le dernier
+message absorbé. Les seuils de rafale ouvrent la carte de choix, même pendant un tour ;
+`/stop` annule le porteur et toutes ses lignes absorbées. `turn.merged` indique le nombre
+et le moment de l'absorption. Les tests couvrent la réclamation, la projection, la
+reprise, la déduplication, les bornes, la livraison et l'annulation.
+
 ### Routine de livraison
 
 Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #147) :

@@ -71,6 +71,16 @@ pub trait ChannelDelivery: Send + Sync {
         outcome: &TurnOutcome,
     );
 
+    /// Propose les actions de la carte de rafale pour des messages déjà en file.
+    async fn offer_burst(
+        &self,
+        _session_id: &str,
+        _origin: &Origin,
+        _parts: Vec<String>,
+    ) -> Result<(), String> {
+        Err("canal sans carte de rafale".into())
+    }
+
     /// Une session vient de recevoir son titre automatique.
     async fn session_titled(&self, _session_id: &str, _title: &str) {}
 
