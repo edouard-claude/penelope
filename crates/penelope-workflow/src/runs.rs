@@ -462,6 +462,34 @@ impl RunStore {
             .await
     }
 
+    /// Workspaces des runs encore vivants, y compris ceux en pause : ils ne
+    /// relèvent pas de la rétention des runs terminés (issue #177).
+    pub async fn active_workspaces(
+        &self,
+    ) -> penelope_store::Result<Vec<(String, RunState, String)>> {
+        self.store
+            .read(|c| {
+                let mut st = c.prepare(
+                    "SELECT id, state, workdir FROM workflow_runs
+                     WHERE workdir IS NOT NULL AND state IN ('running','paused','blocked')",
+                )?;
+                let rows = st.query_map([], |r| {
+                    let state: String = r.get(1)?;
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        RunState::parse(&state).expect("état filtré par la requête"),
+                        r.get::<_, String>(2)?,
+                    ))
+                })?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row?);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
     /// Admission d'un nouveau run selon la politique de concurrence (§12.2).
     pub async fn admit(
         &self,
@@ -856,6 +884,31 @@ mod tests {
         let expired = rs.expired_workspaces(7).await.unwrap();
         assert_eq!(expired.len(), 1);
         assert_eq!(expired[0].1, "/tmp/r1");
+    }
+
+    /// #177 : un run en pause conserve son workspace et doit être visible dans
+    /// l'inventaire de capacité, même si la rétention ne le sélectionne pas.
+    #[tokio::test]
+    async fn paused_workspaces_are_in_capacity_inventory() {
+        let rs = runs(TestClock::default()).await;
+        let paused = rs
+            .create(&workflow(), "s1", json!({}), Some("/tmp/paused"), None, 0)
+            .await
+            .unwrap();
+        rs.set_state(&paused.id, RunState::Paused, None)
+            .await
+            .unwrap();
+        let done = rs
+            .create(&workflow(), "s2", json!({}), Some("/tmp/done"), None, 0)
+            .await
+            .unwrap();
+        rs.set_state(&done.id, RunState::Done, None).await.unwrap();
+
+        let inventory = rs.active_workspaces().await.unwrap();
+        assert_eq!(
+            inventory,
+            vec![(paused.id, RunState::Paused, "/tmp/paused".into())]
+        );
     }
 
     #[test]

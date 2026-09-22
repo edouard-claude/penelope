@@ -315,6 +315,14 @@ Opérations : `pause`, `resume`, `cancel`, `retry-step`, `skip-step`, `goto:<ét
 Les deux dernières exigent une approbation du propriétaire : sauter une étape ou aller
 ailleurs change ce que le workflow garantit.
 
+La rétention (`workflows.workspace_retention_days`, sept jours par défaut) ne concerne
+que les runs terminés. Un run `paused` conserve son espace de travail. Une fois par
+jour, le daemon mesure les workspaces des runs `running`, `paused` et `blocked` sous
+`state/runs/<run_id>` ; à partir de 1 Gio, il écrit un avertissement avec l'état, le
+chemin et la taille, ainsi qu'un événement `workflow.workspace_large`. Il ne suit pas
+les liens symboliques et ne supprime pas ces workspaces. Si un build a rempli le
+disque, examiner le run et ses artefacts avant de le reprendre ou de l'annuler.
+
 ## Reprise
 
 Chaque franchissement d'étape écrit, dans la même transaction : la ligne du run, son

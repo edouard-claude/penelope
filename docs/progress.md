@@ -2614,6 +2614,18 @@ Pénélope lit `token_endpoint_auth_methods_supported`, prend en charge
 défaut. Les tests simulent les deux méthodes, l'échange, le rafraîchissement et vérifient
 que la valeur du secret n'est pas persistée.
 
+### 0.17.51
+
+#### La taille des workspaces de runs vivants devient visible (#177)
+
+L'audit du 22 septembre a attribué les 11 Go de `state/runs` à un run en pause :
+son `target/debug` Cargo, et non un échec de la rétention des runs terminés.
+Une passe quotidienne mesure désormais les espaces des runs `running`, `paused` et
+`blocked`. Dès 1 Gio, le journal et l'événement `workflow.workspace_large` indiquent
+le run, son état, son chemin et sa taille. Les liens symboliques ne sont pas suivis ;
+aucun run vivant n'est effacé. Les tests vérifient la sélection des runs en pause,
+la borne du parcours et l'absence de suppression.
+
 ### Routine de livraison
 
 Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #147) :

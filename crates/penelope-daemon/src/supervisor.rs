@@ -13,8 +13,79 @@
 
 use crate::bus::Origin;
 use crate::runtime::Daemon;
+use penelope_workflow::RunState;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Seuil d'alerte, pas de suppression : un build peut remplir un run en pause (#177).
+const WORKSPACE_WARNING_BYTES: u64 = 1_073_741_824;
+
+/// Taille des fichiers réguliers du workspace ; les liens ne sont jamais suivis.
+fn workspace_size_bytes(root: &Path) -> std::io::Result<u64> {
+    let meta = std::fs::symlink_metadata(root)?;
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "workspace non répertoire ou lien symbolique",
+        ));
+    }
+    let mut bytes = 0_u64;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let meta = std::fs::symlink_metadata(entry.path())?;
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else if meta.is_file() {
+                bytes = bytes.saturating_add(meta.len());
+            }
+        }
+    }
+    Ok(bytes)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct LargeWorkspace {
+    run_id: String,
+    state: RunState,
+    path: PathBuf,
+    bytes: u64,
+}
+
+fn large_workspaces(
+    root: &Path,
+    owners: Vec<(String, RunState, String)>,
+    threshold: u64,
+) -> Vec<LargeWorkspace> {
+    owners
+        .into_iter()
+        .filter_map(|(run_id, state, workdir)| {
+            let path = PathBuf::from(workdir);
+            if path.parent() != Some(root) || path.file_name().is_none_or(|n| n != run_id.as_str()) {
+                tracing::warn!(run = %run_id, path = %path.display(), "workspace hors state/runs : taille ignorée");
+                return None;
+            }
+            match workspace_size_bytes(&path) {
+                Ok(bytes) if bytes >= threshold => Some(LargeWorkspace {
+                    run_id,
+                    state,
+                    path,
+                    bytes,
+                }),
+                Ok(_) => None,
+                Err(e) => {
+                    tracing::warn!(run = %run_id, error = %e, "taille du workspace indisponible");
+                    None
+                }
+            }
+        })
+        .collect()
+}
 
 impl Daemon {
     /// Fait tourner le daemon jusqu'à l'arrêt.
@@ -513,6 +584,46 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
         }
         s.runs.forget_workdir(&run_id).await?;
     }
+
+    // Une passe quotidienne suffit : compter les fichiers d'un build Rust peut
+    // demander plusieurs secondes. Aucun run vivant n'est supprimé (issue #177).
+    let now = s.clock.now_ms();
+    let last = d
+        .kv_get("workflow.workspace_size.checked")
+        .await?
+        .and_then(|v| v.parse::<i64>().ok());
+    if last.is_none_or(|last| now.saturating_sub(last) >= 24 * 3_600_000) {
+        let owners = s.runs.active_workspaces().await?;
+        let root = ephemeral_root.clone();
+        let large = tokio::task::spawn_blocking(move || {
+            large_workspaces(&root, owners, WORKSPACE_WARNING_BYTES)
+        })
+        .await?;
+        for item in large {
+            tracing::warn!(
+                run = %item.run_id,
+                state = item.state.as_str(),
+                path = %item.path.display(),
+                bytes = item.bytes,
+                threshold_bytes = WORKSPACE_WARNING_BYTES,
+                "workspace de run volumineux"
+            );
+            s.events
+                .append(penelope_kernel::event::EventDraft::new(
+                    "workflow.workspace_large",
+                    serde_json::json!({
+                        "run_id": item.run_id,
+                        "state": item.state.as_str(),
+                        "path": item.path,
+                        "bytes": item.bytes,
+                        "threshold_bytes": WORKSPACE_WARNING_BYTES,
+                    }),
+                ))
+                .await?;
+        }
+        d.kv_set("workflow.workspace_size.checked", &now.to_string())
+            .await?;
+    }
     Ok(())
 }
 
@@ -520,6 +631,45 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use penelope_kernel::clock::TestClock;
+
+    /// #177 : les liens symboliques ne gonflent pas le relevé et ne font pas
+    /// sortir le parcours du workspace d'un run.
+    #[cfg(unix)]
+    #[test]
+    fn workspace_measurement_stays_inside_its_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("run");
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("first"), b"abc").unwrap();
+        std::fs::write(root.join("nested/second"), b"12345").unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::write(&outside, vec![b'x'; 100]).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        assert_eq!(workspace_size_bytes(&root).unwrap(), 8);
+        assert!(workspace_size_bytes(&root.join("link")).is_err());
+    }
+
+    /// #177 : le diagnostic nomme le run en pause et ne touche pas ses fichiers.
+    #[test]
+    fn paused_large_workspace_is_reported_without_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("runs");
+        let path = root.join("r_test");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("build.bin"), b"12345").unwrap();
+        let owners = vec![(
+            "r_test".into(),
+            RunState::Paused,
+            path.to_string_lossy().into_owned(),
+        )];
+        let reported = large_workspaces(&root, owners.clone(), 5);
+        assert_eq!(reported.len(), 1);
+        assert_eq!(reported[0].state, RunState::Paused);
+        assert_eq!(reported[0].path, path);
+        assert_eq!(reported[0].bytes, 5);
+        assert!(path.join("build.bin").exists());
+        assert!(large_workspaces(&root, owners, 6).is_empty());
+    }
 
     #[derive(Default)]
     struct Recorder {
