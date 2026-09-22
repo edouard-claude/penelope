@@ -2626,6 +2626,16 @@ le run, son état, son chemin et sa taille. Les liens symboliques ne sont pas su
 aucun run vivant n'est effacé. Les tests vérifient la sélection des runs en pause,
 la borne du parcours et l'absence de suppression.
 
+### 0.17.52
+
+#### Deux sessions distinctes avant une proposition de procédure (#178)
+
+La consolidation ne propose plus une `ProcedureCandidate` après deux succès dans
+la même session, même à des dates différentes. Elle exige deux occurrences réussies
+et deux sessions traçables distinctes. Ce critère évite de compter deux fois une
+seule trajectoire ; il reste un indicateur de tâches indépendantes, pas leur preuve.
+Le test couvre aussi les candidats sans session.
+
 ### Routine de livraison
 
 Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #147) :

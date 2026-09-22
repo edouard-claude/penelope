@@ -118,10 +118,12 @@ pub fn gate(g: &CandidateGroup, gates: &PromotionGates) -> Gate {
             }
         }
         CandidateType::ProcedureCandidate => {
-            if g.occurrences >= 2 {
-                Gate::Propose("séquence réussie deux fois : skill proposée".into())
-            } else {
+            if g.occurrences < 2 {
                 Gate::Reject("une seule exécution réussie".into())
+            } else if g.distinct_sessions < 2 {
+                Gate::Reject("séquence non vérifiée dans deux sessions distinctes".into())
+            } else {
+                Gate::Propose("séquence réussie dans deux sessions : skill proposée".into())
             }
         }
     }
@@ -1039,6 +1041,39 @@ mod tests {
         assert!(matches!(gate(&two[0], &g), Gate::Propose(_)));
         let one = group(vec![mk("s1")], 0.9);
         assert!(!gate(&one[0], &g).is_promote());
+    }
+
+    /// #178 : deux observations du même tour de travail ne prouvent pas la
+    /// réutilisabilité d'une procédure, même à deux dates différentes.
+    #[test]
+    fn procedure_requires_two_distinct_sessions() {
+        let gates = PromotionGates::default();
+        let mk = |day: &str, session: Option<&str>| {
+            let candidate = Candidate::new(
+                CandidateType::ProcedureCandidate,
+                "séquence : lire ticket, créer branche, lancer tests",
+                Origin::Agent,
+                "interactive",
+                &format!("{day}T10:00:00Z"),
+            )
+            .with_subject("ticket-branche-tests");
+            match session {
+                Some(id) => candidate.in_session(id),
+                None => candidate,
+            }
+        };
+        let repeated = group(
+            vec![mk("2026-09-16", Some("s1")), mk("2026-09-17", Some("s1"))],
+            0.9,
+        );
+        assert_eq!(repeated[0].occurrences, 2);
+        assert_eq!(repeated[0].distinct_sessions, 1);
+        assert!(matches!(gate(&repeated[0], &gates), Gate::Reject(_)));
+
+        let untraceable = group(vec![mk("2026-09-16", None), mk("2026-09-17", None)], 0.9);
+        assert_eq!(untraceable[0].occurrences, 2);
+        assert_eq!(untraceable[0].distinct_sessions, 0);
+        assert!(matches!(gate(&untraceable[0], &gates), Gate::Reject(_)));
     }
 
     fn ctx<'a>(

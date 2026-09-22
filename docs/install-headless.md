@@ -1630,6 +1630,11 @@ jamais le modèle, un écart doit se répéter sur plusieurs jours. Pour chaque 
 préférence, décision ou correction, le modèle répond à cinq questions, et le code en
 déduit la place :
 
+Une procédure candidate n'est proposée comme skill qu'après deux exécutions réussies
+dans deux sessions distinctes. Deux répétitions dans la même session ou sans session
+traçable ne suffisent pas. La session est un indicateur prudent de tâches différentes ;
+elle ne prouve pas à elle seule que les tâches sont indépendantes.
+
 | Critère | Question |
 |---|---|
 | Durable | Encore vrai dans un mois ? |
