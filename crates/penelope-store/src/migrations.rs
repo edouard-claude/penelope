@@ -75,6 +75,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0015_memory_usage_reset",
         sql: SQL_0015,
     },
+    Migration {
+        version: "0016_turn_merge",
+        sql: SQL_0016,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -925,6 +929,16 @@ ALTER TABLE mcp_tools ADD COLUMN first_seen TEXT;
 /// requêtes et les vues restent.
 const SQL_0015: &str = r#"
 UPDATE mem_signals SET recalls = 0, useful_recalls = 0;
+"#;
+
+/// Messages distincts absorbés par un tour porteur ; la clé de déduplication reste
+/// sur leur ligne et le lien survit à une reprise après crash (#161).
+const SQL_0016: &str = r#"
+ALTER TABLE turn_queue ADD COLUMN merged_into TEXT;
+CREATE INDEX turn_queue_merged_into ON turn_queue(merged_into, enqueued_at);
+ALTER TABLE messages ADD COLUMN source_turn_id TEXT;
+CREATE UNIQUE INDEX messages_source_turn ON messages(source_turn_id)
+  WHERE source_turn_id IS NOT NULL;
 "#;
 
 #[cfg(test)]

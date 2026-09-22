@@ -9,7 +9,7 @@ use penelope_kernel::clock::SharedClock;
 use penelope_kernel::ids::ArtifactId;
 use penelope_llm::types::{ChatMessage, Content, Role, ToolCall};
 use penelope_store::Store;
-use penelope_store::rusqlite::params;
+use penelope_store::rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -292,6 +292,57 @@ impl HistoryStore {
                         eager as i64,
                         artifact_id
                     ],
+                )?;
+                let id = tx.last_insert_rowid();
+                tx.execute(
+                    "INSERT INTO messages_fts(content, session_id, msg_id) VALUES(?1,?2,?3)",
+                    params![searchable, sid, id],
+                )?;
+                Ok(seq)
+            })
+            .await
+    }
+
+    /// Ajoute une seule fois un message reçu par la file, avec son horodatage
+    /// original. L'ID du tour est la clé d'idempotence après crash (#161).
+    pub async fn append_user_turn_at(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        text: &str,
+        arrived_at: &str,
+        tokens: u64,
+        episode: i64,
+    ) -> penelope_store::Result<i64> {
+        let (sid, source, ts) = (
+            session_id.to_string(),
+            turn_id.to_string(),
+            arrived_at.to_string(),
+        );
+        let message = ChatMessage::user(text);
+        let content = serialise_content(&message)?;
+        let searchable = text.to_string();
+        self.store
+            .write(move |tx| {
+                if let Some(seq) = tx
+                    .query_row(
+                        "SELECT seq FROM messages WHERE source_turn_id=?1",
+                        [&source],
+                        |r| r.get(0),
+                    )
+                    .optional()?
+                {
+                    return Ok(seq);
+                }
+                let seq: i64 = tx.query_row(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE session_id=?1",
+                    [&sid],
+                    |r| r.get(0),
+                )?;
+                tx.execute(
+                    "INSERT INTO messages(session_id, seq, role, content, tokens_est, ts,
+                        episode, source_turn_id) VALUES(?1,?2,'user',?3,?4,?5,?6,?7)",
+                    params![sid, seq, content, tokens as i64, ts, episode, source],
                 )?;
                 let id = tx.last_insert_rowid();
                 tx.execute(
@@ -1165,6 +1216,38 @@ mod tests {
                 .map(|e| e.message.clone())
                 .collect::<Vec<_>>()
         ));
+    }
+
+    /// #161 : le message venu de la file porte sa date de réception et n'est pas
+    /// dupliqué si le tour est rejoué après une écriture interrompue.
+    #[tokio::test]
+    async fn queued_user_message_keeps_arrival_time_and_is_idempotent() {
+        let h = hs().await;
+        let at = "2026-09-22T10:00:00.000Z";
+        let first = h
+            .append_user_turn_at("s1", "t1", "bonjour", at, 10, 0)
+            .await
+            .unwrap();
+        let again = h
+            .append_user_turn_at("s1", "t1", "bonjour", at, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(first, again);
+        let entries = h.load("s1", 0).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].message.text(), "bonjour");
+        let timestamp: String = h
+            .store()
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT ts FROM messages WHERE source_turn_id='t1'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(timestamp, at);
     }
 
     #[tokio::test]

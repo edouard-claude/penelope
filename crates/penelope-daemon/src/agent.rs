@@ -645,6 +645,9 @@ impl AgentLoop {
 
             // 3. Appel du modèle, avec repli sur panne transitoire.
             let mut messages = conv.request_messages().await?;
+            if spec.cancel.is_cancelled() {
+                return Ok(TurnOutcome::Cancelled);
+            }
             if empty_retry {
                 // Relance vue du modèle seulement : rien n'est écrit dans l'historique.
                 messages.push(ChatMessage::user(
@@ -1149,6 +1152,9 @@ impl AgentLoop {
     ) -> anyhow::Result<TurnOutcome> {
         let s = &self.services;
         let mut messages = conv.request_messages().await?;
+        if spec.cancel.is_cancelled() {
+            return Ok(TurnOutcome::Cancelled);
+        }
         messages.push(ChatMessage::user(format!(
             "(Message du harnais, pas du propriétaire.) Tu as appelé `{tool}` en boucle avec \
              les mêmes arguments : les outils sont arrêtés pour ce tour. Réponds maintenant au \

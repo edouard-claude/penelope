@@ -72,6 +72,45 @@ pub struct Turn {
     /// Runner qui tient le lease : jeton de clôture de `heartbeat` et `finish` (#43).
     #[serde(default)]
     pub holder: String,
+    /// Messages originaux absorbés, dans l'ordre d'arrivée. La ligne porteuse garde
+    /// son propre `payload` ; chaque ligne conserve son ID et sa clé de déduplication.
+    #[serde(default)]
+    pub merged_messages: Vec<TurnMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TurnMessage {
+    pub id: TurnId,
+    pub payload: Value,
+    pub enqueued_at: String,
+}
+
+/// L'identité du canal ignore le message Telegram lui-même : deux messages du
+/// même chat et du même sujet partagent un tour, mais jamais deux sujets.
+fn origin_key(payload: &Value) -> Option<Value> {
+    let origin = payload.get("origin")?;
+    if payload.get("text")?.as_str()?.trim().is_empty() {
+        return None;
+    }
+    if payload
+        .get("images")
+        .and_then(Value::as_array)
+        .is_some_and(|images| !images.is_empty())
+    {
+        return None;
+    }
+    match origin.get("channel")?.as_str()? {
+        "telegram" => Some(serde_json::json!({
+            "channel": "telegram",
+            "chat_id": origin.get("chat_id")?.as_i64()?,
+            "topic_id": origin.get("topic_id").filter(|v| !v.is_null()).cloned(),
+        })),
+        "cli" => Some(serde_json::json!({"channel": "cli"})),
+        "internal" => Some(serde_json::json!({
+            "channel": "internal", "source": origin.get("source")?.as_str()?
+        })),
+        _ => None,
+    }
 }
 
 #[derive(Clone)]
@@ -210,7 +249,7 @@ impl TurnQueue {
                                            WHERE l.resource = 'session:' || q.session_id)
                            AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = q.session_id
                                            AND s.state IN ('closed', 'deleted'))
-                         ORDER BY q.priority DESC, q.enqueued_at
+                         ORDER BY q.priority DESC, q.enqueued_at, q.rowid
                          LIMIT 1",
                         [],
                         |r| {
@@ -230,6 +269,46 @@ impl TurnQueue {
                     return Ok(None);
                 };
 
+                let payload_value: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
+                let mut merged_messages = Vec::new();
+                if kind == "message"
+                    && let Some(key) = origin_key(&payload_value)
+                {
+                    let candidates: Vec<(String, String, String, bool)> = {
+                        let mut st = tx.prepare(
+                            "SELECT id, payload, enqueued_at, state='merged'
+                             FROM turn_queue
+                             WHERE session_id=?1 AND kind='message'
+                               AND ((state='pending' AND id<>?2)
+                                    OR (state='merged' AND merged_into=?2))
+                             ORDER BY enqueued_at, rowid",
+                        )?;
+                        let rows = st.query_map(params![session_id, id], |r| {
+                            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                        })?;
+                        rows.collect::<penelope_store::rusqlite::Result<Vec<_>>>()?
+                    };
+                    for (message_id, body, arrived, was_merged) in candidates {
+                        let message_payload: Value =
+                            serde_json::from_str(&body).unwrap_or(Value::Null);
+                        if !was_merged && origin_key(&message_payload) != Some(key.clone()) {
+                            continue;
+                        }
+                        if !was_merged {
+                            tx.execute(
+                                "UPDATE turn_queue SET state='merged', merged_into=?2
+                                 WHERE id=?1 AND state='pending'",
+                                params![message_id, id],
+                            )?;
+                        }
+                        merged_messages.push(TurnMessage {
+                            id: TurnId(message_id),
+                            payload: message_payload,
+                            enqueued_at: arrived,
+                        });
+                    }
+                }
+
                 tx.execute(
                     "UPDATE turn_queue SET state='leased', started_at=?2, attempts=attempts+1
                      WHERE id=?1",
@@ -247,10 +326,11 @@ impl TurnQueue {
                     id: TurnId(id),
                     session_id,
                     kind: TurnKind::parse(&kind).unwrap_or(TurnKind::Message),
-                    payload: serde_json::from_str(&payload).unwrap_or(Value::Null),
+                    payload: payload_value,
                     attempts: attempts + 1,
                     enqueued_at,
                     holder: mine,
+                    merged_messages,
                 }))
             })
             .await?;
@@ -258,6 +338,119 @@ impl TurnQueue {
             self.remember(&t.holder, t.id.as_str());
         }
         Ok(claimed)
+    }
+
+    /// Absorbe les nouveaux messages arrivés pendant l'exécution, sous le lease du
+    /// tour porteur. Un autre runner ne peut ni les voler ni les marquer lus.
+    pub async fn absorb_pending(&self, turn: &Turn) -> Result<Vec<TurnMessage>> {
+        if turn.kind != TurnKind::Message {
+            return Ok(Vec::new());
+        }
+        let Some(origin) = origin_key(&turn.payload) else {
+            return Ok(Vec::new());
+        };
+        let (id, sid, holder) = (
+            turn.id.to_string(),
+            turn.session_id.clone(),
+            turn.holder.clone(),
+        );
+        let (held, absorbed) = self
+            .store
+            .write(move |tx| {
+                let held: i64 = tx.query_row(
+                    "SELECT count(*) FROM leases WHERE resource=?1 AND holder=?2",
+                    params![format!("turn:{id}"), holder],
+                    |r| r.get(0),
+                )?;
+                if held == 0 {
+                    return Ok((false, Vec::new()));
+                }
+                let candidates: Vec<(String, String, String)> = {
+                    let mut st = tx.prepare(
+                        "SELECT id, payload, enqueued_at FROM turn_queue
+                         WHERE session_id=?1 AND kind='message' AND state='pending'
+                         ORDER BY enqueued_at, rowid",
+                    )?;
+                    let rows = st.query_map([&sid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+                    rows.collect::<penelope_store::rusqlite::Result<Vec<_>>>()?
+                };
+                let mut absorbed = Vec::new();
+                for (message_id, body, arrived) in candidates {
+                    let payload: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+                    if origin_key(&payload) != Some(origin.clone()) {
+                        continue;
+                    }
+                    tx.execute(
+                        "UPDATE turn_queue SET state='merged', merged_into=?2
+                         WHERE id=?1 AND state='pending'",
+                        params![message_id, id],
+                    )?;
+                    absorbed.push(TurnMessage {
+                        id: TurnId(message_id),
+                        payload,
+                        enqueued_at: arrived,
+                    });
+                }
+                Ok((true, absorbed))
+            })
+            .await?;
+        if !held {
+            return Err(KernelError::LeaseLost(format!(
+                "tour {} : absorption refusée au runner évincé",
+                turn.id
+            )));
+        }
+        Ok(absorbed)
+    }
+
+    /// Dernière origine absorbée, y compris les messages arrivés pendant le tour.
+    pub async fn last_merged_payload(&self, turn_id: &str) -> Result<Option<Value>> {
+        let id = turn_id.to_string();
+        Ok(self
+            .store
+            .read(move |c| {
+                let payload: Option<String> = c
+                    .query_row(
+                        "SELECT payload FROM turn_queue WHERE merged_into=?1 AND state='merged'
+                         ORDER BY enqueued_at DESC, rowid DESC LIMIT 1",
+                        [&id],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                Ok(payload.and_then(|raw| serde_json::from_str(&raw).ok()))
+            })
+            .await?)
+    }
+
+    /// Toutes les lignes absorbées par ce porteur, dans leur ordre de réception.
+    pub async fn merged_messages(&self, turn_id: &str) -> Result<Vec<TurnMessage>> {
+        let id = turn_id.to_string();
+        Ok(self
+            .store
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT id, payload, enqueued_at FROM turn_queue
+                     WHERE merged_into=?1 AND state='merged' ORDER BY enqueued_at, rowid",
+                )?;
+                let rows = st.query_map([id], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                })?;
+                let mut messages = Vec::new();
+                for row in rows {
+                    let (id, payload, enqueued_at) = row?;
+                    messages.push(TurnMessage {
+                        id: TurnId(id),
+                        payload: serde_json::from_str(&payload).unwrap_or(Value::Null),
+                        enqueued_at,
+                    });
+                }
+                Ok(messages)
+            })
+            .await?)
     }
 
     /// Prolonge le lease d'un tour en cours.
@@ -301,6 +494,10 @@ impl TurnQueue {
 
     pub async fn complete(&self, turn: &Turn) -> Result<()> {
         self.finish(turn, "done", None).await
+    }
+
+    pub async fn cancel_leased(&self, turn: &Turn) -> Result<()> {
+        self.finish(turn, "cancelled", None).await
     }
 
     pub async fn fail(&self, turn: &Turn, error: &str) -> Result<()> {
@@ -353,6 +550,11 @@ impl TurnQueue {
                     params![id, now],
                 )?;
                 tx.execute(
+                    "UPDATE turn_queue SET state='cancelled', finished_at=?2
+                     WHERE merged_into=?1 AND state='merged'",
+                    params![id, now],
+                )?;
+                tx.execute(
                     "DELETE FROM leases WHERE resource=?1",
                     [format!("turn:{id}")],
                 )?;
@@ -392,6 +594,13 @@ impl TurnQueue {
                      WHERE id=?1 AND state='leased'",
                     params![id, state, now, error],
                 )?;
+                if state == "cancelled" {
+                    tx.execute(
+                        "UPDATE turn_queue SET state='cancelled', finished_at=?2
+                         WHERE merged_into=?1 AND state='merged'",
+                        params![id, now],
+                    )?;
+                }
                 tx.execute(
                     "DELETE FROM leases WHERE resource IN (?1, ?2) AND holder=?3",
                     params![turn_res, session_res, holder],
@@ -506,6 +715,258 @@ mod tests {
             .unwrap();
         assert!(a.is_some());
         assert!(b.is_none(), "un update rejoué ne crée pas un second tour");
+    }
+
+    /// #161 : les messages Telegram distincts d'un même sujet forment un tour, sans
+    /// perdre leur identité, leur ordre ni leur clé de déduplication.
+    #[tokio::test]
+    async fn claim_merges_pending_messages_of_one_origin() {
+        let clock = TestClock::default();
+        let store = Store::open_memory().unwrap();
+        let q = queue(store.clone(), clock.clone());
+        let origin = |message_id| {
+            json!({
+                "channel": "telegram", "chat_id": 10, "topic_id": 7, "message_id": message_id
+            })
+        };
+        let first = q
+            .enqueue(
+                "s1",
+                TurnKind::Message,
+                json!({"text":"un", "origin":origin(1)}),
+                Some("tg:1".into()),
+                0,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        clock.advance_ms(1);
+        let second = q
+            .enqueue(
+                "s1",
+                TurnKind::Message,
+                json!({"text":"deux", "origin":origin(2)}),
+                Some("tg:2".into()),
+                0,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        clock.advance_ms(1);
+        let third = q
+            .enqueue(
+                "s1",
+                TurnKind::Message,
+                json!({"text":"trois", "origin":origin(3)}),
+                Some("tg:3".into()),
+                0,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        let turn = q.claim("r1").await.unwrap().unwrap();
+        assert_eq!(turn.id, first);
+        assert_eq!(
+            turn.merged_messages
+                .iter()
+                .map(|m| m.payload["text"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["deux", "trois"]
+        );
+        for (id, key) in [(second, "tg:2"), (third, "tg:3")] {
+            let id = id.to_string();
+            let row: (String, Option<String>, String) = store
+                .read(move |c| {
+                    Ok(c.query_row(
+                        "SELECT state, merged_into, dedup_key FROM turn_queue WHERE id=?1",
+                        [id],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    )?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(row, ("merged".into(), Some(first.to_string()), key.into()));
+        }
+        assert_eq!(
+            q.last_merged_payload(first.as_str())
+                .await
+                .unwrap()
+                .unwrap()["origin"]["message_id"],
+            3
+        );
+        assert!(
+            q.enqueue("s1", TurnKind::Message, json!({}), Some("tg:2".into()), 0)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        q.complete(&turn).await.unwrap();
+        assert!(q.claim("r2").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn claim_keeps_sessions_origins_and_resume_priority_separate() {
+        let q = queue(Store::open_memory().unwrap(), TestClock::default());
+        let telegram = |id| {
+            json!({"text":format!("m{id}"), "origin":{
+                "channel":"telegram", "chat_id":10, "message_id":id
+            }})
+        };
+        q.enqueue("s1", TurnKind::Message, telegram(1), None, 0)
+            .await
+            .unwrap();
+        q.enqueue("s1", TurnKind::Message, telegram(2), None, 0)
+            .await
+            .unwrap();
+        q.enqueue(
+            "s1",
+            TurnKind::Message,
+            json!({"text":"cli", "origin":{"channel":"cli"}}),
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+        q.enqueue("s2", TurnKind::Message, telegram(3), None, 0)
+            .await
+            .unwrap();
+        q.enqueue("s2", TurnKind::Message, telegram(4), None, 0)
+            .await
+            .unwrap();
+        q.enqueue(
+            "s1",
+            TurnKind::Resume,
+            json!({"origin":{"channel":"telegram","chat_id":10}}),
+            None,
+            10,
+        )
+        .await
+        .unwrap();
+
+        let resume = q.claim("r1").await.unwrap().unwrap();
+        assert_eq!(resume.kind, TurnKind::Resume);
+        assert!(resume.merged_messages.is_empty());
+        q.complete(&resume).await.unwrap();
+        let a = q.claim("r1").await.unwrap().unwrap();
+        assert_eq!(a.session_id, "s1");
+        assert_eq!(a.merged_messages.len(), 1);
+        q.complete(&a).await.unwrap();
+        let b = q.claim("r1").await.unwrap().unwrap();
+        assert_eq!(b.session_id, "s1");
+        assert_eq!(b.payload["text"], "cli");
+        assert!(b.merged_messages.is_empty());
+        q.complete(&b).await.unwrap();
+        let c = q.claim("r1").await.unwrap().unwrap();
+        assert_eq!(c.session_id, "s2");
+        assert_eq!(c.merged_messages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_live_turn_absorbs_pending_messages_and_recovery_keeps_them() {
+        let store = Store::open_memory().unwrap();
+        let clock = TestClock::default();
+        let q = queue(store.clone(), clock.clone());
+        let payload = |text| json!({"text":text, "origin":{"channel":"cli"}});
+        q.enqueue("s1", TurnKind::Message, payload("premier"), None, 0)
+            .await
+            .unwrap();
+        let turn = q.claim("r1").await.unwrap().unwrap();
+        q.enqueue(
+            "s1",
+            TurnKind::Message,
+            payload("ajout"),
+            Some("u2".into()),
+            0,
+        )
+        .await
+        .unwrap();
+        let absorbed = q.absorb_pending(&turn).await.unwrap();
+        assert_eq!(absorbed.len(), 1);
+        assert_eq!(absorbed[0].payload["text"], "ajout");
+        assert!(q.absorb_pending(&turn).await.unwrap().is_empty());
+
+        let restarted = queue(store, clock);
+        restarted.recover_on_boot().await.unwrap();
+        let replayed = restarted.claim("r2").await.unwrap().unwrap();
+        assert_eq!(replayed.id, turn.id);
+        assert_eq!(replayed.merged_messages.len(), 1);
+        assert_eq!(replayed.merged_messages[0].id, absorbed[0].id);
+    }
+
+    #[tokio::test]
+    async fn a_message_after_completion_remains_a_separate_turn() {
+        let q = queue(Store::open_memory().unwrap(), TestClock::default());
+        let payload = |text| json!({"text":text, "origin":{"channel":"cli"}});
+        q.enqueue("s1", TurnKind::Message, payload("premier"), None, 0)
+            .await
+            .unwrap();
+        let first = q.claim("r1").await.unwrap().unwrap();
+        q.complete(&first).await.unwrap();
+        q.enqueue("s1", TurnKind::Message, payload("après"), None, 0)
+            .await
+            .unwrap();
+        let second = q.claim("r1").await.unwrap().unwrap();
+        assert_ne!(first.id, second.id);
+        assert_eq!(second.payload["text"], "après");
+        assert!(second.merged_messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_photo_message_is_not_absorbed_as_text() {
+        let q = queue(Store::open_memory().unwrap(), TestClock::default());
+        let origin = json!({"channel":"telegram", "chat_id":10});
+        q.enqueue(
+            "s1",
+            TurnKind::Message,
+            json!({"text":"question", "origin":origin}),
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+        q.enqueue(
+            "s1",
+            TurnKind::Message,
+            json!({"text":"regarde", "images":["photo.jpg"], "origin":origin}),
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+        let first = q.claim("r1").await.unwrap().unwrap();
+        assert!(first.merged_messages.is_empty());
+        q.complete(&first).await.unwrap();
+        let second = q.claim("r1").await.unwrap().unwrap();
+        assert_eq!(second.payload["images"][0], "photo.jpg");
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_merged_turn_cancels_every_original_message() {
+        let store = Store::open_memory().unwrap();
+        let q = queue(store.clone(), TestClock::default());
+        let payload = |text| json!({"text":text, "origin":{"channel":"cli"}});
+        q.enqueue("s1", TurnKind::Message, payload("un"), None, 0)
+            .await
+            .unwrap();
+        q.enqueue("s1", TurnKind::Message, payload("deux"), None, 0)
+            .await
+            .unwrap();
+        let turn = q.claim("r1").await.unwrap().unwrap();
+        assert_eq!(turn.merged_messages.len(), 1);
+        q.cancel_leased(&turn).await.unwrap();
+        let count: i64 = store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM turn_queue WHERE state='cancelled'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+        assert!(q.claim("r2").await.unwrap().is_none());
     }
 
     /// CA 3 : un tour interrompu par un crash est réclamé à nouveau après expiration
