@@ -2546,7 +2546,7 @@ mod tests {
     /// #163 : un refus décrit les racines réellement lues, pas le snapshot du début du tour.
     #[tokio::test]
     async fn a_workspace_refusal_lists_the_live_roots() {
-        let (dir, mut x) = executor().await;
+        let (dir, x) = executor().await;
         let old = x.env.workspaces[0].clone();
         let live = dir.path().join("live-workspace");
         std::fs::create_dir_all(&live).unwrap();
