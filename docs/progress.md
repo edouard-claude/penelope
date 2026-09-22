@@ -8,7 +8,7 @@ Dernière mise à jour : 22 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1650 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1652 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2514,6 +2514,22 @@ Le retour en build distingue prérequis absent, preuve manquante ou périmée, t
 critère non satisfait. Cinq tests couvrent la commande actualisée, l'outil absent et
 son approbation, le test rouge, le SHA périmé et les clauses conditionnelles du dépôt.
 Les budgets et plafonds du workflow ne changent pas.
+
+### 0.17.45
+
+#### Les approbations de workflow reviennent dans leur sujet Telegram (#165)
+
+La session technique d'un run n'a pas de coordonnées Telegram. Au clic, le bot consultait
+seulement cette session : les confirmations d'approbation partaient dans Général alors
+que la carte était dans le sujet. La destination de chaque carte est maintenant persistée
+et relue au clic. Si elle manque, l'origine enregistrée du run puis la session servent de
+repli, sans mélanger le chat d'une source avec le sujet d'une autre.
+
+Autorisation, refus, « Déjà tranché », seconde confirmation destructive et budget suivent
+la même résolution. Les raisons de refus sont isolées par sujet ; une carte d'effet
+incertain renvoyée après redémarrage retrouve aussi l'origine du run. Deux tests couvrent
+le clic après redémarrage, deux sujets du même groupe, les décisions répétées et les
+cartes de budget et d'effet incertain.
 
 ### Routine de livraison
 

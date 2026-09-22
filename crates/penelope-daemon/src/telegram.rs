@@ -259,6 +259,13 @@ fn form_key(chat_id: i64, topic_id: Option<i64>) -> String {
     }
 }
 
+fn approval_reason_key(chat_id: i64, topic_id: Option<i64>) -> String {
+    match topic_id {
+        Some(t) => format!("tg.await_reason.{chat_id}.{t}"),
+        None => format!("tg.await_reason.{chat_id}"),
+    }
+}
+
 /// Sujet où vit un formulaire, d'après sa charge : toutes ses phrases y retournent.
 fn form_topic(pending: &Value) -> Option<i64> {
     pending["topic"].as_i64()
@@ -703,23 +710,10 @@ impl TelegramGateway {
             if self.daemon.kv_get(&flag).await?.is_some() {
                 continue;
             }
-            let session = match &a.session_id {
-                Some(sid) => s.sessions.get(sid).await?,
-                None => None,
-            };
-            // La session garde son chat et son sujet ; sans session, le foyer (#143).
-            let (home_chat, home_topic) = self.home_chat();
-            let chat_id = session
-                .as_ref()
-                .and_then(|x| x.tg_chat_id)
-                .unwrap_or(home_chat);
-            let topic_id = session.as_ref().and_then(|x| x.tg_topic_id).or(
-                if session.as_ref().and_then(|x| x.tg_chat_id).is_some() {
-                    None
-                } else {
-                    home_topic
-                },
-            );
+            let (chat_id, topic_id) = self
+                .recorded_approval_destination(&a)
+                .await
+                .unwrap_or_else(|| self.home_chat());
             self.send_approval_card(chat_id, topic_id, &a).await?;
             self.daemon.kv_set(&flag, "1").await?;
             sent += 1;
@@ -929,7 +923,7 @@ impl TelegramGateway {
                 }
 
                 // Une raison de refus était attendue : ce message la donne.
-                let reason_key = format!("tg.await_reason.{chat_id}");
+                let reason_key = approval_reason_key(chat_id, topic_id);
                 if let Some(approval_id) = self.daemon.kv_get(&reason_key).await?
                     && !approval_id.is_empty()
                 {
@@ -3667,7 +3661,7 @@ impl TelegramGateway {
             && (action.action == k::BUDGET_RAISE || action.action == k::BUDGET_STOP)
         {
             return self
-                .budget_clicked(callback_id, action, chat_id, message_id)
+                .budget_clicked(callback_id, action, chat_id, topic_id, message_id)
                 .await;
         }
         if let ClickOutcome::Accepted(action) = &outcome
@@ -3782,7 +3776,9 @@ impl TelegramGateway {
             let _ = self.bot.edit_markup(chat_id, message_id, None).await;
             return Ok(());
         };
-        let topic_id = self.topic_of(&approval).await;
+        let (chat_id, topic_id) = self
+            .approval_destination(&approval, chat_id, topic_id)
+            .await;
         let double = approval.payload["double"].as_bool().unwrap_or(false);
 
         match action.action.as_str() {
@@ -3932,7 +3928,7 @@ impl TelegramGateway {
             k::DENY_REASON => {
                 let _ = self.bot.edit_markup(chat_id, message_id, None).await;
                 self.daemon
-                    .kv_set(&format!("tg.await_reason.{chat_id}"), &approval_id)
+                    .kv_set(&approval_reason_key(chat_id, topic_id), &approval_id)
                     .await?;
                 self.reply(
                     chat_id,
@@ -4002,16 +3998,47 @@ impl TelegramGateway {
         Ok(())
     }
 
-    async fn topic_of(&self, a: &ApprovalRequest) -> Option<i64> {
-        let sid = a.session_id.as_deref()?;
-        self.daemon
-            .services
-            .sessions
-            .get(sid)
+    async fn recorded_approval_destination(
+        &self,
+        a: &ApprovalRequest,
+    ) -> Option<(i64, Option<i64>)> {
+        let key = format!("tg.approval_destination.{}", a.id.as_str());
+        if let Ok(Some(raw)) = self.daemon.kv_get(&key).await
+            && let Ok(v) = serde_json::from_str::<Value>(&raw)
+            && let Some(chat) = v["chat_id"].as_i64()
+        {
+            return Some((chat, v["topic_id"].as_i64()));
+        }
+        if let Some(run_id) = a.run_id.as_deref()
+            && let Some(destination) = crate::workflow::origin_of(&self.daemon, run_id)
+                .await
+                .telegram_chat()
+        {
+            return Some(destination);
+        }
+        if let Some(sid) = a.session_id.as_deref()
+            && let Ok(Some(session)) = self.daemon.services.sessions.get(sid).await
+            && let Some(chat) = session.tg_chat_id
+        {
+            return Some((chat, session.tg_topic_id));
+        }
+        None
+    }
+
+    async fn approval_destination(
+        &self,
+        a: &ApprovalRequest,
+        clicked_chat: i64,
+        clicked_topic: Option<i64>,
+    ) -> (i64, Option<i64>) {
+        // Le message du callback donne la destination la plus précise. Telegram ne
+        // répète parfois pas son sujet : la destination persistée de la carte tranche.
+        if clicked_topic.is_some() {
+            return (clicked_chat, clicked_topic);
+        }
+        self.recorded_approval_destination(a)
             .await
-            .ok()
-            .flatten()
-            .and_then(|s| s.tg_topic_id)
+            .unwrap_or((clicked_chat, clicked_topic))
     }
 
     // ================================================================ cartes
@@ -4022,6 +4049,14 @@ impl TelegramGateway {
         topic_id: Option<i64>,
         a: &ApprovalRequest,
     ) -> anyhow::Result<()> {
+        // Le clic peut arriver après un redémarrage ; le run technique n'a pas de
+        // coordonnées Telegram, mais cette destination survit dans le store (#165).
+        self.daemon
+            .kv_set(
+                &format!("tg.approval_destination.{}", a.id.as_str()),
+                &json!({"chat_id": chat_id, "topic_id": topic_id}).to_string(),
+            )
+            .await?;
         if a.kind == penelope_hitl::ApprovalKind::BudgetExceeded
             && a.payload["budget"].as_bool() == Some(true)
         {
@@ -4493,6 +4528,7 @@ impl TelegramGateway {
         callback_id: &str,
         action: &Action,
         chat_id: i64,
+        clicked_topic: Option<i64>,
         message_id: i64,
     ) -> anyhow::Result<()> {
         let d = &self.daemon;
@@ -4505,7 +4541,7 @@ impl TelegramGateway {
                 .await;
             return Ok(());
         };
-        let topic_id = self.topic_of(&a).await;
+        let (chat_id, topic_id) = self.approval_destination(&a, chat_id, clicked_topic).await;
         let scope = a.payload["scope"].as_str().unwrap_or("session").to_string();
         let spent = a.payload["spent"].as_f64().unwrap_or(0.0);
         let limit = a.payload["limit"].as_f64().unwrap_or(0.0);
@@ -9615,6 +9651,360 @@ mod tests {
         let answers = t.calls_to(tg::ANSWER_CALLBACK_QUERY).await;
         assert_eq!(answers[0]["text"], "Déjà traité.");
         assert!(texts(&t.calls_to(tg::SEND_MESSAGE).await).is_empty());
+    }
+
+    /// #165 : la session technique d'un run n'a pas de sujet ; la destination de la
+    /// carte doit survivre au clic, même si le callback ne répète pas le thread id.
+    #[tokio::test]
+    async fn workflow_approval_confirmation_stays_in_the_cards_topic() {
+        let (dir, g, t, _p) = gateway().await;
+        let s = &g.daemon.services;
+        let group = -100_165;
+        let topic = 1558;
+        let origin = Origin::Telegram {
+            chat_id: group,
+            topic_id: Some(topic),
+            message_id: None,
+        };
+        let run = crate::workflow::start_run(
+            &g.daemon,
+            "build-verify",
+            json!({"objectif": "corriger le dépôt"}),
+            &origin,
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+        let session = s.sessions.get(&run.session_id).await.unwrap().unwrap();
+        assert_eq!((session.tg_chat_id, session.tg_topic_id), (None, None));
+        let approval = s
+            .approvals
+            .create(
+                penelope_hitl::ApprovalKind::ToolCall,
+                "fs_write",
+                penelope_kernel::risk::RiskClass::Write,
+                json!({"tool": "fs_write", "arguments": {"path": "note.txt", "content": "ok"}}),
+                vec!["Autoriser".into(), "Refuser".into()],
+                Some(&run.session_id),
+                Some(&run.id),
+                false,
+            )
+            .await
+            .unwrap();
+        g.send_approval_card(group, Some(topic), &approval)
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let card = t.calls_to(tg::SEND_MESSAGE).await.pop().unwrap();
+        assert_eq!(card["message_thread_id"], topic);
+        let token = inline_buttons(&card)
+            .into_iter()
+            .find(|(label, _)| label.contains("Autoriser"))
+            .unwrap()
+            .1;
+        // Nouveau daemon sur le même store : la destination de la carte et l'action
+        // survivent ensemble au redémarrage.
+        let reopened = Arc::new(
+            crate::runtime::Services::for_tests(
+                dir.path().to_path_buf(),
+                Arc::new(TestClock::default()),
+            )
+            .await
+            .unwrap(),
+        );
+        let d2 = Arc::new(Daemon::from_services(reopened));
+        let t2 = MockTransport::new();
+        let g2 = TelegramGateway::with_transport(d2, t2.clone());
+        g2.callback("cb165", &token, group, None, 1001, OWNER)
+            .await
+            .unwrap();
+        g2.flush_outbox().await.unwrap();
+        let replies = t2.calls_to(tg::SEND_MESSAGE).await;
+        let confirmation = replies
+            .iter()
+            .find(|m| m["text"].as_str().is_some_and(|x| x.contains("Autoriser")))
+            .expect("confirmation du clic");
+        assert_eq!(confirmation["chat_id"], group);
+        assert_eq!(confirmation["message_thread_id"], topic);
+        g2.daemon
+            .kv_set(
+                &format!("tg.approval_destination.{}", approval.id.as_str()),
+                "",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            g2.recorded_approval_destination(&approval).await,
+            Some((group, Some(topic))),
+            "sans destination de carte, l'origine du run prend le relais"
+        );
+
+        // Un second run dans le même groupe garde son propre sujet, y compris pour
+        // Refuser puis « Déjà tranché » sur l'autre bouton de la carte.
+        let second_topic = 1559;
+        let second_origin = Origin::Telegram {
+            chat_id: group,
+            topic_id: Some(second_topic),
+            message_id: None,
+        };
+        let second = crate::workflow::start_run(
+            &g2.daemon,
+            "build-verify",
+            json!({"objectif": "autre correctif"}),
+            &second_origin,
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+        let second_approval = g2
+            .daemon
+            .services
+            .approvals
+            .create(
+                penelope_hitl::ApprovalKind::ToolCall,
+                "fs_write",
+                penelope_kernel::risk::RiskClass::Write,
+                json!({"tool": "fs_write", "arguments": {"path": "other.txt", "content": "x"}}),
+                vec!["Autoriser".into(), "Refuser".into()],
+                Some(&second.session_id),
+                Some(&second.id),
+                false,
+            )
+            .await
+            .unwrap();
+        t2.clear().await;
+        g2.send_approval_card(group, Some(second_topic), &second_approval)
+            .await
+            .unwrap();
+        g2.flush_outbox().await.unwrap();
+        let second_card = t2.calls_to(tg::SEND_MESSAGE).await.pop().unwrap();
+        let buttons = inline_buttons(&second_card);
+        let deny = buttons
+            .iter()
+            .find(|(label, _)| label.contains("Refuser"))
+            .unwrap()
+            .1
+            .clone();
+        let approve = buttons
+            .iter()
+            .find(|(label, _)| label.contains("Autoriser"))
+            .unwrap()
+            .1
+            .clone();
+        t2.clear().await;
+        g2.callback("cb166", &deny, group, None, 1002, OWNER)
+            .await
+            .unwrap();
+        g2.callback("cb167", &approve, group, None, 1002, OWNER)
+            .await
+            .unwrap();
+        g2.flush_outbox().await.unwrap();
+        let replies = t2.calls_to(tg::SEND_MESSAGE).await;
+        assert!(
+            replies
+                .iter()
+                .any(|m| m["text"].as_str().is_some_and(|x| x.contains("Refusé")))
+        );
+        assert!(replies.iter().any(|m| {
+            m["text"]
+                .as_str()
+                .is_some_and(|x| x.contains("Déjà tranché"))
+        }));
+        assert!(
+            replies
+                .iter()
+                .all(|m| m["message_thread_id"] == second_topic),
+            "{replies:?}"
+        );
+        assert_eq!(
+            g2.daemon
+                .services
+                .approvals
+                .get(second_approval.id.as_str())
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            ApprovalState::Denied
+        );
+
+        let reason_approval = g2
+            .daemon
+            .services
+            .approvals
+            .create(
+                penelope_hitl::ApprovalKind::ToolCall,
+                "fs_write",
+                penelope_kernel::risk::RiskClass::Write,
+                json!({"tool": "fs_write", "arguments": {"path": "reason.txt", "content": "x"}}),
+                vec!["Autoriser".into(), "Refuser".into()],
+                Some(&second.session_id),
+                Some(&second.id),
+                false,
+            )
+            .await
+            .unwrap();
+        t2.clear().await;
+        g2.send_approval_card(group, Some(second_topic), &reason_approval)
+            .await
+            .unwrap();
+        g2.flush_outbox().await.unwrap();
+        let reason_card = t2.calls_to(tg::SEND_MESSAGE).await.pop().unwrap();
+        let reason = inline_buttons(&reason_card)
+            .into_iter()
+            .find(|(label, _)| label.contains("raison"))
+            .unwrap()
+            .1;
+        g2.callback("cb-reason", &reason, group, None, 1003, OWNER)
+            .await
+            .unwrap();
+        assert_eq!(
+            g2.daemon
+                .kv_get(&approval_reason_key(group, Some(second_topic)))
+                .await
+                .unwrap(),
+            Some(reason_approval.id.as_str().to_string())
+        );
+        assert_eq!(
+            g2.daemon
+                .kv_get(&approval_reason_key(group, Some(topic)))
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_budget_and_destructive_cards_keep_the_topic() {
+        let (_dir, g, t, _p) = gateway().await;
+        let group = -100_166;
+        let topic = 1660;
+        let run = crate::workflow::start_run(
+            &g.daemon,
+            "build-verify",
+            json!({"objectif": "vérifier"}),
+            &Origin::Telegram {
+                chat_id: group,
+                topic_id: Some(topic),
+                message_id: None,
+            },
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+        let s = &g.daemon.services;
+        let budget = s
+            .approvals
+            .create(
+                penelope_hitl::ApprovalKind::BudgetExceeded,
+                "budget",
+                penelope_kernel::risk::RiskClass::Write,
+                json!({"budget": true, "scope": "run", "run_id": run.id, "spent": 21.0, "limit": 20.0}),
+                vec!["Arrêter".into()],
+                Some(&run.session_id),
+                Some(&run.id),
+                false,
+            )
+            .await
+            .unwrap();
+        g.send_approval_card(group, Some(topic), &budget)
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let card = t.calls_to(tg::SEND_MESSAGE).await.pop().unwrap();
+        let stop = inline_buttons(&card)
+            .into_iter()
+            .find(|(label, _)| label.contains("Arrêter"))
+            .unwrap()
+            .1;
+        t.clear().await;
+        g.callback("cb-budget", &stop, group, None, 2001, OWNER)
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        assert!(
+            t.calls_to(tg::SEND_MESSAGE)
+                .await
+                .iter()
+                .all(|m| m["message_thread_id"] == topic)
+        );
+
+        let destructive = s
+            .approvals
+            .create(
+                penelope_hitl::ApprovalKind::ToolCall,
+                "shell_exec",
+                penelope_kernel::risk::RiskClass::Destructive,
+                json!({"tool": "shell_exec", "arguments": {"command": "rm note.txt"}, "double": true}),
+                vec!["Autoriser".into(), "Refuser".into()],
+                Some(&run.session_id),
+                Some(&run.id),
+                false,
+            )
+            .await
+            .unwrap();
+        t.clear().await;
+        g.send_approval_card(group, Some(topic), &destructive)
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let card = t.calls_to(tg::SEND_MESSAGE).await.pop().unwrap();
+        let approve = inline_buttons(&card)
+            .into_iter()
+            .find(|(label, _)| label.contains("Autoriser"))
+            .unwrap()
+            .1;
+        t.clear().await;
+        g.callback("cb-double", &approve, group, None, 2002, OWNER)
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let next = t.calls_to(tg::SEND_MESSAGE).await;
+        assert!(
+            next.iter().any(|m| m["text"]
+                .as_str()
+                .is_some_and(|x| x.contains("Seconde confirmation"))),
+            "{next:?}"
+        );
+        assert!(
+            next.iter().all(|m| m["message_thread_id"] == topic),
+            "{next:?}"
+        );
+
+        // Une carte d'effet incertain renvoyée après redémarrage lit l'origine du
+        // run, car sa session technique ne porte ni chat ni sujet.
+        let uncertain = s
+            .approvals
+            .create(
+                penelope_hitl::ApprovalKind::EffectUnknown,
+                "git_push",
+                penelope_kernel::risk::RiskClass::External,
+                json!({"request": {"branch": "fix/165"}}),
+                vec!["C'est fait".into(), "Relancer".into(), "Ignorer".into()],
+                Some(&run.session_id),
+                Some(&run.id),
+                false,
+            )
+            .await
+            .unwrap();
+        t.clear().await;
+        assert_eq!(g.announce_uncertain_effects().await.unwrap(), 1);
+        g.flush_outbox().await.unwrap();
+        let card = t.calls_to(tg::SEND_MESSAGE).await.pop().unwrap();
+        assert_eq!(card["message_thread_id"], topic);
+        assert!(card["text"].as_str().unwrap().contains("git_push"));
+        assert_eq!(
+            s.approvals
+                .get(uncertain.id.as_str())
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            ApprovalState::Pending
+        );
     }
 
     #[tokio::test]
