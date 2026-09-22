@@ -125,6 +125,18 @@ pub struct AsMetadata {
     pub code_challenge_methods_supported: Vec<String>,
     #[serde(default)]
     pub grant_types_supported: Vec<String>,
+    #[serde(default)]
+    pub token_endpoint_auth_methods_supported: Vec<String>,
+}
+
+/// Mode d'authentification au point d'accès des jetons.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientAuthMethod {
+    #[default]
+    None,
+    Post,
+    Basic,
 }
 
 impl AsMetadata {
@@ -156,6 +168,7 @@ impl AsMetadata {
             scopes_supported: arr("scopes_supported"),
             code_challenge_methods_supported: arr("code_challenge_methods_supported"),
             grant_types_supported: arr("grant_types_supported"),
+            token_endpoint_auth_methods_supported: arr("token_endpoint_auth_methods_supported"),
         };
         if m.authorization_endpoint.is_empty() || m.token_endpoint.is_empty() {
             return Err(McpError::OAuth(
@@ -172,6 +185,23 @@ impl AsMetadata {
                 .code_challenge_methods_supported
                 .iter()
                 .any(|m| m == "S256")
+    }
+
+    pub fn client_auth_method(&self, has_secret: bool) -> Result<ClientAuthMethod> {
+        if !has_secret {
+            return Ok(ClientAuthMethod::None);
+        }
+        let methods = &self.token_endpoint_auth_methods_supported;
+        // RFC 8414 : en l'absence de cette propriété, le défaut est client_secret_basic.
+        if methods.is_empty() || methods.iter().any(|m| m == "client_secret_basic") {
+            return Ok(ClientAuthMethod::Basic);
+        }
+        if methods.iter().any(|m| m == "client_secret_post") {
+            return Ok(ClientAuthMethod::Post);
+        }
+        Err(McpError::OAuth(
+            "aucune méthode d'authentification compatible avec `client_secret`".into(),
+        ))
     }
 }
 
@@ -596,6 +626,7 @@ mod tests {
             scopes_supported: vec!["repo:read".into(), "repo:write".into()],
             code_challenge_methods_supported: vec!["S256".into()],
             grant_types_supported: vec!["authorization_code".into(), "refresh_token".into()],
+            token_endpoint_auth_methods_supported: vec![],
         }
     }
 
@@ -790,6 +821,18 @@ mod tests {
         let r = refresh_request_body("rt", "cid", "https://api.example.com/mcp");
         assert_eq!(r["grant_type"], "refresh_token");
         assert_eq!(r["resource"], "https://api.example.com/mcp");
+    }
+
+    #[test]
+    fn confidential_client_method_follows_server_metadata() {
+        let mut m = meta();
+        assert_eq!(m.client_auth_method(false).unwrap(), ClientAuthMethod::None);
+        m.token_endpoint_auth_methods_supported = vec!["client_secret_post".into()];
+        assert_eq!(m.client_auth_method(true).unwrap(), ClientAuthMethod::Post);
+        m.token_endpoint_auth_methods_supported = vec!["client_secret_basic".into()];
+        assert_eq!(m.client_auth_method(true).unwrap(), ClientAuthMethod::Basic);
+        m.token_endpoint_auth_methods_supported = vec!["private_key_jwt".into()];
+        assert!(m.client_auth_method(true).is_err());
     }
 
     #[test]

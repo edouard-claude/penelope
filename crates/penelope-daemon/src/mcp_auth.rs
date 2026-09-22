@@ -11,7 +11,7 @@ use crate::runtime::{Daemon, Services};
 use penelope_kernel::event::EventDraft;
 use penelope_mcp::ServerConfig;
 use penelope_mcp::oauth::{
-    self, AsMetadata, AuthRequest, ClientRegistration, Pkce, RedirectMode, Tokens,
+    self, AsMetadata, AuthRequest, ClientAuthMethod, ClientRegistration, Pkce, RedirectMode, Tokens,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -29,6 +29,10 @@ pub struct Grant {
     pub issuer: String,
     pub token_endpoint: String,
     pub client_id: String,
+    #[serde(default)]
+    pub client_secret_ref: String,
+    #[serde(default)]
+    pub auth_method: ClientAuthMethod,
     pub resource: String,
     pub tokens: Tokens,
 }
@@ -38,6 +42,10 @@ pub struct Grant {
 struct Pending {
     request: AuthRequest,
     client_id: String,
+    #[serde(default)]
+    client_secret_ref: String,
+    #[serde(default)]
+    auth_method: ClientAuthMethod,
     token_endpoint: String,
 }
 
@@ -127,14 +135,23 @@ async fn post_form(
     client: &reqwest::Client,
     url: &str,
     form: &BTreeMap<String, String>,
+    basic: Option<(&str, &str)>,
 ) -> Result<Value, String> {
-    let resp = client
+    let mut request = client
         .post(url)
         .header("Accept", "application/json")
-        .form(form)
+        .form(form);
+    if let Some((client_id, secret)) = basic {
+        // RFC 6749 §2.3.1 applique d'abord l'encodage formulaire aux deux identifiants.
+        let encode = |value: &str| {
+            url::form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>()
+        };
+        request = request.basic_auth(encode(client_id), Some(encode(secret)));
+    }
+    let resp = request
         .send()
         .await
-        .map_err(|e| format!("POST {url} : {e}"))?;
+        .map_err(|e| penelope_observe::redact(&format!("POST {url} : {e}")))?;
     let status = resp.status().as_u16();
     let body: Value = resp.json().await.unwrap_or(Value::Null);
     if status >= 400 {
@@ -142,9 +159,45 @@ async fn post_form(
             .as_str()
             .or_else(|| body["error"].as_str())
             .unwrap_or("refus");
-        return Err(format!("POST {url} : HTTP {status} ({why})"));
+        return Err(penelope_observe::redact(&format!(
+            "POST {url} : HTTP {status} ({why})"
+        )));
     }
     Ok(body)
+}
+
+/// Résout le secret uniquement à l'appel du point d'accès des jetons.
+fn token_client_auth(
+    secrets: &dyn penelope_platform::SecretStore,
+    method: ClientAuthMethod,
+    reference: &str,
+    client_id: &str,
+    body: &mut BTreeMap<String, String>,
+) -> Result<Option<(String, String)>, String> {
+    if method == ClientAuthMethod::None {
+        return Ok(None);
+    }
+    let name = reference
+        .strip_prefix("${SECRET:")
+        .and_then(|s| s.strip_suffix('}'))
+        .ok_or("référence `client_secret` invalide")?;
+    penelope_platform::validate_secret_name(name).map_err(|_| "nom de secret invalide")?;
+    let secret = secrets
+        .get(name)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("secret OAuth `{name}` absent"))?;
+    penelope_observe::register_secret(&secret);
+    match method {
+        ClientAuthMethod::Post => {
+            body.insert("client_secret".into(), secret);
+            Ok(None)
+        }
+        ClientAuthMethod::Basic => {
+            body.remove("client_id");
+            Ok(Some((client_id.into(), secret)))
+        }
+        ClientAuthMethod::None => Ok(None),
+    }
 }
 
 /// Prépare une autorisation : l'URL à ouvrir et la demande mémorisée.
@@ -153,6 +206,7 @@ pub async fn start(
     cfg: &ServerConfig,
     www_authenticate: Option<&str>,
 ) -> Result<AuthStart, String> {
+    cfg.validate().map_err(|e| e.to_string())?;
     let s = &d.services;
     if !matches!(cfg.effective_transport(), "http" | "sse") {
         return Err(format!(
@@ -226,6 +280,9 @@ pub async fn start(
     if !meta.supports_s256() {
         return Err("le serveur d'autorisation ne propose pas PKCE S256".into());
     }
+    let auth_method = meta
+        .client_auth_method(!cfg.client_secret.is_empty())
+        .map_err(|e| e.to_string())?;
     check_endpoint(&meta.authorization_endpoint)?;
     check_endpoint(&meta.token_endpoint)?;
     let issuer = if meta.issuer.is_empty() {
@@ -330,6 +387,8 @@ pub async fn start(
             expires_at_ms,
         },
         client_id,
+        client_secret_ref: cfg.client_secret.clone(),
+        auth_method,
         token_endpoint: meta.token_endpoint.clone(),
     };
     d.kv_set(
@@ -376,19 +435,36 @@ pub async fn complete(d: &Daemon, callback: &str) -> Result<String, String> {
     }
     let code = oauth::validate_callback(&pending.request, &cb).map_err(|e| e.to_string())?;
     check_endpoint(&pending.token_endpoint)?;
-    let body = oauth::token_request_body(
+    let mut body = oauth::token_request_body(
         &code,
         &pending.request.redirect_uri,
         &pending.client_id,
         &pending.request.verifier,
         &pending.request.resource,
     );
-    let v = post_form(&http()?, &pending.token_endpoint, &body).await?;
+    let basic = token_client_auth(
+        s.platform.secrets.as_ref(),
+        pending.auth_method,
+        &pending.client_secret_ref,
+        &pending.client_id,
+        &mut body,
+    )?;
+    let v = post_form(
+        &http()?,
+        &pending.token_endpoint,
+        &body,
+        basic
+            .as_ref()
+            .map(|(id, secret)| (id.as_str(), secret.as_str())),
+    )
+    .await?;
     let tokens = Tokens::parse(&v, s.clock.now_ms()).map_err(|e| e.to_string())?;
     let grant = Grant {
         issuer: pending.request.issuer.clone(),
         token_endpoint: pending.token_endpoint.clone(),
         client_id: pending.client_id.clone(),
+        client_secret_ref: pending.client_secret_ref,
+        auth_method: pending.auth_method,
         resource: pending.request.resource.clone(),
         tokens,
     };
@@ -435,10 +511,24 @@ pub async fn authorization_header(
         let Some(refresh) = grant.tokens.refresh_token.clone() else {
             return Ok(None);
         };
-        let body = oauth::refresh_request_body(&refresh, &grant.client_id, &grant.resource);
-        let v = post_form(&http()?, &grant.token_endpoint, &body)
-            .await
-            .map_err(|e| format!("rafraîchissement du jeton de `{server}` : {e}"))?;
+        let mut body = oauth::refresh_request_body(&refresh, &grant.client_id, &grant.resource);
+        let basic = token_client_auth(
+            s.platform.secrets.as_ref(),
+            grant.auth_method,
+            &grant.client_secret_ref,
+            &grant.client_id,
+            &mut body,
+        )?;
+        let v = post_form(
+            &http()?,
+            &grant.token_endpoint,
+            &body,
+            basic
+                .as_ref()
+                .map(|(id, secret)| (id.as_str(), secret.as_str())),
+        )
+        .await
+        .map_err(|e| format!("rafraîchissement du jeton de `{server}` : {e}"))?;
         let mut tokens = Tokens::parse(&v, now).map_err(|e| e.to_string())?;
         // Rotation : un nouveau jeton de rafraîchissement remplace l'ancien, sinon on le garde.
         if tokens.refresh_token.is_none() {
@@ -602,6 +692,7 @@ pub async fn reconnect_and_tell(d: &Daemon, server: &str) {
 mod tests {
     use super::*;
     use penelope_kernel::clock::TestClock;
+    use penelope_platform::SecretStore;
     use std::sync::Mutex;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -616,6 +707,13 @@ mod tests {
     /// n'en porte aucune et le serveur d'autorisation n'offre pas d'enregistrement
     /// dynamique. Seul un client pré-enregistré passe.
     async fn fake_authorization_server_opts(prereg: bool) -> (String, Seen) {
+        fake_authorization_server_with_auth(prereg, None).await
+    }
+
+    async fn fake_authorization_server_with_auth(
+        prereg: bool,
+        auth_method: Option<&'static str>,
+    ) -> (String, Seen) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let seen: Seen = Arc::new(Mutex::new(Vec::new()));
@@ -659,9 +757,10 @@ mod tests {
                     let method = first.next().unwrap_or("").to_string();
                     let path = first.next().unwrap_or("").to_string();
                     let body = String::from_utf8_lossy(&body).to_string();
+                    let recorded = format!("{head}\n\n{body}");
                     log.lock()
                         .unwrap()
-                        .push((method.clone(), path.clone(), body.clone()));
+                        .push((method.clone(), path.clone(), recorded));
                     let json = match (method.as_str(), path.as_str()) {
                         ("GET", "/.well-known/oauth-protected-resource/mcp") if prereg => {
                             json!({
@@ -678,6 +777,7 @@ mod tests {
                             "authorization_endpoint": format!("{b}/authorize"),
                             "token_endpoint": format!("{b}/token"),
                             "code_challenge_methods_supported": ["S256"],
+                            "token_endpoint_auth_methods_supported": auth_method.into_iter().collect::<Vec<_>>(),
                         }),
                         ("GET", "/.well-known/oauth-authorization-server") => json!({
                             "issuer": b,
@@ -857,6 +957,108 @@ mod tests {
                 .unwrap_err()
                 .contains("HTTPS")
         );
+    }
+
+    async fn confidential_flow(method: &'static str) {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = TestClock::new(1_789_516_800_000);
+        let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
+        let s = Arc::new(
+            crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+                .await
+                .unwrap(),
+        );
+        s.platform
+            .secrets
+            .set("mcp_client_secret", "secret-test")
+            .unwrap();
+        let d = Daemon::from_services(s.clone());
+        let (base, seen) = fake_authorization_server_with_auth(true, Some(method)).await;
+        let cfg = ServerConfig {
+            name: format!("confidentiel-{method}"),
+            transport: "http".into(),
+            url: format!("{base}/mcp"),
+            client_id: "client-test".into(),
+            client_secret: "${SECRET:mcp_client_secret}".into(),
+            ..Default::default()
+        };
+        let started = start(&d, &cfg, None).await.unwrap();
+        let state = param(&started.url, "state");
+        complete(&d, &format!("?code=abc&state={state}"))
+            .await
+            .unwrap();
+        clock.advance_hours(2);
+        assert_eq!(
+            authorization_header(&s, &cfg.name, &cfg.url)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("Bearer at-2")
+        );
+        let calls: Vec<String> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, path, _)| path == "/token")
+            .map(|(_, _, request)| request.clone())
+            .collect();
+        assert_eq!(calls.len(), 2, "échange et rafraîchissement");
+        for request in calls {
+            match method {
+                "client_secret_post" => {
+                    assert!(request.contains("client_secret=secret-test"), "{request}")
+                }
+                "client_secret_basic" => {
+                    assert!(
+                        request
+                            .to_ascii_lowercase()
+                            .contains("authorization: basic"),
+                        "{request}"
+                    );
+                    assert!(!request.contains("client_secret="), "{request}");
+                }
+                _ => unreachable!(),
+            }
+        }
+        let grant = s
+            .platform
+            .secrets
+            .get(&secret_name(&cfg.name))
+            .unwrap()
+            .unwrap();
+        assert!(
+            !grant.contains("secret-test"),
+            "la valeur ne doit pas être persistée"
+        );
+        assert!(grant.contains("${SECRET:mcp_client_secret}"));
+    }
+
+    #[tokio::test]
+    async fn confidential_client_uses_secret_post_for_exchange_and_refresh() {
+        confidential_flow("client_secret_post").await;
+    }
+
+    #[tokio::test]
+    async fn confidential_client_uses_secret_basic_for_exchange_and_refresh() {
+        confidential_flow("client_secret_basic").await;
+    }
+
+    #[test]
+    fn confidential_client_secret_is_registered_for_redaction() {
+        let secrets = penelope_platform::MemorySecretStore::new();
+        secrets.set("oauth_test", "secret-redaction-test").unwrap();
+        let mut body = BTreeMap::new();
+        token_client_auth(
+            &secrets,
+            ClientAuthMethod::Post,
+            "${SECRET:oauth_test}",
+            "client-test",
+            &mut body,
+        )
+        .unwrap();
+        let rendered =
+            penelope_observe::redact(&format!("erreur distante : {}", body["client_secret"]));
+        assert!(!rendered.contains("secret-redaction-test"), "{rendered}");
     }
 
     #[test]

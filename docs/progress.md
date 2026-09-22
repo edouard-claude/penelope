@@ -2599,6 +2599,21 @@ règle durable. Le schéma de l'outil donne des exemples. Les tests couvrent les
 les chemins refusés avant lancement, la réutilisation d'un clone, un vrai clone local
 explicite, la migration et la portée des règles.
 
+### 0.17.50
+
+#### Les clients MCP OAuth confidentiels gardent leur secret hors configuration (#174)
+
+Une déclaration MCP peut référencer un `client_secret` par `${SECRET:nom}` ; toute valeur
+en clair et toute référence autre que le magasin de secrets sont refusées. La valeur est
+résolue seulement lors de l'échange du code et du rafraîchissement, puis enregistrée dans
+le rédacteur avant l'appel réseau. Les demandes et autorisations persistées ne conservent
+que la référence.
+
+Pénélope lit `token_endpoint_auth_methods_supported`, prend en charge
+`client_secret_basic` et `client_secret_post`, et conserve le client public PKCE par
+défaut. Les tests simulent les deux méthodes, l'échange, le rafraîchissement et vérifient
+que la valeur du secret n'est pas persistée.
+
 ### Routine de livraison
 
 Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #147) :

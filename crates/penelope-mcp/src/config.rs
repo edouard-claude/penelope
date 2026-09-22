@@ -24,6 +24,8 @@ pub struct ServerConfig {
     /// En-têtes personnalisés, placeholders `${SECRET:…}` acceptés.
     pub headers: BTreeMap<String, String>,
     pub client_id: String,
+    /// Référence au magasin de secrets pour un client OAuth confidentiel.
+    pub client_secret: String,
     pub scopes: Vec<String>,
 
     // --- comportement ---
@@ -62,6 +64,7 @@ impl Default for ServerConfig {
             url: String::new(),
             headers: BTreeMap::new(),
             client_id: String::new(),
+            client_secret: String::new(),
             scopes: Vec::new(),
             lazy_start: true,
             idle_timeout: "10m".into(),
@@ -142,6 +145,20 @@ impl ServerConfig {
                 }
             }
             other => return Err(bad(&format!("transport inconnu : `{other}`"))),
+        }
+        if !self.client_secret.is_empty() {
+            let name = self
+                .client_secret
+                .strip_prefix("${SECRET:")
+                .and_then(|s| s.strip_suffix('}'));
+            if name.is_none_or(|n| penelope_platform::secrets::validate_secret_name(n).is_err()) {
+                return Err(bad(
+                    "`client_secret` doit être une référence ${SECRET:nom} valide",
+                ));
+            }
+            if self.client_id.is_empty() {
+                return Err(bad("`client_id` est obligatoire avec `client_secret`"));
+            }
         }
         if crate::protocol::ProtocolVersion::parse(&self.protocol).is_none() {
             return Err(bad(&format!(
@@ -334,6 +351,26 @@ mod tests {
         assert!(c.validate().is_err());
         c.url = "https://api.example.com/mcp".into();
         c.validate().unwrap();
+    }
+
+    #[test]
+    fn confidential_client_requires_a_secret_reference() {
+        let mut c = ServerConfig::http("api", "https://api.example.com/mcp");
+        c.client_id = "client".into();
+        c.client_secret = "${SECRET:mcp_client_secret}".into();
+        c.validate().unwrap();
+        for invalid in [
+            "literal-secret",
+            "${ENV:SECRET}",
+            "${SECRET:}",
+            "${SECRET:a}suffix",
+        ] {
+            c.client_secret = invalid.into();
+            assert!(c.validate().is_err(), "{invalid}");
+        }
+        c.client_secret = "${SECRET:mcp_client_secret}".into();
+        c.client_id.clear();
+        assert!(c.validate().is_err());
     }
 
     #[test]
