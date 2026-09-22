@@ -390,6 +390,12 @@ rôle du workflow, paramètres complétés par Pénélope, brief de la discussio
 boutons seulement, « ▶️ Lancer » et « ⏸ Pas encore » (pas de « Toujours » : chaque
 lancement se valide). « Pas encore » rend la main à la conversation avec la raison du
 refus. Le run parle ensuite dans le même chat et le même sujet, formulaire compris.
+Les approbations d'outils d'un run gardent aussi cette destination : la carte, le clic
+Autoriser ou Refuser, « Déjà tranché », la seconde confirmation destructive et la réponse
+de budget reviennent dans le sujet du run. La destination de la carte est conservée en
+base pour un clic après redémarrage ; si elle manque, l'origine enregistrée du run sert
+de repli, puis la session. Une raison de refus tapée dans un autre sujet ne tranche pas
+l'approbation.
 
 ```
 ▶️ Lancer « Ticket → correctif → déploiement » ? (ticket-to-deploy)
