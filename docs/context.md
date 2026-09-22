@@ -176,3 +176,14 @@ compacter, réserve épuisée), `context.compaction_failed`, `context.compacted`
 `/budget` et `self_status` donnent la taille réelle du contexte, les deux seuils et la
 dernière compaction ; le compteur `penelope_compactions_total` de `penelope metrics` les
 compte par déclencheur et par issue.
+
+Le champ `evidence` de `context.compacted` observe sans bloquer les actions marquées
+`TODO:`, `À faire:` ou `- [ ]` et les identifiants des messages utilisateur du
+transcript échantillonné du lot.
+Il les recherche dans le contexte final, **ancres et citations verbatim comprises**.
+L'événement donne les nombres trouvés et absents, avec au plus trois exemples de
+80 caractères par catégorie ; la métrique
+`penelope_compaction_missing_evidence_total` ne contient que les comptes. Le contrôle
+est une comparaison textuelle : une reformulation peut apparaître comme absente, et
+une obligation non marquée n'est pas détectée. Il n'ajoute ni appel au modèle ni
+modification du résumé accepté, y compris lors d'une compaction sans modèle.

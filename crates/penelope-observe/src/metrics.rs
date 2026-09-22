@@ -221,6 +221,11 @@ pub fn register_default_metrics() {
     describe("penelope_mcp_servers_ready", "Serveurs MCP prêts", "");
     describe("penelope_approvals_pending", "Approbations en attente", "");
     describe("penelope_compactions_total", "Compactions", "");
+    describe(
+        "penelope_compaction_missing_evidence_total",
+        "Indices exacts absents du contexte compacté",
+        "",
+    );
     describe("penelope_effects_unknown", "Effets en état inconnu", "");
     describe("penelope_rss_bytes", "Mémoire résidente du daemon", "bytes");
 }

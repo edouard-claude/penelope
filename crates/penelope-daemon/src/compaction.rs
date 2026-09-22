@@ -17,7 +17,7 @@ use penelope_llm::provider::{CancelToken, collect_stream};
 use penelope_llm::types::ChatRequest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -26,6 +26,108 @@ const MAX_PASSES: usize = 12;
 /// Échecs consécutifs du résumeur au-delà desquels la compaction se fait sans modèle
 /// (issue #131).
 const MECHANICAL_AFTER: u32 = 3;
+
+/// Observation prudente des éléments explicites de messages utilisateur.
+/// Une paraphrase peut être signalée comme absente : ce n'est pas un verdict
+/// sémantique, et ce contrôle ne bloque jamais la compaction (issue #179).
+#[derive(Debug, Serialize)]
+struct FidelityObservation {
+    actions_total: usize,
+    actions_missing: usize,
+    action_samples: Vec<String>,
+    identifiers_total: usize,
+    identifiers_missing: usize,
+    identifier_samples: Vec<String>,
+}
+
+fn observe_fidelity(job: &SummaryJob, summary: &Value) -> FidelityObservation {
+    let rendered = penelope_context::compaction::render_summary(
+        summary,
+        &penelope_context::anchors::render(&job.anchors),
+        &job.verbatim_users,
+    );
+    let normalised_rendered = normalise_evidence(&rendered);
+    let mut user_text = String::new();
+    let mut actions = BTreeMap::<String, String>::new();
+    let mut in_user = false;
+    for raw in job.source_text.lines() {
+        let text = if raw.starts_with("[UTILISATEUR #") {
+            in_user = true;
+            raw.split_once("] ").map(|(_, text)| text).unwrap_or("")
+        } else if ["[ASSISTANT #", "[OUTIL #", "[SYSTÈME #"]
+            .iter()
+            .any(|prefix| raw.starts_with(prefix))
+        {
+            in_user = false;
+            ""
+        } else {
+            raw
+        };
+        if !in_user {
+            continue;
+        }
+        user_text.push_str(text);
+        user_text.push('\n');
+        let trimmed = text
+            .trim_start()
+            .trim_start_matches(['-', '*', ' '])
+            .trim_start();
+        let action = if let Some(rest) = trimmed.strip_prefix("[ ]") {
+            Some(rest)
+        } else {
+            let lower = trimmed.to_lowercase();
+            ["todo:", "à faire:", "a faire:"]
+                .iter()
+                .find_map(|prefix| lower.starts_with(prefix).then(|| &trimmed[prefix.len()..]))
+        };
+        if let Some(action) = action {
+            let action = action.trim();
+            if !action.is_empty() {
+                actions
+                    .entry(normalise_evidence(action))
+                    .or_insert_with(|| action.to_string());
+            }
+        }
+    }
+    let missing_actions: Vec<&String> = actions
+        .iter()
+        .filter_map(|(normalised, original)| {
+            (!normalised_rendered.contains(normalised)).then_some(original)
+        })
+        .collect();
+    let identifiers: BTreeSet<String> = penelope_context::anchors::extract(&user_text)
+        .into_iter()
+        .filter(|a| a.kind != penelope_context::AnchorKind::Error)
+        .map(|a| a.value)
+        .collect();
+    let missing_identifiers: Vec<&String> = identifiers
+        .iter()
+        .filter(|id| !rendered.contains(id.as_str()))
+        .collect();
+    FidelityObservation {
+        actions_total: actions.len(),
+        actions_missing: missing_actions.len(),
+        action_samples: missing_actions
+            .into_iter()
+            .take(3)
+            .map(|s| s.chars().take(80).collect())
+            .collect(),
+        identifiers_total: identifiers.len(),
+        identifiers_missing: missing_identifiers.len(),
+        identifier_samples: missing_identifiers
+            .into_iter()
+            .take(3)
+            .map(|s| s.chars().take(80).collect())
+            .collect(),
+    }
+}
+
+fn normalise_evidence(text: &str) -> String {
+    text.to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
 /// Délai du résumeur, proportionné au lot : 120 s, plus une seconde par millier de tokens
 /// de source, 420 s au plus. Au-delà, le lot est en échec (issue #131).
@@ -1021,6 +1123,30 @@ async fn publish(
     report.tokens_summary = tokens_summary;
     report.model = Some(pending.model.clone());
 
+    // Observation en shadow du contexte réellement rendu : ni le résumé accepté
+    // ni le lot source ne sont retouchés. Les métriques ne portent aucun texte.
+    let fidelity = observe_fidelity(job, &pending.summary);
+    if fidelity.actions_missing > 0 || fidelity.identifiers_missing > 0 {
+        tracing::warn!(
+            session = %session_id,
+            actions_missing = fidelity.actions_missing,
+            identifiers_missing = fidelity.identifiers_missing,
+            "indices explicites absents du contexte compacté"
+        );
+    }
+    for (kind, count) in [
+        ("action", fidelity.actions_missing),
+        ("identifier", fidelity.identifiers_missing),
+    ] {
+        if count > 0 {
+            penelope_observe::metrics::counter_inc(
+                "penelope_compaction_missing_evidence_total",
+                &[("kind", kind)],
+                count as f64,
+            );
+        }
+    }
+
     s.events
         .append(
             EventDraft::new(
@@ -1036,6 +1162,7 @@ async fn publish(
                     "updated": job.previous_node_id,
                     "model": pending.model,
                     "trigger": trigger.as_str(),
+                    "evidence": fidelity,
                 }),
             )
             .session(session_id),
@@ -1261,6 +1388,87 @@ mod tests {
         "fichiers_et_ressources": "db/schema.sql", "prochaines_etapes": "migrer ce soir",
         "contexte_critique": ""}"#;
 
+    /// #179 : l'observation voit une action explicite et un identifiant perdus,
+    /// sans modifier le résumé accepté.
+    #[test]
+    fn fidelity_observation_reports_missing_evidence_without_rewriting_summary() {
+        let job = SummaryJob {
+            session_id: "s1".into(),
+            from_seq: 1,
+            to_seq: 1,
+            chunk_from_seq: 1,
+            source_text: "[UTILISATEUR #1] TODO: envoyer le rapport de PROJ-42\n".into(),
+            previous_summary: None,
+            previous_node_id: None,
+            anchors: vec![],
+            verbatim_users: vec![],
+            tokens_src: 20,
+            batches: vec![(1, 1)],
+        };
+        let summary = json!({"objectif": "préparer le projet"});
+        let before = summary.clone();
+        let observed = observe_fidelity(&job, &summary);
+        assert_eq!(observed.actions_total, 1);
+        assert_eq!(observed.actions_missing, 1);
+        assert_eq!(observed.identifiers_total, 1);
+        assert_eq!(observed.identifiers_missing, 1);
+        assert_eq!(summary, before);
+    }
+
+    /// #179 : le contrôle porte sur le contexte final, y compris les ancres et
+    /// les messages utilisateur conservés, pas seulement sur le texte du modèle.
+    #[test]
+    fn fidelity_observation_counts_automatically_preserved_evidence() {
+        let job = SummaryJob {
+            session_id: "s1".into(),
+            from_seq: 1,
+            to_seq: 1,
+            chunk_from_seq: 1,
+            source_text: "[UTILISATEUR #1] TODO: envoyer le rapport de PROJ-42\n".into(),
+            previous_summary: None,
+            previous_node_id: None,
+            anchors: penelope_context::anchors::extract("PROJ-42"),
+            verbatim_users: vec!["TODO: envoyer le rapport de PROJ-42".into()],
+            tokens_src: 20,
+            batches: vec![(1, 1)],
+        };
+        let observed = observe_fidelity(&job, &json!({"objectif": "préparer le projet"}));
+        assert_eq!(observed.actions_missing, 0);
+        assert_eq!(observed.identifiers_missing, 0);
+    }
+
+    /// #179 : le diagnostic reste limité aux messages utilisateur et borne le
+    /// texte enregistré dans l'événement.
+    #[test]
+    fn fidelity_observation_bounds_samples_and_ignores_other_roles() {
+        let job = SummaryJob {
+            session_id: "s1".into(),
+            from_seq: 1,
+            to_seq: 2,
+            chunk_from_seq: 1,
+            source_text: format!(
+                "[ASSISTANT #1] TODO: ignorer PROJ-999\n[UTILISATEUR #2] TODO: {} PROJ-42\n- [ ] vérifier PROJ-43\n",
+                "envoyer le rapport ".repeat(10)
+            ),
+            previous_summary: None,
+            previous_node_id: None,
+            anchors: vec![],
+            verbatim_users: vec![],
+            tokens_src: 100,
+            batches: vec![(1, 2)],
+        };
+        let observed = observe_fidelity(&job, &json!({"objectif": "travail en cours"}));
+        assert_eq!(observed.actions_total, 2);
+        assert_eq!(observed.identifiers_total, 2);
+        assert_eq!(observed.identifier_samples, vec!["PROJ-42", "PROJ-43"]);
+        assert!(
+            observed
+                .action_samples
+                .iter()
+                .all(|s| s.chars().count() <= 80)
+        );
+    }
+
     async fn daemon() -> (tempfile::TempDir, Arc<Daemon>, Arc<MockProvider>) {
         let dir = tempfile::tempdir().unwrap();
         let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
@@ -1373,6 +1581,8 @@ mod tests {
             .find(|e| e.kind == "context.compacted")
             .expect("événement de compaction");
         assert_eq!(ev.payload["trigger"], "manual");
+        assert!(ev.payload["evidence"]["actions_total"].is_number());
+        assert!(ev.payload["evidence"]["identifiers_missing"].is_number());
 
         // Rien de neuf : pas de second appel au résumeur, même forcé.
         let again = compact(&d, &sid, Trigger::Background, None).await.unwrap();
@@ -1518,6 +1728,9 @@ mod tests {
         assert_eq!(sent.len(), 1, "{sent:?}");
         assert!(sent[0].contains("ne se résumait plus"), "{sent:?}");
         let events = s.events.session_events(&sid, 0).await.unwrap();
+        assert!(events.iter().any(|e| {
+            e.kind == "context.compacted" && e.payload["evidence"]["actions_total"].is_number()
+        }));
         assert!(
             events
                 .iter()

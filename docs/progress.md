@@ -8,7 +8,7 @@ Dernière mise à jour : 22 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1713 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
+- **1716 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2635,6 +2635,19 @@ la même session, même à des dates différentes. Elle exige deux occurrences r
 et deux sessions traçables distinctes. Ce critère évite de compter deux fois une
 seule trajectoire ; il reste un indicateur de tâches indépendantes, pas leur preuve.
 Le test couvre aussi les candidats sans session.
+
+### 0.17.53
+
+#### La compaction relève les indices explicites absents du contexte final (#179)
+
+L'événement `context.compacted` compte désormais les actions marquées `TODO:`,
+`À faire:` ou `- [ ]` et les identifiants des messages utilisateur présents dans le
+transcript échantillonné du lot. Le contrôle les compare au contexte final, après
+ajout mécanique des ancres et des citations verbatim. Il conserve au plus trois
+exemples de 80 caractères par catégorie dans l'événement ; la métrique agrégée ne
+porte que les nombres.
+Le résultat du résumeur, y compris le repli sans modèle, ne change pas. Ce contrôle
+textuel reste indicatif : une paraphrase peut être signalée comme manquante.
 
 ### Routine de livraison
 
