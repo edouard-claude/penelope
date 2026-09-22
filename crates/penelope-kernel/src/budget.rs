@@ -5,6 +5,7 @@
 
 use crate::clock::SharedClock;
 use crate::error::Result;
+use crate::event::{EventDraft, EventLog};
 use penelope_store::Store;
 use penelope_store::rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -141,6 +142,7 @@ pub struct BudgetLedger {
     clock: SharedClock,
     watcher: Watcher,
     timezone: Option<Timezone>,
+    events: Option<EventLog>,
 }
 
 impl BudgetLedger {
@@ -151,6 +153,7 @@ impl BudgetLedger {
             clock,
             watcher: Watcher::default(),
             timezone: None,
+            events: None,
         }
     }
 
@@ -158,6 +161,12 @@ impl BudgetLedger {
     /// relèvement, `/usage` et les regroupements par jour suivent minuit **local**.
     pub fn with_timezone(mut self, tz: impl Fn() -> String + Send + Sync + 'static) -> Self {
         self.timezone = Some(std::sync::Arc::new(tz));
+        self
+    }
+
+    /// Tous les appels LLM enregistrés par le ledger alimentent le même flux durable.
+    pub fn with_events(mut self, events: EventLog) -> Self {
+        self.events = Some(events);
         self
     }
 
@@ -217,7 +226,34 @@ impl BudgetLedger {
 
     pub async fn record(&self, u: UsageRecord) -> Result<()> {
         let (session, run) = (u.session_id.clone(), u.run_id.clone());
-        self.insert(u).await?;
+        self.insert(u.clone()).await?;
+        if let Some(events) = &self.events {
+            let mut event = EventDraft::new(
+                "runtime.llm",
+                serde_json::json!({
+                    "model": u.model,
+                    "provider": u.provider,
+                    "role": u.role,
+                    "turn_id": u.turn_id,
+                    "generation_id": u.generation_id,
+                    "prompt_tokens": u.prompt,
+                    "completion_tokens": u.completion,
+                    "cached_tokens": u.cached,
+                    "reasoning_tokens": u.reasoning,
+                    "cost_usd": u.cost_usd,
+                    "cost_estimated": u.estimated,
+                }),
+            );
+            if let Some(session_id) = &session {
+                event = event.session(session_id);
+            }
+            if let Some(run_id) = &run {
+                event = event.run(run_id);
+            }
+            if let Err(error) = events.append(event).await {
+                tracing::warn!(%error, "consommation LLM sans événement runtime");
+            }
+        }
         let watcher = self.watcher.read().ok().and_then(|g| g.clone());
         if let Some(w) = watcher {
             w.recorded(session.as_deref(), run.as_deref());
@@ -673,6 +709,32 @@ mod tests {
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].0, "m");
         assert_eq!(b[0].2, 330);
+    }
+
+    #[tokio::test]
+    async fn every_recorded_model_usage_has_a_runtime_event() {
+        let store = Store::open_memory().unwrap();
+        let clock = Arc::new(TestClock::default());
+        let events = crate::event::EventLog::new(store.clone(), clock.clone());
+        let ledger = BudgetLedger::new(store, clock).with_events(events.clone());
+        ledger
+            .record(UsageRecord {
+                session_id: Some("s1".into()),
+                model: "model-a".into(),
+                provider: "openrouter".into(),
+                prompt: 12,
+                completion: 3,
+                cost_usd: 0.02,
+                estimated: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let logged = events.range(0, 10).await.unwrap();
+        assert_eq!(logged.len(), 1);
+        assert_eq!(logged[0].kind, "runtime.llm");
+        assert_eq!(logged[0].payload["prompt_tokens"], 12);
+        assert_eq!(logged[0].payload["cost_usd"], 0.02);
     }
 
     fn conso(cost: f64) -> UsageRecord {

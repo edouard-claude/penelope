@@ -1075,6 +1075,20 @@ pub struct Observability {
     /// Niveau de journalisation du daemon (`info`, `debug`, `warn`…), lu au démarrage ;
     /// la variable `PENELOPE_LOG` l'emporte.
     pub log_level: String,
+    /// Écoute WebSocket locale, active seulement si un consommateur est déclaré.
+    pub runtime_stream_bind: String,
+    /// Chaque consommateur possède son propre secret et son filtre d'événements.
+    pub runtime_consumers: Vec<RuntimeConsumer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct RuntimeConsumer {
+    pub name: String,
+    /// Nom dans le magasin de secrets, jamais la valeur du jeton.
+    pub token_secret: String,
+    /// Types exacts d'événements ; vide : tous les types.
+    pub kinds: Vec<String>,
 }
 
 impl Default for Observability {
@@ -1084,6 +1098,8 @@ impl Default for Observability {
             prometheus: "127.0.0.1:9464".into(),
             log_retention_days: 14,
             log_level: "info".into(),
+            runtime_stream_bind: "127.0.0.1:9465".into(),
+            runtime_consumers: Vec::new(),
         }
     }
 }
@@ -1430,6 +1446,31 @@ impl Config {
             KernelError::config(format!("fuseau inconnu : {}", self.owner.timezone))
         })?;
 
+        if !self.observability.runtime_consumers.is_empty() {
+            let bind = self
+                .observability
+                .runtime_stream_bind
+                .parse::<std::net::SocketAddr>()
+                .map_err(|_| KernelError::config("observability.runtime_stream_bind invalide"))?;
+            if bind.ip() != std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST) || bind.port() == 0
+            {
+                return Err(KernelError::config(
+                    "observability.runtime_stream_bind doit être 127.0.0.1 avec un port non nul",
+                ));
+            }
+            let mut names = std::collections::BTreeSet::new();
+            for consumer in &self.observability.runtime_consumers {
+                if consumer.name.trim().is_empty()
+                    || !names.insert(&consumer.name)
+                    || consumer.token_secret.trim().is_empty()
+                {
+                    return Err(KernelError::config(
+                        "chaque consommateur runtime doit avoir un nom unique et un token_secret",
+                    ));
+                }
+            }
+        }
+
         if !matches!(self.telegram.mode.as_str(), "polling" | "webhook") {
             return Err(KernelError::config(
                 "telegram.mode doit valoir `polling` ou `webhook`",
@@ -1726,8 +1767,14 @@ impl ApplyResult {
     }
 }
 
-/// Les seuls chemins pour lesquels `RequiresRestart` est acceptable (§4.4).
-pub const RESTART_ONLY_PATHS: &[&str] = &["store.path", "rpc.socket", "telegram.token"];
+/// Chemins pour lesquels `RequiresRestart` est acceptable (§4.4).
+pub const RESTART_ONLY_PATHS: &[&str] = &[
+    "store.path",
+    "rpc.socket",
+    "telegram.token",
+    "observability.runtime_stream_bind",
+    "observability.runtime_consumers",
+];
 
 pub fn restart_allowed(path: &str) -> bool {
     RESTART_ONLY_PATHS.iter().any(|p| path.starts_with(p))
@@ -2645,8 +2692,28 @@ mod tests {
     }
 
     #[test]
+    fn runtime_stream_requires_loopback_and_per_consumer_token() {
+        let mut config = cfg();
+        config.observability.runtime_consumers = vec![RuntimeConsumer {
+            name: "watchdog".into(),
+            token_secret: "runtime_watchdog_token".into(),
+            kinds: vec!["runtime.tool".into()],
+        }];
+        assert!(config.validate().is_ok());
+        config.observability.runtime_stream_bind = "0.0.0.0:9465".into();
+        assert!(config.validate().is_err());
+        config.observability.runtime_stream_bind = "127.0.0.1:9465".into();
+        config.observability.runtime_consumers[0]
+            .token_secret
+            .clear();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
     fn restart_only_paths_are_limited() {
         assert!(restart_allowed("telegram.token"));
+        assert!(restart_allowed("observability.runtime_stream_bind"));
+        assert!(restart_allowed("observability.runtime_consumers"));
         assert!(restart_allowed("store.path"));
         assert!(!restart_allowed("runners.count"));
     }

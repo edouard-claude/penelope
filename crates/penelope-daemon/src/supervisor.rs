@@ -118,6 +118,22 @@ impl Daemon {
             }),
             tokio::spawn(crate::upgrade::confirm_when_healthy(self.clone())),
         ];
+        if !self
+            .services
+            .config
+            .config()
+            .observability
+            .runtime_consumers
+            .is_empty()
+        {
+            tasks.push(supervised("runtime.stream", |d| {
+                Box::pin(async move {
+                    if let Err(error) = crate::runtime_events::serve(d).await {
+                        tracing::error!(%error, "flux runtime indisponible");
+                    }
+                }) as BoxLoop
+            }));
+        }
 
         // Telegram construit d'abord (sans réseau) : un serveur MCP qui se connecte sait déjà
         // si un propriétaire peut répondre à ses demandes d'élicitation (issue #12).

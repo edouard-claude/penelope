@@ -71,15 +71,17 @@ impl Services {
 
         let events = EventLog::new(store.clone(), clock.clone());
         let effects = EffectLedger::new(store.clone(), clock.clone());
-        let sessions = SessionStore::new(store.clone(), clock.clone());
+        let sessions = SessionStore::new(store.clone(), clock.clone()).with_events(events.clone());
         let lease_ttl = penelope_kernel::config::parse_duration(&cfg.runners.lease_ttl)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(60_000);
         let turns = TurnQueue::new(store.clone(), clock.clone(), lease_ttl);
-        let budget = BudgetLedger::new(store.clone(), clock.clone()).with_timezone({
-            let config = config.clone();
-            move || config.config().owner.timezone.clone()
-        });
+        let budget = BudgetLedger::new(store.clone(), clock.clone())
+            .with_events(events.clone())
+            .with_timezone({
+                let config = config.clone();
+                move || config.config().owner.timezone.clone()
+            });
 
         let catalog = Catalog::new();
         let llm_state = LlmStateMachine::new(store.clone(), clock.clone());
@@ -102,7 +104,8 @@ impl Services {
             cfg.mcp.eager_total_max_bytes,
         );
 
-        let approvals = ApprovalStore::new(store.clone(), clock.clone());
+        let approvals =
+            ApprovalStore::new(store.clone(), clock.clone()).with_events(events.clone());
         let policies = PolicyEngine::new(store.clone(), clock.clone());
         let mut templates = TemplateRegistry::with_builtins();
         templates.load_dir(&dirs.templates());
@@ -189,16 +192,19 @@ impl Services {
         );
         let mcp_tools = ToolRegistry::new(store.clone(), 30, 8192, 65536);
         let known = workflow_known(&cfg, &mcp_tools).await;
+        let events = EventLog::new(store.clone(), clock.clone());
 
         Ok(Services {
-            events: EventLog::new(store.clone(), clock.clone()),
+            events: events.clone(),
             effects: EffectLedger::new(store.clone(), clock.clone()),
-            sessions: SessionStore::new(store.clone(), clock.clone()),
+            sessions: SessionStore::new(store.clone(), clock.clone()).with_events(events.clone()),
             turns: TurnQueue::new(store.clone(), clock.clone(), 60_000),
-            budget: BudgetLedger::new(store.clone(), clock.clone()).with_timezone({
-                let config = config.clone();
-                move || config.config().owner.timezone.clone()
-            }),
+            budget: BudgetLedger::new(store.clone(), clock.clone())
+                .with_events(events.clone())
+                .with_timezone({
+                    let config = config.clone();
+                    move || config.config().owner.timezone.clone()
+                }),
             llm_state: LlmStateMachine::new(store.clone(), clock.clone()),
             memory: MemoryIndex::new(store.clone(), clock.clone()).with_half_life({
                 let config = config.clone();
@@ -207,7 +213,7 @@ impl Services {
             candidates: CandidateStore::new(store.clone(), clock.clone()),
             intents: IntentStore::new(store.clone(), clock.clone()),
             skills: SkillRegistry::new(store.clone()),
-            approvals: ApprovalStore::new(store.clone(), clock.clone()),
+            approvals: ApprovalStore::new(store.clone(), clock.clone()).with_events(events.clone()),
             policies: PolicyEngine::new(store.clone(), clock.clone()),
             templates: Arc::new(TemplateRegistry::with_builtins()),
             actions: ActionStore::new(store.clone(), clock.clone(), 42),

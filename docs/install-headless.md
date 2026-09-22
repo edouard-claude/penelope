@@ -505,6 +505,8 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `observability.prometheus` | `"127.0.0.1:9464"` | Adresse d'exposition Prometheus. Sans effet dans cette version : les métriques se lisent par `penelope metrics`. |
 | `observability.log_retention_days` | `14` | Durée de conservation des journaux, en jours. |
 | `observability.log_level` | `"info"` | Niveau de journalisation du daemon (`info`, `debug`, `warn`…), lu au démarrage ; la variable `PENELOPE_LOG` l'emporte. |
+| `observability.runtime_stream_bind` | `"127.0.0.1:9465"` | Écoute WebSocket locale, active seulement si un consommateur est déclaré. |
+| `observability.runtime_consumers` | `[]` | Chaque consommateur possède son propre secret et son filtre d'événements. |
 
 **[tools]**
 
@@ -2125,6 +2127,9 @@ rien n'est plus recopié sur stderr (`daemon.err.log` ne garde que les paniques)
 `observability.log_level` règle le niveau. `penelope metrics` donne les compteurs du daemon
 en texte Prometheus : tours par issue et leur durée, appels d'outils par outil,
 approbations en attente, effets incertains, mémoire résidente.
+
+Le [flux runtime](runtime-events.md) expose les événements commités à des consommateurs
+locaux authentifiés, avec replay et filtres par type. Il est désactivé par défaut.
 
 La CLI parle au daemon par la socket `{state}/rpc.sock`. Chaque requête porte un jeton de
 session tiré à chaque démarrage et rangé à côté (`rpc.token`, lisible par le seul

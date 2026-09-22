@@ -1763,7 +1763,8 @@ impl NativeToolExecutor {
         args: &Value,
         cancel: &penelope_llm::CancelToken,
     ) -> Result<ToolOutcome, ToolError> {
-        match self.dispatch(name, args, cancel).await {
+        let started = std::time::Instant::now();
+        let result = match self.dispatch(name, args, cancel).await {
             Err(e) => Err(self.explain(name, args, e).await),
             Ok(o) => {
                 // Un secret lu (fichier, sortie de commande, page) devient une valeur
@@ -1773,7 +1774,36 @@ impl NativeToolExecutor {
                 penelope_observe::redact::learn_secrets(&o.text);
                 Ok(o)
             }
+        };
+        let (tool, effective_args) = if name == "tool_call" {
+            (
+                args.get("name").and_then(Value::as_str).unwrap_or(name),
+                effective_arguments(name, args),
+            )
+        } else {
+            (name, args.clone())
+        };
+        let (ok, output) = match &result {
+            Ok(outcome) => (!outcome.is_error, outcome.value.clone()),
+            Err(error) => (false, json!({"error": error.to_string()})),
+        };
+        let payload = json!({
+            "tool": tool,
+            "args": crate::runtime_events::bounded_redacted(&crate::agent::without_intention(&effective_args)),
+            "result": crate::runtime_events::bounded_redacted(&output),
+            "ok": ok,
+            "duration_ms": started.elapsed().as_millis() as u64,
+            "cost_usd_estimated": if tool.starts_with("mcp__") { Value::Null } else { json!(0.0) },
+        });
+        let mut event = penelope_kernel::event::EventDraft::new("runtime.tool", payload)
+            .session(&self.env.session_id);
+        if let Some(run_id) = &self.env.run_id {
+            event = event.run(run_id);
         }
+        if let Err(error) = self.services.events.append(event).await {
+            tracing::warn!(%error, tool, "événement d'outil non enregistré");
+        }
+        result
     }
 
     /// Arguments d'un appel, validés sans rien exécuter (issue #117) : balisage laissé
@@ -2619,6 +2649,20 @@ mod tests {
                 .to_string()
                 .contains("n'existe pas")
         );
+    }
+
+    #[tokio::test]
+    async fn every_native_tool_execution_is_in_the_runtime_log() {
+        let (dir, x) = executor().await;
+        let path = dir.path().join("ws").join("secret.txt");
+        let secret = "sk_test_FauxSecret1234567890";
+        std::fs::write(&path, secret).unwrap();
+        x.execute("fs_read", &json!({"path": path})).await.unwrap();
+        let events = x.services.events.range(0, 100).await.unwrap();
+        let tool = events.iter().find(|e| e.kind == "runtime.tool").unwrap();
+        assert_eq!(tool.payload["tool"], "fs_read");
+        assert!(tool.payload["duration_ms"].is_number());
+        assert!(!tool.payload.to_string().contains(secret));
     }
 
     /// #163 : un refus décrit les racines réellement lues, pas le snapshot du début du tour.
