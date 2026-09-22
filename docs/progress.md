@@ -2544,6 +2544,27 @@ Le `cwd` du shell, le relèvement de `cd … && …` et les règles `$path_prefi
 la même résolution. Les tests exercent un alias de casse selon le système de fichiers,
 un volume sensible à la casse, la persistance de la configuration et un lien sortant.
 
+### 0.17.47
+
+#### Flux d'observation runtime et relais Pathlayer (#162)
+
+Le journal d'audit émet désormais chaque ligne commitée sur un WebSocket local, dans
+l'ordre de ses identifiants SQLite. L'abonnement précède le replay, et une reconnexion
+avec `after_id` ou une perte de tampon reprend au journal. Chaque consommateur a son
+jeton du magasin de secrets et son filtre de types ; le serveur est désactivé sans
+consommateur et refuse un bind hors de `127.0.0.1`. Le flux exporte une projection
+rédigée et bornée, sans les empreintes d'audit ni commande d'actuation.
+
+L'exécuteur commun journalise les appels natifs, MCP et shell, y compris dans les
+workflows, avec arguments, résultat, durée et coût estimé. Le ledger LLM émet les
+tokens et coûts ; les stores émettent le cycle de vie des sessions et approbations ;
+l'ordonnanceur émet les déclenchements. Les événements préexistants complètent les
+tours, runs, étapes, intents et erreurs. Les tests vérifient l'ordre sous concurrence,
+le replay filtré, le refus sans jeton et la rédaction. Une session locale a exécuté
+quatre lectures réelles ; le relais de 48 lignes les a transmis au `HttpIngestAdapter`
+de Pathlayer, qui a détecté la boucle à 0,50, 0,75 puis 0,88. Le schéma réserve
+`actuation: null` sans accepter de commande de retour en V1.
+
 ### Routine de livraison
 
 Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #147) :

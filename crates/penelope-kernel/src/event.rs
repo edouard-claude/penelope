@@ -14,6 +14,7 @@ use penelope_store::Store;
 use penelope_store::rusqlite::{self, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::sync::broadcast;
 
 pub const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -132,6 +133,8 @@ pub fn compute_hash_from_text(
 pub struct EventLog {
     store: Store,
     clock: SharedClock,
+    live: broadcast::Sender<Event>,
+    live_order: std::sync::Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -145,7 +148,19 @@ pub struct VerifyReport {
 
 impl EventLog {
     pub fn new(store: Store, clock: SharedClock) -> Self {
-        EventLog { store, clock }
+        let (live, _) = broadcast::channel(2048);
+        EventLog {
+            store,
+            clock,
+            live,
+            live_order: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
+    /// Événements commités pendant que le consommateur est connecté. `range` couvre
+    /// l'historique et les pertes signalées par le canal borné.
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.live.subscribe()
     }
 
     pub fn store(&self) -> &Store {
@@ -155,8 +170,12 @@ impl EventLog {
     /// Ajoute un événement. Le calcul du hash et l'insertion sont dans la même
     /// transaction, sur l'unique thread écrivain : la chaîne ne peut pas diverger.
     pub async fn append(&self, draft: EventDraft) -> Result<Event> {
+        // Le writer SQLite attribue les IDs en ordre, mais ses appelants peuvent être
+        // réveillés dans un autre ordre. Garder le verrou jusqu'à l'émission (#162).
+        let _ordered = self.live_order.lock().await;
         let ts = self.clock.now_rfc3339();
-        self.store
+        let event = self
+            .store
             .write(move |tx| {
                 // Journal vide : GENESIS. Toute autre erreur de lecture remonte : un
                 // maillon chaîné sur GENESIS au milieu du journal serait indiscernable
@@ -223,7 +242,9 @@ impl EventLog {
                 })
             })
             .await
-            .map_err(KernelError::from)
+            .map_err(KernelError::from)?;
+        let _ = self.live.send(event.clone());
+        Ok(event)
     }
 
     /// Lit les événements d'une session à partir d'un numéro de séquence.
@@ -545,6 +566,20 @@ mod tests {
         assert_eq!(c.seq, 2);
     }
 
+    /// #162 : un consommateur branché reçoit le même événement que le rejeu durable,
+    /// avec son identifiant attribué après le commit SQLite.
+    #[tokio::test]
+    async fn live_events_follow_the_committed_log() {
+        let log = log().await;
+        let mut live = log.subscribe();
+        let written = log
+            .append(EventDraft::new("tool.result", json!({"tool": "fs_read"})).session("s1"))
+            .await
+            .unwrap();
+        assert_eq!(live.recv().await.unwrap(), written);
+        assert_eq!(log.range(0, 10).await.unwrap(), vec![written]);
+    }
+
     #[tokio::test]
     async fn purge_erases_content_but_keeps_chain_verifiable() {
         let l = log().await;
@@ -569,6 +604,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_appends_keep_a_single_chain() {
         let l = log().await;
+        let mut live = l.subscribe();
         let mut hs = Vec::new();
         for i in 0..40 {
             let l2 = l.clone();
@@ -584,6 +620,9 @@ mod tests {
         let r = l.verify().await.unwrap();
         assert!(r.ok, "{r:?}");
         assert_eq!(r.checked, 40);
+        for expected_id in 1..=40 {
+            assert_eq!(live.recv().await.unwrap().id, expected_id);
+        }
     }
 }
 

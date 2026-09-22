@@ -36,6 +36,7 @@ pub mod review;
 pub mod rpc;
 pub mod runner;
 pub mod runtime;
+pub mod runtime_events;
 pub mod scheduler;
 pub mod secret_shelf;
 pub mod selfdocs;

@@ -14,6 +14,9 @@ repository = "https://github.com/edouard-claude/penelope"
 # --- core async / serde ---
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "process", "net", "signal", "io-std"] }
 futures = "0.3"
+# #162 : serveur WebSocket local avec handshake vérifiable et trames bornées ;
+# le transport TCP brut ne fournit pas ces garanties.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

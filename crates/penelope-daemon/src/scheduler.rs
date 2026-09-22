@@ -477,6 +477,12 @@ async fn fire(
         }
         None => anyhow::bail!("cible inconnue"),
     }
+    s.events
+        .append(penelope_kernel::event::EventDraft::new(
+            "schedule.fired",
+            json!({"schedule": sched.id, "target": sched.target["type"]}),
+        ))
+        .await?;
     Ok(())
 }
 
@@ -1226,6 +1232,17 @@ mod tests {
         clock.set_ms(1_767_330_030_000); // 2026-01-02T05:00:30Z = 09:00:30 à La Réunion
         let report = tick(&d).await.unwrap();
         assert_eq!(report.fired, vec![sched.id.clone()]);
+        assert!(
+            s.events
+                .range(0, 100)
+                .await
+                .unwrap()
+                .iter()
+                .any(
+                    |event| event.kind == "schedule.fired" && event.payload["schedule"] == sched.id
+                ),
+            "tout déclenchement réussi apparaît dans le journal runtime"
+        );
         let sent = rec.0.lock().unwrap().clone();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].1, "⏰ Appeler Paul");

@@ -86,6 +86,7 @@ pub struct Session {
 pub struct SessionStore {
     store: Store,
     clock: SharedClock,
+    events: Option<crate::event::EventLog>,
 }
 
 /// Opération sur `session_metadata` (§11, outil `session_metadata`).
@@ -111,7 +112,16 @@ impl MetadataOp {
 
 impl SessionStore {
     pub fn new(store: Store, clock: SharedClock) -> Self {
-        SessionStore { store, clock }
+        SessionStore {
+            store,
+            clock,
+            events: None,
+        }
+    }
+
+    pub fn with_events(mut self, events: crate::event::EventLog) -> Self {
+        self.events = Some(events);
+        self
     }
 
     pub async fn create(&self, kind: SessionKind, title: Option<String>) -> Result<Session> {
@@ -166,6 +176,16 @@ impl SessionStore {
                 Ok(())
             })
             .await?;
+        if let Some(events) = &self.events {
+            let event = crate::event::EventDraft::new(
+                "runtime.session.created",
+                json!({"kind": s.kind.as_str(), "parent_id": s.parent_id}),
+            )
+            .session(s.id.as_str());
+            if let Err(error) = events.append(event).await {
+                tracing::warn!(%error, "création de session sans événement runtime");
+            }
+        }
         Ok(s)
     }
 
@@ -381,21 +401,33 @@ impl SessionStore {
 
     pub async fn set_state(&self, id: &str, state: &str) -> Result<()> {
         let (id, state, now) = (id.to_string(), state.to_string(), self.clock.now_rfc3339());
-        self.store
+        let (event_id, event_state) = (id.clone(), state.clone());
+        let updated = self
+            .store
             .write(move |tx| {
                 let closed = if state == "closed" {
                     Some(now.clone())
                 } else {
                     None
                 };
-                tx.execute(
+                let updated = tx.execute(
                     "UPDATE sessions SET state=?2, updated_at=?3, closed_at=COALESCE(?4, closed_at)
                      WHERE id=?1",
                     params![id, state, now, closed],
                 )?;
-                Ok(())
+                Ok(updated > 0)
             })
             .await?;
+        if updated && let Some(events) = &self.events {
+            let event = crate::event::EventDraft::new(
+                "runtime.session.state",
+                json!({"state": event_state}),
+            )
+            .session(event_id);
+            if let Err(error) = events.append(event).await {
+                tracing::warn!(%error, "état de session sans événement runtime");
+            }
+        }
         Ok(())
     }
 
@@ -584,6 +616,29 @@ mod tests {
         let back = s.require(sess.id.as_str()).await.unwrap();
         assert_eq!(back.title.as_deref(), Some("test"));
         assert_eq!(back.kind, SessionKind::Chat);
+    }
+
+    #[tokio::test]
+    async fn session_creation_is_in_the_runtime_log() {
+        let store = Store::open_memory().unwrap();
+        let clock = Arc::new(TestClock::default());
+        let events = crate::event::EventLog::new(store.clone(), clock.clone());
+        let sessions = SessionStore::new(store, clock).with_events(events.clone());
+        let session = sessions
+            .create(SessionKind::WorkflowRun, None)
+            .await
+            .unwrap();
+        let logged = events.range(0, 10).await.unwrap();
+        assert_eq!(logged.len(), 1);
+        assert_eq!(logged[0].kind, "runtime.session.created");
+        assert_eq!(logged[0].session_id.as_deref(), Some(session.id.as_str()));
+        sessions
+            .set_state(session.id.as_str(), "closed")
+            .await
+            .unwrap();
+        let logged = events.range(1, 10).await.unwrap();
+        assert_eq!(logged[0].kind, "runtime.session.state");
+        assert_eq!(logged[0].payload["state"], "closed");
     }
 
     /// #47 : écrire les métadonnées d'une session inconnue ne réussit pas en silence.

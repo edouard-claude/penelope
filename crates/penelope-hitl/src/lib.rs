@@ -13,6 +13,7 @@ pub mod policy;
 pub use policy::{PolicyEngine, PolicyRule, RuleScope};
 
 use penelope_kernel::clock::SharedClock;
+use penelope_kernel::event::{EventDraft, EventLog};
 use penelope_kernel::ids::ApprovalId;
 use penelope_kernel::risk::{PolicyWindow, RiskClass};
 use penelope_store::Store;
@@ -213,6 +214,7 @@ pub struct ApprovalStore {
     store: Store,
     clock: SharedClock,
     default_ttl_ms: i64,
+    events: Option<EventLog>,
 }
 
 impl ApprovalStore {
@@ -221,11 +223,18 @@ impl ApprovalStore {
             store,
             clock,
             default_ttl_ms: 24 * 3_600_000,
+            events: None,
         }
     }
 
     pub fn with_ttl_ms(mut self, ms: i64) -> Self {
         self.default_ttl_ms = ms;
+        self
+    }
+
+    /// Publication des transitions HITL dans le journal runtime du daemon.
+    pub fn with_events(mut self, events: EventLog) -> Self {
+        self.events = Some(events);
         self
     }
 
@@ -287,6 +296,26 @@ impl ApprovalStore {
                 Ok(())
             })
             .await?;
+        if let Some(events) = &self.events {
+            let mut event = EventDraft::new(
+                "runtime.approval.requested",
+                serde_json::json!({
+                    "approval_id": req.id.as_str(),
+                    "kind": req.kind.as_str(),
+                    "subject": req.subject,
+                    "risk": req.risk.as_str(),
+                }),
+            );
+            if let Some(session_id) = &req.session_id {
+                event = event.session(session_id);
+            }
+            if let Some(run_id) = &req.run_id {
+                event = event.run(run_id);
+            }
+            if let Err(error) = events.append(event).await {
+                tracing::warn!(%error, "demande HITL sans événement runtime");
+            }
+        }
         Ok(req)
     }
 
@@ -357,6 +386,25 @@ impl ApprovalStore {
                 by: req.decided_via.clone().unwrap_or_else(|| "?".into()),
                 at: req.decided_at.clone().unwrap_or_else(|| "?".into()),
             });
+        }
+        if let Some(events) = &self.events {
+            let mut event = EventDraft::new(
+                "runtime.approval.decided",
+                serde_json::json!({
+                    "approval_id": req.id.as_str(),
+                    "approved": d.approved,
+                    "via": d.via,
+                }),
+            );
+            if let Some(session_id) = &req.session_id {
+                event = event.session(session_id);
+            }
+            if let Some(run_id) = &req.run_id {
+                event = event.run(run_id);
+            }
+            if let Err(error) = events.append(event).await {
+                tracing::warn!(%error, "décision HITL sans événement runtime");
+            }
         }
         Ok(req)
     }
@@ -628,6 +676,25 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn approval_lifecycle_is_in_the_runtime_log() {
+        let store = Store::open_memory().unwrap();
+        let clock = Arc::new(TestClock::default());
+        let events = penelope_kernel::event::EventLog::new(store.clone(), clock.clone());
+        let approvals = ApprovalStore::new(store, clock).with_events(events.clone());
+        let request = make(&approvals).await;
+        approvals
+            .decide(request.id.as_str(), &Decision::approve_once("cli"))
+            .await
+            .unwrap();
+        let logged = events.range(0, 10).await.unwrap();
+        assert_eq!(logged.len(), 2);
+        assert_eq!(logged[0].kind, "runtime.approval.requested");
+        assert_eq!(logged[1].kind, "runtime.approval.decided");
+        assert_eq!(logged[0].payload["approval_id"], request.id.as_str());
+        assert_eq!(logged[1].payload["approved"], true);
     }
 
     /// CA 9 : double clic simultané Telegram + CLI donne une seule décision.
