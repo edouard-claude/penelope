@@ -361,8 +361,9 @@ test` ou `go test ./...` selon le dépôt. `review` reste écrit pour un dépôt
 Pendant `build`, l'agent pose ou actualise `session_metadata.verification` avec `dir`,
 `test_command` (la commande **effectivement validée**, prérequis PATH ou `ulimit`
 explicites), `prerequisites` et `evidence` : liste de `{kind, ref, sha}`. Les preuves
-`pr` et `ci` portent le SHA de la révision contrôlée. Les références de TDD portent un
-artefact ou un chemin lisible. Le contrat persiste avec la session en cas de redémarrage ;
+`pr`, `ci` et `tdd_green` portent le SHA de la révision contrôlée ; `tdd_red` peut
+documenter le commit antérieur. Les références de TDD portent un artefact ou un chemin
+lisible. Un contrat sans preuve est refusé. Le contrat persiste avec la session en cas de redémarrage ;
 il ne contient pas d'environnement complet ni de secrets. Le vérificateur reçoit
 l'objectif, les critères, ce contrat, les sorties des contrôles et les règles
 `AGENTS.md`/`CLAUDE.md` du dépôt. Il consulte les preuves et peut les contester ; un

@@ -2507,7 +2507,8 @@ ses prérequis non secrets et les références de preuves TDD, PR et CI. Le cont
 `project_tests` reprend cette commande par `shell_exec` avec la politique d'approbation et
 le bac à sable du builder. Le vérificateur reçoit l'objectif, les critères, les résultats,
 les règles du dépôt et un passage de relais borné et rédigé ; il examine lui-même les
-preuves. Un SHA de preuve différent du commit local est refusé avant son jugement.
+preuves. Une preuve PR, CI ou test vert liée à un autre commit est refusée avant son
+jugement ; un test rouge peut documenter l'état antérieur.
 
 Le retour en build distingue prérequis absent, preuve manquante ou périmée, test rouge et
 critère non satisfait. Cinq tests couvrent la commande actualisée, l'outil absent et

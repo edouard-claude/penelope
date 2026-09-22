@@ -2342,6 +2342,10 @@ fn evidence_matches_head(evidence: &Value, head: &str) -> bool {
     evidence["sha"].as_str() == Some(head)
 }
 
+fn requires_current_sha(evidence: &Value) -> bool {
+    matches!(evidence["kind"].as_str(), Some("pr" | "ci" | "tdd_green"))
+}
+
 fn limited_text(value: &Value, limit: usize) -> String {
     value
         .as_str()
@@ -2548,18 +2552,20 @@ async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         .collect();
     let missing_sha = references
         .iter()
-        .any(|e| matches!(e["kind"].as_str(), Some("pr" | "ci")) && !e["sha"].is_string());
+        .any(|e| requires_current_sha(e) && !e["sha"].is_string());
     let stale: Vec<Value> = references
         .iter()
         .filter(|e| {
-            e["sha"].is_string()
+            requires_current_sha(e)
                 && head
                     .as_deref()
                     .is_none_or(|sha| !evidence_matches_head(e, sha))
         })
         .cloned()
         .collect();
-    if missing_sha && failure_kind.is_none() {
+    if ((metadata["verification"].is_object() && references.is_empty()) || missing_sha)
+        && failure_kind.is_none()
+    {
         failure_kind = Some("evidence_missing");
     } else if !stale.is_empty() && failure_kind.is_none() {
         failure_kind = Some("stale_evidence");
@@ -3235,8 +3241,15 @@ mod tests {
     #[test]
     fn verification_rejects_evidence_from_another_commit() {
         let evidence = json!({"kind": "ci", "ref": "https://example.test/run/42", "sha": "old"});
+        assert!(requires_current_sha(&evidence));
         assert!(!evidence_matches_head(&evidence, "new"));
         assert!(evidence_matches_head(&json!({"sha": "new"}), "new"));
+        assert!(!requires_current_sha(
+            &json!({"kind": "tdd_red", "sha": "old"})
+        ));
+        assert!(requires_current_sha(
+            &json!({"kind": "tdd_green", "sha": "new"})
+        ));
     }
 
     #[test]
