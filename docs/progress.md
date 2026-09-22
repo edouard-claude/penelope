@@ -3,12 +3,12 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 20 septembre 2026.
+Dernière mise à jour : 22 septembre 2026.
 
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1645 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
+- **1650 tests verts** hors réseau ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2497,6 +2497,23 @@ Le résultat de `config_set` distingue maintenant l'appel suivant, le tour suiva
 redémarrage. La référence des clés documente ces moments ; les refus de chemin citent les
 racines réellement utilisées. Trois tests couvrent le changement dans le même tour, le tour
 suivant, le message rendu et le maintien du cloisonnement.
+
+### 0.17.44
+
+#### `build-verify` reprend la commande et les preuves du build (#167)
+
+Le build conserve dans `session_metadata.verification` la commande effectivement validée,
+ses prérequis non secrets et les références de preuves TDD, PR et CI. Le contrôle
+`project_tests` reprend cette commande par `shell_exec` avec la politique d'approbation et
+le bac à sable du builder. Le vérificateur reçoit l'objectif, les critères, les résultats,
+les règles du dépôt et un passage de relais borné et rédigé ; il examine lui-même les
+preuves. Une preuve PR, CI ou test vert liée à un autre commit est refusée avant son
+jugement ; un test rouge peut documenter l'état antérieur.
+
+Le retour en build distingue prérequis absent, preuve manquante ou périmée, test rouge et
+critère non satisfait. Cinq tests couvrent la commande actualisée, l'outil absent et
+son approbation, le test rouge, le SHA périmé et les clauses conditionnelles du dépôt.
+Les budgets et plafonds du workflow ne changent pas.
 
 ### Routine de livraison
 

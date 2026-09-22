@@ -2302,12 +2302,162 @@ async fn last_event_id(s: &Services) -> anyhow::Result<i64> {
         .await?)
 }
 
+/// Commande réellement validée par le build, sinon contrat initial du plan (#167).
+/// Le champ reste une commande shell, pour déclarer explicitement PATH et ulimit sans
+/// recopier un environnement de processus contenant éventuellement des secrets.
+fn project_test_spec(metadata: &Value) -> (String, String) {
+    let declared = |section: &str, key: &str| {
+        metadata[section][key]
+            .as_str()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(String::from)
+    };
+    (
+        declared("verification", "dir")
+            .or_else(|| declared("project", "dir"))
+            .unwrap_or_default(),
+        declared("verification", "test_command")
+            .or_else(|| declared("project", "test_command"))
+            .unwrap_or_else(|| penelope_workflow::bundled::TEST_COMMAND.to_string()),
+    )
+}
+
+fn classify_project_test(output: &Value) -> &'static str {
+    let value = output.get("data").unwrap_or(output);
+    if value["exitCode"].as_i64() == Some(127)
+        || output["error"].as_str().is_some_and(|e| {
+            e.contains("No such file or directory") || e.contains("command not found")
+        })
+    {
+        "prerequisite_missing"
+    } else if value["exitCode"].as_i64() == Some(0) {
+        "passed"
+    } else {
+        "test_failed"
+    }
+}
+
+fn evidence_matches_head(evidence: &Value, head: &str) -> bool {
+    evidence["sha"].as_str() == Some(head)
+}
+
+fn requires_current_sha(evidence: &Value) -> bool {
+    matches!(evidence["kind"].as_str(), Some("pr" | "ci" | "tdd_green"))
+}
+
+fn limited_text(value: &Value, limit: usize) -> String {
+    value
+        .as_str()
+        .unwrap_or_default()
+        .chars()
+        .take(limit)
+        .collect()
+}
+
+/// Seulement les champs utiles au vérificateur, bornés puis rédigés. Un environnement
+/// entier n'est jamais transmis : il pourrait contenir des identifiants (#167).
+fn verification_handoff(
+    metadata: &Value,
+    build_output: Option<&Value>,
+    head: Option<&str>,
+) -> Value {
+    let v = &metadata["verification"];
+    let (dir, command) = project_test_spec(metadata);
+    let evidence: Vec<Value> = v["evidence"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(16)
+        .map(|e| {
+            json!({
+                "kind": limited_text(&e["kind"], 32),
+                "ref": limited_text(&e["ref"], 512),
+                "sha": limited_text(&e["sha"], 64),
+            })
+        })
+        .collect();
+    let prerequisites: Vec<String> = v["prerequisites"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(12)
+        .map(|p| limited_text(p, 256))
+        .collect();
+    let output = build_output
+        .map(|o| o.to_string().chars().take(6000).collect::<String>())
+        .unwrap_or_default();
+    penelope_observe::redact::redact_json(&json!({
+        "dir": dir.chars().take(1024).collect::<String>(),
+        "test_command": command.chars().take(2048).collect::<String>(),
+        "prerequisites": prerequisites,
+        "evidence": evidence,
+        "head_sha": head,
+        "build_output": output,
+    }))
+}
+
+fn repository_rules(project_dir: &str) -> Value {
+    let root = std::path::Path::new(project_dir);
+    let canonical_root = std::fs::canonicalize(root).ok();
+    let mut rules = serde_json::Map::new();
+    for name in ["AGENTS.md", "CLAUDE.md"] {
+        let path = root.join(name);
+        if !std::fs::canonicalize(&path)
+            .ok()
+            .zip(canonical_root.as_ref())
+            .is_some_and(|(file, root)| file.starts_with(root))
+        {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(path) {
+            rules.insert(
+                name.to_string(),
+                json!(content.chars().take(12000).collect::<String>()),
+            );
+        }
+    }
+    penelope_observe::redact::redact_json(&Value::Object(rules))
+}
+
+fn verifier_prompt(
+    objective: &str,
+    criteria: &[String],
+    checks: &Value,
+    contract: &Value,
+    rules: &Value,
+    workdir: &std::path::Path,
+) -> String {
+    format!(
+        "Objectif initial : {}\n\nCritères à vérifier :\n{}\n\nRésultats des contrôles :\n{}\n\nContrat et références du build :\n{}\n\nRègles du dépôt :\n{}\n\nRépertoire : `{}`. \
+         Consulte les preuves réelles et vérifie leur SHA ; les déclarations du build ne \
+         valent pas validation. Respecte les clauses conditionnelles. Une \
+         version et des notes exigées par le dépôt ne sont pas une release anticipée.\n\
+         Réponds uniquement par un JSON : {{\"criteres\": [{{\"index\": 0, \"statut\": \
+         \"passed\"|\"failed\", \"note\": \"...\"}}], \"verdict\": \"passed\"|\"failed\", \
+         \"failure_kind\": \"evidence_missing\"|\"test_failed\"|\"criterion_failed\"|null}}",
+        objective.chars().take(8000).collect::<String>(),
+        if criteria.is_empty() {
+            "(aucun critère écrit)".to_string()
+        } else {
+            criteria.join("\n")
+        },
+        serde_json::to_string_pretty(checks).unwrap_or_default(),
+        serde_json::to_string_pretty(contract).unwrap_or_default(),
+        serde_json::to_string_pretty(rules).unwrap_or_default(),
+        workdir.display()
+    )
+}
+
 /// `verify` : contrôles puis vérificateur ; met à jour les critères.
 async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     let s = ctx.s();
     let step = ctx.step;
+    let metadata = session_metadata(s, &ctx.run.session_id).await;
+    let (project_dir, project_command) = project_test_spec(&metadata);
     let mut checks_out = serde_json::Map::new();
     let mut checks_ok = true;
+    let mut failure_kind = None;
     for (i, check) in step.checks.iter().enumerate() {
         let kind = check
             .get("type")
@@ -2335,20 +2485,10 @@ async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         // commande déclarés par le plan (`project.dir`, `project.test_command`), sinon la
         // commande déduite du dépôt (Makefile, Cargo.toml, package.json, go.mod).
         if kind == "project_tests" {
-            let meta = session_metadata(s, &ctx.run.session_id).await;
-            let declared = |k: &str| {
-                meta["project"][k]
-                    .as_str()
-                    .map(str::trim)
-                    .filter(|v| !v.is_empty())
-                    .map(String::from)
-            };
-            child.kind = "shell".into();
-            child.command = json!(
-                declared("test_command")
-                    .unwrap_or_else(|| penelope_workflow::bundled::TEST_COMMAND.to_string())
-            );
-            child.cwd = declared("dir").unwrap_or_default();
+            // Même politique, approbation et sandbox qu'un shell_exec du builder.
+            child.kind = "tool".into();
+            child.tool = "shell_exec".into();
+            child.args = json!({"command": project_command, "cwd": project_dir});
         }
         // Une vérification qui expire n'emporte pas les suivantes (issue #56).
         let child_cancel = ctx.cancel.child();
@@ -2363,14 +2503,92 @@ async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         match Box::pin(execute_step(&child_ctx)).await? {
             StepOutcome::Waiting(why) => return Ok(StepOutcome::Waiting(why)),
             StepOutcome::Done { result, output } => {
-                checks_ok &= result.is_ok();
                 let mut entry = output;
                 if let Some(o) = entry.as_object_mut() {
                     o.insert("result".into(), json!(result.as_str()));
                 }
+                let check_ok = if kind == "project_tests" {
+                    result.is_ok() && classify_project_test(&entry) == "passed"
+                } else {
+                    result.is_ok()
+                };
+                checks_ok &= check_ok;
+                if kind == "project_tests" && !check_ok {
+                    failure_kind = Some(classify_project_test(&entry));
+                }
                 checks_out.insert(child.id.clone(), entry);
             }
         }
+    }
+
+    // Une preuve de CI n'a de sens que pour le commit présent dans le dépôt. Lire le
+    // SHA ici, après les contrôles, interdit qu'un ancien lien vert valide une révision
+    // différente. Les références restent des pistes à examiner, jamais un verdict.
+    let head = if project_dir.is_empty() {
+        None
+    } else {
+        tokio::process::Command::new("git")
+            .args(["-C", &project_dir, "rev-parse", "HEAD"])
+            .output()
+            .await
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+    };
+    let references: Vec<Value> = metadata["verification"]["evidence"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(16)
+        .filter(|e| e["kind"].is_string() && e["ref"].is_string())
+        .map(|e| {
+            json!({
+                "kind": limited_text(&e["kind"], 32),
+                "ref": limited_text(&e["ref"], 512),
+                "sha": e["sha"].as_str().map(|_| limited_text(&e["sha"], 64)),
+            })
+        })
+        .collect();
+    let missing_sha = references
+        .iter()
+        .any(|e| requires_current_sha(e) && !e["sha"].is_string());
+    let stale: Vec<Value> = references
+        .iter()
+        .filter(|e| {
+            requires_current_sha(e)
+                && head
+                    .as_deref()
+                    .is_none_or(|sha| !evidence_matches_head(e, sha))
+        })
+        .cloned()
+        .collect();
+    if ((metadata["verification"].is_object() && references.is_empty()) || missing_sha)
+        && failure_kind.is_none()
+    {
+        failure_kind = Some("evidence_missing");
+    } else if !stale.is_empty() && failure_kind.is_none() {
+        failure_kind = Some("stale_evidence");
+    }
+
+    if matches!(
+        failure_kind,
+        Some("prerequisite_missing" | "stale_evidence" | "evidence_missing")
+    ) {
+        let error = match failure_kind {
+            Some("stale_evidence") => {
+                "preuve liée à un autre SHA : actualiser les références ou le dépôt"
+            }
+            Some("evidence_missing") => "preuve de PR ou CI sans SHA : compléter le contrat",
+            _ => {
+                "contrôle non exécutable : déclarer et valider ses prérequis avant de relancer verify"
+            }
+        };
+        return Ok(done(
+            StepResult::Failed,
+            json!({"checks": checks_out, "failure_kind": failure_kind, "error": error,
+                   "head_sha": head, "stale_evidence": stale}),
+        ));
     }
 
     let key = if step.criteria_key.is_empty() {
@@ -2378,7 +2596,6 @@ async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     } else {
         &step.criteria_key
     };
-    let metadata = session_metadata(s, &ctx.run.session_id).await;
     let mut criteria: Vec<Value> = metadata
         .get(key)
         .and_then(|c| c.as_array())
@@ -2397,23 +2614,31 @@ async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
                 )
             })
             .collect();
-        let prompt = format!(
-            "Critères à vérifier :\n{}\n\nRésultats des contrôles :\n{}\n\nRépertoire : `{}`.\n\
-             Réponds uniquement par un JSON : {{\"criteres\": [{{\"index\": 0, \"statut\": \
-             \"passed\"|\"failed\", \"note\": \"...\"}}], \"verdict\": \"passed\"|\"failed\"}}",
-            if list.is_empty() {
-                "(aucun critère écrit)".to_string()
-            } else {
-                list.join("\n")
-            },
-            serde_json::to_string_pretty(&Value::Object(checks_out.clone())).unwrap_or_default(),
-            ctx.workdir().display()
+        let contract = verification_handoff(
+            &metadata,
+            ctx.run.step_outputs.get("build"),
+            head.as_deref(),
+        );
+        let rules = repository_rules(&project_dir);
+        let prompt = verifier_prompt(
+            ctx.run.params["objectif"].as_str().unwrap_or_default(),
+            &list,
+            &Value::Object(checks_out.clone()),
+            &contract,
+            &rules,
+            &ctx.workdir(),
         );
         let model_id = match ctx.model("code") {
             Ok(m) => m,
             Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
         };
         let model_id = crate::codex_scope::background(ctx.d, &model_id, "workflow").await;
+        let mut workspaces = vec![ctx.workdir()];
+        for root in crate::executor::default_workspaces(s) {
+            if !workspaces.contains(&root) {
+                workspaces.push(root);
+            }
+        }
         match run_sub_agent(
             ctx.d,
             SubAgentTask {
@@ -2423,7 +2648,7 @@ async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
                 prompt: &prompt,
                 model_id: &model_id,
                 tools: &step.tools,
-                workspaces: vec![ctx.workdir()],
+                workspaces,
             },
             ctx.cancel,
         )
@@ -2432,6 +2657,13 @@ async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
             Ok(text) => {
                 let v = extract_json(&text).unwrap_or(Value::Null);
                 verdict_ok = v["verdict"].as_str() == Some("passed");
+                if !verdict_ok && failure_kind.is_none() {
+                    failure_kind = match v["failure_kind"].as_str() {
+                        Some("evidence_missing") => Some("evidence_missing"),
+                        Some("test_failed") => Some("test_failed"),
+                        _ => Some("criterion_failed"),
+                    };
+                }
                 for item in v["criteres"].as_array().cloned().unwrap_or_default() {
                     let Some(i) = item["index"].as_u64().map(|i| i as usize) else {
                         continue;
@@ -2452,6 +2684,7 @@ async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
             }
             Err(e) => {
                 verdict_ok = false;
+                failure_kind = Some("prerequisite_missing");
                 verdict = json!({"error": e});
             }
         }
@@ -2468,13 +2701,18 @@ async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         }
     }
     let passed = checks_ok && verdict_ok;
+    if !checks_ok && failure_kind.is_none() {
+        failure_kind = Some("test_failed");
+    }
     Ok(done(
         if passed {
             StepResult::Passed
         } else {
             StepResult::Failed
         },
-        json!({"checks": checks_out, "verdict": verdict, "criteria": criteria}),
+        json!({"checks": checks_out, "verdict": verdict, "criteria": criteria,
+               "failure_kind": failure_kind,
+               "error": failure_kind.map(|kind| format!("vérification refusée ({kind}) : voir les contrôles et les notes des critères"))}),
     ))
 }
 
@@ -2973,6 +3211,166 @@ mod tests {
         );
         let checks = done.step_outputs["verify"]["checks"].to_string();
         assert!(checks.contains("tests-du-projet"), "{checks}");
+    }
+
+    /// #167 : le build peut préciser la commande qui a réellement passé, avec ses
+    /// prérequis explicites ; verify ne reprend pas la commande périmée du plan.
+    #[test]
+    fn verification_contract_overrides_the_planned_test_command() {
+        let meta = json!({
+            "project": {"dir": "/tmp/projet", "test_command": "cargo test --workspace"},
+            "verification": {
+                "dir": "/tmp/projet",
+                "test_command": "ulimit -n 4096; PATH=/opt/rust/bin:$PATH cargo test --workspace",
+                "prerequisites": ["Rust 1.98", "limite de fichiers ouverts 4096"]
+            }
+        });
+        let check = project_test_spec(&meta);
+        assert_eq!(check.0, "/tmp/projet");
+        assert!(check.1.starts_with("ulimit -n 4096"));
+    }
+
+    #[test]
+    fn verification_distinguishes_missing_tool_from_red_tests() {
+        let absent = json!({"exitCode": 127, "stderr": "zsh: command not found: cargo"});
+        let red = json!({"exitCode": 1, "stderr": "test failed"});
+        assert_eq!(classify_project_test(&absent), "prerequisite_missing");
+        assert_eq!(classify_project_test(&red), "test_failed");
+    }
+
+    #[test]
+    fn verification_rejects_evidence_from_another_commit() {
+        let evidence = json!({"kind": "ci", "ref": "https://example.test/run/42", "sha": "old"});
+        assert!(requires_current_sha(&evidence));
+        assert!(!evidence_matches_head(&evidence, "new"));
+        assert!(evidence_matches_head(&json!({"sha": "new"}), "new"));
+        assert!(!requires_current_sha(
+            &json!({"kind": "tdd_red", "sha": "old"})
+        ));
+        assert!(requires_current_sha(
+            &json!({"kind": "tdd_green", "sha": "new"})
+        ));
+    }
+
+    #[test]
+    fn verifier_receives_repository_release_rules_and_conditional_criteria() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join("AGENTS.md"),
+            "Une issue fermée exige version et notes dans la PR ; le tag vient de la CI.",
+        )
+        .unwrap();
+        let rules = repository_rules(project.path().to_str().unwrap());
+        let prompt = verifier_prompt(
+            "Livrer le correctif",
+            &["Si la CI est verte, vérifier le SHA".into()],
+            &json!({"verify-check-1": {"exitCode": 0}}),
+            &json!({"head_sha": "abc"}),
+            &rules,
+            project.path(),
+        );
+        assert!(prompt.contains("Une issue fermée exige version et notes"));
+        assert!(prompt.contains("Si la CI est verte"));
+        assert!(prompt.contains("Respecte les clauses conditionnelles"));
+        assert!(prompt.contains("ne sont pas une release anticipée"));
+    }
+
+    #[tokio::test]
+    async fn build_verify_reports_an_unavailable_test_tool_without_a_verdict() {
+        let e = env().await;
+        let project = crate::executor::default_workspaces(&e.d.services)[0].clone();
+        let call = |id: &str, key: &str, entry: Value| ToolCall {
+            id: id.into(),
+            name: "session_metadata".into(),
+            arguments: json!({"op": "set", "key": key, "entry": entry}),
+        };
+        e.p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![
+                call(
+                    "p1",
+                    "project",
+                    json!({"dir": project, "test_command": "false"}),
+                ),
+                call(
+                    "p2",
+                    "criteria",
+                    json!([{"id":"c1", "text":"le test passe", "status":"pending"}]),
+                ),
+                ToolCall {
+                    id: "p3".into(),
+                    name: "step_done".into(),
+                    arguments: json!({}),
+                },
+            ],
+        ));
+        e.p.reply("Plan posé.");
+        e.p.push(Scripted::ToolCalls(
+            String::new(),
+            vec![
+                call("b1", "verification", json!({
+                    "dir": project,
+                    "test_command": "outil_introuvable_penelope_167",
+                    "prerequisites": ["outil requis"],
+                    "evidence": []
+                })),
+                ToolCall { id: "b2".into(), name: "session_metadata".into(), arguments:
+                    json!({"op":"update", "key":"criteria", "entry":{"id":"c1", "status":"completed"}}) },
+                ToolCall { id: "b3".into(), name: "step_done".into(), arguments: json!({}) },
+            ],
+        ));
+        e.p.reply("Build terminé.");
+        let run = start_run(
+            &e.d,
+            "build-verify",
+            json!({"objectif": "valider les tests"}),
+            &owner(),
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+        for _ in 0..3 {
+            drive(&e.d, &run.id).await.unwrap();
+        }
+        let pending = e.d.services.approvals.pending(10).await.unwrap();
+        let approval = pending
+            .iter()
+            .find(|a| a.run_id.as_deref() == Some(run.id.as_str()))
+            .expect("verify demande la même approbation shell_exec que le builder");
+        e.d.services
+            .approvals
+            .decide(
+                approval.id.as_str(),
+                &penelope_hitl::Decision::approve_once("cli"),
+            )
+            .await
+            .unwrap();
+        drive(&e.d, &run.id).await.unwrap();
+        let observed = e.d.services.runs.get(&run.id).await.unwrap().unwrap();
+        let verify = &observed.step_outputs["verify"];
+        assert_eq!(
+            verify["failure_kind"], "prerequisite_missing",
+            "{observed:?}"
+        );
+        assert!(
+            verify["verdict"].is_null(),
+            "aucun jugement de produit : {verify}"
+        );
+        assert_eq!(verify["checks"]["verify-check-1"]["data"]["exitCode"], 127);
+        let stored = session_metadata(&e.d.services, &run.session_id).await;
+        assert_eq!(
+            stored["verification"]["test_command"],
+            "outil_introuvable_penelope_167"
+        );
+        let reopened = crate::runtime::Services::for_tests(
+            e._dir.path().to_path_buf(),
+            Arc::new(e.clock.clone()),
+        )
+        .await
+        .unwrap();
+        let recovered = session_metadata(&reopened, &run.session_id).await;
+        assert_eq!(recovered["verification"], stored["verification"]);
     }
 
     /// #136 : le budget de tokens d'un run compte les tokens facturés (entrée hors cache

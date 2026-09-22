@@ -1934,6 +1934,13 @@ penelope wf list
 penelope wf run build-verify --param objectif="corriger le calcul de TVA"
 ```
 
+Dans `build-verify`, le plan déclare le dépôt et une commande de tests. Le build pose
+ensuite `session_metadata.verification` avec la commande réellement passée, ses
+prérequis non secrets et les références de preuves (TDD, PR, CI) liées à leur SHA.
+`verify` relance cette commande par `shell_exec` avec la politique d'approbation et le
+bac à sable habituels. Un outil absent ou une preuve périmée est signalé comme tel au
+build ; une CI verte ne dispense pas de la vérification indépendante.
+
 Le plus simple est d'en parler : « on traite quelques tickets Yobbu ». Pénélope repère
 le workflow adapté dans son index, cherche les données avec ses outils (tickets ouverts
 dans Redmine ou ClickUp, dépôt, forge), ne demande que ce qui manque, puis propose le

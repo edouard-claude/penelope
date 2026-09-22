@@ -51,7 +51,15 @@ pub fn build_verify() -> Workflow {
             Step {
                 prompt: "Implémente. Quand un critère est rempli, coche-le : \
                          `session_metadata` op=update key=criteria entry={\"id\": \"<id>\", \
-                         \"status\": \"completed\"}.\n\
+                         \"status\": \"completed\"}. Avant `step_done()`, pose \
+                         `session_metadata` op=set key=verification entry={\"dir\": \
+                         \"<dépôt>\", \"test_command\": \"<commande exactement validée, avec \
+                         les prérequis non secrets explicites>\", \"prerequisites\": [\"...\"], \
+                         \"evidence\": [{\"kind\": \"tdd_red|tdd_green|pr|ci\", \"ref\": \
+                         \"<lien ou artefact consultable>\", \"sha\": \"<SHA du commit si la \
+                         preuve est liée à une révision>\"}]}. Mets ce contrat à jour si tu \
+                         découvres un prérequis. Ne copie aucun secret de l'environnement. \
+                         Après un refus de verify, corrige la cause indiquée : {{reason}}\n\
                          {{pendingCount}} critère(s) restant(s) :\n{{criteriaList}}"
                     .into(),
                 nudge_prompt: "Continue : {{pendingCount}} critère(s) restant(s).".into(),
