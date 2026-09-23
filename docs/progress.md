@@ -8,7 +8,7 @@ Dernière mise à jour : 23 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1734 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
+- **1735 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2688,6 +2688,18 @@ bouton périmé. Aucune exécution n'est déclenchée par cette tranche : l'éta
 sera consommé par T3 de #185. Un nouveau plan dans la même session archive l'ancien
 plan approuvé sans le perdre. `workflow_start` ne peut plus lancer directement depuis
 une conversation Telegram. La CLI et les runs techniques gardent leur moteur actuel.
+
+### 0.17.57
+
+#### Le secret OAuth Basic reste absent des journaux structurés (#188)
+
+La vérification demandée après #174 couvre maintenant la requête réelle capturée par
+le serveur d'autorisation simulé, pour `client_secret_basic` et
+`client_secret_post`, à l'échange du code et au rafraîchissement. Un test injecte aussi
+un header Basic dans un champ générique de `tracing` et vérifie la sortie du rédacteur.
+Les deux formes, secret brut et valeur Basic encodée, sont masquées. Le motif Basic du
+rédacteur existant remplissait déjà ce contrat ; aucun changement du flux OAuth n'était
+nécessaire.
 
 ### Routine de livraison
 

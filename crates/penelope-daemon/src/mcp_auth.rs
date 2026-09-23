@@ -1004,6 +1004,8 @@ mod tests {
             .collect();
         assert_eq!(calls.len(), 2, "échange et rafraîchissement");
         for request in calls {
+            let logged = penelope_observe::redact(&json!({"request_debug": &request}).to_string());
+            assert!(!logged.contains("secret-test"), "{logged}");
             match method {
                 "client_secret_post" => {
                     assert!(request.contains("client_secret=secret-test"), "{request}")
@@ -1016,6 +1018,15 @@ mod tests {
                         "{request}"
                     );
                     assert!(!request.contains("client_secret="), "{request}");
+                    let encoded = request
+                        .lines()
+                        .find(|line| {
+                            line.to_ascii_lowercase()
+                                .starts_with("authorization: basic ")
+                        })
+                        .and_then(|line| line.split_whitespace().last())
+                        .expect("header Basic du serveur simulé");
+                    assert!(!logged.contains(encoded), "{logged}");
                 }
                 _ => unreachable!(),
             }
@@ -1059,6 +1070,30 @@ mod tests {
         let rendered =
             penelope_observe::redact(&format!("erreur distante : {}", body["client_secret"]));
         assert!(!rendered.contains("secret-redaction-test"), "{rendered}");
+    }
+
+    #[test]
+    fn basic_authorization_value_is_redacted_even_in_a_generic_structured_field() {
+        use base64::Engine as _;
+        let secrets = penelope_platform::MemorySecretStore::new();
+        secrets.set("oauth_basic_test", "s3cr3t").unwrap();
+        let mut body = BTreeMap::from([("client_id".into(), "c".into())]);
+        token_client_auth(
+            &secrets,
+            ClientAuthMethod::Basic,
+            "${SECRET:oauth_basic_test}",
+            "c",
+            &mut body,
+        )
+        .unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode("c:s3cr3t");
+        let event = json!({
+            "request_debug": format!("headers = {{ Authorization: Basic {encoded} }}"),
+            "error": "s3cr3t",
+        });
+        let logged = penelope_observe::redact(&event.to_string());
+        assert!(!logged.contains("s3cr3t"), "{logged}");
+        assert!(!logged.contains(&encoded), "{logged}");
     }
 
     #[test]
