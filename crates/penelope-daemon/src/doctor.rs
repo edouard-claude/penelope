@@ -765,7 +765,7 @@ pub async fn machine_checks(s: &Services) -> Vec<DoctorCheck> {
                 inv.missing.len(),
                 inv.missing.join(", ")
             ),
-            Some(format!("brew install {}", inv.missing.join(" "))),
+            Some(brew_install_command(&inv.missing)),
         ));
     }
 
@@ -785,6 +785,22 @@ pub async fn machine_checks(s: &Services) -> Vec<DoctorCheck> {
         }
     }
     out
+}
+
+/// Le nom d'un exécutable n'est pas toujours celui de sa formule Homebrew.
+fn brew_install_command(missing: &[String]) -> String {
+    let formulas = missing
+        .iter()
+        .map(|name| {
+            if name == "rg" {
+                "ripgrep"
+            } else {
+                name.as_str()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("brew install {formulas}")
 }
 
 /// #146 : une skill importée déclare ses dépendances (`requires: [pip:…, npm:…, bin:…]`).
@@ -2095,6 +2111,14 @@ mod tests {
         assert_eq!(c.fix.as_deref(), Some("penelope start"));
     }
     use super::*;
+
+    #[test]
+    fn missing_rg_suggests_the_homebrew_formula_name() {
+        assert_eq!(
+            brew_install_command(&["rg".into(), "jq".into()]),
+            "brew install ripgrep jq"
+        );
+    }
 
     /// #125 : les alias des rôles d'image n'appellent pas d'outils ; un modèle de pointage
     /// sans tool calling peut les servir. Le modèle de conversation, lui, en a besoin.
