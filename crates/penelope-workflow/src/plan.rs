@@ -276,6 +276,66 @@ impl PlanStore {
         }).await
     }
 
+    /// Une nouvelle demande dans la même conversation conserve le plan approuvé
+    /// pour T3, puis ouvre un brouillon distinct. La bascule est atomique.
+    pub async fn start_next(
+        &self,
+        session: &str,
+        approved: &PlanDraft,
+        next: &PlanDraft,
+    ) -> penelope_store::Result<()> {
+        if !approved.plan.can_execute() {
+            return Err(StoreError::other("le plan courant est encore en revue"));
+        }
+        let key = format!("workflow.plan.{session}");
+        let archive = format!("workflow.plan.archive.{session}.");
+        let before =
+            serde_json::to_string(approved).map_err(|e| StoreError::other(e.to_string()))?;
+        let after = serde_json::to_string(next).map_err(|e| StoreError::other(e.to_string()))?;
+        self.store.write_durable(move |tx| {
+            let changed = tx.execute(
+                "UPDATE kv SET v = ?1, ts = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE k = ?2 AND v = ?3",
+                params![after, key, before],
+            )?;
+            if changed != 1 {
+                return Err(StoreError::other("plan modifié entre lecture et écriture"));
+            }
+            tx.execute(
+                "INSERT INTO kv(k, v, ts) VALUES(?1 || hex(randomblob(16)), ?2, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+                params![archive, before],
+            )?;
+            Ok(())
+        }).await
+    }
+
+    /// Plans approuvés du sujet, y compris celui qui reste actif.
+    pub async fn approved(&self, session: &str) -> penelope_store::Result<Vec<PlanDraft>> {
+        let archive = format!("workflow.plan.archive.{session}.");
+        let active = format!("workflow.plan.{session}");
+        let raws = self
+            .store
+            .read(move |db| {
+                let mut stmt = db.prepare(
+                    "SELECT v FROM kv WHERE k = ?1 OR substr(k, 1, length(?2)) = ?2 ORDER BY ts, k",
+                )?;
+                let rows =
+                    stmt.query_map(params![active, archive], |row| row.get::<_, String>(0))?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await?;
+        let drafts = raws
+            .into_iter()
+            .map(|raw| {
+                serde_json::from_str::<PlanDraft>(&raw)
+                    .map_err(|e| StoreError::other(e.to_string()))
+            })
+            .collect::<penelope_store::Result<Vec<_>>>()?;
+        Ok(drafts
+            .into_iter()
+            .filter(|draft| draft.plan.can_execute())
+            .collect())
+    }
+
     pub async fn get(&self, session: &str) -> penelope_store::Result<Option<PlanDraft>> {
         let key = format!("workflow.plan.{session}");
         let value = self
@@ -424,5 +484,23 @@ mod tests {
             .unwrap();
         assert!(plans.replace("session", &initial, &stale).await.is_err());
         assert_eq!(plans.get("session").await.unwrap(), Some(approved));
+    }
+
+    #[tokio::test]
+    async fn another_plan_cannot_discard_one_still_in_review() {
+        let dir = tempfile::tempdir().unwrap();
+        let plans =
+            PlanStore::new(penelope_store::Store::open(dir.path().join("state.db")).unwrap());
+        let first = PlanDraft {
+            workflow_id: "build-verify".into(),
+            params: serde_json::json!({}),
+            brief: None,
+            plan: Plan::new("Premier but", steps("Premier test")).unwrap(),
+        };
+        let mut next = first.clone();
+        next.workflow_id = "other".into();
+        plans.create("session", &first).await.unwrap();
+        assert!(plans.start_next("session", &first, &next).await.is_err());
+        assert_eq!(plans.get("session").await.unwrap(), Some(first));
     }
 }

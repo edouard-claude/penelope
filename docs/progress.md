@@ -8,7 +8,7 @@ Dernière mise à jour : 23 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1733 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
+- **1734 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2685,7 +2685,8 @@ sans paramètres fournis. L'orchestrateur propose un but et des étapes typées 
 l'historique. Le plan et son gate sont écrits durablement dans le store. La carte dans
 le même sujet permet « Vas-y » ; le clic approuve la version affichée et rejette un
 bouton périmé. Aucune exécution n'est déclenchée par cette tranche : l'état approuvé
-sera consommé par T3 de #185. `workflow_start` ne peut plus lancer directement depuis
+sera consommé par T3 de #185. Un nouveau plan dans la même session archive l'ancien
+plan approuvé sans le perdre. `workflow_start` ne peut plus lancer directement depuis
 une conversation Telegram. La CLI et les runs techniques gardent leur moteur actuel.
 
 ### Routine de livraison

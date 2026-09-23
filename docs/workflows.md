@@ -435,7 +435,8 @@ dans le sujet d'origine montre le plan et son bouton « Vas-y ». Ce clic persis
 approuvé ; l'exécution de ce plan viendra avec T3 de #185. Le lancement direct avec
 `workflow_start` est refusé dans une conversation Telegram. `/run <id>` passe toujours
 par cette conversation, même quand des paramètres sont fournis. La CLI et les runs
-techniques continuent d'utiliser le moteur existant.
+techniques continuent d'utiliser le moteur existant. Une nouvelle demande dans la même
+session conserve le plan approuvé précédent pour T3.
 
 ## Limites actuelles
 

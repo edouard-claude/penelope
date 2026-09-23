@@ -1315,7 +1315,7 @@ impl NativeToolExecutor {
                 json!({"definition": w, "graphe": w.render_graph()})
             }
             "workflow_plan" => {
-                use penelope_workflow::plan::{Plan, PlanDraft, PlanStep, PlanStore};
+                use penelope_workflow::plan::{PlanStep, PlanStore};
                 let id = str_arg(args, "id")?;
                 s.workflows
                     .get(&id)
@@ -1326,60 +1326,57 @@ impl NativeToolExecutor {
                 let goal = args.get("goal").and_then(Value::as_str);
                 let steps = args.get("steps");
                 let draft = if let Some(mut old) = existing {
-                    if old.workflow_id != id {
-                        return Err(ToolError::Invalid(format!(
-                            "la session prépare déjà le workflow `{}`",
-                            old.workflow_id
-                        )));
-                    }
-                    if restore.is_some() || goal.is_some() || steps.is_some() {
-                        let previous = old.clone();
-                        let expected = args
-                            .get("expected_version")
-                            .and_then(Value::as_u64)
-                            .ok_or_else(|| {
-                                ToolError::Invalid("expected_version requis pour réviser".into())
-                            })?;
-                        if let Some(version) = restore {
-                            old.restore(expected, version)
-                                .map_err(|e| ToolError::Invalid(e.to_string()))?;
-                        } else {
-                            let goal =
-                                goal.ok_or_else(|| ToolError::Invalid("goal requis".into()))?;
-                            let steps: Vec<PlanStep> = serde_json::from_value(
-                                steps
-                                    .cloned()
-                                    .ok_or_else(|| ToolError::Invalid("steps requis".into()))?,
-                            )
-                            .map_err(|e| ToolError::Invalid(e.to_string()))?;
-                            old.revise(expected, goal, steps)
-                                .map_err(|e| ToolError::Invalid(e.to_string()))?;
+                    if old.plan.can_execute()
+                        && args.get("expected_version").is_none()
+                        && goal.is_some()
+                        && steps.is_some()
+                    {
+                        let new = new_workflow_plan(&id, args)?;
+                        plans.start_next(&self.env.session_id, &old, &new).await?;
+                        new
+                    } else {
+                        if old.workflow_id != id {
+                            return Err(ToolError::Invalid(format!(
+                                "la session prépare déjà le workflow `{}`",
+                                old.workflow_id
+                            )));
                         }
-                        old.params = args.get("params").cloned().unwrap_or(old.params);
-                        old.brief = args
-                            .get("brief")
-                            .and_then(Value::as_str)
-                            .map(String::from)
-                            .or(old.brief);
-                        plans.replace(&self.env.session_id, &previous, &old).await?;
+                        if restore.is_some() || goal.is_some() || steps.is_some() {
+                            let previous = old.clone();
+                            let expected = args
+                                .get("expected_version")
+                                .and_then(Value::as_u64)
+                                .ok_or_else(|| {
+                                    ToolError::Invalid(
+                                        "expected_version requis pour réviser".into(),
+                                    )
+                                })?;
+                            if let Some(version) = restore {
+                                old.restore(expected, version)
+                                    .map_err(|e| ToolError::Invalid(e.to_string()))?;
+                            } else {
+                                let goal =
+                                    goal.ok_or_else(|| ToolError::Invalid("goal requis".into()))?;
+                                let steps: Vec<PlanStep> =
+                                    serde_json::from_value(steps.cloned().ok_or_else(|| {
+                                        ToolError::Invalid("steps requis".into())
+                                    })?)
+                                    .map_err(|e| ToolError::Invalid(e.to_string()))?;
+                                old.revise(expected, goal, steps)
+                                    .map_err(|e| ToolError::Invalid(e.to_string()))?;
+                            }
+                            old.params = args.get("params").cloned().unwrap_or(old.params);
+                            old.brief = args
+                                .get("brief")
+                                .and_then(Value::as_str)
+                                .map(String::from)
+                                .or(old.brief);
+                            plans.replace(&self.env.session_id, &previous, &old).await?;
+                        }
+                        old
                     }
-                    old
                 } else {
-                    let goal = goal.ok_or_else(|| ToolError::Invalid("goal requis".into()))?;
-                    let steps: Vec<PlanStep> = serde_json::from_value(
-                        steps
-                            .cloned()
-                            .ok_or_else(|| ToolError::Invalid("steps requis".into()))?,
-                    )
-                    .map_err(|e| ToolError::Invalid(e.to_string()))?;
-                    let plan =
-                        Plan::new(goal, steps).map_err(|e| ToolError::Invalid(e.to_string()))?;
-                    let new = PlanDraft {
-                        workflow_id: id,
-                        params: args.get("params").cloned().unwrap_or(json!({})),
-                        brief: args.get("brief").and_then(Value::as_str).map(String::from),
-                        plan,
-                    };
+                    let new = new_workflow_plan(&id, args)?;
                     plans.create(&self.env.session_id, &new).await?;
                     new
                 };
@@ -2326,6 +2323,24 @@ pub(crate) fn shell_override(raw: &str) -> Option<(String, Vec<String>)> {
     Some((program, args))
 }
 
+fn new_workflow_plan(id: &str, args: &Value) -> ToolResult<penelope_workflow::plan::PlanDraft> {
+    use penelope_workflow::plan::{Plan, PlanDraft, PlanStep};
+    let goal = str_arg(args, "goal")?;
+    let steps: Vec<PlanStep> = serde_json::from_value(
+        args.get("steps")
+            .cloned()
+            .ok_or_else(|| ToolError::Invalid("steps requis".into()))?,
+    )
+    .map_err(|e| ToolError::Invalid(e.to_string()))?;
+    let plan = Plan::new(goal, steps).map_err(|e| ToolError::Invalid(e.to_string()))?;
+    Ok(PlanDraft {
+        workflow_id: id.into(),
+        params: args.get("params").cloned().unwrap_or(json!({})),
+        brief: args.get("brief").and_then(Value::as_str).map(String::from),
+        plan,
+    })
+}
+
 fn str_arg(args: &Value, key: &str) -> ToolResult<String> {
     args.get(key)
         .and_then(|v| v.as_str())
@@ -2673,6 +2688,21 @@ mod tests {
             .is_err()
         );
         assert_eq!(plans.get("s1").await.unwrap().unwrap().plan.version(), 2);
+        let mut approved = plans.get("s1").await.unwrap().unwrap();
+        let previous = approved.clone();
+        approved.approve(2).unwrap();
+        plans.replace("s1", &previous, &approved).await.unwrap();
+        e.execute(
+            "workflow_plan",
+            &json!({
+                "id":"build-verify", "goal":"Vérifier un autre changement",
+                "steps":[{"phase":"tests", "title":"Nouveaux tests"}]
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(plans.get("s1").await.unwrap().unwrap().plan.version(), 1);
+        assert_eq!(plans.approved("s1").await.unwrap(), vec![approved]);
     }
 
     struct TestConfigAdmin {
