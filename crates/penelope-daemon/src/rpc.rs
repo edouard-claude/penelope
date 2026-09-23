@@ -112,6 +112,39 @@ impl Rpc {
                 self.daemon.handle.request_restart();
                 Ok(json!({"ok": true}))
             }
+            // Jobs d'outils (issue #204) : ce qui tourne hors des tours.
+            method::JOBS => {
+                let jobs = crate::tool_jobs::store(s);
+                let all = p.get("all").and_then(|v| v.as_bool()) == Some(true);
+                let now = s.clock.now_ms();
+                let rows = if all {
+                    let mut v = jobs.live().await?;
+                    for sess in s.sessions.list(None, 100).await? {
+                        v.extend(
+                            jobs.of_session(sess.id.as_str(), false)
+                                .await?
+                                .into_iter()
+                                .filter(|j| j.state.is_terminal()),
+                        );
+                    }
+                    v
+                } else {
+                    jobs.live().await?
+                };
+                // Une ligne par job, sans son résultat : `penelope jobs` dit ce qui
+                // tourne, `penelope logs` dit ce que ça a donné.
+                Ok(json!(
+                    rows.iter()
+                        .map(|j| json!({
+                            "job": j.id,
+                            "tool": j.tool,
+                            "état": j.state.as_str(),
+                            "âge_s": j.age_s(now),
+                            "session": j.session_id,
+                        }))
+                        .collect::<Vec<_>>()
+                ))
+            }
             method::UPGRADE => crate::upgrade::rpc(&self.daemon, p).await,
             method::IMPORT_HERMES => crate::hermes::rpc(&self.daemon, p).await,
 
@@ -141,7 +174,10 @@ impl Rpc {
                     .turns
                     .cancel_pending(&sid, "arrêté par le propriétaire")
                     .await?;
-                Ok(json!({"session": sid, "stopped": stopped, "dropped": dropped}))
+                // Les jobs d'outils de la session : ils tournent hors du tour, donc hors
+                // de portée de `cancel_session` (issue #204).
+                let jobs = s.jobs.cancel_session(&sid);
+                Ok(json!({"session": sid, "stopped": stopped, "dropped": dropped, "jobs": jobs}))
             }
             method::SESSION_CLOSE => {
                 let query = required_str(p, "session")?;

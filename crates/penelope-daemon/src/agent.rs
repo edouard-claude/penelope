@@ -315,6 +315,15 @@ pub trait ToolExecutor {
         None
     }
 
+    /// Copie détachable de cet exécuteur, pour un appel qui sort du tour (issue #204).
+    ///
+    /// Un job survit au tour qui l'a lancé : il ne peut donc pas emprunter l'exécuteur du
+    /// tour. `None` — le défaut — signifie « cet exécuteur ne sait pas se détacher » :
+    /// l'appel s'exécute alors comme avant, dans le tour.
+    fn detached(&self) -> Option<Arc<dyn ToolExecutor + Send + Sync>> {
+        None
+    }
+
     /// Risque et nom effectif d'un appel. Par défaut : le catalogue natif.
     async fn describe_call(&self, name: &str, args: &Value) -> CallInfo {
         let _ = args;
@@ -1711,6 +1720,25 @@ impl AgentLoop {
                 eager: false,
             },
             Planned::Fresh(id) => {
+                // L'appel qui demande l'arrière-plan sort du tour ici, et **seulement**
+                // ici : l'effet est planifié avant, le job le passe `dispatching` puis le
+                // clôt (§4.2, issue #204). Rien ne contourne le ledger.
+                if let Some(outcome) = crate::tool_jobs::maybe_spawn(
+                    s,
+                    execute,
+                    crate::tool_jobs::JobRequest {
+                        session_id: &spec.session_id,
+                        run_id: spec.run_id.as_deref(),
+                        turn_id: spec.turn_id.as_deref(),
+                        call,
+                        tool: &info.effective_name,
+                        effect: &id,
+                    },
+                )
+                .await?
+                {
+                    return Ok(outcome);
+                }
                 s.effects.dispatching(&id).await?;
                 let result = execute
                     .execute_cancellable(&call.name, &call.arguments, &spec.cancel)

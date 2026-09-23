@@ -8,7 +8,7 @@ Dernière mise à jour : 23 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1757 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
+- **1782 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2745,6 +2745,44 @@ rappelée : `session purge` emporte les instantanés que la session seule réfé
 coupe le renvoi depuis `usage` (la ligne comptable, ses jetons et son coût restent) ; la
 rétention n'efface que ce que plus aucune ligne ne cite. Décision
 [0011](decisions/0011-prompt-systeme-journalise.md).
+
+### 0.17.60
+
+#### Un outil long sort du tour et rend la main (#204)
+
+Un appel d'outil occupait le tour du début à la fin : `run_effect` planifiait l'effet puis
+attendait `execute_cancellable`. Un `shell_exec` à `timeout_ms` de 3 600 000 ms immobilisait
+donc le tour jusqu'à une heure, et le message du propriétaire attendait derrière lui, même
+pour dire « laisse tomber ». Seul `/stop` traversait, et il annulait tout le tour.
+
+Les **jobs d'outils** (table `tool_jobs`, migration `0019`) sortent ces appels du tour, sur
+le modèle des tâches MCP : mêmes états — `TaskState` est importé, pas redéfini —, mêmes
+colonnes `request` et `result`, mêmes règles de purge et de rétention. Sans `poll_at` : un
+job natif tourne ici, rien ne le sonde. `shell_exec background: true` rend immédiatement
+`{job, state: "working"}` ; au-delà de `tools.background_after` (120 s), le texte de
+l'outil **propose** l'arrière-plan sans rien détourner d'office. `sub_agent_spawn` se
+lance de la même façon. `job_status`, `job_wait`, `job_cancel` et `job_list` sont exposés à
+la session dès qu'un job existe, et `job_wait` est borné.
+
+Le ledger ne change pas : l'effet est planifié avant, passe `dispatching` avec le job, et
+un job perdu au redémarrage suit le chemin `unknown` → carte de #83. Il n'est **jamais**
+relancé d'office, même si l'outil est déclaré idempotent (décision
+[0012](decisions/0012-jobs-outils-durables.md)). Le résultat revient seul dans la session
+d'origine par un tour `Nudge`, exactement une fois, même si le tour est clos ou la session
+fermée depuis longtemps.
+
+Bornes et traces : `tools.jobs_per_session` (3) et `tools.jobs_total` (10), refusés avec
+ce qu'il faut pour s'en sortir ; `/stop` coupe les jobs de la session, `/stop tout` ceux de
+toutes les sessions ; événements `tool.job.started` et `tool.job.completed` ;
+`penelope jobs`, `self_status` section `jobs` et un contrôle `doctor`. Une tâche qui
+panique devient un échec ordinaire plutôt qu'un effet `dispatching` éternel, et une session
+de sous-agent ou de run de workflow ignore `background` : la relance n'y trouverait
+personne.
+
+Hors périmètre, et dit : l'ingestion de documents ne rejoint pas le registre. Elle prend
+des octets bruts, n'est pas un appel d'outil (ni `effect_id` ni `ToolOutcome`), a son
+propre registre d'annulation et livre par une carte Telegram. Le ticket la conditionnait à
+un coût nul ; il ne l'est pas.
 
 ### Routine de livraison
 

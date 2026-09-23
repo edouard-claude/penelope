@@ -54,6 +54,7 @@ pub mod telegram;
 #[cfg(test)]
 mod ticket_to_deploy_e2e;
 pub mod titles;
+pub mod tool_jobs;
 pub mod tools_on_demand;
 pub mod upgrade;
 pub mod usage_feedback;

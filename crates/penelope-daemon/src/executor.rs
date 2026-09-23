@@ -645,6 +645,9 @@ impl NativeToolExecutor {
                             ""
                         }
                     );
+                    if let Some(hint) = crate::tool_jobs::background_hint(&cfg, name, args) {
+                        o.text.push_str(&hint);
+                    }
                     return Ok(o.eager());
                 }
                 if out.exit_code != 0 {
@@ -656,6 +659,11 @@ impl NativeToolExecutor {
                         o.text =
                             format!("{}\n\n{}", penelope_tools::shell::NETWORK_OFF_NOTE, o.text);
                     }
+                }
+                // Un délai demandé au-delà de `tools.background_after` a immobilisé le
+                // tour : la prochaine fois, proposer l'arrière-plan (issue #204).
+                if let Some(hint) = crate::tool_jobs::background_hint(&cfg, name, args) {
+                    o.text.push_str(&hint);
                 }
                 return Ok(o.eager());
             }
@@ -1473,6 +1481,10 @@ impl NativeToolExecutor {
                 .await
                 .map_err(ToolError::Other)?
             }
+            // ------------------------------------------------- jobs d'outils (#204)
+            "job_status" | "job_wait" | "job_cancel" | "job_list" => {
+                crate::tool_jobs::tool(s, &self.env.session_id, name, args).await?
+            }
             "session_notes" => crate::session_notes::tool(s, &self.env.session_id, args)
                 .await
                 .map_err(ToolError::Invalid)?,
@@ -2109,6 +2121,18 @@ pub(crate) fn lift_cd(args: &Value, workspaces: &[PathBuf]) -> Option<Value> {
 impl ToolExecutor for NativeToolExecutor {
     fn policy_workspace(&self) -> Option<PathBuf> {
         self.workspaces().into_iter().next()
+    }
+
+    /// Même session, même origine, mêmes branchements : ce que le job exécutera hors du
+    /// tour est l'exécuteur du tour, sans son emprunt (issue #204).
+    fn detached(&self) -> Option<Arc<dyn ToolExecutor + Send + Sync>> {
+        let mut copy = NativeToolExecutor::new(self.services.clone(), self.env.clone());
+        copy.locks = self.locks.clone();
+        copy.messenger = self.messenger.clone();
+        copy.mcp = self.mcp.clone();
+        copy.orchestrator = self.orchestrator.clone();
+        copy.admin = self.admin.clone();
+        Some(Arc::new(copy))
     }
 
     fn normalise_call(&self, name: &str, args: &Value) -> Option<Value> {

@@ -47,6 +47,15 @@ mesuré ou estimé. Les événements de session et HITL portent leur cycle de vi
 les événements préexistants couvrent les tours, runs, étapes, intents, planifications
 et erreurs. L'ordonnanceur émet aussi `schedule.fired` après un déclenchement réussi.
 
+`tool.job.started` et `tool.job.completed` encadrent un appel d'outil sorti de son tour
+(un `shell_exec` ou un `sub_agent_spawn` lancé avec `background: true`). Le premier porte
+`job`, `tool` et `effect` — l'identifiant de l'effet du ledger, resté `dispatching` tant
+que le job tourne ; le second porte `job`, `effect` et l'état final (`completed`,
+`failed` ou `cancelled`). Les deux sont attachés à la session d'origine, y compris quand
+son tour est clos depuis longtemps. Le résultat, lui, ne passe pas par ces événements :
+il revient dans la conversation par un tour de relance. Voir
+[Jobs d'outils](install-headless.md#jobs-doutils).
+
 `turn.started` porte, avec le modèle, les empreintes de ce que le modèle va lire :
 `system_hash` (le préfixe T0 à T2) et `tools_hash` (la liste d'outils). Le texte n'est
 jamais dans l'événement — il est gardé une fois, sous cette empreinte, et se relit par

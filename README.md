@@ -103,6 +103,16 @@ par rôle, par fournisseur amont et par cause de raté de cache. Plafonds jour, 
 run, alerte à 80 %, point de contrôle au-delà d'un dollar dans un même tour, délégation
 à un sous-agent après dix appels d'outils.
 
+### Un travail long ne bloque pas la conversation
+
+`shell_exec` et `sub_agent_spawn` acceptent `background: true` : l'appel rend la main tout
+de suite, la commande continue hors du tour, et son résultat revient seul dans la
+conversation — même si le tour d'origine est clos depuis longtemps, même si la session
+était fermée entre-temps. Pendant ce temps un message reste traité sans attendre, `/stop`
+coupe le job et son groupe de processus, et deux plafonds empêchent d'en accumuler. Un job
+est un effet comme un autre : planifié dans le ledger avant de partir, jamais relancé tout
+seul après un redémarrage.
+
 ### Elle sait ce qu'elle est
 
 Sa documentation est compilée dans son binaire : elle la cherche, la lit par section, et

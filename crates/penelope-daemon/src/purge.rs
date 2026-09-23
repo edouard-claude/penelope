@@ -6,7 +6,7 @@
 //!  session.purge <id>
 //!     messages, messages_fts, message_context, lcm_*, artifacts (fichiers compris)
 //!     llm_requests, turn_queue.payload, tg_updates.payload, mem_candidates.text
-//!     effects.request/result, tg_outbox, approval_requests.payload, mcp_tasks,
+//!     effects.request/result, tg_outbox, approval_requests.payload, mcp_tasks, tool_jobs,
 //!     workflow_runs et workflow_step_log des runs de la session (#78)
 //!     prompt_snapshots que la session seule référençait, et usage.system_hash (#205)
 //!     events : payload remplacé, hash d'origine conservé (audit.purge)
@@ -14,7 +14,8 @@
 //!  rétention (une fois par jour)
 //!     tours terminés, requêtes au modèle, updates Telegram, clés de travail,
 //!     arguments et résultats d'effets tranchés, messages envoyés, demandes décidées,
-//!     tâches MCP et sorties de runs terminés : au-delà de `retention.days`, vidés ;
+//!     tâches MCP, jobs d'outils et sorties de runs terminés : au-delà de
+//!     `retention.days`, vidés ;
 //!     prompts système que plus aucune ligne ne cite ;
 //!     pré-images de la mémoire au-delà de `retention.memory_history_days`.
 //! ```
@@ -223,6 +224,19 @@ pub async fn session(d: &Daemon, session_id: &str, reason: &str) -> anyhow::Resu
                 ),
                 [&sid],
             )?;
+            // #204 : un job d'outil porte la commande demandée et sa sortie. La ligne, son
+            // état et son effet restent : la chaîne d'audit tient, le contenu part. Un job
+            // encore en cours est déclaré annulé — la session n'existe plus pour l'accueillir.
+            let jobs = tx.execute(
+                &format!(
+                    "UPDATE tool_jobs SET request = '{{}}', result = NULL,
+                        state = CASE WHEN state IN ('working','input_required')
+                                     THEN 'cancelled' ELSE state END,
+                        delivered_at = COALESCE(delivered_at, updated_at)
+                     WHERE session_id = ?1 OR run_id IN ({RUNS})"
+                ),
+                [&sid],
+            )?;
             let steps = tx.execute(
                 &format!(
                     "UPDATE workflow_step_log SET output = NULL, error = NULL
@@ -253,6 +267,7 @@ pub async fn session(d: &Daemon, session_id: &str, reason: &str) -> anyhow::Resu
                     "effects": effects,
                     "approvals": approvals,
                     "mcp_tasks": tasks,
+                    "tool_jobs": jobs,
                     "workflow_steps": steps,
                     "workflow_runs": runs,
                 }),
@@ -340,6 +355,7 @@ pub async fn retention(d: &Daemon) -> anyhow::Result<Value> {
             let mut keys = 0;
             let (mut effects, mut outbox, mut approvals) = (0, 0, 0);
             let (mut tasks, mut steps, mut runs) = (0, 0, 0);
+            let mut jobs = 0;
             let mut prompts = 0;
             if let Some(c) = &general {
                 turns = tx.execute(
@@ -388,6 +404,13 @@ pub async fn retention(d: &Daemon) -> anyhow::Result<Value> {
                      WHERE state IN ('completed','failed','cancelled') AND updated_at < ?1",
                     [c],
                 )?;
+                // #204 : même règle pour les jobs d'outils que pour les tâches MCP — un job
+                // encore en cours n'est jamais ramassé.
+                jobs = tx.execute(
+                    "DELETE FROM tool_jobs
+                     WHERE state IN ('completed','failed','cancelled') AND updated_at < ?1",
+                    [c],
+                )?;
                 // #205 : un instantané de prompt suit la ligne d'`usage` qui le cite ; il
                 // ne part qu'une fois que plus personne ne le désigne.
                 prompts = tx.execute(
@@ -427,6 +450,7 @@ pub async fn retention(d: &Daemon) -> anyhow::Result<Value> {
                 "tg_outbox": outbox,
                 "approvals": approvals,
                 "mcp_tasks": tasks,
+                "tool_jobs": jobs,
                 "prompt_snapshots": prompts,
                 "workflow_steps": steps,
                 "workflow_runs": runs,
@@ -783,6 +807,9 @@ mod tests {
                     ("approval_requests", "payload"),
                     ("mcp_tasks", "request"),
                     ("mcp_tasks", "result"),
+                    // #204 : les arguments et le résultat d'un job d'outil.
+                    ("tool_jobs", "request"),
+                    ("tool_jobs", "result"),
                     ("workflow_step_log", "output"),
                     ("workflow_runs", "params"),
                     ("workflow_runs", "step_outputs"),
@@ -928,6 +955,14 @@ mod tests {
                      VALUES('mt1','forge','t','wr1',?1,'completed',?1,'2026-06-01T00:00:00Z',
                         '2026-06-01T00:00:00Z')",
                     [&dit],
+                )?;
+                // #204 : un job d'outil de la session porte la commande du propriétaire.
+                tx.execute(
+                    "INSERT INTO tool_jobs(id, session_id, tool, request, state, result,
+                        created_at, updated_at)
+                     VALUES('tj1',?1,'shell_exec',?2,'completed',?2,'2026-06-01T00:00:00Z',
+                        '2026-06-01T00:00:00Z')",
+                    penelope_store::rusqlite::params![sid2, dit],
                 )?;
                 Ok(())
             })
@@ -1120,6 +1155,18 @@ mod tests {
                         updated_at) VALUES('mt_vieille','f','t','{}','completed',?1,?1)",
                     p,
                 )?;
+                tx.execute(
+                    "INSERT INTO tool_jobs(id, session_id, tool, request, state, created_at,
+                        updated_at)
+                     VALUES('tj_vieux','s_1','shell_exec','{}','completed',?1,?1)",
+                    p,
+                )?;
+                tx.execute(
+                    "INSERT INTO tool_jobs(id, session_id, tool, request, state, created_at,
+                        updated_at)
+                     VALUES('tj_en_cours','s_1','shell_exec','{}','working',?1,?1)",
+                    p,
+                )?;
                 Ok(())
             })
             .await
@@ -1130,6 +1177,14 @@ mod tests {
         assert_eq!(report["tg_outbox"], 1);
         assert_eq!(report["approvals"], 1);
         assert_eq!(report["mcp_tasks"], 1);
+        // #204 : un job terminé et vieux part, un job encore en cours reste.
+        assert_eq!(report["tool_jobs"], 1, "{report}");
+        let reste: i64 = s
+            .store
+            .read(|c| Ok(c.query_row("SELECT count(*) FROM tool_jobs", [], |r| r.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(reste, 1, "le job en cours n'est pas ramassé");
         let (fait, doute, attente): (Option<String>, String, i64) = s
             .store
             .read(|c| {

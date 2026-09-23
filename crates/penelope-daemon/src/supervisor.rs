@@ -179,6 +179,10 @@ impl Daemon {
             supervised("workflows", |d| {
                 Box::pin(crate::workflow::driver_loop(d)) as BoxLoop
             }),
+            // Résultats des jobs d'outils rendus à leur session (issue #204).
+            supervised("tool_jobs", |d| {
+                Box::pin(crate::tool_jobs::deliver_loop(d)) as BoxLoop
+            }),
             supervised("codex.refresh", |d| {
                 Box::pin(crate::codex_auth::refresh_loop(d)) as BoxLoop
             }),
@@ -255,6 +259,12 @@ impl Daemon {
         self.handle.shutdown();
         self.bus.notify_enqueued();
         // Les processus des serveurs MCP ne doivent pas survivre au daemon.
+        // Les jobs de ce processus meurent avec lui : leurs jetons tuent les groupes de
+        // processus plutôt que de laisser des orphelins (issues #204 et #65).
+        let cut = self.services.jobs.cancel_all();
+        if cut > 0 {
+            tracing::info!(jobs = cut, "jobs d'outils interrompus à l'arrêt");
+        }
         mcp.stop_all().await;
         // Les tours en cours ont un peu de temps pour finir ; le reste sera repris au
         // prochain démarrage (leases, ledger).

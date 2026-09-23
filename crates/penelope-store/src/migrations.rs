@@ -87,6 +87,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0018_prompt_snapshots",
         sql: SQL_0018,
     },
+    Migration {
+        version: "0019_tool_jobs",
+        sql: SQL_0019,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -978,6 +982,36 @@ ALTER TABLE llm_requests ADD COLUMN tools_hash TEXT;
 ALTER TABLE llm_requests ADD COLUMN request_hash TEXT;
 "#;
 
+/// Jobs d'outils natifs (#204) : un appel long sort du tour et son résultat revient seul.
+///
+/// Table distincte de `mcp_tasks` : celle-ci décrit une tâche **chez un serveur MCP**
+/// (`server`, `task_ref` non nuls, sondée de l'extérieur). Un job natif n'est pas sondé,
+/// il tourne ici ; il porte un outil, ses arguments, l'effet du ledger (§4.2) et le tour
+/// d'origine. Mêmes états, mêmes règles de purge et de rétention.
+///
+/// Pas de `poll_at` : rien ne sonde un job natif, et une colonne morte qui prétend porter
+/// une échéance est pire qu'une colonne absente (décisions 0011 et 0012). `updated_at`
+/// donne l'âge, `delivered_at` la livraison.
+const SQL_0019: &str = r#"
+CREATE TABLE tool_jobs(
+  id           TEXT PRIMARY KEY,
+  session_id   TEXT NOT NULL,
+  run_id       TEXT,
+  turn_id      TEXT,                        -- tour d'origine, clos ou non
+  call_id      TEXT,                        -- appel d'outil qui l'a lancé
+  tool         TEXT NOT NULL,
+  request      TEXT NOT NULL DEFAULT '{}',  -- arguments de l'appel
+  state        TEXT NOT NULL,               -- working|input_required|completed|failed|cancelled
+  result       TEXT,                        -- valeur rendue, ou message d'erreur
+  effect_id    TEXT,                        -- effet du ledger resté `dispatching`
+  delivered_at TEXT,                        -- résultat remis à la session d'origine
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+CREATE INDEX tool_jobs_session ON tool_jobs(session_id, state);
+CREATE INDEX tool_jobs_delivery ON tool_jobs(delivered_at, updated_at);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1222,6 +1256,7 @@ mod tests {
             "subsystem_apply_results",
             "event_purges",
             "prompt_snapshots",
+            "tool_jobs",
         ] {
             let n: i64 = c
                 .query_row(

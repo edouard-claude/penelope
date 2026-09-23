@@ -237,11 +237,14 @@ pub mod method {
     pub const UPGRADE: &str = "upgrade";
     /// Métriques au format d'exposition Prometheus (issue #103).
     pub const METRICS: &str = "metrics";
+    /// Jobs d'outils vivants, leur âge et leur session (issue #204).
+    pub const JOBS: &str = "jobs";
 
     /// Toutes les méthodes, pour le test de couverture Telegram ↔ CLI (CA 15).
     pub const ALL: &[&str] = &[
         STATUS,
         METRICS,
+        JOBS,
         DOCTOR,
         SHUTDOWN,
         RESTART,

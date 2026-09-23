@@ -142,6 +142,7 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
     // Rétention : dernière passe et contenu que gardent les tables d'effets (#78).
     checks.push(retention_check(s).await);
     checks.push(prompt_stability_check(s).await);
+    checks.push(tool_jobs_check(s).await);
 
     // Jour budgétaire : des lignes récentes comptées dans un autre fuseau (#79).
     checks.push(budget_days_check(s).await);
@@ -1784,6 +1785,63 @@ async fn retention_check(s: &Services) -> DoctorCheck {
     }
 }
 
+/// #204 : un job d'outil tourne hors d'un tour. Deux façons de mal finir : un job qui
+/// traîne parce que personne ne l'a relu, et un job de la base que plus aucun jeton de ce
+/// processus ne couvre — ce que laisse un redémarrage. Les deux sont nommés, avec leur âge
+/// et leur session.
+async fn tool_jobs_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "tool_jobs";
+    const LABEL: &str = "Jobs d'outils";
+    /// Au-delà, un job n'est plus une commande longue mais un oubli.
+    const OLD_S: i64 = 3_600;
+    let cfg = s.config.config();
+    let now = s.clock.now_ms();
+    let live = crate::tool_jobs::store(s).live().await.unwrap_or_default();
+    let here = s.jobs.len();
+    if live.is_empty() {
+        return DoctorCheck::ok(ID, LABEL, "aucun job en cours".to_string());
+    }
+    let detail = |extra: &str| {
+        format!(
+            "{} job(s) en cours ({} dans ce processus), plafonds {}/session et {} au              total{extra} : {}",
+            live.len(),
+            here,
+            cfg.tools.jobs_per_session,
+            cfg.tools.jobs_total,
+            live.iter()
+                .map(|j| format!(
+                    "`{}` {} ({} s, session {})",
+                    j.id,
+                    j.tool,
+                    j.age_s(now),
+                    j.session_id
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    // Un job de la base sans jeton ici n'est plus interruptible : c'est le reste d'un
+    // processus mort, que la reprise au démarrage aurait dû trancher.
+    if live.len() > here {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            detail(", dont certains sans processus"),
+            Some("penelope restart".into()),
+        );
+    }
+    let vieux = live.iter().filter(|j| j.age_s(now) > OLD_S).count();
+    if vieux > 0 {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            detail(&format!(", dont {vieux} de plus d'une heure")),
+            Some("penelope jobs".into()),
+        );
+    }
+    DoctorCheck::ok(ID, LABEL, detail(""))
+}
+
 /// #205 : un préfixe stable est la condition du coût (#17). Quand il bouge plusieurs fois
 /// par jour **hors** pause et hors compaction, chaque tour repaie son prompt entier : c'est
 /// la cause n° 1 des ratés de cache, et l'instantané dit désormais quelle tuile bouge.
@@ -2245,6 +2303,7 @@ mod tests {
             "reasoning_effort",
             "dream_power",
             "prompt.stability",
+            "tool_jobs",
         ] {
             assert!(ids.contains(&expected), "contrôle manquant : {expected}");
         }

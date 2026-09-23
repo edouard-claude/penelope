@@ -52,6 +52,9 @@ pub struct Services {
     pub schedules: ScheduleStore,
     /// Demandes des serveurs MCP au propriétaire (§8.4, issue #12).
     pub elicitations: Arc<crate::elicitation::Broker>,
+    /// Jobs d'outils qui tournent dans ce processus (issue #204) : leur jeton
+    /// d'annulation, pour que `/stop` les traverse comme il traverse un outil.
+    pub jobs: Arc<crate::tool_jobs::Running>,
 }
 
 impl Services {
@@ -154,6 +157,7 @@ impl Services {
             runs,
             schedules,
             elicitations: Arc::default(),
+            jobs: Arc::default(),
         })
     }
 
@@ -221,6 +225,7 @@ impl Services {
             runs: RunStore::new(store.clone(), clock.clone()),
             schedules: ScheduleStore::new(store.clone(), clock.clone(), "Indian/Reunion"),
             elicitations: Arc::default(),
+            jobs: Arc::default(),
             mcp_tools,
             context,
             catalog,
@@ -459,6 +464,16 @@ impl Daemon {
         let s = &self.services;
 
         let turns = s.turns.recover_on_boot().await?;
+        // Avant les effets : un job dont le processus est mort devient `failed` sans être
+        // relancé (décision 0012), et son effet suit le chemin `dispatching` → `unknown`
+        // qui pose **une** question au propriétaire (#83).
+        let lost_jobs = crate::tool_jobs::store(s).recover_on_boot().await?;
+        if !lost_jobs.is_empty() {
+            tracing::warn!(
+                count = lost_jobs.len(),
+                "jobs d'outils perdus au redémarrage"
+            );
+        }
         let unknown_effects = s.effects.recover_on_boot().await?;
         let unknown_llm = s.llm_state.recover_on_boot().await?;
         let runs = s.runs.recover_on_boot().await?;
@@ -476,6 +491,7 @@ impl Daemon {
             llm_unknown: unknown_llm.len() as u64,
             runs_resumed: runs.len() as u64,
             mcp_orphans_killed: orphans.len() as u64,
+            tool_jobs_lost: lost_jobs.len() as u64,
         };
 
         s.events
@@ -640,6 +656,9 @@ pub struct RecoveryReport {
     pub llm_unknown: u64,
     pub runs_resumed: u64,
     pub mcp_orphans_killed: u64,
+    /// Jobs d'outils que le redémarrage a interrompus (issue #204).
+    #[serde(default)]
+    pub tool_jobs_lost: u64,
 }
 
 impl RecoveryReport {
