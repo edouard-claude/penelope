@@ -1366,6 +1366,7 @@ name = "penelope-evals"
 version = "0.17.59"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64",
  "chrono",
  "futures",
@@ -1390,6 +1391,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "toml",
  "tracing",
 ]
 

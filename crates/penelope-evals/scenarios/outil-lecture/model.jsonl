@@ -1,0 +1,2 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "fs_read", "arguments": {"path": "notes.txt"}}]}}
+{"text": "La première tâche de notes.txt : relancer le client Borealis."}

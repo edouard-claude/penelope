@@ -16,6 +16,13 @@ futures.workspace = true
 chrono.workspace = true
 regex.workspace = true
 sha2.workspace = true
+# Scénarios rejouables (R11) : `scenario.toml` est lu avec le `toml` du workspace, et
+# chaque rejeu boote les services sur un répertoire temporaire.
+toml.workspace = true
+tempfile.workspace = true
+# Le fournisseur enregistreur et le serveur MCP simulé des scénarios implémentent des
+# traits `async_trait` de `penelope-llm` et du daemon.
+async-trait.workspace = true
 penelope-kernel.workspace = true
 penelope-store.workspace = true
 penelope-platform.workspace = true
@@ -33,5 +40,4 @@ penelope-daemon.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
-tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util"] }

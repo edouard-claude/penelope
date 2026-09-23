@@ -1,0 +1,20 @@
+name = "lectures-paralleles"
+description = """Trois `fs_read` dans une même réponse (#85) : lectures pures, lancées ensemble,
+résultats enregistrés dans l'ordre des appels, puis la réponse."""
+pin_model = "main"
+
+[[files]]
+path = "a.txt"
+content = "alpha : 1\n"
+
+[[files]]
+path = "b.txt"
+content = "bravo : 2\n"
+
+[[files]]
+path = "c.txt"
+content = "charlie : 3\n"
+
+[[steps]]
+kind = "message"
+text = "lis a.txt, b.txt et c.txt et additionne les valeurs"

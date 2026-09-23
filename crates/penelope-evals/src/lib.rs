@@ -9,6 +9,7 @@ pub mod ca_matrix;
 pub mod live;
 pub mod mcp_servers;
 pub mod mem_bench;
+pub mod scenario;
 pub mod suites;
 
 pub use suites::{Suite, SuiteResult, all_suites, requires_network};

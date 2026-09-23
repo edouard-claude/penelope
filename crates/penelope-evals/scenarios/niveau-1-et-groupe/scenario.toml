@@ -1,0 +1,30 @@
+name = "niveau-1-et-groupe"
+description = """Niveau 1 (#52) : un gros résultat d'outil part en artefact, le transcript garde
+la tête, la queue et le pointeur ; puis un groupe de trois lectures dont le total dépasse
+le budget est admis d'un bloc, les petites restent entières, la grosse est externalisée.
+`context.large_payload_tokens` est abaissé pour que 200 lignes suffisent."""
+pin_model = "main"
+
+[config]
+"context.large_payload_tokens" = 300
+
+[[files]]
+path = "journal.log"
+content = "2026-01-01 00:00:00 INFO  requête servie en 12 ms, 200 OK, /api/factures\n"
+repeat = 200
+
+[[files]]
+path = "a.txt"
+content = "alpha : 1\n"
+
+[[files]]
+path = "b.txt"
+content = "bravo : 2\n"
+
+[[steps]]
+kind = "message"
+text = "lis journal.log et dis-moi s'il y a des erreurs"
+
+[[steps]]
+kind = "message"
+text = "relis journal.log, a.txt et b.txt ensemble"
