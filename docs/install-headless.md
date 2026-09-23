@@ -1698,8 +1698,10 @@ rien, ils se datent.
 demande de le découper ; `mem_note` (notes de travail) reste sans borne. Pour les entrées
 déjà écrites, `penelope mem split <uid>` propose un découpage en faits courts — les
 données financières personnelles (solde, salaire, épargne) restent hors de la mémoire de
-fond — par une carte, jamais par une écriture directe. `penelope doctor` liste les entrées
-actives au-delà de la borne et le Cœur au-delà de son budget.
+fond — par une carte, jamais par une écriture directe. Une réponse vide, sans puces
+exploitables ou réduite à un seul fait pour une longue entrée est retentée une fois ;
+si elle reste insuffisante, la commande explique l'échec sans créer de carte. `penelope
+doctor` liste les entrées actives au-delà de la borne et le Cœur au-delà de son budget.
 
 **Les lots et leur coût.** La passe juge les candidats par lots d'au plus
 `memory.dream_batch` = `40`. Une sortie coupée fait rejouer le même début de lot deux

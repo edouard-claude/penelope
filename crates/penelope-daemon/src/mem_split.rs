@@ -126,43 +126,95 @@ async fn cut(d: &Arc<Daemon>, text: &str) -> anyhow::Result<Vec<String>> {
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
     let info = s.catalog.get(strip_provider(&model));
-    let request = ChatRequest {
-        model: model.clone(),
-        messages: vec![
-            ChatMessage::system(PROMPT),
-            ChatMessage::user(format!("<entree>\n{text}\n</entree>")),
-        ],
-        stream: true,
-        max_tokens: Some(2_000),
-        reasoning_effort: info.as_ref().and_then(|i| i.lightest_effort()),
-        ..Default::default()
-    };
-    let call = async {
-        let rx = provider
-            .chat_stream(request, CancelToken::new())
-            .await
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        collect_stream(rx, &model, provider.name(), &s.catalog)
-            .await
-            .map_err(|e| anyhow::anyhow!(e.to_string()))
-    };
-    let response = tokio::time::timeout(TIMEOUT, call)
-        .await
-        .map_err(|_| anyhow::anyhow!("le découpage a pris trop de temps"))??;
-    let _ = s
-        .budget
-        .record(penelope_kernel::budget::UsageRecord {
-            model: response.model.clone(),
-            provider: response.provider.clone(),
-            role: Some("memory_review".into()),
-            prompt: response.usage.prompt,
-            completion: response.usage.completion,
-            cost_usd: response.cost_usd,
-            estimated: response.cost_estimated,
-            ..Default::default()
-        })
-        .await;
-    Ok(parse_facts(&response.message.text()))
+    tokio::time::timeout(TIMEOUT, async {
+        let mut last_quality = ProposalQuality::Empty;
+        for attempt in 0..2 {
+            let prompt = if attempt == 0 {
+                PROMPT.to_string()
+            } else {
+                format!(
+                    "{PROMPT}\nLa réponse précédente était vide ou trop partielle. \
+                     Donne plusieurs faits distincts sous forme de puces, sans introduction."
+                )
+            };
+            let request = ChatRequest {
+                model: model.clone(),
+                messages: vec![
+                    ChatMessage::system(prompt),
+                    ChatMessage::user(format!("<entree>\n{text}\n</entree>")),
+                ],
+                stream: true,
+                max_tokens: Some(if attempt == 0 { 2_000 } else { 3_000 }),
+                reasoning_effort: info.as_ref().and_then(|i| i.lightest_effort()),
+                ..Default::default()
+            };
+            let rx = provider
+                .chat_stream(request, CancelToken::new())
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let response = collect_stream(rx, &model, provider.name(), &s.catalog)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let _ = s
+                .budget
+                .record(penelope_kernel::budget::UsageRecord {
+                    model: response.model.clone(),
+                    provider: response.provider.clone(),
+                    role: Some("memory_review".into()),
+                    prompt: response.usage.prompt,
+                    completion: response.usage.completion,
+                    cost_usd: response.cost_usd,
+                    estimated: response.cost_estimated,
+                    ..Default::default()
+                })
+                .await;
+            let raw = response.message.text();
+            let facts = parse_facts(&raw);
+            last_quality = proposal_quality(text.chars().count(), &raw, &facts);
+            if last_quality == ProposalQuality::Ready {
+                return Ok(facts);
+            }
+        }
+        anyhow::bail!(
+            "découpage refusé après deux essais : {}",
+            last_quality.reason()
+        )
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("le découpage a pris trop de temps"))?
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProposalQuality {
+    Ready,
+    Empty,
+    NoFacts,
+    TooSparse,
+}
+
+impl ProposalQuality {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::Ready => "proposition suffisante",
+            Self::Empty => "réponse vide du modèle",
+            Self::NoFacts => "aucun fait exploitable dans la réponse du modèle",
+            Self::TooSparse => "un seul fait proposé pour une longue entrée",
+        }
+    }
+}
+
+fn proposal_quality(source_chars: usize, raw: &str, facts: &[String]) -> ProposalQuality {
+    // Une entrée de plus de deux fois la borne ne tient pas dans un seul fait :
+    // une carte avec une seule ligne donnerait une fausse impression de couverture.
+    if raw.trim().is_empty() {
+        ProposalQuality::Empty
+    } else if facts.is_empty() {
+        ProposalQuality::NoFacts
+    } else if source_chars > 2 * penelope_memory::quality::MAX_ENTRY_CHARS && facts.len() < 2 {
+        ProposalQuality::TooSparse
+    } else {
+        ProposalQuality::Ready
+    }
 }
 
 /// Lignes de faits d'une réponse : puces, bornées, sans doublon.
@@ -170,20 +222,84 @@ pub fn parse_facts(raw: &str) -> Vec<String> {
     let max = penelope_memory::quality::MAX_ENTRY_CHARS;
     let mut out: Vec<String> = Vec::new();
     for line in raw.lines() {
-        let t = line
-            .trim()
-            .trim_start_matches(['-', '*', '•'])
-            .trim()
-            .to_string();
-        if t.is_empty() || t.chars().count() > max || t.ends_with(':') {
+        let Some(t) = bullet_text(line) else {
             continue;
-        }
-        if !out.contains(&t) {
-            out.push(t);
+        };
+        let parts: Vec<&str> = if t.chars().count() > max {
+            // Un modèle regroupe parfois plusieurs phrases dans une seule puce.
+            // Ne couper qu'aux fins de phrase, jamais au milieu d'un fait.
+            split_sentences(t)
+        } else {
+            vec![t]
+        };
+        for part in parts {
+            let fact = part.trim();
+            if fact.is_empty()
+                || fact.chars().count() > max
+                || fact.ends_with(':')
+                || private_detail(fact)
+            {
+                continue;
+            }
+            if !out.iter().any(|existing| existing == fact) {
+                out.push(fact.to_string());
+            }
         }
     }
     out.truncate(12);
     out
+}
+
+fn split_sentences(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (at, mark) in text.char_indices() {
+        if !matches!(mark, '.' | ';') {
+            continue;
+        }
+        let end = at + mark.len_utf8();
+        if text[end..].chars().next().is_none_or(char::is_whitespace) {
+            parts.push(&text[start..end]);
+            start = end;
+        }
+    }
+    if start < text.len() {
+        parts.push(&text[start..]);
+    }
+    parts
+}
+
+/// Seules les lignes explicitement présentées comme faits sont acceptées.
+fn bullet_text(line: &str) -> Option<&str> {
+    let t = line.trim();
+    if let Some(rest) = t.strip_prefix(['-', '*', '•']) {
+        return rest.starts_with(char::is_whitespace).then(|| rest.trim());
+    }
+    let digits = t.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 || digits > 2 {
+        return None;
+    }
+    let rest = &t[digits..];
+    let rest = rest.strip_prefix(['.', ')'])?;
+    rest.starts_with(char::is_whitespace).then(|| rest.trim())
+}
+
+/// Garde-fou local : le modèle ne suffit pas à exclure les données privées.
+fn private_detail(fact: &str) -> bool {
+    let lower = fact.to_lowercase();
+    [
+        "€",
+        "iban",
+        "siren",
+        "siret",
+        "salaire",
+        "solde bancaire",
+        "épargne",
+        "chiffre d'affaires",
+        "montant de facture",
+    ]
+    .iter()
+    .any(|word| lower.contains(word))
 }
 
 fn short(text: &str) -> String {
@@ -217,6 +333,62 @@ mod tests {
                 "Yobbu est une marketplace de services.",
                 "Le 14 ouvre en 2027.",
             ]
+        );
+    }
+
+    #[test]
+    fn an_apology_or_intro_is_never_a_memory_fact() {
+        assert!(parse_facts("Je ne peux pas découper cette entrée.").is_empty());
+        assert_eq!(
+            parse_facts("Voici les faits proposés :\n1. Le projet est en cours."),
+            ["Le projet est en cours."]
+        );
+    }
+
+    #[test]
+    fn a_long_bullet_is_split_at_sentence_boundaries() {
+        let first = format!("Le projet utilise {}.", "Rust ".repeat(55));
+        let second = "Les tests passent sur macOS et Linux.";
+        let raw = format!("- {first} {second}");
+        assert!(raw.chars().count() > penelope_memory::quality::MAX_ENTRY_CHARS);
+        assert_eq!(parse_facts(&raw), [first.trim(), second]);
+    }
+
+    #[test]
+    fn splitting_a_long_bullet_keeps_dots_inside_urls() {
+        let first = format!("Consulter https://example.org pour {}.", "Rust ".repeat(50));
+        let second = "Les tests passent sur macOS et Linux.";
+        let raw = format!("- {first} {second}");
+        assert!(raw.chars().count() > penelope_memory::quality::MAX_ENTRY_CHARS);
+        assert_eq!(parse_facts(&raw), [first.trim(), second]);
+    }
+
+    #[test]
+    fn financial_and_administrative_details_are_not_proposed() {
+        let raw = "- Le salaire est de 5 000 € par mois.\n\
+                   - Le projet utilise Rust.\n\
+                   - Son IBAN est FR7612345678901234567890123.";
+        assert_eq!(parse_facts(raw), ["Le projet utilise Rust."]);
+    }
+
+    #[test]
+    fn a_silent_or_sparse_model_answer_requires_another_attempt() {
+        assert_eq!(proposal_quality(2_000, "", &[]), ProposalQuality::Empty);
+        assert_eq!(
+            proposal_quality(2_000, "Je ne peux pas découper cette entrée.", &[]),
+            ProposalQuality::NoFacts
+        );
+        assert_eq!(
+            proposal_quality(2_000, "- Un fait court.", &["Un fait court.".into()]),
+            ProposalQuality::TooSparse
+        );
+        assert_eq!(
+            proposal_quality(2_000, "- A.\n- B.", &["A.".into(), "B.".into()]),
+            ProposalQuality::Ready
+        );
+        assert_eq!(
+            proposal_quality(450, "- A.", &["A.".into()]),
+            ProposalQuality::Ready
         );
     }
 }

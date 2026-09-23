@@ -8,7 +8,7 @@ Dernière mise à jour : 23 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1718 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
+- **1723 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2660,6 +2660,20 @@ sans cette preuve reste déconnectée. Quand l'exécutable `rg` manque dans le `
 daemon, la correction proposée est `brew install ripgrep`, nom réel de la formule.
 Deux tests de régression couvrent ces cas. Les autres alertes `doctor` de cette machine
 ont été traitées dans sa configuration, sa skill LinkedIn et l'index de son vault.
+
+### 0.17.55
+
+#### `mem split` refuse les propositions vides ou trompeuses (#184)
+
+Le découpage lit seulement les puces de faits, accepte les listes numérotées et sépare
+une longue puce aux fins de phrase plutôt que de la perdre entièrement. Un garde-fou
+local écarte les mentions de salaire, d'IBAN, de SIREN/SIRET et les montants en euros.
+Si le modèle ne
+répond pas, ne fournit aucun fait exploitable ou résume une longue entrée en un seul
+fait, il reçoit un second essai dans le même délai total de 120 secondes. Un nouvel
+échec est expliqué et ne crée pas de carte d'approbation trompeuse. Cinq tests de
+régression couvrent ces cas ; aucune entrée du vault n'est modifiée par cette commande
+avant l'approbation du propriétaire.
 
 ### Routine de livraison
 
