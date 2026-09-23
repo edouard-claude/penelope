@@ -138,8 +138,9 @@ fn the_index_cites_every_guide_and_decision() {
 #[test]
 fn the_readme_does_not_freeze_changing_coverage_counts() {
     let readme = read(&root().join("README.md"));
-    let counts = regex::Regex::new(r"\b[0-9][0-9 ]* (?:tests verts|outils|clés de configuration)\b")
-        .unwrap();
+    let counts =
+        regex::Regex::new(r"\b[0-9][0-9 ]* (?:tests verts|outils|clés de configuration)\b")
+            .unwrap();
     let stale: Vec<&str> = counts.find_iter(&readme).map(|m| m.as_str()).collect();
     assert!(
         stale.is_empty(),
