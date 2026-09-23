@@ -155,6 +155,20 @@ pub fn code_lines(raw: &str) -> Vec<(usize, &str)> {
         .collect()
 }
 
+/// Un chemin de fichier de tests, indépendamment du budget : sous un répertoire `tests/`
+/// (tests d'intégration, ou sous-modules d'un `mod tests` scindé), ou nommé `tests.rs`,
+/// `*_tests.rs` ou `testing.rs` (aides de test). C'est la forme que prennent les tests
+/// sortis des gros fichiers du daemon (#215) : le `#[cfg(test)]` est sur la déclaration
+/// `mod` du parent, pas dans le fichier. Un module entièrement `#[cfg(test)]` qui ne suit
+/// pas ces noms est listé dans `[files].test_modules`.
+pub fn is_test_path(rel: &str) -> bool {
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    name == "tests.rs"
+        || name == "testing.rs"
+        || name.ends_with("_tests.rs")
+        || rel.split('/').any(|seg| seg == "tests")
+}
+
 /// Le chemin `rel` d'un fichier du workspace, à partir de son chemin absolu.
 pub fn relative_to_root(path: &Path) -> String {
     path.strip_prefix(workspace_root())
@@ -209,6 +223,28 @@ mod tests {
         let t = SourceFile::new("penelope-evals", "crates/penelope-evals/tests/docs.rs", "");
         assert!(!t.in_src());
         assert_eq!(t.daemon_rel(), None);
+    }
+
+    #[test]
+    fn test_paths_are_recognised_by_name_or_directory() {
+        for rel in [
+            "crates/penelope-evals/tests/docs.rs",
+            "crates/penelope-daemon/src/telegram/tests.rs",
+            "crates/penelope-daemon/src/telegram/tests/mod.rs",
+            "crates/penelope-daemon/src/telegram/tests/commands.rs",
+            "crates/penelope-daemon/src/agent/clone_policy_tests.rs",
+            "crates/penelope-daemon/src/mcp/testing.rs",
+        ] {
+            assert!(is_test_path(rel), "{rel} est un fichier de tests");
+        }
+        for rel in [
+            "crates/penelope-daemon/src/telegram.rs",
+            "crates/penelope-daemon/src/tests_helpers.rs",
+            "crates/penelope-daemon/src/testing/mod.rs",
+            "crates/penelope-daemon/src/wiki_e2e.rs",
+        ] {
+            assert!(!is_test_path(rel), "{rel} n'est pas un fichier de tests");
+        }
     }
 
     #[test]

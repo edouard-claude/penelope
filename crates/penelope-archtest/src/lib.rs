@@ -175,31 +175,46 @@ pub fn forbidden_patterns() -> Vec<Violation> {
             let Ok(raw) = std::fs::read_to_string(&file) else {
                 continue;
             };
-            let mut in_tests = false;
-            for (i, line) in raw.lines().enumerate() {
-                // Les blocs de test peuvent manipuler des chemins temporaires.
-                if line.trim_start().starts_with("#[cfg(test)]") {
-                    in_tests = true;
-                }
-                if in_tests {
-                    continue;
-                }
-                // Une ligne de commentaire ou de documentation n'est pas du code.
-                let trimmed = line.trim_start();
-                if trimmed.starts_with("//") {
-                    continue;
-                }
-                for (rule, needle) in FORBIDDEN_PATTERNS {
-                    if line.contains(needle) {
-                        out.push(Violation {
-                            crate_name: c.name.clone(),
-                            file: file.clone(),
-                            line: i + 1,
-                            rule,
-                            text: line.to_string(),
-                        });
-                    }
-                }
+            out.extend(forbidden_patterns_in(&c.name, &file, &raw));
+        }
+    }
+    out
+}
+
+/// Les motifs interdits d'un fichier.
+///
+/// Un fichier de tests (`tests.rs`, `tests/`, `*_tests.rs`, `testing.rs`) est ignoré en
+/// entier, comme l'est ce qui suit un `#[cfg(test)]` : les tests sortis des gros fichiers
+/// du daemon (#215) manipulent les mêmes chemins temporaires qu'avant, et l'attribut est
+/// désormais sur la déclaration `mod` du parent.
+pub fn forbidden_patterns_in(crate_name: &str, file: &Path, raw: &str) -> Vec<Violation> {
+    if snapshot::is_test_path(&snapshot::relative_to_root(file)) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut in_tests = false;
+    for (i, line) in raw.lines().enumerate() {
+        // Les blocs de test peuvent manipuler des chemins temporaires.
+        if line.trim_start().starts_with("#[cfg(test)]") {
+            in_tests = true;
+        }
+        if in_tests {
+            continue;
+        }
+        // Une ligne de commentaire ou de documentation n'est pas du code.
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        for (rule, needle) in FORBIDDEN_PATTERNS {
+            if line.contains(needle) {
+                out.push(Violation {
+                    crate_name: crate_name.to_string(),
+                    file: file.to_path_buf(),
+                    line: i + 1,
+                    rule,
+                    text: line.to_string(),
+                });
             }
         }
     }
@@ -459,6 +474,28 @@ mod tests {
                 .iter()
                 .any(|(_, needle)| shell.contains(needle))
         );
+    }
+
+    #[test]
+    fn test_files_are_exempt_from_the_forbidden_patterns() {
+        let raw = "let p = \"/tmp/projet\";\n";
+        for rel in [
+            "crates/penelope-daemon/src/workflow/tests.rs",
+            "crates/penelope-daemon/src/telegram/tests/commands.rs",
+            "crates/penelope-daemon/src/agent/clone_policy_tests.rs",
+            "crates/penelope-daemon/src/mcp/testing.rs",
+        ] {
+            let v = forbidden_patterns_in("penelope-daemon", Path::new(rel), raw);
+            assert!(v.is_empty(), "{rel} est un fichier de tests : {v:?}");
+        }
+        let v = forbidden_patterns_in(
+            "penelope-daemon",
+            Path::new("crates/penelope-daemon/src/workflow.rs"),
+            raw,
+        );
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].rule, "chemin absolu /tmp");
+        assert_eq!(v[0].line, 1);
     }
 
     #[test]

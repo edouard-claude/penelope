@@ -20,7 +20,7 @@ use regex::Regex;
 
 use crate::Violation;
 use crate::budget::{Budget, Measures};
-use crate::snapshot::{Snapshot, SourceFile, code_lines};
+use crate::snapshot::{Snapshot, SourceFile, code_lines, is_test_path};
 
 /// Classe d'un fichier Rust pour les plafonds (R1, R2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,17 +29,11 @@ pub enum FileKind {
     Test,
 }
 
-/// Un fichier est un fichier de tests s'il est sous un répertoire `tests/` (tests
-/// d'intégration, ou sous-modules d'un `mod tests` scindé), s'il se nomme `tests.rs` ou
-/// `*_tests.rs`, ou s'il est listé dans `[files].test_modules`.
+/// Un fichier est un fichier de tests s'il en a le chemin (`is_test_path` : répertoire
+/// `tests/`, nom `tests.rs`, `*_tests.rs` ou `testing.rs`) ou s'il est listé dans
+/// `[files].test_modules`.
 pub fn file_kind(rel: &str, budget: &Budget) -> FileKind {
-    let name = rel.rsplit('/').next().unwrap_or(rel);
-    let in_tests_dir = rel.split('/').any(|seg| seg == "tests");
-    if in_tests_dir
-        || name == "tests.rs"
-        || name.ends_with("_tests.rs")
-        || budget.test_modules.contains(rel)
-    {
+    if is_test_path(rel) || budget.test_modules.contains(rel) {
         FileKind::Test
     } else {
         FileKind::Source
@@ -97,10 +91,12 @@ pub fn size_violations(snap: &Snapshot, budget: &Budget) -> Vec<Violation> {
                 let text = match kind {
                     FileKind::Source => format!(
                         "{} lignes, plafond {} (hors liste de référence) : découper, ou \
-                         déplacer les tests dans {}/tests.rs",
+                         déplacer les tests dans {}/tests.rs (tests.rs, tests/, *_tests.rs \
+                         et testing.rs sont des fichiers de tests, plafond {})",
                         thousands(n),
                         thousands(cap),
-                        f.name().trim_end_matches(".rs")
+                        f.name().trim_end_matches(".rs"),
+                        thousands(budget.test_ceiling)
                     ),
                     FileKind::Test => format!(
                         "{} lignes, plafond {} : scinder le fichier de tests",
