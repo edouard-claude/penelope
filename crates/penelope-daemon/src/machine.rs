@@ -212,11 +212,11 @@ fn account_of(name: &str, path: &std::path::Path) -> Option<String> {
     let raw = match name {
         "gh" => {
             let p = probe_command(path, &["auth", "status"], PROBE_TIMEOUT)?;
-            p.ok.then(|| login_in(p.text(), Field::Account))?
+            forge_login(p.ok, p.text(), Field::Account)?
         }
         "glab" => {
             let p = probe_command(path, &["auth", "status"], PROBE_TIMEOUT)?;
-            p.ok.then(|| login_in(p.text(), Field::Host))?
+            forge_login(p.ok, p.text(), Field::Host)?
         }
         // Installé ne veut pas dire que le démon tourne : sans lui, `docker run` échoue.
         "docker" => {
@@ -233,6 +233,16 @@ fn account_of(name: &str, path: &std::path::Path) -> Option<String> {
     (!clean.is_empty()).then_some(clean)
 }
 
+/// Une forge peut renvoyer un code d'échec global parce qu'un autre hôte est
+/// déconnecté ; une ligne de connexion positive reste valable pour cet hôte.
+fn forge_login(status_ok: bool, text: &str, want: Field) -> Option<String> {
+    if !status_ok && !text.contains("✓ Logged in to") {
+        return None;
+    }
+    let login = login_in(text, want);
+    (!login.is_empty()).then_some(login)
+}
+
 /// Ce qu'on retient d'une ligne « Logged in to … » : le compte, ou l'hôte.
 #[derive(Clone, Copy, PartialEq)]
 enum Field {
@@ -247,6 +257,9 @@ enum Field {
 /// `✓ Logged in to github.com account edouard-claude (keyring)` (récent).
 fn login_in(text: &str, want: Field) -> String {
     for line in text.lines() {
+        if !line.contains("Logged in to") {
+            continue;
+        }
         let words: Vec<&str> = line.split_whitespace().collect();
         let Some(to) = words.iter().position(|w| *w == "to") else {
             continue;
@@ -465,6 +478,23 @@ mod tests {
         assert_eq!(
             login_in("You are not logged into any hosts", Field::Account),
             ""
+        );
+    }
+
+    /// #182 : `glab auth status` sort en échec si gitlab.com est déconnecté, même quand
+    /// l'instance privée du propriétaire est authentifiée.
+    #[test]
+    fn a_connected_gitlab_host_survives_another_hosts_failure() {
+        let mixed = "gitlab.com\n  x gitlab.com: API call failed: 401\n\
+                     gitlab.apnl.tech\n  ✓ Logged in to gitlab.apnl.tech as edouard (keyring)\n\
+                     X could not authenticate to one or more configured instances";
+        assert_eq!(
+            forge_login(false, mixed, Field::Host).as_deref(),
+            Some("gitlab.apnl.tech")
+        );
+        assert_eq!(
+            forge_login(false, "not logged in to gitlab.com", Field::Host),
+            None
         );
     }
 
