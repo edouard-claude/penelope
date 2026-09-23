@@ -12,8 +12,8 @@ peut relire et corriger à la main, appelle des serveurs MCP, exécute des workf
 survivent à un redémarrage, et demande l'accord de son propriétaire avant tout ce qui
 engage.
 
-Rust, 17 crates, `#![forbid(unsafe_code)]` dans chacun, 1682 tests verts hors
-réseau externe.
+Rust, 17 crates, `#![forbid(unsafe_code)]` dans chacun. La suite de tests
+fonctionne hors réseau externe.
 
 ## Pourquoi celle-ci
 
@@ -69,7 +69,9 @@ question posée au propriétaire, jamais une relance automatique. Un run de work
 son étape courante, ses sorties et son journal dans la même transaction, et reprend à
 cette étape après un redémarrage. Le tour interrompu est remis en file une seule fois.
 Le [flux runtime](docs/runtime-events.md) permet à un observateur local authentifié de
-suivre ces événements en direct et de les rejouer depuis un identifiant durable.
+suivre ces événements en direct et de les rejouer depuis un identifiant durable. Il
+est désactivé sans consommateur configuré : ce WebSocket de lecture seule n'est pas
+une API pour poser des questions à Pénélope ou lui envoyer des commandes.
 
 ### Une autorisation a des bornes
 
@@ -104,7 +106,7 @@ Sa documentation est compilée dans son binaire : elle la cherche, la lit par se
 cite le lien GitHub au tag de la version qui tourne. `self_status` lui rend sa version,
 son modèle du tour, sa configuration effective, ses coûts, sa file, l'état de la machine
 et l'inventaire de ses outils, workflows, skills, serveurs MCP et limites. Les tables de
-référence de la documentation (54 outils, 193 clés de configuration) sont générées
+référence de la documentation (outils et clés de configuration) sont générées
 depuis le code, et un test refuse une section « limites » qui décrirait comme manquant
 quelque chose de livré.
 
@@ -248,8 +250,8 @@ penelope-platform            penelope-observe ├──► penelope-mcp     ├�
 cargo test --workspace
 ```
 
-Les 1682 tests verts, y compris ceux du WebSocket local, n'ont besoin d'aucun
-secret en CI. Les suites nommées sont des filtres sur cette même commande, ce qui évite
+La suite, y compris les tests du WebSocket local, n'a besoin d'aucun secret en CI.
+Les suites nommées sont des filtres sur cette même commande, ce qui évite
 qu'un chemin de test diverge de l'autre.
 
 ```bash
