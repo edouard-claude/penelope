@@ -1,7 +1,8 @@
 name: Release
 
 # Déclenché par un tag `vX.Y.Z`. Produit un binaire universel macOS, plus les deux
-# binaires par architecture, chacun avec sa somme de contrôle.
+# binaires par architecture, chacun avec sa somme de contrôle. Aucune release 1.x tant que
+# la variable de dépôt `V1_RELEASES` ne vaut pas `1` (#212, posée à la bascule).
 
 on:
   push:
@@ -26,6 +27,27 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 45
     steps:
+      # Avant tout, et avant même le checkout (#212) : la V1 vit en `1.0.0-alpha.N` sur sa
+      # branche sans jamais être publiée, parce que `penelope upgrade` des instances 0.17
+      # installerait une pré-release 1.x. Un tag `v1*`, qu'il vienne d'un push ou du
+      # `workflow_dispatch`, ne publie rien tant que le propriétaire n'a pas posé la
+      # variable de dépôt `V1_RELEASES=1` à la bascule. Les jobs suivants dépendent de
+      # celui-ci : rien n'est construit ni publié.
+      - name: Pas de release 1.x avant la bascule
+        env:
+          VERSION: ${{ inputs.tag || github.ref_name }}
+          V1_RELEASES: ${{ vars.V1_RELEASES }}
+        run: |
+          set -euo pipefail
+          case "$VERSION" in
+            v1*|1.*)
+              if [ "${V1_RELEASES:-}" != "1" ]; then
+                echo "::error::release 1.x interdite avant la bascule (variable de dépôt V1_RELEASES absente)"
+                exit 1
+              fi
+              echo "V1_RELEASES=1 : release ${VERSION} autorisée" ;;
+            *) echo "${VERSION} : pas une release 1.x" ;;
+          esac
       - uses: actions/checkout@v4
       - name: Chaîne d'outils
         run: |
