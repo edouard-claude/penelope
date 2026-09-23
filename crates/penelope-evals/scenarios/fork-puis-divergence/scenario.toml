@@ -1,0 +1,16 @@
+name = "fork-puis-divergence"
+description = """Fork puis divergence : après un échange, `/fork` duplique la session ; le message
+suivant part dans le fork, dont l'historique s'allonge, pendant que l'original ne bouge
+pas. Routage normal : le fork n'a pas d'alias collant, le classifieur est rappelé."""
+
+[[steps]]
+kind = "message"
+text = "on parle du devis ACME : 12 000 € HT, livraison en mars"
+
+[[steps]]
+kind = "command"
+command = "/fork variante sans remise"
+
+[[steps]]
+kind = "message"
+text = "dans cette variante, pas de remise : recalcule le total TTC"

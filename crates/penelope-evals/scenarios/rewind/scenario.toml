@@ -1,0 +1,24 @@
+name = "rewind"
+description = """Retour en arrière : trois échanges, `/rewind 2` retire les deux derniers tours
+dans une session d'archive fermée, le message suivant repart juste après ce qui reste."""
+pin_model = "main"
+
+[[steps]]
+kind = "message"
+text = "un"
+
+[[steps]]
+kind = "message"
+text = "deux"
+
+[[steps]]
+kind = "message"
+text = "trois"
+
+[[steps]]
+kind = "command"
+command = "/rewind 2"
+
+[[steps]]
+kind = "message"
+text = "reprise après le retour en arrière"

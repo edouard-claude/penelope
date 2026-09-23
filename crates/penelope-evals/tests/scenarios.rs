@@ -44,6 +44,11 @@ scenario_cases! {
     compaction_puis_prolongation => "compaction-puis-prolongation",
     session_froide => "session-froide",
     depassement_prouve => "depassement-prouve",
+    fork_puis_divergence => "fork-puis-divergence",
+    rewind => "rewind",
+    purge => "purge",
+    crash_deux_vies => "crash-deux-vies",
+    approbation_apres_redemarrage => "approbation-apres-redemarrage",
 }
 
 #[test]

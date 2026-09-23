@@ -1,0 +1,17 @@
+name = "purge"
+description = """Purge de session (#46) : deux échanges, puis `penelope purge` sur la session. Le
+contenu part (messages, requêtes, usage lié), la chaîne d'audit reste : les événements
+de la session gardent leur ligne et leur hachage, leur charge utile devient `purged`."""
+pin_model = "main"
+
+[[steps]]
+kind = "message"
+text = "le mot de passe du wifi est framboise-42"
+
+[[steps]]
+kind = "message"
+text = "et le code de l'alarme est 1234"
+
+[[steps]]
+kind = "command"
+command = "/purge"

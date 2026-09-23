@@ -1,0 +1,16 @@
+name = "approbation-apres-redemarrage"
+description = """Approbation de bout en bout, avec un redémarrage au milieu : le modèle veut
+écrire un fichier (`fs_write`, classe `write`), la politique demande l'accord du
+propriétaire, le tour se suspend. Le daemon redémarre, la demande est toujours là ; le
+propriétaire approuve, un tour de reprise exécute l'écriture et le modèle conclut."""
+pin_model = "main"
+
+[[steps]]
+kind = "message"
+text = "écris « migration ce soir » dans rappel.txt"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "approve"
