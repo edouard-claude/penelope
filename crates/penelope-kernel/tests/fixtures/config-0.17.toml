@@ -1,0 +1,311 @@
+# Configuration complète de la 0.17 : chaque clé de la référence générée de
+# docs/install-headless.md (bloc `reference:config`), avec une valeur valide. Relue par
+# tests/config_0_17.rs : aucune clé inconnue, validation et cohérence sans refus ni
+# avertissement, et autant de clés que la référence (lot B, épopée #208, tâche T10).
+#
+# Les valeurs s'écartent des défauts là où cela prouve la relecture : identifiant du
+# propriétaire, groupe autorisé, endpoint local actif, fournisseur supplémentaire, seuil
+# par modèle, consommateur du flux runtime, familles de commandes autorisées.
+
+[owner]
+telegram_user_id = 123456789
+timezone = "Indian/Reunion"
+language = "fr"
+
+[telegram]
+token = "${SECRET:telegram_bot_token}"
+mode = "polling"
+topics = true
+rich_messages = false
+quiet_hours = "22:00-07:00"
+api_base = "https://api.telegram.org"
+poll_timeout_s = 50
+rate_per_chat_per_s = 1.0
+text_limit = 4096
+caption_limit = 1024
+max_fragments = 3
+draft_interval_ms = 700
+webhook_url = ""
+allow_groups = false
+allowed_chats = [-1001234567890]
+text_group_window_ms = 2000
+burst_messages = 5
+burst_chars = 20000
+
+[telegram.home]
+chat = -1001234567890
+topic = 0
+
+[providers.openrouter]
+api_key = "${SECRET:openrouter_api_key}"
+base_url = "https://openrouter.ai/api/v1"
+request_retries = 3
+stream_idle_timeout = "120s"
+catalog_refresh = "6h"
+referer = "https://github.com/edouard-claude/penelope"
+title = "Penelope"
+categories = "personal-agent"
+enabled = true
+
+[providers.openrouter.routing]
+allow_fallbacks = true
+order = []
+data_collection = "allow"
+require_parameters = false
+zdr = false
+sort = ""
+only = []
+ignore = []
+quantizations = []
+
+[providers.local]
+kind = "openai_compat"
+base_url = "http://127.0.0.1:8080/v1"
+api_key = ""
+enabled = true
+models = ["whisper-default", "mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"]
+stream_idle_timeout = "120s"
+context_window = 32768
+
+[providers.codex]
+enabled = false
+base_url = "https://chatgpt.com/backend-api/codex"
+issuer = "https://auth.openai.com"
+client_id = "app_EMoamEEZ73f0CkXaXp7hrann"
+originator = "codex_cli_rs"
+client_version = "0.149.0"
+stream_idle_timeout = "120s"
+request_retries = 3
+reasoning_summary = "auto"
+verbosity = "medium"
+quota_alert_ratio = 0.8
+quota_stop_ratio = 0.95
+models = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"]
+
+# Table à clés libres : `providers.extra.<nom>` dans la référence.
+[providers.extra.ollama]
+kind = "openai_compat"
+base_url = "http://127.0.0.1:11434/v1"
+api_key = ""
+enabled = false
+models = ["qwen3:8b"]
+stream_idle_timeout = "120s"
+context_window = 32768
+
+[models]
+locate_frame = "auto"
+
+[models.aliases]
+embedding = "openrouter:openai/text-embedding-3-small"
+fast = "openrouter:deepseek/deepseek-v4-flash"
+image = "openrouter:google/gemini-3.1-flash-image"
+main = "openrouter:deepseek/deepseek-v4-pro"
+reasoning = "openrouter:z-ai/glm-5.2"
+stt = "openai_compat:whisper-default"
+summarizer = "openrouter:deepseek/deepseek-v4-flash"
+tts = "openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"
+vision = "openrouter:google/gemini-3.1-flash-image"
+
+[models.roles]
+chat_default = "main"
+classifier = "fast"
+code = "reasoning"
+compaction = "summarizer"
+embedding = "embedding"
+image_describe = "vision"
+image_generate = "image"
+image_locate = "vision"
+memory_review = "fast"
+stt = "stt"
+tts = "tts"
+
+[models.routing]
+classifier = true
+low = "fast"
+medium = "main"
+high = "reasoning"
+sticky = true
+
+[models.routing.fallback]
+main = ["fast"]
+reasoning = ["main"]
+
+[budget]
+daily_usd = 20.0
+session_usd = 5.0
+run_usd = 5.0
+alert_ratio = 0.8
+turn_checkpoint_usd = 1.0
+show_turn_cost_usd = 0.5
+delegate_after_calls = 10
+compaction_reserve_usd = 0.5
+
+[context]
+compaction_threshold = 0.7
+tail_ratio = 0.025
+tail_min_tokens = 10000
+tail_max_tokens = 25000
+min_tail_user_messages = 2
+max_tool_result_share = 0.25
+large_payload_tokens = 25000
+max_prompt_tokens = 120000
+background_compaction_margin = 0.1
+cooldown_ms = [60000, 300000, 900000]
+auto_title = true
+
+# Table à clés libres : `context.model_thresholds.<nom>` dans la référence.
+[context.model_thresholds]
+"openrouter:deepseek/deepseek-v4-pro" = 0.6
+
+[memory]
+vault_path = "{data}/vault"
+vault_git_autocommit = "15m"
+vault_git_remote = ""
+profile_budget_tokens = 600
+core_budget_tokens = 1200
+project_budget_tokens = 800
+recall_budget_tokens = 1000
+recall_timeout_ms = 150
+trigger_threshold = 0.72
+max_injected_per_turn = 3
+half_life_days = 180.0
+dedup_cosine = 0.92
+dedup_jaccard = 0.9
+episode_idle = "2h"
+episode_topic_shift = 0.35
+review_max_candidates = 5
+dream_batch = 40
+dreaming_cron = "30 3 * * *"
+dream_retry_wait = "2m"
+consolidation_reasoning = "auto"
+consolidation_reasoning_tokens = 16000
+digest_cron = "0 8 * * *"
+prune_episodic_days = 180
+expire_ecart_days = 90
+
+[memory.promotion]
+ecart_min_occurrences = 3
+ecart_min_sessions = 3
+ecart_min_days = 2
+fact_min_recalls = 2
+fact_min_importance = 8
+preference_min_sessions = 2
+max_retire_ratio = 0.2
+contested_confidence = 0.5
+contested_min_observations = 4
+
+[memory.intents]
+cooldown = "24h"
+fire_budget = 3
+expiry = "90d"
+max_per_turn = 3
+
+[mcp]
+registry_mode = "lazy"
+max_processes = 24
+default_timeout = "30s"
+oauth_redirect_mode = "paste_back"
+public_callback_url = ""
+cimd_url = ""
+preferred_protocol = "2026-07-28"
+idle_timeout = "10m"
+max_concurrency_per_server = 4
+sticky_set_max = 30
+schema_max_bytes = 8192
+eager_total_max_bytes = 65536
+callback_port = 7777
+callback_host = "127.0.0.1"
+restart_backoff_max = "5m"
+max_failures = 8
+
+[mcp.policy]
+read = "auto"
+write = "ask"
+destructive = "ask_twice"
+external = "ask"
+unknown = "ask"
+
+[runners]
+count = 4
+lease_ttl = "60s"
+heartbeat = "15s"
+
+[sandbox]
+default_profile = "workspace-write"
+allow_full_for = []
+allow_keychain_for = []
+workspaces = []
+shell_network = false
+deny_read = [
+    "~/.ssh",
+    "~/.aws",
+    "~/.gnupg",
+    "~/.config/gh",
+    "~/.netrc",
+    "~/.kube",
+    "~/.docker/config.json",
+    "{data}/penelope.db",
+    "{data}/secrets.enc",
+    "{data}/mcp.d",
+    "{config}",
+    "{state}",
+]
+
+[observability]
+otlp_endpoint = ""
+prometheus = "127.0.0.1:9464"
+log_retention_days = 14
+log_level = "info"
+runtime_stream_bind = "127.0.0.1:9465"
+
+# Une seule clé dans la référence (`observability.runtime_consumers`, liste) : un
+# consommateur déclaré exerce la validation de `runtime_stream_bind`.
+[[observability.runtime_consumers]]
+name = "tableau"
+token_secret = "${SECRET:runtime_tableau}"
+kinds = ["runtime.tool", "runtime.llm"]
+
+[tools]
+shell = ""
+shell_timeout = "120s"
+http_allowlist = ["api.github.com"]
+http_block_private_ips = true
+loop_detector_repeats = 3
+max_output_bytes = 262144
+approval_mode = "reads"
+shell_allow = ["cargo test", "npm run lint"]
+shell_allow_network = ["git push"]
+inventory_extra = []
+
+[workflows]
+workspace_retention_days = 7
+max_depth = 3
+default_max_iterations = 40
+
+[upgrade]
+channel = "stable"
+base_url = ""
+minisign_pubkey = ""
+health_timeout = "60s"
+heartbeat_daily = true
+codesign_identity = ""
+codesign_identifier = "io.github.edouard-claude.penelope"
+install_dir = "~/.local/bin"
+
+[voice]
+tts_voice = "fr_female"
+max_chars = 1500
+reply_in_kind = false
+
+[retention]
+days = 90
+memory_history_days = 30
+
+[backup]
+git_remote = ""
+cron = "0 4 * * *"
+keep_daily = 7
+keep_weekly = 4
+keep_monthly = 12
+include_media = false
+max_push_bytes = 104857600
