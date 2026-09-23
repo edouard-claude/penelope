@@ -16,3 +16,10 @@ tokio.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util"] }
+# Filet de migration (tests/migration_from_0_17.rs, lot B, épopée #208) : la fixture de
+# base 0.17 est semée d'une chaîne d'événements et d'un effet par les vraies primitives du
+# noyau (`EventLog`, `EffectLedger`), et la chaîne est revérifiée après migration par
+# `EventLog::verify`. Sans elles, le test réinventerait le hachage. Dépendance de
+# développement seulement : le graphe livré reste acyclique (archtest ignore les
+# dev-dependencies, Cargo accepte ce cycle pour les tests d'intégration).
+penelope-kernel.workspace = true

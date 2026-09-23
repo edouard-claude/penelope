@@ -4,3 +4,5 @@ spec
 *.db-wal
 *.db-shm
 .penelope-home/
+# La fixture de base 0.17 du filet de migration (lot B, épopée #208) est suivie.
+!crates/penelope-store/tests/fixtures/*.db
