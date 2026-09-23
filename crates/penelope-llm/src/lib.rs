@@ -22,7 +22,7 @@ pub use provider::{
 pub use router::{
     Classification, Complexity, Decision, RouteInput, RouteReason, Router, StickyModel,
 };
-pub use state::{LlmState, LlmStateMachine, UnknownSendPolicy};
+pub use state::{LlmState, LlmStateMachine, PlannedCall, RequestKeys, UnknownSendPolicy};
 pub use tokens::{TokenEstimator, UsageAnchor, UsageState, transcript_fingerprint};
 pub use types::{
     ChatMessage, ChatRequest, ChatResponse, Content, FinishReason, LlmError, LlmErrorKind, Result,

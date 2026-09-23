@@ -228,6 +228,8 @@ pub mod method {
     pub const BACKUP: &str = "backup";
     pub const RESTORE: &str = "restore";
     pub const AUDIT_VERIFY: &str = "audit.verify";
+    /// Reconstitue une requête : prompt système, messages, outils (issue #205).
+    pub const AUDIT_SHOW: &str = "audit.show";
     pub const STORE_REBUILD: &str = "store.rebuild";
     pub const USAGE: &str = "usage";
     pub const TAIL: &str = "tail";
@@ -336,6 +338,7 @@ pub mod method {
         BACKUP,
         RESTORE,
         AUDIT_VERIFY,
+        AUDIT_SHOW,
         STORE_REBUILD,
         USAGE,
         TAIL,

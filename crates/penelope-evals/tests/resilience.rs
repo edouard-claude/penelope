@@ -287,11 +287,14 @@ async fn ca_17_4_llm_calls_are_classified_by_where_the_crash_happened() {
         // Partie, pas d'en-têtes.
         s.llm_state
             .plan(
-                "q_avant",
-                None,
-                None,
-                "anthropic/claude-sonnet-4.5",
-                "openrouter",
+                penelope_llm::PlannedCall {
+                    id: "q_avant",
+                    session_id: None,
+                    run_id: None,
+                    model: "anthropic/claude-sonnet-4.5",
+                    provider: "openrouter",
+                    keys: penelope_llm::RequestKeys::default(),
+                },
                 &json!({"m": 1}),
             )
             .await
@@ -301,11 +304,14 @@ async fn ca_17_4_llm_calls_are_classified_by_where_the_crash_happened() {
         // Partie, en-têtes reçus : sûrement facturée.
         s.llm_state
             .plan(
-                "q_apres",
-                None,
-                None,
-                "anthropic/claude-sonnet-4.5",
-                "openrouter",
+                penelope_llm::PlannedCall {
+                    id: "q_apres",
+                    session_id: None,
+                    run_id: None,
+                    model: "anthropic/claude-sonnet-4.5",
+                    provider: "openrouter",
+                    keys: penelope_llm::RequestKeys::default(),
+                },
                 &json!({"m": 2}),
             )
             .await
@@ -316,11 +322,14 @@ async fn ca_17_4_llm_calls_are_classified_by_where_the_crash_happened() {
         // Jamais partie.
         s.llm_state
             .plan(
-                "q_jamais",
-                None,
-                None,
-                "anthropic/claude-sonnet-4.5",
-                "openrouter",
+                penelope_llm::PlannedCall {
+                    id: "q_jamais",
+                    session_id: None,
+                    run_id: None,
+                    model: "anthropic/claude-sonnet-4.5",
+                    provider: "openrouter",
+                    keys: penelope_llm::RequestKeys::default(),
+                },
                 &json!({"m": 3}),
             )
             .await

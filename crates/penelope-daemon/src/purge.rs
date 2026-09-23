@@ -8,20 +8,24 @@
 //!     llm_requests, turn_queue.payload, tg_updates.payload, mem_candidates.text
 //!     effects.request/result, tg_outbox, approval_requests.payload, mcp_tasks,
 //!     workflow_runs et workflow_step_log des runs de la session (#78)
+//!     prompt_snapshots que la session seule référençait, et usage.system_hash (#205)
 //!     events : payload remplacé, hash d'origine conservé (audit.purge)
 //!
 //!  rétention (une fois par jour)
 //!     tours terminés, requêtes au modèle, updates Telegram, clés de travail,
 //!     arguments et résultats d'effets tranchés, messages envoyés, demandes décidées,
 //!     tâches MCP et sorties de runs terminés : au-delà de `retention.days`, vidés ;
+//!     prompts système que plus aucune ligne ne cite ;
 //!     pré-images de la mémoire au-delà de `retention.memory_history_days`.
 //! ```
 //!
 //! Un effet vidé garde sa ligne, son état et sa clé d'idempotence : un rejeu reste
 //! reconnu comme tel, seul le contenu est parti.
 //!
-//! Ce qui n'est **jamais** touché : `events` (la ligne et son hash), `usage` (comptabilité,
-//! sans texte), la mémoire durable (le vault et ses fichiers ont leurs propres outils).
+//! Ce qui n'est **jamais** touché : `events` (la ligne et son hash), la mémoire durable
+//! (le vault et ses fichiers ont leurs propres outils). `usage` garde ses lignes, ses
+//! jetons et ses coûts : seul son `system_hash`, qui mène au texte d'un prompt, est coupé
+//! à la purge d'une session (#205).
 
 use crate::runtime::Daemon;
 use penelope_kernel::event::EventDraft;
@@ -125,6 +129,30 @@ pub async fn session(d: &Daemon, session_id: &str, reason: &str) -> anyhow::Resu
             )?;
             let nodes = tx.execute("DELETE FROM lcm_nodes WHERE session_id = ?1", [&sid])?;
             let artifacts = tx.execute("DELETE FROM artifacts WHERE session_id = ?1", [&sid])?;
+            // #205 : le prompt système gardé sous son empreinte contient le profil, la
+            // mémoire rappelée et les notes de session. Part ce que cette session seule
+            // référençait ; ce qu'une autre lit encore attend sa purge à elle.
+            let prompts = tx.execute(
+                "DELETE FROM prompt_snapshots WHERE hash IN (
+                    SELECT system_hash FROM usage
+                     WHERE session_id = ?1 AND system_hash IS NOT NULL
+                    UNION
+                    SELECT system_hash FROM llm_requests
+                     WHERE session_id = ?1 AND system_hash IS NOT NULL)
+                 AND hash NOT IN (
+                    SELECT system_hash FROM usage
+                     WHERE COALESCE(session_id, '') <> ?1 AND system_hash IS NOT NULL)
+                 AND hash NOT IN (
+                    SELECT system_hash FROM llm_requests
+                     WHERE COALESCE(session_id, '') <> ?1 AND system_hash IS NOT NULL)",
+                [&sid],
+            )?;
+            // La ligne comptable reste, avec ses jetons et son coût : seule la clé qui
+            // menait au texte est coupée.
+            tx.execute(
+                "UPDATE usage SET system_hash = NULL WHERE session_id = ?1",
+                [&sid],
+            )?;
             let requests = tx.execute("DELETE FROM llm_requests WHERE session_id = ?1", [&sid])?;
             let turns = tx.execute(
                 "UPDATE turn_queue SET payload = '{\"purged\":true}', last_error = NULL
@@ -217,6 +245,7 @@ pub async fn session(d: &Daemon, session_id: &str, reason: &str) -> anyhow::Resu
                     "lcm_nodes": nodes,
                     "artifacts": artifacts,
                     "llm_requests": requests,
+                    "prompt_snapshots": prompts,
                     "turns": turns,
                     "candidates": candidates,
                     "tg_updates": updates,
@@ -311,6 +340,7 @@ pub async fn retention(d: &Daemon) -> anyhow::Result<Value> {
             let mut keys = 0;
             let (mut effects, mut outbox, mut approvals) = (0, 0, 0);
             let (mut tasks, mut steps, mut runs) = (0, 0, 0);
+            let mut prompts = 0;
             if let Some(c) = &general {
                 turns = tx.execute(
                     "DELETE FROM turn_queue
@@ -358,6 +388,17 @@ pub async fn retention(d: &Daemon) -> anyhow::Result<Value> {
                      WHERE state IN ('completed','failed','cancelled') AND updated_at < ?1",
                     [c],
                 )?;
+                // #205 : un instantané de prompt suit la ligne d'`usage` qui le cite ; il
+                // ne part qu'une fois que plus personne ne le désigne.
+                prompts = tx.execute(
+                    "DELETE FROM prompt_snapshots
+                     WHERE last_seen_at < ?1
+                       AND hash NOT IN (SELECT system_hash FROM usage
+                                         WHERE system_hash IS NOT NULL)
+                       AND hash NOT IN (SELECT system_hash FROM llm_requests
+                                         WHERE system_hash IS NOT NULL)",
+                    [c],
+                )?;
                 steps = tx.execute(
                     "UPDATE workflow_step_log SET output = NULL, error = NULL
                      WHERE (output IS NOT NULL OR error IS NOT NULL) AND run_id IN (
@@ -386,6 +427,7 @@ pub async fn retention(d: &Daemon) -> anyhow::Result<Value> {
                 "tg_outbox": outbox,
                 "approvals": approvals,
                 "mcp_tasks": tasks,
+                "prompt_snapshots": prompts,
                 "workflow_steps": steps,
                 "workflow_runs": runs,
             }))
@@ -581,6 +623,141 @@ mod tests {
         assert_eq!(reredact_outbox(&d).await.unwrap(), 0);
     }
 
+    /// #205 : un prompt système contient le profil et la mémoire rappelée. La purge
+    /// d'une session emporte les instantanés qu'elle seule référençait, garde ceux
+    /// qu'une autre session utilise encore, et coupe le renvoi depuis `usage` — la
+    /// ligne comptable reste, la clé du texte part.
+    #[tokio::test]
+    async fn purging_a_session_takes_the_prompts_only_it_used() {
+        let (_dir, d, _clock) = daemon().await;
+        let s = d.services.clone();
+        let mine = d.chat_session_for(&Origin::Cli).await.unwrap();
+        let other = s
+            .sessions
+            .create(penelope_kernel::session::SessionKind::Chat, None)
+            .await
+            .unwrap()
+            .id
+            .0;
+        let (a, b) = (mine.clone(), other.clone());
+        s.store
+            .write(move |tx| {
+                for (h, text) in [("h_seul", "profil : Édouard"), ("h_partage", "règles")] {
+                    tx.execute(
+                        "INSERT INTO prompt_snapshots(hash, rendered, first_seen_at,
+                            last_seen_at, uses)
+                         VALUES(?1,?2,'2026-06-01T00:00:00Z','2026-06-01T00:00:00Z',1)",
+                        params![h, text],
+                    )?;
+                }
+                for (sid, h) in [(&a, "h_seul"), (&a, "h_partage"), (&b, "h_partage")] {
+                    tx.execute(
+                        "INSERT INTO usage(ts, day, session_id, model, provider, prompt,
+                            completion, cost_usd, system_hash)
+                         VALUES('2026-06-01T00:00:00Z','2026-06-01',?1,'m','p',10,1,0.1,?2)",
+                        params![sid, h],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        session(&d, &mine, "essai").await.unwrap();
+
+        let (kept, orphan, still_pointed) = s
+            .store
+            .read(move |c| {
+                let kept: i64 = c.query_row(
+                    "SELECT count(*) FROM prompt_snapshots WHERE hash = 'h_partage'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let orphan: i64 = c.query_row(
+                    "SELECT count(*) FROM prompt_snapshots WHERE hash = 'h_seul'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let still: i64 = c.query_row(
+                    "SELECT count(*) FROM usage WHERE session_id = ?1 AND system_hash IS NOT NULL",
+                    [&mine],
+                    |r| r.get(0),
+                )?;
+                Ok((kept, orphan, still))
+            })
+            .await
+            .unwrap();
+        assert_eq!(orphan, 0, "l'instantané propre à la session est parti");
+        assert_eq!(kept, 1, "celui qu'une autre session lit encore reste");
+        assert_eq!(still_pointed, 0, "usage ne pointe plus vers le texte");
+        let lines: i64 = s
+            .store
+            .read(move |c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM usage WHERE session_id = ?1",
+                    [&other],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(lines, 1, "la comptabilité de l'autre session est intacte");
+    }
+
+    /// #205 : la rétention n'efface qu'un instantané que plus personne ne cite.
+    #[tokio::test]
+    async fn retention_only_drops_prompts_nothing_points_to() {
+        let (_dir, d, clock) = daemon().await;
+        let s = d.services.clone();
+        clock.set_ms(
+            chrono::DateTime::parse_from_rfc3339("2026-09-01T00:00:00Z")
+                .unwrap()
+                .timestamp_millis(),
+        );
+        s.store
+            .write(|tx| {
+                for h in ["h_cite", "h_orphelin", "h_recent"] {
+                    let ts = if h == "h_recent" {
+                        "2026-08-31T00:00:00Z"
+                    } else {
+                        "2026-01-01T00:00:00Z"
+                    };
+                    tx.execute(
+                        "INSERT INTO prompt_snapshots(hash, rendered, first_seen_at,
+                            last_seen_at, uses)
+                         VALUES(?1,'texte',?2,?2,1)",
+                        params![h, ts],
+                    )?;
+                }
+                tx.execute(
+                    "INSERT INTO usage(ts, day, session_id, model, provider, prompt,
+                        completion, cost_usd, system_hash)
+                     VALUES('2026-01-01T00:00:00Z','2026-01-01','s1','m','p',10,1,0.1,'h_cite')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let report = retention(&d).await.unwrap();
+        assert_eq!(report["prompt_snapshots"], 1, "{report}");
+        let left: Vec<String> = s
+            .store
+            .read(|c| {
+                let mut st = c.prepare("SELECT hash FROM prompt_snapshots ORDER BY hash")?;
+                let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+                let mut v = Vec::new();
+                for r in rows {
+                    v.push(r?);
+                }
+                Ok(v)
+            })
+            .await
+            .unwrap();
+        assert_eq!(left, vec!["h_cite".to_string(), "h_recent".to_string()]);
+    }
+
     /// Le mot du transcript ne doit plus exister nulle part : neuf tables, l'index plein
     /// texte et les fichiers.
     async fn word_is_gone(d: &Daemon, word: &str) -> bool {
@@ -593,7 +770,7 @@ mod tests {
                     ("message_context", "context"),
                     ("lcm_nodes", "summary"),
                     ("artifacts", "head"),
-                    ("llm_requests", "request"),
+                    ("prompt_snapshots", "rendered"),
                     ("turn_queue", "payload"),
                     ("tg_updates", "payload"),
                     ("mem_candidates", "text"),
@@ -688,10 +865,17 @@ mod tests {
                 )?;
                 tx.execute(
                     "INSERT INTO llm_requests(id, session_id, model, provider, state, body_hash,
-                        request, created_at, updated_at)
-                     VALUES('r1',?1,'m','p','completed','h',?2,'2026-01-01T00:00:00Z',
-                        '2026-01-01T00:00:00Z')",
-                    penelope_store::rusqlite::params![sid2, format!("prompt {secret_owned}")],
+                        created_at, updated_at, system_hash)
+                     VALUES('r1',?1,'m','p','completed','h','2026-01-01T00:00:00Z',
+                        '2026-01-01T00:00:00Z','h_prompt')",
+                    penelope_store::rusqlite::params![sid2],
+                )?;
+                // #205 : le prompt système rendu, gardé sous son empreinte.
+                tx.execute(
+                    "INSERT INTO prompt_snapshots(hash, rendered, first_seen_at, last_seen_at,
+                        uses)
+                     VALUES('h_prompt',?1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',1)",
+                    [format!("profil du propriétaire : {secret_owned}")],
                 )?;
                 tx.execute(
                     "INSERT INTO tg_updates(update_id, received_at, processed, payload)
@@ -879,8 +1063,8 @@ mod tests {
                 )?;
                 tx.execute(
                     "INSERT INTO llm_requests(id, session_id, model, provider, state, body_hash,
-                        request, created_at, updated_at)
-                     VALUES('r_vieux','s','m','p','completed','h','prompt',?1,?1)",
+                        created_at, updated_at)
+                     VALUES('r_vieux','s','m','p','completed','h',?1,?1)",
                     p,
                 )?;
                 tx.execute(

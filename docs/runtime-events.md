@@ -47,6 +47,11 @@ mesuré ou estimé. Les événements de session et HITL portent leur cycle de vi
 les événements préexistants couvrent les tours, runs, étapes, intents, planifications
 et erreurs. L'ordonnanceur émet aussi `schedule.fired` après un déclenchement réussi.
 
+`turn.started` porte, avec le modèle, les empreintes de ce que le modèle va lire :
+`system_hash` (le préfixe T0 à T2) et `tools_hash` (la liste d'outils). Le texte n'est
+jamais dans l'événement — il est gardé une fois, sous cette empreinte, et se relit par
+`penelope audit show` (voir [Relire ce que le modèle a lu](context.md#relire-ce-que-le-modèle-a-lu)).
+
 ## Démonstration Pathlayer
 
 L'endpoint HTTP `POST /ingest` appartient à `HttpIngestAdapter` de Pathlayer :

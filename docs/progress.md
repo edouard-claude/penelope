@@ -8,7 +8,7 @@ Dernière mise à jour : 23 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1735 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
+- **1757 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2711,6 +2711,40 @@ changeants ont été retirés du texte d'accueil ; un test de documentation emp�
 leur retour. Le README et le guide du flux runtime précisent que le WebSocket inspiré
 du Gateway OpenClaw sert à observer les événements en lecture seule, qu'il est
 désactivé sans consommateur, et qu'il ne fournit ni conversation ni commande.
+
+### 0.17.59
+
+#### Le prompt système envoyé devient relisible, adressé par son empreinte (#205)
+
+Aucune requête n'était reconstituable après coup : le préfixe stable (T0 à T2) était
+réassemblé à chaque tour puis jeté, et `llm_requests.request` n'avait jamais été écrite
+depuis l'origine. `usage --by miss` savait donc dire « le préfixe a changé », jamais quoi.
+
+Le prompt rendu est désormais gardé dans `prompt_snapshots`, sous le `system_hash` que
+l'empreinte calculait déjà : une ligne par prompt **distinct**, `uses` compte les appels.
+Le contexte volatil (T4) n'y entre pas — il reste dans `message_context` — et l'écriture
+suit l'appel, jamais la latence du premier jeton. La découpe en tuiles accompagne le
+rendu sans recopier de texte : `usage --by miss` rend maintenant `prefixe:T1` ou
+`prefixe:T1+T2` et nomme la tuile en clair.
+
+`penelope audit show --turn <id>` (ou `--session <id>` pour son dernier tour) reconstitue
+ce que le modèle avait sous les yeux : prompt système vérifié octet pour octet par son
+empreinte, tuiles, messages de la projection, trois empreintes par appel. Ce qui manque
+est dit en `reserves` — instantané purgé, historique résumé depuis, messages effacés — et
+`exact` passe à faux plutôt que de présenter un résultat approchant comme exact. Les
+textes sortent rédigés (#134).
+
+`turn.started` porte `system_hash` et `tools_hash` : la chaîne hachée référence enfin ce
+que le modèle a lu. `llm_requests` troque la colonne morte `request` contre les trois clés
+déjà calculées (migration `0018`). `doctor` ajoute « Stabilité du prompt système » : plus
+de cinq changements de préfixe en 24 h, il nomme la tuile fautive ; il dit aussi le poids
+gardé.
+
+Purge et rétention sont dans le même lot, le prompt contenant le profil et la mémoire
+rappelée : `session purge` emporte les instantanés que la session seule référençait et
+coupe le renvoi depuis `usage` (la ligne comptable, ses jetons et son coût restent) ; la
+rétention n'efface que ce que plus aucune ligne ne cite. Décision
+[0011](decisions/0011-prompt-systeme-journalise.md).
 
 ### Routine de livraison
 

@@ -811,7 +811,8 @@ penelope usage
 
 Par défaut, les sessions les plus chères, avec leur titre ou leur premier message. Autres
 regroupements : `--by turn` (requêtes), `--by model`, `--by day`, `--by role`
-(conversation ou classifieur), `--by upstream`, `--by miss` (ratés de cache par cause) ;
+(conversation ou classifieur), `--by upstream`, `--by miss` (ratés de cache par cause, tuile du prompt nommée quand
+c'est le préfixe) ;
 filtres `--session <id>` et `--since AAAA-MM-JJ`. Chaque ligne donne les tokens d'entrée,
 en cache et de sortie, et la part servie par le cache. Sur Telegram, `/budget` résume le
 jour, la session, la taille du contexte et les requêtes les plus chères ; `/usage`,
@@ -862,7 +863,9 @@ de 5 min ou une compaction, et le fournisseur amont qui a servi l'appel précéd
 tête de `provider.order` pendant 10 min (sauf ordre imposé par
 `providers.openrouter.routing`). Chaque raté est expliqué dans `penelope usage --by miss` :
 premier appel, pause, préfixe, outils, modèle, historique réécrit, fournisseur amont
-différent, ou préfixe intact non servi par le fournisseur.
+différent, ou préfixe intact non servi par le fournisseur. Quand c'est le préfixe, la
+cause nomme la tuile qui a bougé (`prefixe:T1`, `prefixe:T2`), et `penelope audit show`
+rend le prompt de l'appel pour comparer.
 
 `model set` signale un identifiant absent du catalogue (`known: false`) quand le catalogue
 est chargé ; sinon, une faute de frappe ne se verra qu'au premier appel.
@@ -2247,6 +2250,24 @@ Recalcule la chaîne de hachage du journal d'événements et nomme le premier ma
 s'il y en a un. Une purge RGPD conserve le hachage d'origine : purger n'invalide pas la
 chaîne.
 
+### Relire une requête envoyée
+
+```bash
+penelope audit show --session s_01J8      # dernier tour de la session
+penelope audit show --turn t_01J8         # un tour précis
+```
+
+Rend ce que le modèle avait sous les yeux : le prompt système relu depuis son instantané
+et vérifié octet pour octet par l'empreinte déjà enregistrée, sa découpe en tuiles
+(T0 identité, T1 capacités, T2 contexte et mémoire), les messages de la projection, et
+pour chaque appel ses trois empreintes (`system_hash`, `tools_hash`, `request_hash`) avec
+la cause du raté de cache s'il y en a eu une.
+
+Ce qui manque est dit plutôt que comblé : `exact` passe à `non` et `reserves` nomme la
+raison — instantané parti en rétention, historique résumé depuis l'appel, messages
+effacés. Les textes sortent rédigés. Le détail du mécanisme est dans
+[Relire ce que le modèle a lu](context.md#relire-ce-que-le-modèle-a-lu).
+
 ### Effacer une conversation
 
 ```bash
@@ -2257,9 +2278,12 @@ Efface le contenu de la session : messages et index plein texte, contexte figé,
 artefacts (leurs fichiers compris), requêtes au modèle, payloads des tours et des updates
 Telegram du chat, candidats de mémoire, et ce que l'agent a fait et dit : arguments et
 résultats d'outils, messages envoyés sur Telegram, demandes d'approbation (celles en
-attente sont annulées), tâches MCP, paramètres et sorties des workflows de la session. Un
+attente sont annulées), tâches MCP, paramètres et sorties des workflows de la session, et
+les prompts système que cette session seule référençait — ceux qu'une autre session lit
+encore attendent sa purge à elle. Un
 outil déjà exécuté reste reconnu comme tel : sa ligne et sa clé d'idempotence demeurent,
-seul leur contenu part. Le journal d'événements garde ses lignes et leurs
+seul leur contenu part. La comptabilité (`usage`) garde ses lignes, ses jetons et ses
+coûts ; seule la clé qui menait au texte du prompt est coupée. Le journal d'événements garde ses lignes et leurs
 hachages, avec le contenu remplacé, et note la purge dans `audit.purge` : `audit-verify`
 reste vert. La commande demande confirmation (`--yes` pour s'en passer, `--reason` pour
 noter pourquoi) ; depuis Telegram, `/purge` affiche la même question avec un bouton.
@@ -2274,14 +2298,16 @@ Ce qui n'est ni la mémoire ni la chaîne d'audit finit par disparaître, une pa
 
 | Réglage | Défaut | Ce qui est effacé au-delà |
 |---|---|---|
-| `retention.days` | `90` | tours terminés, requêtes au modèle abouties, payloads des updates Telegram, clés de travail (`turn.*`, `prompt.prefix.*`, `wf.*`, `tg.*`…), arguments et résultats des outils menés à terme (un effet incertain garde tout), messages Telegram envoyés, contenu des demandes décidées, tâches MCP terminées, sorties des workflows finis |
+| `retention.days` | `90` | tours terminés, requêtes au modèle abouties, payloads des updates Telegram, clés de travail (`turn.*`, `prompt.prefix.*`, `wf.*`, `tg.*`…), arguments et résultats des outils menés à terme (un effet incertain garde tout), messages Telegram envoyés, contenu des demandes décidées, tâches MCP terminées, sorties des workflows finis, prompts système que plus aucune ligne ne cite |
 | `retention.memory_history_days` | `30` | pré-images de la mémoire (`mem_history`), qui gardent chaque fichier avant et après chaque opération du rêve |
 
 `0` désactive la rétention correspondante. Le payload d'un update Telegram est de toute
 façon vidé dès qu'il est traité : seul son identifiant sert encore, pour ne pas traiter
 deux fois le même message. `penelope doctor` donne la date de la dernière passe et ce que
-gardent encore les tables d'effets, d'envois, de demandes, de tâches MCP et d'étapes : ce
-sont elles qui grossissent avec l'activité, et elles partent dans la sauvegarde.
+gardent encore les tables d'effets, d'envois, de demandes, de tâches MCP, d'étapes et de
+prompts système : ce sont elles qui grossissent avec l'activité, et elles partent dans la
+sauvegarde. Un prompt système suit la ligne d'`usage` qui le cite : tant qu'une
+consommation le désigne, il reste relisible par `penelope audit show`.
 
 ## 10. Mise à jour
 

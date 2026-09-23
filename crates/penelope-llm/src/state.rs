@@ -63,6 +63,26 @@ pub enum UnknownSendPolicy {
     AskHuman,
 }
 
+/// Les trois clés qui rendent une requête retrouvable sans en recopier le corps
+/// (issue #205) : le prompt système par son instantané, la liste d'outils et la chaîne
+/// des messages par leur empreinte. Elles sont déjà calculées pour le cache de préfixe.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RequestKeys {
+    pub system_hash: Option<String>,
+    pub tools_hash: Option<String>,
+    pub request_hash: Option<String>,
+}
+
+/// Ce qu'il faut savoir d'un appel pour enregistrer son plan d'envoi.
+pub struct PlannedCall<'a> {
+    pub id: &'a str,
+    pub session_id: Option<&'a str>,
+    pub run_id: Option<&'a str>,
+    pub model: &'a str,
+    pub provider: &'a str,
+    pub keys: RequestKeys,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmRequestRecord {
     pub id: String,
@@ -72,6 +92,7 @@ pub struct LlmRequestRecord {
     pub provider: String,
     pub state: LlmState,
     pub body_hash: String,
+    pub keys: RequestKeys,
     pub maybe_billed: bool,
     pub error: Option<String>,
 }
@@ -101,33 +122,41 @@ impl LlmStateMachine {
         self.policy
     }
 
-    /// Fige le corps et enregistre le plan d'envoi.
+    /// Fige le corps et enregistre le plan d'envoi, avec les clés qui le rendront
+    /// retrouvable (issue #205).
     pub async fn plan(
         &self,
-        id: &str,
-        session_id: Option<&str>,
-        run_id: Option<&str>,
-        model: &str,
-        provider: &str,
+        call: PlannedCall<'_>,
         body: &Value,
     ) -> penelope_store::Result<String> {
         let hash = sha256_hex(canonical_json(body).as_bytes());
         let (id, sid, rid, model, provider, ts) = (
-            id.to_string(),
-            session_id.map(String::from),
-            run_id.map(String::from),
-            model.to_string(),
-            provider.to_string(),
+            call.id.to_string(),
+            call.session_id.map(String::from),
+            call.run_id.map(String::from),
+            call.model.to_string(),
+            call.provider.to_string(),
             self.clock.now_rfc3339(),
         );
-        let h = hash.clone();
+        let (h, keys) = (hash.clone(), call.keys);
         self.store
             .write(move |tx| {
                 tx.execute(
                     "INSERT INTO llm_requests(id, session_id, run_id, model, provider, state,
-                        body_hash, created_at, updated_at)
-                     VALUES(?1,?2,?3,?4,?5,'planned',?6,?7,?7)",
-                    params![id, sid, rid, model, provider, h, ts],
+                        body_hash, created_at, updated_at, system_hash, tools_hash, request_hash)
+                     VALUES(?1,?2,?3,?4,?5,'planned',?6,?7,?7,?8,?9,?10)",
+                    params![
+                        id,
+                        sid,
+                        rid,
+                        model,
+                        provider,
+                        h,
+                        ts,
+                        keys.system_hash,
+                        keys.tools_hash,
+                        keys.request_hash
+                    ],
                 )?;
                 Ok(())
             })
@@ -215,7 +244,7 @@ impl LlmStateMachine {
                 )?;
                 let mut st = tx.prepare(
                     "SELECT id, session_id, run_id, model, provider, state, body_hash,
-                            maybe_billed, error
+                            maybe_billed, error, system_hash, tools_hash, request_hash
                      FROM llm_requests WHERE state='send_unknown' ORDER BY updated_at",
                 )?;
                 let rows = st.query_map([], |r| {
@@ -230,6 +259,11 @@ impl LlmStateMachine {
                         body_hash: r.get(6)?,
                         maybe_billed: r.get::<_, i64>(7)? != 0,
                         error: r.get(8)?,
+                        keys: RequestKeys {
+                            system_hash: r.get(9)?,
+                            tools_hash: r.get(10)?,
+                            request_hash: r.get(11)?,
+                        },
                     })
                 })?;
                 let mut v = Vec::new();
@@ -256,7 +290,8 @@ impl LlmStateMachine {
             .read(move |c| {
                 let mut st = c.prepare(
                     "SELECT id, session_id, run_id, model, provider, state, body_hash,
-                            maybe_billed, error FROM llm_requests WHERE id=?1",
+                            maybe_billed, error, system_hash, tools_hash, request_hash
+                     FROM llm_requests WHERE id=?1",
                 )?;
                 let mut rows = st.query([&id])?;
                 match rows.next()? {
@@ -272,6 +307,11 @@ impl LlmStateMachine {
                             body_hash: r.get(6)?,
                             maybe_billed: r.get::<_, i64>(7)? != 0,
                             error: r.get(8)?,
+                            keys: RequestKeys {
+                                system_hash: r.get(9)?,
+                                tools_hash: r.get(10)?,
+                                request_hash: r.get(11)?,
+                            },
                         }))
                     }
                     None => Ok(None),
@@ -292,12 +332,30 @@ mod tests {
         LlmStateMachine::new(store, Arc::new(TestClock::default()))
     }
 
+    fn planned<'a>(id: &'a str, provider: &'a str) -> PlannedCall<'a> {
+        PlannedCall {
+            id,
+            session_id: None,
+            run_id: None,
+            model: "m",
+            provider,
+            keys: RequestKeys::default(),
+        }
+    }
+
     #[tokio::test]
     async fn nominal_sequence() {
         let m = sm(Store::open_memory().unwrap());
-        m.plan("q1", Some("s1"), None, "a/b", "openrouter", &json!({"x":1}))
-            .await
-            .unwrap();
+        m.plan(
+            PlannedCall {
+                session_id: Some("s1"),
+                model: "a/b",
+                ..planned("q1", "openrouter")
+            },
+            &json!({"x":1}),
+        )
+        .await
+        .unwrap();
         assert!(m.dispatching("q1").await.unwrap());
         assert!(m.response_started("q1").await.unwrap());
         assert!(m.completed("q1").await.unwrap());
@@ -307,15 +365,41 @@ mod tests {
         );
     }
 
+    /// #205 : la colonne `request` n'a jamais été écrite ; ce sont les trois clés déjà
+    /// calculées qui rendent une requête retrouvable, et elles sont relues telles quelles.
+    #[tokio::test]
+    async fn the_three_keys_make_a_request_findable() {
+        let m = sm(Store::open_memory().unwrap());
+        let keys = RequestKeys {
+            system_hash: Some("sys".into()),
+            tools_hash: Some("tools".into()),
+            request_hash: Some("req".into()),
+        };
+        m.plan(
+            PlannedCall {
+                id: "q1",
+                session_id: Some("s1"),
+                run_id: None,
+                model: "a/b",
+                provider: "openrouter",
+                keys: keys.clone(),
+            },
+            &json!({"x":1}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(m.get("q1").await.unwrap().unwrap().keys, keys);
+    }
+
     #[tokio::test]
     async fn body_hash_is_order_independent() {
         let m = sm(Store::open_memory().unwrap());
         let h1 = m
-            .plan("a", None, None, "m", "p", &json!({"x":1,"y":2}))
+            .plan(planned("a", "p"), &json!({"x":1,"y":2}))
             .await
             .unwrap();
         let h2 = m
-            .plan("b", None, None, "m", "p", &json!({"y":2,"x":1}))
+            .plan(planned("b", "p"), &json!({"y":2,"x":1}))
             .await
             .unwrap();
         assert_eq!(h1, h2);
@@ -324,7 +408,7 @@ mod tests {
     #[tokio::test]
     async fn cas_refuses_out_of_order_transitions() {
         let m = sm(Store::open_memory().unwrap());
-        m.plan("q", None, None, "m", "p", &json!({})).await.unwrap();
+        m.plan(planned("q", "p"), &json!({})).await.unwrap();
         assert!(
             !m.response_started("q").await.unwrap(),
             "on ne passe pas de planned à response_started"
@@ -337,7 +421,7 @@ mod tests {
     async fn crash_before_headers_gives_send_unknown() {
         let store = Store::open_memory().unwrap();
         let m = sm(store.clone());
-        m.plan("q", None, None, "m", "openrouter", &json!({}))
+        m.plan(planned("q", "openrouter"), &json!({}))
             .await
             .unwrap();
         m.dispatching("q").await.unwrap();
@@ -354,7 +438,7 @@ mod tests {
     async fn crash_after_headers_is_a_failure_not_an_unknown() {
         let store = Store::open_memory().unwrap();
         let m = sm(store.clone());
-        m.plan("q", None, None, "m", "openrouter", &json!({}))
+        m.plan(planned("q", "openrouter"), &json!({}))
             .await
             .unwrap();
         m.dispatching("q").await.unwrap();

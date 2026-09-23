@@ -1135,6 +1135,20 @@ impl Rpc {
 
             // ------------------------------------------------------------ données
             method::AUDIT_VERIFY => Ok(serde_json::to_value(s.events.verify().await?)?),
+            // #205 : ce que le modèle avait sous les yeux, reconstitué depuis l'empreinte
+            // du prompt et le transcript. Sans `turn`, le dernier tour de la session.
+            method::AUDIT_SHOW => {
+                let turn = match p.get("turn").and_then(|v| v.as_str()) {
+                    Some(t) => t.to_string(),
+                    None => {
+                        let session = required_str(p, "session")?;
+                        crate::audit::last_turn(s, &session)
+                            .await?
+                            .ok_or_else(|| anyhow::anyhow!("aucun appel pour {session}"))?
+                    }
+                };
+                crate::audit::show(s, &turn).await
+            }
             method::USAGE => {
                 let by = p.get("by").and_then(|b| b.as_str()).unwrap_or("session");
                 if !penelope_kernel::budget::USAGE_AXES.contains(&by) {

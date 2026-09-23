@@ -577,7 +577,7 @@ impl BudgetLedger {
                     row.label = match by.as_str() {
                         "session" => session_label(c, &row.key),
                         "turn" => turn_label(c, &row.key),
-                        "miss" => Some(miss_label(&row.key).to_string()),
+                        "miss" => Some(miss_label(&row.key)),
                         _ => None,
                     };
                 }
@@ -588,17 +588,35 @@ impl BudgetLedger {
 }
 
 /// Libellé d'une cause de raté de cache.
-pub fn miss_label(cause: &str) -> &'static str {
+///
+/// La cause « préfixe » porte, quand l'instantané du prompt le permet (issue #205), les
+/// tuiles qui ont bougé : `prefixe:T1`, `prefixe:T1+T2`. Le libellé les nomme en clair.
+pub fn miss_label(cause: &str) -> String {
+    if let Some(tiles) = cause.strip_prefix("prefixe:") {
+        let named: Vec<&str> = tiles.split('+').map(tile_label).collect();
+        return format!("message système modifié : {}", named.join(", "));
+    }
     match cause {
         "" => "cache servi, ou prompt trop court pour compter",
         "premier_appel" => "premier appel de la session",
         "pause" => "pause de plus de 5 min, cache expiré",
-        "prefixe" => "message système modifié (T0 à T2)",
+        "prefixe" => "message système modifié (T0 à T2), tuile inconnue",
         "outils" => "liste d'outils modifiée",
         "modele" => "autre modèle que l'appel précédent",
         "historique" => "historique réécrit avant le dernier message",
         "fournisseur" => "autre fournisseur amont que l'appel précédent",
         _ => "préfixe intact, cache non servi par le fournisseur",
+    }
+    .to_string()
+}
+
+/// Ce que nomme une tuile du préfixe, en clair (issue #205).
+pub fn tile_label(name: &str) -> &'static str {
+    match name {
+        "T0" => "T0 identité et règles du harnais",
+        "T1" => "T1 index des capacités (skills, workflows, serveurs MCP, machine)",
+        "T2" => "T2 contexte du workspace et instantanés mémoire",
+        _ => "tuile inconnue",
     }
 }
 

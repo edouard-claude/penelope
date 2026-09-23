@@ -145,6 +145,11 @@ pub trait Conversation: Send + Sync {
     async fn admit_tool_results(&self, _count: usize) -> anyhow::Result<()> {
         Ok(())
     }
+    /// Le préfixe stable du prompt système, avec sa découpe en tuiles quand elle est
+    /// connue : l'audit du prompt (issue #205) l'enregistre sous son empreinte.
+    fn prompt_prefix(&self) -> Option<crate::prompt_snapshot::PromptPrefix> {
+        None
+    }
 }
 
 /// Compaction à la demande d'une session (§5.4 : une tentative bornée sur dépassement).
@@ -250,6 +255,10 @@ impl Conversation for MemoryConversation {
 
     async fn tail(&self) -> anyhow::Result<Vec<ChatMessage>> {
         Ok(self.messages())
+    }
+
+    fn prompt_prefix(&self) -> Option<crate::prompt_snapshot::PromptPrefix> {
+        Some(crate::prompt_snapshot::PromptPrefix::plain(&self.system))
     }
 }
 
@@ -539,10 +548,21 @@ impl AgentLoop {
         // Un dépassement de fenêtre prouvé a droit à une compaction, pas davantage.
         let mut overflow_compacted = false;
 
+        // Ce que le modèle va lire est nommé dès l'ouverture du tour : la chaîne d'audit
+        // référence le prompt système par son empreinte, et l'instantané la résout
+        // (issue #205).
+        let prefix = conv.prompt_prefix();
         s.events
             .append(
-                EventDraft::new("turn.started", json!({"model": spec.model_id}))
-                    .session(&spec.session_id),
+                EventDraft::new(
+                    "turn.started",
+                    json!({
+                        "model": spec.model_id,
+                        "system_hash": prefix.as_ref().map(|p| p.hash()),
+                        "tools_hash": crate::cache_audit::Fingerprint::tools_hash_of(&spec.tools),
+                    }),
+                )
+                .session(&spec.session_id),
             )
             .await?;
 
@@ -701,6 +721,15 @@ impl AgentLoop {
             };
 
             cost += response.cost_usd;
+            // Le prompt système rendu devient une ligne, adressée par l'empreinte déjà
+            // calculée (issue #205). L'écriture suit l'appel : elle n'est pas dans la
+            // latence du premier jeton, et son échec ne coûte que le diagnostic.
+            if let Some(prefix) = &prefix
+                && let Err(e) =
+                    crate::prompt_snapshot::record(s, &fingerprint.system_hash, prefix).await
+            {
+                tracing::warn!(error = %e, "instantané du prompt non enregistré");
+            }
             let miss = crate::cache_audit::miss_cause(
                 previous.as_ref(),
                 &crate::cache_audit::Observed {
@@ -712,13 +741,25 @@ impl AgentLoop {
                     now_ms: s.clock.now_ms(),
                 },
             );
+            // « Le préfixe a changé » ne suffit pas : dire laquelle des tuiles a bougé.
+            let miss = match miss {
+                Some("prefixe") => Some(
+                    crate::prompt_snapshot::prefix_cause(
+                        s,
+                        previous.as_ref().and_then(|p| p.system_hash.as_deref()),
+                        &fingerprint.system_hash,
+                    )
+                    .await,
+                ),
+                other => other.map(String::from),
+            };
             s.budget
                 .record(penelope_kernel::budget::UsageRecord {
                     msg_count: Some(fingerprint.chain.len() as i64),
                     request_hash: fingerprint.request_hash(),
                     system_hash: Some(fingerprint.system_hash.clone()),
                     tools_hash: Some(fingerprint.tools_hash.clone()),
-                    miss_cause: miss.map(String::from),
+                    miss_cause: miss,
                     session_id: Some(spec.session_id.clone()),
                     run_id: spec.run_id.clone(),
                     turn_id: spec.turn_id.clone(),
@@ -934,16 +975,23 @@ impl AgentLoop {
                 ..Default::default()
             };
 
-            // Machine d'état des appels LLM (§4.3).
+            // Machine d'état des appels LLM (§4.3). Les trois clés de l'empreinte sont
+            // calculées sur le corps réellement envoyé : c'est par elles que la requête
+            // se retrouve, le corps n'étant jamais recopié (issue #205).
             let llm_id = format!("q_{}", penelope_kernel::ids::Ulid::new());
             let body = serde_json::to_value(&request).unwrap_or(Value::Null);
+            let keys =
+                crate::cache_audit::Fingerprint::of(&request.messages, &request.tools).keys();
             s.llm_state
                 .plan(
-                    &llm_id,
-                    Some(&spec.session_id),
-                    spec.run_id.as_deref(),
-                    &model_id,
-                    self.provider.name(),
+                    penelope_llm::PlannedCall {
+                        id: &llm_id,
+                        session_id: Some(&spec.session_id),
+                        run_id: spec.run_id.as_deref(),
+                        model: &model_id,
+                        provider: self.provider.name(),
+                        keys,
+                    },
                     &body,
                 )
                 .await?;

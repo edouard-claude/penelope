@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod approval_mode;
+pub mod audit;
 pub mod backup;
 pub mod budget_alert;
 pub mod bus;
@@ -31,6 +32,7 @@ pub mod media;
 pub mod mem_audit;
 pub mod mem_split;
 pub mod onboarding;
+pub mod prompt_snapshot;
 pub mod purge;
 pub mod review;
 pub mod rpc;

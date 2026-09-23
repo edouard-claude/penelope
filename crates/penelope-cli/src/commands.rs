@@ -158,7 +158,8 @@ pub enum Command {
     /// Consommation et coûts, du plus cher au moins cher : tokens d'entrée, en cache, de
     /// sortie, part de cache.
     Usage {
-        /// Regroupement : session, turn (requête), model, day, role, provider, upstream, run.
+        /// Regroupement : session, turn (requête), model, day, role, provider, upstream,
+        /// run, miss (ratés de cache par cause).
         #[arg(long, default_value = "session")]
         by: String,
         /// Limite à une session.
@@ -173,6 +174,9 @@ pub enum Command {
     /// Vérifie la chaîne d'audit.
     #[command(name = "audit-verify")]
     AuditVerify,
+    /// Audit d'un tour : ce que le modèle avait sous les yeux.
+    #[command(subcommand)]
+    Audit(AuditCmd),
     /// Sauvegarde cohérente. `--push` : archive chiffrée complète, poussée dans le dépôt
     /// privé de `backup.git_remote`.
     Backup {
@@ -222,6 +226,18 @@ pub enum ImportCmd {
         /// N'essaie pas les serveurs MCP importés.
         #[arg(long)]
         no_test: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AuditCmd {
+    /// Reconstitue une requête : prompt système, messages, empreintes (issue #205).
+    /// Sans `--turn`, le dernier tour de la session.
+    Show {
+        #[arg(long)]
+        turn: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
     },
 }
 
@@ -1144,6 +1160,14 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
             json!({"by": by, "session": session, "since": since, "limit": limit}),
         ),
         Command::AuditVerify => (m::AUDIT_VERIFY, json!({})),
+        Command::Audit(AuditCmd::Show { turn, session }) => {
+            if turn.is_none() && session.is_none() {
+                return Err(CliError::Usage(
+                    "préciser `--turn <id>` ou `--session <id>`".into(),
+                ));
+            }
+            (m::AUDIT_SHOW, json!({"turn": turn, "session": session}))
+        }
         Command::Backup { push, full, media } => (
             m::BACKUP,
             json!({"push": push, "full": *full || *push, "media": media}),
@@ -2420,6 +2444,7 @@ mod tests {
             vec!["policies"],
             vec!["usage"],
             vec!["audit-verify"],
+            vec!["audit", "show", "--turn", "t_1"],
             vec!["backup"],
             vec!["session", "list"],
             vec!["session", "new"],

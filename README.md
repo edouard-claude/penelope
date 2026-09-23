@@ -58,7 +58,10 @@ Cinq niveaux de compaction, dont un seul appelle un modèle. `context.max_prompt
 borne le contexte indépendamment de la fenêtre annoncée par le modèle, la compaction de
 fond se déclenche sur le prompt réellement facturé au dernier appel, et une réserve
 budgétaire empêche le plafond du jour de bloquer les résumés. Chaque raté de cache est
-attribué à une cause et visible par `penelope usage --by miss`.
+attribué à une cause — la tuile du prompt qui a bougé, quand c'est le préfixe — et visible
+par `penelope usage --by miss`. Le prompt système envoyé est gardé sous son empreinte :
+`penelope audit show --turn <id>` rend ce que le modèle avait sous les yeux, et dit ce
+qu'il ne peut pas reconstituer.
 
 ### Une session longue ne se perd pas
 

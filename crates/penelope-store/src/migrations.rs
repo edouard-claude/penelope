@@ -83,6 +83,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0017_clone_source",
         sql: SQL_0017,
     },
+    Migration {
+        version: "0018_prompt_snapshots",
+        sql: SQL_0018,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -954,6 +958,26 @@ WHERE tool = 'git_clone' AND arg_match IS NULL AND window = 'always'
   AND revoked_at IS NULL;
 "#;
 
+/// #205 : le prompt système rendu devient une ligne, dédupliquée par le `system_hash`
+/// que l'empreinte calculait déjà. `llm_requests.request`, jamais écrite depuis l'origine,
+/// cède la place aux trois clés qui rendent une requête rejouable.
+const SQL_0018: &str = r#"
+CREATE TABLE prompt_snapshots(
+  hash          TEXT PRIMARY KEY,          -- = usage.system_hash
+  rendered      TEXT NOT NULL,             -- préfixe stable T0-T2, tel qu'envoyé
+  tiers         TEXT,                      -- découpe en tuiles (sans texte), NULL si inconnue
+  first_seen_at TEXT NOT NULL,
+  last_seen_at  TEXT NOT NULL,
+  uses          INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX prompt_snapshots_last_seen ON prompt_snapshots(last_seen_at);
+
+ALTER TABLE llm_requests DROP COLUMN request;
+ALTER TABLE llm_requests ADD COLUMN system_hash TEXT;
+ALTER TABLE llm_requests ADD COLUMN tools_hash TEXT;
+ALTER TABLE llm_requests ADD COLUMN request_hash TEXT;
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1045,6 +1069,26 @@ mod tests {
             )
             .unwrap();
         assert_eq!(row, (0, 0, "2026-09-01T10:00:00Z".into(), 4));
+    }
+
+    /// #205 : le prompt système devient une ligne adressée par son empreinte, et
+    /// `llm_requests` troque une colonne jamais écrite contre les trois clés déjà
+    /// calculées.
+    #[test]
+    fn prompt_snapshots_replace_the_dead_request_column() {
+        let c = fresh();
+        c.execute(
+            "INSERT INTO prompt_snapshots(hash, rendered, tiers, first_seen_at, last_seen_at, uses)
+             VALUES('h1','Tu es Pénélope.','{}','2026-09-23T10:00:00Z','2026-09-23T10:00:00Z',1)",
+            [],
+        )
+        .unwrap();
+        let st = c.prepare("SELECT * FROM llm_requests").unwrap();
+        let columns: Vec<String> = st.column_names().iter().map(|c| c.to_string()).collect();
+        assert!(!columns.contains(&"request".to_string()), "{columns:?}");
+        for k in ["system_hash", "tools_hash", "request_hash"] {
+            assert!(columns.contains(&k.to_string()), "{k} absent : {columns:?}");
+        }
     }
 
     #[test]
@@ -1177,6 +1221,7 @@ mod tests {
             "config_generations",
             "subsystem_apply_results",
             "event_purges",
+            "prompt_snapshots",
         ] {
             let n: i64 = c
                 .query_row(

@@ -166,7 +166,45 @@ pourquoi le préfixe en attente (souvenir, skill, serveur ajoutés) profite de l
 frontière. Entre deux compactions, chaque appel relit le préfixe au tarif du cache ; chez
 Anthropic, un marqueur `cache_control` le signale explicitement. `penelope usage --by miss`
 donne, pour chaque raté, sa cause probable : premier appel, pause, préfixe, outils,
-modèle, historique réécrit, fournisseur amont différent.
+modèle, historique réécrit, fournisseur amont différent. Quand la cause est le préfixe,
+elle nomme la tuile qui a bougé : `prefixe:T1` (index des capacités), `prefixe:T2`
+(contexte et mémoire), `prefixe:T1+T2`.
+
+## Relire ce que le modèle a lu
+
+Le préfixe stable est réassemblé à chaque tour ; il n'existait donc nulle part une fois
+la réponse rendue. Depuis la 0.17.59 il est **gardé sous son empreinte** — celle-là même
+que `usage.system_hash` enregistrait déjà (décision
+[0011](decisions/0011-prompt-systeme-journalise.md)) :
+
+```
+ usage.system_hash ─┐
+ llm_requests.system_hash ─┼─▶ prompt_snapshots(hash) ─▶ rendu T0+T1+T2 + découpe en tuiles
+ turn.started.system_hash ─┘
+```
+
+Une ligne par prompt **distinct**, pas par tour : le même préfixe sur cinq cents appels
+n'écrit qu'une fois, et `uses` compte les appels. Le contexte volatil (T4) n'y entre pas,
+il reste avec son message dans `message_context`. L'écriture suit l'appel : elle n'est
+jamais dans la latence du premier jeton, et son échec ne coûte que le diagnostic.
+
+```bash
+penelope audit show --turn t_01K5...      # ce tour-là
+penelope audit show --session s_01K5...   # son dernier tour
+```
+
+La commande rend le prompt système relu (vérifié octet pour octet par son empreinte),
+sa découpe en tuiles, les messages de la projection, et les trois empreintes de chaque
+appel. Ce qui manque est **dit**, jamais comblé : un instantané parti en rétention, un
+historique résumé depuis l'appel ou des messages effacés apparaissent en `reserves`, et
+`exact` passe à `faux`. Les textes sortent rédigés, comme tout ce qui quitte la base.
+
+Le prompt contient le profil, la mémoire rappelée et les notes de session : c'est de la
+donnée personnelle. `penelope session purge` emporte les instantanés que la session seule
+référençait — ceux qu'une autre session lit encore attendent sa purge à elle — et la
+rétention n'efface que ce que plus aucune ligne ne cite. `penelope doctor` dit le poids
+gardé et le nombre de changements de préfixe des dernières 24 h : au-delà de cinq, c'est
+un rechargement qui casse le cache, et le contrôle nomme la tuile.
 
 ## Observer
 

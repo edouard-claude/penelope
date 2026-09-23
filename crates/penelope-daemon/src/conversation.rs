@@ -337,6 +337,10 @@ impl Conversation for SessionConversation {
             .await?;
         Ok(entries.iter().map(|e| e.message.clone()).collect())
     }
+
+    fn prompt_prefix(&self) -> Option<crate::prompt_snapshot::PromptPrefix> {
+        Some(crate::prompt_snapshot::PromptPrefix::of(&self.tiers))
+    }
 }
 
 /// Assemble les tuiles du prompt d'une session, instantanés mémoire recalculés.

@@ -49,12 +49,32 @@ impl Fingerprint {
         Fingerprint {
             chain,
             system_hash: sha256_hex(system.as_bytes()),
-            tools_hash: sha256_hex(serde_json::to_string(tools).unwrap_or_default().as_bytes()),
+            tools_hash: Fingerprint::tools_hash_of(tools),
         }
     }
 
     pub fn request_hash(&self) -> Option<String> {
         self.chain.last().cloned()
+    }
+
+    /// Empreinte du seul message système, telle que l'attend `prompt_snapshots`.
+    pub fn system_hash_of(rendered: &str) -> String {
+        sha256_hex(rendered.as_bytes())
+    }
+
+    /// Empreinte de la liste d'outils, calculée comme dans [`Fingerprint::of`].
+    pub fn tools_hash_of(tools: &[ToolDef]) -> String {
+        sha256_hex(serde_json::to_string(tools).unwrap_or_default().as_bytes())
+    }
+
+    /// Les trois clés qui rendent la requête retrouvable (issue #205) : c'est ce que
+    /// `llm_requests` garde à la place du corps, jamais écrit depuis l'origine.
+    pub fn keys(&self) -> penelope_llm::RequestKeys {
+        penelope_llm::RequestKeys {
+            system_hash: Some(self.system_hash.clone()),
+            tools_hash: Some(self.tools_hash.clone()),
+            request_hash: self.request_hash(),
+        }
     }
 }
 

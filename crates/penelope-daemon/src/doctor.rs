@@ -141,6 +141,7 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
 
     // Rétention : dernière passe et contenu que gardent les tables d'effets (#78).
     checks.push(retention_check(s).await);
+    checks.push(prompt_stability_check(s).await);
 
     // Jour budgétaire : des lignes récentes comptées dans un autre fuseau (#79).
     checks.push(budget_days_check(s).await);
@@ -1717,7 +1718,7 @@ async fn retention_check(s: &Services) -> DoctorCheck {
     let read = s
         .store
         .read(|c| {
-            let sizes: [i64; 5] = c.query_row(
+            let sizes: [i64; 6] = c.query_row(
                 "SELECT
                    (SELECT coalesce(sum(length(request) + coalesce(length(result), 0)), 0)
                       FROM effects),
@@ -1725,9 +1726,19 @@ async fn retention_check(s: &Services) -> DoctorCheck {
                    (SELECT coalesce(sum(length(payload)), 0) FROM approval_requests),
                    (SELECT coalesce(sum(length(request) + coalesce(length(result), 0)), 0)
                       FROM mcp_tasks),
-                   (SELECT coalesce(sum(coalesce(length(output), 0)), 0) FROM workflow_step_log)",
+                   (SELECT coalesce(sum(coalesce(length(output), 0)), 0) FROM workflow_step_log),
+                   (SELECT coalesce(sum(length(rendered)), 0) FROM prompt_snapshots)",
                 [],
-                |r| Ok([r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?]),
+                |r| {
+                    Ok([
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ])
+                },
             )?;
             let last = penelope_store::kv_get(c, "retention.last")?;
             Ok((sizes, last))
@@ -1738,12 +1749,13 @@ async fn retention_check(s: &Services) -> DoctorCheck {
     };
     let mo = |b: i64| format!("{:.1} Mo", b as f64 / (1024.0 * 1024.0));
     let kept = format!(
-        "effets {}, envois Telegram {}, demandes {}, tâches MCP {}, étapes {}",
+        "effets {}, envois Telegram {}, demandes {}, tâches MCP {}, étapes {}, prompts {}",
         mo(sizes[0]),
         mo(sizes[1]),
         mo(sizes[2]),
         mo(sizes[3]),
-        mo(sizes[4])
+        mo(sizes[4]),
+        mo(sizes[5])
     );
     if days == 0 {
         return DoctorCheck::ok(ID, LABEL, format!("désactivée ; contenu gardé : {kept}"));
@@ -1770,6 +1782,59 @@ async fn retention_check(s: &Services) -> DoctorCheck {
             Some("penelope restart".into()),
         ),
     }
+}
+
+/// #205 : un préfixe stable est la condition du coût (#17). Quand il bouge plusieurs fois
+/// par jour **hors** pause et hors compaction, chaque tour repaie son prompt entier : c'est
+/// la cause n° 1 des ratés de cache, et l'instantané dit désormais quelle tuile bouge.
+async fn prompt_stability_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "prompt.stability";
+    const LABEL: &str = "Stabilité du prompt système";
+    /// Au-delà, ce n'est plus un rechargement isolé mais un préfixe qui ne tient pas.
+    const MAX_PER_DAY: i64 = 5;
+    let since = (s.clock.now_utc() - chrono::Duration::days(1))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let rows: Vec<(String, i64)> = s
+        .store
+        .read(move |c| {
+            let mut st = c.prepare(
+                "SELECT miss_cause, COUNT(DISTINCT system_hash)
+                 FROM usage
+                 WHERE ts >= ?1 AND miss_cause LIKE 'prefixe%' AND system_hash IS NOT NULL
+                 GROUP BY miss_cause",
+            )?;
+            let r = st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(r.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .unwrap_or_default();
+    let total: i64 = rows.iter().map(|(_, n)| n).sum();
+    let (rows_count, bytes) = crate::prompt_snapshot::weight_bytes(s)
+        .await
+        .unwrap_or((0, 0));
+    let kept = format!(
+        "{rows_count} prompts gardés, {:.1} Mo",
+        bytes as f64 / (1024.0 * 1024.0)
+    );
+    if total <= MAX_PER_DAY {
+        return DoctorCheck::ok(
+            ID,
+            LABEL,
+            format!("{total} changement(s) de préfixe en 24 h ; {kept}"),
+        );
+    }
+    // La cause la plus fréquente porte déjà le nom de la tuile (`prefixe:T1`).
+    let worst = rows
+        .iter()
+        .max_by_key(|(_, n)| *n)
+        .map(|(cause, _)| penelope_kernel::budget::miss_label(cause))
+        .unwrap_or_default();
+    DoctorCheck::fail(
+        ID,
+        LABEL,
+        format!("{total} changements de préfixe en 24 h, surtout : {worst} ; {kept}"),
+        Some("penelope usage --by miss --since <jour> pour voir quelle tuile bouge".into()),
+    )
 }
 
 /// #79 : la journée budgétaire suit `owner.timezone`. Après un changement de fuseau, ou
@@ -2179,6 +2244,7 @@ mod tests {
             "skills",
             "reasoning_effort",
             "dream_power",
+            "prompt.stability",
         ] {
             assert!(ids.contains(&expected), "contrôle manquant : {expected}");
         }
@@ -2319,6 +2385,46 @@ mod tests {
         .critical();
         assert_eq!(check.severity, "error");
         assert!(render(&[check]).contains("correction proposée"));
+    }
+
+    /// #205 : un préfixe qui bouge plusieurs fois par jour hors pause et hors compaction
+    /// est la cause n° 1 des ratés de cache (#17). `doctor` le dit, et nomme la tuile.
+    #[tokio::test]
+    async fn an_unstable_system_prompt_is_reported_with_its_tile() {
+        let (_d, s) = services().await;
+        let now = s.clock.now_rfc3339();
+        let day = now[..10].to_string();
+        s.store
+            .write(move |tx| {
+                for i in 0..6 {
+                    tx.execute(
+                        "INSERT INTO usage(ts, day, session_id, model, provider, prompt,
+                            completion, cost_usd, miss_cause, system_hash)
+                         VALUES(?1,?2,'s1','m','p',10000,10,0.1,'prefixe:T1',?3)",
+                        penelope_store::rusqlite::params![now, day, format!("h{i}")],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let checks = run(&s).await;
+        let c = checks.iter().find(|c| c.id == "prompt.stability").unwrap();
+        assert!(!c.ok, "{}", c.detail);
+        assert!(c.detail.contains("6"), "{}", c.detail);
+        assert!(c.detail.contains("index des capacités"), "{}", c.detail);
+    }
+
+    /// Sur une instance calme, le contrôle est vert et dit le poids gardé.
+    #[tokio::test]
+    async fn a_quiet_instance_keeps_a_green_prompt_check() {
+        let (_d, s) = services().await;
+        let checks = run(&s).await;
+        let c = checks.iter().find(|c| c.id == "prompt.stability").unwrap();
+        assert!(c.ok, "{}", c.detail);
+        let r = checks.iter().find(|c| c.id == "retention").unwrap();
+        assert!(r.detail.contains("prompts"), "{}", r.detail);
     }
 
     #[tokio::test]
