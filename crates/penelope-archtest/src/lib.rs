@@ -13,6 +13,7 @@
 
 pub mod budget;
 pub mod freeze;
+pub mod ratchet;
 pub mod snapshot;
 
 use std::collections::{BTreeMap, BTreeSet};
