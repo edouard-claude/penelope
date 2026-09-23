@@ -1,0 +1,306 @@
+# crates/penelope-archtest/budget.toml : gel de la dette (#209, #210, #211, #213, #214).
+#
+# Les nombres ne montent jamais. `UPDATE_BUDGET=1 cargo test -p penelope-archtest` les
+# abaisse à la valeur courante et retire les entrées passées sous leur plafond ; les
+# remonter, ou ajouter une entrée à une liste de référence, demande le trailer
+# « Dérogation-budget: #N » dans un commit de la plage (scripts/check-budget.sh).
+# Relevé au commit qui pose le gel, sur la branche v1 (design/v1/gel-et-outillage.md §3).
+
+[files]
+ceiling = 1000        # src/**/*.rs, tests inline compris (R1)
+test_ceiling = 1500   # tests/**/*.rs, src/**/tests.rs, *_tests.rs, modules cfg(test) (R2)
+test_modules = [
+    "crates/penelope-daemon/src/ticket_to_deploy_e2e.rs",
+    "crates/penelope-daemon/src/wiki_e2e.rs",
+]
+
+# Liste de référence (R3) : les fichiers autorisés à dépasser, chacun avec sa borne.
+# Elle ne peut que rétrécir : un fichier repassé sous le plafond doit en sortir.
+[files.oversized]
+"crates/penelope-daemon/src/telegram.rs" = 13716
+"crates/penelope-daemon/src/dream.rs" = 5859
+"crates/penelope-daemon/src/agent.rs" = 4240
+"crates/penelope-daemon/src/workflow.rs" = 4044
+"crates/penelope-daemon/src/executor.rs" = 3712
+"crates/penelope-daemon/src/mcp.rs" = 3291
+"crates/penelope-daemon/src/engine.rs" = 3173
+"crates/penelope-kernel/src/config.rs" = 2738
+"crates/penelope-cli/src/commands.rs" = 2676
+"crates/penelope-daemon/src/rpc.rs" = 2481
+"crates/penelope-daemon/src/doctor.rs" = 2463
+"crates/penelope-daemon/src/telegram/screens.rs" = 2435
+"crates/penelope-daemon/src/compaction.rs" = 2225
+"crates/penelope-llm/src/provider.rs" = 2048
+"crates/penelope-daemon/src/hermes.rs" = 1971
+"crates/penelope-daemon/src/upgrade.rs" = 1926
+"crates/penelope-daemon/src/scheduler.rs" = 1833
+"crates/penelope-memory/src/index.rs" = 1622
+"crates/penelope-llm/src/codex.rs" = 1533
+"crates/penelope-memory/src/consolidation.rs" = 1476
+"crates/penelope-context/src/store.rs" = 1379
+"crates/penelope-tools/src/spec.rs" = 1290
+"crates/penelope-mcp/src/transport.rs" = 1265
+"crates/penelope-store/src/migrations.rs" = 1260
+"crates/penelope-daemon/src/mcp_auth.rs" = 1246
+"crates/penelope-daemon/src/ingest.rs" = 1225
+"crates/penelope-daemon/src/conversation.rs" = 1222
+"crates/penelope-context/src/engine.rs" = 1214
+"crates/penelope-mcp/src/registry.rs" = 1200
+"crates/penelope-daemon/src/purge.rs" = 1189
+"crates/penelope-memory/src/vault.rs" = 1163
+"crates/penelope-kernel/src/turn.rs" = 1136
+"crates/penelope-context/src/compaction.rs" = 1122
+"crates/penelope-hitl/src/policy.rs" = 1120
+"crates/penelope-workflow/src/validate.rs" = 1101
+"crates/penelope-platform/src/backend/macos.rs" = 1082
+"crates/penelope-memory/src/recall.rs" = 1066
+"crates/penelope-daemon/src/codex_auth.rs" = 1040
+"crates/penelope-store/src/lib.rs" = 1036
+"crates/penelope-mcp/src/client.rs" = 1027
+"crates/penelope-platform/src/process.rs" = 1008
+"crates/penelope-workflow/src/schedules.rs" = 1003
+
+# Plafond de lignes de src/ par crate (R4) : 78 668 au gel, plus 2 500 de marge, soit une
+# vingtaine de correctifs de taille courante. Un autre crate se plafonne en ajoutant une
+# ligne. UPDATE_BUDGET ne touche pas à cette table.
+[crates]
+"penelope-daemon" = 81168
+
+# Liste blanche des modules du daemon (R5) : les déclarations `mod x;` de lib.rs et
+# `mod screens;` de telegram.rs. `mod tests;` est toujours permis. Les fichiers où un bloc
+# `impl Daemon` est admis (R6) : les quatre existants, pas un de plus.
+[daemon]
+modules = [
+    "agent",
+    "approval_mode",
+    "audit",
+    "backup",
+    "budget_alert",
+    "bus",
+    "cache_audit",
+    "codex_auth",
+    "codex_quota",
+    "codex_scope",
+    "compaction",
+    "concepts",
+    "conversation",
+    "doctor",
+    "dream",
+    "elicitation",
+    "embeddings",
+    "engine",
+    "episodes",
+    "executor",
+    "hermes",
+    "images",
+    "ingest",
+    "machine",
+    "mcp",
+    "mcp_auth",
+    "media",
+    "mem_audit",
+    "mem_split",
+    "onboarding",
+    "prompt_snapshot",
+    "purge",
+    "review",
+    "rpc",
+    "runner",
+    "runtime",
+    "runtime_events",
+    "scheduler",
+    "screens",
+    "secret_shelf",
+    "selfdocs",
+    "selfknow",
+    "session_notes",
+    "session_ops",
+    "session_project",
+    "skill_deps",
+    "skill_install",
+    "supervisor",
+    "tasks",
+    "telegram",
+    "ticket_to_deploy_e2e",
+    "titles",
+    "tools_on_demand",
+    "upgrade",
+    "usage_feedback",
+    "vault_git",
+    "vault_inventory",
+    "vault_ops",
+    "vision",
+    "voice",
+    "wiki_e2e",
+    "workflow",
+]
+impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
+
+# Occurrences du type `Daemon` par fichier du daemon (R6), hors commentaires et avant le
+# module de tests, frontière de mot (DaemonHandle et DaemonTokens ne comptent pas). Un
+# fichier absent a un budget de 0. Cible V1 : seuls runtime, engine, runner, supervisor
+# et rpc le nomment encore.
+[daemon.daemon_users]
+"scheduler.rs" = 26
+"compaction.rs" = 21
+"dream.rs" = 20
+"workflow.rs" = 20
+"onboarding.rs" = 13
+"backup.rs" = 10
+"supervisor.rs" = 10
+"rpc.rs" = 9
+"runner.rs" = 8
+"concepts.rs" = 7
+"embeddings.rs" = 7
+"episodes.rs" = 7
+"ingest.rs" = 7
+"session_ops.rs" = 7
+"telegram.rs" = 7
+"mcp_auth.rs" = 6
+"runtime.rs" = 6
+"purge.rs" = 5
+"tasks.rs" = 5
+"voice.rs" = 5
+"budget_alert.rs" = 4
+"hermes.rs" = 4
+"mem_audit.rs" = 4
+"upgrade.rs" = 4
+"codex_auth.rs" = 3
+"codex_scope.rs" = 3
+"engine.rs" = 3
+"mem_split.rs" = 3
+"review.rs" = 3
+"titles.rs" = 3
+"vision.rs" = 3
+"codex_quota.rs" = 2
+"images.rs" = 2
+"runtime_events.rs" = 2
+"skill_install.rs" = 2
+"vault_git.rs" = 2
+"cache_audit.rs" = 1
+"doctor.rs" = 1
+"lib.rs" = 1          # le réexport `pub use runtime::{Daemon, …}`
+"session_project.rs" = 1
+"vault_inventory.rs" = 1
+
+# `#[allow(clippy::too_many_lines)]` dans les sources (R7, #211) : les allows de la pose
+# du lint sont comptés par le lot qui les pose ; d'ici là, aucun.
+[lints]
+allow_too_many_lines = 0
+
+# Les critères d'acceptation (R8, #213) : chaque nom doit exister comme fonction quelque
+# part dans les sources. Renommer est interdit, déplacer est permis ; la liste ne peut que
+# s'allonger (UPDATE_BUDGET ajoute un `ca_*` nouveau).
+[ca]
+required = [
+    "ca_10_1_sticky_model_survives_until_a_boundary",
+    "ca_10_2_high_complexity_routes_to_reasoning",
+    "ca_10_3_fallback_chain_is_used_on_transient_failure",
+    "ca_10_4_daily_budget_exceeded_is_detected",
+    "ca_12_1_ticket_to_deploy_runs_end_to_end_and_survives_restarts",
+    "ca_12_2_runs_are_recovered_at_their_current_step",
+    "ca_12_3_invalid_file_is_rejected_and_previous_stays",
+    "ca_12_4_poll_fires_once_per_item",
+    "ca_12_5_workflows_reload_and_reject_without_losing_the_previous_version",
+    "ca_13_1_injected_instructions_never_act_on_their_own",
+    "ca_13_2_planted_secret_never_leaks",
+    "ca_13_2_secrets_never_leak",
+    "ca_14_1_every_template_renders_in_both_forms",
+    "ca_14_3_rate_limit_is_respected_without_loss",
+    "ca_14_4_double_click_is_idempotent",
+    "ca_14_5_non_owner_clicks_are_refused",
+    "ca_14_5_unauthorized_users_are_rejected",
+    "ca_14_6_splitting_never_breaks_a_code_block",
+    "ca_15_1_every_command_maps_to_an_rpc_method",
+    "ca_17_1_a_turn_interrupted_mid_flight_is_requeued_once",
+    "ca_17_1_a_turn_is_requeued",
+    "ca_17_2_a_completed_effect_is_replayed_not_reexecuted",
+    "ca_17_3_an_uncertain_effect_asks_instead_of_retrying",
+    "ca_17_4_llm_calls_are_classified_by_where_the_crash_happened",
+    "ca_17_5_a_run_resumes_at_its_current_step",
+    "ca_17_6_the_event_chain_survives_and_detects_tampering",
+    "ca_17_7_a_frozen_writer_does_not_duplicate_a_turn_in_flight",
+    "ca_2_2_penelope_home_reroots_everything",
+    "ca_2_3_no_os_specific_code_outside_the_platform_crate",
+    "ca_2_5_workspace_write_blocks_outside_writes",
+    "ca_2_8_a_broken_upgrade_is_rolled_back_automatically",
+    "ca_3_1_dependency_rules_hold",
+    "ca_3_2_four_sessions_run_concurrently",
+    "ca_3_3_expired_lease_is_reclaimed",
+    "ca_4_1_detects_tampering",
+    "ca_4_2_dispatching_becomes_unknown_without_retry",
+    "ca_4_3_generations_are_monotonic",
+    "ca_4_4_config_changes_are_published_live",
+    "ca_5_1_level4_proves_it_fits",
+    "ca_5_3_prefix_is_byte_identical_across_turns",
+    "ca_5_4_each_request_extends_the_previous_one",
+    "ca_6_10_intent_fires_respects_cooldown_and_expires",
+    "ca_6_11_empty_pass_is_a_noop",
+    "ca_6_12_recall_never_blocks",
+    "ca_6_13_forbidden_content_is_blocked_in_consolidation",
+    "ca_6_14_a_profile_write_waits_for_the_next_episode",
+    "ca_6_15_two_idle_hours_close_the_episode_and_ingest_it",
+    "ca_6_1_defeasible_rule_recall",
+    "ca_6_2_ecart_promotion_thresholds",
+    "ca_6_3_correction_scoping",
+    "ca_6_4_contradiction_without_distinct_context_asks",
+    "ca_6_6_recalled_memory_is_never_re_extracted",
+    "ca_6_7_background_sessions_produce_nothing",
+    "ca_6_8_manual_edit_defers_the_operation",
+    "ca_6_9_reindex_keeps_provenance_and_signals",
+    "ca_7_1_new_skill_is_available_after_reload",
+    "ca_7_2_invalid_skills_are_rejected_explicitly",
+    "ca_7_3_rejected_proposal_is_never_written",
+    "ca_7_4_a_dropped_skill_is_available_without_restart",
+    "ca_8_1_every_version_and_transport_negotiates",
+    "ca_8_2_mixed_versions_behind_the_same_url",
+    "ca_8_3_incremental_consent_and_registration",
+    "ca_8_3_invalid_issuer_is_rejected",
+    "ca_8_3_oauth_discovery_and_pkce",
+    "ca_8_3_paste_back_flow_over_telegram",
+    "ca_8_6_tasks_survive_a_restart",
+    "ca_8_7_adding_an_mcp_server_is_hot",
+    "ca_9_1_first_decision_wins",
+    "ca_9_2_expiry_blocks_then_can_resume",
+    "ca_9_3_always_rule_applies_then_is_revocable",
+]
+
+# Frontière canal / cœur (R8 du découpage, #214) : mentions du canal (`telegram` en toute
+# casse, `tg_…`, `chat_id`, `topic_id`, `callback_data`, `find_by_topic`) dans les lignes
+# de code des crates agnostiques, hors telegram.rs et telegram/. Un fichier absent a un
+# budget de 0. Le cœur ne connaît un canal que par ChannelDelivery, Messenger ou
+# OwnerChannel ; ces entrées ne peuvent que décroître (lot D, T36), sauf les permanentes,
+# justifiées en commentaire, qui attendent T37 après la V1.
+[channel.allowed]
+"crates/penelope-daemon/src/doctor.rs" = 44
+"crates/penelope-daemon/src/scheduler.rs" = 39
+"crates/penelope-kernel/src/session.rs" = 37
+"crates/penelope-store/src/migrations.rs" = 30   # permanent : l'historique SQL est immuable (tables tg_updates, tg_outbox)
+"crates/penelope-kernel/src/config.rs" = 25      # permanent : le schéma de configuration nomme ses canaux ([telegram])
+"crates/penelope-daemon/src/supervisor.rs" = 23
+"crates/penelope-daemon/src/rpc.rs" = 18
+"crates/penelope-daemon/src/purge.rs" = 17
+"crates/penelope-daemon/src/executor.rs" = 13
+"crates/penelope-daemon/src/runtime.rs" = 12
+"crates/penelope-daemon/src/selfknow.rs" = 12
+"crates/penelope-daemon/src/runner.rs" = 11
+"crates/penelope-daemon/src/elicitation.rs" = 10
+"crates/penelope-daemon/src/engine.rs" = 10
+"crates/penelope-daemon/src/bus.rs" = 9          # permanent pour Origin::Telegram, tant qu'Origin::Channel n'existe pas (T37)
+"crates/penelope-daemon/src/conversation.rs" = 6
+"crates/penelope-kernel/src/turn.rs" = 6
+"crates/penelope-kernel/src/effects.rs" = 5
+"crates/penelope-tools/src/spec.rs" = 4
+"crates/penelope-daemon/src/dream.rs" = 3
+"crates/penelope-daemon/src/session_project.rs" = 3
+"crates/penelope-observe/src/redact.rs" = 2      # permanent : le caviardage doit connaître la forme des jetons
+"crates/penelope-daemon/src/codex_scope.rs" = 1
+"crates/penelope-daemon/src/lib.rs" = 1          # `pub mod telegram;` : disparaît avec la passerelle en crate (T29)
+"crates/penelope-daemon/src/mcp.rs" = 1
+"crates/penelope-daemon/src/mcp_auth.rs" = 1
+"crates/penelope-daemon/src/media.rs" = 1
+"crates/penelope-daemon/src/session_ops.rs" = 1
+"crates/penelope-daemon/src/titles.rs" = 1
+"crates/penelope-daemon/src/upgrade.rs" = 1
+"crates/penelope-daemon/src/voice.rs" = 1
+"crates/penelope-kernel/src/api.rs" = 1

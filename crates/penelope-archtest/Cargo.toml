@@ -7,6 +7,9 @@ license.workspace = true
 
 [dependencies]
 toml.workspace = true
+# `UPDATE_BUDGET=1` réécrit `budget.toml` sans perdre les commentaires qui justifient les
+# entrées permanentes : `toml` seul les jetterait (#209).
+toml_edit.workspace = true
 regex.workspace = true
 
 [dev-dependencies]
