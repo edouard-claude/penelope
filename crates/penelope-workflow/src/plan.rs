@@ -2,6 +2,7 @@
 
 use penelope_store::{Store, StoreError, rusqlite::params};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// La phase donne au moteur un sens stable, même si l'ordre des pas est proposé
 /// librement par l'orchestrateur.
@@ -66,6 +67,8 @@ pub enum PlanError {
     AlreadyApproved,
     #[error("la version {0} du plan est introuvable")]
     UnknownVersion(u64),
+    #[error("version du plan périmée : {0} attendu, {1} courant")]
+    StaleVersion(u64, u64),
     #[error("la version du plan ne peut plus être incrémentée")]
     VersionOverflow,
 }
@@ -173,6 +176,42 @@ impl Plan {
 }
 
 /// Écriture durable du brouillon à chaque transition de gate ou de version.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlanDraft {
+    pub workflow_id: String,
+    pub params: Value,
+    pub brief: Option<String>,
+    pub plan: Plan,
+}
+
+impl PlanDraft {
+    fn check_version(&self, expected: u64) -> Result<(), PlanError> {
+        (self.plan.version() == expected)
+            .then_some(())
+            .ok_or(PlanError::StaleVersion(expected, self.plan.version()))
+    }
+
+    pub fn revise(
+        &mut self,
+        expected: u64,
+        goal: impl Into<String>,
+        steps: Vec<PlanStep>,
+    ) -> Result<(), PlanError> {
+        self.check_version(expected)?;
+        self.plan.revise(goal, steps)
+    }
+
+    pub fn restore(&mut self, expected: u64, old: u64) -> Result<(), PlanError> {
+        self.check_version(expected)?;
+        self.plan.restore(old)
+    }
+
+    pub fn approve(&mut self, expected: u64) -> Result<(), PlanError> {
+        self.check_version(expected)?;
+        self.plan.approve()
+    }
+}
+
 #[derive(Clone)]
 pub struct PlanStore {
     store: Store,
@@ -183,9 +222,9 @@ impl PlanStore {
         Self { store }
     }
 
-    pub async fn save(&self, session: &str, plan: &Plan) -> penelope_store::Result<()> {
+    pub async fn save(&self, session: &str, draft: &PlanDraft) -> penelope_store::Result<()> {
         let key = format!("workflow.plan.{session}");
-        let value = serde_json::to_string(plan).map_err(|e| StoreError::other(e.to_string()))?;
+        let value = serde_json::to_string(draft).map_err(|e| StoreError::other(e.to_string()))?;
         self.store
             .write_durable(move |tx| {
                 tx.execute(
@@ -198,7 +237,7 @@ impl PlanStore {
             .await
     }
 
-    pub async fn get(&self, session: &str) -> penelope_store::Result<Option<Plan>> {
+    pub async fn get(&self, session: &str) -> penelope_store::Result<Option<PlanDraft>> {
         let key = format!("workflow.plan.{session}");
         let value = self
             .store
@@ -285,6 +324,25 @@ mod tests {
         assert!(restored.can_execute());
     }
 
+    #[test]
+    fn a_stale_button_or_revision_cannot_approve_another_version() {
+        let mut draft = PlanDraft {
+            workflow_id: "build-verify".into(),
+            params: serde_json::json!({}),
+            brief: None,
+            plan: Plan::new("Corriger la commande", steps("Tests initiaux")).unwrap(),
+        };
+        draft
+            .revise(1, "Corriger la commande", steps("Tests révisés"))
+            .unwrap();
+        assert_eq!(draft.plan.version(), 2);
+        assert!(draft.approve(1).is_err());
+        assert!(draft.revise(1, "Autre but", steps("Autres tests")).is_err());
+        assert!(!draft.plan.can_execute());
+        draft.approve(2).unwrap();
+        assert!(draft.plan.can_execute());
+    }
+
     #[tokio::test]
     async fn a_plan_survives_reopening_the_store() {
         let dir = tempfile::tempdir().unwrap();
@@ -292,10 +350,16 @@ mod tests {
         let mut plan = Plan::new("Corriger la commande", steps("Tests initiaux")).unwrap();
         plan.revise("Corriger la commande", steps("Tests révisés"))
             .unwrap();
+        let draft = PlanDraft {
+            workflow_id: "build-verify".into(),
+            params: serde_json::json!({"ticket": "#186"}),
+            brief: None,
+            plan,
+        };
         let first = PlanStore::new(penelope_store::Store::open(&path).unwrap());
-        first.save("topic:21", &plan).await.unwrap();
+        first.save("topic:21", &draft).await.unwrap();
         drop(first);
         let reopened = PlanStore::new(penelope_store::Store::open(&path).unwrap());
-        assert_eq!(reopened.get("topic:21").await.unwrap(), Some(plan));
+        assert_eq!(reopened.get("topic:21").await.unwrap(), Some(draft));
     }
 }
