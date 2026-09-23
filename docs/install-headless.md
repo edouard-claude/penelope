@@ -286,7 +286,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `telegram.rate_per_chat_per_s` | `1.0` | Messages envoyés au plus par seconde, par chat. |
 | `telegram.text_limit` | `4096` | Taille maximale d'un message. Sans effet dans cette version. |
 | `telegram.caption_limit` | `1024` | Taille maximale d'une légende. Sans effet dans cette version. |
-| `telegram.max_fragments` | `3` | Fragments au-delà desquels une réponse part en document. Sans effet dans cette version. |
+| `telegram.max_fragments` | `3` | Fragments au-delà desquels un avis interne (digest du matin, rapport de veille) part en document plutôt qu'en chapelet de messages (issue #145). 0 : jamais. |
 | `telegram.draft_interval_ms` | `700` | Intervalle entre deux mises à jour du brouillon de réponse, en millisecondes (300 au moins). |
 | `telegram.webhook_url` | `""` | Adresse du webhook. Sans effet dans cette version. |
 | `telegram.allow_groups` | `false` | Ancien interrupteur des groupes, sans effet depuis 0.17.4 : un groupe s'ouvre en ajoutant son identifiant à `telegram.allowed_chats`. |
@@ -1187,8 +1187,8 @@ Ce que le modèle peut appeler sans serveur MCP, avec la classe de risque qui d�
 l'approbation (`read` : sans approbation ; `write`, `external`, `destructive` : selon la
 politique). Les outils MCP passent par `tool_search`, `tool_describe` et `tool_call`.
 
-En conversation, chaque appel au modèle ne décrit que le noyau d'usage courant (17 outils)
-et ces trois méta-outils : 20 définitions, environ 2 600 tokens de schémas au lieu de
+En conversation, chaque appel au modèle ne décrit que le noyau d'usage courant (16 outils)
+et ces trois méta-outils : 19 définitions, environ 2 600 tokens de schémas au lieu de
 52 définitions et 6 000 tokens. Les outils marqués « à la demande » dans la table sont
 seulement nommés dans le message système ; `tool_search` les trouve par ce qu'ils font
 (« planifier un rappel » donne `schedule_create`), `tool_describe` donne leur schéma et
