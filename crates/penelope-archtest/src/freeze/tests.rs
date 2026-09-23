@@ -164,7 +164,8 @@ fn the_size_detector_actually_detects() {
     assert_eq!(
         v[0].to_string(),
         "[penelope-x] crates/x/src/media.rs:1 — plafond de taille : 1 001 lignes, plafond \
-         1 000 (hors liste de référence) : découper, ou déplacer les tests dans media/tests.rs"
+         1 000 (hors liste de référence) : découper, ou déplacer les tests dans media/tests.rs \
+         (tests.rs, tests/, *_tests.rs et testing.rs sont des fichiers de tests, plafond 1 500)"
     );
     assert!(size_violations(&snap(999), &b).is_empty());
     assert!(size_violations(&snap(1000), &b).is_empty());
@@ -225,7 +226,10 @@ fn test_files_have_their_own_ceiling() {
         "crates/x/src/e2e.rs",
         "crates/x/src/foo/tests.rs",
         "crates/x/src/foo_tests.rs",
+        "crates/x/src/telegram/tests/mod.rs",
         "crates/x/src/telegram/tests/commands.rs",
+        "crates/x/src/agent/clone_policy_tests.rs",
+        "crates/x/src/mcp/testing.rs",
     ] {
         assert!(one(rel, 1400).is_empty(), "{rel} est un fichier de tests");
     }

@@ -51,8 +51,14 @@ Choix à connaître :
 
 - **Fichiers de tests (R2)** : `crates/*/tests/**`, tout fichier sous un répertoire
   `tests/` de `src/` (les sous-modules d'un `mod tests` scindé, la sortie que R2 prescrit
-  elle-même), `tests.rs`, `*_tests.rs`, et `[files].test_modules`. Ils sont exclus de R5,
-  R6 et de la garde de canal (« hors tests »).
+  elle-même), `tests.rs`, `*_tests.rs`, `testing.rs` (aides de test), et
+  `[files].test_modules` (`snapshot::is_test_path`). C'est la forme des fichiers que le
+  lot #215 (a-tests-lints) sort des sept gros fichiers du daemon : `src/<module>/tests.rs`,
+  `src/<module>/tests/mod.rs` et `tests/<thème>.rs`, `src/agent/clone_policy_tests.rs`,
+  `src/mcp/testing.rs`. Ils ont le plafond de 1 500, sont exclus de R5, R6 et de la garde
+  de canal (« hors tests »), et `forbidden_patterns` (`ca_2_3`) les ignore en entier,
+  comme il ignorait ce qui suivait leur ancien `#[cfg(test)]` (`workflow/tests.rs` porte
+  un `"/tmp/projet"`). Le message de R1 rappelle la règle.
 - **Frontière canal** : la mesure est celle de `decoupage-daemon.md` §1.3, en un seul
   motif (`telegram` en toute casse, `tg_…`, `chat_id`, `topic_id`, `callback_data`), plus
   `find_by_topic` que le §7 range dans les identifiants ; les cinq familles de l'issue
