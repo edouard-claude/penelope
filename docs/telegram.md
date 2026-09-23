@@ -262,7 +262,7 @@ Workflows (4)
 | Commande | Écran |
 |---|---|
 | `/help` | familles, puis un bouton par commande |
-| `/wf`, `/run` | ▶️ lance (les paramètres déclarés sont demandés un par un), ℹ️ étapes et paramètres ; `/run <workflow>` sans paramètres passe par la conversation, formulaire à un bouton |
+| `/wf`, `/run` | ▶️ prépare un plan en conversation, ℹ️ étapes et paramètres ; `/run <workflow>` accepte aussi des paramètres dans la demande |
 | `/runs`, `/resume` | état et étape de chaque run, ⏸ ▶️ ⏹ (confirmé), 🔎 détail ; `/resume` ne montre que les runs en pause ou bloqués |
 | `/schedules` | ⚡ déclencher, ⏸/▶️, 📍 livrer dans cette conversation, 🗑 (confirmé) ; où livre chaque planification et sa dernière erreur ; `/schedules ici <id>` dans un sujet l'y déplace ; une exécution en échec arrive en alerte avec « Relancer maintenant » |
 | `/mcp` | par serveur : détail, 🔄 redémarrer, 🧪 tester ; le détail ajoute 📜 journal, ⏻ activer ou désactiver, 🔐 autoriser |
@@ -397,11 +397,11 @@ les sources du vault.
 Une adresse de retour OAuth collée (`code=` et `state=`, avec ou sans `http://`) termine
 l'autorisation en attente et ne part jamais vers le modèle.
 
-Un workflow proposé en conversation (`workflow_start`) arrive en carte dédiée : nom et
-rôle du workflow, paramètres complétés par Pénélope, brief de la discussion, et deux
-boutons seulement, « ▶️ Lancer » et « ⏸ Pas encore » (pas de « Toujours » : chaque
-lancement se valide). « Pas encore » rend la main à la conversation avec la raison du
-refus. Le run parle ensuite dans le même chat et le même sujet, formulaire compris.
+Un workflow proposé en conversation passe par `workflow_plan`. Sa carte affiche le but,
+les étapes typées et la version dans le même sujet. Une réponse corrige le plan ; une
+nouvelle carte remplace la version courante. « Vas-y » approuve la version montrée et
+la conserve pour T3 de #185, sans lancer encore de run. Un bouton d'une ancienne version
+est rejeté. `workflow_start` ne lance plus directement depuis Telegram.
 Les approbations d'outils d'un run gardent aussi cette destination : la carte, le clic
 Autoriser ou Refuser, « Déjà tranché », la seconde confirmation destructive et la réponse
 de budget reviennent dans le sujet du run. La destination de la carte est conservée en

@@ -80,6 +80,12 @@ pub async fn set(
         .await
 }
 
+/// Un brouillon de plan ne lance rien et reste révisable : sa persistance locale
+/// est autorisée d'avance. Le gate « vas-y » garde l'approbation du propriétaire.
+pub fn local_draft_allow(tool: &str) -> Option<String> {
+    (tool == "workflow_plan").then(|| "brouillon local sans exécution".into())
+}
+
 /// Autorisation déclarée d'avance dans la configuration (issue #111) : une commande
 /// `shell_exec` d'une famille de `tools.shell_allow`, ou de `tools.shell_allow_network`
 /// quand elle demande le réseau. Renvoie la raison, pour la trace.
@@ -213,5 +219,11 @@ mod list_allow_tests {
             !allowed(&cfg_with(&["yt-dlp"], &[]), "yt-dlp https://y", true),
             "le réseau ne s'hérite pas de `tools.shell_allow`"
         );
+    }
+
+    #[test]
+    fn preparing_a_plan_needs_no_prior_approval_but_starting_does() {
+        assert!(local_draft_allow("workflow_plan").is_some());
+        assert!(local_draft_allow("workflow_start").is_none());
     }
 }

@@ -428,13 +428,15 @@ Le daemon pilote les runs en tâche de fond et sert toutes les méthodes `wf.*` 
 un fichier surveillé ou un sondage MCP. Une carte de progression suit le run sur
 Telegram ; les questions d'une étape `user` arrivent avec leurs boutons.
 
-En conversation, Pénélope lance elle-même un workflow quand la demande y correspond : elle
-complète les paramètres requis avec ses outils, ne demande que ce qui manque, puis appelle
-`workflow_start` avec `params` et `brief`. Le propriétaire valide d'un bouton (« Lancer »
-ou « Pas encore »). Le brief est enregistré avec le run, placé avant la consigne de la
-première étape `agent` ou `sub_agent` visitée (sauf si elle emploie déjà `{{brief}}`) et
-affiché sur la carte de progression ; le run parle dans la conversation d'origine.
-`/run <id>` sans paramètres passe par ce même chemin, le formulaire restant à un bouton.
+En conversation Telegram, Pénélope complète les paramètres avec ses outils, demande
+ce qui manque, puis propose un plan avec `workflow_plan` (`goal`, `steps`, `params`,
+`brief`). Les corrections et retours arrière créent de nouvelles versions. Une carte
+dans le sujet d'origine montre le plan et son bouton « Vas-y ». Ce clic persiste l'état
+approuvé ; l'exécution de ce plan viendra avec T3 de #185. Le lancement direct avec
+`workflow_start` est refusé dans une conversation Telegram. `/run <id>` passe toujours
+par cette conversation, même quand des paramètres sont fournis. La CLI et les runs
+techniques continuent d'utiliser le moteur existant. Une nouvelle demande dans la même
+session conserve le plan approuvé précédent pour T3.
 
 ## Limites actuelles
 

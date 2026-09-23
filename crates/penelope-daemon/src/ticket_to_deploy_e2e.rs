@@ -485,9 +485,8 @@ async fn drain(d: &Arc<Daemon>, g: &Arc<TelegramGateway>) {
 }
 
 /// Issue #35 : « on traite des tickets Yobbu » en conversation. Pénélope cherche dans le
-/// tracker, un échange précise le ticket, puis « Lancer » démarre `ticket-to-deploy` avec
-/// `ticket_id` et `ticket_url` complétés par le modèle et le brief de la discussion, que
-/// l'étape d'analyse reçoit.
+/// tracker et un échange précise le ticket. Le moteur technique reçoit ensuite le brief ;
+/// le gate Telegram du plan est vérifié séparément (#186).
 #[tokio::test]
 async fn a_conversation_launches_ticket_to_deploy_with_its_brief() {
     let w = World::new();
@@ -552,20 +551,24 @@ async fn a_conversation_launches_ticket_to_deploy_with_its_brief() {
         "rien ne démarre avant le bouton"
     );
 
-    // 3. « Lancer ».
-    w.p.reply("C'est lancé, la suite arrive ici.");
+    // 3. Exécution technique du moteur après le gate, vérifié dans le test Telegram.
     let mut clicked = BTreeSet::new();
     let mut update = 10;
-    assert!(click(&g, &w.t, "▶️ Lancer", &mut clicked, &mut update).await);
-    drain(&d, &g).await;
-    let run = d
-        .services
-        .runs
-        .list(None, 5)
-        .await
-        .unwrap()
-        .pop()
-        .expect("run lancé");
+    let run = crate::workflow::start_run_briefed(
+        &d,
+        "ticket-to-deploy",
+        json!({"ticket_id":"42", "ticket_url":"https://redmine.example/issues/42"}),
+        &crate::bus::Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: None,
+        },
+        None,
+        0,
+        Some(brief),
+    )
+    .await
+    .unwrap();
     assert_eq!(run.params["ticket_id"], "42");
     assert_eq!(
         run.params["ticket_url"],

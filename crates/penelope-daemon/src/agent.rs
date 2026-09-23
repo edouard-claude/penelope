@@ -1372,11 +1372,16 @@ impl AgentLoop {
                     // Autorisation déclarée d'avance, puis mode de la session (#111).
                     if verdict.rule_id.is_none()
                         && verdict.decision != PolicyDecision::Deny
-                        && let Some(why) = crate::approval_mode::declared_allow(
-                            &cfg,
+                        && let Some(why) = crate::approval_mode::local_draft_allow(
                             &info.effective_name,
-                            &effective_args,
                         )
+                        .or_else(|| {
+                            crate::approval_mode::declared_allow(
+                                &cfg,
+                                &info.effective_name,
+                                &effective_args,
+                            )
+                        })
                     {
                         verdict.decision = PolicyDecision::Auto;
                         verdict.reason = why;

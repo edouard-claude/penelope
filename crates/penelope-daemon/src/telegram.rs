@@ -2410,21 +2410,13 @@ impl TelegramGateway {
                     }
                     Some(id) => {
                         let rest = words.next().unwrap_or_default().trim();
-                        // Paramètres déclarés et rien de saisi : Pénélope les complète en
-                        // conversation ; le formulaire reste à un bouton (issue #35).
-                        if rest.is_empty()
-                            && let Some(w) = s.workflows.get(id)
-                            && !w.metadata.parameters.is_empty()
-                        {
+                        // Le plan précède toute exécution, même avec paramètres explicites.
+                        if let Some(w) = s.workflows.get(id) {
                             return self
-                                .run_by_conversation(chat_id, topic_id, message_id, &w)
+                                .run_by_conversation(chat_id, topic_id, message_id, &w, rest)
                                 .await;
                         }
-                        let params = parse_params(rest);
-                        match crate::workflow::start_run(d, id, params, &origin, None, 0).await {
-                            Ok(run) => format!("▶️ Run `{}` lancé.", run.id),
-                            Err(e) => format!("❌ {e}"),
-                        }
+                        format!("❌ Workflow `{id}` introuvable.")
                     }
                 }
             }
@@ -2602,14 +2594,14 @@ impl TelegramGateway {
     /// Réponse suivie d'un bouton par suite proposée ; un clic envoie la suite comme message
     /// du propriétaire dans la session (issue #31).
     /// `/run <workflow>` sans paramètres : la demande part au modèle, qui complète les
-    /// paramètres avec ses outils et propose le lancement (issue #35). Le formulaire reste
-    /// proposé par un bouton.
-    async fn run_by_conversation(
+    /// paramètres avec ses outils et propose le plan avant le gate (issues #35, #186).
+    pub(super) async fn run_by_conversation(
         &self,
         chat_id: i64,
         topic_id: Option<i64>,
         message_id: i64,
         w: &penelope_workflow::Workflow,
+        provided: &str,
     ) -> anyhow::Result<()> {
         let d = &self.daemon;
         let id = &w.metadata.id;
@@ -2638,9 +2630,16 @@ impl TelegramGateway {
         if !optional.is_empty() {
             ask.push_str(&format!(" Facultatifs : {optional}."));
         }
+        if !provided.is_empty() {
+            ask.push_str(&format!(
+                " Paramètres fournis par le propriétaire : {provided}."
+            ));
+        }
         ask.push_str(
             " Complète-les avec tes outils, demande-moi seulement ce qui manque, puis propose \
-             le lancement avec `workflow_start` (`params` et `brief`).]",
+             un plan structuré avec `workflow_plan` (`id`, `goal`, `steps`, `params`, `brief`) ; \
+             découvre cet outil avec `tool_search` si nécessaire. \
+             Montre-moi le plan pour correction ; ne lance aucun run avant « vas-y ».]",
         );
         let origin = Origin::Telegram {
             chat_id,
@@ -2649,32 +2648,15 @@ impl TelegramGateway {
         };
         let session = d.chat_session_for(&origin).await?;
         d.enqueue_message(&session, &ask, &origin, None).await?;
-        let form = self
-            .daemon
-            .services
-            .actions
-            .create(
-                k::SCREEN_DO,
-                "wf.run",
-                json!({"params": {"id": id}, "back": null}),
-                24 * 3_600_000,
-                true,
-            )
-            .await?;
         self.send_screen(
             chat_id,
             topic_id,
             Some(message_id),
             screens::Screen {
                 text: format!(
-                    "💬 Je cherche les paramètres de « {title} » avec toi, puis je propose le \
-                     lancement."
+                    "💬 Je prépare le plan de « {title} » avec toi. Tu pourras le corriger avant « vas-y »."
                 ),
-                rows: vec![vec![ButtonSpec::callback(
-                    "📝 Remplir le formulaire",
-                    &form.token,
-                    "",
-                )]],
+                rows: vec![],
             },
             None,
         )
@@ -7169,6 +7151,46 @@ fn shorten_failure(text: &str) -> String {
 
 #[async_trait::async_trait]
 impl Messenger for TelegramGateway {
+    async fn send_plan_card(
+        &self,
+        origin: &Origin,
+        session: &str,
+        draft: &penelope_workflow::plan::PlanDraft,
+    ) -> Result<(), String> {
+        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
+        let version = draft.plan.version();
+        let token = self
+            .daemon
+            .services
+            .actions
+            .create(
+                k::SCREEN_DO,
+                "wf.plan.go",
+                json!({"params":{"session":session,"version":version},"back":null}),
+                24 * 3_600_000,
+                true,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut lines = vec![format!("📋 Plan v{version} · {}", draft.plan.goal())];
+        for (index, step) in draft.plan.steps().iter().enumerate() {
+            lines.push(format!("{}. {:?} — {}", index + 1, step.phase, step.title));
+        }
+        lines.push("\nRéponds dans cette conversation pour corriger le plan, ou valide-le.".into());
+        self.send_screen(
+            chat_id,
+            topic_id,
+            None,
+            screens::Screen {
+                text: lines.join("\n"),
+                rows: vec![vec![ButtonSpec::callback("✅ Vas-y", &token.token, "")]],
+            },
+            None,
+        )
+        .await
+        .map_err(|e| e.to_string())
+    }
+
     async fn send_text(&self, origin: &Origin, markdown: &str) -> Result<(), String> {
         let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
         // Un avis interne (digest, rapport de veille) qui déborde part en document
@@ -10766,10 +10788,9 @@ mod tests {
             .1
     }
 
-    /// Issue #30 : `/wf`, ▶️ sur un workflow à paramètres, le formulaire s'ouvre, la saisie
-    /// est validée, et le run démarre avec ces paramètres.
+    /// Issue #186 : le menu prépare un plan, sans lancer ni ouvrir le formulaire.
     #[tokio::test]
-    async fn a_workflow_is_launched_from_its_menu_with_a_parameter_form() {
+    async fn a_workflow_menu_starts_a_plan_conversation() {
         let (_d, g, t, _p) = gateway().await;
         let s = &g.daemon.services;
         g.process_update(&updates::text_message(300, OWNER, OWNER, "/wf"))
@@ -10787,39 +10808,12 @@ mod tests {
             .unwrap();
         settle_click(&g).await;
         g.flush_outbox().await.unwrap();
-        let form = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
-        assert!(form.contains("Objectif"), "formulaire ouvert : {form}");
+        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
+        assert!(sent.contains("prépare le plan"), "{sent}");
         assert!(
             s.runs.list(None, 5).await.unwrap().is_empty(),
-            "rien lancé avant l'envoi"
+            "rien lancé avant vas-y"
         );
-
-        g.process_update(&updates::text_message(
-            302,
-            OWNER,
-            OWNER,
-            "réparer le build",
-        ))
-        .await
-        .unwrap();
-        g.flush_outbox().await.unwrap();
-        let submit = button(&t, "Envoyer").await;
-        g.process_update(&updates::callback(303, OWNER, &submit, 901))
-            .await
-            .unwrap();
-        settle_click(&g).await;
-        g.flush_outbox().await.unwrap();
-        let run = s
-            .runs
-            .list(None, 5)
-            .await
-            .unwrap()
-            .pop()
-            .expect("run lancé");
-        assert_eq!(run.workflow_id, "build-verify");
-        assert_eq!(run.params["objectif"], "réparer le build");
-        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
-        assert!(sent.contains(&run.id), "{sent}");
     }
 
     /// Issue #30 : `/schedules`, 🗑, Confirmer : la planification est supprimée et le
@@ -11441,7 +11435,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_workflow_runs_from_telegram_with_buttons_and_typed_input() {
+    async fn a_workflow_question_uses_telegram_buttons_and_typed_input() {
         let (_d, g, t, _p) = gateway().await;
         let s = &g.daemon.services;
         let raw = json!({
@@ -11467,8 +11461,7 @@ mod tests {
         s.workflows
             .load_dir(&dir, penelope_workflow::registry::Scope::User, &known);
 
-        // Sans paramètres saisis, pas de formulaire imposé : la demande part en conversation
-        // et le formulaire reste à un bouton (issue #35).
+        // La commande prépare la conversation de plan sans lancer le run.
         g.process_update(&updates::text_message(120, OWNER, OWNER, "/run validation"))
             .await
             .unwrap();
@@ -11489,40 +11482,24 @@ mod tests {
             asked.contains("`validation`") && asked.contains("sujet (Sujet)"),
             "{asked}"
         );
-        let form = button(&t, "📝 Remplir le formulaire").await;
-        g.process_update(&updates::callback(1200, OWNER, &form, 680))
-            .await
-            .unwrap();
-        settle_click(&g).await;
-        g.flush_outbox().await.unwrap();
-        let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
-        assert!(
-            sent.iter().any(|m| m.contains("Sujet")),
-            "paramètre demandé : {sent:?}"
-        );
-        g.process_update(&updates::text_message(121, OWNER, OWNER, "devis-42"))
-            .await
-            .unwrap();
-        g.flush_outbox().await.unwrap();
-        let recap = t.calls_to(tg::SEND_MESSAGE).await.last().unwrap().clone();
-        let send = inline_buttons(&recap)
-            .into_iter()
-            .find(|(l, _)| l.contains("Envoyer"))
-            .expect("récapitulatif")
-            .1;
-        g.process_update(&updates::callback(1210, OWNER, &send, 690))
-            .await
-            .unwrap();
-        settle_click(&g).await;
-        g.flush_outbox().await.unwrap();
-        let after = texts(&t.calls_to(tg::SEND_MESSAGE).await);
-        let run = s
-            .runs
-            .list(None, 5)
-            .await
-            .unwrap()
-            .pop()
-            .unwrap_or_else(|| panic!("run lancé : {after:?}"));
+        assert!(s.runs.list(None, 5).await.unwrap().is_empty());
+        // L'ancien scénario valide ensuite les boutons d'une étape `user` sur un run
+        // technique créé directement, indépendamment du nouveau gate de plan.
+        let origin = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: None,
+            message_id: None,
+        };
+        let run = crate::workflow::start_run(
+            &g.daemon,
+            "validation",
+            json!({"sujet":"devis-42"}),
+            &origin,
+            None,
+            0,
+        )
+        .await
+        .unwrap();
         assert_eq!(run.params["sujet"], "devis-42");
 
         crate::workflow::drive(&g.daemon, &run.id).await.unwrap();
@@ -11608,7 +11585,6 @@ mod tests {
             sent.iter().any(|m| m.contains("Sur quel ticket ?")),
             "{sent:?}"
         );
-        assert!(!button(&t, "📝 Remplir le formulaire").await.is_empty());
         let asked = p
             .requests()
             .last()
@@ -11619,7 +11595,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            asked.contains("ticket_url") && asked.contains("workflow_start"),
+            asked.contains("ticket_url") && asked.contains("workflow_plan"),
             "{asked}"
         );
         assert!(
@@ -11633,11 +11609,9 @@ mod tests {
         );
     }
 
-    /// Issue #35 : `workflow_start` proposé par le modèle arrive en carte « Lancer / Pas
-    /// encore » avec paramètres et brief, sans « Toujours » ; « Lancer » démarre le run dans
-    /// la conversation d'origine, brief compris.
+    /// Issue #186 : l'ancienne carte de lancement ne contourne plus le gate du plan.
     #[tokio::test]
-    async fn a_workflow_launch_card_starts_the_run_with_its_brief() {
+    async fn a_workflow_launch_card_cannot_bypass_the_plan_gate() {
         let (_d, g, t, p) = gateway().await;
         let d = g.daemon.clone();
         d.hooks
@@ -11677,28 +11651,67 @@ mod tests {
         let labels: Vec<String> = inline_buttons(&card).into_iter().map(|(l, _)| l).collect();
         assert_eq!(labels, vec!["▶️ Lancer", "⏸ Pas encore"]);
 
-        p.reply("C'est lancé, je te tiens au courant ici.");
+        p.reply("Je prépare d'abord un plan.");
         let launch = button(&t, "▶️ Lancer").await;
         g.process_update(&updates::callback(141, OWNER, &launch, 1400))
             .await
             .unwrap();
         settle_click(&g).await;
         drain(&g).await;
-        let run = d
-            .services
-            .runs
-            .list(None, 5)
-            .await
-            .unwrap()
-            .pop()
-            .expect("run lancé");
-        assert_eq!(run.workflow_id, "ticket-to-deploy");
-        assert_eq!(run.params["ticket_id"], "7647");
-        assert_eq!(crate::workflow::brief_of(&d.services, &run.id).await, brief);
-        let origin = crate::workflow::origin_of(&d, &run.id).await;
-        assert_eq!(origin.telegram_chat(), Some((OWNER, None)));
+        assert!(d.services.runs.list(None, 5).await.unwrap().is_empty());
         let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
-        assert!(sent.iter().any(|m| m.contains("C'est lancé")), "{sent:?}");
+        assert!(sent.iter().any(|m| m.contains("plan")), "{sent:?}");
+    }
+
+    #[tokio::test]
+    async fn plan_go_button_persists_approval_without_starting_a_run() {
+        use penelope_workflow::plan::{Phase, Plan, PlanDraft, PlanGate, PlanStep, PlanStore};
+        let (_d, g, t, _p) = gateway().await;
+        let plans = PlanStore::new(g.daemon.services.store.clone());
+        let draft = PlanDraft {
+            workflow_id: "build-verify".into(),
+            params: json!({"objectif":"réparer le build"}),
+            brief: Some("Bug de build".into()),
+            plan: Plan::new(
+                "Réparer le build",
+                vec![PlanStep::new(Phase::Tests, "Reproduire l'échec")],
+            )
+            .unwrap(),
+        };
+        plans.save("plan-session", &draft).await.unwrap();
+        let origin = Origin::Telegram {
+            chat_id: OWNER,
+            topic_id: Some(21),
+            message_id: Some(400),
+        };
+        g.send_plan_card(&origin, "plan-session", &draft)
+            .await
+            .unwrap();
+        g.flush_outbox().await.unwrap();
+        let go = button(&t, "Vas-y").await;
+        g.process_update(&updates::callback(401, OWNER, &go, 1401))
+            .await
+            .unwrap();
+        settle_click(&g).await;
+        assert_eq!(
+            plans
+                .get("plan-session")
+                .await
+                .unwrap()
+                .unwrap()
+                .plan
+                .gate(),
+            PlanGate::Ready
+        );
+        assert!(
+            g.daemon
+                .services
+                .runs
+                .list(None, 5)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// Issue #39 : une veille planifiée depuis une conversation répond encore après `/new`,

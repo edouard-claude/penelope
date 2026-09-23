@@ -683,9 +683,40 @@ pub fn all() -> Vec<ToolSpec> {
             false,
         ),
         spec(
+            "workflow_plan",
+            RiskClass::Write,
+            "Propose ou révise un plan de workflow avant tout lancement. Un pas porte sa phase \
+             (specification, tests, implementation, review, verification) et son titre. \
+             Pour corriger, fournis expected_version ; pour revenir en arrière, \
+             fournis restore_version. Le propriétaire lance par le bouton « vas-y ».",
+            obj(
+                json!({
+                    "id": {"type":"string"},
+                    "goal": {"type":"string"},
+                    "steps": {"type":"array", "minItems":1, "items": {
+                        "type":"object",
+                        "properties": {
+                            "phase": {"type":"string", "enum":["specification", "tests", "implementation", "review", "verification"]},
+                            "title": {"type":"string"}
+                        },
+                        "required":["phase", "title"]
+                    }},
+                    "params": {"type":"object"},
+                    "brief": {"type":"string", "maxLength":4000},
+                    "expected_version": {"type":"integer", "minimum":1},
+                    "restore_version": {"type":"integer", "minimum":1}
+                }),
+                &["id"],
+            ),
+            false,
+            false,
+            false,
+        ),
+        spec(
             "workflow_start",
             RiskClass::Write,
-            "Propose le lancement d'un workflow : le propriétaire valide d'un bouton. \
+            "Lancement direct réservé aux contextes internes et CLI ; depuis Telegram, \
+             propose d'abord `workflow_plan` et attends le gate « vas-y ». \
              `params` : les paramètres requis, complétés par toi (outils, conversation). \
              `brief` : résumé de la discussion (ticket, constats, décisions, contraintes, \
              approche retenue), transmis à la première étape du run.",
@@ -999,7 +1030,9 @@ pub const ON_DEMAND: &[&str] = &[
     "workflow_control",
     "workflow_describe",
     "workflow_list",
+    "workflow_plan",
     "workflow_status",
+    "workflow_start",
 ];
 
 /// Vrai pour un outil natif à la demande.
@@ -1124,6 +1157,7 @@ mod tests {
             "skill_patch",
             "workflow_list",
             "workflow_describe",
+            "workflow_plan",
             "workflow_start",
             "workflow_status",
             "workflow_control",
