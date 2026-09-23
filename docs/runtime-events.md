@@ -1,7 +1,10 @@
 # Flux d'événements runtime
 
-Le daemon expose, sur activation, un WebSocket local de lecture seule. Chaque événement
-est écrit dans le journal SQLite avant son émission. Une reconnexion avec `after_id`
+Le daemon expose, sur activation, un WebSocket local de lecture seule. Il sert à
+observer l'activité de Pénélope, pas à converser avec elle ni à commander ses actions.
+Ce n'est pas le serveur OpenClaw Gateway : Pénélope reprend son modèle de flux
+d'observation sans intégrer OpenClaw. Chaque événement est écrit dans le journal
+SQLite avant son émission. Une reconnexion avec `after_id`
 rejoue les événements suivants ; l'ID SQLite est l'identifiant idempotent et l'horloge
 séquentielle globale. Le flux reprend aussi après une perte du tampon en direct.
 

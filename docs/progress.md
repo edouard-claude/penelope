@@ -2701,6 +2701,17 @@ Les deux formes, secret brut et valeur Basic encodée, sont masquées. Le motif 
 rédacteur existant remplissait déjà ce contrat ; aucun changement du flux OAuth n'était
 nécessaire.
 
+### 0.17.58
+
+#### La documentation ne fige plus ses compteurs de couverture (#194)
+
+Le README annonçait encore 1 682 tests, 54 outils et 193 clés alors que les
+références générées de cette version contiennent 57 outils et 222 clés. Les chiffres
+changeants ont été retirés du texte d'accueil ; un test de documentation empêche
+leur retour. Le README et le guide du flux runtime précisent que le WebSocket inspiré
+du Gateway OpenClaw sert à observer les événements en lecture seule, qu'il est
+désactivé sans consommateur, et qu'il ne fournit ni conversation ni commande.
+
 ### Routine de livraison
 
 Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #147) :
