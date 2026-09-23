@@ -24,6 +24,7 @@ use penelope_kernel::event::{EventDraft, EventLog};
 use penelope_store::rusqlite::{self, Connection, Transaction, params};
 use penelope_store::{MIGRATIONS, Store, applied_versions};
 use serde_json::json;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -730,20 +731,213 @@ fn check_seeded_rows(c: &Connection) {
     assert_eq!(count(c, "SELECT count(*) FROM config_generations"), 1);
 }
 
-/// Réouvre la base produite et vérifie qu'elle porte toutes les migrations et toutes les
-/// données semées.
-fn check_generated(path: &Path) {
-    let store = Store::open(path).expect("la fixture produite s'ouvre");
+/// Les `penelope-*.db` du répertoire des fixtures, triés.
+fn fixture_files() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = std::fs::read_dir(fixtures_dir())
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("penelope-") && n.ends_with(".db"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+/// `major.minor.patch` d'une version, suffixe (`-alpha.N`) ignoré.
+fn version_triple(v: &str) -> (u64, u64, u64) {
+    let core = v.split('-').next().unwrap_or(v);
+    let mut it = core.split('.').map(|n| n.parse::<u64>().unwrap_or(0));
+    (
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+    )
+}
+
+/// Le schéma tel que SQLite le voit : colonnes de chaque table (nom, type, NOT NULL,
+/// défaut, clé primaire) et définition de chaque index, hors objets internes de SQLite.
+/// Une base migrée depuis la fixture doit rendre exactement celui d'une base neuve.
+fn schema_signature(c: &Connection) -> penelope_store::Result<BTreeMap<String, Vec<String>>> {
+    let mut out = BTreeMap::new();
+    let mut st = c.prepare(
+        "SELECT type, name, tbl_name, COALESCE(sql, '') FROM sqlite_master
+         WHERE name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY type, name",
+    )?;
+    let rows = st.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+        ))
+    })?;
+    for row in rows {
+        let (kind, name, table, sql) = row?;
+        let value = if kind == "table" {
+            let mut cols = c.prepare(&format!("PRAGMA table_info(\"{name}\")"))?;
+            let cols = cols.query_map([], |r| {
+                Ok(format!(
+                    "{} {} notnull={} default={} pk={}",
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    r.get::<_, i64>(5)?
+                ))
+            })?;
+            cols.collect::<std::result::Result<Vec<_>, _>>()?
+        } else {
+            vec![table, sql]
+        };
+        out.insert(format!("{kind}:{name}"), value);
+    }
+    Ok(out)
+}
+
+/// `all_prd_tables_exist` (src/migrations.rs), sur la base migrée.
+fn check_prd_tables(c: &Connection) {
+    for t in [
+        "events",
+        "sessions",
+        "messages",
+        "messages_fts",
+        "lcm_nodes",
+        "lcm_edges",
+        "artifacts",
+        "turn_queue",
+        "leases",
+        "effects",
+        "llm_requests",
+        "usage",
+        "mem_entries",
+        "mem_fts",
+        "mem_vec",
+        "mem_links",
+        "mem_provenance",
+        "mem_signals",
+        "mem_candidates",
+        "mem_history",
+        "dream_runs",
+        "intents",
+        "episodes",
+        "skills",
+        "mcp_servers",
+        "mcp_tools",
+        "mcp_tools_fts",
+        "mcp_tools_vec",
+        "mcp_tasks",
+        "oauth_clients",
+        "oauth_state",
+        "approval_requests",
+        "policies",
+        "workflows",
+        "workflow_runs",
+        "schedules",
+        "seen_items",
+        "tg_updates",
+        "tg_outbox",
+        "tg_actions",
+        "tg_topics",
+        "config_generations",
+        "subsystem_apply_results",
+        "event_purges",
+        "prompt_snapshots",
+    ] {
+        let n: i64 = c
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = ?1",
+                [t],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "table manquante : {t}");
+    }
+}
+
+/// Ouvre une **copie** de `fixture`, la migre par `Store::open`, et vérifie : toutes les
+/// migrations, le schéma d'une base neuve, les tables du PRD, chaque donnée semée, la
+/// chaîne d'événements (qui doit aussi pouvoir continuer), l'intégrité du fichier.
+async fn check_fixture(fixture: &Path) {
+    let name = fixture
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let dir = tempfile::tempdir().unwrap();
+    let copy = dir.path().join("penelope.db");
+    std::fs::copy(fixture, &copy).unwrap();
+    let store = Store::open(&copy).unwrap_or_else(|e| panic!("{name} : {e}"));
+    assert!(
+        store.repaired_fts().is_empty(),
+        "{name} : index FTS reconstruits à l'ouverture : {:?}",
+        store.repaired_fts()
+    );
+
+    // 1. Toutes les migrations, dans l'ordre.
     let applied = store.read_blocking(applied_versions).unwrap();
     let expected: Vec<String> = MIGRATIONS.iter().map(|m| m.version.to_string()).collect();
-    assert_eq!(applied, expected);
+    assert_eq!(applied, expected, "{name} : schema_migrations incomplète");
+
+    // 2. Le schéma migré est celui d'une base neuve, table par table, index par index.
+    let fresh = Store::open(dir.path().join("fresh.db")).unwrap();
+    let migrated = store.read_blocking(schema_signature).unwrap();
+    let neuf = fresh.read_blocking(schema_signature).unwrap();
+    let mut diff = Vec::new();
+    for k in migrated.keys().chain(neuf.keys()).collect::<BTreeSet<_>>() {
+        match (migrated.get(k), neuf.get(k)) {
+            (Some(a), Some(b)) if a == b => {}
+            (Some(a), Some(b)) => diff.push(format!("{k} : migré {a:?}, neuf {b:?}")),
+            (Some(_), None) => diff.push(format!("{k} : seulement dans la base migrée")),
+            (None, Some(_)) => diff.push(format!("{k} : seulement dans la base neuve")),
+            (None, None) => unreachable!(),
+        }
+    }
+    assert!(
+        diff.is_empty(),
+        "{name} : le schéma migré diffère d'une base neuve :\n{}",
+        diff.join("\n")
+    );
+
+    // 3. Les tables du PRD ; 4. chaque donnée semée.
     store
         .read_blocking(|c| {
+            check_prd_tables(c);
             check_seeded_rows(c);
             Ok(())
         })
         .unwrap();
+
+    // 5. La chaîne d'événements se vérifie, et continue après la migration.
+    let log = EventLog::new(
+        store.clone(),
+        Arc::new(TestClock::new(START_MS + 86_400_000)),
+    );
+    let report = log.verify().await.unwrap();
+    assert!(report.ok, "{name} : chaîne rompue : {:?}", report.detail);
+    assert_eq!(report.checked, EVENT_COUNT, "{name}");
+    log.append(EventDraft::new(
+        "store.migrated",
+        json!({"fixture": name, "migrations": MIGRATIONS.len()}),
+    ))
+    .await
+    .unwrap();
+    let report = log.verify().await.unwrap();
+    assert!(
+        report.ok,
+        "{name} : la chaîne ne continue pas : {:?}",
+        report.detail
+    );
+    assert_eq!(report.checked, EVENT_COUNT + 1);
+
+    // 6. Le fichier est intègre après la migration.
+    assert_eq!(store.integrity().unwrap(), "ok", "{name}");
     store.close();
+    fresh.close();
 }
 
 // ---------------------------------------------------------------- tests
@@ -762,11 +956,9 @@ async fn generate_fixture() {
     let dir = tempfile::tempdir().unwrap();
     let produced = generate(dir.path()).await;
     let size = std::fs::metadata(&produced).unwrap().len();
-    // Le générateur relit ce qu'il vient d'écrire : la copie vérifiée est celle de
-    // travail, la fixture reste intacte jusqu'à la copie finale.
-    let checked = dir.path().join("check.db");
-    std::fs::copy(&produced, &checked).unwrap();
-    check_generated(&checked);
+    // Le générateur relit ce qu'il vient d'écrire, sur une copie : la fixture reste
+    // intacte jusqu'à la copie finale.
+    check_fixture(&produced).await;
 
     if std::env::var("UPDATE_FIXTURE").as_deref() == Ok("1") {
         std::fs::create_dir_all(fixtures_dir()).unwrap();
@@ -779,5 +971,30 @@ async fn generate_fixture() {
              UPDATE_FIXTURE=1 pour l'écrire dans tests/fixtures/",
             produced.display()
         );
+    }
+}
+
+/// Le filet (gel-et-outillage.md §5.2 point 4) : chaque fixture du répertoire, copiée,
+/// migrée par `Store::open` du code courant, puis relue. La fixture est censée être plus
+/// ancienne que le code : c'est l'écart entre les deux que le test mesure.
+#[tokio::test]
+async fn a_real_0_17_database_migrates_and_reads_back() {
+    let fixtures = fixture_files();
+    assert!(
+        !fixtures.is_empty(),
+        "aucune fixture penelope-*.db dans {} : \
+         UPDATE_FIXTURE=1 cargo test -p penelope-store --test migration_from_0_17 -- --ignored",
+        fixtures_dir().display()
+    );
+    let code = version_triple(env!("CARGO_PKG_VERSION"));
+    for fixture in fixtures {
+        let name = fixture.file_name().unwrap().to_string_lossy().into_owned();
+        let written_by = name.trim_start_matches("penelope-").trim_end_matches(".db");
+        assert!(
+            version_triple(written_by) <= code,
+            "{name} vient d'une version plus récente que le code ({})",
+            env!("CARGO_PKG_VERSION")
+        );
+        check_fixture(&fixture).await;
     }
 }
