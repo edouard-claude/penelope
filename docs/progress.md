@@ -3,7 +3,7 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 22 septembre 2026.
+Dernière mise à jour : 23 septembre 2026.
 
 ## Résumé
 
@@ -2648,6 +2648,18 @@ exemples de 80 caractères par catégorie dans l'événement ; la métrique agr�
 porte que les nombres.
 Le résultat du résumeur, y compris le repli sans modèle, ne change pas. Ce contrôle
 textuel reste indicatif : une paraphrase peut être signalée comme manquante.
+
+### 0.17.54
+
+#### `doctor` reconnaît un hôte GitLab connecté et conseille la bonne formule (#182)
+
+`glab auth status` peut sortir en erreur quand `gitlab.com` est déconnecté alors qu'une
+autre instance GitLab est authentifiée. L'inventaire retient maintenant la ligne de
+connexion positive de cette instance ; il peut proposer `glab` au modèle. Une sortie
+sans cette preuve reste déconnectée. Quand l'exécutable `rg` manque dans le `PATH` du
+daemon, la correction proposée est `brew install ripgrep`, nom réel de la formule.
+Deux tests de régression couvrent ces cas. Les autres alertes `doctor` de cette machine
+ont été traitées dans sa configuration, sa skill LinkedIn et l'index de son vault.
 
 ### Routine de livraison
 
