@@ -522,6 +522,90 @@ fn the_workspace_version_has_its_progress_section() {
     );
 }
 
+/// Identifiant d'un suffixe de pré-release, dans l'ordre semver : un nombre passe sous
+/// un mot (`1 < alpha`), les nombres se comparent entre eux (`alpha.2 < alpha.10`), les
+/// mots en ASCII (`alpha < beta < rc`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Ident {
+    Number(u64),
+    Text(String),
+}
+
+/// Ce qui suit les trois nombres : une pré-release, ou rien. Les variantes sont dans cet
+/// ordre pour que la version pleine passe au-dessus de toutes ses pré-releases
+/// (`1.0.0-rc.1 < 1.0.0`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Stage {
+    Pre(Vec<Ident>),
+    Full,
+}
+
+/// Version d'une section `### x.y.z` ou `### x.y.z-<pré>` de `docs/progress.md`, ou du
+/// workspace (`1.0.0-alpha.N` sur la branche v1, #212). L'ordre dérivé est celui de
+/// semver : `0.17.59 < 1.0.0-alpha.2 < 1.0.0-alpha.10 < 1.0.0-rc.1 < 1.0.0`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Version {
+    numbers: (u64, u64, u64),
+    stage: Stage,
+}
+
+fn parse_version(s: &str) -> Option<Version> {
+    let (core, pre) = match s.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (s, None),
+    };
+    let mut it = core.split('.');
+    let mut next = || it.next()?.parse::<u64>().ok();
+    let numbers = (next()?, next()?, next()?);
+    if it.next().is_some() {
+        return None;
+    }
+    let ident = |id: &str| {
+        (!id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric())).then(|| {
+            id.parse::<u64>()
+                .map_or_else(|_| Ident::Text(id.to_string()), Ident::Number)
+        })
+    };
+    let stage = match pre {
+        None => Stage::Full,
+        Some(pre) => Stage::Pre(pre.split('.').map(ident).collect::<Option<Vec<_>>>()?),
+    };
+    Some(Version { numbers, stage })
+}
+
+/// La plus haute section `### x.y.z` de `progress` est la version `workspace`, sinon
+/// l'erreur qui dit quoi faire.
+fn highest_section_matches(progress: &str, workspace: &str) -> Result<(), String> {
+    let (highest, title) = progress
+        .lines()
+        .filter_map(|l| {
+            let title = l.trim().strip_prefix("### ")?;
+            Some((parse_version(title)?, title))
+        })
+        .max()
+        .ok_or("aucune section de version dans docs/progress.md")?;
+    let current = parse_version(workspace)
+        .ok_or_else(|| format!("version du workspace illisible : {workspace}"))?;
+    // #212 : le bloc « Version 1 (branche v1) » ne vit que sur v1. S'il arrive sur main
+    // par un rétroportage, sa plus haute section dépasse la version 0.17 du workspace.
+    if highest.numbers.0 > current.numbers.0 {
+        return Err(format!(
+            "section V1 sur main : docs/progress.md décrit la version {title} alors que le \
+             workspace est en {workspace} ; un rétroportage depuis v1 a emporté le bloc \
+             « Version 1 (branche v1) », qui n'a rien à faire sur cette branche : le retirer \
+             du lot"
+        ));
+    }
+    if highest > current {
+        return Err(format!(
+            "docs/progress.md décrit la version {title}, le workspace est en {workspace} : \
+             poser la version avant de fusionner (`make bump V={title}`), sinon le lot part \
+             sans release"
+        ));
+    }
+    Ok(())
+}
+
 /// #147 : et l'inverse. Trois sections `0.17.24`, `0.17.25`, `0.17.26` ont existé le
 /// 20/09 pendant que le workspace restait en `0.17.23` : des lots fermés, documentés,
 /// et aucune release — `penelope upgrade` disait « à jour » à une instance qui avait
@@ -529,25 +613,73 @@ fn the_workspace_version_has_its_progress_section() {
 #[test]
 fn the_highest_progress_section_is_the_workspace_version() {
     let progress = read(&root().join("docs/progress.md"));
-    let parse = |s: &str| -> Option<(u64, u64, u64)> {
-        let mut it = s.split('.');
-        let mut next = || it.next()?.parse::<u64>().ok();
-        let v = (next()?, next()?, next()?);
-        it.next().is_none().then_some(v)
-    };
-    let highest = progress
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("### ").and_then(parse))
-        .max()
-        .expect("au moins une section de version dans docs/progress.md");
-    let v = penelope_daemon::VERSION;
-    let current = parse(v).unwrap_or_else(|| panic!("version du workspace illisible : {v}"));
-    let (a, b, c) = highest;
+    if let Err(why) = highest_section_matches(&progress, penelope_daemon::VERSION) {
+        panic!("{why}");
+    }
+}
+
+/// #212 : le parseur lit le suffixe et suit l'ordre semver, pour que la branche v1
+/// (`1.0.0-alpha.N`) passe le test et qu'un bloc V1 sur main le fasse échouer.
+#[test]
+fn progress_versions_follow_semver() {
+    let v = |s: &str| parse_version(s).unwrap_or_else(|| panic!("{s} illisible"));
+    assert_eq!(v("0.17.59").numbers, (0, 17, 59));
+    assert_eq!(v("0.17.59").stage, Stage::Full);
+    assert_eq!(
+        v("1.0.0-alpha.2").stage,
+        Stage::Pre(vec![Ident::Text("alpha".into()), Ident::Number(2)])
+    );
+    for (low, high) in [
+        ("0.17.59", "0.17.60"),
+        ("0.17.60", "1.0.0-alpha.1"),
+        ("1.0.0-alpha.2", "1.0.0-alpha.10"),
+        ("1.0.0-alpha.10", "1.0.0-beta.1"),
+        ("1.0.0-beta.1", "1.0.0-rc.1"),
+        ("1.0.0-rc.1", "1.0.0"),
+        ("1.0.0-alpha", "1.0.0-alpha.1"),
+        ("1.0.0-1", "1.0.0-alpha"),
+        ("1.0.0", "1.0.1-alpha.1"),
+    ] {
+        assert!(v(low) < v(high), "{low} < {high}");
+    }
+    for bad in [
+        "0.17",
+        "0.17.59.1",
+        "1.0.0-",
+        "1.0.0-alpha..1",
+        "1.0.0-rc 1",
+        "x.y.z",
+        "Branché depuis la 0.1.0",
+    ] {
+        assert_eq!(parse_version(bad), None, "{bad}");
+    }
+}
+
+/// #212 : sections `0.17.59` et `1.0.0-alpha.1` : vert avec un workspace en
+/// `1.0.0-alpha.1`, rouge en `0.17.59` (bloc V1 sur main) ; et #147 reste attrapé sur
+/// les deux branches.
+#[test]
+fn a_v1_block_passes_on_v1_and_fails_on_main() {
+    let both = "## Version 1 (branche v1)\n\n### 1.0.0-alpha.1\n\nx\n\n## Résumé\n\n\
+                ### 0.17.59\n\ny\n\n### 0.17.58\n";
+    assert_eq!(highest_section_matches(both, "1.0.0-alpha.1"), Ok(()));
+    let why = highest_section_matches(both, "0.17.59").unwrap_err();
+    assert!(why.starts_with("section V1 sur main"), "{why}");
+
+    let why = highest_section_matches("### 0.17.60\n### 0.17.59\n", "0.17.59").unwrap_err();
+    assert!(why.contains("`make bump V=0.17.60`"), "{why}");
+    let v1 = "### 1.0.0-alpha.2\n### 1.0.0-alpha.1\n### 0.17.59\n";
+    let why = highest_section_matches(v1, "1.0.0-alpha.1").unwrap_err();
+    assert!(why.contains("`make bump V=1.0.0-alpha.2`"), "{why}");
+    assert_eq!(highest_section_matches(v1, "1.0.0-alpha.2"), Ok(()));
+    assert_eq!(
+        highest_section_matches("### 1.0.0-rc.1\n### 0.17.59\n", "1.0.0"),
+        Ok(()),
+        "la version pleine passe au-dessus de ses pré-releases"
+    );
     assert!(
-        highest <= current,
-        "docs/progress.md décrit la version {a}.{b}.{c}, le workspace est en {v} : poser \
-         la version avant de fusionner (`make bump V={a}.{b}.{c}`), sinon le lot part sans \
-         release"
+        highest_section_matches(both, "1.0.0-").is_err(),
+        "workspace illisible"
     );
 }
 
