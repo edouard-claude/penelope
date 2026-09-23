@@ -4,9 +4,12 @@ name: CI
 # `cargo clippy -- -D warnings` et `cargo deny check` propres. La CI ne fait rien
 # d'autre que rejouer exactement ces commandes.
 
+# Deux branches vivantes (#212) : `main` livre la 0.17, `v1` avance en `1.0.0-alpha.N`
+# sans jamais être taguée. La concurrence est par ref, donc un push sur l'une n'annule pas
+# la suite de l'autre ; le job `livraison` reste réservé à `main`.
 on:
   push:
-    branches: [main]
+    branches: [main, v1]
   pull_request:
   workflow_dispatch:
 
@@ -28,6 +31,30 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+
+      # Chaque branche porte sa ligne de version (#212) : `0.` sur `main`, `1.0.0-` sur
+      # `v1`. Un lot qui apporte la version de l'autre branche (rétroportage, fusion mal
+      # résolue sur les seize lignes de `Cargo.toml`) échoue ici, avant de coûter une
+      # suite et, sur `main`, avant que `livraison` ne pose un tag `v1*`. Ailleurs
+      # (pull request, autre branche), pas de contrainte.
+      - name: La branche porte sa version
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          echo "ref : ${GITHUB_REF}  version : ${version}"
+          case "$GITHUB_REF" in
+            refs/heads/main)
+              case "$version" in
+                0.*) ;;
+                *) echo "::error::sur main, la version du workspace commence par « 0. » (lue : ${version}) ; la 1.0.0-alpha.N vit sur v1 (#212)"; exit 1 ;;
+              esac ;;
+            refs/heads/v1)
+              case "$version" in
+                1.0.0-*) ;;
+                *) echo "::error::sur v1, la version du workspace commence par « 1.0.0- » (lue : ${version}) ; une 0.17.x n'a rien à faire ici (#212)"; exit 1 ;;
+              esac ;;
+            *) echo "pas de contrainte de version sur cette ref" ;;
+          esac
 
       # `rust-toolchain.toml` épingle la version : rustup l'installe tout seul.
       - name: Chaîne d'outils
