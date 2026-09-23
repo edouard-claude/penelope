@@ -228,7 +228,7 @@ pub fn parse_facts(raw: &str) -> Vec<String> {
         let parts: Vec<&str> = if t.chars().count() > max {
             // Un modèle regroupe parfois plusieurs phrases dans une seule puce.
             // Ne couper qu'aux fins de phrase, jamais au milieu d'un fait.
-            t.split_inclusive(['.', ';']).collect()
+            split_sentences(t)
         } else {
             vec![t]
         };
@@ -248,6 +248,25 @@ pub fn parse_facts(raw: &str) -> Vec<String> {
     }
     out.truncate(12);
     out
+}
+
+fn split_sentences(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (at, mark) in text.char_indices() {
+        if !matches!(mark, '.' | ';') {
+            continue;
+        }
+        let end = at + mark.len_utf8();
+        if text[end..].chars().next().is_none_or(char::is_whitespace) {
+            parts.push(&text[start..end]);
+            start = end;
+        }
+    }
+    if start < text.len() {
+        parts.push(&text[start..]);
+    }
+    parts
 }
 
 /// Seules les lignes explicitement présentées comme faits sont acceptées.
@@ -329,6 +348,15 @@ mod tests {
     #[test]
     fn a_long_bullet_is_split_at_sentence_boundaries() {
         let first = format!("Le projet utilise {}.", "Rust ".repeat(55));
+        let second = "Les tests passent sur macOS et Linux.";
+        let raw = format!("- {first} {second}");
+        assert!(raw.chars().count() > penelope_memory::quality::MAX_ENTRY_CHARS);
+        assert_eq!(parse_facts(&raw), [first.trim(), second]);
+    }
+
+    #[test]
+    fn splitting_a_long_bullet_keeps_dots_inside_urls() {
+        let first = format!("Consulter https://example.org pour {}.", "Rust ".repeat(50));
         let second = "Les tests passent sur macOS et Linux.";
         let raw = format!("- {first} {second}");
         assert!(raw.chars().count() > penelope_memory::quality::MAX_ENTRY_CHARS);

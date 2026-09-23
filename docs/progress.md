@@ -8,7 +8,7 @@ Dernière mise à jour : 23 septembre 2026.
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
-- **1722 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
+- **1723 tests verts** hors réseau externe ; les suites réseau sont écrites et se lancent à la demande.
 - `cargo clippy --workspace --all-targets -- -D warnings` : propre.
 - `cargo deny check` : propre (avis, interdits, licences, sources).
 - `cargo fmt --all --check` : propre.
@@ -2671,7 +2671,7 @@ local écarte les mentions de salaire, d'IBAN, de SIREN/SIRET et les montants en
 Si le modèle ne
 répond pas, ne fournit aucun fait exploitable ou résume une longue entrée en un seul
 fait, il reçoit un second essai dans le même délai total de 120 secondes. Un nouvel
-échec est expliqué et ne crée pas de carte d'approbation trompeuse. Quatre tests de
+échec est expliqué et ne crée pas de carte d'approbation trompeuse. Cinq tests de
 régression couvrent ces cas ; aucune entrée du vault n'est modifiée par cette commande
 avant l'approbation du propriétaire.
 
