@@ -2340,10 +2340,49 @@ gh secret set MINISIGN_SECRET_KEY < minisign.key
 gh variable set MINISIGN_PUBLIC_KEY --body "$(tail -n 1 minisign.pub)"
 ```
 
-puis ranger `minisign.key` hors de la machine. Les binaires publiés ensuite portent la
-clé publique et n'acceptent plus que des releases signées. Le répertoire du binaire doit
-être inscriptible par l'utilisateur du service ; sinon, ou pour une version pas encore
-publiée, depuis le dépôt cloné sur la machine :
+puis conserver `minisign.key` dans le gestionnaire de mots de passe du propriétaire du
+dépôt et effacer la copie de travail. Cette clé n'a pas de phrase de passe : le
+gestionnaire est sa protection. Les binaires publiés ensuite portent la clé publique et
+n'acceptent plus que des releases signées.
+
+#### Rotation ou perte de la clé minisign
+
+Si le secret GitHub est perdu mais que `minisign.key` est encore dans le gestionnaire de
+mots de passe, restaurer **la même clé** :
+
+```bash
+gh secret set MINISIGN_SECRET_KEY < minisign.key
+```
+
+Garder `MINISIGN_PUBLIC_KEY` : les instances déjà installées peuvent continuer à
+vérifier les releases.
+
+Si la clé privée est définitivement perdue, générer une nouvelle paire avec la commande
+ci-dessus. Poser d'abord `MINISIGN_SECRET_KEY`, puis `MINISIGN_PUBLIC_KEY` ; ne pas
+déclencher de release entre ces deux opérations. La nouvelle clé publique sera intégrée
+aux prochains binaires, mais une instance qui porte l'ancienne clé refusera leur
+signature. Sur **chaque** instance concernée, choisir un des recours suivants :
+
+```bash
+# Autoriser la nouvelle clé avant une mise à jour depuis la release.
+penelope config set upgrade.minisign_pubkey "<nouvelle clé publique RW…>"
+penelope upgrade
+```
+
+Ou, depuis le dépôt à jour sur cette instance, reconstruire et installer le binaire en
+intégrant la nouvelle clé ; conserver l'identité locale de signature macOS si elle est
+utilisée :
+
+```bash
+PENELOPE_MINISIGN_PUBKEY="<nouvelle clé publique RW…>" \
+  SIGN_IDENTITY="Penelope Dev" make deploy
+```
+
+Sans l'un de ces gestes sur l'instance, changer seulement la variable GitHub ne suffit
+pas : son ancien binaire ne fait pas confiance à la nouvelle clé.
+
+Le répertoire du binaire doit être inscriptible par l'utilisateur du service ; sinon,
+ou pour une version pas encore publiée, depuis le dépôt cloné sur la machine :
 
 ```bash
 make deploy
