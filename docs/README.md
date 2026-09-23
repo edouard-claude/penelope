@@ -32,7 +32,7 @@ d'outils sont à jour.
 - [mcp.md](mcp.md) : le client MCP, versions de protocole, transports, OAuth, registre paresseux et élicitation. Sections : [Versions de protocole](mcp.md#versions-de-protocole), [Transports](mcp.md#transports), [Déclarer un serveur](mcp.md#déclarer-un-serveur), [Registre paresseux](mcp.md#registre-paresseux), [OAuth 2.1](mcp.md#oauth-21), [Élicitation](mcp.md#élicitation).
 - [context.md](context.md) : la compression de contexte de bout en bout, seuils, queue verbatim, gabarit de résumé, échecs et cache, chiffres vérifiés contre le code. Sections : [Ce qu'un appel envoie](context.md#ce-quun-appel-envoie), [Les chiffres par fenêtre](context.md#les-chiffres-par-fenêtre), [Une session](context.md#une-session-du-premier-tour-à-la-cinquième-compaction), [Quand le résumé échoue](context.md#quand-le-résumé-échoue), [Le cache](context.md#le-cache), [Observer](context.md#observer).
 - [runtime-events.md](runtime-events.md) : activation du flux WebSocket, contrat du replay et démonstration Pathlayer. Sections : [Activer](runtime-events.md#activer-un-consommateur), [Contrat](runtime-events.md#contrat), [Démonstration](runtime-events.md#démonstration-pathlayer).
-- [progress.md](progress.md) : avancement, notes de chaque version, routine de livraison et manques connus. Sections : [Résumé](progress.md#résumé), [Suites du §20.1](progress.md#suites-du-201), [Ce qui reste à faire](progress.md#ce-qui-reste-à-faire), [Routine de livraison](progress.md#routine-de-livraison), [Décisions](progress.md#décisions).
+- [progress.md](progress.md) : avancement, notes de chaque version, routine de livraison et manques connus. Sections : [Version 1](progress.md#version-1-branche-v1), [Résumé](progress.md#résumé), [Suites du §20.1](progress.md#suites-du-201), [Ce qui reste à faire](progress.md#ce-qui-reste-à-faire), [Routine de livraison](progress.md#routine-de-livraison), [Décisions](progress.md#décisions).
 - [ca-matrix.md](ca-matrix.md) : critères d'acceptation et tests qui les couvrent, générée depuis les sources.
 
 ## Décisions
@@ -50,3 +50,6 @@ d'outils sont à jour.
 - [0009](decisions/0009-pas-d-emulation-d-outils.md) : pas d'émulation d'outils, un modèle sans tool calling est refusé.
 - [0010](decisions/0010-fournisseur-codex-oauth.md) : fournisseur Codex — identité empruntée, périmètre du propriétaire, quota du plan.
 - [0011](decisions/0011-prompt-systeme-journalise.md) : le prompt système est journalisé en clair, adressé par son empreinte.
+- [0015](decisions/0015-gel-0.17-et-branche-v1.md) : gel de la 0.17 et branche `v1` ; `main` ne prend que des corrections, versions `1.0.0-alpha.N` jamais taguées.
+
+Les numéros 0012 à 0014 et 0016 sont réservés par la charte de la V1 (`design/v1/README.md` §9) et pas encore écrits.
