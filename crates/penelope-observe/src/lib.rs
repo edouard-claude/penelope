@@ -333,6 +333,7 @@ mod tests {
         use tracing_subscriber::layer::SubscriberExt;
         let token = "7123456789:AAHtest_secret_value_for_the_bot_0123";
         redact::register_secret(token);
+        redact::register_secret("s3cr3t");
         let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
         struct Sink(Arc<Mutex<Vec<u8>>>);
         impl Write for Sink {
@@ -356,10 +357,17 @@ mod tests {
                 error = %format!("error sending request for url (https://api.telegram.org/bot{token}/getUpdates)"),
                 "getUpdates en échec"
             );
+            tracing::warn!(
+                request_debug = "headers = { Authorization: Basic YzpzM2NyM3Q= }",
+                credential = "s3cr3t",
+                "OAuth MCP en échec"
+            );
         });
         let out = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
         assert!(out.contains("getUpdates en échec"), "{out}");
         assert!(!out.contains("AAHtest_secret_value"), "{out}");
+        assert!(!out.contains("YzpzM2NyM3Q="), "{out}");
+        assert!(!out.contains("s3cr3t"), "{out}");
         // Même sans enregistrement, la forme d'URL de la Bot API est reconnue.
         assert!(
             !redact::redact(
