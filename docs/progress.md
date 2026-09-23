@@ -5,6 +5,14 @@ décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
 Dernière mise à jour : 23 septembre 2026.
 
+## Version 1 (branche v1)
+
+Ce bloc recevra les sections `### 1.0.0-alpha.N` de la branche `v1` (décision
+[0015](decisions/0015-gel-0.17-et-branche-v1.md), épopée #208) : un lot par section, un
+bump par lot, jamais de tag ni de release. Il reste vide tant que la branche n'existe pas.
+Les sections `### 0.17.x` restent dans le bloc ci-dessous et y arrivent par les fusions de
+`main`.
+
 ## Résumé
 
 - 17 crates, `#![forbid(unsafe_code)]` partout, aucune dépendance circulaire.
@@ -2790,7 +2798,9 @@ Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #
 rien à taguer à la main. Dans le lot, avant de pousser :
 
 1. `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-   `cargo test --workspace`, `cargo deny check`.
+   `cargo test --workspace`, `cargo deny check` ; `UPDATE_BUDGET=1 cargo test -p
+   penelope-archtest` dès qu'un fichier de la liste de référence est touché : le budget ne
+   monte jamais (`CLAUDE.md`, § Gel de la dette).
 2. `progress.md` : nouvelle section de version, compte de tests, tableau du §21.
 3. Relire **toutes** les sections « Limites actuelles » et « pas encore branché » de
    `README.md` et de `docs/` (`mcp.md`, `telegram.md`, `workflows.md`,
@@ -2853,6 +2863,14 @@ Les écarts assumés par rapport à un « DEVRAIT » du PRD sont documentés un 
 | [0006](decisions/0006-changement-de-sujet-lexical.md) | Changement de sujet mesuré sans modèle | Aucun appel de plus par message ; une fausse frontière ne perd rien |
 | [0007](decisions/0007-deploiement-par-makefile.md) | `deploy-generic` par cibles `make` | Pas de commande arbitraire lue dans le dépôt ; convention lisible en SSH |
 | [0008](decisions/0008-cache-de-prompt.md) | Rien ne bouge avant le dernier message | Un préfixe relu coûte une fraction du prix d'entrée ; chaque raté est mesuré |
+| [0009](decisions/0009-pas-d-emulation-d-outils.md) | Pas d'émulation d'outils | Un modèle sans tool calling est refusé au moment du choix, plutôt que simulé par un analyseur de texte aux effets non idempotents |
+| [0010](decisions/0010-fournisseur-codex-oauth.md) | Fournisseur Codex par OAuth | Identité empruntée et dite, périmètre borné aux tours du propriétaire, quota du plan au lieu du dollar |
+| [0011](decisions/0011-prompt-systeme-journalise.md) | Prompt système journalisé en clair | Ce que le modèle a lu est reconstituable, adressé par son empreinte ; une ligne par préfixe distinct |
+| [0015](decisions/0015-gel-0.17-et-branche-v1.md) | Gel de la 0.17 et branche `v1` | La dette ne grossit plus sur `main` (budget à cliquet) ; la V1 se refait à côté, versions jamais taguées |
+
+Les numéros 0012 à 0014 et 0016 sont réservés par la charte de la V1 (`design/v1/README.md`
+§9 : journal source unique de la conversation, découpage du daemon, boucle en pipeline, PTC
+hors V1) et pas encore écrits.
 
 ## Deux failles corrigées en écrivant la suite `security`
 
