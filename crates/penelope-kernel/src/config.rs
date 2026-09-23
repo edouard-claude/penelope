@@ -163,8 +163,8 @@ pub struct Telegram {
     pub text_limit: usize,
     /// Taille maximale d'une légende. Sans effet dans cette version.
     pub caption_limit: usize,
-    /// Fragments au-delà desquels une réponse part en document. Sans effet dans cette
-    /// version.
+    /// Fragments au-delà desquels un avis interne (digest du matin, rapport de veille)
+    /// part en document plutôt qu'en chapelet de messages (issue #145). 0 : jamais.
     pub max_fragments: usize,
     /// Intervalle entre deux mises à jour du brouillon de réponse, en millisecondes (300 au
     /// moins).
