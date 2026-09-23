@@ -27,6 +27,20 @@ pub trait Messenger: Send + Sync {
     async fn send_approval(&self, _origin: &Origin, _approval_id: &str) -> Result<(), String> {
         Ok(())
     }
+    /// Présente le plan et son gate dans le canal d'origine.
+    async fn send_plan_card(
+        &self,
+        origin: &Origin,
+        session: &str,
+        draft: &penelope_workflow::plan::PlanDraft,
+    ) -> Result<(), String> {
+        let _ = session;
+        self.send_text(
+            origin,
+            &format!("Plan v{} : {}", draft.plan.version(), draft.plan.goal()),
+        )
+        .await
+    }
     /// Question d'une étape `user` : un bouton par choix. Sans boutons, le texte dit
     /// comment répondre en ligne de commande.
     #[allow(clippy::too_many_arguments)]
@@ -1300,7 +1314,89 @@ impl NativeToolExecutor {
                     .ok_or_else(|| ToolError::Invalid(format!("workflow `{id}` introuvable")))?;
                 json!({"definition": w, "graphe": w.render_graph()})
             }
+            "workflow_plan" => {
+                use penelope_workflow::plan::{Plan, PlanDraft, PlanStep, PlanStore};
+                let id = str_arg(args, "id")?;
+                s.workflows
+                    .get(&id)
+                    .ok_or_else(|| ToolError::Invalid(format!("workflow `{id}` introuvable")))?;
+                let plans = PlanStore::new(s.store.clone());
+                let existing = plans.get(&self.env.session_id).await?;
+                let restore = args.get("restore_version").and_then(Value::as_u64);
+                let goal = args.get("goal").and_then(Value::as_str);
+                let steps = args.get("steps");
+                let draft = if let Some(mut old) = existing {
+                    if old.workflow_id != id {
+                        return Err(ToolError::Invalid(format!(
+                            "la session prépare déjà le workflow `{}`",
+                            old.workflow_id
+                        )));
+                    }
+                    if restore.is_some() || goal.is_some() || steps.is_some() {
+                        let previous = old.clone();
+                        let expected = args
+                            .get("expected_version")
+                            .and_then(Value::as_u64)
+                            .ok_or_else(|| {
+                                ToolError::Invalid("expected_version requis pour réviser".into())
+                            })?;
+                        if let Some(version) = restore {
+                            old.restore(expected, version)
+                                .map_err(|e| ToolError::Invalid(e.to_string()))?;
+                        } else {
+                            let goal =
+                                goal.ok_or_else(|| ToolError::Invalid("goal requis".into()))?;
+                            let steps: Vec<PlanStep> = serde_json::from_value(
+                                steps
+                                    .cloned()
+                                    .ok_or_else(|| ToolError::Invalid("steps requis".into()))?,
+                            )
+                            .map_err(|e| ToolError::Invalid(e.to_string()))?;
+                            old.revise(expected, goal, steps)
+                                .map_err(|e| ToolError::Invalid(e.to_string()))?;
+                        }
+                        old.params = args.get("params").cloned().unwrap_or(old.params);
+                        old.brief = args
+                            .get("brief")
+                            .and_then(Value::as_str)
+                            .map(String::from)
+                            .or(old.brief);
+                        plans.replace(&self.env.session_id, &previous, &old).await?;
+                    }
+                    old
+                } else {
+                    let goal = goal.ok_or_else(|| ToolError::Invalid("goal requis".into()))?;
+                    let steps: Vec<PlanStep> = serde_json::from_value(
+                        steps
+                            .cloned()
+                            .ok_or_else(|| ToolError::Invalid("steps requis".into()))?,
+                    )
+                    .map_err(|e| ToolError::Invalid(e.to_string()))?;
+                    let plan =
+                        Plan::new(goal, steps).map_err(|e| ToolError::Invalid(e.to_string()))?;
+                    let new = PlanDraft {
+                        workflow_id: id,
+                        params: args.get("params").cloned().unwrap_or(json!({})),
+                        brief: args.get("brief").and_then(Value::as_str).map(String::from),
+                        plan,
+                    };
+                    plans.create(&self.env.session_id, &new).await?;
+                    new
+                };
+                if let Some(messenger) = &self.messenger {
+                    messenger
+                        .send_plan_card(&self.env.origin, &self.env.session_id, &draft)
+                        .await
+                        .map_err(ToolError::Other)?;
+                }
+                serde_json::to_value(&draft).unwrap_or_default()
+            }
             "workflow_start" => {
+                if matches!(self.env.origin, Origin::Telegram { .. }) && !self.env.in_workflow {
+                    return Err(ToolError::Invalid(
+                        "propose d'abord un plan avec workflow_plan ; seul le propriétaire peut valider « vas-y »".into(),
+                    ));
+                }
                 let o = self
                     .orchestrator
                     .as_ref()
@@ -2521,6 +2617,62 @@ mod tests {
             turn_model: None,
         };
         (dir, NativeToolExecutor::new(s, env))
+    }
+
+    #[tokio::test]
+    async fn workflow_plan_is_durable_revisable_and_gates_telegram_start() {
+        use penelope_workflow::plan::{PlanGate, PlanStore};
+        let (_dir, mut e) = executor().await;
+        e.env.origin = Origin::Telegram {
+            chat_id: 1,
+            topic_id: Some(2),
+            message_id: Some(3),
+        };
+        assert!(
+            e.execute("workflow_start", &json!({"id":"build-verify"}))
+                .await
+                .is_err()
+        );
+        let first = e
+            .execute(
+                "workflow_plan",
+                &json!({
+                    "id":"build-verify", "goal":"Vérifier le projet",
+                    "steps":[{"phase":"tests", "title":"Exécuter les tests"}]
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(first.text.contains("Vérifier le projet"));
+        let plans = PlanStore::new(e.services.store.clone());
+        let saved = plans.get("s1").await.unwrap().unwrap();
+        assert_eq!(saved.plan.version(), 1);
+        assert_eq!(saved.plan.gate(), PlanGate::Review);
+        assert!(!saved.plan.can_execute());
+        e.execute(
+            "workflow_plan",
+            &json!({
+                "id":"build-verify", "expected_version":1,
+                "goal":"Vérifier et documenter le projet",
+                "steps":[{"phase":"tests", "title":"Exécuter les tests"},
+                         {"phase":"verification", "title":"Relire le résultat"}]
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(plans.get("s1").await.unwrap().unwrap().plan.version(), 2);
+        assert!(
+            e.execute(
+                "workflow_plan",
+                &json!({
+                    "id":"build-verify", "expected_version":1,
+                    "goal":"Version périmée", "steps":[{"phase":"tests", "title":"Test"}]
+                })
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(plans.get("s1").await.unwrap().unwrap().plan.version(), 2);
     }
 
     struct TestConfigAdmin {

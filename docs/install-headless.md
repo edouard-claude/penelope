@@ -1281,7 +1281,8 @@ et `/stop` interrompt tout le lot.
 | `workflow_control` | write | Contrôle un run : pause, reprise, annulation, relance d'étape. (à la demande) |
 | `workflow_describe` | read | Décrit un workflow : étapes, paramètres, budget. (à la demande) |
 | `workflow_list` | read | Liste les workflows disponibles. (à la demande) |
-| `workflow_start` | write | Propose le lancement d'un workflow : le propriétaire valide d'un bouton. |
+| `workflow_plan` | write | Propose ou révise un plan de workflow avant tout lancement. (à la demande) |
+| `workflow_start` | write | Lancement direct réservé aux contextes internes et CLI ; depuis Telegram, propose d'abord `workflow_plan` et attends le gate « vas-y ». (à la demande) |
 | `workflow_status` | read | État d'un run. (à la demande) |
 <!-- reference:outils:fin -->
 

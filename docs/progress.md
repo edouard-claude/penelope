@@ -2675,6 +2675,19 @@ fait, il reçoit un second essai dans le même délai total de 120 secondes. Un 
 régression couvrent ces cas ; aucune entrée du vault n'est modifiée par cette commande
 avant l'approbation du propriétaire.
 
+### 0.17.56
+
+#### Un plan révisable précède les workflows Telegram (#186)
+
+`/run <workflow>` et le bouton du catalogue ouvrent une conversation de plan, avec ou
+sans paramètres fournis. L'orchestrateur propose un but et des étapes typées via
+`workflow_plan` ; une correction crée une nouvelle version, un retour arrière conserve
+l'historique. Le plan et son gate sont écrits durablement dans le store. La carte dans
+le même sujet permet « Vas-y » ; le clic approuve la version affichée et rejette un
+bouton périmé. Aucune exécution n'est déclenchée par cette tranche : l'état approuvé
+sera consommé par T3 de #185. `workflow_start` ne peut plus lancer directement depuis
+une conversation Telegram. La CLI et les runs techniques gardent leur moteur actuel.
+
 ### Routine de livraison
 
 Le tag et la release sont posés par la CI (job `livraison` de `ci.yml`, issue #147) :

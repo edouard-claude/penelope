@@ -109,33 +109,6 @@ fn run_icon(state: &str) -> &'static str {
     }
 }
 
-/// Schéma JSON des paramètres d'un workflow, pour le moteur de formulaires.
-pub(super) fn parameters_schema(params: &[penelope_workflow::model::Parameter]) -> Value {
-    let mut properties = serde_json::Map::new();
-    let mut required = Vec::new();
-    for p in params {
-        let kind = match p.kind.as_str() {
-            "number" | "float" => "number",
-            "integer" | "int" => "integer",
-            "boolean" | "bool" => "boolean",
-            _ => "string",
-        };
-        let mut field = json!({
-            "type": kind,
-            "title": if p.label.is_empty() { p.id.clone() } else { p.label.clone() },
-            "description": p.description,
-        });
-        if let Some(d) = &p.default {
-            field["default"] = d.clone();
-        }
-        properties.insert(p.id.clone(), field);
-        if p.required {
-            required.push(json!(p.id));
-        }
-    }
-    json!({"type": "object", "properties": properties, "required": required})
-}
-
 /// Schéma JSON des arguments d'un prompt MCP.
 fn prompt_schema(prompt: &Value) -> Value {
     let mut properties = serde_json::Map::new();
@@ -1958,19 +1931,31 @@ impl TelegramGateway {
                 } else {
                     entry.metadata.name.clone()
                 };
-                if entry.metadata.parameters.is_empty() {
-                    let run = crate::workflow::start_run(d, &id, json!({}), &origin, None, 0)
-                        .await
-                        .map_err(anyhow::Error::msg)?;
-                    Done::note(
-                        "Run lancé",
-                        format!("▶️ Run `{}` lancé (« {title} »).", run.id),
-                    )
-                } else {
-                    self.start_workflow_form(chat_id, topic_id, &id, &title)
-                        .await?;
-                    Done::quiet(format!("Paramètres de « {title} »"))
-                }
+                self.run_by_conversation(chat_id, topic_id, 0, &entry, "")
+                    .await?;
+                Done::quiet(format!("Plan de « {title} » en préparation"))
+            }
+            "wf.plan.go" => {
+                let session = str_of("session");
+                let version = p["version"]
+                    .as_u64()
+                    .ok_or_else(|| anyhow::anyhow!("version manquante"))?;
+                let plans = penelope_workflow::plan::PlanStore::new(s.store.clone());
+                let mut draft = plans
+                    .get(&session)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("plan introuvable"))?;
+                let previous = draft.clone();
+                draft.approve(version).map_err(|e| anyhow::anyhow!("{e}"))?;
+                plans.replace(&session, &previous, &draft).await?;
+                Done::note(
+                    "Plan approuvé",
+                    format!(
+                        "✅ Plan v{} de « {} » approuvé et conservé. Prêt pour l'exécution par la prochaine tranche.",
+                        draft.plan.version(),
+                        draft.plan.goal()
+                    ),
+                )
             }
             // Rafale de messages : le propriétaire choisit ce qu'on en fait (issue #49).
             "burst.one" | "burst.ingest" | "burst.each" | "burst.drop" => {
@@ -2398,32 +2383,6 @@ impl TelegramGateway {
         };
         self.show_screen(chat_id, topic_id, Some(message_id), screen, &args, None)
             .await
-    }
-
-    /// Formulaire des paramètres d'un workflow ; l'envoi démarre le run.
-    pub(super) async fn start_workflow_form(
-        &self,
-        chat_id: i64,
-        topic_id: Option<i64>,
-        workflow: &str,
-        title: &str,
-    ) -> anyhow::Result<()> {
-        let entry = self
-            .daemon
-            .services
-            .workflows
-            .get(workflow)
-            .ok_or_else(|| anyhow::anyhow!("workflow `{workflow}` introuvable"))?;
-        let schema = parameters_schema(&entry.metadata.parameters);
-        let state = penelope_telegram::forms::FormState::new(workflow, schema)
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        // Le sujet d'origine suit le formulaire : le run y parlera (issue #35).
-        let pending = json!({"workflow": workflow, "choice": title, "state": state, "topic": topic_id,
-                   "since": self.daemon.services.clock.now_rfc3339()});
-        self.daemon
-            .kv_set(&form_key(chat_id, topic_id), &pending.to_string())
-            .await?;
-        self.send_form_step(chat_id, &pending).await
     }
 
     /// Rend un prompt MCP et l'envoie au modèle de la session, comme un message du

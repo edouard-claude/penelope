@@ -237,6 +237,45 @@ impl PlanStore {
             .await
     }
 
+    /// Crée le plan une seule fois ; deux propositions simultanées ne s'écrasent pas.
+    pub async fn create(&self, session: &str, draft: &PlanDraft) -> penelope_store::Result<()> {
+        let key = format!("workflow.plan.{session}");
+        let value = serde_json::to_string(draft).map_err(|e| StoreError::other(e.to_string()))?;
+        self.store
+            .write_durable(move |tx| {
+                tx.execute(
+                    "INSERT INTO kv(k, v, ts) VALUES(?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+                    params![key, value],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Compare le contenu lu avant l'action avec celui de la transaction d'écriture.
+    /// Un clic périmé ou deux corrections concurrentes ne peuvent perdre une version.
+    pub async fn replace(
+        &self,
+        session: &str,
+        previous: &PlanDraft,
+        next: &PlanDraft,
+    ) -> penelope_store::Result<()> {
+        let key = format!("workflow.plan.{session}");
+        let before =
+            serde_json::to_string(previous).map_err(|e| StoreError::other(e.to_string()))?;
+        let after = serde_json::to_string(next).map_err(|e| StoreError::other(e.to_string()))?;
+        self.store.write_durable(move |tx| {
+            let changed = tx.execute(
+                "UPDATE kv SET v = ?1, ts = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE k = ?2 AND v = ?3",
+                params![after, key, before],
+            )?;
+            if changed != 1 {
+                return Err(StoreError::other("plan modifié entre lecture et écriture"));
+            }
+            Ok(())
+        }).await
+    }
+
     pub async fn get(&self, session: &str) -> penelope_store::Result<Option<PlanDraft>> {
         let key = format!("workflow.plan.{session}");
         let value = self
@@ -361,5 +400,29 @@ mod tests {
         drop(first);
         let reopened = PlanStore::new(penelope_store::Store::open(&path).unwrap());
         assert_eq!(reopened.get("topic:21").await.unwrap(), Some(draft));
+    }
+
+    #[tokio::test]
+    async fn concurrent_corrections_cannot_overwrite_an_approved_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let plans =
+            PlanStore::new(penelope_store::Store::open(dir.path().join("state.db")).unwrap());
+        let initial = PlanDraft {
+            workflow_id: "build-verify".into(),
+            params: serde_json::json!({}),
+            brief: None,
+            plan: Plan::new("Premier but", steps("Tests initiaux")).unwrap(),
+        };
+        plans.create("session", &initial).await.unwrap();
+        assert!(plans.create("session", &initial).await.is_err());
+        let mut approved = initial.clone();
+        approved.approve(1).unwrap();
+        plans.replace("session", &initial, &approved).await.unwrap();
+        let mut stale = initial.clone();
+        stale
+            .revise(1, "But périmé", steps("Autres tests"))
+            .unwrap();
+        assert!(plans.replace("session", &initial, &stale).await.is_err());
+        assert_eq!(plans.get("session").await.unwrap(), Some(approved));
     }
 }
