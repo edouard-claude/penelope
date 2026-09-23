@@ -4,9 +4,16 @@
 //! - les règles de dépendance entre crates ;
 //! - l'absence de chemins littéraux, d'appels shell, de signaux Unix et d'API Trousseau
 //!   **hors** `penelope-platform` ;
-//! - l'interdiction de `unsafe` hors des crates FFI explicitement listés.
+//! - l'interdiction de `unsafe` hors des crates FFI explicitement listés ;
+//! - le gel de la dette (`freeze`, `budget`, `ratchet`) : plafonds de taille, liste
+//!   blanche des modules du daemon, couplage au `Daemon`, allows comptés, critères
+//!   d'acceptation figés et frontière canal/cœur, confrontés à `budget.toml`.
 
 #![forbid(unsafe_code)]
+
+pub mod budget;
+pub mod freeze;
+pub mod snapshot;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -94,7 +101,7 @@ pub fn sources(c: &Crate) -> Vec<PathBuf> {
     out
 }
 
-fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
+pub(crate) fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
