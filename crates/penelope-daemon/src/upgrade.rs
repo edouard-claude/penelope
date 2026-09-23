@@ -133,18 +133,43 @@ pub fn expected_sum(sums: &str, name: &str) -> Option<String> {
     })
 }
 
-/// `0.3.1`, `v0.3.1`, `0.3.1-rc1` : les trois premiers nombres.
+/// `0.3.1`, `v0.3.1` : les trois nombres. Une version à suffixe (`1.0.0-alpha.1`,
+/// `0.17.60-rc1`, `1.2.3+build`) rend `None` : elle n'est jamais candidate à une mise à
+/// jour automatique, ni retenue par `release` comme plus haute version publiée ; seul un
+/// tag explicite l'installe. Issue #212 : le suffixe était coupé, donc une
+/// `v1.0.0-alpha.1` publiée par erreur valait `1.0.0 > 0.17.59` et toutes les instances
+/// 0.17 l'auraient installée à leur prochaine vérification.
 pub fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
-    let core = v.trim().trim_start_matches('v');
-    let core = core.split(['-', '+']).next()?;
-    let mut n = core.split('.').map(|p| p.parse::<u64>().ok());
-    Some((n.next()??, n.next()??, n.next().flatten().unwrap_or(0)))
+    let (numbers, suffixed) = version_parts(v)?;
+    (!suffixed).then_some(numbers)
 }
 
+/// Les trois nombres, et si la version porte un suffixe (`-alpha.1`, `-rc1`, `+build`).
+fn version_parts(v: &str) -> Option<((u64, u64, u64), bool)> {
+    let v = v.trim().trim_start_matches('v');
+    let (core, suffixed) = match v.find(['-', '+']) {
+        Some(i) => (&v[..i], true),
+        None => (v, false),
+    };
+    let mut n = core.split('.').map(|p| p.parse::<u64>().ok());
+    Some((
+        (n.next()??, n.next()??, n.next().flatten().unwrap_or(0)),
+        suffixed,
+    ))
+}
+
+/// `candidate` remplace-t-elle `current` sans être demandée par son tag ? Jamais pour une
+/// pré-release, ni pour une version illisible. Quand le binaire courant est lui-même une
+/// pré-release (`1.0.0-alpha.7` sur la branche v1), sa version pleine le dépasse, une
+/// 0.17 non (#212).
 fn is_newer(candidate: &str, current: &str) -> bool {
-    match (parse_version(candidate), parse_version(current)) {
-        (Some(a), Some(b)) => a > b,
-        _ => candidate != current,
+    let Some(a) = parse_version(candidate) else {
+        return false;
+    };
+    match version_parts(current) {
+        Some((b, false)) => a > b,
+        Some((b, true)) => a >= b,
+        None => false,
     }
 }
 
@@ -1210,12 +1235,95 @@ mod tests {
         assert_eq!(expected_sum("court  ./x", "x"), None, "somme malformée");
 
         assert_eq!(parse_version("v0.3.10"), Some((0, 3, 10)));
-        assert_eq!(parse_version("1.2.3-rc1"), Some((1, 2, 3)));
+        assert_eq!(
+            parse_version("1.2.3-rc1"),
+            None,
+            "#212 : un suffixe n'est pas installable d'office"
+        );
         assert!(is_newer("0.3.10", "0.3.9"));
         assert!(!is_newer("0.3.1", "0.3.1"));
         assert!(announces("penelope 0.3.1", "0.3.1"));
         assert!(!announces("penelope 0.3.10", "0.3.1"), "pas de préfixe");
+        assert!(
+            announces("penelope 1.0.0-rc.1", "1.0.0-rc.1"),
+            "le suffixe compte"
+        );
         assert!(asset_name("v1.0.0", "linux").is_err());
+    }
+
+    /// #212 : une pré-release n'est jamais « plus récente ». `parse_version` coupait le
+    /// suffixe, donc une `v1.0.0-alpha.1` publiée par erreur valait `1.0.0 > 0.17.59` et
+    /// toutes les instances 0.17 l'auraient installée à leur prochaine vérification.
+    #[test]
+    fn a_prerelease_is_never_newer_than_the_running_version() {
+        assert_eq!(parse_version("1.0.0-alpha.1"), None);
+        assert_eq!(parse_version("v1.0.0-alpha.1"), None);
+        assert_eq!(parse_version("0.17.60-rc1"), None);
+        assert_eq!(parse_version("1.2.3+build"), None);
+        assert_eq!(parse_version("1.0.0"), Some((1, 0, 0)));
+        assert_eq!(parse_version("v0.17.59"), Some((0, 17, 59)));
+
+        assert!(!is_newer("v1.0.0-alpha.1", "0.17.59"));
+        assert!(!is_newer("0.17.60-rc1", "0.17.59"));
+        assert!(is_newer("0.17.60", "0.17.59"));
+        assert!(is_newer("1.0.0", "0.17.59"));
+        assert!(!is_newer("0.17.59", "0.17.59"));
+        assert!(!is_newer("0.17.58", "0.17.59"));
+        assert!(
+            !is_newer("n'importe quoi", "0.17.59"),
+            "illisible : pas plus récente"
+        );
+
+        // Le binaire courant est une pré-release (branche v1) : sa version pleine le
+        // dépasse, une 0.17 non, une autre pré-release jamais sans son tag.
+        assert!(is_newer("1.0.0", "1.0.0-rc.1"));
+        assert!(is_newer("1.0.1", "1.0.0-alpha.7"));
+        assert!(!is_newer("0.17.61", "1.0.0-alpha.7"));
+        assert!(!is_newer("1.0.0-rc.2", "1.0.0-rc.1"));
+    }
+
+    /// #212, côté `release` : sans tag, la plus haute version publiée ignore les
+    /// pré-releases, même numérotées au-dessus ; par son tag, une pré-release reste
+    /// installable (c'est ainsi que la `1.0.0-rc.1` s'installera à la bascule).
+    #[tokio::test]
+    async fn the_latest_release_skips_prereleases_unless_asked_by_tag() {
+        let server = fake_releases(|base| {
+            let assets = |tag: &str| {
+                json!([
+                    {"name": format!("penelope-{tag}-macos-universal.tar.gz"),
+                     "browser_download_url": format!("{base}/dl/{tag}")},
+                    {"name": "SHA256SUMS", "browser_download_url": format!("{base}/dl/{tag}.sums")},
+                ])
+            };
+            let list = json!([
+                {"tag_name": "v1.0.0-alpha.1", "prerelease": true, "assets": assets("v1.0.0-alpha.1")},
+                {"tag_name": "v0.17.60", "prerelease": true, "assets": assets("v0.17.60")},
+                {"tag_name": "v0.17.59", "prerelease": true, "assets": assets("v0.17.59")},
+            ]);
+            vec![
+                ("/r".to_string(), list.to_string().into_bytes()),
+                (
+                    "/r/tags/v1.0.0-alpha.1".to_string(),
+                    list[0].to_string().into_bytes(),
+                ),
+            ]
+        })
+        .await;
+        let source = Source {
+            releases_url: format!("{server}/r"),
+            os: "macos".into(),
+            pubkey: None,
+        };
+        let client = client().unwrap();
+        let latest = release(&client, &source, None).await.unwrap();
+        assert_eq!(
+            (latest.tag.as_str(), latest.version.as_str()),
+            ("v0.17.60", "0.17.60")
+        );
+        let asked = release(&client, &source, Some("v1.0.0-alpha.1"))
+            .await
+            .unwrap();
+        assert_eq!(asked.version, "1.0.0-alpha.1");
     }
 
     #[cfg(unix)]
