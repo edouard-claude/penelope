@@ -41,6 +41,9 @@ scenario_cases! {
     messages_fusionnes => "messages-fusionnes",
     reponse_vide_relancee => "reponse-vide-relancee",
     flux_coupe => "flux-coupe",
+    compaction_puis_prolongation => "compaction-puis-prolongation",
+    session_froide => "session-froide",
+    depassement_prouve => "depassement-prouve",
 }
 
 #[test]

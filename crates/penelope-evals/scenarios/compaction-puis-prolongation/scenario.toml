@@ -1,0 +1,29 @@
+name = "compaction-puis-prolongation"
+description = """Compaction manuelle `/compact` après deux échanges : le premier tour est
+résumé (un nœud LCM), puis deux échanges de plus et un second `/compact` prolongent le
+même nœud au lieu d'en créer un second."""
+pin_model = "main"
+
+[[steps]]
+kind = "message"
+text = "on prépare la migration PROJ-7 vers PostgreSQL 17, le schéma est exporté dans db/schema.sql"
+
+[[steps]]
+kind = "message"
+text = "réponses courtes s'il te plaît ; on migre ce soir"
+
+[[steps]]
+kind = "command"
+command = "/compact"
+
+[[steps]]
+kind = "message"
+text = "les index sont relus, il reste à rejouer les migrations"
+
+[[steps]]
+kind = "message"
+text = "on migrera après le rejeu"
+
+[[steps]]
+kind = "command"
+command = "/compact"

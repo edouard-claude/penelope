@@ -1,0 +1,25 @@
+name = "session-froide"
+description = """Session froide (#40) : une longue session dont le dernier appel facturé pesait
+300 000 tokens reprend après une pause plus longue que le cache du fournisseur. Avant
+l'appel au modèle, l'historique est résumé (déclencheur `resume`), puis le message est
+joué avec le résumé en tête. L'historique est semé sans appel au modèle ; le classifieur
+est rappelé à la frontière de cache (#82)."""
+
+[[steps]]
+kind = "seed"
+exchanges = 20
+user = "question {i} sur PROJ-7 : où en est le lot {i} de la migration ?"
+assistant = "réponse {i} : le lot {i} est exporté, l'index relu, rien de bloquant."
+tokens = 600
+
+[[steps]]
+kind = "usage"
+prompt = 300000
+
+[[steps]]
+kind = "advance_clock"
+by = "10m"
+
+[[steps]]
+kind = "message"
+text = "on reprend ? où en est la migration PROJ-7 ?"
