@@ -52,7 +52,8 @@ penelope-tools.workspace = true
 # Approbations et politiques.
 penelope-hitl.workspace = true
 # Gabarits et actions de boutons portés par `Services`, lien profond du bot
-# (`helpers::deep_link`) : sortent vers la passerelle avec T36 (`decoupage-daemon.md` §6),
+# (`helpers::deep_link`), formulaire d'une élicitation (`elicitation`, vers
+# `OwnerChannel::show`) : sortent vers la passerelle avec T36 (`decoupage-daemon.md` §6),
 # et la dépendance avec eux.
 penelope-telegram.workspace = true
 # Registre des workflows, runs, planifications ; plan présenté par `Messenger`.
