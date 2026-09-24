@@ -3,8 +3,12 @@
 use super::*;
 
 pub(super) mod decide;
+pub(super) mod policy;
 
-use decide::{CallContext, DescribedCall, GuardStop, Suspension, call_chain, run_call_guards};
+use decide::{
+    CallContext, DescribedCall, GuardStop, Refusal, Suspension, call_chain, run_call_guards,
+};
+use policy::PolicyStage;
 
 /// Résolution des appels en attente.
 /// Lectures lancées ensemble, au plus (issue #85).
@@ -87,7 +91,6 @@ impl AgentLoop {
         detector: &mut LoopDetector,
     ) -> anyhow::Result<Pending> {
         let s = &self.services;
-        let cfg = s.config.config();
         let tail = conv.tail().await?;
         let pending = pending_calls(&tail);
         if pending.is_empty() {
@@ -152,94 +155,18 @@ impl AgentLoop {
             // « Toujours » couvrirait l'outil entier.
             let effective_args = crate::executor::effective_arguments(&call.name, &call.arguments);
             let policy_workspace = execute.policy_workspace();
-            let mut verdict = s
-                .policies
-                .evaluate_in(
-                    &cfg.mcp.policy,
-                    &info.effective_name,
-                    server_of(&info.effective_name).as_deref(),
-                    &effective_args,
-                    info.risk,
-                    spec.run_id.as_deref(),
-                    Some(&spec.session_id),
-                    policy_workspace.as_deref(),
-                )
-                .await?;
-            // La déclaration du serveur MCP peut imposer sa politique à un outil :
-            // un refus l'emporte toujours, le reste cède à une règle du propriétaire.
-            if let Some(forced) = info.policy
-                && (forced == PolicyDecision::Deny || verdict.rule_id.is_none())
-            {
-                verdict.decision = forced;
-                verdict.reason = format!(
-                    "politique de la déclaration du serveur : `{}`",
-                    forced.as_str()
-                );
-            }
-            // Autorisation déclarée d'avance, puis mode de la session (#111).
-            if verdict.rule_id.is_none()
-                && verdict.decision != PolicyDecision::Deny
-                && let Some(why) = crate::approval_mode::local_draft_allow(&info.effective_name)
-                    .or_else(|| {
-                        crate::approval_mode::declared_allow(
-                            &cfg,
-                            &info.effective_name,
-                            &effective_args,
-                        )
-                    })
-            {
-                verdict.decision = PolicyDecision::Auto;
-                verdict.reason = why;
-            }
-            match crate::approval_mode::of_session(s, &spec.session_id).await {
-                crate::approval_mode::ApprovalMode::Ask
-                    if verdict.decision == PolicyDecision::Auto
-                        && (info.effective_name == "shell_exec"
-                            || info.risk != RiskClass::Read) =>
-                {
-                    verdict.decision = PolicyDecision::Ask;
-                    verdict.reason = "mode « demander tout » de la session".into();
-                }
-                crate::approval_mode::ApprovalMode::Auto
-                    if verdict.decision == PolicyDecision::Ask
-                        && verdict.rule_id.is_none()
-                        && info.policy.is_none()
-                        && info.risk != RiskClass::Destructive
-                        && !(info.effective_name == "shell_exec"
-                            && effective_args
-                                .get("command")
-                                .and_then(|c| c.as_str())
-                                .is_none_or(penelope_tools::shell::may_destroy)) =>
-                {
-                    verdict.decision = PolicyDecision::Auto;
-                    verdict.reason = "mode « tout sauf le destructif » de la session".into();
-                }
-                _ => {}
-            }
-            // Réseau demandé par une commande : la carte le dit en toutes lettres.
-            if crate::executor::wants_network(&info.effective_name, &effective_args)
-                && info.risk == RiskClass::External
-            {
-                verdict.reason = format!(
-                    "accès réseau demandé pour cette commande ({})",
-                    verdict.reason
-                );
-            }
-            // Une règle « toujours » posée pour `config_set` vaut pour les réglages
-            // ordinaires, jamais pour le bac à sable, les providers ou Telegram.
-            if info.effective_name == "config_set"
-                && info.risk == RiskClass::Destructive
-                && verdict.decision != PolicyDecision::Deny
-            {
-                verdict.decision = PolicyDecision::AskTwice;
-                verdict.reason = "réglage sensible : double confirmation à chaque fois".into();
-            }
+            let verdict =
+                PolicyStage::evaluate(s, spec, policy_workspace.as_deref(), &info, &effective_args)
+                    .await?;
 
             match verdict.decision {
                 PolicyDecision::Deny => {
                     steps.push(Step::Record(
                         call,
-                        format!("Refusé par la politique : {}", verdict.reason),
+                        Refusal::Policy {
+                            reason: verdict.reason,
+                        }
+                        .text(),
                     ));
                     continue;
                 }

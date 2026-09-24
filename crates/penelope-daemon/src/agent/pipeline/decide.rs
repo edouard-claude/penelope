@@ -26,6 +26,8 @@ pub(crate) enum Refusal {
     LoopWarn(String),
     /// Arguments invalides (issue #117), déjà formulés pour le modèle.
     Invalid(String),
+    /// Refusé par la politique (règle, déclaration du serveur), avec sa raison.
+    Policy { reason: String },
 }
 
 impl Refusal {
@@ -42,6 +44,7 @@ impl Refusal {
             Refusal::Expired => not_run("la demande a expiré sans réponse"),
             Refusal::LoopWarn(m) => format!("[avertissement du harnais] {m}"),
             Refusal::Invalid(text) => text.clone(),
+            Refusal::Policy { reason } => format!("Refusé par la politique : {reason}"),
         }
     }
 }
