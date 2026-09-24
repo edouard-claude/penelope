@@ -10,10 +10,12 @@
 //! des erreurs. Le journal est haché et ne se réécrit pas : deviner serait mentir sur
 //! ce que le modèle a lu.
 
+mod build;
 mod payload;
 #[cfg(test)]
 mod tests;
 
+pub use build::*;
 pub use payload::*;
 
 use serde::{Deserialize, Serialize};

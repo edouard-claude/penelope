@@ -132,7 +132,12 @@ impl AgentLoop {
         if choices.len() < 2 {
             choices = LOOP_DEFAULT_CHOICES.iter().map(|c| c.to_string()).collect();
         }
-        conv.record(&ChatMessage::assistant(&answer), true).await?;
+        let prov = Provenance {
+            turn: spec.turn_id.clone(),
+            ..Default::default()
+        };
+        conv.record_as(&ChatMessage::assistant(&answer), true, &prov)
+            .await?;
         Ok(TurnOutcome::LoopAborted {
             report,
             answer,

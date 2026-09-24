@@ -82,6 +82,20 @@ Un tour qui tombe avant d'appeler le modèle (fournisseur indisponible) est ouve
 fermé ensemble, `turn.started` sans modèle. Un `turn.started` sans `turn.finished` de
 même `turn_id` est un tour interrompu par un arrêt du processus.
 
+Les événements `conv.*` portent le **contenu** de la conversation, pour que le journal
+se suffise (épopée #208, `design/v1/source-de-verite.md` §2.2). Chaque payload a
+`"v": 1` et, pour ceux qui produisent un message, `surface` (`{"op":"append"}` ou
+`{"op":"replace","from":s,"to":s}`). Pendant la double écriture, les tables restent la
+source de lecture ; une ligne de `messages` cite son événement par `event_id`.
+
+| Kind | Écrit quand | Payload |
+|---|---|---|
+| `conv.user` | un message utilisateur entre dans l'historique | `source` (`owner`, `merged`, `trigger`, `nudge`, `photo`), `content`, `episode`, `tokens_est` ; `turn_message_id` et `arrived_at` pour un message de la file ; `mid_turn` s'il est arrivé pendant le tour |
+| `conv.assistant` | une réponse du modèle est gardée | `content`, `tool_calls`, `reasoning`, `turn`, `step`, `model`, `provider`, `upstream`, `generation_id`, `finish`, `usage`, `cost_usd`, `system_hash`, `tools_hash`, `request_hash` ; `interrupted` après un arrêt |
+| `conv.tool_result` | un résultat d'outil est gardé | `call_id`, `tool`, `ok`, `eager`, `content` |
+
+Ces événements sont des données personnelles, purgées comme les autres.
+
 ## Démonstration Pathlayer
 
 L'endpoint HTTP `POST /ingest` appartient à `HttpIngestAdapter` de Pathlayer :

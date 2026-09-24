@@ -18,6 +18,8 @@ use std::collections::BTreeMap;
 pub struct HistoryStore {
     store: Store,
     clock: SharedClock,
+    /// Journal de la double écriture (T5) ; absent, les lignes s'écrivent seules.
+    events: Option<penelope_kernel::event::EventLog>,
 }
 
 /// Résultat d'une recherche FTS sur l'historique (`history_grep`).
@@ -241,7 +243,11 @@ pub struct Artifact {
 
 impl HistoryStore {
     pub fn new(store: Store, clock: SharedClock) -> Self {
-        HistoryStore { store, clock }
+        HistoryStore {
+            store,
+            clock,
+            events: None,
+        }
     }
 
     pub fn store(&self) -> &Store {
@@ -258,49 +264,17 @@ impl HistoryStore {
         eager: bool,
         artifact_id: Option<String>,
     ) -> penelope_store::Result<i64> {
-        let sid = session_id.to_string();
-        let content = serialise_content(message)?;
-        let searchable = message.text();
-        let ts = self.clock.now_rfc3339();
-        let role = message.role.as_str().to_string();
-        let tool_call_id = message.tool_call_id.clone();
-        let tool_name = message.name.clone();
-
-        self.store
-            .write(move |tx| {
-                let seq: i64 = tx
-                    .query_row(
-                        "SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE session_id = ?1",
-                        [&sid],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(1);
-                tx.execute(
-                    "INSERT INTO messages(session_id, seq, role, content, tool_call_id, tool_name,
-                        tokens_est, ts, episode, eager, artifact_id)
-                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-                    params![
-                        sid,
-                        seq,
-                        role,
-                        content,
-                        tool_call_id,
-                        tool_name,
-                        tokens as i64,
-                        ts,
-                        episode,
-                        eager as i64,
-                        artifact_id
-                    ],
-                )?;
-                let id = tx.last_insert_rowid();
-                tx.execute(
-                    "INSERT INTO messages_fts(content, session_id, msg_id) VALUES(?1,?2,?3)",
-                    params![searchable, sid, id],
-                )?;
-                Ok(seq)
-            })
-            .await
+        let prov = crate::journal::Provenance::default();
+        self.append_as(
+            session_id,
+            message,
+            tokens,
+            episode,
+            eager,
+            artifact_id,
+            &prov,
+        )
+        .await
     }
 
     /// Ajoute une seule fois un message reçu par la file, avec son horodatage
@@ -314,43 +288,12 @@ impl HistoryStore {
         tokens: u64,
         episode: i64,
     ) -> penelope_store::Result<i64> {
-        let (sid, source, ts) = (
-            session_id.to_string(),
-            turn_id.to_string(),
-            arrived_at.to_string(),
+        let prov = crate::journal::Provenance::queued(
+            crate::journal::UserSource::Owner,
+            turn_id,
+            arrived_at,
         );
-        let message = ChatMessage::user(text);
-        let content = serialise_content(&message)?;
-        let searchable = text.to_string();
-        self.store
-            .write(move |tx| {
-                if let Some(seq) = tx
-                    .query_row(
-                        "SELECT seq FROM messages WHERE source_turn_id=?1",
-                        [&source],
-                        |r| r.get(0),
-                    )
-                    .optional()?
-                {
-                    return Ok(seq);
-                }
-                let seq: i64 = tx.query_row(
-                    "SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE session_id=?1",
-                    [&sid],
-                    |r| r.get(0),
-                )?;
-                tx.execute(
-                    "INSERT INTO messages(session_id, seq, role, content, tokens_est, ts,
-                        episode, source_turn_id) VALUES(?1,?2,'user',?3,?4,?5,?6,?7)",
-                    params![sid, seq, content, tokens as i64, ts, episode, source],
-                )?;
-                let id = tx.last_insert_rowid();
-                tx.execute(
-                    "INSERT INTO messages_fts(content, session_id, msg_id) VALUES(?1,?2,?3)",
-                    params![searchable, sid, id],
-                )?;
-                Ok(seq)
-            })
+        self.append_queued(session_id, &ChatMessage::user(text), tokens, episode, &prov)
             .await
     }
 
@@ -1135,6 +1078,8 @@ fn excerpt_around(text: &str, needle: &str, width: usize) -> String {
         .unwrap_or(text.len());
     text[start..end].replace('\n', " ")
 }
+
+mod dual;
 
 #[cfg(test)]
 mod tests;

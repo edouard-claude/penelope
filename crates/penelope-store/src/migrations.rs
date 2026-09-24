@@ -91,6 +91,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0019_tool_jobs",
         sql: SQL_0019,
     },
+    Migration {
+        version: "0020_history_journal",
+        sql: SQL_0020,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -914,6 +918,20 @@ mod since_0011;
 use since_0011::{
     SQL_0011, SQL_0012, SQL_0013, SQL_0014, SQL_0015, SQL_0016, SQL_0017, SQL_0018, SQL_0019,
 };
+
+/// Double écriture de l'historique (épopée #208, T5, `design/v1/source-de-verite.md`
+/// §2.4, §4.1, §4.5) : une ligne de `messages` ou de `lcm_nodes` cite l'événement `conv.*`
+/// qui la porte ; `sealed` marque le préfixe V0 scellé par `conv.import` (posé au boot,
+/// pas ici : le scellement a besoin du journal). L'index partiel retrouve un message de
+/// la file par sa clé d'idempotence dans le journal (§2.7).
+const SQL_0020: &str = r#"
+ALTER TABLE messages ADD COLUMN event_id INTEGER;
+ALTER TABLE messages ADD COLUMN sealed INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lcm_nodes ADD COLUMN event_id INTEGER;
+CREATE INDEX messages_event ON messages(event_id);
+CREATE INDEX events_turn_message ON events(session_id, json_extract(payload, '$.turn_message_id'))
+  WHERE kind = 'conv.user';
+"#;
 
 #[cfg(test)]
 mod tests;

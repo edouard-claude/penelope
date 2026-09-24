@@ -8,6 +8,7 @@ use crate::bus::{ChannelDelivery, Origin};
 pub use crate::helpers::{local_now, vault_dir};
 use crate::runtime::Services;
 use penelope_context::CompactionParams;
+use penelope_context::journal::{Provenance, UserSource};
 use penelope_context::tiers::{Tiers, TiersBuilder, volatile_header};
 use penelope_context::transcript::Entry;
 use penelope_kernel::event::EventDraft;
@@ -178,16 +179,19 @@ impl Conversation for SessionConversation {
                     continue;
                 };
                 let tokens = s.context.estimator.text_tokens(&self.model_id, text);
+                // Absorbé pendant le tour : la requête porte la note de fusion (§2.3).
+                let prov = Provenance {
+                    mid_turn: true,
+                    ..Provenance::queued(
+                        UserSource::Merged,
+                        message.id.as_str(),
+                        &message.enqueued_at,
+                    )
+                };
+                let user = ChatMessage::user(text);
                 s.context
                     .history
-                    .append_user_turn_at(
-                        &self.session_id,
-                        message.id.as_str(),
-                        text,
-                        &message.enqueued_at,
-                        tokens,
-                        self.episode,
-                    )
+                    .append_queued(&self.session_id, &user, tokens, self.episode, &prov)
                     .await?;
             }
             if !absorbed.is_empty() {
@@ -264,12 +268,22 @@ impl Conversation for SessionConversation {
     }
 
     async fn record(&self, message: &ChatMessage, eager: bool) -> anyhow::Result<()> {
+        self.record_as(message, eager, &Provenance::default()).await
+    }
+
+    async fn record_as(
+        &self,
+        message: &ChatMessage,
+        eager: bool,
+        prov: &Provenance,
+    ) -> anyhow::Result<()> {
         let s = &self.services;
         let tokens = s.context.estimator.message_tokens(&self.model_id, message);
+        let (sid, episode) = (&self.session_id, self.episode);
         let seq = s
             .context
             .history
-            .append(&self.session_id, message, tokens, self.episode, eager, None)
+            .append_as(sid, message, tokens, episode, eager, None, prov)
             .await?;
         s.sessions.touch(&self.session_id).await?;
 

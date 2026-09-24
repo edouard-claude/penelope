@@ -10,6 +10,16 @@ pub trait Conversation: Send + Sync {
     async fn request_messages(&self) -> anyhow::Result<Vec<ChatMessage>>;
     /// Ajoute un message au transcript.
     async fn record(&self, message: &ChatMessage, eager: bool) -> anyhow::Result<()>;
+    /// Ajoute un message avec sa provenance (tour, étape, appel au modèle), que le
+    /// journal garde (épopée #208, T5). Un transcript sans journal l'ignore.
+    async fn record_as(
+        &self,
+        message: &ChatMessage,
+        eager: bool,
+        _prov: &Provenance,
+    ) -> anyhow::Result<()> {
+        self.record(message, eager).await
+    }
     /// Queue du transcript, sans prompt système : sert à retrouver les appels en attente.
     async fn tail(&self) -> anyhow::Result<Vec<ChatMessage>>;
     /// Compacte tout de suite après un dépassement de fenêtre prouvé par le provider.

@@ -89,7 +89,7 @@ impl Services {
         let catalog = Catalog::new();
         let llm_state = LlmStateMachine::new(store.clone(), clock.clone());
         let estimator = TokenEstimator::new();
-        let history = HistoryStore::new(store.clone(), clock.clone());
+        let history = HistoryStore::new(store.clone(), clock.clone()).with_events(events.clone());
         let lcm = Lcm::new(store.clone(), clock.clone());
         let context = ContextEngine::new(history, lcm, estimator, catalog.clone(), clock.clone());
 
@@ -187,8 +187,9 @@ impl Services {
         ));
         let cfg = config.config();
         let catalog = Catalog::new();
+        let events = EventLog::new(store.clone(), clock.clone());
         let context = ContextEngine::new(
-            HistoryStore::new(store.clone(), clock.clone()),
+            HistoryStore::new(store.clone(), clock.clone()).with_events(events.clone()),
             Lcm::new(store.clone(), clock.clone()),
             TokenEstimator::new(),
             catalog.clone(),
@@ -196,7 +197,6 @@ impl Services {
         );
         let mcp_tools = ToolRegistry::new(store.clone(), 30, 8192, 65536);
         let known = workflow_known(&cfg, &mcp_tools).await;
-        let events = EventLog::new(store.clone(), clock.clone());
 
         Ok(Services {
             events: events.clone(),

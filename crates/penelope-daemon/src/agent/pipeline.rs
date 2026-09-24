@@ -482,8 +482,16 @@ impl AgentLoop {
         eager: bool,
     ) -> anyhow::Result<()> {
         let preview: String = text.chars().take(200).collect();
-        conv.record(&ChatMessage::tool_result(&call.id, &call.name, text), eager)
-            .await?;
+        let prov = Provenance {
+            ok: Some(ok),
+            ..Default::default()
+        };
+        conv.record_as(
+            &ChatMessage::tool_result(&call.id, &call.name, text),
+            eager,
+            &prov,
+        )
+        .await?;
         sink.emit(TurnEvent::ToolResult {
             name: call.name.clone(),
             ok,

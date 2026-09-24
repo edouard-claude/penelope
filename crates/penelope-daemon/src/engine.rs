@@ -10,6 +10,7 @@ use crate::conversation::SessionConversation;
 use crate::executor::{NativeToolExecutor, ToolEnv, chat_tool_defs, default_workspaces};
 use crate::helpers::last_model_key;
 use crate::runtime::Daemon;
+use penelope_context::journal::{Provenance, UserSource};
 use penelope_kernel::ids::TurnId;
 use penelope_kernel::session::SessionKind;
 use penelope_kernel::turn::{Turn, TurnKind};
@@ -389,29 +390,21 @@ impl Daemon {
                     _ => text.clone(),
                 };
                 let tokens = s.context.estimator.text_tokens("default", &content);
+                let (history, user) = (&s.context.history, ChatMessage::user(content));
                 if turn.kind == TurnKind::Message {
-                    s.context
-                        .history
-                        .append_user_turn_at(
-                            &turn.session_id,
-                            turn.id.as_str(),
-                            &content,
-                            &turn.enqueued_at,
-                            tokens,
-                            episode,
-                        )
+                    let prov =
+                        Provenance::queued(UserSource::Owner, turn.id.as_str(), &turn.enqueued_at);
+                    history
+                        .append_queued(&turn.session_id, &user, tokens, episode, &prov)
                         .await?;
                 } else {
-                    s.context
-                        .history
-                        .append(
-                            &turn.session_id,
-                            &ChatMessage::user(content),
-                            tokens,
-                            episode,
-                            false,
-                            None,
-                        )
+                    let source = match turn.kind {
+                        TurnKind::Trigger => UserSource::Trigger,
+                        _ => UserSource::Nudge,
+                    };
+                    let prov = Provenance::user(source);
+                    history
+                        .append_as(&turn.session_id, &user, tokens, episode, false, None, &prov)
                         .await?;
                 }
                 self.services.kv_set(&flag, "1").await?;
@@ -423,16 +416,12 @@ impl Daemon {
                     continue;
                 };
                 let tokens = s.context.estimator.text_tokens("default", message);
+                let prov =
+                    Provenance::queued(UserSource::Merged, merged.id.as_str(), &merged.enqueued_at);
+                let user = ChatMessage::user(message);
                 s.context
                     .history
-                    .append_user_turn_at(
-                        &turn.session_id,
-                        merged.id.as_str(),
-                        message,
-                        &merged.enqueued_at,
-                        tokens,
-                        episode,
-                    )
+                    .append_queued(&turn.session_id, &user, tokens, episode, &prov)
                     .await?;
             }
         }
@@ -485,9 +474,18 @@ impl Daemon {
                     .photo_message(&text, &images, &model_id, &turn.session_id, &origin_turn)
                     .await;
                 let tokens = s.context.estimator.message_tokens(&model_id, &message);
+                let prov = Provenance::user(UserSource::Photo);
                 s.context
                     .history
-                    .append(&turn.session_id, &message, tokens, episode, false, None)
+                    .append_as(
+                        &turn.session_id,
+                        &message,
+                        tokens,
+                        episode,
+                        false,
+                        None,
+                        &prov,
+                    )
                     .await?;
                 self.services.kv_set(&flag, "1").await?;
             }

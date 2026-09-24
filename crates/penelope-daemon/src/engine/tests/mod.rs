@@ -8,6 +8,7 @@ use penelope_llm::mock::{MockProvider, Scripted};
 
 use penelope_llm::types::ToolCall;
 
+mod journal;
 mod models;
 mod rules;
 mod turns;

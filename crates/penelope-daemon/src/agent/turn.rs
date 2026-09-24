@@ -175,10 +175,23 @@ impl AgentLoop {
                 })
                 .await?;
 
+            // Ce que l'appel dit de lui-même, pour le journal (T5).
+            let prov = Provenance {
+                turn: spec.turn_id.clone(),
+                step: iteration + 1,
+                call: Some(Box::new(penelope_context::journal::AssistantPayload {
+                    system_hash: Some(fingerprint.system_hash.clone()),
+                    tools_hash: Some(fingerprint.tools_hash.clone()),
+                    request_hash: fingerprint.request_hash(),
+                    interrupted: response.finish == FinishReason::Cancelled,
+                    ..penelope_context::journal::AssistantPayload::of_response(&response)
+                })),
+                ..Default::default()
+            };
             if response.finish == FinishReason::Cancelled {
                 // Ce qui a été écrit avant l'arrêt reste dans le transcript.
                 if !response.message.text().is_empty() {
-                    conv.record(&response.message, false).await?;
+                    conv.record_as(&response.message, false, &prov).await?;
                 }
                 return Ok(TurnOutcome::Cancelled);
             }
@@ -271,7 +284,7 @@ impl AgentLoop {
                 });
             }
 
-            conv.record(&response.message, false).await?;
+            conv.record_as(&response.message, false, &prov).await?;
 
             // 4. Pas d'appel d'outil : c'est la réponse finale.
             if response.message.tool_calls.is_empty() {
