@@ -50,7 +50,7 @@ test_modules = [
 # vingtaine de correctifs de taille courante. Un autre crate se plafonne en ajoutant une
 # ligne. UPDATE_BUDGET ne touche pas à cette table.
 [crates]
-"penelope-daemon" = 60004   # v1 : après la sortie de penelope-app, penelope-mcp-host et de la passerelle Telegram (lot H) ; redescend avec les crates suivantes
+"penelope-daemon" = 53875   # v1 : après la sortie de penelope-app, mcp-host, vault et de la passerelle Telegram (lot H) ; redescend avec les crates du cœur (lot J)
 
 # Liste blanche des modules du daemon (R5) : les déclarations `mod x;` de lib.rs et
 # `mod screens;` de telegram.rs. `mod tests;` est toujours permis. Les fichiers où un bloc
@@ -66,45 +66,32 @@ modules = [
     "codex_auth",
     "codex_quota",
     "compaction",
-    "concepts",
     "conversation",
     "doctor",
     "dream",
-    "embeddings",
     "engine",
-    "episodes",
     "executor",
     "hermes",
     "images",
     "history",  # étape de boot du scellement (épopée #208, lot E, T11), prévue par source-de-verite.md
     "ingest",
-    "mem_audit",
-    "mem_split",
     "onboarding",
     "prompt_snapshot",
     "purge",
-    "review",
     "rpc",
     "runner",
     "runtime",
     "runtime_events",
     "scheduler",
-    "secret_shelf",
     "selfdocs",
     "selfknow",
-    "session_notes",
     "session_ops",
-    "session_project",
     "skill_deps",
     "skill_install",
     "supervisor",
     "titles",
     "tools_on_demand",
     "upgrade",
-    "usage_feedback",
-    "vault_git",
-    "vault_inventory",
-    "vault_ops",
     "vision",
     "voice",
     "wiki_e2e",
@@ -151,7 +138,6 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 "skill_install.rs" = 2
 "cache_audit.rs" = 1
 "lib.rs" = 1          # le réexport `pub use runtime::{Daemon, …}`
-"session_project.rs" = 1
 
 # `#[allow(clippy::too_many_lines)]` dans les sources (R7, #211) : les allows de la pose
 # du lint sont comptés par le lot qui les pose ; d'ici là, aucun.
@@ -246,6 +232,7 @@ required = [
 # OwnerChannel ; ces entrées ne peuvent que décroître (lot D, T36), sauf les permanentes,
 # justifiées en commentaire, qui attendent T37 après la V1.
 [channel.allowed]
+"crates/penelope-vault/src/session_project.rs" = 2   # descendu du daemon avec le vault (T22) : le sujet Telegram nomme le projet
 "crates/penelope-daemon/src/rpc/methods/workflows.rs" = 9   # découpage (lot G) : la mention suit son code
 "crates/penelope-daemon/src/rpc/methods/approvals.rs" = 9   # découpage (lot G) : la mention suit son code
 "crates/penelope-mcp-host/src/lifecycle.rs" = 1   # découpage (lot G), puis sortie du daemon (T25) : la mention suit son code
@@ -275,7 +262,6 @@ required = [
 "crates/penelope-kernel/src/turn.rs" = 6
 "crates/penelope-kernel/src/effects.rs" = 5
 "crates/penelope-tools/src/spec.rs" = 4
-"crates/penelope-daemon/src/session_project.rs" = 2
 "crates/penelope-app/src/helpers.rs" = 12   # clés kv et origine du canal sorties de telegram.rs et scheduler.rs (épopée #208, lot D, T06)
 "crates/penelope-observe/src/redact.rs" = 2      # permanent : le caviardage doit connaître la forme des jetons
 "crates/penelope-app/src/codex_scope.rs" = 1
