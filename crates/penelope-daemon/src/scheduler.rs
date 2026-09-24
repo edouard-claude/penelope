@@ -112,9 +112,7 @@ pub async fn tick(d: &Arc<Daemon>) -> anyhow::Result<TickReport> {
             other => finish(d, &sched, other, &mut report).await?,
         }
     }
-    d.services
-        .kv_set("scheduler.event_cursor", &to.to_string())
-        .await?;
+    s.kv_set("scheduler.event_cursor", &to.to_string()).await?;
     cancelled_triggers(d).await?;
     Ok(report)
 }
@@ -1455,12 +1453,10 @@ mod tests {
             Ok(vec!["telegram.allowed_chats".into()])
         })
         .unwrap();
-        d.services
-            .kv_set(&crate::telegram::chat_title_key(-100_777), "Équipe")
+        s.kv_set(&crate::telegram::chat_title_key(-100_777), "Équipe")
             .await
             .unwrap();
-        d.services
-            .kv_set(&crate::telegram::topic_name_key(-100_777, 12), "Veille")
+        s.kv_set(&crate::telegram::topic_name_key(-100_777, 12), "Veille")
             .await
             .unwrap();
         let sched = s

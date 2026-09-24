@@ -354,10 +354,7 @@ pub async fn start(
                             .as_str()
                             .ok_or("enregistrement du client refusé (pas de `client_id`)")?
                             .to_string();
-                        d.services
-                            .kv_set(&key, &id)
-                            .await
-                            .map_err(|e| e.to_string())?;
+                        s.kv_set(&key, &id).await.map_err(|e| e.to_string())?;
                         id
                     }
                 }
@@ -394,13 +391,12 @@ pub async fn start(
         auth_method,
         token_endpoint: meta.token_endpoint.clone(),
     };
-    d.services
-        .kv_set(
-            &pending_key(&state),
-            &serde_json::to_string(&pending).map_err(|e| e.to_string())?,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+    s.kv_set(
+        &pending_key(&state),
+        &serde_json::to_string(&pending).map_err(|e| e.to_string())?,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let _ = s
         .events
         .append(EventDraft::new(
@@ -831,7 +827,7 @@ mod tests {
         let clock = TestClock::new(1_789_516_800_000);
         let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+            Services::for_tests(dir.path().to_path_buf(), shared)
                 .await
                 .unwrap(),
         );
@@ -968,7 +964,7 @@ mod tests {
         let clock = TestClock::new(1_789_516_800_000);
         let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+            Services::for_tests(dir.path().to_path_buf(), shared)
                 .await
                 .unwrap(),
         );
@@ -1142,7 +1138,7 @@ mod tests {
         let clock = TestClock::new(1_789_516_800_000);
         let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+            Services::for_tests(dir.path().to_path_buf(), shared)
                 .await
                 .unwrap(),
         );
@@ -1172,7 +1168,7 @@ mod tests {
         let clock = TestClock::new(1_789_516_800_000);
         let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+            Services::for_tests(dir.path().to_path_buf(), shared)
                 .await
                 .unwrap(),
         );
@@ -1198,7 +1194,7 @@ mod tests {
         let clock = TestClock::new(1_789_516_800_000);
         let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+            Services::for_tests(dir.path().to_path_buf(), shared)
                 .await
                 .unwrap(),
         );

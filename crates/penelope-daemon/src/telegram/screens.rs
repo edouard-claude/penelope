@@ -2328,8 +2328,7 @@ impl TelegramGateway {
                         "topic": topic_id,
                         "since": d.services.clock.now_rfc3339(),
                     });
-                    d.services
-                        .kv_set(&form_key(chat_id, topic_id), &pending.to_string())
+                    s.kv_set(&form_key(chat_id, topic_id), &pending.to_string())
                         .await?;
                     self.send_form_step(chat_id, &pending).await?;
                     Done::quiet(format!("Arguments de {prompt}"))

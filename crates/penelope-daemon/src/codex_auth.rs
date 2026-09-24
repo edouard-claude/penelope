@@ -264,9 +264,8 @@ pub async fn start_pending(s: &Services) -> Result<DeviceLogin, String> {
 /// Attend la validation du code affiché plus tôt. La demande est oubliée dans tous les
 /// cas : un code mort ne doit pas être resservi.
 pub async fn wait_pending(s: &Services) -> Result<Grant, String> {
-    let raw = s
-        .kv_get(PENDING_KEY)
-        .await
+    let stored = s.kv_get(PENDING_KEY).await;
+    let raw = stored
         .map_err(|e| e.to_string())?
         .ok_or("aucune connexion Codex en attente : relancer `penelope model auth codex`")?;
     let login: DeviceLogin = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
@@ -669,15 +668,13 @@ pub async fn refresh_loop(d: Arc<Daemon>) {
 
 /// Une seule annonce par déconnexion : la suivante attend une reconnexion.
 async fn notify_disconnected(d: &Daemon, grant: &Grant) {
+    let s = &d.services;
     let reason = grant.disconnected.clone().unwrap_or_default();
     let key = format!("codex.disconnected.notified.{reason}");
-    if d.services.kv_get(&key).await.ok().flatten().is_some() {
+    if s.kv_get(&key).await.ok().flatten().is_some() {
         return;
     }
-    let _ = d
-        .services
-        .kv_set(&key, &d.services.clock.now_rfc3339())
-        .await;
+    let _ = s.kv_set(&key, &s.clock.now_rfc3339()).await;
     let text = format!(
         "🔌 **Compte ChatGPT déconnecté** ({reason}).\n\nLes modèles `codex:` repassent \
          par OpenRouter en attendant. Pour reconnecter : `penelope model auth codex`, ou \
@@ -779,7 +776,7 @@ mod tests {
         let clock: penelope_kernel::clock::SharedClock =
             Arc::new(penelope_kernel::clock::TestClock::default());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );

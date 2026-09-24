@@ -801,13 +801,8 @@ mod tests {
             .bind_telegram(&topic, -10_042, Some(21))
             .await
             .unwrap();
-        d.services
-            .kv_set(
-                &crate::telegram::topic_name_key(-10_042, 21),
-                "Posts LinkedIn",
-            )
-            .await
-            .unwrap();
+        let key = crate::telegram::topic_name_key(-10_042, 21);
+        d.services.kv_set(&key, "Posts LinkedIn").await.unwrap();
         let t = t2(topic.clone()).await;
         assert!(
             t.contains("Trois publications") && !t.contains("Scaleway"),

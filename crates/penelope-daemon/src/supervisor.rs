@@ -451,8 +451,7 @@ pub(crate) async fn skills_tick(d: &Daemon) -> anyhow::Result<bool> {
     match crate::runtime::reload_skills(s).await {
         Ok(n) => {
             tracing::info!(skills = n, "skills relues après changement du dossier");
-            d.services
-                .kv_set("skills.fingerprint", &skills_fingerprint(s))
+            s.kv_set("skills.fingerprint", &skills_fingerprint(s))
                 .await?;
             Ok(true)
         }
@@ -643,8 +642,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
                 ))
                 .await?;
         }
-        d.services
-            .kv_set("workflow.workspace_size.checked", &now.to_string())
+        s.kv_set("workflow.workspace_size.checked", &now.to_string())
             .await?;
     }
     Ok(())

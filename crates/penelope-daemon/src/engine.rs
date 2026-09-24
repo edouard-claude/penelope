@@ -266,9 +266,7 @@ impl Daemon {
                     .sessions
                     .create(SessionKind::Chat, Some("CLI".into()))
                     .await?;
-                self.services
-                    .kv_set("cli.session", sess.id.as_str())
-                    .await?;
+                s.kv_set("cli.session", sess.id.as_str()).await?;
                 Ok(sess.id.to_string())
             }
         }

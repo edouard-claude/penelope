@@ -548,11 +548,12 @@ impl TelegramGateway {
     }
 
     pub fn with_transport(daemon: Arc<Daemon>, transport: Arc<dyn BotTransport>) -> Arc<Self> {
-        let cfg = daemon.services.config.config();
+        let s = &daemon.services;
+        let cfg = s.config.config();
         let bot = Arc::new(Bot::new(
             transport,
             cfg.telegram.rate_per_chat_per_s,
-            daemon.services.clock.clone(),
+            s.clock.clone(),
         ));
         Arc::new(TelegramGateway {
             owner_id: cfg.owner.telegram_user_id,
@@ -737,11 +738,10 @@ impl TelegramGateway {
     // ================================================================ réception
 
     async fn poll_loop(self: Arc<Self>) {
+        let s = &self.daemon.services;
         let mut backoff = Duration::from_secs(1);
         while !self.shutting_down() {
-            let offset = self
-                .daemon
-                .services
+            let offset = s
                 .kv_get("tg.offset")
                 .await
                 .ok()
@@ -759,11 +759,7 @@ impl TelegramGateway {
                             // retaper ou de croire que c'est fait (issue #71).
                             self.report_failure(&u, &e).await;
                         }
-                        let _ = self
-                            .daemon
-                            .services
-                            .kv_set("tg.offset", &(id + 1).to_string())
-                            .await;
+                        let _ = s.kv_set("tg.offset", &(id + 1).to_string()).await;
                     }
                 }
                 Err(e) => {
@@ -872,6 +868,7 @@ impl TelegramGateway {
 
     #[allow(clippy::too_many_lines)] // gel 0.17 : lot G (telegram/mod.rs)
     async fn handle(self: &Arc<Self>, incoming: Incoming) -> anyhow::Result<()> {
+        let s = &self.daemon.services;
         match incoming {
             Incoming::Text {
                 update_id,
@@ -885,20 +882,15 @@ impl TelegramGateway {
                 // Renommage demandé depuis le menu `/sessions` il y a moins de 5 min : ce
                 // message est le titre.
                 let title_key = format!("tg.await_title.{chat_id}");
-                if let Some(raw) = self.daemon.services.kv_get(&title_key).await?
+                if let Some(raw) = s.kv_get(&title_key).await?
                     && let Some((target, at)) = raw.split_once(' ')
-                    && self.daemon.services.clock.now_ms() - at.parse::<i64>().unwrap_or(0)
-                        < 5 * 60_000
+                    && s.clock.now_ms() - at.parse::<i64>().unwrap_or(0) < 5 * 60_000
                 {
                     let target = target.to_string();
-                    self.daemon.services.kv_set(&title_key, "").await?;
+                    s.kv_set(&title_key, "").await?;
                     let note = match crate::titles::clean(&text) {
                         Some(title) => {
-                            self.daemon
-                                .services
-                                .sessions
-                                .set_title(&target, &title, false)
-                                .await?;
+                            s.sessions.set_title(&target, &title, false).await?;
                             format!("✏️ Session renommée : « {title} ».")
                         }
                         None => "Titre vide : rien n'a changé.".to_string(),
@@ -907,7 +899,7 @@ impl TelegramGateway {
                 }
                 // Entretien d'accueil en cours : ce message répond à la question posée.
                 let onboard_key = format!("tg.onboard.{chat_id}");
-                if let Some(raw) = self.daemon.services.kv_get(&onboard_key).await?
+                if let Some(raw) = s.kv_get(&onboard_key).await?
                     && let Ok(v) = serde_json::from_str::<Value>(&raw)
                     && let Some(rel) = v["rel"].as_str()
                 {
@@ -929,10 +921,10 @@ impl TelegramGateway {
                 }
                 // Une saisie était attendue par une étape `user` de workflow.
                 let input_key = format!("tg.await_input.{chat_id}");
-                if let Some(raw) = self.daemon.services.kv_get(&input_key).await?
+                if let Some(raw) = s.kv_get(&input_key).await?
                     && !raw.is_empty()
                 {
-                    self.daemon.services.kv_set(&input_key, "").await?;
+                    s.kv_set(&input_key, "").await?;
                     let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
                     let note = match crate::workflow::answer(
                         &self.daemon,
@@ -951,10 +943,10 @@ impl TelegramGateway {
 
                 // Une raison de refus était attendue : ce message la donne.
                 let reason_key = approval_reason_key(chat_id, topic_id);
-                if let Some(approval_id) = self.daemon.services.kv_get(&reason_key).await?
+                if let Some(approval_id) = s.kv_get(&reason_key).await?
                     && !approval_id.is_empty()
                 {
-                    self.daemon.services.kv_set(&reason_key, "").await?;
+                    s.kv_set(&reason_key, "").await?;
                     let d = Decision::deny("telegram", Some(text.clone()));
                     self.finalize_decision(&approval_id, &d, chat_id, topic_id)
                         .await?;
@@ -962,20 +954,10 @@ impl TelegramGateway {
                 }
 
                 // Profil vide : l'accueil est proposé une fois, sans retenir le message.
-                if self
-                    .daemon
-                    .services
-                    .kv_get("tg.onboard.proposed")
-                    .await?
-                    .is_none()
+                if s.kv_get("tg.onboard.proposed").await?.is_none()
                     && crate::onboarding::profile_is_empty(&self.daemon).await
                 {
-                    self.daemon
-                        .services
-                        .kv_set(
-                            "tg.onboard.proposed",
-                            &self.daemon.services.clock.now_rfc3339(),
-                        )
+                    s.kv_set("tg.onboard.proposed", &s.clock.now_rfc3339())
                         .await?;
                     self.propose_onboarding(chat_id, topic_id).await?;
                 }
@@ -1112,7 +1094,7 @@ impl TelegramGateway {
                     "conversation Telegram non autorisée ignorée : \
                      telegram.allowed_chats"
                 );
-                record_seen_chat(&self.daemon.services, chat_id, &chat_type, &title).await;
+                record_seen_chat(&s, chat_id, &chat_type, &title).await;
             }
             Incoming::Ignored { reason, .. } => {
                 tracing::debug!(%reason, "update ignoré");
@@ -1289,12 +1271,11 @@ impl TelegramGateway {
                         .and_then(|v| v.get("message_id").and_then(|m| m.as_i64()))
                     {
                         Some(mid) => {
-                            d.services
-                                .kv_set(
-                                    &format!("tg.new_session.{}", sess.id),
-                                    &format!("{chat_id}:{mid}"),
-                                )
-                                .await?;
+                            s.kv_set(
+                                &format!("tg.new_session.{}", sess.id),
+                                &format!("{chat_id}:{mid}"),
+                            )
+                            .await?;
                             return Ok(());
                         }
                         None => text,
@@ -2834,6 +2815,7 @@ impl TelegramGateway {
         topic_id: Option<i64>,
         message_id: i64,
     ) -> anyhow::Result<()> {
+        let s = &self.daemon.services;
         let run = action.target.as_str();
         let visit = action.args["visit"].as_str().unwrap_or_default();
         let choice = action.args["choice"].as_str().unwrap_or_default();
@@ -2863,21 +2845,17 @@ impl TelegramGateway {
                 }
             };
             let pending = json!({"run": run, "visit": visit, "choice": choice, "state": state,
-                       "topic": topic_id, "since": self.daemon.services.clock.now_rfc3339()});
-            self.daemon
-                .services
-                .kv_set(&form_key(chat_id, topic_id), &pending.to_string())
+                       "topic": topic_id, "since": s.clock.now_rfc3339()});
+            s.kv_set(&form_key(chat_id, topic_id), &pending.to_string())
                 .await?;
             return self.send_form_step(chat_id, &pending).await;
         }
         let note = if wants_input {
-            self.daemon
-                .services
-                .kv_set(
-                    &format!("tg.await_input.{chat_id}"),
-                    &json!({"run": run, "visit": visit, "choice": choice}).to_string(),
-                )
-                .await?;
+            s.kv_set(
+                &format!("tg.await_input.{chat_id}"),
+                &json!({"run": run, "visit": visit, "choice": choice}).to_string(),
+            )
+            .await?;
             format!("✏️ « {choice} » : précise en un message.")
         } else {
             match crate::workflow::answer(&self.daemon, run, visit, choice, None).await {
@@ -4028,8 +4006,9 @@ impl TelegramGateway {
         &self,
         a: &ApprovalRequest,
     ) -> Option<(i64, Option<i64>)> {
+        let s = &self.daemon.services;
         let key = format!("tg.approval_destination.{}", a.id.as_str());
-        if let Ok(Some(raw)) = self.daemon.services.kv_get(&key).await
+        if let Ok(Some(raw)) = s.kv_get(&key).await
             && let Ok(v) = serde_json::from_str::<Value>(&raw)
             && let Some(chat) = v["chat_id"].as_i64()
         {
@@ -4043,7 +4022,7 @@ impl TelegramGateway {
             return Some(destination);
         }
         if let Some(sid) = a.session_id.as_deref()
-            && let Ok(Some(session)) = self.daemon.services.sessions.get(sid).await
+            && let Ok(Some(session)) = s.sessions.get(sid).await
             && let Some(chat) = session.tg_chat_id
         {
             return Some((chat, session.tg_topic_id));
@@ -4874,12 +4853,11 @@ impl TelegramGateway {
                 Err(e) => Some(format!("Fermeture impossible : {e}")),
             },
             k::SESSION_RENAME => {
-                d.services
-                    .kv_set(
-                        &format!("tg.await_title.{chat_id}"),
-                        &format!("{target} {}", s.clock.now_ms()),
-                    )
-                    .await?;
+                s.kv_set(
+                    &format!("tg.await_title.{chat_id}"),
+                    &format!("{target} {}", s.clock.now_ms()),
+                )
+                .await?;
                 let _ = self.bot.answer_callback(callback_id, None, false).await;
                 return self
                     .reply(
@@ -4985,15 +4963,14 @@ impl TelegramGateway {
         chat_id: i64,
         topic_id: Option<i64>,
     ) -> anyhow::Result<usize> {
-        let d = &self.daemon;
+        let s = &self.daemon.services;
         let mut background = 0;
-        for other in d
-            .services
+        for other in s
             .sessions
             .bind_telegram(session_id, chat_id, topic_id)
             .await?
         {
-            background += d.services.turns.queued_for(&other).await? as usize;
+            background += s.turns.queued_for(&other).await? as usize;
         }
         self.flush_held(session_id).await?;
         Ok(background)
@@ -5024,12 +5001,11 @@ impl TelegramGateway {
         topic_id: Option<i64>,
         item: Held,
     ) -> anyhow::Result<()> {
+        let s = &self.daemon.services;
         use penelope_telegram::render::escape_html;
         let _guard = self.held_lock.lock().await;
-        let d = &self.daemon;
         let key = held_key(session_id);
-        let mut held: Value = d
-            .services
+        let mut held: Value = s
             .kv_get(&key)
             .await?
             .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -5050,8 +5026,7 @@ impl TelegramGateway {
         if approvals > 0 {
             parts.push(count_of(approvals, "approbation", "approbations"));
         }
-        let title = d
-            .services
+        let title = s
             .sessions
             .get(session_id)
             .await?
@@ -5063,8 +5038,7 @@ impl TelegramGateway {
             parts.join(" et "),
             escape_html(&title)
         );
-        let token = d
-            .services
+        let token = s
             .actions
             .create(
                 k::SESSION_SWITCH,
@@ -5106,25 +5080,24 @@ impl TelegramGateway {
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             held["notice"] = sent["message_id"].clone();
         }
-        d.services.kv_set(&key, &held.to_string()).await?;
+        s.kv_set(&key, &held.to_string()).await?;
         Ok(())
     }
 
     /// Retour au focus : les sorties mises de côté partent dans l'ordre, approbations encore
     /// ouvertes comprises. Renvoie le nombre de sorties envoyées.
     async fn flush_held(&self, session_id: &str) -> anyhow::Result<usize> {
+        let s = &self.daemon.services;
         let _guard = self.held_lock.lock().await;
-        let d = &self.daemon;
         let key = held_key(session_id);
-        let Some(held) = d
-            .services
+        let Some(held) = s
             .kv_get(&key)
             .await?
             .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
         else {
             return Ok(0);
         };
-        d.services.kv_delete(&key).await?;
+        s.kv_delete(&key).await?;
         let chat_id = held["chat_id"].as_i64().unwrap_or(self.owner_id);
         let topic_id = held["topic_id"].as_i64();
         let items: Vec<Held> = serde_json::from_value(held["items"].clone()).unwrap_or_default();
@@ -5158,7 +5131,7 @@ impl TelegramGateway {
                     }
                 }
                 Held::Approval { id } => {
-                    if let Some(a) = d.services.approvals.get(id).await?
+                    if let Some(a) = s.approvals.get(id).await?
                         && a.state == ApprovalState::Pending
                     {
                         self.send_approval_card(chat_id, topic_id, &a).await?;
@@ -5311,13 +5284,12 @@ impl TelegramGateway {
         chat_id: i64,
         topic_id: Option<i64>,
     ) -> anyhow::Result<Option<String>> {
-        let d = &self.daemon;
-        let here = d.services.kv_get(&form_key(chat_id, topic_id)).await?;
+        let s = &self.daemon.services;
+        let here = s.kv_get(&form_key(chat_id, topic_id)).await?;
         if here.as_deref().is_some_and(|r| !r.is_empty()) || topic_id.is_none() {
             return Ok(here);
         }
-        let Some(legacy) = d
-            .services
+        let Some(legacy) = s
             .kv_get(&form_key(chat_id, None))
             .await?
             .filter(|r| !r.is_empty())
@@ -5326,9 +5298,8 @@ impl TelegramGateway {
         };
         let mut pending: Value = serde_json::from_str(&legacy)?;
         pending["topic"] = json!(topic_id);
-        d.services.kv_set(&form_key(chat_id, None), "").await?;
-        d.services
-            .kv_set(&form_key(chat_id, topic_id), &pending.to_string())
+        s.kv_set(&form_key(chat_id, None), "").await?;
+        s.kv_set(&form_key(chat_id, topic_id), &pending.to_string())
             .await?;
         Ok(Some(pending.to_string()))
     }
@@ -5604,8 +5575,7 @@ impl TelegramGateway {
                 .map(|_| ())
                 .map_err(|e| anyhow::anyhow!(e.to_string()));
         };
-        d.services
-            .kv_set(&key, &json!({"rel": sitting.rel, "n": q.n}).to_string())
+        s.kv_set(&key, &json!({"rel": sitting.rel, "n": q.n}).to_string())
             .await?;
         let (i, total) = sitting.position(q.n);
         let mut hint = q.hint.to_string();
@@ -5942,7 +5912,8 @@ impl TelegramGateway {
         echo: bool,
         card: Option<i64>,
     ) -> anyhow::Result<()> {
-        let broker = &self.daemon.services.elicitations;
+        let s = &self.daemon.services;
+        let broker = &s.elicitations;
         let card = broker.request(id).and_then(|(_, c)| c).or(card);
         match broker.resolve(id, answer) {
             Ok(request) => {
@@ -5951,10 +5922,7 @@ impl TelegramGateway {
                     && serde_json::from_str::<Value>(&raw)
                         .is_ok_and(|p| p["elicitation"].as_str() == Some(id))
                 {
-                    self.daemon
-                        .services
-                        .kv_set(&form_key(chat_id, topic), "")
-                        .await?;
+                    s.kv_set(&form_key(chat_id, topic), "").await?;
                 }
                 let note = note.replace("{server}", &request.server);
                 self.elicitation_update(&request, card, &note, None).await?;
@@ -5976,8 +5944,9 @@ impl TelegramGateway {
         chat_id: i64,
         message_id: i64,
     ) -> anyhow::Result<()> {
+        let s = &self.daemon.services;
         use crate::elicitation::{Action as Answer, Kind};
-        let broker = self.daemon.services.elicitations.clone();
+        let broker = s.elicitations.clone();
         let Some((request, card)) = broker.request(&action.target) else {
             let _ = self
                 .bot
@@ -6026,11 +5995,9 @@ impl TelegramGateway {
                         "choice": format!("{} · {title}", request.server),
                         "state": state,
                         "topic": topic,
-                        "since": self.daemon.services.clock.now_rfc3339(),
+                        "since": s.clock.now_rfc3339(),
                     });
-                    self.daemon
-                        .services
-                        .kv_set(&form_key(chat_id, topic), &pending.to_string())
+                    s.kv_set(&form_key(chat_id, topic), &pending.to_string())
                         .await?;
                     let rows = vec![vec![
                         self.elicit_button("🚫 Refuser", k::ELICIT_DECLINE, &request)
@@ -6466,12 +6433,13 @@ impl TelegramGateway {
         body: &str,
         head: &str,
     ) -> anyhow::Result<()> {
-        let dirs = &self.daemon.services.platform.dirs;
+        let s = &self.daemon.services;
+        let dirs = &s.platform.dirs;
         let dir = dirs.data().join("outgoing");
         std::fs::create_dir_all(&dir)?;
         let path = dir.join(format!(
             "penelope-{}.md",
-            self.daemon.services.clock.now_rfc3339().replace(':', "-")
+            s.clock.now_rfc3339().replace(':', "-")
         ));
         std::fs::write(&path, penelope_observe::redact(body))?;
         let caption: String = head
@@ -6925,19 +6893,12 @@ impl ChannelDelivery for TelegramGateway {
     }
 
     async fn session_titled(&self, session_id: &str, title: &str) {
+        let s = &self.daemon.services;
         let key = format!("tg.new_session.{session_id}");
-        let Some((chat_id, message_id)) = self
-            .daemon
-            .services
-            .kv_get(&key)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|v| {
-                let (c, m) = v.split_once(':')?;
-                Some((c.parse::<i64>().ok()?, m.parse::<i64>().ok()?))
-            })
-        else {
+        let Some((chat_id, message_id)) = s.kv_get(&key).await.ok().flatten().and_then(|v| {
+            let (c, m) = v.split_once(':')?;
+            Some((c.parse::<i64>().ok()?, m.parse::<i64>().ok()?))
+        }) else {
             return;
         };
         let text = format!("🆕 Nouvelle session « {title} » (`{session_id}`).");
@@ -6948,7 +6909,7 @@ impl ChannelDelivery for TelegramGateway {
         {
             tracing::debug!(error = %e, "message de nouvelle session non mis à jour");
         }
-        let _ = self.daemon.services.kv_delete(&key).await;
+        let _ = s.kv_delete(&key).await;
     }
 
     async fn deliver(
@@ -6958,6 +6919,7 @@ impl ChannelDelivery for TelegramGateway {
         origin: &Origin,
         outcome: &TurnOutcome,
     ) {
+        let s = &self.daemon.services;
         let Origin::Telegram {
             chat_id,
             topic_id,
@@ -7018,7 +6980,7 @@ impl ChannelDelivery for TelegramGateway {
                     }
                 }
                 TurnOutcome::AwaitingApproval { approval_id } => {
-                    if let Some(a) = self.daemon.services.approvals.get(approval_id).await? {
+                    if let Some(a) = s.approvals.get(approval_id).await? {
                         self.send_approval_card(chat_id, topic_id, &a).await?;
                     }
                     if let Some(mid) = message_id {
@@ -7041,18 +7003,11 @@ impl ChannelDelivery for TelegramGateway {
                     limit_usd,
                 } => {
                     // Carte de relèvement si la demande est ouverte (issue #32), sinon le texte.
-                    let pending = self
-                        .daemon
-                        .services
-                        .approvals
-                        .pending(50)
-                        .await?
-                        .into_iter()
-                        .find(|a| {
-                            a.kind == penelope_hitl::ApprovalKind::BudgetExceeded
-                                && a.session_id.as_deref() == Some(session_id)
-                                && a.payload["budget"].as_bool() == Some(true)
-                        });
+                    let pending = s.approvals.pending(50).await?.into_iter().find(|a| {
+                        a.kind == penelope_hitl::ApprovalKind::BudgetExceeded
+                            && a.session_id.as_deref() == Some(session_id)
+                            && a.payload["budget"].as_bool() == Some(true)
+                    });
                     match pending {
                         Some(a) => self.send_budget_card(chat_id, topic_id, &a).await?,
                         None => {
@@ -7067,14 +7022,7 @@ impl ChannelDelivery for TelegramGateway {
                     }
                 }
                 TurnOutcome::Failed { error } => {
-                    let cost = self
-                        .daemon
-                        .services
-                        .budget
-                        .turn_totals(turn_id)
-                        .await
-                        .ok()
-                        .map(|(_, c)| c);
+                    let cost = s.budget.turn_totals(turn_id).await.ok().map(|(_, c)| c);
                     self.send_failure(chat_id, topic_id, message_id, session_id, error, cost)
                         .await?;
                     if let Some(mid) = message_id {
@@ -7416,12 +7364,11 @@ impl Messenger for TelegramGateway {
     }
 
     async fn upsert_card(&self, origin: &Origin, key: &str, markdown: &str) -> Result<(), String> {
+        let s = &self.daemon.services;
         let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
         let html = markdown_to_html(markdown);
         let kv_key = format!("tg.card.{key}");
-        let known = self
-            .daemon
-            .services
+        let known = s
             .kv_get(&kv_key)
             .await
             .ok()
@@ -7442,7 +7389,7 @@ impl Messenger for TelegramGateway {
             .await
             .map_err(|e| e.to_string())?;
         if let Some(id) = sent.get("message_id").and_then(|m| m.as_i64()) {
-            let _ = self.daemon.services.kv_set(&kv_key, &id.to_string()).await;
+            let _ = s.kv_set(&kv_key, &id.to_string()).await;
         }
         Ok(())
     }

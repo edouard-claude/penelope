@@ -8,7 +8,8 @@
 //! frontière de tour. Chaque décision laisse un événement : `context.compaction_requested`,
 //! `context.compaction_skipped` (avec sa raison), `context.compacted` (issue #40).
 
-use crate::runtime::Daemon;
+use crate::engine::last_model_key;
+use crate::runtime::{Daemon, Services};
 use penelope_context::{CompactionParams, Cooldown, SummaryJob};
 use penelope_kernel::event::EventDraft;
 use penelope_llm::Provider;
@@ -314,7 +315,7 @@ pub async fn publish_pending(d: &Arc<Daemon>, session_id: &str) -> anyhow::Resul
     let Some(_claim) = d.compaction.claim(session_id) else {
         return Ok(None);
     };
-    let Some(pending) = load_pending(d, session_id).await? else {
+    let Some(pending) = load_pending(&d.services, session_id).await? else {
         return Ok(None);
     };
     let mut report = Report {
@@ -391,7 +392,7 @@ pub async fn request(
 
 /// Prompt réellement facturé au dernier appel de conversation d'une session, et son
 /// instant (millisecondes).
-pub async fn last_prompt(s: &crate::runtime::Services, session_id: &str) -> Option<(u64, i64)> {
+pub async fn last_prompt(s: &Services, session_id: &str) -> Option<(u64, i64)> {
     use penelope_store::rusqlite::OptionalExtension;
     let sid = session_id.to_string();
     let row: Option<(i64, String)> = s
@@ -418,7 +419,7 @@ pub async fn last_prompt(s: &crate::runtime::Services, session_id: &str) -> Opti
 }
 
 /// Seuil de la compaction de fond pour le modèle de conversation d'une session.
-pub fn background_threshold(s: &crate::runtime::Services, model_id: &str) -> u64 {
+pub fn background_threshold(s: &Services, model_id: &str) -> u64 {
     let cfg = s.config.config();
     let params = CompactionParams::from_config(
         &cfg,
@@ -520,7 +521,7 @@ pub async fn before_turn(d: &Arc<Daemon>, session_id: &str, model_id: &str, turn
 }
 
 /// Dépense du jour en résumés.
-async fn compaction_spent_today(s: &crate::runtime::Services) -> f64 {
+async fn compaction_spent_today(s: &Services) -> f64 {
     let day = s.budget.today();
     s.store
         .read(move |c| {
@@ -565,7 +566,7 @@ async fn compact_inner(
     };
 
     // Un résumé prêt passe d'abord : le lot suivant se prépare sur l'état publié.
-    if let Some(pending) = load_pending(d, session_id).await? {
+    if let Some(pending) = load_pending(&d.services, session_id).await? {
         if !trigger.publishes_now() && d.bus.is_active(session_id) {
             report.deferred = true;
             report.skipped = Some("un résumé attend déjà la fin du tour en cours".into());
@@ -575,7 +576,7 @@ async fn compact_inner(
     }
 
     let cfg = s.config.config();
-    let mut cooldown = load_cooldown(d, session_id).await;
+    let mut cooldown = load_cooldown(&d.services, session_id).await;
     let now = s.clock.now_ms();
     match trigger {
         Trigger::Background | Trigger::Resume if cooldown.is_active(now) => {
@@ -587,7 +588,7 @@ async fn compact_inner(
         }
         Trigger::Manual | Trigger::Overflow if cooldown.failures > 0 => {
             cooldown.clear();
-            save_cooldown(d, session_id, &cooldown).await;
+            save_cooldown(&d.services, session_id, &cooldown).await;
         }
         _ => {}
     }
@@ -658,7 +659,7 @@ async fn compact_inner(
                     // quatrième refroidissement, et le propriétaire le sait (issue #131).
                     if cooldown.failures >= MECHANICAL_AFTER {
                         cooldown.clear();
-                        save_cooldown(d, session_id, &cooldown).await;
+                        save_cooldown(&d.services, session_id, &cooldown).await;
                         let pending = Pending {
                             summary: mechanical_summary(&job),
                             job,
@@ -671,7 +672,7 @@ async fn compact_inner(
                         tell_mechanical(d, session_id, &model, &error, &report).await;
                         break;
                     }
-                    save_cooldown(d, session_id, &cooldown).await;
+                    save_cooldown(&d.services, session_id, &cooldown).await;
                     let retry_in_s = (cooldown.until_ms - s.clock.now_ms()).max(0) / 1000;
                     let _ = s
                         .events
@@ -709,12 +710,12 @@ async fn compact_inner(
             model: used.clone(),
         };
         if !trigger.publishes_now() && d.bus.is_active(session_id) {
-            save_pending(d, session_id, &pending).await?;
+            save_pending(&d.services, session_id, &pending).await?;
             report.deferred = true;
             report.model = Some(used.clone());
             // Le tour a pu se terminer pendant l'écriture : sa frontière est passée.
             if !d.bus.is_active(session_id)
-                && let Some(p) = load_pending(d, session_id).await?
+                && let Some(p) = load_pending(&d.services, session_id).await?
             {
                 report.deferred = false;
                 publish_saved(d, session_id, p, trigger, &mut report).await;
@@ -730,7 +731,7 @@ async fn compact_inner(
 
     if report.published > 0 && cooldown.failures > 0 {
         cooldown.clear();
-        save_cooldown(d, session_id, &cooldown).await;
+        save_cooldown(&d.services, session_id, &cooldown).await;
     }
     if report.published == 0 && !report.deferred && report.skipped.is_none() {
         report.skipped =
@@ -956,7 +957,7 @@ async fn tell_mechanical(
 
 /// Sessions dont la compaction a échoué ces dernières 24 h : titre, échecs, coût moyen
 /// des derniers tours ; pour le digest (issue #131).
-pub async fn struggling_sessions(s: &crate::runtime::Services) -> Vec<(String, u32, Option<f64>)> {
+pub async fn struggling_sessions(s: &Services) -> Vec<(String, u32, Option<f64>)> {
     let since = chrono::DateTime::from_timestamp_millis(s.clock.now_ms() - 86_400_000)
         .unwrap_or_default()
         .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
@@ -990,7 +991,7 @@ pub async fn struggling_sessions(s: &crate::runtime::Services) -> Vec<(String, u
 }
 
 /// Coût moyen des cinq derniers tours d'une session.
-async fn cost_per_turn(s: &crate::runtime::Services, session_id: &str) -> Option<f64> {
+async fn cost_per_turn(s: &Services, session_id: &str) -> Option<f64> {
     let sid = session_id.to_string();
     s.store
         .read(move |c| {
@@ -1194,29 +1195,27 @@ async fn publish_saved(
     }
 }
 
-async fn load_pending(d: &Arc<Daemon>, session_id: &str) -> anyhow::Result<Option<Pending>> {
-    let Some(raw) = d.services.kv_get(&pending_key(session_id)).await? else {
+async fn load_pending(s: &Services, session_id: &str) -> anyhow::Result<Option<Pending>> {
+    let Some(raw) = s.kv_get(&pending_key(session_id)).await? else {
         return Ok(None);
     };
     match serde_json::from_str(&raw) {
         Ok(p) => Ok(Some(p)),
         Err(e) => {
             tracing::warn!(session = %session_id, error = %e, "résumé en attente illisible, écarté");
-            d.services.kv_delete(&pending_key(session_id)).await?;
+            s.kv_delete(&pending_key(session_id)).await?;
             Ok(None)
         }
     }
 }
 
-async fn save_pending(d: &Arc<Daemon>, session_id: &str, pending: &Pending) -> anyhow::Result<()> {
-    d.services
-        .kv_set(&pending_key(session_id), &serde_json::to_string(pending)?)
+async fn save_pending(s: &Services, session_id: &str, pending: &Pending) -> anyhow::Result<()> {
+    s.kv_set(&pending_key(session_id), &serde_json::to_string(pending)?)
         .await
 }
 
-async fn load_cooldown(d: &Arc<Daemon>, session_id: &str) -> Cooldown {
-    d.services
-        .kv_get(&cooldown_key(session_id))
+async fn load_cooldown(s: &Services, session_id: &str) -> Cooldown {
+    s.kv_get(&cooldown_key(session_id))
         .await
         .ok()
         .flatten()
@@ -1224,9 +1223,9 @@ async fn load_cooldown(d: &Arc<Daemon>, session_id: &str) -> Cooldown {
         .unwrap_or_default()
 }
 
-async fn save_cooldown(d: &Arc<Daemon>, session_id: &str, cooldown: &Cooldown) {
+async fn save_cooldown(s: &Services, session_id: &str, cooldown: &Cooldown) {
     let raw = serde_json::to_string(cooldown).unwrap_or_default();
-    if let Err(e) = d.services.kv_set(&cooldown_key(session_id), &raw).await {
+    if let Err(e) = s.kv_set(&cooldown_key(session_id), &raw).await {
         tracing::warn!(session = %session_id, error = %e, "cooldown de compaction non enregistré");
     }
 }
@@ -1237,10 +1236,8 @@ async fn conversation_model(d: &Arc<Daemon>, session_id: &str) -> String {
         return pin.model_id;
     }
     let cfg = d.services.config.config();
-    let alias = d
-        .services
-        .kv_get(&crate::engine::last_model_key(session_id))
-        .await
+    let last = d.services.kv_get(&last_model_key(session_id)).await;
+    let alias = last
         .ok()
         .flatten()
         .filter(|a| !a.is_empty())
@@ -1251,7 +1248,7 @@ async fn conversation_model(d: &Arc<Daemon>, session_id: &str) -> String {
 /// Taille du contexte d'une session (issue #18) : prompt du dernier appel de conversation,
 /// part en cache, seuils de compaction et fenêtre du modèle.
 pub async fn context_view(
-    s: &crate::runtime::Services,
+    s: &Services,
     session_id: &str,
     model_id: Option<&str>,
 ) -> anyhow::Result<Value> {
@@ -1476,7 +1473,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );
@@ -1653,7 +1650,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let clock = TestClock::default();
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), Arc::new(clock.clone()))
+            Services::for_tests(dir.path().to_path_buf(), Arc::new(clock.clone()))
                 .await
                 .unwrap(),
         );
@@ -1726,7 +1723,7 @@ mod tests {
             nodes[0].summary.contains("question "),
             "derniers messages du propriétaire gardés"
         );
-        assert_eq!(load_cooldown(&d, &sid).await.failures, 0);
+        assert_eq!(load_cooldown(&d.services, &sid).await.failures, 0);
         let sent = rec.0.lock().unwrap().clone();
         assert_eq!(sent.len(), 1, "{sent:?}");
         assert!(sent[0].contains("ne se résumait plus"), "{sent:?}");
@@ -1829,7 +1826,7 @@ mod tests {
 
         let err = compact(&d, &sid, Trigger::Manual, None).await.unwrap_err();
         assert!(err.to_string().contains("résumé a échoué"), "{err}");
-        let cooldown = load_cooldown(&d, &sid).await;
+        let cooldown = load_cooldown(&d.services, &sid).await;
         assert_eq!(cooldown.failures, 1);
         let events = d.services.events.session_events(&sid, 0).await.unwrap();
         assert!(events.iter().any(|e| e.kind == "context.compaction_failed"));
@@ -1855,7 +1852,7 @@ mod tests {
         p.reply(SUMMARY);
         let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
         assert_eq!(r.published, 1);
-        assert_eq!(load_cooldown(&d, &sid).await.failures, 0);
+        assert_eq!(load_cooldown(&d.services, &sid).await.failures, 0);
     }
 
     #[tokio::test]
@@ -2135,7 +2132,7 @@ mod tests {
         let clock = TestClock::default();
         let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+            Services::for_tests(dir.path().to_path_buf(), shared)
                 .await
                 .unwrap(),
         );
