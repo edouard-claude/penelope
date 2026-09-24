@@ -21,6 +21,8 @@ use crate::engine::ContextEngine;
 use crate::replay::{Lineage, ReplayError};
 use crate::store::HistoryStore;
 use crate::transcript::Entry;
+use cache::Folded;
+pub(crate) use cache::SharedReadCache;
 use penelope_kernel::config::HistorySource;
 use penelope_llm::types::{ChatMessage, Role};
 use penelope_store::rusqlite::Connection;
@@ -66,14 +68,18 @@ impl HistoryStore {
         session_id: &str,
     ) -> penelope_store::Result<Result<Option<JournalRead>, String>> {
         let sid = session_id.to_string();
+        let reads = self.reads.clone();
         self.store()
-            .read(move |c| Ok(read_journal_in(c, &sid)))
+            .read(move |c| Ok(read_journal_in(c, &sid, &reads)))
             .await
     }
 }
 
-fn read_journal_in(c: &Connection, sid: &str) -> Result<Option<JournalRead>, String> {
-    let fail = |e: ReplayError| e.to_string();
+fn read_journal_in(
+    c: &Connection,
+    sid: &str,
+    reads: &SharedReadCache,
+) -> Result<Option<JournalRead>, String> {
     let count = |sql: &str| -> Result<i64, String> {
         c.query_row(sql, [sid], |r| r.get(0))
             .map_err(|e| e.to_string())
@@ -86,29 +92,54 @@ fn read_journal_in(c: &Connection, sid: &str) -> Result<Option<JournalRead>, Str
     if unjournaled > 0 {
         return Ok(None);
     }
-    let lineage = Lineage::load(c, sid).map_err(fail)?;
-    if !lineage.journaled() {
-        // Sans `conv.*`, une session n'a de conversation que si elle n'a pas de lignes :
-        // sinon c'est une archive de retour arrière, copie V0 sans journal.
-        let rows = count("SELECT COUNT(*) FROM messages WHERE session_id = ?1")?;
-        return Ok((rows == 0).then(JournalRead::default));
+    let purges = cache::purge_mark(c)?;
+    // Le verrou n'est pas tenu pendant le pliage : la session est retirée, puis remise.
+    let cached = reads.lock().ok().and_then(|mut r| r.take(sid, purges));
+    let (folded, count) = match cached {
+        Some(mut folded) => {
+            let n = folded.catch_up(c, sid)?;
+            (folded, n)
+        }
+        None => {
+            let lineage = Lineage::load(c, sid).map_err(|e: ReplayError| e.to_string())?;
+            if !lineage.journaled() {
+                // Sans `conv.*`, une session n'a de conversation que si elle n'a pas de
+                // lignes : sinon c'est une archive de retour arrière, copie V0 sans journal.
+                let rows = count("SELECT COUNT(*) FROM messages WHERE session_id = ?1")?;
+                return Ok((rows == 0).then(JournalRead::default));
+            }
+            let n = lineage.events.len();
+            match Folded::load(lineage, purges)? {
+                Some(folded) => (folded, n),
+                None => return Ok(Some(JournalRead::default())),
+            }
+        }
+    };
+    let read = journal_read(&folded);
+    if let Ok(mut r) = reads.lock() {
+        r.put(sid, folded, count);
     }
-    let surface = lineage.surface().map_err(fail)?;
-    let seqs = lineage.row_seqs(&surface);
+    Ok(Some(read))
+}
+
+/// Les entrées de la surface pliée, numérotées comme les lignes.
+fn journal_read(folded: &Folded) -> JournalRead {
+    let surface = folded.surface();
+    let seqs = folded.row_seqs();
     let renumber = |mut e: Entry| {
         if e.seq != 0 {
             e.seq = seqs.get(&e.seq).copied().unwrap_or(e.seq);
         }
         e
     };
-    Ok(Some(JournalRead {
+    JournalRead {
         projected: surface
             .projected_entries()
             .into_iter()
             .map(renumber)
             .collect(),
         entries: surface.entries().into_iter().map(renumber).collect(),
-    }))
+    }
 }
 
 /// La première entrée qui diffère, octet pour octet (sérialisation JSON).
@@ -261,5 +292,6 @@ impl ContextEngine {
     }
 }
 
+mod cache;
 #[cfg(test)]
 mod tests;

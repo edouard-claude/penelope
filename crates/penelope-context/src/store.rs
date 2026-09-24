@@ -20,6 +20,8 @@ pub struct HistoryStore {
     pub(crate) clock: SharedClock,
     /// Journal de la double écriture (T5) ; absent, les lignes s'écrivent seules.
     pub(crate) events: Option<penelope_kernel::event::EventLog>,
+    /// Surfaces déjà pliées, reprises sur les seuls événements nouveaux (T14).
+    pub(crate) reads: crate::read::SharedReadCache,
 }
 
 /// Résultat d'une recherche FTS sur l'historique (`history_grep`).
@@ -247,6 +249,7 @@ impl HistoryStore {
             store,
             clock,
             events: None,
+            reads: Default::default(),
         }
     }
 

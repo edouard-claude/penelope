@@ -142,14 +142,23 @@ pub(crate) struct Expected {
 
 /// Les événements d'une session que le pliage lit (contenu et bornes de tour).
 pub(crate) fn session_events(c: &Connection, sid: &str) -> rusqlite::Result<Vec<Event>> {
-    let mut st = c.prepare(
+    session_events_after(c, sid, i64::MIN)
+}
+
+/// Comme [`session_events`], après le `seq` donné : ce qu'une lecture n'a pas encore plié.
+pub(crate) fn session_events_after(
+    c: &Connection,
+    sid: &str,
+    after: i64,
+) -> rusqlite::Result<Vec<Event>> {
+    let mut st = c.prepare_cached(
         "SELECT id, session_id, run_id, seq, ts, kind, payload, hash, prev_hash
          FROM events
-         WHERE session_id = ?1
+         WHERE session_id = ?1 AND seq > ?2
            AND (kind LIKE 'conv.%' OR kind IN ('turn.started', 'turn.finished'))
          ORDER BY seq",
     )?;
-    let rows = st.query_map([sid], |r| {
+    let rows = st.query_map(params![sid, after], |r| {
         let payload: String = r.get(6)?;
         Ok(Event {
             id: r.get(0)?,
@@ -256,17 +265,7 @@ impl Lineage {
     /// Numéro de ligne de chaque adresse de message de la surface : l'adresse d'une
     /// ligne scellée, sinon le numéro qui suit le précédent (voir l'en-tête).
     pub fn row_seqs(&self, surface: &Surface) -> BTreeMap<i64, i64> {
-        let mut out = BTreeMap::new();
-        let mut last = 0;
-        for addr in surface.messages.keys() {
-            let seq = match self.owners.get(addr) {
-                None => *addr,
-                Some(_) => last + 1,
-            };
-            last = last.max(seq);
-            out.insert(*addr, seq);
-        }
-        out
+        row_seqs(&self.owners, surface)
     }
 
     /// Ce que les caches de la session doivent contenir.
@@ -401,8 +400,24 @@ impl Lineage {
     }
 }
 
+/// Numéro de ligne de chaque adresse de message de la surface, `owners` étant
+/// l'événement de chaque adresse de la chaîne (voir l'en-tête).
+pub(crate) fn row_seqs(owners: &BTreeMap<i64, Owner>, surface: &Surface) -> BTreeMap<i64, i64> {
+    let mut out = BTreeMap::new();
+    let mut last = 0;
+    for addr in surface.messages.keys() {
+        let seq = match owners.get(addr) {
+            None => *addr,
+            Some(_) => last + 1,
+        };
+        last = last.max(seq);
+        out.insert(*addr, seq);
+    }
+    out
+}
+
 /// L'adresse que produit un événement de la session, et ce qui l'accompagne.
-fn own_owner(e: &Event) -> Option<Owner> {
+pub(crate) fn own_owner(e: &Event) -> Option<Owner> {
     let conv = ConvEvent::decode(&e.kind, &e.payload).ok()??;
     let text = |k: &str| e.payload.get(k).and_then(Value::as_str).map(String::from);
     let summary = match &conv {

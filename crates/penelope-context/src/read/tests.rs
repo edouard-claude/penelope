@@ -1,5 +1,5 @@
 use super::*;
-use crate::replay::fixture::{World, rewound, rich, sealed, world};
+use crate::replay::fixture::{World, compact, exchanges, rewound, rich, sealed, tool_round, world};
 
 async fn both(w: &World, sid: &str) -> (Vec<Entry>, Vec<Entry>) {
     let e = &w.engine;
@@ -92,4 +92,116 @@ async fn rows_without_events_are_read_from_the_tables() {
     let (tables, journal) = both(&w, "s9").await;
     assert_eq!(tables.len(), 1);
     assert_eq!(text(&tables), text(&journal));
+}
+
+/// Temps d'une lecture depuis le journal (projection et queue) et ce qu'elle a plié.
+async fn timed(w: &World, sid: &str) -> (std::time::Duration, usize, Vec<Entry>) {
+    let e = &w.engine;
+    let start = std::time::Instant::now();
+    let projected = e
+        .projected_entries(sid, HistorySource::Journal)
+        .await
+        .unwrap();
+    let folded = w.history().reads.lock().unwrap().folded;
+    e.tail(sid, 40, HistorySource::Journal).await.unwrap();
+    (start.elapsed(), folded, projected)
+}
+
+/// La même lecture, repliée depuis le début.
+async fn fresh(w: &World, sid: &str) -> (Vec<Entry>, Vec<Entry>) {
+    w.history().reads.lock().unwrap().clear();
+    let e = &w.engine;
+    let projected = e.projected_entries(sid, HistorySource::Journal).await;
+    let tail = e.tail(sid, 40, HistorySource::Journal).await;
+    (projected.unwrap(), tail.unwrap())
+}
+
+/// Coût de lecture (T14, note « Coût ») : une session de 2 000 messages et une fille de
+/// fork ; la requête n après un échange de plus ne plie que ce qui est nouveau, et lit ce
+/// qu'un pliage complet aurait lu.
+#[tokio::test]
+async fn a_read_after_a_new_exchange_folds_only_what_is_new() {
+    let w = world().await;
+    exchanges(&w, "s1", 0..1_000).await;
+    let h = w.history();
+    h.journal_fork("s3", "s1").await.unwrap();
+    h.copy_messages("s1", "s3", 0, None).await.unwrap();
+    exchanges(&w, "s3", 0..2).await;
+    for sid in ["s1", "s3"] {
+        h.reads.lock().unwrap().clear();
+        let (cold, all, _) = timed(&w, sid).await;
+        let (warm, none, _) = timed(&w, sid).await;
+        exchanges(&w, sid, 2_000..2_001).await;
+        let (next, new, projected) = timed(&w, sid).await;
+        eprintln!(
+            "{sid} : première lecture {cold:?} ({all} événements pliés), \
+             sans rien de neuf {warm:?} ({none}), après un échange {next:?} ({new})"
+        );
+        assert!(projected.len() > 2_000, "{sid}");
+        assert!(all > 0, "{sid}");
+        assert_eq!(
+            (none, new),
+            (0, 4),
+            "{sid} : turn.started, user, context, assistant"
+        );
+        let tail = w
+            .engine
+            .tail(sid, 40, HistorySource::Journal)
+            .await
+            .unwrap();
+        let (again, again_tail) = fresh(&w, sid).await;
+        assert_eq!(text(&projected), text(&again), "{sid}");
+        assert_eq!(text(&tail), text(&again_tail), "{sid}");
+    }
+}
+
+/// Lire entre chaque écriture (compaction, prolongation, niveau 1, retour arrière) : la
+/// surface reprise est celle d'un pliage complet, et celle des tables.
+#[tokio::test]
+async fn a_resumed_read_matches_a_full_fold_at_every_step() {
+    let w = world().await;
+    let check = |label: &'static str| {
+        let w = &w;
+        async move {
+            let e = &w.engine;
+            let journal = e
+                .projected_entries("s1", HistorySource::Journal)
+                .await
+                .unwrap();
+            let tail = e.tail("s1", 40, HistorySource::Journal).await.unwrap();
+            if label != "purge" {
+                // Les tables d'une session purgée sont effacées par le daemon, pas ici.
+                let tables = e
+                    .projected_entries("s1", HistorySource::Tables)
+                    .await
+                    .unwrap();
+                assert_eq!(text(&tables), text(&journal), "{label}");
+            }
+            let (again, again_tail) = fresh(w, "s1").await;
+            assert_eq!(text(&journal), text(&again), "{label}");
+            assert_eq!(text(&tail), text(&again_tail), "{label}");
+        }
+    };
+    exchanges(&w, "s1", 0..20).await;
+    check("échanges").await;
+    tool_round(&w, "s1").await;
+    check("niveau 1").await;
+    exchanges(&w, "s1", 20..30).await;
+    compact(&w, "s1").await;
+    check("résumé").await;
+    exchanges(&w, "s1", 30..60).await;
+    check("après le résumé").await;
+    compact(&w, "s1").await;
+    check("prolongation").await;
+    exchanges(&w, "s1", 60..62).await;
+    rewound(&w).await;
+    check("retour arrière").await;
+    w.log.purge_session("s1", "test").await.unwrap();
+    check("purge").await;
+    let e = &w.engine;
+    let purged = e
+        .projected_entries("s1", HistorySource::Journal)
+        .await
+        .unwrap();
+    assert!(purged.is_empty(), "une purge jette la surface pliée");
 }

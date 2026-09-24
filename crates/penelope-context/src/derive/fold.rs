@@ -6,6 +6,21 @@ use crate::journal::*;
 use penelope_kernel::event::Event;
 use penelope_llm::types::{ChatMessage, Role};
 
+/// Un pliage suspendu : sa surface et ce qu'il sait de la tête du journal.
+#[derive(Debug, Clone, Default)]
+pub(super) struct Paused {
+    surface: Surface,
+    seen_conv: bool,
+    inherited: bool,
+    last_seq: Option<i64>,
+}
+
+impl Paused {
+    pub(super) fn surface(&self) -> &Surface {
+        &self.surface
+    }
+}
+
 pub(super) struct Fold<'a> {
     prefix: &'a Sealed,
     surface: Surface,
@@ -27,12 +42,27 @@ fn refuse(seq: i64, kind: &str, reason: impl Into<String>) -> DeriveError {
 
 impl<'a> Fold<'a> {
     pub(super) fn new(prefix: &'a Sealed) -> Self {
+        Self::resume(prefix, Paused::default())
+    }
+
+    /// Reprend un pliage là où [`Fold::pause`] l'a laissé.
+    pub(super) fn resume(prefix: &'a Sealed, paused: Paused) -> Self {
         Fold {
             prefix,
-            surface: Surface::default(),
-            seen_conv: false,
-            inherited: false,
-            last_seq: None,
+            surface: paused.surface,
+            seen_conv: paused.seen_conv,
+            inherited: paused.inherited,
+            last_seq: paused.last_seq,
+        }
+    }
+
+    /// L'état du pliage, à reprendre sur les événements suivants.
+    pub(super) fn pause(self) -> Paused {
+        Paused {
+            surface: self.surface,
+            seen_conv: self.seen_conv,
+            inherited: self.inherited,
+            last_seq: self.last_seq,
         }
     }
 
@@ -41,6 +71,13 @@ impl<'a> Fold<'a> {
         events: &[Event],
         until: Option<i64>,
     ) -> Result<Surface, DeriveError> {
+        self.feed(events, until)?;
+        self.check()?;
+        Ok(self.surface)
+    }
+
+    /// Plie les événements, jusqu'à l'adresse `until` s'il y en a une.
+    pub(super) fn feed(&mut self, events: &[Event], until: Option<i64>) -> Result<(), DeriveError> {
         for ev in events {
             if self.last_seq.is_some_and(|l| ev.seq <= l) {
                 return Err(refuse(
@@ -55,6 +92,11 @@ impl<'a> Fold<'a> {
             }
             self.step(ev)?;
         }
+        Ok(())
+    }
+
+    /// Un préfixe hérité fourni doit avoir été consommé par la tête du journal.
+    pub(super) fn check(&self) -> Result<(), DeriveError> {
         if !self.inherited && !matches!(self.prefix.origin, Origin::None) && !self.surface.purged {
             return Err(refuse(
                 0,
@@ -62,7 +104,7 @@ impl<'a> Fold<'a> {
                 "préfixe hérité fourni, mais aucun conv.fork ni conv.import en tête du journal",
             ));
         }
-        Ok(self.surface)
+        Ok(())
     }
 
     fn address(&self, ev: &Event) -> i64 {

@@ -106,6 +106,26 @@ pub fn derive_until(prefix: &Sealed, events: &[Event], until: i64) -> Result<Sur
     fold::Fold::new(prefix).run(events, Some(until))
 }
 
+/// Un pliage qu'on reprend sur les événements nouveaux (lecture incrémentale, §4.3) :
+/// plier `a` puis reprendre sur `b` donne la surface de `derive(prefix, a ++ b)`.
+#[derive(Debug, Clone, Default)]
+pub struct Folding(fold::Paused);
+
+impl Folding {
+    /// Plie `events` à la suite de ce qui l'a déjà été.
+    pub fn advance(&mut self, prefix: &Sealed, events: &[Event]) -> Result<(), DeriveError> {
+        let mut fold = fold::Fold::resume(prefix, std::mem::take(&mut self.0));
+        let done = fold.feed(events, None).and_then(|()| fold.check());
+        self.0 = fold.pause();
+        done
+    }
+
+    /// La surface pliée jusqu'ici.
+    pub fn surface(&self) -> &Surface {
+        self.0.surface()
+    }
+}
+
 impl Slot {
     /// Première et dernière adresses couvertes par la place.
     fn span(self, s: &Surface) -> (i64, i64) {
