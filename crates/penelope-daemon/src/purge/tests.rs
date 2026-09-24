@@ -305,19 +305,58 @@ async fn purging_a_forked_session_warns_about_its_forks() {
         .unwrap();
     let forked = crate::session_ops::fork(&s, &sid, None).await.unwrap();
     let child = forked["session"].as_str().unwrap().to_string();
+    // La lecture préalable, par le contrat RPC : le fork nommé, rien d'effacé.
+    let rpc = crate::rpc::Rpc::new(d.clone());
+    let preview = rpc
+        .handle(penelope_kernel::api::RpcRequest::new(
+            1,
+            penelope_kernel::api::method::SESSION_PURGE_PREVIEW,
+            serde_json::json!({"session": sid}),
+        ))
+        .await
+        .result
+        .expect("lecture préalable");
+    assert_eq!(preview["forks"][0]["id"], child, "{preview}");
+    let warning = preview["avertissement"].as_str().unwrap();
+    assert!(
+        warning.starts_with("Cette session a un fork, il perdra son début : "),
+        "{warning}"
+    );
+    assert!(warning.contains(&child), "{warning}");
+    let read = h.read_journal(&child).await.unwrap().unwrap().unwrap();
+    assert!(
+        !read.entries.is_empty(),
+        "la lecture préalable n'efface rien"
+    );
     let report = session(&s, &sid, "essai").await.unwrap();
     assert_eq!(report["forks"], serde_json::json!([child]), "{report}");
     assert!(
         report["avertissement"]
             .as_str()
             .unwrap()
-            .contains("perdent le préfixe"),
+            .contains("il perdra son début"),
         "{report}"
     );
     let read = h.read_journal(&child).await.unwrap().unwrap().unwrap();
     assert!(read.entries.is_empty(), "le préfixe hérité est parti");
     let alone = session(&s, &child, "essai").await.unwrap();
     assert!(alone.get("forks").is_none(), "{alone}");
+}
+
+/// Arbitrage 3 : le nombre de forks en toutes lettres jusqu'à dix, en chiffres au-delà.
+#[test]
+fn the_fork_warning_counts_in_words_up_to_ten() {
+    let ids = |n: usize| (1..=n).map(|i| format!("s_{i}")).collect::<Vec<_>>();
+    assert_eq!(
+        forks_warning(&ids(1)),
+        "Cette session a un fork, il perdra son début : s_1."
+    );
+    assert!(
+        forks_warning(&ids(2))
+            .starts_with("Cette session a deux forks, ils perdront leur début : s_1, s_2")
+    );
+    assert!(forks_warning(&ids(10)).starts_with("Cette session a dix forks,"));
+    assert!(forks_warning(&ids(11)).starts_with("Cette session a 11 forks,"));
 }
 
 /// T17 : la rétention purge le payload des `conv.attempt` anciens (texte partiel

@@ -379,6 +379,7 @@ fn params_of(m: &str) -> Value {
         method::SESSION_COMPACT => json!({"session": "$session"}),
         method::SESSION_EXPORT => json!({"session": "$session"}),
         method::SESSION_PURGE => json!({"session": "$session_purge", "reason": "test"}),
+        method::SESSION_PURGE_PREVIEW => json!({"session": "$session"}),
         method::SESSION_MODEL => json!({"session": "$session"}),
         method::SESSION_MODE => json!({"session": "$session", "mode": "reads"}),
         method::SESSION_PROJECT => json!({"session": "$session", "project": "penelope"}),

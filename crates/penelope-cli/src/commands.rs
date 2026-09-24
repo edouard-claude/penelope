@@ -702,25 +702,13 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         _ => {}
     }
 
-    // Purge : effacement sans retour, confirmé à l'invite sauf `--yes` (issue #46).
+    // Purge : effacement sans retour, confirmé à l'invite sauf `--yes` (issue #46), forks
+    // nommés avant (arbitrage 3 de la V1).
     if let Command::Session(SessionCmd::Purge { session, yes, .. }) = &cli.command
         && !yes
+        && !purge::confirm(&cli, session).await?
     {
-        eprint!(
-            "Effacer définitivement le contenu de la session « {session} » (messages, \
-             résumés, artefacts) ? La chaîne d'audit garde ses lignes, sans leur contenu. \
-             [o]ui / [n]on : "
-        );
-        let _ = std::io::Write::flush(&mut std::io::stderr());
-        let mut answer = String::new();
-        let _ = std::io::stdin().read_line(&mut answer);
-        if !matches!(
-            answer.trim().to_lowercase().as_str(),
-            "o" | "oui" | "y" | "yes"
-        ) {
-            eprintln!("Rien n'a été effacé.");
-            return Ok(());
-        }
+        return Ok(());
     }
 
     let socket = socket_path(cli.home.clone())?;
@@ -2185,6 +2173,7 @@ async fn follow_session(
     Ok(())
 }
 
+mod purge;
 mod render;
 #[cfg(test)]
 mod tests;

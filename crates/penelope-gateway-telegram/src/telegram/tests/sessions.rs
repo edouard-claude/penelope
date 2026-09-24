@@ -848,3 +848,64 @@ async fn sessions_get_a_readable_title() {
             .unwrap()
     );
 }
+
+/// Arbitrage 3 de la V1 : `/purge` d'une session qui a un fork le dit dans l'écran de
+/// confirmation, avant la question ; rien n'est effacé avant le clic.
+#[tokio::test]
+async fn purging_a_forked_session_warns_on_the_confirmation_screen() {
+    let (_d, g, t, _p) = gateway().await;
+    let origin = Origin::Telegram {
+        chat_id: OWNER,
+        topic_id: None,
+        message_id: None,
+    };
+    let sid = g.daemon.chat_session_for(&origin).await.unwrap();
+    let s = &g.daemon.services;
+    s.context
+        .history
+        .append(
+            &sid,
+            &penelope_llm::types::ChatMessage::user("Quetzal"),
+            5,
+            0,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    let forked = crate::session_ops::fork(s, &sid, None).await.unwrap();
+    let child = forked["session"].as_str().unwrap().to_string();
+
+    g.process_update(&updates::text_message(
+        97,
+        OWNER,
+        OWNER,
+        &format!("/purge {sid}"),
+    ))
+    .await
+    .unwrap();
+    let mut out = Vec::new();
+    for _ in 0..100 {
+        g.flush_outbox().await.unwrap();
+        out = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+        if out.iter().any(|m| m.contains("Effacer le contenu")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let screen = out
+        .iter()
+        .find(|m| m.contains("Effacer le contenu"))
+        .unwrap_or_else(|| panic!("écran de confirmation attendu : {out:?}"));
+    let warning = screen.find("il perdra son début").expect("avertissement");
+    assert!(
+        warning < screen.find("Effacer le contenu").unwrap(),
+        "{screen}"
+    );
+    assert!(screen.contains(&child), "{screen}");
+    let read = s.context.history.read_journal(&child).await.unwrap();
+    assert!(
+        !read.unwrap().unwrap().entries.is_empty(),
+        "rien n'est effacé avant la confirmation"
+    );
+}

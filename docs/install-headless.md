@@ -2377,6 +2377,11 @@ coûts ; seule la clé qui menait au texte du prompt est coupée. Le journal d'�
 hachages, avec le contenu remplacé, et note la purge dans `audit.purge` : `audit-verify`
 reste vert. La commande demande confirmation (`--yes` pour s'en passer, `--reason` pour
 noter pourquoi) ; depuis Telegram, `/purge` affiche la même question avec un bouton.
+Une session dont d'autres sont nées par `fork` leur prête son début : la purger le leur
+retire. La commande le dit avant la question (« Cette session a deux forks, ils perdront
+leur début : … », avec leurs identifiants et titres), l'écran de `/purge` aussi. Sans
+terminal pour répondre (script, tube), elle refuse sans `--yes`. La méthode
+`session.purge_preview` rend cette lecture sans rien effacer.
 
 La mémoire durable n'est pas touchée : elle vit dans le vault et s'édite avec ses propres
 outils (`penelope mem …`). Une entrée née d'une conversation purgée reste donc en mémoire

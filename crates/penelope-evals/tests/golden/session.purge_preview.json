@@ -1,0 +1,19 @@
+{
+  "method": "session.purge_preview",
+  "params": {
+    "session": "$session"
+  },
+  "response": {
+    "result": {
+      "session": "string",
+      "title": "string",
+      "forks": [
+        {
+          "id": "string",
+          "title": "string"
+        }
+      ],
+      "avertissement": "string"
+    }
+  }
+}

@@ -348,13 +348,50 @@ async fn forks_of(s: &Services, session_id: &str) -> anyhow::Result<Vec<String>>
         .await?)
 }
 
-fn forks_warning(forks: &[String]) -> String {
+/// L'avertissement du propriétaire (arbitrage 3, design/v1/README.md §10) : « cette
+/// session a deux forks, ils perdront leur début », suivi des sessions nommées.
+pub fn forks_warning(forks: &[String]) -> String {
+    const WORDS: [&str; 10] = [
+        "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf", "dix",
+    ];
+    let n = forks.len();
+    let count = WORDS
+        .get(n.wrapping_sub(1))
+        .map_or_else(|| n.to_string(), |w| (*w).to_string());
+    let (noun, tail) = if n == 1 {
+        ("fork", "il perdra son début")
+    } else {
+        ("forks", "ils perdront leur début")
+    };
     format!(
-        "{} session(s) née(s) d'un fork de celle-ci perdent le préfixe qu'elles en \
-         héritent : {}",
-        forks.len(),
+        "Cette session a {count} {noun}, {tail} : {}.",
         forks.join(", ")
     )
+}
+
+/// Ce que la purge d'une session emporterait chez ses forks, lu sans rien effacer :
+/// `penelope session purge` et `/purge` le citent avant de demander confirmation.
+pub async fn preview(s: &Services, session_id: &str) -> anyhow::Result<Value> {
+    let sess = s.sessions.require(session_id).await?;
+    let mut forks = Vec::new();
+    let mut named = Vec::new();
+    for id in forks_of(s, session_id).await? {
+        let title = s.sessions.get(&id).await?.map(|f| crate::titles::label(&f));
+        named.push(match &title {
+            Some(t) => format!("{id} « {t} »"),
+            None => id.clone(),
+        });
+        forks.push(json!({"id": id, "title": title}));
+    }
+    let mut out = json!({
+        "session": session_id,
+        "title": crate::titles::label(&sess),
+        "forks": forks,
+    });
+    if !named.is_empty() {
+        out["avertissement"] = json!(forks_warning(&named));
+    }
+    Ok(out)
 }
 
 /// Rétention des tentatives (T17) : le texte partiel d'un `conv.attempt` ne survit pas à

@@ -81,6 +81,13 @@ impl Rpc {
                     .unwrap_or("demande du propriétaire");
                 crate::purge::session(&self.daemon.services, &id, reason).await
             }
+            method::SESSION_PURGE_PREVIEW => {
+                let query = required_str(p, "session")?;
+                let sess = crate::session_ops::resolve(s, &query)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                crate::purge::preview(&self.daemon.services, sess.id.as_str()).await
+            }
             method::SESSION_TITLE => {
                 let sid = self.session_param(p).await?;
                 let title = required_str(p, "title")?;

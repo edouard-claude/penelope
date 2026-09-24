@@ -127,6 +127,8 @@ pub mod method {
     pub const SESSION_EXPORT: &str = "session.export";
     /// Purge RGPD : efface le contenu d'une session, garde la chaîne d'audit (issue #46).
     pub const SESSION_PURGE: &str = "session.purge";
+    /// Lecture préalable à la purge : les forks qui perdraient leur début, sans rien effacer.
+    pub const SESSION_PURGE_PREVIEW: &str = "session.purge_preview";
     /// Modèle d'une session : lecture, épinglage d'un alias, retour à l'automatique.
     pub const SESSION_MODEL: &str = "session.model";
     /// Mode d'approbation d'une session : `ask`, `reads`, `auto` (issue #111).
@@ -266,6 +268,7 @@ pub mod method {
         SESSION_COMPACT,
         SESSION_EXPORT,
         SESSION_PURGE,
+        SESSION_PURGE_PREVIEW,
         SESSION_MODEL,
         SESSION_MODE,
         SESSION_PROJECT,

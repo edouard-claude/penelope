@@ -559,13 +559,20 @@ impl TelegramGateway {
                         Some(sess) => format!("« {} »", crate::titles::label(&sess)),
                         None => format!("`{id}`"),
                     };
+                    // Les forks perdent leur début avec la mère (arbitrage 3 de la V1) :
+                    // l'écran le dit avant la question.
+                    let preview = penelope_daemon::purge::preview(s, &id).await?;
+                    let warning = preview["avertissement"]
+                        .as_str()
+                        .map(|w| format!("⚠️ {w}\n\n"))
+                        .unwrap_or_default();
                     let args = json!({
                         "op": "session.purge",
                         "params": {"session": id, "reason": "demande du propriétaire"},
                         "question": format!(
-                            "Effacer le contenu de la session {label} ? Messages, résumés, \
-                             artefacts et requêtes partent définitivement ; la chaîne \
-                             d'audit garde ses lignes, sans leur contenu."
+                            "{warning}Effacer le contenu de la session {label} ? Messages, \
+                             résumés, artefacts et requêtes partent définitivement ; la \
+                             chaîne d'audit garde ses lignes, sans leur contenu."
                         ),
                         "back": null,
                     });
