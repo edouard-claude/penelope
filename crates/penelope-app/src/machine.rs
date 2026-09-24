@@ -17,7 +17,7 @@
 //! `brew upgrade gh` ne doit rien changer au prompt. Les versions restent dans
 //! `self_status`, qui n'est lu que sur demande.
 
-use crate::runtime::Services;
+use crate::services::Services;
 use penelope_kernel::config::Config;
 use penelope_platform::host::HostStatus;
 use serde::{Deserialize, Serialize};
@@ -546,7 +546,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let clock: penelope_kernel::clock::SharedClock =
             Arc::new(penelope_kernel::clock::TestClock::default());
-        let s = crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+        let s = crate::services::Services::for_tests(dir.path().to_path_buf(), clock)
             .await
             .unwrap();
         assert!(cached(&s).await.is_none(), "rien avant la première passe");

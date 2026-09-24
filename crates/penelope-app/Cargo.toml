@@ -24,6 +24,8 @@ async-trait.workspace = true
 # Heure locale du propriétaire (`helpers::local_now`).
 chrono.workspace = true
 chrono-tz.workspace = true
+# Pièces jointes encodées pour le modèle (`media`).
+base64.workspace = true
 # Validation des adresses que présente une élicitation MCP (`elicitation`).
 url.workspace = true
 # Crates métier que `Services::bootstrap` assemble, une raison chacune :
@@ -33,6 +35,8 @@ penelope-kernel.workspace = true
 penelope-store.workspace = true
 # Répertoires, secrets, processus de la machine.
 penelope-platform.workspace = true
+# Caviardage des sorties de commandes de la machine (`machine`).
+penelope-observe.workspace = true
 # Catalogue des modèles, état des requêtes, providers (`ProviderSource`), types des messages.
 penelope-llm.workspace = true
 # Moteur de contexte (historique, LCM) ; provenance des messages (`Conversation`).

@@ -43,16 +43,7 @@ pub struct NativeToolExecutor {
     pub admin: Option<Arc<dyn crate::selfknow::Admin>>,
 }
 
-/// Chemins dont la lecture est refusée aux commandes sous bac à sable (issue #68).
-pub fn denied_reads(s: &Services) -> Vec<PathBuf> {
-    s.config
-        .config()
-        .sandbox
-        .deny_read
-        .iter()
-        .map(|d| s.platform.dirs.expand(d))
-        .collect()
-}
+pub use penelope_app::helpers::{canonical_workspace, default_workspaces, denied_reads};
 
 /// Statuts d'un critère de workflow ; `completed` et `passed` le cochent (issue #137).
 pub const CRITERION_STATUSES: [&str; 4] = ["pending", "completed", "passed", "failed"];
@@ -168,27 +159,6 @@ fn untrusted_listing(source: &str, value: Value) -> ToolOutcome {
         is_error: false,
         eager: false,
     }
-}
-
-/// Workspaces autorisés : configuration, sinon `{data}/workspace`.
-pub fn canonical_workspace(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| penelope_platform::sandbox::normalise(path))
-}
-
-pub fn default_workspaces(s: &Services) -> Vec<PathBuf> {
-    let cfg = s.config.config();
-    let mut v: Vec<PathBuf> = cfg
-        .sandbox
-        .workspaces
-        .iter()
-        .map(|w| s.platform.dirs.expand(w))
-        .collect();
-    if v.is_empty() {
-        let ws = s.platform.dirs.data().join("workspace");
-        let _ = std::fs::create_dir_all(&ws);
-        v.push(ws);
-    }
-    v.iter().map(|p| canonical_workspace(p)).collect()
 }
 
 /// Moment promis par `config_set`. La configuration est publiée immédiatement, mais les

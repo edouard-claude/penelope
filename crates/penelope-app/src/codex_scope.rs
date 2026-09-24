@@ -12,7 +12,7 @@
 //! La garde est **unique** et se pose juste avant le choix du fournisseur : un travail de
 //! fond nomme ce qu'il est, et reçoit en retour le modèle qu'il a le droit d'appeler.
 
-use crate::runtime::Services;
+use crate::services::Services;
 use penelope_kernel::config::Config;
 use penelope_kernel::event::EventDraft;
 use serde_json::json;

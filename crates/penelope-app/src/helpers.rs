@@ -190,3 +190,37 @@ pub fn last_model_key(session_id: &str) -> String {
 pub fn step_done_key(run_id: &str) -> String {
     format!("wf.step_done.{run_id}")
 }
+
+// ---------------------------------------- Workspaces et bac à sable (depuis executor/mod.rs)
+
+/// Chemins dont la lecture est refusée aux commandes sous bac à sable (issue #68).
+pub fn denied_reads(s: &Services) -> Vec<PathBuf> {
+    s.config
+        .config()
+        .sandbox
+        .deny_read
+        .iter()
+        .map(|d| s.platform.dirs.expand(d))
+        .collect()
+}
+
+/// Workspaces autorisés : configuration, sinon `{data}/workspace`.
+pub fn canonical_workspace(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| penelope_platform::sandbox::normalise(path))
+}
+
+pub fn default_workspaces(s: &Services) -> Vec<PathBuf> {
+    let cfg = s.config.config();
+    let mut v: Vec<PathBuf> = cfg
+        .sandbox
+        .workspaces
+        .iter()
+        .map(|w| s.platform.dirs.expand(w))
+        .collect();
+    if v.is_empty() {
+        let ws = s.platform.dirs.data().join("workspace");
+        let _ = std::fs::create_dir_all(&ws);
+        v.push(ws);
+    }
+    v.iter().map(|p| canonical_workspace(p)).collect()
+}

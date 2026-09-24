@@ -10,7 +10,6 @@ pub mod budget_alert;
 pub mod cache_audit;
 pub mod codex_auth;
 pub mod codex_quota;
-pub mod codex_scope;
 pub mod compaction;
 pub mod concepts;
 pub mod conversation;
@@ -24,10 +23,8 @@ pub mod hermes;
 pub mod history;
 pub mod images;
 pub mod ingest;
-pub mod machine;
 pub mod mcp;
 pub mod mcp_auth;
-pub mod media;
 pub mod mem_audit;
 pub mod mem_split;
 pub mod onboarding;
@@ -66,7 +63,9 @@ mod wiki_e2e;
 pub mod workflow;
 
 // Modules descendus dans `penelope-app` (T21), réexportés sous leur ancien chemin.
-pub use penelope_app::{bus, elicitation, helpers, ports, tasks, testing};
+pub use penelope_app::{
+    bus, codex_scope, elicitation, helpers, machine, media, ports, tasks, testing,
+};
 
 pub use agent::{AgentLoop, TurnOutcome};
 pub use ports::Handle;

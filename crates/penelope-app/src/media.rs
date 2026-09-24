@@ -4,7 +4,7 @@
 //! les montrer au modèle. Un fichier qui n'est pas un document ingérable est déposé dans
 //! le premier workspace, là où les outils de fichiers et le shell peuvent l'atteindre.
 
-use crate::runtime::Services;
+use crate::services::Services;
 use base64::Engine;
 use std::path::{Path, PathBuf};
 
@@ -128,7 +128,7 @@ pub fn data_url(path: &Path) -> Result<String, String> {
 
 /// Dépose un fichier reçu dans le workspace (`<workspace>/telegram/`), sous un nom sûr.
 pub fn save_attachment(s: &Services, name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
-    let workspace = crate::executor::default_workspaces(s)
+    let workspace = crate::helpers::default_workspaces(s)
         .into_iter()
         .next()
         .ok_or("aucun workspace configuré")?;

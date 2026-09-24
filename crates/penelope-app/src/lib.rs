@@ -7,10 +7,13 @@
 #![forbid(unsafe_code)]
 
 pub mod bus;
+pub mod codex_scope;
 pub mod conversation;
 pub mod elicitation;
 pub mod helpers;
 pub mod jobs;
+pub mod machine;
+pub mod media;
 pub mod outcome;
 pub mod ports;
 pub mod services;

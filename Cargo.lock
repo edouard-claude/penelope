@@ -1274,6 +1274,7 @@ version = "1.0.0-alpha.5"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64",
  "chrono",
  "chrono-tz",
  "futures",
@@ -1283,6 +1284,7 @@ dependencies = [
  "penelope-llm",
  "penelope-mcp",
  "penelope-memory",
+ "penelope-observe",
  "penelope-platform",
  "penelope-skills",
  "penelope-store",
