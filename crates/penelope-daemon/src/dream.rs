@@ -117,6 +117,7 @@ pub async fn run_as(
     result
 }
 
+#[allow(clippy::too_many_lines)] // gel 0.17 : phases de la nuit, lot G (dream/mod.rs)
 async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutcome> {
     let s = &d.services;
     let cfg = s.config.config();
@@ -2022,6 +2023,7 @@ fn today(s: &Services) -> String {
 }
 
 /// Applique une opération validée ; renvoie le fichier touché.
+#[allow(clippy::too_many_lines)] // gel 0.17 : lot G (dream/apply.rs)
 async fn apply(
     d: &Arc<Daemon>,
     vault: &Path,

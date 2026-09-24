@@ -532,6 +532,7 @@ impl AgentLoop {
     }
 
     /// Exécute (ou reprend) un tour sur un transcript quelconque.
+    #[allow(clippy::too_many_lines)] // gel 0.17 : boucle d'agent, découpée au lot G (agent/loop.rs)
     pub async fn run_conversation(
         &self,
         spec: &TurnSpec,
@@ -921,6 +922,7 @@ impl AgentLoop {
     /// Chez OpenRouter, les replis partent dans la requête (`models`) : OpenRouter bascule
     /// lui-même avant le premier jeton, y compris quand la panne survient après le 200.
     /// Ailleurs, ils sont essayés ici, sur les erreurs d'avant flux.
+    #[allow(clippy::too_many_lines)] // gel 0.17 : appel du modèle et replis, lot G (agent/model_call.rs)
     async fn call_model(
         &self,
         spec: &TurnSpec,
@@ -1265,6 +1267,7 @@ impl AgentLoop {
     }
 
     /// Résout les appels d'outils sans résultat à la fin du transcript.
+    #[allow(clippy::too_many_lines)] // gel 0.17 : lot G (agent/pending.rs)
     async fn resolve_pending(
         &self,
         spec: &TurnSpec,

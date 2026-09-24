@@ -233,6 +233,7 @@ async fn a_dream_is_committed_in_the_vault_history() {
 /// retrouve ailleurs, retente ce qui n'a pas de verdict, et propose au retrait ce qui ne
 /// sert jamais.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // gel 0.17 : scénario de test bout en bout
 async fn the_grid_updates_journals_and_ages_the_memory() {
     let dir = tempfile::tempdir().unwrap();
     let clock = TestClock::new(1_789_516_800_000);

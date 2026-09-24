@@ -264,6 +264,7 @@ du serveur MCP du tracker (`tracker`), le titre et la description du ticket.";
 
 /// `ticket-to-deploy` : scénario de référence du §12.10. Tracker et forge sont ceux du
 /// ticket et du dépôt : leurs outils MCP sont trouvés à l'exécution (issue #35).
+#[allow(clippy::too_many_lines)] // gel 0.17 : table (définition du workflow livré)
 pub fn ticket_to_deploy() -> Workflow {
     Workflow {
         metadata: Metadata {

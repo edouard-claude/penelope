@@ -844,6 +844,7 @@ impl TelegramGateway {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // gel 0.17 : lot G (telegram/mod.rs)
     async fn handle(self: &Arc<Self>, incoming: Incoming) -> anyhow::Result<()> {
         match incoming {
             Incoming::Text {
@@ -1090,6 +1091,7 @@ impl TelegramGateway {
 
     // ================================================================ commandes
 
+    #[allow(clippy::too_many_lines)] // gel 0.17 : table de dispatch des commandes, lot G (telegram/commands/*.rs)
     async fn command(
         self: &Arc<Self>,
         chat_id: i64,
@@ -3588,6 +3590,7 @@ impl TelegramGateway {
 
     // ================================================================ boutons
 
+    #[allow(clippy::too_many_lines)] // gel 0.17 : lot G (telegram/callbacks.rs)
     async fn callback(
         self: &Arc<Self>,
         callback_id: &str,

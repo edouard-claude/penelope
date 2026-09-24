@@ -410,6 +410,7 @@ impl TelegramGateway {
 
     // ------------------------------------------------------------ écrans
 
+    #[allow(clippy::too_many_lines)] // gel 0.17 : table des écrans, lot G (telegram/screens/*.rs)
     pub(super) async fn build_screen(
         &self,
         chat_id: i64,
@@ -1903,6 +1904,7 @@ impl TelegramGateway {
 
     // ------------------------------------------------------------ opérations
 
+    #[allow(clippy::too_many_lines)] // gel 0.17 : lot G (telegram/screens/perform.rs)
     async fn perform(
         &self,
         chat_id: i64,

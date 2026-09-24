@@ -466,6 +466,7 @@ impl NativeToolExecutor {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // gel 0.17 : table de dispatch des outils natifs, lot G (executor/tools/*.rs)
     async fn dispatch(
         &self,
         name: &str,

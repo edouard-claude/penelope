@@ -920,6 +920,7 @@ fn render_model_list(v: &Value) -> String {
 }
 
 /// Associe une commande à sa méthode RPC (CA 15 : parité Telegram ↔ CLI).
+#[allow(clippy::too_many_lines)] // gel 0.17 : table de routage des commandes vers les méthodes RPC
 pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
     Ok(match cmd {
         Command::Status => (m::STATUS, json!({})),

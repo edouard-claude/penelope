@@ -2451,6 +2451,7 @@ fn verifier_prompt(
 }
 
 /// `verify` : contrôles puis vérificateur ; met à jour les critères.
+#[allow(clippy::too_many_lines)] // gel 0.17 : lot G (workflow/steps/verify.rs)
 async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     let s = ctx.s();
     let step = ctx.step;

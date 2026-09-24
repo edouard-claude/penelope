@@ -91,6 +91,7 @@ fn hidden_entries(vault: &Path) -> Vec<(String, Vec<u8>)> {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // gel 0.17 : scénario de test bout en bout
 async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::new(1_789_516_800_000));

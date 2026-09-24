@@ -193,6 +193,7 @@ impl Access {
 /// Classe un update brut. Le propriétaire est la **liste blanche d'un seul élément**
 /// (§13.4) ; un groupe n'est ouvert que s'il figure dans `access.allowed_chats`, et y
 /// parler en administrateur anonyme vaut propriétaire (issue #113).
+#[allow(clippy::too_many_lines)] // gel 0.17 : classification des mises à jour Telegram
 pub fn classify(update: &Value, access: &Access) -> Incoming {
     let owner_id = access.owner_id;
     let update_id = update

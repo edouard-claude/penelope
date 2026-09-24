@@ -80,6 +80,7 @@ fn obj(props: Value, required: &[&str]) -> Value {
 }
 
 /// Tous les outils natifs du §11, triés par nom.
+#[allow(clippy::too_many_lines)] // gel 0.17 : table
 pub fn all() -> Vec<ToolSpec> {
     let mut v = vec![
         // ------------------------------------------------------------ fichiers

@@ -190,6 +190,7 @@ async fn codex_view(s: &Services, cfg: &penelope_kernel::config::Config) -> Valu
     })
 }
 
+#[allow(clippy::too_many_lines)] // gel 0.17 : assemblage du statut
 pub async fn status(
     s: &Services,
     session_id: &str,

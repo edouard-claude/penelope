@@ -58,6 +58,7 @@ const EPHEMERAL_KEYS: &[&str] = &[
 ];
 
 /// Efface tout ce qu'une session a dit et fait dire, sauf la chaîne d'audit.
+#[allow(clippy::too_many_lines)] // gel 0.17 : purge d'une session table par table
 pub async fn session(d: &Daemon, session_id: &str, reason: &str) -> anyhow::Result<Value> {
     let s = &d.services;
     let sess = s.sessions.require(session_id).await?;

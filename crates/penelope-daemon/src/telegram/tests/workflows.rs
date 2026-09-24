@@ -3,6 +3,7 @@ use super::*;
 /// #165 : la session technique d'un run n'a pas de sujet ; la destination de la
 /// carte doit survivre au clic, même si le callback ne répète pas le thread id.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // gel 0.17 : scénario de test bout en bout
 async fn workflow_approval_confirmation_stays_in_the_cards_topic() {
     let (dir, g, t, _p) = gateway().await;
     let s = &g.daemon.services;

@@ -1436,6 +1436,7 @@ impl Config {
     }
 
     /// Validation sémantique, au-delà du typage TOML (§4.4 étape 2).
+    #[allow(clippy::too_many_lines)] // gel 0.17 : validation clé par clé
     pub fn validate(&self) -> Result<()> {
         if self.owner.telegram_user_id == 0 {
             return Err(KernelError::config(

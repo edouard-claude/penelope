@@ -32,6 +32,7 @@ const fn c(
 use penelope_kernel::api::method as m;
 
 /// Toutes les commandes du tableau §14.6.
+#[allow(clippy::too_many_lines)] // gel 0.17 : table
 pub fn all() -> Vec<Command> {
     vec![
         // Session

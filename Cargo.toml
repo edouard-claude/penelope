@@ -10,6 +10,13 @@ license = "MIT OR Apache-2.0"
 authors = ["Penelope"]
 repository = "https://github.com/edouard-claude/penelope"
 
+# Gel 0.17 (règle R7, issue #211) : aucune fonction nouvelle au-dessus de 200 lignes
+# (`clippy.toml`, `too-many-lines-threshold`). Les fonctions existantes portent un
+# `#[allow(clippy::too_many_lines)] // gel 0.17 : <raison>`, comptés par archtest ; la
+# sortie normale est de découper la fonction, jamais d'ajouter un allow.
+[workspace.lints.clippy]
+too_many_lines = "warn"
+
 [workspace.dependencies]
 # --- core async / serde ---
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "process", "net", "signal", "io-std"] }

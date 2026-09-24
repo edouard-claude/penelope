@@ -373,6 +373,7 @@ impl Daemon {
         outcome
     }
 
+    #[allow(clippy::too_many_lines)] // gel 0.17 : lot G (engine/turn.rs)
     async fn execute_turn(
         self: &Arc<Self>,
         turn: &Turn,

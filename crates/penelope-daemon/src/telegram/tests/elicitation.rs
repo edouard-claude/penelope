@@ -209,6 +209,7 @@ async fn mcp_elicitation_is_answered_from_telegram() {
 /// l'état du serveur, le modèle lit qui a répondu ; un lien (2025-11-25) montre son
 /// domaine, s'ouvre après accord et sa fin signalée met la carte à jour.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // gel 0.17 : scénario de test bout en bout
 async fn mcp_links_and_mrtr_elicitations_from_telegram() {
     use crate::executor::McpGateway;
     use crate::mcp::testing::{FakeConnector, declare, server, tool};

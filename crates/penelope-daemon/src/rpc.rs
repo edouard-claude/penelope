@@ -47,6 +47,7 @@ impl Rpc {
     /// sur la pile de l'appelant, il la faisait déborder au test dès qu'une branche
     /// s'ajoutait (issues #145 et #146). Ses deux appelants le mettent donc sur le tas —
     /// une allocation par appel RPC, et une méthode de plus ne coûte plus rien.
+    #[allow(clippy::too_many_lines)] // gel 0.17 : table de dispatch RPC, lot G (rpc/methods/*.rs)
     async fn dispatch(&self, method: &str, p: &Value) -> anyhow::Result<Value> {
         let s = self.services();
         match method {

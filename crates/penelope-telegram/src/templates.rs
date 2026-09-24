@@ -350,6 +350,7 @@ fn burl(label: &str, url: &str) -> ButtonDef {
 }
 
 /// Catalogue livré : un template par ligne du tableau §14.5.
+#[allow(clippy::too_many_lines)] // gel 0.17 : table
 pub fn builtin_templates() -> Vec<Template> {
     use crate::actions::kind as k;
     vec![
