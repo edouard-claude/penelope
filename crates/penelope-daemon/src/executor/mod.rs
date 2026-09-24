@@ -171,7 +171,7 @@ fn untrusted_listing(source: &str, value: Value) -> ToolOutcome {
 }
 
 /// Workspaces autorisés : configuration, sinon `{data}/workspace`.
-fn canonical_workspace(path: &Path) -> PathBuf {
+pub fn canonical_workspace(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| penelope_platform::sandbox::normalise(path))
 }
 
