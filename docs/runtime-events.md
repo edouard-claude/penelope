@@ -106,7 +106,6 @@ Pendant la double écriture, les tables restent la source de lecture ; une ligne
 | `conv.summary` | un résumé est publié (compaction) : `replace` de la plage qu'il couvre, précédent résumé compris quand il le prolonge ; `context.compacted` suit | `node_id`, `previous_node_id`, `summary` (le texte rendu du nœud), `anchors`, `verbatim_users`, `model`, `tokens_src`, `tokens_self`, `batches_left`, `trigger`, `idempotency_key` (republier le même travail n'écrit pas un second événement) |
 | `conv.fork` | premier `conv.*` d'une session fille (`/fork`) : elle hérite de la surface de sa mère ; `session.forked` suit | `parent`, `up_to` (dernière adresse héritée), `offset` |
 | `conv.rewind` | `/rewind` : `cut` après le nœud qui précède le message de coupe (0 : tout) ; `session.rewound` suit | `turns`, `archive_session` |
-| `conv.attempt` | un appel au modèle n'a pas donné de réponse gardée (#206) ; hors surface | `cause` (`stream_cut`, `before_stream`, `empty_answer`, `fallback`), `turn`, `step`, `model`, `error`, `partial_text`, `usage`, `retry_prompt` |
 | `conv.import` | scellement d'une session d'avant le journal (§4.5) | `messages`, `contexts`, `lcm_active`, `digest` |
 
 Le contenu transite donc par ce flux : un message du propriétaire, une réponse, un
