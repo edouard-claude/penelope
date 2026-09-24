@@ -1324,6 +1324,7 @@ dependencies = [
  "penelope-kernel",
  "penelope-llm",
  "penelope-observe",
+ "penelope-ops",
  "penelope-platform",
  "penelope-store",
  "penelope-telegram",

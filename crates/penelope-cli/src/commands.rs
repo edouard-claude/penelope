@@ -737,7 +737,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
             if cli.json {
                 output::print(&value, true);
             } else {
-                print!("{}", penelope_daemon::doctor::render(&checks));
+                print!("{}", penelope_ops::doctor::render(&checks));
             }
             if checks.iter().any(|c| !c.ok && c.severity == "error") {
                 return Err(CliError::Validation(
@@ -1087,7 +1087,7 @@ async fn upgrade(cli: &Cli) -> CliResult<()> {
         output::print(&value, true);
         return Ok(());
     }
-    println!("{}", penelope_daemon::upgrade::render(&value));
+    println!("{}", penelope_ops::upgrade::render(&value));
     let changed = value["installed"].is_string() || value["rolled_back"].as_bool() == Some(true);
     if changed && offline {
         println!("Daemon arrêté : `penelope start` pour démarrer la nouvelle version.");
@@ -1098,7 +1098,7 @@ async fn upgrade(cli: &Cli) -> CliResult<()> {
 }
 
 async fn upgrade_offline(cli: &Cli, p: &Value) -> CliResult<Value> {
-    use penelope_daemon::upgrade as up;
+    use penelope_ops::upgrade as up;
     let dirs = penelope_platform::resolve_directories(cli.home.clone())
         .map_err(|e| CliError::Io(e.to_string()))?;
     // Sans daemon, la configuration est lue sur disque (clé minisign, adresse des releases).
@@ -1618,7 +1618,7 @@ async fn doctor(cli: &Cli) -> CliResult<()> {
     if cli.json {
         output::print(&json!(checks), true);
     } else {
-        print!("{}", penelope_daemon::doctor::render(&checks));
+        print!("{}", penelope_ops::doctor::render(&checks));
     }
     if checks.iter().any(|c| !c.ok && c.severity == "error") {
         return Err(CliError::Validation(
@@ -1753,7 +1753,7 @@ fn service(cli: &Cli) -> CliResult<()> {
 }
 
 async fn daemon(cli: &Cli) -> CliResult<()> {
-    use penelope_daemon::upgrade::{self, Boot};
+    use penelope_ops::upgrade::{self, Boot};
     // Nouveau binaire à l'essai : ce démarrage est compté avant d'ouvrir quoi que ce soit,
     // pour qu'un plantage plus loin mène aussi au retour arrière.
     let dirs = penelope_platform::resolve_directories(cli.home.clone())

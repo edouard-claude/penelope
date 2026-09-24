@@ -26,6 +26,9 @@ penelope-kernel.workspace = true
 penelope-platform.workspace = true
 penelope-observe.workspace = true
 penelope-daemon.workspace = true
+# Rendu du diagnostic et mise à jour du binaire (`doctor::render`, `upgrade`), sortis du
+# daemon (épopée #208, T28).
+penelope-ops.workspace = true
 # La passerelle Telegram, composée au-dessus du daemon par la commande `daemon` (T29).
 penelope-gateway-telegram.workspace = true
 penelope-store.workspace = true
