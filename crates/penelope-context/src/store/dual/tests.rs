@@ -323,7 +323,9 @@ async fn a_fork_addresses_its_own_events_after_what_it_inherits() {
         surface.contexts.get(&address).map(String::as_str),
         Some("<contexte/>")
     );
-    assert!(surface.messages.contains_key(&address));
+    // Le contexte désigne le message écrit après le fork, pas un nœud du préfixe.
+    assert_eq!(surface.messages[&address].message.text(), "deux");
+    assert!(address > up_to);
 
     // La coupe vise le nœud qui précède le message retiré.
     let removed = h.rewind_from("s2", seq, 1, None).await.unwrap();
