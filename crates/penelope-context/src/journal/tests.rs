@@ -319,3 +319,18 @@ fn free_json_values_keep_the_bytes_the_provider_sent() {
         serde_json::to_string(&message).unwrap()
     );
 }
+
+/// T14 : une réponse écrite `eager` (abandon de boucle) le reste une fois relue : la
+/// ligne refaite depuis le journal est la même.
+#[test]
+fn an_eager_answer_stays_eager() {
+    let answer = penelope_llm::types::ChatMessage::assistant("je m'arrête");
+    for eager in [false, true] {
+        let Some(ConvEvent::Assistant(p)) =
+            message_event(&answer, 5, 0, eager, &Provenance::default())
+        else {
+            panic!("conv.assistant");
+        };
+        assert_eq!(crate::derive::assistant_node(*p).eager, eager);
+    }
+}

@@ -155,6 +155,10 @@ pub struct AssistantPayload {
     /// Réponse partielle gardée après `/stop`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub interrupted: bool,
+    /// Drapeau `eager` de la ligne (réponse d'abandon de boucle) : sans effet sur la
+    /// requête, gardé pour que la ligne se refasse à l'identique (T14).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub eager: bool,
     #[serde(default)]
     pub episode: i64,
     #[serde(default)]

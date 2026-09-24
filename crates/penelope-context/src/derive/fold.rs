@@ -363,7 +363,7 @@ pub(crate) fn assistant_node(p: AssistantPayload) -> MessageNode {
     restore_verbatim(&mut message, &p.verbatim);
     MessageNode {
         message,
-        eager: false,
+        eager: p.eager,
         artifact_id: None,
         tokens: p.tokens_est,
         episode: p.episode,
