@@ -273,6 +273,106 @@ async fn word_is_gone(d: &Daemon, word: &str) -> bool {
         .unwrap()
 }
 
+/// Payloads `conv.*` du journal qui contiennent le mot.
+async fn conv_payloads_with(d: &Daemon, word: &str) -> i64 {
+    let w = format!("%{word}%");
+    d.services
+        .store
+        .read(move |c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM events WHERE kind LIKE 'conv.%' AND payload LIKE ?1",
+                [&w],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap()
+}
+
+/// T17 : purger une session dont une autre est née d'un fork le dit (la fille perd le
+/// préfixe qu'elle lit dans le journal de sa mère) ; la fille se relit sans ce préfixe.
+#[tokio::test]
+async fn purging_a_forked_session_warns_about_its_forks() {
+    let (_dir, d, _clock) = daemon().await;
+    let s = d.services.clone();
+    let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+    let h = &s.context.history;
+    h.append(&sid, &ChatMessage::user("Quetzal"), 5, 0, false, None)
+        .await
+        .unwrap();
+    h.append(&sid, &ChatMessage::assistant("noté"), 5, 0, false, None)
+        .await
+        .unwrap();
+    let forked = crate::session_ops::fork(&s, &sid, None).await.unwrap();
+    let child = forked["session"].as_str().unwrap().to_string();
+    let report = session(&s, &sid, "essai").await.unwrap();
+    assert_eq!(report["forks"], serde_json::json!([child]), "{report}");
+    assert!(
+        report["avertissement"]
+            .as_str()
+            .unwrap()
+            .contains("perdent le préfixe"),
+        "{report}"
+    );
+    let read = h.read_journal(&child).await.unwrap().unwrap().unwrap();
+    assert!(read.entries.is_empty(), "le préfixe hérité est parti");
+    let alone = session(&s, &child, "essai").await.unwrap();
+    assert!(alone.get("forks").is_none(), "{alone}");
+}
+
+/// T17 : la rétention purge le payload des `conv.attempt` anciens (texte partiel
+/// compris), garde les récents ; `history verify` reste à zéro, `audit verify` ok.
+#[tokio::test]
+async fn retention_purges_old_attempts_by_payload() {
+    use penelope_context::journal::{AttemptCause, AttemptPayload, ConvEvent};
+    let (_dir, d, clock) = daemon().await;
+    let s = d.services.clone();
+    let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+    let h = &s.context.history;
+    let attempt = |text: &str| {
+        let e = ConvEvent::Attempt(AttemptPayload {
+            turn: None,
+            step: 1,
+            cause: AttemptCause::StreamCut,
+            model: None,
+            provider: None,
+            upstream: None,
+            error: None,
+            partial_text: Some(text.to_string()),
+            partial_reasoning: None,
+            usage: None,
+            cost_usd: None,
+            llm_request_id: None,
+            retry_prompt: None,
+        });
+        EventDraft::new(e.kind(), e.payload()).session(&sid)
+    };
+    h.append(&sid, &ChatMessage::user("question"), 5, 0, false, None)
+        .await
+        .unwrap();
+    s.events.append(attempt("brouillon ancien")).await.unwrap();
+    h.append(&sid, &ChatMessage::assistant("réponse"), 5, 0, false, None)
+        .await
+        .unwrap();
+    clock.advance_ms(91 * 86_400_000);
+    s.events.append(attempt("brouillon récent")).await.unwrap();
+
+    let report = retention(&s).await.unwrap();
+    assert_eq!(report["conv_attempts"], 1, "{report}");
+    assert_eq!(conv_payloads_with(&d, "brouillon ancien").await, 0);
+    assert_eq!(conv_payloads_with(&d, "brouillon récent").await, 1);
+    let again = retention(&s).await.unwrap();
+    assert_eq!(again["conv_attempts"], 0, "idempotent");
+    let verified = s.events.verify().await.unwrap();
+    assert!(verified.ok, "chaîne rompue : {verified:?}");
+    let v = crate::history::verify(&s, &serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(v["ok"], true, "{v}");
+    let read = h.read_journal(&sid).await.unwrap().unwrap().unwrap();
+    assert_eq!(read.entries.len(), 2, "la surface ne perd rien");
+}
+
 /// #46 : après la purge, plus un mot du transcript dans la base, les fichiers sont
 /// partis, la chaîne d'audit tient toujours.
 #[tokio::test]
@@ -449,6 +549,11 @@ async fn purging_a_session_leaves_the_audit_chain_and_nothing_else() {
         .unwrap();
 
     assert!(!word_is_gone(&d, SECRET).await, "le mot doit être là avant");
+    // T17 : le journal de la conversation (`conv.*`) porte le mot, il doit partir.
+    assert!(
+        conv_payloads_with(&d, SECRET).await > 0,
+        "conv.user le porte"
+    );
     assert!(!h.grep(SECRET, None, 10).await.unwrap().is_empty());
 
     let report = session(&d.services, &sid, "essai").await.unwrap();
@@ -459,6 +564,13 @@ async fn purging_a_session_leaves_the_audit_chain_and_nothing_else() {
         word_is_gone(&d, SECRET).await,
         "purge incomplète : {report}"
     );
+    assert_eq!(conv_payloads_with(&d, SECRET).await, 0);
+    // T17 : refondue depuis son journal purgé, la session n'a plus de surface.
+    let p = serde_json::json!({"session": sid});
+    crate::history::reindex(&s, &p).await.unwrap();
+    assert_eq!(crate::history::verify(&s, &p).await.unwrap()["ok"], true);
+    assert!(h.load(&sid, 0).await.unwrap().is_empty());
+    assert!(word_is_gone(&d, SECRET).await, "la refonte ne ramène rien");
     assert!(h.grep(SECRET, None, 10).await.unwrap().is_empty());
     // L'idempotence survit : l'effet purgé est rejoué, jamais ré-exécuté.
     assert!(matches!(

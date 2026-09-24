@@ -9,7 +9,9 @@
 //!     effects.request/result, tg_outbox, approval_requests.payload, mcp_tasks, tool_jobs,
 //!     workflow_runs et workflow_step_log des runs de la session (#78)
 //!     prompt_snapshots que la session seule référençait, et usage.system_hash (#205)
+//!     prompt_snapshots cités par ses conv.system et par aucune autre session (T17)
 //!     events : payload remplacé, hash d'origine conservé (audit.purge)
+//!     sessions nées d'un fork : nommées dans le rapport, elles perdent leur préfixe
 //!
 //!  rétention (une fois par jour)
 //!     tours terminés, requêtes au modèle, updates Telegram, clés de travail,
@@ -17,6 +19,7 @@
 //!     tâches MCP, jobs d'outils et sorties de runs terminés : au-delà de
 //!     `retention.days`, vidés ;
 //!     prompts système que plus aucune ligne ne cite ;
+//!     payloads des `conv.attempt` (texte partiel), hash gardé dans event_purges (T17) ;
 //!     pré-images de la mémoire au-delà de `retention.memory_history_days`.
 //! ```
 //!
@@ -92,6 +95,10 @@ pub async fn session(s: &Services, session_id: &str, reason: &str) -> anyhow::Re
         .to_string_lossy()
         .to_string();
     let artifacts_root = s.platform.dirs.artifacts();
+    let forks = forks_of(s, session_id).await?;
+    if !forks.is_empty() {
+        tracing::warn!(session = %session_id, ?forks, "{}", forks_warning(&forks));
+    }
 
     let (counts, files) = s
         .store
@@ -139,13 +146,20 @@ pub async fn session(s: &Services, session_id: &str, reason: &str) -> anyhow::Re
                      WHERE session_id = ?1 AND system_hash IS NOT NULL
                     UNION
                     SELECT system_hash FROM llm_requests
-                     WHERE session_id = ?1 AND system_hash IS NOT NULL)
+                     WHERE session_id = ?1 AND system_hash IS NOT NULL
+                    UNION
+                    SELECT json_extract(payload, '$.hash') FROM events
+                     WHERE session_id = ?1 AND kind = 'conv.system')
                  AND hash NOT IN (
                     SELECT system_hash FROM usage
                      WHERE COALESCE(session_id, '') <> ?1 AND system_hash IS NOT NULL)
                  AND hash NOT IN (
                     SELECT system_hash FROM llm_requests
-                     WHERE COALESCE(session_id, '') <> ?1 AND system_hash IS NOT NULL)",
+                     WHERE COALESCE(session_id, '') <> ?1 AND system_hash IS NOT NULL)
+                 AND hash NOT IN (
+                    SELECT json_extract(payload, '$.hash') FROM events
+                     WHERE kind = 'conv.system' AND COALESCE(session_id, '') <> ?1
+                       AND json_extract(payload, '$.hash') IS NOT NULL)",
                 [&sid],
             )?;
             // La ligne comptable reste, avec ses jetons et son coût : seule la clé qui
@@ -302,15 +316,69 @@ pub async fn session(s: &Services, session_id: &str, reason: &str) -> anyhow::Re
     // `audit.purge` dit ce qui vient d'être fait.
     let events = s.events.purge_session(session_id, reason).await?;
 
-    let report = json!({
+    let mut report = json!({
         "session": session_id,
         "reason": reason,
         "events": events,
         "files": removed,
         "tables": counts,
     });
+    if !forks.is_empty() {
+        report["forks"] = json!(forks);
+        report["avertissement"] = json!(forks_warning(&forks));
+    }
     tracing::info!(session = %session_id, %reason, "session purgée");
     Ok(report)
+}
+
+/// Les sessions nées d'un fork de celle-ci : elles lisent leur préfixe dans son journal
+/// (fork par référence, §2.6) et le perdent à sa purge.
+async fn forks_of(s: &Services, session_id: &str) -> anyhow::Result<Vec<String>> {
+    let sid = session_id.to_string();
+    Ok(s.store
+        .read(move |c| {
+            let mut st = c.prepare(
+                "SELECT DISTINCT session_id FROM events
+                 WHERE kind = 'conv.fork' AND json_extract(payload, '$.parent') = ?1
+                 ORDER BY session_id",
+            )?;
+            let rows = st.query_map([&sid], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await?)
+}
+
+fn forks_warning(forks: &[String]) -> String {
+    format!(
+        "{} session(s) née(s) d'un fork de celle-ci perdent le préfixe qu'elles en \
+         héritent : {}",
+        forks.len(),
+        forks.join(", ")
+    )
+}
+
+/// Rétention des tentatives (T17) : le texte partiel d'un `conv.attempt` ne survit pas à
+/// la comptabilité qu'il accompagne. Le payload est remplacé, le hash d'origine gardé dans
+/// `event_purges`, comme à la purge d'une session : `audit verify` compte ces lignes
+/// `purged` et la chaîne tient.
+fn purge_attempts(
+    tx: &penelope_store::rusqlite::Transaction<'_>,
+    cutoff: &str,
+    now: &str,
+) -> penelope_store::rusqlite::Result<usize> {
+    const OLD: &str = "SELECT id FROM events
+         WHERE kind = 'conv.attempt' AND ts < ?1 AND payload <> '{\"purged\":true}'";
+    tx.execute(
+        &format!(
+            "INSERT OR IGNORE INTO event_purges(event_id, purged_at, original_hash, reason)
+             SELECT id, ?2, hash, 'retention' FROM events WHERE id IN ({OLD})"
+        ),
+        params![cutoff, now],
+    )?;
+    tx.execute(
+        &format!("UPDATE events SET payload = '{{\"purged\":true}}' WHERE id IN ({OLD})"),
+        [cutoff],
+    )
 }
 
 /// Chemins de médias cités dans un message (`"/…/media/voice/01J.ogg"`).
@@ -343,6 +411,7 @@ pub async fn retention(s: &Services) -> anyhow::Result<Value> {
     let days = cfg.retention.days;
     let history_days = cfg.retention.memory_history_days;
     let general = (days > 0).then(|| cutoff(days));
+    let stamp = s.clock.now_rfc3339();
     let history = (history_days > 0).then(|| cutoff(history_days));
 
     let report = s
@@ -356,7 +425,9 @@ pub async fn retention(s: &Services) -> anyhow::Result<Value> {
             let (mut tasks, mut steps, mut runs) = (0, 0, 0);
             let mut jobs = 0;
             let mut prompts = 0;
+            let mut attempts = 0;
             if let Some(c) = &general {
+                attempts = purge_attempts(tx, c, &stamp)?;
                 turns = tx.execute(
                     "DELETE FROM turn_queue
                      WHERE state IN ('done','failed','cancelled')
@@ -453,6 +524,7 @@ pub async fn retention(s: &Services) -> anyhow::Result<Value> {
                 "prompt_snapshots": prompts,
                 "workflow_steps": steps,
                 "workflow_runs": runs,
+                "conv_attempts": attempts,
             }))
         })
         .await?;

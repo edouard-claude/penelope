@@ -123,7 +123,9 @@ impl<'a> Fold<'a> {
                     self.surface.merge_note = false;
                     self.surface.attempts_tail = None;
                 }
-                k if k.starts_with(KIND_PREFIX) && is_purged(&ev.payload) => {
+                // Une tentative purgée par la rétention (T17) ne porte aucun nœud : la
+                // surface ne perd rien, le pliage reste strict.
+                k if k.starts_with(KIND_PREFIX) && k != KIND_ATTEMPT && is_purged(&ev.payload) => {
                     self.surface.purged = true;
                 }
                 _ => {}
