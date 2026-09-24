@@ -146,29 +146,10 @@ pub fn alert_text(status: &BudgetStatus, top: &[UsageRow]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::RecordingMessenger;
     use penelope_kernel::budget::UsageRecord;
     use penelope_kernel::clock::TestClock;
-    use std::sync::Mutex;
     use std::time::Duration;
-
-    #[derive(Default)]
-    struct Recorder(Mutex<Vec<String>>);
-
-    #[async_trait::async_trait]
-    impl Messenger for Recorder {
-        async fn send_text(&self, _origin: &Origin, markdown: &str) -> Result<(), String> {
-            self.0.lock().unwrap().push(markdown.to_string());
-            Ok(())
-        }
-        async fn send_file(
-            &self,
-            _origin: &Origin,
-            _path: &std::path::Path,
-            _caption: Option<&str>,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-    }
 
     fn spend(session: &str, cost: f64, prompt: u64, cached: u64) -> UsageRecord {
         UsageRecord {
@@ -199,11 +180,11 @@ mod tests {
             Ok(vec!["budget.daily_usd".into()])
         })
         .unwrap();
-        let rec = Arc::new(Recorder::default());
+        let rec = RecordingMessenger::new();
         let messenger = Slot::default();
         messenger.set(Some(rec.clone() as Arc<dyn Messenger>));
         AlertWatcher::install(&s, messenger);
-        let sent = || rec.0.lock().unwrap().clone();
+        let sent = || rec.texts();
         let settle = || tokio::time::sleep(Duration::from_millis(50));
 
         s.budget

@@ -650,10 +650,9 @@ mod daemon_tests {
                 .await
                 .unwrap(),
         );
-        let d = Arc::new(Daemon::from_services(s));
         let p = Arc::new(MockProvider::new());
-        d.set_provider_override(p.clone());
-        d.publish_config("test", |c| {
+        let providers = crate::testing::MockProviders::new(p.clone());
+        s.publish_config("test", |c| {
             c.memory.review_max_candidates = 5;
             Ok(vec!["memory.review_max_candidates".into()])
         })
@@ -662,8 +661,8 @@ mod daemon_tests {
             r#"{"candidats": [{"type": "correction", "texte": "Les migrations passent par sqlx", "importance": 5, "quand": "projet=facturation"}]}"#,
         );
         let n = review(
-            &d.services,
-            d.providers.as_ref(),
+            &s,
+            providers.as_ref(),
             "s1",
             "t1",
             "non, ici on fait les migrations avec sqlx, pas diesel",
@@ -673,19 +672,14 @@ mod daemon_tests {
         .await
         .unwrap();
         assert_eq!(n, 1);
-        let pending = d.services.candidates.pending(None).await.unwrap();
+        let pending = s.candidates.pending(None).await.unwrap();
         assert_eq!(pending[0].origin, Origin::Owner);
         assert_eq!(pending[0].importance, 8, "une correction est prioritaire");
         assert!(pending[0].quand.is_some());
-        let vault = crate::helpers::vault_dir(&d.services);
+        let vault = crate::helpers::vault_dir(&s);
         let journal = std::fs::read_dir(vault.join("journal")).unwrap().count();
         assert_eq!(journal, 1);
-        let roles = d
-            .services
-            .budget
-            .report("role", None, None, 10)
-            .await
-            .unwrap();
+        let roles = s.budget.report("role", None, None, 10).await.unwrap();
         assert!(roles.iter().any(|r| r.key == "memory_review"));
     }
 

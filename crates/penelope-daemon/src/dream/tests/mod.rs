@@ -107,25 +107,6 @@ fn passing_error() -> penelope_llm::mock::Scripted {
     )
 }
 
-#[derive(Default)]
-struct Recorder(std::sync::Mutex<Vec<String>>);
-
-#[async_trait::async_trait]
-impl crate::executor::Messenger for Recorder {
-    async fn send_text(&self, _o: &crate::bus::Origin, markdown: &str) -> Result<(), String> {
-        self.0.lock().unwrap().push(markdown.to_string());
-        Ok(())
-    }
-    async fn send_file(
-        &self,
-        _o: &crate::bus::Origin,
-        _p: &std::path::Path,
-        _c: Option<&str>,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-}
-
 /// Modèle simulé de #140 : `easy` tokens par candidat, `hard` pour un candidat
 /// « épineux », coupé à `max_tokens` comme un vrai fournisseur ; au-delà de `garble`
 /// candidats, une réponse illisible quelle que soit la sortie.

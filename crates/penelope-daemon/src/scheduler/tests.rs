@@ -1,47 +1,14 @@
 use super::*;
 use crate::executor::Messenger;
+use crate::testing::RecordingMessenger;
 use penelope_kernel::clock::TestClock;
 use std::sync::Mutex;
-
-/// Canal de message qui enregistre ce qu'on lui confie.
-#[derive(Default)]
-struct Recorder(Mutex<Vec<(Origin, String)>>);
-
-#[async_trait::async_trait]
-impl Messenger for Recorder {
-    async fn send_text(&self, origin: &Origin, markdown: &str) -> Result<(), String> {
-        self.0
-            .lock()
-            .unwrap()
-            .push((origin.clone(), markdown.to_string()));
-        Ok(())
-    }
-    async fn send_file(
-        &self,
-        _: &Origin,
-        _: &std::path::Path,
-        _: Option<&str>,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-impl Recorder {
-    fn texts(&self) -> Vec<String> {
-        self.0
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(_, t)| t.clone())
-            .collect()
-    }
-}
 
 async fn daemon() -> (
     tempfile::TempDir,
     Arc<Daemon>,
     Arc<TestClock>,
-    Arc<Recorder>,
+    Arc<RecordingMessenger>,
 ) {
     let dir = tempfile::tempdir().unwrap();
     let clock = Arc::new(TestClock::default());
@@ -56,7 +23,7 @@ async fn daemon() -> (
         Ok(vec!["owner.telegram_user_id".into()])
     })
     .unwrap();
-    let rec = Arc::new(Recorder::default());
+    let rec = RecordingMessenger::new();
     *d.hooks.messenger.write().unwrap() = Some(rec.clone() as Arc<dyn Messenger>);
     (dir, d, clock, rec)
 }
@@ -97,7 +64,7 @@ async fn a_dated_reminder_fires_once_then_is_done() {
             .any(|event| event.kind == "schedule.fired" && event.payload["schedule"] == sched.id),
         "tout déclenchement réussi apparaît dans le journal runtime"
     );
-    let sent = rec.0.lock().unwrap().clone();
+    let sent = rec.sent();
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].1, "⏰ Appeler Paul");
     assert!(matches!(sent[0].0, Origin::Telegram { chat_id: 42, .. }));
@@ -369,7 +336,7 @@ async fn a_schedule_says_where_it_delivers_and_can_be_moved() {
         tick(&d, &d.hooks.scheduler()).await.unwrap().fired,
         vec![sched.id.clone()]
     );
-    let sent = rec.0.lock().unwrap().clone();
+    let sent = rec.sent();
     assert!(matches!(sent[0].0, Origin::Telegram { chat_id: 42, .. }));
     assert!(
         matches!(

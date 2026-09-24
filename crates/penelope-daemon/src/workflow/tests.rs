@@ -1,69 +1,15 @@
 use super::*;
-use crate::executor::Messenger;
+use crate::testing::RecordingMessenger;
 use penelope_kernel::clock::TestClock;
 use penelope_llm::mock::{MockProvider, Scripted};
 use penelope_llm::types::ToolCall;
-use std::sync::Mutex as StdMutex;
-
-/// Canal qui enregistre messages, questions, cartes et approbations.
-#[derive(Default)]
-struct Recorder {
-    texts: StdMutex<Vec<String>>,
-    questions: StdMutex<Vec<(String, String, Vec<String>)>>,
-    cards: StdMutex<Vec<(String, String)>>,
-    approvals: StdMutex<Vec<String>>,
-}
-
-#[async_trait::async_trait]
-impl Messenger for Recorder {
-    async fn send_text(&self, _: &Origin, markdown: &str) -> Result<(), String> {
-        self.texts.lock().unwrap().push(markdown.to_string());
-        Ok(())
-    }
-    async fn send_file(
-        &self,
-        _: &Origin,
-        _: &std::path::Path,
-        _: Option<&str>,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-    async fn send_approval(&self, _: &Origin, id: &str) -> Result<(), String> {
-        self.approvals.lock().unwrap().push(id.to_string());
-        Ok(())
-    }
-    async fn send_question(
-        &self,
-        _: &Origin,
-        markdown: &str,
-        run_id: &str,
-        visit: &str,
-        choices: &[String],
-        _: bool,
-        _: Option<&Value>,
-    ) -> Result<(), String> {
-        self.questions.lock().unwrap().push((
-            format!("{run_id}|{visit}"),
-            markdown.to_string(),
-            choices.to_vec(),
-        ));
-        Ok(())
-    }
-    async fn upsert_card(&self, _: &Origin, key: &str, markdown: &str) -> Result<(), String> {
-        self.cards
-            .lock()
-            .unwrap()
-            .push((key.to_string(), markdown.to_string()));
-        Ok(())
-    }
-}
 
 struct Env {
     _dir: tempfile::TempDir,
     d: Arc<Daemon>,
     p: Arc<MockProvider>,
     clock: TestClock,
-    r: Arc<Recorder>,
+    r: Arc<RecordingMessenger>,
 }
 
 async fn env() -> Env {
@@ -78,7 +24,7 @@ async fn env() -> Env {
     let d = Arc::new(Daemon::from_services(s));
     let p = Arc::new(MockProvider::new());
     d.set_provider_override(p.clone());
-    let r = Arc::new(Recorder::default());
+    let r = RecordingMessenger::with_cards();
     if let Ok(mut g) = d.hooks.messenger.write() {
         *g = Some(r.clone());
     }
@@ -606,7 +552,7 @@ async fn a_question_waits_for_the_owner_then_follows_the_choice() {
         RunState::Running,
         "repasser ne repose pas la question"
     );
-    let questions = e.r.questions.lock().unwrap().clone();
+    let questions = e.r.questions();
     assert_eq!(questions.len(), 1);
     assert_eq!(questions[0].0, format!("{}|choisir.0", run.id));
     assert!(questions[0].1.contains("On déploie ?"));
@@ -629,7 +575,7 @@ async fn a_question_waits_for_the_owner_then_follows_the_choice() {
     assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Done);
     let done = e.d.services.runs.get(&run.id).await.unwrap().unwrap();
     assert_eq!(done.step_outputs["choisir"]["choice"], "Oui");
-    let cards = e.r.cards.lock().unwrap().clone();
+    let cards = e.r.cards();
     assert!(cards.iter().all(|(k, _)| *k == format!("run.{}", run.id)));
     assert!(cards.last().unwrap().1.contains("terminé"), "{cards:?}");
 }
@@ -762,7 +708,7 @@ async fn a_brief_reaches_the_first_agent_step_and_the_progress_card() {
         !history[0].message.text().contains(brief),
         "seule la première étape reçoit le brief"
     );
-    let cards = e.r.cards.lock().unwrap().clone();
+    let cards = e.r.cards();
     assert!(
         cards
             .iter()
@@ -794,10 +740,10 @@ async fn a_tool_step_waits_for_approval_and_runs_once() {
         .await
         .unwrap();
     assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Running);
-    let approvals = e.r.approvals.lock().unwrap().clone();
+    let approvals = e.r.approvals();
     assert_eq!(approvals.len(), 1, "une carte d'approbation");
     drive(&e.d, &run.id).await.unwrap();
-    assert_eq!(e.r.approvals.lock().unwrap().len(), 1, "une seule carte");
+    assert_eq!(e.r.approvals().len(), 1, "une seule carte");
 
     crate::agent::decide_approval(
         &e.d.services,

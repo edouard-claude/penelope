@@ -1,30 +1,15 @@
 use super::*;
+use crate::testing::RecordingMessenger;
 
-use crate::bus::Origin as Channel;
 use crate::executor::Messenger;
 use penelope_kernel::clock::TestClock;
 use penelope_llm::mock::MockProvider;
-use std::sync::Mutex;
-
-#[derive(Default)]
-struct Recorder(Mutex<Vec<String>>);
-
-#[async_trait::async_trait]
-impl Messenger for Recorder {
-    async fn send_text(&self, _: &Channel, markdown: &str) -> Result<(), String> {
-        self.0.lock().unwrap().push(markdown.to_string());
-        Ok(())
-    }
-    async fn send_file(&self, _: &Channel, _: &Path, _: Option<&str>) -> Result<(), String> {
-        Ok(())
-    }
-}
 
 async fn daemon() -> (
     tempfile::TempDir,
     Arc<Daemon>,
     Arc<MockProvider>,
-    Arc<Recorder>,
+    Arc<RecordingMessenger>,
 ) {
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
@@ -36,11 +21,11 @@ async fn daemon() -> (
     let d = Arc::new(Daemon::from_services(s));
     let p = Arc::new(MockProvider::new());
     d.set_provider_override(p.clone());
-    let r = Arc::new(Recorder::default());
+    let r = RecordingMessenger::new();
     (dir, d, p, r)
 }
 
-fn slot(r: &Arc<Recorder>) -> Slot<dyn Messenger> {
+fn slot(r: &Arc<RecordingMessenger>) -> Slot<dyn Messenger> {
     let slot = Slot::default();
     slot.set(Some(r.clone() as Arc<dyn Messenger>));
     slot
@@ -88,7 +73,7 @@ async fn the_vault_inbox_is_ingested_then_emptied() {
         inbox.join("en-cours.txt").exists(),
         "un fichier récent attend"
     );
-    let said = r.0.lock().unwrap().clone();
+    let said = r.texts();
     assert!(
         said.iter().any(|m| m.contains("sources/compte-rendu.md")),
         "{said:?}"
@@ -104,13 +89,7 @@ async fn the_vault_inbox_is_ingested_then_emptied() {
     age(&inbox.join("copie.md"));
     assert_eq!(scan_inbox(&d, &slot(&r)).await.unwrap(), 1);
     assert!(!vault.join("sources/copie.md").exists());
-    assert!(
-        r.0.lock()
-            .unwrap()
-            .last()
-            .unwrap()
-            .contains("déjà dans le vault")
-    );
+    assert!(r.texts().last().unwrap().contains("déjà dans le vault"));
 }
 
 /// Un PDF scanné, sans couche texte, est lu par OCR (Vision). Lent la première fois

@@ -658,6 +658,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::RecordingMessenger;
     use penelope_kernel::clock::TestClock;
 
     /// #177 : les liens symboliques ne gonflent pas le relevé et ne font pas
@@ -699,32 +700,6 @@ mod tests {
         assert!(large_workspaces(&root, owners, 6).is_empty());
     }
 
-    #[derive(Default)]
-    struct Recorder {
-        texts: std::sync::Mutex<Vec<String>>,
-        cards: std::sync::Mutex<Vec<String>>,
-    }
-
-    #[async_trait::async_trait]
-    impl crate::executor::Messenger for Recorder {
-        async fn send_text(&self, _origin: &Origin, markdown: &str) -> Result<(), String> {
-            self.texts.lock().unwrap().push(markdown.to_string());
-            Ok(())
-        }
-        async fn send_file(
-            &self,
-            _origin: &Origin,
-            _path: &std::path::Path,
-            _caption: Option<&str>,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-        async fn send_approval(&self, _origin: &Origin, approval_id: &str) -> Result<(), String> {
-            self.cards.lock().unwrap().push(approval_id.to_string());
-            Ok(())
-        }
-    }
-
     /// #97 : une demande sans réponse reçoit un rappel à T+1 h et un à T+6 h, pas plus ;
     /// une demande tranchée n'en reçoit aucun.
     #[tokio::test]
@@ -737,7 +712,7 @@ mod tests {
                 .unwrap(),
         );
         let d = Arc::new(Daemon::from_services(s.clone()));
-        let rec = Arc::new(Recorder::default());
+        let rec = RecordingMessenger::new();
         *d.hooks.messenger.write().unwrap() =
             Some(rec.clone() as Arc<dyn crate::executor::Messenger>);
         let ask = |subject: &'static str| {
@@ -760,7 +735,7 @@ mod tests {
         };
         let oubliee = ask("shell_exec").await;
         let tranchee = ask("fs_write").await;
-        let cards = |r: &Recorder| r.cards.lock().unwrap().clone();
+        let cards = |r: &RecordingMessenger| r.approvals();
 
         maintenance_pass(&d).await.unwrap();
         assert!(cards(&rec).is_empty(), "rien avant une heure");
@@ -775,7 +750,7 @@ mod tests {
             .unwrap();
         maintenance_pass(&d).await.unwrap();
         assert_eq!(cards(&rec), vec![oubliee.id.0.clone()], "premier rappel");
-        assert!(rec.texts.lock().unwrap()[0].contains("Rappel 1/2"));
+        assert!(rec.texts()[0].contains("Rappel 1/2"));
 
         clock.advance_ms(30 * 60_000);
         maintenance_pass(&d).await.unwrap();

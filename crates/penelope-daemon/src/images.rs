@@ -129,7 +129,7 @@ pub fn decode_data_url(url: &str) -> Result<(Vec<u8>, &'static str), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::Daemon;
+    use crate::testing::MockProviders;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::{MockProvider, Scripted};
     use std::sync::Arc;
@@ -143,17 +143,16 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let d = Arc::new(Daemon::from_services(s));
         let p = Arc::new(MockProvider::new());
-        d.set_provider_override(p.clone());
+        let providers = MockProviders::new(p.clone());
         p.push(Scripted::Images(
             "Voici un phare.".into(),
             vec!["data:image/png;base64,iVBORw0KGgo=".into()],
         ));
 
         let v = generate(
-            &d.services,
-            d.providers.as_ref(),
+            &s,
+            providers.as_ref(),
             "un phare breton au crépuscule",
             Some("1024x1024"),
         )
@@ -166,16 +165,11 @@ mod tests {
         let req = p.requests().pop().unwrap();
         assert_eq!(req.modalities, vec!["image", "text"]);
         assert!(req.messages[0].text().contains("1024x1024"));
-        let roles = d
-            .services
-            .budget
-            .report("role", None, None, 10)
-            .await
-            .unwrap();
+        let roles = s.budget.report("role", None, None, 10).await.unwrap();
         assert!(roles.iter().any(|r| r.key == "image_generate"));
 
         p.reply("Désolé, pas d'image.");
-        let err = generate(&d.services, d.providers.as_ref(), "rien", None)
+        let err = generate(&s, providers.as_ref(), "rien", None)
             .await
             .unwrap_err();
         assert!(err.contains("aucune image"), "{err}");

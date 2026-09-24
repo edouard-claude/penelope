@@ -1,4 +1,5 @@
 use super::*;
+use crate::testing::RecordingMessenger;
 
 /// répète pas le même message ; le digest dit la nuit ratée ; la nuit suivante promeut
 /// chaque candidat une seule fois.
@@ -6,7 +7,7 @@ use super::*;
 async fn a_failed_night_keeps_what_it_wrote_and_is_said_once() {
     let (_dir, d, p) = daemon().await;
     let s = &d.services;
-    let rec = Arc::new(Recorder::default());
+    let rec = RecordingMessenger::new();
     *d.hooks.messenger.write().unwrap() = Some(rec.clone() as Arc<dyn crate::executor::Messenger>);
     d.publish_config("test", |c| {
         c.memory.dream_batch = 1;
@@ -93,7 +94,7 @@ async fn a_failed_night_keeps_what_it_wrote_and_is_said_once() {
         failed.iter().any(|e| e.kind == "memory.dream_failed"),
         "{failed:?}"
     );
-    let sent = rec.0.lock().unwrap().clone();
+    let sent = rec.texts();
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert!(
         sent[0].contains("La consolidation de cette nuit a échoué"),
@@ -117,9 +118,9 @@ async fn a_failed_night_keeps_what_it_wrote_and_is_said_once() {
         .to_string();
     night_failed(&d, &d.hooks.messenger, &reason).await;
     night_failed(&d, &d.hooks.messenger, &reason).await;
-    assert_eq!(rec.0.lock().unwrap().len(), 1);
+    assert_eq!(rec.texts().len(), 1);
     night_failed(&d, &d.hooks.messenger, "Payment required").await;
-    let sent = rec.0.lock().unwrap().clone();
+    let sent = rec.texts();
     assert_eq!(sent.len(), 2);
     assert!(sent[1].contains("4 nuits de suite"), "{sent:?}");
 
@@ -134,7 +135,7 @@ async fn a_failed_night_keeps_what_it_wrote_and_is_said_once() {
     for text in &order {
         assert_eq!(profil.matches(text.as_str()).count(), 1, "{profil}");
     }
-    assert_eq!(rec.0.lock().unwrap().len(), 2, "un succès ne dit rien");
+    assert_eq!(rec.texts().len(), 2, "un succès ne dit rien");
     assert!(
         d.services
             .kv_get(FAILED_NIGHTS_KEY)

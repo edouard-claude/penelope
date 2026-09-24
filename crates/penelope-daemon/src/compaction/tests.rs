@@ -2,6 +2,7 @@ use super::*;
 use crate::agent::Conversation;
 use crate::bus::Origin;
 use crate::conversation::SessionConversation;
+use crate::testing::RecordingMessenger;
 use penelope_kernel::clock::TestClock;
 use penelope_llm::catalog::ModelInfo;
 use penelope_llm::mock::{MockProvider, Scripted};
@@ -247,25 +248,6 @@ async fn a_summary_ready_during_a_turn_waits_for_its_end() {
     );
 }
 
-#[derive(Default)]
-struct Recorder(std::sync::Mutex<Vec<String>>);
-
-#[async_trait::async_trait]
-impl crate::executor::Messenger for Recorder {
-    async fn send_text(&self, _o: &Origin, markdown: &str) -> Result<(), String> {
-        self.0.lock().unwrap().push(markdown.to_string());
-        Ok(())
-    }
-    async fn send_file(
-        &self,
-        _o: &Origin,
-        _p: &std::path::Path,
-        _c: Option<&str>,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-}
-
 /// #131 : un résumeur qui échoue trois fois de suite ne fait pas attendre un
 /// quatrième refroidissement : la compaction se fait sans modèle, franche (un nœud),
 /// avec les messages du propriétaire gardés, et le propriétaire le sait ; `/status` et
@@ -282,7 +264,7 @@ async fn three_failures_compact_without_a_model_and_say_so() {
     let d = Arc::new(Daemon::from_services(s.clone()));
     let p = Arc::new(MockProvider::new());
     d.set_provider_override(p.clone());
-    let rec = Arc::new(Recorder::default());
+    let rec = RecordingMessenger::new();
     *d.hooks.messenger.write().unwrap() = Some(rec.clone() as Arc<dyn crate::executor::Messenger>);
     let sid = long_session(&d).await;
     for _ in 0..3 {
@@ -348,7 +330,7 @@ async fn three_failures_compact_without_a_model_and_say_so() {
         "derniers messages du propriétaire gardés"
     );
     assert_eq!(load_cooldown(&d.services, &sid).await.failures, 0);
-    let sent = rec.0.lock().unwrap().clone();
+    let sent = rec.texts();
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert!(sent[0].contains("ne se résumait plus"), "{sent:?}");
     let events = s.events.session_events(&sid, 0).await.unwrap();
