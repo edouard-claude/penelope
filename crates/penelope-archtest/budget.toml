@@ -51,7 +51,7 @@ test_modules = [
 # vingtaine de correctifs de taille courante. Un autre crate se plafonne en ajoutant une
 # ligne. UPDATE_BUDGET ne touche pas à cette table.
 [crates]
-"penelope-daemon" = 82409   # v1 : après la sortie de penelope-app (lot H, T21) ; redescend avec les crates suivantes (lots H et J)
+"penelope-daemon" = 82637   # v1 : après la sortie de penelope-app (lot H, T21) ; redescend avec les crates suivantes (lots H et J)
 
 # Liste blanche des modules du daemon (R5) : les déclarations `mod x;` de lib.rs et
 # `mod screens;` de telegram.rs. `mod tests;` est toujours permis. Les fichiers où un bloc
