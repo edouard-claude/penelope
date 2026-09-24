@@ -91,6 +91,7 @@ penelope-hitl     = { path = "crates/penelope-hitl", version = "1.0.0-alpha.8" }
 penelope-telegram = { path = "crates/penelope-telegram", version = "1.0.0-alpha.8" }
 penelope-workflow = { path = "crates/penelope-workflow", version = "1.0.0-alpha.8" }
 penelope-app      = { path = "crates/penelope-app", version = "1.0.0-alpha.8" }
+penelope-agent    = { path = "crates/penelope-agent", version = "1.0.0-alpha.8" }
 penelope-mcp-host = { path = "crates/penelope-mcp-host", version = "1.0.0-alpha.8" }
 penelope-vault    = { path = "crates/penelope-vault", version = "1.0.0-alpha.8" }
 penelope-ops      = { path = "crates/penelope-ops", version = "1.0.0-alpha.8" }

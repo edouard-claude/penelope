@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::pipeline::policy::{PolicyStage, Verdict, VerdictLayer};
+use crate::pipeline::policy::{PolicyStage, Verdict, VerdictLayer};
 
 fn info(name: &str, risk: RiskClass, policy: Option<PolicyDecision>) -> CallInfo {
     CallInfo {

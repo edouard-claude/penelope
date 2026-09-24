@@ -1269,6 +1269,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "penelope-agent"
+version = "1.0.0-alpha.8"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "penelope-app",
+ "penelope-hitl",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-observe",
+ "penelope-store",
+ "penelope-tools",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "penelope-app"
 version = "1.0.0-alpha.8"
 dependencies = [
@@ -1370,6 +1390,7 @@ dependencies = [
  "futures",
  "lopdf",
  "minisign-verify",
+ "penelope-agent",
  "penelope-app",
  "penelope-context",
  "penelope-hitl",

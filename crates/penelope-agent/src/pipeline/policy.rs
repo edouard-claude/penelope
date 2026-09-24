@@ -124,7 +124,7 @@ impl PolicyStage {
             _ => {}
         }
         // Réseau demandé par une commande : la carte le dit en toutes lettres.
-        if crate::agent::wants_network(&info.effective_name, effective_args)
+        if crate::wants_network(&info.effective_name, effective_args)
             && info.risk == RiskClass::External
         {
             verdict.reason = format!(
@@ -199,7 +199,7 @@ pub fn declared_allow(
         return None;
     }
     let command = args.get("command").and_then(|v| v.as_str())?.trim();
-    let (families, key) = if crate::agent::wants_network(tool, args) {
+    let (families, key) = if crate::wants_network(tool, args) {
         (&cfg.tools.shell_allow_network, "tools.shell_allow_network")
     } else {
         (&cfg.tools.shell_allow, "tools.shell_allow")

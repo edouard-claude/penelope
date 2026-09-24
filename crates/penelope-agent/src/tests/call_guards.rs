@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::pipeline::decide::{
+use crate::pipeline::decide::{
     CallContext, DescribedCall, GuardStop, Refusal, Suspension, call_chain, run_call_guards,
 };
 

@@ -1,0 +1,40 @@
+[package]
+name = "penelope-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# La boucle d'agent et le pipeline d'outils (épopée #208, T10, `design/v1/boucle-et-outils.md`
+# §4) : un tour de bout en bout, sur `AgentServices` et les ports de `penelope-app`. Jamais
+# `penelope-context`, `penelope-memory`, `penelope-telegram` (`design/v1/README.md` §3.2).
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+# Composition des flux d'un appel au modèle.
+futures.workspace = true
+# Effets, budget, risque, événements, configuration, sessions, horloge.
+penelope-kernel.workspace = true
+# Types des messages, providers, catalogue, état des requêtes.
+penelope-llm.workspace = true
+# Détecteur de boucles, issues d'outils, analyse des commandes.
+penelope-tools.workspace = true
+# Approbations et politiques.
+penelope-hitl.workspace = true
+# Métriques.
+penelope-observe.workspace = true
+# La base partagée d'`AgentServices` ; bornes des tours interrompus.
+penelope-store.workspace = true
+# Les ports : `Conversation`, `ToolExecutor`, `TurnSink`, vocabulaire du journal.
+penelope-app.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "test-util"] }

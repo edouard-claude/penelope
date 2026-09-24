@@ -154,7 +154,7 @@ impl AgentLoop {
             // 4. Politique et approbation, sur les arguments de l'outil visé : par
             // `tool_call`, ceux de l'appel interne (#110), sinon une règle
             // « Toujours » couvrirait l'outil entier.
-            let effective_args = crate::agent::effective_arguments(&call.name, &call.arguments);
+            let effective_args = crate::effective_arguments(&call.name, &call.arguments);
             let policy_workspace = execute.policy_workspace();
             let verdict =
                 PolicyStage::evaluate(s, spec, policy_workspace.as_deref(), &info, &effective_args)
@@ -566,7 +566,7 @@ pub fn server_of(tool: &str) -> Option<String> {
         .map(String::from)
 }
 
-pub(crate) fn effect_kind(tool: &str) -> EffectKind {
+pub fn effect_kind(tool: &str) -> EffectKind {
     if tool.starts_with("mcp__") {
         return EffectKind::Mcp;
     }

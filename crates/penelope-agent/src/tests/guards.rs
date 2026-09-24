@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::guards::{GuardVerdict, TurnGuard};
+use crate::guards::{GuardVerdict, TurnGuard};
 
 /// Garde qui note son passage et rend un verdict fixé d'avance.
 struct Recording {
