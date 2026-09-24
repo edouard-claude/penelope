@@ -293,7 +293,7 @@ async fn a_workflow_question_uses_telegram_buttons_and_typed_input() {
 async fn onboarding_writes_the_profile_from_the_answers() {
     let (_d, g, t, _p) = gateway().await;
     let d = g.daemon.clone();
-    let vault = crate::conversation::vault_dir(&d.services);
+    let vault = crate::helpers::vault_dir(&d.services);
     let last = || {
         let t = t.clone();
         async move { t.calls_to(tg::SEND_MESSAGE).await.last().unwrap().clone() }

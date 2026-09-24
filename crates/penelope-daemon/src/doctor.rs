@@ -1075,7 +1075,7 @@ pub fn binary_signature_check(s: &Services) -> DoctorCheck {
 pub fn install_mode_check() -> DoctorCheck {
     const ID: &str = "install_mode";
     const LABEL: &str = "Mode d'installation";
-    let Ok(exe) = crate::upgrade::running_binary() else {
+    let Ok(exe) = crate::helpers::running_binary() else {
         return DoctorCheck::ok(ID, LABEL, "binaire introuvable");
     };
     let launched = penelope_platform::service::launchd_plist_path()
@@ -1087,7 +1087,7 @@ pub fn install_mode_check() -> DoctorCheck {
 fn install_mode(exe: &std::path::Path, launched: Option<&str>) -> DoctorCheck {
     const ID: &str = "install_mode";
     const LABEL: &str = "Mode d'installation";
-    let mode = if crate::upgrade::is_source_build(exe) {
+    let mode = if crate::helpers::is_source_build(exe) {
         "binaire de compilation"
     } else {
         "chemin stable (`/upgrade install` ou `make deploy` le remplacent)"
@@ -1100,7 +1100,7 @@ fn install_mode(exe: &std::path::Path, launched: Option<&str>) -> DoctorCheck {
         );
     };
     let real = std::fs::canonicalize(program).unwrap_or_else(|_| program.into());
-    if crate::upgrade::is_source_build(&real) {
+    if crate::helpers::is_source_build(&real) {
         return DoctorCheck::fail(
             ID,
             LABEL,
@@ -1538,7 +1538,7 @@ pub async fn telegram_chats_check(s: &Services) -> DoctorCheck {
     const LABEL: &str = "Conversations Telegram";
     let cfg = s.config.config();
     let allowed = &cfg.telegram.allowed_chats;
-    let refused: Vec<String> = crate::telegram::seen_chats(s)
+    let refused: Vec<String> = crate::helpers::seen_chats(s)
         .await
         .iter()
         .filter(|c| !c["id"].as_i64().is_some_and(|id| allowed.contains(&id)))
@@ -1548,7 +1548,7 @@ pub async fn telegram_chats_check(s: &Services) -> DoctorCheck {
                 "{} « {} » `{}` (vu le {})",
                 c["type"].as_str().unwrap_or("?"),
                 c["title"].as_str().unwrap_or_default(),
-                crate::telegram::shown(&c["id"]),
+                crate::helpers::shown(&c["id"]),
                 c["last_seen"]
                     .as_str()
                     .unwrap_or_default()

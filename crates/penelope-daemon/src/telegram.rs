@@ -11,7 +11,10 @@
 use crate::agent::{TurnEvent, TurnOutcome, decide_approval};
 use crate::bus::{BusKind, ChannelDelivery, Origin};
 use crate::executor::Messenger;
-use crate::runtime::{Daemon, Services};
+use crate::helpers::{
+    BOT_USERNAME_KEY, SEEN_CHATS_KEY, chat_title_key, seen_chats, shown, topic_name_key,
+};
+use crate::runtime::Daemon;
 use penelope_hitl::{ApprovalRequest, ApprovalState, Decision};
 use penelope_kernel::api::method as m;
 use penelope_kernel::risk::PolicyWindow;
@@ -32,16 +35,6 @@ mod screens;
 /// Longueur d'un fragment Markdown avant conversion HTML : marge pour les balises.
 const FRAGMENT_CHARS: usize = 3_500;
 const MAX_ATTEMPTS: i64 = 6;
-/// Une valeur JSON telle qu'on la montre dans une bulle : une chaîne sans guillemets, un
-/// nombre tel quel, une absence en « ? », jamais `null` (issue #115).
-pub(crate) fn shown(v: &Value) -> String {
-    match v {
-        Value::Null => "?".into(),
-        Value::String(s) if s.is_empty() => "?".into(),
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
-}
 
 /// Carte d'approbation d'un appel d'outil, lisible par le propriétaire (issue #116).
 pub(crate) struct ApprovalCard {
@@ -230,16 +223,6 @@ fn background_note(n: usize) -> String {
              t'attendent à ton retour."
         ),
     }
-}
-
-/// Formulaire d'étape `user` en cours dans un chat.
-const BOT_USERNAME_KEY: &str = "tg.bot_username";
-
-/// Lien `https://t.me/<bot>?start=<charge>` vers un écran ou une commande, quand le bot est
-/// connu (issue #30).
-pub async fn deep_link(s: &Services, payload: &str) -> Option<String> {
-    let bot = s.kv_get(BOT_USERNAME_KEY).await.ok().flatten()?;
-    (!bot.is_empty() && bot != "?").then(|| penelope_telegram::render::deep_link(&bot, payload))
 }
 
 /// Montant en dollars à la française : `5,02`, `20`.
@@ -1429,8 +1412,8 @@ impl TelegramGateway {
                 // Installer ou revenir en arrière : toujours confirmé (issue #30).
                 // Installation depuis les sources : la carte de bascule (issue #33).
                 if args == "install"
-                    && crate::upgrade::running_binary()
-                        .is_ok_and(|b| crate::upgrade::is_source_build(&b))
+                    && crate::helpers::running_binary()
+                        .is_ok_and(|b| crate::helpers::is_source_build(&b))
                 {
                     return self
                         .show_screen(
@@ -2283,7 +2266,7 @@ impl TelegramGateway {
                         )
                         .await;
                 } else {
-                    let vault = crate::conversation::vault_dir(s);
+                    let vault = crate::helpers::vault_dir(s);
                     let session = d.chat_session_for(&origin).await?;
                     match crate::vault_ops::remember(
                         s,
@@ -2538,7 +2521,7 @@ impl TelegramGateway {
                         )
                         .await;
                 }
-                let vault = crate::conversation::vault_dir(s);
+                let vault = crate::helpers::vault_dir(s);
                 let session = d.chat_session_for(&origin).await?;
                 match crate::vault_ops::remember(
                     s,
@@ -7900,16 +7883,6 @@ pub fn render_value(v: &Value) -> String {
     out.chars().take(3_500).collect()
 }
 
-/// Clé du nom d'un sujet Telegram, lu dans les messages du sujet (issue #119).
-pub fn topic_name_key(chat_id: i64, topic_id: i64) -> String {
-    format!("tg.topic_name.{chat_id}.{topic_id}")
-}
-
-/// Titre d'un groupe autorisé, pour nommer où livre une planification (#124).
-pub fn chat_title_key(chat_id: i64) -> String {
-    format!("tg.chat_title.{chat_id}")
-}
-
 /// Titre du groupe d'un message (un chat privé n'en a pas).
 fn chat_title_of(update: &Value) -> Option<(i64, String)> {
     let chat = &update.get("message")?["chat"];
@@ -7930,8 +7903,6 @@ fn topic_name_of(update: &Value) -> Option<(i64, i64, String)> {
     Some((chat, topic, name.to_string()))
 }
 
-/// Conversations refusées récemment, les plus récentes d'abord (issue #113).
-pub const SEEN_CHATS_KEY: &str = "telegram.seen_chats";
 const SEEN_CHATS_MAX: usize = 20;
 
 /// Une conversation refusée : son identifiant, son type, son titre et la dernière fois.
@@ -7948,17 +7919,6 @@ pub async fn record_seen_chat(s: &crate::runtime::Services, chat_id: i64, kind: 
         .store
         .write(move |tx| penelope_store::kv_set(tx, SEEN_CHATS_KEY, &v))
         .await;
-}
-
-/// Conversations refusées récemment.
-pub async fn seen_chats(s: &crate::runtime::Services) -> Vec<Value> {
-    s.store
-        .read(|c| penelope_store::kv_get(c, SEEN_CHATS_KEY))
-        .await
-        .ok()
-        .flatten()
-        .and_then(|v| serde_json::from_str(&v).ok())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

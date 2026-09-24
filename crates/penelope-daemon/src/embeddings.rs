@@ -356,7 +356,7 @@ mod tests {
         let p = Arc::new(MockProvider::new());
         d.set_provider_override(p.clone());
         let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
-        let vault = crate::conversation::vault_dir(&s);
+        let vault = crate::helpers::vault_dir(&s);
         crate::vault_ops::remember(
             &s,
             &vault,

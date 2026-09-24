@@ -177,7 +177,7 @@ async fn usage_signals_are_evidence_for_the_grid_never_a_gate() {
     for recalls in [0u32, 20] {
         let (_dir, d, p) = daemon().await;
         let s = &d.services;
-        let vault = crate::conversation::vault_dir(s);
+        let vault = crate::helpers::vault_dir(s);
         std::fs::create_dir_all(&vault).unwrap();
         std::fs::write(
             vault.join("memoire.md"),
@@ -260,7 +260,7 @@ async fn the_quality_gate_shapes_the_promoted_memory() {
     let o = run(&d, false).await.unwrap();
     assert_eq!(o.report.promoted, 4, "{:?}", o.report);
     assert_eq!(o.report.rejected.len(), 3, "{:?}", o.report.rejected);
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let memoire = std::fs::read_to_string(vault.join("memoire.md")).unwrap();
     let projets = std::fs::read_to_string(vault.join("projets.md")).unwrap();
     assert!(memoire.contains("agence web à Saint-Denis"));

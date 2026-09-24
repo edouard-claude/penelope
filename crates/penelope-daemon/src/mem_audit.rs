@@ -113,7 +113,7 @@ async fn facts(d: &Daemon) -> anyhow::Result<Facts> {
             .filter(|st| st.state == penelope_mcp::supervisor::ServerState::Ready)
             .count() as i64;
     }
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     f.lint_problems = penelope_memory::wiki::lint(&vault).problems() as i64;
     let pending = vault.join("concepts/_a-definir.md");
     f.undefined_concepts = std::fs::read_to_string(pending)
@@ -317,7 +317,7 @@ pub async fn run(d: &Daemon) -> anyhow::Result<Audit> {
         .kv_set(LAST_KEY, &serde_json::to_string(&audit)?)
         .await?;
     // `audit-AAAA-MM-JJ` : un nom unique dans tout le vault (issue #29).
-    let vault = crate::conversation::vault_dir(&d.services);
+    let vault = crate::helpers::vault_dir(&d.services);
     let rel = format!("audits/audit-{date}.md");
     let current = std::fs::read_to_string(vault.join(&rel)).unwrap_or_default();
     crate::vault_ops::save_note(
@@ -424,7 +424,7 @@ mod tests {
         assert_eq!(empty.delta, None);
 
         let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
-        let vault = crate::conversation::vault_dir(&s);
+        let vault = crate::helpers::vault_dir(&s);
         for text in [
             "Toujours tutoyer le propriétaire",
             "Préférer des réponses courtes",

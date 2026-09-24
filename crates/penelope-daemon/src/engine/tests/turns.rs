@@ -296,7 +296,7 @@ async fn a_turn_offers_the_core_then_what_the_session_discovered() {
 async fn a_recalled_memory_counts_as_useful_only_when_the_answer_uses_it() {
     let (_dir, d, p) = daemon().await;
     let s = d.services.clone();
-    let vault = crate::conversation::vault_dir(&s);
+    let vault = crate::helpers::vault_dir(&s);
     std::fs::create_dir_all(&vault).unwrap();
     std::fs::write(
         vault.join("memoire.md"),

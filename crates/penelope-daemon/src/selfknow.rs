@@ -138,11 +138,11 @@ async fn inventory_section(
         }),
         "install" => {
             let cfg = s.config.config();
-            let exe = crate::upgrade::running_binary().ok();
+            let exe = crate::helpers::running_binary().ok();
             json!({
                 "version": crate::VERSION,
                 "mode": match &exe {
-                    Some(b) if crate::upgrade::is_source_build(b) => "sources",
+                    Some(b) if crate::helpers::is_source_build(b) => "sources",
                     Some(_) => "releases",
                     None => "inconnu",
                 },
@@ -340,7 +340,7 @@ pub async fn status(
         let rows = |r: Vec<penelope_kernel::budget::UsageRow>| {
             r.into_iter()
                 .map(|x| {
-                    json!({"key": x.key, "label": x.label, "usd": crate::rpc::round_usd(x.cost_usd),
+                    json!({"key": x.key, "label": x.label, "usd": crate::helpers::round_usd(x.cost_usd),
                            "calls": x.calls, "tokens": x.tokens})
                 })
                 .collect::<Vec<_>>()
@@ -348,9 +348,9 @@ pub async fn status(
         out.insert(
             "costs".into(),
             json!({
-                "today_usd": crate::rpc::round_usd(s.budget.spent_today().await?),
+                "today_usd": crate::helpers::round_usd(s.budget.spent_today().await?),
                 "daily_limit_usd": cfg.budget.daily_usd,
-                "this_session_usd": crate::rpc::round_usd(s.budget.spent_session(session_id).await?),
+                "this_session_usd": crate::helpers::round_usd(s.budget.spent_session(session_id).await?),
                 "session_limit_usd": cfg.budget.session_usd,
                 "today_by_model": rows(s.budget.report("model", None, Some(&today), 5).await?),
                 "this_session_by_request": rows(s.budget.report("turn", Some(session_id), None, 5).await?),

@@ -121,7 +121,7 @@ pub async fn run_as(
 async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutcome> {
     let s = &d.services;
     let cfg = s.config.config();
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let run_id = format!("d_{}", penelope_kernel::ids::Ulid::new());
     let started = s.clock.now_rfc3339();
     let pass_started = std::time::Instant::now();
@@ -990,7 +990,7 @@ pub async fn file_unanswered_clash(s: &Services, a: &penelope_hitl::ApprovalRequ
     };
     let (uid, existing, proposed) = (text("existing_uid"), text("existing"), text("proposed"));
     let day = today(s);
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let line = format!(
         "- {day} · sans réponse · nouveau « {} » contre [[memoire#^{uid}]] « {} »\n",
         short(&proposed),
@@ -1079,7 +1079,7 @@ async fn unused_entries(d: &Arc<Daemon>, day: &str) -> Vec<String> {
     // Ce qui est servi d'office dans l'instantané n'a pas d'usage mesurable par entrée :
     // le proposer au retrait retirerait ce qui sert le plus (issue #62).
     let injected = crate::conversation::snapshot_uids(s, &crate::session_project::Scope::All).await;
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let resolver = penelope_memory::wiki::Resolver::scan(&vault);
     entries
         .iter()
@@ -2782,7 +2782,7 @@ pub async fn restore(s: &Services, history_id: i64) -> anyhow::Result<Value> {
     if file.contains("..") {
         anyhow::bail!("chemin refusé : {file}");
     }
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let path = vault.join(&file);
     let current = std::fs::read_to_string(&path).unwrap_or_default();
     let before = before.unwrap_or_default();
@@ -3060,7 +3060,7 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
         t.push_str(&format!(
             "\n📋 {} demande(s) en attente : {}\n",
             pending.len(),
-            match crate::telegram::deep_link(&d.services, "approvals").await {
+            match crate::helpers::deep_link(&d.services, "approvals").await {
                 Some(link) => format!("[ouvrir]({link})"),
                 None => "`/approvals`".into(),
             }
@@ -3083,7 +3083,7 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
             "\n🔧 Runs récents : {done} terminé(s), {blocked} bloqué(s), {running} en cours{}\n",
             match (
                 blocked > 0,
-                crate::telegram::deep_link(&d.services, "runs_stuck").await
+                crate::helpers::deep_link(&d.services, "runs_stuck").await
             ) {
                 (true, Some(link)) => format!(" · [reprendre]({link})"),
                 _ => String::new(),
@@ -3097,14 +3097,14 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
     let yesterday_note = (s.clock.now_utc() - chrono::Duration::days(1))
         .format("%Y-%m-%d")
         .to_string();
-    if crate::conversation::vault_dir(s)
+    if crate::helpers::vault_dir(s)
         .join(format!("journal/{yesterday_note}.md"))
         .exists()
     {
         t.push_str(&format!("\n📓 Journal d'hier : [[{yesterday_note}]]\n"));
     }
     // Termes employés dans les sources sans définition (issue #22).
-    let undefined = crate::concepts::to_define(&crate::conversation::vault_dir(s));
+    let undefined = crate::concepts::to_define(&crate::helpers::vault_dir(s));
     if !undefined.is_empty() {
         let shown: Vec<&str> = undefined.iter().take(5).map(String::as_str).collect();
         t.push_str(&format!(
@@ -3128,7 +3128,7 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
                     })
                     .unwrap_or_default();
                 t.push_str(&format!("\n📈 Mémoire : {}/100{delta}", audit.total));
-                if let Some(link) = crate::telegram::deep_link(&d.services, "audit").await {
+                if let Some(link) = crate::helpers::deep_link(&d.services, "audit").await {
                     t.push_str(&format!(" · [détail]({link})"));
                 }
                 if let Some(best) = crate::mem_audit::best_next(&audit) {
@@ -3270,7 +3270,7 @@ pub async fn failure_reported(d: &Arc<Daemon>, reason: &str, always: bool) {
             json!({"run": run_id, "error": reason, "nights": nights, "pending": pending}),
         ))
         .await;
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let day = today(s);
     let written = crate::vault_ops::update_note(&vault, "DREAMS.md", None, &day, |raw| {
         let mut body = if raw.trim().is_empty() {
@@ -3370,7 +3370,7 @@ async fn last_failure(s: &Services) -> Option<String> {
 pub async fn vault_sync(d: &Arc<Daemon>, message: &str) -> Result<Value, String> {
     let s = &d.services;
     let cfg = s.config.config();
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     if let Err(e) = crate::vault_git::ensure_repo(s).await {
         tracing::warn!(error = %e, "initialisation git du vault");
     }
@@ -3395,7 +3395,7 @@ pub async fn vault_sync(d: &Arc<Daemon>, message: &str) -> Result<Value, String>
 
 /// Vérifie le vault : frontmatter, pratiques, entrées sans uid, contenu interdit.
 pub async fn vault_check(s: &Services) -> Value {
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let mut issues = Vec::new();
     let mut files = 0;
     for rel in markdown_files(&vault) {
@@ -3450,7 +3450,7 @@ pub async fn vault_check(s: &Services) -> Value {
 
 /// Répertoire d'un fichier du vault, pour les chemins affichés.
 pub fn vault_path(s: &Services, rel: &str) -> PathBuf {
-    crate::conversation::vault_dir(s).join(rel)
+    crate::helpers::vault_dir(s).join(rel)
 }
 
 #[cfg(test)]

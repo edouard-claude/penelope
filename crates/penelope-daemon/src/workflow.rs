@@ -14,6 +14,7 @@ use crate::agent::{AgentLoop, MemoryConversation, NullSink, TurnOutcome, TurnSpe
 use crate::bus::Origin;
 use crate::conversation::SessionConversation;
 use crate::executor::{NativeToolExecutor, ToolEnv};
+use crate::helpers::step_done_key;
 use crate::runtime::{Daemon, Services};
 use penelope_hitl::{ApprovalKind, ApprovalState};
 use penelope_kernel::effects::{EffectSpec, Planned};
@@ -121,11 +122,6 @@ fn visit_key(what: &str, run: &Run, step_id: &str) -> String {
     format!("wf.{what}.{}.{step_id}.{}", run.id, run.iterations)
 }
 
-/// Clé du `step_done()` / `return_value` d'un run.
-pub(crate) fn step_done_key(run_id: &str) -> String {
-    format!("wf.step_done.{run_id}")
-}
-
 fn origin_key(run_id: &str) -> String {
     format!("wf.origin.{run_id}")
 }
@@ -137,7 +133,7 @@ pub async fn origin_of(d: &Daemon, run_id: &str) -> Origin {
             let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
             Origin::from_payload(&json!({ "origin": v }))
         }
-        None => crate::scheduler::owner_origin_of(&d.services),
+        None => crate::helpers::owner_origin_of(&d.services),
     }
 }
 
@@ -1315,7 +1311,7 @@ async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
                             && a.payload["budget"].as_bool() == Some(true)
                     })
                 {
-                    let origin = crate::scheduler::owner_origin_of(&ctx.d.services);
+                    let origin = crate::helpers::owner_origin_of(&ctx.d.services);
                     let _ = m.send_approval(&origin, a.id.as_str()).await;
                 }
                 return Ok(done(
@@ -1457,7 +1453,7 @@ pub async fn run_sub_agent(
             // Le sous-agent d'un run parle dans la conversation du run (issue #35).
             origin: match run_id {
                 Some(r) => origin_of(d, r).await,
-                None => crate::scheduler::owner_origin_of(&d.services),
+                None => crate::helpers::owner_origin_of(&d.services),
             },
             workspaces,
             in_workflow: false,

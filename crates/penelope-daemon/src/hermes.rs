@@ -408,7 +408,7 @@ async fn import_skills(s: &Services, opts: &Options, r: &mut Report) {
 // ------------------------------------------------------------------ SOUL.md, AGENTS.md
 
 fn import_files(s: &Services, opts: &Options, r: &mut Report) -> bool {
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let aside_dir = s.platform.dirs.state().join("import-hermes");
     let mut changed = false;
     for name in ["SOUL.md", "AGENTS.md"] {
@@ -540,7 +540,7 @@ fn normalized(text: &str) -> String {
 }
 
 async fn import_memories(s: &Services, opts: &Options, r: &mut Report) -> bool {
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let mut changed = false;
     for (source, level, dest) in [
         ("MEMORY.md", Level::Coeur, "memoire.md"),
@@ -1181,7 +1181,7 @@ pub async fn rpc(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
     if opts.apply
         && let Some(m) = d.hooks.messenger()
     {
-        let origin = crate::scheduler::owner_origin_of(&d.services);
+        let origin = crate::helpers::owner_origin_of(&d.services);
         if !matches!(origin, crate::bus::Origin::Internal { .. }) {
             let _ = m.send_text(&origin, &text).await;
         }
@@ -1871,7 +1871,7 @@ mcp_servers:
         let sup = crate::mcp::McpSupervisor::new(d.services.clone(), fake.clone());
         d.hooks.set_mcp(sup.clone());
         let s = &d.services;
-        let vault = crate::conversation::vault_dir(s);
+        let vault = crate::helpers::vault_dir(s);
 
         let plan = import(
             &d,

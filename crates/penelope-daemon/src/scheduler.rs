@@ -18,6 +18,7 @@
 //! un arrêt part une fois au redémarrage, jamais en rafale.
 
 use crate::bus::Origin;
+use crate::helpers::owner_origin_of;
 use crate::runtime::{Daemon, Services};
 use penelope_kernel::session::SessionKind;
 use penelope_kernel::turn::TurnKind;
@@ -960,14 +961,14 @@ pub async fn place_name(s: &Services, origin: &Origin) -> String {
     } else if *chat_id > 0 {
         format!("conversation {chat_id}")
     } else {
-        match kv(crate::telegram::chat_title_key(*chat_id)).await {
+        match kv(crate::helpers::chat_title_key(*chat_id)).await {
             Some(title) => format!("groupe « {title} »"),
             None => format!("groupe {chat_id}"),
         }
     };
     match topic_id {
         None => chat,
-        Some(t) => match kv(crate::telegram::topic_name_key(*chat_id, *t)).await {
+        Some(t) => match kv(crate::helpers::topic_name_key(*chat_id, *t)).await {
             Some(name) => format!("sujet « {name} », {chat}"),
             None => format!("sujet {t}, {chat}"),
         },
@@ -1064,22 +1065,6 @@ pub async fn due_today(d: &Daemon) -> Vec<String> {
     }
     rows.sort_by_key(|(at, _)| *at);
     rows.into_iter().map(|(_, line)| line).collect()
-}
-
-/// Conversation privée du propriétaire sur Telegram, s'il est configuré.
-pub(crate) fn owner_origin_of(s: &Services) -> Origin {
-    let owner = s.config.config().owner.telegram_user_id;
-    if owner != 0 {
-        Origin::Telegram {
-            chat_id: owner,
-            topic_id: None,
-            message_id: None,
-        }
-    } else {
-        Origin::Internal {
-            source: "daemon".into(),
-        }
-    }
 }
 
 /// Paramètres d'un workflow : chaînes `{{…}}` remplacées, `{{item}}` = l'élément entier.
@@ -1453,10 +1438,10 @@ mod tests {
             Ok(vec!["telegram.allowed_chats".into()])
         })
         .unwrap();
-        s.kv_set(&crate::telegram::chat_title_key(-100_777), "Équipe")
+        s.kv_set(&crate::helpers::chat_title_key(-100_777), "Équipe")
             .await
             .unwrap();
-        s.kv_set(&crate::telegram::topic_name_key(-100_777, 12), "Veille")
+        s.kv_set(&crate::helpers::topic_name_key(-100_777, 12), "Veille")
             .await
             .unwrap();
         let sched = s

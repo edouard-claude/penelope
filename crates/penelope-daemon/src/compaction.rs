@@ -8,7 +8,7 @@
 //! frontière de tour. Chaque décision laisse un événement : `context.compaction_requested`,
 //! `context.compaction_skipped` (avec sa raison), `context.compacted` (issue #40).
 
-use crate::engine::last_model_key;
+use crate::helpers::last_model_key;
 use crate::runtime::{Daemon, Services};
 use penelope_context::{CompactionParams, Cooldown, SummaryJob};
 use penelope_kernel::event::EventDraft;
@@ -939,7 +939,7 @@ async fn tell_mechanical(
     if let Some(m) = d.hooks.messenger() {
         let _ = m
             .send_text(
-                &crate::scheduler::owner_origin_of(&d.services),
+                &crate::helpers::owner_origin_of(&d.services),
                 &format!(
                     "⚠️ La session « {title} » ne se résumait plus : le résumeur (`{model}`) a \
                      échoué {MECHANICAL_AFTER} fois ({error}). {} messages ont été compactés \

@@ -466,7 +466,7 @@ async fn a_burst_asks_before_answering_and_can_be_ingested() {
     settle_click(&g).await;
     for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(40)).await;
-        if crate::conversation::vault_dir(&g.daemon.services)
+        if crate::helpers::vault_dir(&g.daemon.services)
             .join("sources")
             .read_dir()
             .map(|mut d| d.next().is_some())
@@ -475,7 +475,7 @@ async fn a_burst_asks_before_answering_and_can_be_ingested() {
             break;
         }
     }
-    let sources: Vec<_> = crate::conversation::vault_dir(&g.daemon.services)
+    let sources: Vec<_> = crate::helpers::vault_dir(&g.daemon.services)
         .join("sources")
         .read_dir()
         .map(|d| d.filter_map(|e| e.ok()).collect())

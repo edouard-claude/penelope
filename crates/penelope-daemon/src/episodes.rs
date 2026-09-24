@@ -355,7 +355,7 @@ pub async fn ingest(
             boundary.as_str()
         );
         // Sources touchées pendant la session : wikilinks, les concepts suivent à l'écriture.
-        let vault = crate::conversation::vault_dir(s);
+        let vault = crate::helpers::vault_dir(s);
         let resolver = penelope_memory::wiki::Resolver::scan(&vault);
         for slug in crate::concepts::session_sources(s, session_id).await {
             let target = resolver.link_target(&format!(
@@ -563,7 +563,7 @@ mod tests {
             candidates[0].source_ref.as_deref(),
             Some(format!("episode:{sid}:{first}").as_str())
         );
-        let vault = crate::conversation::vault_dir(&d.services);
+        let vault = crate::helpers::vault_dir(&d.services);
         let journal: String = std::fs::read_dir(vault.join("journal"))
             .unwrap()
             .flatten()
@@ -659,7 +659,7 @@ mod tests {
             }
         };
         let before = build(0).await;
-        let vault = crate::conversation::vault_dir(s);
+        let vault = crate::helpers::vault_dir(s);
         crate::vault_ops::remember(s, &vault, Level::Profil, "Préfère le tutoiement", &sid)
             .await
             .unwrap();

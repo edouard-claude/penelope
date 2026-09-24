@@ -409,7 +409,7 @@ pub async fn record_candidates(
         return Ok(0);
     }
     // Le journal du jour garde une trace lisible de ce qui a été noté.
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     for c in &candidates {
         let prov = Provenance {
             origin: Origin::Agent,
@@ -610,7 +610,7 @@ mod secret_tests {
             s.platform.secrets.get(&names[0]).unwrap().as_deref(),
             Some("sk_test_FauxCle0123456")
         );
-        let vault = crate::conversation::vault_dir(&s);
+        let vault = crate::helpers::vault_dir(&s);
         for e in std::fs::read_dir(vault.join("journal")).unwrap().flatten() {
             let raw = std::fs::read_to_string(e.path()).unwrap();
             assert!(!raw.contains("sk_test_"), "{raw}");
@@ -660,7 +660,7 @@ mod daemon_tests {
         assert_eq!(pending[0].origin, Origin::Owner);
         assert_eq!(pending[0].importance, 8, "une correction est prioritaire");
         assert!(pending[0].quand.is_some());
-        let vault = crate::conversation::vault_dir(&d.services);
+        let vault = crate::helpers::vault_dir(&d.services);
         let journal = std::fs::read_dir(vault.join("journal")).unwrap().count();
         assert_eq!(journal, 1);
         let roles = d

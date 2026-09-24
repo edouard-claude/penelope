@@ -270,7 +270,7 @@ fn concept_slug(vault: &Path, nom: &str) -> String {
 /// Indexe les entrées d'une page de concept sous son slug.
 async fn index_page(d: &Daemon, page: &Page, prov: &Provenance) -> anyhow::Result<()> {
     let s = &d.services;
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let rel = format!("{DIR}/{}.md", page.slug);
     let raw = std::fs::read_to_string(vault.join(&rel))?;
     let day: String = s.clock.now_rfc3339().chars().take(10).collect();
@@ -292,7 +292,7 @@ pub async fn apply(
     undefined: &[String],
 ) -> anyhow::Result<Vec<String>> {
     let s = &d.services;
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     std::fs::create_dir_all(vault.join(DIR))?;
     let prov = Provenance {
         origin,
@@ -455,7 +455,7 @@ async fn link_source(
     prov: &Provenance,
 ) -> anyhow::Result<()> {
     let s = &d.services;
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let rel = format!("{}/{source_slug}.md", penelope_memory::ingest::SOURCES_DIR);
     let path = vault.join(&rel);
     let Ok(raw) = std::fs::read_to_string(&path) else {
@@ -512,7 +512,7 @@ async fn link_source(
 /// s'ajoute à la ligne, qui garde son uid et sa provenance.
 async fn link_memory(d: &Daemon, pages: &[Page]) -> anyhow::Result<usize> {
     let s = &d.services;
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let mut n = 0;
     for level in [Level::Coeur, Level::Projet] {
         for mut e in s.memory.by_level(level).await? {
@@ -624,7 +624,7 @@ pub fn to_define(vault: &Path) -> Vec<String> {
 /// `index.md` : concepts les plus liés, sources récentes, projets.
 async fn write_index(d: &Daemon, pages: &[Page], day: &str) -> anyhow::Result<()> {
     let s = &d.services;
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let resolver = penelope_memory::wiki::Resolver::scan(&vault);
     let mut concepts: Vec<&Page> = pages.iter().collect();
     concepts.sort_by(|a, b| {
@@ -772,7 +772,7 @@ mod tests {
         let p = Arc::new(MockProvider::new());
         d.set_provider_override(p.clone());
         let sid = d.chat_session_for(&Channel::Cli).await.unwrap();
-        let vault = crate::conversation::vault_dir(&s);
+        let vault = crate::helpers::vault_dir(&s);
         crate::vault_ops::remember(
             &s,
             &vault,

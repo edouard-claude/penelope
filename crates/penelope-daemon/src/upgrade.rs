@@ -17,6 +17,7 @@
 //! à temps, pour qu'un blocage finisse aussi en retour arrière. Une installation depuis
 //! les sources se met à jour par `make deploy`.
 
+pub use crate::helpers::{is_source_build, running_binary};
 use crate::runtime::Daemon;
 use penelope_kernel::event::EventDraft;
 use penelope_platform::handoff::HandOff;
@@ -275,23 +276,6 @@ pub async fn check(source: &Source) -> Result<Value, String> {
         "up_to_date": !is_newer(&r.version, crate::VERSION),
         "source_install": running_binary().is_ok_and(|b| is_source_build(&b)),
     }))
-}
-
-/// Chemin réel du binaire en cours.
-pub fn running_binary() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    Ok(std::fs::canonicalize(&exe).unwrap_or(exe))
-}
-
-/// Vrai pour un binaire de compilation (`target/debug`, `target/release`).
-pub fn is_source_build(exe: &Path) -> bool {
-    let parts: Vec<String> = exe
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().to_string())
-        .collect();
-    parts
-        .windows(2)
-        .any(|w| w[0] == "target" && (w[1] == "debug" || w[1] == "release"))
 }
 
 /// Binaire qu'une mise à jour peut remplacer. Un binaire de compilation ne se remplace
@@ -798,7 +782,7 @@ pub async fn confirm_when_healthy(d: Arc<Daemon>) {
             return;
         }
         if let Some(m) = d.hooks.messenger() {
-            let origin = crate::scheduler::owner_origin_of(&d.services);
+            let origin = crate::helpers::owner_origin_of(&d.services);
             let _ = m.send_text(&origin, &c.text()).await;
             return;
         }

@@ -333,7 +333,7 @@ async fn session_lines(s: &Services, session_id: &str) -> anyhow::Result<Vec<Val
 pub async fn rebuild(d: &Arc<Daemon>) -> anyhow::Result<Value> {
     let s = &d.services;
     let messages = s.context.history.rebuild_fts().await?;
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let memory = crate::vault_ops::reindex(s, &vault)
         .await
         .map_err(anyhow::Error::msg)?;

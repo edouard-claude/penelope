@@ -1189,7 +1189,7 @@ impl TelegramGateway {
             }
 
             "practices" => {
-                let dir = crate::conversation::vault_dir(s).join("pratiques");
+                let dir = crate::helpers::vault_dir(s).join("pratiques");
                 let mut found: Vec<(String, penelope_memory::vault::Practice)> =
                     std::fs::read_dir(&dir)
                         .into_iter()
@@ -1226,7 +1226,7 @@ impl TelegramGateway {
 
             "practice" => {
                 let slug = args["slug"].as_str().unwrap_or_default();
-                let path = crate::conversation::vault_dir(s).join(format!("pratiques/{slug}.md"));
+                let path = crate::helpers::vault_dir(s).join(format!("pratiques/{slug}.md"));
                 let p = std::fs::read_to_string(&path)
                     .map_err(|_| anyhow::anyhow!("pratique `{slug}` introuvable"))
                     .and_then(|raw| {
@@ -1683,8 +1683,8 @@ impl TelegramGateway {
                 }
                 // Installation depuis les sources : l'installation passe par la bascule vers
                 // les releases (issue #33).
-                let from_sources = crate::upgrade::running_binary()
-                    .is_ok_and(|b| crate::upgrade::is_source_build(&b));
+                let from_sources = crate::helpers::running_binary()
+                    .is_ok_and(|b| crate::helpers::is_source_build(&b));
                 if from_sources {
                     t.push_str(
                         "\n📦 Installation depuis les sources : « Installer » propose de basculer \
@@ -1726,7 +1726,7 @@ impl TelegramGateway {
 
             "upgrade.switch" => {
                 let cfg = s.config.config();
-                let current = crate::upgrade::running_binary().map_err(anyhow::Error::msg)?;
+                let current = crate::helpers::running_binary().map_err(anyhow::Error::msg)?;
                 let install_dir = s.platform.dirs.expand(&cfg.upgrade.install_dir);
                 let source = crate::upgrade::Source::from_config(&cfg);
                 let latest: Option<String> = s
@@ -2151,7 +2151,7 @@ impl TelegramGateway {
                 Done::toast(format!("⏪ {name} : version précédente"))
             }
             "mem.forget" => {
-                let vault = crate::conversation::vault_dir(s);
+                let vault = crate::helpers::vault_dir(s);
                 match crate::vault_ops::forget(s, &vault, &str_of("uid"))
                     .await
                     .map_err(anyhow::Error::msg)?
@@ -2167,7 +2167,7 @@ impl TelegramGateway {
                     .get(&uid)
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("entrée `{uid}` introuvable"))?;
-                let vault = crate::conversation::vault_dir(s);
+                let vault = crate::helpers::vault_dir(s);
                 let day = crate::vault_ops::day(s);
                 crate::vault_ops::update_note(&vault, &e.file, Some(&uid), &day, |raw| {
                     penelope_memory::edit::update_annotations(raw, &uid, |a| {
@@ -2180,7 +2180,7 @@ impl TelegramGateway {
             }
             "practice.status" => {
                 let (slug, statut) = (str_of("slug"), str_of("statut"));
-                let vault = crate::conversation::vault_dir(s);
+                let vault = crate::helpers::vault_dir(s);
                 let rel = format!("pratiques/{}", penelope_platform::slugify(&slug)) + ".md";
                 crate::vault_ops::update_note(
                     &vault,
@@ -2341,7 +2341,7 @@ impl TelegramGateway {
             }
             "session.forget" => {
                 let id = str_of("session");
-                let vault = crate::conversation::vault_dir(s);
+                let vault = crate::helpers::vault_dir(s);
                 let uids = s.memory.forget_session(&id).await?;
                 for uid in &uids {
                     crate::vault_ops::forget(s, &vault, uid)

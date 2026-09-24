@@ -787,7 +787,7 @@ async fn replaying_a_written_batch_adds_nothing_twice() {
     p.reply(&keep(texte));
     let first = run(&d, false).await.unwrap();
     assert_eq!(first.report.promoted, 1, "{:?}", first.report);
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
     assert_eq!(profil.matches(texte).count(), 1, "{profil}");
 

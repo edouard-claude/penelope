@@ -507,13 +507,19 @@ async fn an_mcp_server_is_restarted_from_its_menu() {
 async fn the_digest_links_to_screens_once_the_bot_is_known() {
     let (_d, g, _t, _p) = gateway().await;
     let d = &g.daemon;
-    assert!(deep_link(&d.services, "approvals").await.is_none());
+    assert!(
+        crate::helpers::deep_link(&d.services, "approvals")
+            .await
+            .is_none()
+    );
     d.services
         .kv_set(BOT_USERNAME_KEY, "penelope_test_bot")
         .await
         .unwrap();
     assert_eq!(
-        deep_link(&d.services, "approvals").await.as_deref(),
+        crate::helpers::deep_link(&d.services, "approvals")
+            .await
+            .as_deref(),
         Some("https://t.me/penelope_test_bot?start=approvals")
     );
     d.services

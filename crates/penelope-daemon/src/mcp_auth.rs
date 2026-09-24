@@ -683,7 +683,7 @@ pub async fn reconnect_and_tell(d: &Daemon, server: &str) {
         None => format!("🔐 `{server}` autorisé."),
     };
     if let Some(m) = d.hooks.messenger() {
-        let origin = crate::scheduler::owner_origin_of(&d.services);
+        let origin = crate::helpers::owner_origin_of(&d.services);
         let _ = m.send_text(&origin, &text).await;
     }
 }

@@ -27,7 +27,7 @@ const LAST_KEY: &str = "backup.last";
 fn entries(d: &Daemon, media: bool) -> Vec<(PathBuf, String)> {
     let dirs = &d.services.platform.dirs;
     let mut v: Vec<(PathBuf, String)> = vec![
-        (crate::conversation::vault_dir(&d.services), "vault".into()),
+        (crate::helpers::vault_dir(&d.services), "vault".into()),
         (dirs.skills(), "skills".into()),
         (dirs.data().join("workflows"), "workflows".into()),
         (dirs.data().join("templates"), "templates".into()),
@@ -546,7 +546,7 @@ mod tests {
     async fn a_backup_restores_the_database_and_the_vault() {
         let (_dir, d) = daemon().await;
         let s = &d.services;
-        let vault = crate::conversation::vault_dir(s);
+        let vault = crate::helpers::vault_dir(s);
         std::fs::create_dir_all(&vault).unwrap();
         std::fs::write(vault.join("memoire.md"), "- un souvenir précis ^01UID\n").unwrap();
         s.platform

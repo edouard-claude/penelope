@@ -1080,7 +1080,7 @@ impl NativeToolExecutor {
                     "projet" => penelope_memory::Level::Projet,
                     _ => penelope_memory::Level::Cure,
                 };
-                let vault = crate::conversation::vault_dir(s);
+                let vault = crate::helpers::vault_dir(s);
                 let uid = crate::vault_ops::remember(
                     s,
                     &vault,
@@ -1093,7 +1093,7 @@ impl NativeToolExecutor {
                 json!({"uid": uid, "niveau": level.as_str()})
             }
             "mem_forget" => {
-                let vault = crate::conversation::vault_dir(s);
+                let vault = crate::helpers::vault_dir(s);
                 let done = crate::vault_ops::forget(s, &vault, &str_arg(args, "uid")?)
                     .await
                     .map_err(ToolError::Io)?;
@@ -1541,7 +1541,7 @@ impl NativeToolExecutor {
                     .run_id
                     .clone()
                     .ok_or_else(|| ToolError::Denied("aucun run en cours".into()))?;
-                let key = crate::workflow::step_done_key(&run);
+                let key = crate::helpers::step_done_key(&run);
                 let stored = s.kv_get(&key).await;
                 let mut state: Value = stored
                     .map_err(|e| ToolError::Other(e.to_string()))?

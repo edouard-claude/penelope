@@ -23,7 +23,7 @@ async fn a_stated_rule_is_promoted_once_with_history_and_review() {
     // À blanc : le rapport dit ce qui serait fait, rien n'est écrit.
     let dry = run(&d, true).await.unwrap();
     assert_eq!(dry.report.promoted, 1);
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     assert!(!vault.join("profil.md").exists());
     assert_eq!(s.candidates.pending(None).await.unwrap().len(), 1);
 
@@ -147,7 +147,7 @@ async fn a_rule_dictated_by_the_owner_is_promoted() {
     );
     let o = run(&d, false).await.unwrap();
     assert_eq!(o.report.promoted, 1, "{:?}", o.report);
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
     assert!(profil.contains("Toujours pousser sur dev d'abord"));
     assert!(!profil.contains("branche qa"), "{profil}");
@@ -175,7 +175,7 @@ async fn a_dream_is_committed_in_the_vault_history() {
     }
     let (_dir, d, p) = daemon().await;
     let s = &d.services;
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     assert!(
         crate::vault_git::ensure_repo(s).await.unwrap(),
         "dépôt créé"
@@ -247,7 +247,7 @@ async fn the_grid_updates_journals_and_ages_the_memory() {
     let p = Arc::new(MockProvider::new());
     d.set_provider_override(p.clone());
     let s = &d.services;
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     std::fs::create_dir_all(&vault).unwrap();
     std::fs::write(
         vault.join("memoire.md"),
@@ -489,7 +489,7 @@ async fn the_grid_updates_journals_and_ages_the_memory() {
 async fn corrections_become_exceptions_of_an_existing_practice() {
     let (_dir, d, p) = daemon().await;
     let s = &d.services;
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     std::fs::create_dir_all(vault.join("pratiques")).unwrap();
     std::fs::write(
         vault.join("pratiques/langage-backend.md"),
@@ -538,7 +538,7 @@ async fn corrections_become_exceptions_of_an_existing_practice() {
 async fn the_vault_check_flags_secrets_and_broken_practices() {
     let (_dir, d, _p) = daemon().await;
     let s = &d.services;
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     std::fs::create_dir_all(vault.join("pratiques")).unwrap();
     std::fs::write(
         vault.join("notes.md"),
@@ -559,7 +559,8 @@ async fn the_vault_check_flags_secrets_and_broken_practices() {
             .any(|i| i["file"] == "notes.md" && i["severity"] == "error")
     );
     assert!(issues.iter().any(|i| i["file"] == "pratiques/cassee.md"));
-    crate::rpc::set_config_path(&d.services, "memory.vault_git_autocommit", json!("0s")).unwrap();
+    crate::helpers::set_config_path(&d.services, "memory.vault_git_autocommit", json!("0s"))
+        .unwrap();
     let sync = vault_sync(&d, "test").await.unwrap();
     assert_eq!(
         sync["git"], false,

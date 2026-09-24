@@ -51,7 +51,7 @@ async fn a_failed_night_keeps_what_it_wrote_and_is_said_once() {
     }
     nightly(&d).await;
     assert_eq!(p.call_count(), 4, "un lot, puis trois essais du second");
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     // #152 : le lot qui a abouti est écrit avant que le suivant soit tenté. Jusqu'ici
     // la passe accumulait tout jusqu'à la fin, et une erreur au deuxième lot jetait le
     // premier — le 21/09, sept lots et 126 candidats perdus de cette façon.

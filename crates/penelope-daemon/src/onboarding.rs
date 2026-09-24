@@ -232,7 +232,7 @@ fn today(d: &Daemon) -> String {
 }
 
 fn vault(d: &Daemon) -> std::path::PathBuf {
-    crate::conversation::vault_dir(&d.services)
+    crate::helpers::vault_dir(&d.services)
 }
 
 /// Séance en cours, sinon une nouvelle (toutes les questions, ou une partie). Le fichier

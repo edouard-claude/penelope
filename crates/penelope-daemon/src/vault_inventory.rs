@@ -80,7 +80,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
 
 /// Inventaire complet du vault.
 pub async fn inventory(s: &Services) -> anyhow::Result<Inventory> {
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let mut paths = Vec::new();
     walk(&vault, &vault, &mut paths);
     paths.sort();
@@ -239,7 +239,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let vault = crate::conversation::vault_dir(&s);
+        let vault = crate::helpers::vault_dir(&s);
         std::fs::create_dir_all(vault.join("clients/acme")).unwrap();
         std::fs::write(
             vault.join("clients/acme/contrat.md"),

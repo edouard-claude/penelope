@@ -109,7 +109,7 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
         Ok(vec!["memory.review_max_candidates".into()])
     })
     .unwrap();
-    let vault = crate::conversation::vault_dir(&s);
+    let vault = crate::helpers::vault_dir(&s);
     std::fs::create_dir_all(vault.join(".editeur")).unwrap();
     std::fs::write(
         vault.join(".editeur/etat.json"),

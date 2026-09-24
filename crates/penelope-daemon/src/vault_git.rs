@@ -54,7 +54,7 @@ pub async fn ensure_repo(s: &Services) -> Result<bool, String> {
     if autocommit_interval(s).is_none() {
         return Ok(false);
     }
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     if is_repo(&vault) {
         return Ok(false);
     }
@@ -86,7 +86,7 @@ pub async fn ensure_repo(s: &Services) -> Result<bool, String> {
 
 /// Autocommit configuré alors que le vault n'est pas sous git.
 pub fn warning(s: &Services) -> Option<String> {
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     (autocommit_interval(s).is_some() && vault.exists() && !is_repo(&vault)).then(|| {
         format!(
             "vault_git_autocommit est configuré mais {} n'est pas un dépôt git : aucun historique \
@@ -142,7 +142,7 @@ pub async fn autocommit_tick(d: &Arc<Daemon>) {
 /// `penelope mem diff [--since dream]` : changements non commités, ou depuis l'avant-dernier
 /// état précédant le dernier rêve.
 pub async fn diff(s: &Services, since_dream: bool) -> Result<Value, String> {
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     if !is_repo(&vault) {
         return Err(
             "le vault n'est pas un dépôt git : `penelope vault sync` l'initialise quand \

@@ -22,6 +22,7 @@ pub mod embeddings;
 pub mod engine;
 pub mod episodes;
 pub mod executor;
+pub mod helpers;
 pub mod hermes;
 pub mod images;
 pub mod ingest;

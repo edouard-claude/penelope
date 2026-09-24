@@ -5,6 +5,7 @@
 
 use crate::agent::Conversation;
 use crate::bus::{ChannelDelivery, Origin};
+pub use crate::helpers::{local_now, vault_dir};
 use crate::runtime::Services;
 use penelope_context::CompactionParams;
 use penelope_context::tiers::{Tiers, TiersBuilder, volatile_header};
@@ -660,25 +661,6 @@ async fn frozen_snapshot(
     blocks
 }
 
-/// Répertoire du vault, placeholders développés.
-pub fn vault_dir(s: &Services) -> std::path::PathBuf {
-    let cfg = s.config.config();
-    s.platform.dirs.expand(&cfg.memory.vault_path)
-}
-
-/// Date et heure locales du propriétaire, lisibles.
-pub fn local_now(s: &Services) -> String {
-    let cfg = s.config.config();
-    let utc = chrono::DateTime::from_timestamp_millis(s.clock.now_ms()).unwrap_or_default();
-    match cfg.owner.timezone.parse::<chrono_tz::Tz>() {
-        Ok(tz) => utc
-            .with_timezone(&tz)
-            .format("%A %d %B %Y, %H:%M")
-            .to_string(),
-        Err(_) => utc.format("%A %d %B %Y, %H:%M UTC").to_string(),
-    }
-}
-
 fn strip_frontmatter(raw: &str) -> String {
     penelope_kernel::frontmatter::parse(raw)
         .map(|fm| fm.body)
@@ -801,7 +783,7 @@ mod tests {
             .bind_telegram(&topic, -10_042, Some(21))
             .await
             .unwrap();
-        let key = crate::telegram::topic_name_key(-10_042, 21);
+        let key = crate::helpers::topic_name_key(-10_042, 21);
         d.services.kv_set(&key, "Posts LinkedIn").await.unwrap();
         let t = t2(topic.clone()).await;
         assert!(

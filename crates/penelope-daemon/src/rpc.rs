@@ -2,6 +2,7 @@
 
 use crate::agent::TurnOutcome;
 use crate::bus::{BusKind, Origin};
+use crate::helpers::{round_usd, set_config_path};
 use crate::runtime::{Daemon, Services};
 use penelope_kernel::api::*;
 use serde_json::{Value, json};
@@ -904,7 +905,7 @@ impl Rpc {
                 crate::dream::restore(s, id).await
             }
             method::MEM_REINDEX => {
-                let vault = crate::conversation::vault_dir(s);
+                let vault = crate::helpers::vault_dir(s);
                 crate::vault_ops::migrate_wiki(s, &vault)
                     .await
                     .map_err(anyhow::Error::msg)?;
@@ -931,7 +932,7 @@ impl Rpc {
             }
             method::MEM_FORGET => {
                 let uid = required_str(p, "uid")?;
-                let vault = crate::conversation::vault_dir(s);
+                let vault = crate::helpers::vault_dir(s);
                 let done = crate::vault_ops::forget(s, &vault, &uid)
                     .await
                     .map_err(anyhow::Error::msg)?;
@@ -964,7 +965,7 @@ impl Rpc {
             }
             method::VAULT_CHECK => Ok(crate::dream::vault_check(s).await),
             method::VAULT_LINT => {
-                let vault = crate::conversation::vault_dir(s);
+                let vault = crate::helpers::vault_dir(s);
                 let (report, proposals) = crate::dream::wiki_review(s, &vault).await;
                 let mut text = if report.is_clean() {
                     format!("✅ Wiki valide : {} note(s), aucun problème.", report.notes)
@@ -1046,7 +1047,7 @@ impl Rpc {
             method::WF_RUN => {
                 let id = required_str(p, "id")?;
                 let params = p.get("params").cloned().unwrap_or(json!({}));
-                let origin = crate::scheduler::owner_origin_of(&self.daemon.services);
+                let origin = crate::helpers::owner_origin_of(&self.daemon.services);
                 let run = crate::workflow::start_run(&self.daemon, &id, params, &origin, None, 0)
                     .await
                     .map_err(anyhow::Error::msg)?;
@@ -1239,11 +1240,6 @@ impl Rpc {
             other => Err(anyhow::anyhow!("méthode inconnue : {other}")),
         }
     }
-}
-
-/// Montant lisible : six décimales suffisent à distinguer un appel d'un autre.
-pub fn round_usd(x: f64) -> f64 {
-    (x * 1_000_000.0).round() / 1_000_000.0
 }
 
 /// Déclaration de serveur passée en paramètre : `toml` (texte d'un fichier `mcp.d`) ou
@@ -1621,64 +1617,6 @@ fn classify(e: &anyhow::Error) -> i32 {
     } else {
         INTERNAL_ERROR
     }
-}
-
-/// `config set a.b.c = valeur` : applique une modification par chemin.
-pub(crate) fn set_config_path(s: &Services, path: &str, value: Value) -> anyhow::Result<u64> {
-    let path_owned = path.to_string();
-    let generation = s.publish_config("cli", move |c| {
-        let mut v = serde_json::to_value(&*c).map_err(penelope_kernel::KernelError::Json)?;
-        let parts: Vec<&str> = path_owned.split('.').collect();
-        let mut cur = &mut v;
-        for (i, part) in parts.iter().enumerate() {
-            if i == parts.len() - 1 {
-                let obj = cur.as_object_mut().ok_or_else(|| {
-                    penelope_kernel::KernelError::config(format!("chemin invalide : {path_owned}"))
-                })?;
-                // Une table à clés libres accepte une entrée nouvelle (#128) ; ailleurs,
-                // une clé absente est une faute de frappe.
-                let parent = parts[..i].join(".");
-                if !obj.contains_key(*part)
-                    && !penelope_kernel::config::MAP_PATHS.contains(&parent.as_str())
-                {
-                    return Err(penelope_kernel::KernelError::config(format!(
-                        "clé inconnue : {path_owned}"
-                    )));
-                }
-                // Une valeur seule vaut une liste d'un élément, comme pour `mcp edit`
-                // (issue #138).
-                let value = match obj.get(*part) {
-                    Some(current) => {
-                        penelope_kernel::config::list_value(&path_owned, current, value.clone())
-                            .map_err(penelope_kernel::KernelError::config)?
-                    }
-                    None => value.clone(),
-                };
-                obj.insert((*part).to_string(), value);
-            } else {
-                cur = cur.get_mut(part).ok_or_else(|| {
-                    penelope_kernel::KernelError::config(format!("clé inconnue : {path_owned}"))
-                })?;
-            }
-        }
-        let updated: penelope_kernel::Config =
-            serde_json::from_value(v).map_err(penelope_kernel::KernelError::Json)?;
-        // Un réglage qui annule sa propre intention est refusé, nommément (issue #16).
-        let refused = penelope_kernel::coherence::new_refusals(c, &updated, &path_owned);
-        if !refused.is_empty() {
-            return Err(penelope_kernel::KernelError::config(format!(
-                "réglage refusé : {}",
-                refused
-                    .iter()
-                    .map(|r| r.message.clone())
-                    .collect::<Vec<_>>()
-                    .join(" ; ")
-            )));
-        }
-        *c = updated;
-        Ok(vec![path_owned.clone()])
-    })?;
-    Ok(generation)
 }
 
 /// Avertissements de cohérence qui touchent un réglage, après son écriture.

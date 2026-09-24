@@ -18,22 +18,22 @@ test_modules = [
 # Elle ne peut que rétrécir : un fichier repassé sous le plafond doit en sortir.
 [files.oversized]
 "crates/penelope-daemon/src/tool_jobs.rs" = 1754   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/telegram.rs" = 7967   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
+"crates/penelope-daemon/src/telegram.rs" = 7925   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/dream.rs" = 3457
-"crates/penelope-daemon/src/workflow.rs" = 2915
+"crates/penelope-daemon/src/workflow.rs" = 2881
 "crates/penelope-daemon/src/executor.rs" = 2504   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/mcp.rs" = 1958
-"crates/penelope-daemon/src/engine.rs" = 1221
+"crates/penelope-daemon/src/engine.rs" = 1179
 "crates/penelope-kernel/src/config.rs" = 2790   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-cli/src/commands.rs" = 2686   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/rpc.rs" = 2518   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
+"crates/penelope-daemon/src/rpc.rs" = 2456   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/doctor.rs" = 2522   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/telegram/screens.rs" = 2437   # +1 : #[allow(clippy::too_many_lines)] posé par le gel (#211)
 "crates/penelope-daemon/src/compaction.rs" = 2225
 "crates/penelope-llm/src/provider.rs" = 2048
 "crates/penelope-daemon/src/hermes.rs" = 1971
-"crates/penelope-daemon/src/upgrade.rs" = 2034   # relevé à l'intégration du lot A : #212 a ajouté ses tests avant le gel
-"crates/penelope-daemon/src/scheduler.rs" = 1833
+"crates/penelope-daemon/src/upgrade.rs" = 2018   # relevé à l'intégration du lot A : #212 a ajouté ses tests avant le gel
+"crates/penelope-daemon/src/scheduler.rs" = 1818
 "crates/penelope-memory/src/index.rs" = 1622
 "crates/penelope-llm/src/codex.rs" = 1533
 "crates/penelope-memory/src/consolidation.rs" = 1476
@@ -43,7 +43,7 @@ test_modules = [
 "crates/penelope-store/src/migrations.rs" = 1295   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/mcp_auth.rs" = 1246
 "crates/penelope-daemon/src/ingest.rs" = 1225
-"crates/penelope-daemon/src/conversation.rs" = 1222
+"crates/penelope-daemon/src/conversation.rs" = 1200
 "crates/penelope-context/src/engine.rs" = 1148
 "crates/penelope-mcp/src/registry.rs" = 1200
 "crates/penelope-daemon/src/purge.rs" = 1245   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
@@ -91,6 +91,7 @@ modules = [
     "engine",
     "episodes",
     "executor",
+    "helpers",  # fonctions partagées sur &Services (épopée #208, lot D, T06) : seul module ajouté par dérogation
     "hermes",
     "images",
     "ingest",
@@ -158,21 +159,21 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 # et rpc le nomment encore.
 [daemon.daemon_users]
 "tool_jobs.rs" = 3   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"scheduler.rs" = 26
-"compaction.rs" = 21
+"scheduler.rs" = 25
+"compaction.rs" = 17
 "dream.rs" = 20
 "workflow.rs" = 20
 "onboarding.rs" = 13
 "backup.rs" = 10
 "supervisor.rs" = 10
-"rpc.rs" = 9
+"rpc.rs" = 8
 "runner.rs" = 8
 "concepts.rs" = 7
 "embeddings.rs" = 7
 "episodes.rs" = 7
 "ingest.rs" = 7
 "session_ops.rs" = 7
-"telegram.rs" = 7
+"telegram.rs" = 6
 "mcp_auth.rs" = 6
 "runtime.rs" = 6
 "purge.rs" = 5
@@ -295,8 +296,8 @@ required = [
 [channel.allowed]
 "crates/penelope-daemon/src/agent/pipeline.rs" = 1   # EffectKind::Telegram (effect_kind), venu d'agent.rs au découpage (lot F) ; disparaît avec T37
 "crates/penelope-daemon/src/tool_jobs.rs" = 6   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/doctor.rs" = 44
-"crates/penelope-daemon/src/scheduler.rs" = 39
+"crates/penelope-daemon/src/doctor.rs" = 42
+"crates/penelope-daemon/src/scheduler.rs" = 33
 "crates/penelope-kernel/src/session.rs" = 37
 "crates/penelope-store/src/migrations.rs" = 30   # permanent : l'historique SQL est immuable (tables tg_updates, tg_outbox)
 "crates/penelope-kernel/src/config.rs" = 25      # permanent : le schéma de configuration nomme ses canaux ([telegram])
@@ -314,8 +315,8 @@ required = [
 "crates/penelope-kernel/src/turn.rs" = 6
 "crates/penelope-kernel/src/effects.rs" = 5
 "crates/penelope-tools/src/spec.rs" = 4
-"crates/penelope-daemon/src/dream.rs" = 3
-"crates/penelope-daemon/src/session_project.rs" = 3
+"crates/penelope-daemon/src/session_project.rs" = 2
+"crates/penelope-daemon/src/helpers.rs" = 12   # clés kv et origine du canal sorties de telegram.rs et scheduler.rs (épopée #208, lot D, T06)
 "crates/penelope-observe/src/redact.rs" = 2      # permanent : le caviardage doit connaître la forme des jetons
 "crates/penelope-daemon/src/codex_scope.rs" = 1
 "crates/penelope-daemon/src/lib.rs" = 1          # `pub mod telegram;` : disparaît avec la passerelle en crate (T29)

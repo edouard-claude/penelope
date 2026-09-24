@@ -8,6 +8,7 @@ use crate::agent::{AgentLoop, TurnEvent, TurnOutcome, TurnSink, TurnSpec};
 use crate::bus::{Bus, BusEvent, BusKind, Origin};
 use crate::conversation::SessionConversation;
 use crate::executor::{NativeToolExecutor, ToolEnv, chat_tool_defs, default_workspaces};
+use crate::helpers::last_model_key;
 use crate::runtime::Daemon;
 use penelope_kernel::ids::TurnId;
 use penelope_kernel::session::SessionKind;
@@ -20,10 +21,6 @@ use std::sync::Arc;
 
 fn pin_key(session_id: &str) -> String {
     format!("session.model_pin.{session_id}")
-}
-
-pub(crate) fn last_model_key(session_id: &str) -> String {
-    format!("session.model_last.{session_id}")
 }
 
 /// Frontière qui a fait reclasser le dernier message (#82), vide sinon.
@@ -85,8 +82,8 @@ impl crate::selfknow::Admin for Daemon {
     }
 
     async fn set_config(&self, path: &str, value: Value) -> Result<u64, String> {
-        let g =
-            crate::rpc::set_config_path(&self.services, path, value).map_err(|e| e.to_string())?;
+        let g = crate::helpers::set_config_path(&self.services, path, value)
+            .map_err(|e| e.to_string())?;
         self.invalidate_providers().await;
         Ok(g)
     }

@@ -158,7 +158,7 @@ pub async fn ingest(
     cancel: &CancelToken,
 ) -> Result<Ingested, String> {
     let s = &d.services;
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let sha = penelope_kernel::canonical::sha256_hex(&bytes);
     let sha_key = format!("ingest.sha.{sha}");
     if let Some(slug) = s.kv_get(&sha_key).await.ok().flatten()
@@ -603,7 +603,7 @@ pub async fn apply_contradiction(
         .unwrap_or_default()
         .to_string();
     let uid = a.payload["existing_uid"].as_str().unwrap_or_default();
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     let note = match action {
         // Ignorer : le candidat est écarté, la mémoire ne bouge pas.
         k if k.ends_with("reject") => {
@@ -680,7 +680,7 @@ pub async fn apply_memory_proposal(d: &Arc<Daemon>, approval_id: &str) -> anyhow
         s.kv_set(&flag, &confirmed.to_string()).await?;
         return Ok(confirmed);
     }
-    let vault = crate::conversation::vault_dir(s);
+    let vault = crate::helpers::vault_dir(s);
     // Découpage d'une entrée fourre-tout (issue #145) : les faits prennent le niveau de
     // l'entrée d'origine, qui est retirée une fois tous écrits.
     if a.payload["split"].as_bool() == Some(true) {
@@ -766,7 +766,7 @@ async fn apply_split(
 /// Le propriétaire reçoit le bilan sur son canal.
 pub async fn scan_inbox(d: &Arc<Daemon>) -> anyhow::Result<usize> {
     let s = &d.services;
-    let inbox = crate::conversation::vault_dir(s).join(doc::INBOX_DIR);
+    let inbox = crate::helpers::vault_dir(s).join(doc::INBOX_DIR);
     let Ok(entries) = std::fs::read_dir(&inbox) else {
         return Ok(0);
     };
@@ -845,7 +845,7 @@ pub async fn scan_inbox(d: &Arc<Daemon>) -> anyhow::Result<usize> {
             }
         };
         if let Some(m) = d.hooks.messenger() {
-            let origin = crate::scheduler::owner_origin_of(&d.services);
+            let origin = crate::helpers::owner_origin_of(&d.services);
             let _ = m.send_text(&origin, &text).await;
         }
         done += 1;
@@ -914,7 +914,7 @@ mod tests {
     #[tokio::test]
     async fn the_vault_inbox_is_ingested_then_emptied() {
         let (_dir, d, p, r) = daemon().await;
-        let inbox = crate::conversation::vault_dir(&d.services).join("inbox");
+        let inbox = crate::helpers::vault_dir(&d.services).join("inbox");
         std::fs::create_dir_all(&inbox).unwrap();
         std::fs::write(
             inbox.join("compte-rendu.md"),
@@ -928,7 +928,7 @@ mod tests {
         p.reply(r#"{"resume": "Compte rendu : migration vendredi.", "faits": []}"#);
 
         assert_eq!(scan_inbox(&d).await.unwrap(), 2);
-        let vault = crate::conversation::vault_dir(&d.services);
+        let vault = crate::helpers::vault_dir(&d.services);
         assert!(vault.join("sources/compte-rendu.md").exists());
         assert!(
             !inbox.join("compte-rendu.md").exists(),
@@ -988,7 +988,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(doc.format, "pdf (OCR)");
-        let vault = crate::conversation::vault_dir(&d.services);
+        let vault = crate::helpers::vault_dir(&d.services);
         let fiche =
             std::fs::read_to_string(vault.join(format!("sources/{}.md", doc.slug))).unwrap();
         assert!(fiche.to_uppercase().contains("PENELOPE"), "{fiche}");
@@ -1013,7 +1013,7 @@ mod tests {
         let uid = format!("src-{}-0001", doc.slug);
         s.memory.retire(&uid).await.unwrap();
 
-        let vault = crate::conversation::vault_dir(s);
+        let vault = crate::helpers::vault_dir(s);
         crate::vault_ops::reindex(s, &vault).await.unwrap();
         assert_eq!(
             s.memory.origin_of(&uid).await.unwrap(),
@@ -1060,7 +1060,7 @@ mod tests {
             0,
             "idempotent"
         );
-        let vault = crate::conversation::vault_dir(&d.services);
+        let vault = crate::helpers::vault_dir(&d.services);
         let notes = std::fs::read_to_string(vault.join("notes.md")).unwrap();
         assert_eq!(notes.matches("3 octobre").count(), 1);
     }
@@ -1077,7 +1077,7 @@ mod tests {
         ] {
             let (_dir, d, _p, _r) = daemon().await;
             let s = &d.services;
-            let vault = crate::conversation::vault_dir(s);
+            let vault = crate::helpers::vault_dir(s);
             let uid = crate::vault_ops::remember(
                 s,
                 &vault,
@@ -1140,7 +1140,7 @@ mod tests {
     async fn an_accepted_split_replaces_the_catch_all_entry() {
         let (_dir, d, _p, _r) = daemon().await;
         let s = &d.services;
-        let vault = crate::conversation::vault_dir(s);
+        let vault = crate::helpers::vault_dir(s);
         // L'entrée d'origine date d'avant la borne : ici, la taille n'est pas le sujet,
         // c'est la mécanique du découpage.
         let uid = crate::vault_ops::remember(
