@@ -17,18 +17,18 @@ test_modules = [
 # Liste de référence (R3) : les fichiers autorisés à dépasser, chacun avec sa borne.
 # Elle ne peut que rétrécir : un fichier repassé sous le plafond doit en sortir.
 [files.oversized]
-"crates/penelope-daemon/src/telegram.rs" = 13716
-"crates/penelope-daemon/src/dream.rs" = 5859
-"crates/penelope-daemon/src/agent.rs" = 4240
-"crates/penelope-daemon/src/workflow.rs" = 4044
-"crates/penelope-daemon/src/executor.rs" = 3712
-"crates/penelope-daemon/src/mcp.rs" = 3291
-"crates/penelope-daemon/src/engine.rs" = 3173
-"crates/penelope-kernel/src/config.rs" = 2738
-"crates/penelope-cli/src/commands.rs" = 2676
-"crates/penelope-daemon/src/rpc.rs" = 2481
+"crates/penelope-daemon/src/telegram.rs" = 7953
+"crates/penelope-daemon/src/dream.rs" = 3457
+"crates/penelope-daemon/src/agent.rs" = 2485
+"crates/penelope-daemon/src/workflow.rs" = 2915
+"crates/penelope-daemon/src/executor.rs" = 2480
+"crates/penelope-daemon/src/mcp.rs" = 1958
+"crates/penelope-daemon/src/engine.rs" = 1221
+"crates/penelope-kernel/src/config.rs" = 2739   # +1 : #[allow(clippy::too_many_lines)] posé par le gel (#211)
+"crates/penelope-cli/src/commands.rs" = 2677   # +1 : #[allow(clippy::too_many_lines)] posé par le gel (#211)
+"crates/penelope-daemon/src/rpc.rs" = 2482   # +1 : #[allow(clippy::too_many_lines)] posé par le gel (#211)
 "crates/penelope-daemon/src/doctor.rs" = 2463
-"crates/penelope-daemon/src/telegram/screens.rs" = 2435
+"crates/penelope-daemon/src/telegram/screens.rs" = 2437   # +1 : #[allow(clippy::too_many_lines)] posé par le gel (#211)
 "crates/penelope-daemon/src/compaction.rs" = 2225
 "crates/penelope-llm/src/provider.rs" = 2048
 "crates/penelope-daemon/src/hermes.rs" = 1971
@@ -38,7 +38,7 @@ test_modules = [
 "crates/penelope-llm/src/codex.rs" = 1533
 "crates/penelope-memory/src/consolidation.rs" = 1476
 "crates/penelope-context/src/store.rs" = 1379
-"crates/penelope-tools/src/spec.rs" = 1290
+"crates/penelope-tools/src/spec.rs" = 1291   # +1 : #[allow(clippy::too_many_lines)] posé par le gel (#211)
 "crates/penelope-mcp/src/transport.rs" = 1265
 "crates/penelope-store/src/migrations.rs" = 1260
 "crates/penelope-daemon/src/mcp_auth.rs" = 1246
@@ -46,7 +46,7 @@ test_modules = [
 "crates/penelope-daemon/src/conversation.rs" = 1222
 "crates/penelope-context/src/engine.rs" = 1214
 "crates/penelope-mcp/src/registry.rs" = 1200
-"crates/penelope-daemon/src/purge.rs" = 1189
+"crates/penelope-daemon/src/purge.rs" = 1190   # +1 : #[allow(clippy::too_many_lines)] posé par le gel (#211)
 "crates/penelope-memory/src/vault.rs" = 1163
 "crates/penelope-kernel/src/turn.rs" = 1136
 "crates/penelope-context/src/compaction.rs" = 1122
@@ -133,6 +133,8 @@ modules = [
     "voice",
     "wiki_e2e",
     "workflow",
+  "clone_policy_tests",  # module de tests sorti d'agent.rs (#215)
+  "testing",  # aides de test sorties de mcp.rs (#215)
 ]
 impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 
@@ -186,7 +188,7 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 # `#[allow(clippy::too_many_lines)]` dans les sources (R7, #211) : les allows de la pose
 # du lint sont comptés par le lot qui les pose ; d'ici là, aucun.
 [lints]
-allow_too_many_lines = 0
+allow_too_many_lines = 27
 
 # Les critères d'acceptation (R8, #213) : chaque nom doit exister comme fonction quelque
 # part dans les sources. Renommer est interdit, déplacer est permis ; la liste ne peut que
@@ -206,6 +208,7 @@ required = [
     "ca_13_2_planted_secret_never_leaks",
     "ca_13_2_secrets_never_leak",
     "ca_14_1_every_template_renders_in_both_forms",
+    "ca_14_2_a_telegram_message_gets_an_answer_and_a_ledger_entry",
     "ca_14_3_rate_limit_is_respected_without_loss",
     "ca_14_4_double_click_is_idempotent",
     "ca_14_5_non_owner_clicks_are_refused",
@@ -263,6 +266,9 @@ required = [
     "ca_9_1_first_decision_wins",
     "ca_9_2_expiry_blocks_then_can_resume",
     "ca_9_3_always_rule_applies_then_is_revocable",
+    "ca_9_4_an_approved_tool_runs_once_after_resume_and_the_ledger_shows_it",
+    "ca_9_5_a_denied_tool_is_reported_to_the_model_and_never_runs",
+    "ca_9_6_a_session_window_lets_the_same_call_pass_without_a_new_request",
 ]
 
 # Frontière canal / cœur (R8 du découpage, #214) : mentions du canal (`telegram` en toute
@@ -272,6 +278,7 @@ required = [
 # OwnerChannel ; ces entrées ne peuvent que décroître (lot D, T36), sauf les permanentes,
 # justifiées en commentaire, qui attendent T37 après la V1.
 [channel.allowed]
+"crates/penelope-daemon/src/agent.rs" = 1   # EffectKind::Telegram (effect_kind), déjà là, visible depuis que les tests sont sortis (#215) ; disparaît avec T37
 "crates/penelope-daemon/src/doctor.rs" = 44
 "crates/penelope-daemon/src/scheduler.rs" = 39
 "crates/penelope-kernel/src/session.rs" = 37
