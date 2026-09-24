@@ -90,17 +90,15 @@ impl PolicyStage {
         // Autorisation déclarée d'avance, puis mode de la session (#111).
         if rule_id.is_none()
             && verdict.decision != PolicyDecision::Deny
-            && let Some(why) = crate::approval_mode::local_draft_allow(&info.effective_name)
-                .or_else(|| {
-                    crate::approval_mode::declared_allow(&cfg, &info.effective_name, effective_args)
-                })
+            && let Some(why) = local_draft_allow(&info.effective_name)
+                .or_else(|| declared_allow(&cfg, &info.effective_name, effective_args))
         {
             verdict.decision = PolicyDecision::Auto;
             verdict.layer = VerdictLayer::DeclaredAllow;
             verdict.reason = why;
         }
         match crate::approval_mode::of_session(s, &spec.session_id).await {
-            crate::approval_mode::ApprovalMode::Ask
+            ApprovalMode::Ask
                 if verdict.decision == PolicyDecision::Auto
                     && (info.effective_name == "shell_exec" || info.risk != RiskClass::Read) =>
             {
@@ -108,7 +106,7 @@ impl PolicyStage {
                 verdict.layer = VerdictLayer::SessionMode;
                 verdict.reason = "mode « demander tout » de la session".into();
             }
-            crate::approval_mode::ApprovalMode::Auto
+            ApprovalMode::Auto
                 if verdict.decision == PolicyDecision::Ask
                     && rule_id.is_none()
                     && info.policy.is_none()
@@ -126,7 +124,7 @@ impl PolicyStage {
             _ => {}
         }
         // Réseau demandé par une commande : la carte le dit en toutes lettres.
-        if crate::executor::wants_network(&info.effective_name, effective_args)
+        if crate::agent::wants_network(&info.effective_name, effective_args)
             && info.risk == RiskClass::External
         {
             verdict.reason = format!(
@@ -146,4 +144,88 @@ impl PolicyStage {
         }
         Ok(verdict)
     }
+}
+
+/// Mode d'approbation d'une session (issue #111) : ce qui part sans demande.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalMode {
+    Ask,
+    Reads,
+    Auto,
+}
+
+impl ApprovalMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim() {
+            "ask" | "demander" | "tout" => ApprovalMode::Ask,
+            "reads" | "lectures" | "defaut" | "défaut" => ApprovalMode::Reads,
+            "auto" => ApprovalMode::Auto,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ApprovalMode::Ask => "ask",
+            ApprovalMode::Reads => "reads",
+            ApprovalMode::Auto => "auto",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            ApprovalMode::Ask => "demander tout",
+            ApprovalMode::Reads => "lectures sans demande",
+            ApprovalMode::Auto => "tout sauf le destructif",
+        }
+    }
+}
+
+/// Un brouillon de plan ne lance rien et reste révisable : sa persistance locale
+/// est autorisée d'avance. Le gate « vas-y » garde l'approbation du propriétaire.
+pub fn local_draft_allow(tool: &str) -> Option<String> {
+    (tool == "workflow_plan").then(|| "brouillon local sans exécution".into())
+}
+
+/// Autorisation déclarée d'avance dans la configuration (issue #111) : une commande
+/// `shell_exec` d'une famille de `tools.shell_allow`, ou de `tools.shell_allow_network`
+/// quand elle demande le réseau. Renvoie la raison, pour la trace.
+pub fn declared_allow(
+    cfg: &penelope_kernel::config::Config,
+    tool: &str,
+    args: &serde_json::Value,
+) -> Option<String> {
+    if tool != "shell_exec" {
+        return None;
+    }
+    let command = args.get("command").and_then(|v| v.as_str())?.trim();
+    let (families, key) = if crate::agent::wants_network(tool, args) {
+        (&cfg.tools.shell_allow_network, "tools.shell_allow_network")
+    } else {
+        (&cfg.tools.shell_allow, "tools.shell_allow")
+    };
+    // Une liste `a && b` est autorisée d'avance quand **chaque** étape l'est, comme pour
+    // les règles (issue #150) : une famille déclarée ne couvre pas ses voisines.
+    let list = penelope_hitl::cmdline::list(command)?;
+    let mut matched: Vec<String> = Vec::new();
+    for step in &list.steps {
+        // Une seule commande : la famille déclarée doit la couvrir, lecture comprise —
+        // en mode « demander tout », `tools.shell_allow` vaut aussi pour `ls` (#111).
+        if list.steps.len() > 1 && penelope_hitl::cmdline::needs_no_rule(step) {
+            continue;
+        }
+        let f = families
+            .iter()
+            .find(|f| penelope_hitl::policy::family_covers(f.trim(), step))?;
+        if !matched.contains(f) {
+            matched.push(f.clone());
+        }
+    }
+    if matched.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "autorisé d'avance : famille(s) « {} » de `{key}`",
+        matched.join(" », « ")
+    ))
 }

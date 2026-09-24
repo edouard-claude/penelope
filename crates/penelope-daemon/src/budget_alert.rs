@@ -104,10 +104,7 @@ pub async fn check(
     Ok(sent)
 }
 
-/// « 16,10 $ »
-pub fn usd(x: f64) -> String {
-    format!("{x:.2} $").replace('.', ",")
-}
+pub use penelope_kernel::budget::usd;
 
 /// Texte de l'alerte.
 pub fn alert_text(status: &BudgetStatus, top: &[UsageRow]) -> String {

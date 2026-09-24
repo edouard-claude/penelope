@@ -118,7 +118,7 @@ impl AgentLoop {
         let call = TurnCall {
             model: spec.model_id.clone(),
             system_hash: prefix.as_ref().map(|p| p.hash()),
-            tools_hash: crate::cache_audit::Fingerprint::tools_hash_of(&spec.tools),
+            tools_hash: Fingerprint::tools_hash_of(&spec.tools),
         };
         let id = meta.map(TurnMeta::identity);
         self.services

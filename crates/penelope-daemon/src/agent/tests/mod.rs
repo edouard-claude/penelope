@@ -13,7 +13,6 @@ mod effects;
 mod fallback;
 mod guards;
 mod policy;
-mod recovery;
 mod run_loop;
 mod turn_bounds;
 
@@ -162,51 +161,6 @@ async fn session(s: &Services) -> String {
         .unwrap()
         .id
         .to_string()
-}
-
-/// Un `git push` était en vol quand le daemon est tombé : l'effet est `dispatching`,
-/// l'appel n'a pas de résultat. Le « redémarrage » le passe en `unknown`.
-async fn crashed_push() -> (
-    tempfile::TempDir,
-    Arc<Services>,
-    Arc<MockProvider>,
-    String,
-    MemoryConversation,
-    String,
-) {
-    let (d, s, p) = setup().await;
-    let sid = session(&s).await;
-    let conv = MemoryConversation::new("Tu es Pénélope.", "pousse la branche");
-    let args = json!({"command": "git push origin main"});
-    conv.record(
-        &ChatMessage::assistant("").with_tool_calls(vec![call("c1", "shell_exec", args.clone())]),
-        false,
-    )
-    .await
-    .unwrap();
-    let id = match s
-        .effects
-        .plan(
-            EffectSpec::new(effect_kind("shell_exec"), "shell_exec", args)
-                .session(&sid)
-                .step("c1"),
-        )
-        .await
-        .unwrap()
-    {
-        Planned::Fresh(id) => id,
-        o => panic!("{o:?}"),
-    };
-    s.effects.dispatching(&id).await.unwrap();
-    let daemon = crate::runtime::Daemon::from_services(s.clone());
-    daemon.recover().await.unwrap();
-    // Un second redémarrage ne crée pas de seconde demande.
-    daemon.recover().await.unwrap();
-    let pending = s.approvals.pending(10).await.unwrap();
-    assert_eq!(pending.len(), 1, "une demande par effet : {pending:?}");
-    assert_eq!(pending[0].kind, penelope_hitl::ApprovalKind::EffectUnknown);
-    let approval = pending[0].id.0.clone();
-    (d, s, p, sid, conv, approval)
 }
 
 fn spent(turn: &str, calls: usize, each: f64) -> Vec<penelope_kernel::budget::UsageRecord> {

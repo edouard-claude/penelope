@@ -205,38 +205,6 @@ impl NativeToolExecutor {
     }
 }
 
-/// Arguments d'un `tool_call` : l'objet `args`, ou `args_json` quand l'objet arrive vide
-/// (certains fournisseurs vident un objet sans propriétés déclarées, issue #110).
-pub(crate) fn call_arguments(args: &Value) -> ToolResult<Value> {
-    let object = args.get("args").filter(|v| !v.is_null());
-    if let Some(v) = object.filter(|v| v.as_object().is_some_and(|o| !o.is_empty())) {
-        return Ok(v.clone());
-    }
-    // Des arguments rendus en chaîne, dans `args_json` ou à la place de l'objet.
-    let raw = args
-        .get("args_json")
-        .and_then(|v| v.as_str())
-        .or_else(|| object.and_then(|v| v.as_str()))
-        .filter(|s| !s.trim().is_empty());
-    if let Some(raw) = raw {
-        return serde_json::from_str::<Value>(raw)
-            .ok()
-            .filter(|v| v.is_object())
-            .ok_or_else(|| ToolError::Invalid("`args_json` n'est pas un objet JSON".into()));
-    }
-    Ok(json!({}))
-}
-
-/// Arguments sur lesquels portent la politique et la carte d'approbation : ceux de
-/// l'outil visé par un `tool_call`, ceux de l'appel sinon.
-pub(crate) fn effective_arguments(tool: &str, args: &Value) -> Value {
-    if tool == "tool_call" {
-        call_arguments(args).unwrap_or_else(|_| json!({}))
-    } else {
-        args.clone()
-    }
-}
-
 /// `cd <répertoire> && <commande>` rendu en `{command: <commande>, cwd: <répertoire>}`
 /// quand le répertoire est dans un workspace et que l'appel ne donne pas déjà son `cwd`
 /// (issue #123) : la commande se classe, s'approuve et se règle pour ce qu'elle est. Hors

@@ -78,8 +78,7 @@ impl AgentLoop {
             // se retrouve, le corps n'étant jamais recopié (issue #205).
             let llm_id = format!("q_{}", penelope_kernel::ids::Ulid::new());
             let body = serde_json::to_value(&request).unwrap_or(Value::Null);
-            let keys =
-                crate::cache_audit::Fingerprint::of(&request.messages, &request.tools).keys();
+            let keys = Fingerprint::of(&request.messages, &request.tools).keys();
             s.llm_state
                 .plan(
                     penelope_llm::PlannedCall {

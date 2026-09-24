@@ -9,6 +9,7 @@ use decide::{
     CallContext, DescribedCall, GuardStop, Refusal, Suspension, call_chain, run_call_guards,
 };
 use policy::PolicyStage;
+pub use policy::{ApprovalMode, declared_allow, local_draft_allow};
 
 /// Résolution des appels en attente.
 /// Lectures lancées ensemble, au plus (issue #85).
@@ -153,7 +154,7 @@ impl AgentLoop {
             // 4. Politique et approbation, sur les arguments de l'outil visé : par
             // `tool_call`, ceux de l'appel interne (#110), sinon une règle
             // « Toujours » couvrirait l'outil entier.
-            let effective_args = crate::executor::effective_arguments(&call.name, &call.arguments);
+            let effective_args = crate::agent::effective_arguments(&call.name, &call.arguments);
             let policy_workspace = execute.policy_workspace();
             let verdict =
                 PolicyStage::evaluate(s, spec, policy_workspace.as_deref(), &info, &effective_args)

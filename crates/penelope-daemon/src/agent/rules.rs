@@ -35,7 +35,7 @@ pub fn arg_patterns(tool: &str, args: Option<&Value>) -> Vec<Value> {
     let Some(list) = penelope_hitl::cmdline::list(command) else {
         return Vec::new();
     };
-    let network = crate::executor::wants_network(tool, args);
+    let network = crate::agent::wants_network(tool, args);
     let mut out: Vec<Value> = Vec::new();
     for step in &list.steps {
         // Une lecture, ou un `cd` qui prépare la suite, n'a besoin d'aucune règle.
@@ -105,7 +105,7 @@ pub fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
             // requête) n'enchaîne rien, `VAR=x cmd` a pour famille `cmd`, et un tube vers
             // une lecture pure (`… | jq`) celle de sa première étape (issue #141).
             let line = penelope_hitl::cmdline::pipeline(&command)?;
-            let network = crate::executor::wants_network(tool, args);
+            let network = crate::agent::wants_network(tool, args);
             let head = family_of(&line)?;
             // Le réseau accordé l'est à la famille de commandes, jamais au shell (#106) :
             // « Toujours » sur `git push` avec réseau ne donne rien à `curl`.

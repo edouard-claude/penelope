@@ -82,12 +82,8 @@ impl AgentLoop {
             // Empreinte et fournisseur amont collant : le cache de préfixe reste chaud et
             // un raté est expliqué (issue #17).
             let previous = crate::cache_audit::previous_call(s, &spec.session_id).await?;
-            let pinned = crate::cache_audit::sticky_upstream(
-                previous.as_ref(),
-                &spec.model_id,
-                s.clock.now_ms(),
-            );
-            let fingerprint = crate::cache_audit::Fingerprint::of(&messages, &spec.tools);
+            let pinned = sticky_upstream(previous.as_ref(), &spec.model_id, s.clock.now_ms());
+            let fingerprint = Fingerprint::of(&messages, &spec.tools);
             let response = match self
                 .call_model(spec, messages, sink, pinned, None, &attempts)
                 .await?
@@ -137,9 +133,9 @@ impl AgentLoop {
             {
                 tracing::warn!(error = %e, "instantané du prompt non enregistré");
             }
-            let miss = crate::cache_audit::miss_cause(
+            let miss = miss_cause(
                 previous.as_ref(),
-                &crate::cache_audit::Observed {
+                &Observed {
                     fingerprint: &fingerprint,
                     model: &response.model,
                     upstream: response.upstream.as_deref(),
@@ -324,7 +320,7 @@ impl AgentLoop {
                     if turn_cost >= cfg.budget.show_turn_cost_usd {
                         text.push_str(&format!(
                             "\n\n_Coût de ce tour : {} ({calls} appels au modèle)._",
-                            crate::budget_alert::usd(turn_cost)
+                            penelope_kernel::budget::usd(turn_cost)
                         ));
                     }
                 }

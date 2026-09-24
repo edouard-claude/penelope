@@ -260,7 +260,7 @@ impl TurnGuard for CostCheckpointGuard {
         }
         let level = (turn_cost / step).floor() as i64;
         let call_id = format!("checkpoint:{turn_id}:{level}");
-        let usd = crate::budget_alert::usd;
+        let usd = penelope_kernel::budget::usd;
         let prior = s
             .approvals
             .find_for_call(&spec.session_id, &call_id)
@@ -338,7 +338,7 @@ impl AgentLoop {
              contexte. Regroupe les commandes restantes dans un seul `shell_exec`, ou confie la \
              suite à `sub_agent_spawn`, qui ne rend que sa conclusion. Mets aussi à jour tes \
              notes de travail (`session_notes` : plan, décisions, prochaine étape).]",
-            crate::budget_alert::usd(turn_cost)
+            penelope_kernel::budget::usd(turn_cost)
         )))
     }
 }

@@ -312,14 +312,15 @@ mod meta;
 mod precheck;
 mod tools;
 
+pub use crate::agent::wants_network;
+pub(crate) use crate::agent::{call_arguments, effective_arguments};
 use args::{
     FS_LIST_INLINE_CHARS, b_arg, new_workflow_plan, render_listing, str_arg, summarise_listing,
     u_arg, with_session_labels,
 };
 use defs::native_info;
 pub(crate) use defs::shell_override;
-pub use defs::{chat_tool_defs, render_mcp_result, tool_defs, wants_network};
-pub(crate) use precheck::{call_arguments, effective_arguments};
+pub use defs::{chat_tool_defs, render_mcp_result, tool_defs};
 
 #[cfg(test)]
 mod tests;

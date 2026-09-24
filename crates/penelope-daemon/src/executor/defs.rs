@@ -2,11 +2,6 @@
 
 use super::*;
 
-/// Vrai quand un appel `shell_exec` demande le réseau (issue #106).
-pub fn wants_network(tool: &str, args: &Value) -> bool {
-    tool == "shell_exec" && args.get("network").and_then(|v| v.as_bool()) == Some(true)
-}
-
 /// Risque et nom effectif d'un appel d'outil natif. `shell_network` : le réseau est
 /// ouvert à toutes les commandes par la configuration.
 pub(super) fn native_info(name: &str, args: &Value, shell_network: bool) -> CallInfo {

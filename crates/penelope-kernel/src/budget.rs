@@ -587,6 +587,11 @@ impl BudgetLedger {
     }
 }
 
+/// « 16,10 $ »
+pub fn usd(x: f64) -> String {
+    format!("{x:.2} $").replace('.', ",")
+}
+
 /// Libellé d'une cause de raté de cache.
 ///
 /// La cause « préfixe » porte, quand l'instantané du prompt le permet (issue #205), les
