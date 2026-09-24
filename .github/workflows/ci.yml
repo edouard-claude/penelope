@@ -31,6 +31,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # check-budget.sh compare HEAD à sa base git (#209)
 
       # Chaque branche porte sa ligne de version (#212) : `0.` sur `main`, `1.0.0-` sur
       # `v1`. Un lot qui apporte la version de l'autre branche (rétroportage, fusion mal
@@ -79,6 +81,17 @@ jobs:
       # `resilience` et `security` en font partie.
       - name: Tests
         run: cargo test --workspace --no-fail-fast
+
+      # Le cliquet du gel (#209) : budget.toml ne remonte jamais sans le trailer
+      # « Dérogation-budget: #N ». En push, la base est le commit d'avant
+      # (`github.event.before`, à zéro au premier push d'une branche : le script n'a rien à
+      # comparer et sort en 0) ; en pull request, le point de fourche avec la branche cible
+      # (GITHUB_BASE_REF). Placée après `Tests` : les dépendances d'archtest sont déjà
+      # compilées, `cargo run` ne rebâtit que le binaire.
+      - name: Le budget ne remonte pas
+        env:
+          BEFORE: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: scripts/check-budget.sh ${BEFORE:+"$BEFORE"}
 
   # macOS est la plateforme cible : format, lint, et ce qui n'existe que là (Seatbelt,
   # launchd, trousseau, binaire de release). Pas la suite entière une seconde fois.
