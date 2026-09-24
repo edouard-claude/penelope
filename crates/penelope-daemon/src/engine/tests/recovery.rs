@@ -230,7 +230,7 @@ async fn crashed_push() -> (
 async fn an_uncertain_effect_marked_done_is_replayed_not_rerun() {
     let (_d, s, p, sid, conv, approval) = crashed_push().await;
     let e = exec(false);
-    let loop_ = AgentLoop::new(s.clone(), p.clone());
+    let loop_ = AgentLoop::new(crate::agent::services_of(&s), p.clone());
     assert_eq!(
         loop_
             .run_conversation(&spec(&sid), &conv, &e, &NullSink)
@@ -274,7 +274,7 @@ async fn an_uncertain_effect_marked_done_is_replayed_not_rerun() {
 async fn an_uncertain_effect_retried_runs_once() {
     let (_d, s, p, sid, conv, approval) = crashed_push().await;
     let e = exec(false);
-    let loop_ = AgentLoop::new(s.clone(), p.clone());
+    let loop_ = AgentLoop::new(crate::agent::services_of(&s), p.clone());
     let d = Decision {
         choice: EFFECT_RETRY.into(),
         ..Decision::approve_once("cli")
@@ -293,7 +293,7 @@ async fn an_uncertain_effect_retried_runs_once() {
 async fn an_uncertain_effect_ignored_is_not_rerun() {
     let (_d, s, p, sid, conv, approval) = crashed_push().await;
     let e = exec(false);
-    let loop_ = AgentLoop::new(s.clone(), p.clone());
+    let loop_ = AgentLoop::new(crate::agent::services_of(&s), p.clone());
     assert!(
         !loop_
             .decide_approval(&approval, &Decision::deny("telegram", None))

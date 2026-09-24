@@ -12,7 +12,7 @@ pub const EFFECT_IGNORE: &str = "Ignorer";
 /// La transition est faite avant que le canal ne remette le tour en file : la reprise
 /// trouve l'effet `completed` (rejoué), `planned` (relancé) ou la demande refusée.
 async fn decide_uncertain_effect(
-    s: &Services,
+    s: &AgentServices,
     a: &penelope_hitl::ApprovalRequest,
     decision: &Decision,
 ) -> anyhow::Result<bool> {
@@ -72,7 +72,7 @@ async fn decide_uncertain_effect(
 
 /// Tranche une approbation : la première décision gagne, une fenêtre crée une règle.
 pub async fn decide_approval(
-    s: &Services,
+    s: &AgentServices,
     approval_id: &str,
     decision: &Decision,
 ) -> anyhow::Result<bool> {

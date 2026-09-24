@@ -97,7 +97,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
             crate::conversation::build_tiers(s, &step.prompt, &[], Some(&run_state_line(ctx)))
                 .await;
         let conv = SessionConversation::new(s.clone(), &run.session_id, &model_id, tiers, 0);
-        let outcome = AgentLoop::new(s.clone(), provider.clone())
+        let outcome = AgentLoop::new(crate::agent::services_of(s), provider.clone())
             .run_conversation(&spec, &conv, &exec, &NullSink)
             .await?;
         if let TurnOutcome::AwaitingApproval { approval_id } = &outcome {
@@ -292,7 +292,7 @@ pub async fn run_sub_agent(
         allowed_tools: allowed,
         cancel: cancel.clone(),
     };
-    let outcome = AgentLoop::new(s.clone(), provider)
+    let outcome = AgentLoop::new(crate::agent::services_of(s), provider)
         .run_conversation(&spec, &conv, &exec, &NullSink)
         .await
         .map_err(|e| e.to_string())?;

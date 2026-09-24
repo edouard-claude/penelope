@@ -145,7 +145,7 @@ impl AgentLoop {
 /// Écrit `turn.finished`. Son échec ne change pas l'issue du tour : il ne coûte que la
 /// borne, que la reprise après crash sait refermer.
 pub async fn close_turn(
-    s: &Services,
+    s: &AgentServices,
     spec: &TurnSpec,
     meta: Option<&TurnMeta>,
     outcome: &anyhow::Result<TurnOutcome>,
@@ -159,7 +159,7 @@ pub async fn close_turn(
 /// n'a pas ouvert de `turn.started` : il est ouvert et fermé ici, pour qu'aucune sortie
 /// ne laisse de trou. Sans effet si la boucle l'a ouvert.
 pub async fn close_unopened(
-    s: &Services,
+    s: &AgentServices,
     session_id: &str,
     meta: &TurnMeta,
     outcome: &anyhow::Result<TurnOutcome>,
@@ -175,7 +175,7 @@ pub async fn close_unopened(
     }
 }
 
-async fn append_bound(s: &Services, session_id: &str, kind: &str, payload: Value) -> bool {
+async fn append_bound(s: &AgentServices, session_id: &str, kind: &str, payload: Value) -> bool {
     match s
         .events
         .append(EventDraft::new(kind, payload).session(session_id))
@@ -194,7 +194,7 @@ async fn append_bound(s: &Services, session_id: &str, kind: &str, payload: Value
 /// {reason: interrupted}`. Rien n'est tronqué ni inventé : le tour rejoué par la file
 /// ouvre sa propre borne, `attempt` suivant, et retrouve ses appels sans résultat dans
 /// l'historique. Rend le nombre de tours fermés.
-pub async fn close_interrupted_turns(s: &Services) -> anyhow::Result<usize> {
+pub async fn close_interrupted_turns(s: &AgentServices) -> anyhow::Result<usize> {
     // La dernière borne de chaque session (colonnes nues de SQLite : celles de la ligne
     // qui porte le `max`).
     let last: Vec<(String, String, String)> = s

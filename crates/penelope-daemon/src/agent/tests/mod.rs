@@ -1,5 +1,7 @@
 use super::*;
 
+use super::decisions::decide_approval;
+use super::turn_log::close_unopened;
 use penelope_kernel::clock::TestClock;
 
 use penelope_llm::mock::{MockProvider, Scripted};
@@ -108,14 +110,10 @@ fn exec(fail: bool) -> CountingExecutor {
     }
 }
 
-async fn setup() -> (tempfile::TempDir, Arc<Services>, Arc<MockProvider>) {
+async fn setup() -> (tempfile::TempDir, Arc<AgentServices>, Arc<MockProvider>) {
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
-    let s = Arc::new(
-        Services::for_tests(dir.path().to_path_buf(), clock)
-            .await
-            .unwrap(),
-    );
+    let s = Arc::new(AgentServices::for_tests(dir.path(), clock).unwrap());
     let p = Arc::new(MockProvider::new());
     (dir, s, p)
 }
@@ -154,8 +152,9 @@ fn call(id: &str, name: &str, args: Value) -> ToolCall {
     }
 }
 
-async fn session(s: &Services) -> String {
-    s.sessions
+async fn session(s: &AgentServices) -> String {
+    penelope_kernel::session::SessionStore::new(s.store.clone(), s.clock.clone())
+        .with_events(s.events.clone())
         .create(penelope_kernel::session::SessionKind::Chat, None)
         .await
         .unwrap()

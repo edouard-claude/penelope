@@ -9,7 +9,7 @@ impl AgentLoop {
     pub(super) async fn run_steps(
         &self,
         spec: &TurnSpec,
-        prefix: Option<&crate::prompt_snapshot::PromptPrefix>,
+        prefix: Option<&penelope_app::conversation::PromptPrefix>,
         conv: &dyn Conversation,
         execute: &(dyn ToolExecutor + Send + Sync),
         sink: &dyn TurnSink,
@@ -81,7 +81,7 @@ impl AgentLoop {
             attempts.at_step(iteration + 1);
             // Empreinte et fournisseur amont collant : le cache de préfixe reste chaud et
             // un raté est expliqué (issue #17).
-            let previous = crate::cache_audit::previous_call(s, &spec.session_id).await?;
+            let previous = s.cache.previous_call(&spec.session_id).await?;
             let pinned = sticky_upstream(previous.as_ref(), &spec.model_id, s.clock.now_ms());
             let fingerprint = Fingerprint::of(&messages, &spec.tools);
             let response = match self
@@ -128,8 +128,7 @@ impl AgentLoop {
             // calculée (issue #205). L'écriture suit l'appel : elle n'est pas dans la
             // latence du premier jeton, et son échec ne coûte que le diagnostic.
             if let Some(prefix) = prefix
-                && let Err(e) =
-                    crate::prompt_snapshot::record(s, &fingerprint.system_hash, prefix).await
+                && let Err(e) = s.snapshots.record(&fingerprint.system_hash, prefix).await
             {
                 tracing::warn!(error = %e, "instantané du prompt non enregistré");
             }
@@ -147,12 +146,12 @@ impl AgentLoop {
             // « Le préfixe a changé » ne suffit pas : dire laquelle des tuiles a bougé.
             let miss = match miss {
                 Some("prefixe") => Some(
-                    crate::prompt_snapshot::prefix_cause(
-                        s,
-                        previous.as_ref().and_then(|p| p.system_hash.as_deref()),
-                        &fingerprint.system_hash,
-                    )
-                    .await,
+                    s.snapshots
+                        .prefix_cause(
+                            previous.as_ref().and_then(|p| p.system_hash.as_deref()),
+                            &fingerprint.system_hash,
+                        )
+                        .await,
                 ),
                 other => other.map(String::from),
             };

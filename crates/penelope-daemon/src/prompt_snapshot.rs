@@ -126,6 +126,21 @@ pub async fn prefix_cause(s: &Services, before: Option<&str>, after: &str) -> St
     }
 }
 
+/// Le port `PromptSnapshots` de la boucle : la table `prompt_snapshots` (épopée #208,
+/// T09).
+pub struct StoredSnapshots(pub std::sync::Arc<Services>);
+
+#[async_trait::async_trait]
+impl crate::agent::PromptSnapshots for StoredSnapshots {
+    async fn record(&self, hash: &str, prefix: &PromptPrefix) -> anyhow::Result<bool> {
+        record(&self.0, hash, prefix).await
+    }
+
+    async fn prefix_cause(&self, before: Option<&str>, after: &str) -> String {
+        prefix_cause(&self.0, before, after).await
+    }
+}
+
 /// Poids de la table, pour `doctor`.
 pub async fn weight_bytes(s: &Services) -> anyhow::Result<(i64, i64)> {
     Ok(s.store

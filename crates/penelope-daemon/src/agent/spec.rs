@@ -32,7 +32,7 @@ pub struct TurnRequest {
 
 /// Un exécuteur de tour.
 pub struct AgentLoop {
-    pub services: Arc<Services>,
+    pub services: Arc<AgentServices>,
     pub provider: Arc<dyn Provider>,
     pub max_iterations: u32,
 }
@@ -46,7 +46,7 @@ pub const TURN_CALLS: u32 = 24;
 pub const CALLS_EXHAUSTED: &str = "le tour n'a pas convergé";
 
 impl AgentLoop {
-    pub fn new(services: Arc<Services>, provider: Arc<dyn Provider>) -> Self {
+    pub fn new(services: Arc<AgentServices>, provider: Arc<dyn Provider>) -> Self {
         AgentLoop {
             services,
             provider,
@@ -82,7 +82,7 @@ impl AgentLoop {
         approval_id: &str,
         decision: &Decision,
     ) -> anyhow::Result<bool> {
-        decide_approval(&self.services, approval_id, decision).await
+        decisions::decide_approval(&self.services, approval_id, decision).await
     }
 
     /// Ancien nom, conservé pour les appelants existants.

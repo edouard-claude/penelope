@@ -28,6 +28,16 @@ pub async fn of_session(s: &Services, session_id: &str) -> ApprovalMode {
         .unwrap_or(ApprovalMode::Reads)
 }
 
+/// Le port `SessionModes` de la boucle : le kv de la session (épopée #208, T09).
+pub struct KvModes(pub std::sync::Arc<Services>);
+
+#[async_trait::async_trait]
+impl crate::agent::SessionModes for KvModes {
+    async fn of_session(&self, session_id: &str) -> ApprovalMode {
+        of_session(&self.0, session_id).await
+    }
+}
+
 /// Fixe le mode d'une session ; `None` : retour au mode de la configuration.
 pub async fn set(
     s: &Services,

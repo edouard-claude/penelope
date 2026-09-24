@@ -596,7 +596,7 @@ impl Daemon {
             cancel,
         };
 
-        let outcome = AgentLoop::new(s.clone(), provider)
+        let outcome = AgentLoop::new(crate::agent::services_of(&s), provider)
             .run_conversation_as(&spec, Some(meta), &conv, &exec, sink)
             .await;
         // Estimation locale ou prompt réellement facturé : l'un ou l'autre au-delà du seuil

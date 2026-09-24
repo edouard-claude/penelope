@@ -3,7 +3,7 @@
 
 use super::*;
 
-async fn attempts_of(s: &Services, sid: &str) -> Vec<penelope_kernel::event::Event> {
+async fn attempts_of(s: &AgentServices, sid: &str) -> Vec<penelope_kernel::event::Event> {
     s.events
         .session_events(sid, 0)
         .await

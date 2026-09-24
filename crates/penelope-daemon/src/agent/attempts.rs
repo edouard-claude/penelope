@@ -53,7 +53,7 @@ impl Attempts {
     /// Journalise une tentative. Le partiel et l'erreur sont rédigés (#134). Au-delà du
     /// plafond, seule la ligne de journal reste. Un échec d'écriture ne change pas
     /// l'issue de l'appel : il ne coûte que la trace.
-    pub(super) async fn record(&self, s: &Services, spec: &TurnSpec, mut p: AttemptPayload) {
+    pub(super) async fn record(&self, s: &AgentServices, spec: &TurnSpec, mut p: AttemptPayload) {
         p.turn = spec.turn_id.clone();
         p.step = self.step.load(Ordering::SeqCst);
         // La requête qui suit ajoute encore la consigne : le pliage doit la retrouver

@@ -194,9 +194,9 @@ impl TurnGuard for BudgetGuard {
         let owner_session = exceeded.scope == penelope_kernel::budget::BudgetScope::Session
             && spec.run_id.is_none()
             && s.sessions
-                .get(&spec.session_id)
+                .kind(&spec.session_id)
                 .await?
-                .is_some_and(|x| x.kind == penelope_kernel::session::SessionKind::Chat);
+                .is_some_and(|k| k == penelope_kernel::session::SessionKind::Chat);
         if owner_session {
             return Ok(GuardVerdict::Suspend { approval_id });
         }

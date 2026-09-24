@@ -1,6 +1,5 @@
 use super::*;
 use crate::agent::pipeline::policy::{PolicyStage, Verdict, VerdictLayer};
-use crate::approval_mode::ApprovalMode;
 
 fn info(name: &str, risk: RiskClass, policy: Option<PolicyDecision>) -> CallInfo {
     CallInfo {
@@ -11,7 +10,7 @@ fn info(name: &str, risk: RiskClass, policy: Option<PolicyDecision>) -> CallInfo
     }
 }
 
-async fn verdict(s: &Services, sid: &str, info: &CallInfo, args: Value) -> Verdict {
+async fn verdict(s: &AgentServices, sid: &str, info: &CallInfo, args: Value) -> Verdict {
     PolicyStage::evaluate(s, &spec(sid), None, info, &args)
         .await
         .unwrap()
@@ -22,6 +21,12 @@ async fn verdict(s: &Services, sid: &str, info: &CallInfo, args: Value) -> Verdi
 #[tokio::test]
 async fn the_eight_policy_reasons_are_byte_identical() {
     let (_d, s, _p) = setup().await;
+    // Les modes de session en mémoire, gardés pour les fixer plus bas.
+    let modes = Arc::new(MemoryModes::new(s.config.clone()));
+    let s = AgentServices {
+        modes: modes.clone(),
+        ..(*s).clone()
+    };
     s.config
         .mutate("test", |c| {
             c.tools.shell_allow = vec!["cargo build".into()];
@@ -125,9 +130,7 @@ async fn the_eight_policy_reasons_are_byte_identical() {
 
     // 5. Mode « demander tout » : même une lecture du shell attend.
     let asking = session(&s).await;
-    crate::approval_mode::set(&s, &asking, Some(ApprovalMode::Ask))
-        .await
-        .unwrap();
+    modes.set(&asking, Some(ApprovalMode::Ask));
     let v = verdict(
         &s,
         &asking,
@@ -141,9 +144,7 @@ async fn the_eight_policy_reasons_are_byte_identical() {
 
     // 6. Mode « tout sauf le destructif ».
     let trusting = session(&s).await;
-    crate::approval_mode::set(&s, &trusting, Some(ApprovalMode::Auto))
-        .await
-        .unwrap();
+    modes.set(&trusting, Some(ApprovalMode::Auto));
     let v = verdict(
         &s,
         &trusting,

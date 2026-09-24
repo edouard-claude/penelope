@@ -34,7 +34,6 @@ use penelope_kernel::event::EventDraft;
 use penelope_kernel::ids::EffectId;
 use penelope_kernel::turn::TurnKind;
 use penelope_llm::CancelToken;
-use penelope_llm::types::ToolCall;
 use penelope_mcp::tasks::TaskState;
 use penelope_store::{Store, rusqlite::params};
 use penelope_tools::ToolOutcome;
@@ -375,18 +374,7 @@ async fn delivers_to_a_conversation(s: &Services, session_id: &str) -> bool {
     )
 }
 
-/// Ce qu'il faut savoir d'un appel pour en faire un job.
-pub struct JobRequest<'a> {
-    pub session_id: &'a str,
-    pub run_id: Option<&'a str>,
-    pub turn_id: Option<&'a str>,
-    pub call: &'a ToolCall,
-    /// Nom effectif de l'outil, après normalisation (`tool_call` compris).
-    pub tool: &'a str,
-    /// Effet déjà planifié, encore `planned` : c'est le job qui le passera
-    /// `dispatching` puis à son état final (§4.2).
-    pub effect: &'a EffectId,
-}
+pub use crate::agent::JobRequest;
 
 /// Transforme l'appel en job s'il le demande. `None` : rien à faire, l'appel suit le
 /// chemin ordinaire et le ledger reste sur sa trajectoire habituelle.
@@ -811,6 +799,7 @@ mod tests {
     use penelope_kernel::clock::TestClock;
     use penelope_kernel::turn::Turn;
     use penelope_llm::mock::{MockProvider, Scripted};
+    use penelope_llm::types::ToolCall;
     use std::sync::Arc;
 
     fn jobs() -> (Store, JobStore, TestClock) {

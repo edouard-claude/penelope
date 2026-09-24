@@ -46,7 +46,7 @@ impl PolicyStage {
     /// Évalue un appel sur ses arguments **effectifs** : par `tool_call`, ceux de l'appel
     /// interne (#110), sinon une règle « Toujours » couvrirait l'outil entier.
     pub(crate) async fn evaluate(
-        s: &Services,
+        s: &AgentServices,
         spec: &TurnSpec,
         workspace: Option<&std::path::Path>,
         info: &CallInfo,
@@ -97,7 +97,7 @@ impl PolicyStage {
             verdict.layer = VerdictLayer::DeclaredAllow;
             verdict.reason = why;
         }
-        match crate::approval_mode::of_session(s, &spec.session_id).await {
+        match s.modes.of_session(&spec.session_id).await {
             ApprovalMode::Ask
                 if verdict.decision == PolicyDecision::Auto
                     && (info.effective_name == "shell_exec" || info.risk != RiskClass::Read) =>

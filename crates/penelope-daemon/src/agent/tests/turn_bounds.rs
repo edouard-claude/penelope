@@ -14,7 +14,7 @@ fn meta() -> TurnMeta {
 
 /// Joue un tour de la file et rend son issue avec ses deux bornes.
 async fn bounded(
-    s: &Arc<Services>,
+    s: &Arc<AgentServices>,
     p: &Arc<MockProvider>,
     spec: &TurnSpec,
 ) -> (TurnOutcome, Value, Value) {
@@ -30,7 +30,7 @@ async fn bounded(
 }
 
 /// Le seul `turn.started` et le seul `turn.finished` de la session, dans cet ordre.
-async fn bounds(s: &Services, sid: &str) -> (Value, Value) {
+async fn bounds(s: &AgentServices, sid: &str) -> (Value, Value) {
     let events = s.events.session_events(sid, 0).await.unwrap();
     let pick = |kind: &str| {
         let found: Vec<_> = events.iter().filter(|e| e.kind == kind).collect();

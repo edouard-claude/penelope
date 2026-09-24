@@ -395,19 +395,20 @@ impl AgentLoop {
                 // L'appel qui demande l'arrière-plan sort du tour ici, et **seulement**
                 // ici : l'effet est planifié avant, le job le passe `dispatching` puis le
                 // clôt (§4.2, issue #204). Rien ne contourne le ledger.
-                if let Some(outcome) = crate::tool_jobs::maybe_spawn(
-                    s,
-                    execute,
-                    crate::tool_jobs::JobRequest {
-                        session_id: &spec.session_id,
-                        run_id: spec.run_id.as_deref(),
-                        turn_id: spec.turn_id.as_deref(),
-                        call,
-                        tool: &info.effective_name,
-                        effect: &id,
-                    },
-                )
-                .await?
+                if let Some(outcome) = s
+                    .jobs
+                    .maybe_spawn(
+                        execute,
+                        JobRequest {
+                            session_id: &spec.session_id,
+                            run_id: spec.run_id.as_deref(),
+                            turn_id: spec.turn_id.as_deref(),
+                            call,
+                            tool: &info.effective_name,
+                            effect: &id,
+                        },
+                    )
+                    .await?
                 {
                     return Ok(outcome);
                 }

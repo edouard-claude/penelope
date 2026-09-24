@@ -51,6 +51,16 @@ pub async fn previous_call(
     }))
 }
 
+/// Le port `CacheAudit` de la boucle : la table `usage` (épopée #208, T09).
+pub struct UsageAudit(pub std::sync::Arc<crate::runtime::Services>);
+
+#[async_trait::async_trait]
+impl crate::agent::CacheAudit for UsageAudit {
+    async fn previous_call(&self, session_id: &str) -> anyhow::Result<Option<PreviousCall>> {
+        previous_call(&self.0, session_id).await
+    }
+}
+
 /// Bloc de contexte volatil, tel qu'il précède le texte d'un message utilisateur.
 pub fn context_block(volatile: &str) -> String {
     format!("<contexte>\n{}\n</contexte>\n\n", volatile.trim())

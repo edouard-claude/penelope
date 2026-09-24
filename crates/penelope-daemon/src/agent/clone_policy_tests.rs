@@ -1,3 +1,4 @@
+use super::decisions::decide_approval;
 use super::*;
 
 #[test]
@@ -18,11 +19,10 @@ fn clone_always_rule_is_limited_to_the_source_origin() {
 #[tokio::test]
 async fn approving_clone_always_creates_only_a_scoped_rule() {
     let dir = tempfile::tempdir().unwrap();
-    let services = crate::runtime::Services::for_tests(
-        dir.path().to_path_buf(),
+    let services = AgentServices::for_tests(
+        dir.path(),
         Arc::new(penelope_kernel::clock::TestClock::default()),
     )
-    .await
     .unwrap();
     let approval = services
         .approvals
