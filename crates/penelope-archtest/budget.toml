@@ -228,7 +228,6 @@ required = [
 "crates/penelope-daemon/src/executor/tools/skills_workflows.rs" = 1   # découpage (lot G) : la mention suit son code
 "crates/penelope-daemon/src/executor/tools/schedules_messaging.rs" = 7   # découpage (lot G) : la mention suit son code
 "crates/penelope-daemon/src/executor/mod.rs" = 5   # découpage (lot G) : la mention suit son code
-"crates/penelope-daemon/src/agent/pipeline.rs" = 1   # EffectKind::Telegram (effect_kind), venu d'agent.rs au découpage (lot F) ; disparaît avec T37
 "crates/penelope-daemon/src/tool_jobs.rs" = 6   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/scheduler.rs" = 32
 "crates/penelope-kernel/src/session.rs" = 37

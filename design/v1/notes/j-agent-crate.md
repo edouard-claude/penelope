@@ -51,7 +51,10 @@ valeurs, construites par le même code : identiques octet pour octet par constru
   `[channel.allowed]` `"crates/penelope-daemon/src/agent/pipeline.rs" = 1`
   (`EffectKind::Telegram` dans `effect_kind`) doit devenir
   `"crates/penelope-agent/src/pipeline.rs" = 1` : même budget, chemin déplacé.
-  `UPDATE_BUDGET` ne renomme pas ; demandé au chef d'équipe.
+  `UPDATE_BUDGET=1` a retiré l'ancienne clé (fichier absent) et n'ajoute pas la
+  nouvelle : la remettre sous son nouveau chemin est une hausse depuis 0, donc une
+  dérogation laissée à l'intégrateur. Ligne prête :
+  `"crates/penelope-agent/src/pipeline.rs" = 1   # EffectKind::Telegram (effect_kind), sorti du daemon avec la boucle (lot J, T10) ; disparaît avec T37`.
 - Aucun fichier au-dessus de 800 lignes, aucun `allow` nouveau.
 
 ## Notes de version
