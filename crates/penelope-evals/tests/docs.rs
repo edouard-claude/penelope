@@ -439,16 +439,23 @@ fn the_context_page_follows_the_code() {
     let key_re =
         regex::Regex::new(r"`((?:context|budget|models|memory|sandbox|tools)\.[a-z_.]+)`").unwrap();
     let value_re = regex::Regex::new(r"`([a-z_]+\.[a-z_.]+)` = (`[^`]+`)").unwrap();
-    // Un nom d'événement a la forme d'une clé : il existe s'il est émis par le daemon.
-    let mut daemon_source = String::new();
-    for e in std::fs::read_dir(root().join("crates/penelope-daemon/src"))
-        .unwrap()
-        .flatten()
-    {
-        if e.path().extension().is_some_and(|x| x == "rs") {
-            daemon_source.push_str(&read(&e.path()));
+    // Un nom d'événement a la forme d'une clé : il existe s'il est émis par le daemon,
+    // sous-modules compris (les tests sortis dans `<module>/tests.rs` aussi).
+    fn walk(dir: &Path, out: &mut String) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push_str(&read(&p));
+            }
         }
     }
+    let mut daemon_source = String::new();
+    walk(
+        &root().join("crates/penelope-daemon/src"),
+        &mut daemon_source,
+    );
     let raw = read(&page);
     let mut wrong = Vec::new();
     for line in prose(&raw) {
