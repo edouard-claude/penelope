@@ -4,6 +4,7 @@
 
 pub mod anchors;
 pub mod compaction;
+pub mod derive;
 pub mod engine;
 pub mod journal;
 pub mod lcm;
