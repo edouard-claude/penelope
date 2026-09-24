@@ -261,8 +261,22 @@ pub fn dependency_rules() -> BTreeMap<&'static str, Vec<&'static str>> {
     // ni une crate extraite du daemon, qui sont au-dessus de lui. `penelope-telegram` en
     // sort avec T36 (gabarits et actions quittent `Services`).
     m.insert("penelope-app", APP_ALLOWED_DEPS.to_vec());
+    // L'hôte MCP (T25) : le socle et les crates métier dont il se sert, jamais le daemon,
+    // qui le construit.
+    m.insert("penelope-mcp-host", MCP_HOST_ALLOWED_DEPS.to_vec());
     m
 }
+
+/// Ce dont `penelope-mcp-host` peut dépendre : le socle et six crates métier.
+pub const MCP_HOST_ALLOWED_DEPS: &[&str] = &[
+    "penelope-app",
+    "penelope-kernel",
+    "penelope-store",
+    "penelope-platform",
+    "penelope-observe",
+    "penelope-llm",
+    "penelope-mcp",
+];
 
 /// Ce dont `penelope-app` peut dépendre : les treize crates métier.
 pub const APP_ALLOWED_DEPS: &[&str] = &[
@@ -412,6 +426,7 @@ mod tests {
             "penelope-memory",
             "penelope-daemon",
             "penelope-app",
+            "penelope-mcp-host",
             "penelope-cli",
         ] {
             assert!(names.contains(&expected), "crate manquant : {expected}");
@@ -456,6 +471,18 @@ mod tests {
             !app.internal_deps.contains("penelope-daemon"),
             "penelope-app est sous le daemon : {:?}",
             app.internal_deps
+        );
+    }
+
+    /// T25 : l'hôte MCP ne connaît pas le daemon, qui le construit.
+    #[test]
+    fn the_mcp_host_crate_does_not_depend_on_the_daemon() {
+        let all = crates();
+        let host = all.iter().find(|c| c.name == "penelope-mcp-host").unwrap();
+        assert!(
+            !host.internal_deps.contains("penelope-daemon"),
+            "penelope-mcp-host est sous le daemon : {:?}",
+            host.internal_deps
         );
     }
 

@@ -436,6 +436,7 @@ pub const CHANNEL_AGNOSTIC_CRATES: &[&str] = &[
     "penelope-workflow",
     "penelope-daemon",
     "penelope-app",
+    "penelope-mcp-host",
     "penelope-agent",
     "penelope-executor",
     "penelope-vault",
