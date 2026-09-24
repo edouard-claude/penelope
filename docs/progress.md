@@ -3,15 +3,131 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 23 septembre 2026.
+Dernière mise à jour : 24 septembre 2026.
 
 ## Version 1 (branche v1)
 
-Ce bloc recevra les sections `### 1.0.0-alpha.N` de la branche `v1` (décision
+Ce bloc reçoit les sections `### 1.0.0-alpha.N` de la branche `v1` (décision
 [0015](decisions/0015-gel-0.17-et-branche-v1.md), épopée #208) : un lot par section, un
-bump par lot, jamais de tag ni de release. Il reste vide tant que la branche n'existe pas.
-Les sections `### 0.17.x` restent dans le bloc ci-dessous et y arrivent par les fusions de
+bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dans le bloc
+ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
+dans `design/v1/`.
+
+### 1.0.0-alpha.1
+
+Premier lot de la branche `v1` : fusion de cinq branches développées en parallèle dans la
+nuit du 23 au 24 septembre, chacune dans son worktree et son périmètre de fichiers. Le gel
+de la dette (lot A de l'épopée #208 : #209, #210, #212, #213, #214, #216 ; #211 et #215
+suivent) et deux filets du lot B. Point de départ : la `0.17.59` de `main`. Ce lot ne
+change aucun comportement de production : il pose des règles, des gardes et des tests.
+
+#### Le gel écrit là où les sessions le lisent (#216)
+
+- **`CLAUDE.md`** : sections « Gel de la dette » (règles R1 à R8 et frontière canal/cœur
+  en une phrase chacune, `UPDATE_BUDGET=1`, `scripts/check-budget.sh`, le trailer
+  `Dérogation-budget: #N` et ses trois cas légitimes, « un nouveau module ou une
+  fonctionnalité va dans `v1` », « aucun tag `v1*` avant la bascule ») et « Travailler sur
+  v1 » (versions `1.0.0-alpha.N` jamais taguées, un seul `progress.md`, fusion `main` →
+  `v1` après chaque release, règle des 24 h). `AGENTS.md` ne fait plus que renvoyer à
+  `CLAUDE.md`.
+- **Modèle de pull request** : trois cases de gel (budget inchangé ou abaissé, aucun
+  nouveau module dans le daemon, scénario ajouté ou mis à jour si le visible change).
+- **`.github/workflows/README.md`** : trois workflows, tests sur Linux et macOS, tag posé
+  par la CI (#147) ; la section « Poser un tag » à la main disparaît.
+- **Décision [0015](decisions/0015-gel-0.17-et-branche-v1.md)** : gel de la 0.17 et
+  branche `v1`. La table des décisions passe de 0008 à 0015 (0012 à 0014 et 0016
+  réservés).
+- **Deux incohérences corrigées** : le noyau d'outils compte 16 entrées (19 définitions
+  avec les méta-outils), pas 17, depuis que `workflow_start` est passé à la demande
+  (0.17.56) ; `telegram.max_fragments` n'est plus « sans effet », elle borne les avis
+  internes (digest, veille) depuis la 0.17.27.
+
+#### Gardes de version pour deux branches (#212)
+
+La V1 vit sur une branche `v1` versionnée `1.0.0-alpha.N`, jamais taguée, pendant que la
+0.17 continue de livrer sur `main`. Trois mécanismes ne le supportaient pas :
+`parse_version` coupait le suffixe, donc un tag `v1.0.0-alpha.1` posé par erreur aurait
+valu `1.0.0 > 0.17.59` et toutes les instances 0.17 l'auraient installé à leur prochaine
+vérification ; le test `docs` n'acceptait que trois entiers ; la CI ne tournait que sur
 `main`.
+
+`penelope upgrade` ne juge plus jamais une version à suffixe « plus récente » : elle sort
+de la liste des candidates et ne s'installe que par `--tag` (c'est ainsi que la
+`1.0.0-rc.1` s'installera à la bascule) ; une instance dont le binaire est lui-même une
+pré-release n'est pas rétrogradée vers une 0.17. Le test `docs` lit `x.y.z-<pré>` dans
+l'ordre semver (`1.0.0-alpha.2 < 1.0.0-alpha.10 < 1.0.0-rc.1 < 1.0.0`) et refuse un bloc
+`1.0.0-alpha.N` quand le workspace est en 0.17 (« section V1 sur main »). `ci.yml` tourne
+sur `main` et `v1`, vérifie que chaque branche porte sa ligne de version (`0.` sur `main`,
+`1.0.0-` sur `v1`) et réserve toujours `livraison` à `main` ; `release.yml` refuse tout
+tag `v1*` tant que la variable de dépôt `V1_RELEASES` ne vaut pas `1`, `workflow_dispatch`
+compris. Le `workflow_dispatch` réel avec `tag=v1.0.0-alpha.0` reste à rejouer par le
+propriétaire.
+
+#### Le gel de la dette est mécanique : budget.toml, huit règles, un cliquet (#209, #210, #213, #214)
+
+Rien n'arrêtait la croissance : 42 fichiers au-dessus de 1 000 lignes portent 56 % du
+workspace, `penelope-daemon` en fait 48 % à lui seul, 41 de ses fichiers nomment le type
+`Daemon` et le cœur nomme Telegram dans 32 fichiers hors passerelle. `penelope-archtest`
+vérifiait les dépendances, les motifs propres à un OS et `unsafe`, jamais une taille, un
+module ou un couplage, et ne lisait que `src/`.
+
+`crates/penelope-archtest/budget.toml` fige tout cela sur la mesure : plafond de 1 000
+lignes par fichier source (tests inline compris) et 1 500 par fichier de tests, liste de
+référence des 42 fichiers en dépassement avec leur borne, `penelope-daemon/src` à 81 168
+lignes, liste blanche de ses 62 modules, budget d'occurrences de `Daemon` par fichier et
+`impl Daemon` dans quatre fichiers, allows de `clippy::too_many_lines` comptés, les 70
+critères `ca_*` figés (renommer interdit, déplacer permis), et la frontière canal / cœur
+avec sa liste par fichier. Chaque règle a son test sur le workspace et son test de
+détecteur ; `archtest` parcourt désormais `src/`, `tests/` et `examples/`. Les nombres ne
+montent jamais : `UPDATE_BUDGET=1 cargo test -p penelope-archtest` resserre le fichier
+vers le bas seulement, et `scripts/check-budget.sh`, à brancher en CI au prochain lot,
+refuse toute remontée par rapport à la base git, sauf un commit portant
+`Dérogation-budget: #<issue>`. Un seul relevé manuel dans ce lot : `upgrade.rs` passe de
+1 926 à 2 034 lignes dans la liste, parce que #212 a ajouté ses tests avant le gel.
+
+#### Filets de migration et de configuration (#208, lot B)
+
+- **Une vraie base 0.17 dans le dépôt** : `crates/penelope-store/tests/fixtures/penelope-0.17.59.db`
+  (216 064 octets, pages de 1 Kio), produite par la 0.17.59 : session `chat` liée à
+  Telegram, douze messages dont deux résultats d'outil, index plein texte, tour terminé,
+  nœud LCM actif, contexte figé, sept événements chaînés par `EventLog`, un effet
+  `completed` par `EffectLedger`, usage et requête, souvenir avec provenance,
+  planification, outbox envoyée, approbation décidée, règle, clés `kv`, génération de
+  configuration. Le test `a_real_0_17_database_migrates_and_reads_back` ouvre une copie par
+  `Store::open` et vérifie les migrations, le schéma (identique à une base neuve, table
+  par table et index par index), les 45 tables, chaque donnée semée, la chaîne
+  d'événements avant et après un événement de plus, l'intégrité. Jusque-là
+  `upgrade_from_each_previous_version` ne rejouait que `0001`, sans base réelle.
+- **Régénération** : `UPDATE_FIXTURE=1 cargo test -p penelope-store --test migration_from_0_17 -- --ignored`,
+  une fois, quand la 0.17 finale est connue (`tests/fixtures/README.md`).
+  `penelope-kernel` en dev-dependency de `penelope-store` pour semer et vérifier la
+  chaîne par les vraies primitives ; le graphe livré ne change pas.
+- **Configuration 0.17 complète relue** : `crates/penelope-kernel/tests/fixtures/config-0.17.toml`
+  porte les 222 clés de la référence générée d'`install-headless.md` ; `config_0_17.rs`
+  la charge sans clé inconnue, valide, sans contradiction, et refuse que le fichier prenne
+  du retard sur la référence (la clé manquante est nommée).
+
+#### Scénarios de session rejouables sans clé (#208, lot B)
+
+- **Le format** (règle R11) : un répertoire `crates/penelope-evals/scenarios/<nom>/` par
+  scénario, avec `scenario.toml` (messages, commandes `/compact` `/fork` `/rewind`
+  `/purge`, avance de l'horloge, redémarrage, crash, approbation, configuration patchée,
+  fichiers semés, serveur MCP simulé), `model.jsonl` (une réponse scriptée par appel de
+  modèle) et deux attendus régénérés par `UPDATE_SCENARIOS=1` : `expected.jsonl`, le monde
+  après le run (sessions, messages, résumés, événements, tours, effets, requêtes LLM,
+  approbations, artefacts, usage, fichiers, audit), et `surface.jsonl`, chaque requête vue
+  par le modèle. Identifiants, horodatages, chemins et hachages deviennent des jetons
+  (`{{session:1}}`, `{{turn:1}}`, `{{ts+600s}}`, `{{home}}`, `{{hash}}`) : deux rejeux
+  sont identiques octet pour octet, un test le vérifie.
+- **Quinze scénarios** verts sans clé dans `cargo test --workspace` (suite `scenarios`) :
+  tour simple, appel d'outil de lecture, lectures parallèles, niveau 1 et admission de
+  groupe, compaction manuelle puis prolongation, session froide, dépassement prouvé, flux
+  coupé, réponse vide relancée, messages fusionnés, fork, rewind, purge, crash en deux
+  vies, approbation après redémarrage. Un diff nomme le scénario, le groupe de lignes ou
+  l'appel qui divergent et dit comment régénérer.
+- **`RECORD_SCENARIO=<nom>`** enveloppe le vrai fournisseur et réécrit `model.jsonl` :
+  implémenté, pas encore exercé (aucune clé cette nuit).
+- `penelope-evals` dépend de `toml`, `tempfile` et `async-trait`, déjà dans le workspace.
 
 ## Résumé
 
