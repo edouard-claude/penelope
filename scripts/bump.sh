@@ -6,7 +6,8 @@
 # Réécrit les seize lignes de `Cargo.toml` (la version du workspace et les quinze
 # dépendances internes), met `Cargo.lock` à jour, vérifie que `docs/progress.md` a bien la
 # section de cette version, et commite « Version x.y.z ». Le tag et la release sont posés
-# par la CI : rien à faire de plus.
+# par la CI : rien à faire de plus. Une version à suffixe (`1.0.0-alpha.N`, branche v1)
+# n'a ni tag ni release (#212).
 set -eu
 
 V="${1:-}"
@@ -39,4 +40,9 @@ cargo update -w --offline
 git add Cargo.toml Cargo.lock
 git commit -m "Version ${V}"
 echo
-echo "Version ${V} commitée. 'git push' : la CI pose le tag v${V} et publie la release."
+case "$V" in
+    # Une version à suffixe vit sur la branche v1, jamais taguée (#212) : `livraison` est
+    # réservé à main et release.yml refuse un tag v1* avant la bascule.
+    *-*) echo "Version ${V} commitée. 'git push' : branche v1 : aucun tag, aucune release." ;;
+    *) echo "Version ${V} commitée. 'git push' : la CI pose le tag v${V} et publie la release." ;;
+esac
