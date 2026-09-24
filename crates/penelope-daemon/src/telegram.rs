@@ -1077,7 +1077,7 @@ impl TelegramGateway {
                     "conversation Telegram non autorisée ignorée : \
                      telegram.allowed_chats"
                 );
-                record_seen_chat(&s, chat_id, &chat_type, &title).await;
+                record_seen_chat(s, chat_id, &chat_type, &title).await;
             }
             Incoming::Ignored { reason, .. } => {
                 tracing::debug!(%reason, "update ignoré");
