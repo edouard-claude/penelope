@@ -9,8 +9,8 @@
 
 use crate::executor::Messenger;
 use crate::ports::McpAdmin;
-use crate::ports::Slot;
-use crate::runtime::{Daemon, Services};
+use crate::ports::{Slot, Supervision};
+use crate::runtime::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_mcp::ServerConfig;
 use penelope_mcp::oauth::{
@@ -205,12 +205,11 @@ fn token_client_auth(
 
 /// Prépare une autorisation : l'URL à ouvrir et la demande mémorisée.
 pub async fn start(
-    d: &Daemon,
+    s: &Services,
     cfg: &ServerConfig,
     www_authenticate: Option<&str>,
 ) -> Result<AuthStart, String> {
     cfg.validate().map_err(|e| e.to_string())?;
-    let s = &d.services;
     if !matches!(cfg.effective_transport(), "http" | "sse") {
         return Err(format!(
             "`{}` n'est pas un serveur HTTP : l'autorisation OAuth ne s'applique pas",
@@ -419,8 +418,7 @@ pub async fn start(
 
 /// Termine une autorisation à partir de l'URL de retour (collée ou reçue). Renvoie le
 /// nom du serveur autorisé.
-pub async fn complete(d: &Daemon, callback: &str) -> Result<String, String> {
-    let s = &d.services;
+pub async fn complete(s: &Services, callback: &str) -> Result<String, String> {
     let cb = oauth::parse_callback(callback);
     let state = cb.state.clone().ok_or("adresse de retour sans `state`")?;
     let raw = s
@@ -579,14 +577,21 @@ pub fn prompt_text(a: &AuthStart) -> String {
 
 // ------------------------------------------------------------------ callback local
 
+/// Ce que le serveur de retour reçoit de celui qui le lance (épopée #208, T25) : les
+/// services, le canal du propriétaire et l'administration MCP, branchés après le
+/// démarrage (d'où les `Slot`), et la supervision pour le signal d'arrêt.
+#[derive(Clone)]
+pub struct AuthContext {
+    pub services: Arc<Services>,
+    pub messenger: Slot<dyn Messenger>,
+    pub mcp_admin: Slot<dyn McpAdmin>,
+    pub supervision: Supervision,
+}
+
 /// Serveur de retour local (`127.0.0.1:<callback_port>`) : reçoit le retour OAuth quand le
 /// navigateur y a accès (tunnel SSH, `public_callback`), et sert le document CIMD.
-pub async fn callback_server(
-    d: Arc<Daemon>,
-    mcp: Slot<dyn McpAdmin>,
-    messenger: Slot<dyn Messenger>,
-) {
-    let port = d.services.config.config().mcp.callback_port;
+pub async fn callback_server(ctx: AuthContext) {
+    let port = ctx.services.config.config().mcp.callback_port;
     let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
         Ok(l) => l,
         Err(e) => {
@@ -594,14 +599,14 @@ pub async fn callback_server(
             return;
         }
     };
-    while !d.handle.is_shutting_down() {
+    while !ctx.supervision.handle.is_shutting_down() {
         let accepted = tokio::time::timeout(Duration::from_secs(1), listener.accept()).await;
         let Ok(Ok((stream, _))) = accepted else {
             continue;
         };
-        let (d2, mcp, messenger) = (d.clone(), mcp.clone(), messenger.clone());
+        let ctx = ctx.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_callback(&d2, &mcp, &messenger, stream).await {
+            if let Err(e) = handle_callback(&ctx, stream).await {
                 tracing::debug!(error = %e, "requête du callback OAuth");
             }
         });
@@ -609,9 +614,7 @@ pub async fn callback_server(
 }
 
 async fn handle_callback(
-    d: &Arc<Daemon>,
-    mcp: &Slot<dyn McpAdmin>,
-    messenger: &Slot<dyn Messenger>,
+    ctx: &AuthContext,
     mut stream: tokio::net::TcpStream,
 ) -> std::io::Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -626,16 +629,17 @@ async fn handle_callback(
         .and_then(|l| l.split_whitespace().nth(1))
         .unwrap_or("/")
         .to_string();
-    let cfg = d.services.config.config();
+    let cfg = ctx.services.config.config();
     let cimd_path = cfg
         .mcp
         .cimd_url
         .split_once("://")
         .and_then(|(_, rest)| rest.find('/').map(|i| rest[i..].to_string()));
     let (status, ctype, body) = if target.starts_with("/oauth/callback") {
-        match complete(d, &target).await {
+        match complete(&ctx.services, &target).await {
             Ok(server) => {
-                reconnect_and_tell(&d.services, mcp.get(), messenger.get(), &server).await;
+                let (mcp, messenger) = (ctx.mcp_admin.get(), ctx.messenger.get());
+                reconnect_and_tell(&ctx.services, mcp, messenger, &server).await;
                 (
                     "200 OK",
                     "text/html; charset=utf-8",

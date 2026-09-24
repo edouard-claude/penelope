@@ -142,7 +142,7 @@ impl Rpc {
             method::MCP_AUTH => {
                 let name = required_str(p, "name")?;
                 if let Some(callback) = p.get("callback").and_then(|c| c.as_str()) {
-                    let server = crate::mcp_auth::complete(&self.daemon, callback)
+                    let server = crate::mcp_auth::complete(&self.daemon.services, callback)
                         .await
                         .map_err(anyhow::Error::msg)?;
                     if server != name {
@@ -167,7 +167,7 @@ impl Rpc {
                     .config_of(&name)
                     .await
                     .ok_or_else(|| anyhow::anyhow!("serveur MCP `{name}` inconnu"))?;
-                let start = crate::mcp_auth::start(&self.daemon, &cfg, None)
+                let start = crate::mcp_auth::start(&self.daemon.services, &cfg, None)
                     .await
                     .map_err(anyhow::Error::msg)?;
                 let mut v = serde_json::to_value(&start)?;

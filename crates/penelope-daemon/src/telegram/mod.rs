@@ -544,7 +544,7 @@ impl TelegramGateway {
             }
             Incoming::OAuthCallback { chat_id, url, .. } => {
                 // Adresse de retour collée (§8.5, `paste_back`) : elle ne sert qu'une fois.
-                match crate::mcp_auth::complete(&self.daemon, &url).await {
+                match crate::mcp_auth::complete(&self.daemon.services, &url).await {
                     Ok(server) => {
                         let d = &self.daemon;
                         let (mcp, m) = (d.hooks.mcp_supervisor(), d.hooks.messenger());

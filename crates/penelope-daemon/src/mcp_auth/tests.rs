@@ -139,7 +139,7 @@ async fn authorization_code_flow_with_paste_back_and_refresh() {
             .await
             .unwrap(),
     );
-    let d = Daemon::from_services(s.clone());
+    let d = s.clone();
     let (base, seen) = fake_authorization_server().await;
     let cfg = ServerConfig {
         name: "suivi".into(),
@@ -279,7 +279,7 @@ async fn confidential_flow(method: &'static str) {
         .secrets
         .set("mcp_client_secret", "secret-test")
         .unwrap();
-    let d = Daemon::from_services(s.clone());
+    let d = s.clone();
     let (base, seen) = fake_authorization_server_with_auth(true, Some(method)).await;
     let cfg = ServerConfig {
         name: format!("confidentiel-{method}"),
@@ -449,7 +449,7 @@ async fn scopes_fall_back_to_those_advertised_by_the_resource() {
             .await
             .unwrap(),
     );
-    let d = Daemon::from_services(s.clone());
+    let d = s.clone();
     let (base, _) = fake_authorization_server_opts(true).await;
     let cfg = ServerConfig {
         name: "slack".into(),
@@ -479,7 +479,7 @@ async fn a_server_without_registration_names_the_command_to_run() {
             .await
             .unwrap(),
     );
-    let d = Daemon::from_services(s.clone());
+    let d = s.clone();
     let (base, _) = fake_authorization_server_opts(true).await;
     let cfg = ServerConfig {
         name: "slack".into(),
@@ -511,7 +511,7 @@ async fn the_callback_host_is_configurable() {
             Ok(vec!["mcp.callback_host".into()])
         })
         .unwrap();
-    let d = Daemon::from_services(s.clone());
+    let d = s.clone();
     let (base, seen) = fake_authorization_server_opts(true).await;
     let cfg = ServerConfig {
         name: "slack".into(),

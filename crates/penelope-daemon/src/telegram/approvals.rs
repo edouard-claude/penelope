@@ -436,7 +436,7 @@ impl TelegramGateway {
                 )
                 .await;
         };
-        let start = match crate::mcp_auth::start(d, &cfg, None).await {
+        let start = match crate::mcp_auth::start(s, &cfg, None).await {
             Ok(st) => st,
             Err(e) => {
                 return self

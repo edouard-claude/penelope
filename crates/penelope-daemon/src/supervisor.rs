@@ -196,10 +196,13 @@ impl Daemon {
                 Box::pin(crate::codex_auth::refresh_loop(s, messenger)) as BoxLoop
             }),
             supervised("mcp.oauth_callback", |d| {
-                let (mcp, m) = (d.hooks.mcp_supervisor.clone(), d.hooks.messenger.clone());
-                Box::pin(async move {
-                    crate::mcp_auth::callback_server(d, mcp, m).await;
-                }) as BoxLoop
+                let ctx = crate::mcp_auth::AuthContext {
+                    services: d.services.clone(),
+                    messenger: d.hooks.messenger.clone(),
+                    mcp_admin: d.hooks.mcp_supervisor.clone(),
+                    supervision: d.supervision(),
+                };
+                Box::pin(crate::mcp_auth::callback_server(ctx)) as BoxLoop
             }),
             tokio::spawn(crate::upgrade::confirm_when_healthy(
                 self.services.clone(),
@@ -581,7 +584,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
             let Some(cfg) = sup.config_of(&st.name).await else {
                 continue;
             };
-            match crate::mcp_auth::start(d, &cfg, None).await {
+            match crate::mcp_auth::start(&d.services, &cfg, None).await {
                 Ok(start) => {
                     if let Some(m) = d.hooks.messenger() {
                         let origin = crate::helpers::owner_origin_of(&d.services);
