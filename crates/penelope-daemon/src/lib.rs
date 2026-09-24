@@ -7,7 +7,6 @@ pub mod approval_mode;
 pub mod audit;
 pub mod backup;
 pub mod budget_alert;
-pub mod bus;
 pub mod cache_audit;
 pub mod codex_auth;
 pub mod codex_quota;
@@ -17,7 +16,6 @@ pub mod concepts;
 pub mod conversation;
 pub mod doctor;
 pub mod dream;
-pub mod elicitation;
 pub mod embeddings;
 pub mod engine;
 pub mod episodes;
@@ -70,6 +68,9 @@ pub mod voice;
 #[cfg(test)]
 mod wiki_e2e;
 pub mod workflow;
+
+// Modules descendus dans `penelope-app` (T21), réexportés sous leur ancien chemin.
+pub use penelope_app::{bus, elicitation};
 
 pub use agent::{AgentLoop, TurnOutcome};
 pub use ports::Handle;

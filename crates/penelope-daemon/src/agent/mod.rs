@@ -31,7 +31,6 @@ mod executor;
 mod guards;
 mod loop_abort;
 mod model;
-mod outcome;
 mod pending;
 mod pipeline;
 mod rules;
@@ -49,8 +48,8 @@ use guards::{TurnContext, default_chain, run_guards};
 pub use loop_abort::{LOOP_STOP_NOTE, last_result_of, split_choices};
 #[cfg(test)]
 use model::fit_modalities;
-pub use outcome::{NullSink, RecordingSink, TurnEvent, TurnOutcome, TurnSink};
 pub use pending::pending_calls;
+pub use penelope_app::outcome::{NullSink, RecordingSink, TurnEvent, TurnOutcome, TurnSink};
 use pipeline::Pending;
 pub(crate) use pipeline::{effect_kind, server_of, without_intention};
 pub use rules::{MAX_FAMILIES_PER_CLICK, always_creates_no_rule};

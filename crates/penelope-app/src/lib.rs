@@ -5,3 +5,7 @@
 //! crates métier, jamais du daemon ni de ce qui en sortira.
 
 #![forbid(unsafe_code)]
+
+pub mod bus;
+pub mod elicitation;
+pub mod outcome;

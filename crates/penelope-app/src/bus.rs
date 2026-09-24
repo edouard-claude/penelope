@@ -6,7 +6,7 @@
 //! - l'**issue** d'un tour passe aussi par des attentes nominatives et un petit cache :
 //!   elle n'est jamais perdue, même si l'attente arrive après la fin du tour.
 
-use crate::agent::{TurnEvent, TurnOutcome};
+use crate::outcome::{TurnEvent, TurnOutcome};
 use penelope_llm::CancelToken;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
