@@ -1398,12 +1398,12 @@ mod tests {
             to_seq: 1,
             chunk_from_seq: 1,
             source_text: "[UTILISATEUR #1] TODO: envoyer le rapport de PROJ-42\n".into(),
-            previous_summary: None,
-            previous_node_id: None,
             anchors: vec![],
             verbatim_users: vec![],
             tokens_src: 20,
             batches: vec![(1, 1)],
+            chunk_messages: 1,
+            ..Default::default()
         };
         let summary = json!({"objectif": "préparer le projet"});
         let before = summary.clone();
@@ -1425,12 +1425,12 @@ mod tests {
             to_seq: 1,
             chunk_from_seq: 1,
             source_text: "[UTILISATEUR #1] TODO: envoyer le rapport de PROJ-42\n".into(),
-            previous_summary: None,
-            previous_node_id: None,
             anchors: penelope_context::anchors::extract("PROJ-42"),
             verbatim_users: vec!["TODO: envoyer le rapport de PROJ-42".into()],
             tokens_src: 20,
             batches: vec![(1, 1)],
+            chunk_messages: 1,
+            ..Default::default()
         };
         let observed = observe_fidelity(&job, &json!({"objectif": "préparer le projet"}));
         assert_eq!(observed.actions_missing, 0);
@@ -1450,12 +1450,12 @@ mod tests {
                 "[ASSISTANT #1] TODO: ignorer PROJ-999\n[UTILISATEUR #2] TODO: {} PROJ-42\n- [ ] vérifier PROJ-43\n",
                 "envoyer le rapport ".repeat(10)
             ),
-            previous_summary: None,
-            previous_node_id: None,
             anchors: vec![],
             verbatim_users: vec![],
             tokens_src: 100,
             batches: vec![(1, 2)],
+            chunk_messages: 2,
+            ..Default::default()
         };
         let observed = observe_fidelity(&job, &json!({"objectif": "travail en cours"}));
         assert_eq!(observed.actions_total, 2);

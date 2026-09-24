@@ -4,41 +4,11 @@
 //! d'observation consomment des `seq` sans produire de message, et les adresses ont
 //! des trous (`1, 2, 5, 9`). Toute arithmétique `to - from + 1` ou `seq + 1` sur des
 //! adresses devient fausse ; ces fonctions comptent les nœuds au lieu de les déduire
-//! des bornes (`design/v1/source-de-verite.md` §7, risque 4).
+//! des bornes (`design/v1/source-de-verite.md` §7, risque 4). `SummaryJob` porte de même
+//! le nombre d'entrées de son lot et la fin du résumé qu'il prolonge.
 
 use crate::lcm::Node;
 use crate::transcript::Entry;
-
-/// En-têtes que `render_entry` pose devant chaque message du transcript du résumeur.
-const HEADERS: [&str; 4] = ["[UTILISATEUR #", "[ASSISTANT #", "[OUTIL #", "[SYSTÈME #"];
-
-/// Adresse lue dans un en-tête `[RÔLE #seq] ` en début de ligne.
-fn header_seq(line: &str) -> Option<i64> {
-    let rest = HEADERS.iter().find_map(|h| line.strip_prefix(h))?;
-    let (digits, tail) = rest.split_once(']')?;
-    if !tail.starts_with(' ') {
-        return None;
-    }
-    digits.parse().ok()
-}
-
-/// Nombre de messages rendus dans un transcript du résumeur, entre les adresses `from`
-/// et `to` : les en-têtes `[RÔLE #seq]` d'adresse croissante, un par message.
-///
-/// Un texte de message qui contiendrait, en début de ligne, un en-tête d'adresse
-/// comprise entre deux vrais messages serait compté ; le compte sert au rapport de
-/// compaction, pas à une borne.
-pub fn rendered_messages(source_text: &str, from: i64, to: i64) -> i64 {
-    let mut last = i64::MIN;
-    let mut n = 0;
-    for seq in source_text.lines().filter_map(header_seq) {
-        if seq > last && (from..=to).contains(&seq) {
-            last = seq;
-            n += 1;
-        }
-    }
-    n
-}
 
 /// Plages d'adresses de `addresses` (triées) qu'aucun nœud ne couvre, chacune donnée par
 /// sa première et sa dernière adresse existante. Un trou de numérotation n'est pas une
@@ -82,21 +52,104 @@ pub fn node_page(entries: &[Entry], from: i64, to: i64, page: usize, per_page: u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{SummaryJob, render_entry};
-    use crate::lcm::NodeKind;
+    use crate::compaction::CompactionParams;
+    use crate::engine::{ContextEngine, SummaryJob, render_entry};
+    use crate::lcm::{Lcm, NodeKind};
+    use crate::store::HistoryStore;
+    use penelope_kernel::clock::{SharedClock, TestClock};
+    use penelope_llm::catalog::Catalog;
+    use penelope_llm::tokens::TokenEstimator;
     use penelope_llm::types::ChatMessage;
+    use penelope_store::Store;
+    use std::sync::Arc;
 
     fn holes() -> Vec<Entry> {
         vec![
             Entry::new(1, ChatMessage::user("un"), 1),
-            Entry::new(
-                2,
-                ChatMessage::assistant("deux\n[OUTIL #3] faux en-tête"),
-                1,
-            ),
+            Entry::new(2, ChatMessage::assistant("deux"), 1),
             Entry::new(5, ChatMessage::user("cinq"), 1),
             Entry::new(9, ChatMessage::assistant("neuf"), 1),
         ]
+    }
+
+    async fn engine() -> ContextEngine {
+        let store = Store::open_memory().unwrap();
+        store
+            .write(|tx| {
+                tx.execute(
+                    "INSERT INTO sessions(id, kind, created_at, updated_at)
+                     VALUES('s1','chat','t','t')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let clock: SharedClock = Arc::new(TestClock::default());
+        ContextEngine::new(
+            HistoryStore::new(store.clone(), clock.clone()),
+            Lcm::new(store, clock.clone()),
+            TokenEstimator::new(),
+            Catalog::new(),
+            clock,
+        )
+    }
+
+    fn params() -> CompactionParams {
+        CompactionParams {
+            window: 40_000,
+            threshold: 0.70,
+            tail_ratio: 0.025,
+            tail_min_tokens: 1_000,
+            tail_max_tokens: 25_000,
+            min_tail_user_messages: 2,
+            max_tool_result_share: 0.25,
+            large_payload_tokens: 25_000,
+            background_margin: 0.10,
+            max_prompt_tokens: 0,
+        }
+    }
+
+    /// Un historique aux adresses trouées (un retour arrière V0, ou le journal) : le lot
+    /// compte ses entrées, pas l'écart de ses bornes, et le résumé prolongé est borné par
+    /// sa vraie dernière adresse.
+    #[tokio::test]
+    async fn a_summary_job_counts_its_entries_not_its_bounds() {
+        let e = engine().await;
+        for i in 0..24 {
+            let m = if i % 2 == 0 {
+                ChatMessage::user(format!("question {i}"))
+            } else {
+                ChatMessage::assistant("réponse")
+            };
+            e.history
+                .append("s1", &m, 500, 0, false, None)
+                .await
+                .unwrap();
+        }
+        // Trous : 3, 4, 7, 8 disparaissent.
+        e.history
+            .store()
+            .write(|tx| {
+                tx.execute("DELETE FROM messages WHERE seq IN (3, 4, 7, 8)", [])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let job = e
+            .prepare_summary("s1", &params(), 128_000, "m", true)
+            .await
+            .unwrap()
+            .expect("un travail de résumé");
+        let entries = e.history.load("s1", 0).await.unwrap();
+        let in_chunk = entries
+            .iter()
+            .filter(|x| x.seq >= job.chunk_from_seq && x.seq <= job.to_seq)
+            .count() as i64;
+        assert!(job.to_seq > 8, "le lot enjambe les trous : {job:?}");
+        assert_eq!(job.messages(), in_chunk);
+        assert!(job.messages() < job.to_seq - job.chunk_from_seq + 1);
+        assert_eq!(job.previous_to_seq, None);
     }
 
     fn job(entries: &[Entry]) -> SummaryJob {
@@ -104,35 +157,40 @@ mod tests {
             session_id: "s".into(),
             from_seq: 1,
             to_seq: 9,
-            chunk_from_seq: 1,
+            chunk_from_seq: 5,
             source_text: entries.iter().map(render_entry).collect(),
-            previous_summary: None,
-            previous_node_id: None,
+            previous_summary: Some("{\"objectif\": \"x\"}".into()),
+            previous_node_id: Some("n_1".into()),
             anchors: vec![],
             verbatim_users: vec![],
             tokens_src: 4,
-            batches: vec![(1, 9)],
+            batches: vec![(5, 9)],
+            chunk_messages: 2,
+            previous_to_seq: Some(2),
         }
     }
 
-    /// Adresses 1, 2, 5, 9 : quatre messages, pas neuf.
+    /// Adresses 1, 2, 5, 9 : le résumé précédent finit à 2, pas à 4.
     #[test]
-    fn a_summary_job_counts_its_messages_not_its_bounds() {
+    fn the_summarizer_names_real_bounds() {
         let entries = holes();
-        let j = job(&entries);
-        // Le faux en-tête « #3 » d'un texte est compté : limite documentée.
-        assert_eq!(j.messages(), 5);
-        let clean: Vec<Entry> = entries
-            .into_iter()
-            .map(|mut e| {
-                if e.seq == 2 {
-                    e.message = ChatMessage::assistant("deux");
-                }
-                e
-            })
-            .collect();
-        assert_eq!(job(&clean).messages(), 4);
-        assert_eq!(rendered_messages(&job(&clean).source_text, 2, 5), 2);
+        let j = job(&entries[2..]);
+        assert_eq!(j.messages(), 2);
+        let prompt = j.summarizer_messages()[1].text();
+        assert!(prompt.contains("(messages #1 à #2)"), "{prompt}");
+        assert!(prompt.contains("(messages #5 à #9)"), "{prompt}");
+        // Un travail préparé avant T21 (sans compte) garde l'ancienne arithmétique.
+        let old = SummaryJob {
+            chunk_messages: 0,
+            previous_to_seq: None,
+            ..j
+        };
+        assert_eq!(old.messages(), 5);
+        assert!(
+            old.summarizer_messages()[1]
+                .text()
+                .contains("(messages #1 à #4)")
+        );
     }
 
     #[test]

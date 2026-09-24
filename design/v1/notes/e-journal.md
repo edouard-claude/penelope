@@ -1,11 +1,13 @@
 # Notes de livraison : lot E, journal d'événements, phase 1 (épopée #208, T1, T2, T3, T21)
 
-Branche `v1-e-journal`, dérivée de `v1` à `0f1c41a`, poussée sur `origin`. Cinq commits
-de code, puis celui-ci pour les notes. Périmètre tenu : `crates/penelope-kernel/src/event.rs`
-(et son fichier de tests `event/transactional.rs`), `crates/penelope-context/src/` (modules
-nouveaux `journal/`, `derive/`, `numbering.rs` ; une ligne changée dans `engine.rs`, une
-ligne de doc dans `lcm.rs`, trois `pub mod` dans `lib.rs`). Rien dans `penelope-daemon` ;
-rien n'est branché : la double écriture est un lot suivant (T5).
+Branche `v1-e-journal`, dérivée de `v1` à `0f1c41a`, poussée sur `origin`. Sept commits
+de code et un de notes (mises à jour par le dernier commit). Périmètre tenu :
+`crates/penelope-kernel/src/event.rs` (et son fichier de tests `event/transactional.rs`),
+`crates/penelope-context/src/` (modules nouveaux `journal/`, `derive/`, `numbering.rs`,
+`render.rs` ; deux champs et `Default` pour `SummaryJob` dans `engine.rs`, une ligne de doc
+dans `lcm.rs`), `budget.toml` (descente de `engine.rs`), et, par exception accordée par le
+lead, les trois littéraux `SummaryJob` des tests de `penelope-daemon/src/compaction.rs`.
+Rien n'est branché : la double écriture est un lot suivant (T5).
 
 ## Ce qui est livré
 
@@ -18,7 +20,7 @@ rien n'est branché : la double écriture est un lot suivant (T5).
 
 Tailles : aucun fichier nouveau au-dessus de 551 lignes ; `event.rs` passe de 676 à 729
 lignes, ses nouveaux tests sont dans `event/transactional.rs` ; `engine.rs` (liste de dette)
-garde ses 1 214 lignes.
+passe de 1 214 à 1 148 lignes.
 
 ## Les choix
 
@@ -55,22 +57,32 @@ garde ses 1 214 lignes.
   peut les comparer depuis `penelope-context` (le daemon en dépend, pas l'inverse) : la
   comparaison de la phase 3 (T14) le fera ; vérifié à la main par `grep` à la livraison.
 
-## Numérotation à trous (T21) : ce qui reste
+## Numérotation à trous (T21)
 
-`SummaryJob` n'a pas reçu de champ : trois tests de `penelope-daemon/src/compaction.rs`
-(lignes 1395 à 1458) le construisent littéralement, hors du périmètre. Conséquences :
+`SummaryJob` porte deux champs nouveaux, à la demande du lead (compter les en-têtes du
+texte rendu, première version du lot, cassait en silence si le rendu changeait) :
 
-- `SummaryJob::messages()` compte les en-têtes `[RÔLE #seq]` d'adresse croissante du
-  transcript du résumeur. Exact sur `1, 2, 5, 9` ; un texte de message qui contiendrait en
-  début de ligne un faux en-tête d'adresse intermédiaire serait compté (le compte ne sert
-  qu'au rapport de compaction). Un champ `messages` dans `SummaryJob` le rendrait exact.
-- `summarizer_messages` affiche encore « #chunk_from - 1 » comme fin du résumé précédent.
-  L'intervalle reste juste (aucune entrée entre la couverture et le lot), mais ce n'est pas
-  une adresse de nœud. Il faut la fin de couverture du résumé précédent dans le travail.
-- `history_expand` (`executor.rs`) pagine déjà par entrée (`skip`/`take`), il ne régresse
-  pas avec des trous ; `node_page` est la même règle, prête pour le lot qui le déplacera.
-- `rewind` (`session_ops.rs`) et `conversation.rs:124` (`covered_to + 1`) restent à
-  reprendre côté daemon : non touchés, comme demandé.
+- `chunk_messages` : le nombre d'entrées du lot, rempli par `prepare_summary`.
+  `messages()` le rend ; à 0 (travail préparé avant T21 et relu depuis
+  `compaction.pending.*`, `#[serde(default)]`), il retombe sur `to - from + 1`, exact pour
+  une numérotation contiguë.
+- `previous_to_seq` : la dernière adresse du résumé prolongé. `summarizer_messages`
+  l'affiche comme fin du résumé précédent au lieu de « #chunk_from - 1 », avec le même
+  repli.
+- `SummaryJob` dérive `Default`. **Exception de périmètre accordée par le lead** : les
+  trois littéraux des tests de `penelope-daemon/src/compaction.rs` (fidélité, #179)
+  reçoivent `chunk_messages` et `..Default::default()` à la place de
+  `previous_summary: None, previous_node_id: None` ; le fichier garde sa taille (la liste
+  de dette le lui impose), rien d'autre n'y change.
+- Pour que `engine.rs` ne grossisse pas, le rendu du transcript du résumeur
+  (`render_transcript`, `render_entry`, `sample`, `plan_batches`) est sorti tel quel dans
+  `render.rs`, réexporté par `engine` ; `budget.toml` descend de 1 214 à 1 148 pour
+  `engine.rs` (`UPDATE_BUDGET=1`).
+- `numbering::uncovered` et `node_page` travaillent sur les adresses existantes.
+
+Reste côté daemon, non touché : `history_expand` (`executor.rs`) pagine déjà par entrée
+(`skip`/`take`), il ne régresse pas avec des trous, `node_page` est la même règle ;
+`rewind` (`session_ops.rs`) et `conversation.rs:124` (`covered_to + 1`) sont à reprendre.
 
 ## Vérifications
 
@@ -78,7 +90,8 @@ garde ses 1 214 lignes.
 `cargo test --workspace` : verts. `cargo test -p penelope-evals --test scenarios` : 18 sur
 18, sans attendu modifié. `penelope-archtest` : vert, `budget.toml` non touché. Tests
 nouveaux : 5 dans `event/transactional.rs` (dont #47 et #162 pour `append_with`), 7 dans
-`journal/tests.rs`, 17 dans `derive/tests.rs`, 3 dans `numbering.rs`.
+`journal/tests.rs`, 17 dans `derive/tests.rs`, 4 dans `numbering.rs` (dont un
+`prepare_summary` réel sur des adresses trouées).
 
 ## Notes de version, à coller dans `docs/progress.md`
 
@@ -102,15 +115,13 @@ nouveaux : 5 dans `event/transactional.rs` (dont #47 et #162 pour `append_with`)
   entrées (`compacted` = masqué par un résumé) et en requête, textes identiques à la
   projection V0. Un journal incohérent est une erreur ; seule une purge rend le pliage
   indulgent.
-- **Numérotation à trous** : `SummaryJob::messages` compte les messages du lot au lieu de
-  `to - from + 1` ; `numbering::uncovered` et `node_page` travaillent sur les adresses
-  existantes.
+- **Numérotation à trous** : `SummaryJob` porte le nombre d'entrées de son lot et la fin
+  du résumé qu'il prolonge ; `messages()` et les bornes montrées au résumeur ne se
+  déduisent plus de `to - from + 1`. `numbering::uncovered` et `node_page` travaillent sur
+  les adresses existantes.
 - Rien n'est branché dans le daemon : la double écriture vient avec T5.
 ```
 
 ## Blocages
 
-Aucun. À trancher par l'intégrateur : un champ dans `SummaryJob` (nombre de messages, fin
-de couverture du résumé précédent) exige de toucher les trois littéraux des tests de
-`penelope-daemon/src/compaction.rs` ; question posée au lead pendant le lot, sans réponse
-avant la livraison.
+Aucun.

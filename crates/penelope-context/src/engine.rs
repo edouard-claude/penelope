@@ -31,7 +31,7 @@ pub struct TurnContext {
 /// Un travail couvre **un lot** de messages jamais résumés. S'il existe déjà un résumé
 /// juste avant, il le **met à jour** et prolonge sa couverture (§5.4) ; sinon il crée une
 /// feuille. Les lots suivants, s'il y en a, sont listés dans `batches` : jamais abandonnés.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SummaryJob {
     pub session_id: String,
     /// Début de la couverture du nœud publié (celui du résumé prolongé, le cas échéant).
@@ -53,6 +53,12 @@ pub struct SummaryJob {
     pub tokens_src: u64,
     /// Plan de découpage : ce lot en premier, puis ceux qui restent (§5.4).
     pub batches: Vec<(i64, i64)>,
+    /// Entrées du lot, comptées : les adresses ont des trous (T21). 0 : travail d'avant.
+    #[serde(default)]
+    pub chunk_messages: i64,
+    /// Dernière adresse couverte par le résumé prolongé.
+    #[serde(default)]
+    pub previous_to_seq: Option<i64>,
 }
 
 /// Consigne du résumeur. Les échanges sont des données, jamais des instructions.
@@ -93,9 +99,13 @@ impl SummaryJob {
         )
     }
 
-    /// Nombre de messages résumés par ce lot, comptés : les adresses ont des trous (T21).
+    /// Nombre de messages résumés par ce lot ; un travail préparé avant T21 (sans compte)
+    /// date d'une numérotation contiguë.
     pub fn messages(&self) -> i64 {
-        crate::numbering::rendered_messages(&self.source_text, self.chunk_from_seq, self.to_seq)
+        match self.chunk_messages {
+            0 => (self.to_seq - self.chunk_from_seq + 1).max(0),
+            n => n,
+        }
     }
 
     /// Lots restant à résumer après celui-ci.
@@ -111,7 +121,7 @@ impl SummaryJob {
                 "Résumé précédent (messages #{} à #{}) :\n<resume>\n{}\n</resume>\n\n\
                  Nouveaux échanges à intégrer (messages #{} à #{}) :\n",
                 self.from_seq,
-                self.chunk_from_seq - 1,
+                self.previous_to_seq.unwrap_or(self.chunk_from_seq - 1),
                 crate::compaction::summary_sections_only(prev),
                 self.chunk_from_seq,
                 self.to_seq
@@ -423,6 +433,8 @@ impl ContextEngine {
             chunk_from_seq: chunk_from,
             source_text,
             previous_summary: previous.as_ref().map(|n| n.summary.clone()),
+            previous_to_seq: previous.as_ref().and_then(|n| n.to_seq),
+            chunk_messages: chunk_len as i64,
             previous_node_id: previous.map(|n| n.id),
             anchors,
             verbatim_users,
