@@ -583,10 +583,24 @@ fn an_absent_value_is_shown_as_a_question_mark() {
 async fn no_bubble_ever_shows_null() {
     let re =
         regex::Regex::new(r#"^\s*[a-z_.]+\["[a-z_]+"\](\["[a-z_]+"\]|\[[0-9]+\])*,?\s*$"#).unwrap();
-    for file in ["src/telegram.rs", "src/telegram/screens.rs"] {
-        let src =
-            std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file))
-                .unwrap();
+    // Toute la passerelle, découpée en modules sous telegram/ (lot G), hors ses tests.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/telegram");
+    let mut files = vec![root.with_extension("rs")];
+    let mut dirs = vec![root];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() && !path.ends_with("tests") {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    assert!(files.len() > 20, "{files:?}");
+    for path in files.iter().filter(|p| p.exists()) {
+        let file = path.display();
+        let src = std::fs::read_to_string(path).unwrap();
         let code = src.split("#[cfg(test)]\nmod tests {").next().unwrap();
         let lines: Vec<&str> = code.lines().collect();
         // Une valeur seule sur sa ligne, que ne suit aucun accesseur (`.as_str()`…).
