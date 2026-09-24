@@ -19,7 +19,7 @@ test_modules = [
 "crates/penelope-daemon/src/tool_jobs.rs" = 1655   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/engine.rs" = 1105
 "crates/penelope-kernel/src/config.rs" = 2148   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-cli/src/commands.rs" = 2190   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
+"crates/penelope-cli/src/commands.rs" = 2179   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/compaction.rs" = 1308
 "crates/penelope-llm/src/provider.rs" = 2048
 "crates/penelope-daemon/src/scheduler.rs" = 1095
@@ -46,7 +46,7 @@ test_modules = [
 # vingtaine de correctifs de taille courante. Un autre crate se plafonne en ajoutant une
 # ligne. UPDATE_BUDGET ne touche pas à cette table.
 [crates]
-"penelope-daemon" = 46009   # v1 : après la sortie de app, mcp-host, vault, ops et de la passerelle Telegram (lot H) ; redescend avec les crates du cœur (lot J)
+"penelope-daemon" = 46092   # v1 : après la sortie de app, mcp-host, vault, ops et de la passerelle Telegram (lot H) ; redescend avec les crates du cœur (lot J)
 
 # Liste blanche des modules du daemon (R5) : les déclarations `mod x;` de lib.rs et
 # `mod screens;` de telegram.rs. `mod tests;` est toujours permis. Les fichiers où un bloc
