@@ -340,9 +340,8 @@ pub async fn search_mode(emb: &Embedder) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::Origin;
-    use crate::runtime::Daemon;
     use penelope_kernel::clock::TestClock;
+    use penelope_kernel::session::SessionKind;
     use penelope_llm::mock::MockProvider;
     use penelope_memory::Level;
 
@@ -370,10 +369,19 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let d = Arc::new(Daemon::from_services(s.clone()));
         let p = Arc::new(MockProvider::new());
-        d.set_provider_override(p.clone());
-        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        let emb = Embedder {
+            services: s.clone(),
+            providers: crate::testing::MockProviders::new(p.clone()),
+            state: Arc::default(),
+        };
+        let sid = s
+            .sessions
+            .create(SessionKind::Chat, Some("CLI".into()))
+            .await
+            .unwrap()
+            .id
+            .to_string();
         let vault = crate::helpers::vault_dir(&s);
         crate::vault_ops::remember(
             &s,
@@ -386,15 +394,12 @@ mod tests {
         .unwrap();
 
         // Sans modèle d'embeddings joignable : lexical seul, dit comme tel.
-        assert!(backfill(&d.embedder(), false).await.is_err());
-        assert_eq!(
-            search_mode(&d.embedder()).await.unwrap()["mode"],
-            "lexicale seule"
-        );
+        assert!(backfill(&emb, false).await.is_err());
+        assert_eq!(search_mode(&emb).await.unwrap()["mode"], "lexicale seule");
 
         p.set_embedder(Some(embedder()));
-        d.embeddings.failed_at_ms.store(0, Ordering::SeqCst);
-        let report = backfill(&d.embedder(), false).await.unwrap();
+        emb.state.failed_at_ms.store(0, Ordering::SeqCst);
+        let report = backfill(&emb, false).await.unwrap();
         assert!(report.memory >= 1, "{report:?}");
         let vectors: i64 = s
             .store
@@ -403,7 +408,7 @@ mod tests {
             .unwrap();
         assert!(vectors >= 1);
         assert_eq!(
-            backfill(&d.embedder(), false).await.unwrap().memory,
+            backfill(&emb, false).await.unwrap().memory,
             0,
             "rien à recalculer"
         );
@@ -421,7 +426,7 @@ mod tests {
             lexical.is_empty(),
             "les mots seuls ne trouvent pas le synonyme"
         );
-        let vector = query_vector(&d.embedder(), "Quelle voiture ai-je ?").await;
+        let vector = query_vector(&emb, "Quelle voiture ai-je ?").await;
         assert!(vector.is_some());
         let hits = s
             .memory
@@ -433,7 +438,7 @@ mod tests {
             "{hits:?}"
         );
         assert_eq!(
-            search_mode(&d.embedder()).await.unwrap()["mode"],
+            search_mode(&emb).await.unwrap()["mode"],
             "hybride (mots-clés et vecteurs)"
         );
     }

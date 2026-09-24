@@ -758,3 +758,87 @@ async fn a_missing_key_fails_with_an_actionable_message() {
         other => panic!("{other:?}"),
     }
 }
+
+/// #108 : « ok » après une proposition de Pénélope produit une décision tirée de la
+/// proposition, d'origine propriétaire ; la revue voit la proposition, et ne note jamais
+/// plus que `memory.review_max_candidates`. Venu de `review` (T22) : il joue deux tours
+/// réels, par le daemon.
+#[tokio::test]
+async fn an_agreement_turns_the_proposal_into_an_owner_decision() {
+    use crate::bus::Origin as Channel;
+    use penelope_memory::{CandidateType, Origin};
+    let dir = tempfile::tempdir().unwrap();
+    let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
+    let s = Arc::new(
+        crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            .await
+            .unwrap(),
+    );
+    let d = Arc::new(Daemon::from_services(s.clone()));
+    let p = Arc::new(MockProvider::new());
+    d.set_provider_override(p.clone());
+    d.publish_config("test", |c| {
+        c.memory.review_max_candidates = 2;
+        c.context.auto_title = false;
+        Ok(vec!["memory.review_max_candidates".into()])
+    })
+    .unwrap();
+    let sid = d.chat_session_for(&Channel::Cli).await.unwrap();
+    d.pin_model(&sid, Some("main")).await.unwrap();
+    let say = |text: &'static str| {
+        let d = d.clone();
+        let sid = sid.clone();
+        async move {
+            d.enqueue_message(&sid, text, &Channel::Cli, None)
+                .await
+                .unwrap();
+            let turn = d.services.turns.claim("test").await.unwrap().unwrap();
+            d.run_turn(&turn).await;
+            d.services.turns.complete(&turn).await.unwrap();
+        }
+    };
+
+    p.reply(
+        "Le digest ne dit rien des rejets. Je propose d'ouvrir une issue « Digest : \
+         motifs de rejet » sur le dépôt public. Je l'ouvre ?",
+    );
+    say("regarde le digest de cette nuit").await;
+    let before = p.call_count();
+    p.reply("Issue ouverte.");
+    p.reply(
+        r#"{"candidats": [
+            {"type": "decision", "texte": "Ouvrir une issue publique sur les motifs de rejet du digest", "importance": 6},
+            {"type": "fait", "texte": "Le digest ne dit rien des rejets", "importance": 4},
+            {"type": "fait", "texte": "Troisième candidat au-delà du plafond", "importance": 3}
+        ]}"#,
+    );
+    say("ok").await;
+    let mut pending = Vec::new();
+    for _ in 0..200 {
+        pending = d.services.candidates.pending(None).await.unwrap();
+        if !pending.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(p.call_count(), before + 2, "une réponse, une revue");
+    let asked = p.requests().last().unwrap().messages[1].text();
+    assert!(
+        asked.contains("<proposition>") && asked.contains("Je l'ouvre ?"),
+        "{asked}"
+    );
+    assert!(pending.len() <= 2, "{pending:?}");
+    let decision = pending
+        .iter()
+        .find(|c| c.ctype == CandidateType::Decision)
+        .expect("décision");
+    assert_eq!(decision.origin, Origin::Owner);
+    assert!(decision.text.contains("motifs de rejet"));
+
+    // « merci » ensuite : aucune revue.
+    let before = p.call_count();
+    p.reply("Avec plaisir.");
+    say("merci").await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(p.call_count(), before + 1, "pas de revue");
+}

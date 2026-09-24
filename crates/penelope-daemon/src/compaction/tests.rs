@@ -827,3 +827,151 @@ async fn a_cold_session_is_compacted_before_the_model_call() {
         kinds(&events)
     );
 }
+
+/// Issue #32 : après une compaction, le prompt contient toujours les notes à jour ; un
+/// fork en reçoit sa propre copie ; le rêve relève les décisions une seule fois. Venu de
+/// `session_notes` (T22) : il compacte et forke, deux étages au-dessus du vault.
+#[tokio::test]
+async fn notes_survive_compaction_are_copied_by_fork_and_harvested_once() {
+    use crate::session_notes::{file_of, harvest, mark_harvested, parse, prompt_block, read, tool};
+    let dir = tempfile::tempdir().unwrap();
+    let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
+    let s = Arc::new(
+        Services::for_tests(dir.path().to_path_buf(), clock)
+            .await
+            .unwrap(),
+    );
+    let d = Arc::new(Daemon::from_services(s));
+    let p = Arc::new(MockProvider::new());
+    d.set_provider_override(p.clone());
+    let s = &d.services;
+    let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+    s.sessions
+        .set_title(&sid, "Refonte facturation", false)
+        .await
+        .unwrap();
+    let h = &s.context.history;
+    for i in 0..20 {
+        let q = format!("question {i} : {}", "détail ".repeat(340));
+        let a = format!("réponse {i} : {}", "analyse ".repeat(300));
+        h.append(&sid, &ChatMessage::user(q), 600, 0, false, None)
+            .await
+            .unwrap();
+        h.append(&sid, &ChatMessage::assistant(a), 600, 0, false, None)
+            .await
+            .unwrap();
+    }
+
+    // Session résumée sans notes : le harnais le rappelle.
+    p.reply(r#"{"objectif": "migration", "contraintes_et_preferences": "", "fait": "schéma", "en_cours": "migration", "bloque": "", "decisions_cles": "PostgreSQL 17", "fichiers_et_ressources": "", "prochaines_etapes": "migrer", "contexte_critique": ""}"#);
+    compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+    let reminder = prompt_block(s, &sid).await.expect("rappel");
+    assert!(reminder.contains("session_notes"), "{reminder}");
+
+    tool(s, &sid, &json!({"action": "update_section", "section": "Objectif", "content": "Migrer la facturation vers PostgreSQL 17"})).await.unwrap();
+    tool(s, &sid, &json!({"action": "update_section", "section": "Décisions", "content": "- Garder les montants en centimes entiers"})).await.unwrap();
+    tool(s, &sid, &json!({"action": "update_section", "section": "Décisions", "content": "- Migrer table par table", "mode": "append"})).await.unwrap();
+
+    let tiers =
+        crate::conversation::build_tiers_in(s, "on continue", &[], None, Some((&sid, 0)), None)
+            .await;
+    assert!(
+        tiers
+            .volatile
+            .contains("Migrer la facturation vers PostgreSQL 17"),
+        "{}",
+        tiers.volatile
+    );
+    assert!(
+        tiers.volatile.contains("centimes entiers") && tiers.volatile.contains("table par table")
+    );
+
+    let rel = file_of(s, &sid).await.unwrap().expect("fichier de notes");
+    assert!(rel.starts_with("notes/refonte-facturation-"), "{rel}");
+    let raw = std::fs::read_to_string(crate::helpers::vault_dir(s).join(&rel)).unwrap();
+    assert!(
+        raw.contains("type: session") && raw.contains(&format!("session: {sid}")),
+        "{raw}"
+    );
+
+    // Nouvelle compaction : les notes, lues à part, restent dans le prompt.
+    for i in 0..10 {
+        h.append(
+            &sid,
+            &ChatMessage::user(format!("encore {i} {}", "x ".repeat(600))),
+            600,
+            0,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        h.append(
+            &sid,
+            &ChatMessage::assistant(format!("ok {i} {}", "y ".repeat(600))),
+            600,
+            0,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    p.reply(r#"{"objectif": "migration", "contraintes_et_preferences": "", "fait": "schéma", "en_cours": "migration", "bloque": "", "decisions_cles": "PostgreSQL 17", "fichiers_et_ressources": "", "prochaines_etapes": "migrer", "contexte_critique": ""}"#);
+    compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+    tool(s, &sid, &json!({"action": "update_section", "section": "Prochaine étape", "content": "Écrire la migration des avoirs"})).await.unwrap();
+    let tiers =
+        crate::conversation::build_tiers_in(s, "et maintenant ?", &[], None, Some((&sid, 0)), None)
+            .await;
+    assert!(
+        tiers.volatile.contains("Écrire la migration des avoirs"),
+        "{}",
+        tiers.volatile
+    );
+    assert!(tiers.volatile.contains("centimes entiers"));
+
+    // Fork : copie propre, modifiable sans toucher l'original.
+    let fork = crate::session_ops::fork(&d.services, &sid, None)
+        .await
+        .unwrap();
+    let fork = fork["session"].as_str().unwrap().to_string();
+    let fork_file = file_of(s, &fork).await.unwrap().expect("notes du fork");
+    assert_ne!(fork_file, rel);
+    tool(s, &fork, &json!({"action": "update_section", "section": "Objectif", "content": "Variante sans avoirs"})).await.unwrap();
+    let original = parse(&read(s, &sid).await.unwrap().unwrap());
+    assert_eq!(
+        original["Objectif"],
+        "Migrer la facturation vers PostgreSQL 17"
+    );
+
+    // Rêve : décisions relevées une seule fois.
+    let first = harvest(s).await.unwrap();
+    assert!(
+        first
+            .iter()
+            .any(|(session, t)| session == &sid && t == "Garder les montants en centimes entiers"),
+        "{first:?}"
+    );
+    // Le marqueur « récoltée » est posé par l'appelant, une fois le candidat
+    // enregistré (issue #61) : sans lui, la décision reste récoltable.
+    let still = harvest(s).await.unwrap();
+    assert_eq!(
+        still.len(),
+        first.len(),
+        "rien n'est consommé sans marqueur"
+    );
+    for (session, text) in &first {
+        mark_harvested(s, session, text).await.unwrap();
+    }
+    let again = harvest(s).await.unwrap();
+    assert!(again.is_empty(), "{again:?}");
+
+    let err = tool(
+        s,
+        &sid,
+        &json!({"action": "update_section", "section": "Divers", "content": "x"}),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.contains("section inconnue"));
+}

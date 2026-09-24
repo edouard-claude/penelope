@@ -443,12 +443,34 @@ pub async fn refresh_snapshot(s: &Services, session_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::Origin as Channel;
-    use crate::runtime::Daemon;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::MockProvider;
 
-    async fn daemon() -> (tempfile::TempDir, Arc<Daemon>, Arc<MockProvider>, TestClock) {
+    /// Ce que les tests tiennent au lieu d'un daemon : services et providers.
+    struct Fixture {
+        services: Arc<Services>,
+        providers: Arc<dyn ProviderSource>,
+    }
+
+    impl Fixture {
+        /// Session de conversation, comme la session CLI du daemon.
+        async fn chat_session(&self) -> String {
+            self.services
+                .sessions
+                .create(SessionKind::Chat, Some("CLI".into()))
+                .await
+                .unwrap()
+                .id
+                .to_string()
+        }
+    }
+
+    async fn daemon() -> (
+        tempfile::TempDir,
+        Arc<Fixture>,
+        Arc<MockProvider>,
+        TestClock,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let clock = TestClock::default();
         let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
@@ -457,13 +479,15 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let d = Arc::new(Daemon::from_services(s));
         let p = Arc::new(MockProvider::new());
-        d.set_provider_override(p.clone());
+        let d = Arc::new(Fixture {
+            services: s,
+            providers: crate::testing::MockProviders::new(p.clone()),
+        });
         (dir, d, p, clock)
     }
 
-    async fn say(d: &Daemon, sid: &str, episode: i64, role: Role, text: &str) {
+    async fn say(d: &Fixture, sid: &str, episode: i64, role: Role, text: &str) {
         let s = &d.services;
         let message = match role {
             Role::User => ChatMessage::user(text),
@@ -477,7 +501,7 @@ mod tests {
         s.sessions.touch(sid).await.unwrap();
     }
 
-    async fn session(d: &Daemon, sid: &str) -> Session {
+    async fn session(d: &Fixture, sid: &str) -> Session {
         d.services.sessions.require(sid).await.unwrap()
     }
 
@@ -486,12 +510,13 @@ mod tests {
     #[tokio::test]
     async fn ca_6_15_two_idle_hours_close_the_episode_and_ingest_it() {
         let (_dir, d, p, clock) = daemon().await;
-        d.publish_config("test", |c| {
-            c.memory.review_max_candidates = 5;
-            Ok(vec!["memory.review_max_candidates".into()])
-        })
-        .unwrap();
-        let sid = d.chat_session_for(&Channel::Cli).await.unwrap();
+        d.services
+            .publish_config("test", |c| {
+                c.memory.review_max_candidates = 5;
+                Ok(vec!["memory.review_max_candidates".into()])
+            })
+            .unwrap();
+        let sid = d.chat_session().await;
         let first = session(&d, &sid).await.episode_seq;
         say(
             &d,
@@ -612,7 +637,7 @@ mod tests {
     #[tokio::test]
     async fn three_messages_off_topic_open_a_new_episode() {
         let (_dir, d, _p, _clock) = daemon().await;
-        let sid = d.chat_session_for(&Channel::Cli).await.unwrap();
+        let sid = d.chat_session().await;
         let first = session(&d, &sid).await.episode_seq;
         say(
             &d,
@@ -706,7 +731,7 @@ mod tests {
     async fn ca_6_14_a_profile_write_waits_for_the_next_episode() {
         let (_dir, d, _p, _clock) = daemon().await;
         let s = &d.services;
-        let sid = d.chat_session_for(&Channel::Cli).await.unwrap();
+        let sid = d.chat_session().await;
         let build = |n: i64| {
             let s = s.clone();
             let sid = sid.clone();

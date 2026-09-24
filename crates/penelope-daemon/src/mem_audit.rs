@@ -395,9 +395,8 @@ pub fn to_json(a: &Audit) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::Origin;
-    use crate::runtime::Daemon;
     use penelope_kernel::clock::TestClock;
+    use penelope_kernel::session::SessionKind;
     use penelope_memory::{Level, Provenance};
     use std::sync::Arc;
 
@@ -412,8 +411,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let d = Arc::new(Daemon::from_services(s.clone()));
-        let empty = run(&d.services, None).await.unwrap();
+        let empty = run(&s, None).await.unwrap();
         assert!(empty.total < 30, "{empty:?}");
         assert!(
             best_next(&empty).unwrap().next.contains("/accueil"),
@@ -421,7 +419,13 @@ mod tests {
         );
         assert_eq!(empty.delta, None);
 
-        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        let sid = s
+            .sessions
+            .create(SessionKind::Chat, Some("CLI".into()))
+            .await
+            .unwrap()
+            .id
+            .to_string();
         let vault = crate::helpers::vault_dir(&s);
         for text in [
             "Toujours tutoyer le propriétaire",
@@ -437,7 +441,7 @@ mod tests {
                 .unwrap();
         }
         clock.advance_days(1);
-        let after = run(&d.services, None).await.unwrap();
+        let after = run(&s, None).await.unwrap();
         assert!(after.axes[0].score > empty.axes[0].score, "{after:?}");
         assert!(after.delta.unwrap() > 0);
         assert!(

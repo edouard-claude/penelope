@@ -344,3 +344,133 @@ fn a_plain_text_answer_still_gives_a_summary() {
     );
     assert!(facts.is_empty());
 }
+
+/// Issue #22 : deux documents qui partagent un terme créent une page de concept liée
+/// aux deux sources ; `mem_neighbors` la retrouve depuis chacune, l'entrée de mémoire
+/// qui la cite est reliée, l'index et les termes à définir suivent.
+#[tokio::test]
+async fn two_sources_sharing_a_term_meet_on_a_concept_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(TestClock::default());
+    let s = Arc::new(
+        crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            .await
+            .unwrap(),
+    );
+    let d = Arc::new(Daemon::from_services(s.clone()));
+    let p = Arc::new(MockProvider::new());
+    d.set_provider_override(p.clone());
+    let sid = d.chat_session_for(&crate::bus::Origin::Cli).await.unwrap();
+    let vault = crate::helpers::vault_dir(&s);
+    crate::vault_ops::remember(
+        &s,
+        &vault,
+        Level::Coeur,
+        "Projet en cours du propriétaire : passage à Factur-X",
+        &sid,
+    )
+    .await
+    .unwrap();
+
+    p.reply(
+        r#"{"resume": "Guide de la facturation.", "faits": [],
+            "concepts": [{"nom": "Factur-X", "definition": "Format de facture électronique hybride.", "alias": []}],
+            "a_definir": ["PDP"]}"#,
+    );
+    let a = crate::ingest::ingest(
+        &d,
+        "guide-facturation.md",
+        b"# Guide\n\nFactur-X et PDP.".to_vec(),
+        "cli",
+        Origin::Owner,
+        Some(&sid),
+        &penelope_llm::CancelToken::new(),
+    )
+    .await
+    .unwrap();
+    p.reply(
+        r#"{"resume": "Compte rendu.", "faits": [],
+            "concepts": [{"nom": "factur x", "definition": "", "alias": ["format hybride"]}],
+            "a_definir": []}"#,
+    );
+    let b = crate::ingest::ingest(
+        &d,
+        "reunion-comptable.md",
+        b"# Reunion\n\nOn passe au factur x.".to_vec(),
+        "cli",
+        Origin::Owner,
+        Some(&sid),
+        &penelope_llm::CancelToken::new(),
+    )
+    .await
+    .unwrap();
+
+    // Les pages de concept, relues du vault (`concepts::pages` est privé à la crate).
+    let dir_concepts = vault.join(crate::concepts::DIR);
+    let pages: Vec<String> = std::fs::read_dir(&dir_concepts)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.ends_with(".md") && !n.starts_with('_'))
+        .collect();
+    assert_eq!(pages, vec!["factur-x.md"], "{pages:?}");
+    let raw = std::fs::read_to_string(dir_concepts.join("factur-x.md")).unwrap();
+    let fm = penelope_kernel::frontmatter::parse(&raw).unwrap();
+    let sources = fm
+        .body
+        .split("## Sources")
+        .nth(1)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.trim_start().starts_with("- "))
+        .count();
+    assert_eq!(sources, 2, "{raw}");
+    assert_eq!(
+        penelope_memory::wiki::aliases_of(&fm),
+        vec!["format hybride"],
+        "une graphie ne fait pas un alias"
+    );
+
+    let from_concept = crate::concepts::neighbors(&s, "factur-x")
+        .await
+        .unwrap()
+        .to_string();
+    assert!(
+        from_concept.contains(&a.slug) && from_concept.contains(&b.slug),
+        "{from_concept}"
+    );
+    for source in [&a.slug, &b.slug] {
+        let n = crate::concepts::neighbors(&s, source).await.unwrap();
+        assert!(n.to_string().contains("factur-x"), "{n}");
+    }
+    let fiche = std::fs::read_to_string(vault.join(&a.file)).unwrap();
+    assert!(
+        fiche.contains("## Concepts\n\n- Concepts : [[factur-x]]"),
+        "{fiche}"
+    );
+    assert!(
+        std::fs::read_to_string(vault.join("memoire.md"))
+            .unwrap()
+            .contains("passage à Factur-X [[factur-x]]")
+    );
+    assert!(
+        from_concept.contains("memoire.md"),
+        "l'entrée de mémoire est une voisine"
+    );
+    assert!(
+        std::fs::read_to_string(vault.join(crate::concepts::INDEX))
+            .unwrap()
+            .contains("[[factur-x]] · Factur-X (2 source(s))")
+    );
+    assert_eq!(crate::concepts::to_define(&vault), vec!["PDP"]);
+
+    // La réindexation garde le graphe.
+    crate::vault_ops::reindex(&s, &vault).await.unwrap();
+    assert!(
+        crate::concepts::neighbors(&s, &a.slug)
+            .await
+            .unwrap()
+            .to_string()
+            .contains("factur-x")
+    );
+}
