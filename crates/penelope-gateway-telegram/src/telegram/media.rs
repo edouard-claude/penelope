@@ -196,7 +196,7 @@ impl TelegramGateway {
                 // l'interrompre (issue #155). Le jeton est retiré quoi qu'il arrive.
                 let (ingest_id, cancel) = daemon.bus.start_ingest(&session);
                 let outcome = crate::ingest::ingest(
-                    &daemon,
+                    &daemon.dream(),
                     &file_name,
                     bytes,
                     "telegram",

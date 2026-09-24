@@ -107,7 +107,7 @@ impl TelegramGateway {
                             // Déclarée pour la session : `/stop tout` l'interrompt (#155).
                             let (ingest_id, cancel) = daemon.bus.start_ingest(&sess);
                             let outcome = crate::ingest::ingest(
-                                &daemon,
+                                &daemon.dream(),
                                 &name,
                                 joined.into_bytes(),
                                 "telegram",

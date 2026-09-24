@@ -1430,6 +1430,7 @@ dependencies = [
  "chrono-tz",
  "penelope-app",
  "penelope-kernel",
+ "penelope-llm",
  "penelope-memory",
  "penelope-vault",
  "serde",

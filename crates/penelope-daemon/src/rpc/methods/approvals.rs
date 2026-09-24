@@ -101,7 +101,8 @@ impl Rpc {
         // Propositions de mémoire : la décision s'applique ici, aucun tour à reprendre.
         if a.kind == penelope_hitl::ApprovalKind::MemoryProposal {
             if a.state == penelope_hitl::ApprovalState::Approved {
-                let written = crate::ingest::apply_memory_proposal(&self.daemon, id).await?;
+                let written =
+                    crate::ingest::apply_memory_proposal(&self.daemon.dream(), id).await?;
                 let mut v = serde_json::to_value(&a)?;
                 v["written"] = json!(written);
                 return Ok(v);

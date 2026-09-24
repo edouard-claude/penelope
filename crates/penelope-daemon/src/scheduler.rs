@@ -62,7 +62,7 @@ pub async fn scheduler_loop(d: Arc<Daemon>, ports: Ports) {
         if !inbox_busy.swap(true, std::sync::atomic::Ordering::SeqCst) {
             let (d2, busy, messenger) = (d.clone(), inbox_busy.clone(), ports.messenger.clone());
             tokio::spawn(async move {
-                match crate::ingest::scan_inbox(&d2, &messenger).await {
+                match crate::ingest::scan_inbox(&d2.dream(), &messenger).await {
                     Ok(0) => {}
                     Ok(n) => tracing::info!(fichiers = n, "boîte de dépôt du vault traitée"),
                     Err(e) => tracing::warn!(error = %e, "boîte de dépôt du vault"),

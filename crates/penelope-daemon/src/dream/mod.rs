@@ -641,3 +641,15 @@ use snapshot::{VaultSnapshot, markdown_files};
 
 #[cfg(test)]
 mod tests;
+
+impl Daemon {
+    /// Contexte du rêve et de l'ingestion (`penelope-dream`, T26) : ce qu'ils lisent du
+    /// daemon, sans le daemon.
+    pub fn dream(&self) -> penelope_dream::Context {
+        penelope_dream::Context {
+            services: self.services.clone(),
+            providers: self.providers.clone(),
+            embeddings: self.embeddings.clone(),
+        }
+    }
+}

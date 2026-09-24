@@ -107,7 +107,7 @@ async fn fourteen_days_of_conversations_become_scoped_rules() {
         }
         if *day == 5 {
             let _ = penelope_daemon::ingest::ingest(
-                &d,
+                &d.dream(),
                 "astuces.html",
                 UNTRUSTED_PAGE.as_bytes().to_vec(),
                 "telegram",

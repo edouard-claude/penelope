@@ -5,7 +5,8 @@
 //! rien n'entre en mémoire sans le propriétaire, surtout pas depuis un document non fiable.
 
 use crate::ports::Slot;
-use crate::runtime::{Daemon, Services};
+use crate::runtime::Services;
+use penelope_dream::Context;
 // Descendue dans `concepts` avec le vault (T22) : `vault_ops::reindex` l'appelle.
 pub use crate::concepts::index_source;
 use penelope_hitl::{ApprovalKind, ApprovalState};
@@ -18,7 +19,6 @@ use penelope_memory::ingest as doc;
 use penelope_memory::{Level, Origin, Provenance};
 use serde_json::{Value, json};
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Pages lues par OCR au plus, et délai total.
@@ -152,7 +152,7 @@ impl Ingested {
 
 /// Ingère un document reçu.
 pub async fn ingest(
-    d: &Arc<Daemon>,
+    d: &Context,
     name: &str,
     bytes: Vec<u8>,
     canal: &str,
@@ -378,7 +378,7 @@ fn reload(vault: &Path, slug: &str, name: &str) -> Option<Ingested> {
 
 /// Résumé et propositions de mémoire, par le modèle du rôle `memory_review`.
 async fn summarise(
-    d: &Arc<Daemon>,
+    d: &Context,
     name: &str,
     format: &str,
     pages: Option<usize>,
@@ -557,7 +557,7 @@ pub fn parse_summary(raw: &str) -> (Option<String>, Vec<String>) {
 /// Tranche une contradiction (issue #145) : remplacer l'entrée en mémoire, garder les
 /// deux en notant le contexte, ou ignorer le candidat. Rend la phrase à afficher.
 pub async fn apply_contradiction(
-    d: &Arc<Daemon>,
+    d: &Context,
     approval_id: &str,
     action: &str,
 ) -> anyhow::Result<String> {
@@ -632,7 +632,7 @@ pub async fn apply_contradiction(
 
 /// Applique une proposition de mémoire approuvée : chaque fait rejoint `notes.md`, la
 /// fiche source en provenance. Idempotent : une seconde application n'écrit rien.
-pub async fn apply_memory_proposal(d: &Arc<Daemon>, approval_id: &str) -> anyhow::Result<usize> {
+pub async fn apply_memory_proposal(d: &Context, approval_id: &str) -> anyhow::Result<usize> {
     let s = &d.services;
     let Some(a) = s.approvals.get(approval_id).await? else {
         anyhow::bail!("demande {approval_id} introuvable");
@@ -698,7 +698,7 @@ pub async fn apply_memory_proposal(d: &Arc<Daemon>, approval_id: &str) -> anyhow
 /// puis l'entrée fourre-tout est retirée. Si aucun fait ne s'écrit, l'originale reste
 /// (issue #145).
 async fn apply_split(
-    d: &Arc<Daemon>,
+    d: &Context,
     a: &penelope_hitl::ApprovalRequest,
     vault: &Path,
 ) -> anyhow::Result<usize> {
@@ -742,7 +742,7 @@ async fn apply_split(
 /// Dépôts dans `vault/inbox/` : chaque fichier est ingéré puis retiré de la boîte.
 /// Le propriétaire reçoit le bilan sur son canal.
 pub async fn scan_inbox(
-    d: &Arc<Daemon>,
+    d: &Context,
     messenger: &Slot<dyn crate::executor::Messenger>,
 ) -> anyhow::Result<usize> {
     let s = &d.services;

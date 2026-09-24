@@ -24,6 +24,8 @@ chrono-tz.workspace = true
 penelope-app.workspace = true
 # Écriture des notes et des entrées de mémoire (`vault_ops`).
 penelope-vault.workspace = true
+# Providers de modèles (`Context::provider_for`).
+penelope-llm.workspace = true
 # Configuration du propriétaire (fuseau).
 penelope-kernel.workspace = true
 # Niveaux et provenance des entrées de mémoire.

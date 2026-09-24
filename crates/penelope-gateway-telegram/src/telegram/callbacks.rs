@@ -256,7 +256,7 @@ impl TelegramGateway {
                     "ℹ️ Déjà tranché.".to_string()
                 } else {
                     match crate::ingest::apply_contradiction(
-                        &self.daemon,
+                        &self.daemon.dream(),
                         &approval_id,
                         &action.action,
                     )
@@ -291,7 +291,11 @@ impl TelegramGateway {
                             .get(&approval_id)
                             .await?
                             .is_some_and(|a| a.payload["confirm"].as_bool() == Some(true));
-                        match crate::ingest::apply_memory_proposal(&self.daemon, &approval_id).await
+                        match crate::ingest::apply_memory_proposal(
+                            &self.daemon.dream(),
+                            &approval_id,
+                        )
+                        .await
                         {
                             Ok(n) if confirm => format!(
                                 "✅ {n} règle(s) confirmée(s) : elles entrent en mémoire à la \

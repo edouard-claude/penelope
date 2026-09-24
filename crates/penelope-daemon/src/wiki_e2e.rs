@@ -190,7 +190,7 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
     );
     let pdf = pdf_with_text(&["Contrat-cadre", "Les factures sont emises en Factur-X."]);
     crate::ingest::ingest(
-        &d,
+        &d.dream(),
         "Contrat cadre.pdf",
         pdf,
         "telegram",
