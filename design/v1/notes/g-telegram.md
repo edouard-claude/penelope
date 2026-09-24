@@ -1,5 +1,8 @@
 # Notes de livraison : lot G-telegram (passerelle Telegram en modules, épopée #208)
 
+
+> **Intégration (24/09)** : la branche a été rebasée sur `v1` après les autres découpages du lot G ; les trois commits de budget de la liste ci-dessous (`0596b06`, `0479fcd`, `8c8d0a3`) ont été remplacés par un seul commit de re-mesure (plafond du daemon à 84 249 sur l'arbre fusionné, entrée Daemon `telegram.rs` 6 répartie en `telegram/mod.rs` 4 et `telegram/media.rs` 2). Les hachages cités ici sont ceux de la branche avant rebase. Le découpage coûte 1 384 lignes au daemon, sans code nouveau ; la suite complète est verte après intégration (1 915 tests).
+
 Branche `v1-g-telegram`, dérivée de `v1` au commit 5c0faf3. Spécification :
 `design/v1/decoupage-daemon.md` §5.1, sur le modèle du découpage d'`agent.rs` (lot F,
 commit 60ea09b).
