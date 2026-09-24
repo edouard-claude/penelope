@@ -1,7 +1,6 @@
 use super::yaml::Node;
 use super::*;
 use crate::mcp::testing::{FakeConnector, server, tool};
-use crate::runtime::Daemon;
 use penelope_kernel::clock::TestClock;
 
 const CONFIG: &str = r#"
@@ -230,7 +229,7 @@ fn hermes_skills_and_memories_are_normalised() {
     );
 }
 
-async fn daemon() -> (tempfile::TempDir, Arc<Daemon>) {
+async fn services() -> (tempfile::TempDir, Arc<Services>) {
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
     let s = Arc::new(
@@ -238,7 +237,7 @@ async fn daemon() -> (tempfile::TempDir, Arc<Daemon>) {
             .await
             .unwrap(),
     );
-    (dir, Arc::new(Daemon::from_services(s)))
+    (dir, s)
 }
 
 fn hermes_home(root: &Path) {
@@ -272,7 +271,7 @@ fn hermes_home(root: &Path) {
 
 #[tokio::test]
 async fn an_instance_is_simulated_then_imported_once() {
-    let (dir, d) = daemon().await;
+    let (dir, s) = services().await;
     let root = dir.path().join("hermes");
     hermes_home(&root);
 
@@ -293,12 +292,11 @@ async fn an_instance_is_simulated_then_imported_once() {
             })
         }),
     );
-    let sup = crate::mcp::testing::supervisor(d.services.clone(), fake.clone());
-    let s = &d.services;
-    let vault = crate::helpers::vault_dir(s);
+    let sup = crate::mcp::testing::supervisor(s.clone(), fake.clone());
+    let vault = crate::helpers::vault_dir(&s);
 
     let plan = import(
-        &d.services,
+        &s,
         Some(sup.clone()),
         &Options {
             root: root.clone(),
@@ -327,7 +325,7 @@ async fn an_instance_is_simulated_then_imported_once() {
         apply: true,
         test: true,
     };
-    let done = import(&d.services, Some(sup.clone()), &opts).await.unwrap();
+    let done = import(&s, Some(sup.clone()), &opts).await.unwrap();
     let text = render(&done);
     assert_eq!(done.count("skill", "imported"), 1, "{text}");
     assert!(s.platform.dirs.skills().join("arxiv/notes.txt").is_file());
@@ -386,7 +384,7 @@ async fn an_instance_is_simulated_then_imported_once() {
     assert!(text.contains("🔐 1 secret(s) rangé(s)"), "{text}");
 
     // Second passage : tout existe déjà, rien n'est dupliqué.
-    let again = import(&d.services, Some(sup.clone()), &opts).await.unwrap();
+    let again = import(&s, Some(sup.clone()), &opts).await.unwrap();
     assert_eq!(again.count("skill", "exists"), 1);
     assert_eq!(again.count("fichier", "identical"), 1);
     assert_eq!(again.count("mcp", "exists"), 4);

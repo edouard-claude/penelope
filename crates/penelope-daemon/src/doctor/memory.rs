@@ -87,19 +87,18 @@ pub async fn vault_index_check(s: &Services) -> DoctorCheck {
 }
 
 /// Alias `embedding` joignable (issue #11) : sans lui, la recherche reste lexicale.
-pub async fn embedding_check(d: &crate::runtime::Daemon) -> DoctorCheck {
+pub async fn embedding_check(emb: &crate::embeddings::Embedder) -> DoctorCheck {
     const ID: &str = "embedding";
     const LABEL: &str = "Embeddings (recherche par le sens)";
     let fix = Some(format!(
         "penelope config set models.aliases.embedding {}",
         penelope_kernel::config::DEFAULT_EMBEDDING_MODEL
     ));
-    let Some(model) = crate::embeddings::model(&d.services) else {
+    let Some(model) = crate::embeddings::model(&emb.services) else {
         return DoctorCheck::fail(ID, LABEL, "aucun modèle pour le rôle `embedding`", fix);
     };
     let texts = ["penelope doctor".to_string()];
-    let emb = d.embedder();
-    let probe = crate::embeddings::embed_texts(&emb, &texts);
+    let probe = crate::embeddings::embed_texts(emb, &texts);
     match tokio::time::timeout(std::time::Duration::from_secs(15), probe).await {
         Ok(Ok((_, v))) if v.first().is_some_and(|x| !x.is_empty()) => {
             DoctorCheck::ok(ID, LABEL, format!("`{model}`, {} dimensions", v[0].len()))

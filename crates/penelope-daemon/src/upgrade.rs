@@ -19,7 +19,7 @@
 
 pub use crate::helpers::{is_source_build, running_binary};
 use crate::ports::{Handle, Slot};
-use crate::runtime::{Daemon, Services};
+use crate::runtime::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_platform::handoff::HandOff;
 use serde::{Deserialize, Serialize};
@@ -181,8 +181,34 @@ fn announces(said: &str, version: &str) -> bool {
         .any(|t| t.trim_start_matches('v') == version)
 }
 
+/// Une release ne se télécharge qu'en HTTPS, ou en HTTP vers la boucle locale **exacte**
+/// (`127.0.0.0/8`, `[::1]`, `localhost`), jamais avec des identifiants dans l'URL. La
+/// même règle que `penelope_mcp_host::auth::check_endpoint`, recopiée ici pour que
+/// `penelope-ops` ne dépende pas de l'hôte MCP (épopée #208, T28) ; les deux rejoindront
+/// `penelope_app::helpers`.
+fn check_endpoint(raw: &str) -> Result<(), String> {
+    let refuse = || {
+        Err(format!(
+            "point d'accès OAuth refusé (HTTPS obligatoire hors boucle locale) : {raw}"
+        ))
+    };
+    let Ok(url) = url::Url::parse(raw) else {
+        return refuse();
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        return refuse();
+    }
+    match (url.scheme(), url.host()) {
+        ("https", Some(_)) => Ok(()),
+        ("http", Some(url::Host::Ipv4(ip))) if ip.is_loopback() => Ok(()),
+        ("http", Some(url::Host::Ipv6(ip))) if ip.is_loopback() => Ok(()),
+        ("http", Some(url::Host::Domain(host))) if host.eq_ignore_ascii_case("localhost") => Ok(()),
+        _ => refuse(),
+    }
+}
+
 async fn fetch(client: &reqwest::Client, url: &str, max: usize) -> Result<Vec<u8>, String> {
-    crate::mcp_auth::check_endpoint(url)?;
+    check_endpoint(url)?;
     let resp = client
         .get(url)
         .header(
@@ -1074,15 +1100,15 @@ pub async fn switch_to_releases(opts: Switch<'_>) -> Result<Value, String> {
 
 /// Méthode RPC `upgrade` : `check`, `rollback`, ou installation (`tag`, `force`). Une
 /// installation ou un retour arrière réussi redémarre le daemon juste après la réponse.
-pub async fn rpc(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
-    let source = Source::from_config(&d.services.config.config());
+pub async fn rpc(s: &Arc<Services>, handle: &Handle, p: &Value) -> anyhow::Result<Value> {
+    let source = Source::from_config(&s.config.config());
     if p["check"].as_bool().unwrap_or(false) {
         return check(&source).await.map_err(anyhow::Error::msg);
     }
     if IN_PROGRESS.swap(true, Ordering::SeqCst) {
         anyhow::bail!("une mise à jour est déjà en cours");
     }
-    let result = change(d, &source, p).await;
+    let result = change(s, &source, p).await;
     IN_PROGRESS.store(false, Ordering::SeqCst);
     let mut v = result.map_err(anyhow::Error::msg)?;
     let kind = if v["installed"].is_string() {
@@ -1092,54 +1118,50 @@ pub async fn rpc(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
     } else {
         return Ok(v);
     };
-    let _ = d
-        .services
-        .events
-        .append(EventDraft::new(kind, v.clone()))
-        .await;
+    let _ = s.events.append(EventDraft::new(kind, v.clone())).await;
     // Bascule : le service rechargé arrête et relance le daemon lui-même.
     if v["switched"].as_bool() == Some(true) {
         v["restart"] = json!(true);
         return Ok(v);
     }
-    let daemon = d.clone();
+    let handle = handle.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(1500)).await;
-        daemon.handle.request_restart();
+        handle.request_restart();
     });
     v["restart"] = json!(true);
     Ok(v)
 }
 
-async fn change(d: &Arc<Daemon>, source: &Source, p: &Value) -> Result<Value, String> {
+async fn change(s: &Services, source: &Source, p: &Value) -> Result<Value, String> {
     if p["switch"].as_bool() == Some(true) {
-        let cfg = d.services.config.config();
-        let install_dir = d.services.platform.dirs.expand(&cfg.upgrade.install_dir);
+        let cfg = s.config.config();
+        let install_dir = s.platform.dirs.expand(&cfg.upgrade.install_dir);
         return switch_to_releases(Switch {
             source,
             tag: p["tag"].as_str().filter(|t| !t.trim().is_empty()),
             current: &running_binary()?,
             install_dir: &install_dir,
-            state_dir: &d.services.platform.dirs.state(),
-            now: d.services.clock.now_rfc3339(),
+            state_dir: &s.platform.dirs.state(),
+            now: s.clock.now_rfc3339(),
             codesign: codesign_of(&cfg),
             host: &SystemHost,
         })
         .await;
     }
     let binary = installed_binary()?;
-    let state_dir = d.services.platform.dirs.state();
+    let state_dir = s.platform.dirs.state();
     if p["rollback"].as_bool().unwrap_or(false) {
         return manual_rollback(&binary, &state_dir);
     }
-    let cfg = d.services.config.config();
+    let cfg = s.config.config();
     let mut v = install(Install {
         source,
         tag: p["tag"].as_str().filter(|t| !t.trim().is_empty()),
         force: p["force"].as_bool().unwrap_or(false),
         binary: &binary,
         state_dir: &state_dir,
-        now: d.services.clock.now_rfc3339(),
+        now: s.clock.now_rfc3339(),
         codesign: codesign_of(&cfg),
     })
     .await?;

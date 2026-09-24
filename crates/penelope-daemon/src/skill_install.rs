@@ -5,17 +5,16 @@
 //! un socle installé à la main. Ce qui est automatisable l'est ici ; ce qui touche la
 //! machine (npm, pip, binaires) est **listé, jamais installé**.
 
-use crate::runtime::Daemon;
+use crate::runtime::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_skills::install::{Installed, MAX_ARCHIVE_BYTES, Source};
 use serde_json::json;
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Télécharge l'archive d'un dépôt et installe les skills demandées dans
 /// `{data}/skills/`. Rend ce qui a été posé, avec les dépendances qui manquent.
 pub async fn install(
-    d: &Arc<Daemon>,
+    s: &Services,
     spec: &str,
     force: bool,
 ) -> anyhow::Result<(Source, Vec<Installed>, Vec<crate::skill_deps::Missing>)> {
@@ -23,12 +22,12 @@ pub async fn install(
     let url = source.archive_url();
     let bytes = fetch(&url).await.map_err(anyhow::Error::msg)?;
 
-    let root = d.services.platform.dirs.skills();
+    let root = s.platform.dirs.skills();
     std::fs::create_dir_all(&root)?;
     let installed = penelope_skills::install::install_from_zip(&bytes, &wanted, &root, force)
         .map_err(anyhow::Error::msg)?;
 
-    crate::runtime::reload_skills(&d.services).await?;
+    crate::runtime::reload_skills(s).await?;
     let missing = crate::skill_deps::missing_for(
         &installed
             .iter()
@@ -37,8 +36,7 @@ pub async fn install(
     )
     .await;
 
-    d.services
-        .events
+    s.events
         .append(EventDraft::new(
             "skill.installed",
             json!({

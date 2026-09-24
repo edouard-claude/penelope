@@ -524,12 +524,11 @@ fn sha256_of(p: &Path) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::Daemon;
     use penelope_kernel::config::Backup;
 
     use std::sync::Arc;
 
-    async fn daemon() -> (tempfile::TempDir, Arc<Daemon>) {
+    async fn services() -> (tempfile::TempDir, Arc<Services>) {
         let dir = tempfile::tempdir().unwrap();
         let clock: penelope_kernel::clock::SharedClock =
             Arc::new(penelope_kernel::clock::TestClock::default());
@@ -538,15 +537,15 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        (dir, Arc::new(Daemon::from_services(s)))
+        (dir, s)
     }
 
     /// #42 : sauvegarde puis restauration dans un répertoire vide : la base et le vault
     /// reviennent identiques, et les valeurs de secrets ne sont jamais dans l'archive.
     #[tokio::test]
     async fn a_backup_restores_the_database_and_the_vault() {
-        let (_dir, d) = daemon().await;
-        let s = &d.services;
+        let (_dir, s) = services().await;
+        let s = &s;
         let vault = crate::helpers::vault_dir(s);
         std::fs::create_dir_all(&vault).unwrap();
         std::fs::write(vault.join("memoire.md"), "- un souvenir précis ^01UID\n").unwrap();
@@ -567,7 +566,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (archive, report) = build(&d.services, false).await.unwrap();
+        let (archive, report) = build(&s, false).await.unwrap();
         assert!(archive.is_file());
         assert!(report["bytes"].as_u64().unwrap_or(0) > 0);
         assert!(report["sha256"].as_str().is_some());
@@ -620,20 +619,18 @@ mod tests {
     /// chiffrement ne monopolisent pas le runtime. `doctor` dit sa durée.
     #[tokio::test(flavor = "current_thread")]
     async fn a_backup_neither_blocks_the_runtime_nor_the_writer() {
-        let (_dir, d) = daemon().await;
-        d.services
-            .platform
+        let (_dir, s) = services().await;
+        s.platform
             .secrets
             .set(PASSPHRASE_SECRET, "phrase de passe")
             .unwrap();
         let job = {
-            let d = d.clone();
-            tokio::spawn(async move { run(&d.services, false, None).await })
+            let s = s.clone();
+            tokio::spawn(async move { run(&s, false, None).await })
         };
         let mut during = 0;
         while !job.is_finished() {
-            d.services
-                .store
+            s.store
                 .write(|tx| penelope_store::kv_set(tx, "battement", "1"))
                 .await
                 .unwrap();
@@ -647,8 +644,7 @@ mod tests {
         assert!(report["snapshot_ms"].is_u64(), "{report}");
         assert!(report["duration_ms"].is_u64(), "{report}");
 
-        let events = d
-            .services
+        let events = s
             .events
             .range(0, 500)
             .await
@@ -657,17 +653,17 @@ mod tests {
             .filter(|e| e.kind == "store.backup")
             .count();
         assert_eq!(events, 1);
-        let check = doctor_check(&d.services).await;
+        let check = doctor_check(&s).await;
         assert!(check.detail.contains("d'instantané"), "{}", check.detail);
     }
 
     /// #42 : sans phrase de passe, rien n'est écrit et le message dit quoi faire.
     #[tokio::test]
     async fn without_a_passphrase_nothing_is_written() {
-        let (_dir, d) = daemon().await;
-        let e = build(&d.services, false).await.unwrap_err();
+        let (_dir, s) = services().await;
+        let e = build(&s, false).await.unwrap_err();
         assert!(e.to_string().contains(PASSPHRASE_SECRET), "{e}");
-        let out = d.services.platform.dirs.data().join("backups");
+        let out = s.platform.dirs.data().join("backups");
         let archives = std::fs::read_dir(&out)
             .map(|r| {
                 r.flatten()
@@ -681,33 +677,29 @@ mod tests {
     /// #42 : une archive au-delà de la limite du dépôt est refusée, avec la marche à suivre.
     #[tokio::test]
     async fn an_oversized_archive_is_refused_before_pushing() {
-        let (_dir, d) = daemon().await;
-        let s = &d.services;
+        let (_dir, s) = services().await;
+        let s = &s;
         s.platform.secrets.set(PASSPHRASE_SECRET, "phrase").unwrap();
-        d.publish_config("test", |c| {
+        s.publish_config("test", |c| {
             c.backup.max_push_bytes = 64;
             c.backup.git_remote = "git@github.com:moi/sauvegardes.git".into();
             Ok(vec!["backup.max_push_bytes".into()])
         })
         .unwrap();
-        let e = run(&d.services, true, Some(false)).await.unwrap_err();
+        let e = run(&s, true, Some(false)).await.unwrap_err();
         assert!(e.to_string().contains("limite"), "{e}");
     }
 
     /// #42 : l'état des sauvegardes remonte dans `doctor`.
     #[tokio::test]
     async fn doctor_says_when_there_is_no_backup_yet() {
-        let (_dir, d) = daemon().await;
-        let c = doctor_check(&d.services).await;
+        let (_dir, s) = services().await;
+        let c = doctor_check(&s).await;
         assert!(!c.ok, "{c:?}");
         assert!(c.detail.contains("phrase de passe"), "{c:?}");
 
-        d.services
-            .platform
-            .secrets
-            .set(PASSPHRASE_SECRET, "phrase")
-            .unwrap();
-        let c = doctor_check(&d.services).await;
+        s.platform.secrets.set(PASSPHRASE_SECRET, "phrase").unwrap();
+        let c = doctor_check(&s).await;
         assert!(c.detail.contains("aucune sauvegarde"), "{c:?}");
     }
 

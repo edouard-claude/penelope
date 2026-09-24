@@ -24,7 +24,7 @@ impl Rpc {
                 if let Some(sup) = self.daemon.hooks.mcp_supervisor() {
                     checks.extend(super::doctor::mcp_checks(s, &*sup).await);
                 }
-                checks.push(crate::doctor::embedding_check(&self.daemon).await);
+                checks.push(crate::doctor::embedding_check(&self.daemon.embedder()).await);
                 checks.push(crate::doctor::vault_index_check(s).await);
                 checks.extend(crate::doctor::coherence_checks(s).await);
                 checks.push(crate::doctor::logs_secret_check(s));
@@ -110,7 +110,9 @@ impl Rpc {
                         .collect::<Vec<_>>()
                 ))
             }
-            method::UPGRADE => crate::upgrade::rpc(&self.daemon, p).await,
+            method::UPGRADE => {
+                crate::upgrade::rpc(&self.daemon.services, &self.daemon.handle, p).await
+            }
             method::IMPORT_HERMES => {
                 let d = &self.daemon;
                 let (mcp, m) = (d.hooks.mcp_supervisor(), d.hooks.messenger());

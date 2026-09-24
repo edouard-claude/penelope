@@ -770,8 +770,8 @@ mod tests {
         )
     }
 
-    /// Daemon de test dont le serveur d'autorisation est `issuer`.
-    async fn with_issuer(issuer: &str) -> (tempfile::TempDir, Arc<crate::runtime::Daemon>) {
+    /// Services de test dont le serveur d'autorisation est `issuer`.
+    async fn with_issuer(issuer: &str) -> (tempfile::TempDir, Arc<Services>) {
         let dir = tempfile::tempdir().unwrap();
         let clock: penelope_kernel::clock::SharedClock =
             Arc::new(penelope_kernel::clock::TestClock::default());
@@ -780,15 +780,14 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let d = Arc::new(crate::runtime::Daemon::from_services(s));
         let issuer = issuer.to_string();
-        d.publish_config("test", move |c| {
+        s.publish_config("test", move |c| {
             c.providers.codex.issuer = issuer.clone();
             c.providers.codex.enabled = true;
             Ok(vec!["providers.codex.issuer".into()])
         })
         .unwrap();
-        (dir, d)
+        (dir, s)
     }
 
     /// #142 : le code d'appareil — `interval` en chaîne, 403 puis 404 en attente, échange
@@ -817,8 +816,8 @@ mod tests {
             ),
         ])
         .await;
-        let (_dir, d) = with_issuer(&url).await;
-        let s = &d.services;
+        let (_dir, services) = with_issuer(&url).await;
+        let s = &*services;
 
         let login = start(s).await.expect("code d'appareil");
         assert_eq!(login.user_code, "ABCD-EF");
@@ -852,8 +851,8 @@ mod tests {
     #[tokio::test]
     async fn a_missing_device_code_says_what_to_do() {
         let (url, _) = scripted_server(vec![(404, "{}".to_string())]).await;
-        let (_dir, d) = with_issuer(&url).await;
-        let e = start(&d.services).await.expect_err("404");
+        let (_dir, s) = with_issuer(&url).await;
+        let e = start(&s).await.expect_err("404");
         assert!(e.contains("code d'appareil n'est pas activé"), "{e}");
     }
 
@@ -871,8 +870,8 @@ mod tests {
             (200, json!({"access_token": "jamais"}).to_string()),
         ])
         .await;
-        let (_dir, d) = with_issuer(&url).await;
-        let s = &d.services;
+        let (_dir, services) = with_issuer(&url).await;
+        let s = &*services;
         let now = s.clock.now_ms();
         store(
             s,
@@ -912,8 +911,8 @@ mod tests {
             json!({"error": "refresh_token_reused"}).to_string(),
         )])
         .await;
-        let (_dir, d) = with_issuer(&url).await;
-        let s = &d.services;
+        let (_dir, services) = with_issuer(&url).await;
+        let s = &*services;
         let now = s.clock.now_ms();
         store(
             s,
