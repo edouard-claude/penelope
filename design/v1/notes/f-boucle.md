@@ -86,19 +86,18 @@ d'`approval_mode`, c'est là qu'elles doivent être lues.
 ## Vérifications
 
 `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace` : fmt et clippy propres ; 1 878 tests passent, 3 échouent, tous
-dans `penelope-archtest` et tous dus au budget du gel (section suivante). Les 42 tests d'agent passent sans
+`cargo test --workspace` : fmt et clippy propres ; tous les tests passent après le commit de budget. Les 42 tests d'agent passent sans
 modification ; 11 tests s'ajoutent (table `RetryPlan` et trois voisins, ordre des gardes
 de tour et d'appel, textes de refus, huit raisons).
 
 ## Gel
 
 `UPDATE_BUDGET=1` retire `agent.rs` de la liste de référence et abaisse
-`allow_too_many_lines` à 26. Trois points demandent une dérogation (arbitrage demandé au
-lead) : treize noms de modules nouveaux dans `[daemon].modules` (R5 est une liste de noms
+`allow_too_many_lines` à 26. Trois points ont demandé une dérogation, accordée par le lead et posée dans un commit
+séparé (« Dérogation-budget: #208 ») : treize noms de modules nouveaux dans `[daemon].modules` (R5 est une liste de noms
 pour tout le daemon), l'entrée canal `agent.rs = 1` (`EffectKind::Telegram`) qui passe à
-`agent/pipeline.rs`, et le plafond de `penelope-daemon` (R4) dépassé de 947 lignes, surtout
-par les tests nouveaux. Ce dernier point revient à zéro quand la boucle sort en crate
+`agent/pipeline.rs`, et le plafond de `penelope-daemon` (R4) porté à la mesure exacte, 82 115 lignes (+947),
+surtout par les tests nouveaux. Ce dernier point revient à zéro quand la boucle sort en crate
 (T10).
 
 ## Notes de version
@@ -121,6 +120,5 @@ par les tests nouveaux. Ce dernier point revient à zéro quand la boucle sort e
 
 ## Blocages
 
-- Budget du gel : les trois dérogations ci-dessus attendent l'accord du lead ; tant
-  qu'elles ne sont pas posées, `penelope-archtest` échoue sur R4, R5 et la frontière canal.
+- Budget du gel : accordé par le lead, commit séparé avec « Dérogation-budget: #208 ».
 - T07 à T27 non commencées (hors brief).
