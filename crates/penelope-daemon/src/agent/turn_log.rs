@@ -7,7 +7,10 @@
 //! après crash (§2.7) reconnaîtra un tour ouvert à cette seule absence.
 
 use super::*;
-use penelope_context::journal::{KIND_TURN_FINISHED, KIND_TURN_STARTED};
+use penelope_context::journal::{
+    KIND_TURN_FINISHED, KIND_TURN_STARTED, TurnCall, TurnEnd, TurnIdentity, finished_payload,
+    started_payload,
+};
 
 /// Identité d'un tour de la file, quand il y en a une : le tour d'une session de chat.
 /// Un sous-agent ou une étape de workflow n'en ont pas.
@@ -20,7 +23,7 @@ pub struct TurnMeta {
     /// Numéro de tentative : un tour rejoué après crash porte le suivant.
     pub attempt: i64,
     /// Posé quand `turn.started` est écrit : un tour qui échoue avant la boucle ne l'a
-    /// pas ouvert, et c'est à l'appelant de le borner ([`open_and_close`]).
+    /// pas ouvert, et c'est à l'appelant de le borner ([`close_unopened`]).
     pub opened: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -35,84 +38,54 @@ impl TurnMeta {
     }
 }
 
-/// Raison écrite dans `turn.finished` (§2.2) ; `interrupted` est réservé à la reprise
-/// après crash, que la boucle n'écrit jamais.
-pub fn finish_reason(outcome: &anyhow::Result<TurnOutcome>) -> &'static str {
-    match outcome {
-        Ok(TurnOutcome::Answered { .. }) => "answered",
-        Ok(TurnOutcome::AwaitingApproval { .. }) => "awaiting_approval",
-        Ok(TurnOutcome::Cancelled) => "cancelled",
-        Ok(TurnOutcome::BudgetExceeded { .. }) => "budget_exceeded",
-        Ok(TurnOutcome::LoopAborted { .. }) => "loop_aborted",
-        Ok(TurnOutcome::Failed { error }) if error.starts_with(CALLS_EXHAUSTED) => {
-            "calls_exhausted"
+impl TurnMeta {
+    fn identity(&self) -> TurnIdentity {
+        TurnIdentity {
+            turn_id: self.turn_id.clone(),
+            kind: self.kind.clone(),
+            attempt: self.attempt,
         }
-        Ok(TurnOutcome::Failed { .. }) | Err(_) => "failed",
     }
 }
 
-/// Payload de `turn.started`.
-pub fn started_payload(
-    spec: &TurnSpec,
-    meta: Option<&TurnMeta>,
-    system_hash: Option<String>,
-) -> Value {
-    let mut p = json!({
-        "model": spec.model_id,
-        "system_hash": system_hash,
-        "tools_hash": crate::cache_audit::Fingerprint::tools_hash_of(&spec.tools),
-    });
-    add_identity(&mut p, spec.turn_id.as_deref(), meta);
-    p
-}
-
-/// Payload de `turn.finished` : la raison, et ce que l'issue dit d'elle-même.
-pub fn finished_payload(
-    origin_turn: Option<&str>,
-    meta: Option<&TurnMeta>,
-    outcome: &anyhow::Result<TurnOutcome>,
-) -> Value {
-    let mut p = json!({"reason": finish_reason(outcome)});
+/// La sortie du tour, dans le vocabulaire du journal.
+fn turn_end(outcome: &anyhow::Result<TurnOutcome>) -> TurnEnd {
     match outcome {
         Ok(TurnOutcome::Answered {
             iterations,
             cost_usd,
             ..
-        }) => {
-            p["iterations"] = json!(iterations);
-            p["cost_usd"] = json!(cost_usd);
-        }
-        Ok(TurnOutcome::AwaitingApproval { approval_id }) => {
-            p["approval_id"] = json!(approval_id);
-        }
+        }) => TurnEnd::Answered {
+            iterations: *iterations,
+            cost_usd: *cost_usd,
+        },
+        Ok(TurnOutcome::AwaitingApproval { approval_id }) => TurnEnd::AwaitingApproval {
+            approval_id: approval_id.clone(),
+        },
+        Ok(TurnOutcome::Cancelled) => TurnEnd::Cancelled,
         Ok(TurnOutcome::BudgetExceeded {
             scope,
             spent_usd,
             limit_usd,
-        }) => {
-            p["scope"] = json!(scope);
-            p["spent_usd"] = json!(spent_usd);
-            p["limit_usd"] = json!(limit_usd);
+        }) => TurnEnd::BudgetExceeded {
+            scope: scope.clone(),
+            spent_usd: *spent_usd,
+            limit_usd: *limit_usd,
+        },
+        Ok(TurnOutcome::LoopAborted { report, .. }) => TurnEnd::LoopAborted {
+            report: report.clone(),
+        },
+        Ok(TurnOutcome::Failed { error }) if error.starts_with(CALLS_EXHAUSTED) => {
+            TurnEnd::CallsExhausted {
+                error: error.clone(),
+            }
         }
-        Ok(TurnOutcome::LoopAborted { report, .. }) => p["report"] = json!(report),
-        Ok(TurnOutcome::Failed { error }) => p["error"] = json!(error),
-        Err(e) => p["error"] = json!(e.to_string()),
-        Ok(TurnOutcome::Cancelled) => {}
-    }
-    add_identity(&mut p, origin_turn, meta);
-    p
-}
-
-/// `turn_id` (la ligne de la file), `origin_turn` (la requête du propriétaire, qu'une
-/// reprise après approbation partage), `kind`, `attempt` : omis hors de la file.
-fn add_identity(p: &mut Value, origin_turn: Option<&str>, meta: Option<&TurnMeta>) {
-    if let Some(m) = meta {
-        p["turn_id"] = json!(m.turn_id);
-        p["kind"] = json!(m.kind);
-        p["attempt"] = json!(m.attempt);
-    }
-    if let Some(origin) = origin_turn {
-        p["origin_turn"] = json!(origin);
+        Ok(TurnOutcome::Failed { error }) => TurnEnd::Failed {
+            error: error.clone(),
+        },
+        Err(e) => TurnEnd::Failed {
+            error: e.to_string(),
+        },
     }
 }
 
@@ -142,12 +115,18 @@ impl AgentLoop {
         // référence le prompt système par son empreinte, et l'instantané la résout
         // (issue #205).
         let prefix = conv.prompt_prefix();
+        let call = TurnCall {
+            model: spec.model_id.clone(),
+            system_hash: prefix.as_ref().map(|p| p.hash()),
+            tools_hash: crate::cache_audit::Fingerprint::tools_hash_of(&spec.tools),
+        };
+        let id = meta.map(TurnMeta::identity);
         self.services
             .events
             .append(
                 EventDraft::new(
                     KIND_TURN_STARTED,
-                    started_payload(spec, meta, prefix.as_ref().map(|p| p.hash())),
+                    started_payload(Some(&call), spec.turn_id.as_deref(), id.as_ref()),
                 )
                 .session(&spec.session_id),
             )
@@ -171,7 +150,8 @@ pub async fn close_turn(
     meta: Option<&TurnMeta>,
     outcome: &anyhow::Result<TurnOutcome>,
 ) {
-    let payload = finished_payload(spec.turn_id.as_deref(), meta, outcome);
+    let id = meta.map(TurnMeta::identity);
+    let payload = finished_payload(&turn_end(outcome), spec.turn_id.as_deref(), id.as_ref());
     append_bound(s, &spec.session_id, KIND_TURN_FINISHED, payload).await;
 }
 
@@ -187,10 +167,10 @@ pub async fn close_unopened(
     if meta.opened.load(std::sync::atomic::Ordering::SeqCst) {
         return;
     }
-    let mut started = json!({});
-    add_identity(&mut started, None, Some(meta));
+    let id = meta.identity();
+    let started = started_payload(None, None, Some(&id));
     if append_bound(s, session_id, KIND_TURN_STARTED, started).await {
-        let finished = finished_payload(None, Some(meta), outcome);
+        let finished = finished_payload(&turn_end(outcome), None, Some(&id));
         append_bound(s, session_id, KIND_TURN_FINISHED, finished).await;
     }
 }

@@ -18,7 +18,7 @@ test_modules = [
 # Elle ne peut que rétrécir : un fichier repassé sous le plafond doit en sortir.
 [files.oversized]
 "crates/penelope-daemon/src/tool_jobs.rs" = 1754   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/engine.rs" = 1179
+"crates/penelope-daemon/src/engine.rs" = 1106
 "crates/penelope-kernel/src/config.rs" = 2790   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-cli/src/commands.rs" = 2686   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/compaction.rs" = 2225
@@ -29,13 +29,11 @@ test_modules = [
 "crates/penelope-memory/src/index.rs" = 1622
 "crates/penelope-llm/src/codex.rs" = 1533
 "crates/penelope-memory/src/consolidation.rs" = 1476
-"crates/penelope-context/src/store.rs" = 1379
+"crates/penelope-context/src/store.rs" = 1064
 "crates/penelope-tools/src/spec.rs" = 1377   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-mcp/src/transport.rs" = 1265
-"crates/penelope-store/src/migrations.rs" = 1295   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/mcp_auth.rs" = 1246
 "crates/penelope-daemon/src/ingest.rs" = 1225
-"crates/penelope-daemon/src/conversation.rs" = 1200
 "crates/penelope-context/src/engine.rs" = 1148
 "crates/penelope-mcp/src/registry.rs" = 1200
 "crates/penelope-daemon/src/purge.rs" = 1245   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
