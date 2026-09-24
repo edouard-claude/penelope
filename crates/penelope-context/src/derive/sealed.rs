@@ -48,13 +48,19 @@ impl Sealed {
 
     /// Préfixe d'une session fille : la dérivation de la mère jusqu'à l'adresse `up_to`.
     /// Récursif : `parent_prefix` est lui-même le préfixe de la mère.
+    ///
+    /// Les messages hérités viennent **sans** leur contexte figé (§2.3 : le fork hérite
+    /// des nœuds et des messages) : la fille repart comme la V0 l'a toujours fait
+    /// (`copy_messages` ne recopie pas `message_context`), et ses requêtes gardent leurs
+    /// octets quand la lecture passe au journal (T14).
     pub fn fork(
         parent: &str,
         parent_prefix: &Sealed,
         parent_events: &[Event],
         up_to: i64,
     ) -> Result<Self, DeriveError> {
-        let surface = derive_until(parent_prefix, parent_events, up_to)?;
+        let mut surface = derive_until(parent_prefix, parent_events, up_to)?;
+        surface.contexts.clear();
         let lost = surface.purged;
         Ok(Sealed {
             origin: Origin::Fork {

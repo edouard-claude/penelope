@@ -14,8 +14,8 @@
 //! `event_id` (une ligne scellée par son numéro) et ne vérifie que l'ordre.
 //!
 //! **Ce que la V0 ne recopie pas.** Une fille de fork ne reçoit pas les contextes figés de
-//! sa mère (`copy_messages`), l'archive d'un retour arrière non plus : ces contextes
-//! hérités sont dans la surface, pas dans le cache. Le rejeu ne les attend pas.
+//! sa mère (`copy_messages`), l'archive d'un retour arrière non plus. Le pliage ne les
+//! hérite pas non plus (`Sealed::fork`) ; l'archive n'en attend pas.
 
 use crate::derive::{DeriveError, Sealed, Slot, Surface, derive, derive_until};
 use crate::journal::{ConvEvent, ImportPayload, KIND_PREFIX, KIND_REWIND, SurfaceOp, is_purged};
@@ -286,11 +286,7 @@ impl Lineage {
                     .and_then(|o| o.turn_message_id.clone()),
             });
         }
-        let inherited = matches!(self.origin, Origin::Fork);
         for (addr, block) in &surface.contexts {
-            if inherited && *addr <= self.offset {
-                continue;
-            }
             if let Some(seq) = out.seqs.get(addr) {
                 out.contexts.insert(*seq, block.clone());
             }

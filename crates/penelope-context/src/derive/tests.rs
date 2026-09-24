@@ -550,3 +550,30 @@ fn events_out_of_order_are_refused() {
     j.events.swap(0, 1);
     assert!(j.derive().is_err());
 }
+
+/// T14 : une fille hérite des messages de sa mère sans leur contexte figé, comme la
+/// copie V0 ; les contextes de ses propres messages restent.
+#[test]
+fn a_fork_inherits_messages_without_their_frozen_context() {
+    let mut root = Journal::default();
+    let r1 = root.user("r1");
+    root.conv(ConvEvent::Context(ContextPayload {
+        target: r1,
+        block: "<ctx mère>".into(),
+    }));
+    let up = root.assistant("r2");
+    let mut child = Journal::default();
+    child.fork("root", up, up);
+    let c1 = child.user("c1") + up;
+    child.conv(ConvEvent::Context(ContextPayload {
+        target: c1,
+        block: "<ctx fille>".into(),
+    }));
+    let prefix = Sealed::fork("root", &Sealed::none(), &root.events, up).unwrap();
+    assert!(prefix.surface().contexts.is_empty());
+    let s = derive(&prefix, &child.events).unwrap();
+    assert_eq!(
+        texts(&s.request_messages("S")),
+        ["S", "r1", "r2", "<ctx fille>c1"]
+    );
+}
