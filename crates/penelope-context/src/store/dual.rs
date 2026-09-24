@@ -438,7 +438,10 @@ pub(crate) fn address_in(
 }
 
 /// Ce qu'une session hérite, lu sur le `conv.fork` ou le `conv.import` en tête de son
-/// journal (§2.3).
+/// journal (§2.3). L'offset d'un `conv.fork` est à la racine du payload, celui d'un
+/// `conv.import` dans son opération de surface (`{"op": "seal", "offset": n}`) : le lire
+/// à la racine seulement donnait 0 à toute session scellée, et des adresses fausses à ses
+/// contextes, résumés et coupes (relevé par `history verify`, T12).
 pub(crate) struct Origin {
     /// Plus grande adresse héritée ; 0 sans héritage.
     pub offset: i64,
@@ -449,8 +452,9 @@ pub(crate) struct Origin {
 pub(crate) fn origin_in(c: &Connection, session_id: &str) -> penelope_store::Result<Origin> {
     let head = c
         .query_row(
-            "SELECT json_extract(payload, '$.offset'), json_extract(payload, '$.parent'),
-                    json_extract(payload, '$.up_to')
+            "SELECT COALESCE(json_extract(payload, '$.offset'),
+                             json_extract(payload, '$.surface.offset')),
+                    json_extract(payload, '$.parent'), json_extract(payload, '$.up_to')
              FROM events WHERE session_id = ?1 AND kind IN (?2, ?3) ORDER BY seq LIMIT 1",
             params![session_id, KIND_FORK, KIND_IMPORT],
             |r| {

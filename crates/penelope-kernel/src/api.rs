@@ -230,6 +230,8 @@ pub mod method {
     pub const AUDIT_VERIFY: &str = "audit.verify";
     /// Reconstitue une requête : prompt système, messages, outils (issue #205).
     pub const AUDIT_SHOW: &str = "audit.show";
+    /// Les caches de la conversation contre le journal (épopée #208, T12).
+    pub const HISTORY_VERIFY: &str = "history.verify";
     pub const STORE_REBUILD: &str = "store.rebuild";
     pub const USAGE: &str = "usage";
     pub const TAIL: &str = "tail";
@@ -342,6 +344,7 @@ pub mod method {
         RESTORE,
         AUDIT_VERIFY,
         AUDIT_SHOW,
+        HISTORY_VERIFY,
         STORE_REBUILD,
         USAGE,
         TAIL,

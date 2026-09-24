@@ -315,64 +315,67 @@ impl HistoryStore {
         session_id: &str,
     ) -> penelope_store::Result<Option<(ImportPayload, LegacyPrefix)>> {
         let sid = session_id.to_string();
-        self.store
-            .read(move |c| {
-                let mut st = c.prepare(
-                    "SELECT payload FROM events WHERE session_id = ?1 AND kind = ?2 ORDER BY seq",
-                )?;
-                let payloads: Vec<String> = st
-                    .query_map(params![sid, KIND_IMPORT], |r| r.get(0))?
-                    .collect::<Result<_, _>>()?;
-                let mut import = None;
-                for text in payloads {
-                    let value: Value = serde_json::from_str(&text)?;
-                    if is_purged(&value) {
-                        continue;
-                    }
-                    if let Some(ConvEvent::Import(p)) = ConvEvent::decode(KIND_IMPORT, &value)
-                        .map_err(|e| penelope_store::StoreError::other(e.to_string()))?
-                    {
-                        import = Some(p);
-                        break;
-                    }
-                }
-                let Some(import) = import else {
-                    return Ok(None);
-                };
-                let rows = LegacyPrefix::read_rows(c, &sid, true)?;
-                let up_to = match import.surface {
-                    SurfaceOp::Seal { offset, .. } => offset,
-                    _ => rows.last().map_or(0, |r| r.seq),
-                };
-                let contexts = LegacyPrefix::read_contexts(c, &sid, up_to)?;
-                let mut active = Vec::new();
-                for n in &import.lcm_active {
-                    let found = c
-                        .query_row(
-                            "SELECT summary, tokens_self FROM lcm_nodes WHERE id = ?1",
-                            [&n.node],
-                            |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
-                        )
-                        .optional()?;
-                    if let Some((summary, tokens_self)) = found {
-                        active.push(SealedSummary {
-                            node_id: n.node.clone(),
-                            summary,
-                            tokens_self: tokens_self as u64,
-                            from: n.from,
-                            to: n.to,
-                        });
-                    }
-                }
-                Ok(Some((
-                    import,
-                    LegacyPrefix {
-                        rows,
-                        contexts,
-                        active,
-                    },
-                )))
-            })
-            .await
+        self.store.read(move |c| sealed_prefix_in(c, &sid)).await
     }
+}
+
+/// [`HistoryStore::sealed_prefix`] dans une connexion ou une transaction de l'appelant.
+pub(crate) fn sealed_prefix_in(
+    c: &Connection,
+    sid: &str,
+) -> penelope_store::Result<Option<(ImportPayload, LegacyPrefix)>> {
+    let mut st =
+        c.prepare("SELECT payload FROM events WHERE session_id = ?1 AND kind = ?2 ORDER BY seq")?;
+    let payloads: Vec<String> = st
+        .query_map(params![sid, KIND_IMPORT], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut import = None;
+    for text in payloads {
+        let value: Value = serde_json::from_str(&text)?;
+        if is_purged(&value) {
+            continue;
+        }
+        if let Some(ConvEvent::Import(p)) = ConvEvent::decode(KIND_IMPORT, &value)
+            .map_err(|e| penelope_store::StoreError::other(e.to_string()))?
+        {
+            import = Some(p);
+            break;
+        }
+    }
+    let Some(import) = import else {
+        return Ok(None);
+    };
+    let rows = LegacyPrefix::read_rows(c, sid, true)?;
+    let up_to = match import.surface {
+        SurfaceOp::Seal { offset, .. } => offset,
+        _ => rows.last().map_or(0, |r| r.seq),
+    };
+    let contexts = LegacyPrefix::read_contexts(c, sid, up_to)?;
+    let mut active = Vec::new();
+    for n in &import.lcm_active {
+        let found = c
+            .query_row(
+                "SELECT summary, tokens_self FROM lcm_nodes WHERE id = ?1",
+                [&n.node],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        if let Some((summary, tokens_self)) = found {
+            active.push(SealedSummary {
+                node_id: n.node.clone(),
+                summary,
+                tokens_self: tokens_self as u64,
+                from: n.from,
+                to: n.to,
+            });
+        }
+    }
+    Ok(Some((
+        import,
+        LegacyPrefix {
+            rows,
+            contexts,
+            active,
+        },
+    )))
 }

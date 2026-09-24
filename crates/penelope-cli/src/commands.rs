@@ -185,6 +185,9 @@ pub enum Command {
     /// Audit d'un tour : ce que le modèle avait sous les yeux.
     #[command(subcommand)]
     Audit(AuditCmd),
+    /// L'historique de la conversation contre le journal d'événements.
+    #[command(subcommand)]
+    History(HistoryCmd),
     /// Sauvegarde cohérente. `--push` : archive chiffrée complète, poussée dans le dépôt
     /// privé de `backup.git_remote`.
     Backup {
@@ -244,6 +247,16 @@ pub enum AuditCmd {
     Show {
         #[arg(long)]
         turn: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HistoryCmd {
+    /// Dérive chaque session du journal et la compare à ses caches (messages, contextes,
+    /// résumés, préfixe scellé) ; code de sortie non nul à la première divergence.
+    Verify {
         #[arg(long)]
         session: Option<String>,
     },
@@ -757,6 +770,15 @@ pub async fn run(cli: Cli) -> CliResult<()> {
             }
         }
         Command::Mcp(_) => output::print(&value, true),
+        Command::History(HistoryCmd::Verify { .. }) => {
+            output::print(&value, cli.json);
+            if value["ok"] != json!(true) {
+                return Err(CliError::Validation(format!(
+                    "{} divergence(s) entre le journal et les caches",
+                    value["divergences"].as_array().map_or(0, Vec::len)
+                )));
+            }
+        }
         _ => output::print(&value, cli.json),
     }
     Ok(())
@@ -1005,6 +1027,9 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
             json!({"by": by, "session": session, "since": since, "limit": limit}),
         ),
         Command::AuditVerify => (m::AUDIT_VERIFY, json!({})),
+        Command::History(HistoryCmd::Verify { session }) => {
+            (m::HISTORY_VERIFY, json!({"session": session}))
+        }
         Command::Audit(AuditCmd::Show { turn, session }) => {
             if turn.is_none() && session.is_none() {
                 return Err(CliError::Usage(
