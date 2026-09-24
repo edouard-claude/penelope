@@ -95,6 +95,7 @@ source de lecture ; une ligne de `messages` cite son événement par `event_id`.
 | `conv.tool_result` | un résultat d'outil est gardé | `call_id`, `tool`, `ok`, `eager`, `content` |
 | `conv.system` | le préfixe système retenu change | `hash`, `rendered` (le texte entier), `tiles`, `reason` (`first`, `cold`, `compaction`) |
 | `conv.context` | le contexte volatil est figé avec un message | `target` (l'adresse du `conv.user`), `block` |
+| `conv.attempt` | un appel au modèle n'a pas donné de réponse gardée (#206) ; sans `surface`, il n'entre jamais dans l'historique | `turn`, `step`, `cause` (`stream_cut` flux coupé, `before_stream` erreur avant le flux, `fallback` la suite passe au modèle de repli, `empty_answer` réponse vide), `model`, `provider`, `error`, `partial_text` et `partial_reasoning` (le début reçu, rédigé), `llm_request_id` ; `usage`, `cost_usd` (déjà comptés, pas de seconde ligne d'usage) et `retry_prompt` (la consigne que la requête suivante ajoute) pour une réponse vide. Dix au plus par tour ; chacun est aussi une ligne `tentative sans réponse` de `penelope logs --turn` |
 
 Ces événements sont des données personnelles, purgées comme les autres.
 

@@ -7,6 +7,7 @@ use penelope_llm::mock::{MockProvider, Scripted};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod approvals;
+mod attempts;
 mod call_guards;
 mod effects;
 mod fallback;

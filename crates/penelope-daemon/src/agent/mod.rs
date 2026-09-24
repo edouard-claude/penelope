@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
+mod attempts;
 mod conversation;
 mod decisions;
 mod executor;
@@ -38,6 +39,8 @@ mod spec;
 mod turn;
 mod turn_log;
 
+use attempts::Attempts;
+pub use attempts::{EMPTY_RETRY_PROMPT, MAX_ATTEMPTS_PER_TURN};
 pub use conversation::{Compactor, Conversation, MemoryConversation};
 pub use decisions::{EFFECT_DONE, EFFECT_IGNORE, EFFECT_RETRY, decide_approval};
 pub use executor::{CallInfo, ToolExecutor};

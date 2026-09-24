@@ -1290,6 +1290,7 @@ dependencies = [
  "penelope-daemon",
  "penelope-evals",
  "penelope-kernel",
+ "penelope-llm",
  "penelope-observe",
  "penelope-platform",
  "penelope-store",

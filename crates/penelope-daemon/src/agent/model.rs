@@ -4,6 +4,8 @@ use super::*;
 
 mod retry;
 
+use super::attempts::{Attempts, Partial, failure_cause, stream_cut_message};
+use penelope_context::journal::{AttemptCause, AttemptPayload};
 use retry::{Phase, RetryAction, RetryPlan};
 
 /// Échec d'un appel au modèle, déjà formulé pour l'utilisateur.
@@ -42,6 +44,7 @@ impl AgentLoop {
         sink: &dyn TurnSink,
         pinned_upstream: Option<String>,
         tool_choice: Option<ToolChoice>,
+        attempts: &Attempts,
     ) -> anyhow::Result<Result<ChatResponse, CallFailure>> {
         let s = &self.services;
         let mut plan = RetryPlan::new(
@@ -103,6 +106,10 @@ impl AgentLoop {
                         .failed(&llm_id, &e.to_string(), e.maybe_billed)
                         .await?;
                     let action = plan.on_error(&e, Phase::BeforeStream, spec.cancel.is_cancelled());
+                    let fell_back = matches!(action, RetryAction::Fallback { .. });
+                    let cause = failure_cause(false, fell_back);
+                    let attempt = self.failed_attempt(&model_id, &e, &llm_id, cause);
+                    attempts.record(s, spec, attempt).await;
                     match action {
                         RetryAction::RetrySame { wait_s: secs } => {
                             tracing::warn!(
@@ -148,15 +155,22 @@ impl AgentLoop {
             });
 
             // Ce qui est déjà parti vers l'utilisateur : texte de réponse ou appel d'outil.
+            // Le texte et le raisonnement reçus sont gardés pour la tentative, si le flux
+            // casse (#206).
             let shown = std::sync::atomic::AtomicBool::new(false);
+            let partial = Partial::default();
             let observe = |chunk: &StreamChunk| match chunk {
                 StreamChunk::Delta { text } => {
                     if !text.is_empty() {
                         shown.store(true, std::sync::atomic::Ordering::SeqCst);
+                        partial.text(text);
                     }
                     sink.emit(TurnEvent::Delta(text.clone()))
                 }
-                StreamChunk::Reasoning { text } => sink.emit(TurnEvent::Reasoning(text.clone())),
+                StreamChunk::Reasoning { text } => {
+                    partial.reasoning(text);
+                    sink.emit(TurnEvent::Reasoning(text.clone()))
+                }
                 StreamChunk::ToolCall(_) => shown.store(true, std::sync::atomic::Ordering::SeqCst),
                 _ => {}
             };
@@ -205,7 +219,13 @@ impl AgentLoop {
                     } else {
                         Phase::InStream
                     };
-                    match plan.on_error(&e, phase, spec.cancel.is_cancelled()) {
+                    let action = plan.on_error(&e, phase, spec.cancel.is_cancelled());
+                    let fell_back = matches!(action, RetryAction::Fallback { .. });
+                    let mut attempt =
+                        self.failed_attempt(&model_id, &e, &llm_id, failure_cause(true, fell_back));
+                    let text = partial.into_attempt(&mut attempt);
+                    attempts.record(s, spec, attempt).await;
+                    match action {
                         RetryAction::RetrySame { wait_s: secs } => {
                             tracing::warn!(
                                 model = %model_id,
@@ -224,20 +244,36 @@ impl AgentLoop {
                                 "flux interrompu avant tout texte : repli sur le modèle suivant"
                             );
                         }
-                        // Des fragments sont déjà partis : pas de repli silencieux, on le dit.
+                        // Des fragments sont déjà partis : pas de repli silencieux, on le dit,
+                        // en citant le début gardé dans la tentative (#206).
                         RetryAction::GiveUp if shown => {
                             let mut failure = CallFailure::from_llm(&e);
-                            failure.message = format!(
-                                "{}\n\nLa réponse a été coupée en cours d'écriture : le début \
-                                 affiché est incomplet.",
-                                failure.message
-                            );
+                            failure.message = stream_cut_message(&failure.message, &text);
                             return Ok(Err(failure));
                         }
                         RetryAction::GiveUp => return Ok(Err(CallFailure::from_llm(&e))),
                     }
                 }
             }
+        }
+    }
+}
+
+impl AgentLoop {
+    /// La tentative d'un appel qui a échoué : modèle, fournisseur, erreur et requête.
+    fn failed_attempt(
+        &self,
+        model_id: &str,
+        e: &LlmError,
+        llm_id: &str,
+        cause: AttemptCause,
+    ) -> AttemptPayload {
+        AttemptPayload {
+            model: Some(model_id.to_string()),
+            provider: Some(self.provider.name().to_string()),
+            error: Some(e.to_string()),
+            llm_request_id: Some(llm_id.to_string()),
+            ..AttemptPayload::new(cause)
         }
     }
 }

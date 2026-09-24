@@ -199,6 +199,18 @@ pub enum AttemptCause {
     Fallback,
 }
 
+impl AttemptCause {
+    /// Le nom écrit dans le journal, repris par les journaux du daemon.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AttemptCause::StreamCut => "stream_cut",
+            AttemptCause::BeforeStream => "before_stream",
+            AttemptCause::EmptyAnswer => "empty_answer",
+            AttemptCause::Fallback => "fallback",
+        }
+    }
+}
+
 /// `conv.attempt` : hors surface ; seule sa consigne de relance entre dans la requête
 /// suivante du même tour.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

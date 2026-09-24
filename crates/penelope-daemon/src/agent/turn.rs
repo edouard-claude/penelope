@@ -1,6 +1,7 @@
 //! Un tour, itération par itération.
 
 use super::*;
+use penelope_context::journal::{AttemptCause, AttemptPayload};
 
 impl AgentLoop {
     /// Les itérations d'un tour, entre ses bornes (`turn_log`).
@@ -19,6 +20,8 @@ impl AgentLoop {
         let mut cost = 0.0f64;
         // Une réponse vide a droit à une seule relance, puis devient une erreur explicite.
         let mut empty_retry = false;
+        // Les tentatives sans réponse du tour, hors historique (#206).
+        let attempts = Attempts::default();
         // Un dépassement de fenêtre prouvé a droit à une compaction, pas davantage.
         let mut overflow_compacted = false;
 
@@ -39,7 +42,14 @@ impl AgentLoop {
                     last_result,
                 } => {
                     return self
-                        .answer_after_loop(spec, conv, report, &tool, last_result.as_deref())
+                        .answer_after_loop(
+                            spec,
+                            conv,
+                            report,
+                            &tool,
+                            last_result.as_deref(),
+                            &attempts,
+                        )
                         .await;
                 }
                 Pending::Nothing | Pending::Resolved => {}
@@ -63,13 +73,12 @@ impl AgentLoop {
             if spec.cancel.is_cancelled() {
                 return Ok(TurnOutcome::Cancelled);
             }
-            if empty_retry {
-                // Relance vue du modèle seulement : rien n'est écrit dans l'historique.
-                messages.push(ChatMessage::user(
-                    "(Relance automatique : ta réponse précédente était vide. Réponds \
-                     maintenant, en texte, au dernier message.)",
-                ));
+            // Relance vue du modèle seulement : la consigne est dans le `conv.attempt` de la
+            // réponse vide, pas dans l'historique ; le pliage l'ajoute de la même façon.
+            if let Some(prompt) = attempts.retry_prompt() {
+                messages.push(ChatMessage::user(prompt));
             }
+            attempts.at_step(iteration + 1);
             // Empreinte et fournisseur amont collant : le cache de préfixe reste chaud et
             // un raté est expliqué (issue #17).
             let previous = crate::cache_audit::previous_call(s, &spec.session_id).await?;
@@ -79,7 +88,10 @@ impl AgentLoop {
                 s.clock.now_ms(),
             );
             let fingerprint = crate::cache_audit::Fingerprint::of(&messages, &spec.tools);
-            let response = match self.call_model(spec, messages, sink, pinned, None).await? {
+            let response = match self
+                .call_model(spec, messages, sink, pinned, None, &attempts)
+                .await?
+            {
                 Ok(r) => r,
                 Err(failure) if failure.context_length && !overflow_compacted => {
                     overflow_compacted = true;
@@ -246,8 +258,20 @@ impl AgentLoop {
                         .session(&spec.session_id),
                     )
                     .await?;
-                if !empty_retry && !reasoning_ate_budget {
+                let retry = !empty_retry && !reasoning_ate_budget;
+                attempts
+                    .record(
+                        s,
+                        spec,
+                        AttemptPayload {
+                            retry_prompt: retry.then(|| EMPTY_RETRY_PROMPT.to_string()),
+                            ..AttemptPayload::of_response(AttemptCause::EmptyAnswer, &response)
+                        },
+                    )
+                    .await;
+                if retry {
                     empty_retry = true;
+                    attempts.set_retry_prompt(Some(EMPTY_RETRY_PROMPT));
                     continue;
                 }
                 let upstream = response
@@ -285,6 +309,9 @@ impl AgentLoop {
             }
 
             conv.record_as(&response.message, false, &prov).await?;
+            // Une réponse écrite clôt la relance : le pliage efface la consigne au même
+            // `conv.assistant`.
+            attempts.set_retry_prompt(None);
 
             // 4. Pas d'appel d'outil : c'est la réponse finale.
             if response.message.tool_calls.is_empty() {

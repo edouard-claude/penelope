@@ -34,3 +34,6 @@ penelope-evals.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Fournisseur simulé : un vrai tour du daemon écrit les lignes que `logs --turn` relit
+# (tests/logs_turn.rs, #206).
+penelope-llm.workspace = true

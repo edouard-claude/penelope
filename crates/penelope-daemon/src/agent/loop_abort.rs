@@ -73,6 +73,7 @@ impl AgentLoop {
         report: String,
         tool: &str,
         last_result: Option<&str>,
+        attempts: &Attempts,
     ) -> anyhow::Result<TurnOutcome> {
         let s = &self.services;
         let mut messages = conv.request_messages().await?;
@@ -89,7 +90,14 @@ impl AgentLoop {
              Chercher autrement, Je te précise le compte ou les dates, Laisser tomber)."
         )));
         let text = match self
-            .call_model(spec, messages, &NullSink, None, Some(ToolChoice::None))
+            .call_model(
+                spec,
+                messages,
+                &NullSink,
+                None,
+                Some(ToolChoice::None),
+                attempts,
+            )
             .await?
         {
             Ok(r) => {

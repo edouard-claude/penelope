@@ -257,3 +257,18 @@ fn upgrade_is_the_identity_in_v1() {
     assert_eq!(upgrade_payload(KIND_USER, 1, p.clone()).unwrap(), p);
     assert!(upgrade_payload(KIND_USER, 3, p).is_err());
 }
+
+#[test]
+fn attempt_causes_are_named_as_they_are_serialised() {
+    for cause in [
+        AttemptCause::StreamCut,
+        AttemptCause::BeforeStream,
+        AttemptCause::EmptyAnswer,
+        AttemptCause::Fallback,
+    ] {
+        assert_eq!(serde_json::to_value(cause).unwrap(), cause.as_str());
+        let p = AttemptPayload::new(cause);
+        let back = ConvEvent::decode(KIND_ATTEMPT, &ConvEvent::Attempt(p.clone()).payload());
+        assert_eq!(back.unwrap(), Some(ConvEvent::Attempt(p)));
+    }
+}
