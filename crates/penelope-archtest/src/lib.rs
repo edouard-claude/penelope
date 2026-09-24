@@ -273,6 +273,9 @@ pub fn dependency_rules() -> BTreeMap<&'static str, Vec<&'static str>> {
     // `penelope-app`. Jamais `penelope-context`, `penelope-memory`, `penelope-telegram`
     // (`design/v1/README.md` §3.2), ni le daemon, qui la compose.
     m.insert("penelope-agent", AGENT_ALLOWED_DEPS.to_vec());
+    // La mémoire qui mûrit (T26) : le socle, le vault et les crates métier, jamais le
+    // daemon ni l'orchestrateur, qui la déclenchent, ni le canal.
+    m.insert("penelope-dream", DREAM_ALLOWED_DEPS.to_vec());
     m
 }
 
@@ -347,6 +350,23 @@ pub const OPS_ALLOWED_DEPS: &[&str] = &[
     "penelope-memory",
     "penelope-mcp",
     "penelope-skills",
+];
+
+/// Ce dont `penelope-dream` peut dépendre (§3.2 : app, vault et métier). Pas
+/// `penelope-telegram` : les liens du digest arrivent en données (`DigestInputs`).
+pub const DREAM_ALLOWED_DEPS: &[&str] = &[
+    "penelope-app",
+    "penelope-vault",
+    "penelope-kernel",
+    "penelope-store",
+    "penelope-platform",
+    "penelope-observe",
+    "penelope-llm",
+    "penelope-context",
+    "penelope-memory",
+    "penelope-mcp",
+    "penelope-tools",
+    "penelope-hitl",
 ];
 
 /// Vérifie les règles de dépendance.
@@ -509,6 +529,7 @@ mod tests {
             "penelope-mcp-host",
             "penelope-vault",
             "penelope-ops",
+            "penelope-dream",
             "penelope-agent",
             "penelope-cli",
             "penelope-gateway-telegram",
@@ -608,6 +629,18 @@ mod tests {
                 ops.internal_deps
             );
         }
+    }
+
+    /// T26 : le rêve, l'ingestion et l'accueil ne connaissent pas le daemon.
+    #[test]
+    fn the_dream_crate_does_not_depend_on_the_daemon() {
+        let all = crates();
+        let dream = all.iter().find(|c| c.name == "penelope-dream").unwrap();
+        assert!(
+            !dream.internal_deps.contains("penelope-daemon"),
+            "penelope-dream est sous le daemon : {:?}",
+            dream.internal_deps
+        );
     }
 
     /// T10 : la boucle ne voit ni le moteur de contexte, ni la mémoire, ni le canal, ni

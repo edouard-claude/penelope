@@ -34,6 +34,8 @@ penelope-vault.workspace = true
 # Exploitation : doctor, mise à jour, sauvegarde, Hermes, Codex, skills, extraits du
 # daemon (épopée #208, T28).
 penelope-ops.workspace = true
+# Accueil, rêve, ingestion, extraits du daemon (épopée #208, T26).
+penelope-dream.workspace = true
 penelope-kernel.workspace = true
 penelope-store.workspace = true
 penelope-platform.workspace = true

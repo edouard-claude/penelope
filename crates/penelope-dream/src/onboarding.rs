@@ -7,7 +7,7 @@
 //! `memoire.md` ; rien n'est écrit sans validation, et chaque entrée garde sa provenance
 //! vers la question d'où elle vient.
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_memory::{Level, Provenance};
 use serde::Serialize;
 use serde_json::{Value, json};

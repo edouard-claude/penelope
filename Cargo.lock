@@ -1393,6 +1393,7 @@ dependencies = [
  "penelope-agent",
  "penelope-app",
  "penelope-context",
+ "penelope-dream",
  "penelope-hitl",
  "penelope-kernel",
  "penelope-llm",
@@ -1418,6 +1419,22 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "penelope-dream"
+version = "1.0.0-alpha.9"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "chrono-tz",
+ "penelope-app",
+ "penelope-kernel",
+ "penelope-memory",
+ "penelope-vault",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

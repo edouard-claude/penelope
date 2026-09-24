@@ -15,7 +15,6 @@ pub mod executor;
 pub mod history;
 pub mod images;
 pub mod ingest;
-pub mod onboarding;
 pub mod prompt_snapshot;
 pub mod purge;
 pub mod rpc;
@@ -56,6 +55,10 @@ pub use penelope_vault::{
 pub use penelope_ops::{
     backup, codex_auth, codex_quota, doctor, hermes, skill_deps, skill_install, upgrade,
 };
+
+// Mémoire qui mûrit sortie dans `penelope-dream` (T26), réexportée sous ses anciens
+// chemins jusqu'à T30.
+pub use penelope_dream::onboarding;
 
 pub use agent::{AgentLoop, TurnOutcome};
 pub use ports::Handle;
