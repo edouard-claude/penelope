@@ -19,12 +19,9 @@ test_modules = [
 [files.oversized]
 "crates/penelope-daemon/src/tool_jobs.rs" = 1754   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/telegram.rs" = 7925   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/mcp.rs" = 1958
 "crates/penelope-daemon/src/engine.rs" = 1179
 "crates/penelope-kernel/src/config.rs" = 2790   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-cli/src/commands.rs" = 2686   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/rpc.rs" = 2456   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/doctor.rs" = 2522   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/telegram/screens.rs" = 2437   # +1 : #[allow(clippy::too_many_lines)] posé par le gel (#211)
 "crates/penelope-daemon/src/compaction.rs" = 2225
 "crates/penelope-llm/src/provider.rs" = 2048
@@ -61,7 +58,7 @@ test_modules = [
 # vingtaine de correctifs de taille courante. Un autre crate se plafonne en ajoutant une
 # ligne. UPDATE_BUDGET ne touche pas à cette table.
 [crates]
-"penelope-daemon" = 82660   # v1 : découpages du lot G (en-têtes de sous-modules), lots D et F ; redescend avec l'extraction des crates (lots H et J)
+"penelope-daemon" = 82865   # v1 : découpages du lot G (en-têtes de sous-modules), lots D et F ; redescend avec l'extraction des crates (lots H et J)
 
 # Liste blanche des modules du daemon (R5) : les déclarations `mod x;` de lib.rs et
 # `mod screens;` de telegram.rs. `mod tests;` est toujours permis. Les fichiers où un bloc
@@ -139,6 +136,11 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 # fichier absent a un budget de 0. Cible V1 : seuls runtime, engine, runner, supervisor
 # et rpc le nomment encore.
 [daemon.daemon_users]
+"rpc/server.rs" = 2   # découpage (lot G) : la mention suit son code
+"rpc/mod.rs" = 4   # découpage (lot G) : la mention suit son code
+"rpc/methods/workflows.rs" = 1   # découpage (lot G) : la mention suit son code
+"rpc/methods/memory.rs" = 1   # découpage (lot G) : la mention suit son code
+"doctor/memory.rs" = 1   # découpage (lot G) : la mention suit son code
 "workflow/step_ctx.rs" = 1   # découpage (lot G) : la mention suit son code
 "workflow/step_agent.rs" = 1   # découpage (lot G) : la mention suit son code
 "workflow/start.rs" = 3   # découpage (lot G) : la mention suit son code
@@ -160,7 +162,6 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 "onboarding.rs" = 13
 "backup.rs" = 10
 "supervisor.rs" = 10
-"rpc.rs" = 8
 "runner.rs" = 8
 "concepts.rs" = 7
 "embeddings.rs" = 7
@@ -190,7 +191,6 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 "skill_install.rs" = 2
 "vault_git.rs" = 2
 "cache_audit.rs" = 1
-"doctor.rs" = 1
 "lib.rs" = 1          # le réexport `pub use runtime::{Daemon, …}`
 "session_project.rs" = 1
 "vault_inventory.rs" = 1
@@ -198,7 +198,7 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 # `#[allow(clippy::too_many_lines)]` dans les sources (R7, #211) : les allows de la pose
 # du lint sont comptés par le lot qui les pose ; d'ici là, aucun.
 [lints]
-allow_too_many_lines = 25
+allow_too_many_lines = 24
 
 # Les critères d'acceptation (R8, #213) : chaque nom doit exister comme fonction quelque
 # part dans les sources. Renommer est interdit, déplacer est permis ; la liste ne peut que
@@ -288,18 +288,23 @@ required = [
 # OwnerChannel ; ces entrées ne peuvent que décroître (lot D, T36), sauf les permanentes,
 # justifiées en commentaire, qui attendent T37 après la V1.
 [channel.allowed]
+"crates/penelope-daemon/src/rpc/methods/workflows.rs" = 9   # découpage (lot G) : la mention suit son code
+"crates/penelope-daemon/src/rpc/methods/approvals.rs" = 9   # découpage (lot G) : la mention suit son code
+"crates/penelope-daemon/src/mcp/lifecycle.rs" = 1   # découpage (lot G) : la mention suit son code
+"crates/penelope-daemon/src/doctor/secrets.rs" = 12   # découpage (lot G) : la mention suit son code
+"crates/penelope-daemon/src/doctor/mod.rs" = 15   # découpage (lot G) : la mention suit son code
+"crates/penelope-daemon/src/doctor/machine.rs" = 3   # découpage (lot G) : la mention suit son code
+"crates/penelope-daemon/src/doctor/coherence.rs" = 12   # découpage (lot G) : la mention suit son code
 "crates/penelope-daemon/src/executor/tools/skills_workflows.rs" = 1   # découpage (lot G) : la mention suit son code
 "crates/penelope-daemon/src/executor/tools/schedules_messaging.rs" = 7   # découpage (lot G) : la mention suit son code
 "crates/penelope-daemon/src/executor/mod.rs" = 5   # découpage (lot G) : la mention suit son code
 "crates/penelope-daemon/src/agent/pipeline.rs" = 1   # EffectKind::Telegram (effect_kind), venu d'agent.rs au découpage (lot F) ; disparaît avec T37
 "crates/penelope-daemon/src/tool_jobs.rs" = 6   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/doctor.rs" = 42
 "crates/penelope-daemon/src/scheduler.rs" = 33
 "crates/penelope-kernel/src/session.rs" = 37
 "crates/penelope-store/src/migrations.rs" = 30   # permanent : l'historique SQL est immuable (tables tg_updates, tg_outbox)
 "crates/penelope-kernel/src/config.rs" = 25      # permanent : le schéma de configuration nomme ses canaux ([telegram])
 "crates/penelope-daemon/src/supervisor.rs" = 23
-"crates/penelope-daemon/src/rpc.rs" = 18
 "crates/penelope-daemon/src/purge.rs" = 17
 "crates/penelope-daemon/src/runtime.rs" = 12
 "crates/penelope-daemon/src/selfknow.rs" = 12
@@ -316,7 +321,6 @@ required = [
 "crates/penelope-observe/src/redact.rs" = 2      # permanent : le caviardage doit connaître la forme des jetons
 "crates/penelope-daemon/src/codex_scope.rs" = 1
 "crates/penelope-daemon/src/lib.rs" = 1          # `pub mod telegram;` : disparaît avec la passerelle en crate (T29)
-"crates/penelope-daemon/src/mcp.rs" = 1
 "crates/penelope-daemon/src/mcp_auth.rs" = 1
 "crates/penelope-daemon/src/media.rs" = 1
 "crates/penelope-daemon/src/session_ops.rs" = 1
