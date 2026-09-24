@@ -78,7 +78,7 @@ pub async fn embed_texts(d: &Daemon, texts: &[String]) -> anyhow::Result<(String
     }
     let missing: Vec<usize> = (0..texts.len()).filter(|i| out[*i].is_none()).collect();
     if !missing.is_empty() {
-        let model = crate::codex_scope::background(d, &model, "embeddings").await;
+        let model = crate::codex_scope::background(&d.services, &model, "embeddings").await;
         let provider = d.provider_for(&model).await.map_err(anyhow::Error::msg)?;
         for chunk in missing.chunks(BATCH) {
             let inputs: Vec<String> = chunk.iter().map(|i| clip(&texts[*i]).to_string()).collect();

@@ -115,7 +115,7 @@ pub async fn generate(
         .alias_model(&alias)
         .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}`"))?
         .to_string();
-    let model = crate::codex_scope::background(d, &model, "titre").await;
+    let model = crate::codex_scope::background(&d.services, &model, "titre").await;
     let provider = d.provider_for(&model).await.map_err(anyhow::Error::msg)?;
     let effort = s
         .catalog

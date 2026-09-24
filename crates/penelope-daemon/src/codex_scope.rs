@@ -12,7 +12,7 @@
 //! La garde est **unique** et se pose juste avant le choix du fournisseur : un travail de
 //! fond nomme ce qu'il est, et reçoit en retour le modèle qu'il a le droit d'appeler.
 
-use crate::runtime::Daemon;
+use crate::runtime::Services;
 use penelope_kernel::config::Config;
 use penelope_kernel::event::EventDraft;
 use serde_json::json;
@@ -40,14 +40,13 @@ pub fn is_codex(model_id: &str) -> bool {
 ///
 /// Rend le modèle tel quel quand il ne vise pas l'abonnement — le cas courant, sans
 /// aucun coût.
-pub async fn background(d: &Daemon, model_id: &str, work: &str) -> String {
+pub async fn background(s: &Services, model_id: &str, work: &str) -> String {
     if !is_codex(model_id) {
         return model_id.to_string();
     }
-    let cfg = d.services.config.config();
+    let cfg = s.config.config();
     let replaced = replacement(&cfg, model_id);
-    let _ = d
-        .services
+    let _ = s
         .events
         .append(EventDraft::new(
             "llm.codex_scope_fallback",
@@ -78,10 +77,10 @@ pub async fn background(d: &Daemon, model_id: &str, work: &str) -> String {
 /// Modèle appelable pour un tour, d'après son origine : un message du propriétaire
 /// (Telegram, CLI) garde l'abonnement, tout autre tour — planification à cible `prompt`,
 /// veille, travail interne — se replie.
-pub async fn for_origin(d: &Daemon, model_id: &str, origin: &crate::bus::Origin) -> String {
+pub async fn for_origin(s: &Services, model_id: &str, origin: &crate::bus::Origin) -> String {
     match origin {
         crate::bus::Origin::Telegram { .. } | crate::bus::Origin::Cli => model_id.to_string(),
-        crate::bus::Origin::Internal { source } => background(d, model_id, source).await,
+        crate::bus::Origin::Internal { source } => background(s, model_id, source).await,
     }
 }
 

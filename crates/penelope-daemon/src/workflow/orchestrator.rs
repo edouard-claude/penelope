@@ -148,7 +148,8 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
             .ok_or_else(|| format!("alias de modèle inconnu `{alias}`"))?;
         // Le sous-agent hérite du périmètre de son tour : l'abonnement ChatGPT sert ceux
         // du propriétaire, pas une planification qui passerait par là (#142).
-        let model_id = crate::codex_scope::for_origin(&self.daemon, &model_id, origin).await;
+        let model_id =
+            crate::codex_scope::for_origin(&self.daemon.services, &model_id, origin).await;
         let text = run_sub_agent(
             &self.daemon,
             SubAgentTask {

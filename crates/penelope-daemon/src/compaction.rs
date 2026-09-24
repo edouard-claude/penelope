@@ -618,7 +618,7 @@ async fn compact_inner(
         .alias_model(&alias)
         .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}` du rôle `compaction`"))?
         .to_string();
-    let model = crate::codex_scope::background(d, &model, "compaction").await;
+    let model = crate::codex_scope::background(&d.services, &model, "compaction").await;
     let provider = d.provider_for(&model).await.map_err(anyhow::Error::msg)?;
     let conversation = conversation_model(d, session_id).await;
     let params = CompactionParams::from_config(
@@ -864,7 +864,7 @@ async fn summarise_or_recover(
         ));
         return Err(Box::new((job, failure)));
     }
-    let fallback = crate::codex_scope::background(d, &fallback, "compaction").await;
+    let fallback = crate::codex_scope::background(&d.services, &fallback, "compaction").await;
     let Ok(fb) = d.provider_for(&fallback).await else {
         return Err(Box::new((job, failure)));
     };

@@ -275,7 +275,7 @@ pub async fn review(
         .alias_model(&alias)
         .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}`"))?
         .to_string();
-    let model = crate::codex_scope::background(d, &model, "consolidation").await;
+    let model = crate::codex_scope::background(&d.services, &model, "consolidation").await;
     let provider = d.provider_for(&model).await.map_err(anyhow::Error::msg)?;
     let info = s.catalog.get(strip_provider(&model));
     let effort = info.as_ref().and_then(|i| i.lightest_effort());

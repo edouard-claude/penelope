@@ -120,7 +120,7 @@ async fn cut(d: &Arc<Daemon>, text: &str) -> anyhow::Result<Vec<String>> {
         .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}`"))?
         .to_string();
     // Travail de fond : jamais l'abonnement du propriétaire (issue #142).
-    let model = crate::codex_scope::background(d, &model, "découpage de mémoire").await;
+    let model = crate::codex_scope::background(&d.services, &model, "découpage de mémoire").await;
     let provider = d
         .provider_for(&model)
         .await

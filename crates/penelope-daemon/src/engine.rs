@@ -493,7 +493,7 @@ impl Daemon {
 
         // 3. Provider. L'abonnement ChatGPT ne sert que les tours du propriétaire : une
         // planification ou un travail interne se replie ici, sans bruit (#142).
-        let model_id = crate::codex_scope::for_origin(self, &model_id, origin).await;
+        let model_id = crate::codex_scope::for_origin(&self.services, &model_id, origin).await;
         let provider = match self.provider_for(&model_id).await {
             Ok(p) => p,
             Err(error) => return Ok(TurnOutcome::Failed { error }),
@@ -680,7 +680,7 @@ impl Daemon {
                  openrouter:openai/whisper-large-v3`"
             ));
         }
-        let model = crate::codex_scope::background(self, &model, "transcription").await;
+        let model = crate::codex_scope::background(&self.services, &model, "transcription").await;
         let provider = self.provider_for(&model).await?;
         let language = Some(cfg.owner.language.clone()).filter(|l| !l.is_empty());
         let t = tokio::time::timeout(
@@ -1032,7 +1032,7 @@ impl Daemon {
         let cfg = s.config.config();
         let alias = cfg.role_alias("classifier");
         let model_id = cfg.alias_model(&alias)?.to_string();
-        let model_id = crate::codex_scope::background(self, &model_id, "classifieur").await;
+        let model_id = crate::codex_scope::background(s, &model_id, "classifieur").await;
         let provider = self.provider_for(&model_id).await.ok()?;
         let info = s
             .catalog

@@ -62,7 +62,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
         Ok(m) => m,
         Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
     };
-    let model_id = crate::codex_scope::background(ctx.d, &model_id, "workflow").await;
+    let model_id = crate::codex_scope::background(&ctx.d.services, &model_id, "workflow").await;
     let provider = match ctx.d.provider_for(&model_id).await {
         Ok(p) => p,
         Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
@@ -342,7 +342,7 @@ pub(super) async fn sub_agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutc
         Ok(m) => m,
         Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
     };
-    let model_id = crate::codex_scope::background(ctx.d, &model_id, "workflow").await;
+    let model_id = crate::codex_scope::background(&ctx.d.services, &model_id, "workflow").await;
     let mut prompt = with_brief(ctx, ctx.render(&step.prompt).await).await;
     if let Some(schema) = &step.output_schema {
         prompt.push_str(&format!(
