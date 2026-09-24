@@ -273,3 +273,49 @@ fn attempt_causes_are_named_as_they_are_serialised() {
         assert_eq!(back.unwrap(), Some(ConvEvent::Attempt(p)));
     }
 }
+
+/// T14 : relu du journal, un message assistant a les octets de sa ligne V0. Les clés
+/// des arguments et des `reasoning_details` gardent l'ordre du fournisseur, un flottant
+/// entier garde son `.0` ; une valeur déjà canonique n'est pas doublée.
+#[test]
+fn free_json_values_keep_the_bytes_the_provider_sent() {
+    let args: serde_json::Value =
+        serde_json::from_str(r#"{"path":"a.md","content":"x","ratio":1.0}"#).unwrap();
+    let details: serde_json::Value =
+        serde_json::from_str(r#"[{"type":"reasoning.text","text":"…","index":0}]"#).unwrap();
+    let message = penelope_llm::types::ChatMessage {
+        tool_calls: vec![
+            ToolCall {
+                id: "c1".into(),
+                name: "fs_write".into(),
+                arguments: args,
+            },
+            ToolCall {
+                id: "c2".into(),
+                name: "fs_read".into(),
+                arguments: json!({"path": "b.md"}),
+            },
+        ],
+        reasoning_details: Some(details),
+        ..penelope_llm::types::ChatMessage::assistant("j'écris")
+    };
+    let Some(event) = message_event(&message, 10, 1, false, &Provenance::default()) else {
+        panic!("un message assistant a son événement");
+    };
+    let text = penelope_kernel::canonical::canonical_json(&event.payload());
+    assert!(text.contains(r#""arguments":{"content":"x","path":"a.md","ratio":1}"#));
+    let back: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let Some(ConvEvent::Assistant(p)) = ConvEvent::decode(KIND_ASSISTANT, &back).unwrap() else {
+        panic!("conv.assistant relu");
+    };
+    assert_eq!(
+        p.verbatim.keys().collect::<Vec<_>>(),
+        ["reasoning_details", "tool_calls.0.arguments"],
+        "l'appel c2, déjà canonique, n'est pas doublé"
+    );
+    let relu = crate::derive::assistant_node(*p).message;
+    assert_eq!(
+        serde_json::to_string(&relu).unwrap(),
+        serde_json::to_string(&message).unwrap()
+    );
+}

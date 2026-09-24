@@ -10,6 +10,7 @@ use crate::tiers::TileMap;
 use penelope_llm::types::{Content, ToolCall};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 use super::SurfaceOp;
 
@@ -121,6 +122,10 @@ pub struct AssistantPayload {
     pub reasoning: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_details: Option<Value>,
+    /// Texte JSON exact des arguments d'appel et des `reasoning_details` que la forme
+    /// canonique du journal réordonnerait (`verbatim.rs`, T14).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub verbatim: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

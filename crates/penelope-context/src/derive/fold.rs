@@ -353,14 +353,16 @@ pub(crate) fn user_node(p: UserPayload) -> MessageNode {
 
 /// Le nœud d'un `conv.assistant`.
 pub(crate) fn assistant_node(p: AssistantPayload) -> MessageNode {
+    let mut message = ChatMessage {
+        content: p.content,
+        tool_calls: p.tool_calls,
+        reasoning: p.reasoning,
+        reasoning_details: p.reasoning_details,
+        ..ChatMessage::assistant("")
+    };
+    restore_verbatim(&mut message, &p.verbatim);
     MessageNode {
-        message: ChatMessage {
-            content: p.content,
-            tool_calls: p.tool_calls,
-            reasoning: p.reasoning,
-            reasoning_details: p.reasoning_details,
-            ..ChatMessage::assistant("")
-        },
+        message,
         eager: false,
         artifact_id: None,
         tokens: p.tokens_est,

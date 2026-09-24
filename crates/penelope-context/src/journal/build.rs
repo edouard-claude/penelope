@@ -141,6 +141,7 @@ pub fn message_event(
                 tool_calls: message.tool_calls.clone(),
                 reasoning: message.reasoning.clone(),
                 reasoning_details: message.reasoning_details.clone(),
+                verbatim: verbatim_of(message),
                 episode,
                 tokens_est: tokens,
                 ..call

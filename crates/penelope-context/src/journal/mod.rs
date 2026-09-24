@@ -15,10 +15,12 @@ mod payload;
 #[cfg(test)]
 mod tests;
 mod turn;
+mod verbatim;
 
 pub use build::*;
 pub use payload::*;
 pub use turn::*;
+pub use verbatim::{restore_verbatim, verbatim_of};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
