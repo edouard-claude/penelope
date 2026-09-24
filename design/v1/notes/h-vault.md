@@ -69,7 +69,7 @@ deux nouveaux ; `conversation` réexporte `build_tiers*`, `build_turn_prompt`,
 
 ## 1. Ce qui est livré
 
-Crate `crates/penelope-vault` (6 214 lignes, 16 modules, aucun fichier au-dessus de 796 lignes), au-dessus de `penelope-app`,
+Crate `crates/penelope-vault` (6 210 lignes, 16 modules, aucun fichier au-dessus de 796 lignes), au-dessus de `penelope-app`,
 sous le daemon, qui en dépend :
 
 | Module | Origine |
@@ -104,7 +104,7 @@ Cycles coupés, par déplacement seul (commit 55d9fba et suivants) : `vault_ops 
 | Mesure | Avant (5669220) | Après |
 |---|---|---|
 | `penelope-daemon/src`, lignes | 82 637 (plafond `[crates]`) | 76 508 |
-| `penelope-vault/src`, lignes | | 6 214 |
+| `penelope-vault/src`, lignes | | 6 210 |
 | `[daemon].modules` | 57 | 44 |
 | `[daemon.daemon_users]` `session_project.rs` | 1 | sorti |
 | `[channel.allowed]` `session_project.rs` | 2 (daemon) | 2 (vault, même fichier) |
