@@ -13,6 +13,71 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.2
+
+Fin du lot A (gel de la dette) et fin du premier jalon du lot B (filets) sur `v1`. Aucun
+comportement de production ne change : des tests changent de fichier, des lints et des
+filets s'ajoutent.
+
+#### Gel de la dette : tests inline sortis, lints de workspace, dépendance morte (#215, #211, #214)
+
+- Les 269 tests inline des sept fichiers de plus de 3 000 lignes de `penelope-daemon`
+  (`telegram.rs`, `dream.rs`, `agent.rs`, `workflow.rs`, `executor.rs`, `mcp.rs`,
+  `engine.rs`) sont dans des fichiers frères, `<module>/tests.rs` ou
+  `<module>/tests/<thème>.rs` (plus `mcp/testing.rs` pour les faux serveurs MCP et
+  `agent/clone_policy_tests.rs`), par déplacement pur : même nombre de tests (538 dans
+  le daemon, 1 777 dans le dépôt), aucune ligne de code de production déplacée, aucune
+  signature changée. `telegram.rs` passe de 13 716 à 7 950 lignes, `dream.rs` de 5 859
+  à 3 455, `agent.rs` de 4 240 à 2 482, `workflow.rs` de 4 044 à 2 914, `executor.rs`
+  de 3 712 à 2 479, `mcp.rs` de 3 291 à 1 958, `engine.rs` de 3 173 à 1 220. Aucun
+  fichier de tests créé ne dépasse 1 231 lignes.
+- `clippy::too_many_lines` à 200 lignes dans tout le workspace (`[workspace.lints]`,
+  `[lints] workspace = true` dans les 17 crates, `clippy.toml`) : une fonction nouvelle
+  de plus de 200 lignes fait échouer `cargo clippy -- -D warnings`, la sortie est de la
+  découper. Les 27 fonctions existantes au-dessus (23 dans le code, 4 tests de bout en
+  bout) portent `#[allow(clippy::too_many_lines)] // gel 0.17 : <raison>`, comptés par
+  archtest (`budget.toml [lints].allow_too_many_lines = 27`).
+- `penelope-workflow` ne dépend plus de `penelope-telegram`, déclaré et jamais utilisé.
+
+Le budget d'archtest est resserré dans le même lot (`UPDATE_BUDGET=1`) : les sept fichiers
+descendent dans la liste de référence ; les six fichiers de la liste qui reçoivent un
+`#[allow]` gagnent une ligne, inscrite avec `Dérogation-budget: #209` ; les modules de tests
+`clone_policy_tests` et `testing` entrent dans la liste blanche ; `EffectKind::Telegram`
+d'`agent.rs`, déjà là, devient visible pour la frontière canal/cœur une fois les tests sortis.
+
+#### Filets de bout en bout sur l'API publique (#208, lot B)
+
+Les filets avant découpage (épopée #208, tâches T8 et T9 de `design/v1/gel-et-outillage.md`) :
+trois tests de bout en bout sur l'API publique du daemon, qui survivent aux déplacements
+internes de la refonte.
+
+- **Telegram de bout en bout** (`tests/telegram_e2e.rs`, CA 14.2) : un message du
+  propriétaire sur un transport simulé donne une réponse (`tg_outbox`), un effet `completed`
+  dans le ledger, les événements du tour ; le daemon reconstruit sur le même répertoire
+  retrouve tout et ne rejoue rien (ni l'outil, ni l'envoi, ni l'update).
+- **Approbation de bout en bout** (`tests/approval_e2e.rs`, CA 9.4 à 9.6) : un outil à
+  risque arrête le tour sur une demande ; approuver puis reprendre exécute l'outil une
+  fois ; refuser transmet « Non exécuté » au modèle sans rien écrire ; « pour cette
+  session » crée une règle bornée à la session, un second appel passe sans demande, une
+  autre session redemande.
+- **Contrat RPC doré** (`crates/penelope-evals/tests/rpc_golden.rs`) : 104 fichiers
+  `golden/<méthode>.json`, un par méthode de `method::ALL`, clés et types comparés à chaque
+  test ; `UPDATE_GOLDEN=1` régénère et liste les cas d'erreur figés (24, dont les onze
+  `mcp.*` sans superviseur). Une clé retirée d'une réponse est rouge.
+- Matrice des CA régénérée : 75 tests d'acceptation.
+
+#### Scénarios : redémarrage sans course et harnais sous le plafond (#208, lot B)
+
+La CI macOS de la `1.0.0-alpha.1` a vu le scénario « crash en deux vies » rouvrir la base
+pendant que la vie précédente relâchait encore son verrou SQLite (« database is locked »).
+Le harnais relâche désormais le daemon avant le crash, attend que plus rien ne tienne les
+services et que le `-wal` retombe à zéro, et réessaie une base encore verrouillée ; un
+scénario `redemarrages-en-serie` enchaîne dix redémarrages. Le harnais, passé à 1 086
+lignes, est découpé en quatre fichiers par déplacement pur : le gel l'avait attrapé.
+
+La charte (`design/v1/README.md` §9) cesse de réserver 0011 et 0012, pris sur `main` par
+#205 et #204 ; la décision sur le journal source unique prendra 0017.
+
 ### 1.0.0-alpha.1
 
 Premier lot de la branche `v1` : fusion de cinq branches développées en parallèle dans la
