@@ -13,6 +13,57 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.6
+
+Cinquième vague de la V1 : la première crate sort du daemon (`penelope-app`, sur laquelle
+les suivantes s'appuieront), et le journal sait se vérifier et refaire ses caches. Les
+tables restent la source de lecture ; `penelope history verify` et
+`penelope history reindex` sont les deux commandes nouvelles.
+
+#### Journal d'événements : vérification et projecteur (#208, T12, T13)
+
+- **`penelope history verify [--session <id>]`** dérive chaque conversation de son
+  journal (événements `conv.*`, préfixe d'avant le journal scellé, mère d'un fork) et la
+  compare à ses tables : nombre et ordre des messages, contenu de chacun, drapeau de
+  compaction, contextes figés, résumés actifs, empreinte du préfixe scellé. Rapport JSON ;
+  code de sortie non nul dès la première divergence, qui nomme la session, le nœud et la
+  ligne. L'archive d'un `/rewind` est vérifiée contre ce que la coupe a retiré. Méthode
+  RPC `history.verify` ; `penelope doctor` vérifie les sessions de la semaine.
+- **`penelope history reindex [--session <id>]`** efface les lignes de cache non scellées
+  (messages et plein texte, contextes figés, résumés) et les réécrit depuis le journal,
+  aux mêmes numéros ; une session que le journal ne sait pas refaire est laissée intacte
+  et nommée. Méthode RPC `history.reindex`.
+- **Les caches se rattrapent seuls** : à l'ouverture de chaque tour, ce qu'une écriture
+  interrompue a laissé derrière le journal est refait depuis le filigrane
+  (`projections_session`) ; un rattrapage en échec ne fait pas échouer le tour, il
+  apparaît dans `doctor`. Une nouvelle version du pliage refond chaque session à son
+  prochain tour.
+- Corrigé : dans une session scellée, un message écrit après le scellement recevait une
+  adresse de journal fausse (offset lu au mauvais endroit), et après un `/rewind` le
+  message suivant héritait du contexte figé du message retiré.
+- Les tables restent la source de lecture : aucune requête envoyée au modèle ne change.
+
+#### Crate `penelope-app` : Services, ports et bus sous le daemon (#208, T21)
+
+- Nouvelle crate `penelope-app`, sous le daemon, qui ne dépend que des crates métier
+  (règle d'archtest) : `Services` et son assemblage, le bus des tours (`Origin`,
+  `TurnOutcome`, `TurnEvent`), l'élicitation MCP, les boucles supervisées, les ports
+  (`ProviderSource`, `McpAdmin`, `Messenger`, `McpGateway`, `Orchestrator`,
+  `Conversation`, `Compactor`, `ToolExecutor`), les helpers sur `&Services` et les
+  doubles de test ; `codex_scope`, `machine` et `media` avec eux.
+- La skill livrée `wiki-markdown` suit `reload_skills` dans la nouvelle crate.
+- Le daemon réexporte tout sous les anciens chemins : CLI, évaluations et tests
+  inchangés. `penelope-daemon` passe de 86 462 à 82 409 lignes.
+- `penelope-app` dépend encore de `penelope-telegram` (gabarits et actions de
+  `Services`, lien profond, formulaire d'élicitation) jusqu'à T36.
+
+#### Outillage : `make bump` suit le nombre de crates (#208)
+
+`scripts/bump.sh` attendait seize lignes de version dans `Cargo.toml` ; avec
+`penelope-app` il y en a dix-sept. Il réécrit maintenant toutes les occurrences de la
+version courante et vérifie qu'aucune ne manque. Le plafond du crate daemon descend à
+82 637 lignes.
+
 ### 1.0.0-alpha.5
 
 Quatrième vague de la V1 : le journal d'événements reçoit tout ce qui change la
