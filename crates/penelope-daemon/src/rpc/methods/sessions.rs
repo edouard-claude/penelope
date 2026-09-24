@@ -204,9 +204,9 @@ impl Rpc {
                 match p.get("project").and_then(|m| m.as_str()).map(str::trim) {
                     None | Some("") => {}
                     Some("aucun" | "none" | "-") => {
-                        crate::session_project::set(&self.daemon, &sid, None).await
+                        crate::session_project::set(s, &sid, None).await
                     }
-                    Some(name) => crate::session_project::set(&self.daemon, &sid, Some(name)).await,
+                    Some(name) => crate::session_project::set(s, &sid, Some(name)).await,
                 }
                 let (project, how) = crate::session_project::of_session(s, &sid).await;
                 let known: Vec<String> =

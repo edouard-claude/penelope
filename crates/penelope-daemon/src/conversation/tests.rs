@@ -34,12 +34,11 @@ async fn the_injected_memory_follows_the_session_subject() {
     )
     .unwrap();
     crate::vault_ops::reindex(&s, &vault).await.unwrap();
-    let d = crate::runtime::Daemon::from_services(s.clone());
 
     let fid = session(&s).await;
     let lnk = session(&s).await;
-    crate::session_project::set(&d, &fid, Some("Fidelatoo")).await;
-    crate::session_project::set(&d, &lnk, Some("linkedin")).await;
+    crate::session_project::set(&s, &fid, Some("Fidelatoo")).await;
+    crate::session_project::set(&s, &lnk, Some("linkedin")).await;
     let t2 = |sid: String| {
         let s = s.clone();
         async move {
@@ -113,7 +112,7 @@ async fn the_injected_memory_follows_the_session_subject() {
         .await
         .unwrap();
     let key = crate::helpers::topic_name_key(-10_042, 21);
-    d.services.kv_set(&key, "Posts LinkedIn").await.unwrap();
+    s.kv_set(&key, "Posts LinkedIn").await.unwrap();
     let t = t2(topic.clone()).await;
     assert!(
         t.contains("Trois publications") && !t.contains("Scaleway"),

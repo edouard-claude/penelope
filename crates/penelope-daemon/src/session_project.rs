@@ -128,8 +128,7 @@ pub async fn of_session(s: &Services, session_id: &str) -> (Option<String>, Opti
 
 /// Fixe le sujet d'une session à la main (`None` : aucun). L'instantané de l'épisode en
 /// cours est refigé au tour suivant.
-pub async fn set(d: &crate::runtime::Daemon, session_id: &str, project: Option<&str>) {
-    let s = &d.services;
+pub async fn set(s: &Services, session_id: &str, project: Option<&str>) {
     let project = project.map(normalize).filter(|p| !p.is_empty());
     store(s, session_id, project.as_deref(), "explicite").await;
     crate::episodes::refresh_snapshot(s, session_id).await;
