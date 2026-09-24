@@ -20,7 +20,6 @@ test_modules = [
 "crates/penelope-daemon/src/tool_jobs.rs" = 1754   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/telegram.rs" = 7967   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/dream.rs" = 3457
-"crates/penelope-daemon/src/agent.rs" = 2513   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/workflow.rs" = 2915
 "crates/penelope-daemon/src/executor.rs" = 2504   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/mcp.rs" = 1958
@@ -65,7 +64,7 @@ test_modules = [
 # vingtaine de correctifs de taille courante. Un autre crate se plafonne en ajoutant une
 # ligne. UPDATE_BUDGET ne touche pas à cette table.
 [crates]
-"penelope-daemon" = 81168
+"penelope-daemon" = 82115   # lot F (T02 à T06) : tests et types de la boucle, disparaît avec la crate penelope-agent (T10)
 
 # Liste blanche des modules du daemon (R5) : les déclarations `mod x;` de lib.rs et
 # `mod screens;` de telegram.rs. `mod tests;` est toujours permis. Les fichiers où un bloc
@@ -137,6 +136,19 @@ modules = [
   "clone_policy_tests",  # module de tests sorti d'agent.rs (#215)
   "testing",  # aides de test sorties de mcp.rs (#215),
   "tool_jobs",  # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
+  "decide",  # sous-module de agent/ (lot F, T02 à T06)
+  "decisions",  # sous-module de agent/ (lot F, T02 à T06)
+  "guards",  # sous-module de agent/ (lot F, T02 à T06)
+  "loop_abort",  # sous-module de agent/ (lot F, T02 à T06)
+  "model",  # sous-module de agent/ (lot F, T02 à T06)
+  "outcome",  # sous-module de agent/ (lot F, T02 à T06)
+  "pending",  # sous-module de agent/ (lot F, T02 à T06)
+  "pipeline",  # sous-module de agent/ (lot F, T02 à T06)
+  "policy",  # sous-module de agent/ (lot F, T02 à T06)
+  "retry",  # sous-module de agent/ (lot F, T02 à T06)
+  "rules",  # sous-module de agent/ (lot F, T02 à T06)
+  "spec",  # sous-module de agent/ (lot F, T02 à T06)
+  "turn",  # sous-module de agent/ (lot F, T02 à T06)
 ]
 impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 
@@ -191,7 +203,7 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 # `#[allow(clippy::too_many_lines)]` dans les sources (R7, #211) : les allows de la pose
 # du lint sont comptés par le lot qui les pose ; d'ici là, aucun.
 [lints]
-allow_too_many_lines = 27
+allow_too_many_lines = 26
 
 # Les critères d'acceptation (R8, #213) : chaque nom doit exister comme fonction quelque
 # part dans les sources. Renommer est interdit, déplacer est permis ; la liste ne peut que
@@ -281,8 +293,8 @@ required = [
 # OwnerChannel ; ces entrées ne peuvent que décroître (lot D, T36), sauf les permanentes,
 # justifiées en commentaire, qui attendent T37 après la V1.
 [channel.allowed]
+"crates/penelope-daemon/src/agent/pipeline.rs" = 1   # EffectKind::Telegram (effect_kind), venu d'agent.rs au découpage (lot F) ; disparaît avec T37
 "crates/penelope-daemon/src/tool_jobs.rs" = 6   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/agent.rs" = 1   # EffectKind::Telegram (effect_kind), déjà là, visible depuis que les tests sont sortis (#215) ; disparaît avec T37
 "crates/penelope-daemon/src/doctor.rs" = 44
 "crates/penelope-daemon/src/scheduler.rs" = 39
 "crates/penelope-kernel/src/session.rs" = 37
