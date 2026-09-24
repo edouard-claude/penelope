@@ -66,7 +66,6 @@ modules = [
     "images",
     "history",  # étape de boot du scellement (épopée #208, lot E, T11), prévue par source-de-verite.md
     "ingest",
-    "onboarding",
     "prompt_snapshot",
     "purge",
     "rpc",
@@ -117,7 +116,6 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 "dream/digest.rs" = 1
 "supervisor.rs" = 10
 "runner.rs" = 8
-"ingest.rs" = 7
 "runtime.rs" = 6
 "engine.rs" = 3
 "runtime_events.rs" = 2
