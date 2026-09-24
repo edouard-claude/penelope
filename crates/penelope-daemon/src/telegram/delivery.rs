@@ -1,4 +1,4 @@
-//! Livraison du cœur vers le canal : `ChannelDelivery` et `Messenger`.
+//! Livraison du cœur vers le canal : `ChannelDelivery`, `Messenger` ; démarrage par `Gateway`.
 
 use super::*;
 
@@ -479,5 +479,17 @@ impl Messenger for TelegramGateway {
         self.send_approval_card(chat_id, topic_id, &a)
             .await
             .map_err(|e| e.to_string())
+    }
+}
+
+/// Démarrée par `Daemon::run`, qui la reçoit de la composition (`penelope-cli`).
+#[async_trait::async_trait]
+impl penelope_app::gateway::Gateway for TelegramGateway {
+    fn name(&self) -> &'static str {
+        "Telegram"
+    }
+
+    async fn start(self: Arc<Self>) -> Result<Vec<tokio::task::JoinHandle<()>>, String> {
+        TelegramGateway::start(&self).await
     }
 }

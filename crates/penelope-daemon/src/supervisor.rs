@@ -5,7 +5,7 @@
 //!    │
 //!    ├── reprise au démarrage (tours, effets, requêtes LLM, runs)
 //!    ├── pool de runners ............ tours de conversation
-//!    ├── passerelle Telegram ........ si propriétaire et jeton configurés
+//!    ├── passerelle (Telegram) ...... reçue de la composition, démarrée après MCP
 //!    ├── catalogue de modèles ....... au démarrage puis toutes les 6 h
 //!    ├── maintenance ................ approbations échues, jetons de boutons expirés
 //!    └── socket RPC ................. CLI, jusqu'au signal d'arrêt
@@ -13,6 +13,7 @@
 
 use crate::bus::Origin;
 use crate::runtime::Daemon;
+use penelope_app::gateway::Gateway;
 use penelope_workflow::RunState;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -89,7 +90,11 @@ fn large_workspaces(
 
 impl Daemon {
     /// Fait tourner le daemon jusqu'à l'arrêt.
-    pub async fn run(self: Arc<Self>) -> anyhow::Result<()> {
+    ///
+    /// `gateway` : le canal composé au-dessus du daemon (`penelope-cli`), déjà construit
+    /// sans réseau. Sa présence est annoncée avant les serveurs MCP, il n'est démarré
+    /// qu'après eux (issue #12, épopée #208 T29).
+    pub async fn run(self: Arc<Self>, gateway: Option<Arc<dyn Gateway>>) -> anyhow::Result<()> {
         // Un seul daemon par répertoire : la socket est prise avant toute autre chose.
         let socket = self.services.platform.dirs.socket_path();
         let listener = penelope_platform::ipc::IpcListener::bind(&socket)
@@ -227,10 +232,9 @@ impl Daemon {
             }));
         }
 
-        // Telegram construit d'abord (sans réseau) : un serveur MCP qui se connecte sait déjà
-        // si un propriétaire peut répondre à ses demandes d'élicitation (issue #12).
-        let telegram = crate::telegram::TelegramGateway::from_config(self.clone()).await;
-        if let Ok(Some(_)) = &telegram {
+        // La passerelle annoncée d'abord : un serveur MCP qui se connecte sait déjà si un
+        // propriétaire peut répondre à ses demandes d'élicitation (issue #12).
+        if gateway.is_some() {
             self.services.elicitations.expect_owner();
         }
 
@@ -252,15 +256,11 @@ impl Daemon {
             ));
         }
 
-        match telegram {
-            Ok(Some(gw)) => match gw.start().await {
+        if let Some(gw) = gateway {
+            match gw.clone().start().await {
                 Ok(handles) => tasks.extend(handles),
-                Err(e) => tracing::error!(error = %e, "Telegram non démarré"),
-            },
-            Ok(None) => tracing::info!(
-                "Telegram non configuré (owner.telegram_user_id ou telegram_bot_token absent)"
-            ),
-            Err(e) => tracing::error!(error = %e, "Telegram non démarré"),
+                Err(e) => tracing::error!(error = %e, "{} non démarré", gw.name()),
+            }
         }
 
         let serve = crate::rpc::serve_on(self.clone(), listener);
