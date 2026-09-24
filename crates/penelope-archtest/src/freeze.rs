@@ -441,6 +441,7 @@ pub const CHANNEL_AGNOSTIC_CRATES: &[&str] = &[
     "penelope-executor",
     "penelope-vault",
     "penelope-dream",
+    "penelope-ops",
 ];
 
 /// Crates qui ont le droit de nommer un canal : la passerelle, ce qui est au-dessus

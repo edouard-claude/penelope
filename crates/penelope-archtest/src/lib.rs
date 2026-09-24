@@ -266,6 +266,9 @@ pub fn dependency_rules() -> BTreeMap<&'static str, Vec<&'static str>> {
     m.insert("penelope-mcp-host", MCP_HOST_ALLOWED_DEPS.to_vec());
     // La mémoire en fichiers (T22) : le socle et les crates métier, sans le canal.
     m.insert("penelope-vault", VAULT_ALLOWED_DEPS.to_vec());
+    // L'exploitation (T28) : le socle, le vault et les crates métier, jamais le daemon ni
+    // l'hôte MCP (`McpAdmin` par le port), ni le canal.
+    m.insert("penelope-ops", OPS_ALLOWED_DEPS.to_vec());
     m
 }
 
@@ -312,6 +315,22 @@ pub const VAULT_ALLOWED_DEPS: &[&str] = &[
     "penelope-mcp",
     "penelope-tools",
     "penelope-hitl",
+];
+
+/// Ce dont `penelope-ops` peut dépendre : `penelope-app`, `penelope-vault` et les crates
+/// métier dont elle se sert. Ni le daemon, ni l'hôte MCP (§3.2 : `McpAdmin` par le port),
+/// ni `penelope-telegram`, `penelope-workflow`, qu'elle ne lit que par `Services`.
+pub const OPS_ALLOWED_DEPS: &[&str] = &[
+    "penelope-app",
+    "penelope-vault",
+    "penelope-kernel",
+    "penelope-store",
+    "penelope-platform",
+    "penelope-observe",
+    "penelope-llm",
+    "penelope-memory",
+    "penelope-mcp",
+    "penelope-skills",
 ];
 
 /// Vérifie les règles de dépendance.
@@ -473,6 +492,7 @@ mod tests {
             "penelope-app",
             "penelope-mcp-host",
             "penelope-vault",
+            "penelope-ops",
             "penelope-cli",
             "penelope-gateway-telegram",
         ] {
@@ -557,6 +577,20 @@ mod tests {
             "penelope-vault est sous le daemon : {:?}",
             vault.internal_deps
         );
+    }
+
+    /// T28 : l'exploitation ne connaît ni le daemon, qui compose `doctor`, ni l'hôte MCP.
+    #[test]
+    fn the_ops_crate_depends_neither_on_the_daemon_nor_on_the_mcp_host() {
+        let all = crates();
+        let ops = all.iter().find(|c| c.name == "penelope-ops").unwrap();
+        for above in ["penelope-daemon", "penelope-mcp-host"] {
+            assert!(
+                !ops.internal_deps.contains(above),
+                "penelope-ops est sous {above} : {:?}",
+                ops.internal_deps
+            );
+        }
     }
 
     #[test]

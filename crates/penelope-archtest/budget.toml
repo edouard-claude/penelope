@@ -22,8 +22,6 @@ test_modules = [
 "crates/penelope-cli/src/commands.rs" = 2190   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/compaction.rs" = 1308
 "crates/penelope-llm/src/provider.rs" = 2048
-"crates/penelope-daemon/src/hermes.rs" = 1210
-"crates/penelope-daemon/src/upgrade.rs" = 1203   # relevé à l'intégration du lot A : #212 a ajouté ses tests avant le gel
 "crates/penelope-daemon/src/scheduler.rs" = 1095
 "crates/penelope-memory/src/index.rs" = 1622
 "crates/penelope-llm/src/codex.rs" = 1533
@@ -40,7 +38,6 @@ test_modules = [
 "crates/penelope-workflow/src/validate.rs" = 1101
 "crates/penelope-platform/src/backend/macos.rs" = 1082
 "crates/penelope-memory/src/recall.rs" = 1066
-"crates/penelope-daemon/src/codex_auth.rs" = 1040
 "crates/penelope-store/src/lib.rs" = 1036
 "crates/penelope-mcp/src/client.rs" = 1027
 "crates/penelope-platform/src/process.rs" = 1008
@@ -60,18 +57,13 @@ modules = [
     "agent",
     "approval_mode",
     "audit",
-    "backup",
     "budget_alert",
     "cache_audit",
-    "codex_auth",
-    "codex_quota",
     "compaction",
     "conversation",
-    "doctor",
     "dream",
     "engine",
     "executor",
-    "hermes",
     "images",
     "history",  # étape de boot du scellement (épopée #208, lot E, T11), prévue par source-de-verite.md
     "ingest",
@@ -86,12 +78,9 @@ modules = [
     "selfdocs",
     "selfknow",
     "session_ops",
-    "skill_deps",
-    "skill_install",
     "supervisor",
     "titles",
     "tools_on_demand",
-    "upgrade",
     "vision",
     "voice",
     "wiki_e2e",
@@ -109,7 +98,6 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 "rpc/mod.rs" = 4   # découpage (lot G) : la mention suit son code
 "rpc/methods/workflows.rs" = 1   # découpage (lot G) : la mention suit son code
 "rpc/methods/memory.rs" = 1   # découpage (lot G) : la mention suit son code
-"doctor/memory.rs" = 1   # découpage (lot G) : la mention suit son code
 "workflow/step_ctx.rs" = 1   # découpage (lot G) : la mention suit son code
 "workflow/step_agent.rs" = 1   # découpage (lot G) : la mention suit son code
 "workflow/start.rs" = 3   # découpage (lot G) : la mention suit son code
@@ -132,10 +120,8 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 "runner.rs" = 8
 "ingest.rs" = 7
 "runtime.rs" = 6
-"upgrade.rs" = 3
 "engine.rs" = 3
 "runtime_events.rs" = 2
-"skill_install.rs" = 2
 "cache_audit.rs" = 1
 "lib.rs" = 1          # le réexport `pub use runtime::{Daemon, …}`
 
@@ -236,10 +222,10 @@ required = [
 "crates/penelope-daemon/src/rpc/methods/workflows.rs" = 9   # découpage (lot G) : la mention suit son code
 "crates/penelope-daemon/src/rpc/methods/approvals.rs" = 9   # découpage (lot G) : la mention suit son code
 "crates/penelope-mcp-host/src/lifecycle.rs" = 1   # découpage (lot G), puis sortie du daemon (T25) : la mention suit son code
-"crates/penelope-daemon/src/doctor/secrets.rs" = 12   # découpage (lot G) : la mention suit son code
-"crates/penelope-daemon/src/doctor/mod.rs" = 15   # découpage (lot G) : la mention suit son code
-"crates/penelope-daemon/src/doctor/machine.rs" = 3   # découpage (lot G) : la mention suit son code
-"crates/penelope-daemon/src/doctor/coherence.rs" = 12   # découpage (lot G) : la mention suit son code
+"crates/penelope-ops/src/doctor/secrets.rs" = 12   # découpage (lot G), puis sortie du daemon (T28) : la mention suit son code
+"crates/penelope-ops/src/doctor/mod.rs" = 15   # découpage (lot G), puis sortie du daemon (T28) : la mention suit son code
+"crates/penelope-ops/src/doctor/machine.rs" = 3   # découpage (lot G), puis sortie du daemon (T28) : la mention suit son code
+"crates/penelope-ops/src/doctor/coherence.rs" = 12   # découpage (lot G), puis sortie du daemon (T28) : la mention suit son code
 "crates/penelope-daemon/src/executor/tools/skills_workflows.rs" = 1   # découpage (lot G) : la mention suit son code
 "crates/penelope-daemon/src/executor/tools/schedules_messaging.rs" = 7   # découpage (lot G) : la mention suit son code
 "crates/penelope-daemon/src/executor/mod.rs" = 5   # découpage (lot G) : la mention suit son code
@@ -268,6 +254,6 @@ required = [
 "crates/penelope-mcp-host/src/auth.rs" = 1   # mcp_auth.rs sorti du daemon (T25) : la mention suit son code
 "crates/penelope-app/src/media.rs" = 1
 "crates/penelope-daemon/src/session_ops.rs" = 1
-"crates/penelope-daemon/src/upgrade.rs" = 1
+"crates/penelope-ops/src/upgrade.rs" = 1   # upgrade.rs sorti du daemon (T28) : la mention suit son code
 "crates/penelope-daemon/src/voice.rs" = 1
 "crates/penelope-kernel/src/api.rs" = 1
