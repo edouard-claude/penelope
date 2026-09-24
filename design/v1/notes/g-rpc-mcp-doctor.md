@@ -47,9 +47,11 @@ désindentation).
 
 Déplacements d'entrées à la main, même total à chaque fois : `[daemon.daemon_users]`
 (rpc 8 = 4 + 2 + 1 + 1, doctor 1) et `[channel.allowed]` (rpc 18 = 9 + 9, mcp 1,
-doctor 42 = 15 + 12 + 12 + 3). Le plafond `[crates]` du daemon monte de 205 lignes
-(82 213 -> 82 418 : rpc +143, mcp +33, doctor +29), en-têtes de modules, `use super::*`,
-blocs `impl` et signatures des fonctions de domaine, sans une ligne de code nouvelle.
+doctor 42 = 15 + 12 + 12 + 3). Le découpage fait grossir le daemon de 205 lignes (rpc
++143, mcp +33, doctor +29 : en-têtes de modules, `use super::*`, blocs `impl` et signatures
+des fonctions de domaine, sans une ligne de code nouvelle). À l'intégration, le budget a été
+re-mesuré en un seul commit (plafond du daemon à 82 865, après les découpages de workflow et
+d'executor), les commits de budget de la branche ont été remplacés par celui-ci.
 
 ## 4. Notes de version
 
