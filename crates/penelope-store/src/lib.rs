@@ -30,7 +30,7 @@ pub use vector::{cosine_similarity, decode_embedding, encode_embedding};
 /// l'accès SQLite transite par `penelope-store` (§3.1).
 pub use rusqlite;
 
-use rusqlite::{Connection, OpenFlags, Transaction};
+use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -443,7 +443,7 @@ fn run_in_transaction<T, F>(conn: &mut Connection, f: F) -> Result<T>
 where
     F: FnOnce(&Transaction<'_>) -> Result<T>,
 {
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     match f(&tx) {
         Ok(v) => {
             tx.commit()?;
