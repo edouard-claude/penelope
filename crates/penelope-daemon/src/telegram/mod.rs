@@ -176,15 +176,13 @@ impl TelegramGateway {
         }
         // Surveillées : une panique relance la boucle au lieu de rendre le bot muet (#84).
         let (a, b, c) = (self.clone(), self.clone(), self.clone());
-        let d = self.daemon.clone();
+        let sup = self.daemon.supervision();
         Ok(vec![
-            crate::tasks::spawn_supervised(d.clone(), "telegram.poll", move || {
-                a.clone().poll_loop()
+            crate::tasks::spawn_supervised(&sup, "telegram.poll", move || a.clone().poll_loop()),
+            crate::tasks::spawn_supervised(&sup, "telegram.drafts", move || b.clone().draft_loop()),
+            crate::tasks::spawn_supervised(&sup, "telegram.outbox", move || {
+                c.clone().outbox_loop()
             }),
-            crate::tasks::spawn_supervised(d.clone(), "telegram.drafts", move || {
-                b.clone().draft_loop()
-            }),
-            crate::tasks::spawn_supervised(d, "telegram.outbox", move || c.clone().outbox_loop()),
         ])
     }
 

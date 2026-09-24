@@ -173,7 +173,7 @@ impl Daemon {
         // d'une relance, au lieu d'arrêter la boucle jusqu'au prochain démarrage (#84).
         let supervised = |name: &str, f: fn(Arc<Daemon>) -> _| {
             let d = self.clone();
-            crate::tasks::spawn_supervised(self.clone(), name, move || f(d.clone()))
+            crate::tasks::spawn_supervised(&self.supervision(), name, move || f(d.clone()))
         };
         let mut tasks = vec![
             tokio::spawn(crate::runner::run_pool(self.clone())),
@@ -234,7 +234,7 @@ impl Daemon {
         {
             let mcp = mcp.clone();
             tasks.push(crate::tasks::spawn_supervised(
-                self.clone(),
+                &self.supervision(),
                 "mcp.maintenance",
                 move || mcp.clone().maintenance_loop(),
             ));

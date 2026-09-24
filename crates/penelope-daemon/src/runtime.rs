@@ -23,7 +23,8 @@ use penelope_workflow::{RunStore, ScheduleStore, WorkflowRegistry};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub use crate::ports::DaemonHandle;
+pub use crate::ports::Handle;
+use crate::ports::ProviderSource;
 
 /// Tous les services, assemblés.
 pub struct Services {
@@ -337,7 +338,7 @@ pub async fn workflow_known_with(
 /// Le daemon.
 pub struct Daemon {
     pub services: Arc<Services>,
-    pub handle: DaemonHandle,
+    pub handle: Handle,
     /// Événements des tours, attentes de réponse, tours actifs.
     pub bus: Arc<crate::bus::Bus>,
     /// Branchements optionnels : canal de message, MCP, orchestration.
@@ -351,9 +352,88 @@ pub struct Daemon {
     /// Boucles de fond surveillées : vivantes, paniques, relances (issue #84).
     pub tasks: Arc<crate::tasks::Tasks>,
     /// Providers construits à la demande (la clé peut arriver après le démarrage).
-    providers: tokio::sync::Mutex<Option<Arc<penelope_llm::ProviderSet>>>,
+    pub providers: Arc<Providers>,
+}
+
+/// Providers des modèles : construits à la première demande, reconstruits après
+/// [`Providers::invalidate`], ou imposés par les tests.
+pub struct Providers {
+    services: Arc<Services>,
+    set: tokio::sync::Mutex<Option<Arc<penelope_llm::ProviderSet>>>,
     /// Provider imposé, pour les tests et les suites sans réseau.
     provider_override: std::sync::RwLock<Option<Arc<dyn penelope_llm::Provider>>>,
+}
+
+impl Providers {
+    pub fn new(services: Arc<Services>) -> Providers {
+        Providers {
+            services,
+            set: tokio::sync::Mutex::new(None),
+            provider_override: std::sync::RwLock::new(None),
+        }
+    }
+
+    /// Impose un provider pour tous les modèles (tests, suites sans réseau).
+    pub fn set_override(&self, p: Arc<dyn penelope_llm::Provider>) {
+        if let Ok(mut g) = self.provider_override.write() {
+            *g = Some(p);
+        }
+    }
+
+    /// Oublie les providers construits : la prochaine demande les reconstruit avec la
+    /// configuration et les secrets du moment.
+    pub async fn invalidate(&self) {
+        *self.set.lock().await = None;
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::ports::ProviderSource for Providers {
+    /// Provider d'un modèle. La construction est retentée tant qu'elle échoue : une clé
+    /// posée après le démarrage est prise en compte au tour suivant, sans redémarrage.
+    async fn provider_for(
+        &self,
+        model_id: &str,
+    ) -> Result<Arc<dyn penelope_llm::Provider>, String> {
+        if let Some(p) = self.provider_override.read().ok().and_then(|g| g.clone()) {
+            return Ok(p);
+        }
+        let mut guard = self.set.lock().await;
+        if guard.is_none() {
+            let s = &self.services;
+            let cfg = s.config.config();
+            // Le fournisseur Codex ne vit que si un compte ChatGPT est connecté : c'est
+            // le daemon qui tient les jetons et leur rotation (issue #142).
+            let codex = match crate::codex_auth::load(s) {
+                Ok(Some(g)) if g.disconnected.is_none() => Some(penelope_llm::CodexAccess {
+                    tokens: Arc::new(crate::codex_auth::DaemonTokens::new(s.clone())),
+                    installation_id: crate::codex_auth::installation_id(s).await,
+                    quota_sink: Some(Arc::new(crate::codex_quota::QuotaWriter::new(s.clone()))),
+                }),
+                _ => None,
+            };
+            let set = penelope_llm::build_providers(
+                &cfg,
+                s.platform.secrets.as_ref(),
+                s.catalog.clone(),
+                codex,
+            )
+            .map_err(|e| {
+                format!(
+                    "aucun provider utilisable : {e}. Poser la clé avec \
+                         `penelope secret set openrouter_api_key`"
+                )
+            })?;
+            *guard = Some(Arc::new(set));
+        }
+        let set = guard.as_ref().expect("providers construits");
+        set.get(model_id)
+            .ok_or_else(|| format!("aucun provider configuré pour `{model_id}`"))
+    }
+
+    fn provider_override_active(&self) -> Option<Arc<dyn penelope_llm::Provider>> {
+        self.provider_override.read().ok().and_then(|g| g.clone())
+    }
 }
 
 /// Points de branchement des sous-systèmes qui démarrent après le daemon.
@@ -409,77 +489,46 @@ impl Daemon {
     pub fn from_services(services: Arc<Services>) -> Daemon {
         let started_at_ms = services.clock.now_ms();
         Daemon {
-            services,
-            handle: DaemonHandle::new(started_at_ms),
+            handle: Handle::new(started_at_ms),
             bus: Arc::new(crate::bus::Bus::new()),
             hooks: Hooks::default(),
             compaction: crate::compaction::State::default(),
             workflows: crate::workflow::State::default(),
             embeddings: crate::embeddings::State::default(),
             tasks: Arc::new(crate::tasks::Tasks::default()),
-            providers: tokio::sync::Mutex::new(None),
-            provider_override: std::sync::RwLock::new(None),
+            providers: Arc::new(Providers::new(services.clone())),
+            services,
         }
+    }
+
+    /// Contexte des boucles de fond surveillées.
+    pub fn supervision(&self) -> crate::ports::Supervision {
+        crate::ports::Supervision {
+            tasks: self.tasks.clone(),
+            handle: self.handle.clone(),
+            clock: self.services.clock.clone(),
+            events: self.services.events.clone(),
+        }
+    }
+
+    pub fn provider_override_active(&self) -> Option<Arc<dyn penelope_llm::Provider>> {
+        self.providers.provider_override_active()
     }
 
     /// Impose un provider pour tous les modèles (tests, suites sans réseau).
-    /// Provider imposé (tests), s'il y en a un.
-    pub fn provider_override_active(&self) -> Option<Arc<dyn penelope_llm::Provider>> {
-        self.provider_override.read().ok().and_then(|g| g.clone())
-    }
-
     pub fn set_provider_override(&self, p: Arc<dyn penelope_llm::Provider>) {
-        if let Ok(mut g) = self.provider_override.write() {
-            *g = Some(p);
-        }
+        self.providers.set_override(p);
     }
 
-    /// Oublie les providers construits : la prochaine demande les reconstruit avec la
-    /// configuration et les secrets du moment.
     pub async fn invalidate_providers(&self) {
-        *self.providers.lock().await = None;
+        self.providers.invalidate().await;
     }
 
-    /// Provider d'un modèle. La construction est retentée tant qu'elle échoue : une clé
-    /// posée après le démarrage est prise en compte au tour suivant, sans redémarrage.
     pub async fn provider_for(
         &self,
         model_id: &str,
     ) -> Result<Arc<dyn penelope_llm::Provider>, String> {
-        if let Some(p) = self.provider_override.read().ok().and_then(|g| g.clone()) {
-            return Ok(p);
-        }
-        let mut guard = self.providers.lock().await;
-        if guard.is_none() {
-            let s = &self.services;
-            let cfg = s.config.config();
-            // Le fournisseur Codex ne vit que si un compte ChatGPT est connecté : c'est
-            // le daemon qui tient les jetons et leur rotation (issue #142).
-            let codex = match crate::codex_auth::load(s) {
-                Ok(Some(g)) if g.disconnected.is_none() => Some(penelope_llm::CodexAccess {
-                    tokens: Arc::new(crate::codex_auth::DaemonTokens::new(s.clone())),
-                    installation_id: crate::codex_auth::installation_id(s).await,
-                    quota_sink: Some(Arc::new(crate::codex_quota::QuotaWriter::new(s.clone()))),
-                }),
-                _ => None,
-            };
-            let set = penelope_llm::build_providers(
-                &cfg,
-                s.platform.secrets.as_ref(),
-                s.catalog.clone(),
-                codex,
-            )
-            .map_err(|e| {
-                format!(
-                    "aucun provider utilisable : {e}. Poser la clé avec \
-                         `penelope secret set openrouter_api_key`"
-                )
-            })?;
-            *guard = Some(Arc::new(set));
-        }
-        let set = guard.as_ref().expect("providers construits");
-        set.get(model_id)
-            .ok_or_else(|| format!("aucun provider configuré pour `{model_id}`"))
+        self.providers.provider_for(model_id).await
     }
 
     /// Reprise au démarrage (§17) : leases, effets, requêtes LLM, tâches MCP, runs.

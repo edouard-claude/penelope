@@ -1,21 +1,43 @@
 //! Ports du daemon : ce qu'un module reçoit au lieu de `&Daemon` (épopée #208, lot D,
 //! `design/v1/decoupage-daemon.md` §2.2).
 
+use penelope_kernel::clock::SharedClock;
+use penelope_kernel::event::EventLog;
+use penelope_llm::Provider;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-/// Poignée de contrôle du daemon.
+/// Providers des modèles, construits à la demande (`Daemon::provider_for` jusqu'ici).
+#[async_trait::async_trait]
+pub trait ProviderSource: Send + Sync {
+    /// Provider d'un modèle ; l'erreur est lisible par le propriétaire.
+    async fn provider_for(&self, model_id: &str) -> Result<Arc<dyn Provider>, String>;
+    /// Provider imposé (tests, suites sans réseau), s'il y en a un.
+    fn provider_override_active(&self) -> Option<Arc<dyn Provider>>;
+}
+
+/// Ce qu'une boucle de fond surveillée reçoit (`tasks::spawn_supervised`) : le registre
+/// des boucles, le signal d'arrêt, l'horloge et le journal d'audit.
 #[derive(Clone)]
-pub struct DaemonHandle {
+pub struct Supervision {
+    pub tasks: Arc<crate::tasks::Tasks>,
+    pub handle: Handle,
+    pub clock: SharedClock,
+    pub events: EventLog,
+}
+
+/// Poignée de contrôle du daemon : signal d'arrêt et de redémarrage, compteurs.
+#[derive(Clone)]
+pub struct Handle {
     shutdown: Arc<AtomicBool>,
     restart: Arc<AtomicBool>,
     started_at_ms: i64,
     turns_done: Arc<AtomicU64>,
 }
 
-impl DaemonHandle {
-    pub fn new(started_at_ms: i64) -> DaemonHandle {
-        DaemonHandle {
+impl Handle {
+    pub fn new(started_at_ms: i64) -> Handle {
+        Handle {
             shutdown: Arc::new(AtomicBool::new(false)),
             restart: Arc::new(AtomicBool::new(false)),
             started_at_ms,

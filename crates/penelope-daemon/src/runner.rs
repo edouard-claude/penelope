@@ -23,7 +23,7 @@ pub async fn run_pool(daemon: Arc<Daemon>) {
         let holder = format!("runner-{i}");
         let d = daemon.clone();
         tasks.push(crate::tasks::spawn_supervised(
-            daemon.clone(),
+            &daemon.supervision(),
             holder.clone(),
             move || runner_loop(d.clone(), holder.clone(), heartbeat),
         ));
@@ -193,7 +193,7 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
             Ok(o) => o,
             Err(payload) => {
                 let msg = crate::tasks::panic_text(payload.as_ref());
-                crate::tasks::report_panic(daemon, "tour", &msg).await;
+                crate::tasks::report_panic(&daemon.supervision(), "tour", &msg).await;
                 TurnOutcome::Failed {
                     error: format!(
                         "erreur interne pendant le tour ({msg}) : il est arrêté, rien d'autre \

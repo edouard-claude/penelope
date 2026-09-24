@@ -15,14 +15,14 @@
 //! `doctor` signale une boucle relancée dans la dernière heure ou une boucle morte,
 //! `status` donne le nombre de runners vivants.
 
-use crate::runtime::Daemon;
+use crate::ports::{Handle, Supervision};
 use futures::FutureExt;
 use penelope_kernel::event::EventDraft;
 use serde::Serialize;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 /// Attente maximale entre deux relances.
@@ -131,12 +131,10 @@ pub fn install_panic_hook() {
 }
 
 /// Journalise, compte et date une panique, et la verse au journal d'audit.
-pub async fn report_panic(d: &Daemon, name: &str, message: &str) {
+pub async fn report_panic(sup: &Supervision, name: &str, message: &str) {
     tracing::error!(tache = name, panique = message, "panique rattrapée");
-    d.tasks
-        .record_panic(name, message, d.services.clock.now_ms());
-    let _ = d
-        .services
+    sup.tasks.record_panic(name, message, sup.clock.now_ms());
+    let _ = sup
         .events
         .append(EventDraft::new(
             "daemon.task_panicked",
@@ -149,7 +147,7 @@ pub async fn report_panic(d: &Daemon, name: &str, message: &str) {
 /// le daemon ne s'arrête pas. Une fin normale n'est pas relancée : pendant l'arrêt c'est
 /// attendu, sinon la boucle est marquée finie et `doctor` le dit.
 pub fn spawn_supervised<F, Fut>(
-    d: Arc<Daemon>,
+    sup: &Supervision,
     name: impl Into<String>,
     make: F,
 ) -> tokio::task::JoinHandle<()>
@@ -158,26 +156,27 @@ where
     Fut: Future<Output = ()> + Send + 'static,
 {
     let name = name.into();
+    let sup = sup.clone();
     install_panic_hook();
     tokio::spawn(async move {
         let mut backoff = Duration::from_secs(1);
         loop {
-            d.tasks.set_alive(&name, true);
+            sup.tasks.set_alive(&name, true);
             let started = tokio::time::Instant::now();
             let outcome = std::panic::AssertUnwindSafe(make()).catch_unwind().await;
-            d.tasks.set_alive(&name, false);
+            sup.tasks.set_alive(&name, false);
             let Err(payload) = outcome else {
-                if !d.handle.is_shutting_down() {
+                if !sup.handle.is_shutting_down() {
                     tracing::warn!(tache = %name, "boucle de fond terminée hors arrêt");
-                    d.tasks.set_ended(&name);
+                    sup.tasks.set_ended(&name);
                 }
                 return;
             };
-            report_panic(&d, &name, &panic_text(payload.as_ref())).await;
+            report_panic(&sup, &name, &panic_text(payload.as_ref())).await;
             if started.elapsed() >= STABLE_AFTER {
                 backoff = Duration::from_secs(1);
             }
-            if !wait_unless_shutdown(&d, backoff).await {
+            if !wait_unless_shutdown(&sup.handle, backoff).await {
                 return;
             }
             tracing::warn!(tache = %name, attente = ?backoff, "boucle de fond relancée");
@@ -187,25 +186,25 @@ where
 }
 
 /// Attend `total`, par tranches courtes. Faux si le daemon s'arrête entre-temps.
-async fn wait_unless_shutdown(d: &Daemon, total: Duration) -> bool {
+async fn wait_unless_shutdown(handle: &Handle, total: Duration) -> bool {
     let step = Duration::from_millis(100);
     let deadline = tokio::time::Instant::now() + total;
     while tokio::time::Instant::now() < deadline {
-        if d.handle.is_shutting_down() {
+        if handle.is_shutting_down() {
             return false;
         }
         tokio::time::sleep(step.min(deadline - tokio::time::Instant::now())).await;
     }
-    !d.handle.is_shutting_down()
+    !handle.is_shutting_down()
 }
 
 /// Contrôle `doctor` : boucle relancée dans la dernière heure, ou boucle finie.
-pub fn doctor_check(d: &Daemon) -> penelope_kernel::api::DoctorCheck {
+pub fn doctor_check(sup: &Supervision) -> penelope_kernel::api::DoctorCheck {
     use penelope_kernel::api::DoctorCheck;
     const ID: &str = "tasks";
     const LABEL: &str = "Boucles de fond";
-    let now = d.services.clock.now_ms();
-    let tasks = d.tasks.snapshot();
+    let now = sup.clock.now_ms();
+    let tasks = sup.tasks.snapshot();
     let mut problems = Vec::new();
     for (name, t) in &tasks {
         if t.ended {
@@ -233,7 +232,7 @@ pub fn doctor_check(d: &Daemon) -> penelope_kernel::api::DoctorCheck {
             LABEL,
             format!(
                 "{alive} vivante(s), dont {} runner(s) ; aucune panique dans l'heure",
-                d.tasks.alive("runner-")
+                sup.tasks.alive("runner-")
             ),
         )
     } else {
@@ -249,6 +248,8 @@ pub fn doctor_check(d: &Daemon) -> penelope_kernel::api::DoctorCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::Daemon;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     async fn daemon() -> (tempfile::TempDir, Arc<Daemon>) {
@@ -284,7 +285,7 @@ mod tests {
         let h = {
             let runs = runs.clone();
             let d2 = d.clone();
-            spawn_supervised(d.clone(), "essai", move || {
+            spawn_supervised(&d.supervision(), "essai", move || {
                 let runs = runs.clone();
                 let d = d2.clone();
                 async move {
@@ -305,7 +306,7 @@ mod tests {
         assert!(t.last_panic.unwrap().contains("hors bornes"));
         let events = d.services.events.range(0, 100).await.unwrap();
         assert!(events.iter().any(|e| e.kind == "daemon.task_panicked"));
-        let c = doctor_check(&d);
+        let c = doctor_check(&d.supervision());
         assert!(
             !c.ok && c.detail.contains("`essai` relancée 1 fois"),
             "{c:?}"
@@ -323,7 +324,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_interrupts_the_restart_backoff() {
         let (_dir, d) = daemon().await;
-        let h = spawn_supervised(d.clone(), "toujours", || async {
+        let h = spawn_supervised(&d.supervision(), "toujours", || async {
             panic!("panique à chaque démarrage");
         });
         // Deux paniques : la boucle attend maintenant 2 s avant la troisième.

@@ -71,7 +71,8 @@ mod wiki_e2e;
 pub mod workflow;
 
 pub use agent::{AgentLoop, TurnOutcome};
-pub use runtime::{Daemon, DaemonHandle, Services};
+pub use ports::Handle;
+pub use runtime::{Daemon, Services};
 
 /// Version du daemon.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
