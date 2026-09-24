@@ -3,12 +3,12 @@
 use super::*;
 
 #[async_trait::async_trait]
-impl crate::executor::McpGateway for McpSupervisor {
+impl penelope_app::ports::McpGateway for McpSupervisor {
     async fn call_tool(
         &self,
         qualified: &str,
         args: &Value,
-        from: crate::elicitation::Destination,
+        from: penelope_app::elicitation::Destination,
     ) -> Result<Value, String> {
         self.call(qualified, args, from).await
     }

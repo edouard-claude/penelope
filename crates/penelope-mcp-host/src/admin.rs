@@ -472,7 +472,7 @@ impl McpSupervisor {
 }
 
 #[async_trait::async_trait]
-impl crate::ports::McpAdmin for McpSupervisor {
+impl penelope_app::ports::McpAdmin for McpSupervisor {
     async fn statuses(&self) -> Vec<ServerStatus> {
         McpSupervisor::statuses(self).await
     }

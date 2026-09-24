@@ -23,8 +23,6 @@ pub mod hermes;
 pub mod history;
 pub mod images;
 pub mod ingest;
-pub mod mcp;
-pub mod mcp_auth;
 pub mod mem_audit;
 pub mod mem_split;
 pub mod onboarding;
@@ -66,6 +64,10 @@ pub mod workflow;
 pub use penelope_app::{
     bus, codex_scope, elicitation, helpers, machine, media, ports, tasks, testing,
 };
+// Hôte MCP sorti dans `penelope-mcp-host` (T25), réexporté sous ses anciens chemins
+// jusqu'à T30.
+pub use penelope_mcp_host as mcp;
+pub use penelope_mcp_host::auth as mcp_auth;
 
 pub use agent::{AgentLoop, TurnOutcome};
 pub use ports::Handle;

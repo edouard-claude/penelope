@@ -10,7 +10,7 @@ impl McpSupervisor {
         &self,
         qualified: &str,
         args: &Value,
-        from: crate::elicitation::Destination,
+        from: penelope_app::elicitation::Destination,
     ) -> Result<Value, String> {
         let tool = self
             .services

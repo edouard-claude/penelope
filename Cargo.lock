@@ -1374,6 +1374,7 @@ dependencies = [
  "penelope-kernel",
  "penelope-llm",
  "penelope-mcp",
+ "penelope-mcp-host",
  "penelope-memory",
  "penelope-observe",
  "penelope-platform",
@@ -1513,6 +1514,29 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "toml",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "penelope-mcp-host"
+version = "1.0.0-alpha.6"
+dependencies = [
+ "async-trait",
+ "base64",
+ "futures",
+ "penelope-app",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-mcp",
+ "penelope-observe",
+ "penelope-platform",
+ "penelope-store",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "tracing",
  "url",
 ]

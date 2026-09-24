@@ -8,7 +8,7 @@ async fn a_stdio_server_cannot_read_what_the_shell_cannot() {
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock =
         Arc::new(penelope_kernel::clock::TestClock::default());
-    let s = crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+    let s = Services::for_tests(dir.path().to_path_buf(), clock)
         .await
         .unwrap();
     let cfg = ServerConfig {
@@ -166,7 +166,7 @@ async fn only_a_declared_server_reaches_the_keychain() {
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock =
         Arc::new(penelope_kernel::clock::TestClock::default());
-    let s = crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+    let s = Services::for_tests(dir.path().to_path_buf(), clock)
         .await
         .unwrap();
     s.config
@@ -298,7 +298,7 @@ async fn a_server_keeps_its_own_directories_readable() {
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock =
         Arc::new(penelope_kernel::clock::TestClock::default());
-    let s = crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+    let s = Services::for_tests(dir.path().to_path_buf(), clock)
         .await
         .unwrap();
     s.config
@@ -321,7 +321,7 @@ async fn a_server_keeps_its_own_directories_readable() {
     let data = s.platform.dirs.data();
     assert_eq!(p.deny_read, vec![data.join("secrets.enc")]);
 }
-use crate::executor::McpGateway;
+use penelope_app::ports::McpGateway;
 use penelope_kernel::clock::TestClock;
 use penelope_kernel::risk::RiskClass;
 use std::sync::Mutex;

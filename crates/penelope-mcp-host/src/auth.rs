@@ -7,10 +7,10 @@
 //! dans la conversation. Les jetons vivent dans le SecretStore et sont rafraîchis avant
 //! chaque connexion.
 
-use crate::executor::Messenger;
-use crate::ports::McpAdmin;
-use crate::ports::{Slot, Supervision};
-use crate::runtime::Services;
+use penelope_app::ports::McpAdmin;
+use penelope_app::ports::Messenger;
+use penelope_app::ports::{Slot, Supervision};
+use penelope_app::services::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_mcp::ServerConfig;
 use penelope_mcp::oauth::{
@@ -701,7 +701,7 @@ pub async fn reconnect_and_tell(
         None => format!("🔐 `{server}` autorisé."),
     };
     if let Some(m) = messenger {
-        let origin = crate::helpers::owner_origin_of(s);
+        let origin = penelope_app::helpers::owner_origin_of(s);
         let _ = m.send_text(&origin, &text).await;
     }
 }

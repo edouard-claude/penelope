@@ -17,7 +17,9 @@
 //! daemon utilise [`ProcessConnector`] (stdio sous bac à sable, HTTP) ; les tests, une
 //! boucle locale.
 
-use crate::runtime::Services;
+#![forbid(unsafe_code)]
+
+use penelope_app::services::Services;
 use penelope_mcp::McpError;
 use penelope_mcp::client::McpClient;
 use penelope_mcp::config::ServerConfig;
@@ -40,6 +42,7 @@ const HEALTH_AFTER_MS: i64 = 60_000;
 const MAX_INPUT_ROUNDS: usize = 4;
 
 mod admin;
+pub mod auth;
 mod connector;
 mod gateway;
 mod lifecycle;
@@ -136,8 +139,7 @@ impl Info {
 }
 
 /// Faux serveurs MCP en mémoire, partagés par les tests du daemon.
-#[cfg(test)]
-pub(crate) mod testing;
+pub mod testing;
 
 #[cfg(test)]
 mod tests;

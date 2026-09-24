@@ -61,7 +61,7 @@ pub fn stdio_profile(
     };
     let mut kept: Vec<std::path::PathBuf> = vec![data_dir];
     kept.extend(cfg.roots.iter().map(|r| s.platform.dirs.expand(r)));
-    profile.deny_read = crate::executor::denied_reads(s)
+    profile.deny_read = penelope_app::helpers::denied_reads(s)
         .into_iter()
         .filter(|d| !kept.iter().any(|k| k.starts_with(d)))
         .collect();
@@ -173,7 +173,7 @@ impl Connector for ProcessConnector {
                 // Autorisation OAuth obtenue par `mcp auth` : jeton rafraîchi au besoin.
                 if !static_auth
                     && let Some(header) =
-                        crate::mcp_auth::authorization_header(s, &cfg.name, &resolved.url).await?
+                        crate::auth::authorization_header(s, &cfg.name, &resolved.url).await?
                 {
                     t.set_authorization(Some(header)).await;
                 }

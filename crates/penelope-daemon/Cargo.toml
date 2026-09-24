@@ -24,6 +24,9 @@ regex.workspace = true
 arc-swap.workspace = true
 # Services, ports et bus, extraits du daemon (épopée #208, T21).
 penelope-app.workspace = true
+# Hôte MCP : superviseur des serveurs et autorisation OAuth, extraits du daemon
+# (épopée #208, T25).
+penelope-mcp-host.workspace = true
 penelope-kernel.workspace = true
 penelope-store.workspace = true
 penelope-platform.workspace = true
