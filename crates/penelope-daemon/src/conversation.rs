@@ -119,13 +119,15 @@ impl SessionConversation {
         self.bare_model().starts_with("anthropic/")
     }
 
+    /// D'où la conversation se relit (`history.source`, épopée #208, T14).
+    fn source(&self) -> penelope_kernel::config::HistorySource {
+        self.services.config.config().history.effective_source()
+    }
+
     /// Entrées à projeter : résumés LCM actifs, puis tout ce qu'ils ne couvrent pas.
     async fn projected_entries(&self) -> anyhow::Result<Vec<Entry>> {
-        Ok(self
-            .services
-            .context
-            .projected_from_tables(&self.session_id)
-            .await?)
+        let (s, sid) = (&self.services, &self.session_id);
+        Ok(s.context.projected_entries(sid, self.source()).await?)
     }
 }
 
@@ -305,12 +307,8 @@ impl Conversation for SessionConversation {
     async fn tail(&self) -> anyhow::Result<Vec<ChatMessage>> {
         // Les dernières entrées seulement : `resolve_pending` appelle cette queue à
         // chaque itération (issue #55).
-        let entries = self
-            .services
-            .context
-            .history
-            .tail(&self.session_id, TAIL_ENTRIES)
-            .await?;
+        let (s, sid) = (&self.services, &self.session_id);
+        let entries = s.context.tail(sid, TAIL_ENTRIES, self.source()).await?;
         Ok(entries.iter().map(|e| e.message.clone()).collect())
     }
 

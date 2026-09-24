@@ -1,11 +1,217 @@
-//! Lecture de la conversation d'une session : les entrées que la requête projette.
+//! Lecture de la conversation d'une session : les entrées que la requête projette et la
+//! queue de l'historique (épopée #208, T14 ; `design/v1/source-de-verite.md` §4.3).
+//!
+//! Deux sources, choisies par `history.source` :
+//!
+//! - `tables` : les lignes `messages`, `message_context` et `lcm_nodes`, comme la V0 ;
+//! - `journal` : le journal de la session plié par [`crate::derive`], après son préfixe
+//!   hérité ([`crate::replay::Lineage`]), les entrées numérotées comme leurs lignes (le
+//!   niveau 0 cite `seq:N`).
+//!
+//! Une session que le journal ne sait pas redonner (lignes sans événement ni scellement,
+//! archive d'un retour arrière) se lit dans les tables, quelle que soit la source ; un
+//! journal qui ne se plie pas aussi, avec une erreur dans les journaux du daemon
+//! (`penelope history verify` la nomme).
+//!
+//! En mode `tables`, dans une compilation de test ou de développement
+//! (`debug_assertions`), chaque lecture est comparée à celle du journal, octet pour octet :
+//! une divergence fait échouer la requête et nomme la session et l'entrée.
 
 use crate::engine::ContextEngine;
+use crate::replay::{Lineage, ReplayError};
+use crate::store::HistoryStore;
 use crate::transcript::Entry;
+use penelope_kernel::config::HistorySource;
 use penelope_llm::types::{ChatMessage, Role};
+use penelope_store::rusqlite::Connection;
+
+/// Comparer chaque lecture des tables à celle du journal (§4.3, « assertion de test »).
+const CHECK: bool = cfg!(debug_assertions);
+
+/// Pourquoi une lecture n'aboutit pas.
+#[derive(Debug, thiserror::Error)]
+pub enum ReadError {
+    #[error(transparent)]
+    Store(#[from] penelope_store::StoreError),
+    /// Les tables et le journal ne donnent pas la même conversation.
+    #[error(
+        "session {session} : {what} diffère entre les tables et le journal, entrée {index} :\n  tables  : {tables}\n  journal : {journal}"
+    )]
+    Diverged {
+        session: String,
+        what: &'static str,
+        index: usize,
+        tables: String,
+        journal: String,
+    },
+    /// Le journal ne se plie pas, sous la comparaison.
+    #[error("session {session} : le journal ne se plie pas : {reason}")]
+    Journal { session: String, reason: String },
+}
+
+/// La conversation d'une session pliée depuis son journal.
+#[derive(Debug, Clone, Default)]
+pub struct JournalRead {
+    /// Les nœuds visibles, dans l'ordre de la requête (résumés en messages système).
+    pub projected: Vec<Entry>,
+    /// Tous les messages non coupés, masqués compris, comme les lignes de `messages`.
+    pub entries: Vec<Entry>,
+}
+
+impl HistoryStore {
+    /// La conversation de la session pliée depuis son journal, numérotée comme ses
+    /// lignes. `Ok(None)` : le journal ne sait pas la redonner, les tables font foi.
+    pub async fn read_journal(
+        &self,
+        session_id: &str,
+    ) -> penelope_store::Result<Result<Option<JournalRead>, String>> {
+        let sid = session_id.to_string();
+        self.store()
+            .read(move |c| Ok(read_journal_in(c, &sid)))
+            .await
+    }
+}
+
+fn read_journal_in(c: &Connection, sid: &str) -> Result<Option<JournalRead>, String> {
+    let fail = |e: ReplayError| e.to_string();
+    let count = |sql: &str| -> Result<i64, String> {
+        c.query_row(sql, [sid], |r| r.get(0))
+            .map_err(|e| e.to_string())
+    };
+    // Lignes que la double écriture n'a pas couvertes : le journal les ignore.
+    let unjournaled = count(
+        "SELECT COUNT(*) FROM messages
+         WHERE session_id = ?1 AND event_id IS NULL AND sealed = 0",
+    )?;
+    if unjournaled > 0 {
+        return Ok(None);
+    }
+    let lineage = Lineage::load(c, sid).map_err(fail)?;
+    if !lineage.journaled() {
+        // Sans `conv.*`, une session n'a de conversation que si elle n'a pas de lignes :
+        // sinon c'est une archive de retour arrière, copie V0 sans journal.
+        let rows = count("SELECT COUNT(*) FROM messages WHERE session_id = ?1")?;
+        return Ok((rows == 0).then(JournalRead::default));
+    }
+    let surface = lineage.surface().map_err(fail)?;
+    let seqs = lineage.row_seqs(&surface);
+    let renumber = |mut e: Entry| {
+        if e.seq != 0 {
+            e.seq = seqs.get(&e.seq).copied().unwrap_or(e.seq);
+        }
+        e
+    };
+    Ok(Some(JournalRead {
+        projected: surface
+            .projected_entries()
+            .into_iter()
+            .map(renumber)
+            .collect(),
+        entries: surface.entries().into_iter().map(renumber).collect(),
+    }))
+}
+
+/// La première entrée qui diffère, octet pour octet (sérialisation JSON).
+fn compare(
+    session: &str,
+    what: &'static str,
+    tables: &[Entry],
+    journal: &[Entry],
+) -> Result<(), ReadError> {
+    let text = |e: Option<&Entry>| {
+        e.map_or_else(
+            || "(absente)".to_string(),
+            |e| serde_json::to_string(e).unwrap_or_default(),
+        )
+    };
+    for index in 0..tables.len().max(journal.len()) {
+        let (a, b) = (text(tables.get(index)), text(journal.get(index)));
+        if a != b {
+            return Err(ReadError::Diverged {
+                session: session.to_string(),
+                what,
+                index,
+                tables: a,
+                journal: b,
+            });
+        }
+    }
+    Ok(())
+}
 
 impl ContextEngine {
-    /// Entrées à projeter : résumés LCM actifs, puis tout ce qu'ils ne couvrent pas.
+    /// La conversation pliée depuis le journal, si la source la demande ou si la
+    /// comparaison est active ; `None` si les tables font foi.
+    async fn journal_side(
+        &self,
+        session_id: &str,
+        source: HistorySource,
+    ) -> Result<Option<JournalRead>, ReadError> {
+        if source == HistorySource::Tables && !CHECK {
+            return Ok(None);
+        }
+        match self.history.read_journal(session_id).await? {
+            Ok(read) => Ok(read),
+            Err(reason) if source == HistorySource::Tables => Err(ReadError::Journal {
+                session: session_id.to_string(),
+                reason,
+            }),
+            Err(reason) => {
+                tracing::error!(
+                    session = session_id,
+                    "le journal ne se plie pas, lecture dans les tables : {reason}"
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// Entrées à projeter dans la requête, lues selon `source`.
+    pub async fn projected_entries(
+        &self,
+        session_id: &str,
+        source: HistorySource,
+    ) -> Result<Vec<Entry>, ReadError> {
+        let journal = self.journal_side(session_id, source).await?;
+        match (source, journal) {
+            (HistorySource::Journal, Some(read)) => Ok(read.projected),
+            (_, journal) => {
+                let tables = self.projected_from_tables(session_id).await?;
+                if let Some(read) = journal {
+                    compare(session_id, "la projection", &tables, &read.projected)?;
+                }
+                Ok(tables)
+            }
+        }
+    }
+
+    /// Les `limit` dernières entrées de l'historique (masquées comprises), lues selon
+    /// `source` : de quoi retrouver les appels d'outils en attente.
+    pub async fn tail(
+        &self,
+        session_id: &str,
+        limit: usize,
+        source: HistorySource,
+    ) -> Result<Vec<Entry>, ReadError> {
+        let last = |mut entries: Vec<Entry>| {
+            entries.drain(..entries.len().saturating_sub(limit));
+            entries
+        };
+        let journal = self.journal_side(session_id, source).await?;
+        match (source, journal) {
+            (HistorySource::Journal, Some(read)) => Ok(last(read.entries)),
+            (_, journal) => {
+                let tables = self.history.tail(session_id, limit).await?;
+                if let Some(read) = journal {
+                    compare(session_id, "la queue", &tables, &last(read.entries))?;
+                }
+                Ok(tables)
+            }
+        }
+    }
+
+    /// Entrées à projeter, lues dans les tables : résumés LCM actifs, puis tout ce
+    /// qu'ils ne couvrent pas.
     pub async fn projected_from_tables(
         &self,
         session_id: &str,
@@ -54,3 +260,6 @@ impl ContextEngine {
         Ok(out)
     }
 }
+
+#[cfg(test)]
+mod tests;

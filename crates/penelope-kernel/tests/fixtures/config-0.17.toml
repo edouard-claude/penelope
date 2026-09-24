@@ -312,3 +312,6 @@ keep_weekly = 4
 keep_monthly = 12
 include_media = false
 max_push_bytes = 104857600
+
+[history]
+source = "tables"

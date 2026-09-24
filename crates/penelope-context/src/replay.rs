@@ -253,18 +253,31 @@ impl Lineage {
         })
     }
 
-    /// Ce que les caches de la session doivent contenir.
-    pub fn expected(&self, c: &Connection, surface: &Surface) -> Result<Expected> {
-        let mut out = Expected::default();
+    /// Numéro de ligne de chaque adresse de message de la surface : l'adresse d'une
+    /// ligne scellée, sinon le numéro qui suit le précédent (voir l'en-tête).
+    pub fn row_seqs(&self, surface: &Surface) -> BTreeMap<i64, i64> {
+        let mut out = BTreeMap::new();
         let mut last = 0;
-        for (addr, node) in &surface.messages {
-            let owner = self.owners.get(addr);
-            let seq = match owner {
+        for addr in surface.messages.keys() {
+            let seq = match self.owners.get(addr) {
                 None => *addr,
                 Some(_) => last + 1,
             };
             last = last.max(seq);
-            out.seqs.insert(*addr, seq);
+            out.insert(*addr, seq);
+        }
+        out
+    }
+
+    /// Ce que les caches de la session doivent contenir.
+    pub fn expected(&self, c: &Connection, surface: &Surface) -> Result<Expected> {
+        let mut out = Expected {
+            seqs: self.row_seqs(surface),
+            ..Expected::default()
+        };
+        for (addr, node) in &surface.messages {
+            let owner = self.owners.get(addr);
+            let seq = out.seqs.get(addr).copied().unwrap_or(*addr);
             let own = owner.is_some_and(|o| o.own);
             out.rows.push(Row {
                 address: *addr,

@@ -271,15 +271,20 @@ async fn the_projection_only_reads_what_is_not_summarised() {
             .await
             .unwrap();
     }
-    // Un résumé couvre les 300 premières entrées.
+    // Un résumé couvre les 300 premières entrées, publié comme la compaction le fait :
+    // `conv.summary` au journal, nœud et marquage dans les tables (T7), pour que les deux
+    // sources de lecture le voient (T14).
+    let job = penelope_context::SummaryJob {
+        session_id: sid.clone(),
+        from_seq: 1,
+        to_seq: 300,
+        chunk_from_seq: 1,
+        tokens_src: 1_000,
+        chunk_messages: 300,
+        ..Default::default()
+    };
     s.context
-        .lcm
-        .insert_leaf(&sid, 1, 300, "résumé des débuts", &[], 1_000, 40)
-        .await
-        .unwrap();
-    s.context
-        .history
-        .mark_compacted(&sid, 1, 300)
+        .apply_summary(&job, &json!({"objectif": "résumé des débuts"}), "m")
         .await
         .unwrap();
 

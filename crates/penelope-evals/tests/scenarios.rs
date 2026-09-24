@@ -99,3 +99,27 @@ async fn two_replays_of_every_scenario_are_identical() {
         );
     }
 }
+
+/// Critère de T14 (épopée #208) : chaque scénario envoie au modèle les mêmes requêtes,
+/// octet pour octet, que la conversation se relise dans les tables ou dans le journal.
+#[tokio::test]
+async fn both_history_sources_send_the_same_requests() {
+    if std::env::var_os("PENELOPE_HISTORY_SOURCE").is_some() {
+        eprintln!("PENELOPE_HISTORY_SOURCE impose la source : comparaison sans objet");
+        return;
+    }
+    for dir in scenario::list(&root()) {
+        let name = dir.file_name().unwrap().to_string_lossy().to_string();
+        let tables = scenario::replay_from(&dir, "tables").await.unwrap();
+        let journal = scenario::replay_from(&dir, "journal").await.unwrap();
+        assert!(!tables.is_empty(), "scénario {name} : aucune requête");
+        if let Err(e) = scenario::compare_surface(&name, &tables, &journal) {
+            panic!("tables contre journal : {e}");
+        }
+        // L'égalité des valeurs ignore l'ordre des clés : les octets aussi.
+        for (i, (t, j)) in tables.iter().zip(&journal).enumerate() {
+            let (t, j) = (t.to_string(), j.to_string());
+            assert_eq!(t, j, "scénario {name}, appel {} : octets différents", i + 1);
+        }
+    }
+}
