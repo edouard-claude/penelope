@@ -45,5 +45,5 @@ de ne rien faire en silence. Nouvelle méthode RPC `session.purge_preview`, lect
 
 ## Reste et blocages
 
-- Plafond `[crates]` du daemon : une trentaine de lignes de plus (`preview`), à poser
+- Plafond `[crates]` du daemon : 46 092 lignes pour 46 009 (`preview` et ses tests), à poser
   par l'intégrateur si rouge.
