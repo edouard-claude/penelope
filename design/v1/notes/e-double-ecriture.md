@@ -1,6 +1,6 @@
 # Notes de livraison : lot E, double écriture du journal (épopée #208, T4, T5, T6)
 
-Branche `v1-e-double-ecriture`, dérivée de `v1` à `5c0faf3`, poussée sur `origin`. Les
+Branche `v1-e-double-ecriture`, rebasée par l'intégrateur sur `v1` à `f2fa148` (lot G), poussée sur `origin`. Les
 trois tâches sont livrées, chacune dans son commit, vertes seules ; les déplacements
 qu'elles demandaient sont dans des commits séparés, sans changement de corps.
 
@@ -12,12 +12,12 @@ qu'elles demandaient sont dans des commits séparés, sans changement de corps.
 | `Migrations : les tests sortent…` | déplacement (migrations/tests.rs) |
 | `Historique : les tests de store.rs sortent…` | déplacement (store/tests.rs) |
 | `Conversation : les tests sortent…` | déplacement (conversation/tests.rs) |
-| `Gel : plafond du daemon relevé pour le lot E` | `[crates]`, trailer `Dérogation-budget: #208` |
 | `Migrations : 0011 à 0019 sortent…` | déplacement (migrations/since_0011.rs), `UPDATE_BUDGET` |
 | `Moteur : conversation_aliases sort…` | déplacement (engine/aliases.rs) |
 | `Journal : chaque tour est fermé…` | T4 |
 | `Journal : chaque message est écrit en double…` | T5 |
-| `Journal : le préfixe système et le contexte figé…` | T6, second relevé du plafond (trailer) |
+| `Journal : le préfixe système et le contexte figé…` | T6 |
+| `Journal : la forme des bornes de tour passe dans penelope_context::journal` | à la demande du lead, `UPDATE_BUDGET` |
 
 ## Ce qui est livré
 
@@ -42,10 +42,13 @@ qu'elles demandaient sont dans des commits séparés, sans changement de corps.
 
 - **Tous les écrivains passent par `HistoryStore`.** Telegram, workflows, planificateur,
   jobs d'outils écrivent des messages sans être touchés : la double écriture est dans le
-  magasin, qui tient l'EventLog comme `BudgetLedger::with_events`. Cela demande **trois
-  lignes hors périmètre dans `runtime.rs`** (attacher le journal dans `bootstrap` et
-  `for_tests`) ; demandé au lead, sans réponse au moment du commit : à relire à
-  l'intégration.
+  magasin, qui tient l'EventLog comme `BudgetLedger::with_events`. **Exception de
+  périmètre accordée par le lead** : `runtime.rs` attache le journal
+  (`.with_events(events.clone())`) dans `bootstrap` et `for_tests`, où `let events`
+  remonte avant `ContextEngine` ; rien d'autre dans le fichier.
+- **La forme des bornes de tour est pure** (`penelope_context::journal::turn` :
+  `TurnReason`, `TurnEnd`, `TurnIdentity`, `started_payload`, `finished_payload`) ; le
+  daemon ne garde que la traduction de `TurnOutcome` et l'écriture.
 - **Idempotence par le journal (§2.7).** `append_queued` cherche la ligne, puis
   l'événement : un crash entre les deux transactions ne réécrit que la ligne, sous
   l'`event_id` existant. Une course entre deux écrivains du même message (impossible
@@ -72,17 +75,18 @@ qu'elles demandaient sont dans des commits séparés, sans changement de corps.
 
 ## Plafond du daemon
 
-`[crates] penelope-daemon` passe de 82 213 à 82 803 (+590, dont environ 350 de tests :
-`turn_bounds.rs`, `engine/tests/journal.rs`, le test chaud/froid de `cache_audit`), en
-deux commits portant `Dérogation-budget: #208`, comme le lot G. La logique pure est
-dans `penelope-context`. Les fichiers de la liste de référence touchés ont été découpés,
-jamais relevés : `engine.rs` 1 179 → 1 106, `store.rs` 1 379 → 1 064, `conversation.rs`
-et `migrations.rs` sortent de la liste.
+Le lot fait grossir `penelope-daemon/src` de **570 lignes** (84 249 à 84 819 sur la base
+`f2fa148`), dont environ 350 de tests (`agent/tests/turn_bounds.rs`,
+`engine/tests/journal.rs`, le test chaud/froid de `cache_audit`). `[crates]` n'est pas
+relevé : `crates_stay_under_their_ceiling` est rouge sur la branche, et lui seul, le lead
+pose le plafond à la mesure à l'intégration de la vague. Les fichiers de la liste de
+référence touchés ont été découpés, jamais relevés : `engine.rs` 1 179 → 1 106,
+`store.rs` 1 379 → 1 064, `conversation.rs` et `migrations.rs` sortent de la liste.
 
 ## Vérifications
 
 `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace` : verts (57 suites). `cargo test -p penelope-evals --test
+`cargo test --workspace --no-fail-fast` : verts (56 suites), sauf `crates_stay_under_their_ceiling`, rouge toléré (ci-dessus). `cargo test -p penelope-evals --test
 scenarios` : 18 sur 18 ; aucun `surface.jsonl` ne bouge ; chaque `expected.jsonl` est
 égal à sa base une fois retirés les kinds ajoutés par la tâche, `seq` et compte de l'audit
 ignorés (script de comparaison), à une exception attendue : le nombre d'événements purgés
@@ -112,5 +116,4 @@ du scénario `purge` (9 → 16). `migration_from_0_17` vert.
 
 ## Blocages
 
-- Pas de réponse du lead sur deux points, tranchés par défaut et signalés : les trois
-  lignes de `runtime.rs` (hors périmètre) et le relevé du plafond du daemon (trailer).
+Aucun.
