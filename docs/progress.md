@@ -13,6 +13,78 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.4
+
+Troisième vague de la V1 : les six plus gros fichiers du daemon découpés en modules, et
+le journal d'événements écrit en double à côté des tables. La fusion de `main` 0.17.62
+apporte le correctif SQLite (transactions `IMMEDIATE`, plus de « database is locked »
+entre deux écrivains). Le seul changement visible est la double écriture : le journal
+reçoit plus d'événements, et aucune requête envoyée au modèle ne change.
+
+#### Passerelle Telegram en modules (épopée #208, lot G)
+
+- `telegram.rs` (7 925 lignes) et `telegram/screens.rs` (2 437) deviennent `telegram/` :
+  vingt-neuf modules, le plus gros à 614 lignes. Les deux fichiers sortent de la liste de
+  référence du gel ; tous les chemins `crate::telegram::*` sont inchangés.
+- Les 50 commandes `/…` et les 32 écrans ne sont plus deux `match` géants : une fonction
+  par commande (`telegram/commands/`) et par écran (`telegram/screens/`), derrière un
+  aiguillage court. Deux `#[allow(clippy::too_many_lines)]` disparaissent.
+- Aucun comportement visible ne change : textes, boutons, cartes et ordre des envois sont
+  ceux de la 1.0.0-alpha.3.
+
+#### Consolidation nocturne découpée en modules (lot G)
+
+`dream.rs` (3 457 lignes) devient le répertoire `dream/` : dix modules de 127 à 633 lignes
+(passe et phases, candidats, contradictions, instantané du vault, appel du modèle, lots,
+application au vault, ledger, digest, crons). Déplacement pur : aucun comportement ni aucun
+chemin public ne change, et le fichier sort de la liste de référence du gel.
+
+#### workflow.rs et executor.rs découpés en modules (lot G)
+
+Les deux fichiers sortent de la liste de référence du gel : `workflow/` (onze modules,
+le plus gros à 438 lignes) et `executor/` (treize modules, le plus gros à 520 lignes).
+La table de dispatch des outils natifs (1 160 lignes) devient un aiguillage court vers
+une fonction par famille d'outils ; son `allow(clippy::too_many_lines)` disparaît.
+Déplacement pur, aucune signature publique changée, aucun comportement modifié.
+
+#### Découpage de rpc.rs, mcp.rs et doctor.rs (lot G)
+
+- `rpc.rs` devient `rpc/` : serveur, flux et méthodes rangées par domaine ; la table de
+  dispatch de 1 190 lignes devient onze fonctions de moins de 200 lignes et un aiguillage
+  sur le préfixe de la méthode.
+- `mcp.rs` devient `mcp/` : connecteur, cycle de vie, appels, administration, passerelle,
+  rendus.
+- `doctor.rs` devient `doctor/` : contrôles rangés par famille (modèles, secrets, machine,
+  mémoire, cohérence, MCP).
+- Aucun comportement ne change : mêmes méthodes RPC, mêmes contrôles, mêmes tests.
+
+#### Journal d'événements, double écriture (#208, T4, T5, T6)
+
+- **Chaque tour est fermé** : `turn.finished` est écrit sur toutes les sorties de la
+  boucle avec `reason` (`answered`, `awaiting_approval`, `cancelled`, `failed`,
+  `budget_exceeded`, `loop_aborted`, `calls_exhausted`), y compris un tour tombé avant
+  d'appeler le modèle. `turn.started` et `turn.finished` portent `turn_id`,
+  `origin_turn`, `kind` et `attempt` ; leur forme vit dans `penelope_context::journal`.
+  Un `turn.started` sans fin désigne désormais un arrêt du processus, et rien d'autre.
+- **Double écriture de l'historique** : chaque message écrit dans `messages` l'est aussi
+  dans le journal (`conv.user`, `conv.assistant`, `conv.tool_result`), l'événement
+  d'abord, la ligne ensuite avec son `event_id` (migration 0020). La réponse du modèle
+  porte son modèle, son usage, son coût et les empreintes du prompt. Un message de la
+  file rejoué après un crash n'est ni réécrit ni rejournalisé.
+- **Le prompt système et le contexte figé entrent au journal** : `conv.system` porte le
+  texte entier du préfixe, une fois par changement (`first`, `cold`, `compaction`) ;
+  `conv.context` le bloc volatil figé avec son message.
+- Les tables restent la source de lecture : aucune requête envoyée au modèle ne change.
+- Pas encore portés par les événements : `llm_request_id` et `projection.steps` de la
+  réponse du modèle, `turn` et `step` du résultat d'outil.
+
+#### Gel : la règle R5 ne compte que les modules de premier niveau du daemon (#208)
+
+La liste blanche des modules du daemon ne lisait pas que `lib.rs` : chaque découpage en
+sous-modules la faisait grossir. Elle ne compte plus que les `mod x;` de `lib.rs`.
+Le plafond du crate daemon passe à 84 819 lignes (en-têtes des nouveaux modules et double
+écriture) ; il redescendra avec l'extraction des crates.
+
 ### 1.0.0-alpha.3
 
 Deuxième vague de la V1 : quatre lots développés en parallèle, chacun dans son worktree, et
@@ -275,14 +347,6 @@ refuse toute remontée par rapport à la base git, sauf un commit portant
 - **`RECORD_SCENARIO=<nom>`** enveloppe le vrai fournisseur et réécrit `model.jsonl` :
   implémenté, pas encore exercé (aucune clé cette nuit).
 - `penelope-evals` dépend de `toml`, `tempfile` et `async-trait`, déjà dans le workspace.
-
-## Version 1 (branche v1)
-
-Ce bloc recevra les sections `### 1.0.0-alpha.N` de la branche `v1` (décision
-[0015](decisions/0015-gel-0.17-et-branche-v1.md), épopée #208) : un lot par section, un
-bump par lot, jamais de tag ni de release. Il reste vide tant que la branche n'existe pas.
-Les sections `### 0.17.x` restent dans le bloc ci-dessous et y arrivent par les fusions de
-`main`.
 
 ## Résumé
 
