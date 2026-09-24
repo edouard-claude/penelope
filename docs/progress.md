@@ -13,6 +13,59 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.8
+
+Septième vague de la V1 : la lecture du journal devient incrémentale (une session longue
+ne ralentit plus chaque requête), `audit show` et l'export lisent le journal, la purge
+emporte le journal et nomme les forks qui perdent leur début, et deux blocs sortent encore
+du daemon : les opérations (`penelope-ops`) et les dépendances de la boucle d'agent,
+désormais derrière des ports. Le daemon passe à 46 009 lignes. Changement visible : dans
+`penelope doctor`, les contrôles MCP, stabilité du prompt, jobs d'outils et historique
+apparaissent en fin de liste.
+
+#### Journal d'événements : lecture incrémentale, audit exact, purge (#208, T15, T17)
+
+- **Lecture incrémentale** : une requête ne replie plus tout le journal de la session et
+  de ses ancêtres, seulement les événements arrivés depuis la précédente (8 ms au lieu de
+  115 ms pour une session de 2 000 messages en compilation de test). Une purge fait tout
+  relire.
+- **`penelope audit show` exact après une compaction** : la requête d'un tour passé est
+  repliée depuis le journal jusqu'à l'appel (résumés de l'époque, messages résumés depuis
+  en clair) au lieu d'être relue dans les lignes d'aujourd'hui.
+- **Export** : le préfixe scellé est marqué (`sealed`) et la conversation telle que le
+  modèle la voit suit en lignes `surface`.
+- **Purge** : le rapport nomme les sessions nées d'un fork de la session purgée, qui
+  perdent le préfixe hérité ; les prompts système journalisés par la session partent
+  avec elle. **Rétention** : le texte partiel des tentatives d'appel (`conv.attempt`)
+  est purgé après `retention.days`, la chaîne d'audit reste vérifiable.
+
+#### Crate `penelope-ops` : l'exploitation hors du daemon (#208, T28)
+
+- Nouvelle crate `penelope-ops`, entre `penelope-app` et `penelope-vault` d'un côté et
+  le daemon de l'autre : diagnostic (`doctor`), mise à jour et retour arrière du binaire,
+  sauvegarde, import d'une instance Hermes, connexion et quota de l'abonnement Codex,
+  installation de skills tierces et de leurs dépendances.
+- La crate ne connaît ni le daemon ni l'hôte MCP : `penelope-archtest` le vérifie. Les
+  contrôles de `doctor` qui lisent le daemon (stabilité du prompt, journal, jobs
+  d'outils) ou l'hôte MCP (serveurs, bac à sable) restent au daemon, qui les ajoute à la
+  méthode `doctor` ; dans la sortie, ils arrivent après les autres contrôles.
+- `upgrade`, `hermes` et `codex_auth` sont découpés sous 800 lignes et quittent la liste
+  des fichiers trop longs ; les tests de la crate n'ouvrent pas de daemon.
+- La CLI importe `doctor::render` et `upgrade` de la crate ; le daemon réexporte tout sous
+  les anciens chemins. `penelope-daemon` passe de 53 836 à 45 232 lignes. `purge` et
+  `session_ops` suivront.
+
+#### Boucle d'agent : ports (#208, T09)
+
+- La boucle ne reçoit plus tous les services du daemon mais `AgentServices` : les
+  registres qu'elle touche et cinq ports (mode d'approbation d'une session, nature d'une
+  session, instantanés du prompt, dernier appel pour le cache, jobs d'outils).
+- Plus aucun chemin du daemon dans `agent/` : le répertoire est prêt à devenir la
+  crate `penelope-agent` (T10). Les tests de la boucle tournent sur une base en
+  mémoire, sans daemon.
+- Le formatage des montants (`usd`) descend dans `penelope-kernel`.
+- Aucun comportement visible ne change.
+
 ### 1.0.0-alpha.7
 
 Sixième vague de la V1 : **la conversation se relit depuis le journal d'événements**
