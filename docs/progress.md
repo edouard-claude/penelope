@@ -77,6 +77,9 @@ Déplacement pur, aucune signature publique changée, aucun comportement modifi�
 - Les tables restent la source de lecture : aucune requête envoyée au modèle ne change.
 - Pas encore portés par les événements : `llm_request_id` et `projection.steps` de la
   réponse du modèle, `turn` et `step` du résultat d'outil.
+- Les scénarios masquent `tokens_est` (`{{tokens}}`) quand l'objet cite la racine
+  temporaire : sa longueur change d'une machine à l'autre, et le résultat d'outil
+  désormais journalisé la contient.
 
 #### Gel : la règle R5 ne compte que les modules de premier niveau du daemon (#208)
 

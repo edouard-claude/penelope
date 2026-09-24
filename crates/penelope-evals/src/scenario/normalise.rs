@@ -9,7 +9,9 @@
 //!   `{{ts+600s}}` ou `{{ts+1500ms}}` : l'horloge de test rend l'écart exact ;
 //! - la racine temporaire des services (brute et canonique) devient `{{home}}` ;
 //! - un hachage (clé `*hash*`, `sha256`, `idem_key`, ou 64 hexadécimaux dans un texte)
-//!   devient `{{hash}}` ; une durée mesurée (`duration_ms`) devient `{{ms}}`.
+//!   devient `{{hash}}` ; une durée mesurée (`duration_ms`) devient `{{ms}}` ;
+//! - une estimation de jetons (`tokens_est`) devient `{{tokens}}` quand l'objet qui la
+//!   porte cite la racine temporaire : sa longueur change d'une machine à l'autre.
 
 use regex::Regex;
 use serde_json::Value;
@@ -31,6 +33,9 @@ const HASH_KEYS: &[&str] = &[
 
 /// Clés mesurées sur l'horloge murale, jamais reproductibles.
 const DURATION_KEYS: &[&str] = &["duration_ms", "elapsed_ms", "latency_ms"];
+
+/// Clés comptées sur un texte qui peut contenir la racine temporaire.
+const SIZE_KEYS: &[&str] = &["tokens_est"];
 
 pub struct Normaliser {
     start_ms: i64,
@@ -74,12 +79,15 @@ impl Normaliser {
             Value::String(s) => Value::String(self.text(&s)),
             Value::Array(items) => Value::Array(items.into_iter().map(|x| self.value(x)).collect()),
             Value::Object(map) => {
+                let mentions_home = self.mentions_home(&map);
                 let mut out = serde_json::Map::new();
                 for (k, v) in map {
                     let v = if HASH_KEYS.contains(&k.as_str()) && v.is_string() {
                         Value::String("{{hash}}".into())
                     } else if DURATION_KEYS.contains(&k.as_str()) && v.is_number() {
                         Value::String("{{ms}}".into())
+                    } else if mentions_home && SIZE_KEYS.contains(&k.as_str()) && v.is_number() {
+                        Value::String("{{tokens}}".into())
                     } else {
                         self.value(v)
                     };
@@ -89,6 +97,15 @@ impl Normaliser {
             }
             other => other,
         }
+    }
+
+    /// Vrai si l'objet cite la racine temporaire, dont la longueur dépend de la machine
+    /// (`/tmp` sous Linux, `/var/folders/…` sous macOS).
+    fn mentions_home(&self, map: &serde_json::Map<String, Value>) -> bool {
+        let raw = Value::Object(map.clone()).to_string();
+        self.homes
+            .iter()
+            .any(|h| !h.is_empty() && raw.contains(h.as_str()))
     }
 
     /// Normalise un texte : chemins, identifiants, horodatages, hachages.
@@ -200,5 +217,14 @@ mod tests {
         assert_eq!(v["duration_ms"], "{{ms}}");
         assert_eq!(v["texte"], "empreinte {{hash}}");
         assert_eq!(v["n"], 3);
+    }
+
+    #[test]
+    fn a_token_estimate_is_masked_only_next_to_the_home() {
+        let mut n = Normaliser::new(START, Path::new("/tmp/racine-w"));
+        let near = n.value(json!({"text": "/tmp/racine-w/a.txt", "tokens_est": 93}));
+        let far = n.value(json!({"text": "rien", "tokens_est": 12}));
+        assert_eq!(near["tokens_est"], "{{tokens}}");
+        assert_eq!(far["tokens_est"], 12);
     }
 }
