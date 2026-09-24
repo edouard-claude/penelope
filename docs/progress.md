@@ -13,6 +13,28 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.9
+
+Huitième vague de la V1 : `penelope purge` prévient avant d'agir quand des forks vont
+perdre leur début (arbitrage 3 du propriétaire), et la boucle d'agent sort du daemon dans
+la crate `penelope-agent`, qui ne dépend ni du contexte, ni de la mémoire, ni de Telegram.
+Le daemon passe à 39 727 lignes.
+
+#### Purge : les forks sont prévenus avant (#208, arbitrage 3)
+
+`penelope session purge` et `/purge` disent, avant de demander confirmation, quelles
+sessions nées d'un fork perdront leur début (« Cette session a deux forks, ils perdront
+leur début : … »). Sans terminal pour répondre, la commande refuse sans `--yes` au lieu
+de ne rien faire en silence. Nouvelle méthode RPC `session.purge_preview`, lecture seule.
+
+#### Boucle d'agent : crate `penelope-agent` (#208, T10)
+
+- La boucle d'agent et le pipeline d'outils quittent le daemon pour la crate
+  `penelope-agent`, qui ne dépend ni du moteur de contexte, ni de la mémoire, ni du
+  canal ; une règle d'architecture le vérifie.
+- Les charges du journal qu'écrit la boucle passent par `penelope-app`, inchangées.
+- Aucun comportement visible ne change.
+
 ### 1.0.0-alpha.8
 
 Septième vague de la V1 : la lecture du journal devient incrémentale (une session longue
