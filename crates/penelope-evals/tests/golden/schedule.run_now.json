@@ -1,0 +1,15 @@
+{
+  "method": "schedule.run_now",
+  "params": {
+    "id": "$schedule_run"
+  },
+  "response": {
+    "result": {
+      "fired": [
+        "string"
+      ],
+      "errors": [],
+      "intents_expired": "integer"
+    }
+  }
+}

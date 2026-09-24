@@ -1,0 +1,56 @@
+{
+  "method": "config.status",
+  "params": {},
+  "response": {
+    "result": {
+      "generation": "integer",
+      "path": "string",
+      "subsystems": {
+        "context": {
+          "result": "string",
+          "gen": "integer"
+        },
+        "hitl": {
+          "result": "string",
+          "gen": "integer"
+        },
+        "llm": {
+          "result": "string",
+          "gen": "integer"
+        },
+        "mcp": {
+          "result": "string",
+          "gen": "integer"
+        },
+        "memory": {
+          "result": "string",
+          "gen": "integer"
+        },
+        "observability": {
+          "result": "string",
+          "gen": "integer"
+        },
+        "runners": {
+          "result": "string",
+          "gen": "integer"
+        },
+        "sandbox": {
+          "result": "string",
+          "gen": "integer"
+        },
+        "skills": {
+          "result": "string",
+          "gen": "integer"
+        },
+        "telegram": {
+          "result": "string",
+          "gen": "integer"
+        },
+        "workflows": {
+          "result": "string",
+          "gen": "integer"
+        }
+      }
+    }
+  }
+}

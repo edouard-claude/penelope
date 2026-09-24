@@ -1,0 +1,23 @@
+{
+  "method": "intent.list",
+  "params": {},
+  "response": {
+    "result": [
+      {
+        "id": "string",
+        "texte": "string",
+        "declencheurs": [
+          "string"
+        ],
+        "portee": "null",
+        "created_at": "string",
+        "expire_at": "null",
+        "budget_tirs": "integer",
+        "tirs": "integer",
+        "cooldown_ms": "integer",
+        "last_fired": "null",
+        "etat": "string"
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "method": "model.auth",
+  "params": {
+    "provider": "codex",
+    "action": "status"
+  },
+  "response": {
+    "result": {
+      "provider": "string",
+      "status": "null",
+      "enabled": "bool"
+    }
+  }
+}

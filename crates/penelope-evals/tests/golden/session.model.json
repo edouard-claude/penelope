@@ -1,0 +1,24 @@
+{
+  "method": "session.model",
+  "params": {
+    "session": "$session"
+  },
+  "response": {
+    "result": {
+      "session": "string",
+      "mode": "string",
+      "pinned": "null",
+      "pinned_model": "null",
+      "last_alias": "string",
+      "last_model": "string",
+      "last_boundary": "null",
+      "classifier": "bool",
+      "choices": [
+        {
+          "alias": "string",
+          "model": "string"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "method": "schedule.move",
+  "params": {
+    "id": "$schedule_move",
+    "private": true
+  },
+  "response": {
+    "result": {
+      "id": "string",
+      "destination": "string"
+    }
+  }
+}

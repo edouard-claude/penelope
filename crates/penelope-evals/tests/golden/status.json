@@ -1,0 +1,23 @@
+{
+  "method": "status",
+  "params": {},
+  "response": {
+    "result": {
+      "version": "string",
+      "uptime_s": "integer",
+      "config_generation": "integer",
+      "sessions_active": "integer",
+      "runs_active": "integer",
+      "approvals_pending": "integer",
+      "mcp_ready": "integer",
+      "mcp_total": "integer",
+      "turns_queued": "integer",
+      "rss_mb": "number",
+      "spent_today_usd": "number",
+      "telegram": "string",
+      "runners_alive": "integer",
+      "runners_expected": "integer",
+      "outbox_failed": "integer"
+    }
+  }
+}

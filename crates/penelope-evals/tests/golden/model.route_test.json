@@ -1,0 +1,13 @@
+{
+  "method": "model.route_test",
+  "params": {
+    "text": "explique-moi la relativité générale"
+  },
+  "response": {
+    "result": {
+      "alias": "string",
+      "model_id": "string",
+      "reason": "string"
+    }
+  }
+}

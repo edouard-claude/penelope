@@ -1,0 +1,292 @@
+{
+  "method": "config.get",
+  "params": {},
+  "response": {
+    "result": {
+      "owner": {
+        "telegram_user_id": "integer",
+        "timezone": "string",
+        "language": "string"
+      },
+      "telegram": {
+        "token": "string",
+        "mode": "string",
+        "topics": "bool",
+        "rich_messages": "bool",
+        "quiet_hours": "string",
+        "api_base": "string",
+        "poll_timeout_s": "integer",
+        "rate_per_chat_per_s": "number",
+        "text_limit": "integer",
+        "caption_limit": "integer",
+        "max_fragments": "integer",
+        "draft_interval_ms": "integer",
+        "webhook_url": "string",
+        "allow_groups": "bool",
+        "allowed_chats": [],
+        "text_group_window_ms": "integer",
+        "burst_messages": "integer",
+        "burst_chars": "integer",
+        "home": {
+          "chat": "integer",
+          "topic": "integer"
+        }
+      },
+      "providers": {
+        "openrouter": {
+          "api_key": "string",
+          "base_url": "string",
+          "request_retries": "integer",
+          "stream_idle_timeout": "string",
+          "catalog_refresh": "string",
+          "referer": "string",
+          "title": "string",
+          "categories": "string",
+          "routing": {
+            "allow_fallbacks": "bool",
+            "order": [],
+            "data_collection": "string",
+            "require_parameters": "bool",
+            "zdr": "bool",
+            "sort": "string",
+            "only": [],
+            "ignore": [],
+            "quantizations": []
+          },
+          "enabled": "bool"
+        },
+        "local": {
+          "kind": "string",
+          "base_url": "string",
+          "api_key": "string",
+          "enabled": "bool",
+          "models": [],
+          "stream_idle_timeout": "string",
+          "context_window": "integer"
+        },
+        "codex": {
+          "enabled": "bool",
+          "base_url": "string",
+          "issuer": "string",
+          "client_id": "string",
+          "originator": "string",
+          "client_version": "string",
+          "stream_idle_timeout": "string",
+          "request_retries": "integer",
+          "reasoning_summary": "string",
+          "verbosity": "string",
+          "quota_alert_ratio": "number",
+          "quota_stop_ratio": "number",
+          "models": [
+            "string"
+          ]
+        },
+        "extra": {}
+      },
+      "models": {
+        "aliases": {
+          "embedding": "string",
+          "fast": "string",
+          "image": "string",
+          "main": "string",
+          "reasoning": "string",
+          "stt": "string",
+          "summarizer": "string",
+          "tts": "string",
+          "vision": "string"
+        },
+        "roles": {
+          "chat_default": "string",
+          "classifier": "string",
+          "code": "string",
+          "compaction": "string",
+          "embedding": "string",
+          "image_describe": "string",
+          "image_generate": "string",
+          "image_locate": "string",
+          "memory_review": "string",
+          "stt": "string",
+          "tts": "string"
+        },
+        "routing": {
+          "classifier": "bool",
+          "low": "string",
+          "medium": "string",
+          "high": "string",
+          "sticky": "bool",
+          "fallback": {
+            "main": [
+              "string"
+            ],
+            "reasoning": [
+              "string"
+            ]
+          }
+        },
+        "locate_frame": "string"
+      },
+      "budget": {
+        "daily_usd": "number",
+        "session_usd": "number",
+        "run_usd": "number",
+        "alert_ratio": "number",
+        "turn_checkpoint_usd": "number",
+        "show_turn_cost_usd": "number",
+        "delegate_after_calls": "integer",
+        "compaction_reserve_usd": "number"
+      },
+      "context": {
+        "compaction_threshold": "number",
+        "tail_ratio": "number",
+        "tail_min_tokens": "integer",
+        "tail_max_tokens": "integer",
+        "min_tail_user_messages": "integer",
+        "max_tool_result_share": "number",
+        "large_payload_tokens": "integer",
+        "max_prompt_tokens": "integer",
+        "model_thresholds": {},
+        "background_compaction_margin": "number",
+        "cooldown_ms": [
+          "integer"
+        ],
+        "auto_title": "bool"
+      },
+      "memory": {
+        "vault_path": "string",
+        "vault_git_autocommit": "string",
+        "vault_git_remote": "string",
+        "profile_budget_tokens": "integer",
+        "core_budget_tokens": "integer",
+        "project_budget_tokens": "integer",
+        "recall_budget_tokens": "integer",
+        "recall_timeout_ms": "integer",
+        "trigger_threshold": "number",
+        "max_injected_per_turn": "integer",
+        "half_life_days": "number",
+        "dedup_cosine": "number",
+        "dedup_jaccard": "number",
+        "episode_idle": "string",
+        "episode_topic_shift": "number",
+        "review_max_candidates": "integer",
+        "dream_batch": "integer",
+        "dreaming_cron": "string",
+        "dream_retry_wait": "string",
+        "consolidation_reasoning": "string",
+        "consolidation_reasoning_tokens": "integer",
+        "digest_cron": "string",
+        "promotion": {
+          "ecart_min_occurrences": "integer",
+          "ecart_min_sessions": "integer",
+          "ecart_min_days": "integer",
+          "fact_min_recalls": "integer",
+          "fact_min_importance": "integer",
+          "preference_min_sessions": "integer",
+          "max_retire_ratio": "number",
+          "contested_confidence": "number",
+          "contested_min_observations": "integer"
+        },
+        "intents": {
+          "cooldown": "string",
+          "fire_budget": "integer",
+          "expiry": "string",
+          "max_per_turn": "integer"
+        },
+        "prune_episodic_days": "integer",
+        "expire_ecart_days": "integer"
+      },
+      "mcp": {
+        "registry_mode": "string",
+        "max_processes": "integer",
+        "default_timeout": "string",
+        "oauth_redirect_mode": "string",
+        "public_callback_url": "string",
+        "cimd_url": "string",
+        "preferred_protocol": "string",
+        "idle_timeout": "string",
+        "max_concurrency_per_server": "integer",
+        "sticky_set_max": "integer",
+        "schema_max_bytes": "integer",
+        "eager_total_max_bytes": "integer",
+        "callback_port": "integer",
+        "callback_host": "string",
+        "policy": {
+          "read": "string",
+          "write": "string",
+          "destructive": "string",
+          "external": "string",
+          "unknown": "string"
+        },
+        "restart_backoff_max": "string",
+        "max_failures": "integer"
+      },
+      "runners": {
+        "count": "integer",
+        "lease_ttl": "string",
+        "heartbeat": "string"
+      },
+      "sandbox": {
+        "default_profile": "string",
+        "allow_full_for": [],
+        "allow_keychain_for": [],
+        "workspaces": [],
+        "shell_network": "bool",
+        "deny_read": [
+          "string"
+        ]
+      },
+      "observability": {
+        "otlp_endpoint": "string",
+        "prometheus": "string",
+        "log_retention_days": "integer",
+        "log_level": "string",
+        "runtime_stream_bind": "string",
+        "runtime_consumers": []
+      },
+      "tools": {
+        "shell": "string",
+        "shell_timeout": "string",
+        "http_allowlist": [],
+        "http_block_private_ips": "bool",
+        "loop_detector_repeats": "integer",
+        "max_output_bytes": "integer",
+        "approval_mode": "string",
+        "shell_allow": [],
+        "shell_allow_network": [],
+        "inventory_extra": []
+      },
+      "workflows": {
+        "workspace_retention_days": "integer",
+        "max_depth": "integer",
+        "default_max_iterations": "integer"
+      },
+      "upgrade": {
+        "channel": "string",
+        "base_url": "string",
+        "minisign_pubkey": "string",
+        "health_timeout": "string",
+        "heartbeat_daily": "bool",
+        "codesign_identity": "string",
+        "codesign_identifier": "string",
+        "install_dir": "string"
+      },
+      "voice": {
+        "tts_voice": "string",
+        "max_chars": "integer",
+        "reply_in_kind": "bool"
+      },
+      "retention": {
+        "days": "integer",
+        "memory_history_days": "integer"
+      },
+      "backup": {
+        "git_remote": "string",
+        "cron": "string",
+        "keep_daily": "integer",
+        "keep_weekly": "integer",
+        "keep_monthly": "integer",
+        "include_media": "bool",
+        "max_push_bytes": "integer"
+      }
+    }
+  }
+}

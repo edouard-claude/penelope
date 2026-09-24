@@ -1,0 +1,7 @@
+{
+  "method": "mem.candidates",
+  "params": {},
+  "response": {
+    "result": []
+  }
+}

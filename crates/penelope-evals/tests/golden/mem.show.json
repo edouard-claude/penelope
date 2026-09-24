@@ -1,0 +1,28 @@
+{
+  "method": "mem.show",
+  "params": {
+    "uid": "u_show"
+  },
+  "response": {
+    "result": {
+      "uid": "string",
+      "file": "string",
+      "anchor": "null",
+      "level": "string",
+      "etype": "string",
+      "slug": "null",
+      "text": "string",
+      "quand": "null",
+      "importance": "null",
+      "projet": "null",
+      "confiance": "null",
+      "statut": "string",
+      "depuis": "null",
+      "maj": "string",
+      "pinned": "bool",
+      "declencheurs": [],
+      "content_hash": "string",
+      "retired_at": "null"
+    }
+  }
+}

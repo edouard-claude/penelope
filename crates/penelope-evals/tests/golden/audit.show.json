@@ -1,0 +1,58 @@
+{
+  "method": "audit.show",
+  "params": {
+    "session": "$session"
+  },
+  "response": {
+    "result": {
+      "tour": "string",
+      "session": "string",
+      "appels": [
+        {
+          "ts": "string",
+          "modele": "string",
+          "tokens_entree": "integer",
+          "tokens_en_cache": "integer",
+          "messages": "integer",
+          "system_hash": "string",
+          "tools_hash": "string",
+          "request_hash": "string",
+          "cache": "null"
+        }
+      ],
+      "prompt_systeme": {
+        "empreinte": "string",
+        "exact": "bool",
+        "octets": "integer",
+        "appels": "integer",
+        "vu_la_premiere_fois": "string",
+        "vu_la_derniere_fois": "string",
+        "rendu": "string",
+        "tuiles": [
+          {
+            "nom": "string",
+            "libelle": "string",
+            "texte": "string"
+          }
+        ]
+      },
+      "messages": [
+        {
+          "texte": "string",
+          "contexte_fige": "string",
+          "seq": "integer",
+          "role": "string",
+          "resume_depuis": "bool"
+        }
+      ],
+      "outils": {
+        "empreinte": "string",
+        "liste": "string"
+      },
+      "exact": "bool",
+      "reserves": [
+        "string"
+      ]
+    }
+  }
+}

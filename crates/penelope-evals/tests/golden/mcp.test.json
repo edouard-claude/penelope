@@ -1,0 +1,12 @@
+{
+  "method": "mcp.test",
+  "params": {
+    "name": "forge"
+  },
+  "response": {
+    "error": {
+      "code": -32603,
+      "message": "string"
+    }
+  }
+}

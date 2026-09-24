@@ -1,0 +1,22 @@
+{
+  "method": "vault.lint",
+  "params": {},
+  "response": {
+    "result": {
+      "report": {
+        "notes": "integer",
+        "unresolved": [],
+        "broken_blocks": [],
+        "orphans": [],
+        "deadends": [],
+        "duplicate_aliases": [],
+        "name_collisions": [],
+        "invalid_block_ids": [],
+        "duplicate_block_ids": [],
+        "bad_properties": []
+      },
+      "proposals": [],
+      "text": "string"
+    }
+  }
+}

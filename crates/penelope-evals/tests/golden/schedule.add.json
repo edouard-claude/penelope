@@ -1,0 +1,32 @@
+{
+  "method": "schedule.add",
+  "params": {
+    "kind": "cron",
+    "spec": {
+      "expr": "0 9 * * 1"
+    },
+    "target": {
+      "type": "prompt",
+      "prompt": "digest de la semaine"
+    }
+  },
+  "response": {
+    "result": {
+      "id": "string",
+      "kind": "string",
+      "spec": {
+        "expr": "string"
+      },
+      "target": {
+        "type": "string",
+        "prompt": "string"
+      },
+      "dedup": {},
+      "state": "string",
+      "last_run": "null",
+      "next_run": "string",
+      "runs": "integer",
+      "last_error": "null"
+    }
+  }
+}

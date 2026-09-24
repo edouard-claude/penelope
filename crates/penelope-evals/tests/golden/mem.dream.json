@@ -1,0 +1,31 @@
+{
+  "method": "mem.dream",
+  "params": {
+    "dry_run": true
+  },
+  "response": {
+    "result": {
+      "run_id": "string",
+      "dry_run": "bool",
+      "report": {
+        "candidates_seen": "integer",
+        "groups": "integer",
+        "promoted": "integer",
+        "proposals": "integer",
+        "rejected": [],
+        "deferred": "integer",
+        "reflections": [],
+        "questions": [],
+        "files_touched": [],
+        "lint_problems": "integer",
+        "journal": "integer",
+        "journal_expired": "integer",
+        "calls": "integer",
+        "wasted_calls": "integer",
+        "lots": "integer",
+        "duration_ms": "integer"
+      },
+      "text": "string"
+    }
+  }
+}

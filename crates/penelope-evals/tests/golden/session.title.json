@@ -1,0 +1,13 @@
+{
+  "method": "session.title",
+  "params": {
+    "session": "$session",
+    "title": "Titre posé"
+  },
+  "response": {
+    "result": {
+      "session": "string",
+      "title": "string"
+    }
+  }
+}

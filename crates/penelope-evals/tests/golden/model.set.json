@@ -1,0 +1,15 @@
+{
+  "method": "model.set",
+  "params": {
+    "alias": "main",
+    "model": "openrouter:anthropic/claude-sonnet-4"
+  },
+  "response": {
+    "result": {
+      "generation": "integer",
+      "alias": "string",
+      "model": "string",
+      "known": "bool"
+    }
+  }
+}

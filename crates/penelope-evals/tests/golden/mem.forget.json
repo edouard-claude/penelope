@@ -1,0 +1,12 @@
+{
+  "method": "mem.forget",
+  "params": {
+    "uid": "u_forget"
+  },
+  "response": {
+    "result": {
+      "uid": "string",
+      "forgotten": "bool"
+    }
+  }
+}

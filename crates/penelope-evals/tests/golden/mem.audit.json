@@ -1,0 +1,26 @@
+{
+  "method": "mem.audit",
+  "params": {},
+  "response": {
+    "result": {
+      "audit": {
+        "version": "integer",
+        "date": "string",
+        "total": "integer",
+        "axes": [
+          {
+            "name": "string",
+            "score": "integer",
+            "max": "integer",
+            "why": "string",
+            "next": "string"
+          }
+        ],
+        "delta": "null",
+        "previous_date": "null"
+      },
+      "text": "string",
+      "best_next": "string"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "method": "mcp.edit",
+  "params": {
+    "name": "forge",
+    "patch": {
+      "enabled": false
+    }
+  },
+  "response": {
+    "error": {
+      "code": -32603,
+      "message": "string"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "method": "session.mode",
+  "params": {
+    "session": "$session",
+    "mode": "reads"
+  },
+  "response": {
+    "result": {
+      "session": "string",
+      "mode": "string",
+      "label": "string"
+    }
+  }
+}

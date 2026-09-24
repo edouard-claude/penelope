@@ -1,0 +1,13 @@
+{
+  "method": "wf.control",
+  "params": {
+    "run": "r_inconnu",
+    "op": "pause"
+  },
+  "response": {
+    "error": {
+      "code": -32000,
+      "message": "string"
+    }
+  }
+}

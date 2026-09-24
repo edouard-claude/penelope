@@ -1,0 +1,31 @@
+{
+  "method": "session.purge",
+  "params": {
+    "session": "$session_purge",
+    "reason": "test"
+  },
+  "response": {
+    "result": {
+      "session": "string",
+      "reason": "string",
+      "events": "integer",
+      "files": "integer",
+      "tables": {
+        "messages": "integer",
+        "lcm_nodes": "integer",
+        "artifacts": "integer",
+        "llm_requests": "integer",
+        "prompt_snapshots": "integer",
+        "turns": "integer",
+        "candidates": "integer",
+        "tg_updates": "integer",
+        "tg_outbox": "integer",
+        "effects": "integer",
+        "approvals": "integer",
+        "mcp_tasks": "integer",
+        "workflow_steps": "integer",
+        "workflow_runs": "integer"
+      }
+    }
+  }
+}

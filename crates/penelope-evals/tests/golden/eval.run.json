@@ -1,0 +1,10 @@
+{
+  "method": "eval.run",
+  "params": {},
+  "response": {
+    "error": {
+      "code": -32603,
+      "message": "string"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "method": "schedule.pause",
+  "params": {
+    "id": "$schedule_pause"
+  },
+  "response": {
+    "result": {
+      "ok": "bool"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "method": "quiet",
+  "params": {
+    "range": "22:00-07:00"
+  },
+  "response": {
+    "result": {
+      "quiet_hours": "string",
+      "generation": "integer"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "method": "wf.run",
+  "params": {
+    "id": "inconnu",
+    "params": {}
+  },
+  "response": {
+    "error": {
+      "code": -32000,
+      "message": "string"
+    }
+  }
+}

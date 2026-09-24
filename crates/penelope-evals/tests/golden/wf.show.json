@@ -1,0 +1,177 @@
+{
+  "method": "wf.show",
+  "params": {
+    "id": "ticket-to-deploy"
+  },
+  "response": {
+    "result": {
+      "definition": {
+        "metadata": {
+          "id": "string",
+          "name": "string",
+          "description": "string",
+          "version": "string",
+          "color": "string",
+          "parameters": [
+            {
+              "type": "string",
+              "required": "bool",
+              "default": "string",
+              "id": "string",
+              "label": "string",
+              "description": "string"
+            }
+          ],
+          "platforms": [],
+          "config": "null"
+        },
+        "entryStep": "string",
+        "settings": {
+          "maxIterations": "integer",
+          "budget": {
+            "maxUsd": "number",
+            "maxTokens": "integer",
+            "maxWallMs": "integer"
+          },
+          "concurrency": {
+            "maxConcurrent": "integer",
+            "admission": "string"
+          },
+          "workspace": "string",
+          "tracker": "string",
+          "deploy_workflow": "string",
+          "forms": {}
+        },
+        "startCondition": {
+          "type": "string"
+        },
+        "steps": [
+          {
+            "command": "null",
+            "cwd": "string",
+            "successExitCodes": [
+              "integer"
+            ],
+            "tool": "string",
+            "args": "null",
+            "template": "string",
+            "choices": [
+              "string"
+            ],
+            "input": "string",
+            "children": [
+              {
+                "on": "null",
+                "criteriaKey": "string",
+                "verifier": "string",
+                "id": "string",
+                "name": "string",
+                "type": "string",
+                "phase": "string",
+                "subGroup": "string",
+                "transitions": [],
+                "budget": "null",
+                "retry": "null",
+                "timeoutMs": "null",
+                "model": "string",
+                "agentId": "string",
+                "subAgentType": "string",
+                "prompt": "string",
+                "nudgePrompt": "string",
+                "tools": [],
+                "outputSchema": "null",
+                "command": {
+                  "unix": "string",
+                  "windows": "string"
+                },
+                "cwd": "string",
+                "successExitCodes": [
+                  "integer"
+                ],
+                "tool": "string",
+                "args": "null",
+                "template": "string",
+                "choices": [],
+                "input": "string",
+                "children": [],
+                "maxConcurrency": "null",
+                "workflowId": "string",
+                "params": "null",
+                "checks": []
+              }
+            ],
+            "maxConcurrency": "null",
+            "workflowId": "string",
+            "params": "null",
+            "on": "null",
+            "criteriaKey": "string",
+            "verifier": "string",
+            "id": "string",
+            "name": "string",
+            "type": "string",
+            "phase": "string",
+            "subGroup": "string",
+            "transitions": [
+              {
+                "goto": "string",
+                "condition": {
+                  "field": "string",
+                  "result": "string",
+                  "values": [
+                    "string"
+                  ],
+                  "key": "string",
+                  "type": "string"
+                },
+                "tag": "string"
+              }
+            ],
+            "network": "bool",
+            "retry": "null",
+            "timeoutMs": "null",
+            "model": "string",
+            "agentId": "string",
+            "subAgentType": "string",
+            "prompt": "string",
+            "nudgePrompt": "string",
+            "tools": [
+              "string"
+            ],
+            "outputSchema": {
+              "properties": {
+                "tracker": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "forge": {
+                  "type": "string",
+                  "enum": [
+                    "string"
+                  ]
+                },
+                "repo": {
+                  "type": "string"
+                },
+                "base_branch": {
+                  "type": "string"
+                }
+              },
+              "type": "string",
+              "required": [
+                "string"
+              ]
+            },
+            "budget": "null",
+            "checks": []
+          }
+        ]
+      },
+      "graph": "string"
+    }
+  }
+}

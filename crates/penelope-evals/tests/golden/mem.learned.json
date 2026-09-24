@@ -1,0 +1,9 @@
+{
+  "method": "mem.learned",
+  "params": {
+    "days": 7
+  },
+  "response": {
+    "result": []
+  }
+}

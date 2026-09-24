@@ -1,0 +1,24 @@
+{
+  "method": "usage",
+  "params": {
+    "by": "session",
+    "limit": 5
+  },
+  "response": {
+    "result": [
+      {
+        "cachedTokens": "integer",
+        "completionTokens": "integer",
+        "key": "string",
+        "label": "string",
+        "costUsd": "number",
+        "tokens": "integer",
+        "calls": "integer",
+        "estimated": "integer",
+        "last": "string",
+        "promptTokens": "integer",
+        "cacheRatio": "number"
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "method": "chat.send",
+  "params": {
+    "text": "bonjour, fais le point"
+  },
+  "response": {
+    "result": {
+      "session": "string",
+      "turn": "string",
+      "outcome": "string",
+      "text": "string",
+      "iterations": "integer",
+      "cost_usd": "number"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "method": "policies",
+  "params": {},
+  "response": {
+    "result": [
+      {
+        "id": "string",
+        "scope": "string",
+        "tool": "string",
+        "server": "null",
+        "arg_match": "null",
+        "decision": "string",
+        "window": "string",
+        "window_ref": "null",
+        "created_at": "string",
+        "revoked_at": "null",
+        "hits": "integer"
+      }
+    ]
+  }
+}

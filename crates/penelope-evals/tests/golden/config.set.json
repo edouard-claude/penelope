@@ -1,0 +1,13 @@
+{
+  "method": "config.set",
+  "params": {
+    "path": "budget.daily_usd",
+    "value": 42.0
+  },
+  "response": {
+    "result": {
+      "generation": "integer",
+      "warnings": []
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "method": "schedule.rm",
+  "params": {
+    "id": "$schedule_rm"
+  },
+  "response": {
+    "result": {
+      "ok": "bool"
+    }
+  }
+}

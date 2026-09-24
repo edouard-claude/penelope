@@ -1,0 +1,9 @@
+{
+  "method": "metrics",
+  "params": {},
+  "response": {
+    "result": {
+      "text": "string"
+    }
+  }
+}

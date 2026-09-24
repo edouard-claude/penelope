@@ -1,0 +1,15 @@
+{
+  "method": "session.project",
+  "params": {
+    "session": "$session",
+    "project": "penelope"
+  },
+  "response": {
+    "result": {
+      "session": "string",
+      "project": "string",
+      "how": "string",
+      "known": []
+    }
+  }
+}

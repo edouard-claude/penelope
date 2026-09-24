@@ -1,0 +1,11 @@
+{
+  "method": "policy.revoke",
+  "params": {
+    "id": "$rule"
+  },
+  "response": {
+    "result": {
+      "revoked": "bool"
+    }
+  }
+}

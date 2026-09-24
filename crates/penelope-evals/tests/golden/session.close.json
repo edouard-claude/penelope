@@ -1,0 +1,13 @@
+{
+  "method": "session.close",
+  "params": {
+    "session": "$session_close"
+  },
+  "response": {
+    "result": {
+      "session": "string",
+      "title": "string",
+      "cancelled": "integer"
+    }
+  }
+}

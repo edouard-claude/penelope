@@ -1,0 +1,24 @@
+{
+  "method": "session.compact",
+  "params": {
+    "session": "$session"
+  },
+  "response": {
+    "result": {
+      "session": "string",
+      "trigger": "string",
+      "published": "integer",
+      "deferred": "bool",
+      "messages": "integer",
+      "node": "string",
+      "covered_to": "integer",
+      "tokens_src": "integer",
+      "tokens_summary": "integer",
+      "remaining_batches": "integer",
+      "model": "string",
+      "cost_usd": "number",
+      "skipped": "null",
+      "text": "string"
+    }
+  }
+}

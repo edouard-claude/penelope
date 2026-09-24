@@ -1,0 +1,9 @@
+{
+  "method": "restart",
+  "params": {},
+  "response": {
+    "result": {
+      "ok": "bool"
+    }
+  }
+}

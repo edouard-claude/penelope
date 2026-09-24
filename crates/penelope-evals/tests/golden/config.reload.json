@@ -1,0 +1,10 @@
+{
+  "method": "config.reload",
+  "params": {},
+  "response": {
+    "result": {
+      "generation": "integer",
+      "changed": []
+    }
+  }
+}

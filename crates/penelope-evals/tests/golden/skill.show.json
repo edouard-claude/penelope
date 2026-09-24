@@ -1,0 +1,23 @@
+{
+  "method": "skill.show",
+  "params": {
+    "name": "wiki-markdown"
+  },
+  "response": {
+    "result": {
+      "name": "string",
+      "description": "string",
+      "version": "string",
+      "allowed_tools": [],
+      "activation": [
+        "string"
+      ],
+      "sub_agent": "bool",
+      "requires": [],
+      "scope": "string",
+      "path": "string",
+      "body": "string",
+      "body_hash": "string"
+    }
+  }
+}
