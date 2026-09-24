@@ -264,6 +264,8 @@ pub fn dependency_rules() -> BTreeMap<&'static str, Vec<&'static str>> {
     // L'hôte MCP (T25) : le socle et les crates métier dont il se sert, jamais le daemon,
     // qui le construit.
     m.insert("penelope-mcp-host", MCP_HOST_ALLOWED_DEPS.to_vec());
+    // La mémoire en fichiers (T22) : le socle et les crates métier, sans le canal.
+    m.insert("penelope-vault", VAULT_ALLOWED_DEPS.to_vec());
     m
 }
 
@@ -293,6 +295,23 @@ pub const APP_ALLOWED_DEPS: &[&str] = &[
     "penelope-hitl",
     "penelope-telegram",
     "penelope-workflow",
+];
+
+/// Ce dont `penelope-vault` peut dépendre : `penelope-app` et les crates métier, sauf
+/// `penelope-telegram` (le vault ne nomme pas de canal) et `penelope-skills`,
+/// `penelope-workflow`, qu'il ne lit que par `Services`.
+pub const VAULT_ALLOWED_DEPS: &[&str] = &[
+    "penelope-app",
+    "penelope-kernel",
+    "penelope-store",
+    "penelope-platform",
+    "penelope-observe",
+    "penelope-llm",
+    "penelope-context",
+    "penelope-memory",
+    "penelope-mcp",
+    "penelope-tools",
+    "penelope-hitl",
 ];
 
 /// Vérifie les règles de dépendance.
@@ -453,6 +472,7 @@ mod tests {
             "penelope-daemon",
             "penelope-app",
             "penelope-mcp-host",
+            "penelope-vault",
             "penelope-cli",
             "penelope-gateway-telegram",
         ] {
@@ -524,6 +544,18 @@ mod tests {
             cli.internal_deps.contains("penelope-gateway-telegram"),
             "la CLI compose la passerelle : {:?}",
             cli.internal_deps
+        );
+    }
+
+    /// T22 : la mémoire en fichiers ne connaît pas le daemon.
+    #[test]
+    fn the_vault_crate_does_not_depend_on_the_daemon() {
+        let all = crates();
+        let vault = all.iter().find(|c| c.name == "penelope-vault").unwrap();
+        assert!(
+            !vault.internal_deps.contains("penelope-daemon"),
+            "penelope-vault est sous le daemon : {:?}",
+            vault.internal_deps
         );
     }
 

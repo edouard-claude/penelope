@@ -61,8 +61,8 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 | CA 6.11 | Empty pass is a noop | `crates/penelope-memory/src/consolidation.rs` |
 | CA 6.12 | Recall never blocks | `crates/penelope-memory/src/recall.rs` |
 | CA 6.13 | Forbidden content is blocked in consolidation | `crates/penelope-memory/src/consolidation.rs` |
-| CA 6.14 | A profile write waits for the next episode | `crates/penelope-daemon/src/episodes.rs` |
-| CA 6.15 | Two idle hours close the episode and ingest it | `crates/penelope-daemon/src/episodes.rs` |
+| CA 6.14 | A profile write waits for the next episode | `crates/penelope-vault/src/episodes.rs` |
+| CA 6.15 | Two idle hours close the episode and ingest it | `crates/penelope-vault/src/episodes.rs` |
 
 ## §7. Skills
 
