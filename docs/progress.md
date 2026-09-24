@@ -13,6 +13,90 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.5
+
+Quatrième vague de la V1 : le journal d'événements reçoit tout ce qui change la
+conversation (compaction, niveau 1, fork, retour arrière, tentatives), l'historique
+d'avant le journal est scellé au premier démarrage, et les modules du daemon ne
+reçoivent plus `Daemon` mais des ports. Les tables restent la source de lecture ; deux
+comportements changent : le message d'un flux coupé cite le début gardé, et la consigne
+de relance après une réponse vide n'accompagne plus que la requête qui suit.
+**La migration 0021 scelle la base et supprime deux tables : une base passée en
+1.0.0-alpha.5 ne se relit plus en 0.17.**
+
+#### Journal d'événements, scellement de l'historique (#208, T11)
+
+- **L'historique d'avant le journal est scellé au démarrage** : chaque session dont les
+  messages n'ont pas d'événement reçoit un seul `conv.import`, qui porte le nombre de
+  messages, de contextes figés, les nœuds de résumé actifs et l'empreinte sha256 de ce
+  préfixe ; ses lignes sont marquées `sealed`. Aucun message n'est recopié dans le
+  journal. L'étape est idempotente : le second démarrage ne scelle rien.
+- La dérivation d'une session scellée (`derive`) repart de ce préfixe et redonne la
+  projection d'avant, résumé actif compris ; les messages suivants viennent après.
+- Migration 0021 : index des lignes à sceller ; les tables `projections_workflow` et
+  `projections_approval`, jamais utilisées, sont supprimées.
+- Le test de migration depuis une vraie base 0.17 vérifie maintenant le scellement.
+
+#### Journal d'événements : compaction, niveau 1, fork et retour arrière (#208, T7, T8, T10, T18)
+
+- **La compaction entre au journal** : un résumé publié est un `conv.summary` qui
+  remplace la plage qu'il couvre (texte du nœud, ancres, résumé prolongé, modèle,
+  déclencheur). Le nœud LCM cite son événement et la plage est marquée dans la même
+  transaction que lui ; republier le même travail n'écrit rien de plus, et un arrêt
+  entre l'événement et le nœud se répare depuis l'événement.
+- **Le niveau 1 aussi** : un gros résultat d'outil parti en artefact est un
+  `conv.tool_result` qui remplace ce seul nœud, avec l'artefact et son empreinte ; le
+  nœud garde sa place.
+- **Fork et retour arrière** : `/fork` écrit `conv.fork` en tête de la session fille
+  (héritage par référence de toute la mère), `/rewind` écrit `conv.rewind` avant de
+  couper. Les adresses d'une fille suivent son héritage (contexte figé, préfixe
+  système, lignes copiées).
+- **Flux runtime** : un consommateur ne reçoit un `conv.*` que s'il le nomme ou n'a pas
+  de filtre, rédigé et borné à 64 Kio ; le catalogue des `conv.*` est dans
+  `docs/runtime-events.md`.
+- Les tables restent la source de lecture : aucune requête envoyée au modèle ne change.
+
+#### Tentatives hors surface et reprise après crash (#208, T9, T20, #206)
+
+- **Un flux coupé en cours d'écriture n'est plus perdu** : le début reçu est gardé dans
+  le journal (`conv.attempt`, cause `stream_cut`), hors de l'historique ; le message au
+  propriétaire le cite au lieu de parler d'un début « affiché ». Le tour suivant ne le
+  renvoie pas au modèle.
+- **Chaque appel sans réponse est relisible** : erreur avant le flux (`before_stream`),
+  passage au modèle de repli (`fallback`), réponse vide relancée (`empty_answer`, avec
+  la consigne de relance, l'usage et le coût déjà comptés : aucune seconde ligne
+  d'usage). Dix tentatives gardées par tour au plus ; toutes sont dans
+  `penelope logs --turn` (« tentative sans réponse » : modèle, cause, début du texte).
+- La consigne de relance après une réponse vide n'accompagne plus que la requête qui
+  suit : elle n'était auparavant retirée qu'en fin de tour.
+- **Reprise après crash** : au démarrage, un tour que l'arrêt du processus a laissé
+  ouvert est fermé `turn.finished {reason: interrupted}` ; le tour rejoué ouvre sa
+  propre borne avec la tentative suivante et reprend l'appel resté sans résultat.
+
+#### Ports du daemon : providers, supervision, canal, MCP (#208, T07 à T10)
+
+- Nouveau module `ports` : `ProviderSource`, `Handle` (ex `DaemonHandle`), `Supervision`,
+  `Slot` (branchement posé après le démarrage) et `McpAdmin`.
+- Dix-huit modules (vault, concepts, embeddings, épisodes, revue, titres, vision, images,
+  voix, purge, sauvegarde, accueil, sessions…) ne prennent plus `&Daemon` : 67 fonctions
+  passent à `&Services` et aux ports.
+- Plus aucun module hors de la colle ne lit `d.hooks` : canal, livraison, MCP et
+  orchestrateur sont reçus en paramètre, par un `Slot` pour les boucles de fond, ou par
+  l'état de la compaction et des workflows.
+- `McpSupervisor` n'est plus nommé hors de `mcp/` et du superviseur : ses consommateurs
+  passent par `McpAdmin`.
+- Doubles de test partagés dans `testing` : `RecordingMessenger` remplace sept copies,
+  `MockProviders` sert un `MockProvider` comme `ProviderSource`.
+- Tests de six modules sortis dans `<module>/tests.rs` ; `hermes::yaml`, les gabarits de
+  l'ordonnanceur et `context_view` en sous-modules. Occurrences de `Daemon` 254 → 148.
+
+#### Gel : la liste de référence n'a plus de taille minimale (#208)
+
+`the_budget_file_is_readable` exigeait trente fichiers en dépassement, ce qui empêchait
+le cliquet de descendre sous ce nombre ; il vérifie désormais que chaque entrée dépasse
+le plafond. Le plafond du crate daemon passe à 86 462 lignes (nouveaux modules `ports`,
+`testing`, `history`, tests des lots) ; il redescendra avec l'extraction des crates.
+
 ### 1.0.0-alpha.4
 
 Troisième vague de la V1 : les six plus gros fichiers du daemon découpés en modules, et
