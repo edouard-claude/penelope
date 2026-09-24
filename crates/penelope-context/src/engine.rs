@@ -91,9 +91,9 @@ impl SummaryJob {
         )
     }
 
-    /// Nombre de messages résumés par ce lot.
+    /// Nombre de messages résumés par ce lot, comptés : les adresses ont des trous (T21).
     pub fn messages(&self) -> i64 {
-        (self.to_seq - self.chunk_from_seq + 1).max(0)
+        crate::numbering::rendered_messages(&self.source_text, self.chunk_from_seq, self.to_seq)
     }
 
     /// Lots restant à résumer après celui-ci.

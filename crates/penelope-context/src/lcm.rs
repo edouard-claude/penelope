@@ -352,6 +352,7 @@ impl Lcm {
     }
 
     /// Vérifie qu'un ensemble de nœuds couvre `[1, up_to]` sans trou.
+    /// Suppose des adresses contiguës ; sur le journal, voir [`crate::numbering::uncovered`].
     pub fn coverage_gaps(nodes: &[Node], up_to: i64) -> Vec<(i64, i64)> {
         let mut ranges: Vec<(i64, i64)> = nodes
             .iter()

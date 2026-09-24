@@ -8,6 +8,7 @@ pub mod derive;
 pub mod engine;
 pub mod journal;
 pub mod lcm;
+pub mod numbering;
 pub mod store;
 pub mod tiers;
 pub mod transcript;
