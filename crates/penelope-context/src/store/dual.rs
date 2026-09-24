@@ -288,9 +288,9 @@ impl HistoryStore {
         session_id: &str,
         tiers: &Tiers,
     ) -> penelope_store::Result<Option<SystemReason>> {
-        let Some(log) = &self.events else {
+        if self.events.is_none() {
             return Ok(None);
-        };
+        }
         let rendered = tiers.prefix();
         let hash = penelope_kernel::canonical::sha256_hex(rendered.as_bytes());
         let sid = session_id.to_string();
@@ -340,16 +340,25 @@ impl HistoryStore {
                 },
             ),
         };
-        let event = ConvEvent::System(SystemPayload {
+        let payload = SystemPayload {
             surface,
             hash,
             rendered,
             tiles: TileMap::of(tiers),
             reason,
-        });
-        log.append(EventDraft::new(event.kind(), event.payload()).session(session_id))
-            .await
-            .map_err(|e| penelope_store::StoreError::other(e.to_string()))?;
+        };
+        let event = ConvEvent::System(payload.clone());
+        // L'instantané du prompt (#205) suit l'événement, dans la seconde transaction,
+        // comme toute ligne de cache.
+        self.journaled(session_id, Some(event), move |tx, event_id| {
+            let ts: String = tx.query_row(
+                "SELECT ts FROM events WHERE id = ?1",
+                [event_id.unwrap_or_default()],
+                |r| r.get(0),
+            )?;
+            crate::projector::ensure_snapshot(tx, &payload, &ts)
+        })
+        .await?;
         Ok(Some(reason))
     }
 

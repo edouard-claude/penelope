@@ -18,10 +18,12 @@
 //!   session est refondue à son prochain rattrapage, jamais réutilisée telle quelle.
 //! - [`HistoryStore::reindex`] : efface les lignes de cache non scellées et les réécrit
 //!   depuis le rejeu ([`crate::replay`]), dans une transaction par session. Idempotent.
+//! - `prompt_snapshots` : chaque `conv.system` y laisse son texte sous son empreinte
+//!   ([`ensure_snapshot`]) ; ni la refonte ni la purge d'une session ne l'effacent ici.
 
 use crate::derive::MessageNode;
 use crate::derive::{assistant_node, tool_node, user_node};
-use crate::journal::{ConvEvent, SurfaceOp};
+use crate::journal::{ConvEvent, SurfaceOp, SystemPayload};
 use crate::lcm::{NodeWrite, insert_leaf_in, replace_in};
 use crate::replay::{
     Expected, Lineage, Origin, ReplayError, archive_expected, archive_of, session_events,
@@ -375,8 +377,39 @@ pub(crate) fn apply_in(
                 Applied::Rebuild
             }
         }
-        ConvEvent::System(_) | ConvEvent::Attempt(_) | ConvEvent::Import(_) => Applied::Done,
+        ConvEvent::System(p) => {
+            ensure_snapshot(tx, &p, &ev.ts)?;
+            Applied::Done
+        }
+        ConvEvent::Attempt(_) | ConvEvent::Import(_) => Applied::Done,
     })
+}
+
+/// L'instantané du prompt système d'un `conv.system` (`prompt_snapshots`, #205), s'il
+/// manque. La table est partagée entre sessions par empreinte : rien n'est réécrit ni
+/// effacé ; `uses` part de zéro, le daemon le compte à chaque appel qui l'envoie.
+pub(crate) fn ensure_snapshot(
+    tx: &Transaction<'_>,
+    p: &SystemPayload,
+    ts: &str,
+) -> penelope_store::Result<()> {
+    let tiles = serde_json::to_string(&p.tiles).ok();
+    tx.execute(
+        "INSERT INTO prompt_snapshots(hash, rendered, tiers, first_seen_at, last_seen_at, uses)
+         VALUES(?1, ?2, ?3, ?4, ?4, 0) ON CONFLICT(hash) DO NOTHING",
+        params![p.hash, p.rendered, tiles, ts],
+    )?;
+    Ok(())
+}
+
+/// Les instantanés de tous les `conv.system` de la session (refonte).
+fn ensure_snapshots_of(tx: &Transaction<'_>, sid: &str) -> penelope_store::Result<()> {
+    for ev in session_events(tx, sid)? {
+        if let Ok(Some(ConvEvent::System(p))) = ConvEvent::decode(&ev.kind, &ev.payload) {
+            ensure_snapshot(tx, &p, &ev.ts)?;
+        }
+    }
+    Ok(())
 }
 
 /// Retire une ligne, son entrée plein texte et son contexte figé.
@@ -516,6 +549,7 @@ fn write_plan(
         done.contexts += 1;
     }
     done.nodes = rewrite_nodes(tx, sid, &expected, ts)?;
+    ensure_snapshots_of(tx, sid)?;
     set_watermark(tx, sid, last_event, state(sealed_offset, false, None), ts)?;
     Ok(done)
 }

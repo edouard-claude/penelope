@@ -341,3 +341,49 @@ async fn a_fork_addresses_its_own_events_after_what_it_inherits() {
     assert_eq!(surface.nodes.len(), 2);
     assert_eq!(h.load("s2", 0).await.unwrap().len(), 2);
 }
+
+/// T14 : l'instantané du prompt (#205) est un cache du `conv.system`, tenu par le
+/// projecteur : écrit avec l'événement, refait par le rattrapage et par la refonte.
+#[tokio::test]
+async fn the_prompt_snapshot_follows_the_system_event() {
+    let (h, _log) = journaled().await;
+    h.journal_system("s1", &tiers("a")).await.unwrap();
+    let hash = penelope_kernel::canonical::sha256_hex(tiers("a").prefix().as_bytes());
+    let snapshot = |h: &HistoryStore| {
+        let hash = hash.clone();
+        let store = h.store().clone();
+        async move {
+            store
+                .read(move |c| {
+                    Ok(c.query_row(
+                        "SELECT rendered, uses FROM prompt_snapshots WHERE hash = ?1",
+                        [hash],
+                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+                    )
+                    .optional()?)
+                })
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(snapshot(&h).await, Some((tiers("a").prefix(), 0)));
+    let erase = |h: &HistoryStore| {
+        let store = h.store().clone();
+        async move {
+            store
+                .write(|tx| {
+                    tx.execute("DELETE FROM prompt_snapshots", [])?;
+                    tx.execute("DELETE FROM projections_session", [])?;
+                    Ok(())
+                })
+                .await
+                .unwrap()
+        }
+    };
+    erase(&h).await;
+    h.catch_up("s1").await.unwrap();
+    assert_eq!(snapshot(&h).await, Some((tiers("a").prefix(), 0)));
+    erase(&h).await;
+    h.reindex(Some("s1")).await.unwrap();
+    assert_eq!(snapshot(&h).await, Some((tiers("a").prefix(), 0)));
+}
