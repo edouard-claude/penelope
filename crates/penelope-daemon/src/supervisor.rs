@@ -378,7 +378,7 @@ async fn maintenance_loop(d: Arc<Daemon>) {
             tracing::warn!(error = %e, "maintenance");
         }
         // Outils MCP inscrits, vault réindexé : vecteurs manquants.
-        crate::embeddings::spawn_backfill(d.clone());
+        crate::embeddings::spawn_backfill(d.embedder());
         // Contenu du vault hors index : signalé à chaque changement, toutes les 30 min.
         let now = d.services.clock.now_ms();
         let last = d

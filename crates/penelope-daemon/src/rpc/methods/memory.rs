@@ -80,10 +80,10 @@ impl Rpc {
                     .map_err(anyhow::Error::msg)?;
                 // `embeddings` : tous les vecteurs recalculés avec le modèle courant.
                 if p.get("embeddings").and_then(|v| v.as_bool()) == Some(true) {
-                    let report = crate::embeddings::backfill(&self.daemon, true).await?;
+                    let report = crate::embeddings::backfill(&self.daemon.embedder(), true).await?;
                     return Ok(json!({"entries": n, "embeddings": report}));
                 }
-                crate::embeddings::spawn_backfill(self.daemon.clone());
+                crate::embeddings::spawn_backfill(self.daemon.embedder());
                 Ok(json!({"entries": n}))
             }
             method::MEM_RETRY_REJECTED => Ok(json!({
@@ -178,6 +178,6 @@ async fn mem_candidates(s: &Services) -> anyhow::Result<Value> {
 /// Propose le découpage d'une entrée fourre-tout : une carte, jamais une écriture (#145).
 async fn mem_split(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
     let uid = required_str(p, "uid")?;
-    let id = crate::mem_split::propose(d, &uid).await?;
+    let id = crate::mem_split::propose(&d.services, d.providers.as_ref(), &uid).await?;
     Ok(json!({"approval": id}))
 }

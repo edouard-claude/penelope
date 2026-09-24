@@ -373,7 +373,8 @@ pub async fn apply(
 async fn same_by_meaning(d: &Daemon, nom: &str, pages: &[Page]) -> Option<usize> {
     let mut texts = vec![nom.to_string()];
     texts.extend(pages.iter().map(|p| p.nom.clone()));
-    let call = crate::embeddings::embed_texts(d, &texts);
+    let emb = d.embedder();
+    let call = crate::embeddings::embed_texts(&emb, &texts);
     let (_, vectors) = tokio::time::timeout(std::time::Duration::from_secs(5), call)
         .await
         .ok()?

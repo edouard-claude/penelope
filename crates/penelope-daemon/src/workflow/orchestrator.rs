@@ -78,7 +78,7 @@ pub struct WorkflowOrchestrator {
 #[async_trait::async_trait]
 impl crate::executor::Orchestrator for WorkflowOrchestrator {
     async fn embed_query(&self, text: &str) -> Option<Vec<f32>> {
-        crate::embeddings::query_vector(&self.daemon, text).await
+        crate::embeddings::query_vector(&self.daemon.embedder(), text).await
     }
 
     async fn start_workflow(
@@ -170,7 +170,8 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
     }
 
     async fn generate_image(&self, prompt: &str, size: Option<&str>) -> Result<Value, String> {
-        crate::images::generate(&self.daemon, prompt, size).await
+        let d = &self.daemon;
+        crate::images::generate(&d.services, d.providers.as_ref(), prompt, size).await
     }
 
     async fn inspect_image(
@@ -180,7 +181,16 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
         task: crate::vision::Task,
         question: &str,
     ) -> Result<Value, String> {
-        crate::vision::inspect(&self.daemon, session_id, path, task, question).await
+        let d = &self.daemon;
+        crate::vision::inspect(
+            &d.services,
+            d.providers.as_ref(),
+            session_id,
+            path,
+            task,
+            question,
+        )
+        .await
     }
 
     async fn control_run(&self, run_id: &str, op: &str) -> Result<Value, String> {

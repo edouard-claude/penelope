@@ -61,11 +61,12 @@ impl crate::selfknow::Admin for Daemon {
         origin: &Origin,
         args: &Value,
     ) -> Result<Value, String> {
-        crate::voice::tool(self, session_id, origin, args).await
+        let (s, p) = (&self.services, self.providers.as_ref());
+        crate::voice::tool(s, p, self.hooks.messenger(), session_id, origin, args).await
     }
 
     async fn memory_search(&self) -> Value {
-        crate::embeddings::search_mode(self)
+        crate::embeddings::search_mode(&self.embedder())
             .await
             .unwrap_or_else(|e| json!({"error": e.to_string()}))
     }
@@ -275,7 +276,7 @@ impl Daemon {
         self.bus.end(&turn.session_id, turn.id.as_str());
         self.handle.record_turn();
         // Un tour a pu écrire en mémoire ou créer une intention : vecteurs manquants.
-        crate::embeddings::spawn_backfill(self.clone());
+        crate::embeddings::spawn_backfill(self.embedder());
         // Retour d'usage (#105) : un souvenir servi n'est utile que si la réponse le
         // reprend ; un tour qui attend une approbation garde sa liste pour sa reprise.
         match &outcome {
@@ -309,7 +310,8 @@ impl Daemon {
                 && let Some(matter) = crate::review::review_matter(said, previous.as_deref())
             {
                 crate::review::spawn(
-                    self.clone(),
+                    self.services.clone(),
+                    self.providers.clone(),
                     turn.session_id.clone(),
                     turn.id.to_string(),
                     said.to_string(),
@@ -324,7 +326,9 @@ impl Daemon {
                 && crate::titles::wants_title(&sess)
             {
                 crate::titles::spawn(
-                    self.clone(),
+                    self.services.clone(),
+                    self.providers.clone(),
+                    self.hooks.delivery(),
                     turn.session_id.clone(),
                     said.to_string(),
                     answer.clone(),
@@ -458,7 +462,7 @@ impl Daemon {
             self.select_model(&session, &classified, &origin_turn),
             async {
                 if want_vector {
-                    crate::embeddings::query_vector(self, &text).await
+                    crate::embeddings::query_vector(&self.embedder(), &text).await
                 } else {
                     None
                 }
@@ -795,17 +799,11 @@ impl Daemon {
         } else {
             format!("Légende du propriétaire : {}", caption.trim())
         };
-        crate::vision::ask(
-            self,
-            crate::vision::Task::Describe,
-            urls,
-            &request,
-            None,
-            session_id,
-            turn_id,
-        )
-        .await
-        .map(|a| a.text)
+        let (s, p) = (&self.services, self.providers.as_ref());
+        let task = crate::vision::Task::Describe;
+        crate::vision::ask(s, p, task, urls, &request, None, session_id, turn_id)
+            .await
+            .map(|a| a.text)
     }
 
     /// Choisit l'alias et le modèle d'un tour (§10.3).

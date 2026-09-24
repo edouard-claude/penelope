@@ -94,11 +94,12 @@ pub async fn embedding_check(d: &crate::runtime::Daemon) -> DoctorCheck {
         "penelope config set models.aliases.embedding {}",
         penelope_kernel::config::DEFAULT_EMBEDDING_MODEL
     ));
-    let Some(model) = crate::embeddings::model(d) else {
+    let Some(model) = crate::embeddings::model(&d.services) else {
         return DoctorCheck::fail(ID, LABEL, "aucun modèle pour le rôle `embedding`", fix);
     };
     let texts = ["penelope doctor".to_string()];
-    let probe = crate::embeddings::embed_texts(d, &texts);
+    let emb = d.embedder();
+    let probe = crate::embeddings::embed_texts(&emb, &texts);
     match tokio::time::timeout(std::time::Duration::from_secs(15), probe).await {
         Ok(Ok((_, v))) if v.first().is_some_and(|x| !x.is_empty()) => {
             DoctorCheck::ok(ID, LABEL, format!("`{model}`, {} dimensions", v[0].len()))

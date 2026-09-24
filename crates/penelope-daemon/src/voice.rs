@@ -9,9 +9,12 @@
 //! ```
 
 use crate::bus::Origin;
-use crate::runtime::Daemon;
+use crate::executor::Messenger;
+use crate::ports::ProviderSource;
+use crate::runtime::Services;
 use regex::Regex;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 /// Taille d'une tranche envoyée à la synthèse, en caractères.
@@ -222,20 +225,25 @@ impl Wav {
 }
 
 /// Synthétise un texte lisible ; rend le WAV assemblé.
-pub async fn synthesize(d: &Daemon, text: &str, voice: &str) -> Result<Wav, String> {
-    let cfg = d.services.config.config();
+pub async fn synthesize(
+    s: &Services,
+    providers: &dyn ProviderSource,
+    text: &str,
+    voice: &str,
+) -> Result<Wav, String> {
+    let cfg = s.config.config();
     let model = tts_model(&cfg);
     if penelope_llm::catalog::provider_of(&model) != "openrouter"
         && !cfg.providers.local.enabled
-        && d.provider_override_active().is_none()
+        && providers.provider_override_active().is_none()
     {
         return Err(format!(
             "la synthèse vise un serveur local (`{model}`) mais `providers.local` n'est pas \
              activé : `penelope config set providers.local.enabled true`"
         ));
     }
-    let model = crate::codex_scope::background(&d.services, &model, "synthèse vocale").await;
-    let provider = d.provider_for(&model).await?;
+    let model = crate::codex_scope::background(s, &model, "synthèse vocale").await;
+    let provider = providers.provider_for(&model).await?;
     let mut parts = Vec::new();
     for chunk in chunks(text, CHUNK_CHARS) {
         let bytes =
@@ -249,22 +257,24 @@ pub async fn synthesize(d: &Daemon, text: &str, voice: &str) -> Result<Wav, Stri
 }
 
 /// Lit `text` en vocal dans la conversation `session_id`. Rend la durée et le fichier.
+#[allow(clippy::too_many_arguments)]
 pub async fn send(
-    d: &Daemon,
+    s: &Services,
+    providers: &dyn ProviderSource,
+    messenger: Option<Arc<dyn Messenger>>,
     session_id: &str,
     origin: &Origin,
     text: &str,
     voice: Option<&str>,
     caption: Option<&str>,
 ) -> Result<Value, String> {
-    let s = &d.services;
     let cfg = s.config.config();
     let spoken = speech_text(text);
     let voice = voice
         .filter(|v| !v.trim().is_empty())
         .unwrap_or(&cfg.voice.tts_voice)
         .to_string();
-    let wav = synthesize(d, &spoken, &voice).await?;
+    let wav = synthesize(s, providers, &spoken, &voice).await?;
     let seconds = wav.seconds();
     let dir = s.platform.dirs.data().join("media").join("voice");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -279,10 +289,7 @@ pub async fn send(
     .map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&wav_path);
     converted?;
-    let messenger = d
-        .hooks
-        .messenger()
-        .ok_or("aucun canal de message disponible")?;
+    let messenger = messenger.ok_or("aucun canal de message disponible")?;
     messenger
         .send_session_voice(
             session_id,
@@ -323,11 +330,14 @@ pub async fn send(
 
 /// Contrôle `doctor` (issue #41) : `ffmpeg` présent et synthèse joignable, en lisant une
 /// phrase d'une seconde.
-pub async fn doctor_check(d: &Daemon) -> penelope_kernel::api::DoctorCheck {
+pub async fn doctor_check(
+    s: &Services,
+    providers: &dyn ProviderSource,
+) -> penelope_kernel::api::DoctorCheck {
     use penelope_kernel::api::DoctorCheck;
     const ID: &str = "voice";
     const LABEL: &str = "Réponses vocales";
-    let cfg = d.services.config.config();
+    let cfg = s.config.config();
     let model = tts_model(&cfg);
     if penelope_platform::audio::ffmpeg().is_none() {
         return DoctorCheck::fail(
@@ -339,7 +349,7 @@ pub async fn doctor_check(d: &Daemon) -> penelope_kernel::api::DoctorCheck {
     }
     let probe = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        synthesize(d, "Bonjour.", &cfg.voice.tts_voice),
+        synthesize(s, providers, "Bonjour.", &cfg.voice.tts_voice),
     )
     .await;
     match probe {
@@ -370,12 +380,14 @@ pub async fn doctor_check(d: &Daemon) -> penelope_kernel::api::DoctorCheck {
 /// Outil `send_voice` : un texte trop long est renvoyé au modèle (résumé vocal à proposer) ;
 /// une synthèse impossible envoie la réponse en texte, avec la raison.
 pub async fn tool(
-    d: &Daemon,
+    s: &Services,
+    providers: &dyn ProviderSource,
+    messenger: Option<Arc<dyn Messenger>>,
     session_id: &str,
     origin: &Origin,
     args: &Value,
 ) -> Result<Value, String> {
-    let cfg = d.services.config.config();
+    let cfg = s.config.config();
     let text = args["text"].as_str().unwrap_or_default().trim().to_string();
     if text.is_empty() {
         return Err("`text` vide".into());
@@ -389,7 +401,9 @@ pub async fn tool(
         ));
     }
     match send(
-        d,
+        s,
+        providers,
+        messenger.clone(),
         session_id,
         origin,
         &text,
@@ -401,10 +415,7 @@ pub async fn tool(
         Ok(v) => Ok(v),
         Err(reason) => {
             tracing::warn!(session = %session_id, error = %reason, "vocal indisponible, repli en texte");
-            let messenger = d
-                .hooks
-                .messenger()
-                .ok_or("aucun canal de message disponible")?;
+            let messenger = messenger.ok_or("aucun canal de message disponible")?;
             messenger
                 .send_session_text(
                     session_id,

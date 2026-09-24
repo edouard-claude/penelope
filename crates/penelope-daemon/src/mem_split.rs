@@ -10,7 +10,8 @@
 //! une carte `memory_proposal` demande le dernier mot. Les données financières
 //! personnelles (soldes, salaire, épargne) restent hors de la mémoire de fond (#25).
 
-use crate::runtime::{Daemon, Services};
+use crate::ports::ProviderSource;
+use crate::runtime::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_kernel::risk::RiskClass;
 use penelope_llm::catalog::strip_provider;
@@ -18,7 +19,6 @@ use penelope_llm::provider::{CancelToken, collect_stream};
 use penelope_llm::types::{ChatMessage, ChatRequest};
 use penelope_memory::{IndexedEntry, Level};
 use serde_json::json;
-use std::sync::Arc;
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -62,8 +62,11 @@ pub async fn oversized(s: &Services) -> Vec<IndexedEntry> {
 
 /// Propose le découpage d'une entrée : une carte `memory_proposal`, jamais une écriture.
 /// Rend l'identifiant de la demande.
-pub async fn propose(d: &Arc<Daemon>, uid: &str) -> anyhow::Result<String> {
-    let s = &d.services;
+pub async fn propose(
+    s: &Services,
+    providers: &dyn ProviderSource,
+    uid: &str,
+) -> anyhow::Result<String> {
     let Some(entry) = s.memory.get(uid).await? else {
         anyhow::bail!("entrée `{uid}` introuvable");
     };
@@ -71,7 +74,7 @@ pub async fn propose(d: &Arc<Daemon>, uid: &str) -> anyhow::Result<String> {
     if entry.text.chars().count() <= max {
         anyhow::bail!("`{uid}` tient déjà en {max} caractères : rien à découper",);
     }
-    let facts = cut(d, &entry.text).await?;
+    let facts = cut(s, providers, &entry.text).await?;
     if facts.is_empty() {
         anyhow::bail!("le modèle n'a proposé aucun fait pour `{uid}`");
     }
@@ -111,8 +114,11 @@ pub async fn propose(d: &Arc<Daemon>, uid: &str) -> anyhow::Result<String> {
 }
 
 /// Les faits proposés par le modèle, bornés et nettoyés.
-async fn cut(d: &Arc<Daemon>, text: &str) -> anyhow::Result<Vec<String>> {
-    let s = &d.services;
+async fn cut(
+    s: &Services,
+    providers: &dyn ProviderSource,
+    text: &str,
+) -> anyhow::Result<Vec<String>> {
     let cfg = s.config.config();
     let alias = cfg.role_alias("memory_review");
     let model = cfg
@@ -120,8 +126,8 @@ async fn cut(d: &Arc<Daemon>, text: &str) -> anyhow::Result<Vec<String>> {
         .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}`"))?
         .to_string();
     // Travail de fond : jamais l'abonnement du propriétaire (issue #142).
-    let model = crate::codex_scope::background(&d.services, &model, "découpage de mémoire").await;
-    let provider = d
+    let model = crate::codex_scope::background(s, &model, "découpage de mémoire").await;
+    let provider = providers
         .provider_for(&model)
         .await
         .map_err(|e| anyhow::anyhow!(e))?;

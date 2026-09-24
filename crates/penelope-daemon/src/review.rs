@@ -2,7 +2,8 @@
 //! relit l'échange et note des **candidats** typés. Il n'écrit jamais dans le profil, le
 //! cœur ni les pratiques : seule la consolidation nocturne promeut, derrière ses portes.
 
-use crate::runtime::Daemon;
+use crate::ports::ProviderSource;
+use crate::runtime::Services;
 use penelope_llm::catalog::strip_provider;
 use penelope_llm::provider::{CancelToken, collect_stream};
 use penelope_llm::types::{ChatMessage, ChatRequest};
@@ -234,7 +235,8 @@ pub async fn previous_answer(s: &crate::runtime::Services, session_id: &str) -> 
 
 /// Lance la revue sans attendre.
 pub fn spawn(
-    d: Arc<Daemon>,
+    s: Arc<Services>,
+    providers: Arc<dyn ProviderSource>,
     session_id: String,
     turn_id: String,
     user_text: String,
@@ -246,7 +248,17 @@ pub fn spawn(
             ReviewMatter::Agreement { proposal } => Some(proposal.as_str()),
             ReviewMatter::Exchange => None,
         };
-        match review(&d, &session_id, &turn_id, &user_text, &answer, proposal).await {
+        match review(
+            &s,
+            providers.as_ref(),
+            &session_id,
+            &turn_id,
+            &user_text,
+            &answer,
+            proposal,
+        )
+        .await
+        {
             Ok(0) => {}
             Ok(n) => tracing::info!(session = %session_id, candidats = n, "revue de fond"),
             Err(e) => tracing::debug!(session = %session_id, error = %e, "revue de fond"),
@@ -257,14 +269,14 @@ pub fn spawn(
 /// Relit un échange et enregistre ses candidats. Renvoie le nombre retenu. `proposal` :
 /// la proposition que le message du propriétaire accepte d'un mot (issue #108).
 pub async fn review(
-    d: &Arc<Daemon>,
+    s: &Services,
+    providers: &dyn ProviderSource,
     session_id: &str,
     turn_id: &str,
     user_text: &str,
     answer: &str,
     proposal: Option<&str>,
 ) -> anyhow::Result<usize> {
-    let s = &d.services;
     let cfg = s.config.config();
     let max = cfg.memory.review_max_candidates;
     if max == 0 {
@@ -275,8 +287,11 @@ pub async fn review(
         .alias_model(&alias)
         .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}`"))?
         .to_string();
-    let model = crate::codex_scope::background(&d.services, &model, "consolidation").await;
-    let provider = d.provider_for(&model).await.map_err(anyhow::Error::msg)?;
+    let model = crate::codex_scope::background(s, &model, "consolidation").await;
+    let provider = providers
+        .provider_for(&model)
+        .await
+        .map_err(anyhow::Error::msg)?;
     let info = s.catalog.get(strip_provider(&model));
     let effort = info.as_ref().and_then(|i| i.lightest_effort());
     let structured = info
@@ -622,6 +637,7 @@ mod secret_tests {
 #[cfg(test)]
 mod daemon_tests {
     use super::*;
+    use crate::runtime::Daemon;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::MockProvider;
 
@@ -646,7 +662,8 @@ mod daemon_tests {
             r#"{"candidats": [{"type": "correction", "texte": "Les migrations passent par sqlx", "importance": 5, "quand": "projet=facturation"}]}"#,
         );
         let n = review(
-            &d,
+            &d.services,
+            d.providers.as_ref(),
             "s1",
             "t1",
             "non, ici on fait les migrations avec sqlx, pas diesel",

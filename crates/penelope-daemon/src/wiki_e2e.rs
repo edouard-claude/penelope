@@ -167,9 +167,17 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
         p.reply(&format!(
             r#"{{"candidats": [{{"type": "fait", "texte": "{candidate}", "importance": 6, "quand": ""}}]}}"#
         ));
-        crate::review::review(&d, &sid, &format!("t{i}"), user, answer, None)
-            .await
-            .unwrap();
+        crate::review::review(
+            &d.services,
+            d.providers.as_ref(),
+            &sid,
+            &format!("t{i}"),
+            user,
+            answer,
+            None,
+        )
+        .await
+        .unwrap();
     }
 
     // Un PDF reçu : fiche, original embarqué, concepts, index, log.md.

@@ -11,7 +11,8 @@
 //! Dans tous les modes, le texte d'une image est une donnée : la consigne le dit au modèle
 //! de vision, et `image_inspect` rend sa réponse encadrée comme non fiable.
 
-use crate::runtime::Daemon;
+use crate::ports::ProviderSource;
+use crate::runtime::Services;
 use penelope_kernel::config::Config;
 use penelope_llm::types::{ChatMessage, ChatRequest, Content};
 use penelope_llm::{CancelToken, collect_stream};
@@ -125,8 +126,10 @@ pub struct Answer {
 }
 
 /// Appelle le modèle de la tâche sur des images (`data:` ou URL) et une demande.
+#[allow(clippy::too_many_arguments)]
 pub async fn ask(
-    d: &Daemon,
+    s: &Services,
+    providers: &dyn ProviderSource,
     task: Task,
     urls: &[String],
     request: &str,
@@ -134,7 +137,6 @@ pub async fn ask(
     session_id: &str,
     turn_id: &str,
 ) -> Result<Answer, String> {
-    let s = &d.services;
     let cfg = s.config.config();
     let alias = alias_for(&cfg, task);
     let model = cfg
@@ -146,7 +148,7 @@ pub async fn ask(
             )
         })?
         .to_string();
-    let provider = d.provider_for(&model).await?;
+    let provider = providers.provider_for(&model).await?;
     let mut content = vec![Content::text(request.to_string())];
     content.extend(urls.iter().map(|url| Content::ImageUrl {
         url: url.clone(),
@@ -213,7 +215,8 @@ pub async fn ask(
 /// du modèle est rendue telle quelle ; en `locate`, la taille de l'image, le repère et les
 /// points lus dans la réponse, en pixels de l'image.
 pub async fn inspect(
-    d: &Daemon,
+    s: &Services,
+    providers: &dyn ProviderSource,
     session_id: &str,
     path: &Path,
     task: Task,
@@ -233,7 +236,17 @@ pub async fn inspect(
         Task::Describe if question.is_empty() => "Décris cette image.".to_string(),
         _ => question.to_string(),
     };
-    let answer = ask(d, task, &[url], &request, size, session_id, session_id).await?;
+    let answer = ask(
+        s,
+        providers,
+        task,
+        &[url],
+        &request,
+        size,
+        session_id,
+        session_id,
+    )
+    .await?;
     let mut out = json!({
         "mode": task.as_str(),
         "model": answer.model,
@@ -245,7 +258,7 @@ pub async fn inspect(
         },
     });
     if task == Task::Locate {
-        let setting = d.services.config.config().models.locate_frame.clone();
+        let setting = s.config.config().models.locate_frame.clone();
         let served = serve_points(&answer.text, &setting, &answer.model, size);
         out["frame"] = json!(match size {
             Some((w, h)) => format!(

@@ -2,7 +2,9 @@
 //! modèle rapide propose 3 à 6 mots. Un titre posé à la main (`/title`, `/new <titre>`,
 //! `penelope session title`) n'est jamais remplacé.
 
-use crate::runtime::Daemon;
+use crate::bus::ChannelDelivery;
+use crate::ports::ProviderSource;
+use crate::runtime::Services;
 use penelope_kernel::session::{Session, SessionKind};
 use penelope_llm::catalog::strip_provider;
 use penelope_llm::provider::{CancelToken, collect_stream};
@@ -76,12 +78,19 @@ pub fn label(session: &Session) -> String {
 }
 
 /// Lance la génération sans attendre le tour suivant.
-pub fn spawn(d: Arc<Daemon>, session_id: String, user_text: String, answer: String) {
+pub fn spawn(
+    s: Arc<Services>,
+    providers: Arc<dyn ProviderSource>,
+    channel: Option<Arc<dyn ChannelDelivery>>,
+    session_id: String,
+    user_text: String,
+    answer: String,
+) {
     tokio::spawn(async move {
-        match generate(&d, &session_id, &user_text, &answer).await {
+        match generate(&s, providers.as_ref(), &session_id, &user_text, &answer).await {
             Ok(Some(title)) => {
                 tracing::info!(session = %session_id, %title, "session titrée");
-                if let Some(channel) = d.hooks.telegram() {
+                if let Some(channel) = channel {
                     channel.session_titled(&session_id, &title).await;
                 }
             }
@@ -94,12 +103,12 @@ pub fn spawn(d: Arc<Daemon>, session_id: String, user_text: String, answer: Stri
 /// Demande un titre au modèle rapide et l'enregistre si la session n'en a toujours pas.
 /// Une seule tentative par session.
 pub async fn generate(
-    d: &Arc<Daemon>,
+    s: &Services,
+    providers: &dyn ProviderSource,
     session_id: &str,
     user_text: &str,
     answer: &str,
 ) -> anyhow::Result<Option<String>> {
-    let s = &d.services;
     let flag = format!("session.title_asked.{session_id}");
     if s.kv_get(&flag).await?.is_some() {
         return Ok(None);
@@ -115,8 +124,11 @@ pub async fn generate(
         .alias_model(&alias)
         .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}`"))?
         .to_string();
-    let model = crate::codex_scope::background(&d.services, &model, "titre").await;
-    let provider = d.provider_for(&model).await.map_err(anyhow::Error::msg)?;
+    let model = crate::codex_scope::background(s, &model, "titre").await;
+    let provider = providers
+        .provider_for(&model)
+        .await
+        .map_err(anyhow::Error::msg)?;
     let effort = s
         .catalog
         .get(strip_provider(&model))

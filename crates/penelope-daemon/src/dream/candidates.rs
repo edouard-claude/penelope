@@ -111,7 +111,7 @@ pub(super) struct Neighbour {
 /// Souvenirs proches de chaque candidat, avec **un seul** appel d'embeddings pour tout le
 /// lot (issue #59).
 pub(super) async fn nearby_batch(d: &Arc<Daemon>, texts: &[String]) -> Vec<Vec<Neighbour>> {
-    let vectors = match crate::embeddings::embed_texts(d, texts).await {
+    let vectors = match crate::embeddings::embed_texts(&d.embedder(), texts).await {
         Ok((_, v)) => v,
         Err(e) => {
             tracing::debug!(error = %e, "embeddings du lot indisponibles : recherche lexicale");

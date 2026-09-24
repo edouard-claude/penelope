@@ -4,7 +4,8 @@
 //! manquants après chaque écriture ; au tour, le vecteur du message a un délai borné et la
 //! recherche redevient lexicale s'il manque.
 
-use crate::runtime::Daemon;
+use crate::ports::ProviderSource;
+use crate::runtime::Services;
 use penelope_kernel::canonical::sha256_hex;
 use penelope_store::rusqlite::params;
 use penelope_store::{decode_embedding, encode_embedding};
@@ -32,18 +33,30 @@ pub struct State {
     backfilling: AtomicBool,
 }
 
+/// Ce que le calcul reçoit au lieu du daemon : services, providers et état partagé.
+#[derive(Clone)]
+pub struct Embedder {
+    pub services: Arc<Services>,
+    pub providers: Arc<dyn ProviderSource>,
+    pub state: Arc<State>,
+}
+
 /// Modèle du rôle `embedding`, s'il est défini.
-pub fn model(d: &Daemon) -> Option<String> {
-    let cfg = d.services.config.config();
+pub fn model(s: &Services) -> Option<String> {
+    let cfg = s.config.config();
     cfg.alias_model(&cfg.role_alias("embedding"))
         .map(String::from)
         .filter(|m| !m.is_empty())
 }
 
 /// Vecteurs de `texts`, dans l'ordre, depuis le cache ou le provider.
-pub async fn embed_texts(d: &Daemon, texts: &[String]) -> anyhow::Result<(String, Vec<Vec<f32>>)> {
-    let model = model(d).ok_or_else(|| anyhow::anyhow!("aucun modèle pour le rôle `embedding`"))?;
-    let s = &d.services;
+pub async fn embed_texts(
+    emb: &Embedder,
+    texts: &[String],
+) -> anyhow::Result<(String, Vec<Vec<f32>>)> {
+    let model = model(&emb.services)
+        .ok_or_else(|| anyhow::anyhow!("aucun modèle pour le rôle `embedding`"))?;
+    let s = &*emb.services;
     let hashes: Vec<String> = texts
         .iter()
         .map(|t| sha256_hex(clip(t).as_bytes()))
@@ -78,15 +91,19 @@ pub async fn embed_texts(d: &Daemon, texts: &[String]) -> anyhow::Result<(String
     }
     let missing: Vec<usize> = (0..texts.len()).filter(|i| out[*i].is_none()).collect();
     if !missing.is_empty() {
-        let model = crate::codex_scope::background(&d.services, &model, "embeddings").await;
-        let provider = d.provider_for(&model).await.map_err(anyhow::Error::msg)?;
+        let model = crate::codex_scope::background(&emb.services, &model, "embeddings").await;
+        let provider = emb
+            .providers
+            .provider_for(&model)
+            .await
+            .map_err(anyhow::Error::msg)?;
         for chunk in missing.chunks(BATCH) {
             let inputs: Vec<String> = chunk.iter().map(|i| clip(&texts[*i]).to_string()).collect();
             let vectors = provider.embed(&model, &inputs).await.inspect_err(|e| {
-                d.embeddings
+                emb.state
                     .failed_at_ms
                     .store(s.clock.now_ms(), Ordering::SeqCst);
-                if let Ok(mut g) = d.embeddings.last_error.lock() {
+                if let Ok(mut g) = emb.state.last_error.lock() {
                     *g = Some(e.to_string());
                 }
             })?;
@@ -114,8 +131,8 @@ pub async fn embed_texts(d: &Daemon, texts: &[String]) -> anyhow::Result<(String
                 })
                 .await?;
         }
-        d.embeddings.failed_at_ms.store(0, Ordering::SeqCst);
-        if let Ok(mut g) = d.embeddings.last_error.lock() {
+        emb.state.failed_at_ms.store(0, Ordering::SeqCst);
+        if let Ok(mut g) = emb.state.last_error.lock() {
             *g = None;
         }
     }
@@ -133,15 +150,15 @@ fn clip(t: &str) -> &str {
 }
 
 /// Vecteur d'un message au tour, en moins de [`TURN_BUDGET`] ; `None` : recherche lexicale.
-pub async fn query_vector(d: &Daemon, text: &str) -> Option<Vec<f32>> {
-    if text.trim().is_empty() || model(d).is_none() {
+pub async fn query_vector(emb: &Embedder, text: &str) -> Option<Vec<f32>> {
+    if text.trim().is_empty() || model(&emb.services).is_none() {
         return None;
     }
-    let failed = d.embeddings.failed_at_ms.load(Ordering::SeqCst);
-    if failed > 0 && d.services.clock.now_ms() - failed < RETRY_AFTER_MS {
+    let failed = emb.state.failed_at_ms.load(Ordering::SeqCst);
+    if failed > 0 && emb.services.clock.now_ms() - failed < RETRY_AFTER_MS {
         return None;
     }
-    match tokio::time::timeout(TURN_BUDGET, embed_texts(d, &[text.to_string()])).await {
+    match tokio::time::timeout(TURN_BUDGET, embed_texts(emb, &[text.to_string()])).await {
         Ok(Ok((_, mut v))) => v.pop().filter(|v| !v.is_empty()),
         Ok(Err(e)) => {
             tracing::debug!(error = %e, "embedding du message indisponible : recherche lexicale");
@@ -165,11 +182,11 @@ pub struct Backfill {
 }
 
 /// Calcule les vecteurs manquants (ou tous, avec `force`).
-pub async fn backfill(d: &Daemon, force: bool) -> anyhow::Result<Backfill> {
-    let Some(model) = model(d) else {
+pub async fn backfill(emb: &Embedder, force: bool) -> anyhow::Result<Backfill> {
+    let Some(model) = model(&emb.services) else {
         anyhow::bail!("aucun modèle pour le rôle `embedding`");
     };
-    let s = &d.services;
+    let s = &*emb.services;
     let mut report = Backfill {
         model: model.clone(),
         ..Default::default()
@@ -192,7 +209,7 @@ pub async fn backfill(d: &Daemon, force: bool) -> anyhow::Result<Backfill> {
         .await?;
     for chunk in entries.chunks(BATCH) {
         let texts: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
-        let (_, vectors) = embed_texts(d, &texts).await?;
+        let (_, vectors) = embed_texts(emb, &texts).await?;
         for ((uid, _), v) in chunk.iter().zip(vectors) {
             s.memory.put_embedding(uid, &model, &v).await?;
             report.memory += 1;
@@ -214,7 +231,7 @@ pub async fn backfill(d: &Daemon, force: bool) -> anyhow::Result<Backfill> {
         .await?;
     for chunk in intents.chunks(BATCH) {
         let texts: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
-        let (_, vectors) = embed_texts(d, &texts).await?;
+        let (_, vectors) = embed_texts(emb, &texts).await?;
         for ((id, _), v) in chunk.iter().zip(vectors) {
             s.intents.put_embedding(id, &v).await?;
             report.intents += 1;
@@ -236,7 +253,7 @@ pub async fn backfill(d: &Daemon, force: bool) -> anyhow::Result<Backfill> {
         .await?;
     for chunk in tools.chunks(BATCH) {
         let texts: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
-        let (_, vectors) = embed_texts(d, &texts).await?;
+        let (_, vectors) = embed_texts(emb, &texts).await?;
         let rows: Vec<(String, Vec<f32>)> =
             chunk.iter().map(|(q, _)| q.clone()).zip(vectors).collect();
         report.tools += rows.len();
@@ -261,32 +278,32 @@ pub async fn backfill(d: &Daemon, force: bool) -> anyhow::Result<Backfill> {
 
 /// Rattrapage en tâche de fond, un seul à la fois ; sans effet si le dernier calcul a
 /// échoué il y a moins de dix minutes.
-pub fn spawn_backfill(d: Arc<Daemon>) {
-    if model(&d).is_none() {
+pub fn spawn_backfill(emb: Embedder) {
+    if model(&emb.services).is_none() {
         return;
     }
-    let failed = d.embeddings.failed_at_ms.load(Ordering::SeqCst);
-    if failed > 0 && d.services.clock.now_ms() - failed < RETRY_AFTER_MS {
+    let failed = emb.state.failed_at_ms.load(Ordering::SeqCst);
+    if failed > 0 && emb.services.clock.now_ms() - failed < RETRY_AFTER_MS {
         return;
     }
-    if d.embeddings.backfilling.swap(true, Ordering::SeqCst) {
+    if emb.state.backfilling.swap(true, Ordering::SeqCst) {
         return;
     }
     let Ok(rt) = tokio::runtime::Handle::try_current() else {
-        d.embeddings.backfilling.store(false, Ordering::SeqCst);
+        emb.state.backfilling.store(false, Ordering::SeqCst);
         return;
     };
     rt.spawn(async move {
-        if let Err(e) = backfill(&d, false).await {
+        if let Err(e) = backfill(&emb, false).await {
             tracing::warn!(error = %e, "embeddings non calculés : recherche lexicale seule");
         }
-        d.embeddings.backfilling.store(false, Ordering::SeqCst);
+        emb.state.backfilling.store(false, Ordering::SeqCst);
     });
 }
 
 /// Mode de recherche, pour `self_status` et `doctor`.
-pub async fn search_mode(d: &Daemon) -> anyhow::Result<Value> {
-    let s = &d.services;
+pub async fn search_mode(emb: &Embedder) -> anyhow::Result<Value> {
+    let s = &*emb.services;
     let counts: (i64, i64, i64, i64, i64, i64) = s
         .store
         .read(|c| {
@@ -304,9 +321,9 @@ pub async fn search_mode(d: &Daemon) -> anyhow::Result<Value> {
             ))
         })
         .await?;
-    let failed = d.embeddings.failed_at_ms.load(Ordering::SeqCst);
-    let error = d.embeddings.last_error.lock().ok().and_then(|g| g.clone());
-    let model = model(d);
+    let failed = emb.state.failed_at_ms.load(Ordering::SeqCst);
+    let error = emb.state.last_error.lock().ok().and_then(|g| g.clone());
+    let model = model(&emb.services);
     let hybrid = model.is_some() && counts.1 > 0 && failed == 0;
     Ok(json!({
         "mode": if hybrid { "hybride (mots-clés et vecteurs)" } else { "lexicale seule" },
@@ -324,6 +341,7 @@ pub async fn search_mode(d: &Daemon) -> anyhow::Result<Value> {
 mod tests {
     use super::*;
     use crate::bus::Origin;
+    use crate::runtime::Daemon;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::MockProvider;
     use penelope_memory::Level;
@@ -368,12 +386,15 @@ mod tests {
         .unwrap();
 
         // Sans modèle d'embeddings joignable : lexical seul, dit comme tel.
-        assert!(backfill(&d, false).await.is_err());
-        assert_eq!(search_mode(&d).await.unwrap()["mode"], "lexicale seule");
+        assert!(backfill(&d.embedder(), false).await.is_err());
+        assert_eq!(
+            search_mode(&d.embedder()).await.unwrap()["mode"],
+            "lexicale seule"
+        );
 
         p.set_embedder(Some(embedder()));
         d.embeddings.failed_at_ms.store(0, Ordering::SeqCst);
-        let report = backfill(&d, false).await.unwrap();
+        let report = backfill(&d.embedder(), false).await.unwrap();
         assert!(report.memory >= 1, "{report:?}");
         let vectors: i64 = s
             .store
@@ -382,7 +403,7 @@ mod tests {
             .unwrap();
         assert!(vectors >= 1);
         assert_eq!(
-            backfill(&d, false).await.unwrap().memory,
+            backfill(&d.embedder(), false).await.unwrap().memory,
             0,
             "rien à recalculer"
         );
@@ -400,7 +421,7 @@ mod tests {
             lexical.is_empty(),
             "les mots seuls ne trouvent pas le synonyme"
         );
-        let vector = query_vector(&d, "Quelle voiture ai-je ?").await;
+        let vector = query_vector(&d.embedder(), "Quelle voiture ai-je ?").await;
         assert!(vector.is_some());
         let hits = s
             .memory
@@ -412,7 +433,7 @@ mod tests {
             "{hits:?}"
         );
         assert_eq!(
-            search_mode(&d).await.unwrap()["mode"],
+            search_mode(&d.embedder()).await.unwrap()["mode"],
             "hybride (mots-clés et vecteurs)"
         );
     }

@@ -4,20 +4,24 @@
 //! `data:` et sont enregistrées sous `{data}/media/generated`, d'où elles partent vers le
 //! propriétaire.
 
-use crate::runtime::Daemon;
+use crate::ports::ProviderSource;
+use crate::runtime::Services;
 use base64::Engine;
 use penelope_llm::catalog::strip_provider;
 use penelope_llm::provider::{CancelToken, collect_stream};
 use penelope_llm::types::{ChatMessage, ChatRequest, Content};
 use serde_json::{Value, json};
-use std::sync::Arc;
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Génère une ou plusieurs images ; renvoie les fichiers écrits.
-pub async fn generate(d: &Arc<Daemon>, prompt: &str, size: Option<&str>) -> Result<Value, String> {
-    let s = &d.services;
+pub async fn generate(
+    s: &Services,
+    providers: &dyn ProviderSource,
+    prompt: &str,
+    size: Option<&str>,
+) -> Result<Value, String> {
     let cfg = s.config.config();
     let alias = cfg.role_alias("image_generate");
     let model = cfg
@@ -32,7 +36,7 @@ pub async fn generate(d: &Arc<Daemon>, prompt: &str, size: Option<&str>) -> Resu
                  openrouter:google/gemini-3.1-flash-image`, par exemple"
         ));
     }
-    let provider = d.provider_for(&model).await?;
+    let provider = providers.provider_for(&model).await?;
     let mut text = prompt.trim().to_string();
     if let Some(size) = size.filter(|s| !s.trim().is_empty()) {
         text.push_str(&format!("\n\nFormat demandé : {size}."));
@@ -125,8 +129,10 @@ pub fn decode_data_url(url: &str) -> Result<(Vec<u8>, &'static str), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::Daemon;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::{MockProvider, Scripted};
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn generated_images_are_written_and_counted() {
@@ -145,9 +151,14 @@ mod tests {
             vec!["data:image/png;base64,iVBORw0KGgo=".into()],
         ));
 
-        let v = generate(&d, "un phare breton au crépuscule", Some("1024x1024"))
-            .await
-            .unwrap();
+        let v = generate(
+            &d.services,
+            d.providers.as_ref(),
+            "un phare breton au crépuscule",
+            Some("1024x1024"),
+        )
+        .await
+        .unwrap();
         let files = v["files"].as_array().unwrap();
         assert_eq!(files.len(), 1);
         let bytes = std::fs::read(files[0].as_str().unwrap()).unwrap();
@@ -164,7 +175,9 @@ mod tests {
         assert!(roles.iter().any(|r| r.key == "image_generate"));
 
         p.reply("Désolé, pas d'image.");
-        let err = generate(&d, "rien", None).await.unwrap_err();
+        let err = generate(&d.services, d.providers.as_ref(), "rien", None)
+            .await
+            .unwrap_err();
         assert!(err.contains("aucune image"), "{err}");
     }
 

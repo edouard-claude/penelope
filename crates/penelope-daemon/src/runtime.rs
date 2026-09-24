@@ -348,7 +348,7 @@ pub struct Daemon {
     /// Runs de workflow pilotés par ce processus (§12.7).
     pub workflows: crate::workflow::State,
     /// Calcul des embeddings : dernier échec, rattrapage en cours (issue #11).
-    pub embeddings: crate::embeddings::State,
+    pub embeddings: Arc<crate::embeddings::State>,
     /// Boucles de fond surveillées : vivantes, paniques, relances (issue #84).
     pub tasks: Arc<crate::tasks::Tasks>,
     /// Providers construits à la demande (la clé peut arriver après le démarrage).
@@ -463,6 +463,10 @@ impl Hooks {
         self.orchestrator.read().ok().and_then(|g| g.clone())
     }
     pub fn telegram(&self) -> Option<Arc<dyn crate::bus::ChannelDelivery>> {
+        self.delivery()
+    }
+    /// Le canal de livraison branché, sous le nom de son port.
+    pub fn delivery(&self) -> Option<Arc<dyn crate::bus::ChannelDelivery>> {
         self.telegram.read().ok().and_then(|g| g.clone())
     }
     pub fn mcp_supervisor(&self) -> Option<Arc<crate::mcp::McpSupervisor>> {
@@ -494,10 +498,19 @@ impl Daemon {
             hooks: Hooks::default(),
             compaction: crate::compaction::State::default(),
             workflows: crate::workflow::State::default(),
-            embeddings: crate::embeddings::State::default(),
+            embeddings: Arc::default(),
             tasks: Arc::new(crate::tasks::Tasks::default()),
             providers: Arc::new(Providers::new(services.clone())),
             services,
+        }
+    }
+
+    /// Calcul des embeddings, vu des modules qui ne tiennent pas le daemon.
+    pub fn embedder(&self) -> crate::embeddings::Embedder {
+        crate::embeddings::Embedder {
+            services: self.services.clone(),
+            providers: self.providers.clone(),
+            state: self.embeddings.clone(),
         }
     }
 
