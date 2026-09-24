@@ -40,12 +40,13 @@ main de l'entrée `[daemon.daemon_users]` (`Dérogation-budget: #208`), la sorti
   batches 4, mod 4, apply 2, candidates 2, clash 1, consolidate 1, digest 1.
 - Aucun test `ca_*` dans dream : `docs/ca-matrix.md` n'a pas changé.
 
-## Blocage
+## Plafond de crate
 
-Le plafond de crate `[crates] "penelope-daemon" = 82213` n'avait aucune marge : le
-découpage ajoute 75 lignes (en-têtes des neuf modules, déclarations et réexports de
-`mod.rs`, replis rustfmt), soit 82 288. `crates_stay_under_their_ceiling` est rouge ; le
-relèvement est laissé à l'intégration (comme `d915731`), hors du périmètre de ce lot.
+Le découpage fait grossir `penelope-daemon/src` de **75 lignes** (82 213 à 82 288) : en-têtes
+des neuf modules, déclarations et réexports de `mod.rs`, deux replis rustfmt.
+`crates_stay_under_their_ceiling` reste rouge sur cette branche, c'est attendu : le plafond
+est posé à la mesure une seule fois, à l'intégration des quatre découpages. Tout le reste
+est vert.
 
 ## Notes de version
 
