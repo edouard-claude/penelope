@@ -77,10 +77,13 @@ champs d'identité et `reason` :
 | `budget_exceeded` | plafond de dépense atteint | `scope`, `spent_usd`, `limit_usd` |
 | `loop_aborted` | détecteur de boucles | `report` |
 | `calls_exhausted` | plafond d'appels au modèle du tour | `error` |
+| `interrupted` | écrit au démarrage pour un tour que l'arrêt du processus a laissé ouvert ; jamais par la boucle | |
 
 Un tour qui tombe avant d'appeler le modèle (fournisseur indisponible) est ouvert et
 fermé ensemble, `turn.started` sans modèle. Un `turn.started` sans `turn.finished` de
-même `turn_id` est un tour interrompu par un arrêt du processus.
+même `turn_id` est un tour interrompu par un arrêt du processus : au démarrage suivant,
+le daemon le ferme `interrupted` avant de servir, et le tour rejoué par la file ouvre sa
+propre borne avec l'`attempt` suivant.
 
 Les événements `conv.*` portent le **contenu** de la conversation, pour que le journal
 se suffise (épopée #208, `design/v1/source-de-verite.md` §2.2). Chaque payload a

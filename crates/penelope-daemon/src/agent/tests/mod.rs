@@ -13,6 +13,7 @@ mod effects;
 mod fallback;
 mod guards;
 mod policy;
+mod recovery;
 mod run_loop;
 mod turn_bounds;
 

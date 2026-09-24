@@ -151,6 +151,19 @@ pub fn finished_payload(
     p
 }
 
+/// Payload du `turn.finished` qui ferme, au démarrage, un tour laissé ouvert par un
+/// arrêt du processus (§2.7, T20) : `reason: interrupted` et l'identité de son
+/// `turn.started`, rien d'autre. Rien n'est inventé sur ce que le tour a fait.
+pub fn interrupted_payload(started: &Value) -> Value {
+    let mut p = json!({"reason": TurnReason::Interrupted.as_str()});
+    for key in ["turn_id", "kind", "attempt", "origin_turn"] {
+        if let Some(v) = started.get(key) {
+            p[key] = v.clone();
+        }
+    }
+    p
+}
+
 /// `turn_id` (la ligne de la file), `origin_turn` (la requête du propriétaire, qu'une
 /// reprise après approbation partage), `kind`, `attempt` : omis hors de la file.
 fn add_identity(p: &mut Value, origin_turn: Option<&str>, id: Option<&TurnIdentity>) {
@@ -218,5 +231,19 @@ mod tests {
         assert_eq!(finished["turn_id"], "q_1");
         // Hors de la file, ni identité ni origine.
         assert_eq!(started_payload(None, None, None), json!({}));
+    }
+
+    #[test]
+    fn an_interrupted_turn_keeps_the_identity_of_its_opening() {
+        let started = started_payload(None, Some("q_0"), Some(&id()));
+        assert_eq!(
+            interrupted_payload(&started),
+            json!({"reason": "interrupted", "turn_id": "q_1", "kind": "resume",
+                   "attempt": 2, "origin_turn": "q_0"})
+        );
+        assert_eq!(
+            interrupted_payload(&json!({"model": "m"})),
+            json!({"reason": "interrupted"})
+        );
     }
 }

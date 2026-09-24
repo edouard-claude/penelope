@@ -9,7 +9,7 @@
 use super::*;
 use penelope_context::journal::{
     KIND_TURN_FINISHED, KIND_TURN_STARTED, TurnCall, TurnEnd, TurnIdentity, finished_payload,
-    started_payload,
+    interrupted_payload, is_purged, started_payload,
 };
 
 /// Identité d'un tour de la file, quand il y en a une : le tour d'une session de chat.
@@ -187,4 +187,44 @@ async fn append_bound(s: &Services, session_id: &str, kind: &str, payload: Value
             false
         }
     }
+}
+
+/// Reprise après crash (§2.7, T20) : au démarrage, après `recover_on_boot`, chaque
+/// session dont la dernière borne est un `turn.started` reçoit son `turn.finished
+/// {reason: interrupted}`. Rien n'est tronqué ni inventé : le tour rejoué par la file
+/// ouvre sa propre borne, `attempt` suivant, et retrouve ses appels sans résultat dans
+/// l'historique. Rend le nombre de tours fermés.
+pub async fn close_interrupted_turns(s: &Services) -> anyhow::Result<usize> {
+    // La dernière borne de chaque session (colonnes nues de SQLite : celles de la ligne
+    // qui porte le `max`).
+    let last: Vec<(String, String, String)> = s
+        .store
+        .read(|c| {
+            let mut st = c.prepare(
+                "SELECT session_id, kind, payload, max(id) FROM events
+                 WHERE kind IN ('turn.started', 'turn.finished') AND session_id IS NOT NULL
+                 GROUP BY session_id",
+            )?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            Ok(rows.collect::<penelope_store::rusqlite::Result<Vec<_>>>()?)
+        })
+        .await?;
+    let mut closed = 0;
+    for (session_id, kind, payload) in last {
+        let started: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
+        if kind != KIND_TURN_STARTED || is_purged(&started) {
+            continue;
+        }
+        s.events
+            .append(
+                EventDraft::new(KIND_TURN_FINISHED, interrupted_payload(&started))
+                    .session(&session_id),
+            )
+            .await?;
+        closed += 1;
+    }
+    if closed > 0 {
+        tracing::warn!(count = closed, "tours interrompus par l'arrêt refermés");
+    }
+    Ok(closed)
 }
