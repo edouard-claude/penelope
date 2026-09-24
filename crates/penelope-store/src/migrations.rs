@@ -7,7 +7,7 @@
 //! - chaque migration s'applique dans une transaction unique.
 
 use crate::{Result, StoreError};
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 
 pub struct Migration {
     pub version: &'static str,
@@ -106,7 +106,7 @@ pub fn migrate(conn: &mut Connection) -> Result<()> {
         if applied.iter().any(|v| v == m.version) {
             continue;
         }
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute_batch(m.sql)
             .map_err(|source| StoreError::Migration {
                 version: m.version,

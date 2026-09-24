@@ -2925,6 +2925,25 @@ de version (`0.` sur `main`, `1.0.0-` sur `v1`) et réserve toujours `livraison`
   (0.17.56) ; `telegram.max_fragments` n'est plus « sans effet », elle borne les avis
   internes (digest, veille) depuis la 0.17.27.
 
+### 0.17.62
+
+#### Deux processus sur la même base ne se font plus refuser une écriture
+
+La CI macOS de la 0.17.61 a échoué sur un test des jobs d'outils (#204) qui redémarre le
+daemon pendant qu'un job tourne : la seconde instance ouvrait la base alors que la première
+écrivait encore, et recevait « database is locked » tout de suite, sans attendre le délai
+de dix secondes pourtant réglé (`busy_timeout`). La release 0.17.61 n'est donc pas partie.
+
+La cause est dans le stockage, pas dans le test : chaque écriture ouvrait une transaction
+« différée », qui commence en lecture et ne demande le verrou d'écriture qu'au premier
+`INSERT`. Si l'autre processus a écrit entre-temps, SQLite refuse aussitôt, sans attente
+possible. Le même cas existe en vrai, pendant une mise à jour où l'ancien daemon finit
+d'écrire alors que le nouveau démarre et migre. Les écritures et les migrations ouvrent
+désormais une transaction « immédiate », qui prend le verrou d'écriture dès le début et
+attend son tour. Le test `two_stores_on_the_same_file_write_concurrently_without_busy_errors`
+(`penelope-store`) fait écrire deux bases ouvertes sur le même fichier en parallèle : il
+échouait trois fois sur trois avant la correction, il passe cinq fois sur cinq après.
+
 ## Décisions
 
 Les écarts assumés par rapport à un « DEVRAIT » du PRD sont documentés un par un :
