@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 #[derive(Clone)]
 pub struct HistoryStore {
     store: Store,
-    clock: SharedClock,
+    pub(crate) clock: SharedClock,
     /// Journal de la double écriture (T5) ; absent, les lignes s'écrivent seules.
     pub(crate) events: Option<penelope_kernel::event::EventLog>,
 }
@@ -950,6 +950,7 @@ fn excerpt_around(text: &str, needle: &str, width: usize) -> String {
 mod dual;
 mod rewrite;
 pub mod seal;
+pub(crate) use dual::origin_in;
 pub(crate) use rewrite::mark_compacted_in;
 
 #[cfg(test)]

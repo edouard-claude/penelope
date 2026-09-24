@@ -23,6 +23,7 @@ mod surface;
 mod tests;
 
 pub use crate::journal::DeriveError;
+pub(crate) use fold::{assistant_node, tool_node, user_node};
 pub use sealed::{Sealed, SealedSummary};
 pub use surface::{MERGE_NOTE, summary_message};
 

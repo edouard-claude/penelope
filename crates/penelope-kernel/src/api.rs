@@ -232,6 +232,8 @@ pub mod method {
     pub const AUDIT_SHOW: &str = "audit.show";
     /// Les caches de la conversation contre le journal (épopée #208, T12).
     pub const HISTORY_VERIFY: &str = "history.verify";
+    /// Les caches de la conversation refondus depuis le journal (épopée #208, T13).
+    pub const HISTORY_REINDEX: &str = "history.reindex";
     pub const STORE_REBUILD: &str = "store.rebuild";
     pub const USAGE: &str = "usage";
     pub const TAIL: &str = "tail";
@@ -345,6 +347,7 @@ pub mod method {
         AUDIT_VERIFY,
         AUDIT_SHOW,
         HISTORY_VERIFY,
+        HISTORY_REINDEX,
         STORE_REBUILD,
         USAGE,
         TAIL,

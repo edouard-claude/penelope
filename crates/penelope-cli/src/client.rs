@@ -107,6 +107,7 @@ const LONG: &[&str] = &[
     "restore",
     "audit.verify",
     "history.verify",
+    "history.reindex",
     "store.rebuild",
     "eval.run",
     "upgrade",

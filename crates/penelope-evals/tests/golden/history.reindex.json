@@ -1,0 +1,18 @@
+{
+  "method": "history.reindex",
+  "params": {},
+  "response": {
+    "result": {
+      "ok": "bool",
+      "sessions": [
+        {
+          "contexts": "integer",
+          "session": "string",
+          "rows": "integer",
+          "nodes": "integer"
+        }
+      ],
+      "refused": []
+    }
+  }
+}

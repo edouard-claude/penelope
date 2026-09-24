@@ -1,8 +1,11 @@
 //! L'historique comme journal (épopée #208, `design/v1/source-de-verite.md`) : étape de
-//! démarrage (scellement, T11), `penelope history verify` et sa ligne `doctor` (T12).
-//! Le cœur est dans `penelope_context::verify` ; ce module ne fait que l'exposer.
+//! démarrage (scellement, T11), `penelope history verify` et sa ligne `doctor` (T12),
+//! `penelope history reindex` et le rattrapage à l'ouverture d'une session (T13). Le cœur
+//! est dans `penelope_context::verify` et `penelope_context::projector` ; ce module ne
+//! fait que l'exposer.
 
 use crate::runtime::Services;
+use penelope_context::projector::CatchUp;
 use penelope_context::store::seal::SealReport;
 use penelope_kernel::api::DoctorCheck;
 use serde_json::Value;
@@ -41,7 +44,33 @@ pub async fn verify(s: &Services, p: &Value) -> anyhow::Result<Value> {
     Ok(serde_json::to_value(report)?)
 }
 
-/// Ligne `doctor` : les sessions de la semaine vérifiées contre le journal.
+/// `history.reindex` (T13, §2.4) : refond les caches de `session`, ou de toutes les
+/// sessions, depuis le journal. Une session que le journal ne sait pas refaire est
+/// laissée intacte et nommée (`refused`).
+pub async fn reindex(s: &Services, p: &Value) -> anyhow::Result<Value> {
+    let session = p.get("session").and_then(Value::as_str);
+    let report = s.context.history.reindex(session).await?;
+    Ok(serde_json::to_value(report)?)
+}
+
+/// Rattrape les caches d'une session depuis son filigrane, à l'ouverture d'un tour (T13) :
+/// ce qu'une seconde transaction n'a pas écrit (arrêt, écriture en erreur) est refait
+/// depuis le journal. Une erreur ne fait pas échouer le tour : elle est journalisée, le
+/// filigrane porte `dirty` et `doctor` la signale.
+pub async fn catch_up(s: &Services, session_id: &str) {
+    match s.context.history.catch_up(session_id).await {
+        Ok(CatchUp::Rebuilt) => {
+            tracing::info!(session = session_id, "caches de la session refondus");
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!(session = session_id, error = %e, "rattrapage des caches en échec");
+        }
+    }
+}
+
+/// Ligne `doctor` : les sessions de la semaine vérifiées contre le journal, et les
+/// rattrapages en échec.
 pub async fn doctor_check(s: &Services) -> DoctorCheck {
     const ID: &str = "history.journal";
     const LABEL: &str = "Historique et journal";
@@ -51,6 +80,23 @@ pub async fn doctor_check(s: &Services) -> DoctorCheck {
         Ok(r) => r,
         Err(e) => return DoctorCheck::fail(ID, LABEL, e.to_string(), None),
     };
+    let dirty = s
+        .context
+        .history
+        .dirty_projections()
+        .await
+        .unwrap_or_default();
+    if let Some((session, error)) = dirty.first() {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!(
+                "{} session(s) au rattrapage en échec ; d'abord {session} : {error}",
+                dirty.len()
+            ),
+            Some(format!("penelope history reindex --session {session}")),
+        );
+    }
     if report.ok {
         return DoctorCheck::ok(
             ID,
