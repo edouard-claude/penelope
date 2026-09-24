@@ -6,7 +6,7 @@ notes de chaque lot (`design/v1/notes/*.md`).
 
 ## Où on en est
 
-- **Version** : `v1` en `1.0.0-alpha.10`, poussée, CI de l'alpha.9 verte ; celle de l'alpha.10 tourne au moment de l'arrêt (voir GitHub Actions).
+- **Version** : `v1` en `1.0.0-alpha.10`, poussée, CI verte (Linux, macOS, `cargo deny`).
   Aucune version `v1` n'est taguée ni publiée (décision 0015).
 - **`main`** : `0.17.62` publiée (gel de la dette et correctif SQLite `IMMEDIATE`). Rien
   n'est arrivé sur `main` depuis : pas de fusion `main` → `v1` en attente.
