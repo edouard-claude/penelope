@@ -1,5 +1,7 @@
 //! Tests du superviseur MCP qui passent par le doctor ou par l'exécuteur natif : restés
-//! au daemon quand le superviseur est sorti dans `penelope-mcp-host` (épopée #208, T25).
+//! au daemon quand le superviseur est sorti dans `penelope-mcp-host` (épopée #208, T25),
+//! puis quand le diagnostic est sorti dans `penelope-ops` (T28) ; et les contrôles de
+//! `doctor` propres au daemon.
 
 use crate::mcp::McpSupervisor;
 use crate::mcp::testing::*;
@@ -91,7 +93,7 @@ async fn the_keychain_setting_takes_effect_on_a_running_server() {
     assert!(keychain(&sts, "mailbridge"));
     assert!(!keychain(&sts, "redmine"));
 
-    let checks = crate::doctor::mcp_checks(&s, &*sup).await;
+    let checks = super::mcp_checks(&s, &*sup).await;
     let open = checks
         .iter()
         .find(|c| c.id == "mcp.mailbridge.keychain")
@@ -244,7 +246,7 @@ async fn doctor_names_what_is_broken_and_how_to_fix_it() {
     std::fs::write(sup.dir().join("casse.toml"), "== pas du toml ==").unwrap();
     sup.reload().await;
 
-    let checks = crate::doctor::mcp_checks(&s, &*sup).await;
+    let checks = super::mcp_checks(&s, &*sup).await;
     let by_id = |id: &str| checks.iter().find(|c| c.id == id).unwrap().clone();
     assert!(by_id("mcp.ok").ok);
     let panne = by_id("mcp.panne");
@@ -259,4 +261,15 @@ async fn doctor_names_what_is_broken_and_how_to_fix_it() {
         "{secret:?}"
     );
     assert!(!by_id("mcp.invalid.casse").ok);
+}
+
+/// Les contrôles de `doctor` qui lisent le daemon sont toujours servis (#204, #205).
+#[tokio::test]
+async fn doctor_keeps_the_daemon_checks() {
+    let (_d, s, _c, _fake, _sup) = setup().await;
+    let checks = super::daemon_checks(&s).await;
+    let ids: Vec<&str> = checks.iter().map(|c| c.id.as_str()).collect();
+    for expected in ["prompt.stability", "tool_jobs"] {
+        assert!(ids.contains(&expected), "contrôle manquant : {expected}");
+    }
 }

@@ -206,8 +206,6 @@ async fn doctor_covers_the_expected_checks() {
         "skills",
         "reasoning_effort",
         "dream_power",
-        "prompt.stability",
-        "tool_jobs",
     ] {
         assert!(ids.contains(&expected), "contrôle manquant : {expected}");
     }
@@ -423,5 +421,3 @@ fn rendering_marks_failures() {
     assert!(out.contains("faire ceci"));
     assert!(out.contains("2 contrôle(s), 1 en échec"));
 }
-
-mod mcp_host;

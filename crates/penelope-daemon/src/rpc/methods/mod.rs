@@ -4,6 +4,7 @@ use super::*;
 
 mod approvals;
 mod codex;
+mod doctor;
 mod mcp;
 mod memory;
 mod ops;

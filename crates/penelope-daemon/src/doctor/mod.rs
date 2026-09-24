@@ -8,14 +8,12 @@ use penelope_kernel::api::DoctorCheck;
 
 mod coherence;
 mod machine;
-mod mcp;
 mod memory;
 mod models;
 mod secrets;
 
 pub use coherence::*;
 pub use machine::*;
-pub use mcp::*;
 pub use memory::*;
 pub use models::*;
 pub use secrets::*;
@@ -155,9 +153,6 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
 
     // Rétention : dernière passe et contenu que gardent les tables d'effets (#78).
     checks.push(retention_check(s).await);
-    checks.push(prompt_stability_check(s).await);
-    checks.push(crate::history::doctor_check(s).await);
-    checks.push(tool_jobs_check(s).await);
 
     // Jour budgétaire : des lignes récentes comptées dans un autre fuseau (#79).
     checks.push(budget_days_check(s).await);

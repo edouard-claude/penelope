@@ -20,8 +20,9 @@ impl Rpc {
             })),
             method::DOCTOR => {
                 let mut checks = crate::doctor::run(s).await;
+                checks.extend(super::doctor::daemon_checks(s).await);
                 if let Some(sup) = self.daemon.hooks.mcp_supervisor() {
-                    checks.extend(crate::doctor::mcp_checks(s, &*sup).await);
+                    checks.extend(super::doctor::mcp_checks(s, &*sup).await);
                 }
                 checks.push(crate::doctor::embedding_check(&self.daemon).await);
                 checks.push(crate::doctor::vault_index_check(s).await);
