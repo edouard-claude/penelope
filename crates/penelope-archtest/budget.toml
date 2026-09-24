@@ -10,7 +10,6 @@
 ceiling = 1000        # src/**/*.rs, tests inline compris (R1)
 test_ceiling = 1500   # tests/**/*.rs, src/**/tests.rs, *_tests.rs, modules cfg(test) (R2)
 test_modules = [
-    "crates/penelope-daemon/src/ticket_to_deploy_e2e.rs",
     "crates/penelope-daemon/src/wiki_e2e.rs",
 ]
 
@@ -20,7 +19,7 @@ test_modules = [
 "crates/penelope-daemon/src/tool_jobs.rs" = 1666   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/engine.rs" = 1105
 "crates/penelope-kernel/src/config.rs" = 2790   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-cli/src/commands.rs" = 2191   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
+"crates/penelope-cli/src/commands.rs" = 2190   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/compaction.rs" = 1308
 "crates/penelope-llm/src/provider.rs" = 2048
 "crates/penelope-daemon/src/hermes.rs" = 1210
@@ -51,7 +50,7 @@ test_modules = [
 # vingtaine de correctifs de taille courante. Un autre crate se plafonne en ajoutant une
 # ligne. UPDATE_BUDGET ne touche pas à cette table.
 [crates]
-"penelope-daemon" = 78277   # v1 : après la sortie de penelope-app et penelope-mcp-host (lot H, T21, T25) ; redescend avec les crates suivantes
+"penelope-daemon" = 60004   # v1 : après la sortie de penelope-app, penelope-mcp-host et de la passerelle Telegram (lot H) ; redescend avec les crates suivantes
 
 # Liste blanche des modules du daemon (R5) : les déclarations `mod x;` de lib.rs et
 # `mod screens;` de telegram.rs. `mod tests;` est toujours permis. Les fichiers où un bloc
@@ -99,8 +98,6 @@ modules = [
     "skill_deps",
     "skill_install",
     "supervisor",
-    "telegram",
-    "ticket_to_deploy_e2e",
     "titles",
     "tools_on_demand",
     "upgrade",
@@ -121,8 +118,6 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 # fichier absent a un budget de 0. Cible V1 : seuls runtime, engine, runner, supervisor
 # et rpc le nomment encore.
 [daemon.daemon_users]
-"telegram/mod.rs" = 4   # découpage (lot G) : la mention suit son code
-"telegram/media.rs" = 2   # découpage (lot G) : la mention suit son code
 "rpc/server.rs" = 2   # découpage (lot G) : la mention suit son code
 "rpc/mod.rs" = 4   # découpage (lot G) : la mention suit son code
 "rpc/methods/workflows.rs" = 1   # découpage (lot G) : la mention suit son code
@@ -267,7 +262,7 @@ required = [
 "crates/penelope-kernel/src/session.rs" = 37
 "crates/penelope-store/src/migrations.rs" = 30   # permanent : l'historique SQL est immuable (tables tg_updates, tg_outbox)
 "crates/penelope-kernel/src/config.rs" = 25      # permanent : le schéma de configuration nomme ses canaux ([telegram])
-"crates/penelope-daemon/src/supervisor.rs" = 23
+"crates/penelope-daemon/src/supervisor.rs" = 13
 "crates/penelope-daemon/src/purge.rs" = 17
 "crates/penelope-daemon/src/runtime.rs" = 5
 "crates/penelope-app/src/services.rs" = 5   # Services descendu de runtime.rs (T21) : gabarits et actions du canal, sortent avec T36
@@ -284,7 +279,6 @@ required = [
 "crates/penelope-app/src/helpers.rs" = 12   # clés kv et origine du canal sorties de telegram.rs et scheduler.rs (épopée #208, lot D, T06)
 "crates/penelope-observe/src/redact.rs" = 2      # permanent : le caviardage doit connaître la forme des jetons
 "crates/penelope-app/src/codex_scope.rs" = 1
-"crates/penelope-daemon/src/lib.rs" = 1          # `pub mod telegram;` : disparaît avec la passerelle en crate (T29)
 "crates/penelope-mcp-host/src/auth.rs" = 1   # mcp_auth.rs sorti du daemon (T25) : la mention suit son code
 "crates/penelope-app/src/media.rs" = 1
 "crates/penelope-daemon/src/session_ops.rs" = 1

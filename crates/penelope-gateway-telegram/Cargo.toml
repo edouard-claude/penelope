@@ -51,8 +51,6 @@ penelope-skills.workspace = true
 penelope-context.workspace = true
 
 [dev-dependencies]
-# Serveurs MCP simulés (`mcp::testing`) des tests d'élicitation et de `ticket_to_deploy_e2e`.
-penelope-daemon = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 # Motif des champs JSON relus par `no_bubble_ever_shows_null`.
 regex.workspace = true

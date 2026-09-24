@@ -8,11 +8,6 @@ license.workspace = true
 [lints]
 workspace = true
 
-[features]
-# Doubles de test (`mcp::testing`) pour les tests d'une crate au-dessus du daemon : la
-# passerelle Telegram les active en dev-dependency (épopée #208, T29).
-test-util = []
-
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
