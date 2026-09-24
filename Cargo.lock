@@ -1644,7 +1644,6 @@ dependencies = [
  "penelope-observe",
  "penelope-platform",
  "penelope-store",
- "penelope-telegram",
  "penelope-tools",
  "regex",
  "serde",

@@ -27,7 +27,6 @@ penelope-hitl.workspace = true
 penelope-llm.workspace = true
 penelope-tools.workspace = true
 penelope-context.workspace = true
-penelope-telegram.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
