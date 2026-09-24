@@ -5,6 +5,7 @@
 pub mod anchors;
 pub mod compaction;
 pub mod engine;
+pub mod journal;
 pub mod lcm;
 pub mod store;
 pub mod tiers;
