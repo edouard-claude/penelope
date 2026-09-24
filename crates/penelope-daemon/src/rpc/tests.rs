@@ -237,7 +237,7 @@ async fn mcp_servers_are_administered_over_rpc() {
             json!({}),
         )]))),
     );
-    let sup = crate::mcp::McpSupervisor::new(r.daemon.services.clone(), fake.clone());
+    let sup = crate::mcp::testing::supervisor(r.daemon.services.clone(), fake.clone());
     r.daemon.hooks.set_mcp(sup.clone());
 
     let toml = "command = \"/opt/mcp/forge\"\ntimeout = \"20s\"\n";

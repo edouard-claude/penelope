@@ -3,6 +3,11 @@ use penelope_mcp::transport::LoopbackTransport;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Superviseur de test, sans nommer son type hors de `mcp/` (épopée #208, T09).
+pub fn supervisor(services: Arc<Services>, connector: Arc<dyn Connector>) -> Arc<McpSupervisor> {
+    McpSupervisor::new(services, connector)
+}
+
 pub type Handler = Arc<dyn Fn(&str, &Value) -> penelope_mcp::Result<Value> + Send + Sync>;
 
 /// Connecteur qui ouvre des boucles locales, un gestionnaire par serveur.

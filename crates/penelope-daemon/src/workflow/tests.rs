@@ -156,7 +156,7 @@ async fn a_long_mcp_task_is_awaited_until_it_completes() {
             other => base(other, params),
         }),
     );
-    let sup = crate::mcp::McpSupervisor::new(e.d.services.clone(), fake.clone());
+    let sup = crate::mcp::testing::supervisor(e.d.services.clone(), fake.clone());
     e.d.hooks.set_mcp(sup.clone());
     sup.add(
         penelope_mcp::config::ServerConfig::stdio("forge", "/opt/mcp/forge", &[]),

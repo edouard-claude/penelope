@@ -21,7 +21,7 @@ use crate::bus::ChannelDelivery;
 use crate::bus::Origin;
 use crate::executor::Messenger;
 use crate::helpers::owner_origin_of;
-use crate::mcp::McpSupervisor;
+use crate::ports::McpAdmin;
 use crate::ports::Slot;
 use crate::runtime::{Daemon, Services};
 use penelope_kernel::session::SessionKind;
@@ -41,7 +41,7 @@ pub const TICK: Duration = Duration::from_secs(10);
 pub struct Ports {
     pub messenger: Slot<dyn Messenger>,
     pub delivery: Slot<dyn ChannelDelivery>,
-    pub mcp: Slot<McpSupervisor>,
+    pub mcp: Slot<dyn McpAdmin>,
     pub orchestrator: Slot<dyn crate::executor::Orchestrator>,
 }
 
@@ -237,7 +237,7 @@ async fn poll(d: &Arc<Daemon>, ports: &Ports, sched: &Schedule) -> anyhow::Resul
     let result = sup
         // Un `mcp_poll` tourne sans le propriétaire : une élicitation n'aurait pas de
         // conversation où revenir, le canal prendra son repli (issue #143).
-        .call(
+        .call_tool(
             &qualified,
             spec.get("args").unwrap_or(&json!({})),
             Default::default(),

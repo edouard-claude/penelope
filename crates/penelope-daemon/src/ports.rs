@@ -1,9 +1,14 @@
 //! Ports du daemon : ce qu'un module reçoit au lieu de `&Daemon` (épopée #208, lot D,
 //! `design/v1/decoupage-daemon.md` §2.2).
 
+use crate::mcp::ReloadReport;
 use penelope_kernel::clock::SharedClock;
 use penelope_kernel::event::EventLog;
 use penelope_llm::Provider;
+use penelope_mcp::config::ServerConfig;
+use penelope_mcp::supervisor::ServerStatus;
+use serde_json::Value;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LockResult, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -14,6 +19,33 @@ pub trait ProviderSource: Send + Sync {
     async fn provider_for(&self, model_id: &str) -> Result<Arc<dyn Provider>, String>;
     /// Provider imposé (tests, suites sans réseau), s'il y en a un.
     fn provider_override_active(&self) -> Option<Arc<dyn Provider>>;
+}
+
+/// Administration des serveurs MCP (`mcp.*`, `doctor`, cartes Telegram, import Hermes),
+/// au lieu du superviseur concret : état, déclarations, cycle de vie, prompts.
+#[async_trait::async_trait]
+pub trait McpAdmin: crate::executor::McpGateway {
+    async fn statuses(&self) -> Vec<ServerStatus>;
+    /// Déclarations invalides lors du dernier chargement : (fichier, erreur).
+    fn invalid(&self) -> Vec<(String, String)>;
+    /// Répertoire des déclarations (`mcp.d`).
+    fn dir(&self) -> &Path;
+    async fn show(&self, name: &str) -> Result<Value, String>;
+    async fn prompts(&self, name: &str) -> Result<Vec<Value>, String>;
+    async fn get_prompt(&self, name: &str, prompt: &str, args: Value) -> Result<Value, String>;
+    async fn logs(&self, name: &str, n: usize) -> Result<Vec<String>, String>;
+    async fn restart(&self, name: &str) -> Result<ServerStatus, String>;
+    async fn test(&self, cfg: &ServerConfig) -> Value;
+    async fn config_of(&self, name: &str) -> Option<ServerConfig>;
+    async fn add(&self, cfg: ServerConfig, replace: bool) -> Result<ReloadReport, String>;
+    async fn edit(&self, name: &str, patch: &Value) -> Result<ReloadReport, String>;
+    async fn set_enabled(&self, name: &str, enabled: bool) -> Result<ReloadReport, String>;
+    async fn remove(&self, name: &str) -> Result<ReloadReport, String>;
+    async fn reload(&self) -> ReloadReport;
+    /// État d'une tâche MCP et, une fois terminée, son résultat.
+    async fn task_status(&self, server: &str, task_ref: &str) -> Result<Value, String>;
+    /// Messages pour le propriétaire, en attente d'envoi.
+    fn take_notices(&self) -> Vec<String>;
 }
 
 /// Branchement posé après le démarrage (canal de message, MCP, orchestration) : un

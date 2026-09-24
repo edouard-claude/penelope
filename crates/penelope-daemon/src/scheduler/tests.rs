@@ -571,7 +571,7 @@ async fn mcp_poll_seeds_then_notifies_new_items_only() {
             _ => Ok(json!({})),
         }),
     );
-    let sup = crate::mcp::McpSupervisor::new(s.clone(), fake);
+    let sup = crate::mcp::testing::supervisor(s.clone(), fake);
     declare(&sup, "redmine", "");
     sup.reload().await;
     d.hooks.set_mcp(sup);

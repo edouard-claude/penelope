@@ -470,3 +470,58 @@ impl McpSupervisor {
             .await;
     }
 }
+
+#[async_trait::async_trait]
+impl crate::ports::McpAdmin for McpSupervisor {
+    async fn statuses(&self) -> Vec<ServerStatus> {
+        McpSupervisor::statuses(self).await
+    }
+    fn invalid(&self) -> Vec<(String, String)> {
+        McpSupervisor::invalid(self)
+    }
+    fn dir(&self) -> &std::path::Path {
+        McpSupervisor::dir(self)
+    }
+    async fn show(&self, name: &str) -> Result<Value, String> {
+        McpSupervisor::show(self, name).await
+    }
+    async fn prompts(&self, name: &str) -> Result<Vec<Value>, String> {
+        McpSupervisor::prompts(self, name).await
+    }
+    async fn get_prompt(&self, name: &str, prompt: &str, args: Value) -> Result<Value, String> {
+        McpSupervisor::get_prompt(self, name, prompt, args).await
+    }
+    async fn logs(&self, name: &str, n: usize) -> Result<Vec<String>, String> {
+        McpSupervisor::logs(self, name, n).await
+    }
+    async fn restart(&self, name: &str) -> Result<ServerStatus, String> {
+        McpSupervisor::restart(self, name).await
+    }
+    async fn test(&self, cfg: &ServerConfig) -> Value {
+        McpSupervisor::test(self, cfg).await
+    }
+    async fn config_of(&self, name: &str) -> Option<ServerConfig> {
+        McpSupervisor::config_of(self, name).await
+    }
+    async fn add(&self, cfg: ServerConfig, replace: bool) -> Result<ReloadReport, String> {
+        McpSupervisor::add(self, cfg, replace).await
+    }
+    async fn edit(&self, name: &str, patch: &Value) -> Result<ReloadReport, String> {
+        McpSupervisor::edit(self, name, patch).await
+    }
+    async fn set_enabled(&self, name: &str, enabled: bool) -> Result<ReloadReport, String> {
+        McpSupervisor::set_enabled(self, name, enabled).await
+    }
+    async fn remove(&self, name: &str) -> Result<ReloadReport, String> {
+        McpSupervisor::remove(self, name).await
+    }
+    async fn reload(&self) -> ReloadReport {
+        McpSupervisor::reload(self).await
+    }
+    async fn task_status(&self, server: &str, task_ref: &str) -> Result<Value, String> {
+        McpSupervisor::task_status(self, server, task_ref).await
+    }
+    fn take_notices(&self) -> Vec<String> {
+        McpSupervisor::take_notices(self)
+    }
+}

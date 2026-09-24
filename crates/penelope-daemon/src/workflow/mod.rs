@@ -60,7 +60,7 @@ pub struct Ports {
     pub messenger: Slot<dyn crate::executor::Messenger>,
     pub mcp: Slot<dyn crate::executor::McpGateway>,
     pub orchestrator: Slot<dyn crate::executor::Orchestrator>,
-    pub mcp_supervisor: Slot<crate::mcp::McpSupervisor>,
+    pub mcp_supervisor: Slot<dyn crate::ports::McpAdmin>,
 }
 
 impl State {

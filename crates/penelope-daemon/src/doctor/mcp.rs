@@ -3,7 +3,7 @@
 use super::*;
 
 /// Serveurs MCP : état de chacun, secrets manquants, déclarations invalides.
-pub async fn mcp_checks(s: &Services, sup: &crate::mcp::McpSupervisor) -> Vec<DoctorCheck> {
+pub async fn mcp_checks(s: &Services, sup: &dyn crate::ports::McpAdmin) -> Vec<DoctorCheck> {
     let mut out = Vec::new();
     // L'URL enregistrée chez le fournisseur doit être exactement celle-ci.
     let mcfg = &s.config.config().mcp;

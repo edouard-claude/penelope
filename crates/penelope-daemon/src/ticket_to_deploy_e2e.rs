@@ -195,7 +195,7 @@ impl World {
             .set_orchestrator(Arc::new(crate::workflow::WorkflowOrchestrator {
                 daemon: d.clone(),
             }));
-        let sup = crate::mcp::McpSupervisor::new(d.services.clone(), self.fake.clone());
+        let sup = crate::mcp::testing::supervisor(d.services.clone(), self.fake.clone());
         declare(&sup, "redmine", "");
         declare(&sup, "github", "");
         d.hooks.set_mcp(sup.clone());

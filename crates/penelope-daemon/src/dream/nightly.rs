@@ -9,7 +9,7 @@ use super::*;
 pub async fn system_crons(
     d: &Arc<Daemon>,
     messenger: &Slot<dyn Messenger>,
-    mcp: &Slot<McpSupervisor>,
+    mcp: &Slot<dyn McpAdmin>,
 ) -> anyhow::Result<()> {
     let s = &d.services;
     let cfg = s.config.config();

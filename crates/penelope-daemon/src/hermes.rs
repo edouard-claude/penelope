@@ -15,7 +15,7 @@
 //! d'existant n'est écrasé : un second import ne duplique rien.
 
 use crate::executor::Messenger;
-use crate::mcp::McpSupervisor;
+use crate::ports::McpAdmin;
 use crate::runtime::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_mcp::config::ServerConfig;
@@ -100,7 +100,7 @@ pub fn default_root() -> Option<PathBuf> {
 /// Importe tout ce qui peut l'être.
 pub async fn import(
     s: &Services,
-    mcp: Option<Arc<McpSupervisor>>,
+    mcp: Option<Arc<dyn McpAdmin>>,
     opts: &Options,
 ) -> Result<Report, String> {
     if !opts.root.is_dir() {
@@ -935,7 +935,7 @@ pub fn convert_server(
     })
 }
 
-async fn import_mcp(s: &Services, sup: Option<Arc<McpSupervisor>>, opts: &Options, r: &mut Report) {
+async fn import_mcp(s: &Services, sup: Option<Arc<dyn McpAdmin>>, opts: &Options, r: &mut Report) {
     let Some(raw) = ["config.yaml", "config.yml"]
         .iter()
         .find_map(|f| std::fs::read_to_string(opts.root.join(f)).ok())
@@ -1171,7 +1171,7 @@ pub fn render(r: &Report) -> String {
 /// défaut). Le rapport d'un import appliqué part aussi sur Telegram.
 pub async fn rpc(
     s: &Services,
-    mcp: Option<Arc<McpSupervisor>>,
+    mcp: Option<Arc<dyn McpAdmin>>,
     messenger: Option<Arc<dyn Messenger>>,
     p: &Value,
 ) -> anyhow::Result<Value> {

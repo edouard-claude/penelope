@@ -118,7 +118,7 @@ async fn recent_reports(s: &Services, n: usize) -> anyhow::Result<Vec<DreamRepor
 /// `mcp` : le superviseur, pour l'audit du lundi.
 pub async fn digest_text(
     d: &Arc<Daemon>,
-    mcp: Option<Arc<McpSupervisor>>,
+    mcp: Option<Arc<dyn McpAdmin>>,
 ) -> anyhow::Result<String> {
     let s = &d.services;
     let mut t = format!("☀️ **Digest du {}**\n", today(s));

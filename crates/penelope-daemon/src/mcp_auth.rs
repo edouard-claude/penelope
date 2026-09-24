@@ -8,7 +8,7 @@
 //! chaque connexion.
 
 use crate::executor::Messenger;
-use crate::mcp::McpSupervisor;
+use crate::ports::McpAdmin;
 use crate::ports::Slot;
 use crate::runtime::{Daemon, Services};
 use penelope_kernel::event::EventDraft;
@@ -583,7 +583,7 @@ pub fn prompt_text(a: &AuthStart) -> String {
 /// navigateur y a accès (tunnel SSH, `public_callback`), et sert le document CIMD.
 pub async fn callback_server(
     d: Arc<Daemon>,
-    mcp: Slot<McpSupervisor>,
+    mcp: Slot<dyn McpAdmin>,
     messenger: Slot<dyn Messenger>,
 ) {
     let port = d.services.config.config().mcp.callback_port;
@@ -610,7 +610,7 @@ pub async fn callback_server(
 
 async fn handle_callback(
     d: &Arc<Daemon>,
-    mcp: &Slot<McpSupervisor>,
+    mcp: &Slot<dyn McpAdmin>,
     messenger: &Slot<dyn Messenger>,
     mut stream: tokio::net::TcpStream,
 ) -> std::io::Result<()> {
@@ -682,7 +682,7 @@ fn html_escape(s: &str) -> String {
 /// Après une autorisation : reconnexion du serveur et message au propriétaire.
 pub async fn reconnect_and_tell(
     s: &Services,
-    mcp: Option<Arc<McpSupervisor>>,
+    mcp: Option<Arc<dyn McpAdmin>>,
     messenger: Option<Arc<dyn Messenger>>,
     server: &str,
 ) {

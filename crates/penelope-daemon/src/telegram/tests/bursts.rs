@@ -21,7 +21,7 @@ async fn a_slow_button_is_acknowledged_immediately() {
         )]))),
     );
     fake.set_open_delay(Duration::from_millis(1200));
-    let sup = crate::mcp::McpSupervisor::new(g.daemon.services.clone(), fake.clone());
+    let sup = crate::mcp::testing::supervisor(g.daemon.services.clone(), fake.clone());
     declare(&sup, "lent", "");
     sup.reload().await;
     g.daemon.hooks.set_mcp(sup.clone());

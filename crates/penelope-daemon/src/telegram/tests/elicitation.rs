@@ -18,7 +18,7 @@ async fn mcp_elicitation_is_answered_from_telegram() {
             )]))),
         );
     }
-    let sup = crate::mcp::McpSupervisor::new(g.daemon.services.clone(), fake.clone());
+    let sup = crate::mcp::testing::supervisor(g.daemon.services.clone(), fake.clone());
     declare(&sup, "redmine", "");
     declare(&sup, "lent", "elicitation_timeout = \"300ms\"\n");
     sup.reload().await;
@@ -262,7 +262,7 @@ async fn mcp_links_and_mrtr_elicitations_from_telegram() {
             _ => legacy(m, p),
         }),
     );
-    let sup = crate::mcp::McpSupervisor::new(g.daemon.services.clone(), fake.clone());
+    let sup = crate::mcp::testing::supervisor(g.daemon.services.clone(), fake.clone());
     declare(&sup, "tracker", "");
     declare(&sup, "drive", "");
     sup.reload().await;

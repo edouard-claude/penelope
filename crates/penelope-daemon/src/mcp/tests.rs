@@ -346,7 +346,7 @@ async fn the_keychain_setting_takes_effect_on_a_running_server() {
     assert!(keychain(&sts, "mailbridge"));
     assert!(!keychain(&sts, "redmine"));
 
-    let checks = crate::doctor::mcp_checks(&s, &sup).await;
+    let checks = crate::doctor::mcp_checks(&s, &*sup).await;
     let open = checks
         .iter()
         .find(|c| c.id == "mcp.mailbridge.keychain")
@@ -954,7 +954,7 @@ async fn doctor_names_what_is_broken_and_how_to_fix_it() {
     std::fs::write(sup.dir().join("casse.toml"), "== pas du toml ==").unwrap();
     sup.reload().await;
 
-    let checks = crate::doctor::mcp_checks(&s, &sup).await;
+    let checks = crate::doctor::mcp_checks(&s, &*sup).await;
     let by_id = |id: &str| checks.iter().find(|c| c.id == id).unwrap().clone();
     assert!(by_id("mcp.ok").ok);
     let panne = by_id("mcp.panne");

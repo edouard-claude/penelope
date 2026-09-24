@@ -727,7 +727,7 @@ async fn the_model_reaches_mcp_tools_through_the_supervisor() {
             tool("delete_issue", json!({"destructiveHint": true})),
         ]))),
     );
-    let sup = crate::mcp::McpSupervisor::new(d.services.clone(), fake.clone());
+    let sup = crate::mcp::testing::supervisor(d.services.clone(), fake.clone());
     declare(&sup, "redmine", "[tool_policy]\ndelete_issue = \"deny\"\n");
     sup.reload().await;
     d.hooks.set_mcp(sup.clone());

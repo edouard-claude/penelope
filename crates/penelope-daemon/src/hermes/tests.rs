@@ -293,7 +293,7 @@ async fn an_instance_is_simulated_then_imported_once() {
             })
         }),
     );
-    let sup = crate::mcp::McpSupervisor::new(d.services.clone(), fake.clone());
+    let sup = crate::mcp::testing::supervisor(d.services.clone(), fake.clone());
     let s = &d.services;
     let vault = crate::helpers::vault_dir(s);
 

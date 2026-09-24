@@ -28,7 +28,7 @@ fn mcp_config_param(p: &Value) -> anyhow::Result<penelope_mcp::config::ServerCon
 
 /// Résultat d'une modification : ce qui a changé et l'état du serveur après coup.
 async fn mcp_change(
-    sup: &crate::mcp::McpSupervisor,
+    sup: &dyn crate::ports::McpAdmin,
     name: &str,
     report: &crate::mcp::ReloadReport,
 ) -> Value {
@@ -79,7 +79,7 @@ impl Rpc {
                 let cfg = mcp_config_param(p)?;
                 let name = cfg.name.clone();
                 let report = sup.add(cfg, false).await.map_err(anyhow::Error::msg)?;
-                Ok(mcp_change(&sup, &name, &report).await)
+                Ok(mcp_change(&*sup, &name, &report).await)
             }
             method::MCP_EDIT => {
                 let sup = self.mcp()?;
@@ -89,7 +89,7 @@ impl Rpc {
                     .cloned()
                     .ok_or_else(|| anyhow::anyhow!("paramètre `patch` manquant"))?;
                 let report = sup.edit(&name, &patch).await.map_err(anyhow::Error::msg)?;
-                Ok(mcp_change(&sup, &name, &report).await)
+                Ok(mcp_change(&*sup, &name, &report).await)
             }
             method::MCP_RM => {
                 let name = required_str(p, "name")?;
@@ -107,7 +107,7 @@ impl Rpc {
                     .set_enabled(&name, method == method::MCP_ENABLE)
                     .await
                     .map_err(anyhow::Error::msg)?;
-                Ok(mcp_change(&sup, &name, &report).await)
+                Ok(mcp_change(&*sup, &name, &report).await)
             }
             method::MCP_RESTART => {
                 let name = required_str(p, "name")?;
@@ -178,7 +178,7 @@ impl Rpc {
         }
     }
 
-    fn mcp(&self) -> anyhow::Result<Arc<crate::mcp::McpSupervisor>> {
+    fn mcp(&self) -> anyhow::Result<Arc<dyn crate::ports::McpAdmin>> {
         self.daemon
             .hooks
             .mcp_supervisor()

@@ -7,7 +7,7 @@
 //! passes sans nouvelle donnée ne changent rien.
 
 use crate::executor::Messenger;
-use crate::mcp::McpSupervisor;
+use crate::ports::McpAdmin;
 use crate::ports::Slot;
 use crate::runtime::{Daemon, Services};
 use penelope_kernel::event::EventDraft;

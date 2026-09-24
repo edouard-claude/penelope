@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use crate::ports::Handle;
-use crate::ports::{ProviderSource, Slot};
+use crate::ports::{McpAdmin, ProviderSource, Slot};
 
 /// Tous les services, assemblés.
 pub struct Services {
@@ -444,8 +444,8 @@ pub struct Hooks {
     pub orchestrator: Slot<dyn crate::executor::Orchestrator>,
     /// Livraison durable des tours (la passerelle du canal).
     pub delivery: Slot<dyn crate::bus::ChannelDelivery>,
-    /// Superviseur MCP concret, pour l'administration (`mcp.*`).
-    pub mcp_supervisor: Slot<crate::mcp::McpSupervisor>,
+    /// Administration des serveurs MCP (`mcp.*`), par son port.
+    pub mcp_supervisor: Slot<dyn McpAdmin>,
 }
 
 impl Hooks {
@@ -470,7 +470,7 @@ impl Hooks {
     pub fn delivery(&self) -> Option<Arc<dyn crate::bus::ChannelDelivery>> {
         self.delivery.get()
     }
-    pub fn mcp_supervisor(&self) -> Option<Arc<crate::mcp::McpSupervisor>> {
+    pub fn mcp_supervisor(&self) -> Option<Arc<dyn McpAdmin>> {
         self.mcp_supervisor.read().ok().and_then(|g| g.clone())
     }
     /// Branchements du moteur de workflows.
@@ -492,7 +492,7 @@ impl Hooks {
         }
     }
     /// Branche un superviseur MCP : passerelle des outils et administration.
-    pub fn set_mcp(&self, sup: Arc<crate::mcp::McpSupervisor>) {
+    pub fn set_mcp<T: McpAdmin + 'static>(&self, sup: Arc<T>) {
         if let Ok(mut g) = self.mcp.write() {
             *g = Some(sup.clone() as Arc<dyn crate::executor::McpGateway>);
         }

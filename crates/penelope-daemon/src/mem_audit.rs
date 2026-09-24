@@ -3,7 +3,7 @@
 //! rentable. Le barème est fixe et versionné, pour que deux audits se comparent ; chaque
 //! audit est historisé dans `audits/audit-AAAA-MM-JJ.md` avec l'écart depuis le précédent.
 
-use crate::mcp::McpSupervisor;
+use crate::ports::McpAdmin;
 use crate::runtime::Services;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -60,7 +60,7 @@ struct Facts {
     vectors: i64,
 }
 
-async fn facts(s: &Services, mcp: Option<Arc<McpSupervisor>>) -> anyhow::Result<Facts> {
+async fn facts(s: &Services, mcp: Option<Arc<dyn McpAdmin>>) -> anyhow::Result<Facts> {
     let now = s.clock.now_utc();
     let month_ago = (now - chrono::Duration::days(30)).to_rfc3339();
     let two_days_ago = (now - chrono::Duration::days(2)).to_rfc3339();
@@ -294,7 +294,7 @@ fn today(s: &Services) -> String {
 const LAST_KEY: &str = "mem.audit.last";
 
 /// Audite, historise et rend l'audit.
-pub async fn run(s: &Services, mcp: Option<Arc<McpSupervisor>>) -> anyhow::Result<Audit> {
+pub async fn run(s: &Services, mcp: Option<Arc<dyn McpAdmin>>) -> anyhow::Result<Audit> {
     let f = facts(s, mcp).await?;
     let axes = axes(&f);
     let total = axes.iter().map(|a| a.score).sum();

@@ -293,7 +293,7 @@ async fn mcp_servers_are_visible_and_restartable_from_telegram() {
             json!({"readOnlyHint": true}),
         )]))),
     );
-    let sup = crate::mcp::McpSupervisor::new(g.daemon.services.clone(), fake.clone());
+    let sup = crate::mcp::testing::supervisor(g.daemon.services.clone(), fake.clone());
     declare(&sup, "redmine", "");
     sup.reload().await;
     g.daemon.hooks.set_mcp(sup.clone());
@@ -470,7 +470,7 @@ async fn an_mcp_server_is_restarted_from_its_menu() {
             json!({"readOnlyHint": true}),
         )]))),
     );
-    let sup = crate::mcp::McpSupervisor::new(g.daemon.services.clone(), fake.clone());
+    let sup = crate::mcp::testing::supervisor(g.daemon.services.clone(), fake.clone());
     declare(&sup, "redmine", "");
     sup.reload().await;
     g.daemon.hooks.set_mcp(sup.clone());
