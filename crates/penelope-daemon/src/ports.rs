@@ -4,8 +4,8 @@
 use penelope_kernel::clock::SharedClock;
 use penelope_kernel::event::EventLog;
 use penelope_llm::Provider;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, LockResult, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// Providers des modèles, construits à la demande (`Daemon::provider_for` jusqu'ici).
 #[async_trait::async_trait]
@@ -14,6 +14,42 @@ pub trait ProviderSource: Send + Sync {
     async fn provider_for(&self, model_id: &str) -> Result<Arc<dyn Provider>, String>;
     /// Provider imposé (tests, suites sans réseau), s'il y en a un.
     fn provider_override_active(&self) -> Option<Arc<dyn Provider>>;
+}
+
+/// Branchement posé après le démarrage (canal de message, MCP, orchestration) : un
+/// module le reçoit explicitement et le lit au moment de s'en servir. Les boucles de fond
+/// partent avant Telegram et MCP (`supervisor.rs`) : une valeur lue à leur lancement
+/// serait vide pour toujours.
+pub struct Slot<T: ?Sized>(Arc<RwLock<Option<Arc<T>>>>);
+
+impl<T: ?Sized> Slot<T> {
+    /// Valeur branchée à cet instant.
+    pub fn get(&self) -> Option<Arc<T>> {
+        self.0.read().ok().and_then(|g| g.clone())
+    }
+    pub fn set(&self, value: Option<Arc<T>>) {
+        if let Ok(mut g) = self.0.write() {
+            *g = value;
+        }
+    }
+    pub fn read(&self) -> LockResult<RwLockReadGuard<'_, Option<Arc<T>>>> {
+        self.0.read()
+    }
+    pub fn write(&self) -> LockResult<RwLockWriteGuard<'_, Option<Arc<T>>>> {
+        self.0.write()
+    }
+}
+
+impl<T: ?Sized> Clone for Slot<T> {
+    fn clone(&self) -> Self {
+        Slot(self.0.clone())
+    }
+}
+
+impl<T: ?Sized> Default for Slot<T> {
+    fn default() -> Self {
+        Slot(Arc::new(RwLock::new(None)))
+    }
 }
 
 /// Ce qu'une boucle de fond surveillée reçoit (`tasks::spawn_supervised`) : le registre

@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use crate::ports::Handle;
-use crate::ports::ProviderSource;
+use crate::ports::{ProviderSource, Slot};
 
 /// Tous les services, assemblés.
 pub struct Services {
@@ -439,12 +439,12 @@ impl crate::ports::ProviderSource for Providers {
 /// Points de branchement des sous-systèmes qui démarrent après le daemon.
 #[derive(Default)]
 pub struct Hooks {
-    pub messenger: std::sync::RwLock<Option<Arc<dyn crate::executor::Messenger>>>,
-    pub mcp: std::sync::RwLock<Option<Arc<dyn crate::executor::McpGateway>>>,
-    pub orchestrator: std::sync::RwLock<Option<Arc<dyn crate::executor::Orchestrator>>>,
-    pub telegram: std::sync::RwLock<Option<Arc<dyn crate::bus::ChannelDelivery>>>,
+    pub messenger: Slot<dyn crate::executor::Messenger>,
+    pub mcp: Slot<dyn crate::executor::McpGateway>,
+    pub orchestrator: Slot<dyn crate::executor::Orchestrator>,
+    pub telegram: Slot<dyn crate::bus::ChannelDelivery>,
     /// Superviseur MCP concret, pour l'administration (`mcp.*`).
-    pub mcp_supervisor: std::sync::RwLock<Option<Arc<crate::mcp::McpSupervisor>>>,
+    pub mcp_supervisor: Slot<crate::mcp::McpSupervisor>,
 }
 
 impl Hooks {
