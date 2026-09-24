@@ -9,6 +9,7 @@ pub mod engine;
 pub mod journal;
 pub mod lcm;
 pub mod numbering;
+mod render;
 pub mod store;
 pub mod tiers;
 pub mod transcript;
