@@ -89,7 +89,7 @@ Branche `v1-i-lecteurs`, dérivée de `v1` à `c5ecc92` (1.0.0-alpha.7), poussé
 ## Plafond du daemon
 
 `crates_stay_under_their_ceiling` rouge (54 155 pour 53 836) : rouge toléré, dont les
-tests d'audit, d'export et de purge. `purge.rs` descend de 1 242 à 574 lignes et quitte
+tests d'audit, d'export et de purge. `purge.rs` descend de 1 242 à 632 lignes et quitte
 la liste de dette. Aucun fichier nouveau au-dessus de 700 lignes (`purge/tests.rs`).
 
 ## Vérifications
