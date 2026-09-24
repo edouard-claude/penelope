@@ -42,6 +42,8 @@ pub async fn fork(
         )
         .await?;
     let fork_id = fork.id.as_str().to_string();
+    // Le fork par référence entre au journal avant la copie V0 (T10).
+    s.context.history.journal_fork(&fork_id, session_id).await?;
     let copied = s
         .context
         .history
@@ -227,7 +229,12 @@ pub async fn rewind(d: &Arc<Daemon>, session_id: &str, turns: usize) -> anyhow::
         .copy_messages(session_id, &archive_id, cutoff, None)
         .await?;
     s.sessions.set_state(&archive_id, "closed").await?;
-    let removed = s.context.history.truncate_from(session_id, cutoff).await?;
+    // `conv.rewind` d'abord, puis la coupe V0 dans la même écriture (T10).
+    let removed = s
+        .context
+        .history
+        .rewind_from(session_id, cutoff, turns as u64, Some(&archive_id))
+        .await?;
     // L'ancre d'usage décrivait un transcript qui n'existe plus.
     s.sessions
         .set_usage_anchor(session_id, &Value::Null)
@@ -423,6 +430,69 @@ mod tests {
         say(&d, &sid, "reprise", "ok").await;
         assert_eq!(h.load(&sid, 0).await.unwrap()[2].seq, 3);
         assert!(rewind(&d, &sid, 0).await.is_err());
+    }
+
+    /// T10 : le fork et le retour arrière entrent au journal, avec des bornes que le
+    /// pliage accepte (elles désignent des nœuds présents).
+    #[tokio::test]
+    async fn fork_and_rewind_are_journaled_with_bounds_that_derive_accepts() {
+        use penelope_context::derive::{Sealed, derive};
+        let (_dir, d) = daemon().await;
+        let s = &d.services;
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        say(&d, &sid, "un", "1").await;
+        say(&d, &sid, "deux", "2").await;
+        let fork_id = fork(&d, &sid, None).await.unwrap()["session"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        say(&d, &fork_id, "trois", "3").await;
+        say(&d, &fork_id, "quatre", "4").await;
+        rewind(&d, &fork_id, 1).await.unwrap();
+        say(&d, &fork_id, "cinq", "5").await;
+
+        let parent = s.events.session_events(&sid, 0).await.unwrap();
+        let child = s.events.session_events(&fork_id, 0).await.unwrap();
+        let conv = |kind: &str| {
+            child
+                .iter()
+                .filter(|e| e.kind == kind)
+                .map(|e| e.payload.clone())
+                .collect::<Vec<_>>()
+        };
+        let forks = conv("conv.fork");
+        assert_eq!(forks.len(), 1);
+        let first_conv = child.iter().find(|e| e.kind.starts_with("conv.")).unwrap();
+        assert_eq!(first_conv.kind, "conv.fork", "premier conv.* de la fille");
+        let up_to = forks[0]["up_to"].as_i64().unwrap();
+        assert_eq!(forks[0]["offset"].as_i64(), Some(up_to));
+        let rewinds = conv("conv.rewind");
+        assert_eq!(rewinds.len(), 1);
+        assert_eq!(rewinds[0]["turns"], 1);
+
+        let prefix = Sealed::fork(&sid, &Sealed::none(), &parent, up_to).unwrap();
+        let surface = derive(&prefix, &child).expect("bornes valides");
+        let texts: Vec<String> = surface
+            .nodes
+            .iter()
+            .map(|slot| match slot {
+                penelope_context::derive::Slot::Message(a) => surface.messages[a].message.text(),
+                penelope_context::derive::Slot::Summary(_) => String::new(),
+            })
+            .collect();
+        let rows: Vec<String> = s
+            .context
+            .history
+            .load(&fork_id, 0)
+            .await
+            .unwrap()
+            .iter()
+            .map(|e| e.message.text())
+            .collect();
+        assert_eq!(
+            texts, rows,
+            "la surface dérivée redonne le canonique de la fille"
+        );
     }
 
     #[tokio::test]

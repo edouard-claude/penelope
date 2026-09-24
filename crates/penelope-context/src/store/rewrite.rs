@@ -2,13 +2,16 @@
 //! marquage d'une plage résumée, corps externalisé (niveau 1).
 
 use super::*;
-use crate::journal::{ConvEvent, SurfaceOp, ToolResultPayload};
+use crate::journal::{ConvEvent, ForkPayload, RewindPayload, SurfaceOp, ToolResultPayload};
 use dual::address_in;
+use penelope_kernel::event::EventDraft;
 use penelope_store::rusqlite::Transaction;
 
 impl HistoryStore {
     /// Copie l'historique d'une session vers une autre, numéros et état de compaction
-    /// compris, index plein texte avec (fork, archive d'un rewind).
+    /// compris, index plein texte avec (fork, archive d'un rewind). Une copie cite
+    /// l'événement de sa ligne d'origine (`event_id`) : c'est l'adresse qu'elle a dans la
+    /// surface héritée (T10).
     pub async fn copy_messages(
         &self,
         from: &str,
@@ -21,9 +24,9 @@ impl HistoryStore {
             .write(move |tx| {
                 let n = tx.execute(
                     "INSERT INTO messages(session_id, seq, role, content, tool_call_id, tool_name,
-                        tokens_est, ts, episode, eager, artifact_id, compacted)
+                        tokens_est, ts, episode, eager, artifact_id, compacted, event_id)
                      SELECT ?2, seq, role, content, tool_call_id, tool_name, tokens_est, ts,
-                        episode, eager, artifact_id, compacted
+                        episode, eager, artifact_id, compacted, event_id
                      FROM messages
                      WHERE session_id = ?1 AND seq >= ?3 AND (?4 IS NULL OR seq <= ?4)
                      ORDER BY seq",
@@ -43,6 +46,85 @@ impl HistoryStore {
             .await
     }
 
+    /// Journalise le fork par référence (T10) : `conv.fork` en tête du journal de la
+    /// fille, qui hérite de toute la surface de sa mère (`up_to` = sa dernière adresse,
+    /// qui sert aussi d'`offset`). À écrire avant tout autre `conv.*` de la fille ; la
+    /// copie V0 reste. Sans journal, rien.
+    pub async fn journal_fork(&self, child: &str, parent: &str) -> penelope_store::Result<()> {
+        let Some(log) = &self.events else {
+            return Ok(());
+        };
+        let p = parent.to_string();
+        let up_to = self
+            .store
+            .read(move |c| {
+                let last: i64 = c.query_row(
+                    "SELECT COALESCE(MAX(seq), 0) FROM events WHERE session_id = ?1",
+                    [&p],
+                    |r| r.get(0),
+                )?;
+                Ok(dual::origin_in(c, &p)?.offset + last)
+            })
+            .await?;
+        let event = ConvEvent::Fork(ForkPayload {
+            surface: SurfaceOp::Inherit {
+                parent: parent.to_string(),
+                up_to,
+                offset: up_to,
+            },
+            parent: parent.to_string(),
+            up_to,
+            offset: up_to,
+        });
+        log.append(EventDraft::new(event.kind(), event.payload()).session(child))
+            .await
+            .map_err(|e| penelope_store::StoreError::other(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Retour arrière journalisé (T10) : `conv.rewind` coupe la surface après le nœud qui
+    /// précède `from_seq` (0 s'il n'y en a pas), puis la seconde transaction retire les
+    /// lignes comme [`truncate_from`](Self::truncate_from). Rend le nombre de lignes
+    /// retirées.
+    pub async fn rewind_from(
+        &self,
+        session_id: &str,
+        from_seq: i64,
+        turns: u64,
+        archive: Option<&str>,
+    ) -> penelope_store::Result<usize> {
+        let event = match self.journals() {
+            true => {
+                let sid = session_id.to_string();
+                let after = self
+                    .store
+                    .read(move |c| {
+                        let before: Option<i64> = c.query_row(
+                            "SELECT MAX(seq) FROM messages WHERE session_id = ?1 AND seq < ?2",
+                            params![sid, from_seq],
+                            |r| r.get(0),
+                        )?;
+                        match before {
+                            Some(seq) => address_in(c, &sid, seq),
+                            None => Ok(0),
+                        }
+                    })
+                    .await?;
+                Some(ConvEvent::Rewind(RewindPayload {
+                    surface: SurfaceOp::Cut { after },
+                    turns,
+                    archive_session: archive.map(String::from),
+                }))
+            }
+            false => None,
+        };
+        let sid = session_id.to_string();
+        self.journaled(session_id, event, move |tx, _| {
+            truncate_in(tx, &sid, from_seq)
+        })
+        .await
+    }
+
     /// Retire les messages d'une session à partir d'une séquence (incluse).
     pub async fn truncate_from(
         &self,
@@ -51,17 +133,7 @@ impl HistoryStore {
     ) -> penelope_store::Result<usize> {
         let sid = session_id.to_string();
         self.store
-            .write(move |tx| {
-                tx.execute(
-                    "DELETE FROM messages_fts WHERE msg_id IN
-                        (SELECT id FROM messages WHERE session_id = ?1 AND seq >= ?2)",
-                    params![sid, from_seq],
-                )?;
-                Ok(tx.execute(
-                    "DELETE FROM messages WHERE session_id = ?1 AND seq >= ?2",
-                    params![sid, from_seq],
-                )?)
-            })
+            .write(move |tx| truncate_in(tx, &sid, from_seq))
             .await
     }
 
@@ -238,4 +310,21 @@ fn externalise_in(
         ],
     )?;
     Ok(())
+}
+
+/// [`HistoryStore::truncate_from`] dans la transaction de l'appelant.
+fn truncate_in(
+    tx: &Transaction<'_>,
+    session_id: &str,
+    from_seq: i64,
+) -> penelope_store::Result<usize> {
+    tx.execute(
+        "DELETE FROM messages_fts WHERE msg_id IN
+            (SELECT id FROM messages WHERE session_id = ?1 AND seq >= ?2)",
+        params![session_id, from_seq],
+    )?;
+    Ok(tx.execute(
+        "DELETE FROM messages WHERE session_id = ?1 AND seq >= ?2",
+        params![session_id, from_seq],
+    )?)
 }

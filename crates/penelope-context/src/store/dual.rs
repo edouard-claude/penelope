@@ -16,7 +16,7 @@ use crate::journal::{
 };
 use crate::tiers::{Tiers, TileMap};
 use penelope_kernel::event::{EventDraft, EventLog};
-use penelope_store::rusqlite::Transaction;
+use penelope_store::rusqlite::{Connection, Transaction};
 use std::sync::{Arc, Mutex};
 
 /// Une ligne de `messages` prête à écrire.
@@ -210,8 +210,7 @@ impl HistoryStore {
     /// Fige le contexte volatil (T4) d'un message utilisateur : il l'accompagnera dans
     /// toutes les requêtes suivantes, pour que le préfixe ne change plus (issue #17).
     /// Sans effet s'il est déjà figé. Journalisé en `conv.context` (T6), qui vise
-    /// l'adresse du `conv.user` : son `seq` d'événement, ou le `seq` V0 d'une ligne
-    /// sans événement (§2.3).
+    /// l'adresse du `conv.user` ([`HistoryStore::address`], §2.3).
     pub async fn freeze_context(
         &self,
         session_id: &str,
@@ -241,15 +240,7 @@ impl HistoryStore {
                     )
                     .optional()?
                     .is_some();
-                let target = c
-                    .query_row(
-                        "SELECT e.seq FROM messages m JOIN events e ON e.id = m.event_id
-                         WHERE m.session_id=?1 AND m.seq=?2",
-                        params![sid, seq],
-                        |r| r.get::<_, i64>(0),
-                    )
-                    .optional()?;
-                Ok((frozen, target.unwrap_or(seq)))
+                Ok((frozen, address_in(c, &sid, seq)?))
             })
             .await?;
         if frozen {
@@ -278,7 +269,8 @@ impl HistoryStore {
     ///
     /// La raison : `first` pour le premier de la session, `compaction` si un résumé a été
     /// publié depuis le précédent (`context.compacted`), `cold` sinon (le préfixe en
-    /// attente sort à un cache froid, `stable_prefix`).
+    /// attente sort à un cache froid, `stable_prefix`). Le premier préfixe d'une session
+    /// fille remplace celui qu'elle hérite de sa mère (T10), à son adresse.
     pub async fn journal_system(
         &self,
         session_id: &str,
@@ -293,34 +285,42 @@ impl HistoryStore {
         let last = self
             .store
             .read(move |c| {
-                let last = c
-                    .query_row(
-                        "SELECT seq, json_extract(payload, '$.hash') FROM events
-                         WHERE session_id=?1 AND kind=?2 ORDER BY seq DESC LIMIT 1",
-                        params![sid, KIND_SYSTEM],
-                        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?)),
-                    )
-                    .optional()?;
-                let Some((seq, hash)) = last else {
+                let Some(at) = system_in(c, &sid)? else {
                     return Ok(None);
                 };
-                let compacted = c
-                    .query_row(
-                        "SELECT 1 FROM events WHERE session_id=?1 AND seq>?2
-                           AND kind='context.compacted' LIMIT 1",
-                        params![sid, seq],
-                        |_| Ok(()),
-                    )
-                    .optional()?
-                    .is_some();
-                Ok(Some((seq, hash, compacted)))
+                let compacted = match at.own_seq {
+                    Some(seq) => c
+                        .query_row(
+                            "SELECT 1 FROM events WHERE session_id=?1 AND seq>?2
+                               AND kind='context.compacted' LIMIT 1",
+                            params![sid, seq],
+                            |_| Ok(()),
+                        )
+                        .optional()?
+                        .is_some(),
+                    None => false,
+                };
+                Ok(Some((at, compacted)))
             })
             .await?;
         let (surface, reason) = match last {
             None => (SurfaceOp::Append, SystemReason::First),
-            Some((_, Some(h), _)) if h == hash => return Ok(None),
-            Some((seq, _, compacted)) => (
-                SurfaceOp::Replace { from: seq, to: seq },
+            Some((at, _)) if at.own_seq.is_some() && at.hash.as_deref() == Some(&hash) => {
+                return Ok(None);
+            }
+            // Le premier préfixe d'une session fille remplace celui qu'elle hérite.
+            Some((at, _)) if at.own_seq.is_none() => (
+                SurfaceOp::Replace {
+                    from: at.address,
+                    to: at.address,
+                },
+                SystemReason::First,
+            ),
+            Some((at, compacted)) => (
+                SurfaceOp::Replace {
+                    from: at.address,
+                    to: at.address,
+                },
                 if compacted {
                     SystemReason::Compaction
                 } else {
@@ -419,22 +419,101 @@ impl HistoryStore {
 
 /// [`HistoryStore::address`] dans une connexion ou une transaction de l'appelant.
 pub(crate) fn address_in(
-    c: &penelope_store::rusqlite::Connection,
+    c: &Connection,
     session_id: &str,
     seq: i64,
 ) -> penelope_store::Result<i64> {
     let found = c
         .query_row(
-            "SELECT e.seq + COALESCE((SELECT json_extract(f.payload, '$.offset') FROM events f
-                 WHERE f.session_id = e.session_id AND f.kind IN (?3, ?4)
-                 ORDER BY f.seq LIMIT 1), 0)
-             FROM messages m JOIN events e ON e.id = m.event_id
+            "SELECT e.session_id, e.seq FROM messages m JOIN events e ON e.id = m.event_id
              WHERE m.session_id = ?1 AND m.seq = ?2",
-            params![session_id, seq, KIND_FORK, KIND_IMPORT],
-            |r| r.get::<_, i64>(0),
+            params![session_id, seq],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
         )
         .optional()?;
-    Ok(found.unwrap_or(seq))
+    match found {
+        Some((owner, event_seq)) => Ok(origin_in(c, &owner)?.offset + event_seq),
+        None => Ok(seq),
+    }
+}
+
+/// Ce qu'une session hérite, lu sur le `conv.fork` ou le `conv.import` en tête de son
+/// journal (§2.3).
+pub(crate) struct Origin {
+    /// Plus grande adresse héritée ; 0 sans héritage.
+    pub offset: i64,
+    /// La mère et l'adresse jusqu'où la fille en hérite, pour un fork.
+    pub parent: Option<(String, i64)>,
+}
+
+pub(crate) fn origin_in(c: &Connection, session_id: &str) -> penelope_store::Result<Origin> {
+    let head = c
+        .query_row(
+            "SELECT json_extract(payload, '$.offset'), json_extract(payload, '$.parent'),
+                    json_extract(payload, '$.up_to')
+             FROM events WHERE session_id = ?1 AND kind IN (?2, ?3) ORDER BY seq LIMIT 1",
+            params![session_id, KIND_FORK, KIND_IMPORT],
+            |r| {
+                Ok((
+                    r.get::<_, Option<i64>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((offset, parent, up_to)) = head else {
+        return Ok(Origin {
+            offset: 0,
+            parent: None,
+        });
+    };
+    Ok(Origin {
+        offset: offset.unwrap_or(0),
+        parent: parent.zip(up_to),
+    })
+}
+
+/// Le prompt système en vigueur pour une session : son dernier `conv.system`, ou celui
+/// qu'elle hérite de sa mère (jusqu'à l'adresse du fork, récursivement).
+pub(crate) struct SystemAt {
+    pub address: i64,
+    /// `seq` de l'événement quand il est dans le journal de la session elle-même.
+    pub own_seq: Option<i64>,
+    /// `None` pour un événement purgé.
+    pub hash: Option<String>,
+}
+
+pub(crate) fn system_in(
+    c: &Connection,
+    session_id: &str,
+) -> penelope_store::Result<Option<SystemAt>> {
+    let (mut session, mut limit, mut own) = (session_id.to_string(), i64::MAX, true);
+    // Une chaîne de forks est finie ; la borne ne sert qu'à ne jamais boucler.
+    for _ in 0..256 {
+        let origin = origin_in(c, &session)?;
+        let last = c
+            .query_row(
+                "SELECT seq, json_extract(payload, '$.hash') FROM events
+                 WHERE session_id = ?1 AND kind = ?2 AND seq <= ?3 - ?4
+                 ORDER BY seq DESC LIMIT 1",
+                params![session, KIND_SYSTEM, limit, origin.offset],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?)),
+            )
+            .optional()?;
+        if let Some((seq, hash)) = last {
+            return Ok(Some(SystemAt {
+                address: origin.offset + seq,
+                own_seq: own.then_some(seq),
+                hash,
+            }));
+        }
+        let Some((parent, up_to)) = origin.parent else {
+            return Ok(None);
+        };
+        (session, limit, own) = (parent, up_to, false);
+    }
+    Ok(None)
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use super::*;
 use crate::derive::{Sealed, derive};
-use crate::journal::UserSource;
+use crate::journal::{KIND_REWIND, UserSource};
 use penelope_kernel::clock::TestClock;
 
 async fn journaled() -> (HistoryStore, EventLog) {
@@ -255,4 +255,87 @@ async fn the_frozen_context_is_journaled_once_on_its_message() {
         h.contexts("s1").await.unwrap().get(&seq).unwrap(),
         "<contexte>\nlundi\n</contexte>\n\n"
     );
+}
+
+/// T10 : une fille hérite par référence du préfixe de sa mère ; ses propres événements
+/// (préfixe système, contexte figé, coupe) visent des adresses que le pliage retrouve.
+#[tokio::test]
+async fn a_fork_addresses_its_own_events_after_what_it_inherits() {
+    let (h, log) = journaled().await;
+    h.store()
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO sessions(id, kind, created_at, updated_at)
+                 VALUES('s2','chat','t','t')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    h.journal_system("s1", &tiers("a")).await.unwrap();
+    h.append("s1", &ChatMessage::user("un"), 1, 0, false, None)
+        .await
+        .unwrap();
+    h.append("s1", &ChatMessage::assistant("1"), 1, 0, false, None)
+        .await
+        .unwrap();
+
+    h.journal_fork("s2", "s1").await.unwrap();
+    h.copy_messages("s1", "s2", 0, None).await.unwrap();
+    let first = h.journal_system("s2", &tiers("a")).await.unwrap();
+    assert_eq!(first, Some(SystemReason::First), "le premier de la fille");
+    let seq = h
+        .append("s2", &ChatMessage::user("deux"), 1, 0, false, None)
+        .await
+        .unwrap();
+    h.freeze_context("s2", seq, "<contexte/>").await.unwrap();
+    h.append("s2", &ChatMessage::assistant("2"), 1, 0, false, None)
+        .await
+        .unwrap();
+
+    let mother = log.session_events("s1", 0).await.unwrap();
+    let child = log.session_events("s2", 0).await.unwrap();
+    let fork = child.iter().find(|e| e.kind == KIND_FORK).unwrap();
+    let up_to = fork.payload["up_to"].as_i64().unwrap();
+    assert_eq!(up_to, mother.last().unwrap().seq);
+    let system = child.iter().find(|e| e.kind == KIND_SYSTEM).unwrap();
+    let inherited = mother.iter().find(|e| e.kind == KIND_SYSTEM).unwrap();
+    assert_eq!(
+        system.payload["surface"],
+        json!({"op": "replace", "from": inherited.seq, "to": inherited.seq})
+    );
+    let address = h.address("s2", seq).await.unwrap();
+    assert_eq!(
+        address,
+        up_to + child.iter().find(|e| e.kind == KIND_USER).unwrap().seq
+    );
+    // Une ligne copiée garde l'adresse qu'elle a chez la mère.
+    assert_eq!(
+        h.address("s2", 1).await.unwrap(),
+        h.address("s1", 1).await.unwrap()
+    );
+
+    let prefix = Sealed::fork("s1", &Sealed::none(), &mother, up_to).unwrap();
+    let surface = derive(&prefix, &child).expect("bornes valides");
+    assert_eq!(surface.nodes.len(), 4);
+    assert_eq!(
+        surface.contexts.get(&address).map(String::as_str),
+        Some("<contexte/>")
+    );
+    assert!(surface.messages.contains_key(&address));
+
+    // La coupe vise le nœud qui précède le message retiré.
+    let removed = h.rewind_from("s2", seq, 1, None).await.unwrap();
+    assert_eq!(removed, 2);
+    let child = log.session_events("s2", 0).await.unwrap();
+    let cut = child.iter().find(|e| e.kind == KIND_REWIND).unwrap();
+    let before = h.address("s2", seq - 1).await.unwrap();
+    assert_eq!(
+        cut.payload["surface"],
+        json!({"op": "cut", "after": before})
+    );
+    let surface = derive(&prefix, &child).expect("bornes valides");
+    assert_eq!(surface.nodes.len(), 2);
+    assert_eq!(h.load("s2", 0).await.unwrap().len(), 2);
 }
