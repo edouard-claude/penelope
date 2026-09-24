@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ingest;
 pub mod onboarding;
 
 use penelope_app::ports::ProviderSource;
@@ -45,5 +46,5 @@ impl Context {
 
 // Modules du socle et du vault, sous les chemins que les fichiers déplacés du daemon
 // nomment encore (`crate::helpers`…).
-pub(crate) use penelope_app::{helpers, machine};
-pub(crate) use penelope_vault::vault_ops;
+pub(crate) use penelope_app::{helpers, machine, media, ports};
+pub(crate) use penelope_vault::{concepts, vault_ops};

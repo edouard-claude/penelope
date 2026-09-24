@@ -4,9 +4,9 @@
 //! propositions de mémoire. Les propositions partent en approbation `memory_proposal` :
 //! rien n'entre en mémoire sans le propriétaire, surtout pas depuis un document non fiable.
 
+use crate::Context;
 use crate::ports::Slot;
-use crate::runtime::Services;
-use penelope_dream::Context;
+use penelope_app::services::Services;
 // Descendue dans `concepts` avec le vault (T22) : `vault_ops::reindex` l'appelle.
 pub use crate::concepts::index_source;
 use penelope_hitl::{ApprovalKind, ApprovalState};
@@ -743,7 +743,7 @@ async fn apply_split(
 /// Le propriétaire reçoit le bilan sur son canal.
 pub async fn scan_inbox(
     d: &Context,
-    messenger: &Slot<dyn crate::executor::Messenger>,
+    messenger: &Slot<dyn penelope_app::ports::Messenger>,
 ) -> anyhow::Result<usize> {
     let s = &d.services;
     let inbox = crate::helpers::vault_dir(s).join(doc::INBOX_DIR);
@@ -832,6 +832,3 @@ pub async fn scan_inbox(
     }
     Ok(done)
 }
-
-#[cfg(test)]
-mod tests;

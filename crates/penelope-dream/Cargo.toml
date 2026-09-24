@@ -17,6 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+tokio.workspace = true
 chrono.workspace = true
 # Jour du propriétaire dans son fuseau (nom de la séance d'accueil).
 chrono-tz.workspace = true
@@ -28,5 +29,11 @@ penelope-vault.workspace = true
 penelope-llm.workspace = true
 # Configuration du propriétaire (fuseau).
 penelope-kernel.workspace = true
+# Approbations des propositions de mémoire et des contradictions (ingestion).
+penelope-hitl.workspace = true
+# Caviardage du texte extrait.
+penelope-observe.workspace = true
+# OCR des PDF scannés.
+penelope-platform.workspace = true
 # Niveaux et provenance des entrées de mémoire.
 penelope-memory.workspace = true

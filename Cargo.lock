@@ -1429,12 +1429,16 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "penelope-app",
+ "penelope-hitl",
  "penelope-kernel",
  "penelope-llm",
  "penelope-memory",
+ "penelope-observe",
+ "penelope-platform",
  "penelope-vault",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 

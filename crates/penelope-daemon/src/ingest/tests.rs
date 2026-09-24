@@ -4,8 +4,16 @@ use crate::testing::RecordingMessenger;
 use std::sync::Arc;
 
 use crate::executor::Messenger;
+use crate::ports::Slot;
+use penelope_hitl::ApprovalKind;
 use penelope_kernel::clock::TestClock;
+use penelope_kernel::risk::RiskClass;
 use penelope_llm::mock::MockProvider;
+use penelope_llm::provider::CancelToken;
+use penelope_memory::{Level, Origin};
+use serde_json::json;
+use std::path::Path;
+use std::time::Duration;
 
 async fn daemon() -> (
     tempfile::TempDir,
