@@ -44,7 +44,14 @@ impl ContextEngine {
             let body = externalised_body(&artifact.id, &head, &tail, original_tokens, kind);
             let new_tokens = self.estimator.text_tokens(model_id, &body);
             self.history
-                .externalise(session_id, *seq, &body, &artifact.id, new_tokens)
+                .externalise_as(
+                    session_id,
+                    *seq,
+                    &body,
+                    &artifact,
+                    new_tokens,
+                    original_tokens,
+                )
                 .await?;
             steps.push(AppliedStep {
                 level: 1,

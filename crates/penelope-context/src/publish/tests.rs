@@ -254,3 +254,66 @@ async fn without_a_journal_nothing_is_journaled_and_the_node_has_no_event() {
     assert!(summaries(&events(&log).await).is_empty());
     assert_eq!(node_event(&bare, &node).await, None);
 }
+
+#[tokio::test]
+async fn an_externalised_result_is_journaled_as_the_replace_of_its_node() {
+    let (e, log) = journaled().await;
+    let h = &e.history;
+    log.append(EventDraft::new("turn.started", json!({})).session("s1"))
+        .await
+        .unwrap();
+    h.append("s1", &ChatMessage::user("lis tout"), 5, 0, false, None)
+        .await
+        .unwrap();
+    let call = |id: &str| penelope_llm::types::ToolCall {
+        id: id.into(),
+        name: "fs_read".into(),
+        arguments: json!({}),
+    };
+    let calls = ChatMessage::assistant("").with_tool_calls(vec![call("c1"), call("c2")]);
+    h.append("s1", &calls, 10, 0, false, None).await.unwrap();
+    let big = "y".repeat(500_000);
+    let one = ChatMessage::tool_result("c1", "fs_read", &big);
+    let seq = h.append("s1", &one, 140_000, 0, false, None).await.unwrap();
+    let two = ChatMessage::tool_result("c2", "fs_read", "court");
+    let small = h.append("s1", &two, 2, 0, false, None).await.unwrap();
+
+    let steps = e
+        .admit_tool_group("s1", &[(seq, big), (small, "court".into())], &params(), "m")
+        .await
+        .unwrap();
+    assert_eq!(steps.len(), 1, "seul le gros résultat part en artefact");
+
+    let all = events(&log).await;
+    let replaced: Vec<&Event> = all
+        .iter()
+        .filter(|ev| ev.kind == crate::journal::KIND_TOOL_RESULT)
+        .filter(|ev| ev.payload["surface"]["op"] == "replace")
+        .collect();
+    assert_eq!(replaced.len(), 1);
+    let p = &replaced[0].payload;
+    let address = h.address("s1", seq).await.unwrap();
+    assert_ne!(address, seq, "une adresse du journal, pas un numéro V0");
+    assert_eq!(
+        p["surface"],
+        json!({"op": "replace", "from": address, "to": address})
+    );
+    assert_eq!(p["call_id"], "c1", "le call_id du nœud remplacé");
+    // L'artefact que l'événement cite existe, avec la même empreinte.
+    let artifact = h
+        .get_artifact(p["artifact_id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .expect("l'artefact est écrit avant l'événement");
+    assert_eq!(p["artifact_sha256"], artifact.sha256);
+    assert_eq!(p["original_tokens"].as_u64(), Some(steps[0].before_tokens));
+
+    // Le pliage accepte le remplacement et redonne le corps de la ligne.
+    let surface = derive(&Sealed::none(), &all).expect("bornes valides");
+    let rows = h.load("s1", 0).await.unwrap();
+    let row = rows.iter().find(|r| r.seq == seq).unwrap();
+    let node = &surface.messages[&address];
+    assert_eq!(node.message.content, row.message.content);
+    assert_eq!(node.artifact_id, row.artifact_id);
+    assert_eq!(surface.nodes.len(), rows.len(), "le nœud garde sa place");
+}
