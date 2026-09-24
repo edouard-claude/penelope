@@ -49,9 +49,10 @@ pub use penelope_app::conversation::{Compactor, Conversation, MemoryConversation
 pub use penelope_app::outcome::{NullSink, RecordingSink, TurnEvent, TurnOutcome, TurnSink};
 pub use penelope_app::tool_executor::{CallInfo, ToolExecutor};
 use pipeline::Pending;
-pub(crate) use pipeline::{effect_kind, server_of, without_intention};
+pub(crate) use pipeline::effect_kind;
+pub use pipeline::{server_of, without_intention};
 pub use rules::{MAX_FAMILIES_PER_CLICK, always_creates_no_rule};
-pub(crate) use rules::{arg_pattern, arg_patterns};
+pub use rules::{arg_pattern, arg_patterns};
 pub use spec::{AgentLoop, CALLS_EXHAUSTED, TURN_CALLS, TurnRequest, TurnSpec};
 pub use turn_log::{TurnMeta, close_interrupted_turns, close_unopened};
 

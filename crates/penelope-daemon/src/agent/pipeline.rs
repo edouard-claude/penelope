@@ -535,7 +535,7 @@ async fn turn_goal(conv: &dyn Conversation) -> Option<String> {
 
 /// Arguments sans l'intention : elle ne change pas l'appel, ni pour la garde de boucle ni
 /// pour le serveur qui l'exécute.
-pub(crate) fn without_intention(args: &Value) -> Value {
+pub fn without_intention(args: &Value) -> Value {
     let mut a = args.clone();
     if let Some(o) = a.as_object_mut() {
         o.remove(penelope_tools::WHY_FIELD);
@@ -558,7 +558,7 @@ fn line_shape(tool: &str, args: &Value) -> Option<&'static str> {
     })
 }
 
-pub(crate) fn server_of(tool: &str) -> Option<String> {
+pub fn server_of(tool: &str) -> Option<String> {
     tool.strip_prefix("mcp__")
         .and_then(|rest| rest.split("__").next())
         .map(String::from)

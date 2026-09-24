@@ -19,7 +19,7 @@ pub const MAX_FAMILIES_PER_CLICK: usize = 3;
 ///
 /// Les étapes de lecture pure (`ls -la tmp/x*`) n'en demandent pas : elles passent déjà
 /// sans carte (#111), et une règle sur `ls` ne borne rien.
-pub(crate) fn arg_patterns(tool: &str, args: Option<&Value>) -> Vec<Value> {
+pub fn arg_patterns(tool: &str, args: Option<&Value>) -> Vec<Value> {
     use penelope_hitl::policy::CMD_PREFIX_OP;
     if tool != "shell_exec" {
         return arg_pattern(tool, args).into_iter().collect();
@@ -90,7 +90,7 @@ fn family_of(step: &penelope_hitl::cmdline::Pipeline) -> Option<String> {
 /// Motif d'arguments d'une règle « toujours », dérivé de l'appel : ce qui borne
 /// l'autorisation à ce que le propriétaire a vraiment vu (issue #67). `None` : la règle
 /// couvre l'outil (outils MCP, outils sans argument significatif).
-pub(crate) fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
+pub fn arg_pattern(tool: &str, args: Option<&Value>) -> Option<Value> {
     use penelope_hitl::policy::{CMD_PREFIX_OP, ORIGIN_OP, PATH_PREFIX_OP};
     let args = args?;
     let str_of = |k: &str| args.get(k).and_then(|v| v.as_str()).map(String::from);

@@ -3,7 +3,7 @@
 use super::*;
 
 /// Vrai quand un appel `shell_exec` demande le réseau (issue #106).
-pub(crate) fn wants_network(tool: &str, args: &Value) -> bool {
+pub fn wants_network(tool: &str, args: &Value) -> bool {
     tool == "shell_exec" && args.get("network").and_then(|v| v.as_bool()) == Some(true)
 }
 
