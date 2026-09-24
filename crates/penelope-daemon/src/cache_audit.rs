@@ -263,9 +263,24 @@ pub async fn stable_prefix(
             tiers.index = index;
             tiers.context = context;
         }
+        journal_prefix(s, session_id, tiers).await;
         return Ok(());
     }
-    s.kv_set(&key, &built.to_string()).await
+    s.kv_set(&key, &built.to_string()).await?;
+    journal_prefix(s, session_id, tiers).await;
+    Ok(())
+}
+
+/// Le préfixe retenu entre au journal quand il change, en entier (`conv.system`,
+/// épopée #208, T6). Un échec ne coûte que l'événement : le tour continue.
+async fn journal_prefix(
+    s: &crate::runtime::Services,
+    session_id: &str,
+    tiers: &penelope_context::Tiers,
+) {
+    if let Err(e) = s.context.history.journal_system(session_id, tiers).await {
+        tracing::warn!(session = session_id, error = %e, "préfixe non journalisé");
+    }
 }
 
 #[cfg(test)]
@@ -452,5 +467,55 @@ mod tests {
         );
         assert!(sticky_upstream(Some(&prev), "openrouter:z-ai/glm-5.3", STICKY_MS + 1).is_none());
         assert!(sticky_upstream(Some(&prev), "openrouter:deepseek/v4", 60_000).is_none());
+    }
+
+    /// T6 (épopée #208) : un préfixe modifié à cache chaud attend, sans entrer au
+    /// journal ; à cache froid, il y entre avec la raison `cold`.
+    #[tokio::test]
+    async fn a_changed_prefix_is_journaled_only_when_the_cache_is_cold() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(TestClock::default());
+        let s = Arc::new(
+            Services::for_tests(dir.path().to_path_buf(), clock.clone())
+                .await
+                .unwrap(),
+        );
+        let d = Daemon::from_services(s.clone());
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        let tiers = |skills: &str| penelope_context::Tiers {
+            identity: "Tu es Pénélope.".into(),
+            index: skills.into(),
+            ..Default::default()
+        };
+        let systems = || async {
+            let events = s.events.session_events(&sid, 0).await.unwrap();
+            events
+                .into_iter()
+                .filter(|e| e.kind == "conv.system")
+                .map(|e| e.payload["reason"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        stable_prefix(&d, &sid, &mut tiers("revue")).await.unwrap();
+        s.budget
+            .record(penelope_kernel::budget::UsageRecord {
+                session_id: Some(sid.clone()),
+                role: Some("chat".into()),
+                model: "m".into(),
+                provider: "mock".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // Skill rechargée à cache chaud : le préfixe d'avant est gardé, rien de neuf.
+        let mut warm = tiers("revue, deploiement");
+        stable_prefix(&d, &sid, &mut warm).await.unwrap();
+        assert_eq!(warm.index, "revue");
+        assert_eq!(systems().await, ["first"]);
+        // À cache froid, le nouveau préfixe sort et entre au journal.
+        clock.advance_ms(CACHE_TTL_MS + 1);
+        stable_prefix(&d, &sid, &mut tiers("revue, deploiement"))
+            .await
+            .unwrap();
+        assert_eq!(systems().await, ["first", "cold"]);
     }
 }

@@ -1,4 +1,5 @@
-//! Épopée #208, T5 : un tour réel écrit chaque message en double, table et journal.
+//! Épopée #208, T5 et T6 : un tour réel écrit chaque message en double, table et
+//! journal, et le préfixe une fois par changement.
 
 use super::*;
 use penelope_context::derive::{Sealed, derive};
@@ -50,4 +51,40 @@ async fn every_row_of_a_turn_has_an_event_that_gives_it_back() {
     let user = events.iter().find(|e| e.kind == "conv.user").unwrap();
     assert_eq!(user.payload["source"], "owner");
     assert!(user.payload["turn_message_id"].is_string());
+}
+
+/// T6 : deux tours sans changement de préfixe n'écrivent qu'un `conv.system`, qui porte
+/// le texte entier ; le contexte figé de chaque message l'est aussi.
+#[tokio::test]
+async fn two_turns_journal_one_prefix_and_their_frozen_contexts() {
+    let (_dir, d, p) = daemon().await;
+    let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+    for text in ["bonjour", "et ensuite ?"] {
+        p.reply("Réponse.");
+        d.enqueue_message(&sid, text, &Origin::Cli, None)
+            .await
+            .unwrap();
+        let turn = claim(&d).await;
+        assert!(matches!(
+            d.run_turn(&turn).await,
+            TurnOutcome::Answered { .. }
+        ));
+        d.services.turns.complete(&turn).await.unwrap();
+    }
+    let s = &d.services;
+    let events = s.events.session_events(&sid, 0).await.unwrap();
+    let systems: Vec<_> = events.iter().filter(|e| e.kind == "conv.system").collect();
+    assert_eq!(systems.len(), 1, "{:?}", systems);
+    assert_eq!(systems[0].payload["reason"], "first");
+    let request = p.requests().pop().unwrap();
+    assert_eq!(
+        systems[0].payload["rendered"].as_str().unwrap(),
+        request.messages[0].text(),
+        "le journal porte le préfixe envoyé"
+    );
+    let contexts = s.context.history.contexts(&sid).await.unwrap();
+    let journaled = events.iter().filter(|e| e.kind == "conv.context").count();
+    assert_eq!(journaled, contexts.len());
+    let surface = derive(&Sealed::none(), &events).unwrap();
+    assert_eq!(surface.contexts.len(), contexts.len());
 }

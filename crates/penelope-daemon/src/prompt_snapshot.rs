@@ -307,6 +307,11 @@ mod tests {
             &snap.rendered[..snap.rendered.len().min(120)]
         );
         assert!(snap.tiles.is_some(), "la découpe accompagne le prompt");
+        // T6 : le journal porte le même préfixe, une seule fois.
+        let events = s.events.session_events(&sid, 0).await.unwrap();
+        let systems: Vec<_> = events.iter().filter(|e| e.kind == "conv.system").collect();
+        assert_eq!(systems.len(), 1);
+        assert_eq!(systems[0].payload["hash"], hash.as_str());
     }
 
     async fn previous_system_hash(s: &Services, session_id: &str) -> String {

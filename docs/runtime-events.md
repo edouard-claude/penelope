@@ -93,6 +93,8 @@ source de lecture ; une ligne de `messages` cite son événement par `event_id`.
 | `conv.user` | un message utilisateur entre dans l'historique | `source` (`owner`, `merged`, `trigger`, `nudge`, `photo`), `content`, `episode`, `tokens_est` ; `turn_message_id` et `arrived_at` pour un message de la file ; `mid_turn` s'il est arrivé pendant le tour |
 | `conv.assistant` | une réponse du modèle est gardée | `content`, `tool_calls`, `reasoning`, `turn`, `step`, `model`, `provider`, `upstream`, `generation_id`, `finish`, `usage`, `cost_usd`, `system_hash`, `tools_hash`, `request_hash` ; `interrupted` après un arrêt |
 | `conv.tool_result` | un résultat d'outil est gardé | `call_id`, `tool`, `ok`, `eager`, `content` |
+| `conv.system` | le préfixe système retenu change | `hash`, `rendered` (le texte entier), `tiles`, `reason` (`first`, `cold`, `compaction`) |
+| `conv.context` | le contexte volatil est figé avec un message | `target` (l'adresse du `conv.user`), `block` |
 
 Ces événements sont des données personnelles, purgées comme les autres.
 

@@ -181,3 +181,78 @@ async fn without_a_journal_the_row_is_written_alone() {
         .unwrap();
     assert_eq!(rows(&h).await, [(1, None)]);
 }
+
+fn tiers(context: &str) -> Tiers {
+    Tiers {
+        identity: "Tu es Pénélope.".into(),
+        index: "outils".into(),
+        context: context.into(),
+        volatile: String::new(),
+    }
+}
+
+/// T6 : le préfixe entre au journal en entier, une fois par changement, avec sa raison.
+#[tokio::test]
+async fn the_prefix_is_journaled_once_per_change_with_its_reason() {
+    let (h, log) = journaled().await;
+    let reason = |r: Option<SystemReason>| r.map(|r| format!("{r:?}"));
+    let first = h.journal_system("s1", &tiers("a")).await.unwrap();
+    assert_eq!(reason(first).as_deref(), Some("First"));
+    assert_eq!(h.journal_system("s1", &tiers("a")).await.unwrap(), None);
+    let cold = h.journal_system("s1", &tiers("b")).await.unwrap();
+    assert_eq!(reason(cold).as_deref(), Some("Cold"));
+    log.append(EventDraft::new("context.compacted", json!({})).session("s1"))
+        .await
+        .unwrap();
+    let after = h.journal_system("s1", &tiers("c")).await.unwrap();
+    assert_eq!(reason(after).as_deref(), Some("Compaction"));
+
+    let events = log.session_events("s1", 0).await.unwrap();
+    let systems: Vec<_> = events.iter().filter(|e| e.kind == KIND_SYSTEM).collect();
+    assert_eq!(systems.len(), 3);
+    assert_eq!(systems[0].payload["surface"], json!({"op": "append"}));
+    assert_eq!(systems[0].payload["reason"], "first");
+    assert_eq!(systems[0].payload["rendered"], tiers("a").prefix());
+    assert_eq!(
+        systems[1].payload["surface"],
+        json!({"op": "replace", "from": systems[0].seq, "to": systems[0].seq})
+    );
+    assert_eq!(systems[2].payload["reason"], "compaction");
+    // Le pliage retient le dernier.
+    let surface = derive(&Sealed::none(), &events).unwrap();
+    assert_eq!(surface.system.unwrap().rendered, tiers("c").prefix());
+}
+
+/// T6 : le contexte figé est journalisé une fois, sur l'adresse du `conv.user` visé.
+#[tokio::test]
+async fn the_frozen_context_is_journaled_once_on_its_message() {
+    let (h, log) = journaled().await;
+    h.append("s1", &ChatMessage::assistant("avant"), 1, 0, false, None)
+        .await
+        .unwrap();
+    let seq = h
+        .append("s1", &ChatMessage::user("bonjour"), 1, 0, false, None)
+        .await
+        .unwrap();
+    assert!(
+        h.freeze_context("s1", seq, "<contexte>\nlundi\n</contexte>\n\n")
+            .await
+            .unwrap()
+    );
+    assert!(!h.freeze_context("s1", seq, "autre").await.unwrap());
+
+    let events = log.session_events("s1", 0).await.unwrap();
+    let contexts: Vec<_> = events.iter().filter(|e| e.kind == "conv.context").collect();
+    assert_eq!(contexts.len(), 1);
+    let user = events.iter().find(|e| e.kind == KIND_USER).unwrap();
+    assert_eq!(contexts[0].payload["target"], user.seq);
+    let surface = derive(&Sealed::none(), &events).unwrap();
+    assert_eq!(
+        surface.contexts.get(&user.seq).map(String::as_str),
+        Some("<contexte>\nlundi\n</contexte>\n\n")
+    );
+    assert_eq!(
+        h.contexts("s1").await.unwrap().get(&seq).unwrap(),
+        "<contexte>\nlundi\n</contexte>\n\n"
+    );
+}

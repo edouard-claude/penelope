@@ -10,7 +10,11 @@
 //! s'écrit seule, comme avant.
 
 use super::*;
-use crate::journal::{ConvEvent, KIND_USER, Provenance, message_event};
+use crate::journal::{
+    ContextPayload, ConvEvent, KIND_SYSTEM, KIND_USER, Provenance, SurfaceOp, SystemPayload,
+    SystemReason, message_event,
+};
+use crate::tiers::{Tiers, TileMap};
 use penelope_kernel::event::{EventDraft, EventLog};
 use penelope_store::rusqlite::Transaction;
 use std::sync::{Arc, Mutex};
@@ -201,6 +205,140 @@ impl HistoryStore {
                 self.write_row(row, event).await
             }
         }
+    }
+
+    /// Fige le contexte volatil (T4) d'un message utilisateur : il l'accompagnera dans
+    /// toutes les requêtes suivantes, pour que le préfixe ne change plus (issue #17).
+    /// Sans effet s'il est déjà figé. Journalisé en `conv.context` (T6), qui vise
+    /// l'adresse du `conv.user` : son `seq` d'événement, ou le `seq` V0 d'une ligne
+    /// sans événement (§2.3).
+    pub async fn freeze_context(
+        &self,
+        session_id: &str,
+        seq: i64,
+        context: &str,
+    ) -> penelope_store::Result<bool> {
+        let (sid, ctx) = (session_id.to_string(), context.to_string());
+        let insert = move |tx: &Transaction<'_>| -> penelope_store::Result<bool> {
+            Ok(tx.execute(
+                "INSERT OR IGNORE INTO message_context(session_id, seq, context)
+                 VALUES(?1, ?2, ?3)",
+                params![sid, seq, ctx],
+            )? > 0)
+        };
+        let Some(log) = &self.events else {
+            return self.store.write(insert).await;
+        };
+        let sid = session_id.to_string();
+        let (frozen, target) = self
+            .store
+            .read(move |c| {
+                let frozen = c
+                    .query_row(
+                        "SELECT 1 FROM message_context WHERE session_id=?1 AND seq=?2",
+                        params![sid, seq],
+                        |_| Ok(()),
+                    )
+                    .optional()?
+                    .is_some();
+                let target = c
+                    .query_row(
+                        "SELECT e.seq FROM messages m JOIN events e ON e.id = m.event_id
+                         WHERE m.session_id=?1 AND m.seq=?2",
+                        params![sid, seq],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .optional()?;
+                Ok((frozen, target.unwrap_or(seq)))
+            })
+            .await?;
+        if frozen {
+            return Ok(false);
+        }
+        let event = ConvEvent::Context(ContextPayload {
+            target,
+            block: context.to_string(),
+        });
+        let done = Arc::new(Mutex::new(false));
+        let out = done.clone();
+        let draft = EventDraft::new(event.kind(), event.payload()).session(session_id);
+        log.append_with(draft, move |tx, _| {
+            *out.lock().unwrap_or_else(|p| p.into_inner()) = insert(tx)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| penelope_store::StoreError::other(e.to_string()))?;
+        Ok(*done.lock().unwrap_or_else(|p| p.into_inner()))
+    }
+
+    /// Journalise le préfixe système retenu pour la prochaine requête, en entier
+    /// (`conv.system`, T6, arbitrage du propriétaire README §10.2), s'il diffère du
+    /// dernier journalisé. Rend la raison écrite, ou `None` si le préfixe n'a pas bougé
+    /// ou qu'aucun journal n'est attaché.
+    ///
+    /// La raison : `first` pour le premier de la session, `compaction` si un résumé a été
+    /// publié depuis le précédent (`context.compacted`), `cold` sinon (le préfixe en
+    /// attente sort à un cache froid, `stable_prefix`).
+    pub async fn journal_system(
+        &self,
+        session_id: &str,
+        tiers: &Tiers,
+    ) -> penelope_store::Result<Option<SystemReason>> {
+        let Some(log) = &self.events else {
+            return Ok(None);
+        };
+        let rendered = tiers.prefix();
+        let hash = penelope_kernel::canonical::sha256_hex(rendered.as_bytes());
+        let sid = session_id.to_string();
+        let last = self
+            .store
+            .read(move |c| {
+                let last = c
+                    .query_row(
+                        "SELECT seq, json_extract(payload, '$.hash') FROM events
+                         WHERE session_id=?1 AND kind=?2 ORDER BY seq DESC LIMIT 1",
+                        params![sid, KIND_SYSTEM],
+                        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?)),
+                    )
+                    .optional()?;
+                let Some((seq, hash)) = last else {
+                    return Ok(None);
+                };
+                let compacted = c
+                    .query_row(
+                        "SELECT 1 FROM events WHERE session_id=?1 AND seq>?2
+                           AND kind='context.compacted' LIMIT 1",
+                        params![sid, seq],
+                        |_| Ok(()),
+                    )
+                    .optional()?
+                    .is_some();
+                Ok(Some((seq, hash, compacted)))
+            })
+            .await?;
+        let (surface, reason) = match last {
+            None => (SurfaceOp::Append, SystemReason::First),
+            Some((_, Some(h), _)) if h == hash => return Ok(None),
+            Some((seq, _, compacted)) => (
+                SurfaceOp::Replace { from: seq, to: seq },
+                if compacted {
+                    SystemReason::Compaction
+                } else {
+                    SystemReason::Cold
+                },
+            ),
+        };
+        let event = ConvEvent::System(SystemPayload {
+            surface,
+            hash,
+            rendered,
+            tiles: TileMap::of(tiers),
+            reason,
+        });
+        log.append(EventDraft::new(event.kind(), event.payload()).session(session_id))
+            .await
+            .map_err(|e| penelope_store::StoreError::other(e.to_string()))?;
+        Ok(Some(reason))
     }
 
     /// L'événement puis la ligne, ou la ligne seule sans journal ou sans événement.
