@@ -524,6 +524,7 @@ impl Daemon {
     pub async fn recover(&self) -> anyhow::Result<RecoveryReport> {
         let s = &self.services;
 
+        crate::history::seal_legacy(s).await?;
         let turns = s.turns.recover_on_boot().await?;
         // Avant les effets : un job dont le processus est mort devient `failed` sans être
         // relancé (décision 0012), et son effet suit le chemin `dispatching` → `unknown`

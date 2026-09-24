@@ -18,6 +18,9 @@
 //! d'effets (`EffectLedger`). `tests/fixtures/README.md` dit quand régénérer, et
 //! pourquoi pas à chaque migration.
 
+use penelope_context::HistoryStore;
+use penelope_context::derive::derive;
+use penelope_context::store::seal::SealReport;
 use penelope_kernel::clock::{Clock, SharedClock, TestClock};
 use penelope_kernel::effects::{EffectKind, EffectLedger, EffectSpec, Planned};
 use penelope_kernel::event::{EventDraft, EventLog};
@@ -862,7 +865,8 @@ fn check_prd_tables(c: &Connection) {
 
 /// Ouvre une **copie** de `fixture`, la migre par `Store::open`, et vérifie : toutes les
 /// migrations, le schéma d'une base neuve, les tables du PRD, chaque donnée semée, la
-/// chaîne d'événements (qui doit aussi pouvoir continuer), l'intégrité du fichier.
+/// chaîne d'événements (qui doit aussi pouvoir continuer), le scellement de
+/// l'historique (T11), l'intégrité du fichier.
 async fn check_fixture(fixture: &Path) {
     let name = fixture
         .file_name()
@@ -934,10 +938,53 @@ async fn check_fixture(fixture: &Path) {
     );
     assert_eq!(report.checked, EVENT_COUNT + 1);
 
-    // 6. Le fichier est intègre après la migration.
+    // 6. Le premier démarrage scelle la session (T11), le second ne fait rien.
+    check_sealing(&store, &log, &name).await;
+
+    // 7. Le fichier est intègre après la migration.
     assert_eq!(store.integrity().unwrap(), "ok", "{name}");
     store.close();
     fresh.close();
+}
+
+/// Scellement de la fixture migrée (épopée #208, T11, `source-de-verite.md` §4.5) : un
+/// `conv.import` pour la session, lignes marquées, empreinte relue à l'identique, et la
+/// dérivation redonne la projection V0 : le nœud actif, puis les messages 9 à 12.
+async fn check_sealing(store: &Store, log: &EventLog, name: &str) {
+    let clock: SharedClock = Arc::new(TestClock::new(START_MS + 86_400_000));
+    let history = HistoryStore::new(store.clone(), clock).with_events(log.clone());
+    let report = history.seal_legacy().await.unwrap();
+    assert_eq!(
+        report.sealed,
+        [(SESSION_ID.to_string(), MESSAGES.len() as i64)],
+        "{name}"
+    );
+    assert_eq!(
+        history.seal_legacy().await.unwrap(),
+        SealReport::default(),
+        "{name}"
+    );
+
+    let (import, prefix) = history.sealed_prefix(SESSION_ID).await.unwrap().unwrap();
+    assert_eq!(import.digest, prefix.digest(), "{name}");
+    assert_eq!((import.messages, import.contexts), (12, 1), "{name}");
+    assert_eq!(import.lcm_active.len(), 1, "{name}");
+    assert_eq!(import.lcm_active[0].node, LCM_ACTIVE_NODE, "{name}");
+    let events = log.session_events(SESSION_ID, 0).await.unwrap();
+    let surface = derive(&prefix.sealed(), &events).unwrap();
+    let projected = surface.projected_entries();
+    assert_eq!(projected.len(), 5, "{name} : résumé puis messages 9 à 12");
+    assert!(
+        projected[0]
+            .message
+            .text()
+            .contains("cargo test : 12 tests verts")
+    );
+    assert_eq!(projected[4].message.text(), "Noté.");
+
+    let report = log.verify().await.unwrap();
+    assert!(report.ok, "{name} : {:?}", report.detail);
+    assert_eq!(report.checked, EVENT_COUNT + 2, "{name}");
 }
 
 // ---------------------------------------------------------------- tests

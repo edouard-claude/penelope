@@ -24,6 +24,7 @@ pub mod episodes;
 pub mod executor;
 pub mod helpers;
 pub mod hermes;
+pub mod history;
 pub mod images;
 pub mod ingest;
 pub mod machine;

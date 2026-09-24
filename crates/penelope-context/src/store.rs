@@ -1059,6 +1059,6 @@ fn excerpt_around(text: &str, needle: &str, width: usize) -> String {
 }
 
 mod dual;
-
+pub mod seal;
 #[cfg(test)]
 mod tests;
