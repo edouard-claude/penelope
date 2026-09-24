@@ -20,7 +20,6 @@ pub mod embeddings;
 pub mod engine;
 pub mod episodes;
 pub mod executor;
-pub mod helpers;
 pub mod hermes;
 pub mod history;
 pub mod images;
@@ -32,7 +31,6 @@ pub mod media;
 pub mod mem_audit;
 pub mod mem_split;
 pub mod onboarding;
-pub mod ports;
 pub mod prompt_snapshot;
 pub mod purge;
 pub mod review;
@@ -50,9 +48,7 @@ pub mod session_project;
 pub mod skill_deps;
 pub mod skill_install;
 pub mod supervisor;
-pub mod tasks;
 pub mod telegram;
-pub mod testing;
 #[cfg(test)]
 mod ticket_to_deploy_e2e;
 pub mod titles;
@@ -70,7 +66,7 @@ mod wiki_e2e;
 pub mod workflow;
 
 // Modules descendus dans `penelope-app` (T21), réexportés sous leur ancien chemin.
-pub use penelope_app::{bus, elicitation};
+pub use penelope_app::{bus, elicitation, helpers, ports, tasks, testing};
 
 pub use agent::{AgentLoop, TurnOutcome};
 pub use ports::Handle;

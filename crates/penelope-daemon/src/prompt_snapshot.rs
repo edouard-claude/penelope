@@ -23,8 +23,7 @@
 //! la donnée personnelle. Purge et rétention sont livrées dans le même lot ([`crate::purge`]).
 
 use crate::runtime::Services;
-use penelope_context::tiers::{Tiers, TileMap};
-use penelope_kernel::canonical::sha256_hex;
+use penelope_context::tiers::TileMap;
 use penelope_store::rusqlite::{OptionalExtension, params};
 
 /// Un prompt système gardé sous son empreinte.
@@ -38,34 +37,7 @@ pub struct Snapshot {
     pub uses: i64,
 }
 
-/// Le préfixe tel qu'il part au modèle, et sa découpe quand la conversation la connaît.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PromptPrefix {
-    pub rendered: String,
-    pub tiles: Option<TileMap>,
-}
-
-impl PromptPrefix {
-    /// Préfixe d'une conversation de session : la découpe suit les tuiles.
-    pub fn of(tiers: &Tiers) -> PromptPrefix {
-        PromptPrefix {
-            rendered: tiers.prefix(),
-            tiles: Some(TileMap::of(tiers)),
-        }
-    }
-
-    /// Préfixe d'un transcript sans tuiles (sous-agent, workflow) : le texte seul.
-    pub fn plain(rendered: impl Into<String>) -> PromptPrefix {
-        PromptPrefix {
-            rendered: rendered.into(),
-            tiles: None,
-        }
-    }
-
-    pub fn hash(&self) -> String {
-        sha256_hex(self.rendered.as_bytes())
-    }
-}
+pub use penelope_app::conversation::PromptPrefix;
 
 /// Enregistre le prompt qui vient d'être envoyé, sous l'empreinte déjà calculée.
 ///
@@ -170,7 +142,7 @@ pub async fn weight_bytes(s: &Services) -> anyhow::Result<(i64, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use penelope_context::tiers::TiersBuilder;
+    use penelope_context::tiers::{Tiers, TiersBuilder};
     use penelope_kernel::clock::TestClock;
     use std::sync::Arc;
 

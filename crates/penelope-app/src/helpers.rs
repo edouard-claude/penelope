@@ -4,7 +4,7 @@
 //! une ligne (épopée #208, tâche T06) ; destinées au futur crate d'application.
 
 use crate::bus::Origin;
-use crate::runtime::Services;
+use crate::services::Services;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -151,7 +151,7 @@ pub fn chat_title_key(chat_id: i64) -> String {
 pub const SEEN_CHATS_KEY: &str = "telegram.seen_chats";
 
 /// Conversations refusées récemment.
-pub async fn seen_chats(s: &crate::runtime::Services) -> Vec<Value> {
+pub async fn seen_chats(s: &crate::services::Services) -> Vec<Value> {
     s.store
         .read(|c| penelope_store::kv_get(c, SEEN_CHATS_KEY))
         .await

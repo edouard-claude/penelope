@@ -4,7 +4,7 @@
 //! production.
 
 use crate::bus::Origin;
-use crate::executor::Messenger;
+use crate::ports::Messenger;
 use crate::ports::ProviderSource;
 use penelope_llm::Provider;
 use penelope_llm::mock::MockProvider;
@@ -94,7 +94,7 @@ impl Messenger for RecordingMessenger {
         form: Option<&Value>,
     ) -> Result<(), String> {
         if !self.separate {
-            let text = crate::executor::question_text(markdown, run_id, choices, form);
+            let text = crate::ports::question_text(markdown, run_id, choices, form);
             return self.send_text(origin, &text).await;
         }
         self.questions.lock().unwrap().push((

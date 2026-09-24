@@ -248,7 +248,7 @@ pub fn doctor_check(sup: &Supervision) -> penelope_kernel::api::DoctorCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::Services;
+    use crate::services::Services;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

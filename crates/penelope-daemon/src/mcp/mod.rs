@@ -99,14 +99,7 @@ impl Slot {
     }
 }
 
-/// Ce qu'un rechargement a changé.
-#[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
-pub struct ReloadReport {
-    pub added: Vec<String>,
-    pub changed: Vec<String>,
-    pub removed: Vec<String>,
-    pub invalid: Vec<(String, String)>,
-}
+pub use penelope_app::ports::ReloadReport;
 
 /// Le superviseur.
 pub struct McpSupervisor {

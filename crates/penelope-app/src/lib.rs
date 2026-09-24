@@ -7,7 +7,14 @@
 #![forbid(unsafe_code)]
 
 pub mod bus;
+pub mod conversation;
 pub mod elicitation;
+pub mod helpers;
 pub mod jobs;
 pub mod outcome;
+pub mod ports;
 pub mod services;
+pub mod tasks;
+pub mod testing;
+pub mod tool_executor;
+pub mod vision;

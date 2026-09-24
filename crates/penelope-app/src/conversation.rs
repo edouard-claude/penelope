@@ -1,6 +1,8 @@
 //! Le transcript sur lequel travaille un tour.
 
 use penelope_context::journal::Provenance;
+use penelope_context::tiers::{Tiers, TileMap};
+use penelope_kernel::canonical::sha256_hex;
 use penelope_llm::types::ChatMessage;
 use std::sync::Mutex;
 
@@ -37,7 +39,7 @@ pub trait Conversation: Send + Sync {
     }
     /// Le préfixe stable du prompt système, avec sa découpe en tuiles quand elle est
     /// connue : l'audit du prompt (issue #205) l'enregistre sous son empreinte.
-    fn prompt_prefix(&self) -> Option<crate::prompt_snapshot::PromptPrefix> {
+    fn prompt_prefix(&self) -> Option<PromptPrefix> {
         None
     }
 }
@@ -90,7 +92,36 @@ impl Conversation for MemoryConversation {
         Ok(self.messages())
     }
 
-    fn prompt_prefix(&self) -> Option<crate::prompt_snapshot::PromptPrefix> {
-        Some(crate::prompt_snapshot::PromptPrefix::plain(&self.system))
+    fn prompt_prefix(&self) -> Option<PromptPrefix> {
+        Some(PromptPrefix::plain(&self.system))
+    }
+}
+
+/// Le préfixe tel qu'il part au modèle, et sa découpe quand la conversation la connaît.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PromptPrefix {
+    pub rendered: String,
+    pub tiles: Option<TileMap>,
+}
+
+impl PromptPrefix {
+    /// Préfixe d'une conversation de session : la découpe suit les tuiles.
+    pub fn of(tiers: &Tiers) -> PromptPrefix {
+        PromptPrefix {
+            rendered: tiers.prefix(),
+            tiles: Some(TileMap::of(tiers)),
+        }
+    }
+
+    /// Préfixe d'un transcript sans tuiles (sous-agent, workflow) : le texte seul.
+    pub fn plain(rendered: impl Into<String>) -> PromptPrefix {
+        PromptPrefix {
+            rendered: rendered.into(),
+            tiles: None,
+        }
+    }
+
+    pub fn hash(&self) -> String {
+        sha256_hex(self.rendered.as_bytes())
     }
 }

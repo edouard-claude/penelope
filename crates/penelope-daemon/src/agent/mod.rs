@@ -25,9 +25,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 mod attempts;
-mod conversation;
 mod decisions;
-mod executor;
 mod guards;
 mod loop_abort;
 mod model;
@@ -40,16 +38,16 @@ mod turn_log;
 
 use attempts::Attempts;
 pub use attempts::{EMPTY_RETRY_PROMPT, MAX_ATTEMPTS_PER_TURN};
-pub use conversation::{Compactor, Conversation, MemoryConversation};
 pub use decisions::{EFFECT_DONE, EFFECT_IGNORE, EFFECT_RETRY, decide_approval};
-pub use executor::{CallInfo, ToolExecutor};
 pub use guards::budget_exceeded_text;
 use guards::{TurnContext, default_chain, run_guards};
 pub use loop_abort::{LOOP_STOP_NOTE, last_result_of, split_choices};
 #[cfg(test)]
 use model::fit_modalities;
 pub use pending::pending_calls;
+pub use penelope_app::conversation::{Compactor, Conversation, MemoryConversation};
 pub use penelope_app::outcome::{NullSink, RecordingSink, TurnEvent, TurnOutcome, TurnSink};
+pub use penelope_app::tool_executor::{CallInfo, ToolExecutor};
 use pipeline::Pending;
 pub(crate) use pipeline::{effect_kind, server_of, without_intention};
 pub use rules::{MAX_FAMILIES_PER_CLICK, always_creates_no_rule};
