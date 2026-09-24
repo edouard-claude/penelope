@@ -17,17 +17,17 @@ test_modules = [
 # Liste de référence (R3) : les fichiers autorisés à dépasser, chacun avec sa borne.
 # Elle ne peut que rétrécir : un fichier repassé sous le plafond doit en sortir.
 [files.oversized]
-"crates/penelope-daemon/src/telegram.rs" = 13716
+"crates/penelope-daemon/src/telegram.rs" = 13753   # relevé au gel sur main (0.17.60, #204) : la mesure du commit qui pose le gel
 "crates/penelope-daemon/src/dream.rs" = 5859
-"crates/penelope-daemon/src/agent.rs" = 4240
+"crates/penelope-daemon/src/agent.rs" = 4268   # relevé au gel sur main (0.17.60, #204) : la mesure du commit qui pose le gel
 "crates/penelope-daemon/src/workflow.rs" = 4044
-"crates/penelope-daemon/src/executor.rs" = 3712
+"crates/penelope-daemon/src/executor.rs" = 3736   # relevé au gel sur main (0.17.60, #204) : la mesure du commit qui pose le gel
 "crates/penelope-daemon/src/mcp.rs" = 3291
 "crates/penelope-daemon/src/engine.rs" = 3173
-"crates/penelope-kernel/src/config.rs" = 2738
-"crates/penelope-cli/src/commands.rs" = 2676
-"crates/penelope-daemon/src/rpc.rs" = 2481
-"crates/penelope-daemon/src/doctor.rs" = 2463
+"crates/penelope-kernel/src/config.rs" = 2789   # relevé au gel sur main (0.17.60, #204) : la mesure du commit qui pose le gel
+"crates/penelope-cli/src/commands.rs" = 2685   # relevé au gel sur main (0.17.60, #204) : la mesure du commit qui pose le gel
+"crates/penelope-daemon/src/rpc.rs" = 2517   # relevé au gel sur main (0.17.60, #204) : la mesure du commit qui pose le gel
+"crates/penelope-daemon/src/doctor.rs" = 2522   # relevé au gel sur main (0.17.60, #204) : la mesure du commit qui pose le gel
 "crates/penelope-daemon/src/telegram/screens.rs" = 2435
 "crates/penelope-daemon/src/compaction.rs" = 2225
 "crates/penelope-llm/src/provider.rs" = 2048
@@ -38,15 +38,15 @@ test_modules = [
 "crates/penelope-llm/src/codex.rs" = 1533
 "crates/penelope-memory/src/consolidation.rs" = 1476
 "crates/penelope-context/src/store.rs" = 1379
-"crates/penelope-tools/src/spec.rs" = 1290
+"crates/penelope-tools/src/spec.rs" = 1376   # relevé au gel sur main (0.17.60, #204) : la mesure du commit qui pose le gel
 "crates/penelope-mcp/src/transport.rs" = 1265
-"crates/penelope-store/src/migrations.rs" = 1260
+"crates/penelope-store/src/migrations.rs" = 1295   # relevé au gel sur main (0.17.60, #204) : la mesure du commit qui pose le gel
 "crates/penelope-daemon/src/mcp_auth.rs" = 1246
 "crates/penelope-daemon/src/ingest.rs" = 1225
 "crates/penelope-daemon/src/conversation.rs" = 1222
 "crates/penelope-context/src/engine.rs" = 1214
 "crates/penelope-mcp/src/registry.rs" = 1200
-"crates/penelope-daemon/src/purge.rs" = 1189
+"crates/penelope-daemon/src/purge.rs" = 1244   # relevé au gel sur main (0.17.60, #204) : la mesure du commit qui pose le gel
 "crates/penelope-memory/src/vault.rs" = 1163
 "crates/penelope-kernel/src/turn.rs" = 1136
 "crates/penelope-context/src/compaction.rs" = 1122
@@ -63,8 +63,9 @@ test_modules = [
 # Plafond de lignes de src/ par crate (R4) : 78 668 au gel, plus 2 500 de marge, soit une
 # vingtaine de correctifs de taille courante. Un autre crate se plafonne en ajoutant une
 # ligne. UPDATE_BUDGET ne touche pas à cette table.
+"crates/penelope-daemon/src/tool_jobs.rs" = 1754   # né avec #204 (0.17.60), avant le gel
 [crates]
-"penelope-daemon" = 81168
+"penelope-daemon" = 83343   # 80 843 lignes au gel sur main (0.17.60, #204) + 2 500 de marge
 
 # Liste blanche des modules du daemon (R5) : les déclarations `mod x;` de lib.rs et
 # `mod screens;` de telegram.rs. `mod tests;` est toujours permis. Les fichiers où un bloc
@@ -133,6 +134,7 @@ modules = [
     "voice",
     "wiki_e2e",
     "workflow",
+  "tool_jobs",  # né avec #204 (0.17.60), avant le gel
 ]
 impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 
@@ -185,6 +187,7 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 
 # `#[allow(clippy::too_many_lines)]` dans les sources (R7, #211) : les allows de la pose
 # du lint sont comptés par le lot qui les pose ; d'ici là, aucun.
+"tool_jobs.rs" = 3   # né avec #204 (0.17.60), avant le gel
 [lints]
 allow_too_many_lines = 0
 
@@ -304,3 +307,4 @@ required = [
 "crates/penelope-daemon/src/upgrade.rs" = 1
 "crates/penelope-daemon/src/voice.rs" = 1
 "crates/penelope-kernel/src/api.rs" = 1
+"crates/penelope-daemon/src/tool_jobs.rs" = 6   # né avec #204 (0.17.60), avant le gel

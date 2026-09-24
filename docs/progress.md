@@ -2849,6 +2849,82 @@ déclarée sans être servie le fait échouer.
   SHA-256 est vérifiée.
 - Les captures d'écran de [telegram.md](telegram.md) sont des maquettes ASCII.
 
+### 0.17.61
+
+Le gel de la dette (lot A de l'épopée #208, décision
+[0015](decisions/0015-gel-0.17-et-branche-v1.md)), reporté depuis la branche `v1` où il a
+été développé dans la nuit du 23 au 24 septembre : `main` ne grossit plus, ne reçoit plus que
+des corrections, et la V1 se construit à côté en `1.0.0-alpha.N`. Ce lot ne change aucun
+comportement de production hors `penelope upgrade` (une pré-release ne s'installe plus
+d'office) ; il pose des règles, des gardes et de la documentation. Deux tâches du lot A
+suivent dans la branche `v1` avant d'être reportées : les lints de workspace (#211) et la
+sortie des tests inline des sept plus gros fichiers (#215).
+
+#### Le gel de la dette est mécanique : budget.toml, huit règles, un cliquet (#209, #210, #213, #214)
+
+Rien n'arrêtait la croissance : 42 fichiers au-dessus de 1 000 lignes portent 56 % du
+workspace, `penelope-daemon` en fait 48 % à lui seul, 41 de ses fichiers nomment le type
+`Daemon` et le cœur nomme Telegram dans 32 fichiers hors passerelle. `penelope-archtest`
+vérifiait les dépendances, les motifs propres à un OS et `unsafe`, jamais une taille, un
+module ou un couplage, et ne lisait que `src/`.
+
+`crates/penelope-archtest/budget.toml` fige tout cela sur la mesure : plafond de 1 000
+lignes par fichier source (tests inline compris) et 1 500 par fichier de tests, liste de
+référence des fichiers en dépassement avec leur borne, `penelope-daemon/src` plafonné à
+83 343 lignes (80 843 au gel plus 2 500 de marge pour les correctifs), liste blanche de ses
+63 modules, budget d'occurrences de `Daemon` par fichier et `impl Daemon` dans quatre
+fichiers, allows de `clippy::too_many_lines` comptés, les 70 critères `ca_*` figés (renommer
+interdit, déplacer permis), et la frontière canal / cœur avec sa liste par fichier. Chaque
+règle a son test sur le workspace et son test de détecteur ; `archtest` parcourt désormais
+`src/`, `tests/` et `examples/`. Les nombres ne montent jamais : `UPDATE_BUDGET=1 cargo test
+-p penelope-archtest` resserre le fichier vers le bas seulement, et `scripts/check-budget.sh`,
+à brancher en CI au prochain lot, refuse toute remontée par rapport à la base git, sauf un
+commit portant `Dérogation-budget: #<issue>`. Le relevé est celui de ce commit : la 0.17.60
+(#204) avait fait grossir onze fichiers et créé `tool_jobs.rs` (1 754 lignes) avant que le
+gel ne soit posé ; ces valeurs sont inscrites telles quelles, elles ne peuvent plus que
+descendre.
+
+#### Gardes de version pour deux branches (#212)
+
+La V1 vit sur une branche `v1` versionnée `1.0.0-alpha.N`, jamais taguée, pendant que la
+0.17 continue de livrer sur `main`. Trois mécanismes ne le supportaient pas :
+`parse_version` coupait le suffixe, donc un tag `v1.0.0-alpha.1` posé par erreur aurait
+valu `1.0.0 > 0.17.60` et toutes les instances 0.17 l'auraient installé à leur prochaine
+vérification ; le test `docs` n'acceptait que trois entiers ; la CI ne tournait que sur
+`main`.
+
+`penelope upgrade` ne juge plus jamais une version à suffixe « plus récente » : elle sort
+de la liste des candidates et ne s'installe que par `--tag` (c'est ainsi que la
+`1.0.0-rc.1` s'installera à la bascule) ; une instance dont le binaire est lui-même une
+pré-release n'est pas rétrogradée vers une 0.17. Le test `docs` lit `x.y.z-<pré>` dans
+l'ordre semver et refuse un bloc `1.0.0-alpha.N` quand le workspace est en 0.17 (« section
+V1 sur main »). `ci.yml` tourne sur `main` et `v1`, vérifie que chaque branche porte sa ligne
+de version (`0.` sur `main`, `1.0.0-` sur `v1`) et réserve toujours `livraison` à `main` ;
+`release.yml` refuse tout tag `v1*` tant que la variable de dépôt `V1_RELEASES` ne vaut pas
+`1`, `workflow_dispatch` compris. Le `workflow_dispatch` réel avec `tag=v1.0.0-alpha.0` reste
+à rejouer par le propriétaire.
+
+#### Le gel écrit là où les sessions le lisent (#216)
+
+- **`CLAUDE.md`** : sections « Gel de la dette » (règles R1 à R8 et frontière canal/cœur en
+  une phrase chacune, `UPDATE_BUDGET=1`, `scripts/check-budget.sh`, le trailer
+  `Dérogation-budget: #N` et ses trois cas légitimes, « un nouveau module ou une
+  fonctionnalité va dans `v1` », « aucun tag `v1*` avant la bascule ») et « Travailler sur
+  v1 » (versions `1.0.0-alpha.N` jamais taguées, un seul `progress.md`, fusion `main` → `v1`
+  après chaque release, règle des 24 h). `AGENTS.md` ne fait plus que renvoyer à `CLAUDE.md`.
+- **Modèle de pull request** : trois cases de gel (budget inchangé ou abaissé, aucun
+  nouveau module dans le daemon, scénario ajouté ou mis à jour si le visible change).
+- **`.github/workflows/README.md`** : trois workflows, tests sur Linux et macOS, tag posé
+  par la CI (#147) ; la section « Poser un tag » à la main disparaît.
+- **Décision [0015](decisions/0015-gel-0.17-et-branche-v1.md)** : gel de la 0.17 et
+  branche `v1` ; la table des décisions est complète jusqu'à 0015 (0013, 0014 et 0016
+  réservés). Un bloc « Version 1 (branche v1) » en tête du fichier reçoit les sections
+  `1.0.0-alpha.N` par les fusions.
+- **Deux incohérences corrigées** : le noyau d'outils compte 16 entrées (19 définitions
+  avec les méta-outils), pas 17, depuis que `workflow_start` est passé à la demande
+  (0.17.56) ; `telegram.max_fragments` n'est plus « sans effet », elle borne les avis
+  internes (digest, veille) depuis la 0.17.27.
+
 ## Décisions
 
 Les écarts assumés par rapport à un « DEVRAIT » du PRD sont documentés un par un :
@@ -2866,11 +2942,12 @@ Les écarts assumés par rapport à un « DEVRAIT » du PRD sont documentés un 
 | [0009](decisions/0009-pas-d-emulation-d-outils.md) | Pas d'émulation d'outils | Un modèle sans tool calling est refusé au moment du choix, plutôt que simulé par un analyseur de texte aux effets non idempotents |
 | [0010](decisions/0010-fournisseur-codex-oauth.md) | Fournisseur Codex par OAuth | Identité empruntée et dite, périmètre borné aux tours du propriétaire, quota du plan au lieu du dollar |
 | [0011](decisions/0011-prompt-systeme-journalise.md) | Prompt système journalisé en clair | Ce que le modèle a lu est reconstituable, adressé par son empreinte ; une ligne par préfixe distinct |
+| [0012](decisions/0012-jobs-outils-durables.md) | Jobs d'outils durables | Un appel long sort du tour et rend la main ; un job mort au redémarrage n'est jamais relancé d'office (#204) |
 | [0015](decisions/0015-gel-0.17-et-branche-v1.md) | Gel de la 0.17 et branche `v1` | La dette ne grossit plus sur `main` (budget à cliquet) ; la V1 se refait à côté, versions jamais taguées |
 
-Les numéros 0012 à 0014 et 0016 sont réservés par la charte de la V1 (`design/v1/README.md`
-§9 : journal source unique de la conversation, découpage du daemon, boucle en pipeline, PTC
-hors V1) et pas encore écrits.
+Les numéros 0013, 0014 et 0016 sont réservés par la charte de la V1 (`design/v1/README.md`
+§9 : découpage du daemon, boucle en pipeline, PTC hors V1) et pas encore écrits ; la
+décision sur le journal source unique prendra le prochain numéro libre.
 
 ## Deux failles corrigées en écrivant la suite `security`
 
