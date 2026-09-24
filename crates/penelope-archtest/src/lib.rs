@@ -269,8 +269,24 @@ pub fn dependency_rules() -> BTreeMap<&'static str, Vec<&'static str>> {
     // L'exploitation (T28) : le socle, le vault et les crates métier, jamais le daemon ni
     // l'hôte MCP (`McpAdmin` par le port), ni le canal.
     m.insert("penelope-ops", OPS_ALLOWED_DEPS.to_vec());
+    // La boucle d'agent (T10) : le noyau, les crates métier de la boucle et les ports de
+    // `penelope-app`. Jamais `penelope-context`, `penelope-memory`, `penelope-telegram`
+    // (`design/v1/README.md` §3.2), ni le daemon, qui la compose.
+    m.insert("penelope-agent", AGENT_ALLOWED_DEPS.to_vec());
     m
 }
+
+/// Ce dont `penelope-agent` peut dépendre (`design/v1/boucle-et-outils.md` §4.2, plus
+/// `penelope-store` pour la base d'`AgentServices`).
+pub const AGENT_ALLOWED_DEPS: &[&str] = &[
+    "penelope-kernel",
+    "penelope-llm",
+    "penelope-tools",
+    "penelope-hitl",
+    "penelope-observe",
+    "penelope-store",
+    "penelope-app",
+];
 
 /// Ce dont `penelope-mcp-host` peut dépendre : le socle et six crates métier.
 pub const MCP_HOST_ALLOWED_DEPS: &[&str] = &[
@@ -493,6 +509,7 @@ mod tests {
             "penelope-mcp-host",
             "penelope-vault",
             "penelope-ops",
+            "penelope-agent",
             "penelope-cli",
             "penelope-gateway-telegram",
         ] {
@@ -589,6 +606,26 @@ mod tests {
                 !ops.internal_deps.contains(above),
                 "penelope-ops est sous {above} : {:?}",
                 ops.internal_deps
+            );
+        }
+    }
+
+    /// T10 : la boucle ne voit ni le moteur de contexte, ni la mémoire, ni le canal, ni
+    /// le daemon (`design/v1/README.md` §3.2).
+    #[test]
+    fn the_agent_crate_sees_neither_context_memory_channel_nor_daemon() {
+        let all = crates();
+        let agent = all.iter().find(|c| c.name == "penelope-agent").unwrap();
+        for above in [
+            "penelope-context",
+            "penelope-memory",
+            "penelope-telegram",
+            "penelope-daemon",
+        ] {
+            assert!(
+                !agent.internal_deps.contains(above),
+                "penelope-agent dépend de {above} : {:?}",
+                agent.internal_deps
             );
         }
     }
