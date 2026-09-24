@@ -22,6 +22,8 @@ chrono.workspace = true
 chrono-tz.workspace = true
 regex.workspace = true
 arc-swap.workspace = true
+# Services, ports et bus, extraits du daemon (épopée #208, T21).
+penelope-app.workspace = true
 penelope-kernel.workspace = true
 penelope-store.workspace = true
 penelope-platform.workspace = true

@@ -257,8 +257,29 @@ pub fn dependency_rules() -> BTreeMap<&'static str, Vec<&'static str>> {
         "penelope-telegram",
         vec!["penelope-kernel", "penelope-store", "penelope-observe"],
     );
+    // Le socle de l'application (épopée #208, T21) : les crates métier, jamais le daemon
+    // ni une crate extraite du daemon, qui sont au-dessus de lui. `penelope-telegram` en
+    // sort avec T36 (gabarits et actions quittent `Services`).
+    m.insert("penelope-app", APP_ALLOWED_DEPS.to_vec());
     m
 }
+
+/// Ce dont `penelope-app` peut dépendre : les treize crates métier.
+pub const APP_ALLOWED_DEPS: &[&str] = &[
+    "penelope-kernel",
+    "penelope-store",
+    "penelope-platform",
+    "penelope-observe",
+    "penelope-llm",
+    "penelope-context",
+    "penelope-memory",
+    "penelope-mcp",
+    "penelope-skills",
+    "penelope-tools",
+    "penelope-hitl",
+    "penelope-telegram",
+    "penelope-workflow",
+];
 
 /// Vérifie les règles de dépendance.
 pub fn dependency_violations() -> Vec<String> {
@@ -390,6 +411,7 @@ mod tests {
             "penelope-mcp",
             "penelope-memory",
             "penelope-daemon",
+            "penelope-app",
             "penelope-cli",
         ] {
             assert!(names.contains(&expected), "crate manquant : {expected}");
@@ -422,6 +444,18 @@ mod tests {
             kernel.internal_deps,
             ["penelope-store".to_string()].into_iter().collect(),
             "le noyau ne dépend que du stockage"
+        );
+    }
+
+    /// T21 : le socle de l'application ne connaît pas le daemon.
+    #[test]
+    fn the_app_crate_does_not_depend_on_the_daemon() {
+        let all = crates();
+        let app = all.iter().find(|c| c.name == "penelope-app").unwrap();
+        assert!(
+            !app.internal_deps.contains("penelope-daemon"),
+            "penelope-app est sous le daemon : {:?}",
+            app.internal_deps
         );
     }
 

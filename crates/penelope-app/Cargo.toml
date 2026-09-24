@@ -1,0 +1,59 @@
+[package]
+name = "penelope-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Le socle de l'application (épopée #208, T21) : `Services`, les ports, le bus des tours,
+# l'élicitation, les boucles supervisées. Tout ce qui est au-dessus (daemon, puis les
+# crates extraites du daemon) le partage ; il ne dépend d'aucune d'elles.
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+# Rattrapage des paniques d'une boucle supervisée (`catch_unwind` sur un futur).
+futures.workspace = true
+async-trait.workspace = true
+# Heure locale du propriétaire (`helpers::local_now`).
+chrono.workspace = true
+chrono-tz.workspace = true
+# Validation des adresses que présente une élicitation MCP (`elicitation`).
+url.workspace = true
+# Crates métier que `Services::bootstrap` assemble, une raison chacune :
+# le journal, les effets, la configuration, les sessions, la file des tours, le budget.
+penelope-kernel.workspace = true
+# La base SQLite ouverte une fois et partagée ; la table `kv`.
+penelope-store.workspace = true
+# Répertoires, secrets, processus de la machine.
+penelope-platform.workspace = true
+# Catalogue des modèles, état des requêtes, providers (`ProviderSource`), types des messages.
+penelope-llm.workspace = true
+# Moteur de contexte (historique, LCM) ; provenance des messages (`Conversation`).
+penelope-context.workspace = true
+# Index de mémoire, candidats, intentions.
+penelope-memory.workspace = true
+# Registre des outils MCP et types d'administration des serveurs (`McpAdmin`).
+penelope-mcp.workspace = true
+# Registre des skills (`reload_skills`).
+penelope-skills.workspace = true
+# Catalogue des outils natifs (`workflow_known`, `CallInfo`, `ToolExecutor`).
+penelope-tools.workspace = true
+# Approbations et politiques.
+penelope-hitl.workspace = true
+# Gabarits et actions de boutons portés par `Services`, lien profond du bot
+# (`helpers::deep_link`) : sortent vers la passerelle avec T36 (`decoupage-daemon.md` §6),
+# et la dépendance avec eux.
+penelope-telegram.workspace = true
+# Registre des workflows, runs, planifications ; plan présenté par `Messenger`.
+penelope-workflow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util", "test-util"] }

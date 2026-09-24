@@ -1269,6 +1269,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "penelope-app"
+version = "1.0.0-alpha.5"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "chrono-tz",
+ "futures",
+ "penelope-context",
+ "penelope-hitl",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-mcp",
+ "penelope-memory",
+ "penelope-platform",
+ "penelope-skills",
+ "penelope-store",
+ "penelope-telegram",
+ "penelope-tools",
+ "penelope-workflow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "penelope-archtest"
 version = "1.0.0-alpha.5"
 dependencies = [
@@ -1337,6 +1366,7 @@ dependencies = [
  "futures",
  "lopdf",
  "minisign-verify",
+ "penelope-app",
  "penelope-context",
  "penelope-hitl",
  "penelope-kernel",
