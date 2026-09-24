@@ -12,7 +12,7 @@
 //! Le nom dérive du contexte et d'une empreinte de la valeur : la même valeur redite
 //! reprend le même nom. Un numéro de carte ne se range pas : le filtre d'écriture le refuse.
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 
 /// Mots qui ne disent rien du secret.
 const STOP: &[&str] = &[

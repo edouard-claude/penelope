@@ -27,6 +27,8 @@ penelope-app.workspace = true
 # Hôte MCP : superviseur des serveurs et autorisation OAuth, extraits du daemon
 # (épopée #208, T25).
 penelope-mcp-host.workspace = true
+# La mémoire en fichiers, extraite du daemon (épopée #208, T22).
+penelope-vault.workspace = true
 penelope-kernel.workspace = true
 penelope-store.workspace = true
 penelope-platform.workspace = true

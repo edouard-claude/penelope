@@ -11,7 +11,7 @@
 //! Les compteurs pèsent sur le classement par [`penelope_memory::index::usage_factor`] ;
 //! ils ne font entrer ni sortir aucun souvenir.
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 
 fn key(session_id: &str) -> String {
     format!("session.served.{session_id}")

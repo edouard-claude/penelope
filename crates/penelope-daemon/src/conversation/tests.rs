@@ -219,66 +219,6 @@ async fn a_practice_is_recalled_with_its_default_and_never_its_deviations() {
     assert!(!t4.contains("2026-09-12"), "{t4}");
 }
 
-/// #58 : le projet actif du workspace de la session compte dans le classement : à
-/// texte égal, l'entrée du projet passe devant.
-#[tokio::test]
-async fn an_entry_of_the_open_project_ranks_first() {
-    let (_d, s) = services().await;
-    let sess = s
-        .sessions
-        .create_with(
-            penelope_kernel::session::SessionKind::Chat,
-            None,
-            None,
-            Some("/Users/edouard/Code/atlas".into()),
-        )
-        .await
-        .unwrap();
-    let sid = sess.id.to_string();
-    let key = penelope_memory::recall::project_key(None, "/Users/edouard/Code/atlas");
-
-    let vault = vault_dir(&s);
-    std::fs::create_dir_all(&vault).unwrap();
-    std::fs::write(
-        vault.join("projets.md"),
-        format!(
-            "# Projets\n\n\
-             - Les migrations passent par sqlx. <!-- uid: 01PROJ --> \
-               <!-- projet: {key} -->\n\
-             - Les migrations passent par sqlx ailleurs. <!-- uid: 01AUTRE -->\n"
-        ),
-    )
-    .unwrap();
-    crate::vault_ops::reindex(&s, &vault).await.unwrap();
-
-    let ctx = current_context(&s, "comment fait-on les migrations ?", Some(&sid)).await;
-    assert_eq!(
-        ctx.active_projects,
-        vec![key.clone()],
-        "projet actif du tour"
-    );
-
-    let hits = s
-        .memory
-        .search(
-            "migrations sqlx",
-            None,
-            &penelope_memory::index::SearchFilter {
-                limit: 5,
-                automatic: true,
-                ..Default::default()
-            },
-            &ctx.active_projects,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        hits.first().map(|h| h.entry.uid.as_str()),
-        Some("01PROJ"),
-        "l'entrée du projet ouvert passe devant : {hits:?}"
-    );
-}
-
 /// #58 : l'index donne aux sections d'une pratique leur vrai type.
 #[tokio::test]
 async fn practice_sections_are_indexed_with_their_own_type() {

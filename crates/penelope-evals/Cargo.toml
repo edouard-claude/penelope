@@ -40,6 +40,8 @@ penelope-hitl.workspace = true
 penelope-telegram.workspace = true
 penelope-workflow.workspace = true
 penelope-daemon.workspace = true
+# Réindexation du vault et enregistrement des candidats du banc de mémoire (T22).
+penelope-vault.workspace = true
 
 [dev-dependencies]
 base64.workspace = true

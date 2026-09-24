@@ -1383,6 +1383,7 @@ dependencies = [
  "penelope-store",
  "penelope-telegram",
  "penelope-tools",
+ "penelope-vault",
  "penelope-workflow",
  "regex",
  "reqwest",
@@ -1418,6 +1419,7 @@ dependencies = [
  "penelope-store",
  "penelope-telegram",
  "penelope-tools",
+ "penelope-vault",
  "penelope-workflow",
  "regex",
  "serde",
@@ -1716,6 +1718,31 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "penelope-vault"
+version = "1.0.0-alpha.6"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "chrono-tz",
+ "penelope-app",
+ "penelope-context",
+ "penelope-hitl",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-mcp",
+ "penelope-memory",
+ "penelope-observe",
+ "penelope-platform",
+ "penelope-store",
+ "penelope-tools",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

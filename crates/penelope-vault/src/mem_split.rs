@@ -10,8 +10,8 @@
 //! une carte `memory_proposal` demande le dernier mot. Les données financières
 //! personnelles (soldes, salaire, épargne) restent hors de la mémoire de fond (#25).
 
-use crate::ports::ProviderSource;
-use crate::runtime::Services;
+use penelope_app::ports::ProviderSource;
+use penelope_app::services::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_kernel::risk::RiskClass;
 use penelope_llm::catalog::strip_provider;
@@ -126,7 +126,7 @@ async fn cut(
         .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}`"))?
         .to_string();
     // Travail de fond : jamais l'abonnement du propriétaire (issue #142).
-    let model = crate::codex_scope::background(s, &model, "découpage de mémoire").await;
+    let model = penelope_app::codex_scope::background(s, &model, "découpage de mémoire").await;
     let provider = providers
         .provider_for(&model)
         .await

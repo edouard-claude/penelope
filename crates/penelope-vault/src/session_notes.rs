@@ -7,7 +7,7 @@
 //! rêve ────────────────────────► décisions nouvelles en candidats, jamais réécrites
 //! ```
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_kernel::session::MetadataOp;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -110,7 +110,7 @@ pub async fn read(s: &Services, session_id: &str) -> anyhow::Result<Option<Strin
     let Some(rel) = file_of(s, session_id).await? else {
         return Ok(None);
     };
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     Ok(std::fs::read_to_string(vault.join(rel)).ok())
 }
 
@@ -125,7 +125,7 @@ pub async fn update(
     let sec = section_of(section)
         .ok_or_else(|| format!("section inconnue `{section}` : {}", SECTIONS.join(", ")))?;
     crate::vault_ops::write_filter_block(content)?;
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     let (rel, title) = match file_of(s, session_id).await.map_err(|e| e.to_string())? {
         Some(rel) => {
             let sess = s
@@ -284,7 +284,7 @@ fn harvest_key(session: &str, text: &str) -> String {
 }
 
 pub async fn harvest(s: &Services) -> anyhow::Result<Vec<(String, String)>> {
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     let mut out = Vec::new();
     for e in std::fs::read_dir(vault.join(DIR))
         .into_iter()

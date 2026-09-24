@@ -4,7 +4,7 @@
 //! Tout ce qui écrit dans le vault passe ici, et ici seulement : c'est la frontière de
 //! sécurité de la mémoire. Un secret ou un contenu suspect n'y entre jamais.
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_memory::index::simple_entry;
 use penelope_memory::{IndexedEntry, Level, Provenance};
 use std::path::Path;
@@ -453,7 +453,7 @@ pub async fn migrate_wiki(s: &Services, vault: &Path) -> Result<Migration, Strin
             let Ok(bytes) = std::fs::read(e.path()) else {
                 continue;
             };
-            let file = crate::media::save_document_original(vault, &stem, &name, &bytes)?;
+            let file = penelope_app::media::save_document_original(vault, &stem, &name, &bytes)?;
             if vault.join(&source).exists() {
                 update_note(vault, &source, None, &day, |raw| {
                     Ok(embed_original(raw, &file, &day))

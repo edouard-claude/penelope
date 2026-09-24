@@ -10,7 +10,7 @@
 //! Le sujet se fixe quand l'instantané de l'épisode est figé : le préfixe reste identique
 //! d'un tour à l'autre. Le changer à la main refige l'instantané au tour suivant.
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_memory::{IndexedEntry, Level};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -151,7 +151,7 @@ pub async fn resolve(s: &Services, session_id: &str, user_text: &str) -> Option<
         .and_then(|x| x.tg_chat_id.zip(x.tg_topic_id))
     {
         Some((chat, topic)) => {
-            let k = crate::helpers::topic_name_key(chat, topic);
+            let k = penelope_app::helpers::topic_name_key(chat, topic);
             s.store
                 .read(move |c| penelope_store::kv_get(c, &k))
                 .await

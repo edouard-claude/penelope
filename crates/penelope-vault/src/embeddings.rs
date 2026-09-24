@@ -4,8 +4,8 @@
 //! manquants après chaque écriture ; au tour, le vecteur du message a un délai borné et la
 //! recherche redevient lexicale s'il manque.
 
-use crate::ports::ProviderSource;
-use crate::runtime::Services;
+use penelope_app::ports::ProviderSource;
+use penelope_app::services::Services;
 use penelope_kernel::canonical::sha256_hex;
 use penelope_store::rusqlite::params;
 use penelope_store::{decode_embedding, encode_embedding};
@@ -91,7 +91,8 @@ pub async fn embed_texts(
     }
     let missing: Vec<usize> = (0..texts.len()).filter(|i| out[*i].is_none()).collect();
     if !missing.is_empty() {
-        let model = crate::codex_scope::background(&emb.services, &model, "embeddings").await;
+        let model =
+            penelope_app::codex_scope::background(&emb.services, &model, "embeddings").await;
         let provider = emb
             .providers
             .provider_for(&model)
@@ -365,14 +366,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let clock = Arc::new(TestClock::default());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );
         let p = Arc::new(MockProvider::new());
         let emb = Embedder {
             services: s.clone(),
-            providers: crate::testing::MockProviders::new(p.clone()),
+            providers: penelope_app::testing::MockProviders::new(p.clone()),
             state: Arc::default(),
         };
         let sid = s
@@ -382,7 +383,7 @@ mod tests {
             .unwrap()
             .id
             .to_string();
-        let vault = crate::helpers::vault_dir(&s);
+        let vault = penelope_app::helpers::vault_dir(&s);
         crate::vault_ops::remember(
             &s,
             &vault,

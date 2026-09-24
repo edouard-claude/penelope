@@ -2,8 +2,8 @@
 //! relit l'échange et note des **candidats** typés. Il n'écrit jamais dans le profil, le
 //! cœur ni les pratiques : seule la consolidation nocturne promeut, derrière ses portes.
 
-use crate::ports::ProviderSource;
-use crate::runtime::Services;
+use penelope_app::ports::ProviderSource;
+use penelope_app::services::Services;
 use penelope_llm::catalog::strip_provider;
 use penelope_llm::provider::{CancelToken, collect_stream};
 use penelope_llm::types::{ChatMessage, ChatRequest};
@@ -218,7 +218,10 @@ pub fn looks_like_proposal(answer: &str) -> bool {
 
 /// Dernière réponse de Pénélope **avant** le dernier message du propriétaire : la
 /// proposition qu'un accord court accepte.
-pub async fn previous_answer(s: &crate::runtime::Services, session_id: &str) -> Option<String> {
+pub async fn previous_answer(
+    s: &penelope_app::services::Services,
+    session_id: &str,
+) -> Option<String> {
     use penelope_llm::types::Role;
     let entries = s.context.history.tail(session_id, 40).await.ok()?;
     let last_user = entries.iter().rposition(|e| e.message.role == Role::User)?;
@@ -287,7 +290,7 @@ pub async fn review(
         .alias_model(&alias)
         .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}`"))?
         .to_string();
-    let model = crate::codex_scope::background(s, &model, "consolidation").await;
+    let model = penelope_app::codex_scope::background(s, &model, "consolidation").await;
     let provider = providers
         .provider_for(&model)
         .await
@@ -376,7 +379,7 @@ pub async fn review(
 /// Enregistre les candidats d'une relecture (tour ou épisode) : une ligne dans le journal
 /// du jour et `mem_candidates`. Renvoie le nombre retenu.
 pub async fn record_candidates(
-    s: &crate::runtime::Services,
+    s: &penelope_app::services::Services,
     raw: &str,
     session_id: &str,
     source_ref: &str,
@@ -424,7 +427,7 @@ pub async fn record_candidates(
         return Ok(0);
     }
     // Le journal du jour garde une trace lisible de ce qui a été noté.
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     for c in &candidates {
         let prov = Provenance {
             origin: Origin::Agent,
@@ -608,7 +611,7 @@ mod secret_tests {
     async fn a_secret_in_a_candidate_is_shelved_and_referenced() {
         let dir = tempfile::tempdir().unwrap();
         let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
-        let s = crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+        let s = penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
             .await
             .unwrap();
         let raw = r#"{"candidats": [{"type": "fait", "texte": "La clé Stripe de test du projet Atlas est sk_test_FauxCle0123456", "importance": 6}]}"#;
@@ -625,7 +628,7 @@ mod secret_tests {
             s.platform.secrets.get(&names[0]).unwrap().as_deref(),
             Some("sk_test_FauxCle0123456")
         );
-        let vault = crate::helpers::vault_dir(&s);
+        let vault = penelope_app::helpers::vault_dir(&s);
         for e in std::fs::read_dir(vault.join("journal")).unwrap().flatten() {
             let raw = std::fs::read_to_string(e.path()).unwrap();
             assert!(!raw.contains("sk_test_"), "{raw}");
@@ -645,12 +648,12 @@ mod daemon_tests {
         let dir = tempfile::tempdir().unwrap();
         let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );
         let p = Arc::new(MockProvider::new());
-        let providers = crate::testing::MockProviders::new(p.clone());
+        let providers = penelope_app::testing::MockProviders::new(p.clone());
         s.publish_config("test", |c| {
             c.memory.review_max_candidates = 5;
             Ok(vec!["memory.review_max_candidates".into()])
@@ -675,7 +678,7 @@ mod daemon_tests {
         assert_eq!(pending[0].origin, Origin::Owner);
         assert_eq!(pending[0].importance, 8, "une correction est prioritaire");
         assert!(pending[0].quand.is_some());
-        let vault = crate::helpers::vault_dir(&s);
+        let vault = penelope_app::helpers::vault_dir(&s);
         let journal = std::fs::read_dir(vault.join("journal")).unwrap().count();
         assert_eq!(journal, 1);
         let roles = s.budget.report("role", None, None, 10).await.unwrap();

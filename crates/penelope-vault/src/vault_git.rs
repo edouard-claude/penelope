@@ -8,7 +8,7 @@
 //! penelope mem diff [--since dream] ─► ce que le dernier rêve a changé
 //! ```
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_kernel::api::DoctorCheck;
 use penelope_tools::git;
 use serde_json::{Value, json};
@@ -53,7 +53,7 @@ pub async fn ensure_repo(s: &Services) -> Result<bool, String> {
     if autocommit_interval(s).is_none() {
         return Ok(false);
     }
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     if is_repo(&vault) {
         return Ok(false);
     }
@@ -85,7 +85,7 @@ pub async fn ensure_repo(s: &Services) -> Result<bool, String> {
 
 /// Autocommit configuré alors que le vault n'est pas sous git.
 pub fn warning(s: &Services) -> Option<String> {
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     (autocommit_interval(s).is_some() && vault.exists() && !is_repo(&vault)).then(|| {
         format!(
             "vault_git_autocommit est configuré mais {} n'est pas un dépôt git : aucun historique \
@@ -140,7 +140,7 @@ pub async fn autocommit_tick(s: &Services) {
 /// `penelope mem diff [--since dream]` : changements non commités, ou depuis l'avant-dernier
 /// état précédant le dernier rêve.
 pub async fn diff(s: &Services, since_dream: bool) -> Result<Value, String> {
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     if !is_repo(&vault) {
         return Err(
             "le vault n'est pas un dépôt git : `penelope vault sync` l'initialise quand \
@@ -205,7 +205,7 @@ pub async fn diff(s: &Services, since_dream: bool) -> Result<Value, String> {
 /// Commit du vault s'il est sous git, puis push si un remote est configuré.
 pub async fn vault_sync(s: &Services, message: &str) -> Result<Value, String> {
     let cfg = s.config.config();
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     if let Err(e) = crate::vault_git::ensure_repo(s).await {
         tracing::warn!(error = %e, "initialisation git du vault");
     }

@@ -15,8 +15,8 @@
 //! l'épisode. Les instantanés mémoire T2 sont figés par épisode : une écriture de profil
 //! apparaît à l'épisode suivant (ou après une compaction), sans casser le cache entre-temps.
 
-use crate::ports::ProviderSource;
-use crate::runtime::Services;
+use penelope_app::ports::ProviderSource;
+use penelope_app::services::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_kernel::session::{Session, SessionKind};
 use penelope_llm::catalog::strip_provider;
@@ -295,7 +295,7 @@ pub async fn ingest(
         .alias_model(&alias)
         .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}`"))?
         .to_string();
-    let model = crate::codex_scope::background(s, &model, "relecture d'épisode").await;
+    let model = penelope_app::codex_scope::background(s, &model, "relecture d'épisode").await;
     let provider = providers
         .provider_for(&model)
         .await
@@ -367,7 +367,7 @@ pub async fn ingest(
             boundary.as_str()
         );
         // Sources touchées pendant la session : wikilinks, les concepts suivent à l'écriture.
-        let vault = crate::helpers::vault_dir(s);
+        let vault = penelope_app::helpers::vault_dir(s);
         let resolver = penelope_memory::wiki::Resolver::scan(&vault);
         for slug in crate::concepts::session_sources(s, session_id).await {
             let target = resolver.link_target(&format!(
@@ -435,7 +435,9 @@ pub async fn refresh_snapshot(s: &Services, session_id: &str) {
             .await;
     }
     // La compaction casse le cache : le préfixe peut suivre ses changements.
-    let _ = s.kv_delete(&crate::helpers::prefix_key(session_id)).await;
+    let _ = s
+        .kv_delete(&penelope_app::helpers::prefix_key(session_id))
+        .await;
 }
 
 #[cfg(test)]
@@ -473,14 +475,14 @@ mod tests {
         let clock = TestClock::default();
         let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), shared)
                 .await
                 .unwrap(),
         );
         let p = Arc::new(MockProvider::new());
         let d = Arc::new(Fixture {
             services: s,
-            providers: crate::testing::MockProviders::new(p.clone()),
+            providers: penelope_app::testing::MockProviders::new(p.clone()),
         });
         (dir, d, p, clock)
     }
@@ -607,7 +609,7 @@ mod tests {
             candidates[0].source_ref.as_deref(),
             Some(format!("episode:{sid}:{first}").as_str())
         );
-        let vault = crate::helpers::vault_dir(&d.services);
+        let vault = penelope_app::helpers::vault_dir(&d.services);
         let journal: String = std::fs::read_dir(vault.join("journal"))
             .unwrap()
             .flatten()
@@ -734,12 +736,11 @@ mod tests {
             let s = s.clone();
             let sid = sid.clone();
             async move {
-                crate::conversation::build_tiers_in(&s, "bonjour", &[], None, Some((&sid, n)), None)
-                    .await
+                crate::tiers::build_tiers_in(&s, "bonjour", &[], None, Some((&sid, n)), None).await
             }
         };
         let before = build(0).await;
-        let vault = crate::helpers::vault_dir(s);
+        let vault = penelope_app::helpers::vault_dir(s);
         crate::vault_ops::remember(s, &vault, Level::Profil, "Préfère le tutoiement", &sid)
             .await
             .unwrap();

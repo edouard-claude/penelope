@@ -14,7 +14,7 @@
 //! | `index.md`, `concepts/_a-definir.md`, `archive/`, fichiers cachés | non | pages générées ou archivées |
 //! | autre format (`.pdf`, `.docx`, `.txt`…) hors `sources/` | non | à envoyer pour ingestion |
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -80,7 +80,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
 
 /// Inventaire complet du vault.
 pub async fn inventory(s: &Services) -> anyhow::Result<Inventory> {
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     let mut paths = Vec::new();
     walk(&vault, &vault, &mut paths);
     paths.sort();
@@ -199,7 +199,7 @@ pub async fn empty_search_note(s: &Services) -> Value {
 }
 
 /// Signale une fois tout nouvel écart (journal et événement) ; rend les écarts.
-pub async fn report_gaps(s: &crate::runtime::Services) -> anyhow::Result<Vec<Gap>> {
+pub async fn report_gaps(s: &penelope_app::services::Services) -> anyhow::Result<Vec<Gap>> {
     let inv = inventory(s).await?;
     let fingerprint =
         penelope_kernel::canonical::sha256_hex(serde_json::to_string(&inv.not_indexed)?.as_bytes());
@@ -238,7 +238,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let vault = crate::helpers::vault_dir(&s);
+        let vault = penelope_app::helpers::vault_dir(&s);
         std::fs::create_dir_all(vault.join("clients/acme")).unwrap();
         std::fs::write(
             vault.join("clients/acme/contrat.md"),

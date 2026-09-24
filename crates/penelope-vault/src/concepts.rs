@@ -8,7 +8,7 @@
 //! point d'entrée du wiki. `mem_neighbors` parcourt le graphe.
 
 use crate::embeddings::Embedder;
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_memory::ingest as doc;
 use penelope_memory::{IndexedEntry, Level, Origin, Provenance};
 use serde::Serialize;
@@ -214,7 +214,10 @@ pub fn migrate_pages(vault: &Path, day: &str) -> Result<usize, String> {
 }
 
 /// Sources ingérées pendant une session, les plus récentes d'abord.
-pub async fn session_sources(s: &crate::runtime::Services, session_id: &str) -> Vec<String> {
+pub async fn session_sources(
+    s: &penelope_app::services::Services,
+    session_id: &str,
+) -> Vec<String> {
     let sid = session_id.to_string();
     s.store
         .read(move |c| {
@@ -271,7 +274,7 @@ fn concept_slug(vault: &Path, nom: &str) -> String {
 
 /// Indexe les entrées d'une page de concept sous son slug.
 async fn index_page(s: &Services, page: &Page, prov: &Provenance) -> anyhow::Result<()> {
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     let rel = format!("{DIR}/{}.md", page.slug);
     let raw = std::fs::read_to_string(vault.join(&rel))?;
     let day: String = s.clock.now_rfc3339().chars().take(10).collect();
@@ -293,7 +296,7 @@ pub async fn apply(
     undefined: &[String],
 ) -> anyhow::Result<Vec<String>> {
     let s = &*emb.services;
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     std::fs::create_dir_all(vault.join(DIR))?;
     let prov = Provenance {
         origin,
@@ -391,7 +394,7 @@ async fn same_by_meaning(emb: &Embedder, nom: &str, pages: &[Page]) -> Option<us
 
 /// Réindexe la ligne de concepts d'une fiche source (`penelope mem reindex`).
 pub async fn reindex_source_links(
-    s: &crate::runtime::Services,
+    s: &penelope_app::services::Services,
     source_slug: &str,
     raw: &str,
     origin: Origin,
@@ -421,7 +424,7 @@ pub async fn reindex_source_links(
 }
 
 fn source_links_entry(
-    s: &crate::runtime::Services,
+    s: &penelope_app::services::Services,
     source_slug: &str,
     text: String,
 ) -> IndexedEntry {
@@ -455,7 +458,7 @@ async fn link_source(
     concepts: &[String],
     prov: &Provenance,
 ) -> anyhow::Result<()> {
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     let rel = format!("{}/{source_slug}.md", penelope_memory::ingest::SOURCES_DIR);
     let path = vault.join(&rel);
     let Ok(raw) = std::fs::read_to_string(&path) else {
@@ -511,7 +514,7 @@ async fn link_source(
 /// Entrées de `memoire.md` et `projets.md` qui citent un concept : le lien `[[slug]]`
 /// s'ajoute à la ligne, qui garde son uid et sa provenance.
 async fn link_memory(s: &Services, pages: &[Page]) -> anyhow::Result<usize> {
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     let mut n = 0;
     for level in [Level::Coeur, Level::Projet] {
         for mut e in s.memory.by_level(level).await? {
@@ -622,7 +625,7 @@ pub fn to_define(vault: &Path) -> Vec<String> {
 
 /// `index.md` : concepts les plus liés, sources récentes, projets.
 async fn write_index(s: &Services, pages: &[Page], day: &str) -> anyhow::Result<()> {
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     let resolver = penelope_memory::wiki::Resolver::scan(&vault);
     let mut concepts: Vec<&Page> = pages.iter().collect();
     concepts.sort_by(|a, b| {
@@ -701,7 +704,7 @@ async fn write_index(s: &Services, pages: &[Page], day: &str) -> anyhow::Result<
 }
 
 /// `mem_neighbors` : voisins d'une note par liens sortants et entrants.
-pub async fn neighbors(s: &crate::runtime::Services, slug: &str) -> anyhow::Result<Value> {
+pub async fn neighbors(s: &penelope_app::services::Services, slug: &str) -> anyhow::Result<Value> {
     let (a, b) = (slug.to_string(), slug.to_string());
     /// Liens sortants, puis entrants (slug, fichier, texte).
     type Links = (Vec<String>, Vec<(Option<String>, String, String)>);

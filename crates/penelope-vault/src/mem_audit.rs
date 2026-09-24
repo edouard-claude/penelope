@@ -3,8 +3,8 @@
 //! rentable. Le barème est fixe et versionné, pour que deux audits se comparent ; chaque
 //! audit est historisé dans `audits/audit-AAAA-MM-JJ.md` avec l'écart depuis le précédent.
 
-use crate::ports::McpAdmin;
-use crate::runtime::Services;
+use penelope_app::ports::McpAdmin;
+use penelope_app::services::Services;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -114,7 +114,7 @@ async fn facts(s: &Services, mcp: Option<Arc<dyn McpAdmin>>) -> anyhow::Result<F
             .filter(|st| st.state == penelope_mcp::supervisor::ServerState::Ready)
             .count() as i64;
     }
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     f.lint_problems = penelope_memory::wiki::lint(&vault).problems() as i64;
     let pending = vault.join("concepts/_a-definir.md");
     f.undefined_concepts = std::fs::read_to_string(pending)
@@ -314,7 +314,7 @@ pub async fn run(s: &Services, mcp: Option<Arc<dyn McpAdmin>>) -> anyhow::Result
     };
     s.kv_set(LAST_KEY, &serde_json::to_string(&audit)?).await?;
     // `audit-AAAA-MM-JJ` : un nom unique dans tout le vault (issue #29).
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     let rel = format!("audits/audit-{date}.md");
     let current = std::fs::read_to_string(vault.join(&rel)).unwrap_or_default();
     crate::vault_ops::save_note(
@@ -407,7 +407,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let clock = Arc::new(TestClock::default());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock.clone())
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock.clone())
                 .await
                 .unwrap(),
         );
@@ -426,7 +426,7 @@ mod tests {
             .unwrap()
             .id
             .to_string();
-        let vault = crate::helpers::vault_dir(&s);
+        let vault = penelope_app::helpers::vault_dir(&s);
         for text in [
             "Toujours tutoyer le propriétaire",
             "Préférer des réponses courtes",

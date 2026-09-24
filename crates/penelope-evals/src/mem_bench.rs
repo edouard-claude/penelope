@@ -236,12 +236,12 @@ pub async fn seed(d: &Arc<Daemon>, f: &Fixture) {
         }
         std::fs::write(&path, content).expect("fichier du vault");
     }
-    penelope_daemon::vault_ops::reindex(s, &vault)
+    penelope_vault::vault_ops::reindex(s, &vault)
         .await
         .expect("indexation");
     for (i, e) in f.echanges.iter().enumerate() {
         let raw = json!({"candidats": e.candidats}).to_string();
-        penelope_daemon::review::record_candidates(
+        penelope_vault::review::record_candidates(
             s,
             &raw,
             &e.session,
