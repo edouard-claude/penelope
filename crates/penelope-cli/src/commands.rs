@@ -260,6 +260,11 @@ pub enum HistoryCmd {
         #[arg(long)]
         session: Option<String>,
     },
+    /// Efface les lignes de cache non scellées et les réécrit depuis le journal.
+    Reindex {
+        #[arg(long)]
+        session: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -779,6 +784,14 @@ pub async fn run(cli: Cli) -> CliResult<()> {
                 )));
             }
         }
+        Command::History(HistoryCmd::Reindex { .. }) => {
+            output::print(&value, cli.json);
+            if value["ok"] != json!(true) {
+                return Err(CliError::Validation(
+                    "des sessions n'ont pas pu être refondues".into(),
+                ));
+            }
+        }
         _ => output::print(&value, cli.json),
     }
     Ok(())
@@ -1029,6 +1042,9 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::AuditVerify => (m::AUDIT_VERIFY, json!({})),
         Command::History(HistoryCmd::Verify { session }) => {
             (m::HISTORY_VERIFY, json!({"session": session}))
+        }
+        Command::History(HistoryCmd::Reindex { session }) => {
+            (m::HISTORY_REINDEX, json!({"session": session}))
         }
         Command::Audit(AuditCmd::Show { turn, session }) => {
             if turn.is_none() && session.is_none() {

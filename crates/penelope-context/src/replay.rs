@@ -64,9 +64,11 @@ pub(crate) enum Origin {
 #[derive(Debug, Clone)]
 pub(crate) struct Owner {
     pub event_id: i64,
+    pub ts: String,
     /// L'événement est dans le journal de la session elle-même.
     pub own: bool,
     pub turn_message_id: Option<String>,
+    pub arrived_at: Option<String>,
     /// Pour un `conv.summary` : ce que le nœud LCM porte et que la surface n'a pas.
     pub summary: Option<SummaryMeta>,
 }
@@ -103,6 +105,8 @@ pub(crate) struct Row {
     pub tokens: u64,
     pub episode: i64,
     pub compacted: bool,
+    /// Heure de la ligne : l'arrivée d'un message de la file, sinon l'événement.
+    pub ts: String,
     pub source_turn_id: Option<String>,
 }
 
@@ -112,12 +116,15 @@ pub(crate) struct NodeRow {
     /// `None` pour la copie d'un nœud hérité : la V0 lui donne un identifiant neuf.
     pub node_id: Option<String>,
     pub event_id: Option<i64>,
+    /// Nœud nommé par le `conv.import` : la refonte ne le réécrit pas.
+    pub sealed: bool,
     pub from_seq: i64,
     pub to_seq: i64,
     pub summary: String,
     pub anchors: String,
     pub tokens_src: u64,
     pub tokens_self: u64,
+    pub ts: String,
     /// Indice, dans la même liste, du nœud qui l'a prolongé.
     pub superseded_by: Option<usize>,
 }
@@ -270,6 +277,10 @@ impl Lineage {
                 tokens: node.tokens,
                 episode: node.episode,
                 compacted: surface.masked.contains(addr),
+                ts: owner
+                    .and_then(|o| o.arrived_at.clone())
+                    .or_else(|| owner.map(|o| o.ts.clone()))
+                    .unwrap_or_default(),
                 source_turn_id: owner
                     .filter(|_| own)
                     .and_then(|o| o.turn_message_id.clone()),
@@ -366,12 +377,14 @@ impl Lineage {
             out.push(NodeRow {
                 node_id: if copied { None } else { source_id },
                 event_id: owner.filter(|_| own).map(|o| o.event_id),
+                sealed: sealed.is_some(),
                 from_seq,
                 to_seq: seq_of(n.to),
                 summary: n.summary.clone(),
                 anchors,
                 tokens_src,
                 tokens_self: n.tokens_self,
+                ts: owner.map(|o| o.ts.clone()).unwrap_or_default(),
                 superseded_by: None,
             });
         }
@@ -396,8 +409,10 @@ fn own_owner(e: &Event) -> Option<Owner> {
     };
     Some(Owner {
         event_id: e.id,
+        ts: e.ts.clone(),
         own: true,
         turn_message_id: text("turn_message_id"),
+        arrived_at: text("arrived_at"),
         summary,
     })
 }

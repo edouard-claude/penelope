@@ -75,6 +75,7 @@ pub async fn process(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> T
 
 async fn process_turn(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> TurnOutcome {
     let started = std::time::Instant::now();
+    crate::history::catch_up(&daemon.services, &turn.session_id).await;
     let outcome = if let Some(parts) = oversized_telegram_merge(daemon, &turn) {
         let _ = daemon
             .services

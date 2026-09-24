@@ -2320,6 +2320,19 @@ JSON ; le code de sortie est non nul dès la première divergence, qui nomme la 
 nœud (son adresse dans le journal) et la ligne. `penelope doctor` fait la même
 vérification sur les sessions de la semaine (ligne « Historique et journal »).
 
+```bash
+penelope history reindex                  # toutes les sessions
+penelope history reindex --session s_01J8
+```
+
+Efface les lignes de cache non scellées d'une session (messages et leur plein texte,
+contextes figés, résumés) et les réécrit depuis le journal, dans une transaction par
+session ; l'historique d'avant le journal, scellé, n'est pas touché. Une session que le
+journal ne sait pas refaire (lignes sans événement) est laissée intacte et nommée. Les
+caches se rattrapent aussi seuls : à l'ouverture de chaque tour, ce qu'une écriture
+interrompue a laissé derrière le journal est refait ; un rattrapage en échec apparaît
+dans `penelope doctor`.
+
 ### Relire une requête envoyée
 
 ```bash

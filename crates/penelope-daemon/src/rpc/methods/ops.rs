@@ -126,6 +126,7 @@ impl Rpc {
             ),
             method::AUDIT_VERIFY => Ok(serde_json::to_value(s.events.verify().await?)?),
             method::HISTORY_VERIFY => crate::history::verify(s, p).await,
+            method::HISTORY_REINDEX => crate::history::reindex(s, p).await,
             // #205 : ce que le modèle avait sous les yeux, reconstitué depuis l'empreinte
             // du prompt et le transcript. Sans `turn`, le dernier tour de la session.
             method::AUDIT_SHOW => {

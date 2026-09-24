@@ -6,7 +6,7 @@ use crate::engine::{ContextEngine, SummaryJob};
 use crate::journal::{ConvEvent, SummaryPayload, SurfaceOp};
 use crate::lcm::{NodeWrite, insert_leaf_in, replace_in};
 use crate::store::mark_compacted_in;
-use penelope_store::rusqlite::Transaction;
+use penelope_store::rusqlite::{OptionalExtension, Transaction};
 
 impl ContextEngine {
     /// Niveau 1 — admission : applique le budget à un groupe de résultats d'outils et
@@ -206,9 +206,17 @@ struct Placement {
 }
 
 impl Placement {
-    /// Le nœud et le marquage de la plage, dans une seule transaction.
+    /// Le nœud et le marquage de la plage, dans une seule transaction. Un nœud que le
+    /// projecteur a déjà écrit depuis l'événement (T13) n'est pas réécrit.
     fn write(&self, tx: &Transaction<'_>, node: &NodeWrite) -> penelope_store::Result<()> {
+        let written = tx
+            .query_row("SELECT 1 FROM lcm_nodes WHERE id = ?1", [&node.id], |_| {
+                Ok(())
+            })
+            .optional()?
+            .is_some();
         match &self.previous {
+            _ if written => {}
             Some(prev) => replace_in(tx, prev, Some((self.to, self.added_src)), node)?,
             None => insert_leaf_in(tx, node, self.chunk_from, self.to)?,
         }

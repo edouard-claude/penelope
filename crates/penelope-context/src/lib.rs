@@ -9,6 +9,7 @@ pub mod engine;
 pub mod journal;
 pub mod lcm;
 pub mod numbering;
+pub mod projector;
 mod publish;
 mod render;
 pub mod replay;

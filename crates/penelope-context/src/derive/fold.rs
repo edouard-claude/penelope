@@ -108,42 +108,13 @@ impl<'a> Fold<'a> {
             ConvEvent::User(p) => {
                 let addr = self.address(ev);
                 self.surface.merge_note |= p.mid_turn;
-                self.push(
-                    addr,
-                    MessageNode {
-                        message: ChatMessage {
-                            content: p.content,
-                            ..ChatMessage::user("")
-                        },
-                        eager: false,
-                        artifact_id: None,
-                        tokens: p.tokens_est,
-                        episode: p.episode,
-                    },
-                );
+                self.push(addr, user_node(p));
                 Ok(())
             }
             ConvEvent::Assistant(p) => {
                 let addr = self.address(ev);
-                let p = *p;
                 self.surface.attempts_tail = None;
-                let message = ChatMessage {
-                    content: p.content,
-                    tool_calls: p.tool_calls,
-                    reasoning: p.reasoning,
-                    reasoning_details: p.reasoning_details,
-                    ..ChatMessage::assistant("")
-                };
-                self.push(
-                    addr,
-                    MessageNode {
-                        message,
-                        eager: false,
-                        artifact_id: None,
-                        tokens: p.tokens_est,
-                        episode: p.episode,
-                    },
-                );
+                self.push(addr, assistant_node(*p));
                 Ok(())
             }
             ConvEvent::ToolResult(p) => self.tool_result(ev, p),
@@ -242,20 +213,7 @@ impl<'a> Fold<'a> {
             SurfaceOp::Replace { from, .. } => from,
             _ => {
                 let addr = self.address(ev);
-                let message = ChatMessage {
-                    content: p.content,
-                    ..ChatMessage::tool_result(p.call_id, p.tool, "")
-                };
-                self.push(
-                    addr,
-                    MessageNode {
-                        message,
-                        eager: p.eager,
-                        artifact_id: p.artifact_id,
-                        tokens: p.tokens_est,
-                        episode: p.episode,
-                    },
-                );
+                self.push(addr, tool_node(p));
                 return Ok(());
             }
         };
@@ -376,6 +334,51 @@ impl<'a> Fold<'a> {
         }
         self.surface.attempts_tail = None;
         Ok(())
+    }
+}
+
+/// Le nœud d'un `conv.user`.
+pub(crate) fn user_node(p: UserPayload) -> MessageNode {
+    MessageNode {
+        message: ChatMessage {
+            content: p.content,
+            ..ChatMessage::user("")
+        },
+        eager: false,
+        artifact_id: None,
+        tokens: p.tokens_est,
+        episode: p.episode,
+    }
+}
+
+/// Le nœud d'un `conv.assistant`.
+pub(crate) fn assistant_node(p: AssistantPayload) -> MessageNode {
+    MessageNode {
+        message: ChatMessage {
+            content: p.content,
+            tool_calls: p.tool_calls,
+            reasoning: p.reasoning,
+            reasoning_details: p.reasoning_details,
+            ..ChatMessage::assistant("")
+        },
+        eager: false,
+        artifact_id: None,
+        tokens: p.tokens_est,
+        episode: p.episode,
+    }
+}
+
+/// Le nœud d'un `conv.tool_result`, ajouté ou remplaçant (niveau 1).
+pub(crate) fn tool_node(p: ToolResultPayload) -> MessageNode {
+    MessageNode {
+        message: ChatMessage {
+            content: p.content,
+            ..ChatMessage::tool_result(p.call_id, p.tool, "")
+        },
+        eager: p.eager,
+        artifact_id: p.artifact_id,
+        tokens: p.tokens_est,
+        episode: p.episode,
     }
 }
 

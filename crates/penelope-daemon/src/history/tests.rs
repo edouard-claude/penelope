@@ -281,3 +281,57 @@ async fn verify_names_a_tampered_row_through_rpc_and_doctor() {
     assert!(!check.ok);
     assert!(check.detail.contains(PLAIN), "{}", check.detail);
 }
+
+/// T13 : `history.reindex` refait les lignes effacées d'une session scellée, et le
+/// rattrapage d'ouverture refait la ligne qu'une seconde transaction n'a pas écrite.
+#[tokio::test]
+async fn reindex_and_catch_up_rebuild_what_the_journal_says() {
+    let (_dir, s) = services().await;
+    seed_v0(&s).await;
+    seal_legacy(&s).await.unwrap();
+    let history = &s.context.history;
+    history
+        .append(PLAIN, &ChatMessage::user("nouveau"), 2, 1, false, None)
+        .await
+        .unwrap();
+    s.store
+        .write(|tx| {
+            tx.execute("DELETE FROM messages WHERE sealed = 0", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let report = reindex(&s, &serde_json::json!({"session": PLAIN}))
+        .await
+        .unwrap();
+    assert_eq!(report["ok"], true, "{report:#}");
+    assert_eq!(report["sessions"][0]["rows"], 1);
+    assert_eq!(
+        verify(&s, &serde_json::json!({})).await.unwrap()["ok"],
+        true
+    );
+
+    // L'événement est commité, sa ligne jamais écrite.
+    let lost = penelope_context::journal::message_event(
+        &ChatMessage::user("perdu"),
+        2,
+        1,
+        false,
+        &penelope_context::journal::Provenance::default(),
+    )
+    .unwrap();
+    s.events
+        .append(penelope_kernel::event::EventDraft::new(lost.kind(), lost.payload()).session(PLAIN))
+        .await
+        .unwrap();
+    assert_eq!(
+        verify(&s, &serde_json::json!({})).await.unwrap()["ok"],
+        false
+    );
+    catch_up(&s, PLAIN).await;
+    assert_eq!(
+        verify(&s, &serde_json::json!({})).await.unwrap()["ok"],
+        true
+    );
+    assert!(doctor_check(&s).await.ok);
+}

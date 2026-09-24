@@ -62,13 +62,25 @@ impl Row {
     }
 }
 
-/// Insère la ligne et son entrée FTS ; rend son `seq`. Un message de la file déjà écrit
-/// rend le `seq` existant sans rien écrire.
+/// Insère la ligne et son entrée FTS ; rend son `seq`. Un message de la file déjà écrit,
+/// ou dont le projecteur a déjà écrit la ligne (rattrapage passé entre l'événement et
+/// cette transaction, T13), rend le `seq` existant sans rien écrire.
 fn insert_row(
     tx: &Transaction<'_>,
     row: &Row,
     event_id: Option<i64>,
 ) -> penelope_store::Result<i64> {
+    if let Some(id) = event_id
+        && let Some(seq) = tx
+            .query_row(
+                "SELECT seq FROM messages WHERE session_id = ?1 AND event_id = ?2",
+                params![row.sid, id],
+                |r| r.get(0),
+            )
+            .optional()?
+    {
+        return Ok(seq);
+    }
     if let Some(source) = &row.source_turn_id
         && let Some(seq) = tx
             .query_row(
