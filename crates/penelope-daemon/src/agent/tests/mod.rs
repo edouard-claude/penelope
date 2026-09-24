@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 mod approvals;
 mod effects;
 mod fallback;
+mod guards;
 mod run_loop;
 
 struct CountingExecutor {

@@ -40,6 +40,7 @@ pub use conversation::{Compactor, Conversation, MemoryConversation};
 pub use decisions::{EFFECT_DONE, EFFECT_IGNORE, EFFECT_RETRY, decide_approval};
 pub use executor::{CallInfo, ToolExecutor};
 pub use guards::budget_exceeded_text;
+use guards::{TurnContext, default_chain, run_guards};
 pub use loop_abort::{LOOP_STOP_NOTE, last_result_of, split_choices};
 #[cfg(test)]
 use model::fit_modalities;

@@ -61,78 +61,17 @@ impl AgentLoop {
                 }
                 Pending::Nothing | Pending::Resolved => {}
             }
-            if spec.cancel.is_cancelled() {
-                return Ok(TurnOutcome::Cancelled);
-            }
-
-            // 2. Budget : vérifié **avant** chaque appel, pas après coup.
-            let statuses = s
-                .budget
-                .status(&cfg.budget, Some(&spec.session_id), spec.run_id.as_deref())
-                .await?;
-            if let Some(exceeded) = statuses.iter().find(|b| b.exceeded) {
-                let stop = TurnOutcome::BudgetExceeded {
-                    scope: exceeded.scope.as_str().to_string(),
-                    spent_usd: exceeded.spent_usd,
-                    limit_usd: exceeded.limit_usd,
-                };
-                // Une carte « continuer ? » par plafond atteint (issue #32) : une demande
-                // déjà tranchée sans relèvement arrête le tour, une demande en attente est
-                // réutilisée plutôt que dupliquée.
-                let call_id = format!(
-                    "budget:{}:{}",
-                    exceeded.scope.as_str(),
-                    (exceeded.limit_usd * 100.0).round() as i64
-                );
-                let approval_id = match s
-                    .approvals
-                    .find_for_call(&spec.session_id, &call_id)
-                    .await?
-                {
-                    Some(a) if a.state == ApprovalState::Pending => a.id.0.clone(),
-                    Some(_) => return Ok(stop),
-                    None => {
-                        s.approvals
-                            .create(
-                                ApprovalKind::BudgetExceeded,
-                                exceeded.scope.as_str(),
-                                RiskClass::Unknown,
-                                json!({
-                                    "budget": true,
-                                    "scope": exceeded.scope.as_str(),
-                                    "spent": exceeded.spent_usd,
-                                    "limit": exceeded.limit_usd,
-                                    "call_id": call_id,
-                                    "turn_id": spec.turn_id,
-                                    "run_id": spec.run_id,
-                                }),
-                                vec!["+5 $".into(), "+20 $".into(), "Arrêter".into()],
-                                Some(&spec.session_id),
-                                spec.run_id.as_deref(),
-                                false,
-                            )
-                            .await?
-                            .id
-                            .0
-                    }
-                };
-                // Session ouverte par le propriétaire : le tour se suspend et reprend là où
-                // il s'est arrêté si le plafond est relevé. Le jour et les runs s'arrêtent.
-                let owner_session = exceeded.scope == penelope_kernel::budget::BudgetScope::Session
-                    && spec.run_id.is_none()
-                    && s.sessions
-                        .get(&spec.session_id)
-                        .await?
-                        .is_some_and(|x| x.kind == penelope_kernel::session::SessionKind::Chat);
-                if owner_session {
-                    return Ok(TurnOutcome::AwaitingApproval { approval_id });
-                }
-                return Ok(stop);
-            }
-
-            // 2 bis. Tour déjà long, reprises après approbation comprises : plafond d'appels
-            // et point de contrôle de coût (issue #19).
-            if let Some(stop) = self.turn_limits(spec, sink, iteration, cost).await? {
+            // 2. Gardes, dans l'ordre fixe : arrêt demandé, budget vérifié **avant** chaque
+            // appel et pas après coup, puis le tour déjà long, reprises après approbation
+            // comprises : plafond d'appels et point de contrôle de coût (issue #19).
+            let cx = TurnContext {
+                agent: self,
+                spec,
+                sink,
+                iteration,
+                cost,
+            };
+            if let Some(stop) = run_guards(&default_chain(), &cx).await? {
                 return Ok(stop);
             }
 
