@@ -127,7 +127,7 @@ pub async fn autocommit_tick(s: &Services) {
     }
     let _ = s.kv_set("vault.git.autocommit", &now.to_string()).await;
     let stamp = s.clock.now_rfc3339();
-    if let Err(e) = crate::dream::vault_sync(
+    if let Err(e) = vault_sync(
         s,
         &format!("autocommit : {}", &stamp[..16.min(stamp.len())]),
     )
@@ -200,4 +200,30 @@ pub async fn diff(s: &Services, since_dream: bool) -> Result<Value, String> {
         "untracked": untracked,
         "text": text,
     }))
+}
+
+/// Commit du vault s'il est sous git, puis push si un remote est configuré.
+pub async fn vault_sync(s: &Services, message: &str) -> Result<Value, String> {
+    let cfg = s.config.config();
+    let vault = crate::helpers::vault_dir(s);
+    if let Err(e) = crate::vault_git::ensure_repo(s).await {
+        tracing::warn!(error = %e, "initialisation git du vault");
+    }
+    if !vault.join(".git").exists() {
+        return Ok(
+            json!({"git": false, "note": "le vault n'est pas un dépôt git : `git init` dans le vault pour l'historique"}),
+        );
+    }
+    let committed = penelope_tools::git::commit(&vault, message, true)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut out = json!({"git": true, "commit": committed});
+    let remote = cfg.memory.vault_git_remote.trim();
+    if !remote.is_empty() && committed["committed"].as_bool() == Some(true) {
+        match penelope_tools::git::push(&vault, remote, "HEAD").await {
+            Ok(v) => out["push"] = v,
+            Err(e) => out["push_error"] = json!(e.to_string()),
+        }
+    }
+    Ok(out)
 }

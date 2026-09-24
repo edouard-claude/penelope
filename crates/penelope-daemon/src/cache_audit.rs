@@ -229,9 +229,8 @@ pub async fn freeze_volatile(
     Ok(())
 }
 
-pub fn prefix_key(session_id: &str) -> String {
-    format!("prompt.prefix.{session_id}")
-}
+// Descendue dans les helpers (T22) : les épisodes du vault l'effacent.
+pub use crate::helpers::prefix_key;
 
 /// Préfixe stable (T0 à T2) : tant que le cache de la session est chaud, un préfixe
 /// modifié (nouvel instantané mémoire, skill ou serveur MCP) attend la prochaine pause ou

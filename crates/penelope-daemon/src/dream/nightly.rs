@@ -228,32 +228,6 @@ pub(super) async fn last_failure(s: &Services) -> Option<String> {
 
 // ------------------------------------------------------------------ vault
 
-/// Commit du vault s'il est sous git, puis push si un remote est configuré.
-pub async fn vault_sync(s: &Services, message: &str) -> Result<Value, String> {
-    let cfg = s.config.config();
-    let vault = crate::helpers::vault_dir(s);
-    if let Err(e) = crate::vault_git::ensure_repo(s).await {
-        tracing::warn!(error = %e, "initialisation git du vault");
-    }
-    if !vault.join(".git").exists() {
-        return Ok(
-            json!({"git": false, "note": "le vault n'est pas un dépôt git : `git init` dans le vault pour l'historique"}),
-        );
-    }
-    let committed = penelope_tools::git::commit(&vault, message, true)
-        .await
-        .map_err(|e| e.to_string())?;
-    let mut out = json!({"git": true, "commit": committed});
-    let remote = cfg.memory.vault_git_remote.trim();
-    if !remote.is_empty() && committed["committed"].as_bool() == Some(true) {
-        match penelope_tools::git::push(&vault, remote, "HEAD").await {
-            Ok(v) => out["push"] = v,
-            Err(e) => out["push_error"] = json!(e.to_string()),
-        }
-    }
-    Ok(out)
-}
-
 /// Vérifie le vault : frontmatter, pratiques, entrées sans uid, contenu interdit.
 pub async fn vault_check(s: &Services) -> Value {
     let vault = crate::helpers::vault_dir(s);

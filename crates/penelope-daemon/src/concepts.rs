@@ -9,6 +9,7 @@
 
 use crate::embeddings::Embedder;
 use crate::runtime::Services;
+use penelope_memory::ingest as doc;
 use penelope_memory::{IndexedEntry, Level, Origin, Provenance};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -743,6 +744,32 @@ pub async fn neighbors(s: &crate::runtime::Services, slug: &str) -> anyhow::Resu
         }
     }
     Ok(json!({"slug": slug, "voisins": out}))
+}
+
+/// Indexe les passages d'une fiche avec sa provenance. Les uid étant stables, réindexer
+/// remplace les passages existants.
+pub async fn index_source(
+    s: &Services,
+    slug: &str,
+    text: &str,
+    origin: Origin,
+    source_ref: &str,
+    session_id: Option<&str>,
+) -> Result<usize, String> {
+    let now = s.clock.now_rfc3339();
+    let prov = Provenance {
+        origin,
+        session_kind: "ingestion".into(),
+        observed_at: now.clone(),
+        supersedes_uid: None,
+        source_ref: Some(source_ref.to_string()),
+        session_id: session_id.map(String::from),
+    };
+    let entries = doc::source_entries(slug, text, &now[..10.min(now.len())]);
+    for e in &entries {
+        s.memory.upsert(e, &prov).await.map_err(|e| e.to_string())?;
+    }
+    Ok(entries.len())
 }
 
 #[cfg(test)]

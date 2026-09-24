@@ -616,7 +616,8 @@ use batches::{
 };
 #[cfg(test)]
 use batches::{network_stall, own_timeout};
-pub(crate) use candidates::core_overflow;
+// Descendue avec les instantanés (T22) : le doctor la cite aussi.
+pub(crate) use crate::conversation::core_overflow;
 pub use candidates::submission_order;
 use candidates::{Clash, Item, ids_for, is_journal, nearby_batch, short, sort_and_plan};
 #[cfg(test)]
@@ -631,9 +632,9 @@ use digest::rejection_families;
 #[cfg(test)]
 use nightly::last_run;
 use nightly::{FAILED_NIGHTS_KEY, FAILED_REASON_KEY, last_failure};
-pub use nightly::{
-    failure_reported, night_failed, nightly, system_crons, vault_check, vault_path, vault_sync,
-};
+pub use nightly::{failure_reported, night_failed, nightly, system_crons, vault_check, vault_path};
+// Descendue dans `vault_git` avec le vault (T22) : l'autocommit l'appelle.
+pub use crate::vault_git::vault_sync;
 use runs::{close_interrupted, finish_run, last_finished_start, record_run, save_stats, set_phase};
 pub use runs::{history, last_report, learned, restore};
 use snapshot::{VaultSnapshot, markdown_files};

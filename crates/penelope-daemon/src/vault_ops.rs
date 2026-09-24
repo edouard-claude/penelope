@@ -192,7 +192,7 @@ pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
             .and_then(|f| f.strip_suffix(".md"))
         {
             if let Some(src) = penelope_memory::ingest::parse_source(&raw) {
-                n += crate::ingest::index_source(
+                n += crate::concepts::index_source(
                     s,
                     slug,
                     &src.text,

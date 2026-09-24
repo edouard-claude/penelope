@@ -15,21 +15,6 @@ pub async fn submission_order(s: &Services) -> anyhow::Result<Vec<String>> {
         .collect())
 }
 
-/// Budget du niveau Cœur, mesuré sur ce qui est réellement injecté (hors entrées
-/// expirées) : un dépassement est signalé dans `DREAMS.md` (issue #25).
-pub(crate) async fn core_overflow(s: &Services, budget: u64) -> Option<String> {
-    let hidden = s.memory.hidden_uids().await.ok()?;
-    let mut entries = s.memory.by_level(Level::Coeur).await.ok()?;
-    entries.retain(|e| !hidden.contains(&e.uid));
-    let (total, left_out) = penelope_memory::recall::Snapshots::budget_use(&entries, budget);
-    (left_out > 0).then(|| {
-        format!(
-            "niveau Cœur à ~{total} jetons pour un budget de {budget} ({left_out} entrée(s) \
-             non injectée(s)) : alléger memoire.md ou relever core_budget_tokens"
-        )
-    })
-}
-
 pub(super) fn short(text: &str) -> String {
     let t: String = text.chars().take(80).collect();
     if text.chars().count() > 80 {

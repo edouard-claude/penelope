@@ -6,6 +6,8 @@
 
 use crate::ports::Slot;
 use crate::runtime::{Daemon, Services};
+// Descendue dans `concepts` avec le vault (T22) : `vault_ops::reindex` l'appelle.
+pub use crate::concepts::index_source;
 use penelope_hitl::{ApprovalKind, ApprovalState};
 use penelope_kernel::event::EventDraft;
 use penelope_kernel::risk::RiskClass;
@@ -321,32 +323,6 @@ pub async fn ingest(
         duplicate: false,
         text,
     })
-}
-
-/// Indexe les passages d'une fiche avec sa provenance. Les uid étant stables, réindexer
-/// remplace les passages existants.
-pub async fn index_source(
-    s: &Services,
-    slug: &str,
-    text: &str,
-    origin: Origin,
-    source_ref: &str,
-    session_id: Option<&str>,
-) -> Result<usize, String> {
-    let now = s.clock.now_rfc3339();
-    let prov = Provenance {
-        origin,
-        session_kind: "ingestion".into(),
-        observed_at: now.clone(),
-        supersedes_uid: None,
-        source_ref: Some(source_ref.to_string()),
-        session_id: session_id.map(String::from),
-    };
-    let entries = doc::source_entries(slug, text, &now[..10.min(now.len())]);
-    for e in &entries {
-        s.memory.upsert(e, &prov).await.map_err(|e| e.to_string())?;
-    }
-    Ok(entries.len())
 }
 
 /// Premier nom libre : `slug`, `slug-2`, `slug-3`…
