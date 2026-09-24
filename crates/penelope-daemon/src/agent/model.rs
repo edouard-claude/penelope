@@ -5,7 +5,7 @@ use super::*;
 mod retry;
 
 use super::attempts::{Attempts, Partial, failure_cause, stream_cut_message};
-use penelope_context::journal::{AttemptCause, AttemptPayload};
+use penelope_app::journal::{AttemptCause, AttemptPayload};
 use retry::{Phase, RetryAction, RetryPlan};
 
 /// Échec d'un appel au modèle, déjà formulé pour l'utilisateur.

@@ -11,7 +11,7 @@
 //! `budget.record`, et une tentative échouée n'a pas d'usage connu.
 
 use super::*;
-use penelope_context::journal::{AttemptCause, AttemptPayload, ConvEvent};
+use penelope_app::journal::{AttemptCause, AttemptPayload, ConvEvent};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Tentatives gardées par tour : au-delà, elles ne sont plus que dans les journaux

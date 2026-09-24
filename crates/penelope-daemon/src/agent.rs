@@ -11,7 +11,7 @@
 //! fin du transcript, puis appelle le modèle. Un premier passage et une reprise après
 //! approbation suivent donc exactement le même chemin.
 
-use penelope_context::journal::Provenance;
+use penelope_app::journal::Provenance;
 use penelope_hitl::{ApprovalKind, ApprovalState, Decision};
 use penelope_kernel::effects::{EffectKind, EffectSpec, Planned};
 use penelope_kernel::event::EventDraft;

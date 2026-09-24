@@ -12,6 +12,7 @@ pub mod conversation;
 pub mod elicitation;
 pub mod gateway;
 pub mod helpers;
+pub mod journal;
 pub mod jobs;
 pub mod machine;
 pub mod media;
