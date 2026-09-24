@@ -9,10 +9,10 @@ Une issue fermée, c'est **trois** choses dans le même lot :
 
 1. le code et ses tests ;
 2. une section `### x.y.z` dans `docs/progress.md`, qui devient les notes de la release ;
-3. la version posée dans `Cargo.toml` (seize lignes) et `Cargo.lock`.
+3. la version posée dans `Cargo.toml` (une ligne par crate, plus celle du workspace) et `Cargo.lock`.
 
 ```bash
-make bump V=0.17.31        # vérifie la section, réécrit les seize lignes, commite
+make bump V=0.17.31        # vérifie la section, réécrit les lignes de version, commite
 git push
 ```
 
@@ -107,7 +107,7 @@ les instances 0.17.
   fusions. Jamais de section `1.0.0-alpha.N` dans un lot poussé sur `main` : le test `docs`
   l'attrape.
 - Synchronisation `main` → `v1` par **fusion** (`git merge --no-ff origin/main`, script
-  `scripts/sync-main.sh` pour les seize lignes de version), après chaque release 0.17.x et
+  `scripts/sync-main.sh` pour les lignes de version), après chaque release 0.17.x et
   au moins une fois par jour ; jamais de rebase. Une fusion en conflit depuis plus de
   **24 h bloque tout autre lot sur `v1`**.
 - `budget.toml` en conflit de fusion : la valeur la plus stricte clé par clé (minimum des

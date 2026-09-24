@@ -6,7 +6,7 @@
 #   scripts/sync-main.sh --continue          reprend une fusion arrêtée, une fois résolue
 #   scripts/sync-main.sh --derogation 217    commite avec « Dérogation-budget: #217 »
 #
-# Chaque bump 0.17.x de main réécrit les seize lignes de version de Cargo.toml et les
+# Chaque bump 0.17.x de main réécrit les lignes de version de Cargo.toml et les
 # paquets penelope-* de Cargo.lock, que v1 porte en 1.0.0-alpha.N : ces deux fichiers
 # conflictent à chaque fusion. Le script rejoue leur fusion à trois voies après avoir
 # ramené les trois côtés (base, v1, main) à la version de v1 : seul ce qui diffère

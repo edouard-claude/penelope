@@ -715,7 +715,7 @@ Code : `crates/penelope-memory/src/vault.rs` (`Annotations`, `VaultEntry`, `pars
 - Bornes : `MAX_ENTRY_CHARS = 300` (`mem_remember`), `TEMPORAL_DAYS = 30`,
   `MAX_TEXT_CHARS = 2 000 000` (ingestion), `PASSAGE_CHARS = 1 200`, formats ingérables
   `pdf`, `docx`, `html`, `htm`, `md`, `markdown`, `txt`, OCR 50 pages.
-- Skill livrée `wiki-markdown` (`crates/penelope-daemon/skills/wiki-markdown/SKILL.md`,
+- Skill livrée `wiki-markdown` (`crates/penelope-app/skills/wiki-markdown/SKILL.md`,
   `the_wiki_markdown_skill_is_bundled`) ; skills : `SKILL.md` avec frontmatter `name`,
   `description`, `version`, `allowed_tools`, `activation`, `sub_agent`, `declencheurs`,
   `requires` (`pip:`, `npm:`, `bin:`), portées `bundled` < `user` < `workspace`, table de

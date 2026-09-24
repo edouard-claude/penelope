@@ -45,7 +45,7 @@ help:
 pull:
 	git pull --ff-only
 
-# Version du workspace (issue #147) : seize lignes de Cargo.toml, le lock, et le commit.
+# Version du workspace (issue #147) : les lignes de version de Cargo.toml, le lock, et le commit.
 # Refuse si `docs/progress.md` n'a pas la section de cette version.
 bump:
 	@test -n "$(V)" || { echo "usage : make bump V=0.17.31"; exit 2; }
