@@ -47,14 +47,10 @@ valeurs, construites par le même code : identiques octet pour octet par constru
 
 - `crates/penelope-daemon/src/agent/` sort du daemon : le plafond `[crates]` du daemon
   redescend d'environ 6 100 lignes ; l'intégrateur peut l'abaisser.
-- Rouge à reprendre : `channel_agnostic_surfaces_do_not_name_a_channel`. La clé
-  `[channel.allowed]` `"crates/penelope-daemon/src/agent/pipeline.rs" = 1`
-  (`EffectKind::Telegram` dans `effect_kind`) doit devenir
-  `"crates/penelope-agent/src/pipeline.rs" = 1` : même budget, chemin déplacé.
-  `UPDATE_BUDGET=1` a retiré l'ancienne clé (fichier absent) et n'ajoute pas la
-  nouvelle : la remettre sous son nouveau chemin est une hausse depuis 0, donc une
-  dérogation laissée à l'intégrateur. Ligne prête :
-  `"crates/penelope-agent/src/pipeline.rs" = 1   # EffectKind::Telegram (effect_kind), sorti du daemon avec la boucle (lot J, T10) ; disparaît avec T37`.
+- `[channel.allowed]` : la clé de `pipeline.rs` (`EffectKind::Telegram` dans
+  `effect_kind`) suit le fichier sous `crates/penelope-agent/src/pipeline.rs`, même
+  budget 1, renommée à la main avec l'accord de l'intégrateur (`UPDATE_BUDGET` retire une
+  clé absente mais n'en ajoute pas).
 - Aucun fichier au-dessus de 800 lignes, aucun `allow` nouveau.
 
 ## Notes de version
