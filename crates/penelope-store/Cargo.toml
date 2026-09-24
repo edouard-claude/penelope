@@ -26,7 +26,3 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sy
 # développement seulement : le graphe livré reste acyclique (archtest ignore les
 # dev-dependencies, Cargo accepte ce cycle pour les tests d'intégration).
 penelope-kernel.workspace = true
-# Même filet, étape suivante (T11) : la fixture migrée est scellée par
-# `HistoryStore::seal_legacy`, relue par `sealed_prefix` et dérivée par `derive`, le code
-# que le démarrage exécute. Même règle : dépendance de développement, cycle toléré.
-penelope-context.workspace = true

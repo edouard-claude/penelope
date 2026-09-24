@@ -1566,7 +1566,6 @@ dependencies = [
 name = "penelope-store"
 version = "1.0.0-alpha.4"
 dependencies = [
- "penelope-context",
  "penelope-kernel",
  "rusqlite",
  "serde",
