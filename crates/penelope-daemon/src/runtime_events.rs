@@ -348,6 +348,119 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// Un client WebSocket authentifié, pour un consommateur au filtre `kinds`.
+    async fn consumer(log: Arc<EventLog>, kinds: &[&str]) -> WebSocketStream<TcpStream> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let kinds = kinds.iter().map(|k| k.to_string()).collect();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let consumer = StreamConsumer {
+                token: "local-secret".into(),
+                kinds,
+            };
+            let _ = serve_connection(socket, log, vec![consumer]).await;
+        });
+        let mut request = format!("ws://{addr}/events?after_id=0")
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert("authorization", "Bearer local-secret".parse().unwrap());
+        let stream = TcpStream::connect(addr).await.unwrap();
+        tokio_tungstenite::client_async(request, stream)
+            .await
+            .unwrap()
+            .0
+    }
+
+    async fn frame(ws: &mut WebSocketStream<TcpStream>) -> Value {
+        let next = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        serde_json::from_str(next.to_text().unwrap()).unwrap()
+    }
+
+    fn assistant(text: &str) -> Value {
+        use penelope_context::journal::{AssistantPayload, ConvEvent};
+        let content = penelope_llm::types::ChatMessage::assistant(text).content;
+        ConvEvent::Assistant(Box::new(AssistantPayload {
+            content,
+            ..Default::default()
+        }))
+        .payload()
+    }
+
+    /// T18 : le contenu de la conversation ne sort que pour qui le demande ; un filtre
+    /// par kind exact (`runtime.tool`) n'en reçoit rien, en rejeu comme en direct.
+    #[tokio::test]
+    async fn a_consumer_of_runtime_tool_receives_no_conv_event() {
+        let log = Arc::new(EventLog::new(
+            Store::open_memory().unwrap(),
+            Arc::new(TestClock::default()),
+        ));
+        let conv = |kind: &str, payload: Value| EventDraft::new(kind, payload).session("s1");
+        log.append(conv("conv.assistant", assistant("avant")))
+            .await
+            .unwrap();
+        let old = log
+            .append(EventDraft::new("runtime.tool", json!({"tool": "fs_read"})))
+            .await
+            .unwrap();
+        let mut ws = consumer(log.clone(), &["runtime.tool"]).await;
+        assert_eq!(frame(&mut ws).await["event_id"], old.id);
+        log.append(conv("conv.assistant", assistant("pendant")))
+            .await
+            .unwrap();
+        log.append(conv("conv.user", json!({"v": 1, "content": []})))
+            .await
+            .unwrap();
+        let fresh = log
+            .append(EventDraft::new("runtime.tool", json!({"tool": "fs_list"})))
+            .await
+            .unwrap();
+        let next = frame(&mut ws).await;
+        assert_eq!(next["kind"], "runtime.tool", "aucun conv.* entre les deux");
+        assert_eq!(next["event_id"], fresh.id);
+    }
+
+    /// T18 : sans filtre, un `conv.assistant` arrive rédigé, et borné à 64 Kio comme
+    /// n'importe quel payload.
+    #[tokio::test]
+    async fn an_unfiltered_consumer_receives_conv_assistant_redacted_and_bounded() {
+        let log = Arc::new(EventLog::new(
+            Store::open_memory().unwrap(),
+            Arc::new(TestClock::default()),
+        ));
+        let secret = "sk-FauxSecretDeConversation1234567890";
+        let said = format!("la clé est {secret}");
+        let small = log
+            .append(EventDraft::new("conv.assistant", assistant(&said)).session("s1"))
+            .await
+            .unwrap();
+        let big = log
+            .append(EventDraft::new("conv.assistant", assistant(&"x".repeat(70_000))).session("s1"))
+            .await
+            .unwrap();
+        let mut ws = consumer(log, &[]).await;
+        let first = frame(&mut ws).await;
+        assert_eq!(first["event_id"], small.id);
+        assert_eq!(first["kind"], "conv.assistant");
+        assert!(!first.to_string().contains(secret), "rédigé");
+        assert!(
+            first["payload"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("la clé est")
+        );
+        let second = frame(&mut ws).await;
+        assert_eq!(second["event_id"], big.id);
+        assert_eq!(second["payload"]["truncated"], true);
+        assert!(second["payload"]["bytes"].as_u64().unwrap() > 64 * 1024);
+    }
+
     #[tokio::test]
     async fn websocket_rejects_unauthenticated_clients() {
         let log = Arc::new(EventLog::new(

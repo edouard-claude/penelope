@@ -87,20 +87,34 @@ propre borne avec l'`attempt` suivant.
 
 Les événements `conv.*` portent le **contenu** de la conversation, pour que le journal
 se suffise (épopée #208, `design/v1/source-de-verite.md` §2.2). Chaque payload a
-`"v": 1` et, pour ceux qui produisent un message, `surface` (`{"op":"append"}` ou
-`{"op":"replace","from":s,"to":s}`). Pendant la double écriture, les tables restent la
-source de lecture ; une ligne de `messages` cite son événement par `event_id`.
+`"v": 1` et, pour ceux qui changent ce que le modèle lit, `surface` : `{"op":"append"}`
+(un nœud de plus), `{"op":"replace","from":a,"to":b}` (une plage remplacée),
+`{"op":"cut","after":a}`, `{"op":"inherit",…}` ou `{"op":"seal",…}`. Les bornes sont des
+**adresses** de la surface : le `seq` de l'événement, plus l'`offset` hérité d'un fork
+ou d'un scellement ; une ligne copiée d'une mère garde l'adresse qu'elle y avait.
+Pendant la double écriture, les tables restent la source de lecture ; une ligne de
+`messages` (et un nœud de `lcm_nodes`) cite son événement par `event_id`.
 
 | Kind | Écrit quand | Payload |
 |---|---|---|
 | `conv.user` | un message utilisateur entre dans l'historique | `source` (`owner`, `merged`, `trigger`, `nudge`, `photo`), `content`, `episode`, `tokens_est` ; `turn_message_id` et `arrived_at` pour un message de la file ; `mid_turn` s'il est arrivé pendant le tour |
 | `conv.assistant` | une réponse du modèle est gardée | `content`, `tool_calls`, `reasoning`, `turn`, `step`, `model`, `provider`, `upstream`, `generation_id`, `finish`, `usage`, `cost_usd`, `system_hash`, `tools_hash`, `request_hash` ; `interrupted` après un arrêt |
-| `conv.tool_result` | un résultat d'outil est gardé | `call_id`, `tool`, `ok`, `eager`, `content` |
-| `conv.system` | le préfixe système retenu change | `hash`, `rendered` (le texte entier), `tiles`, `reason` (`first`, `cold`, `compaction`) |
+| `conv.tool_result` | un résultat d'outil est gardé (`append`) ; ou son corps part en artefact (niveau 1) : `replace` de ce seul nœud, qui garde son adresse | `call_id`, `tool`, `ok`, `eager`, `content`, `tokens_est` ; en remplacement, `artifact_id`, `artifact_sha256`, `original_tokens` |
+| `conv.system` | le préfixe système retenu change ; le premier d'une session fille remplace celui qu'elle hérite | `hash`, `rendered` (le texte entier), `tiles`, `reason` (`first`, `cold`, `compaction`) |
 | `conv.context` | le contexte volatil est figé avec un message | `target` (l'adresse du `conv.user`), `block` |
 | `conv.attempt` | un appel au modèle n'a pas donné de réponse gardée (#206) ; sans `surface`, il n'entre jamais dans l'historique | `turn`, `step`, `cause` (`stream_cut` flux coupé, `before_stream` erreur avant le flux, `fallback` la suite passe au modèle de repli, `empty_answer` réponse vide), `model`, `provider`, `error`, `partial_text` et `partial_reasoning` (le début reçu, rédigé), `llm_request_id` ; `usage`, `cost_usd` (déjà comptés, pas de seconde ligne d'usage) et `retry_prompt` (la consigne que la requête suivante ajoute) pour une réponse vide. Dix au plus par tour ; chacun est aussi une ligne `tentative sans réponse` de `penelope logs --turn` |
+| `conv.summary` | un résumé est publié (compaction) : `replace` de la plage qu'il couvre, précédent résumé compris quand il le prolonge ; `context.compacted` suit | `node_id`, `previous_node_id`, `summary` (le texte rendu du nœud), `anchors`, `verbatim_users`, `model`, `tokens_src`, `tokens_self`, `batches_left`, `trigger`, `idempotency_key` (republier le même travail n'écrit pas un second événement) |
+| `conv.fork` | premier `conv.*` d'une session fille (`/fork`) : elle hérite de la surface de sa mère ; `session.forked` suit | `parent`, `up_to` (dernière adresse héritée), `offset` |
+| `conv.rewind` | `/rewind` : `cut` après le nœud qui précède le message de coupe (0 : tout) ; `session.rewound` suit | `turns`, `archive_session` |
+| `conv.attempt` | un appel au modèle n'a pas donné de réponse gardée (#206) ; hors surface | `cause` (`stream_cut`, `before_stream`, `empty_answer`, `fallback`), `turn`, `step`, `model`, `error`, `partial_text`, `usage`, `retry_prompt` |
+| `conv.import` | scellement d'une session d'avant le journal (§4.5) | `messages`, `contexts`, `lcm_active`, `digest` |
 
-Ces événements sont des données personnelles, purgées comme les autres.
+Le contenu transite donc par ce flux : un message du propriétaire, une réponse, un
+résultat d'outil, un résumé. Il reste local (le bind n'accepte que `127.0.0.1`), rédigé
+selon les règles communes et borné à 64 Kio comme tout payload ; un gros résultat passe
+en `{ "truncated": true, "bytes": … }`. Un consommateur filtre par kind exact : il ne
+reçoit aucun `conv.*` qu'il n'a pas nommé, sauf avec une liste `kinds` vide. Ces
+événements sont des données personnelles, purgées comme les autres.
 
 ## Démonstration Pathlayer
 
