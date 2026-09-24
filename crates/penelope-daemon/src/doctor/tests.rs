@@ -423,3 +423,5 @@ fn rendering_marks_failures() {
     assert!(out.contains("faire ceci"));
     assert!(out.contains("2 contrôle(s), 1 en échec"));
 }
+
+mod mcp_host;
