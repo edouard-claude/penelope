@@ -339,7 +339,7 @@ pub async fn start(
                         format!("{issuer}|{redirect_uri}").as_bytes()
                     )[..24]
                 );
-                match d.kv_get(&key).await.map_err(|e| e.to_string())? {
+                match d.services.kv_get(&key).await.map_err(|e| e.to_string())? {
                     Some(id) if !id.is_empty() => id,
                     _ => {
                         check_endpoint(&endpoint)?;
@@ -354,7 +354,10 @@ pub async fn start(
                             .as_str()
                             .ok_or("enregistrement du client refusé (pas de `client_id`)")?
                             .to_string();
-                        d.kv_set(&key, &id).await.map_err(|e| e.to_string())?;
+                        d.services
+                            .kv_set(&key, &id)
+                            .await
+                            .map_err(|e| e.to_string())?;
                         id
                     }
                 }
@@ -391,12 +394,13 @@ pub async fn start(
         auth_method,
         token_endpoint: meta.token_endpoint.clone(),
     };
-    d.kv_set(
-        &pending_key(&state),
-        &serde_json::to_string(&pending).map_err(|e| e.to_string())?,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    d.services
+        .kv_set(
+            &pending_key(&state),
+            &serde_json::to_string(&pending).map_err(|e| e.to_string())?,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
     let _ = s
         .events
         .append(EventDraft::new(
@@ -421,13 +425,14 @@ pub async fn complete(d: &Daemon, callback: &str) -> Result<String, String> {
     let cb = oauth::parse_callback(callback);
     let state = cb.state.clone().ok_or("adresse de retour sans `state`")?;
     let raw = d
+        .services
         .kv_get(&pending_key(&state))
         .await
         .map_err(|e| e.to_string())?
         .filter(|r| !r.is_empty())
         .ok_or("aucune autorisation en attente pour cette adresse (déjà utilisée ou expirée)")?;
     // Une adresse de retour ne sert qu'une fois, qu'elle aboutisse ou non.
-    let _ = d.kv_delete(&pending_key(&state)).await;
+    let _ = d.services.kv_delete(&pending_key(&state)).await;
     let pending: Pending = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
     let server = pending.request.server.clone();
     if s.clock.now_ms() > pending.request.expires_at_ms {

@@ -6,6 +6,7 @@ use super::*;
 async fn a_slow_button_is_acknowledged_immediately() {
     let (_d, g, t, _p) = gateway().await;
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();
@@ -48,6 +49,7 @@ async fn a_slow_button_is_acknowledged_immediately() {
 async fn drafts_are_coalesced_and_never_delay_the_answer() {
     let (_d, g, t, p) = gateway().await;
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();
@@ -96,6 +98,7 @@ async fn drafts_are_coalesced_and_never_delay_the_answer() {
 async fn a_slow_voice_note_does_not_block_the_next_update() {
     let (_d, g, t, p) = gateway().await;
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();
@@ -132,6 +135,7 @@ async fn a_slow_voice_note_does_not_block_the_next_update() {
 async fn a_slow_document_does_not_block_the_next_update() {
     let (_d, g, t, _p) = gateway().await;
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();
@@ -262,6 +266,7 @@ async fn a_definitive_refusal_is_told_once() {
 async fn pieces_of_one_paste_become_a_single_turn() {
     let (_d, g, t, p) = gateway().await;
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();
@@ -319,6 +324,7 @@ async fn pieces_of_one_paste_become_a_single_turn() {
 async fn a_short_message_goes_at_once_a_split_piece_waits() {
     let (_d, g, _t, _p) = gateway().await;
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();
@@ -372,6 +378,7 @@ async fn a_short_message_goes_at_once_a_split_piece_waits() {
 async fn two_messages_far_apart_stay_two_turns() {
     let (_d, g, _t, p) = gateway().await;
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();
@@ -407,6 +414,7 @@ async fn two_messages_far_apart_stay_two_turns() {
 async fn a_burst_asks_before_answering_and_can_be_ingested() {
     let (_d, g, t, p) = gateway().await;
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();
@@ -484,6 +492,7 @@ async fn a_burst_asks_before_answering_and_can_be_ingested() {
 async fn the_same_update_is_processed_only_once() {
     let (_d, g, t, p) = gateway().await;
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();

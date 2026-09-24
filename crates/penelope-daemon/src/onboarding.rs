@@ -238,7 +238,11 @@ fn vault(d: &Daemon) -> std::path::PathBuf {
 /// Séance en cours, sinon une nouvelle (toutes les questions, ou une partie). Le fichier
 /// est écrit avant la première question.
 pub async fn start(d: &Daemon, part: Option<Part>) -> anyhow::Result<Sitting> {
-    if let Some(rel) = d.kv_get(kv_current()).await?.filter(|r| !r.is_empty())
+    if let Some(rel) = d
+        .services
+        .kv_get(kv_current())
+        .await?
+        .filter(|r| !r.is_empty())
         && let Some(s) = load(d, &rel)
         && (part.is_none() || s.part == part)
     {
@@ -261,7 +265,7 @@ pub async fn start(d: &Daemon, part: Option<Part>) -> anyhow::Result<Sitting> {
             .collect(),
     };
     save(d, &sitting)?;
-    d.kv_set(kv_current(), &rel).await?;
+    d.services.kv_set(kv_current(), &rel).await?;
     Ok(sitting)
 }
 
@@ -592,7 +596,7 @@ pub async fn write(d: &Daemon, s: &Sitting, session_id: &str) -> anyhow::Result<
             .await
             .map_err(anyhow::Error::msg)?;
     }
-    d.kv_set(kv_current(), "").await?;
+    d.services.kv_set(kv_current(), "").await?;
     let sitting = s.rel.trim_start_matches("accueil/").trim_end_matches(".md");
     if let Err(e) = crate::vault_ops::log(
         &vault,
@@ -612,7 +616,7 @@ pub async fn write(d: &Daemon, s: &Sitting, session_id: &str) -> anyhow::Result<
 
 /// Abandonne la séance en cours (le fichier reste dans le vault).
 pub async fn cancel(d: &Daemon) -> anyhow::Result<()> {
-    d.kv_set(kv_current(), "").await
+    d.services.kv_set(kv_current(), "").await
 }
 
 /// Vrai quand le profil n'a encore aucune entrée : l'accueil est proposé.

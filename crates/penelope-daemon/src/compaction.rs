@@ -1185,7 +1185,7 @@ async fn publish_saved(
     trigger: Trigger,
     report: &mut Report,
 ) {
-    if let Err(e) = d.kv_delete(&pending_key(session_id)).await {
+    if let Err(e) = d.services.kv_delete(&pending_key(session_id)).await {
         tracing::warn!(session = %session_id, error = %e, "résumé en attente non retiré");
         return;
     }
@@ -1195,26 +1195,28 @@ async fn publish_saved(
 }
 
 async fn load_pending(d: &Arc<Daemon>, session_id: &str) -> anyhow::Result<Option<Pending>> {
-    let Some(raw) = d.kv_get(&pending_key(session_id)).await? else {
+    let Some(raw) = d.services.kv_get(&pending_key(session_id)).await? else {
         return Ok(None);
     };
     match serde_json::from_str(&raw) {
         Ok(p) => Ok(Some(p)),
         Err(e) => {
             tracing::warn!(session = %session_id, error = %e, "résumé en attente illisible, écarté");
-            d.kv_delete(&pending_key(session_id)).await?;
+            d.services.kv_delete(&pending_key(session_id)).await?;
             Ok(None)
         }
     }
 }
 
 async fn save_pending(d: &Arc<Daemon>, session_id: &str, pending: &Pending) -> anyhow::Result<()> {
-    d.kv_set(&pending_key(session_id), &serde_json::to_string(pending)?)
+    d.services
+        .kv_set(&pending_key(session_id), &serde_json::to_string(pending)?)
         .await
 }
 
 async fn load_cooldown(d: &Arc<Daemon>, session_id: &str) -> Cooldown {
-    d.kv_get(&cooldown_key(session_id))
+    d.services
+        .kv_get(&cooldown_key(session_id))
         .await
         .ok()
         .flatten()
@@ -1224,7 +1226,7 @@ async fn load_cooldown(d: &Arc<Daemon>, session_id: &str) -> Cooldown {
 
 async fn save_cooldown(d: &Arc<Daemon>, session_id: &str, cooldown: &Cooldown) {
     let raw = serde_json::to_string(cooldown).unwrap_or_default();
-    if let Err(e) = d.kv_set(&cooldown_key(session_id), &raw).await {
+    if let Err(e) = d.services.kv_set(&cooldown_key(session_id), &raw).await {
         tracing::warn!(session = %session_id, error = %e, "cooldown de compaction non enregistré");
     }
 }
@@ -1236,6 +1238,7 @@ async fn conversation_model(d: &Arc<Daemon>, session_id: &str) -> String {
     }
     let cfg = d.services.config.config();
     let alias = d
+        .services
         .kv_get(&crate::engine::last_model_key(session_id))
         .await
         .ok()

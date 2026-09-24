@@ -89,6 +89,7 @@ pub async fn run_as(
     let now = s.clock.now_ms();
     if !dry_run {
         if let Some(held) = d
+            .services
             .kv_get(LOCK_KEY)
             .await?
             .and_then(|v| v.parse::<i64>().ok())
@@ -96,16 +97,16 @@ pub async fn run_as(
         {
             anyhow::bail!("une consolidation est déjà en cours");
         }
-        d.kv_set(LOCK_KEY, &now.to_string()).await?;
+        d.services.kv_set(LOCK_KEY, &now.to_string()).await?;
     }
     let result = run_locked(d, dry_run).await;
     if !dry_run {
-        let _ = d.kv_delete(LOCK_KEY).await;
+        let _ = d.services.kv_delete(LOCK_KEY).await;
     }
     match &result {
         Ok(_) if !dry_run => {
-            let _ = d.kv_delete(FAILED_NIGHTS_KEY).await;
-            let _ = d.kv_delete(FAILED_REASON_KEY).await;
+            let _ = d.services.kv_delete(FAILED_NIGHTS_KEY).await;
+            let _ = d.services.kv_delete(FAILED_REASON_KEY).await;
         }
         // L'échec part au foyer d'où que vienne la passe : planifiée, il ne se répète pas
         // de nuit en nuit ; lancée à la main, il part toujours (issue #152).
@@ -1055,10 +1056,10 @@ async fn expired_journal(s: &Services, vault: &Path, day: &str) -> Vec<Operation
 /// commence au premier rêve qui le connaît : rien n'est proposé avant 60 jours de mesure.
 async fn unused_entries(d: &Arc<Daemon>, day: &str) -> Vec<String> {
     const KEY: &str = "memory.usage_since";
-    let since = match d.kv_get(KEY).await.ok().flatten() {
+    let since = match d.services.kv_get(KEY).await.ok().flatten() {
         Some(v) => v,
         None => {
-            let _ = d.kv_set(KEY, day).await;
+            let _ = d.services.kv_set(KEY, day).await;
             day.to_string()
         }
     };
@@ -2965,6 +2966,7 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
     let failed = last_failure(s).await;
     if let Some(reason) = &failed {
         let nights = d
+            .services
             .kv_get(FAILED_NIGHTS_KEY)
             .await
             .ok()
@@ -3165,8 +3167,13 @@ pub async fn system_crons(d: &Arc<Daemon>) -> anyhow::Result<()> {
             continue;
         }
         let key = format!("system.cron.{name}.last");
-        let Some(last) = d.kv_get(&key).await?.and_then(|v| v.parse::<i64>().ok()) else {
-            d.kv_set(&key, &now.to_string()).await?;
+        let Some(last) = d
+            .services
+            .kv_get(&key)
+            .await?
+            .and_then(|v| v.parse::<i64>().ok())
+        else {
+            d.services.kv_set(&key, &now.to_string()).await?;
             continue;
         };
         let Ok(cron) = penelope_kernel::cron::Cron::parse(&expr) else {
@@ -3178,7 +3185,7 @@ pub async fn system_crons(d: &Arc<Daemon>) -> anyhow::Result<()> {
         if now < next {
             continue;
         }
-        d.kv_set(&key, &now.to_string()).await?;
+        d.services.kv_set(&key, &now.to_string()).await?;
         let d2 = d.clone();
         match name {
             "dream" => {
@@ -3234,6 +3241,7 @@ pub async fn failure_reported(d: &Arc<Daemon>, reason: &str, always: bool) {
     let s = &d.services;
     let reason: String = reason.chars().take(300).collect();
     let nights = d
+        .services
         .kv_get(FAILED_NIGHTS_KEY)
         .await
         .ok()
@@ -3241,9 +3249,12 @@ pub async fn failure_reported(d: &Arc<Daemon>, reason: &str, always: bool) {
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(0)
         + 1;
-    let _ = d.kv_set(FAILED_NIGHTS_KEY, &nights.to_string()).await;
-    let previous = d.kv_get(FAILED_REASON_KEY).await.ok().flatten();
-    let _ = d.kv_set(FAILED_REASON_KEY, &reason).await;
+    let _ = d
+        .services
+        .kv_set(FAILED_NIGHTS_KEY, &nights.to_string())
+        .await;
+    let previous = d.services.kv_get(FAILED_REASON_KEY).await.ok().flatten();
+    let _ = d.services.kv_set(FAILED_REASON_KEY, &reason).await;
     let pending = s
         .candidates
         .pending(None)

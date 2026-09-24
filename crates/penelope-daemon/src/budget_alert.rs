@@ -71,10 +71,10 @@ pub async fn check(
             status.scope.as_str(),
             status.limit_usd
         );
-        if d.kv_get(&key).await?.is_some() {
+        if d.services.kv_get(&key).await?.is_some() {
             continue;
         }
-        d.kv_set(&key, &s.clock.now_rfc3339()).await?;
+        d.services.kv_set(&key, &s.clock.now_rfc3339()).await?;
         let top = match status.scope {
             BudgetScope::Daily => s.budget.report("session", None, Some(&today), 3).await?,
             BudgetScope::Session => s.budget.report("turn", session_id, None, 3).await?,

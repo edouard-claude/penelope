@@ -135,7 +135,13 @@ async fn a_failed_night_keeps_what_it_wrote_and_is_said_once() {
         assert_eq!(profil.matches(text.as_str()).count(), 1, "{profil}");
     }
     assert_eq!(rec.0.lock().unwrap().len(), 2, "un succès ne dit rien");
-    assert!(d.kv_get(FAILED_NIGHTS_KEY).await.unwrap().is_none());
+    assert!(
+        d.services
+            .kv_get(FAILED_NIGHTS_KEY)
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(
         !digest_text(&d)
             .await

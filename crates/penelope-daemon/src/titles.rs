@@ -101,10 +101,10 @@ pub async fn generate(
 ) -> anyhow::Result<Option<String>> {
     let s = &d.services;
     let flag = format!("session.title_asked.{session_id}");
-    if d.kv_get(&flag).await?.is_some() {
+    if d.services.kv_get(&flag).await?.is_some() {
         return Ok(None);
     }
-    d.kv_set(&flag, "1").await?;
+    d.services.kv_set(&flag, "1").await?;
     let cfg = s.config.config();
     let alias = match cfg.models.roles.get("title") {
         Some(a) => a.clone(),

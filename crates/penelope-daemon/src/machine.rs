@@ -303,14 +303,14 @@ pub async fn refresh(s: &Services) -> anyhow::Result<Inventory> {
     })
     .await?;
     inv.checked_at = s.clock.now_rfc3339();
-    crate::workflow::kv_set(s, KV_KEY, &serde_json::to_string(&inv)?).await?;
+    s.kv_set(KV_KEY, &serde_json::to_string(&inv)?).await?;
     Ok(inv)
 }
 
 /// Le dernier inventaire connu, sans rien sonder. C'est celui que lit le message système :
 /// un tour de conversation ne lance pas de processus.
 pub async fn cached(s: &Services) -> Option<Inventory> {
-    let raw = crate::workflow::kv_get(s, KV_KEY).await.ok()??;
+    let raw = s.kv_get(KV_KEY).await.ok()??;
     serde_json::from_str(&raw).ok()
 }
 

@@ -670,8 +670,7 @@ mod tests {
             missing: vec!["glab".into()],
             checked_at: "2026-09-21T09:00:00+04:00".into(),
         };
-        crate::workflow::kv_set(
-            &s,
+        s.kv_set(
             crate::machine::KV_KEY,
             &serde_json::to_string(&inv).unwrap(),
         )

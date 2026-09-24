@@ -105,14 +105,6 @@ fn done(result: StepResult, output: Value) -> StepOutcome {
 
 // ------------------------------------------------------------------ kv
 
-pub(crate) async fn kv_get(s: &Services, key: &str) -> anyhow::Result<Option<String>> {
-    s.kv_get(key).await
-}
-
-pub(crate) async fn kv_set(s: &Services, key: &str, value: &str) -> anyhow::Result<()> {
-    s.kv_set(key, value).await
-}
-
 async fn kv_delete_prefix(s: &Services, prefix: &str) -> anyhow::Result<()> {
     let p = format!("{prefix}%");
     s.store
@@ -140,11 +132,7 @@ fn origin_key(run_id: &str) -> String {
 
 /// Canal du run : là où partent questions, approbations et carte de progression.
 pub async fn origin_of(d: &Daemon, run_id: &str) -> Origin {
-    match kv_get(&d.services, &origin_key(run_id))
-        .await
-        .ok()
-        .flatten()
-    {
+    match d.services.kv_get(&origin_key(run_id)).await.ok().flatten() {
         Some(raw) => {
             let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
             Origin::from_payload(&json!({ "origin": v }))
@@ -164,7 +152,7 @@ fn brief_key(run_id: &str) -> String {
 
 /// Résumé de la conversation qui a lancé le run (issue #35) ; vide sinon.
 pub async fn brief_of(s: &Services, run_id: &str) -> String {
-    kv_get(s, &brief_key(run_id))
+    s.kv_get(&brief_key(run_id))
         .await
         .ok()
         .flatten()
@@ -180,10 +168,10 @@ async fn with_brief(ctx: &StepCtx<'_>, prompt: String) -> String {
         return prompt;
     }
     let key = format!("wf.brief_step.{}", ctx.run.id);
-    let first = match kv_get(s, &key).await.ok().flatten() {
+    let first = match s.kv_get(&key).await.ok().flatten() {
         Some(step) => step == ctx.step.id,
         None => {
-            let _ = kv_set(s, &key, &ctx.step.id).await;
+            let _ = s.kv_set(&key, &ctx.step.id).await;
             true
         }
     };
@@ -320,17 +308,19 @@ pub async fn start_run_briefed(
         .set_workdir(&run.id, &workdir.to_string_lossy())
         .await
         .map_err(|e| e.to_string())?;
-    let _ = kv_set(s, &origin_key(&run.id), &origin.to_value().to_string()).await;
+    let _ = s
+        .kv_set(&origin_key(&run.id), &origin.to_value().to_string())
+        .await;
     if let Some(brief) = brief.map(str::trim).filter(|b| !b.is_empty()) {
         let brief: String = brief.chars().take(BRIEF_CHARS).collect();
-        let _ = kv_set(s, &brief_key(&run.id), &brief).await;
+        let _ = s.kv_set(&brief_key(&run.id), &brief).await;
     }
     if admission == Admission::Hold {
         s.runs
             .set_state(&run.id, RunState::Paused, Some("en attente d'admission"))
             .await
             .map_err(|e| e.to_string())?;
-        let _ = kv_set(s, &format!("wf.held.{}", run.id), "1").await;
+        let _ = s.kv_set(&format!("wf.held.{}", run.id), "1").await;
     }
     let _ = s
         .events
@@ -436,7 +426,7 @@ async fn admit_held(d: &Arc<Daemon>) -> anyhow::Result<()> {
     held.sort_by(|a, b| a.started_at.cmp(&b.started_at));
     for run in held {
         let key = format!("wf.held.{}", run.id);
-        if kv_get(s, &key).await?.is_none() {
+        if s.kv_get(&key).await?.is_none() {
             continue;
         }
         let Some(wf) = s.workflows.get(&run.workflow_id) else {
@@ -603,7 +593,8 @@ async fn execute_with_retry(
 ) -> anyhow::Result<StepOutcome> {
     let s = &d.services;
     let attempt_key = visit_key("attempt", run, &step.id);
-    let mut attempt: u32 = kv_get(s, &attempt_key)
+    let mut attempt: u32 = s
+        .kv_get(&attempt_key)
         .await?
         .and_then(|a| a.parse().ok())
         .unwrap_or(0);
@@ -627,7 +618,7 @@ async fn execute_with_retry(
                     && attempt < retry.max =>
             {
                 attempt += 1;
-                kv_set(s, &attempt_key, &attempt.to_string()).await?;
+                s.kv_set(&attempt_key, &attempt.to_string()).await?;
                 let backoff = retry.backoff_ms.saturating_mul(1 << (attempt - 1).min(6));
                 // L'attente écoute la pause et l'annulation : jusqu'à 300 s sans rien
                 // regarder, c'était un run qu'on ne pouvait plus arrêter (issue #57).
@@ -718,7 +709,7 @@ pub async fn effective_budget(
     declared: &penelope_workflow::model::Budget,
 ) -> penelope_workflow::model::Budget {
     let mut b = *declared;
-    if let Ok(Some(raw)) = kv_get(s, &budget_key(&run.id)).await
+    if let Ok(Some(raw)) = s.kv_get(&budget_key(&run.id)).await
         && let Ok(v) = serde_json::from_str::<Value>(&raw)
     {
         if let Some(usd) = v["max_usd"].as_f64() {
@@ -785,8 +776,7 @@ pub async fn raise_budget(
     if let Some(t) = tokens {
         b.max_tokens = t;
     }
-    kv_set(
-        s,
+    s.kv_set(
         &budget_key(run_id),
         &json!({"max_usd": b.max_usd, "max_tokens": b.max_tokens}).to_string(),
     )
@@ -870,14 +860,15 @@ pub async fn control(
             // La visite repart de zéro : nouveaux effets (tentative suivante), nouvelle question.
             if let Some(step) = &run.current_step {
                 let attempt_key = visit_key("attempt", &run, step);
-                let n: u32 = kv_get(s, &attempt_key)
+                let n: u32 = s
+                    .kv_get(&attempt_key)
                     .await?
                     .and_then(|a| a.parse().ok())
                     .unwrap_or(0);
                 for what in ["agent", "answer", "asked", "wait", "child", "approval"] {
                     kv_delete_prefix(s, &visit_key(what, &run, step)).await?;
                 }
-                kv_set(s, &attempt_key, &(n + 1).to_string()).await?;
+                s.kv_set(&attempt_key, &(n + 1).to_string()).await?;
             }
             s.runs.control(run_id, op).await?
         }
@@ -980,8 +971,7 @@ pub async fn answer(
         }
         None => input.map(|t| json!(t)).unwrap_or(Value::Null),
     };
-    kv_set(
-        s,
+    s.kv_set(
         &visit_key("answer", &run, &step),
         &json!({"choice": choice, "input": input}).to_string(),
     )
@@ -1201,7 +1191,7 @@ async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     let (run, step) = (ctx.run, ctx.step);
     let started_key = visit_key("agent", run, &step.id);
     let done_key = step_done_key(&run.id);
-    let mut nudges: u32 = match kv_get(s, &started_key).await? {
+    let mut nudges: u32 = match s.kv_get(&started_key).await? {
         Some(n) => n.parse().unwrap_or(0),
         None => {
             // Première visite : consigne de l'étape, `step_done` remis à zéro.
@@ -1229,7 +1219,7 @@ async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
                 ctx.workdir().display()
             );
             record_user(s, &run.session_id, &text).await?;
-            kv_set(s, &started_key, "0").await?;
+            s.kv_set(&started_key, "0").await?;
             0
         }
     };
@@ -1297,7 +1287,7 @@ async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
             send_approval_once(ctx, approval_id).await;
             return Ok(StepOutcome::Waiting(format!("approbation {approval_id}")));
         }
-        if let Some(raw) = kv_get(s, &done_key).await? {
+        if let Some(raw) = s.kv_get(&done_key).await? {
             let v: Value = serde_json::from_str(&raw).unwrap_or(json!({}));
             if v["done"].as_bool().unwrap_or(false) {
                 let result = v["result"]
@@ -1356,7 +1346,7 @@ async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
             &format!("[relance du workflow] {nudge}"),
         )
         .await?;
-        kv_set(s, &started_key, &nudges.to_string()).await?;
+        s.kv_set(&started_key, &nudges.to_string()).await?;
     }
 }
 
@@ -1379,13 +1369,13 @@ async fn record_user(s: &Arc<Services>, session_id: &str, text: &str) -> anyhow:
 async fn send_approval_once(ctx: &StepCtx<'_>, approval_id: &str) {
     let s = ctx.s();
     let key = format!("wf.approval_sent.{approval_id}");
-    if kv_get(s, &key).await.ok().flatten().is_some() {
+    if s.kv_get(&key).await.ok().flatten().is_some() {
         return;
     }
     if let Some(m) = ctx.d.hooks.messenger() {
         let origin = origin_of(ctx.d, &ctx.run.id).await;
         if m.send_approval(&origin, approval_id).await.is_ok() {
-            let _ = kv_set(s, &key, "1").await;
+            let _ = s.kv_set(&key, "1").await;
         }
     }
 }
@@ -1858,7 +1848,7 @@ async fn tool_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
 async fn user_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     let s = ctx.s();
     let (run, step) = (ctx.run, ctx.step);
-    if let Some(raw) = kv_get(s, &visit_key("answer", run, &step.id)).await? {
+    if let Some(raw) = s.kv_get(&visit_key("answer", run, &step.id)).await? {
         let v: Value = serde_json::from_str(&raw).unwrap_or(json!({}));
         let choice = v["choice"].as_str().unwrap_or("répondu").to_string();
         return Ok(done(
@@ -1867,7 +1857,7 @@ async fn user_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         ));
     }
     let asked_key = visit_key("asked", run, &step.id);
-    if kv_get(s, &asked_key).await?.is_none() {
+    if s.kv_get(&asked_key).await?.is_none() {
         let text = question_text(ctx).await;
         let visit = format!("{}.{}", step.id, run.iterations);
         let wants_input = step.input != "none" && !step.input.is_empty();
@@ -1889,7 +1879,7 @@ async fn user_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
             .await
             .map_err(anyhow::Error::msg)?;
         }
-        kv_set(s, &asked_key, "1").await?;
+        s.kv_set(&asked_key, "1").await?;
         let _ = s
             .events
             .append(
@@ -2031,7 +2021,7 @@ async fn workflow_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     let s = ctx.s();
     let (run, step) = (ctx.run, ctx.step);
     let key = visit_key("child", run, &step.id);
-    if let Some(child_id) = kv_get(s, &key).await? {
+    if let Some(child_id) = s.kv_get(&key).await? {
         let Some(child) = s.runs.get(&child_id).await? else {
             return Ok(done(
                 StepResult::Error,
@@ -2066,7 +2056,7 @@ async fn workflow_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     .await
     {
         Ok(child) => {
-            kv_set(s, &key, &child.id).await?;
+            s.kv_set(&key, &child.id).await?;
             Ok(StepOutcome::Waiting(format!("sous-run {}", child.id)))
         }
         Err(e) => Ok(done(StepResult::Error, json!({"error": e}))),
@@ -2079,12 +2069,12 @@ async fn wait_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     let (run, step) = (ctx.run, ctx.step);
     let key = visit_key("wait", run, &step.id);
     let now = s.clock.now_ms();
-    let state: Value = match kv_get(s, &key).await? {
+    let state: Value = match s.kv_get(&key).await? {
         Some(raw) => serde_json::from_str(&raw).unwrap_or(json!({})),
         None => {
             let cursor = last_event_id(s).await?;
             let v = json!({"since_ms": now, "cursor": cursor});
-            kv_set(s, &key, &v.to_string()).await?;
+            s.kv_set(&key, &v.to_string()).await?;
             v
         }
     };
@@ -2180,7 +2170,7 @@ async fn mcp_task_wait(
     }
     let tasks = TaskStore::new(s.store.clone(), s.clock.clone());
     let key = visit_key("mcp_task", run, &step.id);
-    let task_id = match kv_get(s, &key).await? {
+    let task_id = match s.kv_get(&key).await? {
         Some(id) => id,
         None => {
             let t = tasks
@@ -2192,7 +2182,7 @@ async fn mcp_task_wait(
                     &json!({"step": step.id}),
                 )
                 .await?;
-            kv_set(s, &key, &t.id).await?;
+            s.kv_set(&key, &t.id).await?;
             t.id
         }
     };
@@ -2232,7 +2222,8 @@ async fn mcp_task_wait(
     let attempts = state["mcp_polls"].as_u64().unwrap_or(0) as u32;
     let mut next = state.clone();
     next["mcp_polls"] = json!(attempts + 1);
-    kv_set(s, &visit_key("wait", run, &step.id), &next.to_string()).await?;
+    s.kv_set(&visit_key("wait", run, &step.id), &next.to_string())
+        .await?;
     match sup.task_status(&server, &reference).await {
         Ok(v) => {
             let status = TaskState::parse(v["status"].as_str().unwrap_or_default())

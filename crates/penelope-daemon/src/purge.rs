@@ -485,7 +485,7 @@ pub async fn retention(d: &Daemon) -> anyhow::Result<Value> {
 /// fois, les réécrit avec les règles du jour.
 pub async fn reredact_outbox(d: &Daemon) -> anyhow::Result<usize> {
     const FLAG: &str = "outbox.reredacted.v1";
-    if d.kv_get(FLAG).await?.is_some() {
+    if d.services.kv_get(FLAG).await?.is_some() {
         return Ok(0);
     }
     // La rédaction se fait **hors** transaction, et hors du thread écrivain (issue
@@ -535,7 +535,7 @@ pub async fn reredact_outbox(d: &Daemon) -> anyhow::Result<usize> {
             Err(e) => tracing::error!(erreur = %e, lignes = n, "paquet non réécrit"),
         }
     }
-    d.kv_set(FLAG, &fixed.to_string()).await?;
+    d.services.kv_set(FLAG, &fixed.to_string()).await?;
     if fixed > 0 {
         tracing::warn!(
             lignes = fixed,
@@ -548,6 +548,7 @@ pub async fn reredact_outbox(d: &Daemon) -> anyhow::Result<usize> {
 pub async fn retention_tick(d: &Daemon) -> anyhow::Result<()> {
     let now = d.services.clock.now_ms();
     let last = d
+        .services
         .kv_get("retention.last")
         .await?
         .and_then(|v| v.parse::<i64>().ok())
@@ -555,7 +556,9 @@ pub async fn retention_tick(d: &Daemon) -> anyhow::Result<()> {
     if now - last < 24 * 3_600_000 {
         return Ok(());
     }
-    d.kv_set("retention.last", &now.to_string()).await?;
+    d.services
+        .kv_set("retention.last", &now.to_string())
+        .await?;
     retention(d).await?;
     Ok(())
 }

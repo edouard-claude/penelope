@@ -1542,7 +1542,8 @@ impl NativeToolExecutor {
                     .clone()
                     .ok_or_else(|| ToolError::Denied("aucun run en cours".into()))?;
                 let key = crate::workflow::step_done_key(&run);
-                let mut state: Value = crate::workflow::kv_get(s, &key)
+                let mut state: Value = s
+                    .kv_get(&key)
                     .await
                     .map_err(|e| ToolError::Other(e.to_string()))?
                     .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -1553,7 +1554,7 @@ impl NativeToolExecutor {
                 } else {
                     state["done"] = json!(true);
                 }
-                crate::workflow::kv_set(s, &key, &state.to_string())
+                s.kv_set(&key, &state.to_string())
                     .await
                     .map_err(|e| ToolError::Other(e.to_string()))?;
                 if name == "step_done" {

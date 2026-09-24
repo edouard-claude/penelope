@@ -249,7 +249,9 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
         && matches!(&outcome, TurnOutcome::Answered { text, .. }
             if crate::scheduler::final_already_sent(daemon, &turn.session_id, text).await);
     let burst_card_sent = matches!(outcome, TurnOutcome::Cancelled)
-        && crate::workflow::kv_get(&daemon.services, &format!("turn.burst_card.{}", turn.id))
+        && daemon
+            .services
+            .kv_get(&format!("turn.burst_card.{}", turn.id))
             .await
             .ok()
             .flatten()
@@ -450,7 +452,8 @@ mod tests {
         assert!(cancel.is_cancelled());
         assert_eq!(channel.0.lock().unwrap().len(), 5);
         assert!(
-            crate::workflow::kv_get(&services, &format!("turn.burst_card.{}", turn.id))
+            services
+                .kv_get(&format!("turn.burst_card.{}", turn.id))
                 .await
                 .unwrap()
                 .is_some()

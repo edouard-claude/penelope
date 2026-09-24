@@ -299,6 +299,7 @@ pub async fn run(d: &Daemon) -> anyhow::Result<Audit> {
     let axes = axes(&f);
     let total = axes.iter().map(|a| a.score).sum();
     let previous: Option<Audit> = d
+        .services
         .kv_get(LAST_KEY)
         .await?
         .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -312,7 +313,9 @@ pub async fn run(d: &Daemon) -> anyhow::Result<Audit> {
         previous_date: previous.map(|p| p.date),
         axes,
     };
-    d.kv_set(LAST_KEY, &serde_json::to_string(&audit)?).await?;
+    d.services
+        .kv_set(LAST_KEY, &serde_json::to_string(&audit)?)
+        .await?;
     // `audit-AAAA-MM-JJ` : un nom unique dans tout le vault (issue #29).
     let vault = crate::conversation::vault_dir(&d.services);
     let rel = format!("audits/audit-{date}.md");

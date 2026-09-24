@@ -492,7 +492,10 @@ async fn a_conversation_launches_ticket_to_deploy_with_its_brief() {
     let w = World::new();
     let origin = origin_repo(w._dir.path());
     let (d, g) = w.boot().await;
-    d.kv_set("tg.onboard.proposed", "test").await.unwrap();
+    d.services
+        .kv_set("tg.onboard.proposed", "test")
+        .await
+        .unwrap();
 
     // 1. Le propriétaire parle ; Pénélope cherche ses tickets dans le tracker.
     w.p.reply(r#"{"complexity":"medium"}"#);

@@ -112,7 +112,9 @@ pub async fn tick(d: &Arc<Daemon>) -> anyhow::Result<TickReport> {
             other => finish(d, &sched, other, &mut report).await?,
         }
     }
-    d.kv_set("scheduler.event_cursor", &to.to_string()).await?;
+    d.services
+        .kv_set("scheduler.event_cursor", &to.to_string())
+        .await?;
     cancelled_triggers(d).await?;
     Ok(report)
 }
@@ -273,11 +275,11 @@ async fn watch_file(d: &Arc<Daemon>, sched: &Schedule) -> anyhow::Result<bool> {
         })
         .unwrap_or_else(|_| "absent".into());
     let key = format!("scheduler.watch.{}", sched.id);
-    let previous = d.kv_get(&key).await?;
+    let previous = d.services.kv_get(&key).await?;
     if previous.as_deref() == Some(fingerprint.as_str()) {
         return Ok(false);
     }
-    d.kv_set(&key, &fingerprint).await?;
+    d.services.kv_set(&key, &fingerprint).await?;
     // Première observation : on mémorise sans déclencher.
     if previous.is_none() {
         return Ok(false);
@@ -337,12 +339,13 @@ async fn events_between(
 }
 
 async fn event_cursor(d: &Arc<Daemon>) -> anyhow::Result<i64> {
-    match d.kv_get("scheduler.event_cursor").await? {
+    match d.services.kv_get("scheduler.event_cursor").await? {
         Some(v) => Ok(v.parse().unwrap_or(0)),
         None => {
             // Premier démarrage : l'historique ne déclenche rien.
             let last = last_event_id(d).await?;
-            d.kv_set("scheduler.event_cursor", &last.to_string())
+            d.services
+                .kv_set("scheduler.event_cursor", &last.to_string())
                 .await?;
             Ok(last)
         }
@@ -623,13 +626,16 @@ async fn save_state(d: &Daemon, session_id: &str, path: &str) {
         Ok(_) => return,
         Err(_) => json!({"path": full, "content": null}),
     };
-    let _ = d.kv_set(&state_key(session_id), &saved.to_string()).await;
+    let _ = d
+        .services
+        .kv_set(&state_key(session_id), &saved.to_string())
+        .await;
 }
 
 /// Remet l'état d'avant le tour (`restore`), ou l'oublie : il est validé.
 async fn settle_state(d: &Daemon, session_id: &str, restore: bool) {
     let key = state_key(session_id);
-    let Ok(Some(raw)) = d.kv_get(&key).await else {
+    let Ok(Some(raw)) = d.services.kv_get(&key).await else {
         return;
     };
     if restore && let Ok(v) = serde_json::from_str::<Value>(&raw) {
@@ -647,7 +653,7 @@ async fn settle_state(d: &Daemon, session_id: &str, restore: bool) {
             Err(e) => tracing::warn!(error = %e, "état de planification non remis"),
         }
     }
-    let _ = d.kv_delete(&key).await;
+    let _ = d.services.kv_delete(&key).await;
 }
 
 /// Ce que le tour devait livrer et n'a pas livré, s'il en déclarait un (issue #120).
@@ -862,8 +868,8 @@ async fn cancelled_triggers(d: &Arc<Daemon>) -> anyhow::Result<()> {
     const CURSOR: &str = "scheduler.cancelled_cursor";
     let s = &d.services;
     let now = s.clock.now_rfc3339();
-    let Some(cursor) = d.kv_get(CURSOR).await? else {
-        d.kv_set(CURSOR, &now).await?;
+    let Some(cursor) = d.services.kv_get(CURSOR).await? else {
+        d.services.kv_set(CURSOR, &now).await?;
         return Ok(());
     };
     let since = cursor.clone();
@@ -896,7 +902,7 @@ async fn cancelled_triggers(d: &Arc<Daemon>) -> anyhow::Result<()> {
         s.schedules.record_outcome(id, Some(&reason)).await?;
         alert(d, &sched, &reason).await;
     }
-    d.kv_set(CURSOR, &last).await?;
+    d.services.kv_set(CURSOR, &last).await?;
     Ok(())
 }
 
@@ -1453,10 +1459,12 @@ mod tests {
             Ok(vec!["telegram.allowed_chats".into()])
         })
         .unwrap();
-        d.kv_set(&crate::telegram::chat_title_key(-100_777), "Équipe")
+        d.services
+            .kv_set(&crate::telegram::chat_title_key(-100_777), "Équipe")
             .await
             .unwrap();
-        d.kv_set(&crate::telegram::topic_name_key(-100_777, 12), "Veille")
+        d.services
+            .kv_set(&crate::telegram::topic_name_key(-100_777, 12), "Veille")
             .await
             .unwrap();
         let sched = s

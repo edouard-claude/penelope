@@ -368,6 +368,7 @@ async fn a_spoken_answer_arrives_as_a_voice_note() {
     }
     let (_d, g, t, p) = gateway().await;
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();
@@ -438,6 +439,7 @@ async fn a_spoken_answer_arrives_as_a_voice_note() {
 async fn a_failed_synthesis_falls_back_to_text() {
     let (_d, g, t, p) = gateway().await;
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();

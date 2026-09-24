@@ -213,7 +213,7 @@ impl Rpc {
             method::SESSION_SWITCH => {
                 let sid = required_str(p, "session")?;
                 s.sessions.require(&sid).await?;
-                self.daemon.kv_set("cli.session", &sid).await?;
+                self.daemon.services.kv_set("cli.session", &sid).await?;
                 Ok(json!({"session": sid}))
             }
 

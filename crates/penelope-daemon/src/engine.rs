@@ -255,7 +255,7 @@ impl Daemon {
                 Ok(sess.id.to_string())
             }
             _ => {
-                if let Some(id) = self.kv_get("cli.session").await?
+                if let Some(id) = self.services.kv_get("cli.session").await?
                     && let Some(sess) = s.sessions.get(&id).await?
                     && sess.state == "active"
                 {
@@ -265,7 +265,9 @@ impl Daemon {
                     .sessions
                     .create(SessionKind::Chat, Some("CLI".into()))
                     .await?;
-                self.kv_set("cli.session", sess.id.as_str()).await?;
+                self.services
+                    .kv_set("cli.session", sess.id.as_str())
+                    .await?;
                 Ok(sess.id.to_string())
             }
         }
@@ -406,6 +408,7 @@ impl Daemon {
         let mut episode = session.episode_seq;
         if turn.kind == TurnKind::Message
             && self
+                .services
                 .kv_get(&format!("turn.recorded.{}", turn.id))
                 .await?
                 .is_none()
@@ -417,7 +420,7 @@ impl Daemon {
         // des photos, il attend le choix du modèle : lui les montrer ou les faire décrire.
         if turn.kind != TurnKind::Resume && !text.trim().is_empty() && images.is_empty() {
             let flag = format!("turn.recorded.{}", turn.id);
-            if self.kv_get(&flag).await?.is_none() {
+            if self.services.kv_get(&flag).await?.is_none() {
                 let content = match turn.kind {
                     TurnKind::Trigger => format!("[déclencheur planifié] {text}"),
                     TurnKind::Nudge => format!("[relance] {text}"),
@@ -449,7 +452,7 @@ impl Daemon {
                         )
                         .await?;
                 }
-                self.kv_set(&flag, "1").await?;
+                self.services.kv_set(&flag, "1").await?;
             }
         }
         if turn.kind == TurnKind::Message {
@@ -515,7 +518,7 @@ impl Daemon {
         // le rôle `image_describe` et jointes en texte (§10.4).
         if turn.kind == TurnKind::Message && !images.is_empty() {
             let flag = format!("turn.recorded.{}", turn.id);
-            if self.kv_get(&flag).await?.is_none() {
+            if self.services.kv_get(&flag).await?.is_none() {
                 let message = self
                     .photo_message(&text, &images, &model_id, &turn.session_id, &origin_turn)
                     .await;
@@ -524,7 +527,7 @@ impl Daemon {
                     .history
                     .append(&turn.session_id, &message, tokens, episode, false, None)
                     .await?;
-                self.kv_set(&flag, "1").await?;
+                self.services.kv_set(&flag, "1").await?;
             }
         }
 
@@ -657,7 +660,7 @@ impl Daemon {
             return Ok(None);
         }
         let key = format!("turn.intents.{}", turn.id);
-        if let Some(saved) = self.kv_get(&key).await? {
+        if let Some(saved) = self.services.kv_get(&key).await? {
             return Ok((!saved.is_empty()).then_some(saved));
         }
         let s = &self.services;
@@ -685,7 +688,7 @@ impl Daemon {
                 lines.join("\n")
             )
         };
-        self.kv_set(&key, &block).await?;
+        self.services.kv_set(&key, &block).await?;
         Ok((!block.is_empty()).then_some(block))
     }
 
@@ -927,9 +930,11 @@ impl Daemon {
         // Dernier choix, pour que `/model` dise qui a répondu en dernier, et pourquoi il
         // a pu changer.
         let _ = self
+            .services
             .kv_set(&last_model_key(session.id.as_str()), &decision.alias)
             .await;
         let _ = self
+            .services
             .kv_set(
                 &last_model_why_key(session.id.as_str()),
                 boundary.map(boundary_label).unwrap_or(""),
@@ -985,6 +990,7 @@ impl Daemon {
     /// Alias épinglé sur une session, s'il existe encore dans la configuration.
     pub async fn pinned_model(&self, session_id: &str) -> Option<StickyModel> {
         let alias = self
+            .services
             .kv_get(&pin_key(session_id))
             .await
             .ok()
@@ -1014,7 +1020,9 @@ impl Daemon {
                 );
             }
         }
-        self.kv_set(&pin_key(session_id), alias.unwrap_or("")).await
+        self.services
+            .kv_set(&pin_key(session_id), alias.unwrap_or(""))
+            .await
     }
 
     /// État du modèle d'une session : épinglé ou automatique, dernier alias utilisé, choix.
@@ -1023,10 +1031,12 @@ impl Daemon {
         let model_of = |a: &str| cfg.alias_model(a).map(String::from);
         let pinned = self.pinned_model(session_id).await;
         let last = self
+            .services
             .kv_get(&last_model_key(session_id))
             .await?
             .filter(|a| !a.is_empty());
         let why = self
+            .services
             .kv_get(&last_model_why_key(session_id))
             .await?
             .filter(|a| !a.is_empty());
@@ -1125,18 +1135,6 @@ impl Daemon {
             })
             .await;
         parse_classification(&response.message.text())
-    }
-
-    pub async fn kv_get(&self, key: &str) -> anyhow::Result<Option<String>> {
-        self.services.kv_get(key).await
-    }
-
-    pub async fn kv_delete(&self, key: &str) -> anyhow::Result<()> {
-        self.services.kv_delete(key).await
-    }
-
-    pub async fn kv_set(&self, key: &str, value: &str) -> anyhow::Result<()> {
-        self.services.kv_set(key, value).await
     }
 }
 

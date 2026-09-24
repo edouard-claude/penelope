@@ -203,9 +203,11 @@ async fn a_long_mcp_task_is_awaited_until_it_completes() {
     let out = &done.step_outputs["attendre"];
     assert_eq!(out["status"], "completed");
     assert_eq!(out["result"]["content"][0]["text"], "build vert");
-    let task_id = kv_get(&e.d.services, &format!("wf.mcp_task.{}.attendre.0", run.id))
-        .await
-        .unwrap();
+    let task_id =
+        e.d.services
+            .kv_get(&format!("wf.mcp_task.{}.attendre.0", run.id))
+            .await
+            .unwrap();
     assert!(task_id.is_some(), "tâche suivie dans mcp_tasks");
 }
 

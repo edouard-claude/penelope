@@ -763,7 +763,7 @@ pub async fn confirm_when_healthy(d: Arc<Daemon>) {
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    if let Err(e) = d.kv_get("upgrade.health").await {
+    if let Err(e) = d.services.kv_get("upgrade.health").await {
         tracing::error!(error = %e, "mise à jour : base inaccessible, pas de confirmation");
         return;
     }

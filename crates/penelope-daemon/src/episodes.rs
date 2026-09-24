@@ -143,7 +143,7 @@ pub async fn close(
 ) -> anyhow::Result<i64> {
     let s = &d.services;
     let next = s.sessions.next_episode(session_id).await?;
-    let _ = d.kv_delete(&streak_key(session_id)).await;
+    let _ = d.services.kv_delete(&streak_key(session_id)).await;
     let _ = s
         .events
         .append(
@@ -171,6 +171,7 @@ async fn topic_change(
         return Ok(None);
     }
     let streak: u32 = d
+        .services
         .kv_get(&streak_key(session_id))
         .await?
         .and_then(|v| v.parse().ok())
@@ -193,7 +194,7 @@ async fn topic_change(
     }
     if similarity(&incoming, &profile) >= TOPIC_MIN_SIMILARITY {
         if streak > 0 {
-            d.kv_delete(&streak_key(session_id)).await?;
+            d.services.kv_delete(&streak_key(session_id)).await?;
         }
         return Ok(None);
     }
@@ -201,7 +202,8 @@ async fn topic_change(
     if streak >= TOPIC_STREAK {
         return Ok(Some(Boundary::TopicChange));
     }
-    d.kv_set(&streak_key(session_id), &streak.to_string())
+    d.services
+        .kv_set(&streak_key(session_id), &streak.to_string())
         .await?;
     Ok(None)
 }
@@ -261,7 +263,7 @@ pub async fn ingest(
 ) -> anyhow::Result<usize> {
     let s = &d.services;
     let flag = format!("episode.ingested.{session_id}.{episode}");
-    if d.kv_get(&flag).await?.is_some() {
+    if d.services.kv_get(&flag).await?.is_some() {
         return Ok(0);
     }
     let cfg = s.config.config();
@@ -275,7 +277,7 @@ pub async fn ingest(
     let entries = s.context.history.load_episode(session_id, episode).await?;
     let (transcript, users) = condensed(&entries);
     if users < MIN_USER_MESSAGES {
-        d.kv_set(&flag, "court").await?;
+        d.services.kv_set(&flag, "court").await?;
         return Ok(0);
     }
 
@@ -321,7 +323,7 @@ pub async fn ingest(
     let response = tokio::time::timeout(TIMEOUT, call)
         .await
         .map_err(|_| anyhow::anyhow!("relecture d'épisode trop longue"))??;
-    d.kv_set(&flag, "1").await?;
+    d.services.kv_set(&flag, "1").await?;
     let _ = s
         .budget
         .record(penelope_kernel::budget::UsageRecord {
@@ -417,11 +419,13 @@ pub fn snapshot_key(session_id: &str, episode: i64) -> String {
 pub async fn refresh_snapshot(d: &Daemon, s: &Services, session_id: &str) {
     if let Ok(Some(sess)) = s.sessions.get(session_id).await {
         let _ = d
+            .services
             .kv_delete(&snapshot_key(session_id, sess.episode_seq))
             .await;
     }
     // La compaction casse le cache : le préfixe peut suivre ses changements.
     let _ = d
+        .services
         .kv_delete(&crate::cache_audit::prefix_key(session_id))
         .await;
 }
@@ -526,12 +530,15 @@ mod tests {
 
         let flag = format!("episode.ingested.{sid}.{first}");
         for _ in 0..100 {
-            if d.kv_get(&flag).await.unwrap().is_some() {
+            if d.services.kv_get(&flag).await.unwrap().is_some() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert_eq!(d.kv_get(&flag).await.unwrap().as_deref(), Some("1"));
+        assert_eq!(
+            d.services.kv_get(&flag).await.unwrap().as_deref(),
+            Some("1")
+        );
         let candidates = d.services.candidates.pending(None).await.unwrap();
         for _ in 0..50 {
             if !d

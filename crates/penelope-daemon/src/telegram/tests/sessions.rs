@@ -6,6 +6,7 @@ use super::*;
 async fn exporting_an_unknown_session_says_so() {
     let (_d, g, t, _p) = gateway().await;
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();
@@ -434,7 +435,13 @@ async fn background_sessions_hold_their_replies_until_switched_back() {
             .iter()
             .any(|x| x.contains("envoyées ci-dessous"))
     );
-    assert!(d.kv_get(&held_key(&first)).await.unwrap().is_none());
+    assert!(
+        d.services
+            .kv_get(&held_key(&first))
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// #112 et #161 : deux messages en file dans A, bascule vers B : A répond une fois
@@ -697,7 +704,13 @@ async fn after_a_fork_only_the_fork_answers() {
         !sent.iter().any(|x| x.contains("réponse de fond")),
         "retenues tant que le fork a le fil : {sent:?}"
     );
-    assert!(d.kv_get(&held_key(&first)).await.unwrap().is_some());
+    assert!(
+        d.services
+            .kv_get(&held_key(&first))
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(
         d.services
             .sessions

@@ -118,6 +118,7 @@ pub async fn autocommit_tick(d: &Arc<Daemon>) {
     };
     let now = s.clock.now_ms();
     let last = d
+        .services
         .kv_get("vault.git.autocommit")
         .await
         .ok()
@@ -127,7 +128,10 @@ pub async fn autocommit_tick(d: &Arc<Daemon>) {
     if now - last < every.as_millis() as i64 {
         return;
     }
-    let _ = d.kv_set("vault.git.autocommit", &now.to_string()).await;
+    let _ = d
+        .services
+        .kv_set("vault.git.autocommit", &now.to_string())
+        .await;
     let stamp = s.clock.now_rfc3339();
     if let Err(e) = crate::dream::vault_sync(
         d,

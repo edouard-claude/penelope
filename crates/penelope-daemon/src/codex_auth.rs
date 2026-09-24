@@ -168,7 +168,7 @@ pub async fn revoke(s: &Services, g: &Grant) -> bool {
 
 /// Identifiant d'installation, créé au premier besoin puis stable.
 pub async fn installation_id(s: &Services) -> String {
-    if let Ok(Some(id)) = crate::workflow::kv_get(s, INSTALL_KEY).await
+    if let Ok(Some(id)) = s.kv_get(INSTALL_KEY).await
         && !id.trim().is_empty()
     {
         return id;
@@ -176,7 +176,7 @@ pub async fn installation_id(s: &Services) -> String {
     let id = penelope_kernel::ids::Ulid::new()
         .to_string_upper()
         .to_lowercase();
-    let _ = crate::workflow::kv_set(s, INSTALL_KEY, &id).await;
+    let _ = s.kv_set(INSTALL_KEY, &id).await;
     id
 }
 
@@ -252,8 +252,7 @@ const PENDING_KEY: &str = "codex.oauth.pending";
 /// Demande un code et le retient : l'appelant l'affiche, puis appelle [`wait_pending`].
 pub async fn start_pending(s: &Services) -> Result<DeviceLogin, String> {
     let login = start(s).await?;
-    crate::workflow::kv_set(
-        s,
+    s.kv_set(
         PENDING_KEY,
         &serde_json::to_string(&login).map_err(|e| e.to_string())?,
     )
@@ -265,13 +264,14 @@ pub async fn start_pending(s: &Services) -> Result<DeviceLogin, String> {
 /// Attend la validation du code affiché plus tôt. La demande est oubliée dans tous les
 /// cas : un code mort ne doit pas être resservi.
 pub async fn wait_pending(s: &Services) -> Result<Grant, String> {
-    let raw = crate::workflow::kv_get(s, PENDING_KEY)
+    let raw = s
+        .kv_get(PENDING_KEY)
         .await
         .map_err(|e| e.to_string())?
         .ok_or("aucune connexion Codex en attente : relancer `penelope model auth codex`")?;
     let login: DeviceLogin = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
     let out = wait_for(s, &login).await;
-    let _ = crate::workflow::kv_set(s, PENDING_KEY, "").await;
+    let _ = s.kv_set(PENDING_KEY, "").await;
     out
 }
 
@@ -671,10 +671,13 @@ pub async fn refresh_loop(d: Arc<Daemon>) {
 async fn notify_disconnected(d: &Daemon, grant: &Grant) {
     let reason = grant.disconnected.clone().unwrap_or_default();
     let key = format!("codex.disconnected.notified.{reason}");
-    if d.kv_get(&key).await.ok().flatten().is_some() {
+    if d.services.kv_get(&key).await.ok().flatten().is_some() {
         return;
     }
-    let _ = d.kv_set(&key, &d.services.clock.now_rfc3339()).await;
+    let _ = d
+        .services
+        .kv_set(&key, &d.services.clock.now_rfc3339())
+        .await;
     let text = format!(
         "🔌 **Compte ChatGPT déconnecté** ({reason}).\n\nLes modèles `codex:` repassent \
          par OpenRouter en attendant. Pour reconnecter : `penelope model auth codex`, ou \

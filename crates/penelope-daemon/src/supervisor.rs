@@ -129,12 +129,19 @@ impl Daemon {
             tracing::warn!(error = %e, "chargement des skills");
         }
         // Vault d'une version antérieure : mis au format du wiki une fois (issue #29).
-        if self.kv_get("wiki.migrated").await.ok().flatten().is_none() {
+        if self
+            .services
+            .kv_get("wiki.migrated")
+            .await
+            .ok()
+            .flatten()
+            .is_none()
+        {
             let vault = crate::conversation::vault_dir(&self.services);
             match crate::vault_ops::migrate_wiki(&self.services, &vault).await {
                 Ok(m) => {
                     tracing::info!(?m, "vault mis au format du wiki");
-                    let _ = self.kv_set("wiki.migrated", "1").await;
+                    let _ = self.services.kv_set("wiki.migrated", "1").await;
                 }
                 Err(e) => tracing::warn!(error = %e, "migration du vault"),
             }
@@ -375,6 +382,7 @@ async fn maintenance_loop(d: Arc<Daemon>) {
         // Contenu du vault hors index : signalé à chaque changement, toutes les 30 min.
         let now = d.services.clock.now_ms();
         let last = d
+            .services
             .kv_get("vault.gaps.checked")
             .await
             .ok()
@@ -382,7 +390,10 @@ async fn maintenance_loop(d: Arc<Daemon>) {
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(0);
         if now - last >= 30 * 60_000 {
-            let _ = d.kv_set("vault.gaps.checked", &now.to_string()).await;
+            let _ = d
+                .services
+                .kv_set("vault.gaps.checked", &now.to_string())
+                .await;
             if let Err(e) = crate::vault_inventory::report_gaps(&d).await {
                 tracing::warn!(error = %e, "inventaire du vault");
             }
@@ -434,13 +445,16 @@ pub(crate) fn skills_fingerprint(s: &crate::runtime::Services) -> String {
 /// skills ont été relues.
 pub(crate) async fn skills_tick(d: &Daemon) -> anyhow::Result<bool> {
     let s = &d.services;
-    if d.kv_get("skills.fingerprint").await?.as_deref() == Some(skills_fingerprint(s).as_str()) {
+    if d.services.kv_get("skills.fingerprint").await?.as_deref()
+        == Some(skills_fingerprint(s).as_str())
+    {
         return Ok(false);
     }
     match crate::runtime::reload_skills(s).await {
         Ok(n) => {
             tracing::info!(skills = n, "skills relues après changement du dossier");
-            d.kv_set("skills.fingerprint", &skills_fingerprint(s))
+            d.services
+                .kv_set("skills.fingerprint", &skills_fingerprint(s))
                 .await?;
             Ok(true)
         }
@@ -552,6 +566,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
             let key = format!("mcp.oauth.notified.{}", st.name);
             let now = s.clock.now_ms();
             let recent = d
+                .services
                 .kv_get(&key)
                 .await?
                 .and_then(|v| v.parse::<i64>().ok())
@@ -559,7 +574,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
             if recent {
                 continue;
             }
-            d.kv_set(&key, &now.to_string()).await?;
+            d.services.kv_set(&key, &now.to_string()).await?;
             let Some(cfg) = sup.config_of(&st.name).await else {
                 continue;
             };
@@ -599,6 +614,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     // demander plusieurs secondes. Aucun run vivant n'est supprimé (issue #177).
     let now = s.clock.now_ms();
     let last = d
+        .services
         .kv_get("workflow.workspace_size.checked")
         .await?
         .and_then(|v| v.parse::<i64>().ok());
@@ -631,7 +647,8 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
                 ))
                 .await?;
         }
-        d.kv_set("workflow.workspace_size.checked", &now.to_string())
+        d.services
+            .kv_set("workflow.workspace_size.checked", &now.to_string())
             .await?;
     }
     Ok(())

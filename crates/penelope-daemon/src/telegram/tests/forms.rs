@@ -34,6 +34,7 @@ async fn a_form_lives_in_its_topic_and_swallows_nothing_from_another() {
     let state = penelope_telegram::forms::FormState::new("redmine", schema).unwrap();
     let pending = json!({"choice": "redmine · commentaire", "state": state, "topic": 3});
     g.daemon
+        .services
         .kv_set(&form_key(chat, Some(3)), &pending.to_string())
         .await
         .unwrap();
@@ -43,6 +44,7 @@ async fn a_form_lives_in_its_topic_and_swallows_nothing_from_another() {
     settle(&g).await;
     let raw = g
         .daemon
+        .services
         .kv_get(&form_key(chat, Some(3)))
         .await
         .unwrap()
@@ -53,6 +55,7 @@ async fn a_form_lives_in_its_topic_and_swallows_nothing_from_another() {
     );
     assert!(
         g.daemon
+            .services
             .kv_get(&form_key(chat, Some(552)))
             .await
             .unwrap()

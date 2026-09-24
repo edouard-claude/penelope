@@ -44,12 +44,12 @@ impl penelope_llm::QuotaSink for QuotaWriter {
 
 /// Range l'instantané.
 pub async fn store(s: &Services, q: &Quota) -> anyhow::Result<()> {
-    crate::workflow::kv_set(s, QUOTA_KEY, &serde_json::to_string(q)?).await
+    s.kv_set(QUOTA_KEY, &serde_json::to_string(q)?).await
 }
 
 /// Dernier instantané connu, s'il y en a un.
 pub async fn snapshot(s: &Services) -> Option<Quota> {
-    let raw = crate::workflow::kv_get(s, QUOTA_KEY).await.ok().flatten()?;
+    let raw = s.kv_get(QUOTA_KEY).await.ok().flatten()?;
     serde_json::from_str(&raw).ok()
 }
 
@@ -103,10 +103,10 @@ pub async fn check_alert(d: &Daemon) -> anyhow::Result<Option<String>> {
         "codex.quota.alert.{window}.{:.0}",
         c.quota_alert_ratio * 100.0
     );
-    if d.kv_get(&key).await?.is_some() {
+    if d.services.kv_get(&key).await?.is_some() {
         return Ok(None);
     }
-    d.kv_set(&key, &s.clock.now_rfc3339()).await?;
+    d.services.kv_set(&key, &s.clock.now_rfc3339()).await?;
     let text = alert_text(&q, ratio, c.quota_stop_ratio, s.clock.now_ms());
     match d.hooks.messenger() {
         Some(m) => {

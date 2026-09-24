@@ -227,7 +227,7 @@ impl Conversation for SessionConversation {
                             .offer_burst(&self.session_id, &origin, parts)
                             .await
                             .map_err(anyhow::Error::msg)?;
-                        crate::workflow::kv_set(s, &format!("turn.burst_card.{}", turn.id), "1")
+                        s.kv_set(&format!("turn.burst_card.{}", turn.id), "1")
                             .await?;
                         if let Some(cancel) = &self.merge_cancel {
                             cancel.cancel();
@@ -801,12 +801,13 @@ mod tests {
             .bind_telegram(&topic, -10_042, Some(21))
             .await
             .unwrap();
-        d.kv_set(
-            &crate::telegram::topic_name_key(-10_042, 21),
-            "Posts LinkedIn",
-        )
-        .await
-        .unwrap();
+        d.services
+            .kv_set(
+                &crate::telegram::topic_name_key(-10_042, 21),
+                "Posts LinkedIn",
+            )
+            .await
+            .unwrap();
         let t = t2(topic.clone()).await;
         assert!(
             t.contains("Trois publications") && !t.contains("Scaleway"),

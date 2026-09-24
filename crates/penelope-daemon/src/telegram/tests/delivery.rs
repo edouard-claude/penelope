@@ -5,6 +5,7 @@ async fn a_text_message_gets_an_html_answer_as_a_reply() {
     let (_d, g, t, p) = gateway().await;
     // Accueil déjà proposé : seul l'échange compte ici.
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();
@@ -55,6 +56,7 @@ async fn a_failing_command_says_so_to_the_owner() {
 async fn stop_empties_the_queue_and_says_how_many() {
     let (_d, g, t, _p) = gateway().await;
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();

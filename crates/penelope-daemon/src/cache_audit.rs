@@ -249,6 +249,7 @@ pub async fn stable_prefix(
     let built = json!([tiers.identity, tiers.index, tiers.context]);
     if warm
         && let Some(stored) = d
+            .services
             .kv_get(&key)
             .await?
             .and_then(|raw| serde_json::from_str::<[String; 3]>(&raw).ok())
@@ -265,7 +266,7 @@ pub async fn stable_prefix(
         }
         return Ok(());
     }
-    d.kv_set(&key, &built.to_string()).await
+    d.services.kv_set(&key, &built.to_string()).await
 }
 
 #[cfg(test)]

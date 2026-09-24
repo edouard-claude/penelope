@@ -76,6 +76,7 @@ async fn workflow_approval_confirmation_stays_in_the_cards_topic() {
     assert_eq!(confirmation["chat_id"], group);
     assert_eq!(confirmation["message_thread_id"], topic);
     g2.daemon
+        .services
         .kv_set(
             &format!("tg.approval_destination.{}", approval.id.as_str()),
             "",
@@ -210,6 +211,7 @@ async fn workflow_approval_confirmation_stays_in_the_cards_topic() {
         .unwrap();
     assert_eq!(
         g2.daemon
+            .services
             .kv_get(&approval_reason_key(group, Some(second_topic)))
             .await
             .unwrap(),
@@ -217,6 +219,7 @@ async fn workflow_approval_confirmation_stays_in_the_cards_topic() {
     );
     assert_eq!(
         g2.daemon
+            .services
             .kv_get(&approval_reason_key(group, Some(topic)))
             .await
             .unwrap(),
@@ -389,6 +392,7 @@ async fn a_workflow_menu_starts_a_plan_conversation() {
 async fn run_without_parameters_turns_into_a_conversation() {
     let (_d, g, t, p) = gateway().await;
     g.daemon
+        .services
         .kv_set("tg.onboard.proposed", "test")
         .await
         .unwrap();
@@ -445,7 +449,10 @@ async fn a_workflow_launch_card_cannot_bypass_the_plan_gate() {
         .set_orchestrator(Arc::new(crate::workflow::WorkflowOrchestrator {
             daemon: d.clone(),
         }));
-    d.kv_set("tg.onboard.proposed", "test").await.unwrap();
+    d.services
+        .kv_set("tg.onboard.proposed", "test")
+        .await
+        .unwrap();
     let brief = "Ticket #7647 : export CSV vide depuis la 2.3. Piste : filtre de dates.";
     p.reply(r#"{"complexity":"medium"}"#);
     p.push(Scripted::ToolCalls(

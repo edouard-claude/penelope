@@ -220,7 +220,11 @@ async fn ca_14_2_a_telegram_message_gets_an_answer_and_a_ledger_entry() {
     assert!(report.is_clean());
     // Le profil est vide : sans ce marqueur, le premier message déclenche aussi la
     // proposition d'accueil, une carte de plus dans la file. Ici, elle a déjà été faite.
-    life.d.kv_set("tg.onboard.proposed", "test").await.unwrap();
+    life.d
+        .services
+        .kv_set("tg.onboard.proposed", "test")
+        .await
+        .unwrap();
 
     let update = updates::text_message(1, OWNER, OWNER, QUESTION);
     life.g.process_update(&update).await.unwrap();

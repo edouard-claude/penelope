@@ -508,7 +508,8 @@ async fn the_digest_links_to_screens_once_the_bot_is_known() {
     let (_d, g, _t, _p) = gateway().await;
     let d = &g.daemon;
     assert!(deep_link(d, "approvals").await.is_none());
-    d.kv_set(BOT_USERNAME_KEY, "penelope_test_bot")
+    d.services
+        .kv_set(BOT_USERNAME_KEY, "penelope_test_bot")
         .await
         .unwrap();
     assert_eq!(
@@ -656,7 +657,10 @@ async fn a_scheduled_prompt_answers_after_new_and_warns_on_failure() {
     let (_d, g, t, p) = gateway().await;
     let d = g.daemon.clone();
     let s = &d.services;
-    d.kv_set("tg.onboard.proposed", "test").await.unwrap();
+    d.services
+        .kv_set("tg.onboard.proposed", "test")
+        .await
+        .unwrap();
     let chat = Origin::Telegram {
         chat_id: OWNER,
         topic_id: None,
