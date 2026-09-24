@@ -343,6 +343,14 @@ pub struct DaemonHandle {
 }
 
 impl DaemonHandle {
+    pub fn new(started_at_ms: i64) -> DaemonHandle {
+        DaemonHandle {
+            shutdown: Arc::new(AtomicBool::new(false)),
+            restart: Arc::new(AtomicBool::new(false)),
+            started_at_ms,
+            turns_done: Arc::new(AtomicU64::new(0)),
+        }
+    }
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::SeqCst);
     }
@@ -443,12 +451,7 @@ impl Daemon {
         let started_at_ms = services.clock.now_ms();
         Daemon {
             services,
-            handle: DaemonHandle {
-                shutdown: Arc::new(AtomicBool::new(false)),
-                restart: Arc::new(AtomicBool::new(false)),
-                started_at_ms,
-                turns_done: Arc::new(AtomicU64::new(0)),
-            },
+            handle: DaemonHandle::new(started_at_ms),
             bus: Arc::new(crate::bus::Bus::new()),
             hooks: Hooks::default(),
             compaction: crate::compaction::State::default(),
