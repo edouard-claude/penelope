@@ -54,7 +54,8 @@ impl Task {
         }
     }
 
-    fn max_tokens(&self) -> u32 {
+    /// Plafond de la réponse du modèle de vision pour cette tâche.
+    pub fn max_tokens(&self) -> u32 {
         match self {
             Task::Describe => 2_000,
             Task::Read => 4_000,
