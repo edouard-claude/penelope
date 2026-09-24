@@ -34,7 +34,7 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 |---|---|---|
 | CA 4.1 | Detects tampering | `crates/penelope-kernel/src/event.rs` |
 | CA 4.2 | Dispatching becomes unknown without retry | `crates/penelope-kernel/src/effects.rs` |
-| CA 4.3 | Generations are monotonic | `crates/penelope-kernel/src/config.rs` |
+| CA 4.3 | Generations are monotonic | `crates/penelope-kernel/src/config/tests.rs` |
 | CA 4.4 | Config changes are published live | `crates/penelope-evals/tests/hot_reload.rs` |
 
 ## §5. Sessions et moteur de contexte
