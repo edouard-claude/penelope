@@ -120,7 +120,38 @@ pub async fn digest_text(
     d: &Arc<Daemon>,
     mcp: Option<Arc<dyn McpAdmin>>,
 ) -> anyhow::Result<String> {
+    // Ce que le digest lit au-dessus du rêve (planifications, compactage), calculé ici
+    // et transmis en données (T26).
     let s = &d.services;
+    // Planifications dont la dernière exécution a échoué, ou n'a rien livré (#39, #120).
+    let failing: Vec<String> = {
+        let mut v = Vec::new();
+        for sched in s.schedules.list().await.unwrap_or_default() {
+            if sched.state == "active"
+                && let Some(err) = &sched.last_error
+            {
+                v.push(format!(
+                    "- {} : {err}",
+                    crate::scheduler::label(d, &sched).await
+                ));
+            }
+        }
+        v
+    };
+    let inputs = penelope_dream::DigestInputs {
+        failing_schedules: failing,
+        struggling_sessions: crate::compaction::struggling_sessions(s).await,
+        due_today: crate::scheduler::due_today(d).await,
+    };
+    digest_with(&d.services, inputs, mcp).await
+}
+
+/// Corps du digest, sans le daemon : les entrées d'au-dessus arrivent en données.
+async fn digest_with(
+    s: &Arc<Services>,
+    inputs: penelope_dream::DigestInputs,
+    mcp: Option<Arc<dyn McpAdmin>>,
+) -> anyhow::Result<String> {
     let mut t = format!("☀️ **Digest du {}**\n", today(s));
     // Une nuit ratée se dit : le rapport précédent ne passe pas pour celui de la nuit.
     let failed = last_failure(s).await;
@@ -173,21 +204,7 @@ pub async fn digest_text(
         None if failed.is_some() => {}
         None => t.push_str("\n🧠 Pas encore de consolidation.\n"),
     }
-    // Planifications dont la dernière exécution a échoué, ou n'a rien livré (#39, #120).
-    let failing: Vec<String> = {
-        let mut v = Vec::new();
-        for sched in s.schedules.list().await.unwrap_or_default() {
-            if sched.state == "active"
-                && let Some(err) = &sched.last_error
-            {
-                v.push(format!(
-                    "- {} : {err}",
-                    crate::scheduler::label(d, &sched).await
-                ));
-            }
-        }
-        v
-    };
+    let failing = inputs.failing_schedules;
     if !failing.is_empty() {
         t.push_str(&format!(
             "\n⏰ {} planification(s) en échec (`/schedules`) :\n{}\n",
@@ -196,7 +213,7 @@ pub async fn digest_text(
         ));
     }
     // Sessions qui ne se résument plus : elles coûtent plus cher à chaque tour (#131).
-    let struggling = crate::compaction::struggling_sessions(s).await;
+    let struggling = inputs.struggling_sessions;
     if !struggling.is_empty() {
         t.push_str("\n🗜 Résumé de session en échec :\n");
         for (title, n, per_turn) in struggling {
@@ -209,7 +226,7 @@ pub async fn digest_text(
         }
     }
     // Ce qui part aujourd'hui, et où (#124).
-    let due = crate::scheduler::due_today(d).await;
+    let due = inputs.due_today;
     if !due.is_empty() {
         t.push_str(&format!(
             "\n🗓 Aujourd'hui :\n{}\n",
@@ -221,7 +238,7 @@ pub async fn digest_text(
         t.push_str(&format!(
             "\n📋 {} demande(s) en attente : {}\n",
             pending.len(),
-            match crate::helpers::deep_link(&d.services, "approvals").await {
+            match crate::helpers::deep_link(s, "approvals").await {
                 Some(link) => format!("[ouvrir]({link})"),
                 None => "`/approvals`".into(),
             }
@@ -244,7 +261,7 @@ pub async fn digest_text(
             "\n🔧 Runs récents : {done} terminé(s), {blocked} bloqué(s), {running} en cours{}\n",
             match (
                 blocked > 0,
-                crate::helpers::deep_link(&d.services, "runs_stuck").await
+                crate::helpers::deep_link(s, "runs_stuck").await
             ) {
                 (true, Some(link)) => format!(" · [reprendre]({link})"),
                 _ => String::new(),
@@ -277,7 +294,7 @@ pub async fn digest_text(
     }
     // Le lundi, l'audit de la mémoire et son écart sur la semaine (issue #23).
     if chrono::Datelike::weekday(&s.clock.now_utc()) == chrono::Weekday::Mon {
-        match crate::mem_audit::run(&d.services, mcp).await {
+        match crate::mem_audit::run(s, mcp).await {
             Ok(audit) => {
                 let delta = audit
                     .delta
@@ -289,7 +306,7 @@ pub async fn digest_text(
                     })
                     .unwrap_or_default();
                 t.push_str(&format!("\n📈 Mémoire : {}/100{delta}", audit.total));
-                if let Some(link) = crate::helpers::deep_link(&d.services, "audit").await {
+                if let Some(link) = crate::helpers::deep_link(s, "audit").await {
                     t.push_str(&format!(" · [détail]({link})"));
                 }
                 if let Some(best) = crate::mem_audit::best_next(&audit) {

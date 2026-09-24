@@ -25,6 +25,18 @@ pub struct Context {
     pub embeddings: Arc<penelope_vault::embeddings::State>,
 }
 
+/// Ce que le digest du matin lit au-dessus du rêve, transmis en données : l'orchestrateur
+/// (planifications) et le compactage ne sont pas des dépendances de la crate.
+#[derive(Debug, Clone, Default)]
+pub struct DigestInputs {
+    /// Planifications actives en échec, une ligne `- libellé : erreur` chacune.
+    pub failing_schedules: Vec<String>,
+    /// Sessions dont le résumé échoue : (titre, échecs en 24 h, coût par tour).
+    pub struggling_sessions: Vec<(String, u32, Option<f64>)>,
+    /// Ce qui part aujourd'hui, une ligne chacun.
+    pub due_today: Vec<String>,
+}
+
 impl Context {
     /// Calcul des embeddings, comme `Daemon::embedder`.
     pub fn embedder(&self) -> penelope_vault::embeddings::Embedder {
