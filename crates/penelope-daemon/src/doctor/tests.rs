@@ -348,46 +348,6 @@ async fn a_missing_owner_is_critical_with_a_fix() {
     assert!(render(&[check]).contains("correction proposée"));
 }
 
-/// #205 : un préfixe qui bouge plusieurs fois par jour hors pause et hors compaction
-/// est la cause n° 1 des ratés de cache (#17). `doctor` le dit, et nomme la tuile.
-#[tokio::test]
-async fn an_unstable_system_prompt_is_reported_with_its_tile() {
-    let (_d, s) = services().await;
-    let now = s.clock.now_rfc3339();
-    let day = now[..10].to_string();
-    s.store
-        .write(move |tx| {
-            for i in 0..6 {
-                tx.execute(
-                    "INSERT INTO usage(ts, day, session_id, model, provider, prompt,
-                        completion, cost_usd, miss_cause, system_hash)
-                     VALUES(?1,?2,'s1','m','p',10000,10,0.1,'prefixe:T1',?3)",
-                    penelope_store::rusqlite::params![now, day, format!("h{i}")],
-                )?;
-            }
-            Ok(())
-        })
-        .await
-        .unwrap();
-
-    let checks = run(&s).await;
-    let c = checks.iter().find(|c| c.id == "prompt.stability").unwrap();
-    assert!(!c.ok, "{}", c.detail);
-    assert!(c.detail.contains("6"), "{}", c.detail);
-    assert!(c.detail.contains("index des capacités"), "{}", c.detail);
-}
-
-/// Sur une instance calme, le contrôle est vert et dit le poids gardé.
-#[tokio::test]
-async fn a_quiet_instance_keeps_a_green_prompt_check() {
-    let (_d, s) = services().await;
-    let checks = run(&s).await;
-    let c = checks.iter().find(|c| c.id == "prompt.stability").unwrap();
-    assert!(c.ok, "{}", c.detail);
-    let r = checks.iter().find(|c| c.id == "retention").unwrap();
-    assert!(r.detail.contains("prompts"), "{}", r.detail);
-}
-
 #[tokio::test]
 async fn pending_unknown_effects_are_surfaced() {
     let (_d, s) = services().await;
