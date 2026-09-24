@@ -2,6 +2,10 @@
 
 use super::*;
 
+pub(super) mod decide;
+
+use decide::{CallContext, DescribedCall, GuardStop, Suspension, call_chain, run_call_guards};
+
 /// Résolution des appels en attente.
 /// Lectures lancées ensemble, au plus (issue #85).
 const PARALLEL_READS: usize = 4;
@@ -96,264 +100,204 @@ impl AgentLoop {
         //    approbation arrête la liste (ceux d'avant partent quand même).
         let mut steps: Vec<Step> = Vec::new();
         let mut terminal: Option<Terminal> = None;
+        let mut cx = CallContext {
+            agent: self,
+            spec,
+            execute,
+            detector: &mut *detector,
+        };
         for mut call in pending {
             // `cd <workspace> && grep …` devient `grep …` dans ce répertoire (#123).
             if let Some(args) = execute.normalise_call(&call.name, &call.arguments) {
                 call.arguments = args;
             }
             let info = execute.describe_call(&call.name, &call.arguments).await;
+            let described = DescribedCall { call, info };
 
-            // Liste blanche de l'étape ou de la skill.
-            if !penelope_tools::is_allowed(&call.name, &spec.allowed_tools) {
-                let text = format!("Refusé : `{}` n'est pas autorisé ici.", call.name);
-                steps.push(Step::Record(call, text));
-                continue;
+            // Gardes, dans l'ordre : liste blanche, décision déjà prise, boucles,
+            // arguments. Une décision déjà prise par le propriétaire est définitive.
+            match run_call_guards(&call_chain(), &described, &mut cx).await? {
+                None => {}
+                Some(GuardStop::Refuse(refusal)) => {
+                    steps.push(Step::Record(described.call, refusal.text()));
+                    continue;
+                }
+                Some(GuardStop::Suspend(Suspension::Prior { approval_id })) => {
+                    terminal = Some(Terminal::Stop(TurnOutcome::AwaitingApproval {
+                        approval_id,
+                    }));
+                    break;
+                }
+                Some(GuardStop::LoopAbort(message)) => {
+                    terminal = Some(Terminal::Loop {
+                        tool: described.info.effective_name.clone(),
+                        call: described.call,
+                        message,
+                    });
+                    break;
+                }
+                Some(GuardStop::Approved) => {
+                    steps.push(Step::Execute {
+                        call: described.call,
+                        info: described.info,
+                        parallel: false,
+                    });
+                    continue;
+                }
+            }
+            let DescribedCall { call, info } = described;
+
+            // 4. Politique et approbation, sur les arguments de l'outil visé : par
+            // `tool_call`, ceux de l'appel interne (#110), sinon une règle
+            // « Toujours » couvrirait l'outil entier.
+            let effective_args = crate::executor::effective_arguments(&call.name, &call.arguments);
+            let policy_workspace = execute.policy_workspace();
+            let mut verdict = s
+                .policies
+                .evaluate_in(
+                    &cfg.mcp.policy,
+                    &info.effective_name,
+                    server_of(&info.effective_name).as_deref(),
+                    &effective_args,
+                    info.risk,
+                    spec.run_id.as_deref(),
+                    Some(&spec.session_id),
+                    policy_workspace.as_deref(),
+                )
+                .await?;
+            // La déclaration du serveur MCP peut imposer sa politique à un outil :
+            // un refus l'emporte toujours, le reste cède à une règle du propriétaire.
+            if let Some(forced) = info.policy
+                && (forced == PolicyDecision::Deny || verdict.rule_id.is_none())
+            {
+                verdict.decision = forced;
+                verdict.reason = format!(
+                    "politique de la déclaration du serveur : `{}`",
+                    forced.as_str()
+                );
+            }
+            // Autorisation déclarée d'avance, puis mode de la session (#111).
+            if verdict.rule_id.is_none()
+                && verdict.decision != PolicyDecision::Deny
+                && let Some(why) = crate::approval_mode::local_draft_allow(&info.effective_name)
+                    .or_else(|| {
+                        crate::approval_mode::declared_allow(
+                            &cfg,
+                            &info.effective_name,
+                            &effective_args,
+                        )
+                    })
+            {
+                verdict.decision = PolicyDecision::Auto;
+                verdict.reason = why;
+            }
+            match crate::approval_mode::of_session(s, &spec.session_id).await {
+                crate::approval_mode::ApprovalMode::Ask
+                    if verdict.decision == PolicyDecision::Auto
+                        && (info.effective_name == "shell_exec"
+                            || info.risk != RiskClass::Read) =>
+                {
+                    verdict.decision = PolicyDecision::Ask;
+                    verdict.reason = "mode « demander tout » de la session".into();
+                }
+                crate::approval_mode::ApprovalMode::Auto
+                    if verdict.decision == PolicyDecision::Ask
+                        && verdict.rule_id.is_none()
+                        && info.policy.is_none()
+                        && info.risk != RiskClass::Destructive
+                        && !(info.effective_name == "shell_exec"
+                            && effective_args
+                                .get("command")
+                                .and_then(|c| c.as_str())
+                                .is_none_or(penelope_tools::shell::may_destroy)) =>
+                {
+                    verdict.decision = PolicyDecision::Auto;
+                    verdict.reason = "mode « tout sauf le destructif » de la session".into();
+                }
+                _ => {}
+            }
+            // Réseau demandé par une commande : la carte le dit en toutes lettres.
+            if crate::executor::wants_network(&info.effective_name, &effective_args)
+                && info.risk == RiskClass::External
+            {
+                verdict.reason = format!(
+                    "accès réseau demandé pour cette commande ({})",
+                    verdict.reason
+                );
+            }
+            // Une règle « toujours » posée pour `config_set` vaut pour les réglages
+            // ordinaires, jamais pour le bac à sable, les providers ou Telegram.
+            if info.effective_name == "config_set"
+                && info.risk == RiskClass::Destructive
+                && verdict.decision != PolicyDecision::Deny
+            {
+                verdict.decision = PolicyDecision::AskTwice;
+                verdict.reason = "réglage sensible : double confirmation à chaque fois".into();
             }
 
-            // Une décision a-t-elle déjà été prise pour cet appel précis ?
-            let prior = s
-                .approvals
-                .find_for_call(&spec.session_id, &call.id)
-                .await?;
-            let decided = match &prior {
-                Some(a) => match a.state {
-                    ApprovalState::Pending => {
-                        terminal = Some(Terminal::Stop(TurnOutcome::AwaitingApproval {
-                            approval_id: a.id.0.clone(),
-                        }));
-                        break;
-                    }
-                    ApprovalState::Approved => Some(true),
-                    _ => Some(false),
-                },
-                None => None,
-            };
-
-            let mut parallel = false;
-            match decided {
-                Some(false) => {
-                    let a = prior.as_ref().expect("décision sans demande");
-                    let why = match a.state {
-                        ApprovalState::Expired => "la demande a expiré sans réponse".to_string(),
-                        _ => a
-                            .reason
-                            .clone()
-                            .map(|r| format!("le propriétaire a refusé : {r}"))
-                            .unwrap_or_else(|| "le propriétaire a refusé".to_string()),
-                    };
+            match verdict.decision {
+                PolicyDecision::Deny => {
                     steps.push(Step::Record(
                         call,
-                        format!("Non exécuté : {why}. Propose une autre approche ou demande."),
+                        format!("Refusé par la politique : {}", verdict.reason),
                     ));
                     continue;
                 }
-                Some(true) => {
-                    // Approuvé : on exécute, sans redemander.
-                    let _ = detector.observe(&call.name, &call.arguments);
-                }
-                None => {
-                    // Détecteur de boucles, sans l'intention : la reformuler ne change
-                    // pas l'appel (#116).
-                    match detector.observe(&call.name, &without_intention(&call.arguments)) {
-                        LoopVerdict::Ok => {}
-                        LoopVerdict::Warn(m) => {
-                            steps.push(Step::Record(
-                                call,
-                                format!("[avertissement du harnais] {m}"),
-                            ));
-                            continue;
-                        }
-                        LoopVerdict::Abort(m) => {
-                            terminal = Some(Terminal::Loop {
-                                call,
-                                tool: info.effective_name.clone(),
-                                message: m,
-                            });
-                            break;
-                        }
-                    }
-
-                    // Arguments vérifiés avant toute carte : un appel invalide revient au
-                    // modèle avec les paramètres attendus, et compte pour la garde de
-                    // boucle (issue #117).
-                    if let Err(e) = execute.precheck(&call.name, &call.arguments).await {
-                        let mut text = e.for_model();
-                        match detector.observe_invalid(&info.effective_name) {
-                            LoopVerdict::Ok => {}
-                            LoopVerdict::Warn(m) => {
-                                text.push_str(&format!("\n\n[avertissement du harnais] {m}"));
-                            }
-                            LoopVerdict::Abort(m) => {
-                                terminal = Some(Terminal::Loop {
-                                    call,
-                                    tool: info.effective_name.clone(),
-                                    message: m,
-                                });
-                                break;
-                            }
-                        }
-                        steps.push(Step::Record(call, text));
-                        continue;
-                    }
-
-                    // 4. Politique et approbation, sur les arguments de l'outil visé : par
-                    // `tool_call`, ceux de l'appel interne (#110), sinon une règle
-                    // « Toujours » couvrirait l'outil entier.
-                    let effective_args =
-                        crate::executor::effective_arguments(&call.name, &call.arguments);
-                    let policy_workspace = execute.policy_workspace();
-                    let mut verdict = s
-                        .policies
-                        .evaluate_in(
-                            &cfg.mcp.policy,
+                PolicyDecision::Ask | PolicyDecision::AskTwice => {
+                    let double = verdict.decision == PolicyDecision::AskTwice;
+                    let arguments = penelope_observe::redact_json(&effective_args);
+                    // Ce que Pénélope cherche à faire, en tête de la carte : sa
+                    // phrase, sinon le message du propriétaire qui a lancé le tour,
+                    // jamais la raison de la politique (issue #116).
+                    let why = call_intention(&call.arguments)
+                        .or(call_intention(&effective_args))
+                        .map(|w| (w, "agent"))
+                        .or(turn_goal(conv).await.map(|g| (g, "tour")));
+                    let approval = s
+                        .approvals
+                        .create(
+                            ApprovalKind::ToolCall,
                             &info.effective_name,
-                            server_of(&info.effective_name).as_deref(),
-                            &effective_args,
                             info.risk,
-                            spec.run_id.as_deref(),
+                            json!({
+                                "tool": info.effective_name,
+                                "arguments": arguments,
+                                "reason": verdict.reason,
+                                "why": why.as_ref().map(|(w, _)| w),
+                                "why_from": why.as_ref().map(|(_, f)| f),
+                                "double": double,
+                                "call_id": call.id,
+                                "turn_id": spec.turn_id,
+                            }),
+                            vec![
+                                "Autoriser".into(),
+                                "Pour cette session".into(),
+                                "Toujours".into(),
+                                "Refuser".into(),
+                            ],
                             Some(&spec.session_id),
-                            policy_workspace.as_deref(),
+                            spec.run_id.as_deref(),
+                            false,
                         )
                         .await?;
-                    // La déclaration du serveur MCP peut imposer sa politique à un outil :
-                    // un refus l'emporte toujours, le reste cède à une règle du propriétaire.
-                    if let Some(forced) = info.policy
-                        && (forced == PolicyDecision::Deny || verdict.rule_id.is_none())
-                    {
-                        verdict.decision = forced;
-                        verdict.reason = format!(
-                            "politique de la déclaration du serveur : `{}`",
-                            forced.as_str()
-                        );
-                    }
-                    // Autorisation déclarée d'avance, puis mode de la session (#111).
-                    if verdict.rule_id.is_none()
-                        && verdict.decision != PolicyDecision::Deny
-                        && let Some(why) = crate::approval_mode::local_draft_allow(
-                            &info.effective_name,
-                        )
-                        .or_else(|| {
-                            crate::approval_mode::declared_allow(
-                                &cfg,
-                                &info.effective_name,
-                                &effective_args,
-                            )
-                        })
-                    {
-                        verdict.decision = PolicyDecision::Auto;
-                        verdict.reason = why;
-                    }
-                    match crate::approval_mode::of_session(s, &spec.session_id).await {
-                        crate::approval_mode::ApprovalMode::Ask
-                            if verdict.decision == PolicyDecision::Auto
-                                && (info.effective_name == "shell_exec"
-                                    || info.risk != RiskClass::Read) =>
-                        {
-                            verdict.decision = PolicyDecision::Ask;
-                            verdict.reason = "mode « demander tout » de la session".into();
-                        }
-                        crate::approval_mode::ApprovalMode::Auto
-                            if verdict.decision == PolicyDecision::Ask
-                                && verdict.rule_id.is_none()
-                                && info.policy.is_none()
-                                && info.risk != RiskClass::Destructive
-                                && !(info.effective_name == "shell_exec"
-                                    && effective_args
-                                        .get("command")
-                                        .and_then(|c| c.as_str())
-                                        .is_none_or(penelope_tools::shell::may_destroy)) =>
-                        {
-                            verdict.decision = PolicyDecision::Auto;
-                            verdict.reason =
-                                "mode « tout sauf le destructif » de la session".into();
-                        }
-                        _ => {}
-                    }
-                    // Réseau demandé par une commande : la carte le dit en toutes lettres.
-                    if crate::executor::wants_network(&info.effective_name, &effective_args)
-                        && info.risk == RiskClass::External
-                    {
-                        verdict.reason = format!(
-                            "accès réseau demandé pour cette commande ({})",
-                            verdict.reason
-                        );
-                    }
-                    // Une règle « toujours » posée pour `config_set` vaut pour les réglages
-                    // ordinaires, jamais pour le bac à sable, les providers ou Telegram.
-                    if info.effective_name == "config_set"
-                        && info.risk == RiskClass::Destructive
-                        && verdict.decision != PolicyDecision::Deny
-                    {
-                        verdict.decision = PolicyDecision::AskTwice;
-                        verdict.reason =
-                            "réglage sensible : double confirmation à chaque fois".into();
-                    }
-
-                    match verdict.decision {
-                        PolicyDecision::Deny => {
-                            steps.push(Step::Record(
-                                call,
-                                format!("Refusé par la politique : {}", verdict.reason),
-                            ));
-                            continue;
-                        }
-                        PolicyDecision::Ask | PolicyDecision::AskTwice => {
-                            let double = verdict.decision == PolicyDecision::AskTwice;
-                            let arguments = penelope_observe::redact_json(&effective_args);
-                            // Ce que Pénélope cherche à faire, en tête de la carte : sa
-                            // phrase, sinon le message du propriétaire qui a lancé le tour,
-                            // jamais la raison de la politique (issue #116).
-                            let why = call_intention(&call.arguments)
-                                .or(call_intention(&effective_args))
-                                .map(|w| (w, "agent"))
-                                .or(turn_goal(conv).await.map(|g| (g, "tour")));
-                            let approval = s
-                                .approvals
-                                .create(
-                                    ApprovalKind::ToolCall,
-                                    &info.effective_name,
-                                    info.risk,
-                                    json!({
-                                        "tool": info.effective_name,
-                                        "arguments": arguments,
-                                        "reason": verdict.reason,
-                                        "why": why.as_ref().map(|(w, _)| w),
-                                        "why_from": why.as_ref().map(|(_, f)| f),
-                                        "double": double,
-                                        "call_id": call.id,
-                                        "turn_id": spec.turn_id,
-                                    }),
-                                    vec![
-                                        "Autoriser".into(),
-                                        "Pour cette session".into(),
-                                        "Toujours".into(),
-                                        "Refuser".into(),
-                                    ],
-                                    Some(&spec.session_id),
-                                    spec.run_id.as_deref(),
-                                    false,
-                                )
-                                .await?;
-                            sink.emit(TurnEvent::Approval {
-                                id: approval.id.0.clone(),
-                                tool: info.effective_name.clone(),
-                                risk: info.risk,
-                                arguments,
-                                reason: verdict.reason.clone(),
-                                double,
-                            });
-                            terminal = Some(Terminal::Stop(TurnOutcome::AwaitingApproval {
-                                approval_id: approval.id.0,
-                            }));
-                            break;
-                        }
-                        PolicyDecision::Auto => {}
-                    }
-                    // Lecture pure autorisée d'office : elle peut partir avec ses voisines.
-                    parallel = info.risk == RiskClass::Read
-                        && PARALLEL_SAFE.contains(&info.effective_name.as_str());
+                    sink.emit(TurnEvent::Approval {
+                        id: approval.id.0.clone(),
+                        tool: info.effective_name.clone(),
+                        risk: info.risk,
+                        arguments,
+                        reason: verdict.reason.clone(),
+                        double,
+                    });
+                    terminal = Some(Terminal::Stop(TurnOutcome::AwaitingApproval {
+                        approval_id: approval.id.0,
+                    }));
+                    break;
                 }
+                PolicyDecision::Auto => {}
             }
+            // Lecture pure autorisée d'office : elle peut partir avec ses voisines.
+            let parallel = info.risk == RiskClass::Read
+                && PARALLEL_SAFE.contains(&info.effective_name.as_str());
             steps.push(Step::Execute {
                 call,
                 info,
