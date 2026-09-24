@@ -320,6 +320,32 @@ pub fn dependency_violations() -> Vec<String> {
     out
 }
 
+/// Crates qui peuvent dépendre de la passerelle Telegram : la composition seulement
+/// (épopée #208, T29, `decoupage-daemon.md` §7 R2). Le daemon la connaît par ses ports
+/// (`Gateway`, `ChannelDelivery`, `Messenger`, `OwnerChannel`), jamais par son type ; les
+/// `dev-dependencies` restent hors règle, comme pour les autres.
+pub const GATEWAY_DEPENDENTS: &[&str] = &["penelope-cli"];
+
+/// Crates hors `GATEWAY_DEPENDENTS` qui déclarent la passerelle dans `[dependencies]`.
+pub fn gateway_dependent_violations() -> Vec<String> {
+    crates()
+        .into_iter()
+        .filter(|c| {
+            c.internal_deps.contains("penelope-gateway-telegram")
+                && !GATEWAY_DEPENDENTS.contains(&c.name.as_str())
+        })
+        .map(|c| {
+            format!(
+                "`{}` dépend de `penelope-gateway-telegram` : seule la composition ({}) \
+                 la connaît ; passer par les ports `Gateway`, `ChannelDelivery`, \
+                 `Messenger`, `OwnerChannel`",
+                c.name,
+                GATEWAY_DEPENDENTS.join(", ")
+            )
+        })
+        .collect()
+}
+
 /// Détecte les cycles de dépendance entre crates.
 pub fn dependency_cycles() -> Vec<String> {
     let all = crates();
@@ -428,6 +454,7 @@ mod tests {
             "penelope-app",
             "penelope-mcp-host",
             "penelope-cli",
+            "penelope-gateway-telegram",
         ] {
             assert!(names.contains(&expected), "crate manquant : {expected}");
         }
@@ -483,6 +510,20 @@ mod tests {
             !host.internal_deps.contains("penelope-daemon"),
             "penelope-mcp-host est sous le daemon : {:?}",
             host.internal_deps
+        );
+    }
+
+    /// T29 : la passerelle Telegram n'est composée que par la CLI.
+    #[test]
+    fn only_the_cli_depends_on_the_gateway() {
+        let v = gateway_dependent_violations();
+        assert!(v.is_empty(), "violations :\n{}", v.join("\n"));
+        let all = crates();
+        let cli = all.iter().find(|c| c.name == "penelope-cli").unwrap();
+        assert!(
+            cli.internal_deps.contains("penelope-gateway-telegram"),
+            "la CLI compose la passerelle : {:?}",
+            cli.internal_deps
         );
     }
 

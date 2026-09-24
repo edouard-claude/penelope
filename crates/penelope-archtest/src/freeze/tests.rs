@@ -482,9 +482,11 @@ fn the_channel_detector_ignores_the_gateway_tests_comments_and_channel_crates() 
     let b = budget();
     let noisy = "Origin::Telegram chat_id topic_id\n";
     let quiet = Snapshot::of(vec![
-        daemon("telegram.rs", noisy),
-        daemon("telegram/screens.rs", noisy),
-        daemon("telegram/commands.rs", noisy),
+        SourceFile::new(
+            "penelope-gateway-telegram",
+            "crates/penelope-gateway-telegram/src/telegram/mod.rs",
+            noisy,
+        ),
         daemon(
             "media.rs",
             "// Telegram\n/// chat_id\n#[cfg(test)]\nmod tests {\n    Origin::Telegram\n}\n",
@@ -514,6 +516,9 @@ fn the_channel_detector_ignores_the_gateway_tests_comments_and_channel_crates() 
     ]);
     let v = channel_violations(&quiet, &b);
     assert!(v.is_empty(), "{}", show(&v));
+    // La passerelle a quitté le daemon (T29) : un `telegram/` qui y reviendrait est mesuré.
+    let back = daemon("telegram/mod.rs", noisy);
+    assert_eq!(channel_violations(&Snapshot::of(vec![back]), &b).len(), 1);
     // Une crate future est protégée dès sa création ; une crate inconnue doit se déclarer.
     let app = SourceFile::new("penelope-app", "crates/penelope-app/src/lib.rs", noisy);
     assert_eq!(channel_violations(&Snapshot::of(vec![app]), &b).len(), 1);

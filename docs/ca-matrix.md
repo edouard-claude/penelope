@@ -111,7 +111,7 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 
 | CA | Test | Fichier |
 |---|---|---|
-| CA 12.1 | Ticket to deploy runs end to end and survives restarts | `crates/penelope-daemon/src/ticket_to_deploy_e2e.rs` |
+| CA 12.1 | Ticket to deploy runs end to end and survives restarts | `crates/penelope-gateway-telegram/src/ticket_to_deploy_e2e.rs` |
 | CA 12.2 | Runs are recovered at their current step | `crates/penelope-workflow/src/runs.rs` |
 | CA 12.3 | Invalid file is rejected and previous stays | `crates/penelope-workflow/src/registry.rs` |
 | CA 12.4 | Poll fires once per item | `crates/penelope-workflow/src/schedules.rs` |
@@ -130,7 +130,7 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 | CA | Test | Fichier |
 |---|---|---|
 | CA 14.1 | Every template renders in both forms | `crates/penelope-telegram/src/templates.rs` |
-| CA 14.2 | A telegram message gets an answer and a ledger entry | `crates/penelope-daemon/tests/telegram_e2e.rs` |
+| CA 14.2 | A telegram message gets an answer and a ledger entry | `crates/penelope-gateway-telegram/tests/telegram_e2e.rs` |
 | CA 14.3 | Rate limit is respected without loss | `crates/penelope-telegram/src/api.rs` |
 | CA 14.4 | Double click is idempotent | `crates/penelope-telegram/src/actions.rs` |
 | CA 14.5 | Non owner clicks are refused | `crates/penelope-telegram/src/actions.rs` |

@@ -453,13 +453,6 @@ pub const CHANNEL_CRATES: &[&str] = &[
     "penelope-archtest",
 ];
 
-/// Fichiers de la passerelle dans le daemon, exclus de la mesure : `telegram.rs` et tout
-/// `telegram/` (les morceaux que le lot G en tirera restent de la passerelle).
-pub fn is_gateway_file(rel: &str) -> bool {
-    rel == "crates/penelope-daemon/src/telegram.rs"
-        || rel.starts_with("crates/penelope-daemon/src/telegram/")
-}
-
 /// Motifs de canal : `telegram` (toute casse : import `penelope_telegram::`, chemin
 /// `crate::telegram::`, configuration `cfg.telegram.`, comparaison `Origin::Telegram`,
 /// texte utilisateur), identifiants `tg_…`, `chat_id`, `topic_id`, `callback_data`,
@@ -482,7 +475,6 @@ fn channel_files<'a>(snap: &'a Snapshot, budget: &Budget) -> Vec<&'a SourceFile>
         .iter()
         .filter(|f| {
             CHANNEL_AGNOSTIC_CRATES.contains(&f.crate_name.as_str())
-                && !is_gateway_file(&f.rel)
                 && file_kind(&f.rel, budget) == FileKind::Source
         })
         .collect()
