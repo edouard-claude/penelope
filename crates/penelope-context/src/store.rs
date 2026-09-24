@@ -19,7 +19,7 @@ pub struct HistoryStore {
     store: Store,
     clock: SharedClock,
     /// Journal de la double écriture (T5) ; absent, les lignes s'écrivent seules.
-    events: Option<penelope_kernel::event::EventLog>,
+    pub(crate) events: Option<penelope_kernel::event::EventLog>,
 }
 
 /// Résultat d'une recherche FTS sur l'historique (`history_grep`).
@@ -783,7 +783,7 @@ pub fn guess_kind(body: &str) -> &'static str {
     "text"
 }
 
-fn serialise_content(m: &ChatMessage) -> penelope_store::Result<String> {
+pub(crate) fn serialise_content(m: &ChatMessage) -> penelope_store::Result<String> {
     let blocks: Vec<Value> = m
         .content
         .iter()
@@ -812,7 +812,7 @@ fn serialise_content(m: &ChatMessage) -> penelope_store::Result<String> {
     Ok(v.to_string())
 }
 
-fn deserialise_content(
+pub(crate) fn deserialise_content(
     role: Role,
     raw: &str,
     tool_call_id: Option<String>,

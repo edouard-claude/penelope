@@ -11,9 +11,11 @@ pub mod lcm;
 pub mod numbering;
 mod publish;
 mod render;
+pub mod replay;
 pub mod store;
 pub mod tiers;
 pub mod transcript;
+pub mod verify;
 
 pub use anchors::{Anchor, AnchorKind};
 pub use compaction::{AppliedStep, CompactionParams, Cooldown, Projection};

@@ -1,0 +1,16 @@
+{
+  "method": "history.verify",
+  "params": {},
+  "response": {
+    "result": {
+      "ok": "bool",
+      "sessions": "integer",
+      "nodes": "integer",
+      "divergent": "integer",
+      "divergences": [],
+      "archives": [
+        "string"
+      ]
+    }
+  }
+}

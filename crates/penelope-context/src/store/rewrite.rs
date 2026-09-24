@@ -312,7 +312,10 @@ fn externalise_in(
     Ok(())
 }
 
-/// [`HistoryStore::truncate_from`] dans la transaction de l'appelant.
+/// [`HistoryStore::truncate_from`] dans la transaction de l'appelant. Le contexte figé des
+/// messages retirés part avec eux : laissé, il collait au message suivant écrit sous le
+/// même numéro, et `freeze_context` le trouvait déjà figé (relevé par
+/// `history verify`, T12).
 fn truncate_in(
     tx: &Transaction<'_>,
     session_id: &str,
@@ -321,6 +324,10 @@ fn truncate_in(
     tx.execute(
         "DELETE FROM messages_fts WHERE msg_id IN
             (SELECT id FROM messages WHERE session_id = ?1 AND seq >= ?2)",
+        params![session_id, from_seq],
+    )?;
+    tx.execute(
+        "DELETE FROM message_context WHERE session_id = ?1 AND seq >= ?2",
         params![session_id, from_seq],
     )?;
     Ok(tx.execute(

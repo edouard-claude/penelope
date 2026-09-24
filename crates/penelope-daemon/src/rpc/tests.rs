@@ -549,6 +549,16 @@ async fn audit_verify_is_reachable() {
 }
 
 #[tokio::test]
+async fn history_verify_is_reachable() {
+    let (_d, r) = rpc().await;
+    let v = call(&r, method::HISTORY_VERIFY, json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(v["ok"], true, "{v:#}");
+}
+
+#[tokio::test]
 async fn approvals_flow_over_rpc() {
     let (_d, r) = rpc().await;
     let a = r

@@ -2308,6 +2308,18 @@ Recalcule la chaîne de hachage du journal d'événements et nomme le premier ma
 s'il y en a un. Une purge RGPD conserve le hachage d'origine : purger n'invalide pas la
 chaîne.
 
+```bash
+penelope history verify                   # toutes les sessions
+penelope history verify --session s_01J8
+```
+
+Dérive chaque conversation de son journal (événements `conv.*`, préfixe d'avant le journal
+scellé au démarrage, mère d'un fork) et la compare aux tables qui en sont les caches :
+messages, contextes figés, résumés actifs, empreinte du préfixe scellé. Le rapport est en
+JSON ; le code de sortie est non nul dès la première divergence, qui nomme la session, le
+nœud (son adresse dans le journal) et la ligne. `penelope doctor` fait la même
+vérification sur les sessions de la semaine (ligne « Historique et journal »).
+
 ### Relire une requête envoyée
 
 ```bash

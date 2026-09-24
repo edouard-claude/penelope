@@ -223,3 +223,61 @@ async fn the_digest_follows_content_not_compaction() {
     let (import, prefix) = history.sealed_prefix(PLAIN).await.unwrap().unwrap();
     assert_ne!(import.digest, prefix.digest());
 }
+
+/// T12 : la base d'une 0.17 scellée, puis un message journalisé dans une session scellée,
+/// se vérifie sans divergence ; une ligne falsifiée est nommée par `history.verify` et
+/// par la ligne `doctor`.
+#[tokio::test]
+async fn verify_names_a_tampered_row_through_rpc_and_doctor() {
+    let (_dir, s) = services().await;
+    seed_v0(&s).await;
+    seal_legacy(&s).await.unwrap();
+    let history = &s.context.history;
+    let seq = history
+        .append(PLAIN, &ChatMessage::user("nouveau"), 2, 1, false, None)
+        .await
+        .unwrap();
+    history.freeze_context(PLAIN, seq, "<ctx2>").await.unwrap();
+    s.store
+        .write(|tx| {
+            tx.execute(
+                "UPDATE sessions SET updated_at = '2026-01-01T00:00:00Z'",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let clean = verify(&s, &serde_json::json!({})).await.unwrap();
+    assert_eq!(clean["ok"], true, "{clean:#}");
+    assert!(doctor_check(&s).await.ok);
+
+    s.store
+        .write(move |tx| {
+            tx.execute(
+                "UPDATE messages SET content = ?3 WHERE session_id = ?1 AND seq = ?2",
+                params![PLAIN, seq, content("falsifié")],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let report = verify(&s, &serde_json::json!({"session": PLAIN}))
+        .await
+        .unwrap();
+    assert_eq!(report["ok"], false);
+    let d = &report["divergences"][0];
+    assert_eq!(
+        (d["session"].as_str(), d["what"].as_str()),
+        (Some(PLAIN), Some("content"))
+    );
+    assert_eq!(d["seq"], seq);
+    assert!(
+        d["node"].as_i64().unwrap() > 3,
+        "adresse après l'offset du scellement"
+    );
+    let check = doctor_check(&s).await;
+    assert!(!check.ok);
+    assert!(check.detail.contains(PLAIN), "{}", check.detail);
+}

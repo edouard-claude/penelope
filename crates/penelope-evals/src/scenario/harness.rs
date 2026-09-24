@@ -6,6 +6,7 @@
 //! `runner::process`, `compaction::compact`, `session_ops`, `purge`) : le scénario
 //! survit aux déplacements internes de la V1.
 
+mod journal;
 mod lifecycle;
 mod steps;
 #[cfg(test)]
@@ -115,7 +116,9 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
     let dumped = {
         let life = h.life.as_ref().context("services absents")?;
         let workspace = workspace_of(&life.services);
-        world::dump(&life.services, &workspace).await?
+        let dumped = world::dump(&life.services, &workspace).await?;
+        journal::check(&life.services, &spec.name).await?;
+        dumped
     };
     if let Some(life) = h.life.take() {
         shut_down(life, &spec.name).await;
