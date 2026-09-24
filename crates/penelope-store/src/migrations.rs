@@ -95,6 +95,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0020_history_journal",
         sql: SQL_0020,
     },
+    Migration {
+        version: "0021_history_seal",
+        sql: SQL_0021,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -917,6 +921,7 @@ CREATE INDEX mem_history_ts ON mem_history(ts);
 mod since_0011;
 use since_0011::{
     SQL_0011, SQL_0012, SQL_0013, SQL_0014, SQL_0015, SQL_0016, SQL_0017, SQL_0018, SQL_0019,
+    SQL_0021,
 };
 
 /// Double écriture de l'historique (épopée #208, T5, `design/v1/source-de-verite.md`

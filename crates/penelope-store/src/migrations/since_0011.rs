@@ -102,3 +102,17 @@ CREATE TABLE tool_jobs(
 CREATE INDEX tool_jobs_session ON tool_jobs(session_id, state);
 CREATE INDEX tool_jobs_delivery ON tool_jobs(delivered_at, updated_at);
 "#;
+
+/// Scellement de l'historique V0 (épopée #208, T11, `design/v1/source-de-verite.md` §2.4,
+/// §4.5). Les lignes à sceller se trouvent par un index partiel : l'étape de boot qui
+/// pose les `conv.import` le relit à chaque démarrage, et il est vide dès que tout est
+/// scellé. Le scellement lui-même n'est pas ici : il a besoin du journal.
+///
+/// `projections_workflow` et `projections_approval` (0001) n'ont jamais été lues ni
+/// écrites ; `projections_session` reste, elle portera le filigrane du projecteur (T13).
+pub(super) const SQL_0021: &str = r#"
+CREATE INDEX messages_unsealed ON messages(session_id, seq)
+  WHERE event_id IS NULL AND sealed = 0;
+DROP TABLE projections_workflow;
+DROP TABLE projections_approval;
+"#;

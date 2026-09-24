@@ -276,3 +276,28 @@ fn schedule_session_ids_become_informative_references() {
     assert_eq!(v["prompt"], "veille");
     assert_eq!(v["origin"]["kind"], "cli");
 }
+
+/// T11 (#208) : les deux projections jamais utilisées disparaissent, le filigrane de
+/// session reste ; les lignes V0 à sceller se trouvent par l'index partiel (`INDEXED BY`
+/// échoue si la requête de l'étape de boot ne peut plus s'en servir).
+#[test]
+fn sealing_drops_the_dead_projections_and_indexes_unsealed_rows() {
+    let c = fresh();
+    let names: Vec<String> = c
+        .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'projections_%'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    assert_eq!(names, vec!["projections_session".to_string()]);
+    let plan: String = c
+        .query_row(
+            "EXPLAIN QUERY PLAN SELECT DISTINCT session_id FROM messages
+             INDEXED BY messages_unsealed WHERE event_id IS NULL AND sealed = 0",
+            [],
+            |r| r.get(3),
+        )
+        .unwrap();
+    assert!(plan.contains("messages_unsealed"), "{plan}");
+}
