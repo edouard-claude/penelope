@@ -5,18 +5,13 @@
 pub mod agent;
 pub mod approval_mode;
 pub mod audit;
-pub mod backup;
 pub mod budget_alert;
 pub mod cache_audit;
-pub mod codex_auth;
-pub mod codex_quota;
 pub mod compaction;
 pub mod conversation;
-pub mod doctor;
 pub mod dream;
 pub mod engine;
 pub mod executor;
-pub mod hermes;
 pub mod history;
 pub mod images;
 pub mod ingest;
@@ -31,13 +26,10 @@ pub mod scheduler;
 pub mod selfdocs;
 pub mod selfknow;
 pub mod session_ops;
-pub mod skill_deps;
-pub mod skill_install;
 pub mod supervisor;
 pub mod titles;
 pub mod tool_jobs;
 pub mod tools_on_demand;
-pub mod upgrade;
 pub mod vision;
 pub mod voice;
 #[cfg(test)]
@@ -57,6 +49,12 @@ pub use penelope_mcp_host::auth as mcp_auth;
 pub use penelope_vault::{
     concepts, embeddings, episodes, mem_audit, mem_split, review, secret_shelf, session_notes,
     session_project, usage_feedback, vault_git, vault_inventory, vault_ops,
+};
+
+// Exploitation sortie dans `penelope-ops` (T28), réexportée sous ses anciens chemins
+// jusqu'à T30.
+pub use penelope_ops::{
+    backup, codex_auth, codex_quota, doctor, hermes, skill_deps, skill_install, upgrade,
 };
 
 pub use agent::{AgentLoop, TurnOutcome};

@@ -12,10 +12,10 @@
 //! de processus, une relecture du magasin sous ce verrou, et l'écriture de la rotation
 //! **avant** tout usage du jeton neuf.
 
-use crate::executor::Messenger;
 use crate::ports::Slot;
-use crate::runtime::Services;
 use base64::Engine;
+use penelope_app::ports::Messenger;
+use penelope_app::services::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_llm::{CodexToken, LlmError, LlmErrorKind};
 use serde::{Deserialize, Serialize};

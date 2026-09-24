@@ -1,0 +1,61 @@
+[package]
+name = "penelope-ops"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# L'exploitation de l'instance (épopée #208, T28) : diagnostic, mise à jour, sauvegarde,
+# import Hermes, connexion et quota Codex, installation de skills. Au-dessus de
+# `penelope-app` et de `penelope-vault` ; le daemon l'appelle, elle ne connaît ni le
+# daemon ni l'hôte MCP (`McpAdmin` par le port de `penelope-app`).
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+# Heure locale des sauvegardes et des contrôles de fuseau.
+chrono-tz.workspace = true
+# Jetons Codex (JWT) et archives de sauvegarde.
+base64.workspace = true
+# Téléchargement des releases, des archives de skills, échanges OAuth Codex.
+reqwest.workspace = true
+# Adresses des releases (HTTPS obligatoire) et des points d'accès OAuth.
+url.workspace = true
+# Signature des releases (`upgrade`).
+minisign-verify.workspace = true
+# Découverte parallèle (import Hermes).
+futures.workspace = true
+# `Services`, ports (`McpAdmin`, `Messenger`, `Handle`, `Slot`), helpers, machine.
+penelope-app.workspace = true
+# Embeddings, inventaire, découpage de la mémoire, vault et son commit (doctor, Hermes).
+penelope-vault.workspace = true
+# Configuration, journal, horloge, contrôles `DoctorCheck`.
+penelope-kernel.workspace = true
+# Base, intégrité, `kv`.
+penelope-store.workspace = true
+# Répertoires, secrets, processus, signature des binaires.
+penelope-platform.workspace = true
+# Caviardage des journaux et des imports.
+penelope-observe.workspace = true
+# Catalogue des modèles, jetons Codex.
+penelope-llm.workspace = true
+# Index de mémoire (doctor, Hermes).
+penelope-memory.workspace = true
+# Déclarations des serveurs MCP importés.
+penelope-mcp.workspace = true
+# Registre et installation des skills.
+penelope-skills.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Doubles du superviseur MCP pour le test d'import Hermes (hors règle de dépendance).
+penelope-mcp-host.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util", "test-util"] }

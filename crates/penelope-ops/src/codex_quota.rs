@@ -10,8 +10,8 @@
 //! fournisseur répond alors `RateLimited` **avant** l'appel, le routeur se replie, et le
 //! message distingue un quota atteint d'une panne (issue #139).
 
-use crate::executor::Messenger;
-use crate::runtime::Services;
+use penelope_app::ports::Messenger;
+use penelope_app::services::Services;
 use penelope_llm::Quota;
 use std::sync::Arc;
 

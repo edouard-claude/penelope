@@ -13,8 +13,8 @@
 //! La restauration vit dans la CLI (`penelope restore-all`) : elle se fait daemon arrêté,
 //! sur une machine où il n'y a encore rien.
 
-use crate::executor::Messenger;
-use crate::runtime::Services;
+use penelope_app::ports::Messenger;
+use penelope_app::services::Services;
 use penelope_kernel::event::EventDraft;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -533,7 +533,7 @@ mod tests {
         let clock: penelope_kernel::clock::SharedClock =
             Arc::new(penelope_kernel::clock::TestClock::default());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );

@@ -1,7 +1,7 @@
 use super::yaml::Node;
 use super::*;
-use crate::mcp::testing::{FakeConnector, server, tool};
 use penelope_kernel::clock::TestClock;
+use penelope_mcp_host::testing::{FakeConnector, server, tool};
 
 const CONFIG: &str = r#"
 model:
@@ -292,7 +292,7 @@ async fn an_instance_is_simulated_then_imported_once() {
             })
         }),
     );
-    let sup = crate::mcp::testing::supervisor(s.clone(), fake.clone());
+    let sup = penelope_mcp_host::testing::supervisor(s.clone(), fake.clone());
     let vault = crate::helpers::vault_dir(&s);
 
     let plan = import(

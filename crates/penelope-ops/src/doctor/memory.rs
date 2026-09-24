@@ -22,7 +22,7 @@ pub async fn memory_size_check(s: &Services) -> DoctorCheck {
         })
         .collect();
     let budget = s.config.config().memory.core_budget_tokens as u64;
-    let overflow = crate::dream::core_overflow(s, budget).await;
+    let overflow = penelope_vault::snapshot::core_overflow(s, budget).await;
 
     if long.is_empty() && overflow.is_none() {
         return DoctorCheck::ok(

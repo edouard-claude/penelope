@@ -29,6 +29,9 @@ penelope-app.workspace = true
 penelope-mcp-host.workspace = true
 # La mémoire en fichiers, extraite du daemon (épopée #208, T22).
 penelope-vault.workspace = true
+# Exploitation : doctor, mise à jour, sauvegarde, Hermes, Codex, skills, extraits du
+# daemon (épopée #208, T28).
+penelope-ops.workspace = true
 penelope-kernel.workspace = true
 penelope-store.workspace = true
 penelope-platform.workspace = true

@@ -19,7 +19,7 @@
 
 pub use crate::helpers::{is_source_build, running_binary};
 use crate::ports::{Handle, Slot};
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_platform::handoff::HandOff;
 use serde::{Deserialize, Serialize};
@@ -764,7 +764,7 @@ pub fn confirm(state_dir: &Path, running_version: &str) -> Option<Confirmation> 
 pub async fn confirm_when_healthy(
     s: Arc<Services>,
     handle: Handle,
-    messenger: Slot<dyn crate::executor::Messenger>,
+    messenger: Slot<dyn penelope_app::ports::Messenger>,
 ) {
     let state_dir = s.platform.dirs.state();
     if pending(&state_dir).is_none() && !rolled_back_note(&state_dir).exists() {

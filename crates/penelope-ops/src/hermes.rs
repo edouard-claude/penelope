@@ -14,9 +14,9 @@
 //! continue. Sans `apply`, rien n'est écrit et le rapport décrit ce qui serait fait. Rien
 //! d'existant n'est écrasé : un second import ne duplique rien.
 
-use crate::executor::Messenger;
 use crate::ports::McpAdmin;
-use crate::runtime::Services;
+use penelope_app::ports::Messenger;
+use penelope_app::services::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_mcp::config::ServerConfig;
 use penelope_memory::{Level, Provenance};
@@ -121,7 +121,7 @@ pub async fn import(
 
     if opts.apply {
         if (files || memories)
-            && let Err(e) = crate::dream::vault_sync(s, "import: hermes").await
+            && let Err(e) = penelope_vault::vault_git::vault_sync(s, "import: hermes").await
         {
             r.warn(format!("commit du vault : {e}"));
         }
@@ -404,7 +404,7 @@ async fn import_skills(s: &Services, opts: &Options, r: &mut Report) {
         }
     }
     if imported > 0
-        && let Err(e) = crate::runtime::reload_skills(s).await
+        && let Err(e) = penelope_app::services::reload_skills(s).await
     {
         r.warn(format!("rechargement des skills : {e}"));
     }

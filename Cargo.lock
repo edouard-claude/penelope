@@ -1378,6 +1378,7 @@ dependencies = [
  "penelope-mcp-host",
  "penelope-memory",
  "penelope-observe",
+ "penelope-ops",
  "penelope-platform",
  "penelope-skills",
  "penelope-store",
@@ -1611,6 +1612,37 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "penelope-ops"
+version = "1.0.0-alpha.7"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "chrono",
+ "chrono-tz",
+ "futures",
+ "minisign-verify",
+ "penelope-app",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-mcp",
+ "penelope-mcp-host",
+ "penelope-memory",
+ "penelope-observe",
+ "penelope-platform",
+ "penelope-skills",
+ "penelope-store",
+ "penelope-vault",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

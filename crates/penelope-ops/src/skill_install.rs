@@ -5,7 +5,7 @@
 //! un socle installé à la main. Ce qui est automatisable l'est ici ; ce qui touche la
 //! machine (npm, pip, binaires) est **listé, jamais installé**.
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_skills::install::{Installed, MAX_ARCHIVE_BYTES, Source};
 use serde_json::json;
@@ -27,7 +27,7 @@ pub async fn install(
     let installed = penelope_skills::install::install_from_zip(&bytes, &wanted, &root, force)
         .map_err(anyhow::Error::msg)?;
 
-    crate::runtime::reload_skills(s).await?;
+    penelope_app::services::reload_skills(s).await?;
     let missing = crate::skill_deps::missing_for(
         &installed
             .iter()

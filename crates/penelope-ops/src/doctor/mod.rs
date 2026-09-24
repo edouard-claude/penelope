@@ -3,7 +3,7 @@
 //! Chaque point en échec est accompagné d'une commande corrective **proposée, jamais
 //! exécutée automatiquement**.
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_kernel::api::DoctorCheck;
 
 mod coherence;
