@@ -1791,31 +1791,8 @@ async fn daemon(cli: &Cli) -> CliResult<()> {
     );
     tracing::info!(version = penelope_daemon::VERSION, "Pénélope démarre");
     let d = std::sync::Arc::new(d);
-    let gateway = telegram_gateway(&d).await;
-    d.run(gateway.map(|g| g as _))
-        .await
-        .map_err(|e| CliError::Io(e.to_string()))
-}
-
-/// La passerelle Telegram, composée au-dessus du daemon (épopée #208, T29) : construite
-/// ici, sans réseau, avant `run`, qui l'annonce avant les serveurs MCP (issue #12) puis la
-/// démarre. `None` sans propriétaire ni jeton, ou si le transport ne se construit pas.
-async fn telegram_gateway(
-    d: &std::sync::Arc<penelope_daemon::Daemon>,
-) -> Option<std::sync::Arc<penelope_gateway_telegram::TelegramGateway>> {
-    match penelope_gateway_telegram::TelegramGateway::from_config(d.clone()).await {
-        Ok(Some(gw)) => Some(gw),
-        Ok(None) => {
-            tracing::info!(
-                "Telegram non configuré (owner.telegram_user_id ou telegram_bot_token absent)"
-            );
-            None
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Telegram non démarré");
-            None
-        }
-    }
+    let gw = penelope_gateway_telegram::compose(&d).await; // avant `run` (#12, T29)
+    d.run(gw).await.map_err(|e| CliError::Io(e.to_string()))
 }
 
 /// `penelope chat` : un message, ou une conversation interactive.

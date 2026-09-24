@@ -27,3 +27,26 @@ pub mod telegram;
 mod ticket_to_deploy_e2e;
 
 pub use telegram::{TelegramGateway, parse_params};
+
+use penelope_app::gateway::Gateway;
+use penelope_daemon::Daemon;
+use std::sync::Arc;
+
+/// La passerelle que la composition (`penelope-cli`) passe à `Daemon::run` : construite
+/// ici, sans réseau, avant `run`, qui l'annonce avant les serveurs MCP (issue #12) puis la
+/// démarre. `None` sans propriétaire ni jeton, ou si le transport ne se construit pas.
+pub async fn compose(d: &Arc<Daemon>) -> Option<Arc<dyn Gateway>> {
+    match TelegramGateway::from_config(d.clone()).await {
+        Ok(Some(gw)) => Some(gw),
+        Ok(None) => {
+            tracing::info!(
+                "Telegram non configuré (owner.telegram_user_id ou telegram_bot_token absent)"
+            );
+            None
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Telegram non démarré");
+            None
+        }
+    }
+}
