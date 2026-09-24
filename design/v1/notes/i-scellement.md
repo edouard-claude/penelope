@@ -32,19 +32,21 @@ Branche `v1-i-scellement`, dérivée de `v1` à `fbf1fe5` (1.0.0-alpha.4), pouss
   second aucun, chaîne vérifiée ; `derive` d'une session scellée redonne ses lignes et la
   projection V0, un message postérieur vient après l'`offset` ; l'empreinte suit le
   contenu, pas la compaction) ; `migrations/tests.rs` (0021) ;
-  `tests/migration_from_0_17.rs` (étape 6 nouvelle : la fixture migrée est scellée, le
-  second passage ne fait rien, l'empreinte se relit, la dérivation donne le nœud actif
-  puis les messages 9 à 12, la chaîne compte un événement de plus).
+  `penelope-context/tests/seal_from_0_17.rs` (la fixture 0.17 du store, lue par chemin
+  relatif, migrée puis scellée : un `conv.import`, second passage sans effet, empreinte
+  relue, la dérivation donne le nœud actif puis les messages 9 à 12, la chaîne compte un
+  maillon de plus). `migration_from_0_17` du store reste tel quel.
 
 ## Les choix
 
-- **Le cœur est dans `penelope-context`, pas dans le daemon.** Le test de la fixture
-  (`penelope-store`) doit rejouer le scellement ; il ne pouvait l'appeler dans le daemon
-  qu'en compilant tout le daemon comme dépendance de développement. `penelope-context`
-  dépend déjà du store et du noyau ; le test du store le prend en dépendance de
-  développement, comme `penelope-kernel` (cycle toléré par Cargo, ignoré par archtest).
-  `history.rs` ne garde que l'étape de boot et sa journalisation. Question posée au lead
-  en début de lot, sans réponse, option appliquée comme annoncé.
+- **Le cœur est dans `penelope-context`, pas dans le daemon** (validé par le lead) : le
+  test sur la fixture 0.17 le rejoue sans compiler le daemon. Il vit dans
+  `penelope-context/tests/`, qui lit la fixture du store par chemin relatif : aucune
+  dépendance de développement store → context. Le module est `store/seal.rs`, sous-module
+  de `store.rs`, et non `src/seal.rs` : il relit les lignes par les fonctions privées de
+  `store.rs` (`deserialise_content`) et les champs de `HistoryStore`, et ne touche pas à
+  `lib.rs` (i-compaction-fork y travaille). `store.rs` n'y gagne qu'une ligne `pub mod
+  seal;`, à taille constante. `history.rs` ne garde que l'étape de boot.
 - **Quelles sessions.** Candidate : une session qui a au moins une ligne `event_id IS
   NULL AND sealed = 0`. Scellée si son journal n'a **aucun** `conv.*` ; sinon laissée
   telle quelle et listée dans `SealReport::skipped` (avertissement au démarrage) : un
@@ -141,7 +143,8 @@ erreur.
 `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` :
 verts. `cargo test --workspace --no-fail-fast` : vert sauf `penelope-archtest` (deux
 rouges tolérés, ci-dessous). Ciblés pendant le lot :
-`penelope-store` (migrations, `migration_from_0_17` et son générateur ignoré),
+`penelope-store` (migrations, `migration_from_0_17`), `penelope-context --test
+seal_from_0_17`,
 `penelope-daemon --lib history`, `penelope-evals --test scenarios` (18/18),
 `penelope-archtest`. Rouges tolérés et seulement eux : `daemon_modules_are_whitelisted`
 (module `history`, prévu par la spécification, à ajouter à `[daemon].modules`) et
@@ -167,4 +170,5 @@ rouges tolérés, ci-dessous). Ciblés pendant le lot :
 
 ## Blocages
 
-Aucun. Le lead ajuste `[daemon].modules` et le plafond `[crates]` du daemon.
+Aucun. `[daemon].modules` et le plafond `[crates]` du daemon ont été ajustés par le lead
+(`1ed4473`).
