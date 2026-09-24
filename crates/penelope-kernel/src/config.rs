@@ -1132,6 +1132,14 @@ pub struct Tools {
     /// Binaires à ajouter à l'inventaire de la machine (issue #156), en plus de la liste
     /// connue : ce que le modèle apprend qu'il peut lancer au lieu de bricoler.
     pub inventory_extra: Vec<String>,
+    /// Délai au-delà duquel un appel d'outil se voit **proposer** l'arrière-plan plutôt
+    /// que d'immobiliser le tour (issue #204). La proposition passe par le texte du
+    /// résultat : c'est le modèle qui décide, rien n'est détourné d'office.
+    pub background_after: String,
+    /// Jobs d'outils simultanés au plus pour une session (issue #204).
+    pub jobs_per_session: usize,
+    /// Jobs d'outils simultanés au plus pour tout le daemon (issue #204).
+    pub jobs_total: usize,
 }
 
 /// Modes d'approbation d'une session (issue #111).
@@ -1150,6 +1158,9 @@ impl Default for Tools {
             shell_allow: Vec::new(),
             shell_allow_network: Vec::new(),
             inventory_extra: Vec::new(),
+            background_after: "120s".into(),
+            jobs_per_session: 3,
+            jobs_total: 10,
         }
     }
 }
@@ -1606,6 +1617,21 @@ impl Config {
             )));
         }
         parse_duration(&self.tools.shell_timeout)?;
+        parse_duration(&self.tools.background_after)?;
+        // Un plafond nul interdirait tout job sans le dire (issue #204) ; un plafond
+        // global sous celui d'une session promettrait à chaque session ce que le daemon
+        // ne peut pas tenir.
+        if self.tools.jobs_per_session == 0 {
+            return Err(KernelError::config(
+                "tools.jobs_per_session doit valoir au moins 1",
+            ));
+        }
+        if self.tools.jobs_total < self.tools.jobs_per_session {
+            return Err(KernelError::config(format!(
+                "tools.jobs_total ({}) doit valoir au moins tools.jobs_per_session ({})",
+                self.tools.jobs_total, self.tools.jobs_per_session
+            )));
+        }
         crate::cron::Cron::parse(&self.memory.dreaming_cron)?;
         if !self.backup.cron.trim().is_empty() {
             crate::cron::Cron::parse(&self.backup.cron)?;
@@ -2156,6 +2182,31 @@ mod tests {
     #[test]
     fn default_config_is_valid() {
         cfg().validate().unwrap();
+    }
+
+    /// #204 : un job d'outil a un seuil de proposition et deux plafonds. Un plafond nul
+    /// interdirait tout job sans le dire : refusé à la validation.
+    #[test]
+    fn tool_jobs_have_a_threshold_and_two_caps() {
+        let c = cfg();
+        assert_eq!(c.tools.background_after, "120s");
+        assert_eq!(c.tools.jobs_per_session, 3);
+        assert_eq!(c.tools.jobs_total, 10);
+        parse_duration(&c.tools.background_after).unwrap();
+
+        let mut bad = cfg();
+        bad.tools.background_after = "deux minutes".into();
+        assert!(bad.validate().is_err());
+
+        let mut zero = cfg();
+        zero.tools.jobs_per_session = 0;
+        let e = zero.validate().unwrap_err().to_string();
+        assert!(e.contains("tools.jobs_per_session"), "{e}");
+
+        let mut narrow = cfg();
+        narrow.tools.jobs_total = 2;
+        let e = narrow.validate().unwrap_err().to_string();
+        assert!(e.contains("tools.jobs_total"), "{e}");
     }
 
     #[test]

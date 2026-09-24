@@ -133,6 +133,13 @@ pub enum Command {
     #[command(subcommand)]
     Skill(SkillCmd),
 
+    /// Jobs d'outils en cours : outil, session, âge. Ce qui tourne hors d'un tour.
+    Jobs {
+        /// Jobs terminés aussi, pas seulement ceux qui tournent.
+        #[arg(long)]
+        all: bool,
+    },
+
     /// Demandes d'approbation en attente.
     Approvals,
     /// Autorise une demande.
@@ -1143,6 +1150,7 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
             (m::SKILL_INSTALL, json!({"source": source, "force": force}))
         }
 
+        Command::Jobs { all } => (m::JOBS, json!({"all": all})),
         Command::Approvals => (m::APPROVALS, json!({})),
         Command::Approve { id, always, effect } => (
             m::APPROVE,
@@ -2469,6 +2477,7 @@ mod tests {
             vec!["mem", "search", "x"],
             vec!["mem", "show", "u1"],
             vec!["skill", "list"],
+            vec!["jobs"],
         ] {
             let c = parse(&args);
             let (method, _) = route(&c.command).unwrap();

@@ -341,6 +341,11 @@ précisément le run **bloqué** qui paraît « en cours » (issue #155). Les **
 document** en cours sont comptées par `/stop` et **interrompues** par `/stop tout` : leur
 appel au modèle porte désormais le jeton d'annulation de leur session.
 
+Les **jobs d'outils** (un `shell_exec` ou un `sub_agent_spawn` lancé en arrière-plan,
+voir [Jobs d'outils](install-headless.md#jobs-doutils)) tournent hors d'un tour : `/stop`
+coupe ceux de la session courante, `/stop tout` ceux de toutes les sessions du chat. Le
+groupe de processus est tué, la réponse dit combien.
+
 Une session reçoit un titre de quelques mots après son premier échange ; `/title
 <texte>` renomme la session courante. `/sessions` rend un bouton par session (▶️ celle du
 chat, ⏳ un tour en cours ou en attente, heure de dernière activité pour la plus récente) :

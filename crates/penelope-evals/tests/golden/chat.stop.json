@@ -7,7 +7,8 @@
     "result": {
       "session": "string",
       "stopped": "bool",
-      "dropped": "integer"
+      "dropped": "integer",
+      "jobs": "integer"
     }
   }
 }

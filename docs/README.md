@@ -17,6 +17,7 @@ d'outils sont à jour.
 | Brancher des serveurs MCP | [Déclarer un serveur](mcp.md#déclarer-un-serveur), [Risque et approbation](mcp.md#risque-et-approbation), [OAuth 2.1](mcp.md#oauth-21), [Serveurs MCP sur la machine](install-headless.md#serveurs-mcp), [Venir d'Hermes](install-headless.md#venir-dhermes) |
 | Mémoire et vault | [Mémoire qui apprend](install-headless.md#mémoire-qui-apprend), [Rappels et tâches planifiées](install-headless.md#rappels-et-tâches-planifiées), [Retrouver une conversation](install-headless.md#retrouver-une-conversation), [Sauvegarde et audit](install-headless.md#9-sauvegarde-et-audit), [Sauvegarde complète chiffrée](install-headless.md#sauvegarde-complète-chiffrée-hors-de-la-machine), [Remonter une instance](install-headless.md#remonter-une-instance-sur-une-machine-neuve) |
 | Coûts et budget | [Coûts](install-headless.md#coûts), [Gros résultats d'outils](install-headless.md#gros-résultats-doutils), [Longues conversations](install-headless.md#longues-conversations), [Cache de prompt](decisions/0008-cache-de-prompt.md) |
+| Travaux longs sans bloquer le tour | [Jobs d'outils](install-headless.md#jobs-doutils), [Jobs durables](decisions/0012-jobs-outils-durables.md) |
 | Relire une requête envoyée | [Relire ce que le modèle a lu](context.md#relire-ce-que-le-modèle-a-lu), [Prompt système journalisé](decisions/0011-prompt-systeme-journalise.md) |
 | Observer le daemon en direct | [Flux runtime](runtime-events.md#flux-dévénements-runtime), [Contrat](runtime-events.md#contrat), [Démonstration Pathlayer](runtime-events.md#démonstration-pathlayer) |
 | Comprendre la compression de contexte | [Ce qu'un appel envoie](context.md#ce-quun-appel-envoie), [Les chiffres par fenêtre](context.md#les-chiffres-par-fenêtre), [Une session jusqu'à la cinquième compaction](context.md#une-session-du-premier-tour-à-la-cinquième-compaction), [Quand le résumé échoue](context.md#quand-le-résumé-échoue), [Le cache](context.md#le-cache) |
@@ -50,6 +51,7 @@ d'outils sont à jour.
 - [0009](decisions/0009-pas-d-emulation-d-outils.md) : pas d'émulation d'outils, un modèle sans tool calling est refusé.
 - [0010](decisions/0010-fournisseur-codex-oauth.md) : fournisseur Codex — identité empruntée, périmètre du propriétaire, quota du plan.
 - [0011](decisions/0011-prompt-systeme-journalise.md) : le prompt système est journalisé en clair, adressé par son empreinte.
+- [0012](decisions/0012-jobs-outils-durables.md) : un job d'outil mort au redémarrage n'est jamais relancé d'office.
 - [0015](decisions/0015-gel-0.17-et-branche-v1.md) : gel de la 0.17 et branche `v1` ; `main` ne prend que des corrections, versions `1.0.0-alpha.N` jamais taguées.
 
-Les numéros 0012 à 0014 et 0016 sont réservés par la charte de la V1 (`design/v1/README.md` §9) et pas encore écrits.
+Les numéros 0013, 0014, 0016 et 0017 sont réservés par la charte de la V1 (`design/v1/README.md` §9) et pas encore écrits (0017 : journal source unique).

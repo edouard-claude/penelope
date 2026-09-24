@@ -441,6 +441,9 @@ pub(crate) struct StopReport {
     pub ingests: usize,
     /// Celles que `/stop tout` vient d'interrompre.
     pub cancelled_ingests: usize,
+    /// Jobs d'outils coupés (issue #204) : `/stop` ceux de la session, `/stop tout` ceux
+    /// de toutes les sessions du chat.
+    pub cancelled_jobs: usize,
     pub tout: bool,
 }
 
@@ -449,7 +452,7 @@ impl StopReport {
         let mut note = match (self.running, self.queued) {
             // « Rien à arrêter » seulement quand il n'y a vraiment rien : un run ouvert
             // compte, quel que soit son état.
-            (false, 0) if self.open.is_empty() && self.ingests == 0 => {
+            (false, 0) if self.open.is_empty() && self.ingests == 0 && self.cancelled_jobs == 0 => {
                 "Rien à arrêter.".to_string()
             }
             (false, 0) => "⏹ Aucun tour en cours.".to_string(),
@@ -479,6 +482,12 @@ impl StopReport {
             note.push_str(&format!(
                 " {} ingestion(s) de document interrompue(s).",
                 self.cancelled_ingests
+            ));
+        }
+        if self.cancelled_jobs > 0 {
+            note.push_str(&format!(
+                " {} job(s) d'outil interrompu(s).",
+                self.cancelled_jobs
             ));
         }
         if !self.left.is_empty() {
@@ -1495,6 +1504,9 @@ impl TelegramGateway {
                 } else {
                     0
                 };
+                // Un job d'outil tourne hors du tour : `cancel_session` ne le voit pas.
+                // `/stop` coupe ceux de cette session (issue #204).
+                let mut cancelled_jobs = s.jobs.cancel_session(&session);
                 let mut queued = crate::session_ops::silence(d, &session, "arrêt demandé").await?;
                 let mut sessions = 0;
                 let mut runs = 0;
@@ -1538,6 +1550,7 @@ impl TelegramGateway {
                         d.bus.cancel_session(&id);
                         ingests += d.bus.ingests_of(&id);
                         cancelled_ingests += d.bus.cancel_ingests(&id);
+                        cancelled_jobs += s.jobs.cancel_session(&id);
                         let n = crate::session_ops::silence(d, &id, "arrêt demandé").await?;
                         if n > 0 || d.bus.is_active(&id) {
                             sessions += 1;
@@ -1577,6 +1590,7 @@ impl TelegramGateway {
                         .collect(),
                     ingests,
                     cancelled_ingests,
+                    cancelled_jobs,
                     tout,
                 }
                 .render();

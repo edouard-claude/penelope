@@ -4,11 +4,11 @@
   "response": {
     "result": [
       {
+        "detail": "string",
         "fix": "string",
         "id": "string",
         "label": "string",
         "ok": "bool",
-        "detail": "string",
         "severity": "string"
       }
     ]

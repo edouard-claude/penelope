@@ -17,17 +17,18 @@ test_modules = [
 # Liste de référence (R3) : les fichiers autorisés à dépasser, chacun avec sa borne.
 # Elle ne peut que rétrécir : un fichier repassé sous le plafond doit en sortir.
 [files.oversized]
-"crates/penelope-daemon/src/telegram.rs" = 7953
+"crates/penelope-daemon/src/tool_jobs.rs" = 1754   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
+"crates/penelope-daemon/src/telegram.rs" = 7967   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/dream.rs" = 3457
-"crates/penelope-daemon/src/agent.rs" = 2485
+"crates/penelope-daemon/src/agent.rs" = 2513   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/workflow.rs" = 2915
-"crates/penelope-daemon/src/executor.rs" = 2480
+"crates/penelope-daemon/src/executor.rs" = 2504   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/mcp.rs" = 1958
 "crates/penelope-daemon/src/engine.rs" = 1221
-"crates/penelope-kernel/src/config.rs" = 2739   # +1 : #[allow(clippy::too_many_lines)] posé par le gel (#211)
-"crates/penelope-cli/src/commands.rs" = 2677   # +1 : #[allow(clippy::too_many_lines)] posé par le gel (#211)
-"crates/penelope-daemon/src/rpc.rs" = 2482   # +1 : #[allow(clippy::too_many_lines)] posé par le gel (#211)
-"crates/penelope-daemon/src/doctor.rs" = 2463
+"crates/penelope-kernel/src/config.rs" = 2790   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
+"crates/penelope-cli/src/commands.rs" = 2686   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
+"crates/penelope-daemon/src/rpc.rs" = 2518   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
+"crates/penelope-daemon/src/doctor.rs" = 2522   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/telegram/screens.rs" = 2437   # +1 : #[allow(clippy::too_many_lines)] posé par le gel (#211)
 "crates/penelope-daemon/src/compaction.rs" = 2225
 "crates/penelope-llm/src/provider.rs" = 2048
@@ -38,15 +39,15 @@ test_modules = [
 "crates/penelope-llm/src/codex.rs" = 1533
 "crates/penelope-memory/src/consolidation.rs" = 1476
 "crates/penelope-context/src/store.rs" = 1379
-"crates/penelope-tools/src/spec.rs" = 1291   # +1 : #[allow(clippy::too_many_lines)] posé par le gel (#211)
+"crates/penelope-tools/src/spec.rs" = 1377   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-mcp/src/transport.rs" = 1265
-"crates/penelope-store/src/migrations.rs" = 1260
+"crates/penelope-store/src/migrations.rs" = 1295   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/mcp_auth.rs" = 1246
 "crates/penelope-daemon/src/ingest.rs" = 1225
 "crates/penelope-daemon/src/conversation.rs" = 1222
 "crates/penelope-context/src/engine.rs" = 1214
 "crates/penelope-mcp/src/registry.rs" = 1200
-"crates/penelope-daemon/src/purge.rs" = 1190   # +1 : #[allow(clippy::too_many_lines)] posé par le gel (#211)
+"crates/penelope-daemon/src/purge.rs" = 1245   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-memory/src/vault.rs" = 1163
 "crates/penelope-kernel/src/turn.rs" = 1136
 "crates/penelope-context/src/compaction.rs" = 1122
@@ -134,7 +135,8 @@ modules = [
     "wiki_e2e",
     "workflow",
   "clone_policy_tests",  # module de tests sorti d'agent.rs (#215)
-  "testing",  # aides de test sorties de mcp.rs (#215)
+  "testing",  # aides de test sorties de mcp.rs (#215),
+  "tool_jobs",  # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 ]
 impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 
@@ -143,6 +145,7 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 # fichier absent a un budget de 0. Cible V1 : seuls runtime, engine, runner, supervisor
 # et rpc le nomment encore.
 [daemon.daemon_users]
+"tool_jobs.rs" = 3   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "scheduler.rs" = 26
 "compaction.rs" = 21
 "dream.rs" = 20
@@ -278,6 +281,7 @@ required = [
 # OwnerChannel ; ces entrées ne peuvent que décroître (lot D, T36), sauf les permanentes,
 # justifiées en commentaire, qui attendent T37 après la V1.
 [channel.allowed]
+"crates/penelope-daemon/src/tool_jobs.rs" = 6   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/agent.rs" = 1   # EffectKind::Telegram (effect_kind), déjà là, visible depuis que les tests sont sortis (#215) ; disparaît avec T37
 "crates/penelope-daemon/src/doctor.rs" = 44
 "crates/penelope-daemon/src/scheduler.rs" = 39

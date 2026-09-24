@@ -252,7 +252,10 @@
         "approval_mode": "string",
         "shell_allow": [],
         "shell_allow_network": [],
-        "inventory_extra": []
+        "inventory_extra": [],
+        "background_after": "string",
+        "jobs_per_session": "integer",
+        "jobs_total": "integer"
       },
       "workflows": {
         "workspace_retention_days": "integer",

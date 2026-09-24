@@ -385,6 +385,21 @@ pub async fn status(
         }
     }
 
+    // #204 : ce qui tourne hors des tours. En section propre, et dans le tableau complet.
+    if all || section == "jobs" {
+        let now = s.clock.now_ms();
+        let live = crate::tool_jobs::store(s).live().await.unwrap_or_default();
+        out.insert(
+            "jobs".into(),
+            json!({
+                "running": live.iter().map(|j| j.view(now)).collect::<Vec<_>>(),
+                "in_this_process": s.jobs.len(),
+                "max_per_session": cfg.tools.jobs_per_session,
+                "max_total": cfg.tools.jobs_total,
+            }),
+        );
+    }
+
     if all || section == "machine" {
         let platform = s.platform.clone();
         let now = s.clock.now_ms() / 1000;
@@ -534,6 +549,35 @@ mod tests {
             .await
             .unwrap();
         (dir, Arc::new(s))
+    }
+
+    /// #204 : `self_status` montre les jobs vivants, leur âge et leur session — en
+    /// section `jobs` comme dans le tableau complet.
+    #[tokio::test]
+    async fn the_status_shows_the_living_tool_jobs() {
+        let (_d, s) = services().await;
+        crate::tool_jobs::store(&s)
+            .create(crate::tool_jobs::NewJob {
+                session_id: "s1".into(),
+                run_id: None,
+                turn_id: None,
+                call_id: None,
+                tool: "shell_exec".into(),
+                request: json!({"command": "cargo test"}),
+                effect_id: Some("e_1".into()),
+            })
+            .await
+            .unwrap();
+        for section in ["jobs", "all"] {
+            let v = status(&s, "s1", None, None, section).await.unwrap();
+            let jobs = v["jobs"]["running"].as_array().unwrap_or_else(|| {
+                panic!("section {section} sans jobs : {v}");
+            });
+            assert_eq!(jobs.len(), 1, "{v}");
+            assert_eq!(jobs[0]["tool"], "shell_exec");
+            assert_eq!(jobs[0]["session"], "s1");
+            assert!(jobs[0]["age_s"].is_number());
+        }
     }
 
     /// Issue #34 : l'inventaire liste `ticket-to-deploy` avec ses paramètres requis et

@@ -23,6 +23,7 @@
         "effects": "integer",
         "approvals": "integer",
         "mcp_tasks": "integer",
+        "tool_jobs": "integer",
         "workflow_steps": "integer",
         "workflow_runs": "integer"
       }

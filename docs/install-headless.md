@@ -522,6 +522,9 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `tools.shell_allow` | `[]` | Familles de commandes `shell_exec` autorisées d'avance, sans enchaînement : par exemple `cargo test`, `npm run lint`. |
 | `tools.shell_allow_network` | `[]` | Familles de commandes autorisées d'avance **avec** le réseau : `git push`, `gh pr`. |
 | `tools.inventory_extra` | `[]` | Binaires à ajouter à l'inventaire de la machine (issue #156), en plus de la liste connue : ce que le modèle apprend qu'il peut lancer au lieu de bricoler. |
+| `tools.background_after` | `"120s"` | Délai au-delà duquel un appel d'outil se voit **proposer** l'arrière-plan plutôt que d'immobiliser le tour (issue #204). La proposition passe par le texte du résultat : c'est le modèle qui décide, rien n'est détourné d'office. |
+| `tools.jobs_per_session` | `3` | Jobs d'outils simultanés au plus pour une session (issue #204). |
+| `tools.jobs_total` | `10` | Jobs d'outils simultanés au plus pour tout le daemon (issue #204). |
 
 **[workflows]**
 
@@ -1254,6 +1257,10 @@ et `/stop` interrompt tout le lot.
 | `intent_cancel` | write | Annule une intention. (à la demande) |
 | `intent_create` | write | Arme une intention événementielle : « quand on reparle de X, rappelle-moi Y ». (à la demande) |
 | `intent_list` | read | Liste les intentions armées. (à la demande) |
+| `job_cancel` | write | Annule un job en cours : le processus et son groupe sont tués, le job passe `cancelled`. (à la demande) |
+| `job_list` | read | Jobs d'outils de cette session : ceux qui tournent encore, leur outil et leur âge. (à la demande) |
+| `job_status` | read | État d'un job lancé en arrière-plan : `working`, `completed`, `failed` ou `cancelled`, et son résultat s'il est terminé. (à la demande) |
+| `job_wait` | read | Attend la fin d'un job, au plus `timeout_ms` (120 s au maximum, 30 s par défaut). (à la demande) |
 | `mem_forget` | destructive | Retire une entrée de mémoire. (à la demande) |
 | `mem_get` | read | Lit une entrée de mémoire par uid ou par slug. (à la demande) |
 | `mem_neighbors` | read | Voisins d'une note dans le graphe du vault : concepts d'une source, sources et entrées de mémoire qui citent un concept (liens `[[slug]]` sortants et entrants). (à la demande) |
@@ -2045,6 +2052,57 @@ fin, quelle que soit la fenêtre du modèle : un modèle à un million de tokens
 un résultat de 175 k entier. Une longue liste de fichiers (`fs_list` récursif) est
 résumée par dossier, la liste complète en artefact.
 
+### Jobs d'outils
+
+Un appel d'outil occupe le tour du début à la fin : pendant qu'une commande tourne, la
+conversation n'avance pas, et un message du propriétaire attend derrière elle — même pour
+dire « laisse tomber ». Pour les deux outils qui peuvent durer, `shell_exec` et
+`sub_agent_spawn`, `background: true` rend la main tout de suite :
+
+```
+shell_exec {"command": "cargo test --workspace", "background": true}
+→ {"job": "tj_01M…", "state": "working"}
+```
+
+Le tour répond sans attendre. La commande continue hors du tour, et son résultat revient
+seul dans la conversation, par un tour de relance qui rappelle de quoi il est le résultat
+— même si le tour d'origine est clos depuis longtemps, et même si la conversation a changé
+de sujet entre-temps. Une session fermée ne perd rien : la livraison attend sa
+réouverture.
+
+Pénélope suit ses jobs avec quatre outils exposés à la demande (`job_list`, `job_status`,
+`job_wait`, `job_cancel`). `job_wait` est borné à deux minutes : au-delà, il rend l'état
+courant plutôt que d'immobiliser le tour à son tour. Un `timeout_ms` demandé au-delà de
+`tools.background_after` (120 s) lui vaut une remarque dans le résultat de l'appel : la
+prochaine fois, l'arrière-plan. Rien n'est détourné d'office ; c'est elle qui décide.
+
+Côté propriétaire :
+
+```bash
+penelope jobs           # ce qui tourne : outil, session, âge
+penelope jobs --all     # les jobs terminés aussi
+```
+
+`/stop` coupe les jobs de la conversation en cours, `/stop tout` ceux de toutes ses
+sessions ; dans les deux cas le groupe de processus est tué, sans orphelin. `penelope
+doctor` signale un job de plus d'une heure, ou un job de la base que plus aucun processus
+ne couvre. `self_status` (section `jobs`) montre la même chose à Pénélope.
+
+Un job n'existe que pour une conversation (y compris celle qu'ouvre un déclencheur
+planifié). Dans un sous-agent ou une étape de workflow, `background: true` est ignoré et
+l'appel s'exécute normalement : la session d'un sous-agent meurt avec sa conclusion, et un
+run de workflow a déjà son attente d'étape.
+
+Deux plafonds empêchent un modèle de tout lancer en arrière-plan sans jamais rien relire :
+`tools.jobs_per_session` (3) et `tools.jobs_total` (10). Au-delà, l'appel est refusé avec
+ce qu'il faut pour s'en sortir.
+
+Un job est un effet comme un autre : il est planifié dans le ledger **avant** de partir, et
+un redémarrage pendant qu'il tourne le laisse incertain. Le job devient alors `failed` et
+la carte « C'est fait / Relancer / Ignorer » part une fois — il n'est jamais relancé tout
+seul, même si son outil est déclaré idempotent (voir la [décision
+0012](decisions/0012-jobs-outils-durables.md)).
+
 ### Longues conversations
 
 Le parcours complet, seuils et chiffres par fenêtre compris, est dans
@@ -2278,7 +2336,8 @@ Efface le contenu de la session : messages et index plein texte, contexte figé,
 artefacts (leurs fichiers compris), requêtes au modèle, payloads des tours et des updates
 Telegram du chat, candidats de mémoire, et ce que l'agent a fait et dit : arguments et
 résultats d'outils, messages envoyés sur Telegram, demandes d'approbation (celles en
-attente sont annulées), tâches MCP, paramètres et sorties des workflows de la session, et
+attente sont annulées), tâches MCP, jobs d'outils (ceux qui tournaient encore sont
+annulés), paramètres et sorties des workflows de la session, et
 les prompts système que cette session seule référençait — ceux qu'une autre session lit
 encore attendent sa purge à elle. Un
 outil déjà exécuté reste reconnu comme tel : sa ligne et sa clé d'idempotence demeurent,
@@ -2298,7 +2357,7 @@ Ce qui n'est ni la mémoire ni la chaîne d'audit finit par disparaître, une pa
 
 | Réglage | Défaut | Ce qui est effacé au-delà |
 |---|---|---|
-| `retention.days` | `90` | tours terminés, requêtes au modèle abouties, payloads des updates Telegram, clés de travail (`turn.*`, `prompt.prefix.*`, `wf.*`, `tg.*`…), arguments et résultats des outils menés à terme (un effet incertain garde tout), messages Telegram envoyés, contenu des demandes décidées, tâches MCP terminées, sorties des workflows finis, prompts système que plus aucune ligne ne cite |
+| `retention.days` | `90` | tours terminés, requêtes au modèle abouties, payloads des updates Telegram, clés de travail (`turn.*`, `prompt.prefix.*`, `wf.*`, `tg.*`…), arguments et résultats des outils menés à terme (un effet incertain garde tout), messages Telegram envoyés, contenu des demandes décidées, tâches MCP terminées, jobs d'outils terminés, sorties des workflows finis, prompts système que plus aucune ligne ne cite |
 | `retention.memory_history_days` | `30` | pré-images de la mémoire (`mem_history`), qui gardent chaque fichier avant et après chaque opération du rêve |
 
 `0` désactive la rétention correspondante. Le payload d'un update Telegram est de toute

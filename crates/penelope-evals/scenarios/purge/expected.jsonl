@@ -1,9 +1,9 @@
 {"type":"outcome","step":1,"input":"message : le mot de passe du wifi est framboise-42","outcome":"answered","text":"Noté, je le garde pour cette session.","iterations":1}
 {"type":"outcome","step":2,"input":"message : et le code de l'alarme est 1234","outcome":"answered","text":"Noté aussi.","iterations":1}
-{"type":"outcome","step":3,"input":"commande : /purge","session":"{{session:1}}","reason":"scénario","events":9,"files":0,"tables":{"messages":4,"lcm_nodes":0,"artifacts":0,"llm_requests":2,"prompt_snapshots":1,"turns":2,"candidates":0,"tg_updates":0,"tg_outbox":0,"effects":0,"approvals":0,"mcp_tasks":0,"workflow_steps":0,"workflow_runs":0}}
+{"type":"outcome","step":3,"input":"commande : /purge","session":"{{session:1}}","reason":"scénario","events":9,"files":0,"tables":{"messages":4,"lcm_nodes":0,"artifacts":0,"llm_requests":2,"prompt_snapshots":1,"turns":2,"candidates":0,"tg_updates":0,"tg_outbox":0,"effects":0,"approvals":0,"mcp_tasks":0,"tool_jobs":0,"workflow_steps":0,"workflow_runs":0}}
 {"type":"session","id":"{{session:1}}","kind":"chat","title":"(session purgée)","state":"active","parent":null,"model_alias":null,"episode":0}
 {"type":"event","session":"{{session:1}}","seq":1,"kind":"runtime.session.created","payload":{"purged":true}}
-{"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"turns_requeued":0}}
+{"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"tool_jobs_lost":0,"turns_requeued":0}}
 {"type":"event","session":"{{session:1}}","seq":2,"kind":"turn.started","payload":{"purged":true}}
 {"type":"event","session":"{{session:1}}","seq":3,"kind":"llm.fallback_used","payload":{"purged":true}}
 {"type":"event","session":"{{session:1}}","seq":4,"kind":"runtime.llm","payload":{"purged":true}}

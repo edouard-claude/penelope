@@ -182,14 +182,17 @@ pub fn all() -> Vec<ToolSpec> {
              `;`, `||`, `$(…)` et redirections empêchent toute règle, donc redemandent à \
              chaque appel. \
              Ne recopie jamais un secret lu (clé, mot de passe) dans la commande : lis-le \
-             dans son fichier ou une variable d'environnement.",
+             dans son fichier ou une variable d'environnement. \
+             `background: true` (tests, build, installation) : rend la main tout de suite, \
+             le résultat revient seul dans la conversation.",
             obj(
                 json!({
                     "command": {"type":"string"},
                     "cwd": {"type":"string"},
                     "timeout_ms": {"type":"integer","minimum":1000,"maximum":3600000},
                     "output": {"type":"string","enum":["digest","full"]},
-                    "network": {"type":"boolean"}
+                    "network": {"type":"boolean"},
+                    "background": {"type":"boolean"}
                 }),
                 &["command"],
             ),
@@ -527,6 +530,57 @@ pub fn all() -> Vec<ToolSpec> {
             false,
             false,
         ),
+        // --------------------------------------------------------- jobs d'outils (#204)
+        spec(
+            "job_list",
+            RiskClass::Read,
+            "Jobs d'outils de cette session : ceux qui tournent encore, leur outil et leur \
+             âge. À relire avant d'en lancer un de plus.",
+            obj(
+                json!({"all": {"type":"boolean","description":"Toutes les sessions, pas seulement celle-ci."}}),
+                &[],
+            ),
+            true,
+            false,
+            false,
+        ),
+        spec(
+            "job_status",
+            RiskClass::Read,
+            "État d'un job lancé en arrière-plan : `working`, `completed`, `failed` ou \
+             `cancelled`, et son résultat s'il est terminé.",
+            obj(json!({"job": {"type":"string"}}), &["job"]),
+            true,
+            false,
+            false,
+        ),
+        spec(
+            "job_wait",
+            RiskClass::Read,
+            "Attend la fin d'un job, au plus `timeout_ms` (120 s au maximum, 30 s par \
+             défaut). Au-delà, rend l'état courant sans bloquer le tour : inutile de \
+             boucler, le résultat revient seul dans la session quand il est prêt.",
+            obj(
+                json!({
+                    "job": {"type":"string"},
+                    "timeout_ms": {"type":"integer","minimum":1000,"maximum":120000}
+                }),
+                &["job"],
+            ),
+            true,
+            false,
+            false,
+        ),
+        spec(
+            "job_cancel",
+            RiskClass::Write,
+            "Annule un job en cours : le processus et son groupe sont tués, le job passe \
+             `cancelled`.",
+            obj(json!({"job": {"type":"string"}}), &["job"]),
+            false,
+            false,
+            false,
+        ),
         spec(
             "intent_cancel",
             RiskClass::Write,
@@ -773,14 +827,16 @@ pub fn all() -> Vec<ToolSpec> {
         spec(
             "sub_agent_spawn",
             RiskClass::Write,
-            "Lance un sub-agent à contexte neuf, outils restreints, retour structuré.",
+            "Lance un sub-agent à contexte neuf, outils restreints, retour structuré. \
+             `background: true` : rend la main tout de suite, la conclusion revient seule.",
             obj(
                 json!({
                     "kind": {"type":"string"},
                     "prompt": {"type":"string"},
                     "model": {"type":"string"},
                     "budget": {"type":"integer"},
-                    "tools": {"type":"array","items":{"type":"string"}}
+                    "tools": {"type":"array","items":{"type":"string"}},
+                    "background": {"type":"boolean"}
                 }),
                 &["kind", "prompt"],
             ),
@@ -925,8 +981,8 @@ pub fn all() -> Vec<ToolSpec> {
                 json!({
                     "section": {
                         "type": "string",
-                        "enum": ["all", "model", "config", "costs", "machine", "inventory", "workflows", "skills", "tools", "mcp", "commands", "schedules", "install", "limits"],
-                        "description": "Partie voulue ; `all` par défaut. `workflows` : identifiants, rôles et paramètres requis ; `tools` : outils natifs et classe de risque ; `limits` : limites connues de la version ; `inventory` : tout l'inventaire."
+                        "enum": ["all", "model", "config", "costs", "jobs", "machine", "inventory", "workflows", "skills", "tools", "mcp", "commands", "schedules", "install", "limits"],
+                        "description": "Partie voulue ; `all` par défaut. `workflows` : identifiants, rôles et paramètres requis ; `tools` : outils natifs et classe de risque ; `jobs` : jobs d'outils en cours ; `limits` : limites connues de la version ; `inventory` : tout l'inventaire."
                     }
                 }),
                 &[],
@@ -1010,6 +1066,10 @@ pub const ON_DEMAND: &[&str] = &[
     "intent_cancel",
     "intent_create",
     "intent_list",
+    "job_cancel",
+    "job_list",
+    "job_status",
+    "job_wait",
     "mem_forget",
     "mem_get",
     "mem_neighbors",
@@ -1173,9 +1233,35 @@ mod tests {
             "self_status",
             "self_docs",
             "config_set",
+            "job_status",
+            "job_wait",
+            "job_cancel",
+            "job_list",
         ] {
             assert!(names.contains(&expected), "outil manquant : {expected}");
         }
+    }
+
+    /// #204 : les deux outils qui peuvent immobiliser un tour savent rendre la main, et
+    /// les outils de suivi restent à la demande — `job_cancel` seul écrit.
+    #[test]
+    fn long_tools_can_be_backgrounded_and_jobs_are_followed_on_demand() {
+        for n in ["shell_exec", "sub_agent_spawn"] {
+            let s = get(n).unwrap();
+            assert_eq!(
+                s.schema["properties"]["background"]["type"], "boolean",
+                "{n} doit accepter `background`"
+            );
+        }
+        for n in ["job_status", "job_wait", "job_list"] {
+            assert_eq!(get(n).unwrap().risk, RiskClass::Read, "{n}");
+            assert!(is_on_demand(n), "{n} doit rester à la demande (#104)");
+        }
+        assert_eq!(get("job_cancel").unwrap().risk, RiskClass::Write);
+        assert!(is_on_demand("job_cancel"));
+        // `job_wait` est borné : le tour ne s'y perd pas.
+        let wait = get("job_wait").unwrap();
+        assert_eq!(wait.schema["properties"]["timeout_ms"]["maximum"], 120000);
     }
 
     #[test]

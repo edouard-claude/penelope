@@ -395,6 +395,29 @@ async fn a_session_budget_is_raised_and_the_suspended_turn_resumes() {
     );
 }
 
+/// #204 : `/stop` coupe les jobs d'outils de la session, `/stop tout` ceux de toutes
+/// les sessions — et le dit, comme pour les ingestions (#155).
+#[test]
+fn stopping_cuts_the_tool_jobs_and_says_so() {
+    use super::StopReport;
+
+    let one = StopReport {
+        cancelled_jobs: 1,
+        ..Default::default()
+    };
+    let out = one.render();
+    assert!(!out.contains("Rien à arrêter"), "{out}");
+    assert!(out.contains("1 job"), "{out}");
+
+    let all = StopReport {
+        running: true,
+        cancelled_jobs: 3,
+        tout: true,
+        ..Default::default()
+    };
+    assert!(all.render().contains("3 job"), "{}", all.render());
+}
+
 /// #155 : le 21/09, `/stop` puis `/stop tout` ont répondu « Rien à arrêter » alors
 /// qu'un run était **bloqué** dans le sujet depuis vingt minutes, et que la dernière
 /// réponse le disait « en cours ». Un run ouvert n'est jamais « rien ».

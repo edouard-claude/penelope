@@ -5,7 +5,7 @@
 {"type":"message","session":"{{session:1}}","seq":2,"role":"user","text":"tu es toujours là ?"}
 {"type":"message","session":"{{session:1}}","seq":3,"role":"assistant","text":"Oui, toujours là."}
 {"type":"event","session":"{{session:1}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"chat","parent_id":null}}
-{"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"turns_requeued":0}}
+{"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"tool_jobs_lost":0,"turns_requeued":0}}
 {"type":"event","session":"{{session:1}}","seq":2,"kind":"turn.started","payload":{"model":"openrouter:deepseek/deepseek-v4-pro","system_hash":"{{hash}}","tools_hash":"{{hash}}"}}
 {"type":"event","session":"{{session:1}}","seq":3,"kind":"turn.started","payload":{"model":"openrouter:deepseek/deepseek-v4-pro","system_hash":"{{hash}}","tools_hash":"{{hash}}"}}
 {"type":"event","session":"{{session:1}}","seq":4,"kind":"llm.fallback_used","payload":{"requested":"deepseek/deepseek-v4-pro","served":"openrouter:deepseek/deepseek-v4-pro"}}
