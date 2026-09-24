@@ -106,32 +106,11 @@ fn done(result: StepResult, output: Value) -> StepOutcome {
 // ------------------------------------------------------------------ kv
 
 pub(crate) async fn kv_get(s: &Services, key: &str) -> anyhow::Result<Option<String>> {
-    let k = key.to_string();
-    Ok(s.store
-        .read(move |c| {
-            let mut st = c.prepare("SELECT v FROM kv WHERE k = ?1")?;
-            let mut rows = st.query([&k])?;
-            Ok(match rows.next()? {
-                Some(r) => Some(r.get::<_, String>(0)?),
-                None => None,
-            })
-        })
-        .await?)
+    s.kv_get(key).await
 }
 
 pub(crate) async fn kv_set(s: &Services, key: &str, value: &str) -> anyhow::Result<()> {
-    let (k, v) = (key.to_string(), value.to_string());
-    s.store
-        .write(move |tx| {
-            tx.execute(
-                "INSERT INTO kv(k, v, ts) VALUES(?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-                 ON CONFLICT(k) DO UPDATE SET v = excluded.v, ts = excluded.ts",
-                penelope_store::rusqlite::params![k, v],
-            )?;
-            Ok(())
-        })
-        .await?;
-    Ok(())
+    s.kv_set(key, value).await
 }
 
 async fn kv_delete_prefix(s: &Services, prefix: &str) -> anyhow::Result<()> {

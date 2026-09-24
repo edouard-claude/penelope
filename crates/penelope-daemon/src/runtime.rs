@@ -235,6 +235,49 @@ impl Services {
             platform,
         })
     }
+
+    /// Lit une valeur de la table `kv`. Seule famille d'accès du daemon (épopée #208, T05).
+    pub async fn kv_get(&self, key: &str) -> anyhow::Result<Option<String>> {
+        let k = key.to_string();
+        Ok(self
+            .store
+            .read(move |c| {
+                let mut st = c.prepare("SELECT v FROM kv WHERE k = ?1")?;
+                let mut rows = st.query([&k])?;
+                Ok(match rows.next()? {
+                    Some(r) => Some(r.get::<_, String>(0)?),
+                    None => None,
+                })
+            })
+            .await?)
+    }
+
+    pub async fn kv_delete(&self, key: &str) -> anyhow::Result<()> {
+        let k = key.to_string();
+        self.store
+            .write(move |tx| {
+                tx.execute("DELETE FROM kv WHERE k = ?1", [k])?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn kv_set(&self, key: &str, value: &str) -> anyhow::Result<()> {
+        let (k, v) = (key.to_string(), value.to_string());
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "INSERT INTO kv(k, v, ts)
+                     VALUES(?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                     ON CONFLICT(k) DO UPDATE SET v = excluded.v, ts = excluded.ts",
+                    penelope_store::rusqlite::params![k, v],
+                )?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
+    }
 }
 
 /// Ce que la validation des workflows doit connaître.

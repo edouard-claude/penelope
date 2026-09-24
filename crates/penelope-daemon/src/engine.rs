@@ -15,7 +15,6 @@ use penelope_kernel::turn::{Turn, TurnKind};
 use penelope_llm::router::{CLASSIFIER_PROMPT, Classification, RouteReason};
 use penelope_llm::types::{ChatMessage, ChatRequest};
 use penelope_llm::{CancelToken, RouteInput, Router, StickyModel, collect_stream};
-use penelope_store::rusqlite::params;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -1129,48 +1128,15 @@ impl Daemon {
     }
 
     pub async fn kv_get(&self, key: &str) -> anyhow::Result<Option<String>> {
-        let k = key.to_string();
-        Ok(self
-            .services
-            .store
-            .read(move |c| {
-                let mut st = c.prepare("SELECT v FROM kv WHERE k = ?1")?;
-                let mut rows = st.query([&k])?;
-                Ok(match rows.next()? {
-                    Some(r) => Some(r.get::<_, String>(0)?),
-                    None => None,
-                })
-            })
-            .await?)
+        self.services.kv_get(key).await
     }
 
     pub async fn kv_delete(&self, key: &str) -> anyhow::Result<()> {
-        let k = key.to_string();
-        self.services
-            .store
-            .write(move |tx| {
-                tx.execute("DELETE FROM kv WHERE k = ?1", [k])?;
-                Ok(())
-            })
-            .await?;
-        Ok(())
+        self.services.kv_delete(key).await
     }
 
     pub async fn kv_set(&self, key: &str, value: &str) -> anyhow::Result<()> {
-        let (k, v) = (key.to_string(), value.to_string());
-        self.services
-            .store
-            .write(move |tx| {
-                tx.execute(
-                    "INSERT INTO kv(k, v, ts)
-                     VALUES(?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-                     ON CONFLICT(k) DO UPDATE SET v = excluded.v, ts = excluded.ts",
-                    params![k, v],
-                )?;
-                Ok(())
-            })
-            .await?;
-        Ok(())
+        self.services.kv_set(key, value).await
     }
 }
 
