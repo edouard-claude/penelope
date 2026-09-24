@@ -9,7 +9,7 @@ Pour le régénérer après avoir ajouté un test :
 UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 ```
 
-71 tests d'acceptation, 14 sections couvertes.
+72 tests d'acceptation, 14 sections couvertes.
 
 ## §2. Plateformes, portabilité et exploitation headless
 
@@ -127,6 +127,7 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 | CA | Test | Fichier |
 |---|---|---|
 | CA 14.1 | Every template renders in both forms | `crates/penelope-telegram/src/templates.rs` |
+| CA 14.2 | A telegram message gets an answer and a ledger entry | `crates/penelope-daemon/tests/telegram_e2e.rs` |
 | CA 14.3 | Rate limit is respected without loss | `crates/penelope-telegram/src/api.rs` |
 | CA 14.4 | Double click is idempotent | `crates/penelope-telegram/src/actions.rs` |
 | CA 14.5 | Non owner clicks are refused | `crates/penelope-telegram/src/actions.rs` |
