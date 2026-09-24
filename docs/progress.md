@@ -13,6 +13,69 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.7
+
+Sixième vague de la V1 : **la conversation se relit depuis le journal d'événements**
+(`history.source = journal`, nouveau défaut ; `tables` reste disponible), avec des
+requêtes identiques octet pour octet à celles d'avant, et trois crates sortent du daemon :
+le vault, l'hôte MCP et la passerelle Telegram, qui passe au-dessus du daemon. Le daemon
+passe de 82 637 à 53 836 lignes. Point connu : chaque requête replie tout le journal de la
+session ; la lecture incrémentale est la prochaine tâche du journal.
+
+#### Journal d'événements : la conversation se relit depuis le journal (#208, T14)
+
+- **Nouvelle clé `history.source`** (`journal` par défaut, `tables` pour revenir à la
+  lecture d'avant) : chaque requête relit la conversation en pliant le journal
+  d'événements de la session (préfixe scellé, mère d'un fork compris) au lieu des
+  tables `messages`. Une session que le journal ne sait pas redonner se lit dans les
+  tables.
+- **Aucune requête ne change** : les seize scénarios enregistrés envoient les mêmes
+  requêtes, octet pour octet, sous les deux sources ; en compilation de test, le mode
+  `tables` compare chaque lecture à celle du journal et échoue à la première différence.
+- Le journal garde désormais l'ordre exact des arguments d'appel et des blocs de
+  raisonnement tels que le fournisseur les a envoyés, et le drapeau `eager` d'une
+  réponse ; une fille de fork hérite des messages de sa mère sans leur contexte figé,
+  comme avant ; l'instantané du prompt système est refait depuis le journal par
+  `penelope history reindex`.
+
+#### Crate `penelope-vault` : la mémoire en fichiers hors du daemon (#208, T22)
+
+- Nouvelle crate `penelope-vault`, entre `penelope-app` et le daemon : vault et
+  réindexation, wiki de concepts, inventaire, historique git, notes de travail, secrets
+  mis de côté, embeddings, retour d'usage, sujet des sessions, découpage et audit de la
+  mémoire, revue des tours, épisodes, instantanés mémoire et tuiles du prompt.
+- Quatre dépendances circulaires coupées au passage : l'indexation d'une fiche source,
+  le commit du vault, la mesure du budget Cœur et la clé du préfixe stable descendent
+  vers ce qui les utilise.
+- Les tests de la crate n'ouvrent pas de daemon : une session et un provider factice
+  suffisent. `penelope-archtest` interdit à la crate de dépendre du daemon ou du canal.
+- Le daemon réexporte tout sous les anciens chemins ; `penelope-daemon` passe de
+  82 637 à 76 508 lignes.
+
+#### Crate `penelope-mcp-host` : superviseur MCP et OAuth hors du daemon (#208, T25)
+
+- Nouvelle crate `penelope-mcp-host`, au-dessus de `penelope-app` et sous le daemon :
+  le superviseur des serveurs de `mcp.d/`, son connecteur de processus et
+  l'autorisation OAuth des serveurs HTTP. Elle ne dépend pas du daemon (règle
+  d'archtest) ; `McpSupervisor` est `McpGateway` et `McpAdmin`.
+- L'autorisation OAuth ne prend plus le daemon : ses services, et pour le serveur de
+  retour local un contexte (canal du propriétaire, administration MCP, supervision).
+- Le daemon réexporte l'hôte sous `mcp` et `mcp_auth` : CLI, évaluations et tests
+  inchangés. `penelope-daemon` passe de 82 637 à 78 275 lignes.
+
+#### Passerelle Telegram en crate `penelope-gateway-telegram` (#208, T29)
+
+- La passerelle Telegram (29 modules, 91 tests, le filet `telegram_e2e` et
+  `ticket_to_deploy_e2e`) quitte `penelope-daemon` pour une crate au-dessus de lui ; le
+  daemon passe de 82 637 à 64 364 lignes et n'a plus de module `telegram`.
+- Le daemon ne la connaît que par ses ports : nouveau port `Gateway`
+  (`penelope-app`), `Daemon::run(gateway)` au lieu d'une construction dans le
+  superviseur. `penelope-cli` la compose ; archtest refuse toute autre crate qui en
+  dépendrait (`GATEWAY_DEPENDENTS`).
+- L'ordre de démarrage de l'issue #12 est conservé (propriétaire annoncé avant les
+  serveurs MCP, passerelle démarrée après eux) et désormais testé.
+- Aucun comportement visible ne change : commandes, cartes, journaux identiques.
+
 ### 1.0.0-alpha.6
 
 Cinquième vague de la V1 : la première crate sort du daemon (`penelope-app`, sur laquelle
