@@ -205,8 +205,8 @@ pub async fn report_gaps(d: &crate::runtime::Daemon) -> anyhow::Result<Vec<Gap>>
     let fingerprint =
         penelope_kernel::canonical::sha256_hex(serde_json::to_string(&inv.not_indexed)?.as_bytes());
     const KEY: &str = "vault.gaps";
-    if d.services.kv_get(KEY).await?.as_deref() != Some(fingerprint.as_str()) {
-        d.services.kv_set(KEY, &fingerprint).await?;
+    if s.kv_get(KEY).await?.as_deref() != Some(fingerprint.as_str()) {
+        s.kv_set(KEY, &fingerprint).await?;
         for g in &inv.not_indexed {
             tracing::warn!(fichier = %g.path, raison = %g.reason, "contenu du vault hors index");
         }

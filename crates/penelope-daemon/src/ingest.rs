@@ -161,7 +161,7 @@ pub async fn ingest(
     let vault = crate::conversation::vault_dir(s);
     let sha = penelope_kernel::canonical::sha256_hex(&bytes);
     let sha_key = format!("ingest.sha.{sha}");
-    if let Some(slug) = d.services.kv_get(&sha_key).await.ok().flatten()
+    if let Some(slug) = s.kv_get(&sha_key).await.ok().flatten()
         && let Some(existing) = reload(&vault, &slug, name)
     {
         return Ok(existing);
@@ -243,7 +243,7 @@ pub async fn ingest(
 
     let source_ref = format!("{canal}:{name}");
     let passages = index_source(s, &slug, &text, origin, &source_ref, session_id).await?;
-    let _ = d.services.kv_set(&sha_key, &slug).await;
+    let _ = s.kv_set(&sha_key, &slug).await;
     // Wiki de concepts : pages, liens, termes à définir, index (issue #22).
     if let Err(e) = crate::concepts::apply(
         d,
@@ -589,7 +589,7 @@ pub async fn apply_contradiction(
         anyhow::bail!("demande {approval_id} introuvable");
     };
     let flag = format!("memory_clash.applied.{approval_id}");
-    if d.services.kv_get(&flag).await?.is_some() {
+    if s.kv_get(&flag).await?.is_some() {
         return Ok("ℹ️ Déjà tranché.".into());
     }
     let ids: Vec<String> = a.payload["candidates"]
@@ -645,7 +645,7 @@ pub async fn apply_contradiction(
         }
     };
     if !note.starts_with("✍️") {
-        d.services.kv_set(&flag, &note).await?;
+        s.kv_set(&flag, &note).await?;
         if !ids.is_empty() && !note.starts_with("🗑") {
             s.candidates.set_state(&ids, "promoted", None).await?;
         }
@@ -664,7 +664,7 @@ pub async fn apply_memory_proposal(d: &Arc<Daemon>, approval_id: &str) -> anyhow
         return Ok(0);
     }
     let flag = format!("memory_proposal.applied.{approval_id}");
-    if d.services.kv_get(&flag).await?.is_some() {
+    if s.kv_get(&flag).await?.is_some() {
         return Ok(0);
     }
     // Règles notées par l'agent et confirmées : elles deviennent celles du propriétaire et
@@ -677,7 +677,7 @@ pub async fn apply_memory_proposal(d: &Arc<Daemon>, approval_id: &str) -> anyhow
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
         let confirmed = s.candidates.confirm_by_owner(&ids).await?;
-        d.services.kv_set(&flag, &confirmed.to_string()).await?;
+        s.kv_set(&flag, &confirmed.to_string()).await?;
         return Ok(confirmed);
     }
     let vault = crate::conversation::vault_dir(s);
@@ -685,7 +685,7 @@ pub async fn apply_memory_proposal(d: &Arc<Daemon>, approval_id: &str) -> anyhow
     // l'entrée d'origine, qui est retirée une fois tous écrits.
     if a.payload["split"].as_bool() == Some(true) {
         let written = apply_split(d, &a, &vault).await?;
-        d.services.kv_set(&flag, &written.to_string()).await?;
+        s.kv_set(&flag, &written.to_string()).await?;
         return Ok(written);
     }
     let source = a.payload["source"].as_str().unwrap_or_default().to_string();
@@ -707,7 +707,7 @@ pub async fn apply_memory_proposal(d: &Arc<Daemon>, approval_id: &str) -> anyhow
             }
         }
     }
-    d.services.kv_set(&flag, &written.to_string()).await?;
+    s.kv_set(&flag, &written.to_string()).await?;
     s.events
         .append(EventDraft::new(
             "memory.proposal_applied",

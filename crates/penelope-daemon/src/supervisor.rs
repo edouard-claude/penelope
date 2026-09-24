@@ -445,9 +445,7 @@ pub(crate) fn skills_fingerprint(s: &crate::runtime::Services) -> String {
 /// skills ont été relues.
 pub(crate) async fn skills_tick(d: &Daemon) -> anyhow::Result<bool> {
     let s = &d.services;
-    if d.services.kv_get("skills.fingerprint").await?.as_deref()
-        == Some(skills_fingerprint(s).as_str())
-    {
+    if s.kv_get("skills.fingerprint").await?.as_deref() == Some(skills_fingerprint(s).as_str()) {
         return Ok(false);
     }
     match crate::runtime::reload_skills(s).await {
@@ -565,8 +563,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
             }
             let key = format!("mcp.oauth.notified.{}", st.name);
             let now = s.clock.now_ms();
-            let recent = d
-                .services
+            let recent = s
                 .kv_get(&key)
                 .await?
                 .and_then(|v| v.parse::<i64>().ok())
@@ -574,7 +571,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
             if recent {
                 continue;
             }
-            d.services.kv_set(&key, &now.to_string()).await?;
+            s.kv_set(&key, &now.to_string()).await?;
             let Some(cfg) = sup.config_of(&st.name).await else {
                 continue;
             };
@@ -613,8 +610,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     // Une passe quotidienne suffit : compter les fichiers d'un build Rust peut
     // demander plusieurs secondes. Aucun run vivant n'est supprimé (issue #177).
     let now = s.clock.now_ms();
-    let last = d
-        .services
+    let last = s
         .kv_get("workflow.workspace_size.checked")
         .await?
         .and_then(|v| v.parse::<i64>().ok());

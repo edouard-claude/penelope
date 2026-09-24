@@ -143,7 +143,7 @@ pub async fn close(
 ) -> anyhow::Result<i64> {
     let s = &d.services;
     let next = s.sessions.next_episode(session_id).await?;
-    let _ = d.services.kv_delete(&streak_key(session_id)).await;
+    let _ = s.kv_delete(&streak_key(session_id)).await;
     let _ = s
         .events
         .append(
@@ -263,7 +263,7 @@ pub async fn ingest(
 ) -> anyhow::Result<usize> {
     let s = &d.services;
     let flag = format!("episode.ingested.{session_id}.{episode}");
-    if d.services.kv_get(&flag).await?.is_some() {
+    if s.kv_get(&flag).await?.is_some() {
         return Ok(0);
     }
     let cfg = s.config.config();
@@ -277,7 +277,7 @@ pub async fn ingest(
     let entries = s.context.history.load_episode(session_id, episode).await?;
     let (transcript, users) = condensed(&entries);
     if users < MIN_USER_MESSAGES {
-        d.services.kv_set(&flag, "court").await?;
+        s.kv_set(&flag, "court").await?;
         return Ok(0);
     }
 
@@ -323,7 +323,7 @@ pub async fn ingest(
     let response = tokio::time::timeout(TIMEOUT, call)
         .await
         .map_err(|_| anyhow::anyhow!("relecture d'épisode trop longue"))??;
-    d.services.kv_set(&flag, "1").await?;
+    s.kv_set(&flag, "1").await?;
     let _ = s
         .budget
         .record(penelope_kernel::budget::UsageRecord {

@@ -720,7 +720,7 @@ impl TelegramGateway {
                 continue;
             }
             let flag = format!("tg.card.effect.{}", a.id.as_str());
-            if self.daemon.services.kv_get(&flag).await?.is_some() {
+            if s.kv_get(&flag).await?.is_some() {
                 continue;
             }
             let (chat_id, topic_id) = self
@@ -728,7 +728,7 @@ impl TelegramGateway {
                 .await
                 .unwrap_or_else(|| self.home_chat());
             self.send_approval_card(chat_id, topic_id, &a).await?;
-            self.daemon.services.kv_set(&flag, "1").await?;
+            s.kv_set(&flag, "1").await?;
             sent += 1;
         }
         Ok(sent)
@@ -850,7 +850,7 @@ impl TelegramGateway {
                     .as_deref()
                     != Some(name.as_str())
             {
-                let _ = self.daemon.services.kv_set(&key, &name).await;
+                let _ = s.kv_set(&key, &name).await;
             }
         }
         let incoming = classify(update, &access);
@@ -3954,9 +3954,7 @@ impl TelegramGateway {
             }
             k::DENY_REASON => {
                 let _ = self.bot.edit_markup(chat_id, message_id, None).await;
-                self.daemon
-                    .services
-                    .kv_set(&approval_reason_key(chat_id, topic_id), &approval_id)
+                s.kv_set(&approval_reason_key(chat_id, topic_id), &approval_id)
                     .await?;
                 self.reply(
                     chat_id,
@@ -5576,7 +5574,7 @@ impl TelegramGateway {
             }
         };
         let Some(q) = sitting.next() else {
-            d.services.kv_set(&key, "").await?;
+            s.kv_set(&key, "").await?;
             let plan = crate::onboarding::plan(d, sitting).await?;
             if plan.is_empty() && plan.keep.is_empty() {
                 crate::onboarding::cancel(d).await?;

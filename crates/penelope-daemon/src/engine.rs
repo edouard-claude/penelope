@@ -256,7 +256,7 @@ impl Daemon {
                 Ok(sess.id.to_string())
             }
             _ => {
-                if let Some(id) = self.services.kv_get("cli.session").await?
+                if let Some(id) = s.kv_get("cli.session").await?
                     && let Some(sess) = s.sessions.get(&id).await?
                     && sess.state == "active"
                 {
@@ -689,7 +689,7 @@ impl Daemon {
                 lines.join("\n")
             )
         };
-        self.services.kv_set(&key, &block).await?;
+        s.kv_set(&key, &block).await?;
         Ok((!block.is_empty()).then_some(block))
     }
 
@@ -930,12 +930,10 @@ impl Daemon {
         }
         // Dernier choix, pour que `/model` dise qui a répondu en dernier, et pourquoi il
         // a pu changer.
-        let _ = self
-            .services
+        let _ = s
             .kv_set(&last_model_key(session.id.as_str()), &decision.alias)
             .await;
-        let _ = self
-            .services
+        let _ = s
             .kv_set(
                 &last_model_why_key(session.id.as_str()),
                 boundary.map(boundary_label).unwrap_or(""),

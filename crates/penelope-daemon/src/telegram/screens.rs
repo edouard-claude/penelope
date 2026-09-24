@@ -1660,8 +1660,7 @@ impl TelegramGateway {
 
             "upgrade" => {
                 // Le dernier résultat de « Vérifier » vaut tant que l'écran n'en porte pas.
-                let cached: Value = d
-                    .services
+                let cached: Value = s
                     .kv_get("tg.upgrade.last_check")
                     .await?
                     .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -1730,8 +1729,7 @@ impl TelegramGateway {
                 let current = crate::upgrade::running_binary().map_err(anyhow::Error::msg)?;
                 let install_dir = s.platform.dirs.expand(&cfg.upgrade.install_dir);
                 let source = crate::upgrade::Source::from_config(&cfg);
-                let latest: Option<String> = d
-                    .services
+                let latest: Option<String> = s
                     .kv_get("tg.upgrade.last_check")
                     .await?
                     .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
@@ -1965,11 +1963,11 @@ impl TelegramGateway {
             "burst.one" | "burst.ingest" | "burst.each" | "burst.drop" => {
                 let id = str_of("id");
                 let key = format!("tg.burst.{id}");
-                let raw = d.services.kv_get(&key).await?.unwrap_or_default();
+                let raw = s.kv_get(&key).await?.unwrap_or_default();
                 if raw.is_empty() {
                     return Ok(Done::quiet("Rafale déjà traitée."));
                 }
-                d.services.kv_set(&key, "").await?;
+                s.kv_set(&key, "").await?;
                 let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
                 let session = v["session"].as_str().unwrap_or_default().to_string();
                 let joined = v["joined"].as_str().unwrap_or_default().to_string();
@@ -2271,10 +2269,7 @@ impl TelegramGateway {
                     Err(e) => json!({"error": e.to_string()}),
                 };
                 // L'écran porte le résultat : il est redessiné ici plutôt que par le retour.
-                let _ = d
-                    .services
-                    .kv_set("tg.upgrade.last_check", &args.to_string())
-                    .await;
+                let _ = s.kv_set("tg.upgrade.last_check", &args.to_string()).await;
                 Done::toast("🔎 Vérifié")
             }
             "upgrade.keep_sources" => {

@@ -596,7 +596,7 @@ pub async fn write(d: &Daemon, s: &Sitting, session_id: &str) -> anyhow::Result<
             .await
             .map_err(anyhow::Error::msg)?;
     }
-    d.services.kv_set(kv_current(), "").await?;
+    services.kv_set(kv_current(), "").await?;
     let sitting = s.rel.trim_start_matches("accueil/").trim_end_matches(".md");
     if let Err(e) = crate::vault_ops::log(
         &vault,

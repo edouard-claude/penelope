@@ -103,10 +103,10 @@ pub async fn check_alert(d: &Daemon) -> anyhow::Result<Option<String>> {
         "codex.quota.alert.{window}.{:.0}",
         c.quota_alert_ratio * 100.0
     );
-    if d.services.kv_get(&key).await?.is_some() {
+    if s.kv_get(&key).await?.is_some() {
         return Ok(None);
     }
-    d.services.kv_set(&key, &s.clock.now_rfc3339()).await?;
+    s.kv_set(&key, &s.clock.now_rfc3339()).await?;
     let text = alert_text(&q, ratio, c.quota_stop_ratio, s.clock.now_ms());
     match d.hooks.messenger() {
         Some(m) => {

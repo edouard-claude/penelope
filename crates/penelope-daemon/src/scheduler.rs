@@ -868,8 +868,8 @@ async fn cancelled_triggers(d: &Arc<Daemon>) -> anyhow::Result<()> {
     const CURSOR: &str = "scheduler.cancelled_cursor";
     let s = &d.services;
     let now = s.clock.now_rfc3339();
-    let Some(cursor) = d.services.kv_get(CURSOR).await? else {
-        d.services.kv_set(CURSOR, &now).await?;
+    let Some(cursor) = s.kv_get(CURSOR).await? else {
+        s.kv_set(CURSOR, &now).await?;
         return Ok(());
     };
     let since = cursor.clone();
@@ -902,7 +902,7 @@ async fn cancelled_triggers(d: &Arc<Daemon>) -> anyhow::Result<()> {
         s.schedules.record_outcome(id, Some(&reason)).await?;
         alert(d, &sched, &reason).await;
     }
-    d.services.kv_set(CURSOR, &last).await?;
+    s.kv_set(CURSOR, &last).await?;
     Ok(())
 }
 

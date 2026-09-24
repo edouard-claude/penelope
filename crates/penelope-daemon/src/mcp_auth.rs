@@ -339,7 +339,7 @@ pub async fn start(
                         format!("{issuer}|{redirect_uri}").as_bytes()
                     )[..24]
                 );
-                match d.services.kv_get(&key).await.map_err(|e| e.to_string())? {
+                match s.kv_get(&key).await.map_err(|e| e.to_string())? {
                     Some(id) if !id.is_empty() => id,
                     _ => {
                         check_endpoint(&endpoint)?;
@@ -424,15 +424,14 @@ pub async fn complete(d: &Daemon, callback: &str) -> Result<String, String> {
     let s = &d.services;
     let cb = oauth::parse_callback(callback);
     let state = cb.state.clone().ok_or("adresse de retour sans `state`")?;
-    let raw = d
-        .services
+    let raw = s
         .kv_get(&pending_key(&state))
         .await
         .map_err(|e| e.to_string())?
         .filter(|r| !r.is_empty())
         .ok_or("aucune autorisation en attente pour cette adresse (déjà utilisée ou expirée)")?;
     // Une adresse de retour ne sert qu'une fois, qu'elle aboutisse ou non.
-    let _ = d.services.kv_delete(&pending_key(&state)).await;
+    let _ = s.kv_delete(&pending_key(&state)).await;
     let pending: Pending = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
     let server = pending.request.server.clone();
     if s.clock.now_ms() > pending.request.expires_at_ms {

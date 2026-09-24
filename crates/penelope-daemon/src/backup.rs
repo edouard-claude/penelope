@@ -204,7 +204,7 @@ pub async fn run(d: &Daemon, push: bool, media: Option<bool>) -> anyhow::Result<
         report["pushed"] = pushed;
     }
 
-    d.services.kv_set(LAST_KEY, &report.to_string()).await?;
+    s.kv_set(LAST_KEY, &report.to_string()).await?;
     let _ = s
         .events
         .append(EventDraft::new(
@@ -375,13 +375,8 @@ pub async fn nightly_tick(d: &Daemon) -> anyhow::Result<()> {
     let now = s.clock.now_ms();
     let key = "backup.cron.last";
     // Premier passage : on mémorise l'instant sans rien lancer, comme le rêve.
-    let Some(last) = d
-        .services
-        .kv_get(key)
-        .await?
-        .and_then(|v| v.parse::<i64>().ok())
-    else {
-        d.services.kv_set(key, &now.to_string()).await?;
+    let Some(last) = s.kv_get(key).await?.and_then(|v| v.parse::<i64>().ok()) else {
+        s.kv_set(key, &now.to_string()).await?;
         return Ok(());
     };
     let Some(next) = cron.next_after_ms(last, &cfg.owner.timezone) else {
@@ -390,7 +385,7 @@ pub async fn nightly_tick(d: &Daemon) -> anyhow::Result<()> {
     if now < next {
         return Ok(());
     }
-    d.services.kv_set(key, &now.to_string()).await?;
+    s.kv_set(key, &now.to_string()).await?;
     match run(d, true, None).await {
         Ok(r) => {
             tracing::info!(report = %r, "sauvegarde nocturne");
