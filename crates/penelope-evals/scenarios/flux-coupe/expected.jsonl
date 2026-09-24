@@ -6,14 +6,15 @@
 {"type":"message","session":"{{session:1}}","seq":3,"role":"assistant","text":"Oui, toujours là."}
 {"type":"event","session":"{{session:1}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"chat","parent_id":null}}
 {"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"tool_jobs_lost":0,"turns_requeued":0}}
-{"type":"event","session":"{{session:1}}","seq":2,"kind":"turn.started","payload":{"model":"openrouter:deepseek/deepseek-v4-pro","system_hash":"{{hash}}","tools_hash":"{{hash}}"}}
-{"type":"event","session":"{{session:1}}","seq":3,"kind":"turn.started","payload":{"model":"openrouter:deepseek/deepseek-v4-pro","system_hash":"{{hash}}","tools_hash":"{{hash}}"}}
-{"type":"event","session":"{{session:1}}","seq":4,"kind":"llm.fallback_used","payload":{"requested":"deepseek/deepseek-v4-pro","served":"openrouter:deepseek/deepseek-v4-pro"}}
-{"type":"event","session":"{{session:1}}","seq":5,"kind":"runtime.llm","payload":{"cached_tokens":0,"completion_tokens":50,"cost_estimated":true,"cost_usd":0,"generation_id":"mock-1","model":"openrouter:deepseek/deepseek-v4-pro","prompt_tokens":1000,"provider":"mock","reasoning_tokens":0,"role":"chat","turn_id":"{{turn:2}}"}}
-{"type":"event","session":"{{session:1}}","seq":6,"kind":"turn.finished","payload":{"cost_usd":0,"iterations":1}}
+{"type":"event","session":"{{session:1}}","seq":2,"kind":"turn.started","payload":{"attempt":1,"kind":"message","model":"openrouter:deepseek/deepseek-v4-pro","origin_turn":"{{turn:1}}","system_hash":"{{hash}}","tools_hash":"{{hash}}","turn_id":"{{turn:1}}"}}
+{"type":"event","session":"{{session:1}}","seq":3,"kind":"turn.finished","payload":{"attempt":1,"error":"provider indisponible pour l'instant (connexion perdue avec le fournisseur)\n\nLa réponse a été coupée en cours d'écriture : le début affiché est incomplet.","kind":"message","origin_turn":"{{turn:1}}","reason":"failed","turn_id":"{{turn:1}}"}}
+{"type":"event","session":"{{session:1}}","seq":4,"kind":"turn.started","payload":{"attempt":1,"kind":"message","model":"openrouter:deepseek/deepseek-v4-pro","origin_turn":"{{turn:2}}","system_hash":"{{hash}}","tools_hash":"{{hash}}","turn_id":"{{turn:2}}"}}
+{"type":"event","session":"{{session:1}}","seq":5,"kind":"llm.fallback_used","payload":{"requested":"deepseek/deepseek-v4-pro","served":"openrouter:deepseek/deepseek-v4-pro"}}
+{"type":"event","session":"{{session:1}}","seq":6,"kind":"runtime.llm","payload":{"cached_tokens":0,"completion_tokens":50,"cost_estimated":true,"cost_usd":0,"generation_id":"mock-1","model":"openrouter:deepseek/deepseek-v4-pro","prompt_tokens":1000,"provider":"mock","reasoning_tokens":0,"role":"chat","turn_id":"{{turn:2}}"}}
+{"type":"event","session":"{{session:1}}","seq":7,"kind":"turn.finished","payload":{"attempt":1,"cost_usd":0,"iterations":1,"kind":"message","origin_turn":"{{turn:2}}","reason":"answered","turn_id":"{{turn:2}}"}}
 {"type":"turn","id":"{{turn:1}}","session":"{{session:1}}","kind":"message","state":"failed","attempts":1,"error":"provider indisponible pour l'instant (connexion perdue avec le fournisseur)\n\nLa réponse a été coupée en cours d'écriture : le début affiché est incomplet."}
 {"type":"turn","id":"{{turn:2}}","session":"{{session:1}}","kind":"message","state":"done","attempts":1,"error":null}
 {"type":"llm","id":"{{llm:1}}","session":"{{session:1}}","model":"openrouter:deepseek/deepseek-v4-pro","provider":"mock","state":"failed"}
 {"type":"llm","id":"{{llm:2}}","session":"{{session:1}}","model":"openrouter:deepseek/deepseek-v4-pro","provider":"mock","state":"completed"}
 {"type":"usage","session":"{{session:1}}","model":"openrouter:deepseek/deepseek-v4-pro","provider":"mock","role":"chat","prompt":1000,"completion":50,"cached":0,"reasoning":0}
-{"type":"audit","ok":true,"checked":7,"purged":0}
+{"type":"audit","ok":true,"checked":8,"purged":0}

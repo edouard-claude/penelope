@@ -256,10 +256,13 @@ impl Daemon {
             session_id: turn.session_id.clone(),
             origin: origin.clone(),
         };
-        let outcome = match self
-            .execute_turn(turn, &origin, active.cancel.clone(), &sink)
-            .await
-        {
+        // Un tour tombé avant sa boucle est borné ici : chaque sortie a son `turn.finished`.
+        let meta = crate::agent::TurnMeta::of(turn);
+        let result = self
+            .execute_turn(turn, &origin, active.cancel.clone(), &sink, &meta)
+            .await;
+        crate::agent::close_unopened(&self.services, &turn.session_id, &meta, &result).await;
+        let outcome = match result {
             Ok(o) => o,
             Err(e) => {
                 tracing::error!(turn = %turn.id, error = %e, "tour en échec");
@@ -339,6 +342,7 @@ impl Daemon {
         origin: &Origin,
         cancel: CancelToken,
         sink: &dyn TurnSink,
+        meta: &crate::agent::TurnMeta,
     ) -> anyhow::Result<TurnOutcome> {
         let s = self.services.clone();
         let cfg = s.config.config();
@@ -590,7 +594,7 @@ impl Daemon {
         };
 
         let outcome = AgentLoop::new(s.clone(), provider)
-            .run_conversation(&spec, &conv, &exec, sink)
+            .run_conversation_as(&spec, Some(meta), &conv, &exec, sink)
             .await;
         // Estimation locale ou prompt réellement facturé : l'un ou l'autre au-delà du seuil
         // demande la compaction de fond (issue #40).

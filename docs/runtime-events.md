@@ -60,6 +60,27 @@ il revient dans la conversation par un tour de relance. Voir
 `system_hash` (le préfixe T0 à T2) et `tools_hash` (la liste d'outils). Le texte n'est
 jamais dans l'événement — il est gardé une fois, sous cette empreinte, et se relit par
 `penelope audit show` (voir [Relire ce que le modèle a lu](context.md#relire-ce-que-le-modèle-a-lu)).
+Pour un tour de la file, il porte aussi `turn_id` (la ligne de la file), `origin_turn`
+(la requête du propriétaire, partagée par une reprise après approbation), `kind`
+(`message`, `trigger`, `resume`, `nudge`) et `attempt` (la tentative, qui monte quand
+un tour est rejoué après un redémarrage).
+
+`turn.finished` ferme **chaque** tour ouvert, quelle que soit sa sortie, avec les mêmes
+champs d'identité et `reason` :
+
+| `reason` | Sortie | Champs en plus |
+|---|---|---|
+| `answered` | réponse finale | `iterations`, `cost_usd` |
+| `awaiting_approval` | le tour attend une décision | `approval_id` |
+| `cancelled` | arrêt demandé (`/stop`, bouton) | |
+| `failed` | erreur du modèle, du fournisseur ou du tour | `error` |
+| `budget_exceeded` | plafond de dépense atteint | `scope`, `spent_usd`, `limit_usd` |
+| `loop_aborted` | détecteur de boucles | `report` |
+| `calls_exhausted` | plafond d'appels au modèle du tour | `error` |
+
+Un tour qui tombe avant d'appeler le modèle (fournisseur indisponible) est ouvert et
+fermé ensemble, `turn.started` sans modèle. Un `turn.started` sans `turn.finished` de
+même `turn_id` est un tour interrompu par un arrêt du processus.
 
 ## Démonstration Pathlayer
 

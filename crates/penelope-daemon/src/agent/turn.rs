@@ -3,11 +3,12 @@
 use super::*;
 
 impl AgentLoop {
-    /// Exécute (ou reprend) un tour sur un transcript quelconque.
+    /// Les itérations d'un tour, entre ses bornes (`turn_log`).
     #[allow(clippy::too_many_lines)] // gel 0.17 : boucle d'agent, découpée au lot G (agent/loop.rs)
-    pub async fn run_conversation(
+    pub(super) async fn run_steps(
         &self,
         spec: &TurnSpec,
+        prefix: Option<&crate::prompt_snapshot::PromptPrefix>,
         conv: &dyn Conversation,
         execute: &(dyn ToolExecutor + Send + Sync),
         sink: &dyn TurnSink,
@@ -20,24 +21,6 @@ impl AgentLoop {
         let mut empty_retry = false;
         // Un dépassement de fenêtre prouvé a droit à une compaction, pas davantage.
         let mut overflow_compacted = false;
-
-        // Ce que le modèle va lire est nommé dès l'ouverture du tour : la chaîne d'audit
-        // référence le prompt système par son empreinte, et l'instantané la résout
-        // (issue #205).
-        let prefix = conv.prompt_prefix();
-        s.events
-            .append(
-                EventDraft::new(
-                    "turn.started",
-                    json!({
-                        "model": spec.model_id,
-                        "system_hash": prefix.as_ref().map(|p| p.hash()),
-                        "tools_hash": crate::cache_audit::Fingerprint::tools_hash_of(&spec.tools),
-                    }),
-                )
-                .session(&spec.session_id),
-            )
-            .await?;
 
         for iteration in 0..self.max_iterations {
             if spec.cancel.is_cancelled() {
@@ -136,7 +119,7 @@ impl AgentLoop {
             // Le prompt système rendu devient une ligne, adressée par l'empreinte déjà
             // calculée (issue #205). L'écriture suit l'appel : elle n'est pas dans la
             // latence du premier jeton, et son échec ne coûte que le diagnostic.
-            if let Some(prefix) = &prefix
+            if let Some(prefix) = prefix
                 && let Err(e) =
                     crate::prompt_snapshot::record(s, &fingerprint.system_hash, prefix).await
             {
@@ -305,15 +288,6 @@ impl AgentLoop {
                         ));
                     }
                 }
-                s.events
-                    .append(
-                        EventDraft::new(
-                            "turn.finished",
-                            json!({"iterations": iteration + 1, "cost_usd": cost}),
-                        )
-                        .session(&spec.session_id),
-                    )
-                    .await?;
                 return Ok(TurnOutcome::Answered {
                     text,
                     iterations: iteration + 1,

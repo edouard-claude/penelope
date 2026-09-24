@@ -35,6 +35,7 @@ mod pipeline;
 mod rules;
 mod spec;
 mod turn;
+mod turn_log;
 
 pub use conversation::{Compactor, Conversation, MemoryConversation};
 pub use decisions::{EFFECT_DONE, EFFECT_IGNORE, EFFECT_RETRY, decide_approval};
@@ -51,6 +52,7 @@ pub(crate) use pipeline::{effect_kind, server_of, without_intention};
 pub use rules::{MAX_FAMILIES_PER_CLICK, always_creates_no_rule};
 pub(crate) use rules::{arg_pattern, arg_patterns};
 pub use spec::{AgentLoop, CALLS_EXHAUSTED, TURN_CALLS, TurnRequest, TurnSpec};
+pub use turn_log::{TurnMeta, close_unopened, finish_reason};
 
 #[cfg(test)]
 mod clone_policy_tests;
