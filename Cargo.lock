@@ -1320,6 +1320,7 @@ dependencies = [
  "futures",
  "penelope-daemon",
  "penelope-evals",
+ "penelope-gateway-telegram",
  "penelope-kernel",
  "penelope-llm",
  "penelope-observe",
@@ -1426,6 +1427,36 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "toml",
+ "tracing",
+]
+
+[[package]]
+name = "penelope-gateway-telegram"
+version = "1.0.0-alpha.6"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "chrono-tz",
+ "penelope-app",
+ "penelope-context",
+ "penelope-daemon",
+ "penelope-hitl",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-mcp",
+ "penelope-memory",
+ "penelope-observe",
+ "penelope-platform",
+ "penelope-skills",
+ "penelope-store",
+ "penelope-telegram",
+ "penelope-workflow",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "tracing",
 ]
 

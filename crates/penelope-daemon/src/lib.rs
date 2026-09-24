@@ -43,9 +43,6 @@ pub mod session_project;
 pub mod skill_deps;
 pub mod skill_install;
 pub mod supervisor;
-pub mod telegram;
-#[cfg(test)]
-mod ticket_to_deploy_e2e;
 pub mod titles;
 pub mod tool_jobs;
 pub mod tools_on_demand;

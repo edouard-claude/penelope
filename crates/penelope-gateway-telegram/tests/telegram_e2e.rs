@@ -15,7 +15,7 @@
 //! qu'elle appelle pour chaque update reçu.
 
 use penelope_daemon::runtime::{Daemon, Services};
-use penelope_daemon::telegram::TelegramGateway;
+use penelope_gateway_telegram::TelegramGateway;
 use penelope_kernel::clock::{SharedClock, TestClock};
 use penelope_llm::mock::{MockProvider, Scripted};
 use penelope_llm::types::ToolCall;

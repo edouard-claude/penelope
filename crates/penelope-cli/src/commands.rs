@@ -931,7 +931,7 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Wf(WfCmd::Trace { run }) => (m::WF_TRACE, json!({"run": run})),
         Command::Wf(WfCmd::Run { id, params }) => (
             m::WF_RUN,
-            json!({"id": id, "params": penelope_daemon::telegram::parse_params(&params.join(" "))}),
+            json!({"id": id, "params": penelope_gateway_telegram::parse_params(&params.join(" "))}),
         ),
         Command::Wf(WfCmd::Control {
             run,
@@ -1802,8 +1802,8 @@ async fn daemon(cli: &Cli) -> CliResult<()> {
 /// démarre. `None` sans propriétaire ni jeton, ou si le transport ne se construit pas.
 async fn telegram_gateway(
     d: &std::sync::Arc<penelope_daemon::Daemon>,
-) -> Option<std::sync::Arc<penelope_daemon::telegram::TelegramGateway>> {
-    match penelope_daemon::telegram::TelegramGateway::from_config(d.clone()).await {
+) -> Option<std::sync::Arc<penelope_gateway_telegram::TelegramGateway>> {
+    match penelope_gateway_telegram::TelegramGateway::from_config(d.clone()).await {
         Ok(Some(gw)) => Some(gw),
         Ok(None) => {
             tracing::info!(

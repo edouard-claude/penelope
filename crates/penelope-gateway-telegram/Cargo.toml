@@ -1,0 +1,62 @@
+[package]
+name = "penelope-gateway-telegram"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# La passerelle Telegram (épopée #208, T29) : un adaptateur pilotant, au-dessus du daemon.
+# Elle appelle l'application (tours, RPC, écrans) ; le daemon ne la connaît que par les
+# ports `Gateway`, `ChannelDelivery`, `Messenger` et `OwnerChannel`. Seul `penelope-cli`
+# la compose (règle `GATEWAY_DEPENDENTS` d'archtest).
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+# Date d'une approbation dans le fuseau du propriétaire, échéance d'un renvoi.
+chrono.workspace = true
+chrono-tz.workspace = true
+# L'application que la passerelle pilote : `Daemon`, RPC, tours, écrans.
+penelope-daemon.workspace = true
+# Le port `Gateway` que le daemon démarre.
+penelope-app.workspace = true
+# API Bot, gabarits, actions de boutons, rendu.
+penelope-telegram.workspace = true
+# Configuration, journal, effets, sessions, risques.
+penelope-kernel.workspace = true
+# Paramètres SQL de la file `tg_outbox`, table `kv`.
+penelope-store.workspace = true
+# Approbations et décisions.
+penelope-hitl.workspace = true
+# Noms de modèles des menus, messages d'une session.
+penelope-llm.workspace = true
+# Pratiques et niveaux de la mémoire (écrans et commandes du vault).
+penelope-memory.workspace = true
+# Runs, planifications et formulaires des workflows.
+penelope-workflow.workspace = true
+# Caviardage des journaux montrés au propriétaire, texte non fiable encadré.
+penelope-observe.workspace = true
+# Nom de fichier d'une pratique du vault (`slugify`).
+penelope-platform.workspace = true
+# Portée des skills listées par l'écran des skills.
+penelope-skills.workspace = true
+# Nature d'un texte reçu en document (`guess_kind`).
+penelope-context.workspace = true
+
+[dev-dependencies]
+# Serveurs MCP simulés (`mcp::testing`) des tests d'élicitation et de `ticket_to_deploy_e2e`.
+penelope-daemon = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true
+# Motif des champs JSON relus par `no_bubble_ever_shows_null`.
+regex.workspace = true
+# Transport en boucle locale des serveurs MCP simulés.
+penelope-mcp.workspace = true
+# Horloge virtuelle des tests (`test-util`), comme le daemon.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util", "test-util"] }
