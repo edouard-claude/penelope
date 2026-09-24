@@ -110,7 +110,6 @@ modules = [
     "runtime",
     "runtime_events",
     "scheduler",
-    "screens",
     "secret_shelf",
     "selfdocs",
     "selfknow",
@@ -133,23 +132,8 @@ modules = [
     "vision",
     "voice",
     "wiki_e2e",
-    "workflow",
-  "clone_policy_tests",  # module de tests sorti d'agent.rs (#215)
-  "testing",  # aides de test sorties de mcp.rs (#215),
-  "tool_jobs",  # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-  "decide",  # sous-module de agent/ (lot F, T02 à T06)
-  "decisions",  # sous-module de agent/ (lot F, T02 à T06)
-  "guards",  # sous-module de agent/ (lot F, T02 à T06)
-  "loop_abort",  # sous-module de agent/ (lot F, T02 à T06)
-  "model",  # sous-module de agent/ (lot F, T02 à T06)
-  "outcome",  # sous-module de agent/ (lot F, T02 à T06)
-  "pending",  # sous-module de agent/ (lot F, T02 à T06)
-  "pipeline",  # sous-module de agent/ (lot F, T02 à T06)
-  "policy",  # sous-module de agent/ (lot F, T02 à T06)
-  "retry",  # sous-module de agent/ (lot F, T02 à T06)
-  "rules",  # sous-module de agent/ (lot F, T02 à T06)
-  "spec",  # sous-module de agent/ (lot F, T02 à T06)
-  "turn",  # sous-module de agent/ (lot F, T02 à T06)
+    "workflow",  # aides de test sorties de mcp.rs (#215),
+  "tool_jobs",  # sous-module de agent/ (lot F, T02 à T06)
 ]
 impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 

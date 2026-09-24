@@ -285,6 +285,8 @@ fn the_module_whitelist_detector_actually_detects() {
     // le module de tests, un commentaire, un autre crate : rien.
     let quiet = Snapshot::of(vec![
         daemon("telegram/tests.rs", "mod commands;\nmod cards;\n"),
+        // Découper un fichier existant en sous-modules est le but de la V1.
+        daemon("agent/mod.rs", "mod pipeline;\npub mod outcome;\n"),
         daemon(
             "a.rs",
             "mod inline {\n}\n// mod ghost;\n#[cfg(test)]\nmod tests {\n    mod sub;\n}\n",
