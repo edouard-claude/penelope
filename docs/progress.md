@@ -13,6 +13,22 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.10
+
+Neuvième vague de la V1, courte : la crate `penelope-dream` naît avec l'accueil et
+l'ingestion, et le digest du matin reçoit ses entrées en données (`DigestInputs`). La
+consolidation nocturne (`dream/`) reste au daemon pour la vague suivante. Le daemon passe
+à 38 177 lignes.
+
+#### Crate `penelope-dream` : accueil et ingestion hors du daemon (#208, T26)
+
+L'entretien d'accueil et l'ingestion de documents quittent le daemon pour la crate
+`penelope-dream`, qui ne dépend pas de lui : l'ingestion reçoit un contexte (services,
+providers, embeddings) au lieu du daemon entier. Le digest du matin reçoit en données ce
+qu'il lisait des planifications et du compactage, première étape de la descente du rêve
+nocturne. Aucun comportement ne change ; les anciens chemins restent réexportés (épopée
+#208, lot J, T26).
+
 ### 1.0.0-alpha.9
 
 Huitième vague de la V1 : `penelope purge` prévient avant d'agir quand des forks vont
