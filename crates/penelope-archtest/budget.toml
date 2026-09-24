@@ -17,7 +17,7 @@ test_modules = [
 # Liste de référence (R3) : les fichiers autorisés à dépasser, chacun avec sa borne.
 # Elle ne peut que rétrécir : un fichier repassé sous le plafond doit en sortir.
 [files.oversized]
-"crates/penelope-daemon/src/tool_jobs.rs" = 1754   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
+"crates/penelope-daemon/src/tool_jobs.rs" = 1666   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/engine.rs" = 1105
 "crates/penelope-kernel/src/config.rs" = 2790   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-cli/src/commands.rs" = 2686   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
@@ -63,34 +63,27 @@ modules = [
     "audit",
     "backup",
     "budget_alert",
-    "bus",
     "cache_audit",
     "codex_auth",
     "codex_quota",
-    "codex_scope",
     "compaction",
     "concepts",
     "conversation",
     "doctor",
     "dream",
-    "elicitation",
     "embeddings",
     "engine",
     "episodes",
     "executor",
-    "helpers",  # fonctions partagées sur &Services (épopée #208, lot D, T06) : seul module ajouté par dérogation
     "hermes",
     "images",
     "history",  # étape de boot du scellement (épopée #208, lot E, T11), prévue par source-de-verite.md
     "ingest",
-    "machine",
     "mcp",
     "mcp_auth",
-    "media",
     "mem_audit",
     "mem_split",
     "onboarding",
-    "ports",  # ProviderSource, Handle, Supervision, Slot (épopée #208, lot D, T07, T08)
     "prompt_snapshot",
     "purge",
     "review",
@@ -108,9 +101,7 @@ modules = [
     "skill_deps",
     "skill_install",
     "supervisor",
-    "tasks",
     "telegram",
-    "testing",  # doubles de test partagés (épopée #208, lot D, T10)
     "ticket_to_deploy_e2e",
     "titles",
     "tools_on_demand",
@@ -281,23 +272,24 @@ required = [
 "crates/penelope-kernel/src/config.rs" = 25      # permanent : le schéma de configuration nomme ses canaux ([telegram])
 "crates/penelope-daemon/src/supervisor.rs" = 23
 "crates/penelope-daemon/src/purge.rs" = 17
-"crates/penelope-daemon/src/runtime.rs" = 10
+"crates/penelope-daemon/src/runtime.rs" = 5
+"crates/penelope-app/src/services.rs" = 5   # Services descendu de runtime.rs (T21) : gabarits et actions du canal, sortent avec T36
 "crates/penelope-daemon/src/selfknow.rs" = 12
 "crates/penelope-daemon/src/runner.rs" = 11
-"crates/penelope-daemon/src/elicitation.rs" = 10
+"crates/penelope-app/src/elicitation.rs" = 10
 "crates/penelope-daemon/src/engine.rs" = 10
-"crates/penelope-daemon/src/bus.rs" = 9          # permanent pour Origin::Telegram, tant qu'Origin::Channel n'existe pas (T37)
+"crates/penelope-app/src/bus.rs" = 9          # permanent pour Origin::Telegram, tant qu'Origin::Channel n'existe pas (T37)
 "crates/penelope-daemon/src/conversation.rs" = 6
 "crates/penelope-kernel/src/turn.rs" = 6
 "crates/penelope-kernel/src/effects.rs" = 5
 "crates/penelope-tools/src/spec.rs" = 4
 "crates/penelope-daemon/src/session_project.rs" = 2
-"crates/penelope-daemon/src/helpers.rs" = 12   # clés kv et origine du canal sorties de telegram.rs et scheduler.rs (épopée #208, lot D, T06)
+"crates/penelope-app/src/helpers.rs" = 12   # clés kv et origine du canal sorties de telegram.rs et scheduler.rs (épopée #208, lot D, T06)
 "crates/penelope-observe/src/redact.rs" = 2      # permanent : le caviardage doit connaître la forme des jetons
-"crates/penelope-daemon/src/codex_scope.rs" = 1
+"crates/penelope-app/src/codex_scope.rs" = 1
 "crates/penelope-daemon/src/lib.rs" = 1          # `pub mod telegram;` : disparaît avec la passerelle en crate (T29)
 "crates/penelope-daemon/src/mcp_auth.rs" = 1
-"crates/penelope-daemon/src/media.rs" = 1
+"crates/penelope-app/src/media.rs" = 1
 "crates/penelope-daemon/src/session_ops.rs" = 1
 "crates/penelope-daemon/src/upgrade.rs" = 1
 "crates/penelope-daemon/src/voice.rs" = 1
