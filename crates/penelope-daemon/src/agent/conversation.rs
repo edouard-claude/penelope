@@ -1,6 +1,8 @@
 //! Le transcript sur lequel travaille un tour.
 
-use super::*;
+use penelope_context::journal::Provenance;
+use penelope_llm::types::ChatMessage;
+use std::sync::Mutex;
 
 /// Le transcript sur lequel travaille un tour.
 #[async_trait::async_trait]

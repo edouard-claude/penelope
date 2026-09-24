@@ -1,6 +1,10 @@
 //! Exécution d'un appel d'outil, vue de la boucle.
 
-use super::*;
+use penelope_kernel::risk::{PolicyDecision, RiskClass};
+use penelope_llm::provider::CancelToken;
+use penelope_tools::ToolOutcome;
+use serde_json::Value;
+use std::sync::Arc;
 
 /// Ce qu'il faut savoir d'un appel avant de l'autoriser.
 #[derive(Debug, Clone, PartialEq)]

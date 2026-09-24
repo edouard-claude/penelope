@@ -1,6 +1,8 @@
 //! Issue d'un tour et ce qu'il montre en se déroulant.
 
-use super::*;
+use penelope_kernel::risk::RiskClass;
+use serde_json::Value;
+use std::sync::Mutex;
 
 /// Issue d'un tour.
 #[derive(Debug, Clone, PartialEq)]

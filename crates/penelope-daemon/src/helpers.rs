@@ -32,7 +32,7 @@ pub fn local_now(s: &Services) -> String {
 // ---------------------------------------- Origine des messages du daemon (depuis scheduler.rs)
 
 /// Conversation privée du propriétaire sur Telegram, s'il est configuré.
-pub(crate) fn owner_origin_of(s: &Services) -> Origin {
+pub fn owner_origin_of(s: &Services) -> Origin {
     let owner = s.config.config().owner.telegram_user_id;
     if owner != 0 {
         Origin::Telegram {
@@ -57,7 +57,7 @@ pub fn round_usd(x: f64) -> f64 {
 // ---------------------------------------- Configuration (depuis rpc.rs)
 
 /// `config set a.b.c = valeur` : applique une modification par chemin.
-pub(crate) fn set_config_path(s: &Services, path: &str, value: Value) -> anyhow::Result<u64> {
+pub fn set_config_path(s: &Services, path: &str, value: Value) -> anyhow::Result<u64> {
     let path_owned = path.to_string();
     let generation = s.publish_config("cli", move |c| {
         let mut v = serde_json::to_value(&*c).map_err(penelope_kernel::KernelError::Json)?;
@@ -118,7 +118,7 @@ pub(crate) fn set_config_path(s: &Services, path: &str, value: Value) -> anyhow:
 
 /// Une valeur JSON telle qu'on la montre dans une bulle : une chaîne sans guillemets, un
 /// nombre tel quel, une absence en « ? », jamais `null` (issue #115).
-pub(crate) fn shown(v: &Value) -> String {
+pub fn shown(v: &Value) -> String {
     match v {
         Value::Null => "?".into(),
         Value::String(s) if s.is_empty() => "?".into(),
@@ -128,7 +128,7 @@ pub(crate) fn shown(v: &Value) -> String {
 }
 
 /// Formulaire d'étape `user` en cours dans un chat.
-pub(crate) const BOT_USERNAME_KEY: &str = "tg.bot_username";
+pub const BOT_USERNAME_KEY: &str = "tg.bot_username";
 
 /// Lien `https://t.me/<bot>?start=<charge>` vers un écran ou une commande, quand le bot est
 /// connu (issue #30).
@@ -182,11 +182,11 @@ pub fn is_source_build(exe: &Path) -> bool {
 
 // ---------------------------------------- Clés kv de session et de workflow (engine.rs, workflow.rs)
 
-pub(crate) fn last_model_key(session_id: &str) -> String {
+pub fn last_model_key(session_id: &str) -> String {
     format!("session.model_last.{session_id}")
 }
 
 /// Clé du `step_done()` / `return_value` d'un run.
-pub(crate) fn step_done_key(run_id: &str) -> String {
+pub fn step_done_key(run_id: &str) -> String {
     format!("wf.step_done.{run_id}")
 }

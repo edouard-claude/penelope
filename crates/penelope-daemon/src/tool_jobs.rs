@@ -345,11 +345,13 @@ impl Running {
         }
     }
 
-    fn insert(&self, job: &str, session: &str, cancel: CancelToken) {
+    /// Inscrit un job qui démarre dans ce processus, avec son jeton d'annulation.
+    pub fn insert(&self, job: &str, session: &str, cancel: CancelToken) {
         self.with(|m| m.insert(job.to_string(), (session.to_string(), cancel)));
     }
 
-    fn forget(&self, job: &str) {
+    /// Oublie un job qui a conclu : plus rien à interrompre.
+    pub fn forget(&self, job: &str) {
         self.with(|m| m.remove(job));
     }
 
@@ -408,6 +410,11 @@ impl Running {
     /// Un job vient de conclure : la livraison peut partir.
     pub fn wake(&self) {
         self.wake.notify_one();
+    }
+
+    /// Attend qu'un job conclue (réveil de la boucle de livraison).
+    pub async fn woken(&self) {
+        self.wake.notified().await;
     }
 }
 
@@ -758,7 +765,7 @@ pub async fn deliver_loop(d: Arc<Daemon>) {
             tracing::warn!(error = %e, "livraison des jobs d'outils");
         }
         tokio::select! {
-            _ = d.services.jobs.wake.notified() => {}
+            _ = d.services.jobs.woken() => {}
             _ = tokio::time::sleep(DELIVERY_POLL) => {}
         }
     }

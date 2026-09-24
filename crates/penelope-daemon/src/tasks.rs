@@ -248,20 +248,25 @@ pub fn doctor_check(sup: &Supervision) -> penelope_kernel::api::DoctorCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::Daemon;
+    use crate::runtime::Services;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    async fn daemon() -> (tempfile::TempDir, Arc<Daemon>) {
+    /// Le contexte d'une boucle surveillée, sans daemon : registre, arrêt, journal.
+    async fn supervision() -> (tempfile::TempDir, Supervision) {
         let dir = tempfile::tempdir().unwrap();
         let clock: penelope_kernel::clock::SharedClock =
             Arc::new(penelope_kernel::clock::SystemClock);
-        let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
-                .await
-                .unwrap(),
-        );
-        (dir, Arc::new(Daemon::from_services(s)))
+        let s = Services::for_tests(dir.path().to_path_buf(), clock.clone())
+            .await
+            .unwrap();
+        let sup = Supervision {
+            tasks: Arc::new(Tasks::default()),
+            handle: Handle::new(clock.now_ms()),
+            clock,
+            events: s.events.clone(),
+        };
+        (dir, sup)
     }
 
     /// #84 : une boucle qui panique est relancée, la panique est comptée, nommée et
@@ -280,39 +285,39 @@ mod tests {
 
     #[tokio::test]
     async fn a_panicking_loop_is_restarted_and_reported() {
-        let (_dir, d) = daemon().await;
+        let (_dir, sup) = supervision().await;
         let runs = Arc::new(AtomicUsize::new(0));
         let h = {
             let runs = runs.clone();
-            let d2 = d.clone();
-            spawn_supervised(&d.supervision(), "essai", move || {
+            let handle = sup.handle.clone();
+            spawn_supervised(&sup, "essai", move || {
                 let runs = runs.clone();
-                let d = d2.clone();
+                let handle = handle.clone();
                 async move {
                     if runs.fetch_add(1, Ordering::SeqCst) == 0 {
                         panic!("index hors bornes dans la boucle d'essai");
                     }
-                    while !d.handle.is_shutting_down() {
+                    while !handle.is_shutting_down() {
                         tokio::time::sleep(Duration::from_millis(50)).await;
                     }
                 }
             })
         };
         until(|| runs.load(Ordering::SeqCst) == 2).await;
-        until(|| d.tasks.snapshot().get("essai").is_some_and(|t| t.alive)).await;
-        let t = d.tasks.snapshot()["essai"].clone();
+        until(|| sup.tasks.snapshot().get("essai").is_some_and(|t| t.alive)).await;
+        let t = sup.tasks.snapshot()["essai"].clone();
         assert!(t.alive);
         assert_eq!(t.panics, 1);
         assert!(t.last_panic.unwrap().contains("hors bornes"));
-        let events = d.services.events.range(0, 100).await.unwrap();
+        let events = sup.events.range(0, 100).await.unwrap();
         assert!(events.iter().any(|e| e.kind == "daemon.task_panicked"));
-        let c = doctor_check(&d.supervision());
+        let c = doctor_check(&sup);
         assert!(
             !c.ok && c.detail.contains("`essai` relancée 1 fois"),
             "{c:?}"
         );
 
-        d.handle.shutdown();
+        sup.handle.shutdown();
         tokio::time::timeout(Duration::from_secs(5), h)
             .await
             .expect("l'arrêt n'est pas retardé")
@@ -323,19 +328,19 @@ mod tests {
     /// délai.
     #[tokio::test]
     async fn shutdown_interrupts_the_restart_backoff() {
-        let (_dir, d) = daemon().await;
-        let h = spawn_supervised(&d.supervision(), "toujours", || async {
+        let (_dir, sup) = supervision().await;
+        let h = spawn_supervised(&sup, "toujours", || async {
             panic!("panique à chaque démarrage");
         });
         // Deux paniques : la boucle attend maintenant 2 s avant la troisième.
         until(|| {
-            d.tasks
+            sup.tasks
                 .snapshot()
                 .get("toujours")
                 .is_some_and(|t| t.panics >= 2)
         })
         .await;
-        d.handle.shutdown();
+        sup.handle.shutdown();
         tokio::time::timeout(Duration::from_millis(500), h)
             .await
             .expect("arrêt immédiat")
