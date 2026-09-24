@@ -452,13 +452,13 @@ mod tests {
         let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
         say(&d, &sid, "un", "1").await;
         say(&d, &sid, "deux", "2").await;
-        let fork_id = fork(&d, &sid, None).await.unwrap()["session"]
+        let fork_id = fork(&d.services, &sid, None).await.unwrap()["session"]
             .as_str()
             .unwrap()
             .to_string();
         say(&d, &fork_id, "trois", "3").await;
         say(&d, &fork_id, "quatre", "4").await;
-        rewind(&d, &fork_id, 1).await.unwrap();
+        rewind(&d.services, &d.bus, &fork_id, 1).await.unwrap();
         say(&d, &fork_id, "cinq", "5").await;
 
         let parent = s.events.session_events(&sid, 0).await.unwrap();

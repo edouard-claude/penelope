@@ -66,11 +66,11 @@ fn the_budget_file_is_readable() {
     let b = workspace_budget();
     assert_eq!(b.ceiling, 1000);
     assert_eq!(b.test_ceiling, 1500);
-    assert!(
-        b.oversized.len() >= 30,
-        "liste de référence : {}",
-        b.oversized.len()
-    );
+    // La liste de référence ne fait que rétrécir : aucun compte minimal, mais chaque
+    // entrée doit dépasser le plafond, sinon elle n'a rien à faire là.
+    for (path, n) in &b.oversized {
+        assert!(*n > b.ceiling, "{path} : {n} lignes, sous le plafond");
+    }
     assert!(
         b.ca_required.len() >= 70,
         "critères : {}",

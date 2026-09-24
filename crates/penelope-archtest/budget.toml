@@ -21,18 +21,16 @@ test_modules = [
 "crates/penelope-daemon/src/engine.rs" = 1105
 "crates/penelope-kernel/src/config.rs" = 2790   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-cli/src/commands.rs" = 2686   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/compaction.rs" = 2225
+"crates/penelope-daemon/src/compaction.rs" = 1308
 "crates/penelope-llm/src/provider.rs" = 2048
-"crates/penelope-daemon/src/hermes.rs" = 1971
-"crates/penelope-daemon/src/upgrade.rs" = 2018   # relevé à l'intégration du lot A : #212 a ajouté ses tests avant le gel
-"crates/penelope-daemon/src/scheduler.rs" = 1818
+"crates/penelope-daemon/src/hermes.rs" = 1210
+"crates/penelope-daemon/src/upgrade.rs" = 1203   # relevé à l'intégration du lot A : #212 a ajouté ses tests avant le gel
+"crates/penelope-daemon/src/scheduler.rs" = 1095
 "crates/penelope-memory/src/index.rs" = 1622
 "crates/penelope-llm/src/codex.rs" = 1533
 "crates/penelope-memory/src/consolidation.rs" = 1476
 "crates/penelope-tools/src/spec.rs" = 1377   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-mcp/src/transport.rs" = 1265
-"crates/penelope-daemon/src/mcp_auth.rs" = 1246
-"crates/penelope-daemon/src/ingest.rs" = 1225
 "crates/penelope-context/src/engine.rs" = 1025
 "crates/penelope-mcp/src/registry.rs" = 1200
 "crates/penelope-daemon/src/purge.rs" = 1242   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
@@ -53,7 +51,7 @@ test_modules = [
 # vingtaine de correctifs de taille courante. Un autre crate se plafonne en ajoutant une
 # ligne. UPDATE_BUDGET ne touche pas à cette table.
 [crates]
-"penelope-daemon" = 85887   # v1 : découpages du lot G (en-têtes de sous-modules), lots D et F ; redescend avec l'extraction des crates (lots H et J)
+"penelope-daemon" = 86462   # v1 : découpages du lot G (en-têtes de sous-modules), lots D et F ; redescend avec l'extraction des crates (lots H et J)
 
 # Liste blanche des modules du daemon (R5) : les déclarations `mod x;` de lib.rs et
 # `mod screens;` de telegram.rs. `mod tests;` est toujours permis. Les fichiers où un bloc
@@ -92,6 +90,7 @@ modules = [
     "mem_audit",
     "mem_split",
     "onboarding",
+    "ports",  # ProviderSource, Handle, Supervision, Slot (épopée #208, lot D, T07, T08)
     "prompt_snapshot",
     "purge",
     "review",
@@ -111,6 +110,7 @@ modules = [
     "supervisor",
     "tasks",
     "telegram",
+    "testing",  # doubles de test partagés (épopée #208, lot D, T10)
     "ticket_to_deploy_e2e",
     "titles",
     "tools_on_demand",
@@ -160,14 +160,10 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 "supervisor.rs" = 10
 "runner.rs" = 8
 "ingest.rs" = 7
-"mcp_auth.rs" = 6
+"mcp_auth.rs" = 5
 "runtime.rs" = 6
-"budget_alert.rs" = 4
-"hermes.rs" = 4
-"upgrade.rs" = 4
-"codex_auth.rs" = 3
+"upgrade.rs" = 3
 "engine.rs" = 3
-"codex_quota.rs" = 2
 "runtime_events.rs" = 2
 "skill_install.rs" = 2
 "cache_audit.rs" = 1
@@ -279,13 +275,13 @@ required = [
 "crates/penelope-daemon/src/executor/mod.rs" = 5   # découpage (lot G) : la mention suit son code
 "crates/penelope-daemon/src/agent/pipeline.rs" = 1   # EffectKind::Telegram (effect_kind), venu d'agent.rs au découpage (lot F) ; disparaît avec T37
 "crates/penelope-daemon/src/tool_jobs.rs" = 6   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/scheduler.rs" = 33
+"crates/penelope-daemon/src/scheduler.rs" = 32
 "crates/penelope-kernel/src/session.rs" = 37
 "crates/penelope-store/src/migrations.rs" = 30   # permanent : l'historique SQL est immuable (tables tg_updates, tg_outbox)
 "crates/penelope-kernel/src/config.rs" = 25      # permanent : le schéma de configuration nomme ses canaux ([telegram])
 "crates/penelope-daemon/src/supervisor.rs" = 23
 "crates/penelope-daemon/src/purge.rs" = 17
-"crates/penelope-daemon/src/runtime.rs" = 12
+"crates/penelope-daemon/src/runtime.rs" = 10
 "crates/penelope-daemon/src/selfknow.rs" = 12
 "crates/penelope-daemon/src/runner.rs" = 11
 "crates/penelope-daemon/src/elicitation.rs" = 10
