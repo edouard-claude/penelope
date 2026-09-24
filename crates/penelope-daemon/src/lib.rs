@@ -54,6 +54,7 @@ pub mod skill_install;
 pub mod supervisor;
 pub mod tasks;
 pub mod telegram;
+pub mod testing;
 #[cfg(test)]
 mod ticket_to_deploy_e2e;
 pub mod titles;

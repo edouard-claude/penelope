@@ -55,17 +55,8 @@ pub trait Messenger: Send + Sync {
         form: Option<&Value>,
     ) -> Result<(), String> {
         let _ = (visit, wants_input);
-        let mut text = markdown.to_string();
-        if !choices.is_empty() {
-            text.push_str(&format!(
-                "\n\nRépondre : `penelope wf control {run_id} answer --choice <{}>`",
-                choices.join("|")
-            ));
-        }
-        if form.is_some() {
-            text.push_str(" `--input '<objet JSON conforme au formulaire>'`");
-        }
-        self.send_text(origin, &text).await
+        self.send_text(origin, &question_text(markdown, run_id, choices, form))
+            .await
     }
     /// Carte mise à jour sur place (progression d'un run) ; à défaut, un nouveau message.
     async fn upsert_card(&self, origin: &Origin, key: &str, markdown: &str) -> Result<(), String> {
@@ -106,6 +97,26 @@ pub trait Messenger: Send + Sync {
         let _ = (session_id, origin, path, duration_s, caption);
         Err("ce canal n'envoie pas de message vocal".into())
     }
+}
+
+/// Question d'une étape `user` en texte seul, pour les canaux sans boutons.
+pub fn question_text(
+    markdown: &str,
+    run_id: &str,
+    choices: &[String],
+    form: Option<&Value>,
+) -> String {
+    let mut text = markdown.to_string();
+    if !choices.is_empty() {
+        text.push_str(&format!(
+            "\n\nRépondre : `penelope wf control {run_id} answer --choice <{}>`",
+            choices.join("|")
+        ));
+    }
+    if form.is_some() {
+        text.push_str(" `--input '<objet JSON conforme au formulaire>'`");
+    }
+    text
 }
 
 /// Accès aux serveurs MCP vivants.
