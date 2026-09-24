@@ -13,6 +13,88 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.3
+
+Deuxième vague de la V1 : quatre lots développés en parallèle, chacun dans son worktree, et
+la fusion de `main` 0.17.61 (jobs d'outils durables, #204). Les filets de la vague
+précédente ont vu exactement ce que #204 changeait et rien d'autre (trois clés de
+configuration, la méthode RPC `jobs`, `tool_jobs_lost` dans la reprise, quatre outils
+`job_*` à la demande) : leurs attendus sont régénérés. Aucun comportement de production ne
+change dans les lots eux-mêmes.
+
+#### La branche v1 outillée : cliquet du budget en CI, fusion de main scriptée, critères de bascule vérifiés (#208, #209, #213)
+
+Le cliquet de `budget.toml` n'était tenu qu'en local, la fusion de `main` dans `v1`
+conflictait à chaque bump sur les seize lignes de version, et rien ne disait quand `v1`
+pourrait devenir `main`. Le job `tests` de la CI lit tout l'historique et lance
+`scripts/check-budget.sh` contre le commit d'avant (push) ou le point de fourche (pull
+request) : une borne qui remonte sans `Dérogation-budget: #N` rend la CI rouge.
+`scripts/sync-main.sh` fusionne `origin/main` dans `v1`, résout `Cargo.toml` et
+`Cargo.lock` en gardant la `1.0.0-alpha.N` de v1 et les autres changements de main, et
+ne commite que si `penelope-archtest` est vert (sinon il dit comment inscrire l'apport
+de main avec le trailer) ; `--dry-run` montre les conflits sans rien toucher.
+`scripts/switch-check.sh` vérifie les critères mesurables de la bascule (CI de v1,
+budget sans dette, critères d'acceptation, fixture de migration, scénarios) et liste
+ce qui manque. Le plancher de `tests/ca_matrix.rs` est désormais la liste figée
+`[ca].required`, et `make bump` sur une `1.0.0-alpha.N` ne promet plus de release.
+
+#### Une seule famille kv, et les helpers partagés sortent de leurs modules (T05, T06)
+
+- `Services::kv_get`, `kv_set`, `kv_delete` remplacent `Daemon::kv_*` et
+  `workflow::kv_get` / `kv_set`, qui dupliquaient la même requête ; 249 appels migrés,
+  aucune clé renommée.
+- Nouveau module `helpers` du daemon : clés kv du canal, `deep_link`, `seen_chats`,
+  `vault_dir`, `local_now`, `owner_origin_of`, `round_usd`, `set_config_path`,
+  `running_binary`, `is_source_build`, `last_model_key`, `step_done_key`. Six cycles de
+  modules tombent (dream, compaction, selfknow, doctor, scheduler, session_project ne
+  citent plus telegram, engine ni rpc).
+- `deep_link`, `set_config_path` et l'origine du propriétaire prennent `&Services` ;
+  `Services::publish_config` porte la publication de configuration.
+- Gel : `helpers` est le seul module ajouté (dérogation #208) ; occurrences de `Daemon`
+  261 → 254 ; telegram.rs, rpc.rs, workflow.rs, engine.rs, scheduler.rs, upgrade.rs et
+  conversation.rs abaissés dans la liste de référence.
+
+#### Journal d'événements, briques pures (#208, T1, T2, T3, T21)
+
+- **`EventLog::append_in` et `append_with`** : un événement dans la transaction de
+  l'appelant, ou un événement commité puis une seconde transaction (`after`) sur le même
+  thread écrivain, sous le verrou d'ordre (#162), avant la diffusion. Une erreur de
+  `after` laisse l'événement dans le journal et remonte. Les trois chemins d'écriture
+  partagent la même insertion : une lecture en erreur ne forge jamais de maillon (#47).
+- **Vocabulaire `conv.*`** (`penelope_context::journal`) : dix kinds (`conv.system`,
+  `user`, `context`, `assistant`, `tool_result`, `attempt`, `summary`, `rewind`, `fork`,
+  `import`), payloads typés, `"v": 1`, opération de surface (`append`, `replace`, `cut`,
+  `inherit`, `seal`). Relecture stricte : un `v` futur, un kind inconnu non marqué
+  `ignorable`, une opération qui ne va pas avec son kind sont refusés.
+- **Pliage pur** (`penelope_context::derive`) : `derive(préfixe, événements) -> Surface`,
+  sans base ; adresses `offset + seq` avec des trous ; résumé, niveau 1 (l'adresse reste),
+  nouveau système, coupe, fork par référence récursif, préfixe V0 scellé, tentative dont
+  la consigne de relance entre dans la requête suivante, note de fusion. Conversion en
+  entrées (`compacted` = masqué par un résumé) et en requête, textes identiques à la
+  projection V0. Un journal incohérent est une erreur ; seule une purge rend le pliage
+  indulgent.
+- **Numérotation à trous** : `SummaryJob` porte le nombre d'entrées de son lot et la fin
+  du résumé qu'il prolonge ; `messages()` et les bornes montrées au résumeur ne se
+  déduisent plus de `to - from + 1`. `numbering::uncovered` et `node_page` travaillent sur
+  les adresses existantes.
+- Rien n'est branché dans le daemon : la double écriture vient avec T5.
+
+#### Boucle d'agent en modules (épopée #208, lot F : T02 à T06)
+
+- `agent.rs` (2 513 lignes) devient `agent/` : douze modules, le plus gros à 571 lignes,
+  tous les chemins `crate::agent::*` inchangés. Le fichier sort de la liste de référence
+  du gel.
+- La politique de nouvelles tentatives d'un appel au modèle est une table pure,
+  `RetryPlan`, testée cas par cas ; `call_model` repasse sous 200 lignes.
+- Avant chaque appel au modèle, quatre gardes nommées dans un ordre fixe : arrêt demandé,
+  budget, plafond d'appels, palier de coût.
+- Avant la politique, quatre gardes d'appel nommées : liste blanche, décision antérieure,
+  garde de boucle, arguments ; les textes de refus sont typés (`Refusal`) et inchangés.
+- La politique d'un appel dit quelle couche a tranché (`VerdictLayer`) ; ses huit raisons
+  sont fixées par un test doré.
+- Aucun comportement visible ne change : textes, cartes, événements et ordre des
+  contrôles sont ceux de la 1.0.0-alpha.2.
+
 ### 1.0.0-alpha.2
 
 Fin du lot A (gel de la dette) et fin du premier jalon du lot B (filets) sur `v1`. Aucun
