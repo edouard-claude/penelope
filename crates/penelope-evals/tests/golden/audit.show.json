@@ -49,10 +49,7 @@
         "empreinte": "string",
         "liste": "string"
       },
-      "exact": "bool",
-      "reserves": [
-        "string"
-      ]
+      "exact": "bool"
     }
   }
 }
