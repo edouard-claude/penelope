@@ -292,6 +292,7 @@ impl ContextEngine {
     }
 }
 
+pub(crate) mod at;
 mod cache;
 #[cfg(test)]
 mod tests;

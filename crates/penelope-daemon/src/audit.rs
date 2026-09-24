@@ -151,6 +151,16 @@ async fn transcript(
     call: &Call,
     reserves: &mut Vec<String>,
 ) -> anyhow::Result<Vec<Value>> {
+    if let Some(hash) = &call.request_hash
+        && let Some(view) = s
+            .context
+            .history
+            .call_view(session_id, hash)
+            .await?
+            .map_err(anyhow::Error::msg)?
+    {
+        return Ok(replayed(&view, call, reserves));
+    }
     let entries = s.context.history.load(session_id, 0).await?;
     let sid = session_id.to_string();
     let frozen: std::collections::HashMap<i64, String> = s
@@ -209,6 +219,35 @@ async fn transcript(
     Ok(out)
 }
 
+/// Les messages de l'appel repliés depuis le journal jusqu'à sa réponse (T15) : les
+/// résumés de l'époque, pas ceux d'aujourd'hui ; ce qui a été résumé depuis y est en clair.
+fn replayed(
+    view: &penelope_context::CallView,
+    call: &Call,
+    reserves: &mut Vec<String>,
+) -> Vec<Value> {
+    if let Some(n) = call.msg_count
+        && n != view.messages as i64
+    {
+        reserves.push(format!(
+            "l'appel portait {n} messages, le journal en replie {}",
+            view.messages
+        ));
+    }
+    view.nodes
+        .iter()
+        .map(|n| {
+            json!({
+                "seq": n.seq,
+                "role": n.message.role.as_str(),
+                "texte": redact(&n.message.text()),
+                "contexte_fige": n.context.as_deref().map(redact),
+                "resume_depuis": false,
+            })
+        })
+        .collect()
+}
+
 async fn calls_of_turn(s: &Services, turn_id: &str) -> anyhow::Result<Vec<Call>> {
     let turn = turn_id.to_string();
     Ok(s.store
@@ -265,6 +304,7 @@ mod tests {
     use crate::runtime::Daemon;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::MockProvider;
+    use penelope_llm::types::ChatMessage;
     use std::sync::Arc;
 
     async fn one_turn(text: &str) -> (tempfile::TempDir, Arc<Daemon>, String) {
@@ -330,6 +370,64 @@ mod tests {
             appels.iter().any(|a| a["request_hash"].is_string()),
             "{appels:?}"
         );
+    }
+
+    /// T15 : après une compaction, la requête d'un tour passé se replie depuis le journal
+    /// jusqu'à l'appel : les messages résumés depuis y sont en clair, sans le résumé
+    /// d'aujourd'hui, et la reconstitution reste exacte.
+    #[tokio::test]
+    async fn a_turn_is_replayed_exactly_after_a_compaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(TestClock::default());
+        let s = Arc::new(
+            Services::for_tests(dir.path().to_path_buf(), clock)
+                .await
+                .unwrap(),
+        );
+        let d = Arc::new(Daemon::from_services(s.clone()));
+        let p = Arc::new(MockProvider::new());
+        d.set_provider_override(p.clone());
+        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+        let h = &s.context.history;
+        for i in 0..20 {
+            let q = format!("question {i} sur PROJ-7 : {}", "détail ".repeat(340));
+            let a = format!("réponse {i} : {}", "analyse ".repeat(300));
+            h.append(&sid, &ChatMessage::user(q), 600, 0, false, None)
+                .await
+                .unwrap();
+            h.append(&sid, &ChatMessage::assistant(a), 600, 0, false, None)
+                .await
+                .unwrap();
+        }
+        p.reply(r#"{"complexity":"medium"}"#);
+        p.reply("Voilà.");
+        d.enqueue_message(&sid, "où en es-tu ?", &Origin::Cli, None)
+            .await
+            .unwrap();
+        let t = s.turns.claim("test").await.unwrap().unwrap();
+        d.run_turn(&t).await;
+        s.turns.complete(&t).await.unwrap();
+        let turn = last_turn(&s, &sid).await.unwrap().expect("un tour");
+        let before = show(&s, &turn).await.unwrap();
+        assert_eq!(before["exact"], true, "{}", before["reserves"]);
+
+        p.reply(r#"{"objectif": "résumé d'aujourd'hui"}"#);
+        let r = crate::compaction::compact(&d, &sid, crate::compaction::Trigger::Manual, None)
+            .await
+            .unwrap();
+        assert_eq!(r.published, 1, "{r:?}");
+        let history = h.load(&sid, 0).await.unwrap();
+        assert!(
+            history.iter().any(|e| e.compacted),
+            "la compaction a masqué"
+        );
+
+        let v = show(&s, &turn).await.unwrap();
+        assert_eq!(v["exact"], true, "{}", v["reserves"]);
+        assert_eq!(v["messages"], before["messages"], "la requête de l'époque");
+        let text = v["messages"].to_string();
+        assert!(text.contains("question 0 sur PROJ-7"), "{text}");
+        assert!(!text.contains("résumé d'aujourd'hui"), "{text}");
     }
 
     /// Un tour inconnu ne rend pas une reconstitution vide : il le dit.

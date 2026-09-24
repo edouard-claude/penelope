@@ -321,14 +321,27 @@ pub async fn export(s: &Services, what: &str, id: Option<&str>) -> anyhow::Resul
     Ok(json!({"path": path, "lines": lines.len()}))
 }
 
+/// Les lignes d'une session : ses messages (le préfixe scellé marqué `sealed`), son
+/// journal, et la surface qu'en dérive le pliage, ce que le modèle voit (T15).
 async fn session_lines(s: &Services, session_id: &str) -> anyhow::Result<Vec<Value>> {
     let mut lines = Vec::new();
+    let sid = session_id.to_string();
+    let sealed: std::collections::HashSet<i64> = s
+        .store
+        .read(move |c| {
+            let mut st =
+                c.prepare("SELECT seq FROM messages WHERE session_id = ?1 AND sealed = 1")?;
+            let rows = st.query_map([&sid], |r| r.get(0))?;
+            Ok(rows.collect::<Result<_, _>>()?)
+        })
+        .await?;
     for e in s.context.history.load(session_id, 0).await? {
         lines.push(json!({
             "type": "message",
             "session": session_id,
             "seq": e.seq,
             "compacted": e.compacted,
+            "sealed": sealed.contains(&e.seq),
             "message": e.message,
         }));
     }
@@ -341,6 +354,17 @@ async fn session_lines(s: &Services, session_id: &str) -> anyhow::Result<Vec<Val
             "kind": ev.kind,
             "payload": ev.payload,
         }));
+    }
+    // Un journal qui ne se plie pas n'empêche pas l'export : `history verify` le nomme.
+    if let Ok(Some(read)) = s.context.history.read_journal(session_id).await? {
+        for e in read.projected {
+            lines.push(json!({
+                "type": "surface",
+                "session": session_id,
+                "seq": e.seq,
+                "message": e.message,
+            }));
+        }
     }
     Ok(lines)
 }
@@ -513,9 +537,23 @@ mod tests {
         let v = export(&d.services, "session", Some(&sid)).await.unwrap();
         let raw = std::fs::read_to_string(v["path"].as_str().unwrap()).unwrap();
         assert!(raw.lines().count() >= 2);
+        let lines: Vec<Value> = raw
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        // T15 : le journal et la surface qu'il dérive accompagnent les messages.
+        let of = |t: &str| lines.iter().filter(|l| l["type"] == t).count();
+        assert_eq!(of("message"), 2);
+        assert_eq!(of("surface"), 2, "{raw}");
         assert!(
-            raw.lines()
-                .all(|l| serde_json::from_str::<Value>(l).is_ok())
+            lines
+                .iter()
+                .any(|l| l["type"] == "event" && l["kind"] == "conv.user")
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|l| l["type"] != "message" || l["sealed"] == false)
         );
         assert!(export(&d.services, "inconnu", None).await.is_err());
 
