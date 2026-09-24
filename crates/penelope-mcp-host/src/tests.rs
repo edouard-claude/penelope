@@ -746,6 +746,14 @@ async fn tool_policy_and_eager_schemas_come_from_the_declaration() {
     assert_eq!(eager, vec!["mcp__a__create_issue", "mcp__a__list_issues"]);
 }
 
+/// T25 : le superviseur est à la fois la passerelle des outils MCP (`McpGateway`) et
+/// l'administration des serveurs (`McpAdmin`) : le daemon ne connaît que ces deux ports.
+#[test]
+fn the_supervisor_is_both_gateway_and_admin() {
+    fn ports<T: McpGateway + penelope_app::ports::McpAdmin>() {}
+    ports::<McpSupervisor>();
+}
+
 #[test]
 fn binary_content_never_enters_the_transcript() {
     let r = ToolResult {

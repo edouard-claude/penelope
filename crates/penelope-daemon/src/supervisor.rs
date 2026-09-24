@@ -235,9 +235,11 @@ impl Daemon {
         }
 
         // Serveurs MCP de `mcp.d/` : chargés en fond, pour ne pas retarder le démarrage.
-        let mcp = crate::mcp::McpSupervisor::new(
+        let mcp = penelope_mcp_host::McpSupervisor::new(
             self.services.clone(),
-            Arc::new(crate::mcp::ProcessConnector::new(self.services.clone())),
+            Arc::new(penelope_mcp_host::ProcessConnector::new(
+                self.services.clone(),
+            )),
         );
         self.hooks.set_mcp(mcp.clone());
         tasks.push(mcp.boot());
