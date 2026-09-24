@@ -2946,9 +2946,9 @@ Les écarts assumés par rapport à un « DEVRAIT » du PRD sont documentés un 
 | [0011](decisions/0011-prompt-systeme-journalise.md) | Prompt système journalisé en clair | Ce que le modèle a lu est reconstituable, adressé par son empreinte ; une ligne par préfixe distinct |
 | [0015](decisions/0015-gel-0.17-et-branche-v1.md) | Gel de la 0.17 et branche `v1` | La dette ne grossit plus sur `main` (budget à cliquet) ; la V1 se refait à côté, versions jamais taguées |
 
-Les numéros 0012 à 0014 et 0016 sont réservés par la charte de la V1 (`design/v1/README.md`
-§9 : journal source unique de la conversation, découpage du daemon, boucle en pipeline, PTC
-hors V1) et pas encore écrits.
+Les numéros 0013, 0014, 0016 et 0017 sont réservés par la charte de la V1 (`design/v1/README.md`
+§9 : découpage du daemon, boucle en pipeline, PTC hors V1, journal source unique de la
+conversation) et pas encore écrits ; 0012 est pris par les jobs d'outils durables (#204, sur `main`).
 
 ## Deux failles corrigées en écrivant la suite `security`
 
