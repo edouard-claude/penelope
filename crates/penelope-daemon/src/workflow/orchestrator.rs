@@ -9,7 +9,7 @@ pub(super) async fn progress(
     wf: &Workflow,
     last: Option<(&Step, &StepResult)>,
 ) {
-    let Some(m) = d.hooks.messenger() else {
+    let Some(m) = d.workflows.ports.messenger.get() else {
         return;
     };
     let origin = origin_of(d, &run.id).await;

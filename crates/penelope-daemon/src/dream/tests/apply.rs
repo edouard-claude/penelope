@@ -21,14 +21,14 @@ async fn a_stated_rule_is_promoted_once_with_history_and_review() {
     p.reply(keep);
 
     // À blanc : le rapport dit ce qui serait fait, rien n'est écrit.
-    let dry = run(&d, true).await.unwrap();
+    let dry = run(&d, &d.hooks.messenger, true).await.unwrap();
     assert_eq!(dry.report.promoted, 1);
     let vault = crate::helpers::vault_dir(s);
     assert!(!vault.join("profil.md").exists());
     assert_eq!(s.candidates.pending(None).await.unwrap().len(), 1);
 
     p.reply(keep);
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert_eq!(o.report.promoted, 1, "{:?}", o.report);
     assert_eq!(o.report.files_touched, vec!["profil.md"]);
 
@@ -56,12 +56,12 @@ async fn a_stated_rule_is_promoted_once_with_history_and_review() {
     assert_eq!(hist.as_array().unwrap().len(), 1);
     let learned = learned(s, 7).await.unwrap();
     assert_eq!(learned[0]["text"], "Toujours répondre en français");
-    let digest = digest_text(&d).await.unwrap();
+    let digest = digest_text(&d, d.hooks.mcp_supervisor()).await.unwrap();
     assert!(digest.contains("Appris cette nuit : 1"), "{digest}");
 
     // Une seconde passe sans nouvelle donnée ne change rien et n'appelle pas le modèle.
     let calls = p.requests().len();
-    let again = run(&d, false).await.unwrap();
+    let again = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert!(again.report.is_noop());
     assert_eq!(p.requests().len(), calls);
 
@@ -145,7 +145,7 @@ async fn a_rule_dictated_by_the_owner_is_promoted() {
                 {"op": "add_entry", "candidat": 1, "file": "profil.md", "section": "Git",
                  "text": "Supprimer la branche qa", "importance": 8}]}"#,
     );
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert_eq!(o.report.promoted, 1, "{:?}", o.report);
     let vault = crate::helpers::vault_dir(s);
     let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
@@ -202,7 +202,7 @@ async fn a_dream_is_committed_in_the_vault_history() {
               "operations": [{"op": "add_entry", "candidat": 1, "file": "memoire.md",
                 "text": "Le propriétaire héberge ses projets sur un serveur à Roubaix", "importance": 6}]}"#,
     );
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert_eq!(o.report.promoted, 1, "{:?}", o.report);
 
     let (_, log, _) =
@@ -343,7 +343,7 @@ async fn the_grid_updates_journals_and_ages_the_memory() {
         ]
     });
     p.reply(&reply.to_string());
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
 
     let memoire = std::fs::read_to_string(vault.join("memoire.md")).unwrap();
     let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
@@ -422,7 +422,7 @@ async fn the_grid_updates_journals_and_ages_the_memory() {
                                 "text": "Le serveur de prod Atlas tourne sous Debian 12"}]})
         .to_string(),
     );
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert_eq!(o.report.journal_expired, 2, "{:?}", o.report);
     let projets = std::fs::read_to_string(vault.join("projets.md")).unwrap();
     assert!(
@@ -464,7 +464,7 @@ async fn the_grid_updates_journals_and_ages_the_memory() {
         Ok(vec!["memory.core_budget_tokens".into()])
     })
     .unwrap();
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert!(
         o.report
             .unused
@@ -478,7 +478,7 @@ async fn the_grid_updates_journals_and_ages_the_memory() {
         !o.report.unused.iter().any(|u| u.contains("Debian")),
         "trop récente"
     );
-    let digest = digest_text(&d).await.unwrap();
+    let digest = digest_text(&d, d.hooks.mcp_supervisor()).await.unwrap();
     assert!(
         digest.contains("Jamais rappelées depuis 60 jours"),
         "{digest}"
@@ -515,7 +515,7 @@ async fn corrections_become_exceptions_of_an_existing_practice() {
                 {"op": "add_entry", "candidat": 1, "file": "../../etc/passwd", "text": "x"}
             ]}"#,
     );
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert_eq!(o.report.promoted, 1, "{:?}", o.report);
     assert_eq!(o.report.proposals, 1, "le défaut reste une proposition");
     let raw = std::fs::read_to_string(vault.join("pratiques/langage-backend.md")).unwrap();

@@ -4,6 +4,7 @@
 //! propositions de mémoire. Les propositions partent en approbation `memory_proposal` :
 //! rien n'entre en mémoire sans le propriétaire, surtout pas depuis un document non fiable.
 
+use crate::ports::Slot;
 use crate::runtime::{Daemon, Services};
 use penelope_hitl::{ApprovalKind, ApprovalState};
 use penelope_kernel::event::EventDraft;
@@ -764,7 +765,10 @@ async fn apply_split(
 
 /// Dépôts dans `vault/inbox/` : chaque fichier est ingéré puis retiré de la boîte.
 /// Le propriétaire reçoit le bilan sur son canal.
-pub async fn scan_inbox(d: &Arc<Daemon>) -> anyhow::Result<usize> {
+pub async fn scan_inbox(
+    d: &Arc<Daemon>,
+    messenger: &Slot<dyn crate::executor::Messenger>,
+) -> anyhow::Result<usize> {
     let s = &d.services;
     let inbox = crate::helpers::vault_dir(s).join(doc::INBOX_DIR);
     let Ok(entries) = std::fs::read_dir(&inbox) else {
@@ -844,7 +848,7 @@ pub async fn scan_inbox(d: &Arc<Daemon>) -> anyhow::Result<usize> {
                 format!("📥 `{name}` non ingéré ({e}) : déplacé dans `inbox/refusés/`.")
             }
         };
-        if let Some(m) = d.hooks.messenger() {
+        if let Some(m) = messenger.get() {
             let origin = crate::helpers::owner_origin_of(&d.services);
             let _ = m.send_text(&origin, &text).await;
         }

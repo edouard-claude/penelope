@@ -12,7 +12,9 @@
 //! de processus, une relecture du magasin sous ce verrou, et l'écriture de la rotation
 //! **avant** tout usage du jeton neuf.
 
-use crate::runtime::{Daemon, Services};
+use crate::executor::Messenger;
+use crate::ports::Slot;
+use crate::runtime::Services;
 use base64::Engine;
 use penelope_kernel::event::EventDraft;
 use penelope_llm::{CodexToken, LlmError, LlmErrorKind};
@@ -633,42 +635,40 @@ impl penelope_llm::TokenSource for DaemonTokens {
 /// Rafraîchissement **hors tour** : une vérification par minute, pour qu'un tour ne
 /// commence jamais par attendre un jeton. Prévient le propriétaire une fois quand la
 /// connexion est morte.
-pub async fn refresh_loop(d: Arc<Daemon>) {
+pub async fn refresh_loop(s: Arc<Services>, messenger: Slot<dyn Messenger>) {
     let mut ticker = tokio::time::interval(Duration::from_secs(60));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
-        let s = &d.services;
         if !s.config.config().providers.codex.enabled {
             continue;
         }
         // Les jauges du plan sont lues à chaque réponse ; l'alerte part d'ici, une fois
         // par fenêtre (#142).
-        if let Err(e) = crate::codex_quota::check_alert(&d).await {
+        if let Err(e) = crate::codex_quota::check_alert(&s, messenger.get()).await {
             tracing::warn!(error = %e, "alerte de quota Codex non vérifiée");
         }
-        let Ok(Some(grant)) = load(s) else { continue };
+        let Ok(Some(grant)) = load(&s) else { continue };
         if grant.disconnected.is_some() {
-            notify_disconnected(&d, &grant).await;
+            notify_disconnected(&s, messenger.get(), &grant).await;
             continue;
         }
         if !grant.needs_refresh(s.clock.now_ms()) {
             continue;
         }
-        if let Err(e) = refresh(s).await {
+        if let Err(e) = refresh(&s).await {
             tracing::warn!(error = %e, "jeton Codex non rafraîchi");
-            if let Ok(Some(g)) = load(s)
+            if let Ok(Some(g)) = load(&s)
                 && g.disconnected.is_some()
             {
-                notify_disconnected(&d, &g).await;
+                notify_disconnected(&s, messenger.get(), &g).await;
             }
         }
     }
 }
 
 /// Une seule annonce par déconnexion : la suivante attend une reconnexion.
-async fn notify_disconnected(d: &Daemon, grant: &Grant) {
-    let s = &d.services;
+async fn notify_disconnected(s: &Services, messenger: Option<Arc<dyn Messenger>>, grant: &Grant) {
     let reason = grant.disconnected.clone().unwrap_or_default();
     let key = format!("codex.disconnected.notified.{reason}");
     if s.kv_get(&key).await.ok().flatten().is_some() {
@@ -680,7 +680,7 @@ async fn notify_disconnected(d: &Daemon, grant: &Grant) {
          par OpenRouter en attendant. Pour reconnecter : `penelope model auth codex`, ou \
          `/model auth codex` ici."
     );
-    match d.hooks.messenger() {
+    match messenger {
         Some(m) => {
             let origin = crate::bus::Origin::Internal {
                 source: "codex".into(),

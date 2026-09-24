@@ -59,7 +59,7 @@ async fn a_scheduled_digest_is_delivered_once() {
             "Veille du 19/09\n{}",
             DIGEST.split_once('\n').unwrap().1
         ));
-        crate::scheduler::run_now(&g.daemon, &sched.id)
+        crate::scheduler::run_now(&g.daemon, &g.daemon.hooks.scheduler(), &sched.id)
             .await
             .unwrap();
         let turn = s.turns.claim("t").await.unwrap().expect("tour planifié");
@@ -536,7 +536,9 @@ async fn the_digest_links_to_screens_once_the_bot_is_known() {
         )
         .await
         .unwrap();
-    let digest = crate::dream::digest_text(d).await.unwrap();
+    let digest = crate::dream::digest_text(d, d.hooks.mcp_supervisor())
+        .await
+        .unwrap();
     assert!(
         digest.contains("[ouvrir](https://t.me/penelope_test_bot?start=approvals)"),
         "{digest}"
@@ -693,7 +695,9 @@ async fn a_scheduled_prompt_answers_after_new_and_warns_on_failure() {
 
     p.reply(r#"{"complexity":"medium"}"#);
     p.reply("Veille du jour : deux annonces à lire.");
-    crate::scheduler::run_now(&d, &id).await.unwrap();
+    crate::scheduler::run_now(&d, &d.hooks.scheduler(), &id)
+        .await
+        .unwrap();
     drain(&g).await;
     let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
     assert!(
@@ -710,7 +714,9 @@ async fn a_scheduled_prompt_answers_after_new_and_warns_on_failure() {
         penelope_llm::types::LlmErrorKind::Other,
         "fournisseur indisponible".into(),
     ));
-    crate::scheduler::run_now(&d, &id).await.unwrap();
+    crate::scheduler::run_now(&d, &d.hooks.scheduler(), &id)
+        .await
+        .unwrap();
     drain(&g).await;
     let calls = t.calls_to(tg::SEND_MESSAGE).await;
     let alert = calls

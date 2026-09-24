@@ -506,13 +506,18 @@ async fn the_plan_gauge_alerts_once_per_window() {
     crate::codex_quota::store(s, &quota(40.0, 1_790_000_000))
         .await
         .unwrap();
-    assert!(crate::codex_quota::check_alert(&d).await.unwrap().is_none());
+    assert!(
+        crate::codex_quota::check_alert(&d.services, d.hooks.messenger())
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Au-delà : une alerte, une seule.
     crate::codex_quota::store(s, &quota(81.0, 1_790_000_000))
         .await
         .unwrap();
-    let first = crate::codex_quota::check_alert(&d)
+    let first = crate::codex_quota::check_alert(&d.services, d.hooks.messenger())
         .await
         .unwrap()
         .expect("alerte");
@@ -522,7 +527,10 @@ async fn the_plan_gauge_alerts_once_per_window() {
         .await
         .unwrap();
     assert!(
-        crate::codex_quota::check_alert(&d).await.unwrap().is_none(),
+        crate::codex_quota::check_alert(&d.services, d.hooks.messenger())
+            .await
+            .unwrap()
+            .is_none(),
         "une seule alerte par fenêtre"
     );
 
@@ -530,7 +538,12 @@ async fn the_plan_gauge_alerts_once_per_window() {
     crate::codex_quota::store(s, &quota(85.0, 1_790_018_000))
         .await
         .unwrap();
-    assert!(crate::codex_quota::check_alert(&d).await.unwrap().is_some());
+    assert!(
+        crate::codex_quota::check_alert(&d.services, d.hooks.messenger())
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[tokio::test]

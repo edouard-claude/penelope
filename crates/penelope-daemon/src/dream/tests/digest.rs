@@ -49,7 +49,7 @@ async fn a_failed_night_keeps_what_it_wrote_and_is_said_once() {
     for _ in 0..3 {
         p.push(passing_error());
     }
-    nightly(&d).await;
+    nightly(&d, &d.hooks.messenger).await;
     assert_eq!(p.call_count(), 4, "un lot, puis trois essais du second");
     let vault = crate::helpers::vault_dir(s);
     // #152 : le lot qui a abouti est écrit avant que le suivant soit tenté. Jusqu'ici
@@ -99,7 +99,7 @@ async fn a_failed_night_keeps_what_it_wrote_and_is_said_once() {
         sent[0].contains("La consolidation de cette nuit a échoué"),
         "{sent:?}"
     );
-    let digest = digest_text(&d).await.unwrap();
+    let digest = digest_text(&d, d.hooks.mcp_supervisor()).await.unwrap();
     assert!(
         digest.contains("Pas de consolidation cette nuit"),
         "{digest}"
@@ -115,10 +115,10 @@ async fn a_failed_night_keeps_what_it_wrote_and_is_said_once() {
         .as_str()
         .unwrap()
         .to_string();
-    night_failed(&d, &reason).await;
-    night_failed(&d, &reason).await;
+    night_failed(&d, &d.hooks.messenger, &reason).await;
+    night_failed(&d, &d.hooks.messenger, &reason).await;
     assert_eq!(rec.0.lock().unwrap().len(), 1);
-    night_failed(&d, "Payment required").await;
+    night_failed(&d, &d.hooks.messenger, "Payment required").await;
     let sent = rec.0.lock().unwrap().clone();
     assert_eq!(sent.len(), 2);
     assert!(sent[1].contains("4 nuits de suite"), "{sent:?}");
@@ -128,7 +128,7 @@ async fn a_failed_night_keeps_what_it_wrote_and_is_said_once() {
     for text in &order {
         p.reply(&keep(text));
     }
-    nightly(&d).await;
+    nightly(&d, &d.hooks.messenger).await;
     assert!(s.candidates.pending(None).await.unwrap().is_empty());
     let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
     for text in &order {
@@ -143,7 +143,7 @@ async fn a_failed_night_keeps_what_it_wrote_and_is_said_once() {
             .is_none()
     );
     assert!(
-        !digest_text(&d)
+        !digest_text(&d, d.hooks.mcp_supervisor())
             .await
             .unwrap()
             .contains("Pas de consolidation")
@@ -221,7 +221,7 @@ async fn quiet_nights_are_said_and_the_digest_stays_short() {
 
     insert("d_1", "2026-09-15T01:30:00Z", night(12, 3, 2)).await;
     insert("d_2", "2026-09-16T01:30:00Z", night(50, 0, 50)).await;
-    let digest = digest_text(&d).await.unwrap();
+    let digest = digest_text(&d, d.hooks.mcp_supervisor()).await.unwrap();
     assert!(digest.chars().count() < 4_096, "{}", digest.chars().count());
     assert!(digest.contains("50 candidat(s) examiné(s) : 0 promu(s), 50 écarté(s)"));
     assert!(digest.contains("- autres motifs :"), "{digest}");
@@ -231,7 +231,7 @@ async fn quiet_nights_are_said_and_the_digest_stays_short() {
     );
 
     insert("d_3", "2026-09-17T01:30:00Z", night(2, 0, 2)).await;
-    let digest = digest_text(&d).await.unwrap();
+    let digest = digest_text(&d, d.hooks.mcp_supervisor()).await.unwrap();
     assert!(
         digest.contains("⚠️ 2 nuits de suite sans rien retenir"),
         "{digest}"
@@ -243,7 +243,7 @@ async fn quiet_nights_are_said_and_the_digest_stays_short() {
     );
 
     insert("d_4", "2026-09-18T01:30:00Z", night(5, 2, 1)).await;
-    let digest = digest_text(&d).await.unwrap();
+    let digest = digest_text(&d, d.hooks.mcp_supervisor()).await.unwrap();
     assert!(!digest.contains("nuits de suite"), "{digest}");
 }
 

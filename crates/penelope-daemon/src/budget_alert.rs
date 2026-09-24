@@ -4,22 +4,26 @@
 //! de la boucle d'agent.
 
 use crate::bus::Origin;
-use crate::runtime::Daemon;
+use crate::executor::Messenger;
+use crate::ports::Slot;
+use crate::runtime::Services;
 use penelope_kernel::budget::{BudgetScope, BudgetStatus, UsageRow, UsageWatcher};
 use std::sync::{Arc, Weak};
 
 /// Observe le ledger de coûts du daemon.
 pub struct AlertWatcher {
-    daemon: Weak<Daemon>,
+    services: Weak<Services>,
+    messenger: Slot<dyn Messenger>,
     /// Une vérification à la fois : deux consommations simultanées n'envoient pas deux
     /// alertes.
     lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AlertWatcher {
-    pub fn install(d: &Arc<Daemon>) {
-        d.services.budget.watch(Arc::new(AlertWatcher {
-            daemon: Arc::downgrade(d),
+    pub fn install(s: &Arc<Services>, messenger: Slot<dyn Messenger>) {
+        s.budget.watch(Arc::new(AlertWatcher {
+            services: Arc::downgrade(s),
+            messenger,
             lock: Arc::default(),
         }));
     }
@@ -27,10 +31,13 @@ impl AlertWatcher {
 
 impl UsageWatcher for AlertWatcher {
     fn recorded(&self, session_id: Option<&str>, run_id: Option<&str>) {
-        let (Some(d), Ok(rt)) = (self.daemon.upgrade(), tokio::runtime::Handle::try_current())
-        else {
+        let (Some(s), Ok(rt)) = (
+            self.services.upgrade(),
+            tokio::runtime::Handle::try_current(),
+        ) else {
             return;
         };
+        let messenger = self.messenger.clone();
         let (session, run, lock) = (
             session_id.map(String::from),
             run_id.map(String::from),
@@ -38,7 +45,7 @@ impl UsageWatcher for AlertWatcher {
         );
         rt.spawn(async move {
             let _guard = lock.lock().await;
-            if let Err(e) = check(&d, session.as_deref(), run.as_deref()).await {
+            if let Err(e) = check(&s, messenger.get(), session.as_deref(), run.as_deref()).await {
                 tracing::warn!(error = %e, "alerte de budget non vérifiée");
             }
         });
@@ -47,11 +54,11 @@ impl UsageWatcher for AlertWatcher {
 
 /// Envoie les alertes dues ; rend les textes envoyés.
 pub async fn check(
-    d: &Daemon,
+    s: &Services,
+    messenger: Option<Arc<dyn Messenger>>,
     session_id: Option<&str>,
     run_id: Option<&str>,
 ) -> anyhow::Result<Vec<String>> {
-    let s = &d.services;
     let cfg = s.config.config();
     // Jour du propriétaire, comme le plafond qu'il surveille (#79).
     let today = s.budget.today();
@@ -81,7 +88,7 @@ pub async fn check(
             BudgetScope::Run => s.budget.report_run("turn", None, run_id, None, 3).await?,
         };
         let text = alert_text(&status, &top);
-        match d.hooks.messenger() {
+        match &messenger {
             Some(m) => {
                 let origin = Origin::Internal {
                     source: "budget".into(),
@@ -139,7 +146,6 @@ pub fn alert_text(status: &BudgetStatus, top: &[UsageRow]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::executor::Messenger;
     use penelope_kernel::budget::UsageRecord;
     use penelope_kernel::clock::TestClock;
     use std::sync::Mutex;
@@ -187,16 +193,16 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let d = Arc::new(Daemon::from_services(s.clone()));
-        d.publish_config("test", |c| {
+        s.publish_config("test", |c| {
             c.budget.daily_usd = 10.0;
             c.budget.session_usd = 100.0;
             Ok(vec!["budget.daily_usd".into()])
         })
         .unwrap();
         let rec = Arc::new(Recorder::default());
-        *d.hooks.messenger.write().unwrap() = Some(rec.clone() as Arc<dyn Messenger>);
-        AlertWatcher::install(&d);
+        let messenger = Slot::default();
+        messenger.set(Some(rec.clone() as Arc<dyn Messenger>));
+        AlertWatcher::install(&s, messenger);
         let sent = || rec.0.lock().unwrap().clone();
         let settle = || tokio::time::sleep(Duration::from_millis(50));
 

@@ -7,6 +7,9 @@
 //! dans la conversation. Les jetons vivent dans le SecretStore et sont rafraîchis avant
 //! chaque connexion.
 
+use crate::executor::Messenger;
+use crate::mcp::McpSupervisor;
+use crate::ports::Slot;
 use crate::runtime::{Daemon, Services};
 use penelope_kernel::event::EventDraft;
 use penelope_mcp::ServerConfig;
@@ -578,7 +581,11 @@ pub fn prompt_text(a: &AuthStart) -> String {
 
 /// Serveur de retour local (`127.0.0.1:<callback_port>`) : reçoit le retour OAuth quand le
 /// navigateur y a accès (tunnel SSH, `public_callback`), et sert le document CIMD.
-pub async fn callback_server(d: Arc<Daemon>) {
+pub async fn callback_server(
+    d: Arc<Daemon>,
+    mcp: Slot<McpSupervisor>,
+    messenger: Slot<dyn Messenger>,
+) {
     let port = d.services.config.config().mcp.callback_port;
     let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
         Ok(l) => l,
@@ -592,9 +599,9 @@ pub async fn callback_server(d: Arc<Daemon>) {
         let Ok(Ok((stream, _))) = accepted else {
             continue;
         };
-        let d2 = d.clone();
+        let (d2, mcp, messenger) = (d.clone(), mcp.clone(), messenger.clone());
         tokio::spawn(async move {
-            if let Err(e) = handle_callback(&d2, stream).await {
+            if let Err(e) = handle_callback(&d2, &mcp, &messenger, stream).await {
                 tracing::debug!(error = %e, "requête du callback OAuth");
             }
         });
@@ -603,6 +610,8 @@ pub async fn callback_server(d: Arc<Daemon>) {
 
 async fn handle_callback(
     d: &Arc<Daemon>,
+    mcp: &Slot<McpSupervisor>,
+    messenger: &Slot<dyn Messenger>,
     mut stream: tokio::net::TcpStream,
 ) -> std::io::Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -626,7 +635,7 @@ async fn handle_callback(
     let (status, ctype, body) = if target.starts_with("/oauth/callback") {
         match complete(d, &target).await {
             Ok(server) => {
-                reconnect_and_tell(d, &server).await;
+                reconnect_and_tell(&d.services, mcp.get(), messenger.get(), &server).await;
                 (
                     "200 OK",
                     "text/html; charset=utf-8",
@@ -671,8 +680,13 @@ fn html_escape(s: &str) -> String {
 }
 
 /// Après une autorisation : reconnexion du serveur et message au propriétaire.
-pub async fn reconnect_and_tell(d: &Daemon, server: &str) {
-    let text = match d.hooks.mcp_supervisor() {
+pub async fn reconnect_and_tell(
+    s: &Services,
+    mcp: Option<Arc<McpSupervisor>>,
+    messenger: Option<Arc<dyn Messenger>>,
+    server: &str,
+) {
+    let text = match mcp {
         Some(sup) => match sup.restart(server).await {
             Ok(st) => format!(
                 "🔐 `{server}` autorisé : {} outil(s) disponible(s).",
@@ -682,8 +696,8 @@ pub async fn reconnect_and_tell(d: &Daemon, server: &str) {
         },
         None => format!("🔐 `{server}` autorisé."),
     };
-    if let Some(m) = d.hooks.messenger() {
-        let origin = crate::helpers::owner_origin_of(&d.services);
+    if let Some(m) = messenger {
+        let origin = crate::helpers::owner_origin_of(s);
         let _ = m.send_text(&origin, &text).await;
     }
 }

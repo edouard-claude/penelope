@@ -140,7 +140,7 @@ impl Rpc {
             }
             method::SCHEDULE_RUN_NOW => {
                 let id = required_str(p, "id")?;
-                crate::scheduler::run_now(&self.daemon, &id).await
+                crate::scheduler::run_now(&self.daemon, &self.daemon.hooks.scheduler(), &id).await
             }
             method::SCHEDULE_PAUSE => {
                 s.schedules

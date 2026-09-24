@@ -76,7 +76,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
             }
         }
     }
-    let mcp = ctx.d.hooks.mcp();
+    let mcp = ctx.d.workflows.ports.mcp.get();
     let mut tools = crate::executor::tool_defs(true, mcp.is_some());
     if let Some(m) = &mcp {
         tools.extend(m.eager_tools().await);
@@ -125,7 +125,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
             TurnOutcome::BudgetExceeded { scope, .. } => {
                 // La carte « continuer ? » part au propriétaire : relever le plafond reprend
                 // le run (issue #32).
-                if let Some(m) = ctx.d.hooks.messenger()
+                if let Some(m) = ctx.d.workflows.ports.messenger.get()
                     && let Some(a) = s.approvals.pending(50).await?.into_iter().find(|a| {
                         a.kind == penelope_hitl::ApprovalKind::BudgetExceeded
                             && a.run_id.as_deref() == Some(run.id.as_str())
@@ -189,7 +189,7 @@ pub(super) async fn send_approval_once(ctx: &StepCtx<'_>, approval_id: &str) {
     if s.kv_get(&key).await.ok().flatten().is_some() {
         return;
     }
-    if let Some(m) = ctx.d.hooks.messenger() {
+    if let Some(m) = ctx.d.workflows.ports.messenger.get() {
         let origin = origin_of(ctx.d, &ctx.run.id).await;
         if m.send_approval(&origin, approval_id).await.is_ok() {
             let _ = s.kv_set(&key, "1").await;
@@ -281,7 +281,7 @@ pub async fn run_sub_agent(
             turn_model: None,
         },
     );
-    exec.mcp = d.hooks.mcp();
+    exec.mcp = d.workflows.ports.mcp.get();
     let spec = TurnSpec {
         session_id: session_id.to_string(),
         run_id: run_id.map(String::from),

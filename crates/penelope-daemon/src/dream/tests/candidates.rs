@@ -40,7 +40,7 @@ async fn decisions_from_working_notes_become_candidates() {
     }
     // Le modèle n'a rien à faire ici : on regarde la file de candidats.
     p.reply(r#"{"tri": [], "operations": []}"#);
-    let _ = run(&d, false).await.unwrap();
+    let _ = run(&d, &d.hooks.messenger, false).await.unwrap();
 
     let pending = s.candidates.pending(None).await.unwrap();
     assert_eq!(
@@ -79,7 +79,7 @@ async fn a_decision_noted_in_a_scheduled_session_is_not_recorded() {
     .await
     .unwrap();
     p.reply(r#"{"tri": [], "operations": []}"#);
-    let _ = run(&d, false).await.unwrap();
+    let _ = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert!(s.candidates.pending(None).await.unwrap().is_empty());
     let harvestable = crate::session_notes::harvest(s).await.unwrap();
     assert_eq!(
@@ -110,7 +110,7 @@ async fn a_rejected_operation_leaves_its_candidate_pending() {
               "operations": [{"op": "replace_entry", "candidat": 1, "uid": "01INCONNU",
                 "text": "Toujours répondre en français"}]}"#,
     );
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert_eq!(o.report.promoted, 0, "{:?}", o.report);
     let pending = s.candidates.pending(None).await.unwrap();
     assert_eq!(
@@ -153,7 +153,7 @@ async fn a_durable_candidate_without_any_operation_stays_pending() {
                 "introuvable": true, "endosse": true, "justification": "règle dite"}],
               "operations": []}"#,
     );
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert_eq!(o.report.promoted, 0, "{:?}", o.report);
     let pending = s.candidates.pending(None).await.unwrap();
     assert_eq!(pending.len(), 1, "{pending:?}");
@@ -207,7 +207,7 @@ async fn usage_signals_are_evidence_for_the_grid_never_a_gate() {
                     "operations": [{"op": "replace_entry", "candidat": 1, "uid": "01MARTIN",
                                     "text": "Le client Martin est basé à Lyon, quartier de la Part-Dieu"}]}"#,
         );
-        let o = run(&d, false).await.unwrap();
+        let o = run(&d, &d.hooks.messenger, false).await.unwrap();
         let prompt = p
             .requests()
             .iter()
@@ -257,7 +257,7 @@ async fn the_quality_gate_shapes_the_promoted_memory() {
                 {"op": "add_entry", "candidat": 1, "file": "memoire.md", "text": "L'adresse IP de la base de données est 127.0.0.1 et non 10...", "importance": 6}
             ]}"#,
     );
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert_eq!(o.report.promoted, 4, "{:?}", o.report);
     assert_eq!(o.report.rejected.len(), 3, "{:?}", o.report.rejected);
     let vault = crate::helpers::vault_dir(s);
@@ -326,7 +326,7 @@ async fn untrusted_candidates_never_reach_the_model_and_vague_ones_are_ignored()
                 "introuvable": true, "endosse": false, "justification": "quel client ?"}],
               "operations": []}"#,
     );
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     let requests = p.requests();
     assert_eq!(requests.len(), 1);
     let prompt: String = requests[0].messages.iter().map(|m| m.text()).collect();

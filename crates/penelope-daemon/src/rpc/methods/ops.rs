@@ -110,7 +110,11 @@ impl Rpc {
                 ))
             }
             method::UPGRADE => crate::upgrade::rpc(&self.daemon, p).await,
-            method::IMPORT_HERMES => crate::hermes::rpc(&self.daemon, p).await,
+            method::IMPORT_HERMES => {
+                let d = &self.daemon;
+                let (mcp, m) = (d.hooks.mcp_supervisor(), d.hooks.messenger());
+                crate::hermes::rpc(&d.services, mcp, m, p).await
+            }
             method::STORE_REBUILD => crate::session_ops::rebuild(&self.daemon.services).await,
             method::RESTORE => anyhow::bail!(
                 "une restauration remplace la base : elle se fait daemon arrêté, `penelope stop` \

@@ -114,7 +114,8 @@ impl Rpc {
             method::MEM_CANDIDATES => mem_candidates(s).await,
             method::MEM_DREAM => {
                 let dry_run = p.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
-                let outcome = crate::dream::run(&self.daemon, dry_run).await?;
+                let outcome =
+                    crate::dream::run(&self.daemon, &self.daemon.hooks.messenger, dry_run).await?;
                 let mut v = serde_json::to_value(&outcome)?;
                 v["text"] = json!(outcome.report.render());
                 Ok(v)

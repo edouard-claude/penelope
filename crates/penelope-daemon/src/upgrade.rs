@@ -18,7 +18,8 @@
 //! les sources se met à jour par `make deploy`.
 
 pub use crate::helpers::{is_source_build, running_binary};
-use crate::runtime::Daemon;
+use crate::ports::{Handle, Slot};
+use crate::runtime::{Daemon, Services};
 use penelope_kernel::event::EventDraft;
 use penelope_platform::handoff::HandOff;
 use serde::{Deserialize, Serialize};
@@ -734,20 +735,24 @@ pub fn confirm(state_dir: &Path, running_version: &str) -> Option<Confirmation> 
 
 /// Après la reprise : quelques secondes de fonctionnement, base et journal accessibles,
 /// puis confirmation et annonce.
-pub async fn confirm_when_healthy(d: Arc<Daemon>) {
-    let state_dir = d.services.platform.dirs.state();
+pub async fn confirm_when_healthy(
+    s: Arc<Services>,
+    handle: Handle,
+    messenger: Slot<dyn crate::executor::Messenger>,
+) {
+    let state_dir = s.platform.dirs.state();
     if pending(&state_dir).is_none() && !rolled_back_note(&state_dir).exists() {
         CONFIRMED.store(true, Ordering::SeqCst);
         return;
     }
     let deadline = tokio::time::Instant::now() + SETTLE;
     while tokio::time::Instant::now() < deadline {
-        if d.handle.is_shutting_down() {
+        if handle.is_shutting_down() {
             return;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    if let Err(e) = d.services.kv_get("upgrade.health").await {
+    if let Err(e) = s.kv_get("upgrade.health").await {
         tracing::error!(error = %e, "mise à jour : base inaccessible, pas de confirmation");
         return;
     }
@@ -767,22 +772,17 @@ pub async fn confirm_when_healthy(d: Arc<Daemon>) {
             json!({"from": from, "error": error}),
         ),
     };
-    if let Err(e) = d
-        .services
-        .events
-        .append(EventDraft::new(kind, payload))
-        .await
-    {
+    if let Err(e) = s.events.append(EventDraft::new(kind, payload)).await {
         tracing::error!(error = %e, "mise à jour : journal inaccessible");
     }
     tracing::info!("{}", c.text());
     // Telegram peut démarrer après la confirmation : on l'attend un peu pour l'annonce.
     for _ in 0..240 {
-        if d.handle.is_shutting_down() {
+        if handle.is_shutting_down() {
             return;
         }
-        if let Some(m) = d.hooks.messenger() {
-            let origin = crate::helpers::owner_origin_of(&d.services);
+        if let Some(m) = messenger.get() {
+            let origin = crate::helpers::owner_origin_of(&s);
             let _ = m.send_text(&origin, &c.text()).await;
             return;
         }

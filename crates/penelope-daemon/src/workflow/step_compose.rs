@@ -261,7 +261,7 @@ async fn mcp_task_wait(
     if !due {
         return Ok(StepOutcome::Waiting("tâche MCP en cours".into()));
     }
-    let Some(sup) = ctx.d.hooks.mcp_supervisor() else {
+    let Some(sup) = ctx.d.workflows.ports.mcp_supervisor.get() else {
         return Ok(StepOutcome::Waiting("superviseur MCP non démarré".into()));
     };
     let attempts = state["mcp_polls"].as_u64().unwrap_or(0) as u32;

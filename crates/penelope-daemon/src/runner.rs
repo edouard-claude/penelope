@@ -239,7 +239,8 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     // (issue #39).
     let scheduled = turn.kind == penelope_kernel::turn::TurnKind::Trigger;
     if scheduled && let Some(schedule) = turn.payload["schedule"].as_str() {
-        crate::scheduler::trigger_outcome_of(daemon, schedule, &outcome, &turn).await;
+        let ports = daemon.hooks.scheduler();
+        crate::scheduler::trigger_outcome_of(daemon, &ports, schedule, &outcome, &turn).await;
     }
 
     // Tour planifié : la réponse finale est le livrable, livrée une fois ; si l'agent a
@@ -351,7 +352,7 @@ mod tests {
         let provider = Arc::new(MockProvider::new());
         daemon.set_provider_override(provider.clone());
         let channel = Arc::new(BurstChannel(std::sync::Mutex::new(Vec::new())));
-        *daemon.hooks.telegram.write().unwrap() = Some(channel.clone());
+        *daemon.hooks.delivery.write().unwrap() = Some(channel.clone());
         let origin = Origin::Telegram {
             chat_id: 10,
             topic_id: None,
@@ -479,7 +480,7 @@ mod tests {
         provider.reply("réponse unique");
         daemon.set_provider_override(provider);
         let channel = Arc::new(DeliveryChannel(std::sync::Mutex::new(None)));
-        *daemon.hooks.telegram.write().unwrap() = Some(channel.clone());
+        *daemon.hooks.delivery.write().unwrap() = Some(channel.clone());
         let first = Origin::Telegram {
             chat_id: 10,
             topic_id: None,

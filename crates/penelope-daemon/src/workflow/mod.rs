@@ -15,6 +15,7 @@ use crate::bus::Origin;
 use crate::conversation::SessionConversation;
 use crate::executor::{NativeToolExecutor, ToolEnv};
 use crate::helpers::step_done_key;
+use crate::ports::Slot;
 use crate::runtime::{Daemon, Services};
 use penelope_hitl::{ApprovalKind, ApprovalState};
 use penelope_kernel::effects::{EffectSpec, Planned};
@@ -48,9 +49,28 @@ const SHELL_TIMEOUT: Duration = Duration::from_secs(600);
 pub struct State {
     driving: Mutex<HashMap<String, CancelToken>>,
     wake: tokio::sync::Notify,
+    /// Branchements reçus de la composition, lus au moment de s'en servir.
+    pub ports: Ports,
+}
+
+/// Ce que le moteur de workflows reçoit au lieu des branchements du daemon : canal du
+/// propriétaire, passerelle et superviseur MCP, orchestrateur des sous-agents.
+#[derive(Clone, Default)]
+pub struct Ports {
+    pub messenger: Slot<dyn crate::executor::Messenger>,
+    pub mcp: Slot<dyn crate::executor::McpGateway>,
+    pub orchestrator: Slot<dyn crate::executor::Orchestrator>,
+    pub mcp_supervisor: Slot<crate::mcp::McpSupervisor>,
 }
 
 impl State {
+    pub fn with_ports(ports: Ports) -> State {
+        State {
+            ports,
+            ..State::default()
+        }
+    }
+
     /// Réveille le pilote : un run vient de démarrer ou une attente peut finir.
     pub fn wake(&self) {
         self.wake.notify_waiters();

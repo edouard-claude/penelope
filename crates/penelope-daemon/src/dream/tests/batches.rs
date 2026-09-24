@@ -71,7 +71,7 @@ async fn many_candidates_are_consolidated_in_bounded_batches() {
         ));
     }
 
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert_eq!(p.call_count(), 3, "trois lots de dix : {:?}", o.report);
     assert_eq!(o.report.deferred, 0, "{:?}", o.report);
     let sizes: Vec<u32> = p.requests().iter().filter_map(|r| r.max_tokens).collect();
@@ -112,7 +112,7 @@ async fn a_truncated_consolidation_retries_with_a_smaller_batch() {
                   "operations": []}"#,
         );
     }
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert!(
         o.report
             .warnings
@@ -135,7 +135,7 @@ async fn a_verbose_candidate_does_not_leave_the_pass_one_by_one() {
     let (_dir, d, p) = daemon().await;
     projects(&d, 160, |k| k >= 115 && k % 10 == 5).await;
     p.set_responder(Some(verbose_model(250, 2_400, usize::MAX)));
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert!(o.report.calls < 20, "{:?}", o.report);
     assert_eq!(o.report.calls as usize, p.call_count());
     let batches = dream_batches(&d.services.events.range(0, 10_000).await.unwrap());
@@ -183,7 +183,7 @@ async fn a_starved_batch_raises_the_reasoning_budget_instead_of_shrinking() {
         }
     })));
 
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     let w = o.report.warnings.join(" | ");
     assert!(
         w.contains("raisonnement plein"),
@@ -258,7 +258,7 @@ async fn batches_are_written_one_by_one_and_survive_a_failure() {
     })
     .unwrap();
 
-    let err = run(&d, false).await.unwrap_err();
+    let err = run(&d, &d.hooks.messenger, false).await.unwrap_err();
     assert!(format!("{err}").contains("refuse"), "{err}");
 
     // Ce que les sept premiers lots ont écrit est gardé, et leurs candidats marqués.
@@ -287,7 +287,7 @@ async fn batches_are_written_one_by_one_and_survive_a_failure() {
             cut: false,
         }
     })));
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert_eq!(
         o.report.candidates_seen as usize,
         n - 7,
@@ -332,7 +332,7 @@ async fn switching_reasoning_off_sends_the_kill_switch() {
             cut: false,
         }
     })));
-    run(&d, false).await.unwrap();
+    run(&d, &d.hooks.messenger, false).await.unwrap();
     let calls = seen.lock().unwrap().clone();
     assert_eq!(calls.len(), 1);
     assert_eq!(
@@ -372,7 +372,7 @@ async fn a_network_stall_replays_the_batch_instead_of_giving_up() {
         }
     })));
 
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert_eq!(tries.load(std::sync::atomic::Ordering::SeqCst), 4);
     let w = o.report.warnings.join(" | ");
     assert!(
@@ -424,7 +424,7 @@ async fn a_lone_cut_is_retried_with_twice_the_output() {
     let (_dir, d, p) = daemon().await;
     projects(&d, 1, |_| true).await;
     p.set_responder(Some(verbose_model(250, 2_400, usize::MAX)));
-    let o = run(&d, true).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, true).await.unwrap();
     assert_eq!(
         (o.report.calls, o.report.wasted_calls),
         (2, 1),
@@ -454,7 +454,7 @@ async fn a_lone_cut_is_retried_with_twice_the_output() {
     let (_dir, d, p) = daemon().await;
     projects(&d, 1, |_| true).await;
     p.set_responder(Some(verbose_model(250, 9_000, usize::MAX)));
-    let o = run(&d, true).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, true).await.unwrap();
     assert_eq!(
         (o.report.calls, o.report.wasted_calls),
         (2, 2),
@@ -498,7 +498,7 @@ async fn a_pass_of_lone_lots_stops_and_says_so() {
     };
     let before = deferrals().await;
     p.set_responder(Some(verbose_model(250, 2_400, 1)));
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert!(o.report.calls <= 25, "{:?}", o.report);
     let stop = o
         .report
@@ -697,7 +697,7 @@ async fn a_pass_does_not_restart_from_the_full_batch_after_a_cut() {
             tri.join(",")
         ))
     })));
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert!(o.report.calls <= 10, "{:?}", o.report);
     assert!(o.report.wasted_calls <= 3, "{:?}", o.report);
     assert_eq!(o.report.calls as usize, p.call_count());
@@ -740,7 +740,7 @@ async fn a_passing_error_is_retried_on_its_batch() {
     .await;
     p.push(passing_error());
     p.reply(&keep("Toujours répondre en français"));
-    let o = run(&d, false).await.unwrap();
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert_eq!(o.report.promoted, 1, "{:?}", o.report);
     assert_eq!(p.call_count(), 2);
     assert!(
@@ -767,7 +767,7 @@ async fn a_passing_error_is_retried_on_its_batch() {
         LlmErrorKind::BadRequest,
         "requête refusée".into(),
     ));
-    assert!(run(&d, false).await.is_err());
+    assert!(run(&d, &d.hooks.messenger, false).await.is_err());
     assert_eq!(p.call_count(), 3, "pas de reprise d'un refus");
 }
 
@@ -785,7 +785,7 @@ async fn replaying_a_written_batch_adds_nothing_twice() {
 
     // Première passe : le candidat est promu, le texte entre dans le vault.
     p.reply(&keep(texte));
-    let first = run(&d, false).await.unwrap();
+    let first = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert_eq!(first.report.promoted, 1, "{:?}", first.report);
     let vault = crate::helpers::vault_dir(s);
     let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
@@ -809,7 +809,7 @@ async fn replaying_a_written_batch_adds_nothing_twice() {
     )
     .await;
     p.reply(&keep(texte));
-    let second = run(&d, false).await.unwrap();
+    let second = run(&d, &d.hooks.messenger, false).await.unwrap();
 
     let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
     assert_eq!(

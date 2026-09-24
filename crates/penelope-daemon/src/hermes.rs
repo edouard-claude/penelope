@@ -14,7 +14,9 @@
 //! continue. Sans `apply`, rien n'est écrit et le rapport décrit ce qui serait fait. Rien
 //! d'existant n'est écrasé : un second import ne duplique rien.
 
-use crate::runtime::{Daemon, Services};
+use crate::executor::Messenger;
+use crate::mcp::McpSupervisor;
+use crate::runtime::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_mcp::config::ServerConfig;
 use penelope_memory::{Level, Provenance};
@@ -96,14 +98,17 @@ pub fn default_root() -> Option<PathBuf> {
 }
 
 /// Importe tout ce qui peut l'être.
-pub async fn import(d: &Arc<Daemon>, opts: &Options) -> Result<Report, String> {
+pub async fn import(
+    s: &Services,
+    mcp: Option<Arc<McpSupervisor>>,
+    opts: &Options,
+) -> Result<Report, String> {
     if !opts.root.is_dir() {
         return Err(format!(
             "instance Hermes introuvable : {} (`--path` pour une autre racine)",
             opts.root.display()
         ));
     }
-    let s = &d.services;
     let mut r = Report {
         root: opts.root.clone(),
         applied: opts.apply,
@@ -112,11 +117,11 @@ pub async fn import(d: &Arc<Daemon>, opts: &Options) -> Result<Report, String> {
     import_skills(s, opts, &mut r).await;
     let files = import_files(s, opts, &mut r);
     let memories = import_memories(s, opts, &mut r).await;
-    import_mcp(d, opts, &mut r).await;
+    import_mcp(s, mcp, opts, &mut r).await;
 
     if opts.apply {
         if (files || memories)
-            && let Err(e) = crate::dream::vault_sync(&d.services, "import: hermes").await
+            && let Err(e) = crate::dream::vault_sync(s, "import: hermes").await
         {
             r.warn(format!("commit du vault : {e}"));
         }
@@ -930,8 +935,7 @@ pub fn convert_server(
     })
 }
 
-async fn import_mcp(d: &Arc<Daemon>, opts: &Options, r: &mut Report) {
-    let s = &d.services;
+async fn import_mcp(s: &Services, sup: Option<Arc<McpSupervisor>>, opts: &Options, r: &mut Report) {
     let Some(raw) = ["config.yaml", "config.yml"]
         .iter()
         .find_map(|f| std::fs::read_to_string(opts.root.join(f)).ok())
@@ -950,7 +954,6 @@ async fn import_mcp(d: &Arc<Daemon>, opts: &Options, r: &mut Report) {
     let dotenv = std::fs::read_to_string(opts.root.join(".env"))
         .map(|raw| parse_dotenv(&raw))
         .unwrap_or_default();
-    let sup = d.hooks.mcp_supervisor();
     let dir = sup
         .as_ref()
         .map(|s| s.dir().to_path_buf())
@@ -1166,9 +1169,14 @@ pub fn render(r: &Report) -> String {
 
 /// Méthode RPC `import.hermes` : `path`, `apply` (faux par défaut), `test` (vrai par
 /// défaut). Le rapport d'un import appliqué part aussi sur Telegram.
-pub async fn rpc(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
+pub async fn rpc(
+    s: &Services,
+    mcp: Option<Arc<McpSupervisor>>,
+    messenger: Option<Arc<dyn Messenger>>,
+    p: &Value,
+) -> anyhow::Result<Value> {
     let root = match p["path"].as_str().filter(|x| !x.trim().is_empty()) {
-        Some(path) => d.services.platform.dirs.expand(path),
+        Some(path) => s.platform.dirs.expand(path),
         None => default_root().ok_or_else(|| anyhow::anyhow!("répertoire personnel inconnu"))?,
     };
     let opts = Options {
@@ -1176,12 +1184,12 @@ pub async fn rpc(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
         apply: p["apply"].as_bool().unwrap_or(false),
         test: p["test"].as_bool().unwrap_or(true),
     };
-    let report = import(d, &opts).await.map_err(anyhow::Error::msg)?;
+    let report = import(s, mcp, &opts).await.map_err(anyhow::Error::msg)?;
     let text = render(&report);
     if opts.apply
-        && let Some(m) = d.hooks.messenger()
+        && let Some(m) = messenger
     {
-        let origin = crate::helpers::owner_origin_of(&d.services);
+        let origin = crate::helpers::owner_origin_of(s);
         if !matches!(origin, crate::bus::Origin::Internal { .. }) {
             let _ = m.send_text(&origin, &text).await;
         }

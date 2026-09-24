@@ -1,6 +1,7 @@
 use super::yaml::Node;
 use super::*;
 use crate::mcp::testing::{FakeConnector, server, tool};
+use crate::runtime::Daemon;
 use penelope_kernel::clock::TestClock;
 
 const CONFIG: &str = r#"
@@ -293,12 +294,12 @@ async fn an_instance_is_simulated_then_imported_once() {
         }),
     );
     let sup = crate::mcp::McpSupervisor::new(d.services.clone(), fake.clone());
-    d.hooks.set_mcp(sup.clone());
     let s = &d.services;
     let vault = crate::helpers::vault_dir(s);
 
     let plan = import(
-        &d,
+        &d.services,
+        Some(sup.clone()),
         &Options {
             root: root.clone(),
             apply: false,
@@ -326,7 +327,7 @@ async fn an_instance_is_simulated_then_imported_once() {
         apply: true,
         test: true,
     };
-    let done = import(&d, &opts).await.unwrap();
+    let done = import(&d.services, Some(sup.clone()), &opts).await.unwrap();
     let text = render(&done);
     assert_eq!(done.count("skill", "imported"), 1, "{text}");
     assert!(s.platform.dirs.skills().join("arxiv/notes.txt").is_file());
@@ -385,7 +386,7 @@ async fn an_instance_is_simulated_then_imported_once() {
     assert!(text.contains("🔐 1 secret(s) rangé(s)"), "{text}");
 
     // Second passage : tout existe déjà, rien n'est dupliqué.
-    let again = import(&d, &opts).await.unwrap();
+    let again = import(&d.services, Some(sup.clone()), &opts).await.unwrap();
     assert_eq!(again.count("skill", "exists"), 1);
     assert_eq!(again.count("fichier", "identical"), 1);
     assert_eq!(again.count("mcp", "exists"), 4);

@@ -209,7 +209,7 @@ impl World {
 /// avec la passerelle et l'orchestrateur), la base se libère.
 fn kill(d: Arc<Daemon>, g: Arc<TelegramGateway>) {
     *d.hooks.messenger.write().unwrap() = None;
-    *d.hooks.telegram.write().unwrap() = None;
+    *d.hooks.delivery.write().unwrap() = None;
     *d.hooks.orchestrator.write().unwrap() = None;
     *d.hooks.mcp.write().unwrap() = None;
     *d.hooks.mcp_supervisor.write().unwrap() = None;

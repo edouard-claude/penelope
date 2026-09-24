@@ -24,7 +24,7 @@ async fn run_fixture(d: &Arc<Daemon>, f: &Fixture, simulated: Option<&MockProvid
     if let Some(p) = simulated {
         p.reply(&mem_bench::simulated_reply(&d.services, f).await);
     }
-    penelope_daemon::dream::run(d, false)
+    penelope_daemon::dream::run(d, &d.hooks.messenger, false)
         .await
         .unwrap_or_else(|e| panic!("rêve du jeu {} : {e}", f.id));
     mem_bench::score(d, f, &mem_bench::initial_entries(f)).await

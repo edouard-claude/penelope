@@ -17,8 +17,12 @@
 //! Un schedule `once` (rappel daté) passe en `done` après son tir. Un tir manqué pendant
 //! un arrêt part une fois au redémarrage, jamais en rafale.
 
+use crate::bus::ChannelDelivery;
 use crate::bus::Origin;
+use crate::executor::Messenger;
 use crate::helpers::owner_origin_of;
+use crate::mcp::McpSupervisor;
+use crate::ports::Slot;
 use crate::runtime::{Daemon, Services};
 use penelope_kernel::session::SessionKind;
 use penelope_kernel::turn::TurnKind;
@@ -31,6 +35,16 @@ use std::time::Duration;
 /// Période de l'ordonnanceur.
 pub const TICK: Duration = Duration::from_secs(10);
 
+/// Branchements que l'ordonnanceur reçoit de la composition : canal du propriétaire,
+/// livraison des alertes, MCP pour le digest. Lus au moment de s'en servir.
+#[derive(Clone, Default)]
+pub struct Ports {
+    pub messenger: Slot<dyn Messenger>,
+    pub delivery: Slot<dyn ChannelDelivery>,
+    pub mcp: Slot<McpSupervisor>,
+    pub orchestrator: Slot<dyn crate::executor::Orchestrator>,
+}
+
 /// Ce qu'un passage a fait, pour les journaux et les tests.
 #[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
 pub struct TickReport {
@@ -40,15 +54,15 @@ pub struct TickReport {
 }
 
 /// Boucle de l'ordonnanceur, jusqu'à l'arrêt du daemon.
-pub async fn scheduler_loop(d: Arc<Daemon>) {
+pub async fn scheduler_loop(d: Arc<Daemon>, ports: Ports) {
     // La boîte de dépôt du vault passe à côté : une ingestion (résumé compris) ne doit pas
     // retarder un rappel.
     let inbox_busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
     while !d.handle.is_shutting_down() {
         if !inbox_busy.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            let (d2, busy) = (d.clone(), inbox_busy.clone());
+            let (d2, busy, messenger) = (d.clone(), inbox_busy.clone(), ports.messenger.clone());
             tokio::spawn(async move {
-                match crate::ingest::scan_inbox(&d2).await {
+                match crate::ingest::scan_inbox(&d2, &messenger).await {
                     Ok(0) => {}
                     Ok(n) => tracing::info!(fichiers = n, "boîte de dépôt du vault traitée"),
                     Err(e) => tracing::warn!(error = %e, "boîte de dépôt du vault"),
@@ -56,10 +70,10 @@ pub async fn scheduler_loop(d: Arc<Daemon>) {
                 busy.store(false, std::sync::atomic::Ordering::SeqCst);
             });
         }
-        if let Err(e) = crate::dream::system_crons(&d).await {
+        if let Err(e) = crate::dream::system_crons(&d, &ports.messenger, &ports.mcp).await {
             tracing::warn!(error = %e, "consolidation ou digest programmés");
         }
-        match tick(&d).await {
+        match tick(&d, &ports).await {
             Ok(r) if !r.fired.is_empty() || !r.errors.is_empty() => {
                 tracing::info!(?r, "ordonnanceur")
             }
@@ -75,7 +89,7 @@ pub async fn scheduler_loop(d: Arc<Daemon>) {
 }
 
 /// Un passage.
-pub async fn tick(d: &Arc<Daemon>) -> anyhow::Result<TickReport> {
+pub async fn tick(d: &Arc<Daemon>, ports: &Ports) -> anyhow::Result<TickReport> {
     let s = &d.services;
     let mut report = TickReport {
         intents_expired: s.intents.expire_due().await?,
@@ -84,10 +98,12 @@ pub async fn tick(d: &Arc<Daemon>) -> anyhow::Result<TickReport> {
 
     for sched in s.schedules.due().await? {
         let result = match sched.kind {
-            TriggerKind::McpPoll => poll(d, &sched).await,
-            _ => fire(d, &sched, &[], &BTreeMap::new()).await.map(|_| true),
+            TriggerKind::McpPoll => poll(d, ports, &sched).await,
+            _ => fire(d, ports, &sched, &[], &BTreeMap::new())
+                .await
+                .map(|_| true),
         };
-        finish(d, &sched, result, &mut report).await?;
+        finish(d, ports, &sched, result, &mut report).await?;
     }
 
     // Fenêtre d'événements de ce passage : bornée au départ, pour qu'un événement écrit
@@ -104,22 +120,22 @@ pub async fn tick(d: &Arc<Daemon>) -> anyhow::Result<TickReport> {
             continue;
         }
         let result = match sched.kind {
-            TriggerKind::WatchFile => watch_file(d, &sched).await,
-            TriggerKind::Event => event(d, &sched, &events).await,
+            TriggerKind::WatchFile => watch_file(d, ports, &sched).await,
+            TriggerKind::Event => event(d, ports, &sched, &events).await,
             _ => continue,
         };
         match result {
             Ok(false) => {}
-            other => finish(d, &sched, other, &mut report).await?,
+            other => finish(d, ports, &sched, other, &mut report).await?,
         }
     }
     s.kv_set("scheduler.event_cursor", &to.to_string()).await?;
-    cancelled_triggers(d).await?;
+    cancelled_triggers(d, ports).await?;
     Ok(report)
 }
 
 /// Exécution immédiate, hors calendrier (`schedule.run_now`).
-pub async fn run_now(d: &Arc<Daemon>, id: &str) -> anyhow::Result<Value> {
+pub async fn run_now(d: &Arc<Daemon>, ports: &Ports, id: &str) -> anyhow::Result<Value> {
     let sched = d
         .services
         .schedules
@@ -135,11 +151,11 @@ pub async fn run_now(d: &Arc<Daemon>, id: &str) -> anyhow::Result<Value> {
     .into_iter()
     .collect();
     let result = match sched.kind {
-        TriggerKind::McpPoll => poll(d, &sched).await,
-        _ => fire(d, &sched, &[], &manual).await.map(|_| true),
+        TriggerKind::McpPoll => poll(d, ports, &sched).await,
+        _ => fire(d, ports, &sched, &[], &manual).await.map(|_| true),
     };
     let mut report = TickReport::default();
-    finish(d, &sched, result, &mut report).await?;
+    finish(d, ports, &sched, result, &mut report).await?;
     Ok(serde_json::to_value(report)?)
 }
 
@@ -149,6 +165,7 @@ const MANUAL: &str = "declenchement_manuel";
 /// Enregistre le tir (ou l'erreur) et programme la suite.
 async fn finish(
     d: &Arc<Daemon>,
+    ports: &Ports,
     sched: &Schedule,
     result: anyhow::Result<bool>,
     report: &mut TickReport,
@@ -169,7 +186,7 @@ async fn finish(
         (Some(e), _) => {
             s.schedules.advance(&sched.id, Some(e)).await?;
             if prompt {
-                alert(d, sched, e).await;
+                alert(d, ports, sched, e).await;
             }
         }
     }
@@ -196,7 +213,7 @@ async fn finish(
 /// `mcp_poll` : appelle un outil MCP en lecture, extrait les éléments, déclenche la cible
 /// pour les nouveaux (ou modifiés). Le premier passage amorce sans déclencher, sauf
 /// `backfill`.
-async fn poll(d: &Arc<Daemon>, sched: &Schedule) -> anyhow::Result<bool> {
+async fn poll(d: &Arc<Daemon>, ports: &Ports, sched: &Schedule) -> anyhow::Result<bool> {
     let s = &d.services;
     let spec = &sched.spec;
     let server = spec["server"].as_str().unwrap_or_default();
@@ -213,9 +230,9 @@ async fn poll(d: &Arc<Daemon>, sched: &Schedule) -> anyhow::Result<bool> {
             registered.risk.as_str()
         );
     }
-    let sup = d
-        .hooks
-        .mcp_supervisor()
+    let sup = ports
+        .mcp
+        .get()
         .ok_or_else(|| anyhow::anyhow!("superviseur MCP non démarré"))?;
     let result = sup
         // Un `mcp_poll` tourne sans le propriétaire : une élicitation n'aurait pas de
@@ -253,13 +270,13 @@ async fn poll(d: &Arc<Daemon>, sched: &Schedule) -> anyhow::Result<bool> {
         .await?;
     let groups = s.schedules.coalesce(sched, &fresh);
     for group in &groups {
-        fire(d, sched, group, &BTreeMap::new()).await?;
+        fire(d, ports, sched, group, &BTreeMap::new()).await?;
     }
     Ok(!groups.is_empty())
 }
 
 /// `watch_file` : empreinte (date de modification, taille) comparée au passage précédent.
-async fn watch_file(d: &Arc<Daemon>, sched: &Schedule) -> anyhow::Result<bool> {
+async fn watch_file(d: &Arc<Daemon>, ports: &Ports, sched: &Schedule) -> anyhow::Result<bool> {
     let raw = sched.spec["path"].as_str().unwrap_or_default();
     let path = d.services.platform.dirs.expand(raw);
     let fingerprint = std::fs::metadata(&path)
@@ -293,13 +310,14 @@ async fn watch_file(d: &Arc<Daemon>, sched: &Schedule) -> anyhow::Result<bool> {
             "modifié".into()
         },
     );
-    fire(d, sched, &[], &vars).await?;
+    fire(d, ports, sched, &[], &vars).await?;
     Ok(true)
 }
 
 /// `event` : événements du journal apparus depuis le passage précédent.
 async fn event(
     d: &Arc<Daemon>,
+    ports: &Ports,
     sched: &Schedule,
     events: &[penelope_kernel::event::Event],
 ) -> anyhow::Result<bool> {
@@ -312,7 +330,7 @@ async fn event(
         if let Some(sid) = &ev.session_id {
             vars.insert("session".to_string(), sid.clone());
         }
-        fire(d, sched, &[], &vars).await?;
+        fire(d, ports, sched, &[], &vars).await?;
         fired = true;
     }
     Ok(fired)
@@ -364,6 +382,7 @@ async fn last_event_id(d: &Arc<Daemon>) -> anyhow::Result<i64> {
 /// valeurs propres au déclencheur (chemin, événement).
 async fn fire(
     d: &Arc<Daemon>,
+    ports: &Ports,
     sched: &Schedule,
     items: &[PolledItem],
     vars: &BTreeMap<String, String>,
@@ -394,7 +413,7 @@ async fn fire(
                 Some(t) => substitute(&t.body, &vars),
                 None => substitute(template, &vars),
             };
-            let messenger = d.hooks.messenger().ok_or_else(|| {
+            let messenger = ports.messenger.get().ok_or_else(|| {
                 anyhow::anyhow!("aucun canal de message : Telegram non configuré")
             })?;
             messenger
@@ -462,9 +481,9 @@ async fn fire(
             d.bus.notify_enqueued();
         }
         Some(TargetKind::Workflow) => {
-            let orchestrator = d
-                .hooks
-                .orchestrator()
+            let orchestrator = ports
+                .orchestrator
+                .get()
                 .ok_or_else(|| anyhow::anyhow!("moteur de workflows non démarré"))?;
             let params = template_params(&sched.target["params"], &vars, items.first());
             orchestrator
@@ -547,7 +566,7 @@ pub async fn label(d: &Daemon, sched: &Schedule) -> String {
 }
 
 /// Alerte : une planification n'a pas pu s'exécuter (issue #39). Jamais de silence.
-pub async fn alert(d: &Arc<Daemon>, sched: &Schedule, reason: &str) {
+pub async fn alert(d: &Arc<Daemon>, ports: &Ports, sched: &Schedule, reason: &str) {
     let text = format!(
         "⚠️ La planification « {} » n'a pas pu s'exécuter : {reason}",
         label(d, sched).await
@@ -561,12 +580,12 @@ pub async fn alert(d: &Arc<Daemon>, sched: &Schedule, reason: &str) {
             json!({"schedule": sched.id, "reason": reason}),
         ))
         .await;
-    if let Some(tg) = d.hooks.telegram()
+    if let Some(tg) = ports.delivery.get()
         && tg.schedule_alert(&origin, &sched.id, &text).await.is_ok()
     {
         return;
     }
-    match d.hooks.messenger() {
+    match ports.messenger.get() {
         Some(m) => {
             if let Err(e) = m.send_text(&origin, &text).await {
                 tracing::warn!(schedule = %sched.id, error = %e, "alerte de planification non envoyée");
@@ -728,13 +747,14 @@ async fn missing_deliverable(
 /// l'état qu'elle a consommé est remis pour que la suivante reprenne les mêmes éléments.
 pub async fn trigger_outcome_of(
     d: &Arc<Daemon>,
+    ports: &Ports,
     schedule_id: &str,
     outcome: &crate::agent::TurnOutcome,
     turn: &penelope_kernel::turn::Turn,
 ) {
     use crate::agent::TurnOutcome;
     if let TurnOutcome::AwaitingApproval { .. } = outcome {
-        return trigger_outcome(d, schedule_id, outcome).await;
+        return trigger_outcome(d, ports, schedule_id, outcome).await;
     }
     let missing = match outcome {
         TurnOutcome::Answered { .. } => missing_deliverable(d, turn, outcome).await,
@@ -743,7 +763,7 @@ pub async fn trigger_outcome_of(
     let delivered = matches!(outcome, TurnOutcome::Answered { .. }) && missing.is_none();
     settle_state(d, &turn.session_id, !delivered).await;
     match missing {
-        None => trigger_outcome(d, schedule_id, outcome).await,
+        None => trigger_outcome(d, ports, schedule_id, outcome).await,
         Some(what) => {
             let s = &d.services;
             let reason = format!("exécutée sans livrable : {what}");
@@ -751,7 +771,7 @@ pub async fn trigger_outcome_of(
                 tracing::warn!(schedule = %schedule_id, error = %e, "issue de planification non enregistrée");
             }
             if let Ok(Some(sched)) = s.schedules.get(schedule_id).await {
-                alert(d, &sched, &reason).await;
+                alert(d, ports, &sched, &reason).await;
             }
         }
     }
@@ -826,6 +846,7 @@ pub async fn final_already_sent(d: &Daemon, session_id: &str, final_text: &str) 
 /// raison est gardée et le propriétaire prévenu (issue #39).
 pub async fn trigger_outcome(
     d: &Arc<Daemon>,
+    ports: &Ports,
     schedule_id: &str,
     outcome: &crate::agent::TurnOutcome,
 ) {
@@ -856,14 +877,14 @@ pub async fn trigger_outcome(
         tracing::warn!(schedule = %schedule_id, error = %e, "issue de planification non enregistrée");
     }
     if let (Some(reason), true) = (error, warn) {
-        alert(d, &sched, &reason).await;
+        alert(d, ports, &sched, &reason).await;
     }
 }
 
 /// Tours de prompts planifiés annulés dans la file sans jamais tourner (session fermée,
 /// `/stop`) : erreur gardée, propriétaire prévenu. Le premier passage prend l'instant sans
 /// rien signaler.
-async fn cancelled_triggers(d: &Arc<Daemon>) -> anyhow::Result<()> {
+async fn cancelled_triggers(d: &Arc<Daemon>, ports: &Ports) -> anyhow::Result<()> {
     const CURSOR: &str = "scheduler.cancelled_cursor";
     let s = &d.services;
     let now = s.clock.now_rfc3339();
@@ -899,7 +920,7 @@ async fn cancelled_triggers(d: &Arc<Daemon>) -> anyhow::Result<()> {
             error.unwrap_or_else(|| "sans raison".into())
         );
         s.schedules.record_outcome(id, Some(&reason)).await?;
-        alert(d, &sched, &reason).await;
+        alert(d, ports, &sched, &reason).await;
     }
     s.kv_set(CURSOR, &last).await?;
     Ok(())

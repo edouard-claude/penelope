@@ -123,7 +123,7 @@ impl Daemon {
         // Profils Seatbelt laissés par les versions qui les écrivaient dans le dossier
         // temporaire (issue #90) : ils passent désormais en argument.
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join("penelope-sandbox"));
-        crate::budget_alert::AlertWatcher::install(&self);
+        crate::budget_alert::AlertWatcher::install(&self.services, self.hooks.messenger.clone());
         // Skills livrées et de l'utilisateur, disponibles dès le premier tour.
         if let Err(e) = crate::runtime::reload_skills(&self.services).await {
             tracing::warn!(error = %e, "chargement des skills");
@@ -181,7 +181,8 @@ impl Daemon {
             supervised("catalog", |d| Box::pin(catalog_loop(d)) as BoxLoop),
             supervised("machine", |d| Box::pin(machine_loop(d)) as BoxLoop),
             supervised("scheduler", |d| {
-                Box::pin(crate::scheduler::scheduler_loop(d)) as BoxLoop
+                let ports = d.hooks.scheduler();
+                Box::pin(crate::scheduler::scheduler_loop(d, ports)) as BoxLoop
             }),
             supervised("workflows", |d| {
                 Box::pin(crate::workflow::driver_loop(d)) as BoxLoop
@@ -191,14 +192,20 @@ impl Daemon {
                 Box::pin(crate::tool_jobs::deliver_loop(d)) as BoxLoop
             }),
             supervised("codex.refresh", |d| {
-                Box::pin(crate::codex_auth::refresh_loop(d)) as BoxLoop
+                let (s, messenger) = (d.services.clone(), d.hooks.messenger.clone());
+                Box::pin(crate::codex_auth::refresh_loop(s, messenger)) as BoxLoop
             }),
             supervised("mcp.oauth_callback", |d| {
+                let (mcp, m) = (d.hooks.mcp_supervisor.clone(), d.hooks.messenger.clone());
                 Box::pin(async move {
-                    crate::mcp_auth::callback_server(d).await;
+                    crate::mcp_auth::callback_server(d, mcp, m).await;
                 }) as BoxLoop
             }),
-            tokio::spawn(crate::upgrade::confirm_when_healthy(self.clone())),
+            tokio::spawn(crate::upgrade::confirm_when_healthy(
+                self.services.clone(),
+                self.handle.clone(),
+                self.hooks.messenger.clone(),
+            )),
         ];
         if !self
             .services

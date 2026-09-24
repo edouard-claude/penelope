@@ -141,7 +141,7 @@ impl TelegramGateway {
         if let Ok(mut g) = hooks.messenger.write() {
             *g = Some(self.clone());
         }
-        if let Ok(mut g) = hooks.telegram.write() {
+        if let Ok(mut g) = hooks.delivery.write() {
             *g = Some(self.clone());
         }
         self.daemon.services.elicitations.attach(self.clone());
@@ -545,7 +545,11 @@ impl TelegramGateway {
             Incoming::OAuthCallback { chat_id, url, .. } => {
                 // Adresse de retour collée (§8.5, `paste_back`) : elle ne sert qu'une fois.
                 match crate::mcp_auth::complete(&self.daemon, &url).await {
-                    Ok(server) => crate::mcp_auth::reconnect_and_tell(&self.daemon, &server).await,
+                    Ok(server) => {
+                        let d = &self.daemon;
+                        let (mcp, m) = (d.hooks.mcp_supervisor(), d.hooks.messenger());
+                        crate::mcp_auth::reconnect_and_tell(&d.services, mcp, m, &server).await
+                    }
                     Err(e) => {
                         self.reply(
                             chat_id,

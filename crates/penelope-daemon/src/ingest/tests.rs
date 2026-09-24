@@ -37,10 +37,13 @@ async fn daemon() -> (
     let p = Arc::new(MockProvider::new());
     d.set_provider_override(p.clone());
     let r = Arc::new(Recorder::default());
-    if let Ok(mut g) = d.hooks.messenger.write() {
-        *g = Some(r.clone());
-    }
     (dir, d, p, r)
+}
+
+fn slot(r: &Arc<Recorder>) -> Slot<dyn Messenger> {
+    let slot = Slot::default();
+    slot.set(Some(r.clone() as Arc<dyn Messenger>));
+    slot
 }
 
 /// Recule la date de modification : la boîte ignore un fichier en cours de copie.
@@ -70,7 +73,7 @@ async fn the_vault_inbox_is_ingested_then_emptied() {
     age(&inbox.join("photo.jpg"));
     p.reply(r#"{"resume": "Compte rendu : migration vendredi.", "faits": []}"#);
 
-    assert_eq!(scan_inbox(&d).await.unwrap(), 2);
+    assert_eq!(scan_inbox(&d, &slot(&r)).await.unwrap(), 2);
     let vault = crate::helpers::vault_dir(&d.services);
     assert!(vault.join("sources/compte-rendu.md").exists());
     assert!(
@@ -99,7 +102,7 @@ async fn the_vault_inbox_is_ingested_then_emptied() {
     )
     .unwrap();
     age(&inbox.join("copie.md"));
-    assert_eq!(scan_inbox(&d).await.unwrap(), 1);
+    assert_eq!(scan_inbox(&d, &slot(&r)).await.unwrap(), 1);
     assert!(!vault.join("sources/copie.md").exists());
     assert!(
         r.0.lock()

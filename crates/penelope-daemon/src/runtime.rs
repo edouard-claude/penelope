@@ -442,7 +442,8 @@ pub struct Hooks {
     pub messenger: Slot<dyn crate::executor::Messenger>,
     pub mcp: Slot<dyn crate::executor::McpGateway>,
     pub orchestrator: Slot<dyn crate::executor::Orchestrator>,
-    pub telegram: Slot<dyn crate::bus::ChannelDelivery>,
+    /// Livraison durable des tours (la passerelle du canal).
+    pub delivery: Slot<dyn crate::bus::ChannelDelivery>,
     /// Superviseur MCP concret, pour l'administration (`mcp.*`).
     pub mcp_supervisor: Slot<crate::mcp::McpSupervisor>,
 }
@@ -467,10 +468,28 @@ impl Hooks {
     }
     /// Le canal de livraison branché, sous le nom de son port.
     pub fn delivery(&self) -> Option<Arc<dyn crate::bus::ChannelDelivery>> {
-        self.telegram.read().ok().and_then(|g| g.clone())
+        self.delivery.get()
     }
     pub fn mcp_supervisor(&self) -> Option<Arc<crate::mcp::McpSupervisor>> {
         self.mcp_supervisor.read().ok().and_then(|g| g.clone())
+    }
+    /// Branchements du moteur de workflows.
+    pub fn workflow(&self) -> crate::workflow::Ports {
+        crate::workflow::Ports {
+            messenger: self.messenger.clone(),
+            mcp: self.mcp.clone(),
+            orchestrator: self.orchestrator.clone(),
+            mcp_supervisor: self.mcp_supervisor.clone(),
+        }
+    }
+    /// Branchements de l'ordonnanceur.
+    pub fn scheduler(&self) -> crate::scheduler::Ports {
+        crate::scheduler::Ports {
+            messenger: self.messenger.clone(),
+            delivery: self.delivery.clone(),
+            mcp: self.mcp_supervisor.clone(),
+            orchestrator: self.orchestrator.clone(),
+        }
     }
     /// Branche un superviseur MCP : passerelle des outils et administration.
     pub fn set_mcp(&self, sup: Arc<crate::mcp::McpSupervisor>) {
@@ -492,16 +511,17 @@ impl Daemon {
 
     pub fn from_services(services: Arc<Services>) -> Daemon {
         let started_at_ms = services.clock.now_ms();
+        let hooks = Hooks::default();
         Daemon {
             handle: Handle::new(started_at_ms),
             bus: Arc::new(crate::bus::Bus::new()),
-            hooks: Hooks::default(),
-            compaction: crate::compaction::State::default(),
-            workflows: crate::workflow::State::default(),
+            compaction: crate::compaction::State::with_messenger(hooks.messenger.clone()),
+            workflows: crate::workflow::State::with_ports(hooks.workflow()),
             embeddings: Arc::default(),
             tasks: Arc::new(crate::tasks::Tasks::default()),
             providers: Arc::new(Providers::new(services.clone())),
             services,
+            hooks,
         }
     }
 

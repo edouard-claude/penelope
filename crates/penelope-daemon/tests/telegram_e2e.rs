@@ -75,7 +75,7 @@ async fn boot(
 /// Fin brutale d'une vie : les runners s'arrêtent, plus rien ne tient le daemon.
 async fn kill(life: Life) {
     *life.d.hooks.messenger.write().unwrap() = None;
-    *life.d.hooks.telegram.write().unwrap() = None;
+    *life.d.hooks.delivery.write().unwrap() = None;
     life.d.handle.shutdown();
     let _ = tokio::time::timeout(Duration::from_secs(5), life.runners).await;
     drop(life.g);

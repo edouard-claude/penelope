@@ -10,7 +10,8 @@
 //! fournisseur répond alors `RateLimited` **avant** l'appel, le routeur se replie, et le
 //! message distingue un quota atteint d'une panne (issue #139).
 
-use crate::runtime::{Daemon, Services};
+use crate::executor::Messenger;
+use crate::runtime::Services;
 use penelope_llm::Quota;
 use std::sync::Arc;
 
@@ -79,8 +80,10 @@ fn reset_clock(reset_at_s: i64) -> String {
 
 /// Alerte le propriétaire quand la fenêtre se remplit : **une seule fois par fenêtre**,
 /// comme les alertes de budget (`budget.alert.*`, issue #79).
-pub async fn check_alert(d: &Daemon) -> anyhow::Result<Option<String>> {
-    let s = &d.services;
+pub async fn check_alert(
+    s: &Services,
+    messenger: Option<Arc<dyn Messenger>>,
+) -> anyhow::Result<Option<String>> {
     let cfg = s.config.config();
     let c = &cfg.providers.codex;
     if !c.enabled {
@@ -108,7 +111,7 @@ pub async fn check_alert(d: &Daemon) -> anyhow::Result<Option<String>> {
     }
     s.kv_set(&key, &s.clock.now_rfc3339()).await?;
     let text = alert_text(&q, ratio, c.quota_stop_ratio, s.clock.now_ms());
-    match d.hooks.messenger() {
+    match messenger {
         Some(m) => {
             let origin = crate::bus::Origin::Internal {
                 source: "codex".into(),

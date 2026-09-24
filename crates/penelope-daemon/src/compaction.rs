@@ -172,12 +172,21 @@ impl Trigger {
 /// État partagé du daemon : compactions en cours, sessions à compacter après leur tour.
 #[derive(Default)]
 pub struct State {
+    /// Canal du propriétaire, reçu de la composition : une compaction sans modèle se dit.
+    pub messenger: crate::ports::Slot<dyn crate::executor::Messenger>,
     running: Mutex<HashSet<String>>,
     /// Session → tour qui a demandé la compaction (le coût lui est attribué).
     wanted: Mutex<HashMap<String, Option<String>>>,
 }
 
 impl State {
+    pub fn with_messenger(messenger: crate::ports::Slot<dyn crate::executor::Messenger>) -> State {
+        State {
+            messenger,
+            ..State::default()
+        }
+    }
+
     /// Demande une compaction de fond à la fin du tour en cours.
     pub fn request(&self, session_id: &str, turn_id: Option<String>) {
         if let Ok(mut g) = self.wanted.lock() {
@@ -936,7 +945,7 @@ async fn tell_mechanical(
         .and_then(|x| x.title)
         .unwrap_or_else(|| session_id.to_string());
     let per_turn = cost_per_turn(s, session_id).await;
-    if let Some(m) = d.hooks.messenger() {
+    if let Some(m) = d.compaction.messenger.get() {
         let _ = m
             .send_text(
                 &crate::helpers::owner_origin_of(&d.services),

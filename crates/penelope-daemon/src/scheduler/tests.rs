@@ -77,12 +77,16 @@ async fn a_dated_reminder_fires_once_then_is_done() {
         .await
         .unwrap();
     assert!(
-        tick(&d).await.unwrap().fired.is_empty(),
+        tick(&d, &d.hooks.scheduler())
+            .await
+            .unwrap()
+            .fired
+            .is_empty(),
         "pas encore l'heure"
     );
 
     clock.set_ms(1_767_330_030_000); // 2026-01-02T05:00:30Z = 09:00:30 à La Réunion
-    let report = tick(&d).await.unwrap();
+    let report = tick(&d, &d.hooks.scheduler()).await.unwrap();
     assert_eq!(report.fired, vec![sched.id.clone()]);
     assert!(
         s.events
@@ -103,7 +107,7 @@ async fn a_dated_reminder_fires_once_then_is_done() {
     );
 
     clock.advance_days(365);
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     assert_eq!(rec.texts().len(), 1, "un rappel unique ne revient pas");
 }
 
@@ -152,14 +156,14 @@ async fn a_silent_scheduled_run_is_a_failure_and_its_state_is_restored() {
             };
             d.services.turns.complete(&turn).await.unwrap();
             let schedule = turn.payload["schedule"].as_str().unwrap().to_string();
-            trigger_outcome_of(&d, &schedule, &outcome, &turn).await;
+            trigger_outcome_of(&d, &d.hooks.scheduler(), &schedule, &outcome, &turn).await;
             schedule
         }
     };
 
     let muet = make(json!("message")).await;
     clock.advance_ms(3_600_500);
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     run("").await;
     let after = s.schedules.get(&muet.id).await.unwrap().unwrap();
     assert!(
@@ -182,13 +186,15 @@ async fn a_silent_scheduled_run_is_a_failure_and_its_state_is_restored() {
         r#"["a","b"]"#,
         "état remis : la suivante reprend les mêmes éléments"
     );
-    let digest = crate::dream::digest_text(&d).await.unwrap();
+    let digest = crate::dream::digest_text(&d, d.hooks.mcp_supervisor())
+        .await
+        .unwrap();
     assert!(digest.contains("planification(s) en échec"), "{digest}");
     s.schedules.set_state(&muet.id, "paused").await.unwrap();
 
     let parle = make(json!("message")).await;
     clock.advance_ms(3_600_500);
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     let alerts = rec.texts().len();
     run("Six items cette semaine.").await;
     let after = s.schedules.get(&parle.id).await.unwrap().unwrap();
@@ -203,7 +209,7 @@ async fn a_silent_scheduled_run_is_a_failure_and_its_state_is_restored() {
 
     let libre = make(Value::Null).await;
     clock.advance_ms(3_600_500);
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     run("").await;
     let after = s.schedules.get(&libre.id).await.unwrap().unwrap();
     assert!(
@@ -244,8 +250,8 @@ async fn a_recurring_prompt_survives_the_closing_of_its_conversation() {
     s.sessions.set_state(&sid, "closed").await.unwrap();
 
     clock.advance_ms(3_600_500);
-    tick(&d).await.unwrap();
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     assert_eq!(
         s.turns.pending_count().await.unwrap(),
         1,
@@ -277,12 +283,12 @@ async fn a_recurring_prompt_survives_the_closing_of_its_conversation() {
         cost_usd: 0.0,
     };
     s.turns.complete(&turn).await.unwrap();
-    trigger_outcome(&d, &sched.id, &answered).await;
+    trigger_outcome(&d, &d.hooks.scheduler(), &sched.id, &answered).await;
     let done = s.schedules.get(&sched.id).await.unwrap().unwrap();
     assert_eq!(done.runs, 1);
     assert!(done.last_run.is_some() && done.last_error.is_none());
 
-    run_now(&d, &sched.id).await.unwrap();
+    run_now(&d, &d.hooks.scheduler(), &sched.id).await.unwrap();
     assert_eq!(
         s.turns.pending_count().await.unwrap(),
         1,
@@ -345,7 +351,10 @@ async fn a_schedule_says_where_it_delivers_and_can_be_moved() {
     assert!(retarget(s, "inconnu", 42, None).await.is_err());
 
     clock.set_ms(1_767_243_630_000); // 2026-01-01T05:00:30Z = 09:00:30 à La Réunion
-    assert_eq!(tick(&d).await.unwrap().fired, vec![sched.id.clone()]);
+    assert_eq!(
+        tick(&d, &d.hooks.scheduler()).await.unwrap().fired,
+        vec![sched.id.clone()]
+    );
     let to = retarget(s, &sched.id, -100_777, Some(12)).await.unwrap();
     assert_eq!(to, "sujet « Veille », groupe « Équipe »");
     let moved = s.schedules.get(&sched.id).await.unwrap().unwrap();
@@ -356,7 +365,10 @@ async fn a_schedule_says_where_it_delivers_and_can_be_moved() {
     assert_eq!(to_of(&listing(s).await.unwrap(), &sched.id), to);
 
     clock.set_ms(1_767_330_030_000); // le lendemain, 09:00:30
-    assert_eq!(tick(&d).await.unwrap().fired, vec![sched.id.clone()]);
+    assert_eq!(
+        tick(&d, &d.hooks.scheduler()).await.unwrap().fired,
+        vec![sched.id.clone()]
+    );
     let sent = rec.0.lock().unwrap().clone();
     assert!(matches!(sent[0].0, Origin::Telegram { chat_id: 42, .. }));
     assert!(
@@ -377,7 +389,9 @@ async fn a_schedule_says_where_it_delivers_and_can_be_moved() {
         today,
         vec!["- 09:00 Veille du matin → sujet « Veille », groupe « Équipe »".to_string()]
     );
-    let digest = crate::dream::digest_text(&d).await.unwrap();
+    let digest = crate::dream::digest_text(&d, d.hooks.mcp_supervisor())
+        .await
+        .unwrap();
     assert!(digest.contains("Aujourd'hui"), "{digest}");
     assert!(digest.contains("groupe « Équipe »"), "{digest}");
 }
@@ -413,7 +427,7 @@ async fn a_cancelled_or_failed_scheduled_prompt_warns_the_owner() {
         )
         .await
         .unwrap();
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     // Un ancien tour, dans une session fermée : la file l'annule sans le jouer.
     let closed = s
         .sessions
@@ -436,7 +450,7 @@ async fn a_cancelled_or_failed_scheduled_prompt_warns_the_owner() {
         .unwrap();
     assert!(s.turns.claim("t").await.unwrap().is_none());
     clock.advance_ms(1_000);
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     let texts = rec.texts();
     assert!(
         texts.iter().any(|t| t
@@ -453,11 +467,12 @@ async fn a_cancelled_or_failed_scheduled_prompt_warns_the_owner() {
             .contains("session fermée")
     );
     assert_eq!(after.runs, 0);
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     assert_eq!(rec.texts().len(), texts.len(), "une seule alerte");
 
     trigger_outcome(
         &d,
+        &d.hooks.scheduler(),
         &sched.id,
         &crate::agent::TurnOutcome::Failed {
             error: "fournisseur indisponible".into(),
@@ -577,7 +592,7 @@ async fn mcp_poll_seeds_then_notifies_new_items_only() {
         .unwrap();
 
     clock.advance_ms(61_000);
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     assert!(
         rec.texts().is_empty(),
         "le premier passage amorce sans notifier"
@@ -588,7 +603,7 @@ async fn mcp_poll_seeds_then_notifies_new_items_only() {
         .unwrap()
         .push(json!({"id": 2, "subject": "Nouveau"}));
     clock.advance_ms(61_000);
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     let texts = rec.texts();
     assert_eq!(texts.len(), 1);
     assert!(
@@ -598,7 +613,7 @@ async fn mcp_poll_seeds_then_notifies_new_items_only() {
     assert!(!texts[0].contains("Ancien"));
 
     clock.advance_ms(61_000);
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     assert_eq!(rec.texts().len(), 1, "rien de nouveau, rien d'envoyé");
 
     s.schedules
@@ -611,7 +626,7 @@ async fn mcp_poll_seeds_then_notifies_new_items_only() {
         .await
         .unwrap();
     clock.advance_ms(61_000);
-    let report = tick(&d).await.unwrap();
+    let report = tick(&d, &d.hooks.scheduler()).await.unwrap();
     assert!(
         report.errors.iter().any(|(_, e)| e.contains("lecture")),
         "{report:?}"
@@ -633,13 +648,13 @@ async fn a_watched_file_fires_when_it_changes() {
         )
         .await
         .unwrap();
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     assert!(rec.texts().is_empty(), "première observation : on mémorise");
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     assert!(rec.texts().is_empty());
 
     std::fs::write(&path, "version 2, plus longue").unwrap();
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     let texts = rec.texts();
     assert_eq!(texts.len(), 1);
     assert!(texts[0].contains("rapport.txt modifié"), "{texts:?}");
@@ -656,7 +671,7 @@ async fn internal_events_fire_their_schedules_once() {
         ))
         .await
         .unwrap();
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     s.schedules
         .create(
             TriggerKind::Event,
@@ -666,7 +681,7 @@ async fn internal_events_fire_their_schedules_once() {
         )
         .await
         .unwrap();
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     assert!(rec.texts().is_empty(), "l'historique ne déclenche rien");
 
     s.events
@@ -676,7 +691,7 @@ async fn internal_events_fire_their_schedules_once() {
         )
         .await
         .unwrap();
-    tick(&d).await.unwrap();
-    tick(&d).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
+    tick(&d, &d.hooks.scheduler()).await.unwrap();
     assert_eq!(rec.texts(), vec!["✅ run terminé (s_42)"]);
 }

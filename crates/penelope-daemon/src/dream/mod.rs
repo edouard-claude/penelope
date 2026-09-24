@@ -6,6 +6,9 @@
 //! ligne par ligne, pré-image conservée dans `mem_history`. Une passe à la fois ; deux
 //! passes sans nouvelle donnée ne changent rien.
 
+use crate::executor::Messenger;
+use crate::mcp::McpSupervisor;
+use crate::ports::Slot;
 use crate::runtime::{Daemon, Services};
 use penelope_kernel::event::EventDraft;
 use penelope_llm::catalog::strip_provider;
@@ -76,12 +79,18 @@ pub enum Trigger {
     Manual,
 }
 
-pub async fn run(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutcome> {
-    run_as(d, dry_run, Trigger::Manual).await
+/// `messenger` : le canal où dire un échec, lu au moment de l'échec.
+pub async fn run(
+    d: &Arc<Daemon>,
+    messenger: &Slot<dyn Messenger>,
+    dry_run: bool,
+) -> anyhow::Result<DreamOutcome> {
+    run_as(d, messenger, dry_run, Trigger::Manual).await
 }
 
 pub async fn run_as(
     d: &Arc<Daemon>,
+    messenger: &Slot<dyn Messenger>,
     dry_run: bool,
     trigger: Trigger,
 ) -> anyhow::Result<DreamOutcome> {
@@ -110,7 +119,7 @@ pub async fn run_as(
         // L'échec part au foyer d'où que vienne la passe : planifiée, il ne se répète pas
         // de nuit en nuit ; lancée à la main, il part toujours (issue #152).
         Err(e) if !dry_run => {
-            failure_reported(d, &e.to_string(), trigger == Trigger::Manual).await;
+            failure_reported(d, messenger, &e.to_string(), trigger == Trigger::Manual).await;
         }
         _ => {}
     }

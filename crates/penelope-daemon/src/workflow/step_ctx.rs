@@ -131,9 +131,10 @@ impl StepCtx<'_> {
             },
         );
         exec.admin = Some(d.clone() as Arc<dyn crate::selfknow::Admin>);
-        exec.messenger = d.hooks.messenger();
-        exec.mcp = d.hooks.mcp();
-        exec.orchestrator = d.hooks.orchestrator();
+        let ports = &d.workflows.ports;
+        exec.messenger = ports.messenger.get();
+        exec.mcp = ports.mcp.get();
+        exec.orchestrator = ports.orchestrator.get();
         exec
     }
 

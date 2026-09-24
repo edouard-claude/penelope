@@ -317,7 +317,7 @@ async fn three_failures_compact_without_a_model_and_say_so() {
     let view = context_view(&s, &sid, None).await.unwrap();
     assert_eq!(view["compaction_failures"], 2);
     assert!(
-        crate::dream::digest_text(&d)
+        crate::dream::digest_text(&d, d.hooks.mcp_supervisor())
             .await
             .unwrap()
             .contains("Résumé de session en échec"),
