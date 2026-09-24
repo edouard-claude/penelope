@@ -86,11 +86,18 @@ impl TelegramGateway {
                         .await;
                 }
                 if choice != Some(false) {
-                    crate::session_ops::silence(d, old.id.as_str(), "nouvelle session").await?;
+                    crate::session_ops::silence(
+                        &d.services,
+                        &d.bus,
+                        old.id.as_str(),
+                        "nouvelle session",
+                    )
+                    .await?;
                     s.sessions.set_state(old.id.as_str(), "closed").await?;
                     // `/new` clôt aussi l'épisode en cours : il est relu (§6.6).
                     crate::episodes::spawn_ingest(
-                        d.clone(),
+                        d.services.clone(),
+                        d.providers.clone(),
                         old.id.to_string(),
                         old.episode_seq,
                         crate::episodes::Boundary::NewSession,
@@ -303,7 +310,7 @@ impl TelegramGateway {
         let text: String = {
             let session = d.chat_session_for(&origin).await?;
             let title = (!args.is_empty()).then(|| args.to_string());
-            match crate::session_ops::fork(d, &session, title).await {
+            match crate::session_ops::fork(&d.services, &session, title).await {
                 Ok(v) => {
                     let fork = v["session"].as_str().unwrap_or_default().to_string();
                     let background = self.bind_chat(&fork, chat_id, topic_id).await?;
@@ -375,7 +382,7 @@ impl TelegramGateway {
         let text: String = {
             let session = d.chat_session_for(&origin).await?;
             let turns = args.trim().parse::<usize>().unwrap_or(1);
-            match crate::session_ops::rewind(d, &session, turns).await {
+            match crate::session_ops::rewind(&d.services, &d.bus, &session, turns).await {
                 Ok(v) => format!(
                     "⏪ {turns} échange(s) défait(s) ({} messages mis de côté dans `{}`).",
                     shown(&v["removed"]),
@@ -412,23 +419,24 @@ impl TelegramGateway {
         // de lire `/stop` et les boutons (issue #69).
         let (me, d2) = (self.clone(), d.clone());
         tokio::spawn(async move {
-            let note = match crate::session_ops::export(&d2, "session", Some(&session)).await {
-                Ok(v) => {
-                    let path = std::path::PathBuf::from(v["path"].as_str().unwrap_or_default());
-                    match me
-                        .bot
-                        .send_document(chat_id, topic_id, &path, Some("Export JSONL"))
-                        .await
-                    {
-                        Ok(_) => return,
-                        Err(e) => format!(
-                            "📦 Export écrit dans `{}`, envoi impossible : {e}",
-                            path.display()
-                        ),
+            let note =
+                match crate::session_ops::export(&d2.services, "session", Some(&session)).await {
+                    Ok(v) => {
+                        let path = std::path::PathBuf::from(v["path"].as_str().unwrap_or_default());
+                        match me
+                            .bot
+                            .send_document(chat_id, topic_id, &path, Some("Export JSONL"))
+                            .await
+                        {
+                            Ok(_) => return,
+                            Err(e) => format!(
+                                "📦 Export écrit dans `{}`, envoi impossible : {e}",
+                                path.display()
+                            ),
+                        }
                     }
-                }
-                Err(e) => format!("❌ {e}"),
-            };
+                    Err(e) => format!("❌ {e}"),
+                };
             let _ = me.reply(chat_id, topic_id, reply_to, &note).await;
         });
         Ok(())

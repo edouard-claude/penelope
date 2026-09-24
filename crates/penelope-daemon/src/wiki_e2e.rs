@@ -120,7 +120,7 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
     let sid = d.chat_session_for(&Channel::Cli).await.unwrap();
 
     // Accueil complet.
-    let mut sitting = crate::onboarding::start(&d, None).await.unwrap();
+    let mut sitting = crate::onboarding::start(&d.services, None).await.unwrap();
     let questions: Vec<u32> = sitting.answers.keys().copied().collect();
     for n in questions {
         let q = crate::onboarding::question(n).unwrap();
@@ -129,11 +129,13 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
             None if q.list => "Refonte du site Durand\nMigration Factur-X".to_string(),
             None => "développeur indépendant".to_string(),
         };
-        sitting = crate::onboarding::answer(&d, &sitting.rel, n, Some(&answer))
+        sitting = crate::onboarding::answer(&d.services, &sitting.rel, n, Some(&answer))
             .await
             .unwrap();
     }
-    crate::onboarding::write(&d, &sitting, &sid).await.unwrap();
+    crate::onboarding::write(&d.services, &sitting, &sid)
+        .await
+        .unwrap();
 
     // Trois tours relus.
     let episode = s.sessions.require(&sid).await.unwrap().episode_seq;
@@ -204,9 +206,15 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
         r#"{"resume": "Passage de la facturation en Factur-X et démo Durand.",
             "candidats": [{"type": "preference", "texte": "Les PR restent courtes", "importance": 7, "quand": ""}]}"#,
     );
-    crate::episodes::ingest(&d, &sid, episode, crate::episodes::Boundary::Idle)
-        .await
-        .unwrap();
+    crate::episodes::ingest(
+        &d.services,
+        d.providers.as_ref(),
+        &sid,
+        episode,
+        crate::episodes::Boundary::Idle,
+    )
+    .await
+    .unwrap();
 
     // Un rêve qui promeut une entrée.
     let c = Candidate::new(

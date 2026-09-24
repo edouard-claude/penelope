@@ -53,7 +53,13 @@ impl Rpc {
                 let sess = crate::session_ops::resolve(s, &query)
                     .await
                     .map_err(anyhow::Error::msg)?;
-                crate::session_ops::close(&self.daemon, sess.id.as_str()).await
+                crate::session_ops::close(
+                    &self.daemon.services,
+                    self.daemon.providers.clone(),
+                    &self.daemon.bus,
+                    sess.id.as_str(),
+                )
+                .await
             }
             method::SESSION_PURGE => {
                 let query = required_str(p, "session")?;
@@ -62,12 +68,18 @@ impl Rpc {
                     .map_err(anyhow::Error::msg)?;
                 let id = sess.id.to_string();
                 // Le tour en cours est arrêté et la file vidée avant d'effacer.
-                crate::session_ops::silence(&self.daemon, &id, "session purgée").await?;
+                crate::session_ops::silence(
+                    &self.daemon.services,
+                    &self.daemon.bus,
+                    &id,
+                    "session purgée",
+                )
+                .await?;
                 let reason = p
                     .get("reason")
                     .and_then(|v| v.as_str())
                     .unwrap_or("demande du propriétaire");
-                crate::purge::session(&self.daemon, &id, reason).await
+                crate::purge::session(&self.daemon.services, &id, reason).await
             }
             method::SESSION_TITLE => {
                 let sid = self.session_param(p).await?;
@@ -112,7 +124,7 @@ impl Rpc {
             method::SESSION_FORK => {
                 let sid = self.session_param(p).await?;
                 let title = p.get("title").and_then(|t| t.as_str()).map(String::from);
-                crate::session_ops::fork(&self.daemon, &sid, title).await
+                crate::session_ops::fork(&self.daemon.services, &sid, title).await
             }
             method::SESSION_REWIND => {
                 let sid = self.session_param(p).await?;
@@ -123,7 +135,8 @@ impl Rpc {
                             .or_else(|| v.as_str().and_then(|x| x.parse().ok()))
                     })
                     .unwrap_or(1) as usize;
-                crate::session_ops::rewind(&self.daemon, &sid, turns).await
+                crate::session_ops::rewind(&self.daemon.services, &self.daemon.bus, &sid, turns)
+                    .await
             }
             method::EXPORT => {
                 let what = p.get("what").and_then(|w| w.as_str()).unwrap_or("session");
@@ -131,7 +144,7 @@ impl Rpc {
                     ("session", None) => Some(self.session_param(p).await?),
                     (_, id) => id.map(String::from),
                 };
-                crate::session_ops::export(&self.daemon, what, id.as_deref()).await
+                crate::session_ops::export(&self.daemon.services, what, id.as_deref()).await
             }
             method::SESSION_EXPORT => {
                 let sid = required_str(p, "session")?;

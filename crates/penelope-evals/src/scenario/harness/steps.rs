@@ -96,7 +96,7 @@ impl Harness<'_> {
             }
             "/fork" => {
                 let title = (!args.is_empty()).then(|| args.to_string());
-                let v = session_ops::fork(&d, &self.session, title).await?;
+                let v = session_ops::fork(&d.services, &self.session, title).await?;
                 self.session = v["session"]
                     .as_str()
                     .context("fork sans identifiant")?
@@ -105,9 +105,9 @@ impl Harness<'_> {
             }
             "/rewind" => {
                 let turns: usize = if args.is_empty() { 1 } else { args.parse()? };
-                session_ops::rewind(&d, &self.session, turns).await
+                session_ops::rewind(&d.services, &d.bus, &self.session, turns).await
             }
-            "/purge" => purge::session(&d, &self.session, "scénario").await,
+            "/purge" => purge::session(&d.services, &self.session, "scénario").await,
             other => anyhow::bail!(
                 "commande inconnue `{other}` : /compact, /fork [titre], /rewind [n], /purge"
             ),

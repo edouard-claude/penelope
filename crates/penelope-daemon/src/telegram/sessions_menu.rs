@@ -196,7 +196,7 @@ impl TelegramGateway {
                 }
                 Some(t)
             }
-            k::SESSION_FORK => match crate::session_ops::fork(d, &target, None).await {
+            k::SESSION_FORK => match crate::session_ops::fork(&d.services, &target, None).await {
                 Ok(v) => {
                     let fork = v["session"].as_str().unwrap_or_default().to_string();
                     self.bind_chat(&fork, chat_id, topic_id).await?;
@@ -205,16 +205,20 @@ impl TelegramGateway {
                 }
                 Err(e) => Some(format!("Fork impossible : {e}")),
             },
-            k::SESSION_CLOSE => match crate::session_ops::close(d, &target).await {
-                Ok(v) => Some(format!(
-                    "Session fermée{}",
-                    match v["cancelled"].as_u64().unwrap_or(0) {
-                        0 => String::new(),
-                        n => format!(", {n} en attente annulé(s)"),
-                    }
-                )),
-                Err(e) => Some(format!("Fermeture impossible : {e}")),
-            },
+            k::SESSION_CLOSE => {
+                match crate::session_ops::close(&d.services, d.providers.clone(), &d.bus, &target)
+                    .await
+                {
+                    Ok(v) => Some(format!(
+                        "Session fermée{}",
+                        match v["cancelled"].as_u64().unwrap_or(0) {
+                            0 => String::new(),
+                            n => format!(", {n} en attente annulé(s)"),
+                        }
+                    )),
+                    Err(e) => Some(format!("Fermeture impossible : {e}")),
+                }
+            }
             k::SESSION_RENAME => {
                 s.kv_set(
                     &format!("tg.await_title.{chat_id}"),

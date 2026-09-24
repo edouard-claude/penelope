@@ -118,7 +118,8 @@ impl TelegramGateway {
             // Un job d'outil tourne hors du tour : `cancel_session` ne le voit pas.
             // `/stop` coupe ceux de cette session (issue #204).
             let mut cancelled_jobs = s.jobs.cancel_session(&session);
-            let mut queued = crate::session_ops::silence(d, &session, "arrêt demandé").await?;
+            let mut queued =
+                crate::session_ops::silence(&d.services, &d.bus, &session, "arrêt demandé").await?;
             let mut sessions = 0;
             let mut runs = 0;
             // Les runs ouverts de ce chat, quel que soit leur état : un run `blocked`
@@ -162,7 +163,8 @@ impl TelegramGateway {
                     ingests += d.bus.ingests_of(&id);
                     cancelled_ingests += d.bus.cancel_ingests(&id);
                     cancelled_jobs += s.jobs.cancel_session(&id);
-                    let n = crate::session_ops::silence(d, &id, "arrêt demandé").await?;
+                    let n = crate::session_ops::silence(&d.services, &d.bus, &id, "arrêt demandé")
+                        .await?;
                     if n > 0 || d.bus.is_active(&id) {
                         sessions += 1;
                     }

@@ -199,8 +199,7 @@ pub async fn empty_search_note(s: &Services) -> Value {
 }
 
 /// Signale une fois tout nouvel écart (journal et événement) ; rend les écarts.
-pub async fn report_gaps(d: &crate::runtime::Daemon) -> anyhow::Result<Vec<Gap>> {
-    let s = &d.services;
+pub async fn report_gaps(s: &crate::runtime::Services) -> anyhow::Result<Vec<Gap>> {
     let inv = inventory(s).await?;
     let fingerprint =
         penelope_kernel::canonical::sha256_hex(serde_json::to_string(&inv.not_indexed)?.as_bytes());

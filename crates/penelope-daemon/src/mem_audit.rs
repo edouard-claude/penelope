@@ -3,9 +3,11 @@
 //! rentable. Le barème est fixe et versionné, pour que deux audits se comparent ; chaque
 //! audit est historisé dans `audits/audit-AAAA-MM-JJ.md` avec l'écart depuis le précédent.
 
-use crate::runtime::Daemon;
+use crate::mcp::McpSupervisor;
+use crate::runtime::Services;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::Arc;
 
 /// Version du barème : un changement de pondération la fait monter. v2 : le lint du wiki
 /// compte avec les liens morts (issue #29).
@@ -58,8 +60,7 @@ struct Facts {
     vectors: i64,
 }
 
-async fn facts(d: &Daemon) -> anyhow::Result<Facts> {
-    let s = &d.services;
+async fn facts(s: &Services, mcp: Option<Arc<McpSupervisor>>) -> anyhow::Result<Facts> {
     let now = s.clock.now_utc();
     let month_ago = (now - chrono::Duration::days(30)).to_rfc3339();
     let two_days_ago = (now - chrono::Duration::days(2)).to_rfc3339();
@@ -105,7 +106,7 @@ async fn facts(d: &Daemon) -> anyhow::Result<Facts> {
             })
         })
         .await?;
-    if let Some(sup) = d.hooks.mcp_supervisor() {
+    if let Some(sup) = mcp {
         f.mcp_ready = sup
             .statuses()
             .await
@@ -281,8 +282,7 @@ fn axes(f: &Facts) -> Vec<Axis> {
     vec![owner, reach, skill, autonomy, quality]
 }
 
-fn today(d: &Daemon) -> String {
-    let s = &d.services;
+fn today(s: &Services) -> String {
     let cfg = s.config.config();
     let utc = chrono::DateTime::from_timestamp_millis(s.clock.now_ms()).unwrap_or_default();
     match cfg.owner.timezone.parse::<chrono_tz::Tz>() {
@@ -294,17 +294,16 @@ fn today(d: &Daemon) -> String {
 const LAST_KEY: &str = "mem.audit.last";
 
 /// Audite, historise et rend l'audit.
-pub async fn run(d: &Daemon) -> anyhow::Result<Audit> {
-    let f = facts(d).await?;
+pub async fn run(s: &Services, mcp: Option<Arc<McpSupervisor>>) -> anyhow::Result<Audit> {
+    let f = facts(s, mcp).await?;
     let axes = axes(&f);
     let total = axes.iter().map(|a| a.score).sum();
-    let previous: Option<Audit> = d
-        .services
+    let previous: Option<Audit> = s
         .kv_get(LAST_KEY)
         .await?
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .filter(|p: &Audit| p.version == SCALE_VERSION);
-    let date = today(d);
+    let date = today(s);
     let audit = Audit {
         version: SCALE_VERSION,
         date: date.clone(),
@@ -313,11 +312,9 @@ pub async fn run(d: &Daemon) -> anyhow::Result<Audit> {
         previous_date: previous.map(|p| p.date),
         axes,
     };
-    d.services
-        .kv_set(LAST_KEY, &serde_json::to_string(&audit)?)
-        .await?;
+    s.kv_set(LAST_KEY, &serde_json::to_string(&audit)?).await?;
     // `audit-AAAA-MM-JJ` : un nom unique dans tout le vault (issue #29).
-    let vault = crate::helpers::vault_dir(&d.services);
+    let vault = crate::helpers::vault_dir(s);
     let rel = format!("audits/audit-{date}.md");
     let current = std::fs::read_to_string(vault.join(&rel)).unwrap_or_default();
     crate::vault_ops::save_note(
@@ -399,6 +396,7 @@ pub fn to_json(a: &Audit) -> serde_json::Value {
 mod tests {
     use super::*;
     use crate::bus::Origin;
+    use crate::runtime::Daemon;
     use penelope_kernel::clock::TestClock;
     use penelope_memory::{Level, Provenance};
     use std::sync::Arc;
@@ -415,7 +413,7 @@ mod tests {
                 .unwrap(),
         );
         let d = Arc::new(Daemon::from_services(s.clone()));
-        let empty = run(&d).await.unwrap();
+        let empty = run(&d.services, None).await.unwrap();
         assert!(empty.total < 30, "{empty:?}");
         assert!(
             best_next(&empty).unwrap().next.contains("/accueil"),
@@ -439,7 +437,7 @@ mod tests {
                 .unwrap();
         }
         clock.advance_days(1);
-        let after = run(&d).await.unwrap();
+        let after = run(&d.services, None).await.unwrap();
         assert!(after.axes[0].score > empty.axes[0].score, "{after:?}");
         assert!(after.delta.unwrap() > 0);
         assert!(

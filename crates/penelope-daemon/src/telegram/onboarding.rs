@@ -43,7 +43,7 @@ impl TelegramGateway {
         topic_id: Option<i64>,
         part: Option<crate::onboarding::Part>,
     ) -> anyhow::Result<()> {
-        let sitting = crate::onboarding::start(&self.daemon, part).await?;
+        let sitting = crate::onboarding::start(&self.daemon.services, part).await?;
         self.onboarding_ask(chat_id, topic_id, &sitting).await
     }
     /// Pose la question suivante, ou montre le récapitulatif à valider.
@@ -68,9 +68,9 @@ impl TelegramGateway {
         };
         let Some(q) = sitting.next() else {
             s.kv_set(&key, "").await?;
-            let plan = crate::onboarding::plan(d, sitting).await?;
+            let plan = crate::onboarding::plan(&d.services, sitting).await?;
             if plan.is_empty() && plan.keep.is_empty() {
-                crate::onboarding::cancel(d).await?;
+                crate::onboarding::cancel(&d.services).await?;
                 return self
                     .reply(
                         chat_id,
@@ -169,7 +169,9 @@ impl TelegramGateway {
             k::ONBOARD_START => self.onboarding_next(chat_id, topic_id, None).await,
             k::ONBOARD_ANSWER => {
                 let n = action.args["n"].as_u64().unwrap_or(0) as u32;
-                match crate::onboarding::answer(d, rel, n, action.args["answer"].as_str()).await {
+                match crate::onboarding::answer(&d.services, rel, n, action.args["answer"].as_str())
+                    .await
+                {
                     Ok(sitting) => self.onboarding_ask(chat_id, topic_id, &sitting).await,
                     Err(e) => {
                         self.reply(chat_id, topic_id, None, &format!("⚠️ {e}"))
@@ -190,7 +192,7 @@ impl TelegramGateway {
                 .await
             }
             k::ONBOARD_WRITE => {
-                let Some(sitting) = crate::onboarding::load(d, rel) else {
+                let Some(sitting) = crate::onboarding::load(&d.services, rel) else {
                     return self
                         .reply(chat_id, topic_id, None, "ℹ️ séance d'accueil introuvable")
                         .await;
@@ -201,7 +203,8 @@ impl TelegramGateway {
                     message_id: None,
                 };
                 let session = d.chat_session_for(&origin).await?;
-                let (added, replaced) = crate::onboarding::write(d, &sitting, &session).await?;
+                let (added, replaced) =
+                    crate::onboarding::write(&d.services, &sitting, &session).await?;
                 self.reply(
                     chat_id,
                     topic_id,
@@ -215,7 +218,7 @@ impl TelegramGateway {
                 .await
             }
             _ => {
-                crate::onboarding::cancel(d).await?;
+                crate::onboarding::cancel(&d.services).await?;
                 d.services
                     .kv_set(&format!("tg.onboard.{chat_id}"), "")
                     .await?;

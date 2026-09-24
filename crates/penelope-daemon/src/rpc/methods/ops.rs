@@ -40,7 +40,7 @@ impl Rpc {
                     )
                     .await,
                 );
-                checks.push(crate::backup::doctor_check(&self.daemon).await);
+                checks.push(crate::backup::doctor_check(&self.daemon.services).await);
                 // Boucles de fond relancées ou mortes (#84).
                 checks.push(crate::tasks::doctor_check(&self.daemon.supervision()));
                 Ok(json!(checks))
@@ -111,7 +111,7 @@ impl Rpc {
             }
             method::UPGRADE => crate::upgrade::rpc(&self.daemon, p).await,
             method::IMPORT_HERMES => crate::hermes::rpc(&self.daemon, p).await,
-            method::STORE_REBUILD => crate::session_ops::rebuild(&self.daemon).await,
+            method::STORE_REBUILD => crate::session_ops::rebuild(&self.daemon.services).await,
             method::RESTORE => anyhow::bail!(
                 "une restauration remplace la base : elle se fait daemon arrêté, `penelope stop` \
                  puis `penelope restore <sauvegarde>`"
@@ -175,7 +175,7 @@ impl Rpc {
                 let full = push || p.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
                 if full {
                     let media = p.get("media").and_then(|v| v.as_bool());
-                    return crate::backup::run(&self.daemon, push, media).await;
+                    return crate::backup::run(&self.daemon.services, push, media).await;
                 }
                 let dest = s.platform.dirs.data().join("backups").join(format!(
                     "penelope-{}.db",

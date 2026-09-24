@@ -279,7 +279,7 @@ impl TelegramGateway {
         // L'audit relit toute la mémoire : détaché (issue #69).
         let (me, d2) = (self.clone(), d.clone());
         tokio::spawn(async move {
-            let note = match crate::mem_audit::run(&d2).await {
+            let note = match crate::mem_audit::run(&d2.services, d2.hooks.mcp_supervisor()).await {
                 Ok(a) => crate::mem_audit::summary(&a),
                 Err(e) => format!("❌ {e}"),
             };

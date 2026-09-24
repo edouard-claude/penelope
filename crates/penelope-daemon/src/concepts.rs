@@ -7,7 +7,8 @@
 //! concept aussi, `concepts/_a-definir.md` liste les termes à définir et `index.md` sert de
 //! point d'entrée du wiki. `mem_neighbors` parcourt le graphe.
 
-use crate::runtime::Daemon;
+use crate::embeddings::Embedder;
+use crate::runtime::Services;
 use penelope_memory::{IndexedEntry, Level, Origin, Provenance};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -268,8 +269,7 @@ fn concept_slug(vault: &Path, nom: &str) -> String {
 }
 
 /// Indexe les entrées d'une page de concept sous son slug.
-async fn index_page(d: &Daemon, page: &Page, prov: &Provenance) -> anyhow::Result<()> {
-    let s = &d.services;
+async fn index_page(s: &Services, page: &Page, prov: &Provenance) -> anyhow::Result<()> {
     let vault = crate::helpers::vault_dir(s);
     let rel = format!("{DIR}/{}.md", page.slug);
     let raw = std::fs::read_to_string(vault.join(&rel))?;
@@ -284,14 +284,14 @@ async fn index_page(d: &Daemon, page: &Page, prov: &Provenance) -> anyhow::Resul
 
 /// Relie une source à ses concepts ; rend les slugs des concepts touchés.
 pub async fn apply(
-    d: &Daemon,
+    emb: &Embedder,
     source_slug: &str,
     source_title: &str,
     origin: Origin,
     concepts: &[Concept],
     undefined: &[String],
 ) -> anyhow::Result<Vec<String>> {
-    let s = &d.services;
+    let s = &*emb.services;
     let vault = crate::helpers::vault_dir(s);
     std::fs::create_dir_all(vault.join(DIR))?;
     let prov = Provenance {
@@ -318,7 +318,7 @@ pub async fn apply(
         });
         // Sans correspondance par les mots : par le sens, si les embeddings répondent.
         if found.is_none() && !existing.is_empty() {
-            found = same_by_meaning(d, &c.nom, &existing).await;
+            found = same_by_meaning(emb, &c.nom, &existing).await;
         }
         let page = match found {
             Some(i) => &mut existing[i],
@@ -355,26 +355,25 @@ pub async fn apply(
         let rel = format!("{DIR}/{}.md", page.slug);
         crate::vault_ops::save_note(&vault, &rel, &render_page(page), &day)
             .map_err(anyhow::Error::msg)?;
-        index_page(d, page, &prov).await?;
+        index_page(s, page, &prov).await?;
         if !touched.contains(&page.slug) {
             touched.push(page.slug.clone());
         }
     }
 
     if !touched.is_empty() {
-        link_source(d, source_slug, &touched, &prov).await?;
-        link_memory(d, &existing).await?;
+        link_source(s, source_slug, &touched, &prov).await?;
+        link_memory(s, &existing).await?;
     }
     update_to_define(&vault, source_slug, undefined, &existing, &day)?;
-    write_index(d, &existing, &day).await?;
+    write_index(s, &existing, &day).await?;
     Ok(touched)
 }
 
-async fn same_by_meaning(d: &Daemon, nom: &str, pages: &[Page]) -> Option<usize> {
+async fn same_by_meaning(emb: &Embedder, nom: &str, pages: &[Page]) -> Option<usize> {
     let mut texts = vec![nom.to_string()];
     texts.extend(pages.iter().map(|p| p.nom.clone()));
-    let emb = d.embedder();
-    let call = crate::embeddings::embed_texts(&emb, &texts);
+    let call = crate::embeddings::embed_texts(emb, &texts);
     let (_, vectors) = tokio::time::timeout(std::time::Duration::from_secs(5), call)
         .await
         .ok()?
@@ -450,12 +449,11 @@ fn source_links_entry(
 /// Section `## Concepts` de la fiche source, indexée pour que la source pointe vers ses
 /// concepts.
 async fn link_source(
-    d: &Daemon,
+    s: &Services,
     source_slug: &str,
     concepts: &[String],
     prov: &Provenance,
 ) -> anyhow::Result<()> {
-    let s = &d.services;
     let vault = crate::helpers::vault_dir(s);
     let rel = format!("{}/{source_slug}.md", penelope_memory::ingest::SOURCES_DIR);
     let path = vault.join(&rel);
@@ -511,8 +509,7 @@ async fn link_source(
 
 /// Entrées de `memoire.md` et `projets.md` qui citent un concept : le lien `[[slug]]`
 /// s'ajoute à la ligne, qui garde son uid et sa provenance.
-async fn link_memory(d: &Daemon, pages: &[Page]) -> anyhow::Result<usize> {
-    let s = &d.services;
+async fn link_memory(s: &Services, pages: &[Page]) -> anyhow::Result<usize> {
     let vault = crate::helpers::vault_dir(s);
     let mut n = 0;
     for level in [Level::Coeur, Level::Projet] {
@@ -623,8 +620,7 @@ pub fn to_define(vault: &Path) -> Vec<String> {
 }
 
 /// `index.md` : concepts les plus liés, sources récentes, projets.
-async fn write_index(d: &Daemon, pages: &[Page], day: &str) -> anyhow::Result<()> {
-    let s = &d.services;
+async fn write_index(s: &Services, pages: &[Page], day: &str) -> anyhow::Result<()> {
     let vault = crate::helpers::vault_dir(s);
     let resolver = penelope_memory::wiki::Resolver::scan(&vault);
     let mut concepts: Vec<&Page> = pages.iter().collect();
@@ -753,6 +749,7 @@ pub async fn neighbors(s: &crate::runtime::Services, slug: &str) -> anyhow::Resu
 mod tests {
     use super::*;
     use crate::bus::Origin as Channel;
+    use crate::runtime::Daemon;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::MockProvider;
     use std::sync::Arc;

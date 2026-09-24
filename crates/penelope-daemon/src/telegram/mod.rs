@@ -383,7 +383,13 @@ impl TelegramGateway {
                     && let Some(rel) = v["rel"].as_str()
                 {
                     let n = v["n"].as_u64().unwrap_or(0) as u32;
-                    return match crate::onboarding::answer(&self.daemon, rel, n, Some(&text)).await
+                    return match crate::onboarding::answer(
+                        &self.daemon.services,
+                        rel,
+                        n,
+                        Some(&text),
+                    )
+                    .await
                     {
                         Ok(sitting) => self.onboarding_ask(chat_id, topic_id, &sitting).await,
                         Err(e) => {
@@ -434,7 +440,7 @@ impl TelegramGateway {
 
                 // Profil vide : l'accueil est proposé une fois, sans retenir le message.
                 if s.kv_get("tg.onboard.proposed").await?.is_none()
-                    && crate::onboarding::profile_is_empty(&self.daemon).await
+                    && crate::onboarding::profile_is_empty(&self.daemon.services).await
                 {
                     s.kv_set("tg.onboard.proposed", &s.clock.now_rfc3339())
                         .await?;

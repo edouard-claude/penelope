@@ -116,7 +116,7 @@ pub async fn import(d: &Arc<Daemon>, opts: &Options) -> Result<Report, String> {
 
     if opts.apply {
         if (files || memories)
-            && let Err(e) = crate::dream::vault_sync(d, "import: hermes").await
+            && let Err(e) = crate::dream::vault_sync(&d.services, "import: hermes").await
         {
             r.warn(format!("commit du vault : {e}"));
         }

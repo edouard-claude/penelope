@@ -561,7 +561,7 @@ async fn the_vault_check_flags_secrets_and_broken_practices() {
     assert!(issues.iter().any(|i| i["file"] == "pratiques/cassee.md"));
     crate::helpers::set_config_path(&d.services, "memory.vault_git_autocommit", json!("0s"))
         .unwrap();
-    let sync = vault_sync(&d, "test").await.unwrap();
+    let sync = vault_sync(&d.services, "test").await.unwrap();
     assert_eq!(
         sync["git"], false,
         "autocommit désactivé : le vault reste hors git"

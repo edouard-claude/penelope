@@ -13,10 +13,12 @@
 //! La restauration vit dans la CLI (`penelope restore-all`) : elle se fait daemon arrêté,
 //! sur une machine où il n'y a encore rien.
 
-use crate::runtime::Daemon;
+use crate::executor::Messenger;
+use crate::runtime::Services;
 use penelope_kernel::event::EventDraft;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Nom du secret qui porte la phrase de passe des sauvegardes.
 pub const PASSPHRASE_SECRET: &str = "backup_passphrase";
@@ -24,10 +26,10 @@ pub const PASSPHRASE_SECRET: &str = "backup_passphrase";
 const LAST_KEY: &str = "backup.last";
 
 /// Ce qui entre dans l'archive, en plus de l'instantané de la base.
-fn entries(d: &Daemon, media: bool) -> Vec<(PathBuf, String)> {
-    let dirs = &d.services.platform.dirs;
+fn entries(s: &Services, media: bool) -> Vec<(PathBuf, String)> {
+    let dirs = &s.platform.dirs;
     let mut v: Vec<(PathBuf, String)> = vec![
-        (crate::helpers::vault_dir(&d.services), "vault".into()),
+        (crate::helpers::vault_dir(s), "vault".into()),
         (dirs.skills(), "skills".into()),
         (dirs.data().join("workflows"), "workflows".into()),
         (dirs.data().join("templates"), "templates".into()),
@@ -47,13 +49,12 @@ fn entries(d: &Daemon, media: bool) -> Vec<(PathBuf, String)> {
 /// Tout le travail lourd (instantané de la base, copies, tar, Argon2id, chiffrement,
 /// somme) s'exécute sur un thread bloquant, et l'instantané ne prend pas l'écrivain : les
 /// tours, les battements de bail et Telegram continuent pendant la sauvegarde (#77).
-pub async fn build(d: &Daemon, media: bool) -> anyhow::Result<(PathBuf, Value)> {
-    let s = &d.services;
+pub async fn build(s: &Services, media: bool) -> anyhow::Result<(PathBuf, Value)> {
     let now = s.clock.now_rfc3339();
     let job = BuildJob {
         store: s.store.clone(),
         platform: s.platform.clone(),
-        entries: entries(d, media),
+        entries: entries(s, media),
         out_dir: s.platform.dirs.data().join("backups"),
         stamp: now.replace([':', '.'], "-"),
         day: now.chars().take(10).collect(),
@@ -164,8 +165,8 @@ impl BuildJob {
 }
 
 /// Phrase de passe des sauvegardes, rangée dans le magasin de secrets.
-fn passphrase(d: &Daemon) -> anyhow::Result<String> {
-    secret_passphrase(&d.services.platform)
+fn passphrase(s: &Services) -> anyhow::Result<String> {
+    secret_passphrase(&s.platform)
 }
 
 fn secret_passphrase(platform: &penelope_platform::Platform) -> anyhow::Result<String> {
@@ -184,11 +185,10 @@ fn secret_passphrase(platform: &penelope_platform::Platform) -> anyhow::Result<S
 }
 
 /// Sauvegarde complète : archive chiffrée, et envoi vers le dépôt privé si demandé.
-pub async fn run(d: &Daemon, push: bool, media: Option<bool>) -> anyhow::Result<Value> {
-    let s = &d.services;
+pub async fn run(s: &Services, push: bool, media: Option<bool>) -> anyhow::Result<Value> {
     let cfg = s.config.config();
     let media = media.unwrap_or(cfg.backup.include_media);
-    let (archive, mut report) = build(d, media).await?;
+    let (archive, mut report) = build(s, media).await?;
     let bytes = report["bytes"].as_u64().unwrap_or(0);
 
     if push {
@@ -200,7 +200,7 @@ pub async fn run(d: &Daemon, push: bool, media: Option<bool>) -> anyhow::Result<
                 cfg.backup.max_push_bytes / (1024 * 1024)
             );
         }
-        let pushed = push_archive(d, &archive, &report).await?;
+        let pushed = push_archive(s, &archive, &report).await?;
         report["pushed"] = pushed;
     }
 
@@ -216,8 +216,7 @@ pub async fn run(d: &Daemon, push: bool, media: Option<bool>) -> anyhow::Result<
 }
 
 /// Pousse l'archive dans le dépôt privé, avec son manifeste, et applique la rotation.
-async fn push_archive(d: &Daemon, archive: &Path, report: &Value) -> anyhow::Result<Value> {
-    let s = &d.services;
+async fn push_archive(s: &Services, archive: &Path, report: &Value) -> anyhow::Result<Value> {
     let cfg = s.config.config();
     let remote = if cfg.backup.git_remote.trim().is_empty() {
         cfg.memory.vault_git_remote.clone()
@@ -362,8 +361,10 @@ fn iso_week(day: &str) -> String {
 }
 
 /// Une sauvegarde par nuit, à l'heure de `backup.cron`, appelée par le superviseur.
-pub async fn nightly_tick(d: &Daemon) -> anyhow::Result<()> {
-    let s = &d.services;
+pub async fn nightly_tick(
+    s: &Services,
+    messenger: Option<Arc<dyn Messenger>>,
+) -> anyhow::Result<()> {
     let cfg = s.config.config();
     if cfg.backup.cron.trim().is_empty() {
         return Ok(());
@@ -386,14 +387,14 @@ pub async fn nightly_tick(d: &Daemon) -> anyhow::Result<()> {
         return Ok(());
     }
     s.kv_set(key, &now.to_string()).await?;
-    match run(d, true, None).await {
+    match run(s, true, None).await {
         Ok(r) => {
             tracing::info!(report = %r, "sauvegarde nocturne");
         }
         Err(e) => {
             // Jamais de silence : une sauvegarde manquée se dit (issue #39).
             tracing::error!(error = %e, "sauvegarde nocturne en échec");
-            if let Some(m) = d.hooks.messenger() {
+            if let Some(m) = messenger {
                 let _ = m
                     .send_text(
                         &crate::bus::Origin::Internal {
@@ -409,15 +410,14 @@ pub async fn nightly_tick(d: &Daemon) -> anyhow::Result<()> {
 }
 
 /// État des sauvegardes, pour `doctor` et `self_status`.
-pub async fn status(d: &Daemon) -> Value {
-    let last: Option<Value> = d
-        .services
+pub async fn status(s: &Services) -> Value {
+    let last: Option<Value> = s
         .kv_get(LAST_KEY)
         .await
         .ok()
         .flatten()
         .and_then(|v| serde_json::from_str(&v).ok());
-    let cfg = d.services.config.config();
+    let cfg = s.config.config();
     let remote = if cfg.backup.git_remote.trim().is_empty() {
         cfg.memory.vault_git_remote.clone()
     } else {
@@ -427,17 +427,17 @@ pub async fn status(d: &Daemon) -> Value {
         "last": last,
         "remote": remote,
         "cron": cfg.backup.cron,
-        "passphrase": passphrase(d).is_ok(),
+        "passphrase": passphrase(s).is_ok(),
         "media_included": cfg.backup.include_media,
     })
 }
 
 /// Contrôle `doctor` : âge de la dernière sauvegarde, destination, phrase de passe.
-pub async fn doctor_check(d: &Daemon) -> penelope_kernel::api::DoctorCheck {
+pub async fn doctor_check(s: &Services) -> penelope_kernel::api::DoctorCheck {
     use penelope_kernel::api::DoctorCheck;
     const ID: &str = "backup";
     const LABEL: &str = "Sauvegarde";
-    let st = status(d).await;
+    let st = status(s).await;
     if st["passphrase"] != true {
         return DoctorCheck::fail(
             ID,
@@ -454,7 +454,7 @@ pub async fn doctor_check(d: &Daemon) -> penelope_kernel::api::DoctorCheck {
             Some("penelope backup --push".into()),
         );
     };
-    let age_h = age_hours(d, created);
+    let age_h = age_hours(s, created);
     // Durée : l'instantané de la base grossit avec elle, sa dérive se voit ici (#77).
     let duration = match (
         st["last"]["duration_ms"].as_u64(),
@@ -479,11 +479,11 @@ pub async fn doctor_check(d: &Daemon) -> penelope_kernel::api::DoctorCheck {
     }
 }
 
-fn age_hours(d: &Daemon, created: &str) -> i64 {
+fn age_hours(s: &Services, created: &str) -> i64 {
     let then = chrono::DateTime::parse_from_rfc3339(created)
         .map(|t| t.timestamp_millis())
         .unwrap_or(0);
-    ((d.services.clock.now_ms() - then) / 3_600_000).max(0)
+    ((s.clock.now_ms() - then) / 3_600_000).max(0)
 }
 
 // ------------------------------------------------------------------ utilitaires
@@ -524,6 +524,7 @@ fn sha256_of(p: &Path) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::Daemon;
     use penelope_kernel::config::Backup;
 
     use std::sync::Arc;
@@ -566,7 +567,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (archive, report) = build(&d, false).await.unwrap();
+        let (archive, report) = build(&d.services, false).await.unwrap();
         assert!(archive.is_file());
         assert!(report["bytes"].as_u64().unwrap_or(0) > 0);
         assert!(report["sha256"].as_str().is_some());
@@ -627,7 +628,7 @@ mod tests {
             .unwrap();
         let job = {
             let d = d.clone();
-            tokio::spawn(async move { run(&d, false, None).await })
+            tokio::spawn(async move { run(&d.services, false, None).await })
         };
         let mut during = 0;
         while !job.is_finished() {
@@ -656,7 +657,7 @@ mod tests {
             .filter(|e| e.kind == "store.backup")
             .count();
         assert_eq!(events, 1);
-        let check = doctor_check(&d).await;
+        let check = doctor_check(&d.services).await;
         assert!(check.detail.contains("d'instantané"), "{}", check.detail);
     }
 
@@ -664,7 +665,7 @@ mod tests {
     #[tokio::test]
     async fn without_a_passphrase_nothing_is_written() {
         let (_dir, d) = daemon().await;
-        let e = build(&d, false).await.unwrap_err();
+        let e = build(&d.services, false).await.unwrap_err();
         assert!(e.to_string().contains(PASSPHRASE_SECRET), "{e}");
         let out = d.services.platform.dirs.data().join("backups");
         let archives = std::fs::read_dir(&out)
@@ -689,7 +690,7 @@ mod tests {
             Ok(vec!["backup.max_push_bytes".into()])
         })
         .unwrap();
-        let e = run(&d, true, Some(false)).await.unwrap_err();
+        let e = run(&d.services, true, Some(false)).await.unwrap_err();
         assert!(e.to_string().contains("limite"), "{e}");
     }
 
@@ -697,7 +698,7 @@ mod tests {
     #[tokio::test]
     async fn doctor_says_when_there_is_no_backup_yet() {
         let (_dir, d) = daemon().await;
-        let c = doctor_check(&d).await;
+        let c = doctor_check(&d.services).await;
         assert!(!c.ok, "{c:?}");
         assert!(c.detail.contains("phrase de passe"), "{c:?}");
 
@@ -706,7 +707,7 @@ mod tests {
             .secrets
             .set(PASSPHRASE_SECRET, "phrase")
             .unwrap();
-        let c = doctor_check(&d).await;
+        let c = doctor_check(&d.services).await;
         assert!(c.detail.contains("aucune sauvegarde"), "{c:?}");
     }
 

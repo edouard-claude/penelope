@@ -1352,8 +1352,8 @@ mod tests {
         background_turn(&d, &p, &sid, "true").await;
         let job = store(&d.services).of_session(&sid, false).await.unwrap()[0].clone();
         settled(&d, &job.id).await;
-
-        crate::session_ops::close(&d, &sid).await.unwrap();
+        let (s, pr, bus) = (&d.services, d.providers.clone(), &d.bus);
+        crate::session_ops::close(s, pr, bus, &sid).await.unwrap();
         assert_eq!(
             deliver_due(&d).await.unwrap(),
             0,

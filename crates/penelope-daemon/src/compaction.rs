@@ -1114,7 +1114,7 @@ async fn publish(
 
     // Frontière sûre pour le cache : le préfixe change de toute façon, les instantanés
     // mémoire T2 se rafraîchissent au tour suivant (§6.6).
-    crate::episodes::refresh_snapshot(d, s, session_id).await;
+    crate::episodes::refresh_snapshot(s, session_id).await;
 
     report.published += 1;
     report.messages += job.messages();

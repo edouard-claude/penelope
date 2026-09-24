@@ -28,7 +28,7 @@
 //! jetons et ses coûts : seul son `system_hash`, qui mène au texte d'un prompt, est coupé
 //! à la purge d'une session (#205).
 
-use crate::runtime::Daemon;
+use crate::runtime::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_store::rusqlite::params;
 use serde_json::{Value, json};
@@ -60,8 +60,7 @@ const EPHEMERAL_KEYS: &[&str] = &[
 
 /// Efface tout ce qu'une session a dit et fait dire, sauf la chaîne d'audit.
 #[allow(clippy::too_many_lines)] // gel 0.17 : purge d'une session table par table
-pub async fn session(d: &Daemon, session_id: &str, reason: &str) -> anyhow::Result<Value> {
-    let s = &d.services;
+pub async fn session(s: &Services, session_id: &str, reason: &str) -> anyhow::Result<Value> {
     let sess = s.sessions.require(session_id).await?;
     let sid = session_id.to_string();
     let chat_id = sess.tg_chat_id;
@@ -333,8 +332,7 @@ fn media_paths(content: &str, root: &str) -> Vec<String> {
 }
 
 /// Rétention : efface ce qui a passé l'âge. Renvoie le détail par table.
-pub async fn retention(d: &Daemon) -> anyhow::Result<Value> {
-    let s = &d.services;
+pub async fn retention(s: &Services) -> anyhow::Result<Value> {
     let cfg = s.config.config();
     let now = s.clock.now_ms();
     let cutoff = |days: u32| {
@@ -483,8 +481,7 @@ pub async fn retention(d: &Daemon) -> anyhow::Result<Value> {
 /// `redact` ne reconnaissait pas cette forme, et la rétention les aurait laissées quatre-
 /// vingt-dix jours. Les règles ont changé ; les lignes déjà écrites, non. Une passe, une
 /// fois, les réécrit avec les règles du jour.
-pub async fn reredact_outbox(d: &Daemon) -> anyhow::Result<usize> {
-    let s = &d.services;
+pub async fn reredact_outbox(s: &Services) -> anyhow::Result<usize> {
     const FLAG: &str = "outbox.reredacted.v1";
     if s.kv_get(FLAG).await?.is_some() {
         return Ok(0);
@@ -544,8 +541,7 @@ pub async fn reredact_outbox(d: &Daemon) -> anyhow::Result<usize> {
     Ok(fixed)
 }
 
-pub async fn retention_tick(d: &Daemon) -> anyhow::Result<()> {
-    let s = &d.services;
+pub async fn retention_tick(s: &Services) -> anyhow::Result<()> {
     let now = s.clock.now_ms();
     let last = s
         .kv_get("retention.last")
@@ -556,7 +552,7 @@ pub async fn retention_tick(d: &Daemon) -> anyhow::Result<()> {
         return Ok(());
     }
     s.kv_set("retention.last", &now.to_string()).await?;
-    retention(d).await?;
+    retention(s).await?;
     Ok(())
 }
 
@@ -564,6 +560,7 @@ pub async fn retention_tick(d: &Daemon) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use crate::bus::Origin;
+    use crate::runtime::Daemon;
     use penelope_llm::types::ChatMessage;
     use std::sync::Arc;
 
@@ -614,7 +611,7 @@ mod tests {
             .unwrap();
 
         assert!(
-            reredact_outbox(&d).await.unwrap() >= 1,
+            reredact_outbox(&d.services).await.unwrap() >= 1,
             "la ligne fautive est réécrite"
         );
         let rows: Vec<String> = d
@@ -645,7 +642,7 @@ mod tests {
         );
 
         // Une seule fois : la passe suivante ne relit rien.
-        assert_eq!(reredact_outbox(&d).await.unwrap(), 0);
+        assert_eq!(reredact_outbox(&d.services).await.unwrap(), 0);
     }
 
     /// #205 : un prompt système contient le profil et la mémoire rappelée. La purge
@@ -688,7 +685,7 @@ mod tests {
             .await
             .unwrap();
 
-        session(&d, &mine, "essai").await.unwrap();
+        session(&d.services, &mine, "essai").await.unwrap();
 
         let (kept, orphan, still_pointed) = s
             .store
@@ -765,7 +762,7 @@ mod tests {
             .await
             .unwrap();
 
-        let report = retention(&d).await.unwrap();
+        let report = retention(&d.services).await.unwrap();
         assert_eq!(report["prompt_snapshots"], 1, "{report}");
         let left: Vec<String> = s
             .store
@@ -1014,7 +1011,7 @@ mod tests {
         assert!(!word_is_gone(&d, SECRET).await, "le mot doit être là avant");
         assert!(!h.grep(SECRET, None, 10).await.unwrap().is_empty());
 
-        let report = session(&d, &sid, "essai").await.unwrap();
+        let report = session(&d.services, &sid, "essai").await.unwrap();
         assert!(report["events"].as_u64().unwrap() > 0);
         assert_eq!(report["files"], 2, "vocal et artefact effacés : {report}");
 
@@ -1173,7 +1170,7 @@ mod tests {
             .await
             .unwrap();
 
-        let report = retention(&d).await.unwrap();
+        let report = retention(&d.services).await.unwrap();
         assert_eq!(report["effects"], 1, "{report}");
         assert_eq!(report["tg_outbox"], 1);
         assert_eq!(report["approvals"], 1);

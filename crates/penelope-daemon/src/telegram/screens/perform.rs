@@ -331,7 +331,7 @@ impl TelegramGateway {
             }
             "session.close" => {
                 let id = str_of("session");
-                let v = crate::session_ops::close(d, &id)
+                let v = crate::session_ops::close(&d.services, d.providers.clone(), &d.bus, &id)
                     .await
                     .map_err(anyhow::Error::msg)?;
                 Done {
@@ -350,7 +350,7 @@ impl TelegramGateway {
             "session.rewind" => {
                 let turns = p["turns"].as_u64().unwrap_or(1) as usize;
                 let session = d.chat_session_for(&origin).await?;
-                let v = crate::session_ops::rewind(d, &session, turns)
+                let v = crate::session_ops::rewind(&d.services, &d.bus, &session, turns)
                     .await
                     .map_err(anyhow::Error::msg)?;
                 Done {

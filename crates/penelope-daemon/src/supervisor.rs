@@ -394,11 +394,11 @@ async fn maintenance_loop(d: Arc<Daemon>) {
                 .services
                 .kv_set("vault.gaps.checked", &now.to_string())
                 .await;
-            if let Err(e) = crate::vault_inventory::report_gaps(&d).await {
+            if let Err(e) = crate::vault_inventory::report_gaps(&d.services).await {
                 tracing::warn!(error = %e, "inventaire du vault");
             }
         }
-        crate::vault_git::autocommit_tick(&d).await;
+        crate::vault_git::autocommit_tick(&d.services).await;
         sleep_or_shutdown(&d, Duration::from_secs(60)).await;
     }
 }
@@ -527,17 +527,17 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     skills_tick(d).await?;
 
     // Sauvegarde complète à l'heure dite (issue #42).
-    if let Err(e) = crate::backup::nightly_tick(d).await {
+    if let Err(e) = crate::backup::nightly_tick(&d.services, d.hooks.messenger()).await {
         tracing::warn!(error = %e, "sauvegarde nocturne");
     }
 
     // Messages déjà en file, rédigés avec les règles du jour : une seule fois (#148).
-    if let Err(e) = crate::purge::reredact_outbox(d).await {
+    if let Err(e) = crate::purge::reredact_outbox(&d.services).await {
         tracing::warn!(error = %e, "relecture du rédacteur sur la file Telegram");
     }
 
     // Rétention des traces : une passe par jour (issue #46).
-    if let Err(e) = crate::purge::retention_tick(d).await {
+    if let Err(e) = crate::purge::retention_tick(&d.services).await {
         tracing::warn!(error = %e, "rétention");
     }
 

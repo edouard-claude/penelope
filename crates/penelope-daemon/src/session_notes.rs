@@ -498,7 +498,9 @@ mod tests {
         assert!(tiers.volatile.contains("centimes entiers"));
 
         // Fork : copie propre, modifiable sans toucher l'original.
-        let fork = crate::session_ops::fork(&d, &sid, None).await.unwrap();
+        let fork = crate::session_ops::fork(&d.services, &sid, None)
+            .await
+            .unwrap();
         let fork = fork["session"].as_str().unwrap().to_string();
         let fork_file = file_of(s, &fork).await.unwrap().expect("notes du fork");
         assert_ne!(fork_file, rel);

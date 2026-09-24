@@ -52,7 +52,7 @@ impl crate::selfknow::Admin for Daemon {
     }
 
     async fn backup_status(&self) -> Result<Value, String> {
-        Ok(crate::backup::status(self).await)
+        Ok(crate::backup::status(&self.services).await)
     }
 
     async fn send_voice(
@@ -380,7 +380,8 @@ impl Daemon {
                 .await?
                 .is_none()
         {
-            episode = crate::episodes::before_message(self, &session, &text).await?;
+            let (s, p) = (self.services.clone(), self.providers.clone());
+            episode = crate::episodes::before_message(s, p, &session, &text).await?;
         }
 
         // 1. Le message utilisateur, écrit une seule fois même si le tour est rejoué. Avec

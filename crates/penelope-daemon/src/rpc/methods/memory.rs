@@ -90,11 +90,17 @@ impl Rpc {
                 "retried": s.candidates.retry_origin_rejections().await?,
             })),
             method::MEM_AUDIT => {
-                let audit = crate::mem_audit::run(&self.daemon).await?;
+                let audit = crate::mem_audit::run(
+                    &self.daemon.services,
+                    self.daemon.hooks.mcp_supervisor(),
+                )
+                .await?;
                 Ok(crate::mem_audit::to_json(&audit))
             }
             method::ONBOARD_NEXT | method::ONBOARD_ANSWER | method::ONBOARD_WRITE => {
-                crate::onboarding::rpc(&self.daemon, method, p).await
+                let d = &self.daemon;
+                let cli = d.chat_session_for(&crate::bus::Origin::Cli);
+                crate::onboarding::rpc(&d.services, method, p, cli).await
             }
             method::MEM_FORGET => {
                 let uid = required_str(p, "uid")?;
@@ -125,7 +131,7 @@ impl Rpc {
             }
             method::VAULT_SYNC => {
                 let day = s.clock.now_rfc3339()[..10].to_string();
-                crate::dream::vault_sync(&self.daemon, &format!("sync: {day}"))
+                crate::dream::vault_sync(&self.daemon.services, &format!("sync: {day}"))
                     .await
                     .map_err(anyhow::Error::msg)
             }

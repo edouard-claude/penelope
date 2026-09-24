@@ -143,7 +143,7 @@ pub async fn failure_reported(d: &Arc<Daemon>, reason: &str, always: bool) {
     });
     if written.is_ok() {
         let message = format!("{}{day} ({run_id}) : échec", crate::vault_git::DREAM_PREFIX);
-        if let Err(e) = vault_sync(d, &message).await {
+        if let Err(e) = vault_sync(&d.services, &message).await {
             tracing::warn!(error = %e, "commit du vault après une nuit ratée");
         }
     }
@@ -220,8 +220,7 @@ pub(super) async fn last_failure(s: &Services) -> Option<String> {
 // ------------------------------------------------------------------ vault
 
 /// Commit du vault s'il est sous git, puis push si un remote est configuré.
-pub async fn vault_sync(d: &Arc<Daemon>, message: &str) -> Result<Value, String> {
-    let s = &d.services;
+pub async fn vault_sync(s: &Services, message: &str) -> Result<Value, String> {
     let cfg = s.config.config();
     let vault = crate::helpers::vault_dir(s);
     if let Err(e) = crate::vault_git::ensure_repo(s).await {

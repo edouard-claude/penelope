@@ -273,7 +273,7 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
     }
     // Le lundi, l'audit de la mémoire et son écart sur la semaine (issue #23).
     if chrono::Datelike::weekday(&s.clock.now_utc()) == chrono::Weekday::Mon {
-        match crate::mem_audit::run(d).await {
+        match crate::mem_audit::run(&d.services, d.hooks.mcp_supervisor()).await {
             Ok(audit) => {
                 let delta = audit
                     .delta

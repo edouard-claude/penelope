@@ -7,7 +7,7 @@
 //! `memoire.md` ; rien n'est écrit sans validation, et chaque entrée garde sa provenance
 //! vers la question d'où elle vient.
 
-use crate::runtime::Daemon;
+use crate::runtime::Services;
 use penelope_memory::{Level, Provenance};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -221,8 +221,7 @@ fn kv_current() -> &'static str {
     "onboard.current"
 }
 
-fn today(d: &Daemon) -> String {
-    let s = &d.services;
+fn today(s: &Services) -> String {
     let cfg = s.config.config();
     let utc = chrono::DateTime::from_timestamp_millis(s.clock.now_ms()).unwrap_or_default();
     match cfg.owner.timezone.parse::<chrono_tz::Tz>() {
@@ -231,24 +230,23 @@ fn today(d: &Daemon) -> String {
     }
 }
 
-fn vault(d: &Daemon) -> std::path::PathBuf {
-    crate::helpers::vault_dir(&d.services)
+fn vault(s: &Services) -> std::path::PathBuf {
+    crate::helpers::vault_dir(s)
 }
 
 /// Séance en cours, sinon une nouvelle (toutes les questions, ou une partie). Le fichier
 /// est écrit avant la première question.
-pub async fn start(d: &Daemon, part: Option<Part>) -> anyhow::Result<Sitting> {
-    if let Some(rel) = d
-        .services
+pub async fn start(services: &Services, part: Option<Part>) -> anyhow::Result<Sitting> {
+    if let Some(rel) = services
         .kv_get(kv_current())
         .await?
         .filter(|r| !r.is_empty())
-        && let Some(s) = load(d, &rel)
+        && let Some(s) = load(services, &rel)
         && (part.is_none() || s.part == part)
     {
         return Ok(s);
     }
-    let date = today(d);
+    let date = today(services);
     // Nom unique dans tout le vault : `accueil-AAAA-MM-JJ`, jamais le nom d'une note du
     // journal (issue #29).
     let rel = match part {
@@ -264,14 +262,14 @@ pub async fn start(d: &Daemon, part: Option<Part>) -> anyhow::Result<Sitting> {
             .map(|q| (q.n, Answer::Pending))
             .collect(),
     };
-    save(d, &sitting)?;
-    d.services.kv_set(kv_current(), &rel).await?;
+    save(services, &sitting)?;
+    services.kv_set(kv_current(), &rel).await?;
     Ok(sitting)
 }
 
 /// Relit une séance depuis son fichier.
-pub fn load(d: &Daemon, rel: &str) -> Option<Sitting> {
-    let raw = std::fs::read_to_string(vault(d).join(rel)).ok()?;
+pub fn load(services: &Services, rel: &str) -> Option<Sitting> {
+    let raw = std::fs::read_to_string(vault(services).join(rel)).ok()?;
     let answers = parse(&raw);
     if answers.is_empty() {
         return None;
@@ -288,8 +286,8 @@ pub fn load(d: &Daemon, rel: &str) -> Option<Sitting> {
     })
 }
 
-fn save(d: &Daemon, s: &Sitting) -> anyhow::Result<()> {
-    let vault = vault(d);
+fn save(services: &Services, s: &Sitting) -> anyhow::Result<()> {
+    let vault = vault(services);
     let date = s
         .rel
         .trim_start_matches("accueil/")
@@ -299,14 +297,21 @@ fn save(d: &Daemon, s: &Sitting) -> anyhow::Result<()> {
         .collect::<String>();
     let current = std::fs::read_to_string(vault.join(&s.rel)).unwrap_or_default();
     let content = penelope_memory::wiki::replace_body(&current, &s.render(&date));
-    crate::vault_ops::save_note(&vault, &s.rel, &content, &today(d)).map_err(anyhow::Error::msg)?;
+    crate::vault_ops::save_note(&vault, &s.rel, &content, &today(services))
+        .map_err(anyhow::Error::msg)?;
     Ok(())
 }
 
 /// Range une réponse (`None` : question passée) et rend la séance à jour. Une réponse à
 /// choix doit correspondre à un choix.
-pub async fn answer(d: &Daemon, rel: &str, n: u32, text: Option<&str>) -> anyhow::Result<Sitting> {
-    let mut s = load(d, rel).ok_or_else(|| anyhow::anyhow!("séance d'accueil introuvable"))?;
+pub async fn answer(
+    services: &Services,
+    rel: &str,
+    n: u32,
+    text: Option<&str>,
+) -> anyhow::Result<Sitting> {
+    let mut s =
+        load(services, rel).ok_or_else(|| anyhow::anyhow!("séance d'accueil introuvable"))?;
     let q = question(n).ok_or_else(|| anyhow::anyhow!("question {n} inconnue"))?;
     let a = match text.map(str::trim).filter(|t| !t.is_empty()) {
         None => Answer::Skipped,
@@ -318,7 +323,7 @@ pub async fn answer(d: &Daemon, rel: &str, n: u32, text: Option<&str>) -> anyhow
         Some(t) => Answer::Given(t.to_string()),
     };
     s.answers.insert(n, a);
-    save(d, &s)?;
+    save(services, &s)?;
     Ok(s)
 }
 
@@ -494,8 +499,7 @@ impl Plan {
 }
 
 /// Compare les propositions à la mémoire actuelle.
-pub async fn plan(d: &Daemon, s: &Sitting) -> anyhow::Result<Plan> {
-    let services = &d.services;
+pub async fn plan(services: &Services, s: &Sitting) -> anyhow::Result<Plan> {
     let mut plan = Plan::default();
     for p in proposals(s) {
         let existing: Vec<(String, String, Option<String>)> = {
@@ -575,10 +579,13 @@ pub fn plan_text(plan: &Plan) -> String {
 }
 
 /// Écrit le plan validé ; rend (ajouts, remplacements).
-pub async fn write(d: &Daemon, s: &Sitting, session_id: &str) -> anyhow::Result<(usize, usize)> {
-    let services = &d.services;
-    let plan = plan(d, s).await?;
-    let vault = vault(d);
+pub async fn write(
+    services: &Services,
+    s: &Sitting,
+    session_id: &str,
+) -> anyhow::Result<(usize, usize)> {
+    let plan = plan(services, s).await?;
+    let vault = vault(services);
     let prov = |p: &Proposal| {
         Provenance::owner(session_id, "accueil", &services.clock.now_rfc3339())
             .with_source(format!("{}#q{}", s.rel, p.question))
@@ -600,7 +607,7 @@ pub async fn write(d: &Daemon, s: &Sitting, session_id: &str) -> anyhow::Result<
     let sitting = s.rel.trim_start_matches("accueil/").trim_end_matches(".md");
     if let Err(e) = crate::vault_ops::log(
         &vault,
-        &today(d),
+        &today(services),
         "accueil",
         &format!(
             "{} ajout(s), {} remplacement(s)",
@@ -615,13 +622,13 @@ pub async fn write(d: &Daemon, s: &Sitting, session_id: &str) -> anyhow::Result<
 }
 
 /// Abandonne la séance en cours (le fichier reste dans le vault).
-pub async fn cancel(d: &Daemon) -> anyhow::Result<()> {
-    d.services.kv_set(kv_current(), "").await
+pub async fn cancel(services: &Services) -> anyhow::Result<()> {
+    services.kv_set(kv_current(), "").await
 }
 
 /// Vrai quand le profil n'a encore aucune entrée : l'accueil est proposé.
-pub async fn profile_is_empty(d: &Daemon) -> bool {
-    d.services
+pub async fn profile_is_empty(services: &Services) -> bool {
+    services
         .memory
         .by_level(Level::Profil)
         .await
@@ -650,10 +657,10 @@ pub fn question_json(s: &Sitting, q: &Question) -> Value {
 /// Pénélope avait l'inventaire sous la main. Ce qui est détecté est **proposé**, pas
 /// écrit : le propriétaire confirme ou complète, et ce qu'il déclare reste prioritaire
 /// sur ce qui est détecté (§ accueil, issue #21).
-pub async fn question_payload(d: &Daemon, s: &Sitting, q: &Question) -> Value {
+pub async fn question_payload(services: &Services, s: &Sitting, q: &Question) -> Value {
     let mut v = question_json(s, q);
     if q.part == Part::Outils
-        && let Some(inv) = crate::machine::cached(&d.services).await
+        && let Some(inv) = crate::machine::cached(services).await
     {
         let installed: Vec<&str> = inv.present.iter().map(|t| t.name.as_str()).collect();
         if !installed.is_empty() {
@@ -669,16 +676,22 @@ pub async fn question_payload(d: &Daemon, s: &Sitting, q: &Question) -> Value {
 }
 
 /// RPC `onboard.*`.
-pub async fn rpc(d: &std::sync::Arc<Daemon>, method: &str, p: &Value) -> anyhow::Result<Value> {
+/// `cli_session` n'est attendu que pour `onboard.write` : la session CLI où écrire.
+pub async fn rpc(
+    services: &Services,
+    method: &str,
+    p: &Value,
+    cli_session: impl std::future::Future<Output = anyhow::Result<String>>,
+) -> anyhow::Result<Value> {
     use penelope_kernel::api::method as m;
     let part = p.get("part").and_then(|v| v.as_str()).and_then(Part::parse);
     match method {
         m::ONBOARD_NEXT => {
-            let s = start(d, part).await?;
+            let s = start(services, part).await?;
             Ok(match s.next() {
-                Some(q) => json!({"question": question_payload(d, &s, q).await}),
+                Some(q) => json!({"question": question_payload(services, &s, q).await}),
                 None => {
-                    let plan = plan(d, &s).await?;
+                    let plan = plan(services, &s).await?;
                     json!({"done": true, "rel": s.rel, "plan": plan, "text": plan_text(&plan)})
                 }
             })
@@ -686,18 +699,19 @@ pub async fn rpc(d: &std::sync::Arc<Daemon>, method: &str, p: &Value) -> anyhow:
         m::ONBOARD_ANSWER => {
             let rel = p["rel"].as_str().unwrap_or_default();
             let n = p["n"].as_u64().unwrap_or(0) as u32;
-            let s = answer(d, rel, n, p.get("answer").and_then(|a| a.as_str())).await?;
+            let s = answer(services, rel, n, p.get("answer").and_then(|a| a.as_str())).await?;
             let next = match s.next() {
-                Some(q) => Some(question_payload(d, &s, q).await),
+                Some(q) => Some(question_payload(services, &s, q).await),
                 None => None,
             };
             Ok(json!({ "next": next }))
         }
         _ => {
             let rel = p["rel"].as_str().unwrap_or_default();
-            let s = load(d, rel).ok_or_else(|| anyhow::anyhow!("séance d'accueil introuvable"))?;
-            let session = d.chat_session_for(&crate::bus::Origin::Cli).await?;
-            let (added, replaced) = write(d, &s, &session).await?;
+            let s = load(services, rel)
+                .ok_or_else(|| anyhow::anyhow!("séance d'accueil introuvable"))?;
+            let session = cli_session.await?;
+            let (added, replaced) = write(services, &s, &session).await?;
             Ok(json!({"added": added, "replaced": replaced}))
         }
     }

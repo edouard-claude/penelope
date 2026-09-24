@@ -8,12 +8,11 @@
 //! penelope mem diff [--since dream] ─► ce que le dernier rêve a changé
 //! ```
 
-use crate::runtime::{Daemon, Services};
+use crate::runtime::Services;
 use penelope_kernel::api::DoctorCheck;
 use penelope_tools::git;
 use serde_json::{Value, json};
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Préfixe des commits de consolidation.
@@ -111,8 +110,7 @@ pub fn doctor_check(s: &Services) -> DoctorCheck {
 }
 
 /// Commit périodique des éditions du vault, à la période `vault_git_autocommit`.
-pub async fn autocommit_tick(d: &Arc<Daemon>) {
-    let s = &d.services;
+pub async fn autocommit_tick(s: &Services) {
     let Some(every) = autocommit_interval(s) else {
         return;
     };
@@ -130,7 +128,7 @@ pub async fn autocommit_tick(d: &Arc<Daemon>) {
     let _ = s.kv_set("vault.git.autocommit", &now.to_string()).await;
     let stamp = s.clock.now_rfc3339();
     if let Err(e) = crate::dream::vault_sync(
-        d,
+        s,
         &format!("autocommit : {}", &stamp[..16.min(stamp.len())]),
     )
     .await

@@ -246,7 +246,7 @@ pub async fn ingest(
     let _ = s.kv_set(&sha_key, &slug).await;
     // Wiki de concepts : pages, liens, termes à définir, index (issue #22).
     if let Err(e) = crate::concepts::apply(
-        d,
+        &d.embedder(),
         &slug,
         &title,
         origin,

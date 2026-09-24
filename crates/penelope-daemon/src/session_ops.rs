@@ -1,7 +1,9 @@
 //! Opérations sur les sessions et le stockage (§4.4, §15) : fork, retour en arrière,
 //! export, reconstruction des index dérivés.
 
-use crate::runtime::{Daemon, Services};
+use crate::bus::Bus;
+use crate::ports::ProviderSource;
+use crate::runtime::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_kernel::session::SessionKind;
 use penelope_llm::types::Role;
@@ -12,12 +14,7 @@ use std::sync::Arc;
 
 /// Duplique une session : transcript, métadonnées et résumés actifs. La nouvelle session
 /// part du même point et diverge ensuite.
-pub async fn fork(
-    d: &Arc<Daemon>,
-    session_id: &str,
-    title: Option<String>,
-) -> anyhow::Result<Value> {
-    let s = &d.services;
+pub async fn fork(s: &Services, session_id: &str, title: Option<String>) -> anyhow::Result<Value> {
     let source = s
         .sessions
         .get(session_id)
@@ -102,9 +99,14 @@ pub async fn fork(
 /// partent dans une session d'archive (fermée, rattachée à la session d'origine).
 /// Arrête ce que fait une session sans la fermer : tour en cours interrompu, file vidée.
 /// Sert quand une session perd son chat (`/fork`, `/switch`) ou se ferme (issue #10).
-pub async fn silence(d: &Daemon, session_id: &str, reason: &str) -> anyhow::Result<usize> {
-    d.bus.cancel_session(session_id);
-    let cancelled = d.services.turns.cancel_pending(session_id, reason).await?;
+pub async fn silence(
+    s: &Services,
+    bus: &Bus,
+    session_id: &str,
+    reason: &str,
+) -> anyhow::Result<usize> {
+    bus.cancel_session(session_id);
+    let cancelled = s.turns.cancel_pending(session_id, reason).await?;
     if cancelled > 0 {
         tracing::info!(session = %session_id, cancelled, %reason, "tours annulés");
     }
@@ -112,14 +114,19 @@ pub async fn silence(d: &Daemon, session_id: &str, reason: &str) -> anyhow::Resu
 }
 
 /// Ferme une session : tour en cours arrêté, file vidée, chat détaché, épisode relu.
-pub async fn close(d: &Arc<Daemon>, session_id: &str) -> anyhow::Result<Value> {
-    let s = &d.services;
+pub async fn close(
+    s: &Arc<Services>,
+    providers: Arc<dyn ProviderSource>,
+    bus: &Bus,
+    session_id: &str,
+) -> anyhow::Result<Value> {
     let sess = s.sessions.require(session_id).await?;
-    let cancelled = silence(d, session_id, "session fermée").await?;
+    let cancelled = silence(s, bus, session_id, "session fermée").await?;
     s.sessions.set_state(session_id, "closed").await?;
     s.sessions.unbind_telegram(session_id).await?;
     crate::episodes::spawn_ingest(
-        d.clone(),
+        s.clone(),
+        providers,
         session_id.to_string(),
         sess.episode_seq,
         crate::episodes::Boundary::NewSession,
@@ -180,12 +187,16 @@ pub async fn resolve(
     }
 }
 
-pub async fn rewind(d: &Arc<Daemon>, session_id: &str, turns: usize) -> anyhow::Result<Value> {
-    let s = &d.services;
+pub async fn rewind(
+    s: &Services,
+    bus: &Bus,
+    session_id: &str,
+    turns: usize,
+) -> anyhow::Result<Value> {
     if turns == 0 {
         anyhow::bail!("nombre de tours à défaire : au moins 1");
     }
-    if d.bus.is_active(session_id) {
+    if bus.is_active(session_id) {
         anyhow::bail!("un tour est en cours dans cette session : `/stop` d'abord");
     }
     let entries = s.context.history.load(session_id, 0).await?;
@@ -264,8 +275,7 @@ fn exports_dir(s: &Services) -> PathBuf {
 
 /// Exporte en JSONL : `session <id>` (messages et événements), `run <id>` (trajectoire
 /// du run : état, étapes, messages, événements), `all` (toutes les sessions).
-pub async fn export(d: &Arc<Daemon>, what: &str, id: Option<&str>) -> anyhow::Result<Value> {
-    let s = &d.services;
+pub async fn export(s: &Services, what: &str, id: Option<&str>) -> anyhow::Result<Value> {
     let stamp = s.clock.now_rfc3339().replace([':', '.'], "-");
     let dir = exports_dir(s);
     std::fs::create_dir_all(&dir)?;
@@ -337,8 +347,7 @@ async fn session_lines(s: &Services, session_id: &str) -> anyhow::Result<Vec<Val
 
 /// Reconstruit ce qui se reconstruit (§4.4) : index plein texte des messages, index de la
 /// mémoire depuis le vault ; vérifie la chaîne d'audit au passage.
-pub async fn rebuild(d: &Arc<Daemon>) -> anyhow::Result<Value> {
-    let s = &d.services;
+pub async fn rebuild(s: &Services) -> anyhow::Result<Value> {
     let messages = s.context.history.rebuild_fts().await?;
     let vault = crate::helpers::vault_dir(s);
     let memory = crate::vault_ops::reindex(s, &vault)
@@ -362,6 +371,7 @@ pub async fn rebuild(d: &Arc<Daemon>) -> anyhow::Result<Value> {
 mod tests {
     use super::*;
     use crate::bus::Origin;
+    use crate::runtime::Daemon;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::types::ChatMessage;
 
@@ -391,7 +401,7 @@ mod tests {
         let (_dir, d) = daemon().await;
         let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
         say(&d, &sid, "on parle du devis ACME", "d'accord").await;
-        let v = fork(&d, &sid, None).await.unwrap();
+        let v = fork(&d.services, &sid, None).await.unwrap();
         let fork_id = v["session"].as_str().unwrap().to_string();
         assert_eq!(v["messages"], 2);
         say(&d, &fork_id, "variante sans remise", "noté").await;
@@ -413,7 +423,7 @@ mod tests {
         say(&d, &sid, "un", "1").await;
         say(&d, &sid, "deux", "2").await;
         say(&d, &sid, "trois", "3").await;
-        let v = rewind(&d, &sid, 2).await.unwrap();
+        let v = rewind(&d.services, &d.bus, &sid, 2).await.unwrap();
         assert_eq!(v["removed"], 4);
         let h = &d.services.context.history;
         let left: Vec<String> = h
@@ -429,7 +439,7 @@ mod tests {
         // Le numéro suivant repart juste après ce qui reste.
         say(&d, &sid, "reprise", "ok").await;
         assert_eq!(h.load(&sid, 0).await.unwrap()[2].seq, 3);
-        assert!(rewind(&d, &sid, 0).await.is_err());
+        assert!(rewind(&d.services, &d.bus, &sid, 0).await.is_err());
     }
 
     /// T10 : le fork et le retour arrière entrent au journal, avec des bornes que le
@@ -500,14 +510,14 @@ mod tests {
         let (_dir, d) = daemon().await;
         let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
         say(&d, &sid, "le mot secret est framboise", "compris").await;
-        let v = export(&d, "session", Some(&sid)).await.unwrap();
+        let v = export(&d.services, "session", Some(&sid)).await.unwrap();
         let raw = std::fs::read_to_string(v["path"].as_str().unwrap()).unwrap();
         assert!(raw.lines().count() >= 2);
         assert!(
             raw.lines()
                 .all(|l| serde_json::from_str::<Value>(l).is_ok())
         );
-        assert!(export(&d, "inconnu", None).await.is_err());
+        assert!(export(&d.services, "inconnu", None).await.is_err());
 
         let s = &d.services;
         s.store
@@ -525,7 +535,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let r = rebuild(&d).await.unwrap();
+        let r = rebuild(&d.services).await.unwrap();
         assert_eq!(r["messages_fts"], 2);
         assert_eq!(r["audit"]["ok"], true);
         assert!(

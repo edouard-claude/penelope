@@ -15,7 +15,8 @@
 //! l'épisode. Les instantanés mémoire T2 sont figés par épisode : une écriture de profil
 //! apparaît à l'épisode suivant (ou après une compaction), sans casser le cache entre-temps.
 
-use crate::runtime::{Daemon, Services};
+use crate::ports::ProviderSource;
+use crate::runtime::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_kernel::session::{Session, SessionKind};
 use penelope_llm::catalog::strip_provider;
@@ -104,8 +105,12 @@ pub fn similarity(a: &BTreeMap<String, f64>, b: &BTreeMap<String, f64>) -> f64 {
 
 /// Avant d'écrire un message dans une session de conversation : clôt l'épisode courant
 /// s'il le faut et renvoie le numéro de l'épisode où écrire le message.
-pub async fn before_message(d: &Arc<Daemon>, session: &Session, text: &str) -> anyhow::Result<i64> {
-    let s = &d.services;
+pub async fn before_message(
+    s: Arc<Services>,
+    providers: Arc<dyn ProviderSource>,
+    session: &Session,
+    text: &str,
+) -> anyhow::Result<i64> {
     let current = session.episode_seq;
     if session.kind != SessionKind::Chat {
         return Ok(current);
@@ -126,22 +131,22 @@ pub async fn before_message(d: &Arc<Daemon>, session: &Session, text: &str) -> a
     let boundary = if idle {
         Some(Boundary::Idle)
     } else {
-        topic_change(d, session.id.as_str(), &episode, text).await?
+        topic_change(&s, session.id.as_str(), &episode, text).await?
     };
     let Some(boundary) = boundary else {
         return Ok(current);
     };
-    close(d, session.id.as_str(), current, boundary).await
+    close(s, providers, session.id.as_str(), current, boundary).await
 }
 
 /// Clôt l'épisode `episode` : le suivant s'ouvre, la relecture part en arrière-plan.
 pub async fn close(
-    d: &Arc<Daemon>,
+    s: Arc<Services>,
+    providers: Arc<dyn ProviderSource>,
     session_id: &str,
     episode: i64,
     boundary: Boundary,
 ) -> anyhow::Result<i64> {
-    let s = &d.services;
     let next = s.sessions.next_episode(session_id).await?;
     let _ = s.kv_delete(&streak_key(session_id)).await;
     let _ = s
@@ -155,13 +160,13 @@ pub async fn close(
         )
         .await;
     tracing::info!(session = %session_id, episode, raison = boundary.as_str(), "épisode clos");
-    spawn_ingest(d.clone(), session_id.to_string(), episode, boundary);
+    spawn_ingest(s, providers, session_id.to_string(), episode, boundary);
     Ok(next)
 }
 
 /// Trois messages consécutifs éloignés du sujet de l'épisode ouvrent un nouvel épisode.
 async fn topic_change(
-    d: &Arc<Daemon>,
+    s: &Services,
     session_id: &str,
     episode: &[penelope_context::transcript::Entry],
     text: &str,
@@ -170,8 +175,7 @@ async fn topic_change(
     if incoming.len() < TOPIC_MIN_TERMS {
         return Ok(None);
     }
-    let streak: u32 = d
-        .services
+    let streak: u32 = s
         .kv_get(&streak_key(session_id))
         .await?
         .and_then(|v| v.parse().ok())
@@ -194,7 +198,7 @@ async fn topic_change(
     }
     if similarity(&incoming, &profile) >= TOPIC_MIN_SIMILARITY {
         if streak > 0 {
-            d.services.kv_delete(&streak_key(session_id)).await?;
+            s.kv_delete(&streak_key(session_id)).await?;
         }
         return Ok(None);
     }
@@ -202,16 +206,21 @@ async fn topic_change(
     if streak >= TOPIC_STREAK {
         return Ok(Some(Boundary::TopicChange));
     }
-    d.services
-        .kv_set(&streak_key(session_id), &streak.to_string())
+    s.kv_set(&streak_key(session_id), &streak.to_string())
         .await?;
     Ok(None)
 }
 
 /// Relit l'épisode sans attendre.
-pub fn spawn_ingest(d: Arc<Daemon>, session_id: String, episode: i64, boundary: Boundary) {
+pub fn spawn_ingest(
+    s: Arc<Services>,
+    providers: Arc<dyn ProviderSource>,
+    session_id: String,
+    episode: i64,
+    boundary: Boundary,
+) {
     tokio::spawn(async move {
-        match ingest(&d, &session_id, episode, boundary).await {
+        match ingest(&s, providers.as_ref(), &session_id, episode, boundary).await {
             Ok(n) => tracing::info!(session = %session_id, episode, candidats = n, "épisode relu"),
             Err(e) => {
                 tracing::warn!(session = %session_id, episode, error = %e, "relecture d'épisode")
@@ -256,12 +265,12 @@ pub fn condensed(entries: &[penelope_context::transcript::Entry]) -> (String, us
 
 /// Relecture d'un épisode clos, une seule fois : résumé dans le journal, candidats.
 pub async fn ingest(
-    d: &Arc<Daemon>,
+    s: &Services,
+    providers: &dyn ProviderSource,
     session_id: &str,
     episode: i64,
     boundary: Boundary,
 ) -> anyhow::Result<usize> {
-    let s = &d.services;
     let flag = format!("episode.ingested.{session_id}.{episode}");
     if s.kv_get(&flag).await?.is_some() {
         return Ok(0);
@@ -286,8 +295,11 @@ pub async fn ingest(
         .alias_model(&alias)
         .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}`"))?
         .to_string();
-    let model = crate::codex_scope::background(&d.services, &model, "relecture d'épisode").await;
-    let provider = d.provider_for(&model).await.map_err(anyhow::Error::msg)?;
+    let model = crate::codex_scope::background(s, &model, "relecture d'épisode").await;
+    let provider = providers
+        .provider_for(&model)
+        .await
+        .map_err(anyhow::Error::msg)?;
     let info = s.catalog.get(strip_provider(&model));
     let effort = info.as_ref().and_then(|i| i.lightest_effort());
     let structured = info
@@ -416,16 +428,14 @@ pub fn snapshot_key(session_id: &str, episode: i64) -> String {
 }
 
 /// Instantané T2 à reconstruire au prochain tour (après une compaction, frontière sûre).
-pub async fn refresh_snapshot(d: &Daemon, s: &Services, session_id: &str) {
+pub async fn refresh_snapshot(s: &Services, session_id: &str) {
     if let Ok(Some(sess)) = s.sessions.get(session_id).await {
-        let _ = d
-            .services
+        let _ = s
             .kv_delete(&snapshot_key(session_id, sess.episode_seq))
             .await;
     }
     // La compaction casse le cache : le préfixe peut suivre ses changements.
-    let _ = d
-        .services
+    let _ = s
         .kv_delete(&crate::cache_audit::prefix_key(session_id))
         .await;
 }
@@ -434,6 +444,7 @@ pub async fn refresh_snapshot(d: &Daemon, s: &Services, session_id: &str) {
 mod tests {
     use super::*;
     use crate::bus::Origin as Channel;
+    use crate::runtime::Daemon;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::MockProvider;
 
@@ -510,9 +521,14 @@ mod tests {
 
         clock.advance_ms(IDLE_MS - 60_000);
         assert_eq!(
-            before_message(&d, &session(&d, &sid).await, "encore une question")
-                .await
-                .unwrap(),
+            before_message(
+                d.services.clone(),
+                d.providers.clone(),
+                &session(&d, &sid).await,
+                "encore une question"
+            )
+            .await
+            .unwrap(),
             first,
             "moins de deux heures : même épisode"
         );
@@ -522,9 +538,14 @@ mod tests {
             r#"{"resume": "Migration de la facturation vers PostgreSQL planifiée.",
                 "candidats": [{"type": "preference", "texte": "Les migrations passent par sqlx", "importance": 7, "quand": ""}]}"#,
         );
-        let next = before_message(&d, &session(&d, &sid).await, "bonjour")
-            .await
-            .unwrap();
+        let next = before_message(
+            d.services.clone(),
+            d.providers.clone(),
+            &session(&d, &sid).await,
+            "bonjour",
+        )
+        .await
+        .unwrap();
         assert_eq!(next, first + 1);
         assert_eq!(session(&d, &sid).await.episode_seq, first + 1);
 
@@ -573,7 +594,18 @@ mod tests {
         assert!(journal.contains("clos (inactivité)"), "{journal}");
 
         // Relire deux fois le même épisode ne coûte rien et ne duplique rien.
-        assert_eq!(ingest(&d, &sid, first, Boundary::Idle).await.unwrap(), 0);
+        assert_eq!(
+            ingest(
+                &d.services,
+                d.providers.as_ref(),
+                &sid,
+                first,
+                Boundary::Idle
+            )
+            .await
+            .unwrap(),
+            0
+        );
         assert_eq!(p.call_count(), 1);
     }
 
@@ -601,9 +633,14 @@ mod tests {
 
         let on_topic = "Et les index de la table des factures pendant la migration ?";
         assert_eq!(
-            before_message(&d, &session(&d, &sid).await, on_topic)
-                .await
-                .unwrap(),
+            before_message(
+                d.services.clone(),
+                d.providers.clone(),
+                &session(&d, &sid).await,
+                on_topic
+            )
+            .await
+            .unwrap(),
             first
         );
         say(&d, &sid, first, Role::User, on_topic).await;
@@ -614,30 +651,50 @@ mod tests {
             "Et pour la garniture sucrée, caramel ou chocolat maison ?",
         ];
         assert_eq!(
-            before_message(&d, &session(&d, &sid).await, off[0])
-                .await
-                .unwrap(),
+            before_message(
+                d.services.clone(),
+                d.providers.clone(),
+                &session(&d, &sid).await,
+                off[0]
+            )
+            .await
+            .unwrap(),
             first
         );
         say(&d, &sid, first, Role::User, off[0]).await;
         assert_eq!(
-            before_message(&d, &session(&d, &sid).await, "ok")
-                .await
-                .unwrap(),
+            before_message(
+                d.services.clone(),
+                d.providers.clone(),
+                &session(&d, &sid).await,
+                "ok"
+            )
+            .await
+            .unwrap(),
             first,
             "trop court pour compter"
         );
         assert_eq!(
-            before_message(&d, &session(&d, &sid).await, off[1])
-                .await
-                .unwrap(),
+            before_message(
+                d.services.clone(),
+                d.providers.clone(),
+                &session(&d, &sid).await,
+                off[1]
+            )
+            .await
+            .unwrap(),
             first
         );
         say(&d, &sid, first, Role::User, off[1]).await;
         assert_eq!(
-            before_message(&d, &session(&d, &sid).await, off[2])
-                .await
-                .unwrap(),
+            before_message(
+                d.services.clone(),
+                d.providers.clone(),
+                &session(&d, &sid).await,
+                off[2]
+            )
+            .await
+            .unwrap(),
             first + 1,
             "troisième message hors sujet : nouvel épisode"
         );

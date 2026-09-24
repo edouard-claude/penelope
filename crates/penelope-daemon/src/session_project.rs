@@ -132,7 +132,7 @@ pub async fn set(d: &crate::runtime::Daemon, session_id: &str, project: Option<&
     let s = &d.services;
     let project = project.map(normalize).filter(|p| !p.is_empty());
     store(s, session_id, project.as_deref(), "explicite").await;
-    crate::episodes::refresh_snapshot(d, s, session_id).await;
+    crate::episodes::refresh_snapshot(s, session_id).await;
 }
 
 /// Sujet à appliquer à l'instantané qu'on fige : l'enregistré, sinon celui que nomment le

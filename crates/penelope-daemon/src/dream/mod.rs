@@ -561,7 +561,7 @@ async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutco
                         today(s),
                         report.promoted
                     );
-                    if let Err(e) = vault_sync(d, &message).await {
+                    if let Err(e) = vault_sync(&d.services, &message).await {
                         tracing::warn!(error = %e, "commit du vault après consolidation");
                     }
                 }
