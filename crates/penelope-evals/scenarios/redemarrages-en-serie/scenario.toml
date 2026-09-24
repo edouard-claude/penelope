@@ -1,0 +1,59 @@
+name = "redemarrages-en-serie"
+description = """Dix redémarrages d'affilée sur la même base : un tour, un crash pendant un appel
+d'outil MCP, puis dix vies successives. La première reprise rejoue le tour interrompu, les
+neuf suivantes ne trouvent rien à reprendre. Chaque vie rouvre la base après la fermeture
+complète de la précédente : non-régression du `database is locked` vu sur le runner macOS
+de la CI quand la seconde vie rouvrait la base pendant le checkpoint de fermeture de la
+première."""
+pin_model = "main"
+
+[[mcp_tools]]
+server = "banc"
+name = "lire"
+description = "Lit un fichier du dépôt distant de test."
+read_only = true
+params = ["path"]
+result = "rapport.txt : 42 lignes, la dernière dit « fin »."
+
+[[steps]]
+kind = "message"
+text = "bonjour"
+
+[[steps]]
+kind = "message"
+text = "lis rapport.txt sur le banc et dis-moi comment il finit"
+crash = "during_tool"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "message"
+text = "toujours là après dix redémarrages ?"

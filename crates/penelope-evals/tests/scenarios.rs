@@ -49,6 +49,7 @@ scenario_cases! {
     purge => "purge",
     crash_deux_vies => "crash-deux-vies",
     approbation_apres_redemarrage => "approbation-apres-redemarrage",
+    redemarrages_en_serie => "redemarrages-en-serie",
 }
 
 #[test]

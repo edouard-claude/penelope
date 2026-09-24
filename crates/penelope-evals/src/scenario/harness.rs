@@ -30,15 +30,20 @@ use penelope_mcp::protocol::ToolDescriptor;
 use penelope_mcp::registry::{RegisteredTool, qualified_name};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Battement de bail pendant un tour : au-delà de tout tour de scénario.
 const HEARTBEAT: Duration = Duration::from_secs(60);
 /// Attente de l'appel d'outil simulé avant de faire mourir le processus.
 const CRASH_WAIT: Duration = Duration::from_secs(30);
+/// Attente bornée de la fermeture complète d'une vie (références relâchées, checkpoint de
+/// fermeture de l'écrivain SQLite fini) et de la réouverture d'une base encore
+/// verrouillée, par pas de `RETRY_STEP`.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
+const RETRY_STEP: Duration = Duration::from_millis(50);
 
 /// Ce qu'un rejeu produit.
 pub struct Run {
@@ -72,6 +77,8 @@ struct Harness<'a> {
     seen: Shared<Vec<ChatRequest>>,
     recorded: Shared<Vec<ScriptLine>>,
     life: Option<Life>,
+    /// Chemin de la base, connu dès la première vie : la fermeture s'y vérifie.
+    db: Option<PathBuf>,
     session: String,
     outcomes: Vec<Value>,
     crashed: bool,
@@ -97,6 +104,7 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
         seen: Arc::new(Mutex::new(Vec::new())),
         recorded: Arc::new(Mutex::new(Vec::new())),
         life: None,
+        db: None,
         session: String::new(),
         outcomes: Vec::new(),
         crashed: false,
@@ -112,6 +120,9 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
         let workspace = workspace_of(&life.services);
         world::dump(&life.services, &workspace).await?
     };
+    if let Some(life) = h.life.take() {
+        shut_down(life, &spec.name).await;
+    }
 
     // Les jetons sont numérotés dans l'ordre du monde (sessions par création, tours par
     // mise en file, effets par appel…), pas dans celui de leur première mention.
@@ -167,15 +178,51 @@ impl Harness<'_> {
         Ok(self.life()?.services.clone())
     }
 
-    /// Démarre une vie : services, daemon, configuration patchée, fournisseur, serveur
-    /// MCP simulé, reprise. La première vie sème aussi les fichiers et ouvre la session.
+    /// Démarre une vie ; si la base est encore verrouillée par la fermeture de la vie
+    /// précédente, réessaie par pas de 50 ms, cinq secondes au plus, en le disant.
     async fn boot(&mut self, first: bool) -> anyhow::Result<Value> {
+        let deadline = Instant::now() + SHUTDOWN_WAIT;
+        let mut attempt = 1u32;
+        loop {
+            match self.boot_once(first).await {
+                Ok(report) => {
+                    if attempt > 1 {
+                        eprintln!(
+                            "scénario {} : base rouverte à la tentative {attempt}",
+                            self.spec.name
+                        );
+                    }
+                    return Ok(report);
+                }
+                Err(e) if is_locked(&e) && Instant::now() < deadline => {
+                    eprintln!(
+                        "scénario {} : base encore verrouillée à la tentative {attempt} ({e:#})",
+                        self.spec.name
+                    );
+                    if let Some(life) = self.life.take() {
+                        shut_down(life, &self.spec.name).await;
+                    }
+                    if let Some(db) = self.db.clone() {
+                        wait_for_wal(&db, deadline).await;
+                    }
+                    attempt += 1;
+                    tokio::time::sleep(RETRY_STEP).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// Une vie : services, daemon, configuration patchée, fournisseur, serveur MCP
+    /// simulé, reprise. La première vie sème aussi les fichiers et ouvre la session.
+    async fn boot_once(&mut self, first: bool) -> anyhow::Result<Value> {
         let shared: SharedClock = self.clock.clone();
         let services = Arc::new(
             Services::for_tests(self.root.path().to_path_buf(), shared)
                 .await
                 .context("services de test")?,
         );
+        self.db = Some(services.store.path().to_path_buf());
         let daemon = Arc::new(Daemon::from_services(services.clone()));
         self.apply_config(&daemon)?;
         daemon.set_provider_override(self.provider(&services)?);
@@ -396,6 +443,8 @@ impl Harness<'_> {
                 Ok(v)
             }
             Some(Crash::DuringTool) => {
+                // Notre propre copie du daemon ne doit pas survivre au processus mort.
+                drop(d);
                 self.crash_during_tool(turn).await?;
                 Ok(json!({"outcome": "crash", "detail": "processus mort pendant l'appel d'outil"}))
             }
@@ -419,7 +468,7 @@ impl Harness<'_> {
             .context("l'outil simulé n'a pas été appelé : rien à interrompre")?;
         task.abort();
         let _ = task.await;
-        drop(life);
+        shut_down(life, &self.spec.name).await;
         self.crashed = true;
         Ok(())
     }
@@ -475,7 +524,7 @@ impl Harness<'_> {
     /// Nouvelle vie sur le même répertoire : reprise, puis les tours en attente sont joués.
     async fn restart(&mut self) -> anyhow::Result<Value> {
         if let Some(life) = self.life.take() {
-            drop(life);
+            shut_down(life, &self.spec.name).await;
         }
         self.crashed = false;
         let recovered = self.boot(false).await?;
@@ -569,6 +618,80 @@ impl Harness<'_> {
         }
         Ok(json!({"messages": exchanges * 2, "tokens_each": tokens}))
     }
+}
+
+/// Fin d'une vie, attendue plutôt que supposée. Les tâches encore vivantes (battement de
+/// bail tué avec le tour, travaux bloquants) relâchent leurs références au daemon et aux
+/// services au prochain passage de l'ordonnanceur ; puis l'écrivain SQLite, qui ne
+/// s'arrête qu'avec la dernière copie du `Store`, finit son checkpoint de fermeture et le
+/// journal `-wal` retombe à zéro. Sans cette attente, la vie suivante rouvrait la base
+/// pendant ce checkpoint et son premier `write` échouait avec `database is locked`
+/// (runner macOS de la CI, run 35946713239). Bornée à `SHUTDOWN_WAIT` ; les attentes
+/// sont dites sur la sortie d'erreur, jamais écrites dans le monde.
+async fn shut_down(life: Life, name: &str) {
+    let Life {
+        services,
+        daemon,
+        gateway,
+    } = life;
+    drop(gateway);
+    let db = services.store.path().to_path_buf();
+    let deadline = Instant::now() + SHUTDOWN_WAIT;
+    let mut polls = 0u32;
+    loop {
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        // Une copie du daemon (la nôtre) et deux des services (la nôtre, celle du daemon).
+        let (d, s) = (Arc::strong_count(&daemon), Arc::strong_count(&services));
+        if d == 1 && s == 2 {
+            break;
+        }
+        if Instant::now() >= deadline {
+            eprintln!(
+                "scénario {name} : des références survivent à la vie ({} sur le daemon, {} sur \
+                 les services) ; fermeture sans les attendre",
+                d - 1,
+                s - 2
+            );
+            break;
+        }
+        polls += 1;
+        tokio::time::sleep(RETRY_STEP).await;
+    }
+    drop(daemon);
+    drop(services);
+    let checks = wait_for_wal(&db, deadline).await;
+    // Une attente ou deux sont l'ordinaire du checkpoint ; au-delà, c'est à lire.
+    if polls > 1 || checks > 1 {
+        eprintln!(
+            "scénario {name} : fermeture de la vie attendue ({polls} attente(s) de références, \
+             {checks} attente(s) du checkpoint)"
+        );
+    }
+}
+
+/// Attend que le journal WAL soit vide ou absent : l'écrivain a fini son checkpoint de
+/// fermeture (`wal_checkpoint(TRUNCATE)`). Rend le nombre d'attentes.
+async fn wait_for_wal(db: &Path, deadline: Instant) -> u32 {
+    let wal = PathBuf::from(format!("{}-wal", db.display()));
+    let mut waits = 0;
+    while wal_len(&wal) > 0 && Instant::now() < deadline {
+        waits += 1;
+        tokio::time::sleep(RETRY_STEP).await;
+    }
+    waits
+}
+
+fn wal_len(wal: &Path) -> u64 {
+    std::fs::metadata(wal).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Une erreur SQLite de verrou (`database is locked`, code 5), la seule qu'un nouvel
+/// essai de démarrage puisse résoudre.
+fn is_locked(e: &anyhow::Error) -> bool {
+    let text = format!("{e:#}").to_lowercase();
+    text.contains("database is locked") || text.contains("database table is locked")
 }
 
 /// Pose `value` à `chemin.pointé` dans un arbre JSON, en créant les objets manquants.
