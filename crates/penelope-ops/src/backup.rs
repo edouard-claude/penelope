@@ -566,7 +566,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (archive, report) = build(&s, false).await.unwrap();
+        let (archive, report) = build(s, false).await.unwrap();
         assert!(archive.is_file());
         assert!(report["bytes"].as_u64().unwrap_or(0) > 0);
         assert!(report["sha256"].as_str().is_some());
@@ -686,7 +686,7 @@ mod tests {
             Ok(vec!["backup.max_push_bytes".into()])
         })
         .unwrap();
-        let e = run(&s, true, Some(false)).await.unwrap_err();
+        let e = run(s, true, Some(false)).await.unwrap_err();
         assert!(e.to_string().contains("limite"), "{e}");
     }
 
