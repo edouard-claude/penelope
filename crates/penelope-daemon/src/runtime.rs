@@ -278,6 +278,24 @@ impl Services {
             .await?;
         Ok(())
     }
+
+    /// Applique une modification de configuration et la déclare appliquée à chaud par
+    /// chaque sous-système.
+    pub fn publish_config<F>(&self, source: &str, mutate: F) -> anyhow::Result<u64>
+    where
+        F: FnOnce(&mut Config) -> penelope_kernel::Result<Vec<String>>,
+    {
+        let g = self.config.mutate(source, mutate)?;
+        for subsystem in SUBSYSTEMS {
+            self.config.record_apply(
+                subsystem,
+                ApplyResult::AppliedLive {
+                    generation: g.generation,
+                },
+            );
+        }
+        Ok(g.generation)
+    }
 }
 
 /// Ce que la validation des workflows doit connaître.
@@ -590,16 +608,7 @@ impl Daemon {
     where
         F: FnOnce(&mut Config) -> penelope_kernel::Result<Vec<String>>,
     {
-        let g = self.services.config.mutate(source, mutate)?;
-        for subsystem in SUBSYSTEMS {
-            self.services.config.record_apply(
-                subsystem,
-                ApplyResult::AppliedLive {
-                    generation: g.generation,
-                },
-            );
-        }
-        Ok(g.generation)
+        self.services.publish_config(source, mutate)
     }
 
     pub async fn status(&self) -> anyhow::Result<penelope_kernel::api::StatusReport> {

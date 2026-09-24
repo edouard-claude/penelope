@@ -845,7 +845,7 @@ pub async fn scan_inbox(d: &Arc<Daemon>) -> anyhow::Result<usize> {
             }
         };
         if let Some(m) = d.hooks.messenger() {
-            let origin = crate::scheduler::owner_origin(d);
+            let origin = crate::scheduler::owner_origin_of(&d.services);
             let _ = m.send_text(&origin, &text).await;
         }
         done += 1;

@@ -559,7 +559,7 @@ async fn the_vault_check_flags_secrets_and_broken_practices() {
             .any(|i| i["file"] == "notes.md" && i["severity"] == "error")
     );
     assert!(issues.iter().any(|i| i["file"] == "pratiques/cassee.md"));
-    crate::rpc::set_config_path(&d, "memory.vault_git_autocommit", json!("0s")).unwrap();
+    crate::rpc::set_config_path(&d.services, "memory.vault_git_autocommit", json!("0s")).unwrap();
     let sync = vault_sync(&d, "test").await.unwrap();
     assert_eq!(
         sync["git"], false,

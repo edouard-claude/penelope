@@ -477,7 +477,7 @@ async fn approval_origin(d: &Daemon, a: &penelope_hitl::ApprovalRequest) -> Orig
             message_id: None,
         };
     }
-    crate::scheduler::owner_origin(d)
+    crate::scheduler::owner_origin_of(&d.services)
 }
 
 /// Un passage de maintenance. Une approbation échue relance son tour, qui dira au
@@ -549,7 +549,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     if let Some(sup) = d.hooks.mcp_supervisor() {
         let notices = sup.take_notices();
         if let Some(m) = d.hooks.messenger() {
-            let origin = crate::scheduler::owner_origin(d);
+            let origin = crate::scheduler::owner_origin_of(&d.services);
             for n in notices {
                 let _ = m.send_text(&origin, &n).await;
             }
@@ -581,7 +581,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
             match crate::mcp_auth::start(d, &cfg, None).await {
                 Ok(start) => {
                     if let Some(m) = d.hooks.messenger() {
-                        let origin = crate::scheduler::owner_origin(d);
+                        let origin = crate::scheduler::owner_origin_of(&d.services);
                         let _ = m
                             .send_text(&origin, &crate::mcp_auth::prompt_text(&start))
                             .await;

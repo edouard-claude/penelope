@@ -85,7 +85,8 @@ impl crate::selfknow::Admin for Daemon {
     }
 
     async fn set_config(&self, path: &str, value: Value) -> Result<u64, String> {
-        let g = crate::rpc::set_config_path(self, path, value).map_err(|e| e.to_string())?;
+        let g =
+            crate::rpc::set_config_path(&self.services, path, value).map_err(|e| e.to_string())?;
         self.invalidate_providers().await;
         Ok(g)
     }

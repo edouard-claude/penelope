@@ -798,7 +798,7 @@ pub async fn confirm_when_healthy(d: Arc<Daemon>) {
             return;
         }
         if let Some(m) = d.hooks.messenger() {
-            let origin = crate::scheduler::owner_origin(&d);
+            let origin = crate::scheduler::owner_origin_of(&d.services);
             let _ = m.send_text(&origin, &c.text()).await;
             return;
         }

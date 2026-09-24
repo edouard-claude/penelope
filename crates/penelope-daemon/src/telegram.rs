@@ -11,7 +11,7 @@
 use crate::agent::{TurnEvent, TurnOutcome, decide_approval};
 use crate::bus::{BusKind, ChannelDelivery, Origin};
 use crate::executor::Messenger;
-use crate::runtime::Daemon;
+use crate::runtime::{Daemon, Services};
 use penelope_hitl::{ApprovalRequest, ApprovalState, Decision};
 use penelope_kernel::api::method as m;
 use penelope_kernel::risk::PolicyWindow;
@@ -237,8 +237,8 @@ const BOT_USERNAME_KEY: &str = "tg.bot_username";
 
 /// Lien `https://t.me/<bot>?start=<charge>` vers un écran ou une commande, quand le bot est
 /// connu (issue #30).
-pub async fn deep_link(d: &Daemon, payload: &str) -> Option<String> {
-    let bot = d.services.kv_get(BOT_USERNAME_KEY).await.ok().flatten()?;
+pub async fn deep_link(s: &Services, payload: &str) -> Option<String> {
+    let bot = s.kv_get(BOT_USERNAME_KEY).await.ok().flatten()?;
     (!bot.is_empty() && bot != "?").then(|| penelope_telegram::render::deep_link(&bot, payload))
 }
 

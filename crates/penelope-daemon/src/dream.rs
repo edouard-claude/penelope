@@ -3062,7 +3062,7 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
         t.push_str(&format!(
             "\n📋 {} demande(s) en attente : {}\n",
             pending.len(),
-            match crate::telegram::deep_link(d, "approvals").await {
+            match crate::telegram::deep_link(&d.services, "approvals").await {
                 Some(link) => format!("[ouvrir]({link})"),
                 None => "`/approvals`".into(),
             }
@@ -3085,7 +3085,7 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
             "\n🔧 Runs récents : {done} terminé(s), {blocked} bloqué(s), {running} en cours{}\n",
             match (
                 blocked > 0,
-                crate::telegram::deep_link(d, "runs_stuck").await
+                crate::telegram::deep_link(&d.services, "runs_stuck").await
             ) {
                 (true, Some(link)) => format!(" · [reprendre]({link})"),
                 _ => String::new(),
@@ -3130,7 +3130,7 @@ pub async fn digest_text(d: &Arc<Daemon>) -> anyhow::Result<String> {
                     })
                     .unwrap_or_default();
                 t.push_str(&format!("\n📈 Mémoire : {}/100{delta}", audit.total));
-                if let Some(link) = crate::telegram::deep_link(d, "audit").await {
+                if let Some(link) = crate::telegram::deep_link(&d.services, "audit").await {
                     t.push_str(&format!(" · [détail]({link})"));
                 }
                 if let Some(best) = crate::mem_audit::best_next(&audit) {

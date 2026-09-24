@@ -1069,11 +1069,7 @@ pub async fn due_today(d: &Daemon) -> Vec<String> {
 }
 
 /// Conversation privée du propriétaire sur Telegram, s'il est configuré.
-pub(crate) fn owner_origin(d: &Daemon) -> Origin {
-    owner_origin_of(&d.services)
-}
-
-fn owner_origin_of(s: &Services) -> Origin {
+pub(crate) fn owner_origin_of(s: &Services) -> Origin {
     let owner = s.config.config().owner.telegram_user_id;
     if owner != 0 {
         Origin::Telegram {

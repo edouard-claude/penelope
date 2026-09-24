@@ -137,7 +137,7 @@ pub async fn origin_of(d: &Daemon, run_id: &str) -> Origin {
             let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
             Origin::from_payload(&json!({ "origin": v }))
         }
-        None => crate::scheduler::owner_origin(d),
+        None => crate::scheduler::owner_origin_of(&d.services),
     }
 }
 
@@ -1315,7 +1315,7 @@ async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
                             && a.payload["budget"].as_bool() == Some(true)
                     })
                 {
-                    let origin = crate::scheduler::owner_origin(ctx.d);
+                    let origin = crate::scheduler::owner_origin_of(&ctx.d.services);
                     let _ = m.send_approval(&origin, a.id.as_str()).await;
                 }
                 return Ok(done(
@@ -1457,7 +1457,7 @@ pub async fn run_sub_agent(
             // Le sous-agent d'un run parle dans la conversation du run (issue #35).
             origin: match run_id {
                 Some(r) => origin_of(d, r).await,
-                None => crate::scheduler::owner_origin(d),
+                None => crate::scheduler::owner_origin_of(&d.services),
             },
             workspaces,
             in_workflow: false,

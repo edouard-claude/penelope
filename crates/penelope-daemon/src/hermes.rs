@@ -1181,7 +1181,7 @@ pub async fn rpc(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
     if opts.apply
         && let Some(m) = d.hooks.messenger()
     {
-        let origin = crate::scheduler::owner_origin(d);
+        let origin = crate::scheduler::owner_origin_of(&d.services);
         if !matches!(origin, crate::bus::Origin::Internal { .. }) {
             let _ = m.send_text(&origin, &text).await;
         }

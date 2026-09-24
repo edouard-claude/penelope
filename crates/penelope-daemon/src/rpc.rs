@@ -309,7 +309,7 @@ impl Rpc {
             method::CONFIG_SET => {
                 let path = required_str(p, "path")?;
                 let value = p.get("value").cloned().unwrap_or(Value::Null);
-                let g = set_config_path(&self.daemon, &path, value)?;
+                let g = set_config_path(&self.daemon.services, &path, value)?;
                 self.daemon.invalidate_providers().await;
                 Ok(json!({"generation": g, "warnings": config_warnings(&self.daemon, &path)}))
             }
@@ -1046,7 +1046,7 @@ impl Rpc {
             method::WF_RUN => {
                 let id = required_str(p, "id")?;
                 let params = p.get("params").cloned().unwrap_or(json!({}));
-                let origin = crate::scheduler::owner_origin(&self.daemon);
+                let origin = crate::scheduler::owner_origin_of(&self.daemon.services);
                 let run = crate::workflow::start_run(&self.daemon, &id, params, &origin, None, 0)
                     .await
                     .map_err(anyhow::Error::msg)?;
@@ -1624,9 +1624,9 @@ fn classify(e: &anyhow::Error) -> i32 {
 }
 
 /// `config set a.b.c = valeur` : applique une modification par chemin.
-pub(crate) fn set_config_path(daemon: &Daemon, path: &str, value: Value) -> anyhow::Result<u64> {
+pub(crate) fn set_config_path(s: &Services, path: &str, value: Value) -> anyhow::Result<u64> {
     let path_owned = path.to_string();
-    let generation = daemon.publish_config("cli", move |c| {
+    let generation = s.publish_config("cli", move |c| {
         let mut v = serde_json::to_value(&*c).map_err(penelope_kernel::KernelError::Json)?;
         let parts: Vec<&str> = path_owned.split('.').collect();
         let mut cur = &mut v;

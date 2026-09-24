@@ -938,7 +938,7 @@ async fn tell_mechanical(
     if let Some(m) = d.hooks.messenger() {
         let _ = m
             .send_text(
-                &crate::scheduler::owner_origin(d),
+                &crate::scheduler::owner_origin_of(&d.services),
                 &format!(
                     "⚠️ La session « {title} » ne se résumait plus : le résumeur (`{model}`) a \
                      échoué {MECHANICAL_AFTER} fois ({error}). {} messages ont été compactés \
