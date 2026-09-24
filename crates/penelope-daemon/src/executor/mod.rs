@@ -317,9 +317,8 @@ use args::{
     u_arg, with_session_labels,
 };
 use defs::native_info;
-pub use defs::{chat_tool_defs, render_mcp_result, tool_defs};
 pub(crate) use defs::shell_override;
-pub use defs::wants_network;
+pub use defs::{chat_tool_defs, render_mcp_result, tool_defs, wants_network};
 pub(crate) use precheck::{call_arguments, effective_arguments};
 
 #[cfg(test)]
