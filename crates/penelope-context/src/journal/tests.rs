@@ -112,6 +112,7 @@ fn every_kind() -> Vec<ConvEvent> {
             tokens_self: 40,
             batches_left: 1,
             trigger: Some("manual".into()),
+            idempotency_key: Some("k".into()),
         }),
         ConvEvent::Rewind(RewindPayload {
             surface: SurfaceOp::Cut { after: 4 },

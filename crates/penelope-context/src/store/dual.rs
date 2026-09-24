@@ -11,8 +11,8 @@
 
 use super::*;
 use crate::journal::{
-    ContextPayload, ConvEvent, KIND_SYSTEM, KIND_USER, Provenance, SurfaceOp, SystemPayload,
-    SystemReason, message_event,
+    ContextPayload, ConvEvent, KIND_FORK, KIND_IMPORT, KIND_SUMMARY, KIND_SYSTEM, KIND_USER,
+    Provenance, SurfaceOp, SystemPayload, SystemReason, message_event,
 };
 use crate::tiers::{Tiers, TileMap};
 use penelope_kernel::event::{EventDraft, EventLog};
@@ -343,22 +343,98 @@ impl HistoryStore {
 
     /// L'événement puis la ligne, ou la ligne seule sans journal ou sans événement.
     async fn write_row(&self, row: Row, event: Option<ConvEvent>) -> penelope_store::Result<i64> {
+        let sid = row.sid.clone();
+        self.journaled(&sid, event, move |tx, event_id| {
+            insert_row(tx, &row, event_id)
+        })
+        .await
+    }
+
+    /// Écrit `event` au journal, puis `write` dans la seconde transaction du même thread
+    /// écrivain, avec l'identifiant de l'événement (`EventLog::append_with`). Sans
+    /// journal attaché ou sans événement, `write` seul, sans identifiant.
+    pub(crate) async fn journaled<T, F>(
+        &self,
+        session_id: &str,
+        event: Option<ConvEvent>,
+        write: F,
+    ) -> penelope_store::Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Transaction<'_>, Option<i64>) -> penelope_store::Result<T> + Send + 'static,
+    {
         let (Some(log), Some(event)) = (&self.events, event) else {
-            return self.store.write(move |tx| insert_row(tx, &row, None)).await;
+            return self.store.write(move |tx| write(tx, None)).await;
         };
-        let seq = Arc::new(Mutex::new(None));
-        let out = seq.clone();
-        let draft = EventDraft::new(event.kind(), event.payload()).session(&row.sid);
+        let out = Arc::new(Mutex::new(None));
+        let slot = out.clone();
+        let draft = EventDraft::new(event.kind(), event.payload()).session(session_id);
         log.append_with(draft, move |tx, ev| {
-            let s = insert_row(tx, &row, Some(ev.id))?;
-            *out.lock().unwrap_or_else(|p| p.into_inner()) = Some(s);
+            let v = write(tx, Some(ev.id))?;
+            *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(v);
             Ok(())
         })
         .await
         .map_err(|e| penelope_store::StoreError::other(e.to_string()))?;
-        let seq = *seq.lock().unwrap_or_else(|p| p.into_inner());
-        seq.ok_or_else(|| penelope_store::StoreError::other("ligne de message non écrite"))
+        let v = out.lock().unwrap_or_else(|p| p.into_inner()).take();
+        v.ok_or_else(|| penelope_store::StoreError::other("écriture journalisée sans résultat"))
     }
+
+    /// Le `conv.summary` déjà écrit pour un travail de résumé (sa clé d'idempotence) :
+    /// son identifiant et le nœud qu'il annonce.
+    pub(crate) async fn summary_event(
+        &self,
+        session_id: &str,
+        key: &str,
+    ) -> penelope_store::Result<Option<(i64, String)>> {
+        let (sid, key) = (session_id.to_string(), key.to_string());
+        self.store
+            .read(move |c| {
+                Ok(c.query_row(
+                    "SELECT id, json_extract(payload, '$.node_id') FROM events
+                     WHERE session_id=?1 AND kind=?2
+                       AND json_extract(payload, '$.idempotency_key')=?3
+                     ORDER BY seq LIMIT 1",
+                    params![sid, KIND_SUMMARY, key],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?)
+            })
+            .await
+    }
+
+    /// Vrai si un journal est attaché.
+    pub(crate) fn journals(&self) -> bool {
+        self.events.is_some()
+    }
+
+    /// Adresse de surface (§2.3) du message `seq` d'une session : `offset + events.seq`
+    /// de son événement, l'offset étant celui de la session qui porte l'événement (la
+    /// mère, pour une ligne héritée d'un fork) ; le `seq` V0 d'une ligne sans événement.
+    pub async fn address(&self, session_id: &str, seq: i64) -> penelope_store::Result<i64> {
+        let sid = session_id.to_string();
+        self.store.read(move |c| address_in(c, &sid, seq)).await
+    }
+}
+
+/// [`HistoryStore::address`] dans une connexion ou une transaction de l'appelant.
+pub(crate) fn address_in(
+    c: &penelope_store::rusqlite::Connection,
+    session_id: &str,
+    seq: i64,
+) -> penelope_store::Result<i64> {
+    let found = c
+        .query_row(
+            "SELECT e.seq + COALESCE((SELECT json_extract(f.payload, '$.offset') FROM events f
+                 WHERE f.session_id = e.session_id AND f.kind IN (?3, ?4)
+                 ORDER BY f.seq LIMIT 1), 0)
+             FROM messages m JOIN events e ON e.id = m.event_id
+             WHERE m.session_id = ?1 AND m.seq = ?2",
+            params![session_id, seq, KIND_FORK, KIND_IMPORT],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?;
+    Ok(found.unwrap_or(seq))
 }
 
 #[cfg(test)]

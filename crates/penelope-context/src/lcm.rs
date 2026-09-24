@@ -9,7 +9,7 @@
 use penelope_kernel::clock::SharedClock;
 use penelope_kernel::ids::NodeId;
 use penelope_store::Store;
-use penelope_store::rusqlite::params;
+use penelope_store::rusqlite::{Transaction, params};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,36 +83,34 @@ impl Lcm {
         tokens_src: u64,
         tokens_self: u64,
     ) -> penelope_store::Result<String> {
-        let id = NodeId::new().0;
-        let (sid, sum, anc, ts) = (
-            session_id.to_string(),
-            summary.to_string(),
-            serde_json::to_string(anchors).unwrap_or_else(|_| "[]".into()),
-            self.clock.now_rfc3339(),
-        );
-        let node_id = id.clone();
+        let node = self.node(session_id, summary, anchors, tokens_src, tokens_self);
+        let id = node.id.clone();
         self.store
-            .write(move |tx| {
-                tx.execute(
-                    "INSERT INTO lcm_nodes(id, session_id, kind, level, from_seq, to_seq, summary,
-                        anchors, tokens_src, tokens_self, tokens_subtree, created_at)
-                     VALUES(?1,?2,'leaf',0,?3,?4,?5,?6,?7,?8,?8,?9)",
-                    params![
-                        node_id,
-                        sid,
-                        from_seq,
-                        to_seq,
-                        sum,
-                        anc,
-                        tokens_src as i64,
-                        tokens_self as i64,
-                        ts
-                    ],
-                )?;
-                Ok(())
-            })
+            .write(move |tx| insert_leaf_in(tx, &node, from_seq, to_seq))
             .await?;
         Ok(id)
+    }
+
+    /// Un nœud neuf à écrire dans une transaction de l'appelant : son identifiant est
+    /// connu avant l'écriture, pour que l'événement `conv.summary` le cite (T7).
+    pub(crate) fn node(
+        &self,
+        session_id: &str,
+        summary: &str,
+        anchors: &[crate::anchors::Anchor],
+        tokens_src: u64,
+        tokens_self: u64,
+    ) -> NodeWrite {
+        NodeWrite {
+            id: NodeId::new().0,
+            session_id: session_id.to_string(),
+            summary: summary.to_string(),
+            anchors: serde_json::to_string(anchors).unwrap_or_else(|_| "[]".into()),
+            tokens_src,
+            tokens_self,
+            ts: self.clock.now_rfc3339(),
+            event_id: None,
+        }
     }
 
     /// Crée un nœud condensé au-dessus d'enfants existants.
@@ -244,81 +242,10 @@ impl Lcm {
         tokens_self: u64,
     ) -> penelope_store::Result<String> {
         let old = old_id.to_string();
-        let (sum, anc, ts) = (
-            new_summary.to_string(),
-            serde_json::to_string(anchors).unwrap_or_else(|_| "[]".into()),
-            self.clock.now_rfc3339(),
-        );
-        let new_id = NodeId::new().0;
-        let nid = new_id.clone();
+        let node = self.node("", new_summary, anchors, 0, tokens_self);
+        let new_id = node.id.clone();
         self.store
-            .write(move |tx| {
-                let (sid, kind, level, from, to, src, superseded): (
-                    String,
-                    String,
-                    i64,
-                    Option<i64>,
-                    Option<i64>,
-                    i64,
-                    Option<String>,
-                ) = tx.query_row(
-                    "SELECT session_id, kind, level, from_seq, to_seq, tokens_src, superseded_by
-                     FROM lcm_nodes WHERE id = ?1",
-                    [&old],
-                    |r| {
-                        Ok((
-                            r.get(0)?,
-                            r.get(1)?,
-                            r.get(2)?,
-                            r.get(3)?,
-                            r.get(4)?,
-                            r.get(5)?,
-                            r.get(6)?,
-                        ))
-                    },
-                )?;
-                // Deux mises à jour concurrentes du même nœud : la seconde est périmée.
-                if let Some(by) = superseded {
-                    return Err(penelope_store::StoreError::other(format!(
-                        "le nœud {old} a déjà été remplacé par {by}"
-                    )));
-                }
-                let (to, src) = match extension {
-                    Some((until, added)) => {
-                        (Some(to.map_or(until, |t| t.max(until))), src + added as i64)
-                    }
-                    None => (to, src),
-                };
-                tx.execute(
-                    "INSERT INTO lcm_nodes(id, session_id, kind, level, from_seq, to_seq, summary,
-                        anchors, tokens_src, tokens_self, tokens_subtree, created_at)
-                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10,?11)",
-                    params![
-                        nid,
-                        sid,
-                        kind,
-                        level,
-                        from,
-                        to,
-                        sum,
-                        anc,
-                        src,
-                        tokens_self as i64,
-                        ts
-                    ],
-                )?;
-                // Les enfants du nœud remplacé sont rattachés au nouveau.
-                tx.execute(
-                    "INSERT OR IGNORE INTO lcm_edges(parent_id, child_id)
-                     SELECT ?1, child_id FROM lcm_edges WHERE parent_id = ?2",
-                    params![nid, old],
-                )?;
-                tx.execute(
-                    "UPDATE lcm_nodes SET superseded_by = ?2 WHERE id = ?1",
-                    params![old, nid],
-                )?;
-                Ok(())
-            })
+            .write(move |tx| replace_in(tx, &old, extension, &node))
             .await?;
         Ok(new_id)
     }
@@ -443,6 +370,122 @@ impl Lcm {
             })
             .await
     }
+}
+
+/// Un nœud à écrire : identifiant, texte et provenance ; `event_id` cite le
+/// `conv.summary` qui le porte (T7).
+pub(crate) struct NodeWrite {
+    pub id: String,
+    pub session_id: String,
+    pub summary: String,
+    /// Ancres déjà sérialisées.
+    pub anchors: String,
+    pub tokens_src: u64,
+    pub tokens_self: u64,
+    pub ts: String,
+    pub event_id: Option<i64>,
+}
+
+/// Écrit une feuille `[from_seq, to_seq]` dans la transaction de l'appelant.
+pub(crate) fn insert_leaf_in(
+    tx: &Transaction<'_>,
+    node: &NodeWrite,
+    from_seq: i64,
+    to_seq: i64,
+) -> penelope_store::Result<()> {
+    tx.execute(
+        "INSERT INTO lcm_nodes(id, session_id, kind, level, from_seq, to_seq, summary,
+            anchors, tokens_src, tokens_self, tokens_subtree, created_at, event_id)
+         VALUES(?1,?2,'leaf',0,?3,?4,?5,?6,?7,?8,?8,?9,?10)",
+        params![
+            node.id,
+            node.session_id,
+            from_seq,
+            to_seq,
+            node.summary,
+            node.anchors,
+            node.tokens_src as i64,
+            node.tokens_self as i64,
+            node.ts,
+            node.event_id
+        ],
+    )?;
+    Ok(())
+}
+
+/// Remplace `old` par `node` dans la transaction de l'appelant, en prolongeant sa
+/// couverture si `extension` le demande ; `node.session_id` et `node.tokens_src` sont
+/// repris de l'ancien nœud.
+pub(crate) fn replace_in(
+    tx: &Transaction<'_>,
+    old: &str,
+    extension: Option<(i64, u64)>,
+    node: &NodeWrite,
+) -> penelope_store::Result<()> {
+    let (sid, kind, level, from, to, src, superseded): (
+        String,
+        String,
+        i64,
+        Option<i64>,
+        Option<i64>,
+        i64,
+        Option<String>,
+    ) = tx.query_row(
+        "SELECT session_id, kind, level, from_seq, to_seq, tokens_src, superseded_by
+         FROM lcm_nodes WHERE id = ?1",
+        [old],
+        |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+            ))
+        },
+    )?;
+    // Deux mises à jour concurrentes du même nœud : la seconde est périmée.
+    if let Some(by) = superseded {
+        return Err(penelope_store::StoreError::other(format!(
+            "le nœud {old} a déjà été remplacé par {by}"
+        )));
+    }
+    let (to, src) = match extension {
+        Some((until, added)) => (Some(to.map_or(until, |t| t.max(until))), src + added as i64),
+        None => (to, src),
+    };
+    tx.execute(
+        "INSERT INTO lcm_nodes(id, session_id, kind, level, from_seq, to_seq, summary,
+            anchors, tokens_src, tokens_self, tokens_subtree, created_at, event_id)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10,?11,?12)",
+        params![
+            node.id,
+            sid,
+            kind,
+            level,
+            from,
+            to,
+            node.summary,
+            node.anchors,
+            src,
+            node.tokens_self as i64,
+            node.ts,
+            node.event_id
+        ],
+    )?;
+    // Les enfants du nœud remplacé sont rattachés au nouveau.
+    tx.execute(
+        "INSERT OR IGNORE INTO lcm_edges(parent_id, child_id)
+         SELECT ?1, child_id FROM lcm_edges WHERE parent_id = ?2",
+        params![node.id, old],
+    )?;
+    tx.execute(
+        "UPDATE lcm_nodes SET superseded_by = ?2 WHERE id = ?1",
+        params![old, node.id],
+    )?;
+    Ok(())
 }
 
 fn row_to_node(r: &penelope_store::rusqlite::Row<'_>) -> penelope_store::rusqlite::Result<Node> {

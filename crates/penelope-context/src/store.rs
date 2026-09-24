@@ -950,5 +950,7 @@ fn excerpt_around(text: &str, needle: &str, width: usize) -> String {
 mod dual;
 mod rewrite;
 pub mod seal;
+pub(crate) use rewrite::mark_compacted_in;
+
 #[cfg(test)]
 mod tests;

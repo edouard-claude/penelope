@@ -266,6 +266,10 @@ pub struct SummaryPayload {
     pub batches_left: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<String>,
+    /// Clé d'idempotence du travail publié (`SummaryJob::idempotency_key`) : republier
+    /// le même travail n'écrit pas un second événement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
 }
 
 /// `conv.rewind` : coupe la surface après un nœud.

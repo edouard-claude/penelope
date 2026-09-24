@@ -2,6 +2,7 @@
 //! marquage d'une plage résumée, corps externalisé (niveau 1).
 
 use super::*;
+use penelope_store::rusqlite::Transaction;
 
 impl HistoryStore {
     /// Copie l'historique d'une session vers une autre, numéros et état de compaction
@@ -71,13 +72,7 @@ impl HistoryStore {
     ) -> penelope_store::Result<usize> {
         let sid = session_id.to_string();
         self.store
-            .write(move |tx| {
-                Ok(tx.execute(
-                    "UPDATE messages SET compacted = 1
-                     WHERE session_id = ?1 AND seq >= ?2 AND seq <= ?3",
-                    params![sid, from_seq, to_seq],
-                )?)
-            })
+            .write(move |tx| mark_compacted_in(tx, &sid, from_seq, to_seq))
             .await
     }
 
@@ -114,4 +109,18 @@ impl HistoryStore {
             })
             .await
     }
+}
+
+/// [`HistoryStore::mark_compacted`] dans la transaction de l'appelant.
+pub(crate) fn mark_compacted_in(
+    tx: &Transaction<'_>,
+    session_id: &str,
+    from_seq: i64,
+    to_seq: i64,
+) -> penelope_store::Result<usize> {
+    Ok(tx.execute(
+        "UPDATE messages SET compacted = 1
+         WHERE session_id = ?1 AND seq >= ?2 AND seq <= ?3",
+        params![session_id, from_seq, to_seq],
+    )?)
 }

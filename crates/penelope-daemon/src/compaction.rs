@@ -1102,7 +1102,7 @@ async fn publish(
     let job = &pending.job;
     let node_id = s
         .context
-        .apply_summary(job, &pending.summary, &pending.model)
+        .apply_summary_as(job, &pending.summary, &pending.model, trigger.as_str())
         .await?;
     let tokens_summary = s
         .context

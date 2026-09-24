@@ -67,6 +67,7 @@ impl Journal {
             tokens_self: 7,
             batches_left: 0,
             trigger: None,
+            idempotency_key: None,
         }))
     }
     fn cut(&mut self, after: i64) -> i64 {
