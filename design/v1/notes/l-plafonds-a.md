@@ -66,8 +66,8 @@ store `lib.rs` ; `[lints].allow_too_many_lines` 21 → 20.
   canal sur les nouveaux fichiers, total inchangé : config.rs 25 → 2 + `config/channel.rs`
   11 + `config/validate.rs` 11 + `config/store.rs` 1 ; `spec.rs` 4 → `spec/agent.rs` 4 ;
   `migrations.rs` 30 → 8 + `migrations/init.rs` 22. `scripts/check-budget.sh` y voit des
-  entrées ajoutées et demande le trailer « Dérogation-budget: #208 ». Question posée à
-  l'intégrateur ; non posé sans son accord.
+  entrées ajoutées et demande le trailer « Dérogation-budget: #208 », posé avec l'accord
+  de l'intégrateur (commit de dérogation, entrées commentées « suit X (découpage T32) »).
 - **`.gitignore`** ignore tout chemin nommé `spec` : `crates/penelope-tools/src/spec/*.rs`
   a été ajouté avec `git add -f`. Un fichier nouveau dans ce répertoire demandera la
   même chose ; une exception `!crates/penelope-tools/src/spec/` serait plus sûre (hors
