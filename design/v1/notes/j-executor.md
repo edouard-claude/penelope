@@ -115,7 +115,6 @@ façades `executor.rs` (`pub use penelope_executor::executor::*`), `selfknow.rs`
 ## 5. Reste et blocages
 
 - `[crates]` : plafond du daemon à abaisser de 38 177 à 31 486 par l'intégrateur.
-- `scripts/bump.sh` compte les lignes `version =` : une de plus avec la crate.
 - Bissection : entre `82cbe69` et `9cd93ad` exclu, `penelope-archtest` est rouge
   (`engine.rs` à 1 121 lignes pour une borne de 1 105).
 - Sorties de périmètre, signalées au chef d'équipe : `penelope-agent` et
