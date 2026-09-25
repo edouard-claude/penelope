@@ -7,36 +7,7 @@
 use crate::runtime::Services;
 use serde_json::{Map, Value, json};
 
-/// Accès du daemon dont les outils ont besoin pour parler de lui.
-#[async_trait::async_trait]
-pub trait Admin: Send + Sync {
-    fn uptime_s(&self) -> u64;
-    /// Écrit un réglage (chemin pointé) et le publie à chaud. Renvoie la génération.
-    async fn set_config(&self, path: &str, value: Value) -> Result<u64, String>;
-    /// Serveurs MCP : état, outils, dernière erreur.
-    async fn mcp_servers(&self) -> Value {
-        Value::Null
-    }
-    /// Recherche mémoire : hybride ou lexicale seule, vecteurs calculés (issue #11).
-    async fn memory_search(&self) -> Value {
-        Value::Null
-    }
-    /// Outil `send_voice` : synthèse, conversion et envoi, repli en texte (issue #41).
-    /// État des sauvegardes (issue #42).
-    async fn backup_status(&self) -> Result<Value, String> {
-        Err("sauvegardes indisponibles".into())
-    }
-
-    async fn send_voice(
-        &self,
-        session_id: &str,
-        origin: &crate::bus::Origin,
-        args: &Value,
-    ) -> Result<Value, String> {
-        let _ = (session_id, origin, args);
-        Err("vocal indisponible hors du daemon".into())
-    }
-}
+pub use penelope_app::ports::Admin;
 
 /// Modèle qui répond au tour en cours.
 #[derive(Debug, Clone, Default)]

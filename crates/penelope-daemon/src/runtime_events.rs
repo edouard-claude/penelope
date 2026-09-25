@@ -40,17 +40,8 @@ pub fn public_frame(event: &Event) -> Value {
     })
 }
 
-/// Les résultats volumineux (listings, pages, images) n'envahissent pas le journal.
-/// La rédaction précède le calcul de taille pour ne jamais exposer le brut.
-pub fn bounded_redacted(value: &Value) -> Value {
-    let cleaned = penelope_observe::redact_json(value);
-    let bytes = cleaned.to_string().len();
-    if bytes > 64 * 1024 {
-        json!({"truncated": true, "bytes": bytes})
-    } else {
-        cleaned
-    }
-}
+/// Descendu dans `penelope-app` pour l'exécuteur (T24), réexporté jusqu'à T30.
+pub use penelope_app::helpers::bounded_redacted;
 
 fn rejected(
     status: StatusCode,

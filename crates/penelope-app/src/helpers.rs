@@ -229,3 +229,17 @@ pub fn default_workspaces(s: &Services) -> Vec<PathBuf> {
     }
     v.iter().map(|p| canonical_workspace(p)).collect()
 }
+
+// ---------------------------------------- Journal (depuis runtime_events.rs)
+
+/// Les résultats volumineux (listings, pages, images) n'envahissent pas le journal.
+/// La rédaction précède le calcul de taille pour ne jamais exposer le brut.
+pub fn bounded_redacted(value: &Value) -> Value {
+    let cleaned = penelope_observe::redact_json(value);
+    let bytes = cleaned.to_string().len();
+    if bytes > 64 * 1024 {
+        serde_json::json!({"truncated": true, "bytes": bytes})
+    } else {
+        cleaned
+    }
+}
