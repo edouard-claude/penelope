@@ -4,8 +4,8 @@
 //! classifieur à la première demande), prompt assemblé, boucle d'agent sur le
 //! transcript persistant, événements publiés sur le bus.
 
-use crate::agent::{AgentLoop, TurnEvent, TurnOutcome, TurnSink, TurnSpec};
-use crate::bus::{Bus, BusEvent, BusKind, Origin};
+use crate::agent::{AgentLoop, TurnOutcome, TurnSink, TurnSpec};
+use crate::bus::Origin;
 use crate::conversation::SessionConversation;
 use crate::executor::{NativeToolExecutor, ToolEnv, chat_tool_defs, default_workspaces};
 use crate::helpers::last_model_key;
@@ -100,24 +100,8 @@ impl crate::selfknow::Admin for Daemon {
     }
 }
 
-/// Sink qui publie les événements d'un tour sur le bus.
-pub struct BusSink {
-    pub bus: Arc<Bus>,
-    pub turn_id: String,
-    pub session_id: String,
-    pub origin: Origin,
-}
-
-impl TurnSink for BusSink {
-    fn emit(&self, event: TurnEvent) {
-        self.bus.publish(BusEvent {
-            turn_id: self.turn_id.clone(),
-            session_id: self.session_id.clone(),
-            origin: self.origin.clone(),
-            kind: BusKind::Event(event),
-        });
-    }
-}
+// Descendu dans `penelope-app` avec le bus (T24), réexporté jusqu'à T30.
+pub use crate::bus::BusSink;
 
 impl Daemon {
     /// Met un message en file pour une session. `dedup` rend l'ajout idempotent.

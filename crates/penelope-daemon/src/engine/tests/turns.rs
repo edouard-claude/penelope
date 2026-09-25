@@ -705,7 +705,8 @@ async fn an_approval_suspends_then_a_resume_turn_finishes_the_work() {
     // La carte d'approbation est passée sur le bus.
     let mut saw_card = false;
     while let Ok(ev) = events.try_recv() {
-        if let BusKind::Event(TurnEvent::Approval { tool, .. }) = &ev.kind {
+        if let crate::bus::BusKind::Event(crate::agent::TurnEvent::Approval { tool, .. }) = &ev.kind
+        {
             assert_eq!(tool, "fs_write");
             saw_card = true;
         }

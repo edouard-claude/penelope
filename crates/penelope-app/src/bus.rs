@@ -341,6 +341,25 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// Sink qui publie les événements d'un tour sur le bus.
+pub struct BusSink {
+    pub bus: Arc<Bus>,
+    pub turn_id: String,
+    pub session_id: String,
+    pub origin: Origin,
+}
+
+impl crate::outcome::TurnSink for BusSink {
+    fn emit(&self, event: TurnEvent) {
+        self.bus.publish(BusEvent {
+            turn_id: self.turn_id.clone(),
+            session_id: self.session_id.clone(),
+            origin: self.origin.clone(),
+            kind: BusKind::Event(event),
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
