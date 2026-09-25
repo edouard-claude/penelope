@@ -116,8 +116,8 @@ les fichiers au-dessus de 1 000 lignes sont nommés dans la liste de référence
   `tool_jobs` (lancement et livraison des jobs d'outils), `history` (rattrapage des caches
   à l'ouverture d'une session) ;
 - les implémentations des ports de la boucle qui lisent la base : `approval_mode`
-  (`KvModes`), `prompt_snapshot` (`StoredSnapshots`), `cache_audit` (`UsageAudit`),
-  `audit` ;
+  (`KvModes`), `prompt_snapshot` (`StoredSnapshots`), et à côté `cache_audit`
+  (contexte volatil et préfixe stable de l'audit du cache) et `audit` ;
 - la façade RPC (`rpc/`) et le flux runtime (`runtime_events`) ;
 - des façades de transition : `agent`, `compaction`, `dream`, `executor`, `ingest`,
   `scheduler`, `selfknow`, `workflow` réexportent la crate où leur code est parti et
@@ -185,14 +185,16 @@ Ce que `penelope-app` fournit en plus des traits :
 ### Ports de la boucle, dans `penelope-agent`
 
 La boucle ne reçoit pas `Services` mais `AgentServices` (`ports.rs`) : les registres
-qu'elle touche et cinq ports que seul le daemon sait implémenter sur la base.
+qu'elle touche, quatre ports que seul le daemon sait implémenter sur la base, et
+`AttemptSink`. Le dernier appel d'une session, pour l'audit du cache, se lit dans le
+`BudgetLedger` du noyau (`previous_call`) ; les parties pures de l'audit (empreinte,
+fournisseur collant, cause d'un raté) sont dans `penelope_llm::cache`.
 
 | Port | Rôle | Implémenté par (daemon) | Double de test |
 |---|---|---|---|
 | `SessionModes` | mode d'approbation d'une session | `KvModes` (`approval_mode.rs`) | `MemoryModes` |
 | `SessionInfo` | nature d'une session | `SessionStore` (kernel) | le même, sur une base en mémoire |
 | `PromptSnapshots` | instantanés du préfixe, cause d'un raté de cache | `StoredSnapshots` (`prompt_snapshot.rs`) | `NoAudit` |
-| `CacheAudit` | le dernier appel, pour l'audit du cache | `UsageAudit` (`cache_audit.rs`) | `NoAudit` |
 | `JobRunner` | détacher un appel long en job | `DaemonJobs` (`agent.rs`, façade) | `NoJobs` |
 
 ### Autres ports

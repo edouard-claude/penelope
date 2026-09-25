@@ -29,7 +29,7 @@ Spécification : `design/v1/decoupage-daemon.md` §6 T31 (la décision prend le 
   mentions dans `[channel.allowed]`. Les écarts à la spécification sont écrits dans 0013
   (daemon à 14 986 et non 9 200, `penelope-app` sans `penelope-telegram`,
   `decide_approval` resté dans la boucle, `DigestSource` dans `penelope-dream`, `Slot`
-  au lieu d'`Option`, trois règles non posées) et dans 0014 (T07, T08, T21 à T25, T27
+  au lieu d'`Option`, trois règles non posées) et dans 0014 (T07, T08, T21 à T23
   non faits).
 - **R9 et R10 dits absents** : `ratchet.rs` annonce R9 « à venir », `budget.toml` n'a pas
   de section `coverage` ; R11 est la suite `scenarios`.
@@ -38,9 +38,12 @@ Spécification : `design/v1/decoupage-daemon.md` §6 T31 (la décision prend le 
 - **Titre « Ce qui reste »** plutôt que « Limites actuelles » : le test
   `no_doc_presents_something_shipped_as_missing` lit les sections de manque, et celle-ci
   cite des outils livrés.
-- **Le juge (#203) et la couture PTC ne sont pas présentés comme faits** : `k-juge` et
-  `k-api` y travaillent en parallèle. 0014 renvoie à 0016 sans lien (le fichier n'existe
-  pas dans cette branche).
+- **Le juge (#203) n'est pas présenté comme fait** : `k-juge` y travaille en parallèle.
+- **Alignement sur `k-api`** (intégré à `v1` pendant le lot, signalé par l'intégrateur) :
+  port `CacheAudit` retiré des tableaux (dernier appel lu dans le `BudgetLedger`, parties
+  pures dans `penelope_llm::cache`), T24, T25 et T27 passés de « reste » à « fait » dans
+  0014. 0014 cite la décision 0016 sans lien : le fichier n'existe pas sur cette branche
+  avant le rebase, et le test des liens le refuserait.
 
 ## Vérifications
 
@@ -50,11 +53,10 @@ fichiers écrits.
 
 ## Collisions attendues
 
-`k-api` ajoute 0016 dans `docs/README.md` et la table de `docs/progress.md`, et réécrit
-probablement la même phrase des numéros réservés : à la fusion, garder 0013 à 0016 dans
-les listes et « Le numéro 0017 est réservé » dans les deux phrases. Après sa fusion,
-0014 peut lier `[0016](0016-….md)` et `docs/architecture.md` citer la couture PTC si
-elle est livrée.
+`k-api` a ajouté 0016 dans `docs/README.md` et la table de `docs/progress.md`, et a
+réécrit la même phrase des numéros réservés : au rebase, garder 0013 à 0016 dans les
+listes et « Le numéro 0017 est réservé » dans les deux phrases. Ensuite, 0014 peut lier
+`[0016](0016-ptc-hors-v1.md)`.
 
 ## Notes de version (pour docs/progress.md)
 

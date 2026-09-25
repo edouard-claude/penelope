@@ -52,7 +52,7 @@ qu'en suivant le code.
 8. **La boucle ne connaît que des ports.** Elle reçoit `AgentServices` : les registres
    qu'elle touche (base, horloge, journal, ledger, configuration, budget, catalogue,
    approbations, politiques) et des ports, `SessionModes`, `SessionInfo`,
-   `PromptSnapshots`, `CacheAudit`, `JobRunner`, `AttemptSink`, plus `Conversation`,
+   `PromptSnapshots`, `JobRunner`, `AttemptSink`, plus `Conversation`,
    `Compactor`, `ToolExecutor`, `TurnSink` et `Inbox` de `penelope-app`. Elle écrit ses
    tentatives par `AttemptSink`, lance un job par `JobRunner`, nomme ses événements par
    `TurnEventKind`.
@@ -86,7 +86,7 @@ qu'en suivant le code.
   (`pipeline.rs`) à 622 lignes ; `call_model` repasse sous 200 lignes et perd son
   `allow`.
 - Le daemon garde les implémentations des ports qui lisent la base (`KvModes`,
-  `StoredSnapshots`, `UsageAudit`, `DaemonJobs`) et compose `AgentServices` par
+  `StoredSnapshots`, `DaemonJobs`) et compose `AgentServices` par
   `agent::services_of` ; l'orchestrateur appelle `AgentLoop` directement pour les étapes
   `agent` et les sous-agents.
 - `/stop` pendant un lot donne « Non exécuté : arrêté par le propriétaire. » aux appels
@@ -100,7 +100,11 @@ qu'en suivant le code.
 Fait (1.0.0-alpha.13) : T02 à T06 (modules, `RetryPlan`, gardes de tour et d'appel,
 couches de politique), T09 à T15 (ports, crate, sous-agents sur la crate, steering,
 tentatives), T17 à T20 (jobs d'outils, par le port `JobRunner`), T26 (événements
-typés).
+typés). Puis, sur `v1` après la 1.0.0-alpha.13 : T24 (couture du PTC, `CallContext {
+call_id, parent, root }` et refus d'une approbation dans un appel imbriqué, décision
+0016), T25 (`TurnRequest`, `AgentLoop::run` et `resume_after_approval` retirés), T27
+(parties pures de l'audit du cache dans `penelope_llm::cache`, dernier appel lu dans le
+`BudgetLedger`, port `CacheAudit` retiré).
 
 Reste :
 
@@ -112,9 +116,6 @@ Reste :
 - T21 à T23 : le juge d'approbation (#203), seulement si la mesure préalable sur
   l'instance le justifie ; aucune couche `Judge` ni plancher `Destructive` n'existe
   encore dans `VerdictLayer`.
-- T24 : la couture du PTC (`run_code`) pour les appels imbriqués (décision 0016).
-- T25 : nettoyage d'API (`resume_after_approval` existe encore) ; T27 : les parties pures
-  de l'audit du cache vers `penelope-llm`.
 - La note de fusion d'un message arrivé pendant le tour reste un message système après
   les messages système ; la passer en `Injection::Note` en queue change la surface d'un
   scénario et se fera à part.

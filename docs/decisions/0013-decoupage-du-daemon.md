@@ -115,7 +115,7 @@ Reste :
 
 - le daemon garde 14 986 lignes au lieu d'environ 9 200 : façades de transition,
   `tool_jobs`, `audit` et les implémentations des ports de la boucle sur la base
-  (`KvModes`, `StoredSnapshots`, `UsageAudit`) y sont encore ;
+  (`KvModes`, `StoredSnapshots`) y sont encore ;
 - `penelope-app` ne dépend pas de `penelope-telegram` (la spécification l'admettait) :
   les gabarits et les actions sont dans la passerelle, derrière `Cards` ;
 - `decide_approval` est resté dans la boucle, pas dans `penelope-app` ;
