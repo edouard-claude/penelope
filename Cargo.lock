@@ -1270,7 +1270,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-agent"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1290,7 +1290,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-app"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1320,7 +1320,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-archtest"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "regex",
  "tempfile",
@@ -1331,7 +1331,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-cli"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1360,7 +1360,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-context"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "chrono",
  "penelope-kernel",
@@ -1379,7 +1379,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-conversation"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1401,7 +1401,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-daemon"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1447,7 +1447,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-dream"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1472,7 +1472,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-evals"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1507,7 +1507,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-executor"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1539,7 +1539,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-gateway-telegram"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1569,7 +1569,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-hitl"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "chrono",
  "penelope-kernel",
@@ -1586,7 +1586,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-kernel"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1608,7 +1608,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-llm"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1631,7 +1631,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-mcp"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "async-trait",
  "base64",
@@ -1658,7 +1658,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-mcp-host"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "async-trait",
  "base64",
@@ -1681,7 +1681,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-memory"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1705,7 +1705,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-observe"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "chrono",
  "regex",
@@ -1720,7 +1720,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-ops"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1751,7 +1751,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-orchestrator"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1784,7 +1784,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-platform"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "argon2",
  "async-trait",
@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-skills"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "chrono",
  "flate2",
@@ -1823,7 +1823,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-store"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "penelope-kernel",
  "rusqlite",
@@ -1837,7 +1837,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-telegram"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1862,7 +1862,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-tools"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1890,7 +1890,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-vault"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1915,7 +1915,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-workflow"
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 dependencies = [
  "chrono",
  "chrono-tz",

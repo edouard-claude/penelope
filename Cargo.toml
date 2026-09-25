@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "1.0.0-alpha.13"
+version = "1.0.0-alpha.14"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -77,31 +77,31 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 tempfile = "3"
 
 # --- internal ---
-penelope-platform = { path = "crates/penelope-platform", version = "1.0.0-alpha.13" }
-penelope-store    = { path = "crates/penelope-store", version = "1.0.0-alpha.13" }
-penelope-kernel   = { path = "crates/penelope-kernel", version = "1.0.0-alpha.13" }
-penelope-observe  = { path = "crates/penelope-observe", version = "1.0.0-alpha.13" }
-penelope-llm      = { path = "crates/penelope-llm", version = "1.0.0-alpha.13" }
-penelope-context  = { path = "crates/penelope-context", version = "1.0.0-alpha.13" }
-penelope-memory   = { path = "crates/penelope-memory", version = "1.0.0-alpha.13" }
-penelope-mcp      = { path = "crates/penelope-mcp", version = "1.0.0-alpha.13" }
-penelope-skills   = { path = "crates/penelope-skills", version = "1.0.0-alpha.13" }
-penelope-tools    = { path = "crates/penelope-tools", version = "1.0.0-alpha.13" }
-penelope-hitl     = { path = "crates/penelope-hitl", version = "1.0.0-alpha.13" }
-penelope-telegram = { path = "crates/penelope-telegram", version = "1.0.0-alpha.13" }
-penelope-workflow = { path = "crates/penelope-workflow", version = "1.0.0-alpha.13" }
-penelope-app      = { path = "crates/penelope-app", version = "1.0.0-alpha.13" }
-penelope-agent    = { path = "crates/penelope-agent", version = "1.0.0-alpha.13" }
-penelope-mcp-host = { path = "crates/penelope-mcp-host", version = "1.0.0-alpha.13" }
-penelope-vault    = { path = "crates/penelope-vault", version = "1.0.0-alpha.13" }
-penelope-ops      = { path = "crates/penelope-ops", version = "1.0.0-alpha.13" }
-penelope-dream    = { path = "crates/penelope-dream", version = "1.0.0-alpha.13" }
-penelope-executor = { path = "crates/penelope-executor", version = "1.0.0-alpha.13" }
-penelope-conversation = { path = "crates/penelope-conversation", version = "1.0.0-alpha.13" }
-penelope-orchestrator = { path = "crates/penelope-orchestrator", version = "1.0.0-alpha.13" }
-penelope-evals    = { path = "crates/penelope-evals", version = "1.0.0-alpha.13" }
-penelope-daemon   = { path = "crates/penelope-daemon", version = "1.0.0-alpha.13" }
-penelope-gateway-telegram = { path = "crates/penelope-gateway-telegram", version = "1.0.0-alpha.13" }
+penelope-platform = { path = "crates/penelope-platform", version = "1.0.0-alpha.14" }
+penelope-store    = { path = "crates/penelope-store", version = "1.0.0-alpha.14" }
+penelope-kernel   = { path = "crates/penelope-kernel", version = "1.0.0-alpha.14" }
+penelope-observe  = { path = "crates/penelope-observe", version = "1.0.0-alpha.14" }
+penelope-llm      = { path = "crates/penelope-llm", version = "1.0.0-alpha.14" }
+penelope-context  = { path = "crates/penelope-context", version = "1.0.0-alpha.14" }
+penelope-memory   = { path = "crates/penelope-memory", version = "1.0.0-alpha.14" }
+penelope-mcp      = { path = "crates/penelope-mcp", version = "1.0.0-alpha.14" }
+penelope-skills   = { path = "crates/penelope-skills", version = "1.0.0-alpha.14" }
+penelope-tools    = { path = "crates/penelope-tools", version = "1.0.0-alpha.14" }
+penelope-hitl     = { path = "crates/penelope-hitl", version = "1.0.0-alpha.14" }
+penelope-telegram = { path = "crates/penelope-telegram", version = "1.0.0-alpha.14" }
+penelope-workflow = { path = "crates/penelope-workflow", version = "1.0.0-alpha.14" }
+penelope-app      = { path = "crates/penelope-app", version = "1.0.0-alpha.14" }
+penelope-agent    = { path = "crates/penelope-agent", version = "1.0.0-alpha.14" }
+penelope-mcp-host = { path = "crates/penelope-mcp-host", version = "1.0.0-alpha.14" }
+penelope-vault    = { path = "crates/penelope-vault", version = "1.0.0-alpha.14" }
+penelope-ops      = { path = "crates/penelope-ops", version = "1.0.0-alpha.14" }
+penelope-dream    = { path = "crates/penelope-dream", version = "1.0.0-alpha.14" }
+penelope-executor = { path = "crates/penelope-executor", version = "1.0.0-alpha.14" }
+penelope-conversation = { path = "crates/penelope-conversation", version = "1.0.0-alpha.14" }
+penelope-orchestrator = { path = "crates/penelope-orchestrator", version = "1.0.0-alpha.14" }
+penelope-evals    = { path = "crates/penelope-evals", version = "1.0.0-alpha.14" }
+penelope-daemon   = { path = "crates/penelope-daemon", version = "1.0.0-alpha.14" }
+penelope-gateway-telegram = { path = "crates/penelope-gateway-telegram", version = "1.0.0-alpha.14" }
 
 [profile.release]
 opt-level = 3
