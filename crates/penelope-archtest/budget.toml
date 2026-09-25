@@ -16,7 +16,7 @@ test_modules = [
 # Liste de référence (R3) : les fichiers autorisés à dépasser, chacun avec sa borne.
 # Elle ne peut que rétrécir : un fichier repassé sous le plafond doit en sortir.
 [files.oversized]
-"crates/penelope-daemon/src/tool_jobs.rs" = 1207   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
+"crates/penelope-daemon/src/tool_jobs.rs" = 1205   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/engine.rs" = 1093
 "crates/penelope-kernel/src/config.rs" = 2148   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-cli/src/commands.rs" = 2179   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
@@ -44,7 +44,7 @@ test_modules = [
 # vingtaine de correctifs de taille courante. Un autre crate se plafonne en ajoutant une
 # ligne. UPDATE_BUDGET ne touche pas à cette table.
 [crates]
-"penelope-daemon" = 20896   # v1 : après la sortie de app, mcp-host, vault, ops (purge et sessions compris), passerelle, agent, dream, executor et conversation ; redescend avec orchestrator
+"penelope-daemon" = 15109   # v1 : toutes les crates du découpage sont sorties (lots H et J) ; reste la composition, le moteur de tours et rpc ; redescend avec T30 (réexports) et T33
 
 # Liste blanche des modules du daemon (R5) : les déclarations `mod x;` de lib.rs et
 # `mod screens;` de telegram.rs. `mod tests;` est toujours permis. Les fichiers où un bloc
@@ -84,8 +84,7 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 "rpc/mod.rs" = 4   # découpage (lot G) : la mention suit son code
 "rpc/methods/workflows.rs" = 1   # découpage (lot G) : la mention suit son code
 "rpc/methods/memory.rs" = 1   # découpage (lot G) : la mention suit son code
-"workflow/mod.rs" = 12   # façade du moteur (T27) : entrées en &Arc<Daemon> jusqu'à T30
-"workflow/compat.rs" = 2   # façade du moteur (T27) : WorkflowOrchestrator { daemon } jusqu'à T30
+"workflow/mod.rs" = 13   # façade du moteur (T27) : entrées en &Arc<Daemon> jusqu'à T30
 "scheduler/mod.rs" = 7   # façade de l'ordonnanceur (T27) : entrées en &Arc<Daemon> jusqu'à T30
 "tool_jobs.rs" = 3   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "compaction.rs" = 1
