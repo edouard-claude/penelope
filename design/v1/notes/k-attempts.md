@@ -14,6 +14,7 @@ Spécification : `design/v1/boucle-et-outils.md` §3.7, §4.1 et §5 (T15, T26).
 | `3aec1b8` | T15 | le daemon ne regrossit pas (plafond `[crates]`) |
 | `0b8202c` | T15 (coupure) | `penelope_app::journal` ne réexporte plus le moteur de contexte ; archtest `reach.rs` |
 | `0012ec6` | T26 | `TurnEventKind` ; les kinds de la boucle documentés dans `docs/runtime-events.md` |
+| (après les notes) | T15 | dépendance morte à `penelope-context` retirée de `penelope-tools` et `penelope-workflow` |
 
 ## Ce qui est livré
 
@@ -72,11 +73,11 @@ modules (les modules de `penelope-app` que la boucle nomme, puis ceux qu'ils nom
 (le daemon atteint `journal` et `services`).
 
 **Ce qui reste du graphe cargo** : agent → app → context existe toujours, parce que
-`penelope-app` porte `Services` (et son `ContextEngine`, `services.rs:39`) avec les ports ;
-agent → tools → context aussi, parce que `penelope-tools` (et `penelope-workflow`)
-déclarent `penelope-context` sans s'en servir. Couper au niveau cargo demande de sortir
-les ports de `penelope-app` dans une crate plus basse, et de retirer ces deux
-dépendances inutiles : hors du périmètre de ce lot.
+`penelope-app` porte `Services` (et son `ContextEngine`, `services.rs:39`) avec les ports.
+Le chemin agent → tools → context, lui, est coupé : `penelope-tools` et
+`penelope-workflow` déclaraient `penelope-context` sans s'en servir, la ligne est retirée
+(accord de l'intégrateur). Couper le reste demande de sortir les ports de `penelope-app`
+dans une crate plus basse : hors du périmètre de ce lot.
 
 ### T26 : `TurnEventKind`
 
@@ -126,5 +127,4 @@ CA 4.5 ne compte plus cette tentative `unpinned`.
 
 ## Blocages
 
-Aucun. Reste : la coupure au niveau cargo (ports hors de `penelope-app`, dépendances
-inutiles de `penelope-tools` et `penelope-workflow` vers `penelope-context`).
+Aucun. Reste : la coupure au niveau cargo (ports hors de `penelope-app`).
