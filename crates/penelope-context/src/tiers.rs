@@ -69,6 +69,16 @@ pub struct Tiers {
 }
 
 impl Tiers {
+    /// La découpe du préfixe rendu en tuiles.
+    pub fn tile_map(&self) -> TileMap {
+        let rendered = self.prefix();
+        TileMap {
+            t0: Tile::of(&rendered, &self.identity),
+            t1: Tile::of(&rendered, &self.index),
+            t2: Tile::of(&rendered, &self.context),
+        }
+    }
+
     /// Concaténation exacte du préfixe stable (T0 + T1 + T2).
     pub fn prefix(&self) -> String {
         let mut s =
@@ -390,7 +400,7 @@ pub struct Tile {
 }
 
 impl Tile {
-    fn of(rendered: &str, text: &str) -> Tile {
+    pub fn of(rendered: &str, text: &str) -> Tile {
         Tile {
             at: rendered.find(text).unwrap_or(0),
             len: text.len(),
@@ -411,15 +421,6 @@ pub struct TileMap {
 }
 
 impl TileMap {
-    pub fn of(tiers: &Tiers) -> TileMap {
-        let rendered = tiers.prefix();
-        TileMap {
-            t0: Tile::of(&rendered, &tiers.identity),
-            t1: Tile::of(&rendered, &tiers.index),
-            t2: Tile::of(&rendered, &tiers.context),
-        }
-    }
-
     fn tile(&self, name: &str) -> Option<&Tile> {
         match name {
             "T0" => Some(&self.t0),
@@ -649,7 +650,7 @@ mod tile_tests {
     fn tiles_slice_the_rendered_prefix() {
         let t = builder().build();
         let rendered = t.prefix();
-        let map = TileMap::of(&t);
+        let map = t.tile_map();
         assert_eq!(map.slice(&rendered, "T0"), Some(t.identity.as_str()));
         assert_eq!(map.slice(&rendered, "T1"), Some(t.index.as_str()));
         assert_eq!(map.slice(&rendered, "T2"), Some(t.context.as_str()));
@@ -660,8 +661,11 @@ mod tile_tests {
     /// doit nommer.
     #[test]
     fn only_the_changed_tile_is_named() {
-        let before = TileMap::of(&builder().build());
-        let after = TileMap::of(&builder().skill("autre", "une autre skill").build());
+        let before = builder().build().tile_map();
+        let after = builder()
+            .skill("autre", "une autre skill")
+            .build()
+            .tile_map();
         assert_eq!(before.changed(&after), vec!["T1"]);
         assert!(before.changed(&before).is_empty());
     }
@@ -670,13 +674,12 @@ mod tile_tests {
     /// l'ordre des tuiles.
     #[test]
     fn several_tiles_are_named_in_order() {
-        let before = TileMap::of(&builder().build());
-        let after = TileMap::of(
-            &builder()
-                .skill("autre", "une autre skill")
-                .memory_snapshot("- Répondre en anglais.", "", "")
-                .build(),
-        );
+        let before = builder().build().tile_map();
+        let after = builder()
+            .skill("autre", "une autre skill")
+            .memory_snapshot("- Répondre en anglais.", "", "")
+            .build()
+            .tile_map();
         assert_eq!(before.changed(&after), vec!["T1", "T2"]);
     }
 
@@ -684,7 +687,7 @@ mod tile_tests {
     #[test]
     fn the_map_carries_no_text() {
         let t = builder().build();
-        let json = serde_json::to_string(&TileMap::of(&t)).unwrap();
+        let json = serde_json::to_string(&t.tile_map()).unwrap();
         assert!(!json.contains("Pénélope"), "{json}");
         assert!(json.len() < 300, "{json}");
     }

@@ -14,7 +14,7 @@ use crate::journal::{
     ContextPayload, ConvEvent, KIND_FORK, KIND_IMPORT, KIND_SUMMARY, KIND_SYSTEM, KIND_USER,
     Provenance, SurfaceOp, SystemPayload, SystemReason, message_event,
 };
-use crate::tiers::{Tiers, TileMap};
+use crate::tiers::Tiers;
 use penelope_kernel::event::{EventDraft, EventLog};
 use penelope_store::rusqlite::{Connection, Transaction};
 use std::sync::{Arc, Mutex};
@@ -344,7 +344,7 @@ impl HistoryStore {
             surface,
             hash,
             rendered,
-            tiles: TileMap::of(tiers),
+            tiles: tiers.tile_map(),
             reason,
         };
         let event = ConvEvent::System(payload.clone());

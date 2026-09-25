@@ -1,8 +1,9 @@
 //! Un tour, itération par itération.
 
-use super::attempts::of_response;
+use super::attempts::{call_record, of_response};
 use super::*;
 use penelope_app::attempts::{Attempt, AttemptCause};
+use penelope_kernel::journal::CallRecord;
 
 impl AgentLoop {
     /// Les itérations d'un tour, entre ses bornes (`turn_log`).
@@ -202,12 +203,12 @@ impl AgentLoop {
             let prov = Provenance {
                 turn: spec.turn_id.clone(),
                 step: iteration + 1,
-                call: Some(Box::new(penelope_app::journal::AssistantPayload {
+                call: Some(Box::new(CallRecord {
                     system_hash: Some(fingerprint.system_hash.clone()),
                     tools_hash: Some(fingerprint.tools_hash.clone()),
                     request_hash: fingerprint.request_hash(),
                     interrupted: response.finish == FinishReason::Cancelled,
-                    ..penelope_app::journal::AssistantPayload::of_response(&response)
+                    ..call_record(&response)
                 })),
                 ..Default::default()
             };

@@ -119,7 +119,7 @@ impl PromptPrefix {
     pub fn of(tiers: &Tiers) -> PromptPrefix {
         PromptPrefix {
             rendered: tiers.prefix(),
-            tiles: Some(TileMap::of(tiers)),
+            tiles: Some(tiers.tile_map()),
         }
     }
 

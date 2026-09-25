@@ -4,7 +4,7 @@
 //! dans `messages` l'est aussi dans le journal, dans l'ordre. Ce module ne fait que
 //! traduire ; l'écriture est dans [`crate::store`].
 
-use penelope_llm::types::{ChatMessage, ChatResponse, Role};
+use penelope_llm::types::{ChatMessage, Role};
 
 use super::*;
 
@@ -27,7 +27,7 @@ pub struct Provenance {
     pub ok: Option<bool>,
     /// L'appel qui a produit une réponse : modèle, usage, empreintes. Le contenu, lui,
     /// vient toujours du message écrit.
-    pub call: Option<Box<AssistantPayload>>,
+    pub call: Option<Box<CallRecord>>,
 }
 
 impl Provenance {
@@ -51,23 +51,21 @@ impl Provenance {
 }
 
 impl AssistantPayload {
-    /// Ce qu'une réponse du modèle dit de son appel, sans son contenu.
-    pub fn of_response(r: &ChatResponse) -> Self {
+    /// Ce qu'un appel dit de lui-même, sans contenu : le reste vient du message écrit.
+    pub fn of_call(c: &CallRecord) -> Self {
         AssistantPayload {
-            model: Some(r.model.clone()),
-            provider: Some(r.provider.clone()),
-            upstream: r.upstream.clone(),
-            generation_id: (!r.id.is_empty()).then(|| r.id.clone()),
-            finish: Some(format!("{:?}", r.finish).to_lowercase()),
-            usage: Some(TokenUsage {
-                prompt: r.usage.prompt,
-                completion: r.usage.completion,
-                cached: r.usage.cached,
-                cache_write: r.usage.cache_write,
-                reasoning: r.usage.reasoning,
-            }),
-            cost_usd: Some(r.cost_usd),
-            estimated: r.cost_estimated,
+            model: c.model.clone(),
+            provider: c.provider.clone(),
+            upstream: c.upstream.clone(),
+            generation_id: c.generation_id.clone(),
+            finish: c.finish.clone(),
+            usage: c.usage.clone(),
+            cost_usd: c.cost_usd,
+            estimated: c.estimated,
+            system_hash: c.system_hash.clone(),
+            tools_hash: c.tools_hash.clone(),
+            request_hash: c.request_hash.clone(),
+            interrupted: c.interrupted,
             ..Default::default()
         }
     }
@@ -96,7 +94,11 @@ pub fn message_event(
             mid_turn: prov.mid_turn,
         }),
         Role::Assistant => {
-            let call = prov.call.as_deref().cloned().unwrap_or_default();
+            let call = prov
+                .call
+                .as_deref()
+                .map(AssistantPayload::of_call)
+                .unwrap_or_default();
             ConvEvent::Assistant(Box::new(AssistantPayload {
                 surface: SurfaceOp::Append,
                 turn: prov.turn.clone(),

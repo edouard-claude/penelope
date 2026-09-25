@@ -13,6 +13,7 @@
 
 use super::*;
 use penelope_app::attempts::{Attempt, AttemptCause, TokenUsage};
+use penelope_kernel::journal::CallRecord;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Tentatives gardées par tour : au-delà, elles ne sont plus que dans les journaux
@@ -147,13 +148,14 @@ impl Partial {
     }
 }
 
-/// Une réponse reçue puis écartée (réponse vide) : son appel, son usage et son coût,
-/// que `budget.record` a déjà comptés. Rien de son contenu n'entre en surface.
-pub(super) fn of_response(cause: AttemptCause, r: &ChatResponse) -> Attempt {
-    Attempt {
+/// Ce qu'une réponse du modèle dit de son appel, sans son contenu.
+pub(super) fn call_record(r: &ChatResponse) -> CallRecord {
+    CallRecord {
         model: Some(r.model.clone()),
         provider: Some(r.provider.clone()),
         upstream: r.upstream.clone(),
+        generation_id: (!r.id.is_empty()).then(|| r.id.clone()),
+        finish: Some(format!("{:?}", r.finish).to_lowercase()),
         usage: Some(TokenUsage {
             prompt: r.usage.prompt,
             completion: r.usage.completion,
@@ -162,6 +164,21 @@ pub(super) fn of_response(cause: AttemptCause, r: &ChatResponse) -> Attempt {
             reasoning: r.usage.reasoning,
         }),
         cost_usd: Some(r.cost_usd),
+        estimated: r.cost_estimated,
+        ..Default::default()
+    }
+}
+
+/// Une réponse reçue puis écartée (réponse vide) : son appel, son usage et son coût,
+/// que `budget.record` a déjà comptés. Rien de son contenu n'entre en surface.
+pub(super) fn of_response(cause: AttemptCause, r: &ChatResponse) -> Attempt {
+    let call = call_record(r);
+    Attempt {
+        model: call.model,
+        provider: call.provider,
+        upstream: call.upstream,
+        usage: call.usage,
+        cost_usd: call.cost_usd,
         partial_reasoning: (!r.reasoning.is_empty()).then(|| r.reasoning.clone()),
         ..Attempt::new(cause)
     }

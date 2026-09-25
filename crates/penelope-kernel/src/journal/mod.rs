@@ -5,9 +5,11 @@
 //! réexporte à l'identique sous `penelope_context::journal`.
 
 mod attempt;
+mod call;
 mod turn;
 
 pub use attempt::*;
+pub use call::*;
 pub use turn::*;
 
 use serde_json::Value;
