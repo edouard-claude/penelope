@@ -3743,12 +3743,14 @@ Les écarts assumés par rapport à un « DEVRAIT » du PRD sont documentés un 
 | [0010](decisions/0010-fournisseur-codex-oauth.md) | Fournisseur Codex par OAuth | Identité empruntée et dite, périmètre borné aux tours du propriétaire, quota du plan au lieu du dollar |
 | [0011](decisions/0011-prompt-systeme-journalise.md) | Prompt système journalisé en clair | Ce que le modèle a lu est reconstituable, adressé par son empreinte ; une ligne par préfixe distinct |
 | [0012](decisions/0012-jobs-outils-durables.md) | Jobs d'outils durables | Un appel long sort du tour et rend la main ; un job mort au redémarrage n'est jamais relancé d'office (#204) |
+| [0013](decisions/0013-decoupage-du-daemon.md) | Daemon découpé en crates, passerelle au-dessus | Les modules prennent `Services` et des ports au lieu de `Daemon` ; la passerelle est un adaptateur pilotant composé par la CLI, pas un port de 90 méthodes |
+| [0014](decisions/0014-boucle-pipeline.md) | Boucle d'agent en pipeline d'étapes typées | Gardes et couches de politique en chaînes fixes testées dans leur ordre, plan de tentatives pur, steering explicite, crate qui ne connaît que des ports |
 | [0015](decisions/0015-gel-0.17-et-branche-v1.md) | Gel de la 0.17 et branche `v1` | La dette ne grossit plus sur `main` (budget à cliquet) ; la V1 se refait à côté, versions jamais taguées |
 | [0016](decisions/0016-ptc-hors-v1.md) | PTC hors V1, avec une couture | Une approbation suspend le tour, pas un programme : un appel imbriqué qui la demanderait est refusé sans carte ; `run_code` viendra, s'il vient, par le même pipeline |
 
-Les numéros 0013, 0014, 0016 et 0017 sont réservés par la charte de la V1 (`design/v1/README.md`
-§9 : découpage du daemon, boucle en pipeline, PTC hors V1, journal source unique de la
-conversation) et pas encore écrits ; 0012 est pris par les jobs d'outils durables (#204, sur `main`).
+Les numéros 0016 et 0017 sont réservés par la charte de la V1 (`design/v1/README.md` §9 :
+PTC hors V1, journal source unique de la conversation) et pas encore écrits ; 0012 est pris
+par les jobs d'outils durables (#204, sur `main`).
 
 ## Deux failles corrigées en écrivant la suite `security`
 

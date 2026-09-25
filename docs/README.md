@@ -23,6 +23,7 @@ d'outils sont à jour.
 | Comprendre la compression de contexte | [Ce qu'un appel envoie](context.md#ce-quun-appel-envoie), [Les chiffres par fenêtre](context.md#les-chiffres-par-fenêtre), [Une session jusqu'à la cinquième compaction](context.md#une-session-du-premier-tour-à-la-cinquième-compaction), [Quand le résumé échoue](context.md#quand-le-résumé-échoue), [Le cache](context.md#le-cache) |
 | Sécurité | [Secrets](install-headless.md#4-secrets), [Shell et bac à sable](install-headless.md#shell-et-bac-à-sable), [Outils natifs](install-headless.md#outils-natifs), [Risque et approbation MCP](mcp.md#risque-et-approbation) |
 | Ce que Pénélope sait d'elle-même | [Inventaire et documentation](install-headless.md#ce-que-pénélope-sait-delle-même) |
+| Comprendre le code | [Couches](architecture.md#les-couches), [Crates](architecture.md#les-crates), [Ports](architecture.md#les-ports), [Règles d'architecture](architecture.md#les-règles-darchitecture), [Découpage du daemon](decisions/0013-decoupage-du-daemon.md), [Boucle en pipeline](decisions/0014-boucle-pipeline.md) |
 | État d'avancement | [Avancement](progress.md#résumé), [Ce qui reste à faire](progress.md#ce-qui-reste-à-faire), [Ce qui n'est pas encore branché](install-headless.md#11-ce-qui-nest-pas-encore-branché), [Critères d'acceptation](ca-matrix.md) |
 
 ## Par fichier
@@ -34,6 +35,7 @@ d'outils sont à jour.
 - [context.md](context.md) : la compression de contexte de bout en bout, seuils, queue verbatim, gabarit de résumé, échecs et cache, chiffres vérifiés contre le code. Sections : [Ce qu'un appel envoie](context.md#ce-quun-appel-envoie), [Les chiffres par fenêtre](context.md#les-chiffres-par-fenêtre), [Une session](context.md#une-session-du-premier-tour-à-la-cinquième-compaction), [Quand le résumé échoue](context.md#quand-le-résumé-échoue), [Le cache](context.md#le-cache), [Observer](context.md#observer).
 - [runtime-events.md](runtime-events.md) : activation du flux WebSocket, contrat du replay et démonstration Pathlayer. Sections : [Activer](runtime-events.md#activer-un-consommateur), [Contrat](runtime-events.md#contrat), [Démonstration](runtime-events.md#démonstration-pathlayer).
 - [progress.md](progress.md) : avancement, notes de chaque version, routine de livraison et manques connus. Sections : [Version 1](progress.md#version-1-branche-v1), [Résumé](progress.md#résumé), [Suites du §20.1](progress.md#suites-du-201), [Ce qui reste à faire](progress.md#ce-qui-reste-à-faire), [Routine de livraison](progress.md#routine-de-livraison), [Décisions](progress.md#décisions).
+- [architecture.md](architecture.md) : les crates et leurs couches, les ports de `penelope-app` et qui les implémente, la frontière canal, le journal comme source de lecture, les règles d'architecture et le gel. Sections : [Couches](architecture.md#les-couches), [Crates](architecture.md#les-crates), [Ports](architecture.md#les-ports), [Frontière canal](architecture.md#la-frontière-canal), [Journal](architecture.md#le-journal-source-de-lecture), [Règles](architecture.md#les-règles-darchitecture), [Ce qui reste](architecture.md#ce-qui-reste).
 - [ca-matrix.md](ca-matrix.md) : critères d'acceptation et tests qui les couvrent, générée depuis les sources.
 
 ## Décisions
@@ -52,7 +54,9 @@ d'outils sont à jour.
 - [0010](decisions/0010-fournisseur-codex-oauth.md) : fournisseur Codex — identité empruntée, périmètre du propriétaire, quota du plan.
 - [0011](decisions/0011-prompt-systeme-journalise.md) : le prompt système est journalisé en clair, adressé par son empreinte.
 - [0012](decisions/0012-jobs-outils-durables.md) : un job d'outil mort au redémarrage n'est jamais relancé d'office.
+- [0013](decisions/0013-decoupage-du-daemon.md) : le daemon découpé en crates, la passerelle Telegram au-dessus de lui, les ports dans `penelope-app`.
+- [0014](decisions/0014-boucle-pipeline.md) : la boucle d'agent est un pipeline d'étapes typées, en chaînes fixes, qui ne connaît que des ports.
 - [0015](decisions/0015-gel-0.17-et-branche-v1.md) : gel de la 0.17 et branche `v1` ; `main` ne prend que des corrections, versions `1.0.0-alpha.N` jamais taguées.
 - [0016](decisions/0016-ptc-hors-v1.md) : le PTC (`run_code`) est hors V1 ; un appel imbriqué qui demanderait une approbation est refusé sans carte.
 
-Les numéros 0013, 0014, 0016 et 0017 sont réservés par la charte de la V1 (`design/v1/README.md` §9) et pas encore écrits (0017 : journal source unique).
+Les numéros 0016 et 0017 sont réservés par la charte de la V1 (`design/v1/README.md` §9) et pas encore écrits (0017 : journal source unique).
