@@ -3,7 +3,7 @@
 use super::*;
 
 /// Boucle du pilote : admet les runs en file, pilote les runs actifs.
-pub async fn driver_loop(d: Arc<Daemon>) {
+pub async fn driver_loop(d: Context) {
     while !d.handle.is_shutting_down() {
         if let Err(e) = drive_all(&d).await {
             tracing::warn!(error = %e, "pilote de workflows");
@@ -16,7 +16,7 @@ pub async fn driver_loop(d: Arc<Daemon>) {
 }
 
 /// Un passage : chaque run actif non piloté part dans sa propre tâche.
-pub async fn drive_all(d: &Arc<Daemon>) -> anyhow::Result<usize> {
+pub async fn drive_all(d: &Context) -> anyhow::Result<usize> {
     admit_held(d).await?;
     let mut started = 0;
     for run in d.services.runs.list(Some(RunState::Running), 500).await? {
@@ -35,7 +35,7 @@ pub async fn drive_all(d: &Arc<Daemon>) -> anyhow::Result<usize> {
 }
 
 /// Admet les runs mis en file dès qu'une place se libère.
-async fn admit_held(d: &Arc<Daemon>) -> anyhow::Result<()> {
+async fn admit_held(d: &Context) -> anyhow::Result<()> {
     let s = &d.services;
     let mut held: Vec<Run> = s
         .runs
@@ -73,7 +73,7 @@ async fn admit_held(d: &Arc<Daemon>) -> anyhow::Result<()> {
 }
 
 /// Pilote un run jusqu'à ce qu'il attende, s'arrête ou finisse.
-pub async fn drive(d: &Arc<Daemon>, run_id: &str) -> anyhow::Result<RunState> {
+pub async fn drive(d: &Context, run_id: &str) -> anyhow::Result<RunState> {
     let Some(cancel) = d.workflows.claim(run_id) else {
         return Ok(RunState::Running);
     };
@@ -89,7 +89,7 @@ pub async fn drive(d: &Arc<Daemon>, run_id: &str) -> anyhow::Result<RunState> {
 }
 
 async fn drive_claimed(
-    d: &Arc<Daemon>,
+    d: &Context,
     run_id: &str,
     cancel: &CancelToken,
 ) -> anyhow::Result<RunState> {
@@ -205,7 +205,7 @@ async fn drive_claimed(
 
 /// Exécute une étape, avec relances (`retry`) sur échec.
 async fn execute_with_retry(
-    d: &Arc<Daemon>,
+    d: &Context,
     run: &Run,
     wf: &Workflow,
     step: &Step,
@@ -258,7 +258,7 @@ async fn execute_with_retry(
 
 /// Termine un run : état, carte, réveil du parent.
 pub(super) async fn finish(
-    d: &Arc<Daemon>,
+    d: &Context,
     run: &Run,
     state: RunState,
     reason: &str,
@@ -375,7 +375,7 @@ pub(super) fn limit_reason(
 /// de `session budget` pour un run. Un run bloqué par la borne relevée redevient
 /// reprenable ; la reprise repart de l'étape courante, sans rejouer les effets faits.
 pub async fn raise_budget(
-    d: &Arc<Daemon>,
+    d: &Context,
     run_id: &str,
     usd: Option<f64>,
     tokens: Option<u64>,

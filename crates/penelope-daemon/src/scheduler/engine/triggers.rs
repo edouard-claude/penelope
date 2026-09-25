@@ -5,7 +5,7 @@ use super::*;
 /// `mcp_poll` : appelle un outil MCP en lecture, extrait les éléments, déclenche la cible
 /// pour les nouveaux (ou modifiés). Le premier passage amorce sans déclencher, sauf
 /// `backfill`.
-pub(super) async fn poll(d: &Arc<Daemon>, ports: &Ports, sched: &Schedule) -> anyhow::Result<bool> {
+pub(super) async fn poll(d: &Context, ports: &Ports, sched: &Schedule) -> anyhow::Result<bool> {
     let s = &d.services;
     let spec = &sched.spec;
     let server = spec["server"].as_str().unwrap_or_default();
@@ -69,7 +69,7 @@ pub(super) async fn poll(d: &Arc<Daemon>, ports: &Ports, sched: &Schedule) -> an
 
 /// `watch_file` : empreinte (date de modification, taille) comparée au passage précédent.
 pub(super) async fn watch_file(
-    d: &Arc<Daemon>,
+    d: &Context,
     ports: &Ports,
     sched: &Schedule,
 ) -> anyhow::Result<bool> {
@@ -112,7 +112,7 @@ pub(super) async fn watch_file(
 
 /// `event` : événements du journal apparus depuis le passage précédent.
 pub(super) async fn event(
-    d: &Arc<Daemon>,
+    d: &Context,
     ports: &Ports,
     sched: &Schedule,
     events: &[penelope_kernel::event::Event],
@@ -134,7 +134,7 @@ pub(super) async fn event(
 
 /// Événements d'identifiant dans `]from, to]`, page par page.
 pub(super) async fn events_between(
-    d: &Arc<Daemon>,
+    d: &Context,
     from: i64,
     to: i64,
 ) -> anyhow::Result<Vec<penelope_kernel::event::Event>> {
@@ -151,7 +151,7 @@ pub(super) async fn events_between(
     Ok(out)
 }
 
-pub(super) async fn event_cursor(d: &Arc<Daemon>) -> anyhow::Result<i64> {
+pub(super) async fn event_cursor(d: &Context) -> anyhow::Result<i64> {
     match d.services.kv_get("scheduler.event_cursor").await? {
         Some(v) => Ok(v.parse().unwrap_or(0)),
         None => {
@@ -165,7 +165,7 @@ pub(super) async fn event_cursor(d: &Arc<Daemon>) -> anyhow::Result<i64> {
     }
 }
 
-pub(super) async fn last_event_id(d: &Arc<Daemon>) -> anyhow::Result<i64> {
+pub(super) async fn last_event_id(d: &Context) -> anyhow::Result<i64> {
     Ok(d.services
         .store
         .read(|c| Ok(c.query_row("SELECT COALESCE(MAX(id), 0) FROM events", [], |r| r.get(0))?))

@@ -1,3 +1,4 @@
+use super::harness::Harness;
 use super::*;
 use crate::testing::RecordingMessenger;
 use penelope_kernel::clock::TestClock;
@@ -5,46 +6,28 @@ use penelope_llm::mock::{MockProvider, Scripted};
 use penelope_llm::types::ToolCall;
 
 struct Env {
-    _dir: tempfile::TempDir,
-    d: Arc<Daemon>,
+    d: Harness,
     p: Arc<MockProvider>,
     clock: TestClock,
     r: Arc<RecordingMessenger>,
 }
 
 async fn env() -> Env {
-    let dir = tempfile::tempdir().unwrap();
     let clock = TestClock::new(1_789_516_800_000);
-    let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
-    let s = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
-            .await
-            .unwrap(),
-    );
-    let d = Arc::new(Daemon::from_services(s));
-    let p = Arc::new(MockProvider::new());
-    d.set_provider_override(p.clone());
+    let d = Harness::new(Arc::new(clock.clone())).await;
+    let p = d.provider.clone();
     let r = RecordingMessenger::with_cards();
-    if let Ok(mut g) = d.hooks.messenger.write() {
-        *g = Some(r.clone());
-    }
-    d.hooks
-        .set_orchestrator(Arc::new(WorkflowOrchestrator { daemon: d.clone() }));
-    Env {
-        _dir: dir,
-        d,
-        p,
-        clock,
-        r,
-    }
+    d.set_messenger(r.clone());
+    Env { d, p, clock, r }
 }
 
 /// Installe un workflow de test, validé comme un fichier déposé par l'utilisateur.
-async fn install(d: &Daemon, raw: Value) {
+async fn install(d: &Context, raw: Value) {
     let s = &d.services;
     let wf = Workflow::from_json(&raw.to_string()).expect("JSON de workflow");
     let known =
-        crate::runtime::workflow_known_with(&s.config.config(), &s.mcp_tools, &s.workflows).await;
+        penelope_app::services::workflow_known_with(&s.config.config(), &s.mcp_tools, &s.workflows)
+            .await;
     let dir = s.platform.dirs.workflows();
     std::fs::create_dir_all(&dir).unwrap();
     s.workflows
@@ -103,7 +86,7 @@ async fn a_long_mcp_task_is_awaited_until_it_completes() {
         }),
     );
     let sup = crate::mcp::testing::supervisor(e.d.services.clone(), fake.clone());
-    e.d.hooks.set_mcp(sup.clone());
+    e.d.set_mcp(sup.clone());
     sup.add(
         penelope_mcp::config::ServerConfig::stdio("forge", "/opt/mcp/forge", &[]),
         false,
@@ -397,10 +380,9 @@ async fn build_verify_reports_an_unavailable_test_tool_without_a_verdict() {
         stored["verification"]["test_command"],
         "outil_introuvable_penelope_167"
     );
-    let reopened =
-        crate::runtime::Services::for_tests(e._dir.path().to_path_buf(), Arc::new(e.clock.clone()))
-            .await
-            .unwrap();
+    let reopened = Services::for_tests(e.d.dir.path().to_path_buf(), Arc::new(e.clock.clone()))
+        .await
+        .unwrap();
     let recovered = session_metadata(&reopened, &run.session_id).await;
     assert_eq!(recovered["verification"], stored["verification"]);
 }
@@ -667,7 +649,7 @@ async fn a_brief_reaches_the_first_agent_step_and_the_progress_card() {
     e.p.reply("Fait.");
     let brief = "Ticket #7647 : le cache ne se vide pas. Vérifier Redis d'abord.";
     let o = WorkflowOrchestrator {
-        daemon: e.d.clone(),
+        context: e.d.cx.clone(),
     };
     let started = crate::executor::Orchestrator::start_workflow(
         &o,
@@ -745,8 +727,8 @@ async fn a_tool_step_waits_for_approval_and_runs_once() {
     drive(&e.d, &run.id).await.unwrap();
     assert_eq!(e.r.approvals().len(), 1, "une seule carte");
 
-    crate::agent::decide_approval(
-        &e.d.services,
+    penelope_agent::decide_approval(
+        &e.d.agent,
         &approvals[0],
         &penelope_hitl::Decision::approve_once("test"),
     )
@@ -930,6 +912,50 @@ async fn loops_stop_at_the_iteration_limit_and_control_works() {
     );
 }
 
+/// T11 : un sous-agent n'a personne à qui demander une approbation (contexte neuf, pas
+/// de carte) : un outil soumis à approbation termine le sous-agent en erreur, sans que
+/// l'outil tourne.
+#[tokio::test]
+async fn a_sub_agent_that_needs_an_approval_fails_instead_of_waiting() {
+    let e = env().await;
+    let sid =
+        e.d.services
+            .sessions
+            .create(penelope_kernel::session::SessionKind::Chat, None)
+            .await
+            .unwrap()
+            .id
+            .to_string();
+    let ws = e.d.dir.path().join("espace");
+    std::fs::create_dir_all(&ws).unwrap();
+    e.p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![ToolCall {
+            id: "s1".into(),
+            name: "shell_exec".into(),
+            arguments: json!({"command": "touch fait.txt", "cwd": ws.display().to_string()}),
+        }],
+    ));
+    e.p.reply("ne devrait pas arriver");
+    let err = run_sub_agent(
+        &e.d,
+        SubAgentTask {
+            session_id: &sid,
+            run_id: None,
+            kind: "general",
+            prompt: "pose un fichier",
+            model_id: "mock:model",
+            tools: &["shell_exec".to_string()],
+            workspaces: vec![ws.clone()],
+        },
+        &CancelToken::new(),
+    )
+    .await
+    .expect_err("une approbation arrête le sous-agent");
+    assert!(err.contains("soumis à approbation"), "{err}");
+    assert!(!ws.join("fait.txt").exists(), "l'outil n'a pas tourné");
+}
+
 /// #57 : `/stop` pendant un sous-agent l'arrête : aucun appel au modèle après l'arrêt,
 /// et le tour parent n'est pas touché par l'arrêt du sous-agent.
 #[tokio::test]
@@ -937,7 +963,7 @@ async fn a_cancelled_turn_stops_its_sub_agent() {
     let e = env().await;
     e.p.reply("le sous-agent ne devrait pas répondre");
     let orchestrator: Arc<dyn crate::executor::Orchestrator> = Arc::new(WorkflowOrchestrator {
-        daemon: e.d.clone(),
+        context: e.d.cx.clone(),
     });
     let sid =
         e.d.services
@@ -1052,7 +1078,7 @@ async fn the_orchestrator_starts_runs_for_tools_and_schedules() {
         ),
     )
     .await;
-    let o = e.d.hooks.orchestrator().unwrap();
+    let o = e.d.orchestrator().unwrap();
     let v = o
         .start_workflow("rapide", json!({}), None, &owner())
         .await

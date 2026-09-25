@@ -16,7 +16,7 @@ use crate::conversation::SessionConversation;
 use crate::executor::{NativeToolExecutor, ToolEnv};
 use crate::helpers::step_done_key;
 use crate::ports::Slot;
-use crate::runtime::{Daemon, Services};
+use crate::runtime::Services;
 use penelope_hitl::{ApprovalKind, ApprovalState};
 use penelope_kernel::effects::{EffectSpec, Planned};
 use penelope_kernel::event::EventDraft;
@@ -147,13 +147,13 @@ fn origin_key(run_id: &str) -> String {
 }
 
 /// Canal du run : là où partent questions, approbations et carte de progression.
-pub async fn origin_of(d: &Daemon, run_id: &str) -> Origin {
-    match d.services.kv_get(&origin_key(run_id)).await.ok().flatten() {
+pub async fn origin_of(s: &Services, run_id: &str) -> Origin {
+    match s.kv_get(&origin_key(run_id)).await.ok().flatten() {
         Some(raw) => {
             let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
             Origin::from_payload(&json!({ "origin": v }))
         }
-        None => crate::helpers::owner_origin_of(&d.services),
+        None => crate::helpers::owner_origin_of(s),
     }
 }
 
@@ -197,6 +197,7 @@ async fn with_brief(ctx: &StepCtx<'_>, prompt: String) -> String {
     format!("Brief de la conversation qui a lancé ce run :\n{brief}\n\n{prompt}")
 }
 
+mod context;
 mod control;
 mod driver;
 mod orchestrator;
@@ -208,6 +209,7 @@ mod step_shell_tool;
 mod step_user;
 mod step_verify;
 
+pub use context::Context;
 pub use control::{answer, control, form_of};
 pub use driver::{drive, drive_all, driver_loop, effective_budget, raise_budget};
 use driver::{finish, limit_reason, refresh_spent, session_metadata};
@@ -228,5 +230,7 @@ use step_verify::{
     requires_current_sha, verifier_prompt,
 };
 
+#[cfg(test)]
+pub(crate) mod harness;
 #[cfg(test)]
 mod tests;

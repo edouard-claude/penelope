@@ -28,7 +28,7 @@ pub struct Daemon {
     /// Compactions de fond en cours et demandées (§5.4).
     pub compaction: Arc<crate::compaction::State>,
     /// Runs de workflow pilotés par ce processus (§12.7).
-    pub workflows: crate::workflow::State,
+    pub workflows: Arc<crate::workflow::State>,
     /// Calcul des embeddings : dernier échec, rattrapage en cours (issue #11).
     pub embeddings: Arc<crate::embeddings::State>,
     /// Boucles de fond surveillées : vivantes, paniques, relances (issue #84).
@@ -200,7 +200,7 @@ impl Daemon {
             compaction: Arc::new(crate::compaction::State::with_messenger(
                 hooks.messenger.clone(),
             )),
-            workflows: crate::workflow::State::with_ports(hooks.workflow()),
+            workflows: Arc::new(crate::workflow::State::with_ports(hooks.workflow())),
             embeddings: Arc::default(),
             tasks: Arc::new(crate::tasks::Tasks::default()),
             providers: Arc::new(Providers::new(services.clone())),

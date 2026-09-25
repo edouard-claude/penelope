@@ -126,8 +126,7 @@ pub async fn listing(s: &Services) -> anyhow::Result<Vec<Value>> {
 /// Planifications actives qui partent aujourd'hui (jour du propriétaire), à l'heure
 /// locale et avec leur destination : le digest du matin les rappelle, pour qu'une
 /// livraison au mauvais endroit se voie tout de suite (#124).
-pub async fn due_today(d: &Daemon) -> Vec<String> {
-    let s = &d.services;
+pub async fn due_today(s: &Services) -> Vec<String> {
     let tz = s
         .config
         .config()
@@ -157,7 +156,7 @@ pub async fn due_today(d: &Daemon) -> Vec<String> {
         let (_, to) = destination(s, &sched).await;
         rows.push((
             at,
-            format!("- {} {} → {to}", at.format("%H:%M"), label(d, &sched).await),
+            format!("- {} {} → {to}", at.format("%H:%M"), label(s, &sched).await),
         ));
     }
     rows.sort_by_key(|(at, _)| *at);

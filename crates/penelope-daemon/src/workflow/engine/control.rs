@@ -4,7 +4,7 @@ use super::*;
 
 /// Applique une opération de contrôle puis réveille le pilote.
 pub async fn control(
-    d: &Arc<Daemon>,
+    d: &Context,
     run_id: &str,
     op: &penelope_workflow::Control,
 ) -> anyhow::Result<RunState> {
@@ -104,7 +104,7 @@ pub async fn control(
 
 /// Enregistre la réponse du propriétaire à une étape `user` et réveille le run.
 pub async fn answer(
-    d: &Arc<Daemon>,
+    d: &Context,
     run_id: &str,
     visit: &str,
     choice: &str,
@@ -168,8 +168,7 @@ pub async fn answer(
 }
 
 /// Schéma du formulaire qu'attend la question `visit` d'un run, s'il y en a un.
-pub async fn form_of(d: &Daemon, run_id: &str, visit: &str) -> Option<Value> {
-    let s = &d.services;
+pub async fn form_of(s: &Services, run_id: &str, visit: &str) -> Option<Value> {
     let run = s.runs.get(run_id).await.ok()??;
     let step = run.current_step.clone()?;
     if visit != format!("{step}.{}", run.iterations) {

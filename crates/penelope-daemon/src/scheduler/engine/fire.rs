@@ -5,7 +5,7 @@ use super::*;
 /// Déclenche la cible d'un schedule. `items` : éléments d'un `mcp_poll` ; `vars` :
 /// valeurs propres au déclencheur (chemin, événement).
 pub(super) async fn fire(
-    d: &Arc<Daemon>,
+    d: &Context,
     ports: &Ports,
     sched: &Schedule,
     items: &[PolledItem],
@@ -63,7 +63,7 @@ pub(super) async fn fire(
             }
             // Une session par exécution (issue #39) : fermer la conversation où la
             // planification est née (`/new`, `/close`) ne la fait plus mourir en silence.
-            let title = format!("{} · {}", label(d, sched).await, local_day(d));
+            let title = format!("{} · {}", label(&d.services, sched).await, local_day(d));
             let session = s
                 .sessions
                 .create(SessionKind::Scheduled, Some(title))
@@ -134,7 +134,7 @@ pub(super) async fn fire(
 /// Crée une planification ; une planification active identique (même déclencheur, même
 /// spécification, prompt quasi identique) est signalée dans la réponse (issue #39).
 pub async fn create(
-    s: &crate::runtime::Services,
+    s: &Services,
     kind: penelope_workflow::TriggerKind,
     spec: Value,
     target: Value,
@@ -161,7 +161,7 @@ pub async fn create(
 
 /// Nom lisible d'une planification : son libellé, sinon le titre de la conversation où
 /// elle est née, sinon le début du prompt.
-pub async fn label(d: &Daemon, sched: &Schedule) -> String {
+pub async fn label(s: &Services, sched: &Schedule) -> String {
     if let Some(l) = sched.target["label"]
         .as_str()
         .filter(|l| !l.trim().is_empty())
@@ -171,7 +171,7 @@ pub async fn label(d: &Daemon, sched: &Schedule) -> String {
     if let Some(sid) = sched.target["origin_session"]
         .as_str()
         .or_else(|| sched.target["session_id"].as_str())
-        && let Ok(Some(sess)) = d.services.sessions.get(sid).await
+        && let Ok(Some(sess)) = s.sessions.get(sid).await
         && let Some(title) = sess.title.filter(|t| !t.trim().is_empty())
     {
         return title;
@@ -190,10 +190,10 @@ pub async fn label(d: &Daemon, sched: &Schedule) -> String {
 }
 
 /// Alerte : une planification n'a pas pu s'exécuter (issue #39). Jamais de silence.
-pub async fn alert(d: &Arc<Daemon>, ports: &Ports, sched: &Schedule, reason: &str) {
+pub async fn alert(d: &Context, ports: &Ports, sched: &Schedule, reason: &str) {
     let text = format!(
         "⚠️ La planification « {} » n'a pas pu s'exécuter : {reason}",
-        label(d, sched).await
+        label(&d.services, sched).await
     );
     let origin = target_origin(&d.services, sched);
     let _ = d
@@ -220,7 +220,7 @@ pub async fn alert(d: &Arc<Daemon>, ports: &Ports, sched: &Schedule, reason: &st
 }
 
 /// Jour du propriétaire, `JJ/MM`.
-pub(super) fn local_day(d: &Daemon) -> String {
+pub(super) fn local_day(d: &Context) -> String {
     let s = &d.services;
     let utc = chrono::DateTime::from_timestamp_millis(s.clock.now_ms()).unwrap_or_default();
     match s.config.config().owner.timezone.parse::<chrono_tz::Tz>() {

@@ -97,7 +97,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
             crate::conversation::build_tiers(s, &step.prompt, &[], Some(&run_state_line(ctx)))
                 .await;
         let conv = SessionConversation::new(s.clone(), &run.session_id, &model_id, tiers, 0);
-        let outcome = AgentLoop::new(crate::agent::services_of(s), provider.clone())
+        let outcome = AgentLoop::new(ctx.d.agent.clone(), provider.clone())
             .run_conversation(&spec, &conv, &exec, &NullSink)
             .await?;
         if let TurnOutcome::AwaitingApproval { approval_id } = &outcome {
@@ -190,7 +190,7 @@ pub(super) async fn send_approval_once(ctx: &StepCtx<'_>, approval_id: &str) {
         return;
     }
     if let Some(m) = ctx.d.workflows.ports.messenger.get() {
-        let origin = origin_of(ctx.d, &ctx.run.id).await;
+        let origin = origin_of(ctx.s(), &ctx.run.id).await;
         if m.send_approval(&origin, approval_id).await.is_ok() {
             let _ = s.kv_set(&key, "1").await;
         }
@@ -249,7 +249,7 @@ pub struct SubAgentTask<'a> {
 }
 
 pub async fn run_sub_agent(
-    d: &Arc<Daemon>,
+    d: &Context,
     task: SubAgentTask<'_>,
     cancel: &CancelToken,
 ) -> Result<String, String> {
@@ -273,7 +273,7 @@ pub async fn run_sub_agent(
             run_id: run_id.map(String::from),
             // Le sous-agent d'un run parle dans la conversation du run (issue #35).
             origin: match run_id {
-                Some(r) => origin_of(d, r).await,
+                Some(r) => origin_of(&d.services, r).await,
                 None => crate::helpers::owner_origin_of(&d.services),
             },
             workspaces,
@@ -292,7 +292,7 @@ pub async fn run_sub_agent(
         allowed_tools: allowed,
         cancel: cancel.clone(),
     };
-    let outcome = AgentLoop::new(crate::agent::services_of(s), provider)
+    let outcome = AgentLoop::new(d.agent.clone(), provider)
         .run_conversation(&spec, &conv, &exec, &NullSink)
         .await
         .map_err(|e| e.to_string())?;

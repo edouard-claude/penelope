@@ -89,7 +89,7 @@ pub(super) async fn workflow_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutco
         });
     }
     let params = ctx.render_json(&step.params).await;
-    let origin = origin_of(ctx.d, &run.id).await;
+    let origin = origin_of(ctx.s(), &run.id).await;
     match start_run(
         ctx.d,
         &step.workflow_id,

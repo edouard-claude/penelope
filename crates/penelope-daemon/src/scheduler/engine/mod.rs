@@ -21,7 +21,8 @@ use crate::bus::ChannelDelivery;
 use crate::bus::Origin;
 use crate::helpers::owner_origin_of;
 use crate::ports::{McpAdmin, Messenger, Slot};
-use crate::runtime::{Daemon, Services};
+use crate::runtime::Services;
+use crate::workflow::Context;
 use penelope_kernel::session::SessionKind;
 use penelope_kernel::turn::TurnKind;
 use penelope_workflow::schedules::{PolledItem, Schedule, TargetKind, TriggerKind};
@@ -52,7 +53,7 @@ pub struct TickReport {
 }
 
 /// Boucle de l'ordonnanceur, jusqu'à l'arrêt du daemon.
-pub async fn scheduler_loop(d: Arc<Daemon>, ports: Ports) {
+pub async fn scheduler_loop(d: Context, ports: Ports) {
     // La boîte de dépôt du vault passe à côté : une ingestion (résumé compris) ne doit pas
     // retarder un rappel.
     let inbox_busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -68,7 +69,7 @@ pub async fn scheduler_loop(d: Arc<Daemon>, ports: Ports) {
                 busy.store(false, std::sync::atomic::Ordering::SeqCst);
             });
         }
-        let (dream, feed) = (d.dream(), Arc::new(crate::dream::DigestFeed(d.clone())));
+        let (dream, feed) = (d.dream(), Arc::new(DigestFeed(d.services.clone())));
         let crons = penelope_dream::system_crons(&dream, feed, &ports.messenger, &ports.mcp);
         if let Err(e) = crons.await {
             tracing::warn!(error = %e, "consolidation ou digest programmés");
@@ -89,7 +90,7 @@ pub async fn scheduler_loop(d: Arc<Daemon>, ports: Ports) {
 }
 
 /// Un passage.
-pub async fn tick(d: &Arc<Daemon>, ports: &Ports) -> anyhow::Result<TickReport> {
+pub async fn tick(d: &Context, ports: &Ports) -> anyhow::Result<TickReport> {
     let s = &d.services;
     let mut report = TickReport {
         intents_expired: s.intents.expire_due().await?,
@@ -135,7 +136,7 @@ pub async fn tick(d: &Arc<Daemon>, ports: &Ports) -> anyhow::Result<TickReport> 
 }
 
 /// Exécution immédiate, hors calendrier (`schedule.run_now`).
-pub async fn run_now(d: &Arc<Daemon>, ports: &Ports, id: &str) -> anyhow::Result<Value> {
+pub async fn run_now(d: &Context, ports: &Ports, id: &str) -> anyhow::Result<Value> {
     let sched = d
         .services
         .schedules
@@ -164,7 +165,7 @@ const MANUAL: &str = "declenchement_manuel";
 
 /// Enregistre le tir (ou l'erreur) et programme la suite.
 async fn finish(
-    d: &Arc<Daemon>,
+    d: &Context,
     ports: &Ports,
     sched: &Schedule,
     result: anyhow::Result<bool>,
@@ -208,11 +209,13 @@ async fn finish(
     Ok(())
 }
 
+mod digest;
 mod fire;
 mod origin;
 mod outcome;
 mod templating;
 mod triggers;
+pub use digest::{DigestFeed, digest_inputs};
 use fire::fire;
 pub use fire::{alert, create, label};
 use origin::target_origin;

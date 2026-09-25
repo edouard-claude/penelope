@@ -4,7 +4,7 @@ use super::*;
 
 /// Démarre un run. `Coalesce` rend le run déjà actif, `Hold` le met en file.
 pub async fn start_run(
-    d: &Arc<Daemon>,
+    d: &Context,
     workflow_id: &str,
     params: Value,
     origin: &Origin,
@@ -21,7 +21,7 @@ pub async fn start_run(
 /// Cinq secondes au plus : l'outil rend la main même si l'étape est longue, mais il aura
 /// vu l'échec d'un `git clone` qui casse en une seconde — le cas du 21/09.
 pub(super) async fn first_verdict(
-    d: &Arc<Daemon>,
+    d: &Context,
     run_id: &str,
     within: Duration,
 ) -> Option<penelope_workflow::runs::Run> {
@@ -40,7 +40,7 @@ pub(super) async fn first_verdict(
 }
 
 pub async fn start_run_briefed(
-    d: &Arc<Daemon>,
+    d: &Context,
     workflow_id: &str,
     params: Value,
     origin: &Origin,

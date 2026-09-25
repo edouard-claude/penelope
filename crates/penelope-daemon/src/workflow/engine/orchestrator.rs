@@ -4,7 +4,7 @@ use super::*;
 
 /// Carte de progression du run : un message, mis à jour à chaque transition (§12.7).
 pub(super) async fn progress(
-    d: &Arc<Daemon>,
+    d: &Context,
     run: &Run,
     wf: &Workflow,
     last: Option<(&Step, &StepResult)>,
@@ -12,7 +12,7 @@ pub(super) async fn progress(
     let Some(m) = d.workflows.ports.messenger.get() else {
         return;
     };
-    let origin = origin_of(d, &run.id).await;
+    let origin = origin_of(&d.services, &run.id).await;
     let (icon, state) = match run.state {
         RunState::Running => ("🔧", "en cours"),
         RunState::Paused => ("⏸", "en pause"),
@@ -72,13 +72,13 @@ pub(super) async fn progress(
 
 /// Workflows, sous-agents et images, offerts aux outils (`workflow_start`, …).
 pub struct WorkflowOrchestrator {
-    pub daemon: Arc<Daemon>,
+    pub context: Context,
 }
 
 #[async_trait::async_trait]
 impl crate::executor::Orchestrator for WorkflowOrchestrator {
     async fn embed_query(&self, text: &str) -> Option<Vec<f32>> {
-        crate::embeddings::query_vector(&self.daemon.embedder(), text).await
+        crate::embeddings::query_vector(&self.context.embedder(), text).await
     }
 
     async fn schedule_create(
@@ -88,11 +88,11 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
         target: Value,
         dedup: Value,
     ) -> Result<Value, String> {
-        crate::scheduler::create(&self.daemon.services, kind, spec, target, dedup).await
+        crate::scheduler::create(&self.context.services, kind, spec, target, dedup).await
     }
 
     async fn schedule_list(&self) -> Result<Vec<Value>, String> {
-        crate::scheduler::listing(&self.daemon.services)
+        crate::scheduler::listing(&self.context.services)
             .await
             .map_err(|e| e.to_string())
     }
@@ -103,11 +103,11 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
         chat: i64,
         topic: Option<i64>,
     ) -> Result<String, String> {
-        crate::scheduler::retarget(&self.daemon.services, id, chat, topic).await
+        crate::scheduler::retarget(&self.context.services, id, chat, topic).await
     }
 
     async fn schedule_delete(&self, id: &str) -> Result<(), String> {
-        self.daemon
+        self.context
             .services
             .schedules
             .set_state(id, "deleted")
@@ -122,12 +122,12 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
         brief: Option<&str>,
         origin: &Origin,
     ) -> Result<Value, String> {
-        let run = start_run_briefed(&self.daemon, id, params, origin, None, 0, brief).await?;
+        let run = start_run_briefed(&self.context, id, params, origin, None, 0, brief).await?;
         // Le tour ne doit pas annoncer un état qu'il n'a pas vérifié (issue #154). Le
         // 21/09, « 🚀 Lancé — en cours » est parti dans le sujet pendant que le run mourait
         // à `git clone` quinze secondes plus tôt : l'outil avait rendu `running` avant que
         // la première étape ne tourne. On attend son verdict, au plus cinq secondes.
-        let settled = first_verdict(&self.daemon, &run.id, Duration::from_secs(5)).await;
+        let settled = first_verdict(&self.context, &run.id, Duration::from_secs(5)).await;
         let state = settled.as_ref().map_or(run.state, |r| r.state);
         let mut out = json!({"run_id": run.id, "state": state.as_str(), "workflow": id});
         match state {
@@ -171,7 +171,7 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
         origin: &Origin,
         cancel: &CancelToken,
     ) -> Result<Value, String> {
-        let cfg = self.daemon.services.config.config();
+        let cfg = self.context.services.config.config();
         let alias = model
             .map(String::from)
             .unwrap_or_else(|| cfg.role_alias("chat_default"));
@@ -183,9 +183,9 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
         // Le sous-agent hérite du périmètre de son tour : l'abonnement ChatGPT sert ceux
         // du propriétaire, pas une planification qui passerait par là (#142).
         let model_id =
-            crate::codex_scope::for_origin(&self.daemon.services, &model_id, origin).await;
+            crate::codex_scope::for_origin(&self.context.services, &model_id, origin).await;
         let text = run_sub_agent(
-            &self.daemon,
+            &self.context,
             SubAgentTask {
                 session_id,
                 run_id: None,
@@ -193,7 +193,7 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
                 prompt,
                 model_id: &model_id,
                 tools: &tools,
-                workspaces: crate::executor::default_workspaces(&self.daemon.services),
+                workspaces: crate::executor::default_workspaces(&self.context.services),
             },
             // Jeton enfant : `/stop` sur le tour parent arrête le sous-agent, et un
             // sous-agent qui s'arrête ne touche pas au parent (issue #57).
@@ -204,7 +204,7 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
     }
 
     async fn generate_image(&self, prompt: &str, size: Option<&str>) -> Result<Value, String> {
-        let d = &self.daemon;
+        let d = &self.context;
         crate::images::generate(&d.services, d.providers.as_ref(), prompt, size).await
     }
 
@@ -215,7 +215,7 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
         task: crate::vision::Task,
         question: &str,
     ) -> Result<Value, String> {
-        let d = &self.daemon;
+        let d = &self.context;
         crate::vision::inspect(
             &d.services,
             d.providers.as_ref(),
@@ -236,7 +236,7 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
                 "`{op}` demande l'accord du propriétaire : `penelope wf control {run_id} {op}`"
             ));
         }
-        let state = control(&self.daemon, run_id, &parsed)
+        let state = control(&self.context, run_id, &parsed)
             .await
             .map_err(|e| e.to_string())?;
         Ok(json!({"run": run_id, "state": state.as_str()}))

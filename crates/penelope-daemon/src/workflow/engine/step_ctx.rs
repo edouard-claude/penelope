@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) struct StepCtx<'a> {
-    pub(super) d: &'a Arc<Daemon>,
+    pub(super) d: &'a Context,
     pub(super) run: &'a Run,
     pub(super) wf: &'a Workflow,
     pub(super) step: &'a Step,
@@ -124,13 +124,13 @@ impl StepCtx<'_> {
             ToolEnv {
                 session_id: self.run.session_id.clone(),
                 run_id: Some(self.run.id.clone()),
-                origin: origin_of(d, &self.run.id).await,
+                origin: origin_of(self.s(), &self.run.id).await,
                 workspaces,
                 in_workflow: true,
                 turn_model: None,
             },
         );
-        exec.admin = Some(d.clone() as Arc<dyn crate::selfknow::Admin>);
+        exec.admin = d.admin.clone();
         let ports = &d.workflows.ports;
         exec.messenger = ports.messenger.get();
         exec.mcp = ports.mcp.get();

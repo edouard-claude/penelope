@@ -9,7 +9,7 @@ pub(super) fn state_key(session_id: &str) -> String {
 
 /// Chemin d'un état ou d'un fichier livrable : absolu, ou relatif au premier workspace ;
 /// jamais hors des workspaces.
-pub(super) fn resolve_in_workspace(d: &Daemon, path: &str) -> Option<std::path::PathBuf> {
+pub(super) fn resolve_in_workspace(d: &Context, path: &str) -> Option<std::path::PathBuf> {
     let workspaces = crate::executor::default_workspaces(&d.services);
     let p = std::path::Path::new(path);
     let full = if p.is_absolute() {
@@ -25,7 +25,7 @@ pub(super) fn resolve_in_workspace(d: &Daemon, path: &str) -> Option<std::path::
 }
 
 /// Garde l'état tel qu'avant le tour (2 Mio au plus, texte).
-pub(super) async fn save_state(d: &Daemon, session_id: &str, path: &str) {
+pub(super) async fn save_state(d: &Context, session_id: &str, path: &str) {
     let Some(full) = resolve_in_workspace(d, path) else {
         tracing::warn!(
             path,
@@ -48,7 +48,7 @@ pub(super) async fn save_state(d: &Daemon, session_id: &str, path: &str) {
 }
 
 /// Remet l'état d'avant le tour (`restore`), ou l'oublie : il est validé.
-pub(super) async fn settle_state(d: &Daemon, session_id: &str, restore: bool) {
+pub(super) async fn settle_state(d: &Context, session_id: &str, restore: bool) {
     let key = state_key(session_id);
     let Ok(Some(raw)) = d.services.kv_get(&key).await else {
         return;
@@ -73,7 +73,7 @@ pub(super) async fn settle_state(d: &Daemon, session_id: &str, restore: bool) {
 
 /// Ce que le tour devait livrer et n'a pas livré, s'il en déclarait un (issue #120).
 pub(super) async fn missing_deliverable(
-    d: &Daemon,
+    d: &Context,
     turn: &penelope_kernel::turn::Turn,
     outcome: &crate::agent::TurnOutcome,
 ) -> Option<String> {
@@ -143,7 +143,7 @@ pub(super) async fn missing_deliverable(
 /// répond sans livrer ce qu'elle a promis est un échec, prévenu comme ceux de #39, et
 /// l'état qu'elle a consommé est remis pour que la suivante reprenne les mêmes éléments.
 pub async fn trigger_outcome_of(
-    d: &Arc<Daemon>,
+    d: &Context,
     ports: &Ports,
     schedule_id: &str,
     outcome: &crate::agent::TurnOutcome,
@@ -176,9 +176,8 @@ pub async fn trigger_outcome_of(
 
 /// Textes envoyés avec succès par `send_message` pendant le tour d'une session planifiée
 /// (chaque exécution a sa session : tout son historique est ce tour).
-pub(super) async fn sent_during_turn(d: &Daemon, session_id: &str) -> Vec<String> {
-    let history = d
-        .services
+pub(super) async fn sent_during_turn(s: &Services, session_id: &str) -> Vec<String> {
+    let history = s
         .context
         .history
         .load(session_id, 0)
@@ -232,8 +231,8 @@ pub fn repeats(final_text: &str, sent: &str) -> bool {
 /// sauf si l'agent a déjà envoyé le même contenu à la même cible pendant le tour
 /// (`send_message` part toujours vers l'origine du tour). Un message intermédiaire
 /// différent, ou un `send_message` en échec, n'empêche jamais la réponse finale.
-pub async fn final_already_sent(d: &Daemon, session_id: &str, final_text: &str) -> bool {
-    sent_during_turn(d, session_id)
+pub async fn final_already_sent(s: &Services, session_id: &str, final_text: &str) -> bool {
+    sent_during_turn(s, session_id)
         .await
         .iter()
         .any(|m| repeats(final_text, m))
@@ -242,7 +241,7 @@ pub async fn final_already_sent(d: &Daemon, session_id: &str, final_text: &str) 
 /// Fin du tour d'un prompt planifié : l'exécution compte si le modèle a répondu, sinon la
 /// raison est gardée et le propriétaire prévenu (issue #39).
 pub async fn trigger_outcome(
-    d: &Arc<Daemon>,
+    d: &Context,
     ports: &Ports,
     schedule_id: &str,
     outcome: &crate::agent::TurnOutcome,
@@ -281,7 +280,7 @@ pub async fn trigger_outcome(
 /// Tours de prompts planifiés annulés dans la file sans jamais tourner (session fermée,
 /// `/stop`) : erreur gardée, propriétaire prévenu. Le premier passage prend l'instant sans
 /// rien signaler.
-pub(super) async fn cancelled_triggers(d: &Arc<Daemon>, ports: &Ports) -> anyhow::Result<()> {
+pub(super) async fn cancelled_triggers(d: &Context, ports: &Ports) -> anyhow::Result<()> {
     const CURSOR: &str = "scheduler.cancelled_cursor";
     let s = &d.services;
     let now = s.clock.now_rfc3339();

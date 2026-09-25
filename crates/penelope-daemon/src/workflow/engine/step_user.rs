@@ -23,7 +23,7 @@ pub(super) async fn user_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> 
             .input
             .strip_prefix("form:")
             .and_then(|id| ctx.wf.settings.forms.get(id));
-        let origin = origin_of(ctx.d, &run.id).await;
+        let origin = origin_of(ctx.s(), &run.id).await;
         if let Some(m) = ctx.d.workflows.ports.messenger.get() {
             m.send_question(
                 &origin,
