@@ -7,7 +7,7 @@
 use crate::anchors::Anchor;
 use crate::compaction::AppliedStep;
 use crate::tiers::TileMap;
-use penelope_kernel::journal::TokenUsage;
+use penelope_kernel::journal::{TokenUsage, UserSource};
 use penelope_llm::types::{Content, ToolCall};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -40,18 +40,6 @@ pub struct SystemPayload {
     pub rendered: String,
     pub tiles: TileMap,
     pub reason: SystemReason,
-}
-
-/// Origine d'un message utilisateur.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UserSource {
-    Owner,
-    Merged,
-    Trigger,
-    Nudge,
-    Photo,
-    Import,
 }
 
 /// `conv.user`.

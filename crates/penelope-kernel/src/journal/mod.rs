@@ -6,10 +6,14 @@
 
 mod attempt;
 mod call;
+mod provenance;
+mod tiles;
 mod turn;
 
 pub use attempt::*;
 pub use call::*;
+pub use provenance::*;
+pub use tiles::*;
 pub use turn::*;
 
 use serde_json::Value;
