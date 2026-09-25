@@ -90,6 +90,7 @@ impl AgentLoop {
         execute: &(dyn ToolExecutor + Send + Sync),
         sink: &dyn TurnSink,
         detector: &mut LoopDetector,
+        steering: &Steering<'_>,
     ) -> anyhow::Result<Pending> {
         let s = &self.services;
         let tail = conv.tail().await?;
@@ -243,6 +244,22 @@ impl AgentLoop {
             if spec.cancel.is_cancelled() {
                 return Ok(Pending::Stop(TurnOutcome::Cancelled));
             }
+            // Un message du propriétaire arrivé pendant le lot : l'appel en cours a fini,
+            // ceux qui ne sont pas partis ne partent plus, le modèle est rappelé avec le
+            // message (§3.4). Pas quand le lot finit sur une carte ou une boucle : le
+            // message attend alors le tour suivant, comme avant.
+            if terminal.is_none() && matches!(step, Step::Execute { .. }) {
+                let steers = steering.claim(Checkpoint::BetweenCalls).await?;
+                if !steers.is_empty() {
+                    let rest = std::iter::once(step).chain(steps);
+                    recorded += self
+                        .skip_steps(conv, sink, rest, NOT_RUN_NEW_MESSAGE)
+                        .await?;
+                    conv.admit_tool_results(recorded).await?;
+                    steering.record(s, spec, conv, &steers).await?;
+                    return Ok(Pending::Resolved);
+                }
+            }
             match step {
                 Step::Record(call, text) => {
                     self.record_result(conv, sink, &call, false, text, false)
@@ -348,6 +365,29 @@ impl AgentLoop {
         }
         conv.admit_tool_results(recorded).await?;
         Ok(Pending::Resolved)
+    }
+
+    /// Clôt les appels qui ne partiront pas : un résultat pour chacun, pour que le
+    /// transcript reste complet sans réparation à la projection (§3.4). Un refus déjà
+    /// décidé garde son texte ; un appel à exécuter reçoit `why`.
+    async fn skip_steps(
+        &self,
+        conv: &dyn Conversation,
+        sink: &dyn TurnSink,
+        steps: impl Iterator<Item = Step>,
+        why: &str,
+    ) -> anyhow::Result<usize> {
+        let mut recorded = 0;
+        for step in steps {
+            let (call, text) = match step {
+                Step::Record(call, text) => (call, text),
+                Step::Execute { call, .. } => (call, why.to_string()),
+            };
+            self.record_result(conv, sink, &call, false, text, false)
+                .await?;
+            recorded += 1;
+        }
+        Ok(recorded)
     }
 
     /// Ledger d'effets **avant** exécution, puis l'outil (§4.2) : jamais ré-exécuté s'il

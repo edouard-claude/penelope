@@ -220,7 +220,9 @@ impl Harness<'_> {
                 );
             }
             let detail = match step {
-                Step::Message { text, crash } => self.message(text, *crash).await,
+                Step::Message { text, crash, steer } => {
+                    self.message(text, *crash, steer.as_deref()).await
+                }
                 Step::Enqueue { text } => self.enqueue(text).await,
                 Step::Command { command } => self.command(command).await,
                 Step::AdvanceClock { by } => {
@@ -334,12 +336,13 @@ fn schema(t: &McpTool) -> Value {
     json!({"type": "object", "properties": props})
 }
 
-/// Serveur MCP simulé : rend le texte déclaré, ou, en mode crash, signale l'appel et ne
-/// répond jamais.
+/// Serveur MCP simulé : rend le texte déclaré ; en mode bloqué, signale l'appel et ne
+/// répond qu'une fois relâché (jamais, pour un crash).
 struct Gateway {
     tools: Vec<McpTool>,
     block: AtomicBool,
     called: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 
 #[async_trait::async_trait]
@@ -357,7 +360,7 @@ impl McpGateway for Gateway {
             .ok_or_else(|| format!("outil simulé inconnu : {qualified}"))?;
         if self.block.load(Ordering::SeqCst) {
             self.called.notify_one();
-            std::future::pending::<()>().await;
+            self.release.notified().await;
         }
         Ok(json!({"content": [{"type": "text", "text": tool.result}]}))
     }

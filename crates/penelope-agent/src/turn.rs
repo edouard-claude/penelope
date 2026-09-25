@@ -34,7 +34,7 @@ impl AgentLoop {
 
             // 1. Appels en attente : premier passage ou reprise, même chemin.
             match self
-                .resolve_pending(spec, conv, execute, sink, &mut detector)
+                .resolve_pending(spec, conv, execute, sink, &mut detector, &steering)
                 .await?
             {
                 Pending::Stop(outcome) => return Ok(outcome),

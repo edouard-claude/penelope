@@ -16,6 +16,7 @@ mod fallback;
 mod guards;
 mod policy;
 mod run_loop;
+mod steering;
 mod turn_bounds;
 
 struct CountingExecutor {

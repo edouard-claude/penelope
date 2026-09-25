@@ -19,6 +19,7 @@ impl Harness<'_> {
         &mut self,
         text: &str,
         crash: Option<Crash>,
+        steer: Option<&str>,
     ) -> anyhow::Result<Value> {
         let d = self.daemon()?;
         d.enqueue_message(&self.session, text, &Origin::Cli, None)
@@ -28,7 +29,10 @@ impl Harness<'_> {
         let merged = turn.merged_messages.len();
         match crash {
             None => {
-                let out = runner::process(&d, turn, HEARTBEAT).await;
+                let out = match steer {
+                    Some(steer) => self.steer_during_tool(turn, steer).await?,
+                    None => runner::process(&d, turn, HEARTBEAT).await,
+                };
                 let mut v = outcome_json(&out);
                 if merged > 0 {
                     v["merged"] = json!(merged);
@@ -64,6 +68,30 @@ impl Harness<'_> {
         shut_down(life, &self.spec.name).await;
         self.crashed = true;
         Ok(())
+    }
+
+    /// Le tour part dans une tâche ; dès que l'outil simulé est appelé, le propriétaire
+    /// écrit `text`, puis l'outil répond : le message arrive pendant l'appel (T13).
+    async fn steer_during_tool(
+        &mut self,
+        turn: Turn,
+        text: &str,
+    ) -> anyhow::Result<penelope_daemon::agent::TurnOutcome> {
+        let life = self.life.as_ref().context("processus mort")?;
+        let gateway = life
+            .gateway
+            .clone()
+            .context("`steer` demande un outil MCP simulé (`[[mcp_tools]]`)")?;
+        gateway.block.store(true, Ordering::SeqCst);
+        let d = life.daemon.clone();
+        let task = tokio::spawn(async move { runner::process(&d, turn, HEARTBEAT).await });
+        tokio::time::timeout(CRASH_WAIT, gateway.called.notified())
+            .await
+            .context("l'outil simulé n'a pas été appelé : aucun appel pendant lequel écrire")?;
+        self.enqueue(text).await?;
+        gateway.block.store(false, Ordering::SeqCst);
+        gateway.release.notify_one();
+        Ok(task.await?)
     }
 
     pub(super) async fn enqueue(&mut self, text: &str) -> anyhow::Result<Value> {

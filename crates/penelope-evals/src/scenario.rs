@@ -99,6 +99,10 @@ pub enum Step {
         /// être `restart`.
         #[serde(default)]
         crash: Option<Crash>,
+        /// Message du propriétaire qui arrive pendant l'appel d'outil MCP simulé : la
+        /// boucle le réclame entre deux appels (steering, épopée #208, T13).
+        #[serde(default)]
+        steer: Option<String>,
     },
     /// Message mis en file sans être joué : le suivant l'absorbe (messages fusionnés).
     Enqueue { text: String },
@@ -147,13 +151,23 @@ impl Step {
     /// Libellé de l'étape dans `expected.jsonl`.
     pub fn label(&self) -> String {
         match self {
-            Step::Message { text, crash: None } => format!("message : {text}"),
+            Step::Message {
+                text,
+                crash: None,
+                steer: None,
+            } => format!("message : {text}"),
             Step::Message {
                 text,
                 crash: Some(_),
+                ..
             } => {
                 format!("message : {text} (crash pendant l'appel d'outil)")
             }
+            Step::Message {
+                text,
+                steer: Some(steer),
+                ..
+            } => format!("message : {text} (pendant l'appel d'outil : {steer})"),
             Step::Enqueue { text } => format!("en file : {text}"),
             Step::Command { command } => format!("commande : {command}"),
             Step::AdvanceClock { by } => format!("horloge : +{by}"),

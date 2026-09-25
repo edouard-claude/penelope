@@ -12,6 +12,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// portent, après les messages système (§2.3).
 pub const MERGE_NOTE: &str = "Un nouveau message utilisateur est arrivé pendant le tour ; ce qui précède est déjà exécuté. Tiens compte du nouveau message dans la réponse en cours.";
 
+/// Résultat d'un appel non démarré quand un message du propriétaire arrive pendant le
+/// lot (`Checkpoint::BetweenCalls`).
+pub const NOT_RUN_NEW_MESSAGE: &str = "Non exécuté : nouveau message du propriétaire.";
+
 /// Les messages réclamés pendant un tour.
 pub(crate) struct Steering<'a> {
     inbox: Option<&'a dyn Inbox>,

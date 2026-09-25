@@ -51,6 +51,7 @@ scenario_cases! {
     approbation_apres_redemarrage => "approbation-apres-redemarrage",
     redemarrages_en_serie => "redemarrages-en-serie",
     outils_niveau_1_et_compaction => "outils-niveau-1-et-compaction",
+    message_pendant_un_lot => "message-pendant-un-lot",
 }
 
 #[test]

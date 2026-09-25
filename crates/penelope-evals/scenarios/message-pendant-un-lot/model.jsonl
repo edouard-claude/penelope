@@ -1,0 +1,2 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "mcp__banc__lire", "arguments": {"path": "rapport.txt"}}, {"id": "c2", "name": "fs_read", "arguments": {"path": "a.txt"}}, {"id": "c3", "name": "fs_read", "arguments": {"path": "b.txt"}}]}}
+{"text": "Le rapport se termine par « fin »."}

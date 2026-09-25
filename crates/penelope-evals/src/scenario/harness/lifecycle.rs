@@ -213,6 +213,7 @@ impl Harness<'_> {
             tools: self.spec.mcp_tools.clone(),
             block: AtomicBool::new(false),
             called: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
         });
         let mut slot = daemon
             .hooks
