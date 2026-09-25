@@ -26,6 +26,7 @@ pub mod telegram;
 #[cfg(test)]
 mod ticket_to_deploy_e2e;
 
+pub use telegram::channel::cards;
 pub use telegram::{TelegramGateway, parse_params};
 
 use penelope_app::gateway::Gateway;

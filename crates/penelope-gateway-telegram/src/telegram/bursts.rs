@@ -348,7 +348,7 @@ impl TelegramGateway {
             parts.join(" et "),
             escape_html(&title)
         );
-        let token = s
+        let token = self
             .actions
             .create(
                 k::SESSION_SWITCH,

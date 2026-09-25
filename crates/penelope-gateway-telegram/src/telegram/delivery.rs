@@ -31,9 +31,8 @@ impl ChannelDelivery for TelegramGateway {
         text: &str,
     ) -> Result<(), String> {
         let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
-        let s = &self.daemon.services;
         let ttl = 7 * 24 * 3_600_000;
-        let rerun = s
+        let rerun = self
             .actions
             .create(
                 k::SCREEN_DO,
@@ -44,7 +43,7 @@ impl ChannelDelivery for TelegramGateway {
             )
             .await
             .map_err(|e| e.to_string())?;
-        let show = s
+        let show = self
             .actions
             .create(k::SCREEN, "schedules", json!({}), ttl, false)
             .await
@@ -247,8 +246,6 @@ impl Messenger for TelegramGateway {
         let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
         let version = draft.plan.version();
         let token = self
-            .daemon
-            .services
             .actions
             .create(
                 k::SCREEN_DO,
@@ -388,7 +385,6 @@ impl Messenger for TelegramGateway {
         form: Option<&Value>,
     ) -> Result<(), String> {
         let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
-        let s = &self.daemon.services;
         let ttl = 7 * 24 * 3_600_000;
         let labels: Vec<String> = if choices.is_empty() {
             vec![
@@ -404,7 +400,7 @@ impl Messenger for TelegramGateway {
         };
         let mut rows: Vec<Vec<ButtonSpec>> = Vec::new();
         for label in &labels {
-            let t = s
+            let t = self
                 .actions
                 .create(
                     k::CHOICE,

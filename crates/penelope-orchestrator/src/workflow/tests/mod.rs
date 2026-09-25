@@ -25,9 +25,13 @@ async fn env() -> Env {
 async fn install(d: &Context, raw: Value) {
     let s = &d.services;
     let wf = Workflow::from_json(&raw.to_string()).expect("JSON de workflow");
-    let known =
-        penelope_app::services::workflow_known_with(&s.config.config(), &s.mcp_tools, &s.workflows)
-            .await;
+    let known = penelope_app::services::workflow_known_with(
+        &s.config.config(),
+        &s.mcp_tools,
+        &s.workflows,
+        &s.channel,
+    )
+    .await;
     let dir = s.platform.dirs.workflows();
     std::fs::create_dir_all(&dir).unwrap();
     s.workflows

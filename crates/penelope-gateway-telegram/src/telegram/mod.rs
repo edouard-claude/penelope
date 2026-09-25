@@ -11,9 +11,7 @@
 use crate::agent::{TurnEvent, TurnOutcome, decide_approval};
 use crate::bus::{BusKind, ChannelDelivery, Origin};
 use crate::executor::Messenger;
-use crate::helpers::{
-    BOT_USERNAME_KEY, SEEN_CHATS_KEY, chat_title_key, seen_chats, shown, topic_name_key,
-};
+use crate::helpers::{SEEN_CHATS_KEY, chat_title_key, seen_chats, shown, topic_name_key};
 use crate::runtime::Daemon;
 use penelope_hitl::{ApprovalRequest, ApprovalState, Decision};
 use penelope_kernel::api::method as m;
@@ -34,6 +32,7 @@ mod approvals;
 mod bursts;
 mod callbacks;
 mod cards;
+pub mod channel;
 mod commands;
 mod delivery;
 mod drafts;
@@ -57,6 +56,7 @@ use cards::{
     background_note, cancelled_note, codex_status_text, context_line, fmt_usd, mcp_list_text,
     mcp_show_text, mcp_state_icon, routing_text, schedules_text,
 };
+pub use channel::BOT_USERNAME_KEY;
 use drafts::Activity;
 pub(crate) use drafts::StopReport;
 use forms::form_key;
@@ -74,6 +74,11 @@ use outbox::shorten_failure;
 pub struct TelegramGateway {
     pub daemon: Arc<Daemon>,
     pub bot: Arc<Bot>,
+    /// Gabarits des cartes (§14.5) : sortis de `Services` (T36), le cœur les lit par le
+    /// port `Cards`.
+    pub templates: Arc<penelope_telegram::TemplateRegistry>,
+    /// Jetons des boutons (`callback_data`).
+    pub actions: penelope_telegram::ActionStore,
     owner_id: i64,
     draft_interval: Duration,
     poll_timeout_s: u64,
@@ -120,7 +125,20 @@ impl TelegramGateway {
             cfg.telegram.rate_per_chat_per_s,
             s.clock.clone(),
         ));
+        let templates = Arc::new(channel::load_templates(&s.platform.dirs.templates()));
+        // Branchées dès la construction, avant `run` : un run repris au démarrage rend
+        // déjà ses questions avec les gabarits du canal.
+        s.channel.cards.set(Some(Arc::new(channel::TelegramCards {
+            templates: templates.clone(),
+            store: s.store.clone(),
+        })));
         Arc::new(TelegramGateway {
+            actions: penelope_telegram::ActionStore::new(
+                s.store.clone(),
+                s.clock.clone(),
+                cfg.owner.telegram_user_id,
+            ),
+            templates,
             owner_id: cfg.owner.telegram_user_id,
             draft_interval: Duration::from_millis(cfg.telegram.draft_interval_ms.max(300)),
             poll_timeout_s: cfg.telegram.poll_timeout_s,
@@ -175,7 +193,7 @@ impl TelegramGateway {
             tracing::warn!(error = %e, "effets incertains non annoncés");
         }
         // Surveillées : une panique relance la boucle au lieu de rendre le bot muet (#84).
-        let (a, b, c) = (self.clone(), self.clone(), self.clone());
+        let (a, b, c, m) = (self.clone(), self.clone(), self.clone(), self.clone());
         let sup = self.daemon.supervision();
         Ok(vec![
             crate::tasks::spawn_supervised(&sup, "telegram.poll", move || a.clone().poll_loop()),
@@ -183,11 +201,29 @@ impl TelegramGateway {
             crate::tasks::spawn_supervised(&sup, "telegram.outbox", move || {
                 c.clone().outbox_loop()
             }),
+            crate::tasks::spawn_supervised(&sup, "telegram.maintenance", move || {
+                m.clone().maintenance_loop()
+            }),
         ])
     }
 
     fn shutting_down(&self) -> bool {
         self.daemon.handle.is_shutting_down()
+    }
+
+    /// Jetons de boutons expirés, retirés chaque minute (ex-maintenance du daemon, T36).
+    async fn maintenance_loop(self: Arc<Self>) {
+        while !self.shutting_down() {
+            if let Err(e) = self.actions.purge_expired().await {
+                tracing::warn!(error = %e, "jetons de boutons expirés");
+            }
+            for _ in 0..120 {
+                if self.shutting_down() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
     }
 
     /// Pousse chaque demande `effect_unknown` en attente, une fois : dans le chat de sa

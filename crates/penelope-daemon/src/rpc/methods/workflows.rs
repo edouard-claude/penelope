@@ -37,6 +37,7 @@ impl Rpc {
                     &s.config.config(),
                     &s.mcp_tools,
                     &s.workflows,
+                    &s.channel,
                 )
                 .await;
                 let report = penelope_workflow::validate(&w, stem, &known);

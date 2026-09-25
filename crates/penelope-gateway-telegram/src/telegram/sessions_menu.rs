@@ -44,7 +44,7 @@ impl TelegramGateway {
         let page = page.min(pages - 1);
         let ttl = 24 * 3_600_000;
         let make = |label: String, action: &'static str, target: String, args: Value| async move {
-            s.actions
+            self.actions
                 .create(action, &target, args, ttl, true)
                 .await
                 .map(|t| ButtonSpec::callback(&label, &t.token, ""))
@@ -282,7 +282,7 @@ impl TelegramGateway {
         ] {
             let mut row = Vec::new();
             for (label, action) in pair {
-                let t = s
+                let t = self
                     .actions
                     .create(action, session_id, nav.clone(), ttl, true)
                     .await?;
@@ -290,7 +290,7 @@ impl TelegramGateway {
             }
             rows.push(row);
         }
-        let back = s
+        let back = self
             .actions
             .create(k::SESSIONS_PAGE, "", nav, ttl, true)
             .await?;

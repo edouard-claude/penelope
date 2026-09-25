@@ -33,7 +33,7 @@ pub(super) async fn fire(
     match sched.target_kind() {
         Some(TargetKind::Notify) => {
             let template = sched.target["template"].as_str().unwrap_or_default();
-            let body = match s.templates.get(template) {
+            let body = match s.channel.template(template) {
                 Some(t) => substitute(&t.body, &vars),
                 None => substitute(template, &vars),
             };

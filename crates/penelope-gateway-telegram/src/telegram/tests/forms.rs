@@ -184,7 +184,7 @@ async fn a_workflow_question_uses_telegram_buttons_and_typed_input() {
         ]
     });
     let wf = penelope_workflow::Workflow::from_json(&raw.to_string()).unwrap();
-    let known = crate::runtime::workflow_known(&s.config.config(), &s.mcp_tools).await;
+    let known = crate::runtime::workflow_known(&s.config.config(), &s.mcp_tools, &s.channel).await;
     let dir = s.platform.dirs.workflows();
     std::fs::create_dir_all(&dir).unwrap();
     s.workflows.write(&dir, &wf, &known).unwrap();
@@ -535,8 +535,13 @@ async fn a_workflow_form_is_filled_field_by_field() {
     });
     let s = &d.services;
     let wf = penelope_workflow::model::Workflow::from_json(&raw.to_string()).unwrap();
-    let known =
-        crate::runtime::workflow_known_with(&s.config.config(), &s.mcp_tools, &s.workflows).await;
+    let known = crate::runtime::workflow_known_with(
+        &s.config.config(),
+        &s.mcp_tools,
+        &s.workflows,
+        &s.channel,
+    )
+    .await;
     let dir = s.platform.dirs.workflows();
     std::fs::create_dir_all(&dir).unwrap();
     s.workflows

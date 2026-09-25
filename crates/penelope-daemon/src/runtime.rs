@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 pub use crate::ports::Handle;
 use crate::ports::{McpAdmin, ProviderSource, Slot};
+use penelope_app::channel::CardsOf;
 // `Services` et ce qu'il assemble sont descendus dans `penelope-app` (T21) : réexportés
 // sous leur ancien chemin.
 pub use penelope_app::services::{
@@ -185,9 +186,9 @@ impl Hooks {
 }
 
 impl Daemon {
-    pub async fn new(home: Option<PathBuf>) -> anyhow::Result<Daemon> {
+    pub async fn new(home: Option<PathBuf>, cards: Option<CardsOf>) -> anyhow::Result<Daemon> {
         let clock: SharedClock = Arc::new(SystemClock);
-        let services = Arc::new(Services::bootstrap(home, clock.clone()).await?);
+        let services = Arc::new(Services::bootstrap(home, clock.clone(), cards).await?);
         Ok(Daemon::from_services(services))
     }
 

@@ -58,8 +58,6 @@ impl TelegramGateway {
     ) -> anyhow::Result<ButtonSpec> {
         let ttl = r.timeout.as_millis() as i64 + 3_600_000;
         let t = self
-            .daemon
-            .services
             .actions
             .create(action, &r.id, json!({}), ttl, true)
             .await?;
@@ -109,8 +107,6 @@ impl TelegramGateway {
         session: &str,
     ) -> Option<ButtonSpec> {
         let t = self
-            .daemon
-            .services
             .actions
             .create(
                 k::ELICIT_RETRY,

@@ -216,7 +216,7 @@ impl TelegramGateway {
             ("+20 $", k::BUDGET_RAISE, 20.0),
             ("⏹ Arrêter", k::BUDGET_STOP, 0.0),
         ] {
-            let t = s
+            let t = self
                 .actions
                 .create(action, a.id.as_str(), json!({"amount": amount}), ttl, true)
                 .await?;

@@ -16,7 +16,7 @@ impl TelegramGateway {
         from_id: i64,
     ) -> anyhow::Result<()> {
         let s = &self.daemon.services;
-        let outcome = s.actions.click(data, from_id).await?;
+        let outcome = self.actions.click(data, from_id).await?;
         if let ClickOutcome::Accepted(action) = &outcome
             && action.action == k::MODEL_PIN
         {

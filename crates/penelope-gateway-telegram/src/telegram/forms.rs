@@ -22,13 +22,12 @@ impl TelegramGateway {
     pub(super) async fn send_form_step(&self, chat_id: i64, pending: &Value) -> anyhow::Result<()> {
         use penelope_telegram::forms::{FieldKind, FormState};
         let state: FormState = serde_json::from_value(pending["state"].clone())?;
-        let s = &self.daemon.services;
         let ttl = 24 * 3_600_000;
         let target = chat_id.to_string();
         let button = |label: &str, action: &str, args: Value| {
             let (label, action, target) = (label.to_string(), action.to_string(), target.clone());
             async move {
-                s.actions
+                self.actions
                     .create(&action, &target, args, ttl, true)
                     .await
                     .map(|t| ButtonSpec::callback(&label, &t.token, ""))
@@ -43,7 +42,7 @@ impl TelegramGateway {
             let mut last = vec![button("✖️ Abandonner", k::FORM_DECLINE, json!({})).await?];
             // Élicitation MCP : refuser reste possible jusqu'à l'envoi.
             if let Some(id) = pending["elicitation"].as_str() {
-                let t = s
+                let t = self
                     .actions
                     .create(k::ELICIT_DECLINE, id, json!({}), ttl, true)
                     .await?;

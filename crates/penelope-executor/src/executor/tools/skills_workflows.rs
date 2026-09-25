@@ -268,9 +268,13 @@ impl NativeToolExecutor {
                 };
                 let w = penelope_workflow::Workflow::from_json(&raw)
                     .map_err(|e| with_doc(format!("JSON invalide : {e}")))?;
-                let known =
-                    penelope_app::services::workflow_known_with(&cfg, &s.mcp_tools, &s.workflows)
-                        .await;
+                let known = penelope_app::services::workflow_known_with(
+                    &cfg,
+                    &s.mcp_tools,
+                    &s.workflows,
+                    &s.channel,
+                )
+                .await;
                 let dir = s.platform.dirs.workflows();
                 let path = s.workflows.write(&dir, &w, &known).map_err(with_doc)?;
                 s.workflows

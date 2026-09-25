@@ -193,7 +193,7 @@ async fn a_document_is_ingested_proposed_and_answered() {
         .iter()
         .find(|a| a.kind == penelope_hitl::ApprovalKind::MemoryProposal)
         .expect("proposition en attente");
-    let token = s
+    let token = g
         .actions
         .create(
             k::MEMORY_ACCEPT,

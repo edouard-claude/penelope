@@ -62,7 +62,7 @@ async fn question_text(ctx: &StepCtx<'_>) -> String {
         .get("__last")
         .cloned()
         .unwrap_or(Value::Null);
-    let mut body = match s.templates.get(if step.template.is_empty() {
+    let mut body = match s.channel.template(if step.template.is_empty() {
         "question"
     } else {
         &step.template

@@ -508,8 +508,6 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
         };
         d.enqueue_resume(sid, a.id.as_str(), &origin).await?;
     }
-    s.actions.purge_expired().await?;
-
     // Une demande restée sans réponse est rappelée à T+1 h puis T+6 h, avec une carte
     // neuve, dans la conversation d'origine (§9.2, issue #97). Sans canal de message
     // (CLI seule), rien n'est marqué : le propriétaire y est actif.

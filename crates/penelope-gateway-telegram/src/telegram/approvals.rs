@@ -40,7 +40,7 @@ impl TelegramGateway {
             let ttl = 24 * 3_600_000;
             let mut row = Vec::new();
             for (label, action) in [("▶️ Continuer", k::APPROVE), ("⏹ Arrêter", k::DENY)] {
-                let t = s
+                let t = self
                     .actions
                     .create(action, a.id.as_str(), json!({}), ttl, true)
                     .await?;
@@ -134,13 +134,13 @@ impl TelegramGateway {
             k::DENY,
             k::DENY_REASON,
         ] {
-            let t = s
+            let t = self
                 .actions
                 .create(action, a.id.as_str(), json!({}), ttl, true)
                 .await?;
             tokens.insert(action.to_string(), t.token);
         }
-        let tpl = s
+        let tpl = self
             .templates
             .get("tool_approval")
             .ok_or_else(|| anyhow::anyhow!("gabarit tool_approval absent"))?;
@@ -296,13 +296,13 @@ impl TelegramGateway {
         let ttl = 7 * 24 * 3_600_000;
         let mut tokens = BTreeMap::new();
         for action in [k::EFFECT_VERIFY, k::EFFECT_RETRY, k::EFFECT_IGNORE] {
-            let t = s
+            let t = self
                 .actions
                 .create(action, a.id.as_str(), json!({}), ttl, true)
                 .await?;
             tokens.insert(action.to_string(), t.token);
         }
-        let tpl = s
+        let tpl = self
             .templates
             .get("effect_unknown")
             .ok_or_else(|| anyhow::anyhow!("gabarit effect_unknown absent"))?;
@@ -381,11 +381,11 @@ impl TelegramGateway {
             text.push_str(&format!("\n\n**Brief**\n{short}{more}"));
         }
         let ttl = 24 * 3_600_000;
-        let launch = s
+        let launch = self
             .actions
             .create(k::APPROVE, a.id.as_str(), json!({}), ttl, true)
             .await?;
-        let later = s
+        let later = self
             .actions
             .create(
                 k::DENY,
@@ -452,7 +452,7 @@ impl TelegramGateway {
         let ttl = crate::mcp_auth::REQUEST_TTL_MS;
         let mut tokens = BTreeMap::new();
         for action in [k::OAUTH_PASTED, k::OAUTH_RETRY] {
-            let t = s
+            let t = self
                 .actions
                 .create(action, server, json!({}), ttl, true)
                 .await?;
@@ -477,7 +477,7 @@ impl TelegramGateway {
             },
         );
         vars.insert("url".into(), start.url.clone());
-        let tpl = s
+        let tpl = self
             .templates
             .get("mcp_oauth_required")
             .ok_or_else(|| anyhow::anyhow!("gabarit mcp_oauth_required absent"))?;
@@ -506,7 +506,6 @@ impl TelegramGateway {
         topic_id: Option<i64>,
         a: &ApprovalRequest,
     ) -> anyhow::Result<()> {
-        let s = &self.daemon.services;
         let items: Vec<String> = a.payload["items"]
             .as_array()
             .cloned()
@@ -526,13 +525,13 @@ impl TelegramGateway {
         let ttl = 7 * 24 * 3_600_000;
         let mut tokens = BTreeMap::new();
         for action in [k::MEMORY_ACCEPT, k::MEMORY_AS_EXCEPTION, k::MEMORY_REJECT] {
-            let t = s
+            let t = self
                 .actions
                 .create(action, a.id.as_str(), json!({}), ttl, true)
                 .await?;
             tokens.insert(action.to_string(), t.token);
         }
-        let tpl = s
+        let tpl = self
             .templates
             .get("memory_proposal")
             .ok_or_else(|| anyhow::anyhow!("gabarit memory_proposal absent"))?;
@@ -574,8 +573,7 @@ impl TelegramGateway {
         topic_id: Option<i64>,
         a: &ApprovalRequest,
     ) -> anyhow::Result<()> {
-        let s = &self.daemon.services;
-        let confirm = s
+        let confirm = self
             .actions
             .create(
                 k::CONFIRM_DESTRUCTIVE,
@@ -585,7 +583,7 @@ impl TelegramGateway {
                 true,
             )
             .await?;
-        let deny = s
+        let deny = self
             .actions
             .create(k::DENY, a.id.as_str(), json!({}), 600_000, true)
             .await?;

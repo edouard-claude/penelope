@@ -26,8 +26,6 @@ impl TelegramGateway {
         turn_cost: Option<f64>,
     ) -> anyhow::Result<()> {
         let token = self
-            .daemon
-            .services
             .actions
             .create(
                 k::REGENERATE,

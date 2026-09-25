@@ -15,8 +15,6 @@ impl TelegramGateway {
         let mut rows = Vec::new();
         for choice in choices {
             let t = self
-                .daemon
-                .services
                 .actions
                 .create(
                     k::SAY,
@@ -62,7 +60,6 @@ impl TelegramGateway {
     /// Texte et boutons du menu. Les jetons sont réutilisables : on peut changer d'avis
     /// depuis le même message pendant une semaine.
     async fn model_menu(&self, view: &Value) -> anyhow::Result<(String, Value)> {
-        let s = &self.daemon.services;
         let session = view["session"].as_str().unwrap_or_default();
         let pinned = view["pinned"].as_str();
         let ttl = 7 * 24 * 3_600_000;
@@ -71,7 +68,7 @@ impl TelegramGateway {
         for c in view["choices"].as_array().cloned().unwrap_or_default() {
             let alias = c["alias"].as_str().unwrap_or("?");
             let model = short_model(c["model"].as_str().unwrap_or("?"));
-            let token = s
+            let token = self
                 .actions
                 .create(k::MODEL_PIN, session, json!({"alias": alias}), ttl, false)
                 .await?;
@@ -82,7 +79,7 @@ impl TelegramGateway {
                 "",
             )]);
         }
-        let auto = s
+        let auto = self
             .actions
             .create(k::MODEL_PIN, session, json!({"alias": null}), ttl, false)
             .await?;

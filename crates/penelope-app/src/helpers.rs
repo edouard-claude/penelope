@@ -127,14 +127,10 @@ pub fn shown(v: &Value) -> String {
     }
 }
 
-/// Formulaire d'étape `user` en cours dans un chat.
-pub const BOT_USERNAME_KEY: &str = "tg.bot_username";
-
-/// Lien `https://t.me/<bot>?start=<charge>` vers un écran ou une commande, quand le bot est
-/// connu (issue #30).
+/// Lien vers un écran ou une commande du canal (issue #30), quand il sait en faire un :
+/// c'est la passerelle qui le construit (T36).
 pub async fn deep_link(s: &Services, payload: &str) -> Option<String> {
-    let bot = s.kv_get(BOT_USERNAME_KEY).await.ok().flatten()?;
-    (!bot.is_empty() && bot != "?").then(|| penelope_telegram::render::deep_link(&bot, payload))
+    s.channel.cards.get()?.deep_link(payload).await
 }
 
 /// Clé du nom d'un sujet Telegram, lu dans les messages du sujet (issue #119).

@@ -1763,7 +1763,7 @@ async fn daemon(cli: &Cli) -> CliResult<()> {
         }
         Boot::Normal => {}
     }
-    let d = penelope_daemon::Daemon::new(cli.home.clone())
+    let d = penelope_daemon::Daemon::new(cli.home.clone(), Some(penelope_gateway_telegram::cards))
         .await
         .map_err(|e| CliError::Io(e.to_string()))?;
     let cfg = d.services.config.config();

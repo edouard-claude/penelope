@@ -11,8 +11,6 @@ impl TelegramGateway {
         topic_id: Option<i64>,
     ) -> anyhow::Result<()> {
         let t = self
-            .daemon
-            .services
             .actions
             .create(k::ONBOARD_START, "", json!({}), 7 * 24 * 3_600_000, true)
             .await?;
@@ -60,7 +58,7 @@ impl TelegramGateway {
         let button = |label: String, action: &'static str, args: Value| {
             let rel = sitting.rel.clone();
             async move {
-                s.actions
+                self.actions
                     .create(action, &rel, args, ttl, true)
                     .await
                     .map(|t| ButtonSpec::callback(&label, &t.token, ""))

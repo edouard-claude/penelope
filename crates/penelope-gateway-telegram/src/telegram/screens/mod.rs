@@ -143,8 +143,6 @@ impl TelegramGateway {
 
     async fn nav(&self, label: &str, screen: &str, args: Value) -> anyhow::Result<ButtonSpec> {
         let t = self
-            .daemon
-            .services
             .actions
             .create(k::SCREEN, screen, args, WEEK_MS, false)
             .await?;
@@ -159,8 +157,6 @@ impl TelegramGateway {
         back: Value,
     ) -> anyhow::Result<ButtonSpec> {
         let t = self
-            .daemon
-            .services
             .actions
             .create(
                 k::SCREEN_DO,
@@ -206,8 +202,6 @@ impl TelegramGateway {
         args: &str,
     ) -> anyhow::Result<ButtonSpec> {
         let t = self
-            .daemon
-            .services
             .actions
             .create(
                 k::RUN_COMMAND,

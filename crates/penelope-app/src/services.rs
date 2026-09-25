@@ -18,7 +18,6 @@ use penelope_memory::{CandidateStore, IntentStore, MemoryIndex};
 use penelope_platform::Platform;
 use penelope_skills::SkillRegistry;
 use penelope_store::Store;
-use penelope_telegram::{ActionStore, TemplateRegistry};
 use penelope_workflow::{RunStore, ScheduleStore, WorkflowRegistry};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -44,8 +43,8 @@ pub struct Services {
     pub mcp_tools: ToolRegistry,
     pub approvals: ApprovalStore,
     pub policies: PolicyEngine,
-    pub templates: Arc<TemplateRegistry>,
-    pub actions: ActionStore,
+    /// Le canal du propriétaire, branché par sa passerelle (T36) : gabarits de cartes.
+    pub channel: crate::channel::Channel,
     pub workflows: WorkflowRegistry,
     pub runs: RunStore,
     pub schedules: ScheduleStore,
@@ -57,8 +56,13 @@ pub struct Services {
 }
 
 impl Services {
-    /// Construit tous les services à partir d'une racine.
-    pub async fn bootstrap(home: Option<PathBuf>, clock: SharedClock) -> anyhow::Result<Services> {
+    /// Construit tous les services à partir d'une racine. `cards` : les cartes du canal,
+    /// passées par la composition, pour valider les workflows dès leur chargement.
+    pub async fn bootstrap(
+        home: Option<PathBuf>,
+        clock: SharedClock,
+        cards: Option<crate::channel::CardsOf>,
+    ) -> anyhow::Result<Services> {
         let platform = Arc::new(Platform::bootstrap(home)?);
         let dirs = &platform.dirs;
 
@@ -109,11 +113,14 @@ impl Services {
         let approvals =
             ApprovalStore::new(store.clone(), clock.clone()).with_events(events.clone());
         let policies = PolicyEngine::new(store.clone(), clock.clone());
-        let mut templates = TemplateRegistry::with_builtins();
-        templates.load_dir(&dirs.templates());
-        let actions = ActionStore::new(store.clone(), clock.clone(), cfg.owner.telegram_user_id);
+        let channel = crate::channel::Channel::default();
+        if let Some(cards) = cards {
+            channel
+                .cards
+                .set(Some(cards(&dirs.templates(), store.clone())));
+        }
 
-        let known = workflow_known(&cfg, &mcp_tools).await;
+        let known = workflow_known(&cfg, &mcp_tools, &channel).await;
         let workflows = WorkflowRegistry::with_bundled(&known);
         workflows.load_dir(
             &dirs.workflows(),
@@ -121,7 +128,7 @@ impl Services {
             &known,
         );
         // Second passage : un workflow utilisateur peut en appeler un autre du même dossier.
-        let known = workflow_known_with(&cfg, &mcp_tools, &workflows).await;
+        let known = workflow_known_with(&cfg, &mcp_tools, &workflows, &channel).await;
         workflows.load_dir(
             &dirs.workflows(),
             penelope_workflow::registry::Scope::User,
@@ -150,8 +157,7 @@ impl Services {
             mcp_tools,
             approvals,
             policies,
-            templates: Arc::new(templates),
-            actions,
+            channel,
             workflows,
             runs,
             schedules,
@@ -195,7 +201,8 @@ impl Services {
             clock.clone(),
         );
         let mcp_tools = ToolRegistry::new(store.clone(), 30, 8192, 65536);
-        let known = workflow_known(&cfg, &mcp_tools).await;
+        let channel = crate::channel::Channel::default();
+        let known = workflow_known(&cfg, &mcp_tools, &channel).await;
 
         Ok(Services {
             events: events.clone(),
@@ -218,8 +225,7 @@ impl Services {
             skills: SkillRegistry::new(store.clone()),
             approvals: ApprovalStore::new(store.clone(), clock.clone()).with_events(events.clone()),
             policies: PolicyEngine::new(store.clone(), clock.clone()),
-            templates: Arc::new(TemplateRegistry::with_builtins()),
-            actions: ActionStore::new(store.clone(), clock.clone(), 42),
+            channel,
             workflows: WorkflowRegistry::with_bundled(&known),
             runs: RunStore::new(store.clone(), clock.clone()),
             schedules: ScheduleStore::new(store.clone(), clock.clone(), "Indian/Reunion"),
@@ -297,18 +303,20 @@ impl Services {
     }
 }
 
-/// Ce que la validation des workflows doit connaître.
-pub async fn workflow_known(cfg: &Config, mcp_tools: &ToolRegistry) -> penelope_workflow::Known {
+/// Ce que la validation des workflows doit connaître. Les gabarits de cartes viennent
+/// du canal branché (T36) ; sans canal, ils ne sont pas vérifiés.
+pub async fn workflow_known(
+    cfg: &Config,
+    mcp_tools: &ToolRegistry,
+    channel: &crate::channel::Channel,
+) -> penelope_workflow::Known {
     let mut known = penelope_workflow::Known {
         model_aliases: cfg.models.aliases.keys().cloned().collect(),
         native_tools: penelope_tools::all_tools()
             .into_iter()
             .map(|s| s.name.to_string())
             .collect(),
-        templates: penelope_telegram::templates::CATALOG
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
+        templates: channel.catalog().into_iter().collect(),
         max_depth: cfg.workflows.max_depth,
         ..Default::default()
     };
@@ -326,8 +334,9 @@ pub async fn workflow_known_with(
     cfg: &Config,
     mcp_tools: &ToolRegistry,
     workflows: &WorkflowRegistry,
+    channel: &crate::channel::Channel,
 ) -> penelope_workflow::Known {
-    let mut known = workflow_known(cfg, mcp_tools).await;
+    let mut known = workflow_known(cfg, mcp_tools, channel).await;
     known.workflow_ids.extend(workflows.ids());
     known
 }
@@ -392,14 +401,32 @@ mod tests {
         assert_eq!(s.config.generation(), 1);
         assert!(s.platform.dirs.vault().is_dir());
         assert!(s.workflows.get("ticket-to-deploy").is_some());
-        assert!(s.templates.get("tool_approval").is_some());
         assert_eq!(s.store.integrity().unwrap(), "ok");
     }
 
+    /// Un canal qui ne sait rendre qu'un gabarit.
+    struct OneCard;
+
+    #[async_trait::async_trait]
+    impl crate::channel::Cards for OneCard {
+        fn catalog(&self) -> Vec<String> {
+            vec!["deploy_gate".into()]
+        }
+        fn template(&self, _id: &str) -> Option<crate::channel::CardTemplate> {
+            None
+        }
+    }
+
     #[tokio::test]
-    async fn workflow_known_lists_native_tools_and_templates() {
+    async fn workflow_known_lists_native_tools_and_the_channel_templates() {
         let (_d, s) = services().await;
-        let k = workflow_known(&s.config.config(), &s.mcp_tools).await;
+        let k = workflow_known(&s.config.config(), &s.mcp_tools, &s.channel).await;
+        assert!(
+            k.templates.is_empty(),
+            "sans canal, pas de gabarit à vérifier"
+        );
+        s.channel.cards.set(Some(Arc::new(OneCard)));
+        let k = workflow_known(&s.config.config(), &s.mcp_tools, &s.channel).await;
         assert!(k.native_tools.contains("fs_read"));
         assert!(k.templates.contains("deploy_gate"));
         assert!(k.model_aliases.contains("main"));

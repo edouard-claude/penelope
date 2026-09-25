@@ -123,8 +123,7 @@ impl TelegramGateway {
                 } else {
                     let mut rows = Vec::new();
                     for (from, label) in &similar {
-                        let t = s
-                            .actions
+                        let t = self.actions
                             .create(
                                 k::SCREEN_DO,
                                 "notes.adopt",
@@ -315,7 +314,7 @@ impl TelegramGateway {
                     let fork = v["session"].as_str().unwrap_or_default().to_string();
                     let background = self.bind_chat(&fork, chat_id, topic_id).await?;
                     s.sessions.touch(&fork).await?;
-                    let back = s
+                    let back = self
                         .actions
                         .create(
                             k::SESSION_SWITCH,
