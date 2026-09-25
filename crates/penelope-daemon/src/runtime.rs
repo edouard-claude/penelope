@@ -9,31 +9,26 @@ use penelope_kernel::event::EventDraft;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub use crate::ports::Handle;
-use crate::ports::{McpAdmin, ProviderSource, Slot};
 use penelope_app::channel::CardsOf;
-// `Services` et ce qu'il assemble sont descendus dans `penelope-app` (T21) : réexportés
-// sous leur ancien chemin.
-pub use penelope_app::services::{
-    BUNDLED_SKILLS, SUBSYSTEMS, Services, reload_skills, workflow_known, workflow_known_with,
-};
+use penelope_app::ports::{Handle, McpAdmin, ProviderSource, Slot};
+use penelope_app::services::Services;
 
 /// Le daemon.
 pub struct Daemon {
     pub services: Arc<Services>,
     pub handle: Handle,
     /// Événements des tours, attentes de réponse, tours actifs.
-    pub bus: Arc<crate::bus::Bus>,
+    pub bus: Arc<penelope_app::bus::Bus>,
     /// Branchements optionnels : canal de message, MCP, orchestration.
     pub hooks: Hooks,
     /// Compactions de fond en cours et demandées (§5.4).
-    pub compaction: Arc<crate::compaction::State>,
+    pub compaction: Arc<penelope_conversation::compaction::State>,
     /// Runs de workflow pilotés par ce processus (§12.7).
-    pub workflows: Arc<crate::workflow::State>,
+    pub workflows: Arc<penelope_orchestrator::workflow::State>,
     /// Calcul des embeddings : dernier échec, rattrapage en cours (issue #11).
-    pub embeddings: Arc<crate::embeddings::State>,
+    pub embeddings: Arc<penelope_vault::embeddings::State>,
     /// Boucles de fond surveillées : vivantes, paniques, relances (issue #84).
-    pub tasks: Arc<crate::tasks::Tasks>,
+    pub tasks: Arc<penelope_app::tasks::Tasks>,
     /// Providers construits à la demande (la clé peut arriver après le démarrage).
     pub providers: Arc<Providers>,
 }
@@ -71,7 +66,7 @@ impl Providers {
 }
 
 #[async_trait::async_trait]
-impl crate::ports::ProviderSource for Providers {
+impl penelope_app::ports::ProviderSource for Providers {
     /// Provider d'un modèle. La construction est retentée tant qu'elle échoue : une clé
     /// posée après le démarrage est prise en compte au tour suivant, sans redémarrage.
     async fn provider_for(
@@ -87,11 +82,13 @@ impl crate::ports::ProviderSource for Providers {
             let cfg = s.config.config();
             // Le fournisseur Codex ne vit que si un compte ChatGPT est connecté : c'est
             // le daemon qui tient les jetons et leur rotation (issue #142).
-            let codex = match crate::codex_auth::load(s) {
+            let codex = match penelope_ops::codex_auth::load(s) {
                 Ok(Some(g)) if g.disconnected.is_none() => Some(penelope_llm::CodexAccess {
-                    tokens: Arc::new(crate::codex_auth::DaemonTokens::new(s.clone())),
-                    installation_id: crate::codex_auth::installation_id(s).await,
-                    quota_sink: Some(Arc::new(crate::codex_quota::QuotaWriter::new(s.clone()))),
+                    tokens: Arc::new(penelope_ops::codex_auth::DaemonTokens::new(s.clone())),
+                    installation_id: penelope_ops::codex_auth::installation_id(s).await,
+                    quota_sink: Some(Arc::new(penelope_ops::codex_quota::QuotaWriter::new(
+                        s.clone(),
+                    ))),
                 }),
                 _ => None,
             };
@@ -122,40 +119,40 @@ impl crate::ports::ProviderSource for Providers {
 /// Points de branchement des sous-systèmes qui démarrent après le daemon.
 #[derive(Default)]
 pub struct Hooks {
-    pub messenger: Slot<dyn crate::executor::Messenger>,
-    pub mcp: Slot<dyn crate::executor::McpGateway>,
-    pub orchestrator: Slot<dyn crate::executor::Orchestrator>,
+    pub messenger: Slot<dyn penelope_executor::executor::Messenger>,
+    pub mcp: Slot<dyn penelope_executor::executor::McpGateway>,
+    pub orchestrator: Slot<dyn penelope_executor::executor::Orchestrator>,
     /// Livraison durable des tours (la passerelle du canal).
-    pub delivery: Slot<dyn crate::bus::ChannelDelivery>,
+    pub delivery: Slot<dyn penelope_app::bus::ChannelDelivery>,
     /// Administration des serveurs MCP (`mcp.*`), par son port.
     pub mcp_supervisor: Slot<dyn McpAdmin>,
 }
 
 impl Hooks {
-    pub fn messenger(&self) -> Option<Arc<dyn crate::executor::Messenger>> {
+    pub fn messenger(&self) -> Option<Arc<dyn penelope_executor::executor::Messenger>> {
         self.messenger.read().ok().and_then(|g| g.clone())
     }
-    pub fn set_orchestrator(&self, o: Arc<dyn crate::executor::Orchestrator>) {
+    pub fn set_orchestrator(&self, o: Arc<dyn penelope_executor::executor::Orchestrator>) {
         if let Ok(mut g) = self.orchestrator.write() {
             *g = Some(o);
         }
     }
-    pub fn mcp(&self) -> Option<Arc<dyn crate::executor::McpGateway>> {
+    pub fn mcp(&self) -> Option<Arc<dyn penelope_executor::executor::McpGateway>> {
         self.mcp.read().ok().and_then(|g| g.clone())
     }
-    pub fn orchestrator(&self) -> Option<Arc<dyn crate::executor::Orchestrator>> {
+    pub fn orchestrator(&self) -> Option<Arc<dyn penelope_executor::executor::Orchestrator>> {
         self.orchestrator.read().ok().and_then(|g| g.clone())
     }
     /// Le canal de livraison branché, sous le nom de son port.
-    pub fn delivery(&self) -> Option<Arc<dyn crate::bus::ChannelDelivery>> {
+    pub fn delivery(&self) -> Option<Arc<dyn penelope_app::bus::ChannelDelivery>> {
         self.delivery.get()
     }
     pub fn mcp_supervisor(&self) -> Option<Arc<dyn McpAdmin>> {
         self.mcp_supervisor.read().ok().and_then(|g| g.clone())
     }
     /// Branchements du moteur de workflows.
-    pub fn workflow(&self) -> crate::workflow::Ports {
-        crate::workflow::Ports {
+    pub fn workflow(&self) -> penelope_orchestrator::workflow::Ports {
+        penelope_orchestrator::workflow::Ports {
             messenger: self.messenger.clone(),
             mcp: self.mcp.clone(),
             orchestrator: self.orchestrator.clone(),
@@ -163,8 +160,8 @@ impl Hooks {
         }
     }
     /// Branchements de l'ordonnanceur.
-    pub fn scheduler(&self) -> crate::scheduler::Ports {
-        crate::scheduler::Ports {
+    pub fn scheduler(&self) -> penelope_orchestrator::scheduler::Ports {
+        penelope_orchestrator::scheduler::Ports {
             messenger: self.messenger.clone(),
             delivery: self.delivery.clone(),
             mcp: self.mcp_supervisor.clone(),
@@ -174,7 +171,7 @@ impl Hooks {
     /// Branche un superviseur MCP : passerelle des outils et administration.
     pub fn set_mcp<T: McpAdmin + 'static>(&self, sup: Arc<T>) {
         if let Ok(mut g) = self.mcp.write() {
-            *g = Some(sup.clone() as Arc<dyn crate::executor::McpGateway>);
+            *g = Some(sup.clone() as Arc<dyn penelope_executor::executor::McpGateway>);
         }
         if let Ok(mut g) = self.mcp_supervisor.write() {
             *g = Some(sup);
@@ -198,13 +195,15 @@ impl Daemon {
         };
         Daemon {
             handle: Handle::new(started_at_ms),
-            bus: Arc::new(crate::bus::Bus::new()),
-            compaction: Arc::new(crate::compaction::State::with_messenger(
+            bus: Arc::new(penelope_app::bus::Bus::new()),
+            compaction: Arc::new(penelope_conversation::compaction::State::with_messenger(
                 hooks.messenger.clone(),
             )),
-            workflows: Arc::new(crate::workflow::State::with_ports(hooks.workflow())),
+            workflows: Arc::new(penelope_orchestrator::workflow::State::with_ports(
+                hooks.workflow(),
+            )),
             embeddings: Arc::default(),
-            tasks: Arc::new(crate::tasks::Tasks::default()),
+            tasks: Arc::new(penelope_app::tasks::Tasks::default()),
             providers: Arc::new(Providers::new(services.clone())),
             services,
             hooks,
@@ -212,8 +211,8 @@ impl Daemon {
     }
 
     /// Calcul des embeddings, vu des modules qui ne tiennent pas le daemon.
-    pub fn embedder(&self) -> crate::embeddings::Embedder {
-        crate::embeddings::Embedder {
+    pub fn embedder(&self) -> penelope_vault::embeddings::Embedder {
+        penelope_vault::embeddings::Embedder {
             services: self.services.clone(),
             providers: self.providers.clone(),
             state: self.embeddings.clone(),
@@ -231,8 +230,8 @@ impl Daemon {
     }
 
     /// Contexte des boucles de fond surveillées.
-    pub fn supervision(&self) -> crate::ports::Supervision {
-        crate::ports::Supervision {
+    pub fn supervision(&self) -> penelope_app::ports::Supervision {
+        penelope_app::ports::Supervision {
             tasks: self.tasks.clone(),
             handle: self.handle.clone(),
             clock: self.services.clock.clone(),
@@ -269,7 +268,7 @@ impl Daemon {
         crate::agent::close_interrupted_turns(s).await?;
         // Avant les effets : un job dont le processus est mort devient `failed` sans être
         // relancé, son effet aussi, et aucune carte `effect_unknown` (décision 0012).
-        let lost_jobs = crate::tool_jobs::store(s).recover_on_boot().await?;
+        let lost_jobs = penelope_executor::jobs::store(s).recover_on_boot().await?;
         if !lost_jobs.is_empty() {
             tracing::warn!(
                 count = lost_jobs.len(),
@@ -331,9 +330,9 @@ impl Daemon {
                         "call_id": e.step_id,
                     }),
                     vec![
-                        crate::agent::EFFECT_DONE.into(),
-                        crate::agent::EFFECT_RETRY.into(),
-                        crate::agent::EFFECT_IGNORE.into(),
+                        penelope_agent::EFFECT_DONE.into(),
+                        penelope_agent::EFFECT_RETRY.into(),
+                        penelope_agent::EFFECT_IGNORE.into(),
                     ],
                     e.session_id.as_deref(),
                     e.run_id.as_deref(),
@@ -450,6 +449,7 @@ pub fn rss_mb() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use penelope_app::services::SUBSYSTEMS;
     use penelope_kernel::clock::TestClock;
     use penelope_kernel::config::ApplyResult;
 

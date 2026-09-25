@@ -2,10 +2,10 @@
 //! gabarits de texte et liens profonds. Les gabarits, leurs boutons et les jetons
 //! d'action restent ici ; `Services` n'en porte plus que le port.
 
-use crate::bus::Origin;
-use crate::helpers::topic_name_key;
-use crate::runtime::Services;
+use penelope_app::bus::Origin;
 use penelope_app::channel::{CardTemplate, Cards};
+use penelope_app::helpers::topic_name_key;
+use penelope_app::services::Services;
 use penelope_store::Store;
 use penelope_telegram::TemplateRegistry;
 use std::path::Path;

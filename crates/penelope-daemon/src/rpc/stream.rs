@@ -1,8 +1,8 @@
 //! Réponses en flux (`chat.stream`, `tail`) et issue d'un tour pour la CLI.
 
 use super::*;
-use crate::agent::TurnOutcome;
-use crate::bus::BusKind;
+use penelope_agent::TurnOutcome;
+use penelope_app::bus::BusKind;
 use tokio::io::AsyncWriteExt;
 
 impl Rpc {
@@ -140,7 +140,7 @@ pub fn outcome_json(session_id: &str, turn_id: &str, o: &TurnOutcome) -> Value {
                 "scope": scope,
                 "spent_usd": spent_usd,
                 "limit_usd": limit_usd,
-                "text": crate::agent::budget_exceeded_text(scope, *spent_usd, *limit_usd),
+                "text": penelope_agent::budget_exceeded_text(scope, *spent_usd, *limit_usd),
             }),
         ),
         TurnOutcome::Failed { error } => ("failed", json!({"error": error})),
@@ -154,8 +154,8 @@ pub fn outcome_json(session_id: &str, turn_id: &str, o: &TurnOutcome) -> Value {
     v
 }
 
-fn to_stream_event(ev: &crate::bus::BusEvent) -> Option<StreamEvent> {
-    use crate::agent::TurnEvent as T;
+fn to_stream_event(ev: &penelope_app::bus::BusEvent) -> Option<StreamEvent> {
+    use penelope_agent::TurnEvent as T;
     let session_id = ev.session_id.clone();
     Some(match &ev.kind {
         BusKind::Event(T::Delta(text)) => StreamEvent::Delta {
@@ -210,7 +210,7 @@ fn to_stream_event(ev: &crate::bus::BusEvent) -> Option<StreamEvent> {
             limit_usd,
         }) => StreamEvent::Error {
             session_id: Some(session_id),
-            message: crate::agent::budget_exceeded_text(scope, *spent_usd, *limit_usd),
+            message: penelope_agent::budget_exceeded_text(scope, *spent_usd, *limit_usd),
         },
         _ => return None,
     })

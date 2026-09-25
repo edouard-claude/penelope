@@ -14,8 +14,8 @@ async fn workflow_approval_confirmation_stays_in_the_cards_topic() {
         topic_id: Some(topic),
         message_id: None,
     };
-    let run = crate::workflow::start_run(
-        &g.daemon,
+    let run = penelope_orchestrator::workflow::start_run(
+        &penelope_daemon::workflow::context_of(&g.daemon),
         "build-verify",
         json!({"objectif": "corriger le dépôt"}),
         &origin,
@@ -54,7 +54,7 @@ async fn workflow_approval_confirmation_stays_in_the_cards_topic() {
     // Nouveau daemon sur le même store : la destination de la carte et l'action
     // survivent ensemble au redémarrage.
     let reopened = Arc::new(
-        crate::runtime::Services::for_tests(
+        penelope_app::services::Services::for_tests(
             dir.path().to_path_buf(),
             Arc::new(TestClock::default()),
         )
@@ -97,8 +97,8 @@ async fn workflow_approval_confirmation_stays_in_the_cards_topic() {
         topic_id: Some(second_topic),
         message_id: None,
     };
-    let second = crate::workflow::start_run(
-        &g2.daemon,
+    let second = penelope_orchestrator::workflow::start_run(
+        &penelope_daemon::workflow::context_of(&g2.daemon),
         "build-verify",
         json!({"objectif": "autre correctif"}),
         &second_origin,
@@ -232,8 +232,8 @@ async fn workflow_budget_and_destructive_cards_keep_the_topic() {
     let (_dir, g, t, _p) = gateway().await;
     let group = -100_166;
     let topic = 1660;
-    let run = crate::workflow::start_run(
-        &g.daemon,
+    let run = penelope_orchestrator::workflow::start_run(
+        &penelope_daemon::workflow::context_of(&g.daemon),
         "build-verify",
         json!({"objectif": "vérifier"}),
         &Origin::Telegram {
@@ -446,7 +446,7 @@ async fn a_workflow_launch_card_cannot_bypass_the_plan_gate() {
     let (_d, g, t, p) = gateway().await;
     let d = g.daemon.clone();
     d.hooks
-        .set_orchestrator(Arc::new(crate::workflow::orchestrator_of(&d)));
+        .set_orchestrator(Arc::new(penelope_daemon::workflow::orchestrator_of(&d)));
     d.services
         .kv_set("tg.onboard.proposed", "test")
         .await
@@ -587,7 +587,7 @@ async fn schedules_are_named_and_moved_by_the_telegram_channel() {
             .unwrap()
             .to_string()
     };
-    let list = crate::scheduler::listing(s).await.unwrap();
+    let list = penelope_orchestrator::scheduler::listing(s).await.unwrap();
     assert_eq!(to_of(&list, &sched.id), "conversation privée");
     assert_eq!(to_of(&list, &other.id), "conversation privée (par défaut)");
 
@@ -596,11 +596,12 @@ async fn schedules_are_named_and_moved_by_the_telegram_channel() {
         topic_id,
         message_id: Some(5),
     };
-    let refused = crate::scheduler::retarget(s, &sched.id, &group(-100_999, Some(1)))
-        .await
-        .unwrap_err();
+    let refused =
+        penelope_orchestrator::scheduler::retarget(s, &sched.id, &group(-100_999, Some(1)))
+            .await
+            .unwrap_err();
     assert!(refused.contains("telegram.allowed_chats"), "{refused}");
-    let to = crate::scheduler::retarget(s, &sched.id, &group(-100_777, Some(12)))
+    let to = penelope_orchestrator::scheduler::retarget(s, &sched.id, &group(-100_777, Some(12)))
         .await
         .unwrap();
     assert_eq!(to, "sujet 12, groupe -100777");
@@ -611,7 +612,7 @@ async fn schedules_are_named_and_moved_by_the_telegram_channel() {
     s.kv_set(&topic_name_key(-100_777, 12), "Veille")
         .await
         .unwrap();
-    let list = crate::scheduler::listing(s).await.unwrap();
+    let list = penelope_orchestrator::scheduler::listing(s).await.unwrap();
     assert_eq!(
         to_of(&list, &sched.id),
         "sujet « Veille », groupe « Équipe »"

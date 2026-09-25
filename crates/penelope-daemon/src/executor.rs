@@ -1,7 +1,4 @@
-//! Façade de l'exécuteur natif : il vit dans `penelope-executor` (épopée #208, T24),
-//! réexporté sous son ancien chemin jusqu'à T30.
+//! Tests de l'exécuteur natif qui ont besoin d'un daemon : l'exécuteur vit dans
+//! `penelope-executor` (épopée #208, T24).
 
-pub use penelope_executor::executor::*;
-
-#[cfg(test)]
 mod tests;

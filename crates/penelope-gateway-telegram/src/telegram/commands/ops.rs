@@ -18,7 +18,8 @@ impl TelegramGateway {
         // Installer ou revenir en arrière : toujours confirmé (issue #30).
         // Installation depuis les sources : la carte de bascule (issue #33).
         if args == "install"
-            && crate::helpers::running_binary().is_ok_and(|b| crate::helpers::is_source_build(&b))
+            && penelope_app::helpers::running_binary()
+                .is_ok_and(|b| penelope_app::helpers::is_source_build(&b))
         {
             return self
                 .show_screen(
@@ -58,7 +59,7 @@ impl TelegramGateway {
                 // L'écran s'affiche tout de suite ; la vérification suit en fond.
                 let daemon = d.clone();
                 tokio::spawn(async move {
-                    let rpc = crate::rpc::Rpc::new(daemon.clone());
+                    let rpc = penelope_daemon::rpc::Rpc::new(daemon.clone());
                     if let Ok(v) = rpc.call(m::UPGRADE, json!({"check": true})).await {
                         let cached = json!({"latest": v["latest"], "up_to_date": v["up_to_date"]});
                         let _ = daemon
@@ -119,7 +120,8 @@ impl TelegramGateway {
             // `/stop` coupe ceux de cette session (issue #204).
             let mut cancelled_jobs = s.jobs.cancel_session(&session);
             let mut queued =
-                crate::session_ops::silence(&d.services, &d.bus, &session, "arrêt demandé").await?;
+                penelope_ops::session_ops::silence(&d.services, &d.bus, &session, "arrêt demandé")
+                    .await?;
             let mut sessions = 0;
             let mut runs = 0;
             // Les runs ouverts de ce chat, quel que soit leur état : un run `blocked`
@@ -163,8 +165,13 @@ impl TelegramGateway {
                     ingests += d.bus.ingests_of(&id);
                     cancelled_ingests += d.bus.cancel_ingests(&id);
                     cancelled_jobs += s.jobs.cancel_session(&id);
-                    let n = crate::session_ops::silence(&d.services, &d.bus, &id, "arrêt demandé")
-                        .await?;
+                    let n = penelope_ops::session_ops::silence(
+                        &d.services,
+                        &d.bus,
+                        &id,
+                        "arrêt demandé",
+                    )
+                    .await?;
                     if n > 0 || d.bus.is_active(&id) {
                         sessions += 1;
                     }
@@ -172,9 +179,13 @@ impl TelegramGateway {
                 }
                 for run in &open {
                     if run.state == penelope_workflow::RunState::Running {
-                        if crate::workflow::control(d, &run.id, &penelope_workflow::Control::Pause)
-                            .await
-                            .is_ok()
+                        if penelope_orchestrator::workflow::control(
+                            &penelope_daemon::workflow::context_of(d),
+                            &run.id,
+                            &penelope_workflow::Control::Pause,
+                        )
+                        .await
+                        .is_ok()
                         {
                             runs += 1;
                         }
@@ -227,7 +238,7 @@ impl TelegramGateway {
         args: &str,
     ) -> anyhow::Result<()> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let reply_to = Some(message_id);
         let text: String = {
             let parts: Vec<&str> = args.split_whitespace().collect();
@@ -250,7 +261,13 @@ impl TelegramGateway {
                         topic_id,
                         message_id: None,
                     };
-                    match crate::scheduler::retarget(&self.daemon.services, id, &here).await {
+                    match penelope_orchestrator::scheduler::retarget(
+                        &self.daemon.services,
+                        id,
+                        &here,
+                    )
+                    .await
+                    {
                         Ok(to) => format!("📍 `{id}` livrera désormais ici : {to}."),
                         Err(e) => format!("❌ {e}"),
                     }
@@ -292,7 +309,7 @@ impl TelegramGateway {
         args: &str,
     ) -> anyhow::Result<()> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let reply_to = Some(message_id);
         let text: String = {
             let parts: Vec<&str> = args.split_whitespace().collect();

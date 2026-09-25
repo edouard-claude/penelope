@@ -5,8 +5,8 @@ use super::*;
 /// dépassé annule et le dit.
 #[tokio::test]
 async fn mcp_elicitation_is_answered_from_telegram() {
-    use crate::mcp::testing::{FakeConnector, declare, server, tool};
     use penelope_mcp::transport::LoopbackTransport;
+    use penelope_mcp_host::testing::{FakeConnector, declare, server, tool};
     let (_d, g, t, _p) = gateway().await;
     let fake = Arc::new(FakeConnector::default());
     for name in ["redmine", "lent"] {
@@ -18,7 +18,7 @@ async fn mcp_elicitation_is_answered_from_telegram() {
             )]))),
         );
     }
-    let sup = crate::mcp::testing::supervisor(g.daemon.services.clone(), fake.clone());
+    let sup = penelope_mcp_host::testing::supervisor(g.daemon.services.clone(), fake.clone());
     declare(&sup, "redmine", "");
     declare(&sup, "lent", "elicitation_timeout = \"300ms\"\n");
     sup.reload().await;
@@ -211,8 +211,8 @@ async fn mcp_elicitation_is_answered_from_telegram() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // gel 0.17 : scénario de test bout en bout
 async fn mcp_links_and_mrtr_elicitations_from_telegram() {
-    use crate::executor::McpGateway;
-    use crate::mcp::testing::{FakeConnector, declare, server, tool};
+    use penelope_executor::executor::McpGateway;
+    use penelope_mcp_host::testing::{FakeConnector, declare, server, tool};
     let (_d, g, t, _p) = gateway().await;
     let fake = Arc::new(FakeConnector::default());
     fake.serve(
@@ -262,7 +262,7 @@ async fn mcp_links_and_mrtr_elicitations_from_telegram() {
             _ => legacy(m, p),
         }),
     );
-    let sup = crate::mcp::testing::supervisor(g.daemon.services.clone(), fake.clone());
+    let sup = penelope_mcp_host::testing::supervisor(g.daemon.services.clone(), fake.clone());
     declare(&sup, "tracker", "");
     declare(&sup, "drive", "");
     sup.reload().await;

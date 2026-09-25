@@ -53,7 +53,7 @@ impl Rpc {
                 }))
             }
             method::MEM_HISTORY => {
-                crate::dream::history(
+                penelope_dream::dream::history(
                     s,
                     p.get("uid").and_then(|v| v.as_str()),
                     p.get("file").and_then(|v| v.as_str()),
@@ -68,44 +68,45 @@ impl Rpc {
                             .or_else(|| v.as_str().and_then(|x| x.parse().ok()))
                     })
                     .ok_or_else(|| anyhow::anyhow!("paramètre `id` (entier) obligatoire"))?;
-                crate::dream::restore(s, id).await
+                penelope_dream::dream::restore(s, id).await
             }
             method::MEM_REINDEX => {
-                let vault = crate::helpers::vault_dir(s);
-                crate::vault_ops::migrate_wiki(s, &vault)
+                let vault = penelope_app::helpers::vault_dir(s);
+                penelope_vault::vault_ops::migrate_wiki(s, &vault)
                     .await
                     .map_err(anyhow::Error::msg)?;
-                let n = crate::vault_ops::reindex(s, &vault)
+                let n = penelope_vault::vault_ops::reindex(s, &vault)
                     .await
                     .map_err(anyhow::Error::msg)?;
                 // `embeddings` : tous les vecteurs recalculés avec le modèle courant.
                 if p.get("embeddings").and_then(|v| v.as_bool()) == Some(true) {
-                    let report = crate::embeddings::backfill(&self.daemon.embedder(), true).await?;
+                    let report =
+                        penelope_vault::embeddings::backfill(&self.daemon.embedder(), true).await?;
                     return Ok(json!({"entries": n, "embeddings": report}));
                 }
-                crate::embeddings::spawn_backfill(self.daemon.embedder());
+                penelope_vault::embeddings::spawn_backfill(self.daemon.embedder());
                 Ok(json!({"entries": n}))
             }
             method::MEM_RETRY_REJECTED => Ok(json!({
                 "retried": s.candidates.retry_origin_rejections().await?,
             })),
             method::MEM_AUDIT => {
-                let audit = crate::mem_audit::run(
+                let audit = penelope_vault::mem_audit::run(
                     &self.daemon.services,
                     self.daemon.hooks.mcp_supervisor(),
                 )
                 .await?;
-                Ok(crate::mem_audit::to_json(&audit))
+                Ok(penelope_vault::mem_audit::to_json(&audit))
             }
             method::ONBOARD_NEXT | method::ONBOARD_ANSWER | method::ONBOARD_WRITE => {
                 let d = &self.daemon;
-                let cli = d.chat_session_for(&crate::bus::Origin::Cli);
-                crate::onboarding::rpc(&d.services, method, p, cli).await
+                let cli = d.chat_session_for(&penelope_app::bus::Origin::Cli);
+                penelope_dream::onboarding::rpc(&d.services, method, p, cli).await
             }
             method::MEM_FORGET => {
                 let uid = required_str(p, "uid")?;
-                let vault = crate::helpers::vault_dir(s);
-                let done = crate::vault_ops::forget(s, &vault, &uid)
+                let vault = penelope_app::helpers::vault_dir(s);
+                let done = penelope_vault::vault_ops::forget(s, &vault, &uid)
                     .await
                     .map_err(anyhow::Error::msg)?;
                 Ok(json!({"uid": uid, "forgotten": done}))
@@ -114,9 +115,12 @@ impl Rpc {
             method::MEM_CANDIDATES => mem_candidates(s).await,
             method::MEM_DREAM => {
                 let dry_run = p.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
-                let outcome =
-                    crate::dream::run(&self.daemon.dream(), &self.daemon.hooks.messenger, dry_run)
-                        .await?;
+                let outcome = penelope_dream::dream::run(
+                    &self.daemon.dream(),
+                    &self.daemon.hooks.messenger,
+                    dry_run,
+                )
+                .await?;
                 let mut v = serde_json::to_value(&outcome)?;
                 v["text"] = json!(outcome.report.render());
                 Ok(v)
@@ -129,18 +133,18 @@ impl Rpc {
                             .or_else(|| v.as_str().and_then(|x| x.parse().ok()))
                     })
                     .unwrap_or(7);
-                Ok(json!(crate::dream::learned(s, days).await?))
+                Ok(json!(penelope_dream::dream::learned(s, days).await?))
             }
             method::VAULT_SYNC => {
                 let day = s.clock.now_rfc3339()[..10].to_string();
-                crate::dream::vault_sync(&self.daemon.services, &format!("sync: {day}"))
+                penelope_dream::dream::vault_sync(&self.daemon.services, &format!("sync: {day}"))
                     .await
                     .map_err(anyhow::Error::msg)
             }
-            method::VAULT_CHECK => Ok(crate::dream::vault_check(s).await),
+            method::VAULT_CHECK => Ok(penelope_dream::dream::vault_check(s).await),
             method::VAULT_LINT => {
-                let vault = crate::helpers::vault_dir(s);
-                let (report, proposals) = crate::dream::wiki_review(s, &vault).await;
+                let vault = penelope_app::helpers::vault_dir(s);
+                let (report, proposals) = penelope_dream::dream::wiki_review(s, &vault).await;
                 let mut text = if report.is_clean() {
                     format!("✅ Wiki valide : {} note(s), aucun problème.", report.notes)
                 } else {
@@ -161,7 +165,7 @@ impl Rpc {
                 if !since.is_empty() && since != "dream" {
                     anyhow::bail!("`--since` n'accepte que `dream`");
                 }
-                crate::vault_git::diff(s, since == "dream")
+                penelope_vault::vault_git::diff(s, since == "dream")
                     .await
                     .map_err(anyhow::Error::msg)
             }
@@ -186,6 +190,6 @@ async fn mem_candidates(s: &Services) -> anyhow::Result<Value> {
 /// Propose le découpage d'une entrée fourre-tout : une carte, jamais une écriture (#145).
 async fn mem_split(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
     let uid = required_str(p, "uid")?;
-    let id = crate::mem_split::propose(&d.services, d.providers.as_ref(), &uid).await?;
+    let id = penelope_vault::mem_split::propose(&d.services, d.providers.as_ref(), &uid).await?;
     Ok(json!({"approval": id}))
 }

@@ -4,7 +4,7 @@
 //! est dans `penelope_context::verify` et `penelope_context::projector` ; ce module ne
 //! fait que l'exposer.
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_context::projector::CatchUp;
 use penelope_context::store::seal::SealReport;
 use penelope_kernel::api::DoctorCheck;

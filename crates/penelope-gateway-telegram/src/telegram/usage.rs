@@ -49,7 +49,7 @@ impl TelegramGateway {
                 .unwrap_or_else(|| format!("`{}`", if r.key.is_empty() { "?" } else { &r.key }));
             t.push_str(&format!(
                 "\n- {} · {label} · {} appel(s) · entrée {} (cache {:.0} %) · sortie {}",
-                crate::budget_alert::usd(r.cost_usd),
+                penelope_conversation::budget_alert::usd(r.cost_usd),
                 r.calls,
                 k(r.prompt),
                 r.cache_ratio() * 100.0,
@@ -127,7 +127,7 @@ impl TelegramGateway {
             usd(session_limit),
             if own { " (plafond propre)" } else { "" }
         );
-        let view = crate::compaction::context_view(s, session, None).await?;
+        let view = penelope_conversation::compaction::context_view(s, session, None).await?;
         if let Some(prompt) = view["last_prompt_tokens"].as_i64() {
             let cached = view["last_cached_tokens"].as_i64().unwrap_or(0);
             t.push_str(&format!(
@@ -163,11 +163,11 @@ impl TelegramGateway {
         // L'abonnement ChatGPT ne facture pas l'appel : sa limite est le quota du plan,
         // que les plafonds en dollars ne voient pas (#142).
         if cfg.providers.codex.enabled
-            && let Some(q) = crate::codex_quota::snapshot(s).await
+            && let Some(q) = penelope_ops::codex_quota::snapshot(s).await
         {
             t.push_str(&format!(
                 "\n**Abonnement ChatGPT** (hors plafonds en dollars)\n\n- {}\n",
-                crate::codex_quota::gauge_line(&q, s.clock.now_ms())
+                penelope_ops::codex_quota::gauge_line(&q, s.clock.now_ms())
             ));
         }
         t.push_str(
@@ -198,7 +198,9 @@ impl TelegramGateway {
             ),
             _ => match a.session_id.as_deref() {
                 Some(sid) => match s.sessions.get(sid).await? {
-                    Some(sess) => format!("dans « {} »", crate::titles::label(&sess)),
+                    Some(sess) => {
+                        format!("dans « {} »", penelope_conversation::titles::label(&sess))
+                    }
                     None => "dans cette session".into(),
                 },
                 None => "dans cette session".into(),
@@ -325,8 +327,12 @@ impl TelegramGateway {
             ),
             "run" => {
                 if let Some(run) = a.payload["run_id"].as_str().or(a.run_id.as_deref())
-                    && let Err(e) =
-                        crate::workflow::control(d, run, &penelope_workflow::Control::Resume).await
+                    && let Err(e) = penelope_orchestrator::workflow::control(
+                        &penelope_daemon::workflow::context_of(d),
+                        run,
+                        &penelope_workflow::Control::Resume,
+                    )
+                    .await
                 {
                     tracing::debug!(error = %e, "reprise du run après relèvement");
                 }

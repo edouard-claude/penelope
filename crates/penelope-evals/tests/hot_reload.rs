@@ -4,7 +4,8 @@
 //! Invariant commun à tous les tests : un fichier invalide est signalé mais ne casse
 //! jamais ce qui tournait déjà.
 
-use penelope_daemon::{Daemon, Services, runtime::workflow_known};
+use penelope_app::services::{Services, workflow_known};
+use penelope_daemon::Daemon;
 use penelope_kernel::clock::{SharedClock, TestClock};
 use penelope_mcp::protocol::ToolDescriptor;
 use penelope_mcp::registry::RegisteredTool;
@@ -358,7 +359,7 @@ async fn ca_4_4_config_changes_are_published_live() {
 
     // Tous les sous-systèmes ont confirmé cette génération.
     let results = s.config.apply_results();
-    for subsystem in penelope_daemon::runtime::SUBSYSTEMS {
+    for subsystem in penelope_app::services::SUBSYSTEMS {
         let r = results.get(*subsystem).expect("résultat manquant");
         assert_eq!(r.generation(), 2, "{subsystem}");
         assert_eq!(r.kind(), "applied_live", "{subsystem}");

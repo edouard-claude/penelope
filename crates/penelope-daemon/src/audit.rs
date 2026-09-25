@@ -7,7 +7,7 @@
 //! et l'outil doit le déclarer plutôt que présenter un résultat faux comme exact.
 
 use crate::prompt_snapshot;
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_kernel::budget::{miss_label, tile_label};
 use penelope_observe::redact::redact;
 use penelope_store::rusqlite::OptionalExtension;
@@ -300,8 +300,8 @@ pub async fn last_turn(s: &Services, session_id: &str) -> anyhow::Result<Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::Origin;
     use crate::runtime::Daemon;
+    use penelope_app::bus::Origin;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::MockProvider;
     use penelope_llm::types::ChatMessage;
@@ -412,10 +412,10 @@ mod tests {
         assert_eq!(before["exact"], true, "{}", before["reserves"]);
 
         p.reply(r#"{"objectif": "résumé d'aujourd'hui"}"#);
-        let r = crate::compaction::compact(
+        let r = penelope_conversation::compaction::compact(
             &crate::compaction::context_of(&d),
             &sid,
-            crate::compaction::Trigger::Manual,
+            penelope_conversation::compaction::Trigger::Manual,
             None,
         )
         .await

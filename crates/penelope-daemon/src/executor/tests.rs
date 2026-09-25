@@ -1,10 +1,10 @@
 //! Tests de l'exécuteur qui ont besoin du daemon : `self_status` par son `Admin` (T24).
 //! Celui de `schedule_move` est dans l'ordonnanceur (`penelope-orchestrator`, T36).
 
-use super::*;
-use crate::agent::ToolExecutor;
-use crate::bus::Origin;
-use crate::runtime::Services;
+use penelope_agent::ToolExecutor;
+use penelope_app::bus::Origin;
+use penelope_app::services::Services;
+use penelope_executor::executor::*;
 use penelope_kernel::clock::TestClock;
 use serde_json::json;
 use std::sync::Arc;
@@ -35,8 +35,8 @@ async fn executor() -> (tempfile::TempDir, NativeToolExecutor) {
 async fn self_status_through_the_daemon_admin_keeps_memory_codex_and_context() {
     let (_dir, mut x) = executor().await;
     let d = Arc::new(crate::runtime::Daemon::from_services(x.services.clone()));
-    x.admin = Some(d.clone() as Arc<dyn crate::selfknow::Admin>);
-    x.env.turn_model = Some(crate::selfknow::TurnModel {
+    x.admin = Some(d.clone() as Arc<dyn penelope_executor::selfknow::Admin>);
+    x.env.turn_model = Some(penelope_executor::selfknow::TurnModel {
         alias: "main".into(),
         model_id: "openrouter:z-ai/glm-5.3".into(),
     });
@@ -52,8 +52,12 @@ async fn self_status_through_the_daemon_admin_keeps_memory_codex_and_context() {
     assert!(context.is_object(), "{v}");
     assert_eq!(
         *context,
-        crate::compaction::context_view(&x.services, "s1", Some("openrouter:z-ai/glm-5.3"))
-            .await
-            .unwrap()
+        penelope_conversation::compaction::context_view(
+            &x.services,
+            "s1",
+            Some("openrouter:z-ai/glm-5.3")
+        )
+        .await
+        .unwrap()
     );
 }

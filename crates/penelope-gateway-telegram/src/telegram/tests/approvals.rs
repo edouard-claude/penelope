@@ -250,13 +250,13 @@ async fn a_command_with_go_templates_reaches_its_approval_card() {
 /// sans paniquer ; une commande multi-lignes n'a pas de motif, donc pas de règle (#67).
 #[tokio::test]
 async fn every_command_shape_reaches_its_card_without_panic() {
-    use crate::agent::ToolExecutor;
+    use penelope_agent::ToolExecutor;
     let (_d, g, t, _p) = gateway().await;
     let s = g.daemon.services.clone();
-    let ws = crate::executor::default_workspaces(&s)[0].clone();
-    let x = crate::executor::NativeToolExecutor::new(
+    let ws = penelope_executor::executor::default_workspaces(&s)[0].clone();
+    let x = penelope_executor::executor::NativeToolExecutor::new(
         s.clone(),
-        crate::executor::ToolEnv {
+        penelope_executor::executor::ToolEnv {
             session_id: "s1".into(),
             run_id: None,
             origin: Origin::Cli,
@@ -279,7 +279,7 @@ async fn every_command_shape_reaches_its_card_without_panic() {
     ] {
         let args = json!({"command": command, "network": true});
         let _ = x.normalise_call("shell_exec", &args);
-        let pattern = crate::agent::arg_pattern("shell_exec", Some(&args));
+        let pattern = penelope_agent::arg_pattern("shell_exec", Some(&args));
         if command.contains('\n') {
             assert!(pattern.is_none(), "multi-lignes sans motif : {command:?}");
         }
@@ -418,7 +418,7 @@ async fn stored_and_sent_secrets_are_masked_and_checked() {
     let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
     assert!(sent.contains("valeur(s) masquée(s)"), "{sent}");
     assert!(!sent.contains(key), "{sent}");
-    assert!(crate::doctor::stored_secret_check(&s).await.ok);
+    assert!(penelope_ops::doctor::stored_secret_check(&s).await.ok);
 
     let now = s.clock.now_rfc3339();
     let leaked = json!({"text": format!("clé {key}")}).to_string();
@@ -433,7 +433,7 @@ async fn stored_and_sent_secrets_are_masked_and_checked() {
         })
         .await
         .unwrap();
-    let c = crate::doctor::stored_secret_check(&s).await;
+    let c = penelope_ops::doctor::stored_secret_check(&s).await;
     assert!(!c.ok && c.detail.contains("o_ancien"), "{c:?}");
 }
 
@@ -538,7 +538,7 @@ async fn an_approval_card_click_resumes_the_turn() {
     assert!(out.iter().any(|x| x.contains("Autoriser")), "{out:?}");
     assert!(out.iter().any(|x| x == "Fichier écrit."), "{out:?}");
     assert_eq!(t.calls_to(tg::ANSWER_CALLBACK_QUERY).await.len(), 1);
-    let ws = crate::executor::default_workspaces(&g.daemon.services);
+    let ws = penelope_executor::executor::default_workspaces(&g.daemon.services);
     assert_eq!(
         std::fs::read_to_string(ws[0].join("note.txt")).unwrap(),
         "ok"
@@ -642,7 +642,7 @@ async fn the_approval_mode_is_set_from_telegram() {
         .await
         .unwrap();
     assert_eq!(
-        crate::approval_mode::of_session(&d.services, &sid).await,
-        crate::approval_mode::ApprovalMode::Auto
+        penelope_daemon::approval_mode::of_session(&d.services, &sid).await,
+        penelope_agent::ApprovalMode::Auto
     );
 }

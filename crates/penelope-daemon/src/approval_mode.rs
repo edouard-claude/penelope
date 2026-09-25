@@ -6,9 +6,9 @@
 //!  auto   tout sans demande, sauf le destructif et ce qu'un serveur MCP impose
 //! ```
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 
-pub use crate::agent::{ApprovalMode, declared_allow, local_draft_allow};
+use penelope_agent::ApprovalMode;
 
 fn key(session_id: &str) -> String {
     format!("session.approval_mode.{session_id}")
@@ -32,7 +32,7 @@ pub async fn of_session(s: &Services, session_id: &str) -> ApprovalMode {
 pub struct KvModes(pub std::sync::Arc<Services>);
 
 #[async_trait::async_trait]
-impl crate::agent::SessionModes for KvModes {
+impl penelope_agent::SessionModes for KvModes {
     async fn of_session(&self, session_id: &str) -> ApprovalMode {
         of_session(&self.0, session_id).await
     }
@@ -100,7 +100,7 @@ pub fn rule_note(r: &penelope_hitl::PolicyRule, now_ms: i64) -> Option<String> {
 
 #[cfg(test)]
 mod list_allow_tests {
-    use super::*;
+    use penelope_agent::{declared_allow, local_draft_allow};
 
     fn cfg_with(allow: &[&str], network: &[&str]) -> penelope_kernel::config::Config {
         let mut c = penelope_kernel::config::Config::default();

@@ -1,7 +1,8 @@
 //! Serveur RPC local (§2.7, §15) : JSON-RPC 2.0 en NDJSON sur socket de domaine.
 
-use crate::bus::Origin;
-use crate::runtime::{Daemon, Services};
+use crate::runtime::Daemon;
+use penelope_app::bus::Origin;
+use penelope_app::services::Services;
 use penelope_kernel::api::*;
 use serde_json::{Value, json};
 use std::sync::Arc;

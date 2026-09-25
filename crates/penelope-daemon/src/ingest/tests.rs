@@ -1,10 +1,10 @@
-use super::*;
 use crate::runtime::Daemon;
-use crate::testing::RecordingMessenger;
+use penelope_app::testing::RecordingMessenger;
+use penelope_dream::ingest::*;
 use std::sync::Arc;
 
-use crate::executor::Messenger;
-use crate::ports::Slot;
+use penelope_app::ports::Slot;
+use penelope_executor::executor::Messenger;
 use penelope_hitl::ApprovalKind;
 use penelope_kernel::clock::TestClock;
 use penelope_kernel::risk::RiskClass;
@@ -24,7 +24,7 @@ async fn daemon() -> (
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
     let s = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+        penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
             .await
             .unwrap(),
     );
@@ -55,7 +55,7 @@ fn age(path: &Path) {
 #[tokio::test]
 async fn the_vault_inbox_is_ingested_then_emptied() {
     let (_dir, d, p, r) = daemon().await;
-    let inbox = crate::helpers::vault_dir(&d.services).join("inbox");
+    let inbox = penelope_app::helpers::vault_dir(&d.services).join("inbox");
     std::fs::create_dir_all(&inbox).unwrap();
     std::fs::write(
         inbox.join("compte-rendu.md"),
@@ -69,7 +69,7 @@ async fn the_vault_inbox_is_ingested_then_emptied() {
     p.reply(r#"{"resume": "Compte rendu : migration vendredi.", "faits": []}"#);
 
     assert_eq!(scan_inbox(&d.dream(), &slot(&r)).await.unwrap(), 2);
-    let vault = crate::helpers::vault_dir(&d.services);
+    let vault = penelope_app::helpers::vault_dir(&d.services);
     assert!(vault.join("sources/compte-rendu.md").exists());
     assert!(
         !inbox.join("compte-rendu.md").exists(),
@@ -123,7 +123,7 @@ async fn a_scanned_pdf_is_read_by_ocr() {
     .await
     .unwrap();
     assert_eq!(doc.format, "pdf (OCR)");
-    let vault = crate::helpers::vault_dir(&d.services);
+    let vault = penelope_app::helpers::vault_dir(&d.services);
     let fiche = std::fs::read_to_string(vault.join(format!("sources/{}.md", doc.slug))).unwrap();
     assert!(fiche.to_uppercase().contains("PENELOPE"), "{fiche}");
 }
@@ -147,8 +147,8 @@ async fn reindexing_keeps_documents_untrusted() {
     let uid = format!("src-{}-0001", doc.slug);
     s.memory.retire(&uid).await.unwrap();
 
-    let vault = crate::helpers::vault_dir(s);
-    crate::vault_ops::reindex(s, &vault).await.unwrap();
+    let vault = penelope_app::helpers::vault_dir(s);
+    penelope_vault::vault_ops::reindex(s, &vault).await.unwrap();
     assert_eq!(
         s.memory.origin_of(&uid).await.unwrap(),
         Some(Origin::Untrusted),
@@ -192,7 +192,7 @@ async fn an_approved_proposal_is_written_once() {
         0,
         "idempotent"
     );
-    let vault = crate::helpers::vault_dir(&d.services);
+    let vault = penelope_app::helpers::vault_dir(&d.services);
     let notes = std::fs::read_to_string(vault.join("notes.md")).unwrap();
     assert_eq!(notes.matches("3 octobre").count(), 1);
 }
@@ -209,8 +209,8 @@ async fn the_three_buttons_of_a_clash_card_decide() {
     ] {
         let (_dir, d, _p, _r) = daemon().await;
         let s = &d.services;
-        let vault = crate::helpers::vault_dir(s);
-        let uid = crate::vault_ops::remember(
+        let vault = penelope_app::helpers::vault_dir(s);
+        let uid = penelope_vault::vault_ops::remember(
             s,
             &vault,
             Level::Profil,
@@ -272,10 +272,10 @@ async fn the_three_buttons_of_a_clash_card_decide() {
 async fn an_accepted_split_replaces_the_catch_all_entry() {
     let (_dir, d, _p, _r) = daemon().await;
     let s = &d.services;
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     // L'entrée d'origine date d'avant la borne : ici, la taille n'est pas le sujet,
     // c'est la mécanique du découpage.
-    let uid = crate::vault_ops::remember(
+    let uid = penelope_vault::vault_ops::remember(
         s,
         &vault,
         Level::Projet,
@@ -368,16 +368,19 @@ async fn two_sources_sharing_a_term_meet_on_a_concept_page() {
     let dir = tempfile::tempdir().unwrap();
     let clock = Arc::new(TestClock::default());
     let s = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+        penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
             .await
             .unwrap(),
     );
     let d = Arc::new(Daemon::from_services(s.clone()));
     let p = Arc::new(MockProvider::new());
     d.set_provider_override(p.clone());
-    let sid = d.chat_session_for(&crate::bus::Origin::Cli).await.unwrap();
-    let vault = crate::helpers::vault_dir(&s);
-    crate::vault_ops::remember(
+    let sid = d
+        .chat_session_for(&penelope_app::bus::Origin::Cli)
+        .await
+        .unwrap();
+    let vault = penelope_app::helpers::vault_dir(&s);
+    penelope_vault::vault_ops::remember(
         &s,
         &vault,
         Level::Coeur,
@@ -392,7 +395,7 @@ async fn two_sources_sharing_a_term_meet_on_a_concept_page() {
             "concepts": [{"nom": "Factur-X", "definition": "Format de facture électronique hybride.", "alias": []}],
             "a_definir": ["PDP"]}"#,
     );
-    let a = crate::ingest::ingest(
+    let a = penelope_dream::ingest::ingest(
         &d.dream(),
         "guide-facturation.md",
         b"# Guide\n\nFactur-X et PDP.".to_vec(),
@@ -408,7 +411,7 @@ async fn two_sources_sharing_a_term_meet_on_a_concept_page() {
             "concepts": [{"nom": "factur x", "definition": "", "alias": ["format hybride"]}],
             "a_definir": []}"#,
     );
-    let b = crate::ingest::ingest(
+    let b = penelope_dream::ingest::ingest(
         &d.dream(),
         "reunion-comptable.md",
         b"# Reunion\n\nOn passe au factur x.".to_vec(),
@@ -421,7 +424,7 @@ async fn two_sources_sharing_a_term_meet_on_a_concept_page() {
     .unwrap();
 
     // Les pages de concept, relues du vault (`concepts::pages` est privé à la crate).
-    let dir_concepts = vault.join(crate::concepts::DIR);
+    let dir_concepts = vault.join(penelope_vault::concepts::DIR);
     let pages: Vec<String> = std::fs::read_dir(&dir_concepts)
         .unwrap()
         .flatten()
@@ -446,7 +449,7 @@ async fn two_sources_sharing_a_term_meet_on_a_concept_page() {
         "une graphie ne fait pas un alias"
     );
 
-    let from_concept = crate::concepts::neighbors(&s, "factur-x")
+    let from_concept = penelope_vault::concepts::neighbors(&s, "factur-x")
         .await
         .unwrap()
         .to_string();
@@ -455,7 +458,9 @@ async fn two_sources_sharing_a_term_meet_on_a_concept_page() {
         "{from_concept}"
     );
     for source in [&a.slug, &b.slug] {
-        let n = crate::concepts::neighbors(&s, source).await.unwrap();
+        let n = penelope_vault::concepts::neighbors(&s, source)
+            .await
+            .unwrap();
         assert!(n.to_string().contains("factur-x"), "{n}");
     }
     let fiche = std::fs::read_to_string(vault.join(&a.file)).unwrap();
@@ -473,16 +478,18 @@ async fn two_sources_sharing_a_term_meet_on_a_concept_page() {
         "l'entrée de mémoire est une voisine"
     );
     assert!(
-        std::fs::read_to_string(vault.join(crate::concepts::INDEX))
+        std::fs::read_to_string(vault.join(penelope_vault::concepts::INDEX))
             .unwrap()
             .contains("[[factur-x]] · Factur-X (2 source(s))")
     );
-    assert_eq!(crate::concepts::to_define(&vault), vec!["PDP"]);
+    assert_eq!(penelope_vault::concepts::to_define(&vault), vec!["PDP"]);
 
     // La réindexation garde le graphe.
-    crate::vault_ops::reindex(&s, &vault).await.unwrap();
+    penelope_vault::vault_ops::reindex(&s, &vault)
+        .await
+        .unwrap();
     assert!(
-        crate::concepts::neighbors(&s, &a.slug)
+        penelope_vault::concepts::neighbors(&s, &a.slug)
             .await
             .unwrap()
             .to_string()

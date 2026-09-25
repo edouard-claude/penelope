@@ -17,9 +17,10 @@
 //! UPDATE_GOLDEN=1 cargo test -p penelope-evals --test rpc_golden
 //! ```
 
-use penelope_daemon::bus::Origin;
+use penelope_app::bus::Origin;
+use penelope_app::services::Services;
+use penelope_daemon::Daemon;
 use penelope_daemon::rpc::Rpc;
-use penelope_daemon::runtime::{Daemon, Services};
 use penelope_evals::ca_matrix;
 use penelope_hitl::{ApprovalKind, RuleScope};
 use penelope_kernel::api::{RpcRequest, RpcResponse, method};

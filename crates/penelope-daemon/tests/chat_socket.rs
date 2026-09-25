@@ -1,6 +1,7 @@
 //! Bout en bout sur la vraie socket : `chat.stream` puis `chat.send`, comme la CLI.
 
-use penelope_daemon::runtime::{Daemon, Services};
+use penelope_app::services::Services;
+use penelope_daemon::Daemon;
 use penelope_kernel::api::{RpcRequest, method};
 use penelope_kernel::clock::SystemClock;
 use penelope_llm::mock::MockProvider;
@@ -214,7 +215,7 @@ async fn a_stream_client_that_leaves_cancels_its_turn() {
         .await
         .expect("le tour s'arrête")
         .unwrap();
-    assert_eq!(out, penelope_daemon::agent::TurnOutcome::Cancelled);
+    assert_eq!(out, penelope_agent::TurnOutcome::Cancelled);
     assert!(
         left.elapsed() < Duration::from_secs(2),
         "{:?}",

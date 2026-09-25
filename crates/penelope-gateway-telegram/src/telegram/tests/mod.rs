@@ -32,7 +32,7 @@ async fn gateway() -> (
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
     let s = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+        penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
             .await
             .unwrap(),
     );
@@ -74,7 +74,7 @@ async fn settle(g: &TelegramGateway) {
 /// Exécute les tours en file, comme le ferait le pool de runners.
 async fn drain(g: &TelegramGateway) {
     while let Some(turn) = g.daemon.services.turns.claim("test").await.unwrap() {
-        crate::runner::process(&g.daemon, turn, Duration::from_secs(30)).await;
+        penelope_daemon::runner::process(&g.daemon, turn, Duration::from_secs(30)).await;
     }
     g.flush_outbox().await.unwrap();
 }

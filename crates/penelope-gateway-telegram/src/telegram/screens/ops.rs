@@ -13,7 +13,7 @@ impl TelegramGateway {
         args: &Value,
     ) -> anyhow::Result<Screen> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let here = back_of(name, args);
         let screen: Screen = {
             let v = rpc.call(m::MCP_LIST, json!({})).await?;
@@ -48,7 +48,7 @@ impl TelegramGateway {
         args: &Value,
     ) -> anyhow::Result<Screen> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let here = back_of(name, args);
         let screen: Screen = {
             let server = args["name"].as_str().unwrap_or_default();
@@ -101,7 +101,7 @@ impl TelegramGateway {
         args: &Value,
     ) -> anyhow::Result<Screen> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let screen: Screen = {
             let filter = args["filter"].as_str().unwrap_or_default();
             let v = rpc.call(m::MODEL_LIST, json!({"filter": filter})).await?;
@@ -164,7 +164,7 @@ impl TelegramGateway {
         args: &Value,
     ) -> anyhow::Result<Screen> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let screen: Screen = {
             let model = args["model"].as_str().unwrap_or_default();
             let back = if args["back"].is_object() {
@@ -323,7 +323,7 @@ impl TelegramGateway {
         _args: &Value,
     ) -> anyhow::Result<Screen> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let screen: Screen = {
             let checks = rpc.call(m::DOCTOR, json!({})).await?;
             let checks = checks.as_array().cloned().unwrap_or_default();
@@ -403,7 +403,7 @@ impl TelegramGateway {
         args: &Value,
     ) -> anyhow::Result<Screen> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let here = back_of(name, args);
         let screen: Screen = {
             let names = rpc.call(m::SECRET_LIST, json!({})).await?;
@@ -464,7 +464,10 @@ impl TelegramGateway {
             } else {
                 &cached
             };
-            let mut t = format!("⬆️ **Mise à jour** · version installée {}", crate::VERSION);
+            let mut t = format!(
+                "⬆️ **Mise à jour** · version installée {}",
+                penelope_daemon::VERSION
+            );
             match (args["latest"].as_str(), args["up_to_date"].as_bool()) {
                 (Some(latest), Some(true)) => {
                     t.push_str(&format!("\n✅ À jour (dernière publiée : {latest})."))
@@ -477,8 +480,8 @@ impl TelegramGateway {
             }
             // Installation depuis les sources : l'installation passe par la bascule vers
             // les releases (issue #33).
-            let from_sources =
-                crate::helpers::running_binary().is_ok_and(|b| crate::helpers::is_source_build(&b));
+            let from_sources = penelope_app::helpers::running_binary()
+                .is_ok_and(|b| penelope_app::helpers::is_source_build(&b));
             if from_sources {
                 t.push_str(
                     "\n📦 Installation depuis les sources : « Installer » propose de basculer \
@@ -532,24 +535,25 @@ impl TelegramGateway {
         let s = &d.services;
         let screen: Screen = {
             let cfg = s.config.config();
-            let current = crate::helpers::running_binary().map_err(anyhow::Error::msg)?;
+            let current = penelope_app::helpers::running_binary().map_err(anyhow::Error::msg)?;
             let install_dir = s.platform.dirs.expand(&cfg.upgrade.install_dir);
-            let source = crate::upgrade::Source::from_config(&cfg);
+            let source = penelope_ops::upgrade::Source::from_config(&cfg);
             let latest: Option<String> = s
                 .kv_get("tg.upgrade.last_check")
                 .await?
                 .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
                 .and_then(|v| v["latest"].as_str().map(String::from));
-            let preflight = crate::upgrade::switch_preflight(&crate::upgrade::Switch {
-                source: &source,
-                tag: None,
-                current: &current,
-                install_dir: &install_dir,
-                state_dir: &s.platform.dirs.state(),
-                now: s.clock.now_rfc3339(),
-                codesign: crate::upgrade::codesign_of(&cfg),
-                host: &crate::upgrade::SystemHost,
-            });
+            let preflight =
+                penelope_ops::upgrade::switch_preflight(&penelope_ops::upgrade::Switch {
+                    source: &source,
+                    tag: None,
+                    current: &current,
+                    install_dir: &install_dir,
+                    state_dir: &s.platform.dirs.state(),
+                    now: s.clock.now_rfc3339(),
+                    codesign: penelope_ops::upgrade::codesign_of(&cfg),
+                    host: &penelope_ops::upgrade::SystemHost,
+                });
             let mut t = format!(
                 "📦 **Installation depuis les sources** (`{}`).\nBasculer vers les releases ? \
                  Le service lancera `{}/penelope`, un chemin stable que les mises à jour \

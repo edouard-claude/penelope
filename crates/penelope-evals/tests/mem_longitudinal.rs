@@ -93,21 +93,21 @@ async fn fourteen_days_of_conversations_become_scoped_rules() {
     let shared: SharedClock = Arc::new(clock.clone());
     let d = live::daemon(dir.path(), shared).await;
     let s = d.services.clone();
-    let vault = penelope_daemon::conversation::vault_dir(&s);
+    let vault = penelope_conversation::vault_dir(&s);
 
     let mut today = 1;
     for (day, messages) in DAYS {
         while today < *day {
             // Nuit : consolidation, puis le jour suivant.
             clock.advance_hours(24);
-            if let Err(e) = penelope_daemon::dream::run(&d.dream(), &d.hooks.messenger, false).await
+            if let Err(e) = penelope_dream::dream::run(&d.dream(), &d.hooks.messenger, false).await
             {
                 eprintln!("consolidation du jour {today} : {e}");
             }
             today += 1;
         }
         if *day == 5 {
-            let _ = penelope_daemon::ingest::ingest(
+            let _ = penelope_dream::ingest::ingest(
                 &d.dream(),
                 "astuces.html",
                 UNTRUSTED_PAGE.as_bytes().to_vec(),
@@ -132,8 +132,9 @@ async fn fourteen_days_of_conversations_become_scoped_rules() {
         }
     }
     clock.advance_hours(24);
-    let _ = penelope_daemon::dream::run(&d.dream(), &d.hooks.messenger, false).await;
-    let digest = penelope_daemon::dream::digest_text(&d, d.hooks.mcp_supervisor())
+    let _ = penelope_dream::dream::run(&d.dream(), &d.hooks.messenger, false).await;
+    let inputs = penelope_orchestrator::scheduler::digest_inputs(&d.services).await;
+    let digest = penelope_dream::digest_text(&d.dream(), inputs, d.hooks.mcp_supervisor())
         .await
         .unwrap_or_default();
 

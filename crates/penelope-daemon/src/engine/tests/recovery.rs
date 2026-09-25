@@ -6,11 +6,11 @@
 //! (épopée #208, T09), ils passent par `Daemon::recover`.
 
 use super::*;
-use crate::agent::{
-    AgentLoop, EFFECT_DONE, EFFECT_RETRY, MemoryConversation, NullSink, decide_approval,
-    effect_kind,
+use crate::agent::decide_approval;
+use penelope_agent::{
+    AgentLoop, EFFECT_DONE, EFFECT_RETRY, MemoryConversation, NullSink, effect_kind,
 };
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_context::journal::{Provenance, TurnIdentity, UserSource, started_payload};
 use penelope_hitl::Decision;
 use penelope_kernel::effects::{EffectSpec, Planned};
@@ -24,7 +24,7 @@ struct CountingExecutor {
 }
 
 #[async_trait::async_trait]
-impl crate::agent::ToolExecutor for CountingExecutor {
+impl penelope_agent::ToolExecutor for CountingExecutor {
     async fn execute(
         &self,
         name: &str,

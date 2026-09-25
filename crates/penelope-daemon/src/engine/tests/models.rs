@@ -36,7 +36,7 @@ async fn the_sticky_model_is_revisited_at_boundaries() {
     let clock = TestClock::default();
     let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
     let s = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+        penelope_app::services::Services::for_tests(dir.path().to_path_buf(), shared)
             .await
             .unwrap(),
     );
@@ -99,7 +99,7 @@ async fn the_sticky_model_is_revisited_at_boundaries() {
 
     // `main` colle ; après une pause plus longue que le cache, une question
     // difficile monte sur `reasoning`.
-    clock.advance_ms(crate::cache_audit::CACHE_TTL_MS + 1_000);
+    clock.advance_ms(penelope_llm::cache::CACHE_TTL_MS + 1_000);
     p.reply(r#"{"complexity":"high"}"#);
     p.reply("analyse");
     say("compare deux architectures de consensus distribué en détail").await;

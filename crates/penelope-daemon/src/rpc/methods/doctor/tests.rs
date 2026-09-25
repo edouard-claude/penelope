@@ -3,11 +3,11 @@
 //! puis quand le diagnostic est sorti dans `penelope-ops` (T28) ; et les contrôles de
 //! `doctor` propres au daemon.
 
-use crate::mcp::McpSupervisor;
-use crate::mcp::testing::*;
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_kernel::clock::TestClock;
 use penelope_mcp::supervisor::ServerStatus;
+use penelope_mcp_host::McpSupervisor;
+use penelope_mcp_host::testing::*;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -150,18 +150,18 @@ async fn poisoned_or_changed_tools_are_flagged_and_lose_their_rules() {
     assert_eq!(suspicious[0].payload["tool"], "mcp__forge__note");
 
     // tool_describe : texte encadré, alerte du détecteur local.
-    let exec = crate::executor::NativeToolExecutor::new(
+    let exec = penelope_executor::executor::NativeToolExecutor::new(
         s.clone(),
-        crate::executor::ToolEnv {
+        penelope_executor::executor::ToolEnv {
             session_id: "s1".into(),
             run_id: None,
-            origin: crate::bus::Origin::Cli,
+            origin: penelope_app::bus::Origin::Cli,
             workspaces: Vec::new(),
             in_workflow: false,
             turn_model: None,
         },
     );
-    let out = crate::agent::ToolExecutor::execute(
+    let out = penelope_agent::ToolExecutor::execute(
         &exec,
         "tool_describe",
         &json!({"names": ["mcp__forge__note"]}),
@@ -310,7 +310,7 @@ async fn a_quiet_instance_keeps_a_green_prompt_check() {
     let checks = super::daemon_checks(&s).await;
     let c = checks.iter().find(|c| c.id == "prompt.stability").unwrap();
     assert!(c.ok, "{}", c.detail);
-    let checks = crate::doctor::run(&s).await;
+    let checks = penelope_ops::doctor::run(&s).await;
     let r = checks.iter().find(|c| c.id == "retention").unwrap();
     assert!(r.detail.contains("prompts"), "{}", r.detail);
 }

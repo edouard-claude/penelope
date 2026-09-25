@@ -16,7 +16,7 @@ impl TelegramGateway {
         args: &str,
     ) -> anyhow::Result<()> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let reply_to = Some(message_id);
         let text: String = {
             let reset = matches!(args.trim(), "off" | "non" | "privé" | "prive");
@@ -63,7 +63,7 @@ impl TelegramGateway {
             topic_id,
             message_id: Some(message_id),
         };
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let reply_to = Some(message_id);
         let text: String = {
             let session = d.chat_session_for(&origin).await?;
@@ -163,7 +163,7 @@ impl TelegramGateway {
             topic_id,
             message_id: Some(message_id),
         };
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let reply_to = Some(message_id);
         let text: String = {
             let session = d.chat_session_for(&origin).await?;
@@ -254,9 +254,9 @@ impl TelegramGateway {
                     )
                     .await;
             }
-            let vault = crate::helpers::vault_dir(s);
+            let vault = penelope_app::helpers::vault_dir(s);
             let session = d.chat_session_for(&origin).await?;
-            match crate::vault_ops::remember(
+            match penelope_vault::vault_ops::remember(
                 s,
                 &vault,
                 penelope_memory::Level::Episodic,
@@ -347,7 +347,7 @@ impl TelegramGateway {
         args: &str,
     ) -> anyhow::Result<()> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let reply_to = Some(message_id);
         let text: String = {
             if args.is_empty() {

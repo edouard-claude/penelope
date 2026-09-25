@@ -16,7 +16,7 @@ use super::{
     TelegramGateway, cancelled_note, context_line, form_key, mcp_list_text, mcp_show_text,
     mcp_state_icon, recent_log_lines, routing_text, schedules_text, short_model, shown,
 };
-use crate::bus::Origin;
+use penelope_app::bus::Origin;
 use penelope_kernel::api::method as m;
 use penelope_telegram::actions::{Action, kind as k};
 use penelope_telegram::api::inline_keyboard;

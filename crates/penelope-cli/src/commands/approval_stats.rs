@@ -156,7 +156,7 @@ pub(super) fn measure(conn: &Connection, now: DateTime<Utc>, days: u32) -> rusql
         cartes_shell += 1;
         let payload: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
         let arguments = payload.get("arguments");
-        if !penelope_daemon::agent::always_creates_no_rule("shell_exec", arguments) {
+        if !penelope_agent::always_creates_no_rule("shell_exec", arguments) {
             continue;
         }
         sans_motif += 1;

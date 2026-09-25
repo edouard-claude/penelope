@@ -56,7 +56,7 @@ async fn a_model_without_tool_calling_is_refused_for_a_conversation_alias() {
             Ok(vec!["models.aliases.main".into()])
         })
         .unwrap();
-    let checks = crate::doctor::run(s).await;
+    let checks = penelope_ops::doctor::run(s).await;
     let tools = checks
         .iter()
         .find(|c| c.id == "models.tools")
@@ -115,7 +115,7 @@ async fn doctor_reports_the_codex_provider() {
     let (_d, r) = rpc().await;
     let s = &r.daemon.services;
     // Éteint et sans alias : rien à dire.
-    assert!(crate::doctor::codex_checks(s).await.is_empty());
+    assert!(penelope_ops::doctor::codex_checks(s).await.is_empty());
 
     r.daemon
         .publish_config("test", |c| {
@@ -126,7 +126,7 @@ async fn doctor_reports_the_codex_provider() {
             Ok(vec!["providers.codex.enabled".into()])
         })
         .unwrap();
-    let checks = crate::doctor::codex_checks(s).await;
+    let checks = penelope_ops::doctor::codex_checks(s).await;
     let by = |id: &str| {
         checks
             .iter()
@@ -150,9 +150,9 @@ async fn doctor_reports_the_codex_provider() {
     assert!(scope.detail.contains("compaction"), "{scope:?}");
 
     // Connecté : l'état le dit, et le périmètre reste signalé.
-    crate::codex_auth::store(
+    penelope_ops::codex_auth::store(
         s,
-        &crate::codex_auth::Grant {
+        &penelope_ops::codex_auth::Grant {
             access_token: "a".into(),
             refresh_token: "rr".into(),
             plan_type: "pro".into(),
@@ -163,7 +163,7 @@ async fn doctor_reports_the_codex_provider() {
         },
     )
     .unwrap();
-    let checks = crate::doctor::codex_checks(s).await;
+    let checks = penelope_ops::doctor::codex_checks(s).await;
     let provider = checks
         .iter()
         .find(|c| c.id == "provider.codex")
@@ -186,9 +186,9 @@ async fn only_one_chatgpt_account_at_a_time() {
     assert!(empty.error.is_none());
     assert!(empty.result.expect("état")["status"].is_null());
 
-    crate::codex_auth::store(
+    penelope_ops::codex_auth::store(
         &r.daemon.services,
-        &crate::codex_auth::Grant {
+        &penelope_ops::codex_auth::Grant {
             access_token: "a".into(),
             refresh_token: "r".into(),
             account_id: "acc_1".into(),
@@ -224,7 +224,7 @@ async fn only_one_chatgpt_account_at_a_time() {
 
 #[tokio::test]
 async fn mcp_servers_are_administered_over_rpc() {
-    use crate::mcp::testing::{FakeConnector, server, tool};
+    use penelope_mcp_host::testing::{FakeConnector, server, tool};
     let (_d, r) = rpc().await;
     let without = call(&r, method::MCP_LIST, json!({})).await;
     assert!(without.error.unwrap().message.contains("non démarré"));
@@ -237,7 +237,7 @@ async fn mcp_servers_are_administered_over_rpc() {
             json!({}),
         )]))),
     );
-    let sup = crate::mcp::testing::supervisor(r.daemon.services.clone(), fake.clone());
+    let sup = penelope_mcp_host::testing::supervisor(r.daemon.services.clone(), fake.clone());
     r.daemon.hooks.set_mcp(sup.clone());
 
     let toml = "command = \"/opt/mcp/forge\"\ntimeout = \"20s\"\n";
@@ -622,7 +622,7 @@ async fn the_approval_mode_and_useless_rules_are_readable() {
     let s = &r.daemon.services;
     let sid = r
         .daemon
-        .chat_session_for(&crate::bus::Origin::Cli)
+        .chat_session_for(&penelope_app::bus::Origin::Cli)
         .await
         .unwrap();
     let v = call(&r, method::SESSION_MODE, json!({"session": sid}))

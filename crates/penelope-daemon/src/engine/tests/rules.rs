@@ -310,7 +310,7 @@ async fn a_cd_into_the_workspace_is_the_working_directory() {
 #[tokio::test]
 async fn always_after_a_cd_rules_the_real_command() {
     let (_dir, d, p) = daemon().await;
-    let ws = crate::executor::default_workspaces(&d.services)[0].clone();
+    let ws = penelope_executor::executor::default_workspaces(&d.services)[0].clone();
     let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
     d.pin_model(&sid, Some("main")).await.unwrap();
     let call = |command: &str, id: &str| {
@@ -508,7 +508,7 @@ async fn a_declared_family_covers_a_quoted_query_url() {
 async fn always_on_a_multiline_heredoc_resumes_without_panic() {
     for dir in ["{ws}", "/Users/essai/depot"] {
         let (_dir, d, p) = daemon().await;
-        let ws = crate::executor::default_workspaces(&d.services)[0].clone();
+        let ws = penelope_executor::executor::default_workspaces(&d.services)[0].clone();
         let dir = dir.replace("{ws}", &ws.to_string_lossy());
         let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
         d.pin_model(&sid, Some("main")).await.unwrap();
@@ -612,9 +612,9 @@ async fn a_copied_key_is_stored_masked_and_executed_whole() {
 
     let ws = default_workspaces(&d.services)[0].clone();
     let config = format!("API_KEY={key}\n");
-    let exec = crate::executor::NativeToolExecutor::new(
+    let exec = penelope_executor::executor::NativeToolExecutor::new(
         d.services.clone(),
-        crate::executor::ToolEnv {
+        penelope_executor::executor::ToolEnv {
             session_id: sid.clone(),
             run_id: None,
             origin: Origin::Cli,
@@ -623,7 +623,7 @@ async fn a_copied_key_is_stored_masked_and_executed_whole() {
             turn_model: None,
         },
     );
-    use crate::agent::ToolExecutor;
+    use penelope_agent::ToolExecutor;
     exec.execute("fs_write", &json!({"path": ".env", "content": config}))
         .await
         .unwrap();
@@ -693,18 +693,18 @@ async fn config_set_asks_twice_for_sensitive_settings_even_with_an_always_rule()
     assert_eq!(s.config.config().sandbox.default_profile, profile_before);
 
     // Un secret ne passe jamais, même approuvé.
-    let x = crate::executor::NativeToolExecutor::new(
+    let x = penelope_executor::executor::NativeToolExecutor::new(
         s.clone(),
-        crate::executor::ToolEnv {
+        penelope_executor::executor::ToolEnv {
             session_id: sid.clone(),
             run_id: None,
             origin: Origin::Cli,
-            workspaces: crate::executor::default_workspaces(s),
+            workspaces: penelope_executor::executor::default_workspaces(s),
             in_workflow: false,
             turn_model: None,
         },
     );
-    use crate::agent::ToolExecutor;
+    use penelope_agent::ToolExecutor;
     let err = x
         .execute(
             "config_set",
@@ -717,7 +717,7 @@ async fn config_set_asks_twice_for_sensitive_settings_even_with_an_always_rule()
 
 #[tokio::test]
 async fn the_model_reaches_mcp_tools_through_the_supervisor() {
-    use crate::mcp::testing::{FakeConnector, declare, server, tool};
+    use penelope_mcp_host::testing::{FakeConnector, declare, server, tool};
     let (_dir, d, p) = daemon().await;
     let fake = Arc::new(FakeConnector::default());
     fake.serve(
@@ -727,7 +727,7 @@ async fn the_model_reaches_mcp_tools_through_the_supervisor() {
             tool("delete_issue", json!({"destructiveHint": true})),
         ]))),
     );
-    let sup = crate::mcp::testing::supervisor(d.services.clone(), fake.clone());
+    let sup = penelope_mcp_host::testing::supervisor(d.services.clone(), fake.clone());
     declare(&sup, "redmine", "[tool_policy]\ndelete_issue = \"deny\"\n");
     sup.reload().await;
     d.hooks.set_mcp(sup.clone());

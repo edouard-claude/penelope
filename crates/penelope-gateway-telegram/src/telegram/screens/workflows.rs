@@ -12,7 +12,7 @@ impl TelegramGateway {
         args: &Value,
     ) -> anyhow::Result<Screen> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let here = back_of(name, args);
         let screen: Screen = {
             let list = rpc.call(m::WF_LIST, json!({})).await?;
@@ -312,7 +312,7 @@ impl TelegramGateway {
         args: &Value,
     ) -> anyhow::Result<Screen> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let here = back_of(name, args);
         let screen: Screen = {
             let v = rpc.call(m::SCHEDULE_LIST, json!({})).await?;

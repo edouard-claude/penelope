@@ -20,10 +20,10 @@
 //!    (jamais envoyé), et le résumé d'un dépassement prouvé après une tentative refusée
 //!    avant le flux (la requête refusée n'a rien mis en cache).
 
+use penelope_app::services::Services;
 use penelope_context::derive::{Sealed, derive_until};
-use penelope_daemon::Services;
-use penelope_daemon::cache_audit::Fingerprint;
 use penelope_kernel::event::Event;
+use penelope_llm::cache::Fingerprint;
 use penelope_llm::provider::to_openai_body;
 use penelope_llm::types::ChatRequest;
 use penelope_store::rusqlite;

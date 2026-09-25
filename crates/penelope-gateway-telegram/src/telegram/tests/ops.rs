@@ -59,11 +59,15 @@ async fn a_scheduled_digest_is_delivered_once() {
             "Veille du 19/09\n{}",
             DIGEST.split_once('\n').unwrap().1
         ));
-        crate::scheduler::run_now(&g.daemon, &g.daemon.hooks.scheduler(), &sched.id)
-            .await
-            .unwrap();
+        penelope_orchestrator::scheduler::run_now(
+            &penelope_daemon::workflow::context_of(&g.daemon),
+            &g.daemon.hooks.scheduler(),
+            &sched.id,
+        )
+        .await
+        .unwrap();
         let turn = s.turns.claim("t").await.unwrap().expect("tour planifié");
-        crate::runner::process(&g.daemon, turn, Duration::from_secs(30)).await;
+        penelope_daemon::runner::process(&g.daemon, turn, Duration::from_secs(30)).await;
         g.flush_outbox().await.unwrap();
         let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
         let digests = sent.iter().filter(|x| x.contains("6 retenus")).count();
@@ -79,9 +83,12 @@ async fn the_reminder_of_a_go_template_command_is_delivered() {
     let dir = tempfile::tempdir().unwrap();
     let clock = TestClock::default();
     let s = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), Arc::new(clock.clone()))
-            .await
-            .unwrap(),
+        penelope_app::services::Services::for_tests(
+            dir.path().to_path_buf(),
+            Arc::new(clock.clone()),
+        )
+        .await
+        .unwrap(),
     );
     let d = Arc::new(Daemon::from_services(s.clone()));
     d.publish_config("test", |c| {
@@ -107,7 +114,9 @@ async fn the_reminder_of_a_go_template_command_is_delivered() {
         .await
         .unwrap();
     clock.advance_ms(3_600_000 + 1);
-    crate::supervisor::maintenance_pass(&d).await.unwrap();
+    penelope_daemon::supervisor::maintenance_pass(&d)
+        .await
+        .unwrap();
     g.flush_outbox().await.unwrap();
     let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await).join("\n");
     assert!(sent.contains("Rappel 1/2"), "{sent}");
@@ -283,7 +292,7 @@ async fn model_buttons_pin_the_session_then_give_it_back_to_the_router() {
 
 #[tokio::test]
 async fn mcp_servers_are_visible_and_restartable_from_telegram() {
-    use crate::mcp::testing::{FakeConnector, declare, server, tool};
+    use penelope_mcp_host::testing::{FakeConnector, declare, server, tool};
     let (_d, g, t, _p) = gateway().await;
     let fake = Arc::new(FakeConnector::default());
     fake.serve(
@@ -293,7 +302,7 @@ async fn mcp_servers_are_visible_and_restartable_from_telegram() {
             json!({"readOnlyHint": true}),
         )]))),
     );
-    let sup = crate::mcp::testing::supervisor(g.daemon.services.clone(), fake.clone());
+    let sup = penelope_mcp_host::testing::supervisor(g.daemon.services.clone(), fake.clone());
     declare(&sup, "redmine", "");
     sup.reload().await;
     g.daemon.hooks.set_mcp(sup.clone());
@@ -460,7 +469,7 @@ async fn a_schedule_is_moved_to_the_topic_it_is_asked_from() {
 /// affiche son état à jour.
 #[tokio::test]
 async fn an_mcp_server_is_restarted_from_its_menu() {
-    use crate::mcp::testing::{FakeConnector, declare, server, tool};
+    use penelope_mcp_host::testing::{FakeConnector, declare, server, tool};
     let (_d, g, t, _p) = gateway().await;
     let fake = Arc::new(FakeConnector::default());
     fake.serve(
@@ -470,7 +479,7 @@ async fn an_mcp_server_is_restarted_from_its_menu() {
             json!({"readOnlyHint": true}),
         )]))),
     );
-    let sup = crate::mcp::testing::supervisor(g.daemon.services.clone(), fake.clone());
+    let sup = penelope_mcp_host::testing::supervisor(g.daemon.services.clone(), fake.clone());
     declare(&sup, "redmine", "");
     sup.reload().await;
     g.daemon.hooks.set_mcp(sup.clone());
@@ -508,7 +517,7 @@ async fn the_digest_links_to_screens_once_the_bot_is_known() {
     let (_d, g, _t, _p) = gateway().await;
     let d = &g.daemon;
     assert!(
-        crate::helpers::deep_link(&d.services, "approvals")
+        penelope_app::helpers::deep_link(&d.services, "approvals")
             .await
             .is_none()
     );
@@ -517,7 +526,7 @@ async fn the_digest_links_to_screens_once_the_bot_is_known() {
         .await
         .unwrap();
     assert_eq!(
-        crate::helpers::deep_link(&d.services, "approvals")
+        penelope_app::helpers::deep_link(&d.services, "approvals")
             .await
             .as_deref(),
         Some("https://t.me/penelope_test_bot?start=approvals")
@@ -536,9 +545,13 @@ async fn the_digest_links_to_screens_once_the_bot_is_known() {
         )
         .await
         .unwrap();
-    let digest = crate::dream::digest_text(d, d.hooks.mcp_supervisor())
-        .await
-        .unwrap();
+    let digest = penelope_dream::digest_text(
+        &d.dream(),
+        penelope_orchestrator::scheduler::digest_inputs(&d.services).await,
+        d.hooks.mcp_supervisor(),
+    )
+    .await
+    .unwrap();
     assert!(
         digest.contains("[ouvrir](https://t.me/penelope_test_bot?start=approvals)"),
         "{digest}"
@@ -675,7 +688,7 @@ async fn a_scheduled_prompt_answers_after_new_and_warns_on_failure() {
         message_id: None,
     };
     let created_in = d.chat_session_for(&chat).await.unwrap();
-    let sched = crate::scheduler::create(
+    let sched = penelope_orchestrator::scheduler::create(
         s,
         penelope_workflow::TriggerKind::Cron,
         json!({"expr": "30 8 * * *"}),
@@ -695,9 +708,13 @@ async fn a_scheduled_prompt_answers_after_new_and_warns_on_failure() {
 
     p.reply(r#"{"complexity":"medium"}"#);
     p.reply("Veille du jour : deux annonces à lire.");
-    crate::scheduler::run_now(&d, &d.hooks.scheduler(), &id)
-        .await
-        .unwrap();
+    penelope_orchestrator::scheduler::run_now(
+        &penelope_daemon::workflow::context_of(&d),
+        &d.hooks.scheduler(),
+        &id,
+    )
+    .await
+    .unwrap();
     drain(&g).await;
     let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
     assert!(
@@ -714,9 +731,13 @@ async fn a_scheduled_prompt_answers_after_new_and_warns_on_failure() {
         penelope_llm::types::LlmErrorKind::Other,
         "fournisseur indisponible".into(),
     ));
-    crate::scheduler::run_now(&d, &d.hooks.scheduler(), &id)
-        .await
-        .unwrap();
+    penelope_orchestrator::scheduler::run_now(
+        &penelope_daemon::workflow::context_of(&d),
+        &d.hooks.scheduler(),
+        &id,
+    )
+    .await
+    .unwrap();
     drain(&g).await;
     let calls = t.calls_to(tg::SEND_MESSAGE).await;
     let alert = calls

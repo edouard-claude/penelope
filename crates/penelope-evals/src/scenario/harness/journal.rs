@@ -9,7 +9,7 @@
 //! 3. la refonte redonne les mêmes messages, les mêmes contextes, les mêmes résumés et le
 //!    même plein texte qu'avant l'effacement, numéros de ligne compris.
 
-use penelope_daemon::Services;
+use penelope_app::services::Services;
 use penelope_store::rusqlite;
 use serde_json::{Value, json};
 

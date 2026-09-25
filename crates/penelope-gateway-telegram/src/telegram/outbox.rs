@@ -38,8 +38,8 @@ impl TelegramGateway {
         let error: String = error.chars().take(3_500).collect();
         // Plafond d'appels atteint : ce n'est pas un échec, et le même bouton continue
         // avec tout ce qui est déjà fait (issue #139).
-        let (text, label) = if error.starts_with(crate::agent::CALLS_EXHAUSTED) {
-            let n = crate::agent::TURN_CALLS;
+        let (text, label) = if error.starts_with(penelope_agent::CALLS_EXHAUSTED) {
+            let n = penelope_agent::TURN_CALLS;
             (
                 format!(
                     "⏸ J'ai utilisé mes {n} appels pour ce tour et je m'arrête là. « Continuer » \

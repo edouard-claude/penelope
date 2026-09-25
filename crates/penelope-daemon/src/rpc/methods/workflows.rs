@@ -1,6 +1,7 @@
 //! Méthodes de workflows, de planifications et de skills.
 
 use super::*;
+use crate::workflow::context_of;
 
 impl Rpc {
     /// Workflows et planifications.
@@ -33,7 +34,7 @@ impl Rpc {
                 let stem = p.get("name").and_then(|n| n.as_str());
                 let w = penelope_workflow::Workflow::from_json(&raw)
                     .map_err(|e| anyhow::anyhow!("JSON invalide : {e}"))?;
-                let known = crate::runtime::workflow_known_with(
+                let known = penelope_app::services::workflow_known_with(
                     &s.config.config(),
                     &s.mcp_tools,
                     &s.workflows,
@@ -57,10 +58,17 @@ impl Rpc {
             method::WF_RUN => {
                 let id = required_str(p, "id")?;
                 let params = p.get("params").cloned().unwrap_or(json!({}));
-                let origin = crate::helpers::owner_origin_of(&self.daemon.services);
-                let run = crate::workflow::start_run(&self.daemon, &id, params, &origin, None, 0)
-                    .await
-                    .map_err(anyhow::Error::msg)?;
+                let origin = penelope_app::helpers::owner_origin_of(&self.daemon.services);
+                let run = penelope_orchestrator::workflow::start_run(
+                    &context_of(&self.daemon),
+                    &id,
+                    params,
+                    &origin,
+                    None,
+                    0,
+                )
+                .await
+                .map_err(anyhow::Error::msg)?;
                 Ok(serde_json::to_value(run)?)
             }
             method::WF_CONTROL => {
@@ -78,8 +86,8 @@ impl Rpc {
                         current.current_step.unwrap_or_default(),
                         current.iterations
                     );
-                    crate::workflow::answer(
-                        &self.daemon,
+                    penelope_orchestrator::workflow::answer(
+                        &context_of(&self.daemon),
                         &run,
                         &visit,
                         &choice,
@@ -90,8 +98,8 @@ impl Rpc {
                 }
                 // Plafonds propres au run (issue #136).
                 if op == "budget" {
-                    return crate::workflow::raise_budget(
-                        &self.daemon,
+                    return penelope_orchestrator::workflow::raise_budget(
+                        &context_of(&self.daemon),
                         &run,
                         p.get("usd").and_then(|v| v.as_f64()),
                         p.get("tokens").and_then(|v| v.as_u64()),
@@ -100,27 +108,32 @@ impl Rpc {
                 }
                 let control = penelope_workflow::Control::parse(&op)
                     .ok_or_else(|| anyhow::anyhow!("opération inconnue : {op}"))?;
-                let state = crate::workflow::control(&self.daemon, &run, &control).await?;
+                let state = penelope_orchestrator::workflow::control(
+                    &context_of(&self.daemon),
+                    &run,
+                    &control,
+                )
+                .await?;
                 Ok(json!({"state": state.as_str()}))
             }
-            method::SCHEDULE_LIST => Ok(json!(crate::scheduler::listing(s).await?)),
+            method::SCHEDULE_LIST => Ok(json!(penelope_orchestrator::scheduler::listing(s).await?)),
             // Nouvelle destination, sans recréer la planification (#124) : `private`, ou
             // `chat_id` et `topic_id`.
             method::SCHEDULE_MOVE => {
                 let id = required_str(p, "id")?;
                 let to = if p.get("private").and_then(|v| v.as_bool()) == Some(true) {
-                    crate::helpers::owner_origin_of(s)
+                    penelope_app::helpers::owner_origin_of(s)
                 } else {
                     let chat = p.get("chat_id").and_then(|v| v.as_i64()).ok_or_else(|| {
                         anyhow::anyhow!("`chat_id` (et `topic_id`) ou `private: true`")
                     })?;
-                    crate::bus::Origin::Telegram {
+                    penelope_app::bus::Origin::Telegram {
                         chat_id: chat,
                         topic_id: p.get("topic_id").and_then(|v| v.as_i64()),
                         message_id: None,
                     }
                 };
-                let to = crate::scheduler::retarget(s, &id, &to)
+                let to = penelope_orchestrator::scheduler::retarget(s, &id, &to)
                     .await
                     .map_err(anyhow::Error::msg)?;
                 Ok(json!({"id": id, "destination": to}))
@@ -132,7 +145,7 @@ impl Rpc {
                             "kind inconnu : cron, interval, mcp_poll, watch_file ou event"
                         )
                     })?;
-                crate::scheduler::create(
+                penelope_orchestrator::scheduler::create(
                     s,
                     kind,
                     p.get("spec").cloned().unwrap_or(json!({})),
@@ -144,7 +157,9 @@ impl Rpc {
             }
             method::SCHEDULE_RUN_NOW => {
                 let id = required_str(p, "id")?;
-                crate::scheduler::run_now(&self.daemon, &self.daemon.hooks.scheduler(), &id).await
+                let ports = self.daemon.hooks.scheduler();
+                penelope_orchestrator::scheduler::run_now(&context_of(&self.daemon), &ports, &id)
+                    .await
             }
             method::SCHEDULE_PAUSE => {
                 s.schedules
@@ -174,7 +189,7 @@ impl Rpc {
         match method {
             method::SKILL_RELOAD => {
                 // Skill déposée à l'instant : relue sans attendre la passe d'entretien.
-                let generation = crate::runtime::reload_skills(s).await?;
+                let generation = penelope_app::services::reload_skills(s).await?;
                 Ok(json!({"generation": generation, "skills": s.skills.all().len()}))
             }
             method::SKILL_ROLLBACK => {
@@ -182,7 +197,7 @@ impl Rpc {
                 let root = s.platform.dirs.skills();
                 let path =
                     penelope_skills::rollback_skill(&root, &name).map_err(anyhow::Error::msg)?;
-                crate::runtime::reload_skills(s).await?;
+                penelope_app::services::reload_skills(s).await?;
                 Ok(json!({"name": name, "restored": path}))
             }
             method::SKILL_LIST => Ok(json!(
@@ -210,11 +225,11 @@ async fn skill_install(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
     let source = required_str(p, "source")?;
     let force = p.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
     let (src, installed, missing) =
-        crate::skill_install::install(&d.services, &source, force).await?;
+        penelope_ops::skill_install::install(&d.services, &source, force).await?;
     Ok(json!({
         "source": src.label(),
         "installed": installed,
         "missing": missing,
-        "report": crate::skill_install::report(&src, &installed, &missing),
+        "report": penelope_ops::skill_install::report(&src, &installed, &missing),
     }))
 }

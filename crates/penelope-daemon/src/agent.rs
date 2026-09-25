@@ -1,16 +1,22 @@
-//! Façade de la boucle d'agent (§4.4 de `design/v1/boucle-et-outils.md`, épopée #208,
-//! T10) : la boucle vit dans la crate `penelope-agent` ; restent ici les ports sur les
-//! services du daemon et les entrées que ses modules appellent avec `&Services`, sous
-//! leur ancien nom.
+//! Les services de la boucle d'agent sur ceux du daemon (§4.4 de
+//! `design/v1/boucle-et-outils.md`, épopée #208, T10) : la boucle vit dans la crate
+//! `penelope-agent` ; restent ici les ports que seul le daemon sait implémenter sur la
+//! base, et les entrées en `&Services` qui en dérivent `AgentServices`. Elles ne peuvent
+//! pas descendre : `penelope-agent` ne nomme pas `Services` (il porterait le moteur de
+//! contexte, `reach.rs`), et `penelope-app` ne connaît pas la boucle.
 
-pub use penelope_agent::*;
+use penelope_agent::{
+    AgentServices, JobRequest, JobRunner, MemoryModes, NoAudit, NoJobs, PromptSnapshots,
+    SessionModes, ToolExecutor, TurnMeta, TurnOutcome,
+};
+use penelope_app::services::Services;
 use penelope_hitl::Decision;
 use penelope_tools::ToolOutcome;
 use std::sync::Arc;
 
 /// Les services de la boucle, sur ceux du daemon : mêmes registres (le ledger de coûts
 /// garde son observateur d'alerte), ports implémentés par les modules du daemon.
-pub fn services_of(s: &Arc<crate::runtime::Services>) -> Arc<AgentServices> {
+pub fn services_of(s: &Arc<Services>) -> Arc<AgentServices> {
     with_ports(
         s,
         Arc::new(crate::approval_mode::KvModes(s.clone())),
@@ -20,7 +26,7 @@ pub fn services_of(s: &Arc<crate::runtime::Services>) -> Arc<AgentServices> {
 }
 
 /// Les registres seuls, pour les entrées sans port (décision, bornes de tour) en `&Services`.
-fn registries_of(s: &crate::runtime::Services) -> Arc<AgentServices> {
+fn registries_of(s: &Services) -> Arc<AgentServices> {
     with_ports(
         s,
         Arc::new(MemoryModes::new(s.config.clone())),
@@ -30,7 +36,7 @@ fn registries_of(s: &crate::runtime::Services) -> Arc<AgentServices> {
 }
 
 fn with_ports(
-    s: &crate::runtime::Services,
+    s: &Services,
     modes: Arc<dyn SessionModes>,
     snapshots: Arc<dyn PromptSnapshots>,
     jobs: Arc<dyn JobRunner>,
@@ -55,7 +61,7 @@ fn with_ports(
 }
 
 /// Le port `JobRunner` sur les jobs d'outils du daemon (`tool_jobs.rs`, issue #204).
-struct DaemonJobs(Arc<crate::runtime::Services>);
+struct DaemonJobs(Arc<Services>);
 
 #[async_trait::async_trait]
 impl JobRunner for DaemonJobs {
@@ -70,7 +76,7 @@ impl JobRunner for DaemonJobs {
 
 /// Tranche une approbation (voir `penelope_agent::decide_approval`).
 pub async fn decide_approval(
-    s: &crate::runtime::Services,
+    s: &Services,
     approval_id: &str,
     decision: &Decision,
 ) -> anyhow::Result<bool> {
@@ -79,7 +85,7 @@ pub async fn decide_approval(
 
 /// Borne un tour qui n'a pas ouvert la sienne (voir `penelope_agent::close_unopened`).
 pub async fn close_unopened(
-    s: &crate::runtime::Services,
+    s: &Services,
     session_id: &str,
     meta: &TurnMeta,
     outcome: &anyhow::Result<TurnOutcome>,
@@ -88,6 +94,6 @@ pub async fn close_unopened(
 }
 
 /// Referme les tours interrompus par l'arrêt (voir `penelope_agent::close_interrupted_turns`).
-pub async fn close_interrupted_turns(s: &crate::runtime::Services) -> anyhow::Result<usize> {
+pub async fn close_interrupted_turns(s: &Services) -> anyhow::Result<usize> {
     penelope_agent::close_interrupted_turns(&registries_of(s)).await
 }

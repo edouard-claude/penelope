@@ -11,7 +11,7 @@ async fn a_slow_button_is_acknowledged_immediately() {
         .await
         .unwrap();
     // Un serveur MCP qui met du temps à redémarrer : le clic ne doit pas l'attendre.
-    use crate::mcp::testing::{FakeConnector, declare, server, tool};
+    use penelope_mcp_host::testing::{FakeConnector, declare, server, tool};
     let fake = Arc::new(FakeConnector::default());
     fake.serve(
         "lent",
@@ -21,7 +21,7 @@ async fn a_slow_button_is_acknowledged_immediately() {
         )]))),
     );
     fake.set_open_delay(Duration::from_millis(1200));
-    let sup = crate::mcp::testing::supervisor(g.daemon.services.clone(), fake.clone());
+    let sup = penelope_mcp_host::testing::supervisor(g.daemon.services.clone(), fake.clone());
     declare(&sup, "lent", "");
     sup.reload().await;
     g.daemon.hooks.set_mcp(sup.clone());
@@ -466,7 +466,7 @@ async fn a_burst_asks_before_answering_and_can_be_ingested() {
     settle_click(&g).await;
     for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(40)).await;
-        if crate::helpers::vault_dir(&g.daemon.services)
+        if penelope_app::helpers::vault_dir(&g.daemon.services)
             .join("sources")
             .read_dir()
             .map(|mut d| d.next().is_some())
@@ -475,7 +475,7 @@ async fn a_burst_asks_before_answering_and_can_be_ingested() {
             break;
         }
     }
-    let sources: Vec<_> = crate::helpers::vault_dir(&g.daemon.services)
+    let sources: Vec<_> = penelope_app::helpers::vault_dir(&g.daemon.services)
         .join("sources")
         .read_dir()
         .map(|d| d.filter_map(|e| e.ok()).collect())

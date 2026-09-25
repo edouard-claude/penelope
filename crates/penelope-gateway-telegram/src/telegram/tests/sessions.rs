@@ -618,7 +618,9 @@ async fn purging_a_forked_session_warns_on_the_confirmation_screen() {
         )
         .await
         .unwrap();
-    let forked = crate::session_ops::fork(s, &sid, None).await.unwrap();
+    let forked = penelope_ops::session_ops::fork(s, &sid, None)
+        .await
+        .unwrap();
     let child = forked["session"].as_str().unwrap().to_string();
 
     g.process_update(&updates::text_message(

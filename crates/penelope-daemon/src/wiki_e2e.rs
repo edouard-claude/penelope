@@ -10,8 +10,8 @@
 //!                                                       └─ dossiers cachés intacts
 //! ```
 
-use crate::bus::Origin as Channel;
 use crate::runtime::Daemon;
+use penelope_app::bus::Origin as Channel;
 use penelope_kernel::clock::TestClock;
 use penelope_llm::mock::MockProvider;
 use penelope_llm::types::ChatMessage;
@@ -96,7 +96,7 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::new(1_789_516_800_000));
     let s = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+        penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
             .await
             .unwrap(),
     );
@@ -109,7 +109,7 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
         Ok(vec!["memory.review_max_candidates".into()])
     })
     .unwrap();
-    let vault = crate::helpers::vault_dir(&s);
+    let vault = penelope_app::helpers::vault_dir(&s);
     std::fs::create_dir_all(vault.join(".editeur")).unwrap();
     std::fs::write(
         vault.join(".editeur/etat.json"),
@@ -120,20 +120,22 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
     let sid = d.chat_session_for(&Channel::Cli).await.unwrap();
 
     // Accueil complet.
-    let mut sitting = crate::onboarding::start(&d.services, None).await.unwrap();
+    let mut sitting = penelope_dream::onboarding::start(&d.services, None)
+        .await
+        .unwrap();
     let questions: Vec<u32> = sitting.answers.keys().copied().collect();
     for n in questions {
-        let q = crate::onboarding::question(n).unwrap();
+        let q = penelope_dream::onboarding::question(n).unwrap();
         let answer = match q.choices.first() {
             Some(c) => c.to_string(),
             None if q.list => "Refonte du site Durand\nMigration Factur-X".to_string(),
             None => "développeur indépendant".to_string(),
         };
-        sitting = crate::onboarding::answer(&d.services, &sitting.rel, n, Some(&answer))
+        sitting = penelope_dream::onboarding::answer(&d.services, &sitting.rel, n, Some(&answer))
             .await
             .unwrap();
     }
-    crate::onboarding::write(&d.services, &sitting, &sid)
+    penelope_dream::onboarding::write(&d.services, &sitting, &sid)
         .await
         .unwrap();
 
@@ -169,7 +171,7 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
         p.reply(&format!(
             r#"{{"candidats": [{{"type": "fait", "texte": "{candidate}", "importance": 6, "quand": ""}}]}}"#
         ));
-        crate::review::review(
+        penelope_vault::review::review(
             &d.services,
             d.providers.as_ref(),
             &sid,
@@ -189,7 +191,7 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
             "a_definir": ["PDP"]}"#,
     );
     let pdf = pdf_with_text(&["Contrat-cadre", "Les factures sont emises en Factur-X."]);
-    crate::ingest::ingest(
+    penelope_dream::ingest::ingest(
         &d.dream(),
         "Contrat cadre.pdf",
         pdf,
@@ -206,12 +208,12 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
         r#"{"resume": "Passage de la facturation en Factur-X et démo Durand.",
             "candidats": [{"type": "preference", "texte": "Les PR restent courtes", "importance": 7, "quand": ""}]}"#,
     );
-    crate::episodes::ingest(
+    penelope_vault::episodes::ingest(
         &d.services,
         d.providers.as_ref(),
         &sid,
         episode,
-        crate::episodes::Boundary::Idle,
+        penelope_vault::episodes::Boundary::Idle,
     )
     .await
     .unwrap();
@@ -228,7 +230,7 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
     .with_importance(9);
     s.candidates.record(vec![c], 5).await.unwrap();
     // Verdict de la grille (issue #37) rattaché au numéro du candidat soumis.
-    let n = crate::dream::submission_order(&s)
+    let n = penelope_dream::dream::submission_order(&s)
         .await
         .unwrap()
         .iter()
@@ -245,7 +247,7 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
         })
         .to_string(),
     );
-    let dream = crate::dream::run(&d.dream(), &d.hooks.messenger, false)
+    let dream = penelope_dream::dream::run(&d.dream(), &d.hooks.messenger, false)
         .await
         .unwrap();
     assert!(dream.report.promoted >= 1, "{:?}", dream.report);
@@ -364,10 +366,10 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
 async fn the_wiki_markdown_skill_is_bundled() {
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
-    let s = crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+    let s = penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
         .await
         .unwrap();
-    crate::runtime::reload_skills(&s).await.unwrap();
+    penelope_app::services::reload_skills(&s).await.unwrap();
     let skill = s.skills.get("wiki-markdown").expect("skill livrée");
     assert_eq!(skill.scope, penelope_skills::Scope::Bundled);
     assert!(skill.body.contains("Propriétés YAML") && skill.body.contains("log.md"));
@@ -380,7 +382,7 @@ async fn the_wiki_markdown_skill_is_bundled() {
         "---\nname: wiki-markdown\ndescription: version maison\n---\nRègles maison.\n",
     )
     .unwrap();
-    crate::runtime::reload_skills(&s).await.unwrap();
+    penelope_app::services::reload_skills(&s).await.unwrap();
     assert_eq!(
         s.skills.get("wiki-markdown").unwrap().description,
         "version maison"

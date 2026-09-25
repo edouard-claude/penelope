@@ -135,7 +135,12 @@ pub(super) fn topic_name_of(update: &Value) -> Option<(i64, i64, String)> {
 const SEEN_CHATS_MAX: usize = 20;
 
 /// Une conversation refusée : son identifiant, son type, son titre et la dernière fois.
-pub async fn record_seen_chat(s: &crate::runtime::Services, chat_id: i64, kind: &str, title: &str) {
+pub async fn record_seen_chat(
+    s: &penelope_app::services::Services,
+    chat_id: i64,
+    kind: &str,
+    title: &str,
+) {
     let mut seen = seen_chats(s).await;
     seen.retain(|c| c["id"].as_i64() != Some(chat_id));
     seen.insert(

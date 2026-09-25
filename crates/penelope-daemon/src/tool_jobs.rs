@@ -25,9 +25,9 @@
 //! sonde pas chez un serveur : il tourne ici, porte un outil, ses arguments et l'effet du
 //! ledger. Sans `poll_at`, donc : rien ne le sonde (décision 0012).
 
-use crate::agent::ToolExecutor;
-use crate::bus::Origin;
-use crate::runtime::{Daemon, Services};
+use crate::runtime::Daemon;
+use penelope_agent::{JobRequest, ToolExecutor};
+use penelope_app::{bus::Origin, services::Services};
 use penelope_kernel::event::EventDraft;
 use penelope_kernel::ids::EffectId;
 use penelope_kernel::turn::TurnKind;
@@ -37,9 +37,9 @@ use penelope_tools::ToolOutcome;
 use serde_json::json;
 use std::sync::Arc;
 
-pub use penelope_app::jobs::Running;
-// Magasin et outils `job_*` sortis dans `penelope-executor` (T24), réexportés jusqu'à T30.
-pub use penelope_executor::jobs::*;
+use penelope_executor::executor::effective_arguments;
+use penelope_executor::jobs::*;
+use penelope_executor::tools_on_demand;
 
 // ---------------------------------------------------------------- lancement
 
@@ -53,8 +53,6 @@ async fn delivers_to_a_conversation(s: &Services, session_id: &str) -> bool {
     )
 }
 
-pub use crate::agent::JobRequest;
-
 /// Transforme l'appel en job s'il le demande. `None` : rien à faire, l'appel suit le
 /// chemin ordinaire et le ledger reste sur sa trajectoire habituelle.
 ///
@@ -67,7 +65,7 @@ pub async fn maybe_spawn(
 ) -> anyhow::Result<Option<ToolOutcome>> {
     // `tool_call` enveloppe l'appel dans `{name, args}` : la demande d'arrière-plan est
     // dans l'enveloppe, pas au premier niveau.
-    let asked = crate::executor::effective_arguments(&req.call.name, &req.call.arguments);
+    let asked = effective_arguments(&req.call.name, &req.call.arguments);
     if !wants_background(req.tool, &asked) {
         return Ok(None);
     }
@@ -130,7 +128,7 @@ pub async fn maybe_spawn(
     // Le résultat renvoie vers `job_status` et consorts : ils doivent être sous la main
     // du tour suivant, pas seulement trouvables par `tool_search` (#104).
     for t in FOLLOW_UP {
-        crate::tools_on_demand::touch(&s, req.session_id, t).await;
+        tools_on_demand::touch(&s, req.session_id, t).await;
     }
 
     let cancel = CancelToken::new();
@@ -158,7 +156,7 @@ pub async fn maybe_spawn(
         let outcome = match futures::FutureExt::catch_unwind(run).await {
             Ok(o) => o,
             Err(payload) => {
-                let message = crate::tasks::panic_text(payload.as_ref());
+                let message = penelope_app::tasks::panic_text(payload.as_ref());
                 tracing::error!(job = %id, tool = %name, %message, "job en panique");
                 Err(penelope_tools::ToolError::Other(format!(
                     "l'outil a paniqué : {message}"
@@ -350,6 +348,7 @@ mod tests {
     use penelope_kernel::turn::Turn;
     use penelope_llm::mock::{MockProvider, Scripted};
     use penelope_llm::types::ToolCall;
+    use penelope_ops::session_ops;
     use penelope_store::Store;
     use serde_json::Value;
     use std::sync::Arc;
@@ -507,7 +506,7 @@ mod tests {
         let clock: penelope_kernel::clock::SharedClock =
             Arc::new(penelope_kernel::clock::SystemClock);
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );
@@ -524,7 +523,7 @@ mod tests {
         crate::approval_mode::set(
             &d.services,
             &sid,
-            crate::approval_mode::ApprovalMode::parse("auto"),
+            penelope_agent::ApprovalMode::parse("auto"),
         )
         .await
         .unwrap();
@@ -552,7 +551,7 @@ mod tests {
         let turn = claim(d).await;
         let out = d.run_turn(&turn).await;
         assert!(
-            matches!(out, crate::agent::TurnOutcome::Answered { .. }),
+            matches!(out, penelope_agent::TurnOutcome::Answered { .. }),
             "le tour doit répondre sans attendre l'outil : {out:?}"
         );
         d.services.turns.complete(&turn).await.unwrap();
@@ -707,7 +706,7 @@ mod tests {
             .expect("le message ne doit pas attendre le job");
         d.services.turns.complete(&turn).await.unwrap();
         assert!(
-            matches!(out, crate::agent::TurnOutcome::Answered { .. }),
+            matches!(out, penelope_agent::TurnOutcome::Answered { .. }),
             "{out:?}"
         );
         assert_eq!(
@@ -806,7 +805,7 @@ mod tests {
         let job = store(&d.services).of_session(&sid, false).await.unwrap()[0].clone();
         settled(&d, &job.id).await;
         let (s, pr, bus) = (&d.services, d.providers.clone(), &d.bus);
-        crate::session_ops::close(s, pr, bus, &sid).await.unwrap();
+        session_ops::close(s, pr, bus, &sid).await.unwrap();
         assert_eq!(
             deliver_due(&d).await.unwrap(),
             0,
@@ -923,12 +922,12 @@ mod tests {
         let (_dir, d, p) = daemon().await;
         let sid = session(&d).await;
         assert!(
-            crate::tools_on_demand::exposed_for_turn(&d.services, &sid)
+            tools_on_demand::exposed_for_turn(&d.services, &sid)
                 .await
                 .is_empty()
         );
         background_turn(&d, &p, &sid, "sleep 30").await;
-        let exposed = crate::tools_on_demand::exposed_for_turn(&d.services, &sid).await;
+        let exposed = tools_on_demand::exposed_for_turn(&d.services, &sid).await;
         for t in ["job_status", "job_wait", "job_cancel", "job_list"] {
             assert!(exposed.contains(&t.to_string()), "{t} absent : {exposed:?}");
         }
@@ -1031,7 +1030,7 @@ mod tests {
         let turn = claim(&d).await;
         let out = d.run_turn(&turn).await;
         assert!(
-            matches!(out, crate::agent::TurnOutcome::Answered { .. }),
+            matches!(out, penelope_agent::TurnOutcome::Answered { .. }),
             "{out:?}"
         );
         d.services.turns.complete(&turn).await.unwrap();
@@ -1077,7 +1076,7 @@ mod tests {
         let turn = claim(&d).await;
         let out = d.run_turn(&turn).await;
         assert!(
-            matches!(out, crate::agent::TurnOutcome::Answered { .. }),
+            matches!(out, penelope_agent::TurnOutcome::Answered { .. }),
             "{out:?}"
         );
         let jobs = store(&d.services).of_session(&sid, true).await.unwrap();

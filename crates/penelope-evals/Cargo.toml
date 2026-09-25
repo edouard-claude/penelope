@@ -42,7 +42,18 @@ penelope-workflow.workspace = true
 penelope-daemon.workspace = true
 # Réindexation du vault et enregistrement des candidats du banc de mémoire (T22).
 penelope-vault.workspace = true
+# Les chemins d'origine des modules sortis du daemon, nommés directement depuis que le
+# daemon ne les réexporte plus (épopée #208, T30) : `Services`, `Origin` (app), la boucle,
+# la compaction, le rêve et l'ingestion, l'exécuteur natif, la purge et le fork.
+penelope-app.workspace = true
+penelope-agent.workspace = true
+penelope-conversation.workspace = true
+penelope-dream.workspace = true
+penelope-executor.workspace = true
+penelope-ops.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util"] }
+# Les entrées du digest (`scheduler::digest_inputs`) du banc longitudinal (T30).
+penelope-orchestrator.workspace = true

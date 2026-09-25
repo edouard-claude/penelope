@@ -38,9 +38,14 @@ penelope-workflow.workspace = true
 penelope-tools.workspace = true
 penelope-telegram.workspace = true
 penelope-evals.workspace = true
+# La règle « toujours » qui ne crée pas de règle (`always_creates_no_rule`), lue par
+# `approvals stats` depuis la boucle d'agent (T30 : plus par le daemon).
+penelope-agent.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 # Fournisseur simulé : un vrai tour du daemon écrit les lignes que `logs --turn` relit
 # (tests/logs_turn.rs, #206).
 penelope-llm.workspace = true
+# `Services` et `Origin`, nommés à leur crate depuis T30.
+penelope-app.workspace = true

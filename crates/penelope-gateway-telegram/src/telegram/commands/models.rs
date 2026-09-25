@@ -18,7 +18,7 @@ impl TelegramGateway {
             topic_id,
             message_id: Some(message_id),
         };
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let reply_to = Some(message_id);
         let text: String = {
             let parts: Vec<&str> = args.split_whitespace().collect();
@@ -83,7 +83,7 @@ impl TelegramGateway {
                             let g = self.clone();
                             let daemon = d.clone();
                             tokio::spawn(async move {
-                                let text = match crate::rpc::Rpc::new(daemon)
+                                let text = match penelope_daemon::rpc::Rpc::new(daemon)
                                     .call(
                                         m::MODEL_AUTH,
                                         json!({"provider": "codex", "action": "wait"}),
@@ -279,8 +279,10 @@ impl TelegramGateway {
         // L'audit relit toute la mémoire : détaché (issue #69).
         let (me, d2) = (self.clone(), d.clone());
         tokio::spawn(async move {
-            let note = match crate::mem_audit::run(&d2.services, d2.hooks.mcp_supervisor()).await {
-                Ok(a) => crate::mem_audit::summary(&a),
+            let note = match penelope_vault::mem_audit::run(&d2.services, d2.hooks.mcp_supervisor())
+                .await
+            {
+                Ok(a) => penelope_vault::mem_audit::summary(&a),
                 Err(e) => format!("❌ {e}"),
             };
             let _ = me.reply(chat_id, topic_id, reply_to, &note).await;

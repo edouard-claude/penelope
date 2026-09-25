@@ -10,14 +10,15 @@
 //! avant chaque passage du pilote, comme après un `kill -9` : la reprise ne doit ni pousser
 //! deux fois, ni ouvrir deux PR, ni commenter deux fois, ni déployer deux fois.
 
-use crate::bus::Origin;
-use crate::mcp::testing::{FakeConnector, declare, server, tool};
-use crate::runtime::{Daemon, Services};
 use crate::telegram::TelegramChat;
 use crate::telegram::TelegramGateway;
+use penelope_app::bus::Origin;
+use penelope_app::services::Services;
+use penelope_daemon::Daemon;
 use penelope_kernel::clock::TestClock;
 use penelope_llm::mock::{MockProvider, Scripted};
 use penelope_llm::types::ToolCall;
+use penelope_mcp_host::testing::{FakeConnector, declare, server, tool};
 use penelope_telegram::mock::{MockTransport, updates};
 use penelope_workflow::runs::RunState;
 use serde_json::{Value, json};
@@ -193,8 +194,8 @@ impl World {
         let g = TelegramGateway::with_transport(d.clone(), self.t.clone());
         g.register();
         d.hooks
-            .set_orchestrator(Arc::new(crate::workflow::orchestrator_of(&d)));
-        let sup = crate::mcp::testing::supervisor(d.services.clone(), self.fake.clone());
+            .set_orchestrator(Arc::new(penelope_daemon::workflow::orchestrator_of(&d)));
+        let sup = penelope_mcp_host::testing::supervisor(d.services.clone(), self.fake.clone());
         declare(&sup, "redmine", "");
         declare(&sup, "github", "");
         d.hooks.set_mcp(sup.clone());
@@ -227,7 +228,12 @@ async fn drive_everything(d: &Arc<Daemon>) {
             .await
             .unwrap()
         {
-            crate::workflow::drive(d, &r.id).await.unwrap();
+            penelope_orchestrator::workflow::drive(
+                &penelope_daemon::workflow::context_of(d),
+                &r.id,
+            )
+            .await
+            .unwrap();
         }
     }
 }
@@ -374,8 +380,8 @@ async fn ca_12_1_ticket_to_deploy_runs_end_to_end_and_survives_restarts() {
         topic_id: None,
         message_id: None,
     };
-    let run = crate::workflow::start_run(
-        &d,
+    let run = penelope_orchestrator::workflow::start_run(
+        &penelope_daemon::workflow::context_of(&d),
         "ticket-to-deploy",
         json!({"ticket_url": "https://redmine.example/issues/42", "ticket_id": "42"}),
         &chat,
@@ -478,7 +484,7 @@ async fn ca_12_1_ticket_to_deploy_runs_end_to_end_and_survives_restarts() {
 /// Exécute les tours de conversation en file, comme le pool de runners.
 async fn drain(d: &Arc<Daemon>, g: &Arc<TelegramGateway>) {
     while let Some(turn) = d.services.turns.claim("test").await.unwrap() {
-        crate::runner::process(d, turn, std::time::Duration::from_secs(30)).await;
+        penelope_daemon::runner::process(d, turn, std::time::Duration::from_secs(30)).await;
     }
     g.flush_outbox().await.unwrap();
 }
@@ -556,11 +562,11 @@ async fn a_conversation_launches_ticket_to_deploy_with_its_brief() {
     // 3. Exécution technique du moteur après le gate, vérifié dans le test Telegram.
     let mut clicked = BTreeSet::new();
     let mut update = 10;
-    let run = crate::workflow::start_run_briefed(
-        &d,
+    let run = penelope_orchestrator::workflow::start_run_briefed(
+        &penelope_daemon::workflow::context_of(&d),
         "ticket-to-deploy",
         json!({"ticket_id":"42", "ticket_url":"https://redmine.example/issues/42"}),
-        &crate::bus::Origin::Telegram {
+        &penelope_app::bus::Origin::Telegram {
             chat_id: OWNER,
             topic_id: None,
             message_id: None,
@@ -576,7 +582,10 @@ async fn a_conversation_launches_ticket_to_deploy_with_its_brief() {
         run.params["ticket_url"],
         "https://redmine.example/issues/42"
     );
-    assert_eq!(crate::workflow::brief_of(&d.services, &run.id).await, brief);
+    assert_eq!(
+        penelope_orchestrator::workflow::brief_of(&d.services, &run.id).await,
+        brief
+    );
 
     // 4. Le run avance jusqu'à la proposition de plan : l'analyse a reçu le brief.
     w.p.push(Scripted::ToolCalls(
@@ -637,7 +646,7 @@ async fn a_conversation_launches_ticket_to_deploy_with_its_brief() {
     );
     assert!(analysis.contains("Le service renvoie 500"), "{analysis}");
     // Le run parle dans la conversation d'origine.
-    let run_origin = crate::workflow::origin_of(&d, &run.id).await;
+    let run_origin = penelope_orchestrator::workflow::origin_of(&d.services, &run.id).await;
     assert_eq!(run_origin.telegram_chat(), Some((OWNER, None)));
     kill(d, g);
 }

@@ -1997,7 +1997,7 @@ async fn finish_turn(
             }
             // « Toujours » sur une commande composée n'écrit aucune règle : le dire
             // avant le clic, comme la carte Telegram (issue #141).
-            let no_rule = penelope_daemon::agent::always_creates_no_rule(
+            let no_rule = penelope_agent::always_creates_no_rule(
                 detail["subject"].as_str().unwrap_or_default(),
                 detail["payload"].get("arguments"),
             );

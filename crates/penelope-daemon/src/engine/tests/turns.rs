@@ -7,9 +7,12 @@ async fn claimed_messages_keep_separate_user_entries_and_arrival_times() {
     let dir = tempfile::tempdir().unwrap();
     let clock = TestClock::default();
     let services = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), Arc::new(clock.clone()))
-            .await
-            .unwrap(),
+        penelope_app::services::Services::for_tests(
+            dir.path().to_path_buf(),
+            Arc::new(clock.clone()),
+        )
+        .await
+        .unwrap(),
     );
     let daemon = Arc::new(Daemon::from_services(services.clone()));
     let provider = Arc::new(MockProvider::new());
@@ -79,7 +82,7 @@ struct EnqueueDuringTool {
 }
 
 #[async_trait::async_trait]
-impl crate::agent::ToolExecutor for EnqueueDuringTool {
+impl penelope_agent::ToolExecutor for EnqueueDuringTool {
     async fn execute(
         &self,
         _name: &str,
@@ -107,7 +110,7 @@ async fn a_running_turn_absorbs_a_new_message_before_the_next_model_call() {
         .await
         .unwrap();
     let turn = claim(&daemon).await;
-    let tiers = crate::conversation::build_tiers(&daemon.services, "initial", &[], None).await;
+    let tiers = penelope_conversation::build_tiers(&daemon.services, "initial", &[], None).await;
     let conv = SessionConversation::new(
         daemon.services.clone(),
         &sid,
@@ -149,7 +152,7 @@ async fn a_running_turn_absorbs_a_new_message_before_the_next_model_call() {
         provider.clone(),
     )
     .with_inbox(inbox)
-    .run_conversation(&spec, &conv, &exec, &crate::agent::NullSink)
+    .run_conversation(&spec, &conv, &exec, &penelope_agent::NullSink)
     .await
     .unwrap();
     assert!(
@@ -348,7 +351,7 @@ async fn a_turn_offers_the_core_then_what_the_session_discovered() {
 async fn a_recalled_memory_counts_as_useful_only_when_the_answer_uses_it() {
     let (_dir, d, p) = daemon().await;
     let s = d.services.clone();
-    let vault = crate::helpers::vault_dir(&s);
+    let vault = penelope_app::helpers::vault_dir(&s);
     std::fs::create_dir_all(&vault).unwrap();
     std::fs::write(
         vault.join("memoire.md"),
@@ -356,7 +359,9 @@ async fn a_recalled_memory_counts_as_useful_only_when_the_answer_uses_it() {
              - Le client Martin est basé à Grenoble <!-- depuis: 2026-06-01 --> ^01MARTIN\n",
     )
     .unwrap();
-    crate::vault_ops::reindex(&s, &vault).await.unwrap();
+    penelope_vault::vault_ops::reindex(&s, &vault)
+        .await
+        .unwrap();
     // Rien d'office dans l'instantané : le souvenir ne vient que par le rappel.
     d.publish_config("test", |c| {
         c.memory.core_budget_tokens = 0;
@@ -555,31 +560,31 @@ async fn the_plan_gauge_alerts_once_per_window() {
     };
 
     // Sous le seuil : rien.
-    crate::codex_quota::store(s, &quota(40.0, 1_790_000_000))
+    penelope_ops::codex_quota::store(s, &quota(40.0, 1_790_000_000))
         .await
         .unwrap();
     assert!(
-        crate::codex_quota::check_alert(&d.services, d.hooks.messenger())
+        penelope_ops::codex_quota::check_alert(&d.services, d.hooks.messenger())
             .await
             .unwrap()
             .is_none()
     );
 
     // Au-delà : une alerte, une seule.
-    crate::codex_quota::store(s, &quota(81.0, 1_790_000_000))
+    penelope_ops::codex_quota::store(s, &quota(81.0, 1_790_000_000))
         .await
         .unwrap();
-    let first = crate::codex_quota::check_alert(&d.services, d.hooks.messenger())
+    let first = penelope_ops::codex_quota::check_alert(&d.services, d.hooks.messenger())
         .await
         .unwrap()
         .expect("alerte");
     assert!(first.contains("81 %"), "{first}");
     assert!(first.contains("pas une panne"), "{first}");
-    crate::codex_quota::store(s, &quota(90.0, 1_790_000_000))
+    penelope_ops::codex_quota::store(s, &quota(90.0, 1_790_000_000))
         .await
         .unwrap();
     assert!(
-        crate::codex_quota::check_alert(&d.services, d.hooks.messenger())
+        penelope_ops::codex_quota::check_alert(&d.services, d.hooks.messenger())
             .await
             .unwrap()
             .is_none(),
@@ -587,11 +592,11 @@ async fn the_plan_gauge_alerts_once_per_window() {
     );
 
     // Fenêtre suivante : l'alerte reprend son droit.
-    crate::codex_quota::store(s, &quota(85.0, 1_790_018_000))
+    penelope_ops::codex_quota::store(s, &quota(85.0, 1_790_018_000))
         .await
         .unwrap();
     assert!(
-        crate::codex_quota::check_alert(&d.services, d.hooks.messenger())
+        penelope_ops::codex_quota::check_alert(&d.services, d.hooks.messenger())
             .await
             .unwrap()
             .is_some()
@@ -757,7 +762,9 @@ async fn an_approval_suspends_then_a_resume_turn_finishes_the_work() {
     // La carte d'approbation est passée sur le bus.
     let mut saw_card = false;
     while let Ok(ev) = events.try_recv() {
-        if let crate::bus::BusKind::Event(crate::agent::TurnEvent::Approval { tool, .. }) = &ev.kind
+        if let penelope_app::bus::BusKind::Event(penelope_agent::TurnEvent::Approval {
+            tool, ..
+        }) = &ev.kind
         {
             assert_eq!(tool, "fs_write");
             saw_card = true;
@@ -794,7 +801,7 @@ async fn a_missing_key_fails_with_an_actionable_message() {
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
     let s = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+        penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
             .await
             .unwrap(),
     );
@@ -818,12 +825,12 @@ async fn a_missing_key_fails_with_an_actionable_message() {
 /// réels, par le daemon.
 #[tokio::test]
 async fn an_agreement_turns_the_proposal_into_an_owner_decision() {
-    use crate::bus::Origin as Channel;
+    use penelope_app::bus::Origin as Channel;
     use penelope_memory::{CandidateType, Origin};
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
     let s = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+        penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
             .await
             .unwrap(),
     );

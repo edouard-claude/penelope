@@ -1,7 +1,7 @@
 //! Méthodes de configuration, de secrets et de modèles.
 
 use super::*;
-use crate::helpers::set_config_path;
+use penelope_app::helpers::set_config_path;
 
 impl Rpc {
     /// Configuration et secrets.
@@ -108,15 +108,15 @@ impl Rpc {
                 });
                 // Abonnement ChatGPT : plan, compte et jauge, là où on regarde les
                 // modèles — son coût en dollars est nul par construction (#142).
-                let codex = match crate::codex_auth::status(s).ok().flatten() {
+                let codex = match penelope_ops::codex_auth::status(s).ok().flatten() {
                     Some(st) => json!({
                         "connected": st.connected,
                         "plan": st.plan,
                         "account": st.account,
                         "disconnected": st.disconnected,
-                        "quota": crate::codex_quota::snapshot(s)
+                        "quota": penelope_ops::codex_quota::snapshot(s)
                             .await
-                            .map(|q| crate::codex_quota::gauge_line(&q, s.clock.now_ms())),
+                            .map(|q| penelope_ops::codex_quota::gauge_line(&q, s.clock.now_ms())),
                     }),
                     None => Value::Null,
                 };
@@ -142,15 +142,19 @@ impl Rpc {
                 // L'abonnement ChatGPT ne sert que les tours du propriétaire (décision 2
                 // de #142) : un alias de rôle de fond ne peut pas le viser.
                 let background =
-                    crate::codex_scope::background_roles_of(&s.config.config(), &alias);
-                if crate::codex_scope::is_codex(&model) && !background.is_empty() {
-                    anyhow::bail!(crate::codex_scope::refusal(&alias, &model, &background));
+                    penelope_app::codex_scope::background_roles_of(&s.config.config(), &alias);
+                if penelope_app::codex_scope::is_codex(&model) && !background.is_empty() {
+                    anyhow::bail!(penelope_app::codex_scope::refusal(
+                        &alias,
+                        &model,
+                        &background
+                    ));
                 }
                 // Un alias qui sert un rôle à outils doit viser un modèle qui en appelle :
                 // l'émulation n'existe plus (issue #54, décision 0009).
                 let bare_new = penelope_llm::catalog::strip_provider(&model);
                 if s.catalog.get(bare_new).map(|i| i.supports_tools()) == Some(false)
-                    && crate::doctor::alias_needs_tools(&s.config.config(), &alias)
+                    && penelope_ops::doctor::alias_needs_tools(&s.config.config(), &alias)
                 {
                     anyhow::bail!(
                         "`{model}` n'appelle pas d'outils : l'alias `{alias}` sert un rôle qui \
@@ -165,7 +169,9 @@ impl Rpc {
                 let reasoning_note = s
                     .catalog
                     .get(bare_new)
-                    .filter(|_| crate::doctor::alias_serves_extraction(&s.config.config(), &alias))
+                    .filter(|_| {
+                        penelope_ops::doctor::alias_serves_extraction(&s.config.config(), &alias)
+                    })
                     .and_then(|i| {
                         (i.lightest_effort().as_deref() != Some("none")).then(|| {
                             format!(

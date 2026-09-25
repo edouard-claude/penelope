@@ -133,7 +133,7 @@ async fn a_document_is_ingested_proposed_and_answered() {
     .await
     .unwrap();
 
-    let vault = crate::helpers::vault_dir(&g.daemon.services);
+    let vault = penelope_app::helpers::vault_dir(&g.daemon.services);
     let source = vault.join("sources/contrat-acme.md");
     assert!(
         eventually(|| async { source.exists() }).await,
@@ -231,7 +231,7 @@ async fn mien_marks_a_document_as_written_by_the_owner() {
     g.process_update(&document_update(95, "doc2", "principes.md", Some("/mien")))
         .await
         .unwrap();
-    let source = crate::helpers::vault_dir(&g.daemon.services).join("sources/principes.md");
+    let source = penelope_app::helpers::vault_dir(&g.daemon.services).join("sources/principes.md");
     assert!(eventually(|| async { source.exists() }).await);
     let raw = std::fs::read_to_string(&source).unwrap();
     assert_eq!(
@@ -270,7 +270,7 @@ async fn other_files_become_attachments_the_agent_can_reach() {
         })
         .await
     );
-    let workspace = crate::executor::default_workspaces(&g.daemon.services)[0].clone();
+    let workspace = penelope_executor::executor::default_workspaces(&g.daemon.services)[0].clone();
     assert!(workspace.join("telegram/archive.bin").exists());
 }
 

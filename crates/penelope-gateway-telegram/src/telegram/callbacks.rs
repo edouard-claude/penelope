@@ -255,7 +255,7 @@ impl TelegramGateway {
                 let note = if !won {
                     "ℹ️ Déjà tranché.".to_string()
                 } else {
-                    match crate::ingest::apply_contradiction(
+                    match penelope_dream::ingest::apply_contradiction(
                         &self.daemon.dream(),
                         &approval_id,
                         &action.action,
@@ -291,7 +291,7 @@ impl TelegramGateway {
                             .get(&approval_id)
                             .await?
                             .is_some_and(|a| a.payload["confirm"].as_bool() == Some(true));
-                        match crate::ingest::apply_memory_proposal(
+                        match penelope_dream::ingest::apply_memory_proposal(
                             &self.daemon.dream(),
                             &approval_id,
                         )
@@ -314,15 +314,15 @@ impl TelegramGateway {
                 let _ = self.bot.edit_markup(chat_id, message_id, None).await;
                 let decision = match action.action.as_str() {
                     k::EFFECT_VERIFY => Decision {
-                        choice: crate::agent::EFFECT_DONE.into(),
+                        choice: penelope_agent::EFFECT_DONE.into(),
                         ..Decision::approve_once("telegram")
                     },
                     k::EFFECT_RETRY => Decision {
-                        choice: crate::agent::EFFECT_RETRY.into(),
+                        choice: penelope_agent::EFFECT_RETRY.into(),
                         ..Decision::approve_once("telegram")
                     },
                     _ => Decision {
-                        choice: crate::agent::EFFECT_IGNORE.into(),
+                        choice: penelope_agent::EFFECT_IGNORE.into(),
                         ..Decision::deny("telegram", None)
                     },
                 };
@@ -367,10 +367,10 @@ impl TelegramGateway {
         let effect = a.kind == penelope_hitl::ApprovalKind::EffectUnknown;
         let note = match (first, a.state) {
             (true, _) if effect => match decision.choice.as_str() {
-                crate::agent::EFFECT_DONE => {
+                penelope_agent::EFFECT_DONE => {
                     format!("✅ Noté : `{}` a eu lieu, je ne le relance pas.", a.subject)
                 }
-                crate::agent::EFFECT_RETRY => format!("🔁 Je relance `{}`.", a.subject),
+                penelope_agent::EFFECT_RETRY => format!("🔁 Je relance `{}`.", a.subject),
                 _ => format!("⏭ `{}` reste tel quel, sans relance.", a.subject),
             },
             (false, st) => format!(
@@ -412,9 +412,10 @@ impl TelegramGateway {
             return Some((chat, v["topic_id"].as_i64()));
         }
         if let Some(run_id) = a.run_id.as_deref()
-            && let Some(destination) = crate::workflow::origin_of(&self.daemon, run_id)
-                .await
-                .telegram_chat()
+            && let Some(destination) =
+                penelope_orchestrator::workflow::origin_of(&self.daemon.services, run_id)
+                    .await
+                    .telegram_chat()
         {
             return Some(destination);
         }

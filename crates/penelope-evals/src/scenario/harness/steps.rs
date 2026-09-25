@@ -6,11 +6,13 @@ use super::super::Crash;
 use super::lifecycle::shut_down;
 use super::{CRASH_WAIT, HEARTBEAT, Harness, outcome_json};
 use anyhow::Context as _;
-use penelope_daemon::bus::Origin;
-use penelope_daemon::{compaction, purge, runner, session_ops};
+use penelope_app::bus::Origin;
+use penelope_conversation::compaction;
+use penelope_daemon::runner;
 use penelope_kernel::budget::UsageRecord;
 use penelope_kernel::turn::Turn;
 use penelope_llm::types::ChatMessage;
+use penelope_ops::{purge, session_ops};
 use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 
@@ -76,7 +78,7 @@ impl Harness<'_> {
         &mut self,
         turn: Turn,
         text: &str,
-    ) -> anyhow::Result<penelope_daemon::agent::TurnOutcome> {
+    ) -> anyhow::Result<penelope_agent::TurnOutcome> {
         let life = self.life.as_ref().context("processus mort")?;
         let gateway = life
             .gateway
@@ -112,7 +114,7 @@ impl Harness<'_> {
         match name {
             "/compact" => {
                 let r = compaction::compact(
-                    &compaction::context_of(&d),
+                    &penelope_daemon::compaction::context_of(&d),
                     &self.session,
                     compaction::Trigger::Manual,
                     None,

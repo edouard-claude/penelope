@@ -75,7 +75,7 @@ impl TelegramGateway {
         } else {
             args
         };
-        let server = crate::agent::server_of(&a.subject).unwrap_or_else(|| "natif".into());
+        let server = penelope_agent::server_of(&a.subject).unwrap_or_else(|| "natif".into());
         let double = a.payload["double"].as_bool().unwrap_or(false);
         let card = approval_card(a);
         let mut vars = BTreeMap::new();
@@ -98,7 +98,7 @@ impl TelegramGateway {
         };
         // Réseau demandé par une commande (#106) : quatre mots ; le bouton « Toujours » dit
         // sur quoi il porte (#116).
-        if crate::executor::wants_network(&a.subject, &a.payload["arguments"]) {
+        if penelope_executor::executor::wants_network(&a.subject, &a.payload["arguments"]) {
             if !alerte.is_empty() {
                 alerte.push('\n');
             }
@@ -436,7 +436,7 @@ impl TelegramGateway {
                 )
                 .await;
         };
-        let start = match crate::mcp_auth::start(s, &cfg, None).await {
+        let start = match penelope_mcp_host::auth::start(s, &cfg, None).await {
             Ok(st) => st,
             Err(e) => {
                 return self
@@ -449,7 +449,7 @@ impl TelegramGateway {
                     .await;
             }
         };
-        let ttl = crate::mcp_auth::REQUEST_TTL_MS;
+        let ttl = penelope_mcp_host::auth::REQUEST_TTL_MS;
         let mut tokens = BTreeMap::new();
         for action in [k::OAUTH_PASTED, k::OAUTH_RETRY] {
             let t = self

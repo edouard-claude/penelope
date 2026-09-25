@@ -9,8 +9,9 @@
 //! compactée ; la question finale n'a plus le passage d'origine sous les yeux, seulement
 //! le résumé et l'outillage d'historique.
 
-use penelope_daemon::bus::Origin;
-use penelope_daemon::compaction::{Trigger, compact, context_of};
+use penelope_app::bus::Origin;
+use penelope_conversation::compaction::{Trigger, compact};
+use penelope_daemon::compaction::context_of;
 use penelope_evals::live;
 use penelope_kernel::clock::{SharedClock, SystemClock};
 use std::sync::Arc;

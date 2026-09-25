@@ -20,9 +20,9 @@
 //!   figer ici ferait s'effondrer la déduplication.
 //!
 //! Le prompt contient le profil, la mémoire rappelée et les notes de session : c'est de
-//! la donnée personnelle. Purge et rétention sont livrées dans le même lot ([`crate::purge`]).
+//! la donnée personnelle. Purge et rétention sont livrées dans le même lot ([`penelope_ops::purge`]).
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_context::tiers::TileMap;
 use penelope_store::rusqlite::{OptionalExtension, params};
 
@@ -37,7 +37,7 @@ pub struct Snapshot {
     pub uses: i64,
 }
 
-pub use penelope_app::conversation::PromptPrefix;
+use penelope_app::conversation::PromptPrefix;
 
 /// Enregistre le prompt qui vient d'être envoyé, sous l'empreinte déjà calculée.
 ///
@@ -131,7 +131,7 @@ pub async fn prefix_cause(s: &Services, before: Option<&str>, after: &str) -> St
 pub struct StoredSnapshots(pub std::sync::Arc<Services>);
 
 #[async_trait::async_trait]
-impl crate::agent::PromptSnapshots for StoredSnapshots {
+impl penelope_agent::PromptSnapshots for StoredSnapshots {
     async fn record(&self, hash: &str, prefix: &PromptPrefix) -> anyhow::Result<bool> {
         record(&self.0, hash, prefix).await
     }
@@ -256,8 +256,8 @@ mod tests {
     /// Deux tours d'une session sans rechargement : un seul instantané, deux usages.
     #[tokio::test]
     async fn two_turns_without_a_reload_share_one_snapshot() {
-        use crate::bus::Origin;
         use crate::runtime::Daemon;
+        use penelope_app::bus::Origin;
         use penelope_llm::mock::MockProvider;
 
         let dir = tempfile::tempdir().unwrap();

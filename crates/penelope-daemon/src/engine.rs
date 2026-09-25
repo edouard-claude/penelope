@@ -4,19 +4,23 @@
 //! classifieur à la première demande), prompt assemblé, boucle d'agent sur le
 //! transcript persistant, événements publiés sur le bus.
 
-use crate::agent::{AgentLoop, TurnOutcome, TurnSink, TurnSpec};
-use crate::bus::Origin;
-use crate::conversation::{SessionConversation, TurnInbox};
-use crate::executor::{NativeToolExecutor, ToolEnv, chat_tool_defs, default_workspaces};
-use crate::helpers::{last_model_key, pin_key};
 use crate::runtime::Daemon;
+use penelope_agent::{AgentLoop, TurnOutcome, TurnSink, TurnSpec};
+use penelope_app::bus::{BusSink, Origin};
+use penelope_app::codex_scope;
+use penelope_app::helpers::{last_model_key, pin_key};
 use penelope_context::journal::{Provenance, UserSource};
+use penelope_conversation::{SessionConversation, TurnInbox, compaction};
+use penelope_executor::executor::{NativeToolExecutor, ToolEnv};
+use penelope_executor::executor::{chat_tool_defs, default_workspaces};
+use penelope_executor::tools_on_demand;
 use penelope_kernel::ids::TurnId;
 use penelope_kernel::session::SessionKind;
 use penelope_kernel::turn::{Turn, TurnKind};
 use penelope_llm::router::{CLASSIFIER_PROMPT, Classification, RouteReason};
 use penelope_llm::types::{ChatMessage, ChatRequest};
 use penelope_llm::{CancelToken, RouteInput, Router, StickyModel, collect_stream};
+use penelope_vault::{embeddings, review, usage_feedback};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -35,20 +39,20 @@ fn boundary_label(b: &str) -> &'static str {
 }
 
 #[async_trait::async_trait]
-impl crate::selfknow::Admin for Daemon {
+impl penelope_executor::selfknow::Admin for Daemon {
     fn uptime_s(&self) -> u64 {
         self.handle.uptime_s(self.services.clock.now_ms())
     }
 
     async fn set_config(&self, path: &str, value: Value) -> Result<u64, String> {
-        let g = crate::helpers::set_config_path(&self.services, path, value)
+        let g = penelope_app::helpers::set_config_path(&self.services, path, value)
             .map_err(|e| e.to_string())?;
         self.invalidate_providers().await;
         Ok(g)
     }
 
     async fn backup_status(&self) -> Result<Value, String> {
-        Ok(crate::backup::status(&self.services).await)
+        Ok(penelope_ops::backup::status(&self.services).await)
     }
 
     fn rss_mb(&self) -> Option<f64> {
@@ -64,7 +68,7 @@ impl crate::selfknow::Admin for Daemon {
         session_id: &str,
         model_id: Option<&str>,
     ) -> anyhow::Result<Value> {
-        crate::compaction::context_view(&self.services, session_id, model_id).await
+        compaction::context_view(&self.services, session_id, model_id).await
     }
 
     async fn send_voice(
@@ -74,11 +78,11 @@ impl crate::selfknow::Admin for Daemon {
         args: &Value,
     ) -> Result<Value, String> {
         let (s, p) = (&self.services, self.providers.as_ref());
-        crate::voice::tool(s, p, self.hooks.messenger(), session_id, origin, args).await
+        penelope_executor::voice::tool(s, p, self.hooks.messenger(), session_id, origin, args).await
     }
 
     async fn memory_search(&self) -> Value {
-        crate::embeddings::search_mode(&self.embedder())
+        embeddings::search_mode(&self.embedder())
             .await
             .unwrap_or_else(|e| json!({"error": e.to_string()}))
     }
@@ -95,9 +99,6 @@ impl crate::selfknow::Admin for Daemon {
         })
     }
 }
-
-// Descendu dans `penelope-app` avec le bus (T24), réexporté jusqu'à T30.
-pub use crate::bus::BusSink;
 
 impl Daemon {
     /// Met un message en file pour une session. `dedup` rend l'ajout idempotent.
@@ -119,7 +120,7 @@ impl Daemon {
     }
 
     /// Met en file un message accompagné de photos (chemins enregistrés par
-    /// [`crate::media::save_photo`]).
+    /// [`penelope_app::media::save_photo`]).
     pub async fn enqueue_message_with_images(
         &self,
         session_id: &str,
@@ -255,7 +256,7 @@ impl Daemon {
             origin: origin.clone(),
         };
         // Un tour tombé avant sa boucle est borné ici : chaque sortie a son `turn.finished`.
-        let meta = crate::agent::TurnMeta::of(turn);
+        let meta = penelope_agent::TurnMeta::of(turn);
         let result = self
             .execute_turn(turn, &origin, active.cancel.clone(), &sink, &meta)
             .await;
@@ -272,7 +273,7 @@ impl Daemon {
         self.bus.end(&turn.session_id, turn.id.as_str());
         self.handle.record_turn();
         // Un tour a pu écrire en mémoire ou créer une intention : vecteurs manquants.
-        crate::embeddings::spawn_backfill(self.embedder());
+        embeddings::spawn_backfill(self.embedder());
         // Retour d'usage (#105) : un souvenir servi n'est utile que si la réponse le
         // reprend ; un tour qui attend une approbation garde sa liste pour sa reprise.
         match &outcome {
@@ -282,10 +283,10 @@ impl Daemon {
                     .get("text")
                     .and_then(|t| t.as_str())
                     .unwrap_or_default();
-                crate::usage_feedback::judge(&self.services, &turn.session_id, said, answer).await;
+                usage_feedback::judge(&self.services, &turn.session_id, said, answer).await;
             }
             TurnOutcome::AwaitingApproval { .. } => {}
-            _ => crate::usage_feedback::forget(&self.services, &turn.session_id).await,
+            _ => usage_feedback::forget(&self.services, &turn.session_id).await,
         }
         // Apprentissage continu (§6.6) : revue de fond des échanges qui le méritent.
         if let (TurnKind::Message, TurnOutcome::Answered { text: answer, .. }) =
@@ -297,15 +298,15 @@ impl Daemon {
                 .and_then(|t| t.as_str())
                 .unwrap_or_default();
             // Un accord court (« ok », « go ») relit la proposition qu'il accepte (#108).
-            let previous = if crate::review::is_short_agreement(said) {
-                crate::review::previous_answer(&self.services, &turn.session_id).await
+            let previous = if review::is_short_agreement(said) {
+                review::previous_answer(&self.services, &turn.session_id).await
             } else {
                 None
             };
             if self.services.config.config().memory.review_max_candidates > 0
-                && let Some(matter) = crate::review::review_matter(said, previous.as_deref())
+                && let Some(matter) = review::review_matter(said, previous.as_deref())
             {
-                crate::review::spawn(
+                review::spawn(
                     self.services.clone(),
                     self.providers.clone(),
                     turn.session_id.clone(),
@@ -319,9 +320,9 @@ impl Daemon {
             if self.services.config.config().context.auto_title
                 && !said.trim().is_empty()
                 && let Ok(Some(sess)) = self.services.sessions.get(&turn.session_id).await
-                && crate::titles::wants_title(&sess)
+                && penelope_conversation::titles::wants_title(&sess)
             {
-                crate::titles::spawn(
+                penelope_conversation::titles::spawn(
                     self.services.clone(),
                     self.providers.clone(),
                     self.hooks.delivery(),
@@ -332,7 +333,7 @@ impl Daemon {
             }
         }
         // Frontière de tour : résumé prêt publié, compaction de fond lancée si besoin.
-        crate::compaction::after_turn(&crate::compaction::context_of(self), &turn.session_id).await;
+        compaction::after_turn(&crate::compaction::context_of(self), &turn.session_id).await;
         outcome
     }
 
@@ -343,7 +344,7 @@ impl Daemon {
         origin: &Origin,
         cancel: CancelToken,
         sink: &dyn TurnSink,
-        meta: &crate::agent::TurnMeta,
+        meta: &penelope_agent::TurnMeta,
     ) -> anyhow::Result<TurnOutcome> {
         let s = self.services.clone();
         let cfg = s.config.config();
@@ -377,7 +378,7 @@ impl Daemon {
                 .is_none()
         {
             let (s, p) = (self.services.clone(), self.providers.clone());
-            episode = crate::episodes::before_message(s, p, &session, &text).await?;
+            episode = penelope_vault::episodes::before_message(s, p, &session, &text).await?;
         }
 
         // 1. Le message utilisateur, écrit une seule fois même si le tour est rejoué. Avec
@@ -459,7 +460,7 @@ impl Daemon {
             self.select_model(&session, &classified, &origin_turn),
             async {
                 if want_vector {
-                    crate::embeddings::query_vector(&self.embedder(), &text).await
+                    embeddings::query_vector(&self.embedder(), &text).await
                 } else {
                     None
                 }
@@ -494,7 +495,7 @@ impl Daemon {
 
         // 3. Provider. L'abonnement ChatGPT ne sert que les tours du propriétaire : une
         // planification ou un travail interne se replie ici, sans bruit (#142).
-        let model_id = crate::codex_scope::for_origin(&self.services, &model_id, origin).await;
+        let model_id = codex_scope::for_origin(&self.services, &model_id, origin).await;
         let provider = match self.provider_for(&model_id).await {
             Ok(p) => p,
             Err(error) => return Ok(TurnOutcome::Failed { error }),
@@ -506,14 +507,14 @@ impl Daemon {
             None => Vec::new(),
         };
         // Reprise d'une session froide au-delà du seuil : résumée avant l'appel (issue #40).
-        crate::compaction::before_turn(
+        compaction::before_turn(
             &crate::compaction::context_of(self),
             &turn.session_id,
             &model_id,
             Some(&origin_turn),
         )
         .await;
-        let (mut tiers, recalled) = crate::conversation::build_turn_prompt(
+        let (mut tiers, recalled) = penelope_conversation::build_turn_prompt(
             &s,
             &text,
             &mcp_lines,
@@ -522,7 +523,7 @@ impl Daemon {
             vector.clone(),
         )
         .await;
-        crate::usage_feedback::served(
+        usage_feedback::served(
             &s,
             &turn.session_id,
             session.kind == SessionKind::Chat,
@@ -540,16 +541,14 @@ impl Daemon {
         crate::cache_audit::stable_prefix(self, &turn.session_id, &mut tiers).await?;
         // Un résumé prêt depuis le tour précédent (ou avant un redémarrage) est publié
         // avant de construire la projection.
-        if let Err(e) = crate::compaction::publish_pending(
-            &crate::compaction::context_of(self),
-            &turn.session_id,
-        )
-        .await
+        if let Err(e) =
+            compaction::publish_pending(&crate::compaction::context_of(self), &turn.session_id)
+                .await
         {
             tracing::warn!(session = %turn.session_id, error = %e, "résumé en attente non publié");
         }
         let conv = SessionConversation::new(s.clone(), &turn.session_id, &model_id, tiers, episode)
-            .with_compactor(Arc::new(crate::compaction::OverflowCompactor {
+            .with_compactor(Arc::new(compaction::OverflowCompactor {
                 context: crate::compaction::context_of(self),
                 turn_id: Some(origin_turn.clone()),
             }));
@@ -564,13 +563,13 @@ impl Daemon {
                 origin: origin.clone(),
                 workspaces: default_workspaces(&s),
                 in_workflow: false,
-                turn_model: Some(crate::selfknow::TurnModel {
+                turn_model: Some(penelope_executor::selfknow::TurnModel {
                     alias: alias.clone(),
                     model_id: model_id.clone(),
                 }),
             },
         );
-        exec.admin = Some(self.clone() as Arc<dyn crate::selfknow::Admin>);
+        exec.admin = Some(self.clone() as Arc<dyn penelope_executor::selfknow::Admin>);
         exec.messenger = self.hooks.messenger();
         exec.mcp = self.hooks.mcp();
         exec.orchestrator = self.hooks.orchestrator();
@@ -588,8 +587,7 @@ impl Daemon {
                 .collect(),
             tools: {
                 // Noyau + outils à la demande découverts par la session (#104).
-                let discovered =
-                    crate::tools_on_demand::exposed_for_turn(&s, &turn.session_id).await;
+                let discovered = tools_on_demand::exposed_for_turn(&s, &turn.session_id).await;
                 let mut tools = chat_tool_defs(&discovered);
                 if let Some(m) = self.hooks.mcp() {
                     tools.extend(m.eager_tools().await);
@@ -606,7 +604,7 @@ impl Daemon {
             .await;
         // Estimation locale ou prompt réellement facturé : l'un ou l'autre au-delà du seuil
         // demande la compaction de fond (issue #40).
-        crate::compaction::after_answer(
+        compaction::after_answer(
             &crate::compaction::context_of(self),
             &turn.session_id,
             &model_id,
@@ -690,7 +688,7 @@ impl Daemon {
                  openrouter:openai/whisper-large-v3`"
             ));
         }
-        let model = crate::codex_scope::background(&self.services, &model, "transcription").await;
+        let model = codex_scope::background(&self.services, &model, "transcription").await;
         let provider = self.provider_for(&model).await?;
         let language = Some(cfg.owner.language.clone()).filter(|l| !l.is_empty());
         let t = tokio::time::timeout(
@@ -728,7 +726,7 @@ impl Daemon {
         let mut urls = Vec::new();
         let mut unreadable = 0;
         for p in images {
-            match crate::media::data_url(p) {
+            match penelope_app::media::data_url(p) {
                 Ok(u) => urls.push(u),
                 Err(e) => {
                     tracing::warn!(error = %e, "photo illisible");
@@ -806,8 +804,8 @@ impl Daemon {
             format!("Légende du propriétaire : {}", caption.trim())
         };
         let (s, p) = (&self.services, self.providers.as_ref());
-        let task = crate::vision::Task::Describe;
-        crate::vision::ask(s, p, task, urls, &request, None, session_id, turn_id)
+        let task = penelope_executor::vision::Task::Describe;
+        penelope_executor::vision::ask(s, p, task, urls, &request, None, session_id, turn_id)
             .await
             .map(|a| a.text)
     }
@@ -915,7 +913,7 @@ impl Daemon {
         let Some(previous) = previous else {
             return Some("cache");
         };
-        if s.clock.now_ms() - previous.ts_ms >= crate::cache_audit::CACHE_TTL_MS {
+        if s.clock.now_ms() - previous.ts_ms >= penelope_llm::cache::CACHE_TTL_MS {
             return Some("cache");
         }
         let since = chrono::DateTime::from_timestamp_millis(previous.ts_ms)
@@ -951,7 +949,7 @@ impl Daemon {
 
     /// Alias épinglé sur une session, s'il existe encore dans la configuration.
     pub async fn pinned_model(&self, session_id: &str) -> Option<StickyModel> {
-        crate::helpers::pinned_model(&self.services, session_id).await
+        penelope_app::helpers::pinned_model(&self.services, session_id).await
     }
 
     /// Épingle un alias sur une session, ou revient à l'automatique (`None`).
@@ -1019,7 +1017,7 @@ impl Daemon {
         let cfg = s.config.config();
         let alias = cfg.role_alias("classifier");
         let model_id = cfg.alias_model(&alias)?.to_string();
-        let model_id = crate::codex_scope::background(s, &model_id, "classifieur").await;
+        let model_id = codex_scope::background(s, &model_id, "classifieur").await;
         let provider = self.provider_for(&model_id).await.ok()?;
         let info = s
             .catalog

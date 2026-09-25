@@ -11,8 +11,8 @@
 //!    └── socket RPC ................. CLI, jusqu'au signal d'arrêt
 //! ```
 
-use crate::bus::Origin;
 use crate::runtime::Daemon;
+use penelope_app::bus::Origin;
 use penelope_app::gateway::Gateway;
 use penelope_workflow::RunState;
 use std::path::{Path, PathBuf};
@@ -128,9 +128,12 @@ impl Daemon {
         // Profils Seatbelt laissés par les versions qui les écrivaient dans le dossier
         // temporaire (issue #90) : ils passent désormais en argument.
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join("penelope-sandbox"));
-        crate::budget_alert::AlertWatcher::install(&self.services, self.hooks.messenger.clone());
+        penelope_conversation::budget_alert::AlertWatcher::install(
+            &self.services,
+            self.hooks.messenger.clone(),
+        );
         // Skills livrées et de l'utilisateur, disponibles dès le premier tour.
-        if let Err(e) = crate::runtime::reload_skills(&self.services).await {
+        if let Err(e) = penelope_app::services::reload_skills(&self.services).await {
             tracing::warn!(error = %e, "chargement des skills");
         }
         // Vault d'une version antérieure : mis au format du wiki une fois (issue #29).
@@ -142,8 +145,8 @@ impl Daemon {
             .flatten()
             .is_none()
         {
-            let vault = crate::helpers::vault_dir(&self.services);
-            match crate::vault_ops::migrate_wiki(&self.services, &vault).await {
+            let vault = penelope_app::helpers::vault_dir(&self.services);
+            match penelope_vault::vault_ops::migrate_wiki(&self.services, &vault).await {
                 Ok(m) => {
                     tracing::info!(?m, "vault mis au format du wiki");
                     let _ = self.services.kv_set("wiki.migrated", "1").await;
@@ -152,7 +155,7 @@ impl Daemon {
             }
         }
         // Historique du vault : dépôt créé si l'autocommit est actif (issue #27).
-        match crate::vault_git::ensure_repo(&self.services).await {
+        match penelope_vault::vault_git::ensure_repo(&self.services).await {
             Ok(_) => {}
             Err(e) => tracing::warn!(error = %e, "initialisation git du vault"),
         }
@@ -176,7 +179,7 @@ impl Daemon {
         // d'une relance, au lieu d'arrêter la boucle jusqu'au prochain démarrage (#84).
         let supervised = |name: &str, f: fn(Arc<Daemon>) -> _| {
             let d = self.clone();
-            crate::tasks::spawn_supervised(&self.supervision(), name, move || f(d.clone()))
+            penelope_app::tasks::spawn_supervised(&self.supervision(), name, move || f(d.clone()))
         };
         let mut tasks = vec![
             tokio::spawn(crate::runner::run_pool(self.clone())),
@@ -185,10 +188,12 @@ impl Daemon {
             supervised("machine", |d| Box::pin(machine_loop(d)) as BoxLoop),
             supervised("scheduler", |d| {
                 let ports = d.hooks.scheduler();
-                Box::pin(crate::scheduler::scheduler_loop(d, ports)) as BoxLoop
+                let cx = crate::workflow::context_of(&d);
+                Box::pin(penelope_orchestrator::scheduler::scheduler_loop(cx, ports)) as BoxLoop
             }),
             supervised("workflows", |d| {
-                Box::pin(crate::workflow::driver_loop(d)) as BoxLoop
+                let cx = crate::workflow::context_of(&d);
+                Box::pin(penelope_orchestrator::workflow::driver_loop(cx)) as BoxLoop
             }),
             // Résultats des jobs d'outils rendus à leur session (issue #204).
             supervised("tool_jobs", |d| {
@@ -196,18 +201,18 @@ impl Daemon {
             }),
             supervised("codex.refresh", |d| {
                 let (s, messenger) = (d.services.clone(), d.hooks.messenger.clone());
-                Box::pin(crate::codex_auth::refresh_loop(s, messenger)) as BoxLoop
+                Box::pin(penelope_ops::codex_auth::refresh_loop(s, messenger)) as BoxLoop
             }),
             supervised("mcp.oauth_callback", |d| {
-                let ctx = crate::mcp_auth::AuthContext {
+                let ctx = penelope_mcp_host::auth::AuthContext {
                     services: d.services.clone(),
                     messenger: d.hooks.messenger.clone(),
                     mcp_admin: d.hooks.mcp_supervisor.clone(),
                     supervision: d.supervision(),
                 };
-                Box::pin(crate::mcp_auth::callback_server(ctx)) as BoxLoop
+                Box::pin(penelope_mcp_host::auth::callback_server(ctx)) as BoxLoop
             }),
-            tokio::spawn(crate::upgrade::confirm_when_healthy(
+            tokio::spawn(penelope_ops::upgrade::confirm_when_healthy(
                 self.services.clone(),
                 self.handle.clone(),
                 self.hooks.messenger.clone(),
@@ -247,7 +252,7 @@ impl Daemon {
         tasks.push(mcp.boot());
         {
             let mcp = mcp.clone();
-            tasks.push(crate::tasks::spawn_supervised(
+            tasks.push(penelope_app::tasks::spawn_supervised(
                 &self.supervision(),
                 "mcp.maintenance",
                 move || mcp.clone().maintenance_loop(),
@@ -365,7 +370,7 @@ async fn catalog_loop(d: Arc<Daemon>) {
 /// qu'un modèle qui ne sait plus rien de sa machine.
 async fn machine_loop(d: Arc<Daemon>) {
     while !d.handle.is_shutting_down() {
-        match crate::machine::refresh(&d.services).await {
+        match penelope_app::machine::refresh(&d.services).await {
             Ok(inv) => tracing::info!(
                 present = inv.present.len(),
                 missing = inv.missing.len(),
@@ -388,7 +393,7 @@ async fn maintenance_loop(d: Arc<Daemon>) {
             tracing::warn!(error = %e, "maintenance");
         }
         // Outils MCP inscrits, vault réindexé : vecteurs manquants.
-        crate::embeddings::spawn_backfill(d.embedder());
+        penelope_vault::embeddings::spawn_backfill(d.embedder());
         // Contenu du vault hors index : signalé à chaque changement, toutes les 30 min.
         let now = d.services.clock.now_ms();
         let last = d
@@ -404,11 +409,11 @@ async fn maintenance_loop(d: Arc<Daemon>) {
                 .services
                 .kv_set("vault.gaps.checked", &now.to_string())
                 .await;
-            if let Err(e) = crate::vault_inventory::report_gaps(&d.services).await {
+            if let Err(e) = penelope_vault::vault_inventory::report_gaps(&d.services).await {
                 tracing::warn!(error = %e, "inventaire du vault");
             }
         }
-        crate::vault_git::autocommit_tick(&d.services).await;
+        penelope_vault::vault_git::autocommit_tick(&d.services).await;
         sleep_or_shutdown(&d, Duration::from_secs(60)).await;
     }
 }
@@ -416,7 +421,7 @@ async fn maintenance_loop(d: Arc<Daemon>) {
 /// Empreinte des dossiers de skills : chemins et contenus (issue #63). Le contenu, pas la
 /// date de modification : une réécriture à l'identique ne relance rien (#118). Au-delà
 /// d'un Mio, un fichier (image, archive) compte par sa taille et sa date.
-pub(crate) fn skills_fingerprint(s: &crate::runtime::Services) -> String {
+pub(crate) fn skills_fingerprint(s: &penelope_app::services::Services) -> String {
     let mut parts: Vec<String> = Vec::new();
     for root in [s.platform.dirs.skills(), s.platform.dirs.bundled_skills()] {
         let mut stack = vec![root];
@@ -458,7 +463,7 @@ pub(crate) async fn skills_tick(d: &Daemon) -> anyhow::Result<bool> {
     if s.kv_get("skills.fingerprint").await?.as_deref() == Some(skills_fingerprint(s).as_str()) {
         return Ok(false);
     }
-    match crate::runtime::reload_skills(s).await {
+    match penelope_app::services::reload_skills(s).await {
         Ok(n) => {
             tracing::info!(skills = n, "skills relues après changement du dossier");
             s.kv_set("skills.fingerprint", &skills_fingerprint(s))
@@ -484,7 +489,7 @@ async fn approval_origin(d: &Daemon, a: &penelope_hitl::ApprovalRequest) -> Orig
             message_id: None,
         };
     }
-    crate::helpers::owner_origin_of(&d.services)
+    penelope_app::helpers::owner_origin_of(&d.services)
 }
 
 /// Un passage de maintenance. Une approbation échue relance son tour, qui dira au
@@ -493,7 +498,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     let s = &d.services;
     for a in s.approvals.expire_due().await? {
         // Une question de contradiction sans réponse est rangée, pas reposée (issue #145).
-        crate::dream::file_unanswered_clash(s, &a).await;
+        penelope_dream::dream::file_unanswered_clash(s, &a).await;
         let Some(sid) = &a.session_id else { continue };
         if a.payload.get("call_id").is_none() {
             continue;
@@ -535,17 +540,17 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     skills_tick(d).await?;
 
     // Sauvegarde complète à l'heure dite (issue #42).
-    if let Err(e) = crate::backup::nightly_tick(&d.services, d.hooks.messenger()).await {
+    if let Err(e) = penelope_ops::backup::nightly_tick(&d.services, d.hooks.messenger()).await {
         tracing::warn!(error = %e, "sauvegarde nocturne");
     }
 
     // Messages déjà en file, rédigés avec les règles du jour : une seule fois (#148).
-    if let Err(e) = crate::purge::reredact_outbox(&d.services).await {
+    if let Err(e) = penelope_ops::purge::reredact_outbox(&d.services).await {
         tracing::warn!(error = %e, "relecture du rédacteur sur la file Telegram");
     }
 
     // Rétention des traces : une passe par jour (issue #46).
-    if let Err(e) = crate::purge::retention_tick(&d.services).await {
+    if let Err(e) = penelope_ops::purge::retention_tick(&d.services).await {
         tracing::warn!(error = %e, "rétention");
     }
 
@@ -554,7 +559,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     if let Some(sup) = d.hooks.mcp_supervisor() {
         let notices = sup.take_notices();
         if let Some(m) = d.hooks.messenger() {
-            let origin = crate::helpers::owner_origin_of(&d.services);
+            let origin = penelope_app::helpers::owner_origin_of(&d.services);
             for n in notices {
                 let _ = m.send_text(&origin, &n).await;
             }
@@ -582,12 +587,12 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
             let Some(cfg) = sup.config_of(&st.name).await else {
                 continue;
             };
-            match crate::mcp_auth::start(&d.services, &cfg, None).await {
+            match penelope_mcp_host::auth::start(&d.services, &cfg, None).await {
                 Ok(start) => {
                     if let Some(m) = d.hooks.messenger() {
-                        let origin = crate::helpers::owner_origin_of(&d.services);
+                        let origin = penelope_app::helpers::owner_origin_of(&d.services);
                         let _ = m
-                            .send_text(&origin, &crate::mcp_auth::prompt_text(&start))
+                            .send_text(&origin, &penelope_mcp_host::auth::prompt_text(&start))
                             .await;
                     }
                 }
@@ -659,7 +664,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::RecordingMessenger;
+    use penelope_app::testing::RecordingMessenger;
     use penelope_kernel::clock::TestClock;
 
     /// #177 : les liens symboliques ne gonflent pas le relevé et ne font pas
@@ -708,14 +713,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let clock = TestClock::default();
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), Arc::new(clock.clone()))
-                .await
-                .unwrap(),
+            penelope_app::services::Services::for_tests(
+                dir.path().to_path_buf(),
+                Arc::new(clock.clone()),
+            )
+            .await
+            .unwrap(),
         );
         let d = Arc::new(Daemon::from_services(s.clone()));
         let rec = RecordingMessenger::new();
         *d.hooks.messenger.write().unwrap() =
-            Some(rec.clone() as Arc<dyn crate::executor::Messenger>);
+            Some(rec.clone() as Arc<dyn penelope_executor::executor::Messenger>);
         let ask = |subject: &'static str| {
             let s = s.clone();
             async move {
@@ -785,12 +793,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let clock = Arc::new(TestClock::default());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock.clone())
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock.clone())
                 .await
                 .unwrap(),
         );
         let d = Arc::new(Daemon::from_services(s.clone()));
-        crate::runtime::reload_skills(&s).await.unwrap();
+        penelope_app::services::reload_skills(&s).await.unwrap();
         let before = s.skills.all().len();
         assert!(s.skills.get("revue-express").is_none());
 
@@ -828,7 +836,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let clock = Arc::new(TestClock::default());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock.clone())
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock.clone())
                 .await
                 .unwrap(),
         );
@@ -845,7 +853,7 @@ mod tests {
             skills_tick(&d).await.unwrap(),
             "premier passage : rechargement"
         );
-        let prefix = crate::conversation::build_tiers(&s, "bonjour", &[], None)
+        let prefix = penelope_conversation::build_tiers(&s, "bonjour", &[], None)
             .await
             .prefix_hash();
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -860,7 +868,7 @@ mod tests {
             .join("wiki-markdown")
             .join("SKILL.md");
         let modified = std::fs::metadata(&bundled).unwrap().modified().unwrap();
-        crate::runtime::reload_skills(&s).await.unwrap();
+        penelope_app::services::reload_skills(&s).await.unwrap();
         assert_eq!(
             std::fs::metadata(&bundled).unwrap().modified().unwrap(),
             modified,
@@ -874,7 +882,7 @@ mod tests {
         );
         assert!(!skills_tick(&d).await.unwrap());
         assert_eq!(
-            crate::conversation::build_tiers(&s, "bonjour", &[], None)
+            penelope_conversation::build_tiers(&s, "bonjour", &[], None)
                 .await
                 .prefix_hash(),
             prefix,
@@ -903,7 +911,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let clock = Arc::new(TestClock::default());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock.clone())
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock.clone())
                 .await
                 .unwrap(),
         );

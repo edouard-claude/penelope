@@ -50,10 +50,10 @@ impl Rpc {
         match method {
             method::SESSION_CLOSE => {
                 let query = required_str(p, "session")?;
-                let sess = crate::session_ops::resolve(s, &query)
+                let sess = penelope_ops::session_ops::resolve(s, &query)
                     .await
                     .map_err(anyhow::Error::msg)?;
-                crate::session_ops::close(
+                penelope_ops::session_ops::close(
                     &self.daemon.services,
                     self.daemon.providers.clone(),
                     &self.daemon.bus,
@@ -63,12 +63,12 @@ impl Rpc {
             }
             method::SESSION_PURGE => {
                 let query = required_str(p, "session")?;
-                let sess = crate::session_ops::resolve(s, &query)
+                let sess = penelope_ops::session_ops::resolve(s, &query)
                     .await
                     .map_err(anyhow::Error::msg)?;
                 let id = sess.id.to_string();
                 // Le tour en cours est arrêté et la file vidée avant d'effacer.
-                crate::session_ops::silence(
+                penelope_ops::session_ops::silence(
                     &self.daemon.services,
                     &self.daemon.bus,
                     &id,
@@ -79,19 +79,19 @@ impl Rpc {
                     .get("reason")
                     .and_then(|v| v.as_str())
                     .unwrap_or("demande du propriétaire");
-                crate::purge::session(&self.daemon.services, &id, reason).await
+                penelope_ops::purge::session(&self.daemon.services, &id, reason).await
             }
             method::SESSION_PURGE_PREVIEW => {
                 let query = required_str(p, "session")?;
-                let sess = crate::session_ops::resolve(s, &query)
+                let sess = penelope_ops::session_ops::resolve(s, &query)
                     .await
                     .map_err(anyhow::Error::msg)?;
-                crate::purge::preview(&self.daemon.services, sess.id.as_str()).await
+                penelope_ops::purge::preview(&self.daemon.services, sess.id.as_str()).await
             }
             method::SESSION_TITLE => {
                 let sid = self.session_param(p).await?;
                 let title = required_str(p, "title")?;
-                let title = crate::titles::clean(&title)
+                let title = penelope_conversation::titles::clean(&title)
                     .ok_or_else(|| anyhow::anyhow!("titre vide ou refusé"))?;
                 s.sessions.require(&sid).await?;
                 s.sessions.set_title(&sid, &title, false).await?;
@@ -117,21 +117,21 @@ impl Rpc {
             }
             method::SESSION_COMPACT => {
                 let sid = self.session_param(p).await?;
-                let report = crate::compaction::compact(
+                let report = penelope_conversation::compaction::compact(
                     &crate::compaction::context_of(&self.daemon),
                     &sid,
-                    crate::compaction::Trigger::Manual,
+                    penelope_conversation::compaction::Trigger::Manual,
                     None,
                 )
                 .await?;
                 let mut v = serde_json::to_value(&report)?;
-                v["text"] = json!(crate::compaction::report_text(&report));
+                v["text"] = json!(penelope_conversation::compaction::report_text(&report));
                 Ok(v)
             }
             method::SESSION_FORK => {
                 let sid = self.session_param(p).await?;
                 let title = p.get("title").and_then(|t| t.as_str()).map(String::from);
-                crate::session_ops::fork(&self.daemon.services, &sid, title).await
+                penelope_ops::session_ops::fork(&self.daemon.services, &sid, title).await
             }
             method::SESSION_REWIND => {
                 let sid = self.session_param(p).await?;
@@ -142,8 +142,13 @@ impl Rpc {
                             .or_else(|| v.as_str().and_then(|x| x.parse().ok()))
                     })
                     .unwrap_or(1) as usize;
-                crate::session_ops::rewind(&self.daemon.services, &self.daemon.bus, &sid, turns)
-                    .await
+                penelope_ops::session_ops::rewind(
+                    &self.daemon.services,
+                    &self.daemon.bus,
+                    &sid,
+                    turns,
+                )
+                .await
             }
             method::EXPORT => {
                 let what = p.get("what").and_then(|w| w.as_str()).unwrap_or("session");
@@ -151,7 +156,7 @@ impl Rpc {
                     ("session", None) => Some(self.session_param(p).await?),
                     (_, id) => id.map(String::from),
                 };
-                crate::session_ops::export(&self.daemon.services, what, id.as_deref()).await
+                penelope_ops::session_ops::export(&self.daemon.services, what, id.as_deref()).await
             }
             method::SESSION_EXPORT => {
                 let sid = required_str(p, "session")?;
@@ -160,7 +165,7 @@ impl Rpc {
             }
             method::SESSION_BUDGET => {
                 let query = required_str(p, "session")?;
-                let sess = crate::session_ops::resolve(s, &query)
+                let sess = penelope_ops::session_ops::resolve(s, &query)
                     .await
                     .map_err(anyhow::Error::msg)?;
                 let id = sess.id.to_string();
@@ -192,7 +197,8 @@ impl Rpc {
             }
             method::SESSION_MODE => {
                 let sid = self.session_param(p).await?;
-                use crate::approval_mode::{ApprovalMode, of_session, set};
+                use crate::approval_mode::{of_session, set};
+                use penelope_agent::ApprovalMode;
                 match p.get("mode").and_then(|m| m.as_str()).map(str::trim) {
                     None | Some("") => {}
                     Some("default" | "config") => set(s, &sid, None).await?,
@@ -211,13 +217,15 @@ impl Rpc {
                 match p.get("project").and_then(|m| m.as_str()).map(str::trim) {
                     None | Some("") => {}
                     Some("aucun" | "none" | "-") => {
-                        crate::session_project::set(s, &sid, None).await
+                        penelope_vault::session_project::set(s, &sid, None).await
                     }
-                    Some(name) => crate::session_project::set(s, &sid, Some(name)).await,
+                    Some(name) => penelope_vault::session_project::set(s, &sid, Some(name)).await,
                 }
-                let (project, how) = crate::session_project::of_session(s, &sid).await;
-                let known: Vec<String> =
-                    crate::session_project::known(s).await.into_iter().collect();
+                let (project, how) = penelope_vault::session_project::of_session(s, &sid).await;
+                let known: Vec<String> = penelope_vault::session_project::known(s)
+                    .await
+                    .into_iter()
+                    .collect();
                 Ok(json!({"session": sid, "project": project, "how": how, "known": known}))
             }
             other => Err(anyhow::anyhow!("méthode inconnue : {other}")),

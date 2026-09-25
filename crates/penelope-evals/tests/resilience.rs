@@ -3,7 +3,8 @@
 //! Chaque test simule un **vrai** redémarrage : les services sont détruits, puis
 //! reconstruits sur le même répertoire. Rien n'est gardé en mémoire d'une vie à l'autre.
 
-use penelope_daemon::{Daemon, Services};
+use penelope_app::services::Services;
+use penelope_daemon::Daemon;
 use penelope_kernel::clock::{SharedClock, TestClock};
 use penelope_kernel::effects::{EffectKind, EffectSpec, Planned, UnknownDecision};
 use penelope_kernel::session::SessionKind;

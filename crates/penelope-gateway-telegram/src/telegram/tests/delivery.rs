@@ -509,7 +509,7 @@ fn stop_promises_only_what_it_did() {
 /// rapport technique, et un clic arrive dans la session comme un message du propriétaire.
 #[tokio::test]
 async fn a_stopped_loop_answer_offers_choices_that_become_messages() {
-    use crate::bus::ChannelDelivery;
+    use penelope_app::bus::ChannelDelivery;
     let (_d, g, t, _p) = gateway().await;
     let d = &g.daemon;
     let chat = Origin::Telegram {

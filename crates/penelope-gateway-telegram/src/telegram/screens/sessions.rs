@@ -109,7 +109,8 @@ impl TelegramGateway {
                 Ok(sid) => {
                     let cfg = s.config.config();
                     let (_, limit, _) = s.budget.limits(&cfg.budget, Some(&sid), None).await?;
-                    let view = crate::compaction::context_view(s, &sid, None).await?;
+                    let view =
+                        penelope_conversation::compaction::context_view(s, &sid, None).await?;
                     format!(
                         "\n- Session : {:.2} $ sur {:.2} $\n- {}",
                         s.budget.spent_session(&sid).await?,
@@ -187,7 +188,7 @@ impl TelegramGateway {
         _args: &Value,
     ) -> anyhow::Result<Screen> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let screen: Screen = {
             let v = rpc.call(m::CONFIG_STATUS, json!({})).await?;
             let mut t = format!(
@@ -297,7 +298,7 @@ impl TelegramGateway {
         args: &Value,
     ) -> anyhow::Result<Screen> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let here = back_of(name, args);
         let screen: Screen = {
             let v = rpc.call(m::QUIET, json!({})).await?;

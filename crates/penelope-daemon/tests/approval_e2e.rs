@@ -10,9 +10,10 @@
 //! Les assertions portent sur le monde : fichiers du workspace, lignes de `effects`,
 //! demandes et règles en base, ce que le harnais envoie au modèle. Jamais sur sa prose.
 
-use penelope_daemon::agent::TurnOutcome;
-use penelope_daemon::bus::Origin;
-use penelope_daemon::runtime::{Daemon, Services};
+use penelope_agent::TurnOutcome;
+use penelope_app::bus::Origin;
+use penelope_app::services::Services;
+use penelope_daemon::Daemon;
 use penelope_hitl::{ApprovalKind, ApprovalState, Decision};
 use penelope_kernel::clock::{SharedClock, TestClock};
 use penelope_kernel::risk::PolicyWindow;

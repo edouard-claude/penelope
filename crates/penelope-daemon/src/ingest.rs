@@ -1,7 +1,4 @@
-//! Ingestion de documents, descendue dans `penelope-dream` (T26) : réexportée sous son
-//! ancien chemin jusqu'à T30. Les tests qui ont besoin d'un `Daemon` restent ici.
+//! Tests de l'ingestion de documents qui ont besoin d'un daemon : l'ingestion vit dans
+//! `penelope-dream` (T26).
 
-pub use penelope_dream::ingest::*;
-
-#[cfg(test)]
 mod tests;

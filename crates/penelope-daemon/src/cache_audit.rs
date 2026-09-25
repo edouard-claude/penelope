@@ -7,14 +7,12 @@
 //! `penelope_llm::cache`, la lecture du dernier appel dans le `BudgetLedger` du kernel
 //! (épopée #208, T27) ; ici, le contexte volatil et le préfixe stable.
 
-pub use crate::agent::{
-    CACHE_TTL_MS, Fingerprint, Observed, PreviousCall, STICKY_MS, miss_cause, sticky_upstream,
-};
+use penelope_llm::cache::{CACHE_TTL_MS, PreviousCall};
 use serde_json::json;
 
 /// Le dernier appel de conversation de la session (voir `BudgetLedger::previous_call`).
 pub async fn previous_call(
-    s: &crate::runtime::Services,
+    s: &penelope_app::services::Services,
     session_id: &str,
 ) -> anyhow::Result<Option<PreviousCall>> {
     Ok(s.budget.previous_call(session_id).await?)
@@ -30,7 +28,7 @@ pub fn context_block(volatile: &str) -> String {
 /// après approbation et tours suivants compris, au lieu de se déplacer à chaque tour et
 /// de réécrire l'historique.
 pub async fn freeze_volatile(
-    s: &crate::runtime::Services,
+    s: &penelope_app::services::Services,
     session_id: &str,
     tiers: &mut penelope_context::Tiers,
 ) -> anyhow::Result<()> {
@@ -59,7 +57,7 @@ pub async fn freeze_volatile(
 }
 
 // Descendue dans les helpers (T22) : les épisodes du vault l'effacent.
-pub use crate::helpers::prefix_key;
+use penelope_app::helpers::prefix_key;
 
 /// Préfixe stable (T0 à T2) : tant que le cache de la session est chaud, un préfixe
 /// modifié (nouvel instantané mémoire, skill ou serveur MCP) attend la prochaine pause ou
@@ -102,7 +100,7 @@ pub async fn stable_prefix(
 /// Le préfixe retenu entre au journal quand il change, en entier (`conv.system`,
 /// épopée #208, T6). Un échec ne coûte que l'événement : le tour continue.
 async fn journal_prefix(
-    s: &crate::runtime::Services,
+    s: &penelope_app::services::Services,
     session_id: &str,
     tiers: &penelope_context::Tiers,
 ) {
@@ -114,8 +112,9 @@ async fn journal_prefix(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::Origin;
-    use crate::runtime::{Daemon, Services};
+    use crate::runtime::Daemon;
+    use penelope_app::bus::Origin;
+    use penelope_app::services::Services;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::{MockProvider, Scripted};
     use penelope_llm::types::ToolCall;

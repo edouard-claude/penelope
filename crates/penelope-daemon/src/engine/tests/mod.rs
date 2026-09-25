@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::agent::Conversation;
+use penelope_agent::Conversation;
 
 use penelope_kernel::clock::{Clock, TestClock};
 
@@ -19,7 +19,7 @@ async fn daemon() -> (tempfile::TempDir, Arc<Daemon>, Arc<MockProvider>) {
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
     let s = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+        penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
             .await
             .unwrap(),
     );
@@ -92,18 +92,14 @@ async fn shell_turn(
     })
     .unwrap();
     // `{ws}` : le workspace de la session (#123).
-    let ws = crate::executor::default_workspaces(&d.services)[0].clone();
+    let ws = penelope_executor::executor::default_workspaces(&d.services)[0].clone();
     let command = command.replace("{ws}", &ws.to_string_lossy());
     let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
     d.pin_model(&sid, Some("main")).await.unwrap();
     if let Some(m) = mode {
-        crate::approval_mode::set(
-            &d.services,
-            &sid,
-            crate::approval_mode::ApprovalMode::parse(m),
-        )
-        .await
-        .unwrap();
+        crate::approval_mode::set(&d.services, &sid, penelope_agent::ApprovalMode::parse(m))
+            .await
+            .unwrap();
     }
     p.push(Scripted::ToolCalls(
         String::new(),

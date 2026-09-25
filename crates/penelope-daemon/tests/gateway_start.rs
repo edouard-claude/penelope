@@ -9,7 +9,8 @@
 //! ```
 
 use penelope_app::gateway::Gateway;
-use penelope_daemon::runtime::{Daemon, Services};
+use penelope_app::services::Services;
+use penelope_daemon::Daemon;
 use penelope_kernel::clock::SystemClock;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

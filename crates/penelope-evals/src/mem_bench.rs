@@ -14,7 +14,8 @@
 //! que le chemin complet (tri, mise à jour, journal, secrets, recherche) garde ce qu'il
 //! doit garder. Avec le vrai modèle, il mesure la qualité du tri lui-même.
 
-use penelope_daemon::{Daemon, Services};
+use penelope_app::services::Services;
+use penelope_daemon::Daemon;
 use penelope_memory::grid::{JOURNAL_SECTION, normalized};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -227,7 +228,7 @@ impl Thresholds {
 /// Prépare le vault et enregistre les candidats des échanges.
 pub async fn seed(d: &Arc<Daemon>, f: &Fixture) {
     let s = &d.services;
-    let vault = penelope_daemon::conversation::vault_dir(s);
+    let vault = penelope_conversation::vault_dir(s);
     std::fs::create_dir_all(&vault).expect("vault");
     for (rel, content) in &f.vault {
         let path = vault.join(rel);
@@ -258,7 +259,7 @@ pub async fn seed(d: &Arc<Daemon>, f: &Fixture) {
 /// deviennent des numéros, `{{candidat}}` reprend le texte soumis (secrets compris, en
 /// référence).
 pub async fn simulated_reply(s: &Services, f: &Fixture) -> String {
-    let order = penelope_daemon::dream::submission_order(s)
+    let order = penelope_dream::dream::submission_order(s)
         .await
         .expect("ordre des candidats");
     let resolve = |needle: &str| {
@@ -340,7 +341,7 @@ fn has(haystack: &str, needle: &str) -> bool {
 /// Mesure un jeu après la passe : `before` donne les entrées du vault initial.
 pub async fn score(d: &Arc<Daemon>, f: &Fixture, before: &BTreeMap<String, String>) -> Score {
     let s = &d.services;
-    let vault = penelope_daemon::conversation::vault_dir(s);
+    let vault = penelope_conversation::vault_dir(s);
     let lines = memory_lines(&vault);
     let (journal, durable): (Vec<&Line>, Vec<&Line>) = lines
         .iter()

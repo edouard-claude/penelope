@@ -1,7 +1,7 @@
 //! Méthodes d'exploitation : état, diagnostic, arrêt, jobs, audit, usage, sauvegarde.
 
 use super::*;
-use crate::helpers::round_usd;
+use penelope_app::helpers::round_usd;
 
 impl Rpc {
     /// État, diagnostic, arrêt, jobs, audit, usage et sauvegarde.
@@ -20,26 +20,28 @@ impl Rpc {
             })),
             method::DOCTOR => {
                 let mut checks = super::doctor::run(s, self.daemon.hooks.mcp_supervisor()).await;
-                checks.push(crate::doctor::embedding_check(&self.daemon.embedder()).await);
-                checks.push(crate::doctor::vault_index_check(s).await);
-                checks.extend(crate::doctor::coherence_checks(s).await);
-                checks.push(crate::doctor::logs_secret_check(s));
-                checks.push(crate::doctor::stored_secret_check(s).await);
-                checks.push(crate::vault_git::doctor_check(s));
-                checks.push(crate::doctor::binary_signature_check(s));
-                checks.push(crate::doctor::install_mode_check());
-                checks.push(crate::doctor::pending_upgrade_check(s));
-                checks.push(crate::doctor::schedules_check(s).await);
+                checks.push(penelope_ops::doctor::embedding_check(&self.daemon.embedder()).await);
+                checks.push(penelope_ops::doctor::vault_index_check(s).await);
+                checks.extend(penelope_ops::doctor::coherence_checks(s).await);
+                checks.push(penelope_ops::doctor::logs_secret_check(s));
+                checks.push(penelope_ops::doctor::stored_secret_check(s).await);
+                checks.push(penelope_vault::vault_git::doctor_check(s));
+                checks.push(penelope_ops::doctor::binary_signature_check(s));
+                checks.push(penelope_ops::doctor::install_mode_check());
+                checks.push(penelope_ops::doctor::pending_upgrade_check(s));
+                checks.push(penelope_ops::doctor::schedules_check(s).await);
                 checks.push(
-                    crate::voice::doctor_check(
+                    penelope_executor::voice::doctor_check(
                         &self.daemon.services,
                         self.daemon.providers.as_ref(),
                     )
                     .await,
                 );
-                checks.push(crate::backup::doctor_check(&self.daemon.services).await);
+                checks.push(penelope_ops::backup::doctor_check(&self.daemon.services).await);
                 // Boucles de fond relancées ou mortes (#84).
-                checks.push(crate::tasks::doctor_check(&self.daemon.supervision()));
+                checks.push(penelope_app::tasks::doctor_check(
+                    &self.daemon.supervision(),
+                ));
                 Ok(json!(checks))
             }
             method::METRICS => {
@@ -75,7 +77,7 @@ impl Rpc {
             }
             // Jobs d'outils (issue #204) : ce qui tourne hors des tours.
             method::JOBS => {
-                let jobs = crate::tool_jobs::store(s);
+                let jobs = penelope_executor::jobs::store(s);
                 let all = p.get("all").and_then(|v| v.as_bool()) == Some(true);
                 let now = s.clock.now_ms();
                 let rows = if all {
@@ -107,14 +109,16 @@ impl Rpc {
                 ))
             }
             method::UPGRADE => {
-                crate::upgrade::rpc(&self.daemon.services, &self.daemon.handle, p).await
+                penelope_ops::upgrade::rpc(&self.daemon.services, &self.daemon.handle, p).await
             }
             method::IMPORT_HERMES => {
                 let d = &self.daemon;
                 let (mcp, m) = (d.hooks.mcp_supervisor(), d.hooks.messenger());
-                crate::hermes::rpc(&d.services, mcp, m, p).await
+                penelope_ops::hermes::rpc(&d.services, mcp, m, p).await
             }
-            method::STORE_REBUILD => crate::session_ops::rebuild(&self.daemon.services).await,
+            method::STORE_REBUILD => {
+                penelope_ops::session_ops::rebuild(&self.daemon.services).await
+            }
             method::RESTORE => anyhow::bail!(
                 "une restauration remplace la base : elle se fait daemon arrêté, `penelope stop` \
                  puis `penelope restore <sauvegarde>`"
@@ -180,7 +184,7 @@ impl Rpc {
                 let full = push || p.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
                 if full {
                     let media = p.get("media").and_then(|v| v.as_bool());
-                    return crate::backup::run(&self.daemon.services, push, media).await;
+                    return penelope_ops::backup::run(&self.daemon.services, push, media).await;
                 }
                 let dest = s.platform.dirs.data().join("backups").join(format!(
                     "penelope-{}.db",

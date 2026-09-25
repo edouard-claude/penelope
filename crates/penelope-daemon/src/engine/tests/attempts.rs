@@ -3,8 +3,8 @@
 
 use super::recovery::setup;
 use super::*;
-use crate::agent::EMPTY_RETRY_PROMPT;
-use crate::runtime::Services;
+use penelope_agent::EMPTY_RETRY_PROMPT;
+use penelope_app::services::Services;
 use penelope_context::derive::{Sealed, derive, derive_until};
 
 /// Un daemon de test, sa session de chat et son fournisseur simulé.

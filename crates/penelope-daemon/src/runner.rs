@@ -3,9 +3,9 @@
 //! Le verrou de session de `TurnQueue` garantit une seule exécution par session ; le
 //! pool apporte la concurrence entre sessions.
 
-use crate::agent::TurnOutcome;
-use crate::bus::Origin;
 use crate::runtime::Daemon;
+use penelope_agent::TurnOutcome;
+use penelope_app::bus::Origin;
 use penelope_kernel::turn::Turn;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,7 +22,7 @@ pub async fn run_pool(daemon: Arc<Daemon>) {
         // `runners.count` runners (#84).
         let holder = format!("runner-{i}");
         let d = daemon.clone();
-        tasks.push(crate::tasks::spawn_supervised(
+        tasks.push(penelope_app::tasks::spawn_supervised(
             &daemon.supervision(),
             holder.clone(),
             move || runner_loop(d.clone(), holder.clone(), heartbeat),
@@ -182,7 +182,7 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     let beat = StopBeat(beat);
     // Une panique pendant le tour ne tue ni le runner ni le verrou de session : le tour
     // échoue, le propriétaire le sait, le bail est rendu (#84).
-    crate::tasks::install_panic_hook();
+    penelope_app::tasks::install_panic_hook();
     let outcome = {
         use futures::FutureExt;
         match std::panic::AssertUnwindSafe(daemon.run_turn(&turn))
@@ -191,8 +191,8 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
         {
             Ok(o) => o,
             Err(payload) => {
-                let msg = crate::tasks::panic_text(payload.as_ref());
-                crate::tasks::report_panic(&daemon.supervision(), "tour", &msg).await;
+                let msg = penelope_app::tasks::panic_text(payload.as_ref());
+                penelope_app::tasks::report_panic(&daemon.supervision(), "tour", &msg).await;
                 TurnOutcome::Failed {
                     error: format!(
                         "erreur interne pendant le tour ({msg}) : il est arrêté, rien d'autre \
@@ -239,7 +239,11 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     let scheduled = turn.kind == penelope_kernel::turn::TurnKind::Trigger;
     if scheduled && let Some(schedule) = turn.payload["schedule"].as_str() {
         let ports = daemon.hooks.scheduler();
-        crate::scheduler::trigger_outcome_of(daemon, &ports, schedule, &outcome, &turn).await;
+        let cx = crate::workflow::context_of(daemon);
+        penelope_orchestrator::scheduler::trigger_outcome_of(
+            &cx, &ports, schedule, &outcome, &turn,
+        )
+        .await;
     }
 
     // Tour planifié : la réponse finale est le livrable, livrée une fois ; si l'agent a
@@ -247,7 +251,7 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     // livrable a été évalué avant, sur ce qui est réellement parti.
     let repeated = scheduled
         && matches!(&outcome, TurnOutcome::Answered { text, .. }
-            if crate::scheduler::final_already_sent(daemon, &turn.session_id, text).await);
+            if penelope_orchestrator::scheduler::final_already_sent(&daemon.services, &turn.session_id, text).await);
     let burst_card_sent = matches!(outcome, TurnOutcome::Cancelled)
         && daemon
             .services
@@ -292,7 +296,7 @@ impl Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::Conversation;
+    use penelope_agent::Conversation;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::MockProvider;
 
@@ -301,7 +305,7 @@ mod tests {
     struct DeliveryChannel(std::sync::Mutex<Option<Origin>>);
 
     #[async_trait::async_trait]
-    impl crate::bus::ChannelDelivery for DeliveryChannel {
+    impl penelope_app::bus::ChannelDelivery for DeliveryChannel {
         async fn deliver(
             &self,
             _turn_id: &str,
@@ -314,9 +318,9 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl crate::bus::ChannelDelivery for BurstChannel {
-        fn burst_limits(&self, _: &Origin) -> Option<crate::bus::BurstLimits> {
-            Some(crate::bus::BurstLimits::new(5, 20_000))
+    impl penelope_app::bus::ChannelDelivery for BurstChannel {
+        fn burst_limits(&self, _: &Origin) -> Option<penelope_app::bus::BurstLimits> {
+            Some(penelope_app::bus::BurstLimits::new(5, 20_000))
         }
 
         async fn deliver(
@@ -343,7 +347,7 @@ mod tests {
     async fn six_pending_telegram_messages_show_a_card_without_calling_the_model() {
         let dir = tempfile::tempdir().unwrap();
         let services = Arc::new(
-            crate::runtime::Services::for_tests(
+            penelope_app::services::Services::for_tests(
                 dir.path().to_path_buf(),
                 Arc::new(TestClock::default()),
             )
@@ -401,7 +405,7 @@ mod tests {
     async fn messages_arriving_during_tools_hit_the_burst_limit_before_another_model_call() {
         let dir = tempfile::tempdir().unwrap();
         let services = Arc::new(
-            crate::runtime::Services::for_tests(
+            penelope_app::services::Services::for_tests(
                 dir.path().to_path_buf(),
                 Arc::new(TestClock::default()),
             )
@@ -421,16 +425,16 @@ mod tests {
             .await
             .unwrap();
         let turn = services.turns.claim("test").await.unwrap().unwrap();
-        let tiers = crate::conversation::build_tiers(&services, "début", &[], None).await;
+        let tiers = penelope_conversation::build_tiers(&services, "début", &[], None).await;
         let cancel = penelope_llm::CancelToken::new();
-        let conv = crate::conversation::SessionConversation::new(
+        let conv = penelope_conversation::SessionConversation::new(
             services.clone(),
             &sid,
             "openrouter:mock/model",
             tiers,
             0,
         );
-        let inbox = crate::conversation::TurnInbox::for_turn(
+        let inbox = penelope_conversation::TurnInbox::for_turn(
             &services,
             &turn,
             Some(channel.clone()),
@@ -458,7 +462,7 @@ mod tests {
                 .unwrap();
         }
         inbox
-            .claim(crate::agent::Checkpoint::BeforeModelCall)
+            .claim(penelope_agent::Checkpoint::BeforeModelCall)
             .await
             .unwrap();
         assert!(cancel.is_cancelled());
@@ -478,7 +482,7 @@ mod tests {
     async fn a_merged_reply_targets_the_last_telegram_message() {
         let dir = tempfile::tempdir().unwrap();
         let services = Arc::new(
-            crate::runtime::Services::for_tests(
+            penelope_app::services::Services::for_tests(
                 dir.path().to_path_buf(),
                 Arc::new(TestClock::default()),
             )
@@ -536,7 +540,7 @@ mod tests {
             Arc::new(penelope_kernel::clock::SystemClock);
         let _ = TestClock::default();
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );
@@ -584,7 +588,7 @@ mod tests {
         let clock: penelope_kernel::clock::SharedClock =
             Arc::new(penelope_kernel::clock::SystemClock);
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );
@@ -648,7 +652,7 @@ mod tests {
         let clock: penelope_kernel::clock::SharedClock =
             Arc::new(penelope_kernel::clock::SystemClock);
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );

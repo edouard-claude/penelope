@@ -295,7 +295,7 @@ impl TelegramGateway {
                         Draft {
                             chat_id,
                             topic_id,
-                            draft_id: crate::bus::draft_id_for(&ev.turn_id),
+                            draft_id: penelope_app::bus::draft_id_for(&ev.turn_id),
                             text: String::new(),
                             last: Instant::now() - self.draft_interval,
                             checked: Instant::now(),

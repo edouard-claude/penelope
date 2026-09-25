@@ -62,7 +62,13 @@ impl TelegramGateway {
                     )
                     .await;
             }
-            match crate::workflow::control(d, args, &penelope_workflow::Control::Resume).await {
+            match penelope_orchestrator::workflow::control(
+                &penelope_daemon::workflow::context_of(d),
+                args,
+                &penelope_workflow::Control::Resume,
+            )
+            .await
+            {
                 Ok(state) => format!("▶️ Run `{args}` : {}.", state.as_str()),
                 Err(e) => format!("❌ {e}"),
             }

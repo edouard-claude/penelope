@@ -112,7 +112,7 @@ async fn a_topic_group_listed_by_id_accepts_the_anonymous_admin() {
     let seen = seen_chats(&s).await;
     assert_eq!(seen[0]["id"], chat);
     assert_eq!(seen[0]["type"], "supergroup");
-    let check = crate::doctor::telegram_chats_check(&s).await;
+    let check = penelope_ops::doctor::telegram_chats_check(&s).await;
     assert!(check.detail.contains("-1001234567890"), "{}", check.detail);
 
     g.daemon
@@ -184,7 +184,8 @@ async fn a_workflow_question_uses_telegram_buttons_and_typed_input() {
         ]
     });
     let wf = penelope_workflow::Workflow::from_json(&raw.to_string()).unwrap();
-    let known = crate::runtime::workflow_known(&s.config.config(), &s.mcp_tools, &s.channel).await;
+    let known =
+        penelope_app::services::workflow_known(&s.config.config(), &s.mcp_tools, &s.channel).await;
     let dir = s.platform.dirs.workflows();
     std::fs::create_dir_all(&dir).unwrap();
     s.workflows.write(&dir, &wf, &known).unwrap();
@@ -220,8 +221,8 @@ async fn a_workflow_question_uses_telegram_buttons_and_typed_input() {
         topic_id: None,
         message_id: None,
     };
-    let run = crate::workflow::start_run(
-        &g.daemon,
+    let run = penelope_orchestrator::workflow::start_run(
+        &penelope_daemon::workflow::context_of(&g.daemon),
         "validation",
         json!({"sujet":"devis-42"}),
         &origin,
@@ -232,7 +233,12 @@ async fn a_workflow_question_uses_telegram_buttons_and_typed_input() {
     .unwrap();
     assert_eq!(run.params["sujet"], "devis-42");
 
-    crate::workflow::drive(&g.daemon, &run.id).await.unwrap();
+    penelope_orchestrator::workflow::drive(
+        &penelope_daemon::workflow::context_of(&g.daemon),
+        &run.id,
+    )
+    .await
+    .unwrap();
     let calls = t.calls_to(tg::SEND_MESSAGE).await;
     let question = calls
         .iter()
@@ -266,7 +272,12 @@ async fn a_workflow_question_uses_telegram_buttons_and_typed_input() {
         "la saisie n'est pas un message de conversation"
     );
     assert_eq!(
-        crate::workflow::drive(&g.daemon, &run.id).await.unwrap(),
+        penelope_orchestrator::workflow::drive(
+            &penelope_daemon::workflow::context_of(&g.daemon),
+            &run.id
+        )
+        .await
+        .unwrap(),
         penelope_workflow::RunState::Done
     );
     let done = s.runs.get(&run.id).await.unwrap().unwrap();
@@ -293,7 +304,7 @@ async fn a_workflow_question_uses_telegram_buttons_and_typed_input() {
 async fn onboarding_writes_the_profile_from_the_answers() {
     let (_d, g, t, _p) = gateway().await;
     let d = g.daemon.clone();
-    let vault = crate::helpers::vault_dir(&d.services);
+    let vault = penelope_app::helpers::vault_dir(&d.services);
     let last = || {
         let t = t.clone();
         async move { t.calls_to(tg::SEND_MESSAGE).await.last().unwrap().clone() }
@@ -490,7 +501,7 @@ async fn notices_without_a_session_go_to_the_home_topic() {
     assert_eq!(sent["message_thread_id"], 5);
 
     // `doctor` ne réclame un foyer que si des groupes sont autorisés.
-    let check = crate::doctor::home_check(&g.daemon.services);
+    let check = penelope_ops::doctor::home_check(&g.daemon.services);
     assert!(check.ok, "{check:?}");
     g.daemon
         .publish_config("test", |c| {
@@ -499,7 +510,7 @@ async fn notices_without_a_session_go_to_the_home_topic() {
             Ok(vec!["telegram.home".into()])
         })
         .unwrap();
-    let check = crate::doctor::home_check(&g.daemon.services);
+    let check = penelope_ops::doctor::home_check(&g.daemon.services);
     assert!(!check.ok, "{check:?}");
     assert!(check.detail.contains("chat privé"), "{check:?}");
 }
@@ -535,7 +546,7 @@ async fn a_workflow_form_is_filled_field_by_field() {
     });
     let s = &d.services;
     let wf = penelope_workflow::model::Workflow::from_json(&raw.to_string()).unwrap();
-    let known = crate::runtime::workflow_known_with(
+    let known = penelope_app::services::workflow_known_with(
         &s.config.config(),
         &s.mcp_tools,
         &s.workflows,
@@ -555,10 +566,19 @@ async fn a_workflow_form_is_filled_field_by_field() {
         topic_id: None,
         message_id: None,
     };
-    let run = crate::workflow::start_run(&d, "deploiement-form", json!({}), &origin, None, 0)
+    let run = penelope_orchestrator::workflow::start_run(
+        &penelope_daemon::workflow::context_of(&d),
+        "deploiement-form",
+        json!({}),
+        &origin,
+        None,
+        0,
+    )
+    .await
+    .unwrap();
+    penelope_orchestrator::workflow::drive(&penelope_daemon::workflow::context_of(&d), &run.id)
         .await
         .unwrap();
-    crate::workflow::drive(&d, &run.id).await.unwrap();
 
     let button = |calls: &[Value], label: &str| -> String {
         calls
@@ -641,7 +661,9 @@ async fn a_workflow_form_is_filled_field_by_field() {
     settle_click(&g).await;
     g.flush_outbox().await.unwrap();
     assert_eq!(
-        crate::workflow::drive(&d, &run.id).await.unwrap(),
+        penelope_orchestrator::workflow::drive(&penelope_daemon::workflow::context_of(&d), &run.id)
+            .await
+            .unwrap(),
         penelope_workflow::runs::RunState::Done
     );
     let done = d.services.runs.get(&run.id).await.unwrap().unwrap();

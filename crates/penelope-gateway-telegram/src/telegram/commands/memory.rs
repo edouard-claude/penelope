@@ -15,7 +15,7 @@ impl TelegramGateway {
     ) -> anyhow::Result<()> {
         let reply_to = Some(message_id);
         let text: String = {
-            let part = crate::onboarding::Part::parse(args);
+            let part = penelope_dream::onboarding::Part::parse(args);
             if !args.is_empty() && part.is_none() {
                 "Partie inconnue : profil, outils, style ou limites.".to_string()
             } else {
@@ -46,7 +46,9 @@ impl TelegramGateway {
         let dry_run = args.contains("dry");
         tokio::spawn(async move {
             let text =
-                match crate::dream::run(&daemon.dream(), &daemon.hooks.messenger, dry_run).await {
+                match penelope_dream::dream::run(&daemon.dream(), &daemon.hooks.messenger, dry_run)
+                    .await
+                {
                     Ok(o) => format!(
                         "🌙 {}{}",
                         if o.dry_run { "(à blanc) " } else { "" },
@@ -141,9 +143,9 @@ impl TelegramGateway {
                     )
                     .await;
             } else {
-                let vault = crate::helpers::vault_dir(s);
+                let vault = penelope_app::helpers::vault_dir(s);
                 let session = d.chat_session_for(&origin).await?;
-                match crate::vault_ops::remember(
+                match penelope_vault::vault_ops::remember(
                     s,
                     &vault,
                     penelope_memory::Level::Coeur,
@@ -221,14 +223,14 @@ impl TelegramGateway {
                     )
                     .await;
             }
-            match crate::session_ops::resolve(s, args).await {
+            match penelope_ops::session_ops::resolve(s, args).await {
                 Err(e) => format!("❌ {e}"),
                 Ok(sess) => {
                     let confirm = json!({
                         "op": "session.forget", "params": {"session": sess.id.to_string()},
                         "question": format!(
                             "Oublier tout ce que la mémoire a retenu de la session « {} » ?",
-                            crate::titles::label(&sess)
+                            penelope_conversation::titles::label(&sess)
                         ),
                         "back": {"screen": "forget.sessions", "args": {}},
                     });
@@ -251,7 +253,7 @@ impl TelegramGateway {
         args: &str,
     ) -> anyhow::Result<()> {
         let d = &self.daemon;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let reply_to = Some(message_id);
         let text: String = {
             if args.is_empty() {

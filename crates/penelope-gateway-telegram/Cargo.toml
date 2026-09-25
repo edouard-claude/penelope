@@ -49,6 +49,19 @@ penelope-platform.workspace = true
 penelope-skills.workspace = true
 # Nature d'un texte reçu en document (`guess_kind`).
 penelope-context.workspace = true
+# Les modules sortis du daemon, nommés à leur crate depuis T30 (épopée #208) au lieu des
+# réexports `penelope_daemon::…` : décisions et règles d'approbation (agent), compaction
+# et titres (conversation), rêve, accueil et ingestion (dream), exécuteur natif et Codex
+# (executor, ops), workflows et planifications (orchestrator), notes et vault (vault),
+# connexions OAuth des serveurs MCP (mcp-host).
+penelope-agent.workspace = true
+penelope-conversation.workspace = true
+penelope-dream.workspace = true
+penelope-executor.workspace = true
+penelope-ops.workspace = true
+penelope-orchestrator.workspace = true
+penelope-vault.workspace = true
+penelope-mcp-host.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -2,6 +2,7 @@
 
 use crate::runtime::Daemon;
 use futures::{SinkExt, StreamExt};
+use penelope_app::helpers::bounded_redacted;
 use penelope_kernel::event::Event;
 use penelope_kernel::event::EventLog;
 use serde_json::{Value, json};
@@ -39,9 +40,6 @@ pub fn public_frame(event: &Event) -> Value {
         "actuation": null,
     })
 }
-
-/// Descendu dans `penelope-app` pour l'exécuteur (T24), réexporté jusqu'à T30.
-pub use penelope_app::helpers::bounded_redacted;
 
 fn rejected(
     status: StatusCode,
@@ -487,7 +485,7 @@ mod tests {
     async fn stream_does_not_bind_without_a_valid_stored_secret() {
         let dir = tempfile::tempdir().unwrap();
         let services = Arc::new(
-            crate::runtime::Services::for_tests(
+            penelope_app::services::Services::for_tests(
                 dir.path().to_path_buf(),
                 Arc::new(TestClock::default()),
             )

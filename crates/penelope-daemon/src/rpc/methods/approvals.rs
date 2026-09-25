@@ -18,8 +18,8 @@ impl Rpc {
                 };
                 // Effet incertain (#83) : « c'est fait » ou « relancer », à dire.
                 match p.get("effect").and_then(|v| v.as_str()) {
-                    Some("done") => d.choice = crate::agent::EFFECT_DONE.into(),
-                    Some("retry") => d.choice = crate::agent::EFFECT_RETRY.into(),
+                    Some("done") => d.choice = penelope_agent::EFFECT_DONE.into(),
+                    Some("retry") => d.choice = penelope_agent::EFFECT_RETRY.into(),
                     Some(other) => anyhow::bail!("--effect {other} : attendu done ou retry"),
                     None => {}
                 }
@@ -102,7 +102,7 @@ impl Rpc {
         if a.kind == penelope_hitl::ApprovalKind::MemoryProposal {
             if a.state == penelope_hitl::ApprovalState::Approved {
                 let written =
-                    crate::ingest::apply_memory_proposal(&self.daemon.dream(), id).await?;
+                    penelope_dream::ingest::apply_memory_proposal(&self.daemon.dream(), id).await?;
                 let mut v = serde_json::to_value(&a)?;
                 v["written"] = json!(written);
                 return Ok(v);

@@ -5,9 +5,9 @@ use super::*;
 #[async_trait::async_trait]
 impl ChannelDelivery for TelegramGateway {
     /// La carte de rafale ne vaut que pour une conversation Telegram (issues #49, #161).
-    fn burst_limits(&self, origin: &Origin) -> Option<crate::bus::BurstLimits> {
+    fn burst_limits(&self, origin: &Origin) -> Option<penelope_app::bus::BurstLimits> {
         let cfg = self.daemon.services.config.config();
-        matches!(origin, Origin::Telegram { .. }).then_some(crate::bus::BurstLimits::new(
+        matches!(origin, Origin::Telegram { .. }).then_some(penelope_app::bus::BurstLimits::new(
             cfg.telegram.burst_messages,
             cfg.telegram.burst_chars,
         ))
@@ -147,7 +147,7 @@ impl ChannelDelivery for TelegramGateway {
                     spent_usd,
                     limit_usd,
                 } => Some(Held::Text {
-                    text: crate::agent::budget_exceeded_text(scope, *spent_usd, *limit_usd),
+                    text: penelope_agent::budget_exceeded_text(scope, *spent_usd, *limit_usd),
                     reply_to: message_id,
                     answer: false,
                     choices: Vec::new(),
@@ -208,7 +208,9 @@ impl ChannelDelivery for TelegramGateway {
                                 chat_id,
                                 topic_id,
                                 message_id,
-                                &crate::agent::budget_exceeded_text(scope, *spent_usd, *limit_usd),
+                                &penelope_agent::budget_exceeded_text(
+                                    scope, *spent_usd, *limit_usd,
+                                ),
                             )
                             .await?
                         }

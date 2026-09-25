@@ -29,11 +29,11 @@ impl Rpc {
                 match action.as_str() {
                     "status" => Ok(json!({
                         "provider": provider,
-                        "status": crate::codex_auth::status(s).map_err(anyhow::Error::msg)?,
+                        "status": penelope_ops::codex_auth::status(s).map_err(anyhow::Error::msg)?,
                         "enabled": s.config.config().providers.codex.enabled,
                     })),
                     "logout" => {
-                        crate::codex_auth::logout(s)
+                        penelope_ops::codex_auth::logout(s)
                             .await
                             .map_err(anyhow::Error::msg)?;
                         // Le fournisseur s'éteint avec le compte : un alias `codex:` se
@@ -49,7 +49,7 @@ impl Rpc {
                         // Un seul compte à la fois : un second exigerait une rotation de
                         // jetons que rien ne surveille, et OpenAI traque exactement ça.
                         if let Some(st) =
-                            crate::codex_auth::status(s).map_err(anyhow::Error::msg)?
+                            penelope_ops::codex_auth::status(s).map_err(anyhow::Error::msg)?
                             && st.connected
                         {
                             anyhow::bail!(
@@ -59,7 +59,7 @@ impl Rpc {
                                 st.plan
                             );
                         }
-                        let login = crate::codex_auth::start_pending(s)
+                        let login = penelope_ops::codex_auth::start_pending(s)
                             .await
                             .map_err(anyhow::Error::msg)?;
                         Ok(json!({
@@ -70,7 +70,7 @@ impl Rpc {
                         }))
                     }
                     "wait" => {
-                        let grant = crate::codex_auth::wait_pending(s)
+                        let grant = penelope_ops::codex_auth::wait_pending(s)
                             .await
                             .map_err(anyhow::Error::msg)?;
                         let g = self.daemon.publish_config("cli", |c| {

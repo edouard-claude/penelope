@@ -9,10 +9,11 @@
 //! Les assertions portent sur le monde : lignes de `tool_jobs` et d'`effects`, demandes
 //! en base, tours en file, appels au modèle, processus vivants.
 
-use penelope_daemon::agent::TurnOutcome;
-use penelope_daemon::bus::Origin;
-use penelope_daemon::runtime::{Daemon, Services};
-use penelope_daemon::tool_jobs::{ToolJob, store};
+use penelope_agent::TurnOutcome;
+use penelope_app::bus::Origin;
+use penelope_app::services::Services;
+use penelope_daemon::Daemon;
+use penelope_executor::jobs::{ToolJob, store};
 use penelope_kernel::clock::{SharedClock, SystemClock};
 use penelope_kernel::turn::TurnKind;
 use penelope_llm::mock::{MockProvider, Scripted};
@@ -52,7 +53,7 @@ async fn session(d: &Arc<Daemon>) -> String {
     penelope_daemon::approval_mode::set(
         &d.services,
         &sid,
-        penelope_daemon::approval_mode::ApprovalMode::parse("auto"),
+        penelope_agent::ApprovalMode::parse("auto"),
     )
     .await
     .unwrap();
@@ -466,7 +467,7 @@ async fn the_default_caps_refuse_the_fourth_job_of_a_session_and_the_eleventh_ov
     // Sept jobs vivants ailleurs : le daemon en porte dix.
     for i in 0..7 {
         store(&d.services)
-            .create(penelope_daemon::tool_jobs::NewJob {
+            .create(penelope_executor::jobs::NewJob {
                 session_id: format!("ailleurs-{i}"),
                 run_id: None,
                 turn_id: None,
@@ -490,7 +491,7 @@ async fn the_default_caps_refuse_the_fourth_job_of_a_session_and_the_eleventh_ov
     penelope_daemon::approval_mode::set(
         &d.services,
         &other,
-        penelope_daemon::approval_mode::ApprovalMode::parse("auto"),
+        penelope_agent::ApprovalMode::parse("auto"),
     )
     .await
     .unwrap();

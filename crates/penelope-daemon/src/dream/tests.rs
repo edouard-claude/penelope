@@ -1,18 +1,19 @@
 //! Tests du rêve qui ont besoin du daemon : la session de chat et l'exécuteur d'outils
 //! du propriétaire. Les autres sont dans `penelope-dream`.
 
-use super::*;
-use crate::runtime::Services;
+use penelope_app::services::Services;
+use penelope_dream::dream::*;
 use penelope_kernel::clock::TestClock;
 use penelope_llm::mock::MockProvider;
 use serde_json::json;
+use std::sync::Arc;
 
 /// Issues #24 et #37 : une règle dictée par le propriétaire et notée avec sa citation est
 /// gardée dans `profil.md` ; notée sans citation, elle n'est pas endossée : la grille
 /// l'écarte, sans rien demander au propriétaire.
 #[tokio::test]
 async fn a_rule_dictated_by_the_owner_is_promoted() {
-    use crate::agent::ToolExecutor;
+    use penelope_agent::ToolExecutor;
     // Le daemon, pour la session de chat et l'exécuteur d'outils du propriétaire.
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::new(1_789_516_800_000));
@@ -25,7 +26,10 @@ async fn a_rule_dictated_by_the_owner_is_promoted() {
     let p = Arc::new(MockProvider::new());
     d.set_provider_override(p.clone());
     let s = &d.services;
-    let sid = d.chat_session_for(&crate::bus::Origin::Cli).await.unwrap();
+    let sid = d
+        .chat_session_for(&penelope_app::bus::Origin::Cli)
+        .await
+        .unwrap();
     s.context
         .history
         .append(
@@ -40,12 +44,12 @@ async fn a_rule_dictated_by_the_owner_is_promoted() {
         )
         .await
         .unwrap();
-    let exec = crate::executor::NativeToolExecutor::new(
+    let exec = penelope_executor::executor::NativeToolExecutor::new(
         s.clone(),
-        crate::executor::ToolEnv {
+        penelope_executor::executor::ToolEnv {
             session_id: sid.clone(),
             run_id: None,
-            origin: crate::bus::Origin::Cli,
+            origin: penelope_app::bus::Origin::Cli,
             workspaces: vec![],
             in_workflow: false,
             turn_model: None,
@@ -88,7 +92,7 @@ async fn a_rule_dictated_by_the_owner_is_promoted() {
     );
     let o = run(&d.dream(), &d.hooks.messenger, false).await.unwrap();
     assert_eq!(o.report.promoted, 1, "{:?}", o.report);
-    let vault = crate::helpers::vault_dir(s);
+    let vault = penelope_app::helpers::vault_dir(s);
     let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
     assert!(profil.contains("Toujours pousser sur dev d'abord"));
     assert!(!profil.contains("branche qa"), "{profil}");

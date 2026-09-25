@@ -37,7 +37,7 @@ impl TelegramGateway {
         let Some(file_id) = file_ids.last() else {
             return Ok(());
         };
-        if file_size.unwrap_or(0) as usize > crate::media::IMAGE_MAX_BYTES {
+        if file_size.unwrap_or(0) as usize > penelope_app::media::IMAGE_MAX_BYTES {
             return self
                 .reply(
                     chat_id,
@@ -49,7 +49,7 @@ impl TelegramGateway {
         }
         self.react(chat_id, message_id, reaction::RECEIVED);
         let saved = match self.bot.download_file(file_id).await {
-            Ok((bytes, _)) => crate::media::save_photo(&self.daemon.services, &bytes),
+            Ok((bytes, _)) => penelope_app::media::save_photo(&self.daemon.services, &bytes),
             Err(e) => Err(format!("téléchargement impossible : {e}")),
         };
         let path = match saved {
@@ -195,7 +195,7 @@ impl TelegramGateway {
                 // L'ingestion est déclarée pour cette session : `/stop tout` peut
                 // l'interrompre (issue #155). Le jeton est retiré quoi qu'il arrive.
                 let (ingest_id, cancel) = daemon.bus.start_ingest(&session);
-                let outcome = crate::ingest::ingest(
+                let outcome = penelope_dream::ingest::ingest(
                     &daemon.dream(),
                     &file_name,
                     bytes,
@@ -386,7 +386,7 @@ async fn store_attachment(
             Err(e) => (format!("📎 `{name}` non enregistré : {e}"), None),
         };
     }
-    match crate::media::save_attachment(s, name, bytes) {
+    match penelope_app::media::save_attachment(s, name, bytes) {
         Ok(path) => (
             format!("📎 `{name}` déposé dans `{}`.", path.display()),
             Some(format!(

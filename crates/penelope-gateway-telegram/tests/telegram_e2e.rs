@@ -14,7 +14,8 @@
 //! répond à `getUpdates` sans attendre, elle tournerait à vide ; `process_update` est ce
 //! qu'elle appelle pour chaque update reçu.
 
-use penelope_daemon::runtime::{Daemon, Services};
+use penelope_app::services::Services;
+use penelope_daemon::Daemon;
 use penelope_gateway_telegram::TelegramGateway;
 use penelope_kernel::clock::{SharedClock, TestClock};
 use penelope_llm::mock::{MockProvider, Scripted};

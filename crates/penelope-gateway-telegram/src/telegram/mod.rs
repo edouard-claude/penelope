@@ -8,11 +8,12 @@
 //! - **envoi** : les réponses finales, cartes et retours de commandes passent par
 //!   `tg_outbox`, dans l'ordre, avec reprise et repli en texte brut.
 
-use crate::agent::{TurnEvent, TurnOutcome, decide_approval};
-use crate::bus::{BusKind, ChannelDelivery, Origin};
-use crate::executor::Messenger;
-use crate::helpers::{SEEN_CHATS_KEY, seen_chats, shown, topic_name_key};
-use crate::runtime::Daemon;
+use penelope_agent::{TurnEvent, TurnOutcome};
+use penelope_app::bus::{BusKind, ChannelDelivery, Origin};
+use penelope_app::helpers::{SEEN_CHATS_KEY, seen_chats, shown, topic_name_key};
+use penelope_daemon::Daemon;
+use penelope_daemon::agent::decide_approval;
+use penelope_executor::executor::Messenger;
 use penelope_hitl::{ApprovalRequest, ApprovalState, Decision};
 use penelope_kernel::api::method as m;
 use penelope_kernel::risk::PolicyWindow;
@@ -196,12 +197,16 @@ impl TelegramGateway {
         let (a, b, c, m) = (self.clone(), self.clone(), self.clone(), self.clone());
         let sup = self.daemon.supervision();
         Ok(vec![
-            crate::tasks::spawn_supervised(&sup, "telegram.poll", move || a.clone().poll_loop()),
-            crate::tasks::spawn_supervised(&sup, "telegram.drafts", move || b.clone().draft_loop()),
-            crate::tasks::spawn_supervised(&sup, "telegram.outbox", move || {
+            penelope_app::tasks::spawn_supervised(&sup, "telegram.poll", move || {
+                a.clone().poll_loop()
+            }),
+            penelope_app::tasks::spawn_supervised(&sup, "telegram.drafts", move || {
+                b.clone().draft_loop()
+            }),
+            penelope_app::tasks::spawn_supervised(&sup, "telegram.outbox", move || {
                 c.clone().outbox_loop()
             }),
-            crate::tasks::spawn_supervised(&sup, "telegram.maintenance", move || {
+            penelope_app::tasks::spawn_supervised(&sup, "telegram.maintenance", move || {
                 m.clone().maintenance_loop()
             }),
         ])
@@ -403,7 +408,7 @@ impl TelegramGateway {
                 {
                     let target = target.to_string();
                     s.kv_set(&title_key, "").await?;
-                    let note = match crate::titles::clean(&text) {
+                    let note = match penelope_conversation::titles::clean(&text) {
                         Some(title) => {
                             s.sessions.set_title(&target, &title, false).await?;
                             format!("✏️ Session renommée : « {title} ».")
@@ -419,7 +424,7 @@ impl TelegramGateway {
                     && let Some(rel) = v["rel"].as_str()
                 {
                     let n = v["n"].as_u64().unwrap_or(0) as u32;
-                    return match crate::onboarding::answer(
+                    return match penelope_dream::onboarding::answer(
                         &self.daemon.services,
                         rel,
                         n,
@@ -447,8 +452,8 @@ impl TelegramGateway {
                 {
                     s.kv_set(&input_key, "").await?;
                     let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
-                    let note = match crate::workflow::answer(
-                        &self.daemon,
+                    let note = match penelope_orchestrator::workflow::answer(
+                        &penelope_daemon::workflow::context_of(&self.daemon),
                         v["run"].as_str().unwrap_or_default(),
                         v["visit"].as_str().unwrap_or_default(),
                         v["choice"].as_str().unwrap_or_default(),
@@ -476,7 +481,7 @@ impl TelegramGateway {
 
                 // Profil vide : l'accueil est proposé une fois, sans retenir le message.
                 if s.kv_get("tg.onboard.proposed").await?.is_none()
-                    && crate::onboarding::profile_is_empty(&self.daemon.services).await
+                    && penelope_dream::onboarding::profile_is_empty(&self.daemon.services).await
                 {
                     s.kv_set("tg.onboard.proposed", &s.clock.now_rfc3339())
                         .await?;
@@ -580,11 +585,12 @@ impl TelegramGateway {
             }
             Incoming::OAuthCallback { chat_id, url, .. } => {
                 // Adresse de retour collée (§8.5, `paste_back`) : elle ne sert qu'une fois.
-                match crate::mcp_auth::complete(&self.daemon.services, &url).await {
+                match penelope_mcp_host::auth::complete(&self.daemon.services, &url).await {
                     Ok(server) => {
                         let d = &self.daemon;
                         let (mcp, m) = (d.hooks.mcp_supervisor(), d.hooks.messenger());
-                        crate::mcp_auth::reconnect_and_tell(&d.services, mcp, m, &server).await
+                        penelope_mcp_host::auth::reconnect_and_tell(&d.services, mcp, m, &server)
+                            .await
                     }
                     Err(e) => {
                         self.reply(

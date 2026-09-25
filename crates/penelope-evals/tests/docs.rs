@@ -74,7 +74,7 @@ fn anchors(markdown: &str) -> BTreeSet<String> {
         if level == 0 || !line[level..].starts_with(' ') {
             continue;
         }
-        let base = penelope_daemon::selfdocs::anchor(line[level..].trim());
+        let base = penelope_executor::selfdocs::anchor(line[level..].trim());
         let n = seen.entry(base.clone()).or_insert(0);
         out.insert(if *n == 0 {
             base.clone()

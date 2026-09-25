@@ -7,8 +7,8 @@ impl TelegramGateway {
 
     /// Texte d'une carte d'élicitation : le serveur est nommé, son message cité et échappé,
     /// un lien montré en entier avec son domaine (§8.4, issue #12).
-    fn elicitation_html(r: &crate::elicitation::Request) -> String {
-        use crate::elicitation::Kind;
+    fn elicitation_html(r: &penelope_app::elicitation::Request) -> String {
+        use penelope_app::elicitation::Kind;
         use penelope_telegram::render::escape_html;
         let server = escape_html(&r.server);
         let quote = match r.message.trim() {
@@ -54,7 +54,7 @@ impl TelegramGateway {
         &self,
         label: &str,
         action: &str,
-        r: &crate::elicitation::Request,
+        r: &penelope_app::elicitation::Request,
     ) -> anyhow::Result<ButtonSpec> {
         let ttl = r.timeout.as_millis() as i64 + 3_600_000;
         let t = self
@@ -66,7 +66,7 @@ impl TelegramGateway {
     /// Remplace la carte (texte d'origine, puis l'issue) ; à défaut, un nouveau message.
     async fn elicitation_update(
         &self,
-        r: &crate::elicitation::Request,
+        r: &penelope_app::elicitation::Request,
         card: Option<i64>,
         note: &str,
         keyboard: Option<Value>,
@@ -103,7 +103,7 @@ impl TelegramGateway {
     /// Bouton « Relancer » d'une demande annulée.
     async fn elicit_retry_button(
         &self,
-        r: &crate::elicitation::Request,
+        r: &penelope_app::elicitation::Request,
         session: &str,
     ) -> Option<ButtonSpec> {
         let t = self
@@ -114,7 +114,7 @@ impl TelegramGateway {
                 json!({
                     "session": session,
                     "server": r.server,
-                    "what": crate::elicitation::first_line(&r.message),
+                    "what": penelope_app::elicitation::first_line(&r.message),
                 }),
                 24 * 3_600_000,
                 true,
@@ -176,7 +176,7 @@ impl TelegramGateway {
     }
     /// Où poser une carte d'élicitation : la conversation de l'appel, sinon le foyer du
     /// propriétaire (issue #143).
-    async fn elicitation_chat(&self, r: &crate::elicitation::Request) -> (i64, Option<i64>) {
+    async fn elicitation_chat(&self, r: &penelope_app::elicitation::Request) -> (i64, Option<i64>) {
         match r.to.origin.as_ref().and_then(|o| o.telegram_chat()) {
             Some(chat) => chat,
             None => self.home_chat(),
@@ -191,7 +191,7 @@ impl TelegramGateway {
         &self,
         chat_id: i64,
         id: &str,
-        answer: crate::elicitation::Action,
+        answer: penelope_app::elicitation::Action,
         note: &str,
         echo: bool,
         card: Option<i64>,
@@ -228,7 +228,7 @@ impl TelegramGateway {
         message_id: i64,
     ) -> anyhow::Result<()> {
         let s = &self.daemon.services;
-        use crate::elicitation::{Action as Answer, Kind};
+        use penelope_app::elicitation::{Action as Answer, Kind};
         let broker = s.elicitations.clone();
         let Some((request, card)) = broker.request(&action.target) else {
             let _ = self
@@ -350,7 +350,7 @@ impl TelegramGateway {
 }
 
 #[async_trait::async_trait]
-impl crate::elicitation::OwnerChannel for TelegramGateway {
+impl penelope_app::elicitation::OwnerChannel for TelegramGateway {
     fn place(&self) -> String {
         "sur Telegram".into()
     }
@@ -363,8 +363,8 @@ impl crate::elicitation::OwnerChannel for TelegramGateway {
             .map_err(|e| e.to_string())
     }
 
-    async fn show(&self, r: &crate::elicitation::Request) -> Result<Option<i64>, String> {
-        use crate::elicitation::Kind;
+    async fn show(&self, r: &penelope_app::elicitation::Request) -> Result<Option<i64>, String> {
+        use penelope_app::elicitation::Kind;
         let accept = match &r.kind {
             Kind::Form { .. } if r.field_count() > 0 => "📝 Remplir",
             Kind::Form { .. } => "✅ Accepter",
@@ -389,7 +389,7 @@ impl crate::elicitation::OwnerChannel for TelegramGateway {
         let html = format!(
             "{}\n\n<i>Sans réponse d'ici {}, la demande est annulée.</i>",
             Self::elicitation_html(r),
-            crate::elicitation::human(r.timeout)
+            penelope_app::elicitation::human(r.timeout)
         );
         // La carte va **dans la conversation qui a déclenché l'appel** (issue #143) :
         // avant, elle partait dans le chat privé, que le propriétaire ne lit plus depuis
@@ -417,7 +417,7 @@ impl crate::elicitation::OwnerChannel for TelegramGateway {
 
     async fn close(
         &self,
-        r: &crate::elicitation::Request,
+        r: &penelope_app::elicitation::Request,
         card: Option<i64>,
         markdown: &str,
         retry: bool,
@@ -438,13 +438,13 @@ impl crate::elicitation::OwnerChannel for TelegramGateway {
     }
 
     /// Rappel à mi-délai, dans la conversation où la carte a été posée (issue #143).
-    async fn remind(&self, r: &crate::elicitation::Request, _card: Option<i64>) {
+    async fn remind(&self, r: &penelope_app::elicitation::Request, _card: Option<i64>) {
         let (chat_id, topic_id) = self.elicitation_chat(r).await;
         let text = format!(
             "⏳ La confirmation demandée par `{}` attend toujours ({} restantes) : {}",
             r.server,
-            crate::elicitation::human(r.timeout / 2),
-            crate::elicitation::first_line(&r.message)
+            penelope_app::elicitation::human(r.timeout / 2),
+            penelope_app::elicitation::first_line(&r.message)
         );
         if let Err(e) = self.reply(chat_id, topic_id, None, &text).await {
             tracing::warn!(error = %e, "rappel d'élicitation non envoyé");

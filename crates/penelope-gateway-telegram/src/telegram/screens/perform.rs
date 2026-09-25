@@ -15,7 +15,7 @@ impl TelegramGateway {
     ) -> anyhow::Result<Done> {
         let d = &self.daemon;
         let s = &d.services;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let str_of = |key: &str| p[key].as_str().unwrap_or_default().to_string();
         let origin = Origin::Telegram {
             chat_id,
@@ -106,7 +106,7 @@ impl TelegramGateway {
                         tokio::spawn(async move {
                             // Déclarée pour la session : `/stop tout` l'interrompt (#155).
                             let (ingest_id, cancel) = daemon.bus.start_ingest(&sess);
-                            let outcome = crate::ingest::ingest(
+                            let outcome = penelope_dream::ingest::ingest(
                                 &daemon.dream(),
                                 &name,
                                 joined.into_bytes(),
@@ -138,7 +138,12 @@ impl TelegramGateway {
                     "run.resume" => penelope_workflow::Control::Resume,
                     _ => penelope_workflow::Control::Cancel,
                 };
-                let state = crate::workflow::control(d, &run, &control).await?;
+                let state = penelope_orchestrator::workflow::control(
+                    &penelope_daemon::workflow::context_of(d),
+                    &run,
+                    &control,
+                )
+                .await?;
                 Done::toast(format!("Run {} : {}", run, state.as_str()))
             }
             // Livrer dans la conversation (et le sujet) où l'écran est affiché (#124).
@@ -149,7 +154,7 @@ impl TelegramGateway {
                     topic_id,
                     message_id: None,
                 };
-                let to = crate::scheduler::retarget(s, &id, &here)
+                let to = penelope_orchestrator::scheduler::retarget(s, &id, &here)
                     .await
                     .map_err(anyhow::Error::msg)?;
                 Done::toast(format!("📍 Livrera ici : {to}"))
@@ -257,8 +262,8 @@ impl TelegramGateway {
                 Done::toast(format!("⏪ {name} : version précédente"))
             }
             "mem.forget" => {
-                let vault = crate::helpers::vault_dir(s);
-                match crate::vault_ops::forget(s, &vault, &str_of("uid"))
+                let vault = penelope_app::helpers::vault_dir(s);
+                match penelope_vault::vault_ops::forget(s, &vault, &str_of("uid"))
                     .await
                     .map_err(anyhow::Error::msg)?
                 {
@@ -273,9 +278,9 @@ impl TelegramGateway {
                     .get(&uid)
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("entrée `{uid}` introuvable"))?;
-                let vault = crate::helpers::vault_dir(s);
-                let day = crate::vault_ops::day(s);
-                crate::vault_ops::update_note(&vault, &e.file, Some(&uid), &day, |raw| {
+                let vault = penelope_app::helpers::vault_dir(s);
+                let day = penelope_vault::vault_ops::day(s);
+                penelope_vault::vault_ops::update_note(&vault, &e.file, Some(&uid), &day, |raw| {
                     penelope_memory::edit::update_annotations(raw, &uid, |a| {
                         a.revue = Some(day.clone())
                     })
@@ -286,13 +291,13 @@ impl TelegramGateway {
             }
             "practice.status" => {
                 let (slug, statut) = (str_of("slug"), str_of("statut"));
-                let vault = crate::helpers::vault_dir(s);
+                let vault = penelope_app::helpers::vault_dir(s);
                 let rel = format!("pratiques/{}", penelope_platform::slugify(&slug)) + ".md";
-                crate::vault_ops::update_note(
+                penelope_vault::vault_ops::update_note(
                     &vault,
                     &rel,
                     None,
-                    &crate::vault_ops::day(s),
+                    &penelope_vault::vault_ops::day(s),
                     |raw| {
                         let mut practice = penelope_memory::vault::Practice::parse(raw, &slug)?;
                         practice.statut = penelope_memory::vault::PracticeStatus::parse(&statut);
@@ -336,9 +341,10 @@ impl TelegramGateway {
             }
             "session.close" => {
                 let id = str_of("session");
-                let v = crate::session_ops::close(&d.services, d.providers.clone(), &d.bus, &id)
-                    .await
-                    .map_err(anyhow::Error::msg)?;
+                let v =
+                    penelope_ops::session_ops::close(&d.services, d.providers.clone(), &d.bus, &id)
+                        .await
+                        .map_err(anyhow::Error::msg)?;
                 Done {
                     toast: "🔒 Session fermée".into(),
                     note: Some(format!(
@@ -355,7 +361,7 @@ impl TelegramGateway {
             "session.rewind" => {
                 let turns = p["turns"].as_u64().unwrap_or(1) as usize;
                 let session = d.chat_session_for(&origin).await?;
-                let v = crate::session_ops::rewind(&d.services, &d.bus, &session, turns)
+                let v = penelope_ops::session_ops::rewind(&d.services, &d.bus, &session, turns)
                     .await
                     .map_err(anyhow::Error::msg)?;
                 Done {
@@ -390,9 +396,9 @@ impl TelegramGateway {
                 };
                 let (daemon, messenger) = (d.clone(), d.hooks.messenger());
                 tokio::spawn(async move {
-                    let rpc = crate::rpc::Rpc::new(daemon);
+                    let rpc = penelope_daemon::rpc::Rpc::new(daemon);
                     let text = match rpc.call(m::UPGRADE, params).await {
-                        Ok(v) => crate::upgrade::render(&v),
+                        Ok(v) => penelope_ops::upgrade::render(&v),
                         Err(e) => format!("❌ {e}"),
                     };
                     if let Some(m) = messenger {
@@ -447,17 +453,18 @@ impl TelegramGateway {
             }
             "session.forget" => {
                 let id = str_of("session");
-                let vault = crate::helpers::vault_dir(s);
+                let vault = penelope_app::helpers::vault_dir(s);
                 let uids = s.memory.forget_session(&id).await?;
                 for uid in &uids {
-                    crate::vault_ops::forget(s, &vault, uid)
+                    penelope_vault::vault_ops::forget(s, &vault, uid)
                         .await
                         .map_err(anyhow::Error::msg)?;
                 }
                 Done::toast(format!("🧹 {} entrée(s) oubliée(s)", uids.len()))
             }
             "notes.adopt" => {
-                let copied = crate::session_notes::copy(s, &str_of("from"), &str_of("to")).await?;
+                let copied =
+                    penelope_vault::session_notes::copy(s, &str_of("from"), &str_of("to")).await?;
                 Done::quiet(if copied {
                     "📓 Notes reprises"
                 } else {

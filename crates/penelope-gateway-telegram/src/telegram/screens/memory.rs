@@ -14,13 +14,13 @@ impl TelegramGateway {
     ) -> anyhow::Result<Screen> {
         let d = &self.daemon;
         let s = &d.services;
-        let rpc = crate::rpc::Rpc::new(d.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let here = back_of(name, args);
         let screen: Screen = {
             let query = args["query"].as_str().unwrap_or_default();
             let items: Vec<(String, String)> = if query.is_empty() {
                 let mut seen = std::collections::BTreeSet::new();
-                crate::dream::learned(s, 30)
+                penelope_dream::dream::learned(s, 30)
                     .await?
                     .into_iter()
                     .filter_map(|i| {
@@ -88,7 +88,7 @@ impl TelegramGateway {
         let here = back_of(name, args);
         let screen: Screen = {
             let days = args["days"].as_i64().unwrap_or(7);
-            let items = crate::dream::learned(s, days).await?;
+            let items = penelope_dream::dream::learned(s, days).await?;
             let mut sc = Screen::new(if items.is_empty() {
                 format!("Rien appris sur les {days} derniers jours.")
             } else {
@@ -223,7 +223,7 @@ impl TelegramGateway {
         let d = &self.daemon;
         let s = &d.services;
         let screen: Screen = {
-            let dir = crate::helpers::vault_dir(s).join("pratiques");
+            let dir = penelope_app::helpers::vault_dir(s).join("pratiques");
             let mut found: Vec<(String, penelope_memory::vault::Practice)> =
                 std::fs::read_dir(&dir)
                     .into_iter()
@@ -273,7 +273,7 @@ impl TelegramGateway {
         let here = back_of(name, args);
         let screen: Screen = {
             let slug = args["slug"].as_str().unwrap_or_default();
-            let path = crate::helpers::vault_dir(s).join(format!("pratiques/{slug}.md"));
+            let path = penelope_app::helpers::vault_dir(s).join(format!("pratiques/{slug}.md"));
             let p = std::fs::read_to_string(&path)
                 .map_err(|_| anyhow::anyhow!("pratique `{slug}` introuvable"))
                 .and_then(|raw| {
@@ -410,7 +410,7 @@ impl TelegramGateway {
                     r.decision, r.window, r.hits
                 ));
                 // Une règle qui ne sert à rien se voit (issue #111).
-                if let Some(note) = crate::approval_mode::rule_note(r, s.clock.now_ms()) {
+                if let Some(note) = penelope_daemon::approval_mode::rule_note(r, s.clock.now_ms()) {
                     sc.text.push_str(&format!(" · ⚠️ {note}"));
                 }
                 sc.rows.push(vec![
@@ -451,7 +451,7 @@ impl TelegramGateway {
             );
             let page = page_of(args);
             for sess in sessions.iter().skip(page * PER_PAGE).take(PER_PAGE) {
-                let label = crate::titles::label(sess);
+                let label = penelope_conversation::titles::label(sess);
                 sc.rows.push(vec![
                     self.guarded(
                         &format!("🗑 {}", trunc(&label, 40)),

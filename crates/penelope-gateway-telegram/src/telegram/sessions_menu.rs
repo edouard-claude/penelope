@@ -68,10 +68,10 @@ impl TelegramGateway {
             if let Some(n) = busy.get(&id).filter(|n| **n > 0) {
                 label.push_str(&format!("⏳{n} "));
             }
-            let title = crate::titles::label(sess);
+            let title = penelope_conversation::titles::label(sess);
             label.push_str(&title.chars().take(48).collect::<String>());
             // Son sujet de travail, qui filtre sa mémoire d'office (#119).
-            if let (Some(p), _) = crate::session_project::of_session(s, &id).await {
+            if let (Some(p), _) = penelope_vault::session_project::of_session(s, &id).await {
                 label.push_str(&format!(" · 📁{p}"));
             }
             // La plus récente porte aussi l'heure de sa dernière activité.
@@ -182,7 +182,10 @@ impl TelegramGateway {
                 }
                 let background = self.bind_chat(&target, chat_id, topic_id).await?;
                 s.sessions.touch(&target).await?;
-                let mut t = format!("Session « {} »", crate::titles::label(&sess));
+                let mut t = format!(
+                    "Session « {} »",
+                    penelope_conversation::titles::label(&sess)
+                );
                 if background > 0 {
                     t.push_str(&format!(
                         " ({background} tour(s) continuent en fond ailleurs)"
@@ -196,18 +199,25 @@ impl TelegramGateway {
                 }
                 Some(t)
             }
-            k::SESSION_FORK => match crate::session_ops::fork(&d.services, &target, None).await {
-                Ok(v) => {
-                    let fork = v["session"].as_str().unwrap_or_default().to_string();
-                    self.bind_chat(&fork, chat_id, topic_id).await?;
-                    s.sessions.touch(&fork).await?;
-                    Some("Session dupliquée : la suite se passe dans le fork.".to_string())
+            k::SESSION_FORK => {
+                match penelope_ops::session_ops::fork(&d.services, &target, None).await {
+                    Ok(v) => {
+                        let fork = v["session"].as_str().unwrap_or_default().to_string();
+                        self.bind_chat(&fork, chat_id, topic_id).await?;
+                        s.sessions.touch(&fork).await?;
+                        Some("Session dupliquée : la suite se passe dans le fork.".to_string())
+                    }
+                    Err(e) => Some(format!("Fork impossible : {e}")),
                 }
-                Err(e) => Some(format!("Fork impossible : {e}")),
-            },
+            }
             k::SESSION_CLOSE => {
-                match crate::session_ops::close(&d.services, d.providers.clone(), &d.bus, &target)
-                    .await
+                match penelope_ops::session_ops::close(
+                    &d.services,
+                    d.providers.clone(),
+                    &d.bus,
+                    &target,
+                )
+                .await
                 {
                     Ok(v) => Some(format!(
                         "Session fermée{}",
@@ -297,7 +307,7 @@ impl TelegramGateway {
         rows.push(vec![ButtonSpec::callback("↩️ Retour", &back.token, "")]);
         let text = format!(
             "**{}**\n`{}` · {}",
-            crate::titles::label(&sess),
+            penelope_conversation::titles::label(&sess),
             sess.id,
             if sess.state == "closed" {
                 "fermée"

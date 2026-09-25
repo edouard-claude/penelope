@@ -18,13 +18,13 @@ pub(crate) struct ApprovalCard {
 
 /// Compose la carte d'une demande d'approbation.
 pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
-    let args = crate::agent::without_intention(&a.payload["arguments"]);
+    let args = penelope_agent::without_intention(&a.payload["arguments"]);
     let intention = a.payload["why"]
         .as_str()
         .filter(|w| !w.trim().is_empty())
         .map(String::from)
         .unwrap_or_else(|| format!("Pénélope veut utiliser `{}`.", a.subject));
-    let (server, tool) = match crate::agent::server_of(&a.subject) {
+    let (server, tool) = match penelope_agent::server_of(&a.subject) {
         Some(srv) => {
             let tool = a
                 .subject
@@ -38,7 +38,7 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
     let mut quals: Vec<String> = Vec::new();
     let action = match (a.subject.as_str(), args["command"].as_str()) {
         ("shell_exec", Some(command)) => {
-            if crate::executor::wants_network(&a.subject, &a.payload["arguments"]) {
+            if penelope_executor::executor::wants_network(&a.subject, &a.payload["arguments"]) {
                 quals.push("réseau".into());
             }
             if args["output"].as_str() == Some("full") {
@@ -97,7 +97,7 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
     }
     // Le libellé nomme **toutes** les familles qu'un clic autoriserait : une liste
     // `a && b` en crée une par famille, et le propriétaire doit les voir avant (#150).
-    let patterns = crate::agent::arg_patterns(&a.subject, a.payload.get("arguments"));
+    let patterns = penelope_agent::arg_patterns(&a.subject, a.payload.get("arguments"));
     let describe = |p: &Value| {
         use penelope_hitl::policy::{CMD_PREFIX_OP, ORIGIN_OP, PATH_PREFIX_OP};
         let op = |k: &str, op: &str| p[k][op].as_str().map(String::from);
@@ -126,7 +126,7 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
     });
     // Une commande composée n'a pas de famille : « Toujours » l'autoriserait une fois,
     // sans créer de règle (#111). La carte le dit avant le clic (#141).
-    if crate::agent::always_creates_no_rule(&a.subject, a.payload.get("arguments")) {
+    if penelope_agent::always_creates_no_rule(&a.subject, a.payload.get("arguments")) {
         // Dire *ce qui* empêche la règle, et par où sortir : une commande par appel
         // (issue #150). Sans cela, « pas de règle possible » se lit comme une fatalité.
         let why = a.payload["arguments"]["command"]

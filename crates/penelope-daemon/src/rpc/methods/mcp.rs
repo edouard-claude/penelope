@@ -28,9 +28,9 @@ fn mcp_config_param(p: &Value) -> anyhow::Result<penelope_mcp::config::ServerCon
 
 /// Résultat d'une modification : ce qui a changé et l'état du serveur après coup.
 async fn mcp_change(
-    sup: &dyn crate::ports::McpAdmin,
+    sup: &dyn penelope_app::ports::McpAdmin,
     name: &str,
-    report: &crate::mcp::ReloadReport,
+    report: &penelope_mcp_host::ReloadReport,
 ) -> Value {
     let status = sup.statuses().await.into_iter().find(|s| s.name == name);
     json!({"report": report, "status": status})
@@ -142,7 +142,7 @@ impl Rpc {
             method::MCP_AUTH => {
                 let name = required_str(p, "name")?;
                 if let Some(callback) = p.get("callback").and_then(|c| c.as_str()) {
-                    let server = crate::mcp_auth::complete(&self.daemon.services, callback)
+                    let server = penelope_mcp_host::auth::complete(&self.daemon.services, callback)
                         .await
                         .map_err(anyhow::Error::msg)?;
                     if server != name {
@@ -167,18 +167,18 @@ impl Rpc {
                     .config_of(&name)
                     .await
                     .ok_or_else(|| anyhow::anyhow!("serveur MCP `{name}` inconnu"))?;
-                let start = crate::mcp_auth::start(&self.daemon.services, &cfg, None)
+                let start = penelope_mcp_host::auth::start(&self.daemon.services, &cfg, None)
                     .await
                     .map_err(anyhow::Error::msg)?;
                 let mut v = serde_json::to_value(&start)?;
-                v["text"] = json!(crate::mcp_auth::prompt_text(&start));
+                v["text"] = json!(penelope_mcp_host::auth::prompt_text(&start));
                 Ok(v)
             }
             other => Err(anyhow::anyhow!("méthode inconnue : {other}")),
         }
     }
 
-    fn mcp(&self) -> anyhow::Result<Arc<dyn crate::ports::McpAdmin>> {
+    fn mcp(&self) -> anyhow::Result<Arc<dyn penelope_app::ports::McpAdmin>> {
         self.daemon
             .hooks
             .mcp_supervisor()

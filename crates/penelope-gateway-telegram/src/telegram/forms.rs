@@ -231,7 +231,7 @@ impl TelegramGateway {
                         .finish_elicitation(
                             chat_id,
                             id,
-                            crate::elicitation::Action::Cancel,
+                            penelope_app::elicitation::Action::Cancel,
                             "✖️ Formulaire abandonné : `{server}` reçoit une annulation.",
                             true,
                             None,
@@ -264,17 +264,23 @@ impl TelegramGateway {
                         topic_id,
                         message_id: None,
                     };
-                    let note =
-                        match crate::workflow::start_run(d, workflow, values, &origin, None, 0)
-                            .await
-                        {
-                            Ok(run) => format!(
-                                "▶️ Run `{}` lancé (« {} »).",
-                                run.id,
-                                pending["choice"].as_str().unwrap_or(workflow)
-                            ),
-                            Err(e) => format!("❌ {e}"),
-                        };
+                    let note = match penelope_orchestrator::workflow::start_run(
+                        &penelope_daemon::workflow::context_of(d),
+                        workflow,
+                        values,
+                        &origin,
+                        None,
+                        0,
+                    )
+                    .await
+                    {
+                        Ok(run) => format!(
+                            "▶️ Run `{}` lancé (« {} »).",
+                            run.id,
+                            pending["choice"].as_str().unwrap_or(workflow)
+                        ),
+                        Err(e) => format!("❌ {e}"),
+                    };
                     return self.reply(chat_id, topic_id, None, &note).await;
                 }
                 // Arguments d'un prompt MCP (`/p`).
@@ -298,15 +304,15 @@ impl TelegramGateway {
                         .finish_elicitation(
                             chat_id,
                             id,
-                            crate::elicitation::Action::Accept(Some(values)),
+                            penelope_app::elicitation::Action::Accept(Some(values)),
                             "✔️ Formulaire envoyé à `{server}`.",
                             true,
                             None,
                         )
                         .await;
                 }
-                let note = match crate::workflow::answer(
-                    d,
+                let note = match penelope_orchestrator::workflow::answer(
+                    &penelope_daemon::workflow::context_of(d),
                     pending["run"].as_str().unwrap_or_default(),
                     pending["visit"].as_str().unwrap_or_default(),
                     pending["choice"].as_str().unwrap_or_default(),

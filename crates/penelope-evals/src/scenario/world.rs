@@ -6,8 +6,8 @@
 //! LLM ; approbations ; artefacts ; usage ; `tg_outbox` ; fichiers du workspace ;
 //! vérification de la chaîne d'audit.
 
+use penelope_app::services::Services;
 use penelope_context::transcript::Entry;
-use penelope_daemon::Services;
 use penelope_store::rusqlite;
 use serde_json::{Value, json};
 use std::path::Path;

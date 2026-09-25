@@ -138,7 +138,9 @@ impl TelegramGateway {
             .await;
         let _ = self.bot.edit_markup(chat_id, message_id, None).await;
         if action.args["form"].as_bool().unwrap_or(false) {
-            let Some(schema) = crate::workflow::form_of(&self.daemon, run, visit).await else {
+            let Some(schema) =
+                penelope_orchestrator::workflow::form_of(&self.daemon.services, run, visit).await
+            else {
                 return self
                     .reply(
                         chat_id,
@@ -170,7 +172,15 @@ impl TelegramGateway {
             .await?;
             format!("✏️ « {choice} » : précise en un message.")
         } else {
-            match crate::workflow::answer(&self.daemon, run, visit, choice, None).await {
+            match penelope_orchestrator::workflow::answer(
+                &penelope_daemon::workflow::context_of(&self.daemon),
+                run,
+                visit,
+                choice,
+                None,
+            )
+            .await
+            {
                 Ok(()) => format!("✔️ « {choice} »"),
                 Err(e) => format!("ℹ️ {e}"),
             }
@@ -186,7 +196,7 @@ impl TelegramGateway {
     ) -> anyhow::Result<()> {
         let session = action.target.as_str();
         let alias = action.args.get("alias").and_then(|a| a.as_str());
-        let rpc = crate::rpc::Rpc::new(self.daemon.clone());
+        let rpc = penelope_daemon::rpc::Rpc::new(self.daemon.clone());
         let result = rpc
             .call(
                 m::SESSION_MODEL,

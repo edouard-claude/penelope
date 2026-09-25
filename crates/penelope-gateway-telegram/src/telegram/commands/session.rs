@@ -73,7 +73,7 @@ impl TelegramGateway {
                          `/new` la ferme et **ils seront perdus**. La garder en fond : \
                          elle finit son travail et ses réponses t'attendent à ton retour \
                          (`/sessions`).",
-                        crate::titles::label(&old)
+                        penelope_conversation::titles::label(&old)
                     );
                     return self
                         .send_screen(
@@ -86,7 +86,7 @@ impl TelegramGateway {
                         .await;
                 }
                 if choice != Some(false) {
-                    crate::session_ops::silence(
+                    penelope_ops::session_ops::silence(
                         &d.services,
                         &d.bus,
                         old.id.as_str(),
@@ -95,17 +95,17 @@ impl TelegramGateway {
                     .await?;
                     s.sessions.set_state(old.id.as_str(), "closed").await?;
                     // `/new` clôt aussi l'épisode en cours : il est relu (§6.6).
-                    crate::episodes::spawn_ingest(
+                    penelope_vault::episodes::spawn_ingest(
                         d.services.clone(),
                         d.providers.clone(),
                         old.id.to_string(),
                         old.episode_seq,
-                        crate::episodes::Boundary::NewSession,
+                        penelope_vault::episodes::Boundary::NewSession,
                     );
                 }
             }
             let title = (!args.is_empty())
-                .then(|| crate::titles::clean(args))
+                .then(|| penelope_conversation::titles::clean(args))
                 .flatten();
             let sess = s
                 .sessions
@@ -116,7 +116,8 @@ impl TelegramGateway {
                 .await?;
             if let Some(title) = title {
                 // Notes d'une session sur le même sujet : proposées (issue #32).
-                let similar = crate::session_notes::similar(s, sess.id.as_str(), &title).await;
+                let similar =
+                    penelope_vault::session_notes::similar(s, sess.id.as_str(), &title).await;
                 let text = format!("🆕 Nouvelle session « {title} » (`{}`).", sess.id);
                 if similar.is_empty() {
                     text
@@ -210,7 +211,7 @@ impl TelegramGateway {
         let reply_to = Some(message_id);
         let text: String = {
             let session = d.chat_session_for(&origin).await?;
-            match crate::titles::clean(args) {
+            match penelope_conversation::titles::clean(args) {
                 None => {
                     return self
                         .send_screen(
@@ -271,15 +272,15 @@ impl TelegramGateway {
         self.react(chat_id, message_id, reaction::RECEIVED);
         let (daemon, messenger) = (d.clone(), d.hooks.messenger());
         tokio::spawn(async move {
-            let text = match crate::compaction::compact(
-                &crate::compaction::context_of(&daemon),
+            let text = match penelope_conversation::compaction::compact(
+                &penelope_daemon::compaction::context_of(&daemon),
                 &session,
-                crate::compaction::Trigger::Manual,
+                penelope_conversation::compaction::Trigger::Manual,
                 None,
             )
             .await
             {
-                Ok(r) => crate::compaction::report_text(&r),
+                Ok(r) => penelope_conversation::compaction::report_text(&r),
                 Err(e) => format!("❌ {e}"),
             };
             if let Some(m) = messenger {
@@ -309,7 +310,7 @@ impl TelegramGateway {
         let text: String = {
             let session = d.chat_session_for(&origin).await?;
             let title = (!args.is_empty()).then(|| args.to_string());
-            match crate::session_ops::fork(&d.services, &session, title).await {
+            match penelope_ops::session_ops::fork(&d.services, &session, title).await {
                 Ok(v) => {
                     let fork = v["session"].as_str().unwrap_or_default().to_string();
                     let background = self.bind_chat(&fork, chat_id, topic_id).await?;
@@ -381,7 +382,7 @@ impl TelegramGateway {
         let text: String = {
             let session = d.chat_session_for(&origin).await?;
             let turns = args.trim().parse::<usize>().unwrap_or(1);
-            match crate::session_ops::rewind(&d.services, &d.bus, &session, turns).await {
+            match penelope_ops::session_ops::rewind(&d.services, &d.bus, &session, turns).await {
                 Ok(v) => format!(
                     "⏪ {turns} échange(s) défait(s) ({} messages mis de côté dans `{}`).",
                     shown(&v["removed"]),
@@ -419,7 +420,9 @@ impl TelegramGateway {
         let (me, d2) = (self.clone(), d.clone());
         tokio::spawn(async move {
             let note =
-                match crate::session_ops::export(&d2.services, "session", Some(&session)).await {
+                match penelope_ops::session_ops::export(&d2.services, "session", Some(&session))
+                    .await
+                {
                     Ok(v) => {
                         let path = std::path::PathBuf::from(v["path"].as_str().unwrap_or_default());
                         match me
@@ -459,7 +462,7 @@ impl TelegramGateway {
                     .send_sessions_menu(chat_id, topic_id, 0, false, None)
                     .await;
             } else {
-                match crate::session_ops::resolve(s, args).await {
+                match penelope_ops::session_ops::resolve(s, args).await {
                     Err(e) => format!("❌ {e}"),
                     Ok(sess) => {
                         let id = sess.id.to_string();
@@ -470,7 +473,7 @@ impl TelegramGateway {
                         s.sessions.touch(&id).await?;
                         format!(
                             "↪️ Session « {} » reprise (`{id}`).{}",
-                            crate::titles::label(&sess),
+                            penelope_conversation::titles::label(&sess),
                             background_note(background)
                         )
                     }
@@ -500,7 +503,7 @@ impl TelegramGateway {
                     .map(|x| x.id.to_string())
                     .ok_or_else(|| "aucune session liée à ce chat".to_string())
             } else {
-                crate::session_ops::resolve(s, args)
+                penelope_ops::session_ops::resolve(s, args)
                     .await
                     .map(|x| x.id.to_string())
             };
@@ -508,7 +511,9 @@ impl TelegramGateway {
                 Err(e) => format!("❌ {e}"),
                 Ok(id) => {
                     let label = match s.sessions.get(&id).await? {
-                        Some(sess) => format!("« {} »", crate::titles::label(&sess)),
+                        Some(sess) => {
+                            format!("« {} »", penelope_conversation::titles::label(&sess))
+                        }
                         None => format!("`{id}`"),
                     };
                     let args = json!({
@@ -547,7 +552,7 @@ impl TelegramGateway {
                     .map(|x| x.id.to_string())
                     .ok_or_else(|| "aucune session liée à ce chat".to_string())
             } else {
-                crate::session_ops::resolve(s, args)
+                penelope_ops::session_ops::resolve(s, args)
                     .await
                     .map(|x| x.id.to_string())
             };
@@ -555,12 +560,14 @@ impl TelegramGateway {
                 Err(e) => format!("❌ {e}"),
                 Ok(id) => {
                     let label = match s.sessions.get(&id).await? {
-                        Some(sess) => format!("« {} »", crate::titles::label(&sess)),
+                        Some(sess) => {
+                            format!("« {} »", penelope_conversation::titles::label(&sess))
+                        }
                         None => format!("`{id}`"),
                     };
                     // Les forks perdent leur début avec la mère (arbitrage 3 de la V1) :
                     // l'écran le dit avant la question.
-                    let preview = penelope_daemon::purge::preview(s, &id).await?;
+                    let preview = penelope_ops::purge::preview(s, &id).await?;
                     let warning = preview["avertissement"]
                         .as_str()
                         .map(|w| format!("⚠️ {w}\n\n"))

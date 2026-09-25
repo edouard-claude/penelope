@@ -16,8 +16,8 @@ test_modules = [
 # Liste de référence (R3) : les fichiers autorisés à dépasser, chacun avec sa borne.
 # Elle ne peut que rétrécir : un fichier repassé sous le plafond doit en sortir.
 [files.oversized]
-"crates/penelope-daemon/src/tool_jobs.rs" = 1136   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/engine.rs" = 1093
+"crates/penelope-daemon/src/tool_jobs.rs" = 1135   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
+"crates/penelope-daemon/src/engine.rs" = 1091
 "crates/penelope-kernel/src/config.rs" = 2148   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-cli/src/commands.rs" = 2128   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-llm/src/provider.rs" = 2048
@@ -53,7 +53,6 @@ modules = [
     "runner",
     "runtime",
     "runtime_events",
-    "scheduler",
     "selfknow",
     "supervisor",
     "wiki_e2e",
@@ -71,11 +70,9 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 "rpc/mod.rs" = 4   # découpage (lot G) : la mention suit son code
 "rpc/methods/workflows.rs" = 1   # découpage (lot G) : la mention suit son code
 "rpc/methods/memory.rs" = 1   # découpage (lot G) : la mention suit son code
-"workflow/mod.rs" = 13   # façade du moteur (T27) : entrées en &Arc<Daemon> jusqu'à T30
-"scheduler/mod.rs" = 7   # façade de l'ordonnanceur (T27) : entrées en &Arc<Daemon> jusqu'à T30
+"workflow/mod.rs" = 3   # façade du moteur (T27) : entrées en &Arc<Daemon> jusqu'à T30
 "tool_jobs.rs" = 3   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "compaction.rs" = 1
-"dream/mod.rs" = 2
 "supervisor.rs" = 10
 "runner.rs" = 8
 "runtime.rs" = 6

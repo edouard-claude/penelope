@@ -2,11 +2,13 @@
 //! le digest du rêve ou le fork. Les autres vivent dans `penelope-conversation` (T23).
 
 use super::*;
-use crate::agent::Conversation;
-use crate::bus::Origin;
-use crate::conversation::SessionConversation;
-use crate::runtime::{Daemon, Services};
-use crate::testing::RecordingMessenger;
+use crate::runtime::Daemon;
+use penelope_agent::Conversation;
+use penelope_app::bus::Origin;
+use penelope_app::services::Services;
+use penelope_app::testing::RecordingMessenger;
+use penelope_conversation::SessionConversation;
+use penelope_conversation::compaction::*;
 use penelope_kernel::clock::TestClock;
 use penelope_llm::catalog::ModelInfo;
 use penelope_llm::catalog::strip_provider;
@@ -116,10 +118,14 @@ async fn three_failures_compact_without_a_model_and_say_so() {
     let view = context_view(&s, &sid, None).await.unwrap();
     assert_eq!(view["compaction_failures"], 2);
     assert!(
-        crate::dream::digest_text(&d, d.hooks.mcp_supervisor())
-            .await
-            .unwrap()
-            .contains("Résumé de session en échec"),
+        penelope_dream::digest_text(
+            &d.dream(),
+            penelope_orchestrator::scheduler::digest_inputs(&d.services).await,
+            d.hooks.mcp_supervisor()
+        )
+        .await
+        .unwrap()
+        .contains("Résumé de session en échec"),
         "le digest signale la session"
     );
 
@@ -183,7 +189,7 @@ async fn a_turn_over_the_threshold_compacts_in_the_background() {
     let turn = d.services.turns.claim("test").await.unwrap().unwrap();
     let out = d.run_turn(&turn).await;
     assert!(
-        matches!(out, crate::agent::TurnOutcome::Answered { .. }),
+        matches!(out, penelope_agent::TurnOutcome::Answered { .. }),
         "{out:?}"
     );
     d.services.turns.complete(&turn).await.unwrap();
@@ -234,7 +240,7 @@ async fn max_prompt_tokens_compacts_a_huge_window_in_the_background() {
     let turn = d.services.turns.claim("test").await.unwrap().unwrap();
     let out = d.run_turn(&turn).await;
     assert!(
-        matches!(out, crate::agent::TurnOutcome::Answered { .. }),
+        matches!(out, penelope_agent::TurnOutcome::Answered { .. }),
         "{out:?}"
     );
     d.services.turns.complete(&turn).await.unwrap();
@@ -272,7 +278,7 @@ async fn a_proven_overflow_compacts_then_retries_once() {
         .unwrap();
     let turn = d.services.turns.claim("test").await.unwrap().unwrap();
     match d.run_turn(&turn).await {
-        crate::agent::TurnOutcome::Answered { text, .. } => {
+        penelope_agent::TurnOutcome::Answered { text, .. } => {
             assert_eq!(text, "C'est reparti.")
         }
         other => panic!("{other:?}"),
@@ -309,7 +315,7 @@ async fn a_proven_overflow_compacts_then_retries_once() {
         .unwrap();
     let turn = d.services.turns.claim("test").await.unwrap().unwrap();
     match d.run_turn(&turn).await {
-        crate::agent::TurnOutcome::Failed { error } => {
+        penelope_agent::TurnOutcome::Failed { error } => {
             assert!(error.contains("/compact"), "{error}")
         }
         other => panic!("{other:?}"),
@@ -354,7 +360,7 @@ async fn the_billed_prompt_size_requests_a_background_compaction() {
     let turn = d.services.turns.claim("test").await.unwrap().unwrap();
     let out = d.run_turn(&turn).await;
     assert!(
-        matches!(out, crate::agent::TurnOutcome::Answered { .. }),
+        matches!(out, penelope_agent::TurnOutcome::Answered { .. }),
         "{out:?}"
     );
     d.services.turns.complete(&turn).await.unwrap();
@@ -435,7 +441,7 @@ async fn a_cold_session_is_compacted_before_the_model_call() {
     let turn = d.services.turns.claim("test").await.unwrap().unwrap();
     let out = d.run_turn(&turn).await;
     assert!(
-        matches!(out, crate::agent::TurnOutcome::Answered { .. }),
+        matches!(out, penelope_agent::TurnOutcome::Answered { .. }),
         "{out:?}"
     );
     d.services.turns.complete(&turn).await.unwrap();
@@ -486,7 +492,9 @@ async fn a_cold_session_is_compacted_before_the_model_call() {
 /// `session_notes` (T22) : il compacte et forke, deux étages au-dessus du vault.
 #[tokio::test]
 async fn notes_survive_compaction_are_copied_by_fork_and_harvested_once() {
-    use crate::session_notes::{file_of, harvest, mark_harvested, parse, prompt_block, read, tool};
+    use penelope_vault::session_notes::{
+        file_of, harvest, mark_harvested, parse, prompt_block, read, tool,
+    };
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
     let s = Arc::new(
@@ -528,7 +536,7 @@ async fn notes_survive_compaction_are_copied_by_fork_and_harvested_once() {
     tool(s, &sid, &json!({"action": "update_section", "section": "Décisions", "content": "- Migrer table par table", "mode": "append"})).await.unwrap();
 
     let tiers =
-        crate::conversation::build_tiers_in(s, "on continue", &[], None, Some((&sid, 0)), None)
+        penelope_conversation::build_tiers_in(s, "on continue", &[], None, Some((&sid, 0)), None)
             .await;
     assert!(
         tiers
@@ -543,7 +551,7 @@ async fn notes_survive_compaction_are_copied_by_fork_and_harvested_once() {
 
     let rel = file_of(s, &sid).await.unwrap().expect("fichier de notes");
     assert!(rel.starts_with("notes/refonte-facturation-"), "{rel}");
-    let raw = std::fs::read_to_string(crate::helpers::vault_dir(s).join(&rel)).unwrap();
+    let raw = std::fs::read_to_string(penelope_app::helpers::vault_dir(s).join(&rel)).unwrap();
     assert!(
         raw.contains("type: session") && raw.contains(&format!("session: {sid}")),
         "{raw}"
@@ -577,9 +585,15 @@ async fn notes_survive_compaction_are_copied_by_fork_and_harvested_once() {
         .await
         .unwrap();
     tool(s, &sid, &json!({"action": "update_section", "section": "Prochaine étape", "content": "Écrire la migration des avoirs"})).await.unwrap();
-    let tiers =
-        crate::conversation::build_tiers_in(s, "et maintenant ?", &[], None, Some((&sid, 0)), None)
-            .await;
+    let tiers = penelope_conversation::build_tiers_in(
+        s,
+        "et maintenant ?",
+        &[],
+        None,
+        Some((&sid, 0)),
+        None,
+    )
+    .await;
     assert!(
         tiers.volatile.contains("Écrire la migration des avoirs"),
         "{}",
@@ -588,7 +602,7 @@ async fn notes_survive_compaction_are_copied_by_fork_and_harvested_once() {
     assert!(tiers.volatile.contains("centimes entiers"));
 
     // Fork : copie propre, modifiable sans toucher l'original.
-    let fork = crate::session_ops::fork(&d.services, &sid, None)
+    let fork = penelope_ops::session_ops::fork(&d.services, &sid, None)
         .await
         .unwrap();
     let fork = fork["session"].as_str().unwrap().to_string();
@@ -637,5 +651,8 @@ async fn notes_survive_compaction_are_copied_by_fork_and_harvested_once() {
 /// dans `penelope-agent` ; les deux doivent rester égales.
 #[test]
 fn the_cache_ttl_is_the_same_for_the_loop_and_the_conversation() {
-    assert_eq!(crate::helpers::CACHE_TTL_MS, penelope_agent::CACHE_TTL_MS);
+    assert_eq!(
+        penelope_app::helpers::CACHE_TTL_MS,
+        penelope_agent::CACHE_TTL_MS
+    );
 }

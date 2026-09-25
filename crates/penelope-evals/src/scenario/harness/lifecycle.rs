@@ -9,9 +9,10 @@ use super::{
     workspace_of,
 };
 use anyhow::Context as _;
-use penelope_daemon::bus::Origin;
-use penelope_daemon::executor::McpGateway;
-use penelope_daemon::{Daemon, Services, runner};
+use penelope_app::bus::Origin;
+use penelope_app::services::Services;
+use penelope_daemon::{Daemon, runner};
+use penelope_executor::executor::McpGateway;
 use penelope_kernel::clock::SharedClock;
 use penelope_kernel::error::KernelError;
 use penelope_llm::mock::{MockProvider, Scripted};

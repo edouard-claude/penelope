@@ -2,15 +2,15 @@
 //! `penelope-ops` (épopée #208, T28) : ils lisent des modules du daemon (`tool_jobs`,
 //! `prompt_snapshot`, `history`) ou l'hôte MCP (`stdio_profile`), dont ops ne dépend pas.
 
-use crate::ports::McpAdmin;
-use crate::runtime::Services;
+use penelope_app::ports::McpAdmin;
+use penelope_app::services::Services;
 use penelope_kernel::api::DoctorCheck;
 use std::sync::Arc;
 
 /// Les contrôles de `doctor::run` avec ceux du daemon à leur rang (après la rétention),
 /// puis ceux des serveurs MCP : l'ordre de la sortie d'avant T28.
 pub(super) async fn run(s: &Services, sup: Option<Arc<dyn McpAdmin>>) -> Vec<DoctorCheck> {
-    let mut checks = crate::doctor::run_with(s, daemon_checks(s).await).await;
+    let mut checks = penelope_ops::doctor::run_with(s, daemon_checks(s).await).await;
     if let Some(sup) = sup {
         checks.extend(mcp_checks(s, &*sup).await);
     }
@@ -109,7 +109,7 @@ pub async fn mcp_checks(s: &Services, sup: &dyn McpAdmin) -> Vec<DoctorCheck> {
         // #89 : un serveur stdio confiné doit refuser les mêmes lectures que le shell.
         if let Some(cfg) = sup.config_of(&st.name).await
             && cfg.effective_transport() == "stdio"
-            && let Ok(p) = crate::mcp::stdio_profile(s, &cfg)
+            && let Ok(p) = penelope_mcp_host::stdio_profile(s, &cfg)
             && p.enforced()
             && p.deny_read.is_empty()
         {
@@ -149,7 +149,10 @@ pub(super) async fn tool_jobs_check(s: &Services) -> DoctorCheck {
     const OLD_S: i64 = 3_600;
     let cfg = s.config.config();
     let now = s.clock.now_ms();
-    let live = crate::tool_jobs::store(s).live().await.unwrap_or_default();
+    let live = penelope_executor::jobs::store(s)
+        .live()
+        .await
+        .unwrap_or_default();
     let here = s.jobs.len();
     if live.is_empty() {
         return DoctorCheck::ok(ID, LABEL, "aucun job en cours".to_string());
