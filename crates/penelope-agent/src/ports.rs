@@ -1,13 +1,14 @@
 //! Ports de la boucle (épopée #208, T09) : ce qu'un tour reçoit du reste du daemon.
 //!
 //! `AgentServices` remplace `Services` dans la boucle : les registres du kernel, du LLM
-//! et du HITL qu'elle lit et écrit directement, plus six traits pour ce qui reste au
-//! daemon (mode d'approbation d'une session, nature d'une session, instantanés du
-//! prompt, dernier appel de la session, jobs d'outils, tentatives). Chaque trait a une
+//! et du HITL qu'elle lit et écrit directement (le dernier appel d'une session, auquel
+//! le cache de prompt se compare, se lit dans le `BudgetLedger`), plus cinq traits pour
+//! ce qui reste au daemon (mode d'approbation d'une session, nature d'une session,
+//! instantanés du prompt, jobs d'outils, tentatives). Chaque trait a une
 //! implémentation unique dans le daemon ; `AgentServices::for_tests` en donne une en
 //! mémoire, sur `Store::open_memory`, pour que la boucle se teste sans daemon.
 
-use super::{ApprovalMode, PreviousCall, ToolExecutor};
+use super::{ApprovalMode, ToolExecutor};
 use penelope_app::attempts::{AttemptSink, MemoryAttempts};
 use penelope_app::conversation::PromptPrefix;
 use penelope_hitl::{ApprovalStore, PolicyEngine};
@@ -42,7 +43,6 @@ pub struct AgentServices {
     pub modes: Arc<dyn SessionModes>,
     pub sessions: Arc<dyn SessionInfo>,
     pub snapshots: Arc<dyn PromptSnapshots>,
-    pub cache: Arc<dyn CacheAudit>,
     pub jobs: Arc<dyn JobRunner>,
     /// Tentatives sans réponse (#206, T15).
     pub attempts: Arc<dyn AttemptSink>,
@@ -76,13 +76,6 @@ pub trait PromptSnapshots: Send + Sync {
     async fn record(&self, hash: &str, prefix: &PromptPrefix) -> anyhow::Result<bool>;
     /// Cause « préfixe » précisée par les tuiles qui ont bougé (`prefixe:T1+T2`).
     async fn prefix_cause(&self, before: Option<&str>, after: &str) -> String;
-}
-
-/// Mémoire du cache de prompt (issue #17) : le dernier appel de conversation de la
-/// session, auquel la requête suivante se compare.
-#[async_trait::async_trait]
-pub trait CacheAudit: Send + Sync {
-    async fn previous_call(&self, session_id: &str) -> anyhow::Result<Option<PreviousCall>>;
 }
 
 /// Un appel qui peut partir en arrière-plan (issue #204).
@@ -163,7 +156,7 @@ impl SessionModes for MemoryModes {
     }
 }
 
-/// Ni instantané ni appel précédent : les tests de la boucle n'en lisent pas.
+/// Aucun instantané : les tests de la boucle n'en lisent pas.
 pub struct NoAudit;
 
 #[async_trait::async_trait]
@@ -174,13 +167,6 @@ impl PromptSnapshots for NoAudit {
 
     async fn prefix_cause(&self, _before: Option<&str>, _after: &str) -> String {
         "prefixe".to_string()
-    }
-}
-
-#[async_trait::async_trait]
-impl CacheAudit for NoAudit {
-    async fn previous_call(&self, _session_id: &str) -> anyhow::Result<Option<PreviousCall>> {
-        Ok(None)
     }
 }
 
@@ -218,7 +204,6 @@ impl AgentServices {
             ),
             modes: Arc::new(MemoryModes::new(config.clone())),
             snapshots: Arc::new(NoAudit),
-            cache: Arc::new(NoAudit),
             jobs: Arc::new(NoJobs),
             attempts: Arc::new(MemoryAttempts::default()),
             catalog: Catalog::new(),

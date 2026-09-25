@@ -242,3 +242,38 @@ async fn ca_10_4_daily_budget_exceeded_is_detected() {
     let st = l.status(&cfg, None, None).await.unwrap();
     assert!(st[0].exceeded, "{st:?}");
 }
+
+/// Le dernier appel de conversation d'une session (issue #17, épopée #208, T27) : les
+/// autres rôles et les autres sessions ne comptent pas, l'heure revient en millisecondes.
+#[tokio::test]
+async fn the_previous_call_is_the_last_chat_call_of_the_session() {
+    let store = Store::open_memory().unwrap();
+    let clock = Arc::new(TestClock::new(1_767_299_400_000));
+    let l = BudgetLedger::new(store, clock.clone());
+    assert_eq!(l.previous_call("s1").await.unwrap(), None);
+    let call = |session: &str, role: &str, hash: &str| UsageRecord {
+        session_id: Some(session.into()),
+        role: Some(role.into()),
+        model: "z-ai/glm-5.3".into(),
+        provider: "openrouter".into(),
+        upstream: Some("Together".into()),
+        msg_count: Some(4),
+        request_hash: Some(hash.into()),
+        system_hash: Some("sys".into()),
+        tools_hash: Some("tools".into()),
+        ..Default::default()
+    };
+    l.record(call("s1", "chat", "h1")).await.unwrap();
+    clock.advance_secs(30);
+    l.record(call("s1", "chat", "h2")).await.unwrap();
+    l.record(call("s1", "classifier", "h3")).await.unwrap();
+    l.record(call("s2", "chat", "h4")).await.unwrap();
+
+    let p = l.previous_call("s1").await.unwrap().unwrap();
+    assert_eq!(p.request_hash.as_deref(), Some("h2"));
+    assert_eq!(p.ts_ms, 1_767_299_430_000);
+    assert_eq!(p.upstream.as_deref(), Some("Together"));
+    assert_eq!(p.msg_count, Some(4));
+    assert_eq!(p.system_hash.as_deref(), Some("sys"));
+    assert_eq!(p.tools_hash.as_deref(), Some("tools"));
+}

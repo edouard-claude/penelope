@@ -98,7 +98,7 @@ impl AgentLoop {
             attempts.at_step(iteration + 1);
             // Empreinte et fournisseur amont collant : le cache de préfixe reste chaud et
             // un raté est expliqué (issue #17).
-            let previous = s.cache.previous_call(&spec.session_id).await?;
+            let previous = s.budget.previous_call(&spec.session_id).await?;
             let pinned = sticky_upstream(previous.as_ref(), &spec.model_id, s.clock.now_ms());
             let fingerprint = Fingerprint::of(&messages, &spec.tools);
             let response = match self

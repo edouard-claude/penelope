@@ -4,6 +4,7 @@
 
 use crate::catalog::strip_provider;
 use crate::types::{ChatMessage, ToolDef};
+pub use penelope_kernel::budget::PreviousCall;
 use penelope_kernel::canonical::sha256_hex;
 use serde_json::json;
 
@@ -75,18 +76,6 @@ impl Fingerprint {
             request_hash: self.request_hash(),
         }
     }
-}
-
-/// Dernier appel de conversation d'une session.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PreviousCall {
-    pub ts_ms: i64,
-    pub model: String,
-    pub upstream: Option<String>,
-    pub msg_count: Option<i64>,
-    pub request_hash: Option<String>,
-    pub system_hash: Option<String>,
-    pub tools_hash: Option<String>,
 }
 
 /// Fournisseur amont à garder pour l'appel suivant : celui du dernier appel du même

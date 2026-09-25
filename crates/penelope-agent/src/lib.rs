@@ -70,8 +70,8 @@ pub use pipeline::server_of;
 pub use pipeline::{ApprovalMode, declared_allow, local_draft_allow};
 pub use pipeline::{CallContext, CallId};
 pub use ports::{
-    AgentServices, CacheAudit, JobRequest, JobRunner, MemoryModes, NoAudit, NoJobs,
-    PromptSnapshots, SessionInfo, SessionModes,
+    AgentServices, JobRequest, JobRunner, MemoryModes, NoAudit, NoJobs, PromptSnapshots,
+    SessionInfo, SessionModes,
 };
 pub use rules::{MAX_FAMILIES_PER_CLICK, always_creates_no_rule};
 pub use rules::{arg_pattern, arg_patterns};

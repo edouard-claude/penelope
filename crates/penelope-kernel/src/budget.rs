@@ -88,6 +88,19 @@ pub struct UsageRecord {
     pub miss_cause: Option<String>,
 }
 
+/// Dernier appel de conversation d'une session : ce à quoi la requête suivante se compare
+/// pour expliquer un raté de cache (issue #17).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreviousCall {
+    pub ts_ms: i64,
+    pub model: String,
+    pub upstream: Option<String>,
+    pub msg_count: Option<i64>,
+    pub request_hash: Option<String>,
+    pub system_hash: Option<String>,
+    pub tools_hash: Option<String>,
+}
+
 /// Une ligne de rapport de consommation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsageRow {
@@ -359,6 +372,45 @@ impl BudgetLedger {
                 )?)
             })
             .await?)
+    }
+
+    /// Le dernier appel de conversation de la session (issue #17) : l'empreinte à laquelle
+    /// la requête suivante se compare, et le fournisseur amont à garder.
+    pub async fn previous_call(&self, session_id: &str) -> Result<Option<PreviousCall>> {
+        use penelope_store::rusqlite::OptionalExtension;
+        let sid = session_id.to_string();
+        let row = self
+            .store
+            .read(move |c| {
+                Ok(c.query_row(
+                    "SELECT ts, model, upstream, msg_count, request_hash, system_hash, tools_hash
+                     FROM usage WHERE session_id = ?1 AND COALESCE(role, 'chat') = 'chat'
+                     ORDER BY ts DESC, rowid DESC LIMIT 1",
+                    [sid],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            PreviousCall {
+                                ts_ms: 0,
+                                model: r.get(1)?,
+                                upstream: r.get(2)?,
+                                msg_count: r.get(3)?,
+                                request_hash: r.get(4)?,
+                                system_hash: r.get(5)?,
+                                tools_hash: r.get(6)?,
+                            },
+                        ))
+                    },
+                )
+                .optional()?)
+            })
+            .await?;
+        Ok(row.map(|(ts, mut p)| {
+            p.ts_ms = chrono::DateTime::parse_from_rfc3339(&ts)
+                .map(|t| t.timestamp_millis())
+                .unwrap_or(0);
+            p
+        }))
     }
 
     /// Appels de conversation et coût total d'un tour, reprises après approbation

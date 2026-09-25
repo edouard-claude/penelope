@@ -3,62 +3,21 @@
 //! miss` en fait le bilan ; le fournisseur amont qui a servi reste épinglé tant que la
 //! session est active.
 //!
-//! Les parties pures (empreinte, fournisseur collant, cause d'un raté) vivent dans la
-//! boucle (`agent/cache.rs`) ; ici, la lecture du dernier appel et le contexte volatil.
+//! Les parties pures (empreinte, fournisseur collant, cause d'un raté) vivent dans
+//! `penelope_llm::cache`, la lecture du dernier appel dans le `BudgetLedger` du kernel
+//! (épopée #208, T27) ; ici, le contexte volatil et le préfixe stable.
 
 pub use crate::agent::{
     CACHE_TTL_MS, Fingerprint, Observed, PreviousCall, STICKY_MS, miss_cause, sticky_upstream,
 };
 use serde_json::json;
 
+/// Le dernier appel de conversation de la session (voir `BudgetLedger::previous_call`).
 pub async fn previous_call(
     s: &crate::runtime::Services,
     session_id: &str,
 ) -> anyhow::Result<Option<PreviousCall>> {
-    use penelope_store::rusqlite::OptionalExtension;
-    let sid = session_id.to_string();
-    let row = s
-        .store
-        .read(move |c| {
-            Ok(c.query_row(
-                "SELECT ts, model, upstream, msg_count, request_hash, system_hash, tools_hash
-                 FROM usage WHERE session_id = ?1 AND COALESCE(role, 'chat') = 'chat'
-                 ORDER BY ts DESC, rowid DESC LIMIT 1",
-                [sid],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        PreviousCall {
-                            ts_ms: 0,
-                            model: r.get(1)?,
-                            upstream: r.get(2)?,
-                            msg_count: r.get(3)?,
-                            request_hash: r.get(4)?,
-                            system_hash: r.get(5)?,
-                            tools_hash: r.get(6)?,
-                        },
-                    ))
-                },
-            )
-            .optional()?)
-        })
-        .await?;
-    Ok(row.map(|(ts, mut p)| {
-        p.ts_ms = chrono::DateTime::parse_from_rfc3339(&ts)
-            .map(|t| t.timestamp_millis())
-            .unwrap_or(0);
-        p
-    }))
-}
-
-/// Le port `CacheAudit` de la boucle : la table `usage` (épopée #208, T09).
-pub struct UsageAudit(pub std::sync::Arc<crate::runtime::Services>);
-
-#[async_trait::async_trait]
-impl crate::agent::CacheAudit for UsageAudit {
-    async fn previous_call(&self, session_id: &str) -> anyhow::Result<Option<PreviousCall>> {
-        previous_call(&self.0, session_id).await
-    }
+    Ok(s.budget.previous_call(session_id).await?)
 }
 
 /// Bloc de contexte volatil, tel qu'il précède le texte d'un message utilisateur.

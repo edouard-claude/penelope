@@ -102,7 +102,6 @@ pub(crate) fn agent_services(s: &Services) -> Arc<AgentServices> {
         modes: Arc::new(MemoryModes::new(s.config.clone())),
         sessions: Arc::new(s.sessions.clone()),
         snapshots: Arc::new(NoAudit),
-        cache: Arc::new(NoAudit),
         jobs: Arc::new(NoJobs),
         attempts: Arc::new(penelope_app::journal::JournalAttempts(s.events.clone())),
     })

@@ -15,7 +15,6 @@ pub fn services_of(s: &Arc<crate::runtime::Services>) -> Arc<AgentServices> {
         s,
         Arc::new(crate::approval_mode::KvModes(s.clone())),
         Arc::new(crate::prompt_snapshot::StoredSnapshots(s.clone())),
-        Arc::new(crate::cache_audit::UsageAudit(s.clone())),
         Arc::new(DaemonJobs(s.clone())),
     )
 }
@@ -26,7 +25,6 @@ fn registries_of(s: &crate::runtime::Services) -> Arc<AgentServices> {
         s,
         Arc::new(MemoryModes::new(s.config.clone())),
         Arc::new(NoAudit),
-        Arc::new(NoAudit),
         Arc::new(NoJobs),
     )
 }
@@ -35,7 +33,6 @@ fn with_ports(
     s: &crate::runtime::Services,
     modes: Arc<dyn SessionModes>,
     snapshots: Arc<dyn PromptSnapshots>,
-    cache: Arc<dyn CacheAudit>,
     jobs: Arc<dyn JobRunner>,
 ) -> Arc<AgentServices> {
     Arc::new(AgentServices {
@@ -52,7 +49,6 @@ fn with_ports(
         modes,
         sessions: Arc::new(s.sessions.clone()),
         snapshots,
-        cache,
         jobs,
         attempts: Arc::new(penelope_app::journal::JournalAttempts(s.events.clone())),
     })
