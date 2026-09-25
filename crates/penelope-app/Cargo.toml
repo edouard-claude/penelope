@@ -26,7 +26,8 @@ chrono.workspace = true
 chrono-tz.workspace = true
 # Pièces jointes encodées pour le modèle (`media`).
 base64.workspace = true
-# Validation des adresses que présente une élicitation MCP (`elicitation`).
+# Validation des adresses que présente une élicitation MCP (`elicitation`), règle
+# HTTPS des points d'accès OAuth et des releases (`helpers::check_endpoint`).
 url.workspace = true
 # Crates métier que `Services::bootstrap` assemble, une raison chacune :
 # le journal, les effets, la configuration, les sessions, la file des tours, le budget.

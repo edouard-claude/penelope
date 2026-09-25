@@ -27,8 +27,6 @@ chrono-tz.workspace = true
 base64.workspace = true
 # Téléchargement des releases, des archives de skills, échanges OAuth Codex.
 reqwest.workspace = true
-# Adresses des releases (HTTPS obligatoire) et des points d'accès OAuth.
-url.workspace = true
 # Signature des releases (`upgrade`).
 minisign-verify.workspace = true
 # Découverte parallèle (import Hermes).

@@ -264,6 +264,36 @@ pub fn default_workspaces(s: &Services) -> Vec<PathBuf> {
     v.iter().map(|p| canonical_workspace(p)).collect()
 }
 
+// ---------------------------------------- Adresses (depuis mcp_auth.rs et upgrade.rs)
+
+/// Un code, un vérificateur PKCE, un jeton ou une release ne voyagent que chiffrés :
+/// HTTPS, ou HTTP vers la boucle locale **exacte** (`127.0.0.0/8`, `[::1]`, `localhost`).
+///
+/// L'hôte est lu par un analyseur d'URL, pas par préfixe : `http://localhost.exemple.org`,
+/// `http://127.0.0.1.exemple.org` ou `http://localhost@exemple.org` ne passent pas pour la
+/// boucle locale. Une URL portant des identifiants est toujours refusée. Une seule règle
+/// pour l'OAuth des serveurs MCP et le téléchargement des releases (épopée #208, T28).
+pub fn check_endpoint(raw: &str) -> Result<(), String> {
+    let refuse = || {
+        Err(format!(
+            "point d'accès OAuth refusé (HTTPS obligatoire hors boucle locale) : {raw}"
+        ))
+    };
+    let Ok(url) = url::Url::parse(raw) else {
+        return refuse();
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        return refuse();
+    }
+    match (url.scheme(), url.host()) {
+        ("https", Some(_)) => Ok(()),
+        ("http", Some(url::Host::Ipv4(ip))) if ip.is_loopback() => Ok(()),
+        ("http", Some(url::Host::Ipv6(ip))) if ip.is_loopback() => Ok(()),
+        ("http", Some(url::Host::Domain(host))) if host.eq_ignore_ascii_case("localhost") => Ok(()),
+        _ => refuse(),
+    }
+}
+
 // ---------------------------------------- Journal (depuis runtime_events.rs)
 
 /// Les résultats volumineux (listings, pages, images) n'envahissent pas le journal.

@@ -181,34 +181,9 @@ fn announces(said: &str, version: &str) -> bool {
         .any(|t| t.trim_start_matches('v') == version)
 }
 
-/// Une release ne se télécharge qu'en HTTPS, ou en HTTP vers la boucle locale **exacte**
-/// (`127.0.0.0/8`, `[::1]`, `localhost`), jamais avec des identifiants dans l'URL. La
-/// même règle que `penelope_mcp_host::auth::check_endpoint`, recopiée ici pour que
-/// `penelope-ops` ne dépende pas de l'hôte MCP (épopée #208, T28) ; les deux rejoindront
-/// `penelope_app::helpers`.
-fn check_endpoint(raw: &str) -> Result<(), String> {
-    let refuse = || {
-        Err(format!(
-            "point d'accès OAuth refusé (HTTPS obligatoire hors boucle locale) : {raw}"
-        ))
-    };
-    let Ok(url) = url::Url::parse(raw) else {
-        return refuse();
-    };
-    if !url.username().is_empty() || url.password().is_some() {
-        return refuse();
-    }
-    match (url.scheme(), url.host()) {
-        ("https", Some(_)) => Ok(()),
-        ("http", Some(url::Host::Ipv4(ip))) if ip.is_loopback() => Ok(()),
-        ("http", Some(url::Host::Ipv6(ip))) if ip.is_loopback() => Ok(()),
-        ("http", Some(url::Host::Domain(host))) if host.eq_ignore_ascii_case("localhost") => Ok(()),
-        _ => refuse(),
-    }
-}
-
 async fn fetch(client: &reqwest::Client, url: &str, max: usize) -> Result<Vec<u8>, String> {
-    check_endpoint(url)?;
+    // HTTPS, ou HTTP vers la boucle locale exacte, jamais d'identifiants dans l'URL.
+    crate::helpers::check_endpoint(url)?;
     let resp = client
         .get(url)
         .header(

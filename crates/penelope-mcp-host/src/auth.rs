@@ -79,32 +79,9 @@ fn http() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Un code, un vérificateur PKCE ou un jeton ne voyagent que chiffrés : HTTPS, ou HTTP
-/// vers la boucle locale **exacte** (`127.0.0.0/8`, `[::1]`, `localhost`).
-///
-/// L'hôte est lu par un analyseur d'URL, pas par préfixe : `http://localhost.exemple.org`,
-/// `http://127.0.0.1.exemple.org` ou `http://localhost@exemple.org` ne passent pas pour la
-/// boucle locale. Une URL portant des identifiants est toujours refusée.
-pub fn check_endpoint(raw: &str) -> Result<(), String> {
-    let refuse = || {
-        Err(format!(
-            "point d'accès OAuth refusé (HTTPS obligatoire hors boucle locale) : {raw}"
-        ))
-    };
-    let Ok(url) = url::Url::parse(raw) else {
-        return refuse();
-    };
-    if !url.username().is_empty() || url.password().is_some() {
-        return refuse();
-    }
-    match (url.scheme(), url.host()) {
-        ("https", Some(_)) => Ok(()),
-        ("http", Some(url::Host::Ipv4(ip))) if ip.is_loopback() => Ok(()),
-        ("http", Some(url::Host::Ipv6(ip))) if ip.is_loopback() => Ok(()),
-        ("http", Some(url::Host::Domain(host))) if host.eq_ignore_ascii_case("localhost") => Ok(()),
-        _ => refuse(),
-    }
-}
+// La règle HTTPS des points d'accès vit dans `penelope_app::helpers`, partagée avec le
+// téléchargement des releases (`penelope-ops`, T28).
+pub use penelope_app::helpers::check_endpoint;
 
 /// `schéma://hôte[:port]` d'une URL, lu par l'analyseur ; `None` si l'URL porte des
 /// identifiants ou n'a pas d'hôte.
