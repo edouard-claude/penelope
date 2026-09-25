@@ -284,6 +284,10 @@ pub fn dependency_rules() -> BTreeMap<&'static str, Vec<&'static str>> {
     // le daemon, qui la compose, ni la boucle, qui la consomme par le port
     // `Conversation`, ni le canal (`design/v1/README.md` §3.2).
     m.insert("penelope-conversation", CONVERSATION_ALLOWED_DEPS.to_vec());
+    // Le moteur de workflows et l'ordonnanceur (T27) : au-dessus de la boucle, de
+    // l'exécuteur, de la conversation et du rêve, qu'ils déclenchent ; jamais le daemon,
+    // qui les compose, ni le canal (`ChannelDelivery` et `Messenger` par les ports).
+    m.insert("penelope-orchestrator", ORCHESTRATOR_ALLOWED_DEPS.to_vec());
     m
 }
 
@@ -408,6 +412,28 @@ pub const CONVERSATION_ALLOWED_DEPS: &[&str] = &[
     "penelope-observe",
     "penelope-llm",
     "penelope-context",
+];
+
+/// Ce dont `penelope-orchestrator` peut dépendre (`decoupage-daemon.md` §3.2 : app,
+/// vault, agent, executor, dream, et la conversation dont les étapes `agent` lisent le
+/// prompt ; plus les crates métier). Ni le daemon, ni l'exploitation, ni l'hôte MCP (par
+/// `McpAdmin`), ni `penelope-telegram`, ni la passerelle.
+pub const ORCHESTRATOR_ALLOWED_DEPS: &[&str] = &[
+    "penelope-app",
+    "penelope-vault",
+    "penelope-agent",
+    "penelope-executor",
+    "penelope-conversation",
+    "penelope-dream",
+    "penelope-kernel",
+    "penelope-store",
+    "penelope-platform",
+    "penelope-observe",
+    "penelope-llm",
+    "penelope-mcp",
+    "penelope-tools",
+    "penelope-hitl",
+    "penelope-workflow",
 ];
 
 /// Vérifie les règles de dépendance.
@@ -574,6 +600,7 @@ mod tests {
             "penelope-agent",
             "penelope-executor",
             "penelope-conversation",
+            "penelope-orchestrator",
             "penelope-cli",
             "penelope-gateway-telegram",
         ] {
@@ -695,6 +722,7 @@ mod tests {
         for above in [
             "penelope-daemon",
             "penelope-agent",
+            "penelope-orchestrator",
             "penelope-dream",
             "penelope-ops",
             "penelope-mcp-host",
@@ -742,6 +770,38 @@ mod tests {
                 !conversation.internal_deps.contains(above),
                 "penelope-conversation dépend de {above} : {:?}",
                 conversation.internal_deps
+            );
+        }
+    }
+
+    /// T27 : l'orchestrateur ne voit ni le daemon, qui le compose, ni le canal, ni les
+    /// crates d'exploitation et d'hôte MCP, qu'il n'atteint que par les ports.
+    #[test]
+    fn the_orchestrator_crate_sees_neither_the_daemon_nor_the_channel() {
+        let all = crates();
+        let orchestrator = all
+            .iter()
+            .find(|c| c.name == "penelope-orchestrator")
+            .unwrap();
+        for above in [
+            "penelope-daemon",
+            "penelope-gateway-telegram",
+            "penelope-telegram",
+            "penelope-ops",
+            "penelope-mcp-host",
+        ] {
+            assert!(
+                !orchestrator.internal_deps.contains(above),
+                "penelope-orchestrator dépend de {above} : {:?}",
+                orchestrator.internal_deps
+            );
+        }
+        for below in ["penelope-agent", "penelope-executor", "penelope-dream"] {
+            let crate_below = all.iter().find(|c| c.name == below).unwrap();
+            assert!(
+                !crate_below.internal_deps.contains("penelope-orchestrator"),
+                "{below} est sous l'orchestrateur : {:?}",
+                crate_below.internal_deps
             );
         }
     }
