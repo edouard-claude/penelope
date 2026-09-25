@@ -51,7 +51,7 @@ pub(super) async fn shell_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
                 &cfg.sandbox.default_profile,
                 &cwd,
                 cfg.sandbox.shell_network || step.network,
-                &crate::executor::denied_reads(s),
+                &penelope_executor::executor::denied_reads(s),
             );
             let _ = std::fs::create_dir_all(&cwd);
             match penelope_tools::shell::exec(
@@ -62,7 +62,7 @@ pub(super) async fn shell_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
                     cwd: Some(&cwd),
                     timeout,
                     max_output_bytes: cfg.tools.max_output_bytes,
-                    shell: crate::executor::shell_override(&cfg.tools.shell),
+                    shell: penelope_executor::executor::shell_override(&cfg.tools.shell),
                     cancel: Some(ctx.cancel),
                 },
             )
@@ -117,7 +117,7 @@ pub(super) async fn tool_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> 
     let args = ctx.render_json(&step.args).await;
     let args = if args.is_null() { json!({}) } else { args };
     let exec = ctx.executor().await;
-    use crate::agent::ToolExecutor;
+    use penelope_agent::ToolExecutor;
     // Même forme qu'en conversation : `cd <workspace> && …` porte son `cwd` (#123).
     let args = exec.normalise_call(&step.tool, &args).unwrap_or(args);
     let info = exec.describe_call(&step.tool, &args).await;
@@ -155,7 +155,7 @@ pub(super) async fn tool_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> 
                 .evaluate_in(
                     &cfg.mcp.policy,
                     &info.effective_name,
-                    crate::agent::server_of(&info.effective_name).as_deref(),
+                    penelope_agent::server_of(&info.effective_name).as_deref(),
                     &args,
                     info.risk,
                     Some(&ctx.run.id),
@@ -207,7 +207,7 @@ pub(super) async fn tool_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> 
     }
 
     let effect = EffectSpec::new(
-        crate::agent::effect_kind(&info.effective_name),
+        penelope_agent::effect_kind(&info.effective_name),
         info.effective_name.clone(),
         args.clone(),
     )

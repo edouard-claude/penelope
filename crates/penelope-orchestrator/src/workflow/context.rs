@@ -2,10 +2,10 @@
 //! (épopée #208, T27) : services, providers, signal d'arrêt, bus des tours, état des runs,
 //! embeddings, services de la boucle d'agent, administration du processus.
 
-use crate::bus::Bus;
-use crate::ports::{Admin, Handle, ProviderSource};
-use crate::runtime::Services;
 use penelope_agent::AgentServices;
+use penelope_app::bus::Bus;
+use penelope_app::ports::{Admin, Handle, ProviderSource};
+use penelope_app::services::Services;
 use std::sync::Arc;
 
 /// Contexte de l'orchestrateur. Le daemon le construit (`workflow::context_of`) ; les tests

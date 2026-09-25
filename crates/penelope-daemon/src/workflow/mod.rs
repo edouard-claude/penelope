@@ -1,10 +1,11 @@
-//! Moteur de workflows : il part dans `penelope-orchestrator` (épopée #208, T27) ;
-//! `engine/` en est le code, qui reçoit un [`Context`] au lieu du daemon, et ce module la
-//! façade qui garde jusqu'à T30 les chemins `crate::workflow::*` et leurs entrées en
-//! `&Arc<Daemon>`, appelées par la passerelle, le RPC et les tests.
+//! Moteur de workflows : parti dans `penelope-orchestrator` (épopée #208, T27), où il
+//! reçoit un [`Context`] au lieu du daemon. Ce module en est la façade : il garde jusqu'à
+//! T30 les chemins `crate::workflow::*` et leurs entrées en `&Arc<Daemon>`, appelées par
+//! la passerelle, le RPC et les tests.
 
-mod engine;
-pub use engine::*;
+pub use penelope_orchestrator::workflow::*;
+
+use penelope_orchestrator::workflow as inner;
 
 use crate::bus::Origin;
 use crate::runtime::Daemon;
@@ -36,7 +37,7 @@ pub async fn start_run(
     parent: Option<&str>,
     depth: u32,
 ) -> Result<Run, String> {
-    engine::start_run(&context_of(d), workflow_id, params, origin, parent, depth).await
+    inner::start_run(&context_of(d), workflow_id, params, origin, parent, depth).await
 }
 
 pub async fn start_run_briefed(
@@ -49,11 +50,11 @@ pub async fn start_run_briefed(
     brief: Option<&str>,
 ) -> Result<Run, String> {
     let cx = context_of(d);
-    engine::start_run_briefed(&cx, workflow_id, params, origin, parent, depth, brief).await
+    inner::start_run_briefed(&cx, workflow_id, params, origin, parent, depth, brief).await
 }
 
 pub async fn control(d: &Arc<Daemon>, run_id: &str, op: &Control) -> anyhow::Result<RunState> {
-    engine::control(&context_of(d), run_id, op).await
+    inner::control(&context_of(d), run_id, op).await
 }
 
 pub async fn answer(
@@ -63,15 +64,15 @@ pub async fn answer(
     choice: &str,
     input: Option<&str>,
 ) -> anyhow::Result<()> {
-    engine::answer(&context_of(d), run_id, visit, choice, input).await
+    inner::answer(&context_of(d), run_id, visit, choice, input).await
 }
 
 pub async fn form_of(d: &Daemon, run_id: &str, visit: &str) -> Option<Value> {
-    engine::form_of(&d.services, run_id, visit).await
+    inner::form_of(&d.services, run_id, visit).await
 }
 
 pub async fn origin_of(d: &Daemon, run_id: &str) -> Origin {
-    engine::origin_of(&d.services, run_id).await
+    inner::origin_of(&d.services, run_id).await
 }
 
 pub async fn raise_budget(
@@ -80,19 +81,19 @@ pub async fn raise_budget(
     usd: Option<f64>,
     tokens: Option<u64>,
 ) -> anyhow::Result<Value> {
-    engine::raise_budget(&context_of(d), run_id, usd, tokens).await
+    inner::raise_budget(&context_of(d), run_id, usd, tokens).await
 }
 
 pub async fn drive(d: &Arc<Daemon>, run_id: &str) -> anyhow::Result<RunState> {
-    engine::drive(&context_of(d), run_id).await
+    inner::drive(&context_of(d), run_id).await
 }
 
 pub async fn drive_all(d: &Arc<Daemon>) -> anyhow::Result<usize> {
-    engine::drive_all(&context_of(d)).await
+    inner::drive_all(&context_of(d)).await
 }
 
 pub async fn driver_loop(d: Arc<Daemon>) {
-    engine::driver_loop(context_of(&d)).await
+    inner::driver_loop(context_of(&d)).await
 }
 
 mod compat;

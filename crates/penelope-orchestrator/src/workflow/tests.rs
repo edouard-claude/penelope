@@ -1,6 +1,6 @@
 use super::harness::Harness;
 use super::*;
-use crate::testing::RecordingMessenger;
+use penelope_app::testing::RecordingMessenger;
 use penelope_kernel::clock::TestClock;
 use penelope_llm::mock::{MockProvider, Scripted};
 use penelope_llm::types::ToolCall;
@@ -58,7 +58,7 @@ fn owner() -> Origin {
 /// son résultat passe dans la sortie de l'étape.
 #[tokio::test]
 async fn a_long_mcp_task_is_awaited_until_it_completes() {
-    use crate::mcp::testing::{FakeConnector, server, tool};
+    use penelope_mcp_host::testing::{FakeConnector, server, tool};
     use std::sync::atomic::{AtomicUsize, Ordering};
     let e = env().await;
     let fake = Arc::new(FakeConnector::default());
@@ -85,7 +85,7 @@ async fn a_long_mcp_task_is_awaited_until_it_completes() {
             other => base(other, params),
         }),
     );
-    let sup = crate::mcp::testing::supervisor(e.d.services.clone(), fake.clone());
+    let sup = penelope_mcp_host::testing::supervisor(e.d.services.clone(), fake.clone());
     e.d.set_mcp(sup.clone());
     sup.add(
         penelope_mcp::config::ServerConfig::stdio("forge", "/opt/mcp/forge", &[]),
@@ -147,7 +147,7 @@ async fn a_long_mcp_task_is_awaited_until_it_completes() {
 async fn build_verify_reaches_verify_once_its_criteria_are_ticked() {
     let e = env().await;
     let s = &e.d.services;
-    let ws = crate::executor::default_workspaces(s)[0].clone();
+    let ws = penelope_executor::executor::default_workspaces(s)[0].clone();
     let project = ws.join("serveur-go");
     std::fs::create_dir_all(&project).unwrap();
     let ids: Vec<String> = (1..=7).map(|i| format!("c{i}")).collect();
@@ -295,7 +295,7 @@ fn verifier_receives_repository_release_rules_and_conditional_criteria() {
 #[tokio::test]
 async fn build_verify_reports_an_unavailable_test_tool_without_a_verdict() {
     let e = env().await;
-    let project = crate::executor::default_workspaces(&e.d.services)[0].clone();
+    let project = penelope_executor::executor::default_workspaces(&e.d.services)[0].clone();
     let call = |id: &str, key: &str, entry: Value| ToolCall {
         id: id.into(),
         name: "session_metadata".into(),
@@ -651,7 +651,7 @@ async fn a_brief_reaches_the_first_agent_step_and_the_progress_card() {
     let o = WorkflowOrchestrator {
         context: e.d.cx.clone(),
     };
-    let started = crate::executor::Orchestrator::start_workflow(
+    let started = penelope_executor::executor::Orchestrator::start_workflow(
         &o,
         "brief",
         json!({}),
@@ -962,9 +962,10 @@ async fn a_sub_agent_that_needs_an_approval_fails_instead_of_waiting() {
 async fn a_cancelled_turn_stops_its_sub_agent() {
     let e = env().await;
     e.p.reply("le sous-agent ne devrait pas répondre");
-    let orchestrator: Arc<dyn crate::executor::Orchestrator> = Arc::new(WorkflowOrchestrator {
-        context: e.d.cx.clone(),
-    });
+    let orchestrator: Arc<dyn penelope_executor::executor::Orchestrator> =
+        Arc::new(WorkflowOrchestrator {
+            context: e.d.cx.clone(),
+        });
     let sid =
         e.d.services
             .sessions

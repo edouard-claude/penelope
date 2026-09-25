@@ -17,12 +17,12 @@
 //! Un schedule `once` (rappel daté) passe en `done` après son tir. Un tir manqué pendant
 //! un arrêt part une fois au redémarrage, jamais en rafale.
 
-use crate::bus::ChannelDelivery;
-use crate::bus::Origin;
-use crate::helpers::owner_origin_of;
-use crate::ports::{McpAdmin, Messenger, Slot};
-use crate::runtime::Services;
 use crate::workflow::Context;
+use penelope_app::bus::ChannelDelivery;
+use penelope_app::bus::Origin;
+use penelope_app::helpers::owner_origin_of;
+use penelope_app::ports::{McpAdmin, Messenger, Slot};
+use penelope_app::services::Services;
 use penelope_kernel::session::SessionKind;
 use penelope_kernel::turn::TurnKind;
 use penelope_workflow::schedules::{PolledItem, Schedule, TargetKind, TriggerKind};
@@ -41,7 +41,7 @@ pub struct Ports {
     pub messenger: Slot<dyn Messenger>,
     pub delivery: Slot<dyn ChannelDelivery>,
     pub mcp: Slot<dyn McpAdmin>,
-    pub orchestrator: Slot<dyn crate::executor::Orchestrator>,
+    pub orchestrator: Slot<dyn penelope_executor::executor::Orchestrator>,
 }
 
 /// Ce qu'un passage a fait, pour les journaux et les tests.
@@ -61,7 +61,7 @@ pub async fn scheduler_loop(d: Context, ports: Ports) {
         if !inbox_busy.swap(true, std::sync::atomic::Ordering::SeqCst) {
             let (d2, busy, messenger) = (d.clone(), inbox_busy.clone(), ports.messenger.clone());
             tokio::spawn(async move {
-                match crate::ingest::scan_inbox(&d2.dream(), &messenger).await {
+                match penelope_dream::ingest::scan_inbox(&d2.dream(), &messenger).await {
                     Ok(0) => {}
                     Ok(n) => tracing::info!(fichiers = n, "boîte de dépôt du vault traitée"),
                     Err(e) => tracing::warn!(error = %e, "boîte de dépôt du vault"),

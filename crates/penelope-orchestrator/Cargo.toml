@@ -1,0 +1,47 @@
+[package]
+name = "penelope-orchestrator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Le moteur de workflows et l'ordonnanceur (épopée #208, T27) : au-dessus de la boucle
+# d'agent, de l'exécuteur, de la conversation et du rêve, sous le daemon ; le canal par
+# les ports de `penelope-app`, jamais `penelope-telegram` ni la passerelle.
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+penelope-app.workspace = true
+penelope-agent.workspace = true
+penelope-executor.workspace = true
+penelope-conversation.workspace = true
+penelope-dream.workspace = true
+penelope-vault.workspace = true
+penelope-kernel.workspace = true
+penelope-store.workspace = true
+penelope-platform.workspace = true
+penelope-observe.workspace = true
+penelope-llm.workspace = true
+penelope-mcp.workspace = true
+penelope-tools.workspace = true
+penelope-hitl.workspace = true
+penelope-workflow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Superviseur MCP de test (`testing::supervisor`) et contrôle `doctor` des
+# planifications, lus par les tests seulement.
+penelope-mcp-host.workspace = true
+penelope-ops.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util", "test-util"] }

@@ -10,13 +10,13 @@
 //! `wf.<quoi>.<run>.<étape>.<itération>` : une boucle qui revient sur une étape repart
 //! d'une page blanche, une reprise après crash retrouve la sienne.
 
-use crate::agent::{AgentLoop, MemoryConversation, NullSink, TurnOutcome, TurnSpec};
-use crate::bus::Origin;
-use crate::conversation::SessionConversation;
-use crate::executor::{NativeToolExecutor, ToolEnv};
-use crate::helpers::step_done_key;
-use crate::ports::Slot;
-use crate::runtime::Services;
+use penelope_agent::{AgentLoop, MemoryConversation, NullSink, TurnOutcome, TurnSpec};
+use penelope_app::bus::Origin;
+use penelope_app::helpers::step_done_key;
+use penelope_app::ports::Slot;
+use penelope_app::services::Services;
+use penelope_conversation::SessionConversation;
+use penelope_executor::executor::{NativeToolExecutor, ToolEnv};
 use penelope_hitl::{ApprovalKind, ApprovalState};
 use penelope_kernel::effects::{EffectSpec, Planned};
 use penelope_kernel::event::EventDraft;
@@ -57,10 +57,10 @@ pub struct State {
 /// propriétaire, passerelle et superviseur MCP, orchestrateur des sous-agents.
 #[derive(Clone, Default)]
 pub struct Ports {
-    pub messenger: Slot<dyn crate::executor::Messenger>,
-    pub mcp: Slot<dyn crate::executor::McpGateway>,
-    pub orchestrator: Slot<dyn crate::executor::Orchestrator>,
-    pub mcp_supervisor: Slot<dyn crate::ports::McpAdmin>,
+    pub messenger: Slot<dyn penelope_executor::executor::Messenger>,
+    pub mcp: Slot<dyn penelope_executor::executor::McpGateway>,
+    pub orchestrator: Slot<dyn penelope_executor::executor::Orchestrator>,
+    pub mcp_supervisor: Slot<dyn penelope_app::ports::McpAdmin>,
 }
 
 impl State {
@@ -153,7 +153,7 @@ pub async fn origin_of(s: &Services, run_id: &str) -> Origin {
             let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
             Origin::from_payload(&json!({ "origin": v }))
         }
-        None => crate::helpers::owner_origin_of(s),
+        None => penelope_app::helpers::owner_origin_of(s),
     }
 }
 

@@ -118,7 +118,7 @@ impl StepCtx<'_> {
     pub(super) async fn executor(&self) -> NativeToolExecutor {
         let d = self.d;
         let mut workspaces = vec![self.workdir()];
-        workspaces.extend(crate::executor::default_workspaces(self.s()));
+        workspaces.extend(penelope_executor::executor::default_workspaces(self.s()));
         let mut exec = NativeToolExecutor::new(
             d.services.clone(),
             ToolEnv {

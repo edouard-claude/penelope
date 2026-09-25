@@ -58,14 +58,14 @@ pub async fn place_name(s: &Services, origin: &Origin) -> String {
     } else if *chat_id > 0 {
         format!("conversation {chat_id}")
     } else {
-        match kv(crate::helpers::chat_title_key(*chat_id)).await {
+        match kv(penelope_app::helpers::chat_title_key(*chat_id)).await {
             Some(title) => format!("groupe « {title} »"),
             None => format!("groupe {chat_id}"),
         }
     };
     match topic_id {
         None => chat,
-        Some(t) => match kv(crate::helpers::topic_name_key(*chat_id, *t)).await {
+        Some(t) => match kv(penelope_app::helpers::topic_name_key(*chat_id, *t)).await {
             Some(name) => format!("sujet « {name} », {chat}"),
             None => format!("sujet {t}, {chat}"),
         },

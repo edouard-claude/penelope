@@ -1,6 +1,6 @@
 use super::*;
-use crate::testing::RecordingMessenger;
 use crate::workflow::harness::Harness;
+use penelope_app::testing::RecordingMessenger;
 use penelope_kernel::clock::TestClock;
 use std::sync::Mutex;
 
@@ -76,7 +76,7 @@ async fn a_silent_scheduled_run_is_a_failure_and_its_state_is_restored() {
         topic_id: Some(7),
         message_id: None,
     };
-    let ws = crate::executor::default_workspaces(s)[0].clone();
+    let ws = penelope_executor::executor::default_workspaces(s)[0].clone();
     std::fs::create_dir_all(ws.join("veille")).unwrap();
     std::fs::write(ws.join("veille/seen.json"), r#"["a","b"]"#).unwrap();
     let make = |livrable: Value| {
@@ -101,9 +101,9 @@ async fn a_silent_scheduled_run_is_a_failure_and_its_state_is_restored() {
         async move {
             let turn = d.services.turns.claim("t").await.unwrap().expect("tour");
             // Le travail consomme l'état.
-            let ws = crate::executor::default_workspaces(&d.services)[0].clone();
+            let ws = penelope_executor::executor::default_workspaces(&d.services)[0].clone();
             std::fs::write(ws.join("veille/seen.json"), r#"["a","b","c","d"]"#).unwrap();
-            let outcome = crate::agent::TurnOutcome::Answered {
+            let outcome = penelope_agent::TurnOutcome::Answered {
                 text: text.into(),
                 iterations: 1,
                 cost_usd: 0.0,
@@ -238,7 +238,7 @@ async fn a_recurring_prompt_survives_the_closing_of_its_conversation() {
     assert_eq!(pending.runs, 0, "rien n'est compté avant la fin du tour");
     assert!(pending.next_run.is_some());
 
-    let answered = crate::agent::TurnOutcome::Answered {
+    let answered = penelope_agent::TurnOutcome::Answered {
         text: "Trois tickets ouverts.".into(),
         iterations: 1,
         cost_usd: 0.0,
@@ -271,12 +271,15 @@ async fn a_schedule_says_where_it_delivers_and_can_be_moved() {
             Ok(vec!["telegram.allowed_chats".into()])
         })
         .unwrap();
-    s.kv_set(&crate::helpers::chat_title_key(-100_777), "Équipe")
+    s.kv_set(&penelope_app::helpers::chat_title_key(-100_777), "Équipe")
         .await
         .unwrap();
-    s.kv_set(&crate::helpers::topic_name_key(-100_777, 12), "Veille")
-        .await
-        .unwrap();
+    s.kv_set(
+        &penelope_app::helpers::topic_name_key(-100_777, 12),
+        "Veille",
+    )
+    .await
+    .unwrap();
     let sched = s
         .schedules
         .create(
@@ -437,7 +440,7 @@ async fn a_cancelled_or_failed_scheduled_prompt_warns_the_owner() {
         &d,
         &d.scheduler(),
         &sched.id,
-        &crate::agent::TurnOutcome::Failed {
+        &penelope_agent::TurnOutcome::Failed {
             error: "fournisseur indisponible".into(),
         },
     )
@@ -452,7 +455,7 @@ async fn a_cancelled_or_failed_scheduled_prompt_warns_the_owner() {
     );
     let after = s.schedules.get(&sched.id).await.unwrap().unwrap();
     assert!(after.last_error.as_deref().unwrap().contains("fournisseur"));
-    let doctor = crate::doctor::schedules_check(s).await;
+    let doctor = penelope_ops::doctor::schedules_check(s).await;
     assert!(
         !doctor.ok && doctor.detail.contains(&sched.id),
         "{doctor:?}"
@@ -505,7 +508,7 @@ async fn a_duplicate_schedule_is_reported_at_creation() {
 
 #[tokio::test]
 async fn mcp_poll_seeds_then_notifies_new_items_only() {
-    use crate::mcp::testing::{FakeConnector, declare};
+    use penelope_mcp_host::testing::{FakeConnector, declare};
     let (d, clock, rec) = harness().await;
     let s = &d.services;
     let issues = Arc::new(Mutex::new(vec![json!({"id": 1, "subject": "Ancien"})]));
@@ -534,7 +537,7 @@ async fn mcp_poll_seeds_then_notifies_new_items_only() {
             _ => Ok(json!({})),
         }),
     );
-    let sup = crate::mcp::testing::supervisor(s.clone(), fake);
+    let sup = penelope_mcp_host::testing::supervisor(s.clone(), fake);
     declare(&sup, "redmine", "");
     sup.reload().await;
     d.set_mcp(sup);

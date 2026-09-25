@@ -18,7 +18,7 @@ pub async fn digest_inputs(s: &Services) -> DigestInputs {
     }
     DigestInputs {
         failing_schedules: failing,
-        struggling_sessions: crate::compaction::struggling_sessions(s).await,
+        struggling_sessions: penelope_conversation::compaction::struggling_sessions(s).await,
         due_today: due_today(s).await,
     }
 }

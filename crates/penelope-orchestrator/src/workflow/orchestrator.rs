@@ -76,9 +76,9 @@ pub struct WorkflowOrchestrator {
 }
 
 #[async_trait::async_trait]
-impl crate::executor::Orchestrator for WorkflowOrchestrator {
+impl penelope_executor::executor::Orchestrator for WorkflowOrchestrator {
     async fn embed_query(&self, text: &str) -> Option<Vec<f32>> {
-        crate::embeddings::query_vector(&self.context.embedder(), text).await
+        penelope_vault::embeddings::query_vector(&self.context.embedder(), text).await
     }
 
     async fn schedule_create(
@@ -183,7 +183,7 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
         // Le sous-agent hérite du périmètre de son tour : l'abonnement ChatGPT sert ceux
         // du propriétaire, pas une planification qui passerait par là (#142).
         let model_id =
-            crate::codex_scope::for_origin(&self.context.services, &model_id, origin).await;
+            penelope_app::codex_scope::for_origin(&self.context.services, &model_id, origin).await;
         let text = run_sub_agent(
             &self.context,
             SubAgentTask {
@@ -193,7 +193,7 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
                 prompt,
                 model_id: &model_id,
                 tools: &tools,
-                workspaces: crate::executor::default_workspaces(&self.context.services),
+                workspaces: penelope_executor::executor::default_workspaces(&self.context.services),
             },
             // Jeton enfant : `/stop` sur le tour parent arrête le sous-agent, et un
             // sous-agent qui s'arrête ne touche pas au parent (issue #57).
@@ -205,18 +205,18 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
 
     async fn generate_image(&self, prompt: &str, size: Option<&str>) -> Result<Value, String> {
         let d = &self.context;
-        crate::images::generate(&d.services, d.providers.as_ref(), prompt, size).await
+        penelope_executor::images::generate(&d.services, d.providers.as_ref(), prompt, size).await
     }
 
     async fn inspect_image(
         &self,
         session_id: &str,
         path: &std::path::Path,
-        task: crate::vision::Task,
+        task: penelope_executor::vision::Task,
         question: &str,
     ) -> Result<Value, String> {
         let d = &self.context;
-        crate::vision::inspect(
+        penelope_executor::vision::inspect(
             &d.services,
             d.providers.as_ref(),
             session_id,

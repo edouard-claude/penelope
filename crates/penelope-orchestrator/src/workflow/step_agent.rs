@@ -62,7 +62,8 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
         Ok(m) => m,
         Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
     };
-    let model_id = crate::codex_scope::background(&ctx.d.services, &model_id, "workflow").await;
+    let model_id =
+        penelope_app::codex_scope::background(&ctx.d.services, &model_id, "workflow").await;
     let provider = match ctx.d.provider_for(&model_id).await {
         Ok(p) => p,
         Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
@@ -77,7 +78,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
         }
     }
     let mcp = ctx.d.workflows.ports.mcp.get();
-    let mut tools = crate::executor::tool_defs(true, mcp.is_some());
+    let mut tools = penelope_executor::executor::tool_defs(true, mcp.is_some());
     if let Some(m) = &mcp {
         tools.extend(m.eager_tools().await);
     }
@@ -94,7 +95,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
 
     loop {
         let tiers =
-            crate::conversation::build_tiers(s, &step.prompt, &[], Some(&run_state_line(ctx)))
+            penelope_conversation::build_tiers(s, &step.prompt, &[], Some(&run_state_line(ctx)))
                 .await;
         let conv = SessionConversation::new(s.clone(), &run.session_id, &model_id, tiers, 0);
         let outcome = AgentLoop::new(ctx.d.agent.clone(), provider.clone())
@@ -132,7 +133,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
                             && a.payload["budget"].as_bool() == Some(true)
                     })
                 {
-                    let origin = crate::helpers::owner_origin_of(&ctx.d.services);
+                    let origin = penelope_app::helpers::owner_origin_of(&ctx.d.services);
                     let _ = m.send_approval(&origin, a.id.as_str()).await;
                 }
                 return Ok(done(
@@ -222,7 +223,7 @@ fn sub_agent_tools(step_tools: &[String]) -> (Vec<penelope_llm::ToolDef>, Vec<St
     let with_mcp = step_tools
         .iter()
         .any(|t| matches!(t.as_str(), "tool_search" | "tool_describe" | "tool_call"));
-    let defs = crate::executor::tool_defs(false, with_mcp);
+    let defs = penelope_executor::executor::tool_defs(false, with_mcp);
     if !step_tools.is_empty() {
         return (defs, step_tools.to_vec());
     }
@@ -274,7 +275,7 @@ pub async fn run_sub_agent(
             // Le sous-agent d'un run parle dans la conversation du run (issue #35).
             origin: match run_id {
                 Some(r) => origin_of(&d.services, r).await,
-                None => crate::helpers::owner_origin_of(&d.services),
+                None => penelope_app::helpers::owner_origin_of(&d.services),
             },
             workspaces,
             in_workflow: false,
@@ -342,7 +343,8 @@ pub(super) async fn sub_agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutc
         Ok(m) => m,
         Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
     };
-    let model_id = crate::codex_scope::background(&ctx.d.services, &model_id, "workflow").await;
+    let model_id =
+        penelope_app::codex_scope::background(&ctx.d.services, &model_id, "workflow").await;
     let mut prompt = with_brief(ctx, ctx.render(&step.prompt).await).await;
     if let Some(schema) = &step.output_schema {
         prompt.push_str(&format!(

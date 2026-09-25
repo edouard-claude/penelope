@@ -10,7 +10,7 @@ pub(super) fn state_key(session_id: &str) -> String {
 /// Chemin d'un état ou d'un fichier livrable : absolu, ou relatif au premier workspace ;
 /// jamais hors des workspaces.
 pub(super) fn resolve_in_workspace(d: &Context, path: &str) -> Option<std::path::PathBuf> {
-    let workspaces = crate::executor::default_workspaces(&d.services);
+    let workspaces = penelope_executor::executor::default_workspaces(&d.services);
     let p = std::path::Path::new(path);
     let full = if p.is_absolute() {
         p.to_path_buf()
@@ -75,7 +75,7 @@ pub(super) async fn settle_state(d: &Context, session_id: &str, restore: bool) {
 pub(super) async fn missing_deliverable(
     d: &Context,
     turn: &penelope_kernel::turn::Turn,
-    outcome: &crate::agent::TurnOutcome,
+    outcome: &penelope_agent::TurnOutcome,
 ) -> Option<String> {
     let s = &d.services;
     let wanted = turn.payload["livrable"].as_str()?.trim().to_string();
@@ -90,11 +90,11 @@ pub(super) async fn missing_deliverable(
     if wanted == "message" {
         let answered = matches!(
             outcome,
-            crate::agent::TurnOutcome::Answered { text, .. } if !text.trim().is_empty()
+            penelope_agent::TurnOutcome::Answered { text, .. } if !text.trim().is_empty()
         );
         let channel = matches!(
-            crate::bus::Origin::from_payload(&turn.payload),
-            crate::bus::Origin::Telegram { .. }
+            penelope_app::bus::Origin::from_payload(&turn.payload),
+            penelope_app::bus::Origin::Telegram { .. }
         );
         // Un message envoyé par l'agent lui-même compte aussi.
         let sent = s
@@ -146,10 +146,10 @@ pub async fn trigger_outcome_of(
     d: &Context,
     ports: &Ports,
     schedule_id: &str,
-    outcome: &crate::agent::TurnOutcome,
+    outcome: &penelope_agent::TurnOutcome,
     turn: &penelope_kernel::turn::Turn,
 ) {
-    use crate::agent::TurnOutcome;
+    use penelope_agent::TurnOutcome;
     if let TurnOutcome::AwaitingApproval { .. } = outcome {
         return trigger_outcome(d, ports, schedule_id, outcome).await;
     }
@@ -244,9 +244,9 @@ pub async fn trigger_outcome(
     d: &Context,
     ports: &Ports,
     schedule_id: &str,
-    outcome: &crate::agent::TurnOutcome,
+    outcome: &penelope_agent::TurnOutcome,
 ) {
-    use crate::agent::TurnOutcome;
+    use penelope_agent::TurnOutcome;
     let s = &d.services;
     let Ok(Some(sched)) = s.schedules.get(schedule_id).await else {
         return;

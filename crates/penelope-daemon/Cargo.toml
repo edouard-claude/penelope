@@ -42,6 +42,8 @@ penelope-executor.workspace = true
 # Conversation de session, compaction, titres, alerte de budget, extraits du daemon
 # (épopée #208, T23).
 penelope-conversation.workspace = true
+# Moteur de workflows et ordonnanceur, extraits du daemon (épopée #208, T27).
+penelope-orchestrator.workspace = true
 penelope-kernel.workspace = true
 penelope-store.workspace = true
 penelope-platform.workspace = true

@@ -3,10 +3,10 @@
 //! propriétaire, MCP, orchestrateur des outils, livraison du canal).
 
 use super::*;
-use crate::bus::{Bus, ChannelDelivery};
-use crate::ports::{Handle, McpAdmin, McpGateway, Messenger, Orchestrator};
-use crate::testing::MockProviders;
 use penelope_agent::{AgentServices, MemoryModes, NoAudit, NoJobs};
+use penelope_app::bus::{Bus, ChannelDelivery};
+use penelope_app::ports::{Handle, McpAdmin, McpGateway, Messenger, Orchestrator};
+use penelope_app::testing::MockProviders;
 use penelope_kernel::clock::SharedClock;
 use penelope_llm::mock::MockProvider;
 

@@ -1,8 +1,8 @@
 //! L'orchestrateur sous son ancienne forme, `WorkflowOrchestrator { daemon }`, que
 //! construisent encore l'exécution des jobs, deux tests du daemon et la passerelle :
-//! chaque méthode passe à celui du moteur, sur le contexte du daemon. À retirer en T30.
+//! chaque méthode passe à celui de `penelope-orchestrator`, sur le contexte du daemon. À retirer en T30.
 
-use super::{Context, context_of, engine};
+use super::{Context, context_of};
 use crate::bus::Origin;
 use crate::ports::Orchestrator;
 use crate::runtime::Daemon;
@@ -16,8 +16,8 @@ pub struct WorkflowOrchestrator {
 }
 
 impl WorkflowOrchestrator {
-    fn engine(&self) -> engine::WorkflowOrchestrator {
-        engine::WorkflowOrchestrator {
+    fn engine(&self) -> penelope_orchestrator::WorkflowOrchestrator {
+        penelope_orchestrator::WorkflowOrchestrator {
             context: context_of(&self.daemon),
         }
     }
