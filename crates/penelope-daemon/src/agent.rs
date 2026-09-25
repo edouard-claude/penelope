@@ -20,8 +20,7 @@ pub fn services_of(s: &Arc<crate::runtime::Services>) -> Arc<AgentServices> {
     )
 }
 
-/// Les registres seuls, pour les entrées qui ne lisent aucun port (décision du
-/// propriétaire, bornes de tour) et que leurs appelants servent en `&Services`.
+/// Les registres seuls, pour les entrées sans port (décision, bornes de tour) en `&Services`.
 fn registries_of(s: &crate::runtime::Services) -> Arc<AgentServices> {
     with_ports(
         s,
