@@ -10,7 +10,7 @@
 //! le résumé et l'outillage d'historique.
 
 use penelope_daemon::bus::Origin;
-use penelope_daemon::compaction::{Trigger, compact};
+use penelope_daemon::compaction::{Trigger, compact, context_of};
 use penelope_evals::live;
 use penelope_kernel::clock::{SharedClock, SystemClock};
 use std::sync::Arc;
@@ -53,7 +53,7 @@ async fn facts_survive_a_level_3_compaction() {
     for filler in FILLER {
         live::turn(&d, &session, filler).await;
     }
-    let report = compact(&d, &session, Trigger::Manual, None)
+    let report = compact(&context_of(&d), &session, Trigger::Manual, None)
         .await
         .expect("compaction");
     assert!(report.published >= 1, "aucun résumé publié : {report:?}");

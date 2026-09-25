@@ -186,6 +186,40 @@ pub fn last_model_key(session_id: &str) -> String {
     format!("session.model_last.{session_id}")
 }
 
+/// Alias épinglé sur une session (`/model`, `penelope session model`).
+pub fn pin_key(session_id: &str) -> String {
+    format!("session.model_pin.{session_id}")
+}
+
+/// Alias épinglé sur une session, s'il existe encore dans la configuration. Lu par le
+/// routage du moteur et par la compaction, qui y prend la fenêtre de la conversation
+/// (épopée #208, T23 : la compaction ne passe plus par le daemon).
+pub async fn pinned_model(s: &Services, session_id: &str) -> Option<penelope_llm::StickyModel> {
+    let alias = s
+        .kv_get(&pin_key(session_id))
+        .await
+        .ok()
+        .flatten()
+        .filter(|a| !a.is_empty())?;
+    let cfg = s.config.config();
+    match cfg.alias_model(&alias) {
+        Some(id) => Some(penelope_llm::StickyModel {
+            alias,
+            model_id: id.to_string(),
+        }),
+        None => {
+            tracing::warn!(session = session_id, alias = %alias, "alias épinglé disparu de la configuration");
+            None
+        }
+    }
+}
+
+/// Au-delà, le cache des fournisseurs a expiré. Même valeur que
+/// `penelope_agent::CACHE_TTL_MS`, que la conversation ne peut pas citer (elle ne dépend
+/// pas de la boucle) ; un test du daemon tient les deux égales jusqu'à ce que la boucle
+/// lise celle-ci (T30).
+pub const CACHE_TTL_MS: i64 = 5 * 60_000;
+
 /// Préfixe stable (T0 à T2) retenu pour une session (`cache_audit`).
 pub fn prefix_key(session_id: &str) -> String {
     format!("prompt.prefix.{session_id}")

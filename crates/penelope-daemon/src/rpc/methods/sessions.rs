@@ -118,7 +118,7 @@ impl Rpc {
             method::SESSION_COMPACT => {
                 let sid = self.session_param(p).await?;
                 let report = crate::compaction::compact(
-                    &self.daemon,
+                    &crate::compaction::context_of(&self.daemon),
                     &sid,
                     crate::compaction::Trigger::Manual,
                     None,

@@ -273,7 +273,7 @@ impl TelegramGateway {
         let (daemon, messenger) = (d.clone(), d.hooks.messenger());
         tokio::spawn(async move {
             let text = match crate::compaction::compact(
-                &daemon,
+                &crate::compaction::context_of(&daemon),
                 &session,
                 crate::compaction::Trigger::Manual,
                 None,

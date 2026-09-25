@@ -83,8 +83,13 @@ impl Harness<'_> {
             .unwrap_or((command.trim(), ""));
         match name {
             "/compact" => {
-                let r = compaction::compact(&d, &self.session, compaction::Trigger::Manual, None)
-                    .await?;
+                let r = compaction::compact(
+                    &compaction::context_of(&d),
+                    &self.session,
+                    compaction::Trigger::Manual,
+                    None,
+                )
+                .await?;
                 Ok(json!({
                     "text": compaction::report_text(&r),
                     "published": r.published,

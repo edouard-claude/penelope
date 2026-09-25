@@ -2,11 +2,13 @@ use super::*;
 use crate::agent::Conversation;
 use crate::bus::Origin;
 use crate::conversation::SessionConversation;
+use crate::runtime::Daemon;
 use crate::testing::RecordingMessenger;
 use penelope_kernel::clock::TestClock;
 use penelope_llm::catalog::ModelInfo;
 use penelope_llm::mock::{MockProvider, Scripted};
 use penelope_llm::types::ChatMessage;
+use std::sync::Arc;
 
 const SUMMARY: &str = r#"{"objectif": "préparer la migration PROJ-7",
         "contraintes_et_preferences": "réponses courtes", "fait": "schéma exporté",
@@ -143,7 +145,9 @@ async fn manual_compaction_replaces_old_turns_with_a_summary() {
     let sid = long_session(&d).await;
     p.reply(SUMMARY);
 
-    let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+    let r = compact(&context_of(&d), &sid, Trigger::Manual, None)
+        .await
+        .unwrap();
     assert_eq!(r.published, 1, "{r:?}");
     assert!(r.messages > 10 && r.tokens_src > 0 && r.tokens_summary > 0);
     assert!(r.skipped.is_none());
@@ -211,7 +215,9 @@ async fn manual_compaction_replaces_old_turns_with_a_summary() {
     assert!(ev.payload["evidence"]["identifiers_missing"].is_number());
 
     // Rien de neuf : pas de second appel au résumeur, même forcé.
-    let again = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+    let again = compact(&context_of(&d), &sid, Trigger::Background, None)
+        .await
+        .unwrap();
     assert_eq!(again.published, 0);
     assert!(again.skipped.is_some());
     assert_eq!(summarizer_requests(&p).len(), 1);
@@ -224,26 +230,33 @@ async fn a_summary_ready_during_a_turn_waits_for_its_end() {
     let _active = d.bus.begin("t_en_cours", &sid, &Origin::Cli);
     p.reply(SUMMARY);
 
-    let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+    let r = compact(&context_of(&d), &sid, Trigger::Manual, None)
+        .await
+        .unwrap();
     assert!(r.deferred && r.published == 0, "{r:?}");
     assert!(report_text(&r).contains("fin du tour"));
     let s = &d.services;
     assert!(s.context.lcm.active_nodes(&sid).await.unwrap().is_empty());
 
     // Pendant l'attente, aucune autre compaction ne prépare un lot concurrent.
-    let other = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+    let other = compact(&context_of(&d), &sid, Trigger::Background, None)
+        .await
+        .unwrap();
     assert!(other.deferred && other.published == 0);
     assert_eq!(summarizer_requests(&p).len(), 1);
 
     d.bus.end(&sid, "t_en_cours");
-    let published = publish_pending(&d, &sid)
+    let published = publish_pending(&context_of(&d), &sid)
         .await
         .unwrap()
         .expect("publication");
     assert_eq!(published.published, 1);
     assert_eq!(s.context.lcm.active_nodes(&sid).await.unwrap().len(), 1);
     assert!(
-        publish_pending(&d, &sid).await.unwrap().is_none(),
+        publish_pending(&context_of(&d), &sid)
+            .await
+            .unwrap()
+            .is_none(),
         "publié une fois"
     );
 }
@@ -281,7 +294,7 @@ async fn three_failures_compact_without_a_model_and_say_so() {
     );
     let before = conv.request_messages().await.unwrap();
     for round in 1..=2 {
-        let err = compact(&d, &sid, Trigger::Background, None)
+        let err = compact(&context_of(&d), &sid, Trigger::Background, None)
             .await
             .unwrap_err();
         assert!(
@@ -306,7 +319,9 @@ async fn three_failures_compact_without_a_model_and_say_so() {
         "le digest signale la session"
     );
 
-    let r = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+    let r = compact(&context_of(&d), &sid, Trigger::Background, None)
+        .await
+        .unwrap();
     assert_eq!(r.published, 1, "{r:?}");
     assert_eq!(r.model.as_deref(), Some(MECHANICAL_MODEL));
     assert!(
@@ -357,7 +372,9 @@ async fn a_passing_failure_is_retried_on_a_shorter_request() {
     for _ in 0..4 {
         p.reply(SUMMARY);
     }
-    let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+    let r = compact(&context_of(&d), &sid, Trigger::Manual, None)
+        .await
+        .unwrap();
     assert!(r.published >= 1, "{r:?}");
     assert!(
         r.recovered
@@ -396,7 +413,9 @@ async fn the_fallback_summarizer_stays_within_the_reserve() {
             "timeout".into(),
         ));
     }
-    let err = compact(&d, &sid, Trigger::Manual, None).await.unwrap_err();
+    let err = compact(&context_of(&d), &sid, Trigger::Manual, None)
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("résumé a échoué"), "{err}");
     let cfg = d.services.config.config();
     let main = cfg.alias_model("main").unwrap().to_string();
@@ -418,7 +437,9 @@ async fn the_fallback_summarizer_stays_within_the_reserve() {
     for _ in 0..3 {
         p.reply(SUMMARY);
     }
-    let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+    let r = compact(&context_of(&d), &sid, Trigger::Manual, None)
+        .await
+        .unwrap();
     assert!(r.published >= 1, "{r:?}");
     assert!(r.recovered.iter().any(|x| x.contains("repli sur")), "{r:?}");
     assert!(summarizer_requests(&p).iter().any(|r| r.model == main));
@@ -430,7 +451,9 @@ async fn a_failed_summary_cools_down_until_compact_is_forced() {
     let sid = long_session(&d).await;
     p.reply("Désolé, je ne peux pas résumer.");
 
-    let err = compact(&d, &sid, Trigger::Manual, None).await.unwrap_err();
+    let err = compact(&context_of(&d), &sid, Trigger::Manual, None)
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("résumé a échoué"), "{err}");
     let cooldown = load_cooldown(&d.services, &sid).await;
     assert_eq!(cooldown.failures, 1);
@@ -438,7 +461,9 @@ async fn a_failed_summary_cools_down_until_compact_is_forced() {
     assert!(events.iter().any(|e| e.kind == "context.compaction_failed"));
 
     // La tâche de fond respecte le cooldown, et le dit (issue #40)…
-    let bg = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+    let bg = compact(&context_of(&d), &sid, Trigger::Background, None)
+        .await
+        .unwrap();
     assert!(bg.skipped.unwrap().contains("échec récent"));
     let events = d.services.events.session_events(&sid, 0).await.unwrap();
     let skipped = events
@@ -456,7 +481,9 @@ async fn a_failed_summary_cools_down_until_compact_is_forced() {
 
     // … `/compact` le lève.
     p.reply(SUMMARY);
-    let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+    let r = compact(&context_of(&d), &sid, Trigger::Manual, None)
+        .await
+        .unwrap();
     assert_eq!(r.published, 1);
     assert_eq!(load_cooldown(&d.services, &sid).await.failures, 0);
 }
@@ -711,7 +738,9 @@ async fn budgets_do_not_block_compaction_until_the_summary_reserve_is_spent() {
         "session au-delà de son plafond"
     );
     p.reply(SUMMARY);
-    let r = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+    let r = compact(&context_of(&d), &sid, Trigger::Background, None)
+        .await
+        .unwrap();
     assert_eq!(r.published, 1, "{r:?}");
 
     s.budget.record(spend("chat", 30.0, None)).await.unwrap();
@@ -719,7 +748,9 @@ async fn budgets_do_not_block_compaction_until_the_summary_reserve_is_spent() {
         .record(spend("compaction", 0.6, None))
         .await
         .unwrap();
-    let r = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+    let r = compact(&context_of(&d), &sid, Trigger::Background, None)
+        .await
+        .unwrap();
     assert!(r.skipped.as_deref().unwrap().contains("réserve"), "{r:?}");
     let events = d.services.events.session_events(&sid, 0).await.unwrap();
     assert!(
@@ -864,7 +895,9 @@ async fn notes_survive_compaction_are_copied_by_fork_and_harvested_once() {
 
     // Session résumée sans notes : le harnais le rappelle.
     p.reply(r#"{"objectif": "migration", "contraintes_et_preferences": "", "fait": "schéma", "en_cours": "migration", "bloque": "", "decisions_cles": "PostgreSQL 17", "fichiers_et_ressources": "", "prochaines_etapes": "migrer", "contexte_critique": ""}"#);
-    compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+    compact(&context_of(&d), &sid, Trigger::Manual, None)
+        .await
+        .unwrap();
     let reminder = prompt_block(s, &sid).await.expect("rappel");
     assert!(reminder.contains("session_notes"), "{reminder}");
 
@@ -918,7 +951,9 @@ async fn notes_survive_compaction_are_copied_by_fork_and_harvested_once() {
         .unwrap();
     }
     p.reply(r#"{"objectif": "migration", "contraintes_et_preferences": "", "fait": "schéma", "en_cours": "migration", "bloque": "", "decisions_cles": "PostgreSQL 17", "fichiers_et_ressources": "", "prochaines_etapes": "migrer", "contexte_critique": ""}"#);
-    compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+    compact(&context_of(&d), &sid, Trigger::Manual, None)
+        .await
+        .unwrap();
     tool(s, &sid, &json!({"action": "update_section", "section": "Prochaine étape", "content": "Écrire la migration des avoirs"})).await.unwrap();
     let tiers =
         crate::conversation::build_tiers_in(s, "et maintenant ?", &[], None, Some((&sid, 0)), None)
@@ -974,4 +1009,11 @@ async fn notes_survive_compaction_are_copied_by_fork_and_harvested_once() {
     .await
     .unwrap_err();
     assert!(err.contains("section inconnue"));
+}
+
+/// T23 : la conversation lit la durée du cache dans `penelope_app::helpers`, la boucle
+/// dans `penelope-agent` ; les deux doivent rester égales.
+#[test]
+fn the_cache_ttl_is_the_same_for_the_loop_and_the_conversation() {
+    assert_eq!(crate::helpers::CACHE_TTL_MS, penelope_agent::CACHE_TTL_MS);
 }

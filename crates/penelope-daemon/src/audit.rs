@@ -412,9 +412,14 @@ mod tests {
         assert_eq!(before["exact"], true, "{}", before["reserves"]);
 
         p.reply(r#"{"objectif": "résumé d'aujourd'hui"}"#);
-        let r = crate::compaction::compact(&d, &sid, crate::compaction::Trigger::Manual, None)
-            .await
-            .unwrap();
+        let r = crate::compaction::compact(
+            &crate::compaction::context_of(&d),
+            &sid,
+            crate::compaction::Trigger::Manual,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(r.published, 1, "{r:?}");
         let history = h.load(&sid, 0).await.unwrap();
         assert!(

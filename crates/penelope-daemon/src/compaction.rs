@@ -9,7 +9,7 @@
 //! `context.compaction_skipped` (avec sa raison), `context.compacted` (issue #40).
 
 use crate::helpers::last_model_key;
-use crate::runtime::{Daemon, Services};
+use crate::runtime::Services;
 use penelope_context::{CompactionParams, Cooldown, SummaryJob};
 use penelope_kernel::event::EventDraft;
 use penelope_llm::Provider;
@@ -19,7 +19,7 @@ use penelope_llm::types::ChatRequest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 /// Lots résumés au plus par compaction ; la suivante reprend le reste.
@@ -115,6 +115,16 @@ impl State {
     }
 }
 
+/// Ce que la compaction lit du daemon (T23 : `State` et le daemon ne se tiennent plus).
+pub fn context_of(d: &crate::runtime::Daemon) -> Context {
+    Context {
+        services: d.services.clone(),
+        providers: d.providers.clone(),
+        bus: d.bus.clone(),
+        compaction: d.compaction.clone(),
+    }
+}
+
 /// Une compaction à la fois par session : libérée en fin de portée, même sur erreur.
 struct Claim<'a> {
     state: &'a State,
@@ -178,7 +188,7 @@ fn pending_key(session_id: &str) -> String {
 
 /// Fin de tour : publie le résumé en attente, puis lance la compaction de fond si le
 /// tour l'a demandée.
-pub async fn after_turn(d: &Arc<Daemon>, session_id: &str) {
+pub async fn after_turn(d: &Context, session_id: &str) {
     if let Err(e) = publish_pending(d, session_id).await {
         tracing::warn!(session = %session_id, error = %e, "résumé en attente non publié");
     }
@@ -193,7 +203,7 @@ pub async fn after_turn(d: &Arc<Daemon>, session_id: &str) {
 }
 
 /// Lance une compaction sans l'attendre.
-pub fn spawn(d: Arc<Daemon>, session_id: String, trigger: Trigger, turn_id: Option<String>) {
+pub fn spawn(d: Context, session_id: String, trigger: Trigger, turn_id: Option<String>) {
     tokio::spawn(async move {
         match compact(&d, &session_id, trigger, turn_id.as_deref()).await {
             Ok(r) if r.published > 0 || r.deferred => tracing::info!(
@@ -217,7 +227,7 @@ pub fn spawn(d: Arc<Daemon>, session_id: String, trigger: Trigger, turn_id: Opti
 }
 
 /// Publie le résumé qui attendait une frontière de tour, s'il y en a un.
-pub async fn publish_pending(d: &Arc<Daemon>, session_id: &str) -> anyhow::Result<Option<Report>> {
+pub async fn publish_pending(d: &Context, session_id: &str) -> anyhow::Result<Option<Report>> {
     // Une compaction en cours publie elle-même ce qu'elle a préparé.
     let Some(_claim) = d.compaction.claim(session_id) else {
         return Ok(None);
@@ -237,7 +247,7 @@ pub async fn publish_pending(d: &Arc<Daemon>, session_id: &str) -> anyhow::Resul
 /// Compacte une session : prépare les lots, les fait résumer, les publie. Un saut laisse
 /// l'événement `context.compaction_skipped` avec sa raison (issue #40).
 pub async fn compact(
-    d: &Arc<Daemon>,
+    d: &Context,
     session_id: &str,
     trigger: Trigger,
     turn_id: Option<&str>,
@@ -271,7 +281,7 @@ pub async fn compact(
 
 /// Demande une compaction de fond pour la fin du tour, en le disant (issue #40).
 pub async fn request(
-    d: &Arc<Daemon>,
+    d: &Context,
     session_id: &str,
     turn_id: Option<String>,
     trigger: Trigger,
@@ -339,7 +349,7 @@ pub fn background_threshold(s: &Services, model_id: &str) -> u64 {
 /// Fin d'un tour : la compaction de fond est demandée si la projection estimée l'a
 /// réclamée, ou si le prompt réellement facturé dépasse le seuil (issue #40).
 pub async fn after_answer(
-    d: &Arc<Daemon>,
+    d: &Context,
     session_id: &str,
     model_id: &str,
     turn_id: Option<String>,
@@ -367,13 +377,13 @@ pub async fn after_answer(
 
 /// Début d'un tour : une session froide (cache perdu) dont le dernier prompt dépasse le
 /// seuil de fond est compactée **avant** l'appel au modèle (issue #40).
-pub async fn before_turn(d: &Arc<Daemon>, session_id: &str, model_id: &str, turn_id: Option<&str>) {
+pub async fn before_turn(d: &Context, session_id: &str, model_id: &str, turn_id: Option<&str>) {
     let s = &d.services;
     let threshold = background_threshold(s, model_id);
     let now = s.clock.now_ms();
     let last = last_prompt(s, session_id).await;
     let (size, reason) = match last {
-        Some((prompt, ts)) if now - ts > crate::cache_audit::CACHE_TTL_MS => {
+        Some((prompt, ts)) if now - ts > crate::helpers::CACHE_TTL_MS => {
             (prompt, "reprise après une pause")
         }
         Some(_) => return,
@@ -443,7 +453,7 @@ async fn compaction_spent_today(s: &Services) -> f64 {
 }
 
 async fn compact_inner(
-    d: &Arc<Daemon>,
+    d: &Context,
     session_id: &str,
     trigger: Trigger,
     turn_id: Option<&str>,
@@ -647,7 +657,7 @@ async fn compact_inner(
     Ok(report)
 }
 
-async fn wait_claim<'a>(d: &'a Arc<Daemon>, session_id: &str) -> Option<Claim<'a>> {
+async fn wait_claim<'a>(d: &'a Context, session_id: &str) -> Option<Claim<'a>> {
     let deadline = tokio::time::Instant::now() + OVERFLOW_WAIT;
     loop {
         if let Some(c) = d.compaction.claim(session_id) {
@@ -694,7 +704,7 @@ const MECHANICAL_MODEL: &str = "sans modèle";
 /// couvre son coût estimé. Rend le lot effectivement résumé et le modèle qui l'a fait,
 /// ou le dernier lot essayé et la raison de l'échec.
 async fn summarise_or_recover(
-    d: &Arc<Daemon>,
+    d: &Context,
     provider: &dyn Provider,
     model: &str,
     job: SummaryJob,
@@ -816,13 +826,7 @@ fn mechanical_summary(job: &SummaryJob) -> Value {
 }
 
 /// Dit au propriétaire qu'une session s'est compactée sans modèle, avec son coût par tour.
-async fn tell_mechanical(
-    d: &Arc<Daemon>,
-    session_id: &str,
-    model: &str,
-    error: &str,
-    report: &Report,
-) {
+async fn tell_mechanical(d: &Context, session_id: &str, model: &str, error: &str, report: &Report) {
     let s = &d.services;
     let _ = s
         .events
@@ -920,7 +924,7 @@ async fn cost_per_turn(s: &Services, session_id: &str) -> Option<f64> {
 }
 
 async fn summarise(
-    d: &Arc<Daemon>,
+    d: &Context,
     provider: &dyn Provider,
     model: &str,
     job: &SummaryJob,
@@ -999,7 +1003,7 @@ async fn summarise(
 
 /// Publie un résumé validé : nœud LCM, canonique marqué, événement.
 async fn publish(
-    d: &Arc<Daemon>,
+    d: &Context,
     session_id: &str,
     pending: &Pending,
     trigger: Trigger,
@@ -1087,7 +1091,7 @@ async fn publish(
 /// Publie un résumé mis de côté. Il est retiré d'abord : un résumé périmé ne revient
 /// pas en boucle.
 async fn publish_saved(
-    d: &Arc<Daemon>,
+    d: &Context,
     session_id: &str,
     pending: Pending,
     trigger: Trigger,
@@ -1138,7 +1142,7 @@ async fn save_cooldown(s: &Services, session_id: &str, cooldown: &Cooldown) {
 }
 
 /// Modèle de la conversation : sa fenêtre fixe la queue et le seuil.
-async fn conversation_model(d: &Arc<Daemon>, session_id: &str) -> String {
+async fn conversation_model(d: &Context, session_id: &str) -> String {
     if let Some(pin) = d.pinned_model(session_id).await {
         return pin.model_id;
     }
@@ -1150,26 +1154,6 @@ async fn conversation_model(d: &Arc<Daemon>, session_id: &str) -> String {
         .filter(|a| !a.is_empty())
         .unwrap_or_else(|| cfg.role_alias("chat_default"));
     cfg.alias_model(&alias).unwrap_or_default().to_string()
-}
-
-/// Compaction sur dépassement de fenêtre, offerte à la conversation d'un tour.
-pub struct OverflowCompactor {
-    pub daemon: Arc<Daemon>,
-    pub turn_id: Option<String>,
-}
-
-#[async_trait::async_trait]
-impl crate::agent::Compactor for OverflowCompactor {
-    async fn compact_now(&self, session_id: &str) -> anyhow::Result<bool> {
-        let r = compact(
-            &self.daemon,
-            session_id,
-            Trigger::Overflow,
-            self.turn_id.as_deref(),
-        )
-        .await?;
-        Ok(r.published > 0)
-    }
 }
 
 /// Bilan lisible, pour Telegram et la CLI.
@@ -1199,8 +1183,10 @@ pub fn report_text(r: &Report) -> String {
     )
 }
 
+mod context;
 mod fidelity;
 mod view;
+pub use context::{Context, OverflowCompactor};
 use fidelity::*;
 pub use view::context_view;
 

@@ -8,7 +8,7 @@ use crate::agent::{AgentLoop, TurnOutcome, TurnSink, TurnSpec};
 use crate::bus::Origin;
 use crate::conversation::SessionConversation;
 use crate::executor::{NativeToolExecutor, ToolEnv, chat_tool_defs, default_workspaces};
-use crate::helpers::last_model_key;
+use crate::helpers::{last_model_key, pin_key};
 use crate::runtime::Daemon;
 use penelope_context::journal::{Provenance, UserSource};
 use penelope_kernel::ids::TurnId;
@@ -19,10 +19,6 @@ use penelope_llm::types::{ChatMessage, ChatRequest};
 use penelope_llm::{CancelToken, RouteInput, Router, StickyModel, collect_stream};
 use serde_json::{Value, json};
 use std::sync::Arc;
-
-fn pin_key(session_id: &str) -> String {
-    format!("session.model_pin.{session_id}")
-}
 
 /// Frontière qui a fait reclasser le dernier message (#82), vide sinon.
 fn last_model_why_key(session_id: &str) -> String {
@@ -336,7 +332,7 @@ impl Daemon {
             }
         }
         // Frontière de tour : résumé prêt publié, compaction de fond lancée si besoin.
-        crate::compaction::after_turn(self, &turn.session_id).await;
+        crate::compaction::after_turn(&crate::compaction::context_of(self), &turn.session_id).await;
         outcome
     }
 
@@ -510,7 +506,13 @@ impl Daemon {
             None => Vec::new(),
         };
         // Reprise d'une session froide au-delà du seuil : résumée avant l'appel (issue #40).
-        crate::compaction::before_turn(self, &turn.session_id, &model_id, Some(&origin_turn)).await;
+        crate::compaction::before_turn(
+            &crate::compaction::context_of(self),
+            &turn.session_id,
+            &model_id,
+            Some(&origin_turn),
+        )
+        .await;
         let (mut tiers, recalled) = crate::conversation::build_turn_prompt(
             &s,
             &text,
@@ -538,13 +540,18 @@ impl Daemon {
         crate::cache_audit::stable_prefix(self, &turn.session_id, &mut tiers).await?;
         // Un résumé prêt depuis le tour précédent (ou avant un redémarrage) est publié
         // avant de construire la projection.
-        if let Err(e) = crate::compaction::publish_pending(self, &turn.session_id).await {
+        if let Err(e) = crate::compaction::publish_pending(
+            &crate::compaction::context_of(self),
+            &turn.session_id,
+        )
+        .await
+        {
             tracing::warn!(session = %turn.session_id, error = %e, "résumé en attente non publié");
         }
         let mut conv =
             SessionConversation::new(s.clone(), &turn.session_id, &model_id, tiers, episode)
                 .with_compactor(Arc::new(crate::compaction::OverflowCompactor {
-                    daemon: self.clone(),
+                    context: crate::compaction::context_of(self),
                     turn_id: Some(origin_turn.clone()),
                 }));
         if turn.kind == TurnKind::Message {
@@ -602,7 +609,7 @@ impl Daemon {
         // Estimation locale ou prompt réellement facturé : l'un ou l'autre au-delà du seuil
         // demande la compaction de fond (issue #40).
         crate::compaction::after_answer(
-            self,
+            &crate::compaction::context_of(self),
             &turn.session_id,
             &model_id,
             spec.turn_id.clone(),
@@ -946,24 +953,7 @@ impl Daemon {
 
     /// Alias épinglé sur une session, s'il existe encore dans la configuration.
     pub async fn pinned_model(&self, session_id: &str) -> Option<StickyModel> {
-        let alias = self
-            .services
-            .kv_get(&pin_key(session_id))
-            .await
-            .ok()
-            .flatten()
-            .filter(|a| !a.is_empty())?;
-        let cfg = self.services.config.config();
-        match cfg.alias_model(&alias) {
-            Some(id) => Some(StickyModel {
-                alias,
-                model_id: id.to_string(),
-            }),
-            None => {
-                tracing::warn!(session = session_id, alias = %alias, "alias épinglé disparu de la configuration");
-                None
-            }
-        }
+        crate::helpers::pinned_model(&self.services, session_id).await
     }
 
     /// Épingle un alias sur une session, ou revient à l'automatique (`None`).

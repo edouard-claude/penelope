@@ -26,7 +26,7 @@ pub struct Daemon {
     /// Branchements optionnels : canal de message, MCP, orchestration.
     pub hooks: Hooks,
     /// Compactions de fond en cours et demandées (§5.4).
-    pub compaction: crate::compaction::State,
+    pub compaction: Arc<crate::compaction::State>,
     /// Runs de workflow pilotés par ce processus (§12.7).
     pub workflows: crate::workflow::State,
     /// Calcul des embeddings : dernier échec, rattrapage en cours (issue #11).
@@ -197,7 +197,9 @@ impl Daemon {
         Daemon {
             handle: Handle::new(started_at_ms),
             bus: Arc::new(crate::bus::Bus::new()),
-            compaction: crate::compaction::State::with_messenger(hooks.messenger.clone()),
+            compaction: Arc::new(crate::compaction::State::with_messenger(
+                hooks.messenger.clone(),
+            )),
             workflows: crate::workflow::State::with_ports(hooks.workflow()),
             embeddings: Arc::default(),
             tasks: Arc::new(crate::tasks::Tasks::default()),
