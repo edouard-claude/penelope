@@ -42,14 +42,14 @@ pub async fn place_name(s: &Services, origin: &Origin) -> String {
 
 /// Déplace une planification vers une autre conversation, sans la recréer : son
 /// historique, ses exécutions et son état restent (issue #124). Le canal dit si la
-/// conversation peut la recevoir. Renvoie la nouvelle destination, en mots.
+/// conversation peut la recevoir ; sans canal branché, seule celle du propriétaire est
+/// sûre. Renvoie la nouvelle destination, en mots.
 pub async fn retarget(s: &Services, id: &str, to: &Origin) -> Result<String, String> {
-    let channel = s
-        .channel
-        .delivery
-        .get()
-        .ok_or("aucun canal du propriétaire n'est branché")?;
-    let to = channel.destination_for(to).await?;
+    let to = match s.channel.delivery.get() {
+        Some(channel) => channel.destination_for(to).await?,
+        None if to.is_channel() && *to == owner_origin_of(s) => to.clone(),
+        None => return Err("aucun canal du propriétaire n'est branché".into()),
+    };
     let moved = s
         .schedules
         .set_origin(id, to.to_value())

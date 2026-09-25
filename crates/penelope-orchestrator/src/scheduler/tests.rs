@@ -332,7 +332,15 @@ async fn a_schedule_says_where_it_delivers_and_can_be_moved() {
         to_of(&list, &sched.id),
         "aucune conversation (canal non configuré)"
     );
-    let refused = retarget(s, &sched.id, &owner_origin_of(s)).await;
+    // Sans canal branché, seule la conversation du propriétaire est une destination sûre.
+    let home = retarget(s, &sched.id, &owner_origin_of(s)).await.unwrap();
+    assert_eq!(home, "aucune conversation (canal non configuré)");
+    let group = Origin::Telegram {
+        chat_id: -100_777,
+        topic_id: None,
+        message_id: None,
+    };
+    let refused = retarget(s, &sched.id, &group).await;
     assert!(refused.unwrap_err().contains("aucun canal"));
 
     s.channel.delivery.set(Some(Arc::new(Places)));
