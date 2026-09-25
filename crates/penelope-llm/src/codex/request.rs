@@ -1,4 +1,4 @@
-//! Requête : corps de l’API Responses.
+//! Requête : corps de l'API Responses.
 
 use super::*;
 
