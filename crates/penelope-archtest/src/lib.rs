@@ -276,6 +276,10 @@ pub fn dependency_rules() -> BTreeMap<&'static str, Vec<&'static str>> {
     // La mémoire qui mûrit (T26) : le socle, le vault et les crates métier, jamais le
     // daemon ni l'orchestrateur, qui la déclenchent, ni le canal.
     m.insert("penelope-dream", DREAM_ALLOWED_DEPS.to_vec());
+    // L'exécuteur des outils natifs (T24) : le socle, le vault et les crates métier ;
+    // ni la boucle, qui l'appelle par `ToolExecutor`, ni l'orchestrateur (planification
+    // par le port `Orchestrator`), ni les crates d'exploitation, ni le daemon.
+    m.insert("penelope-executor", EXECUTOR_ALLOWED_DEPS.to_vec());
     m
 }
 
@@ -367,6 +371,26 @@ pub const DREAM_ALLOWED_DEPS: &[&str] = &[
     "penelope-mcp",
     "penelope-tools",
     "penelope-hitl",
+];
+
+/// Ce dont `penelope-executor` peut dépendre (§3.2 : app, vault et métier ; **pas**
+/// agent, **pas** orchestrator). `penelope-telegram` pour la liste des commandes de
+/// `self_status`, jusqu'à T36.
+pub const EXECUTOR_ALLOWED_DEPS: &[&str] = &[
+    "penelope-app",
+    "penelope-vault",
+    "penelope-kernel",
+    "penelope-store",
+    "penelope-platform",
+    "penelope-observe",
+    "penelope-llm",
+    "penelope-context",
+    "penelope-memory",
+    "penelope-mcp",
+    "penelope-skills",
+    "penelope-tools",
+    "penelope-telegram",
+    "penelope-workflow",
 ];
 
 /// Vérifie les règles de dépendance.
@@ -531,6 +555,7 @@ mod tests {
             "penelope-ops",
             "penelope-dream",
             "penelope-agent",
+            "penelope-executor",
             "penelope-cli",
             "penelope-gateway-telegram",
         ] {
@@ -641,6 +666,28 @@ mod tests {
             "penelope-dream est sous le daemon : {:?}",
             dream.internal_deps
         );
+    }
+
+    /// T24 : l'exécuteur ne connaît ni le daemon, ni la boucle qui l'appelle, ni les
+    /// crates qui sont au-dessus de lui ; il ne les atteint que par les ports.
+    #[test]
+    fn the_executor_crate_sees_neither_the_daemon_nor_the_agent_loop() {
+        let all = crates();
+        let executor = all.iter().find(|c| c.name == "penelope-executor").unwrap();
+        for above in [
+            "penelope-daemon",
+            "penelope-agent",
+            "penelope-dream",
+            "penelope-ops",
+            "penelope-mcp-host",
+            "penelope-gateway-telegram",
+        ] {
+            assert!(
+                !executor.internal_deps.contains(above),
+                "penelope-executor dépend de {above} : {:?}",
+                executor.internal_deps
+            );
+        }
     }
 
     /// T10 : la boucle ne voit ni le moteur de contexte, ni la mémoire, ni le canal, ni
