@@ -39,7 +39,7 @@ pub async fn digest_text(
     d: &crate::runtime::Daemon,
     mcp: Option<Arc<dyn McpAdmin>>,
 ) -> anyhow::Result<String> {
-    digest_with(&d.dream(), digest_inputs(d).await, mcp).await
+    penelope_dream::digest_text(&d.dream(), digest_inputs(d).await, mcp).await
 }
 
 /// Source des entrées du digest pour les crons système (`system_crons`).

@@ -69,7 +69,7 @@ pub async fn scheduler_loop(d: Arc<Daemon>, ports: Ports) {
             });
         }
         let (dream, feed) = (d.dream(), Arc::new(crate::dream::DigestFeed(d.clone())));
-        let crons = crate::dream::system_crons(&dream, feed, &ports.messenger, &ports.mcp);
+        let crons = penelope_dream::system_crons(&dream, feed, &ports.messenger, &ports.mcp);
         if let Err(e) = crons.await {
             tracing::warn!(error = %e, "consolidation ou digest programmés");
         }

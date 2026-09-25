@@ -11,6 +11,9 @@ pub mod dream;
 pub mod ingest;
 pub mod onboarding;
 
+// Ce que l'ordonnanceur déclenche (T26).
+pub use dream::{digest_text, system_crons};
+
 use penelope_app::ports::ProviderSource;
 use penelope_app::services::Services;
 use std::sync::Arc;

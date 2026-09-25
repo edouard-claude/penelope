@@ -153,7 +153,8 @@ async fn a_silent_scheduled_run_is_a_failure_and_its_state_is_restored() {
         r#"["a","b"]"#,
         "état remis : la suivante reprend les mêmes éléments"
     );
-    let digest = crate::dream::digest_text(&d, d.hooks.mcp_supervisor())
+    let inputs = crate::dream::digest_inputs(&d).await;
+    let digest = penelope_dream::digest_text(&d.dream(), inputs, d.hooks.mcp_supervisor())
         .await
         .unwrap();
     assert!(digest.contains("planification(s) en échec"), "{digest}");
@@ -356,7 +357,8 @@ async fn a_schedule_says_where_it_delivers_and_can_be_moved() {
         today,
         vec!["- 09:00 Veille du matin → sujet « Veille », groupe « Équipe »".to_string()]
     );
-    let digest = crate::dream::digest_text(&d, d.hooks.mcp_supervisor())
+    let inputs = crate::dream::digest_inputs(&d).await;
+    let digest = penelope_dream::digest_text(&d.dream(), inputs, d.hooks.mcp_supervisor())
         .await
         .unwrap();
     assert!(digest.contains("Aujourd'hui"), "{digest}");

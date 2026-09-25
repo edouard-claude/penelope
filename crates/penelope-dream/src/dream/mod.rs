@@ -625,7 +625,7 @@ use candidates::{Neighbour, contradiction};
 pub use clash::file_unanswered_clash;
 use clash::{ask_about_clash, expired_journal, unused_entries};
 use consolidate::{CallOutcome, consolidate};
-pub use digest::digest_with;
+pub use digest::digest_text;
 #[cfg(test)]
 use digest::night_summary;
 use digest::rejection_families;

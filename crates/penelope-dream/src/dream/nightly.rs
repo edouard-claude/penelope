@@ -47,7 +47,7 @@ pub async fn system_crons(
             _ => {
                 tokio::spawn(async move {
                     let inputs = digest.digest_inputs().await;
-                    match digest_with(&d2, inputs, mcp.get()).await {
+                    match digest_text(&d2, inputs, mcp.get()).await {
                         Ok(text) => {
                             if let Some(m) = messenger.get() {
                                 // Avis sans session : il part au foyer (`telegram.home`,

@@ -66,7 +66,7 @@ async fn daemon() -> (tempfile::TempDir, Arc<Harness>, Arc<MockProvider>) {
 /// Digest sans planifications ni compactage (`DigestInputs` vides) : ce qu'en voient
 /// les tests du rêve.
 async fn digest_text(d: &Context, mcp: Option<Arc<dyn McpAdmin>>) -> anyhow::Result<String> {
-    digest_with(d, DigestInputs::default(), mcp).await
+    super::digest_text(d, DigestInputs::default(), mcp).await
 }
 
 async fn note(

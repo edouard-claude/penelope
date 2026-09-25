@@ -117,7 +117,7 @@ async fn recent_reports(s: &Services, n: usize) -> anyhow::Result<Vec<DreamRepor
 /// Digest du matin (§6.8 sortie, §14.5 `digest`). `inputs` : ce que le digest lit
 /// au-dessus du rêve (planifications, compactage), calculé par l'appelant (T26).
 /// `mcp` : le superviseur, pour l'audit du lundi.
-pub async fn digest_with(
+pub async fn digest_text(
     d: &Context,
     inputs: DigestInputs,
     mcp: Option<Arc<dyn McpAdmin>>,
