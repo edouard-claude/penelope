@@ -63,14 +63,12 @@ modules = [
     "history",  # étape de boot du scellement (épopée #208, lot E, T11), prévue par source-de-verite.md
     "ingest",
     "prompt_snapshot",
-    "purge",
     "rpc",
     "runner",
     "runtime",
     "runtime_events",
     "scheduler",
     "selfknow",
-    "session_ops",
     "supervisor",
     "wiki_e2e",
     "workflow",  # aides de test sorties de mcp.rs (#215),
@@ -221,7 +219,7 @@ required = [
 "crates/penelope-store/src/migrations.rs" = 30   # permanent : l'historique SQL est immuable (tables tg_updates, tg_outbox)
 "crates/penelope-kernel/src/config.rs" = 25      # permanent : le schéma de configuration nomme ses canaux ([telegram])
 "crates/penelope-daemon/src/supervisor.rs" = 13
-"crates/penelope-daemon/src/purge.rs" = 17
+"crates/penelope-ops/src/purge.rs" = 17   # purge.rs sorti du daemon (T28) : la mention suit son code
 "crates/penelope-daemon/src/runtime.rs" = 5
 "crates/penelope-app/src/services.rs" = 5   # Services descendu de runtime.rs (T21) : gabarits et actions du canal, sortent avec T36
 "crates/penelope-executor/src/selfknow.rs" = 12   # selfknow.rs sorti du daemon (T24) : la mention suit son code ; T36 la passe par Admin
@@ -237,7 +235,7 @@ required = [
 "crates/penelope-app/src/codex_scope.rs" = 1
 "crates/penelope-mcp-host/src/auth.rs" = 1   # mcp_auth.rs sorti du daemon (T25) : la mention suit son code
 "crates/penelope-app/src/media.rs" = 1
-"crates/penelope-daemon/src/session_ops.rs" = 1
+"crates/penelope-ops/src/session_ops.rs" = 1   # session_ops.rs sorti du daemon (T28) : la mention suit son code
 "crates/penelope-ops/src/upgrade.rs" = 1   # upgrade.rs sorti du daemon (T28) : la mention suit son code
 "crates/penelope-executor/src/voice.rs" = 1   # voice.rs sorti du daemon (T24) : la mention suit son code
 "crates/penelope-kernel/src/api.rs" = 1

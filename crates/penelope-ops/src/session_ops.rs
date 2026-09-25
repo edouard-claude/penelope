@@ -3,7 +3,7 @@
 
 use crate::bus::Bus;
 use crate::ports::ProviderSource;
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_kernel::session::SessionKind;
 use penelope_llm::types::Role;

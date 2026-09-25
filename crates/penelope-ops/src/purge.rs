@@ -31,7 +31,7 @@
 //! jetons et ses coûts : seul son `system_hash`, qui mène au texte d'un prompt, est coupé
 //! à la purge d'une session (#205).
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_store::rusqlite::params;
 use serde_json::{Value, json};

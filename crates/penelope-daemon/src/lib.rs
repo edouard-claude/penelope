@@ -13,14 +13,12 @@ pub mod executor;
 pub mod history;
 pub mod ingest;
 pub mod prompt_snapshot;
-pub mod purge;
 pub mod rpc;
 pub mod runner;
 pub mod runtime;
 pub mod runtime_events;
 pub mod scheduler;
 pub mod selfknow;
-pub mod session_ops;
 pub mod supervisor;
 pub mod tool_jobs;
 #[cfg(test)]
@@ -45,7 +43,8 @@ pub use penelope_vault::{
 // Exploitation sortie dans `penelope-ops` (T28), réexportée sous ses anciens chemins
 // jusqu'à T30.
 pub use penelope_ops::{
-    backup, codex_auth, codex_quota, doctor, hermes, skill_deps, skill_install, upgrade,
+    backup, codex_auth, codex_quota, doctor, hermes, purge, session_ops, skill_deps, skill_install,
+    upgrade,
 };
 
 // Mémoire qui mûrit sortie dans `penelope-dream` (T26), réexportée sous ses anciens
