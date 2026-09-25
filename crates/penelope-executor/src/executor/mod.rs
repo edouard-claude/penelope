@@ -4,9 +4,9 @@
 //! boucles, politique, approbation, ledger. Ce module ne fait qu'exécuter, en validant
 //! les arguments contre le schéma de l'outil et en restant dans les workspaces.
 
-use crate::agent::{CallInfo, ToolExecutor};
-use crate::bus::Origin;
-use crate::runtime::Services;
+use penelope_app::bus::Origin;
+use penelope_app::services::Services;
+use penelope_app::tool_executor::{CallInfo, ToolExecutor};
 use penelope_kernel::risk::RiskClass;
 use penelope_tools::{ToolError, ToolOutcome, ToolResult};
 use serde_json::{Value, json};
@@ -185,12 +185,12 @@ fn config_application_time(path: &str) -> (&'static str, Option<&'static str>) {
 impl NativeToolExecutor {
     /// Conversation à qui rendre une élicitation née de cet appel (issue #143) : celle
     /// du tour, quand il vient de Telegram ; sinon rien, et le canal choisit son repli.
-    fn elicitation_destination(&self) -> crate::elicitation::Destination {
+    fn elicitation_destination(&self) -> penelope_app::elicitation::Destination {
         let (chat_id, topic_id) = match self.env.origin.telegram_chat() {
             Some((c, t)) => (Some(c), t),
             None => (None, None),
         };
-        crate::elicitation::Destination {
+        penelope_app::elicitation::Destination {
             session_id: Some(self.env.session_id.clone()),
             chat_id,
             topic_id,
@@ -312,15 +312,15 @@ mod meta;
 mod precheck;
 mod tools;
 
-pub use crate::agent::wants_network;
-pub(crate) use crate::agent::{call_arguments, effective_arguments};
 use args::{
     FS_LIST_INLINE_CHARS, b_arg, new_workflow_plan, render_listing, str_arg, summarise_listing,
     u_arg, with_session_labels,
 };
 use defs::native_info;
-pub(crate) use defs::shell_override;
+pub use defs::shell_override;
 pub use defs::{chat_tool_defs, render_mcp_result, tool_defs};
+pub use penelope_tools::args::wants_network;
+pub use penelope_tools::args::{call_arguments, effective_arguments};
 
 #[cfg(test)]
 mod tests;

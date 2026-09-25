@@ -4,9 +4,9 @@
 //! `data:` et sont enregistrées sous `{data}/media/generated`, d'où elles partent vers le
 //! propriétaire.
 
-use crate::ports::ProviderSource;
-use crate::runtime::Services;
 use base64::Engine;
+use penelope_app::ports::ProviderSource;
+use penelope_app::services::Services;
 use penelope_llm::catalog::strip_provider;
 use penelope_llm::provider::{CancelToken, collect_stream};
 use penelope_llm::types::{ChatMessage, ChatRequest, Content};
@@ -129,7 +129,7 @@ pub fn decode_data_url(url: &str) -> Result<(Vec<u8>, &'static str), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::MockProviders;
+    use penelope_app::testing::MockProviders;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::{MockProvider, Scripted};
     use std::sync::Arc;
@@ -139,7 +139,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );

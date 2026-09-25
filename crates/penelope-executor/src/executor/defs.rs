@@ -113,7 +113,7 @@ pub fn render_mcp_result(v: &Value) -> String {
     out
 }
 
-pub(crate) fn shell_override(raw: &str) -> Option<(String, Vec<String>)> {
+pub fn shell_override(raw: &str) -> Option<(String, Vec<String>)> {
     let mut parts = raw.split_whitespace();
     let program = parts.next()?.to_string();
     let mut args: Vec<String> = parts.map(String::from).collect();

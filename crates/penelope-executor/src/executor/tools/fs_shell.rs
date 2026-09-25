@@ -174,7 +174,7 @@ impl NativeToolExecutor {
                             ""
                         }
                     );
-                    if let Some(hint) = crate::tool_jobs::background_hint(&cfg, name, args) {
+                    if let Some(hint) = crate::jobs::background_hint(&cfg, name, args) {
                         o.text.push_str(&hint);
                     }
                     return Ok(o.eager());
@@ -191,7 +191,7 @@ impl NativeToolExecutor {
                 }
                 // Un délai demandé au-delà de `tools.background_after` a immobilisé le
                 // tour : la prochaine fois, proposer l'arrière-plan (issue #204).
-                if let Some(hint) = crate::tool_jobs::background_hint(&cfg, name, args) {
+                if let Some(hint) = crate::jobs::background_hint(&cfg, name, args) {
                     o.text.push_str(&hint);
                 }
                 return Ok(o.eager());

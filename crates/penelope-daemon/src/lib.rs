@@ -13,7 +13,6 @@ pub mod dream;
 pub mod engine;
 pub mod executor;
 pub mod history;
-pub mod images;
 pub mod ingest;
 pub mod prompt_snapshot;
 pub mod purge;
@@ -22,15 +21,11 @@ pub mod runner;
 pub mod runtime;
 pub mod runtime_events;
 pub mod scheduler;
-pub mod selfdocs;
 pub mod selfknow;
 pub mod session_ops;
 pub mod supervisor;
 pub mod titles;
 pub mod tool_jobs;
-pub mod tools_on_demand;
-pub mod vision;
-pub mod voice;
 #[cfg(test)]
 mod wiki_e2e;
 pub mod workflow;
@@ -59,6 +54,11 @@ pub use penelope_ops::{
 // Mémoire qui mûrit sortie dans `penelope-dream` (T26), réexportée sous ses anciens
 // chemins jusqu'à T30.
 pub use penelope_dream::onboarding;
+
+// Exécuteur des outils natifs sorti dans `penelope-executor` (T24), réexporté sous ses
+// anciens chemins jusqu'à T30 ; `executor`, `selfknow` et `tool_jobs` en restent les
+// façades.
+pub use penelope_executor::{images, selfdocs, tools_on_demand, vision, voice};
 
 pub use agent::{AgentLoop, TurnOutcome};
 pub use ports::Handle;

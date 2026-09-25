@@ -1,0 +1,54 @@
+[package]
+name = "penelope-executor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# L'exécuteur des outils natifs (épopée #208, T24) : outils par famille, `self_status`,
+# documentation embarquée, vision, images, voix, outils à la demande, magasin des jobs
+# d'outils. Au-dessus de `penelope-app` et `penelope-vault`, sous le daemon ; ni la
+# boucle (`penelope-agent`) ni l'orchestrateur : il ne les voit que par les ports.
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+# Heure locale du propriétaire (`time_now`).
+chrono-tz.workspace = true
+# Images générées rendues en fichiers.
+base64.workspace = true
+# Découpage du texte à dire (`voice`).
+regex.workspace = true
+# Outils `http_*`, téléchargement de fichiers et d'images.
+reqwest.workspace = true
+url.workspace = true
+# `Services`, les ports (`Admin`, `Orchestrator`, `Messenger`, `McpGateway`), les helpers.
+penelope-app.workspace = true
+# Outils mémoire (`remember`, `forget`, `memory_search`), notes de session, tuiles du prompt.
+penelope-vault.workspace = true
+penelope-kernel.workspace = true
+penelope-store.workspace = true
+penelope-platform.workspace = true
+penelope-observe.workspace = true
+penelope-llm.workspace = true
+# Termes significatifs d'une recherche dans l'historique (`history_search`).
+penelope-context.workspace = true
+penelope-memory.workspace = true
+penelope-mcp.workspace = true
+penelope-skills.workspace = true
+penelope-tools.workspace = true
+# Liste des commandes pour l'inventaire de `self_status` : sort avec T36 (par `Admin`).
+penelope-telegram.workspace = true
+penelope-workflow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util", "test-util"] }

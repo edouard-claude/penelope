@@ -27,7 +27,7 @@ impl NativeToolExecutor {
                             let mut o = json!({
                                 "name": k.name, "description": k.description, "score": score
                             });
-                            let missing = crate::machine::missing_binaries(&k.requires);
+                            let missing = penelope_app::machine::missing_binaries(&k.requires);
                             if !missing.is_empty() {
                                 o["binaires_manquants"] = json!(missing);
                             }
@@ -54,7 +54,7 @@ impl NativeToolExecutor {
                     "requires": sk.requires, "content": content
                 });
                 // Dit avant l'application, pas au premier échec de commande (issue #156).
-                let missing = crate::machine::missing_binaries(&sk.requires);
+                let missing = penelope_app::machine::missing_binaries(&sk.requires);
                 if !missing.is_empty() {
                     out["binaires_manquants"] = json!(missing);
                     out["remarque"] = json!(format!(
@@ -100,7 +100,7 @@ impl NativeToolExecutor {
                 proposal.validate().map_err(ToolError::Invalid)?;
                 let root = s.platform.dirs.skills();
                 let path = penelope_skills::write_skill(&root, &proposal).map_err(ToolError::Io)?;
-                crate::runtime::reload_skills(s)
+                penelope_app::services::reload_skills(s)
                     .await
                     .map_err(|e| ToolError::Io(e.to_string()))?;
                 json!({"written": path, "name": proposal.name})
@@ -269,7 +269,8 @@ impl NativeToolExecutor {
                 let w = penelope_workflow::Workflow::from_json(&raw)
                     .map_err(|e| with_doc(format!("JSON invalide : {e}")))?;
                 let known =
-                    crate::runtime::workflow_known_with(&cfg, &s.mcp_tools, &s.workflows).await;
+                    penelope_app::services::workflow_known_with(&cfg, &s.mcp_tools, &s.workflows)
+                        .await;
                 let dir = s.platform.dirs.workflows();
                 let path = s.workflows.write(&dir, &w, &known).map_err(with_doc)?;
                 s.workflows

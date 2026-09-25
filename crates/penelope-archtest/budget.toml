@@ -16,7 +16,7 @@ test_modules = [
 # Liste de référence (R3) : les fichiers autorisés à dépasser, chacun avec sa borne.
 # Elle ne peut que rétrécir : un fichier repassé sous le plafond doit en sortir.
 [files.oversized]
-"crates/penelope-daemon/src/tool_jobs.rs" = 1655   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
+"crates/penelope-daemon/src/tool_jobs.rs" = 1207   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/engine.rs" = 1105
 "crates/penelope-kernel/src/config.rs" = 2148   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-cli/src/commands.rs" = 2179   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
@@ -63,7 +63,6 @@ modules = [
     "dream",
     "engine",
     "executor",
-    "images",
     "history",  # étape de boot du scellement (épopée #208, lot E, T11), prévue par source-de-verite.md
     "ingest",
     "prompt_snapshot",
@@ -73,14 +72,10 @@ modules = [
     "runtime",
     "runtime_events",
     "scheduler",
-    "selfdocs",
     "selfknow",
     "session_ops",
     "supervisor",
     "titles",
-    "tools_on_demand",
-    "vision",
-    "voice",
     "wiki_e2e",
     "workflow",  # aides de test sorties de mcp.rs (#215),
   "tool_jobs",  # sous-module de agent/ (lot F, T02 à T06)
@@ -216,9 +211,9 @@ required = [
 "crates/penelope-ops/src/doctor/mod.rs" = 15   # découpage (lot G), puis sortie du daemon (T28) : la mention suit son code
 "crates/penelope-ops/src/doctor/machine.rs" = 3   # découpage (lot G), puis sortie du daemon (T28) : la mention suit son code
 "crates/penelope-ops/src/doctor/coherence.rs" = 12   # découpage (lot G), puis sortie du daemon (T28) : la mention suit son code
-"crates/penelope-daemon/src/executor/tools/skills_workflows.rs" = 1   # découpage (lot G) : la mention suit son code
-"crates/penelope-daemon/src/executor/tools/schedules_messaging.rs" = 7   # découpage (lot G) : la mention suit son code
-"crates/penelope-daemon/src/executor/mod.rs" = 5   # découpage (lot G) : la mention suit son code
+"crates/penelope-executor/src/executor/tools/skills_workflows.rs" = 1   # découpage (lot G), puis sortie du daemon (T24) : la mention suit son code
+"crates/penelope-executor/src/executor/tools/schedules_messaging.rs" = 7   # découpage (lot G), puis sortie du daemon (T24) : la mention suit son code
+"crates/penelope-executor/src/executor/mod.rs" = 5   # découpage (lot G), puis sortie du daemon (T24) : la mention suit son code
 "crates/penelope-agent/src/pipeline.rs" = 1   # EffectKind::Telegram (effect_kind) : suit le fichier dans penelope-agent (T10) ; disparaît avec T37
 "crates/penelope-daemon/src/tool_jobs.rs" = 6   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-daemon/src/scheduler.rs" = 32
@@ -229,7 +224,7 @@ required = [
 "crates/penelope-daemon/src/purge.rs" = 17
 "crates/penelope-daemon/src/runtime.rs" = 5
 "crates/penelope-app/src/services.rs" = 5   # Services descendu de runtime.rs (T21) : gabarits et actions du canal, sortent avec T36
-"crates/penelope-daemon/src/selfknow.rs" = 12
+"crates/penelope-executor/src/selfknow.rs" = 12   # selfknow.rs sorti du daemon (T24) : la mention suit son code ; T36 la passe par Admin
 "crates/penelope-daemon/src/runner.rs" = 11
 "crates/penelope-app/src/elicitation.rs" = 10
 "crates/penelope-daemon/src/engine.rs" = 10
@@ -245,5 +240,5 @@ required = [
 "crates/penelope-app/src/media.rs" = 1
 "crates/penelope-daemon/src/session_ops.rs" = 1
 "crates/penelope-ops/src/upgrade.rs" = 1   # upgrade.rs sorti du daemon (T28) : la mention suit son code
-"crates/penelope-daemon/src/voice.rs" = 1
+"crates/penelope-executor/src/voice.rs" = 1   # voice.rs sorti du daemon (T24) : la mention suit son code
 "crates/penelope-kernel/src/api.rs" = 1

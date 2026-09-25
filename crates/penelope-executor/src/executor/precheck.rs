@@ -36,8 +36,8 @@ impl NativeToolExecutor {
         };
         let payload = json!({
             "tool": tool,
-            "args": crate::runtime_events::bounded_redacted(&crate::agent::without_intention(&effective_args)),
-            "result": crate::runtime_events::bounded_redacted(&output),
+            "args": penelope_app::helpers::bounded_redacted(&penelope_tools::args::without_intention(&effective_args)),
+            "result": penelope_app::helpers::bounded_redacted(&output),
             "ok": ok,
             "duration_ms": started.elapsed().as_millis() as u64,
             "cost_usd_estimated": if tool.starts_with("mcp__") { Value::Null } else { json!(0.0) },
@@ -90,7 +90,7 @@ impl NativeToolExecutor {
             t if t.starts_with("mcp__") || name == "tool_call" => self
                 .services
                 .mcp_tools
-                .validate_args(t, &crate::agent::without_intention(&inner))
+                .validate_args(t, &penelope_tools::args::without_intention(&inner))
                 .await
                 .map_err(|e| match e {
                     penelope_mcp::McpError::UnknownTool(q) => ToolError::Unknown(q),

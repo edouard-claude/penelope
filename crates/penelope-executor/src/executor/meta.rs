@@ -31,8 +31,8 @@ impl NativeToolExecutor {
         // Une forge dont le client est connecté : le dire au lieu de laisser le modèle
         // réapprendre à chaque sujet (issue #156). La lecture a déjà eu lieu, rien n'est
         // bloqué — c'est une remarque, comme celle du réseau coupé (#106).
-        let hint = match crate::machine::cached(s).await {
-            Some(inv) => crate::machine::forge_hint(&inv, url),
+        let hint = match penelope_app::machine::cached(s).await {
+            Some(inv) => penelope_app::machine::forge_hint(&inv, url),
             None => None,
         };
         if let Some(h) = &hint {
@@ -203,7 +203,7 @@ impl NativeToolExecutor {
     pub(super) async fn mcp_call(&self, qualified: &str, args: &Value) -> ToolResult<ToolOutcome> {
         let s = &self.services;
         // L'intention est pour la carte, pas pour le serveur (#116).
-        let args = &crate::agent::without_intention(args);
+        let args = &penelope_tools::args::without_intention(args);
         // Refus local, sans aller au serveur : `explain` y joint son schéma (#110).
         s.mcp_tools
             .validate_args(qualified, args)

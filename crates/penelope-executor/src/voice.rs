@@ -8,10 +8,10 @@
 //!  échec ─► la réponse part en texte, avec « vocal indisponible : <raison> »
 //! ```
 
-use crate::bus::Origin;
 use crate::executor::Messenger;
-use crate::ports::ProviderSource;
-use crate::runtime::Services;
+use penelope_app::bus::Origin;
+use penelope_app::ports::ProviderSource;
+use penelope_app::services::Services;
 use regex::Regex;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -242,7 +242,7 @@ pub async fn synthesize(
              activé : `penelope config set providers.local.enabled true`"
         ));
     }
-    let model = crate::codex_scope::background(s, &model, "synthèse vocale").await;
+    let model = penelope_app::codex_scope::background(s, &model, "synthèse vocale").await;
     let provider = providers.provider_for(&model).await?;
     let mut parts = Vec::new();
     for chunk in chunks(text, CHUNK_CHARS) {

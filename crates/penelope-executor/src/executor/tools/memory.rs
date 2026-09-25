@@ -40,7 +40,7 @@ impl NativeToolExecutor {
                 // Rien trouvé : le périmètre et ce qui en sort, jamais un silence (issue #15).
                 if hits.is_empty() {
                     return Ok(ToolOutcome::ok(
-                        crate::vault_inventory::empty_search_note(s).await,
+                        penelope_vault::vault_inventory::empty_search_note(s).await,
                     ));
                 }
                 // Retour d'usage (issues #37 et #105) : trouvé par une recherche, donc
@@ -50,8 +50,14 @@ impl NativeToolExecutor {
                     Ok(Some(ref x)) if x.kind == penelope_kernel::session::SessionKind::Chat
                 );
                 let uids: Vec<String> = hits.iter().map(|h| h.entry.uid.clone()).collect();
-                crate::usage_feedback::served(s, &self.env.session_id, in_chat, &uids, &query)
-                    .await;
+                penelope_vault::usage_feedback::served(
+                    s,
+                    &self.env.session_id,
+                    in_chat,
+                    &uids,
+                    &query,
+                )
+                .await;
                 let mut out = Vec::new();
                 for h in &hits {
                     let untrusted = h.entry.etype == penelope_memory::ingest::SOURCE_ETYPE
@@ -71,7 +77,7 @@ impl NativeToolExecutor {
                 }
                 json!(out)
             }
-            "mem_neighbors" => crate::concepts::neighbors(s, &str_arg(args, "slug")?)
+            "mem_neighbors" => penelope_vault::concepts::neighbors(s, &str_arg(args, "slug")?)
                 .await
                 .map_err(|e| ToolError::Other(e.to_string()))?,
             "mem_get" => {
@@ -105,9 +111,9 @@ impl NativeToolExecutor {
                     .ok_or_else(|| ToolError::Invalid("type inconnu".into()))?;
                 // Un secret part dans le magasin, la note n'en garde que la référence
                 // (issue #37).
-                let (texte, _) = crate::secret_shelf::shelve(s, &str_arg(args, "texte")?)
+                let (texte, _) = penelope_vault::secret_shelf::shelve(s, &str_arg(args, "texte")?)
                     .map_err(ToolError::Denied)?;
-                crate::vault_ops::write_filter(&texte).map_err(ToolError::Denied)?;
+                penelope_vault::vault_ops::write_filter(&texte).map_err(ToolError::Denied)?;
                 // Une règle dictée par le propriétaire compte comme la sienne, à condition
                 // d'en citer l'extrait mot pour mot (issue #24).
                 let citation = args.get("citation").and_then(|v| v.as_str());
@@ -156,8 +162,8 @@ impl NativeToolExecutor {
                     "projet" => penelope_memory::Level::Projet,
                     _ => penelope_memory::Level::Cure,
                 };
-                let vault = crate::helpers::vault_dir(s);
-                let uid = crate::vault_ops::remember(
+                let vault = penelope_app::helpers::vault_dir(s);
+                let uid = penelope_vault::vault_ops::remember(
                     s,
                     &vault,
                     level,
@@ -169,8 +175,8 @@ impl NativeToolExecutor {
                 json!({"uid": uid, "niveau": level.as_str()})
             }
             "mem_forget" => {
-                let vault = crate::helpers::vault_dir(s);
-                let done = crate::vault_ops::forget(s, &vault, &str_arg(args, "uid")?)
+                let vault = penelope_app::helpers::vault_dir(s);
+                let done = penelope_vault::vault_ops::forget(s, &vault, &str_arg(args, "uid")?)
                     .await
                     .map_err(ToolError::Io)?;
                 json!({"forgotten": done})

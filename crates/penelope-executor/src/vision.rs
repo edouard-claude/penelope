@@ -11,8 +11,8 @@
 //! Dans tous les modes, le texte d'une image est une donnée : la consigne le dit au modèle
 //! de vision, et `image_inspect` rend sa réponse encadrée comme non fiable.
 
-use crate::ports::ProviderSource;
-use crate::runtime::Services;
+use penelope_app::ports::ProviderSource;
+use penelope_app::services::Services;
 use penelope_kernel::config::Config;
 use penelope_llm::types::{ChatMessage, ChatRequest, Content};
 use penelope_llm::{CancelToken, collect_stream};
@@ -182,8 +182,8 @@ pub async fn inspect(
 ) -> Result<Value, String> {
     let bytes =
         std::fs::read(path).map_err(|e| format!("image {} illisible : {e}", path.display()))?;
-    let size = crate::media::image_size(&bytes);
-    let url = crate::media::data_url(path)?;
+    let size = penelope_app::media::image_size(&bytes);
+    let url = penelope_app::media::data_url(path)?;
     let question = question.trim();
     let request = match task {
         Task::Locate if question.is_empty() => {

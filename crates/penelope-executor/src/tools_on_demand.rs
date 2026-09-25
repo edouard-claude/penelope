@@ -9,7 +9,7 @@
 //!  tour N+11 : sans usage depuis 10 tours, schedule_create sort de la liste
 //! ```
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use std::collections::BTreeMap;
 
 /// Tours sans usage après lesquels un outil découvert quitte la liste de la session.

@@ -14,9 +14,9 @@ impl NativeToolExecutor {
 
         let v = match name {
             "job_status" | "job_wait" | "job_cancel" | "job_list" => {
-                crate::tool_jobs::tool(s, &self.env.session_id, name, args).await?
+                crate::jobs::tool(s, &self.env.session_id, name, args).await?
             }
-            "session_notes" => crate::session_notes::tool(s, &self.env.session_id, args)
+            "session_notes" => penelope_vault::session_notes::tool(s, &self.env.session_id, args)
                 .await
                 .map_err(ToolError::Invalid)?,
             "session_metadata" => {
@@ -71,7 +71,7 @@ impl NativeToolExecutor {
                     .run_id
                     .clone()
                     .ok_or_else(|| ToolError::Denied("aucun run en cours".into()))?;
-                let key = crate::helpers::step_done_key(&run);
+                let key = penelope_app::helpers::step_done_key(&run);
                 let stored = s.kv_get(&key).await;
                 let mut state: Value = stored
                     .map_err(|e| ToolError::Other(e.to_string()))?
