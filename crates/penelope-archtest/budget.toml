@@ -30,7 +30,6 @@ test_modules = [
 "crates/penelope-workflow/src/validate.rs" = 1101
 "crates/penelope-platform/src/backend/macos.rs" = 1082
 "crates/penelope-store/src/lib.rs" = 1036
-"crates/penelope-mcp/src/client.rs" = 1027
 "crates/penelope-platform/src/process.rs" = 1008
 "crates/penelope-workflow/src/schedules.rs" = 1003
 
