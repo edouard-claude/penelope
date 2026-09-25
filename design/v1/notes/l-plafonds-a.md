@@ -53,6 +53,10 @@ store `lib.rs` ; `[lints].allow_too_many_lines` 21 → 20.
   `since_0011.rs` avant lui.
 - **Filet de migration** : `tests/migration_from_0_17/{seed,checks}.rs`, déclarés par
   `#[path]` (un fichier de `tests/` est une racine de crate).
+- **Hors périmètre, par nécessité** : `penelope-evals/tests/docs.rs` lisait les
+  structures de configuration dans `config.rs` seul ; il lit aussi `config/*.rs` (hors
+  tests). `docs/ca-matrix.md` régénéré (`UPDATE_CA_MATRIX=1`) : huit tests `ca_*` ont
+  suivi leurs modules de tests, noms inchangés.
 - Les tests sortis gardent leurs littéraux multi-lignes à l'octet près : l'extraction
   ne désindente pas les lignes de continuation d'une chaîne.
 
