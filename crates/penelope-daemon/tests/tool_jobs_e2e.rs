@@ -398,3 +398,114 @@ async fn stop_kills_the_whole_process_group_of_a_job() {
         .unwrap_or_default();
     assert!(orphans.is_empty(), "orphelins : {orphans:?}");
 }
+
+/// Résultats d'outils que le modèle a lus dans une session.
+async fn tool_results(d: &Daemon, sid: &str) -> Vec<String> {
+    d.services
+        .context
+        .history
+        .load(sid, 0)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|e| e.message.role == Role::Tool)
+        .map(|e| e.message.text())
+        .collect()
+}
+
+/// Le dernier refus de job lu par le modèle dans cette session.
+async fn refusal(d: &Daemon, sid: &str) -> String {
+    let results = tool_results(d, sid).await;
+    results
+        .iter()
+        .rev()
+        .find(|r| r.contains("Job refusé"))
+        .cloned()
+        .unwrap_or_else(|| panic!("aucun refus : {results:?}"))
+}
+
+/// T18 : les plafonds par défaut, 3 jobs par conversation et 10 pour tout le daemon.
+/// Le job de trop est refusé avec un texte qui nomme le plafond et dit quoi faire, ne
+/// crée aucune ligne, et son effet est clos au lieu de rester en attente.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_default_caps_refuse_the_fourth_job_of_a_session_and_the_eleventh_overall() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, p) = daemon_at(dir.path()).await;
+    let cfg = d.services.config.config();
+    assert_eq!((cfg.tools.jobs_per_session, cfg.tools.jobs_total), (3, 10));
+
+    let sid = session(&d).await;
+    // Trois commandes distinctes : un appel identique à un effet en cours est écarté
+    // plus tôt (« Appel déjà en cours »), ce n'est pas le plafond.
+    for i in 0..3 {
+        background_shell(&d, &p, &sid, &format!("sleep 300.{i}")).await;
+    }
+    background_shell(&d, &p, &sid, "sleep 301").await;
+    let text = refusal(&d, &sid).await;
+    assert!(
+        text.contains("jobs_per_session") && text.contains("= 3") && text.contains("job_wait"),
+        "{text}"
+    );
+    let jobs = store(&d.services).of_session(&sid, false).await.unwrap();
+    assert_eq!(jobs.len(), 3, "le refus ne crée pas de ligne");
+    assert_eq!(effects_of(&d, "shell_exec").await, 4);
+    let refused: i64 = d
+        .services
+        .store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM effects WHERE tool = 'shell_exec' AND state = 'failed'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(refused, 1, "l'effet du job refusé est clos");
+
+    // Sept jobs vivants ailleurs : le daemon en porte dix.
+    for i in 0..7 {
+        store(&d.services)
+            .create(penelope_daemon::tool_jobs::NewJob {
+                session_id: format!("ailleurs-{i}"),
+                run_id: None,
+                turn_id: None,
+                call_id: None,
+                tool: "shell_exec".into(),
+                request: json!({"command": "sleep 300"}),
+                effect_id: None,
+            })
+            .await
+            .unwrap();
+    }
+    let other = d
+        .services
+        .sessions
+        .create(penelope_kernel::session::SessionKind::Chat, None)
+        .await
+        .unwrap()
+        .id
+        .to_string();
+    d.pin_model(&other, Some("main")).await.unwrap();
+    penelope_daemon::approval_mode::set(
+        &d.services,
+        &other,
+        penelope_daemon::approval_mode::ApprovalMode::parse("auto"),
+    )
+    .await
+    .unwrap();
+    background_shell(&d, &p, &other, "sleep 302").await;
+    let text = refusal(&d, &other).await;
+    assert!(
+        text.contains("jobs_total") && text.contains("= 10"),
+        "{text}"
+    );
+    assert!(
+        store(&d.services)
+            .of_session(&other, false)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    d.services.jobs.cancel_all();
+}
