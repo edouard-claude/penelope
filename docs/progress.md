@@ -13,6 +13,60 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.12
+
+Onzième vague de la V1 : **un message qui arrive pendant un lot d'outils est pris en
+compte proprement** (l'outil en cours finit, les autres ne sont pas lancés, le modèle est
+rappelé une fois) et `/stop` pendant des outils laisse une note au tour suivant ; les
+workflows et la planification sortent du daemon (`penelope-orchestrator`), ainsi que la
+purge et les opérations de session (`penelope-ops`). Toutes les crates du découpage sont
+désormais sorties : le daemon passe de 22 863 à 15 109 lignes (86 462 au plus haut).
+
+#### Boucle d'agent : steering explicite (#208, T12 à T14)
+
+- Un message arrivé pendant un tour est réclamé par la boucle à des points nommés
+  (`Inbox`, avant chaque appel au modèle et entre deux appels d'outils) ; lire la
+  conversation n'absorbe plus rien.
+- Un message arrivé pendant un lot d'outils n'attend plus la fin du lot : l'appel en
+  cours finit, les suivants reçoivent « Non exécuté : nouveau message du propriétaire. »,
+  et le modèle repart avec le message.
+- `/stop` pendant un lot donne « Non exécuté : arrêté par le propriétaire. » aux appels
+  non démarrés ; le tour suivant sait que le précédent a été interrompu, sans toucher au
+  préfixe du prompt.
+- Nouveau scénario rejouable `message-pendant-un-lot`.
+
+#### Orchestrateur : crate `penelope-orchestrator` (#208, T27 et T11)
+
+- Le moteur de workflows et l'ordonnanceur quittent le daemon pour la crate
+  `penelope-orchestrator`, au-dessus de la boucle d'agent, de l'exécuteur, de la
+  conversation et du rêve ; une règle d'architecture lui interdit le daemon, la
+  passerelle et le canal, qu'il n'atteint que par les ports de `penelope-app`.
+- Ils reçoivent un contexte (services, providers, état des runs, services de la boucle)
+  au lieu du daemon ; les étapes `agent` et les sous-agents appellent la boucle
+  directement. Un test vérifie qu'un sous-agent qui demande une approbation échoue au
+  lieu d'attendre.
+- `penelope-daemon` passe de 22 863 à 17 076 lignes. Aucun comportement visible ne
+  change.
+
+#### `penelope-ops` complète : purge et sessions, ordre de `doctor` rétabli (#208, T28)
+
+- `purge` (purge d'une session, rétention, caviardage de la file sortante) et
+  `session_ops` (fork, retour arrière, export, reconstruction) quittent le daemon pour
+  `penelope-ops` ; le daemon les réexporte sous leurs anciens chemins. Leurs tests
+  n'ouvrent plus de daemon.
+- `penelope doctor` retrouve l'ordre de la 1.0.0-alpha.7 : stabilité du prompt,
+  historique et jobs d'outils juste après la rétention, et non plus en fin de liste.
+  Un test compare les identifiants.
+- La règle HTTPS des adresses (OAuth MCP, téléchargement des releases) n'a plus qu'une
+  copie, dans `penelope_app::helpers::check_endpoint`.
+- `penelope-daemon` passe de 22 863 à 20 831 lignes.
+
+#### Doctor : le test d'ordre ne dépend plus de la machine (#208)
+
+Le test qui fige l'ordre de `penelope doctor` compare les contrôles de référence sans
+interdire qu'un contrôle propre à la machine (`machine.missing`, `machine.gh`) s'intercale :
+il échouait sur les runners de la CI.
+
 ### 1.0.0-alpha.11
 
 Dixième vague de la V1 : trois crates du cœur sortent du daemon (la conversation et la
