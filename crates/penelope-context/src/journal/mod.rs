@@ -14,12 +14,14 @@ mod build;
 mod payload;
 #[cfg(test)]
 mod tests;
-mod turn;
 mod verbatim;
 
 pub use build::*;
 pub use payload::*;
-pub use turn::*;
+pub use penelope_kernel::journal::{
+    KIND_TURN_FINISHED, KIND_TURN_STARTED, TurnCall, TurnEnd, TurnIdentity, TurnReason,
+    finished_payload, interrupted_payload, is_purged, started_payload,
+};
 pub use verbatim::{restore_verbatim, verbatim_of};
 
 use serde::{Deserialize, Serialize};
@@ -40,10 +42,6 @@ pub const KIND_SUMMARY: &str = "conv.summary";
 pub const KIND_REWIND: &str = "conv.rewind";
 pub const KIND_FORK: &str = "conv.fork";
 pub const KIND_IMPORT: &str = "conv.import";
-
-/// Événements d'exécution qui bornent un tour ; le pliage les lit sans les versionner.
-pub const KIND_TURN_STARTED: &str = "turn.started";
-pub const KIND_TURN_FINISHED: &str = "turn.finished";
 
 /// Opération d'un événement sur la surface (la liste des nœuds vus par le modèle).
 ///
@@ -103,11 +101,6 @@ pub enum DeriveError {
         kind: String,
         reason: String,
     },
-}
-
-/// Vrai pour un payload effacé par la purge (`{"purged":true}`, `event.rs`).
-pub fn is_purged(payload: &Value) -> bool {
-    payload.get("purged").and_then(Value::as_bool) == Some(true)
 }
 
 /// Monte un payload de la version `v` à [`FORMAT_VERSION`], **à la lecture** : le
