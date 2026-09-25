@@ -13,6 +13,48 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.14
+
+Treizième vague de la V1 : `penelope approvals stats` mesure, en lecture seule, si le juge
+d'approbation (#203) vaudrait la peine d'être construit ; l'API de la boucle est nettoyée
+et la couture du PTC posée (décision 0016) ; `docs/architecture.md` et les décisions 0013
+et 0014 décrivent le code tel qu'il est.
+
+#### Mesure avant le juge d'approbation (#208, #203, T21)
+
+- `penelope approvals stats [--days 30] [--json]` compte, en lecture seule et sans daemon,
+  les cartes `shell_exec` pour lesquelles « Toujours » n'écrit aucune règle, celles que le
+  juge de #203 verrait, les commandes distinctes, les dix plus fréquentes (tronquées,
+  secrets masqués, hachées) et la part de « oui », avec un verdict go/no-go pour T22.
+- La base est ouverte en `SQLITE_OPEN_READ_ONLY` et `query_only` : les tests prouvent
+  qu'elle ne change pas, daemon lancé ou arrêté.
+- `docs/install-headless.md` : « Mesurer avant d'activer le juge », avec les seuils motivés.
+
+#### Boucle : couture PTC, API réduite, cache audit sans port (#208, T24, T25, T27)
+
+- **Couture PTC** (décision [0016](decisions/0016-ptc-hors-v1.md)) : `run_code` reste hors
+  V1. Chaque appel porte son `CallContext { call_id, parent, root }` dans le pipeline ; un
+  appel imbriqué dont la politique demanderait une approbation est refusé sans carte, car
+  une approbation suspend le tour, pas un programme en vol.
+- **API de la boucle** : `TurnRequest`, `AgentLoop::run` et l'alias
+  `resume_after_approval` sont retirés ; un tour se lance par `TurnSpec` et une
+  `Conversation`, une approbation se tranche par `decide_approval`.
+- **Cache de prompt** : l'empreinte, le fournisseur collant et la cause d'un raté vivent
+  dans `penelope_llm::cache` ; le dernier appel d'une session se lit dans le
+  `BudgetLedger` (`previous_call`). Le port `CacheAudit` disparaît. Aucun changement
+  visible : même requête, mêmes causes de raté.
+
+#### Architecture documentée, décisions 0013 et 0014 (#208, T31)
+
+- Nouveau guide `docs/architecture.md` : les crates et leurs couches, les ports de
+  `penelope-app` et qui les implémente, la frontière canal, le journal comme source de
+  lecture, les règles d'architecture et les valeurs du gel, ce qui reste avant la
+  bascule. Pénélope le lit aussi, embarqué dans son binaire.
+- Décision [0013](decisions/0013-decoupage-du-daemon.md) : le daemon découpé en crates, la
+  passerelle Telegram au-dessus de lui.
+- Décision [0014](decisions/0014-boucle-pipeline.md) : la boucle d'agent est un pipeline
+  d'étapes typées.
+
 ### 1.0.0-alpha.13
 
 Douzième vague de la V1 : **le cœur ne nomme plus le canal** (`penelope-app`, le daemon et
