@@ -382,8 +382,7 @@ pub const DREAM_ALLOWED_DEPS: &[&str] = &[
 ];
 
 /// Ce dont `penelope-executor` peut dépendre (§3.2 : app, vault et métier ; **pas**
-/// agent, **pas** orchestrator). `penelope-telegram` pour la liste des commandes de
-/// `self_status`, jusqu'à T36.
+/// agent, **pas** orchestrator, **pas** le canal depuis T36).
 pub const EXECUTOR_ALLOWED_DEPS: &[&str] = &[
     "penelope-app",
     "penelope-vault",
@@ -397,7 +396,6 @@ pub const EXECUTOR_ALLOWED_DEPS: &[&str] = &[
     "penelope-mcp",
     "penelope-skills",
     "penelope-tools",
-    "penelope-telegram",
     "penelope-workflow",
 ];
 
@@ -637,6 +635,19 @@ mod tests {
         );
     }
 
+    /// T36 : le daemon ne connaît plus la bibliothèque du canal ; seule la passerelle,
+    /// au-dessus de lui, s'en sert.
+    #[test]
+    fn the_daemon_does_not_depend_on_the_channel_library() {
+        let all = crates();
+        let daemon = all.iter().find(|c| c.name == "penelope-daemon").unwrap();
+        assert!(
+            !daemon.internal_deps.contains("penelope-telegram"),
+            "penelope-daemon dépend de penelope-telegram : {:?}",
+            daemon.internal_deps
+        );
+    }
+
     /// T21 : le socle de l'application ne connaît pas le daemon ; T36 : ni le canal,
     /// qu'il n'atteint que par ses ports (`Cards`, `ChannelDelivery`, `OwnerChannel`).
     #[test]
@@ -734,6 +745,8 @@ mod tests {
             "penelope-ops",
             "penelope-mcp-host",
             "penelope-gateway-telegram",
+            // T36 : les commandes du canal viennent du canal branché.
+            "penelope-telegram",
         ] {
             assert!(
                 !executor.internal_deps.contains(above),

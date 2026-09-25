@@ -55,7 +55,6 @@ penelope-mcp.workspace = true
 penelope-skills.workspace = true
 penelope-tools.workspace = true
 penelope-hitl.workspace = true
-penelope-telegram.workspace = true
 penelope-workflow.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true
