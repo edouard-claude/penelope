@@ -108,7 +108,7 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 | CA 10.1 | Sticky model survives until a boundary | `crates/penelope-llm/src/router.rs` |
 | CA 10.2 | High complexity routes to reasoning | `crates/penelope-llm/src/router.rs` |
 | CA 10.3 | Fallback chain is used on transient failure | `crates/penelope-llm/src/router.rs` |
-| CA 10.4 | Daily budget exceeded is detected | `crates/penelope-kernel/src/budget.rs` |
+| CA 10.4 | Daily budget exceeded is detected | `crates/penelope-kernel/src/budget/tests.rs` |
 
 ## §12. Workflows, triggers et jobs
 
