@@ -25,8 +25,8 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 | CA | Test | Fichier |
 |---|---|---|
 | CA 3.1 | Dependency rules hold | `crates/penelope-archtest/src/lib.rs` |
-| CA 3.2 | Four sessions run concurrently | `crates/penelope-kernel/src/turn.rs` |
-| CA 3.3 | Expired lease is reclaimed | `crates/penelope-kernel/src/turn.rs` |
+| CA 3.2 | Four sessions run concurrently | `crates/penelope-kernel/src/turn/tests.rs` |
+| CA 3.3 | Expired lease is reclaimed | `crates/penelope-kernel/src/turn/tests.rs` |
 
 ## §4. Noyau : event log, ledger d'effets, générations
 
@@ -94,9 +94,9 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 
 | CA | Test | Fichier |
 |---|---|---|
-| CA 9.1 | First decision wins | `crates/penelope-hitl/src/lib.rs` |
-| CA 9.2 | Expiry blocks then can resume | `crates/penelope-hitl/src/lib.rs` |
-| CA 9.3 | Always rule applies then is revocable | `crates/penelope-hitl/src/policy.rs` |
+| CA 9.1 | First decision wins | `crates/penelope-hitl/src/tests.rs` |
+| CA 9.2 | Expiry blocks then can resume | `crates/penelope-hitl/src/tests.rs` |
+| CA 9.3 | Always rule applies then is revocable | `crates/penelope-hitl/src/policy/tests.rs` |
 | CA 9.4 | An approved tool runs once after resume and the ledger shows it | `crates/penelope-daemon/tests/approval_e2e.rs` |
 | CA 9.5 | A denied tool is reported to the model and never runs | `crates/penelope-daemon/tests/approval_e2e.rs` |
 | CA 9.6 | A session window lets the same call pass without a new request | `crates/penelope-daemon/tests/approval_e2e.rs` |
@@ -105,9 +105,9 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 
 | CA | Test | Fichier |
 |---|---|---|
-| CA 10.1 | Sticky model survives until a boundary | `crates/penelope-llm/src/router.rs` |
-| CA 10.2 | High complexity routes to reasoning | `crates/penelope-llm/src/router.rs` |
-| CA 10.3 | Fallback chain is used on transient failure | `crates/penelope-llm/src/router.rs` |
+| CA 10.1 | Sticky model survives until a boundary | `crates/penelope-llm/src/router/tests.rs` |
+| CA 10.2 | High complexity routes to reasoning | `crates/penelope-llm/src/router/tests.rs` |
+| CA 10.3 | Fallback chain is used on transient failure | `crates/penelope-llm/src/router/tests.rs` |
 | CA 10.4 | Daily budget exceeded is detected | `crates/penelope-kernel/src/budget/tests.rs` |
 
 ## §12. Workflows, triggers et jobs
