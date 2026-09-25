@@ -281,7 +281,7 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
 }
 
 /// Contenu d'un fichier de déclaration MCP.
-pub(super) fn read_toml(path: &std::path::Path) -> CliResult<String> {
+fn read_toml(path: &std::path::Path) -> CliResult<String> {
     std::fs::read_to_string(path).map_err(|e| CliError::Io(format!("{} : {e}", path.display())))
 }
 

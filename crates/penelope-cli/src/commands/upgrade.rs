@@ -25,7 +25,7 @@ pub(super) async fn upgrade(cli: &Cli) -> CliResult<()> {
     Ok(())
 }
 
-pub(super) async fn upgrade_offline(cli: &Cli, p: &Value) -> CliResult<Value> {
+async fn upgrade_offline(cli: &Cli, p: &Value) -> CliResult<Value> {
     use penelope_ops::upgrade as up;
     let dirs = penelope_platform::resolve_directories(cli.home.clone())
         .map_err(|e| CliError::Io(e.to_string()))?;

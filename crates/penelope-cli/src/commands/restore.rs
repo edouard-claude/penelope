@@ -192,7 +192,7 @@ pub(super) async fn restore_all(cli: &Cli, source: Option<String>, dry_run: bool
 }
 
 /// Copie récursive, fichier ou répertoire.
-pub(super) fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
     if src.is_file() {
         if let Some(p) = dst.parent() {
             std::fs::create_dir_all(p)?;
