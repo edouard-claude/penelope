@@ -16,6 +16,51 @@ pub const MERGE_NOTE: &str = "Un nouveau message utilisateur est arrivé pendant
 /// lot (`Checkpoint::BetweenCalls`).
 pub const NOT_RUN_NEW_MESSAGE: &str = "Non exécuté : nouveau message du propriétaire.";
 
+/// Résultat d'un appel non démarré quand le propriétaire arrête le tour (`/stop`).
+pub const NOT_RUN_STOPPED: &str = "Non exécuté : arrêté par le propriétaire.";
+
+/// Note du tour qui suit un arrêt pendant des outils.
+pub const INTERRUPTED_NOTE: &str =
+    "Le tour précédent a été interrompu ; des outils ont pu s'exécuter partiellement.";
+
+/// Ce que le harnais ajoute à la requête, nommé (§3.4).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Injection {
+    /// Note système placée **après** le dernier message utilisateur : le préfixe et la
+    /// chaîne qui précède ne bougent pas (décision 0008). Jamais écrite dans
+    /// l'historique : elle se déduit du transcript à chaque requête.
+    Note(String),
+}
+
+impl Injection {
+    pub fn apply(&self, messages: &mut Vec<ChatMessage>) {
+        match self {
+            Injection::Note(text) => {
+                let at = messages
+                    .iter()
+                    .rposition(|m| m.role == Role::User)
+                    .map_or(messages.len(), |i| i + 1);
+                messages.insert(at, ChatMessage::system(text.as_str()));
+            }
+        }
+    }
+}
+
+/// La note d'interruption, si les résultats d'outils qui précèdent les derniers
+/// messages du propriétaire portent la trace d'un `/stop` (`NOT_RUN_STOPPED`).
+pub fn interruption_note(messages: &[ChatMessage]) -> Option<Injection> {
+    let last_user = messages.iter().rposition(|m| m.role == Role::User)?;
+    let before = messages[..=last_user]
+        .iter()
+        .rev()
+        .skip_while(|m| m.role == Role::User)
+        .take_while(|m| m.role == Role::Tool);
+    before
+        .into_iter()
+        .any(|m| m.text() == NOT_RUN_STOPPED)
+        .then(|| Injection::Note(INTERRUPTED_NOTE.to_string()))
+}
+
 /// Les messages réclamés pendant un tour.
 pub(crate) struct Steering<'a> {
     inbox: Option<&'a dyn Inbox>,

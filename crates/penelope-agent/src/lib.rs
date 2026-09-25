@@ -74,7 +74,10 @@ pub use rules::{MAX_FAMILIES_PER_CLICK, always_creates_no_rule};
 pub use rules::{arg_pattern, arg_patterns};
 pub use spec::{AgentLoop, CALLS_EXHAUSTED, TURN_CALLS, TurnRequest, TurnSpec};
 use steering::Steering;
-pub use steering::{Checkpoint, Inbox, MERGE_NOTE, NOT_RUN_NEW_MESSAGE, Steer};
+pub use steering::{
+    Checkpoint, INTERRUPTED_NOTE, Inbox, Injection, MERGE_NOTE, NOT_RUN_NEW_MESSAGE,
+    NOT_RUN_STOPPED, Steer, interruption_note,
+};
 pub use turn_log::{TurnMeta, close_interrupted_turns, close_unopened};
 
 #[cfg(test)]

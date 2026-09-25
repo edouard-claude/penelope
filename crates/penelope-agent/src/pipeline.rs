@@ -241,7 +241,10 @@ impl AgentLoop {
         let mut nudge = nudge;
         let mut steps = steps.into_iter().peekable();
         while let Some(step) = steps.next() {
+            // `/stop` : ce qui n'est pas parti ne part plus, et le dit (§3.4).
             if spec.cancel.is_cancelled() {
+                let rest = std::iter::once(step).chain(steps);
+                self.skip_steps(conv, sink, rest, NOT_RUN_STOPPED).await?;
                 return Ok(Pending::Stop(TurnOutcome::Cancelled));
             }
             // Un message du propriétaire arrivé pendant le lot : l'appel en cours a fini,
@@ -345,17 +348,12 @@ impl AgentLoop {
                     false,
                 )
                 .await?;
-                for rest in pending_calls(&conv.tail().await?) {
-                    self.record_result(
-                        conv,
-                        sink,
-                        &rest,
-                        false,
-                        "Non exécuté : tour arrêté par le détecteur de boucles.".into(),
-                        false,
-                    )
-                    .await?;
-                }
+                self.close_pending(
+                    conv,
+                    sink,
+                    "Non exécuté : tour arrêté par le détecteur de boucles.",
+                )
+                .await?;
                 return Ok(Pending::Loop {
                     report,
                     tool,
@@ -388,6 +386,20 @@ impl AgentLoop {
             recorded += 1;
         }
         Ok(recorded)
+    }
+
+    /// Clôt les appels sans résultat en fin de transcript, chacun avec `why`.
+    pub(super) async fn close_pending(
+        &self,
+        conv: &dyn Conversation,
+        sink: &dyn TurnSink,
+        why: &str,
+    ) -> anyhow::Result<()> {
+        for rest in pending_calls(&conv.tail().await?) {
+            self.record_result(conv, sink, &rest, false, why.to_string(), false)
+                .await?;
+        }
+        Ok(())
     }
 
     /// Ledger d'effets **avant** exécution, puis l'outil (§4.2) : jamais ré-exécuté s'il

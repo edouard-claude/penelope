@@ -29,6 +29,11 @@ impl AgentLoop {
 
         for iteration in 0..self.max_iterations {
             if spec.cancel.is_cancelled() {
+                // Les appels que ce tour vient de demander ne partiront pas (§3.4) ; au
+                // premier passage, ceux du transcript appartiennent à une reprise.
+                if iteration > 0 {
+                    self.close_pending(conv, sink, NOT_RUN_STOPPED).await?;
+                }
                 return Ok(TurnOutcome::Cancelled);
             }
 
@@ -75,6 +80,11 @@ impl AgentLoop {
             let steers = steering.claim(Checkpoint::BeforeModelCall).await?;
             steering.record(s, spec, conv, &steers).await?;
             let mut messages = steering.with_merge_note(conv.request_messages().await?);
+            // Le tour précédent a été arrêté pendant ses outils : le modèle le sait, par
+            // une note après le dernier message utilisateur, hors du préfixe (§3.4).
+            if let Some(note) = interruption_note(&messages) {
+                note.apply(&mut messages);
+            }
             if spec.cancel.is_cancelled() {
                 return Ok(TurnOutcome::Cancelled);
             }
