@@ -5,9 +5,11 @@ use super::*;
 // ------------------------------------------------------------------ crons système
 
 /// Déclenche la consolidation et le digest à leurs horaires (§19 `dreaming_cron`,
-/// `digest_cron`). Le premier passage mémorise l'instant sans rien lancer.
+/// `digest_cron`). Le premier passage mémorise l'instant sans rien lancer. `digest` :
+/// qui fournit au digest ses entrées d'au-dessus du rêve, lues au moment de l'écrire.
 pub async fn system_crons(
-    d: &Arc<Daemon>,
+    d: &Context,
+    digest: Arc<dyn DigestSource>,
     messenger: &Slot<dyn Messenger>,
     mcp: &Slot<dyn McpAdmin>,
 ) -> anyhow::Result<()> {
@@ -36,14 +38,16 @@ pub async fn system_crons(
             continue;
         }
         s.kv_set(&key, &now.to_string()).await?;
-        let (d2, messenger, mcp) = (d.clone(), messenger.clone(), mcp.clone());
+        let (d2, digest, messenger, mcp) =
+            (d.clone(), digest.clone(), messenger.clone(), mcp.clone());
         match name {
             "dream" => {
                 tokio::spawn(async move { nightly(&d2, &messenger).await });
             }
             _ => {
                 tokio::spawn(async move {
-                    match digest_text(&d2, mcp.get()).await {
+                    let inputs = digest.digest_inputs().await;
+                    match digest_with(&d2, inputs, mcp.get()).await {
                         Ok(text) => {
                             if let Some(m) = messenger.get() {
                                 // Avis sans session : il part au foyer (`telegram.home`,
@@ -64,7 +68,7 @@ pub async fn system_crons(
 }
 
 /// Passe nocturne : une nuit ratée ne passe jamais en silence (issue #127).
-pub async fn nightly(d: &Arc<Daemon>, messenger: &Slot<dyn Messenger>) {
+pub async fn nightly(d: &Context, messenger: &Slot<dyn Messenger>) {
     match run(d, messenger, false).await {
         Ok(o) => tracing::info!(run = %o.run_id, "consolidation nocturne terminée"),
         Err(e) => {
@@ -81,14 +85,14 @@ pub(super) const FAILED_REASON_KEY: &str = "dream.failed_reason";
 /// laisse croire qu'il n'y avait rien à consolider), et message au propriétaire comme
 /// pour la sauvegarde, à la première nuit ratée ou quand la raison change : une panne
 /// qui dure ne répète pas le même message chaque nuit, le digest la rappelle.
-pub async fn night_failed(d: &Arc<Daemon>, messenger: &Slot<dyn Messenger>, reason: &str) {
+pub async fn night_failed(d: &Context, messenger: &Slot<dyn Messenger>, reason: &str) {
     failure_reported(d, messenger, reason, false).await;
 }
 
 /// `always` : le message part même si la raison n'a pas changé — une passe lancée à la
 /// main doit rendre compte à qui vient de la lancer (issue #152).
 pub async fn failure_reported(
-    d: &Arc<Daemon>,
+    d: &Context,
     messenger: &Slot<dyn Messenger>,
     reason: &str,
     always: bool,

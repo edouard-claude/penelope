@@ -154,7 +154,7 @@ impl OutputBudget {
 /// coupure au 8ᵉ lot rendait les sept premiers à l'état d'avant, 126 candidats jetés.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn write_batch(
-    d: &Arc<Daemon>,
+    d: &Context,
     vault: &Path,
     run_id: &str,
     day: &str,
@@ -304,7 +304,7 @@ pub(super) fn reasoning_fallback(cfg: &penelope_kernel::config::Config) -> Optio
 pub(super) const LONE_WATCH: usize = 8;
 
 /// Limite de sortie du modèle de consolidation : celle du catalogue, sinon 16 000.
-pub(super) fn output_cap(d: &Arc<Daemon>, cfg: &penelope_kernel::config::Config) -> u32 {
+pub(super) fn output_cap(d: &Context, cfg: &penelope_kernel::config::Config) -> u32 {
     cfg.alias_model(&cfg.role_alias("compaction"))
         .and_then(|m| d.services.catalog.get(strip_provider(m)))
         .and_then(|i| i.max_output)
@@ -315,7 +315,7 @@ pub(super) fn output_cap(d: &Arc<Daemon>, cfg: &penelope_kernel::config::Config)
 /// Un signe de vie par lot (issue #135) : événement et journal, taille, durée, sortie,
 /// coupé ou non.
 pub(super) async fn batch_event(
-    d: &Arc<Daemon>,
+    d: &Context,
     run_id: &str,
     size: usize,
     took: Duration,
@@ -355,7 +355,7 @@ pub(super) async fn batch_event(
 /// faits n'est pas refait (issue #127).
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn consolidate_retrying(
-    d: &Arc<Daemon>,
+    d: &Context,
     items: &[Item<'_>],
     snap: &VaultSnapshot,
     max_tokens: u32,

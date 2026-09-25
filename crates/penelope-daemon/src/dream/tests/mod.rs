@@ -12,22 +12,65 @@ mod candidates;
 mod digest;
 mod sizing;
 
-async fn daemon() -> (tempfile::TempDir, Arc<Daemon>, Arc<MockProvider>) {
+/// Ce que tiennent les tests du rêve, sans le daemon : le contexte de la crate, le
+/// canal du propriétaire (`hooks.messenger`) et aucun superviseur MCP. Les tests lisent
+/// `d.services` à travers le contexte.
+struct Harness {
+    ctx: Context,
+    hooks: Hooks,
+}
+
+#[derive(Default)]
+struct Hooks {
+    messenger: Slot<dyn Messenger>,
+}
+
+impl Hooks {
+    fn mcp_supervisor(&self) -> Option<Arc<dyn McpAdmin>> {
+        None
+    }
+}
+
+impl std::ops::Deref for Harness {
+    type Target = Context;
+    fn deref(&self) -> &Context {
+        &self.ctx
+    }
+}
+
+/// Contexte monté sur `s`, chaque modèle répondant par `p`.
+fn harness(s: Arc<Services>, p: Arc<MockProvider>) -> Arc<Harness> {
+    Arc::new(Harness {
+        ctx: Context {
+            services: s,
+            providers: penelope_app::testing::MockProviders::new(p),
+            embeddings: Arc::default(),
+        },
+        hooks: Hooks::default(),
+    })
+}
+
+async fn daemon() -> (tempfile::TempDir, Arc<Harness>, Arc<MockProvider>) {
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::new(1_789_516_800_000));
     let s = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+        Services::for_tests(dir.path().to_path_buf(), clock)
             .await
             .unwrap(),
     );
-    let d = Arc::new(Daemon::from_services(s));
     let p = Arc::new(MockProvider::new());
-    d.set_provider_override(p.clone());
+    let d = harness(s, p.clone());
     (dir, d, p)
 }
 
+/// Digest sans planifications ni compactage (`DigestInputs` vides) : ce qu'en voient
+/// les tests du rêve.
+async fn digest_text(d: &Context, mcp: Option<Arc<dyn McpAdmin>>) -> anyhow::Result<String> {
+    digest_with(d, DigestInputs::default(), mcp).await
+}
+
 async fn note(
-    d: &Daemon,
+    d: &Context,
     ctype: CandidateType,
     text: &str,
     origin: Origin,
@@ -177,7 +220,7 @@ fn verdicts(n: u64) -> String {
 
 /// Candidats de #140 : `n` projets distincts, jugés dans l'ordre, épineux quand
 /// `thorny` le dit.
-async fn projects(d: &Arc<Daemon>, n: usize, thorny: impl Fn(usize) -> bool) {
+async fn projects(d: &Context, n: usize, thorny: impl Fn(usize) -> bool) {
     for k in 0..n {
         let thorny = if thorny(k) { ", cas épineux" } else { "" };
         note(

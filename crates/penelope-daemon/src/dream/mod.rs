@@ -6,10 +6,11 @@
 //! ligne par ligne, pré-image conservée dans `mem_history`. Une passe à la fois ; deux
 //! passes sans nouvelle donnée ne changent rien.
 
-use crate::executor::Messenger;
 use crate::ports::McpAdmin;
+use crate::ports::Messenger;
 use crate::ports::Slot;
-use crate::runtime::{Daemon, Services};
+use penelope_app::services::Services;
+use penelope_dream::{Context, DigestInputs, DigestSource};
 use penelope_kernel::event::EventDraft;
 use penelope_llm::catalog::strip_provider;
 use penelope_llm::provider::{CancelToken, collect_stream};
@@ -81,7 +82,7 @@ pub enum Trigger {
 
 /// `messenger` : le canal où dire un échec, lu au moment de l'échec.
 pub async fn run(
-    d: &Arc<Daemon>,
+    d: &Context,
     messenger: &Slot<dyn Messenger>,
     dry_run: bool,
 ) -> anyhow::Result<DreamOutcome> {
@@ -89,7 +90,7 @@ pub async fn run(
 }
 
 pub async fn run_as(
-    d: &Arc<Daemon>,
+    d: &Context,
     messenger: &Slot<dyn Messenger>,
     dry_run: bool,
     trigger: Trigger,
@@ -127,7 +128,7 @@ pub async fn run_as(
 }
 
 #[allow(clippy::too_many_lines)] // gel 0.17 : phases de la nuit, lot G (dream/mod.rs)
-async fn run_locked(d: &Arc<Daemon>, dry_run: bool) -> anyhow::Result<DreamOutcome> {
+async fn run_locked(d: &Context, dry_run: bool) -> anyhow::Result<DreamOutcome> {
     let s = &d.services;
     let cfg = s.config.config();
     let vault = crate::helpers::vault_dir(s);
@@ -617,7 +618,6 @@ use batches::{
 #[cfg(test)]
 use batches::{network_stall, own_timeout};
 // Descendue avec les instantanés (T22) : le doctor la cite aussi.
-pub(crate) use crate::conversation::core_overflow;
 pub use candidates::submission_order;
 use candidates::{Clash, Item, ids_for, is_journal, nearby_batch, short, sort_and_plan};
 #[cfg(test)]
@@ -625,7 +625,7 @@ use candidates::{Neighbour, contradiction};
 pub use clash::file_unanswered_clash;
 use clash::{ask_about_clash, expired_journal, unused_entries};
 use consolidate::{CallOutcome, consolidate};
-pub use digest::digest_text;
+pub use digest::digest_with;
 #[cfg(test)]
 use digest::night_summary;
 use digest::rejection_families;
@@ -633,11 +633,56 @@ use digest::rejection_families;
 use nightly::last_run;
 use nightly::{FAILED_NIGHTS_KEY, FAILED_REASON_KEY, last_failure};
 pub use nightly::{failure_reported, night_failed, nightly, system_crons, vault_check, vault_path};
+pub(crate) use penelope_vault::snapshot::core_overflow;
 // Descendue dans `vault_git` avec le vault (T22) : l'autocommit l'appelle.
 pub use crate::vault_git::vault_sync;
 use runs::{close_interrupted, finish_run, last_finished_start, record_run, save_stats, set_phase};
 pub use runs::{history, last_report, learned, restore};
 use snapshot::{VaultSnapshot, markdown_files};
+
+// ------------------------------------------------------------------ daemon
+
+/// Ce que le digest lit au-dessus du rêve, calculé par le daemon et transmis en
+/// données (T26) : planifications en échec, sessions dont le résumé échoue, départs du
+/// jour.
+pub async fn digest_inputs(d: &crate::runtime::Daemon) -> DigestInputs {
+    let s = &d.services;
+    // Planifications dont la dernière exécution a échoué, ou n'a rien livré (#39, #120).
+    let mut failing = Vec::new();
+    for sched in s.schedules.list().await.unwrap_or_default() {
+        if sched.state == "active"
+            && let Some(err) = &sched.last_error
+        {
+            failing.push(format!(
+                "- {} : {err}",
+                crate::scheduler::label(d, &sched).await
+            ));
+        }
+    }
+    DigestInputs {
+        failing_schedules: failing,
+        struggling_sessions: crate::compaction::struggling_sessions(s).await,
+        due_today: crate::scheduler::due_today(d).await,
+    }
+}
+
+/// Digest du matin vu du daemon : ses entrées calculées ici, le corps dans le rêve.
+pub async fn digest_text(
+    d: &crate::runtime::Daemon,
+    mcp: Option<Arc<dyn McpAdmin>>,
+) -> anyhow::Result<String> {
+    digest_with(&d.dream(), digest_inputs(d).await, mcp).await
+}
+
+/// Source des entrées du digest pour les crons système (`system_crons`).
+pub struct DigestFeed(pub Arc<crate::runtime::Daemon>);
+
+#[async_trait::async_trait]
+impl DigestSource for DigestFeed {
+    async fn digest_inputs(&self) -> DigestInputs {
+        digest_inputs(&self.0).await
+    }
+}
 
 #[cfg(test)]
 mod tests;

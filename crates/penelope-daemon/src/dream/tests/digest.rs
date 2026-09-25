@@ -8,13 +8,14 @@ async fn a_failed_night_keeps_what_it_wrote_and_is_said_once() {
     let (_dir, d, p) = daemon().await;
     let s = &d.services;
     let rec = RecordingMessenger::new();
-    *d.hooks.messenger.write().unwrap() = Some(rec.clone() as Arc<dyn crate::executor::Messenger>);
-    d.publish_config("test", |c| {
-        c.memory.dream_batch = 1;
-        c.memory.dream_retry_wait = "1ms".into();
-        Ok(vec!["memory.dream_batch".into()])
-    })
-    .unwrap();
+    *d.hooks.messenger.write().unwrap() = Some(rec.clone() as Arc<dyn crate::ports::Messenger>);
+    d.services
+        .publish_config("test", |c| {
+            c.memory.dream_batch = 1;
+            c.memory.dream_retry_wait = "1ms".into();
+            Ok(vec!["memory.dream_batch".into()])
+        })
+        .unwrap();
     for text in [
         "Toujours répondre en français",
         "Toujours tutoyer le propriétaire",

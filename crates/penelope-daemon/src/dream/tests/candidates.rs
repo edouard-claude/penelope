@@ -276,7 +276,8 @@ async fn the_quality_gate_shapes_the_promoted_memory() {
         .expect("paiement");
     assert!(paid.contains("sensible: oui"), "{paid}");
 
-    let blocks = crate::conversation::fresh_snapshot(s, &crate::session_project::Scope::All).await;
+    let blocks =
+        penelope_vault::snapshot::fresh_snapshot(s, &crate::session_project::Scope::All).await;
     assert!(blocks[1].contains("agence web"), "{blocks:?}");
     assert!(
         blocks[1].contains("Durand"),

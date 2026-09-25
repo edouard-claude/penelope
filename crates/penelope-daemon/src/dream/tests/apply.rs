@@ -82,7 +82,17 @@ async fn a_stated_rule_is_promoted_once_with_history_and_review() {
 #[tokio::test]
 async fn a_rule_dictated_by_the_owner_is_promoted() {
     use crate::agent::ToolExecutor;
-    let (_dir, d, p) = daemon().await;
+    // Le daemon, pour la session de chat et l'exécuteur d'outils du propriétaire.
+    let dir = tempfile::tempdir().unwrap();
+    let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::new(1_789_516_800_000));
+    let s = Arc::new(
+        Services::for_tests(dir.path().to_path_buf(), clock)
+            .await
+            .unwrap(),
+    );
+    let d = Arc::new(crate::runtime::Daemon::from_services(s));
+    let p = Arc::new(MockProvider::new());
+    d.set_provider_override(p.clone());
     let s = &d.services;
     let sid = d.chat_session_for(&crate::bus::Origin::Cli).await.unwrap();
     s.context
@@ -145,7 +155,7 @@ async fn a_rule_dictated_by_the_owner_is_promoted() {
                 {"op": "add_entry", "candidat": 1, "file": "profil.md", "section": "Git",
                  "text": "Supprimer la branche qa", "importance": 8}]}"#,
     );
-    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
+    let o = run(&d.dream(), &d.hooks.messenger, false).await.unwrap();
     assert_eq!(o.report.promoted, 1, "{:?}", o.report);
     let vault = crate::helpers::vault_dir(s);
     let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
@@ -239,13 +249,12 @@ async fn the_grid_updates_journals_and_ages_the_memory() {
     let clock = TestClock::new(1_789_516_800_000);
     let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
     let s = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), shared)
+        Services::for_tests(dir.path().to_path_buf(), shared)
             .await
             .unwrap(),
     );
-    let d = Arc::new(Daemon::from_services(s));
     let p = Arc::new(MockProvider::new());
-    d.set_provider_override(p.clone());
+    let d = harness(s, p.clone());
     let s = &d.services;
     let vault = crate::helpers::vault_dir(s);
     std::fs::create_dir_all(&vault).unwrap();
@@ -458,12 +467,13 @@ async fn the_grid_updates_journals_and_ages_the_memory() {
     }
     // Le signal ne porte que sur ce qui n'est pas servi d'office : le budget de
     // l'instantané est ramené à rien pour ce tour (issue #62).
-    d.publish_config("test", |c| {
-        c.memory.core_budget_tokens = 0;
-        c.memory.project_budget_tokens = 0;
-        Ok(vec!["memory.core_budget_tokens".into()])
-    })
-    .unwrap();
+    d.services
+        .publish_config("test", |c| {
+            c.memory.core_budget_tokens = 0;
+            c.memory.project_budget_tokens = 0;
+            Ok(vec!["memory.core_budget_tokens".into()])
+        })
+        .unwrap();
     let o = run(&d, &d.hooks.messenger, false).await.unwrap();
     assert!(
         o.report

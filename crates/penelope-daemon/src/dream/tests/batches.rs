@@ -5,11 +5,12 @@ use super::*;
 #[tokio::test]
 async fn many_candidates_are_consolidated_in_bounded_batches() {
     let (_dir, d, p) = daemon().await;
-    d.publish_config("test", |c| {
-        c.memory.dream_batch = 10;
-        Ok(vec!["memory.dream_batch".into()])
-    })
-    .unwrap();
+    d.services
+        .publish_config("test", |c| {
+            c.memory.dream_batch = 10;
+            Ok(vec!["memory.dream_batch".into()])
+        })
+        .unwrap();
     // Trente candidats bien distincts : la déduplication ne doit pas les regrouper.
     const SUJETS: [&str; 30] = [
         "facturation",
@@ -85,11 +86,12 @@ async fn many_candidates_are_consolidated_in_bounded_batches() {
 #[tokio::test]
 async fn a_truncated_consolidation_retries_with_a_smaller_batch() {
     let (_dir, d, p) = daemon().await;
-    d.publish_config("test", |c| {
-        c.memory.dream_batch = 4;
-        Ok(vec!["memory.dream_batch".into()])
-    })
-    .unwrap();
+    d.services
+        .publish_config("test", |c| {
+            c.memory.dream_batch = 4;
+            Ok(vec!["memory.dream_batch".into()])
+        })
+        .unwrap();
     for sujet in ["facturation", "déploiement", "sauvegarde", "veille"] {
         note(
             &d,
@@ -252,11 +254,12 @@ async fn batches_are_written_one_by_one_and_survive_a_failure() {
         }
     })));
     // Un lot par candidat : la taille de lot descend à 1.
-    d.publish_config("test", |c| {
-        c.memory.dream_batch = 1;
-        Ok(vec!["memory.dream_batch".into()])
-    })
-    .unwrap();
+    d.services
+        .publish_config("test", |c| {
+            c.memory.dream_batch = 1;
+            Ok(vec!["memory.dream_batch".into()])
+        })
+        .unwrap();
 
     let err = run(&d, &d.hooks.messenger, false).await.unwrap_err();
     assert!(format!("{err}").contains("refuse"), "{err}");
@@ -312,11 +315,12 @@ async fn batches_are_written_one_by_one_and_survive_a_failure() {
 async fn switching_reasoning_off_sends_the_kill_switch() {
     let (_dir, d, p) = daemon().await;
     projects(&d, 3, |_| false).await;
-    d.publish_config("test", |c| {
-        c.memory.consolidation_reasoning = "off".into();
-        Ok(vec!["memory.consolidation_reasoning".into()])
-    })
-    .unwrap();
+    d.services
+        .publish_config("test", |c| {
+            c.memory.consolidation_reasoning = "off".into();
+            Ok(vec!["memory.consolidation_reasoning".into()])
+        })
+        .unwrap();
     // Ce qui est demandé au modèle à chaque appel : l'effort, et le budget de
     // raisonnement.
     type Asked = Vec<(Option<String>, Option<u32>)>;
@@ -616,11 +620,12 @@ async fn a_pass_does_not_restart_from_the_full_batch_after_a_cut() {
 #[tokio::test]
 async fn a_passing_error_is_retried_on_its_batch() {
     let (_dir, d, p) = daemon().await;
-    d.publish_config("test", |c| {
-        c.memory.dream_retry_wait = "1ms".into();
-        Ok(vec!["memory.dream_retry_wait".into()])
-    })
-    .unwrap();
+    d.services
+        .publish_config("test", |c| {
+            c.memory.dream_retry_wait = "1ms".into();
+            Ok(vec!["memory.dream_retry_wait".into()])
+        })
+        .unwrap();
     note(
         &d,
         CandidateType::Preference,

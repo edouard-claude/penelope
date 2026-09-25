@@ -37,6 +37,14 @@ pub struct DigestInputs {
     pub due_today: Vec<String>,
 }
 
+/// Qui fournit au digest ses entrées d'au-dessus du rêve, au moment de l'écrire : les
+/// crons système (`system_crons`) le déclenchent sans connaître l'orchestrateur ni le
+/// compactage. Le daemon l'implémente (`dream::DigestFeed`).
+#[async_trait::async_trait]
+pub trait DigestSource: Send + Sync {
+    async fn digest_inputs(&self) -> DigestInputs;
+}
+
 impl Context {
     /// Calcul des embeddings, comme `Daemon::embedder`.
     pub fn embedder(&self) -> penelope_vault::embeddings::Embedder {

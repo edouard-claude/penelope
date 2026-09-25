@@ -45,14 +45,15 @@ impl TelegramGateway {
         let (daemon, messenger) = (d.clone(), d.hooks.messenger());
         let dry_run = args.contains("dry");
         tokio::spawn(async move {
-            let text = match crate::dream::run(&daemon, &daemon.hooks.messenger, dry_run).await {
-                Ok(o) => format!(
-                    "🌙 {}{}",
-                    if o.dry_run { "(à blanc) " } else { "" },
-                    o.report.render()
-                ),
-                Err(e) => format!("❌ {e}"),
-            };
+            let text =
+                match crate::dream::run(&daemon.dream(), &daemon.hooks.messenger, dry_run).await {
+                    Ok(o) => format!(
+                        "🌙 {}{}",
+                        if o.dry_run { "(à blanc) " } else { "" },
+                        o.report.render()
+                    ),
+                    Err(e) => format!("❌ {e}"),
+                };
             if let Some(m) = messenger {
                 let _ = m.send_text(&origin, &text).await;
             }

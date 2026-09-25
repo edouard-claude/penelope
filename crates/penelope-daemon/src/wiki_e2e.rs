@@ -245,7 +245,7 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
         })
         .to_string(),
     );
-    let dream = crate::dream::run(&d, &d.hooks.messenger, false)
+    let dream = crate::dream::run(&d.dream(), &d.hooks.messenger, false)
         .await
         .unwrap();
     assert!(dream.report.promoted >= 1, "{:?}", dream.report);

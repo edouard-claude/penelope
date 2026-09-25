@@ -128,7 +128,7 @@ pub(super) async fn expired_journal(s: &Services, vault: &Path, day: &str) -> Ve
 
 /// Entrées durables jamais rappelées depuis 60 jours (retour d'usage, issue #37). Le suivi
 /// commence au premier rêve qui le connaît : rien n'est proposé avant 60 jours de mesure.
-pub(super) async fn unused_entries(d: &Arc<Daemon>, day: &str) -> Vec<String> {
+pub(super) async fn unused_entries(d: &Context, day: &str) -> Vec<String> {
     const KEY: &str = "memory.usage_since";
     let since = match d.services.kv_get(KEY).await.ok().flatten() {
         Some(v) => v,
@@ -153,7 +153,8 @@ pub(super) async fn unused_entries(d: &Arc<Daemon>, day: &str) -> Vec<String> {
         .unwrap_or_default();
     // Ce qui est servi d'office dans l'instantané n'a pas d'usage mesurable par entrée :
     // le proposer au retrait retirerait ce qui sert le plus (issue #62).
-    let injected = crate::conversation::snapshot_uids(s, &crate::session_project::Scope::All).await;
+    let injected =
+        penelope_vault::snapshot::snapshot_uids(s, &crate::session_project::Scope::All).await;
     let vault = crate::helpers::vault_dir(s);
     let resolver = penelope_memory::wiki::Resolver::scan(&vault);
     entries

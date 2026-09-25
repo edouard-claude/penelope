@@ -88,7 +88,7 @@ pub(super) struct CallOutcome {
 }
 
 pub(super) async fn consolidate(
-    d: &Arc<Daemon>,
+    d: &Context,
     items: &[Item<'_>],
     snap: &VaultSnapshot,
     max_tokens: u32,

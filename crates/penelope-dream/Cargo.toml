@@ -19,6 +19,8 @@ anyhow.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 chrono.workspace = true
+# Port `DigestSource`, implémenté par le daemon.
+async-trait.workspace = true
 # Jour du propriétaire dans son fuseau (nom de la séance d'accueil).
 chrono-tz.workspace = true
 # `Services`, helpers (`vault_dir`), inventaire machine.

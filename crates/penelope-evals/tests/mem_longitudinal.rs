@@ -100,7 +100,8 @@ async fn fourteen_days_of_conversations_become_scoped_rules() {
         while today < *day {
             // Nuit : consolidation, puis le jour suivant.
             clock.advance_hours(24);
-            if let Err(e) = penelope_daemon::dream::run(&d, &d.hooks.messenger, false).await {
+            if let Err(e) = penelope_daemon::dream::run(&d.dream(), &d.hooks.messenger, false).await
+            {
                 eprintln!("consolidation du jour {today} : {e}");
             }
             today += 1;
@@ -131,7 +132,7 @@ async fn fourteen_days_of_conversations_become_scoped_rules() {
         }
     }
     clock.advance_hours(24);
-    let _ = penelope_daemon::dream::run(&d, &d.hooks.messenger, false).await;
+    let _ = penelope_daemon::dream::run(&d.dream(), &d.hooks.messenger, false).await;
     let digest = penelope_daemon::dream::digest_text(&d, d.hooks.mcp_supervisor())
         .await
         .unwrap_or_default();

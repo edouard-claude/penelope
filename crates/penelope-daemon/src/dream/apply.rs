@@ -33,7 +33,7 @@ pub(super) fn today(s: &Services) -> String {
 /// Applique une opération validée ; renvoie le fichier touché.
 #[allow(clippy::too_many_lines)] // gel 0.17 : lot G (dream/apply.rs)
 pub(super) async fn apply(
-    d: &Arc<Daemon>,
+    d: &Context,
     vault: &Path,
     op: &Operation,
     run_id: &str,
@@ -311,7 +311,7 @@ pub(super) async fn apply(
 /// Exception (ou écart observé) ajoutée à une pratique existante.
 #[allow(clippy::too_many_arguments)]
 async fn add_to_practice(
-    d: &Arc<Daemon>,
+    d: &Context,
     vault: &Path,
     op: &Operation,
     practice: &str,

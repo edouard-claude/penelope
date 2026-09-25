@@ -95,7 +95,7 @@ pub(super) struct Neighbour {
 
 /// Souvenirs proches de chaque candidat, avec **un seul** appel d'embeddings pour tout le
 /// lot (issue #59).
-pub(super) async fn nearby_batch(d: &Arc<Daemon>, texts: &[String]) -> Vec<Vec<Neighbour>> {
+pub(super) async fn nearby_batch(d: &Context, texts: &[String]) -> Vec<Vec<Neighbour>> {
     let vectors = match crate::embeddings::embed_texts(&d.embedder(), texts).await {
         Ok((_, v)) => v,
         Err(e) => {
@@ -113,7 +113,7 @@ pub(super) async fn nearby_batch(d: &Arc<Daemon>, texts: &[String]) -> Vec<Vec<N
 
 /// Souvenirs proches d'un candidat : recherche par le sens quand les embeddings répondent,
 /// sinon lexicale ; ni journal, ni documents ingérés.
-async fn nearby_with(d: &Arc<Daemon>, text: &str, vector: Option<Vec<f32>>) -> Vec<Neighbour> {
+async fn nearby_with(d: &Context, text: &str, vector: Option<Vec<f32>>) -> Vec<Neighbour> {
     let s = &d.services;
     let filter = penelope_memory::SearchFilter {
         limit: 8,

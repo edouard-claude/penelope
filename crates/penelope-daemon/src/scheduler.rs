@@ -19,10 +19,8 @@
 
 use crate::bus::ChannelDelivery;
 use crate::bus::Origin;
-use crate::executor::Messenger;
 use crate::helpers::owner_origin_of;
-use crate::ports::McpAdmin;
-use crate::ports::Slot;
+use crate::ports::{McpAdmin, Messenger, Slot};
 use crate::runtime::{Daemon, Services};
 use penelope_kernel::session::SessionKind;
 use penelope_kernel::turn::TurnKind;
@@ -70,7 +68,9 @@ pub async fn scheduler_loop(d: Arc<Daemon>, ports: Ports) {
                 busy.store(false, std::sync::atomic::Ordering::SeqCst);
             });
         }
-        if let Err(e) = crate::dream::system_crons(&d, &ports.messenger, &ports.mcp).await {
+        let (dream, feed) = (d.dream(), Arc::new(crate::dream::DigestFeed(d.clone())));
+        let crons = crate::dream::system_crons(&dream, feed, &ports.messenger, &ports.mcp);
+        if let Err(e) = crons.await {
             tracing::warn!(error = %e, "consolidation ou digest programmés");
         }
         match tick(&d, &ports).await {

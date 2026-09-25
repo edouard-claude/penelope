@@ -114,44 +114,15 @@ async fn recent_reports(s: &Services, n: usize) -> anyhow::Result<Vec<DreamRepor
         .await?)
 }
 
-/// Digest du matin (§6.8 sortie, §14.5 `digest`).
+/// Digest du matin (§6.8 sortie, §14.5 `digest`). `inputs` : ce que le digest lit
+/// au-dessus du rêve (planifications, compactage), calculé par l'appelant (T26).
 /// `mcp` : le superviseur, pour l'audit du lundi.
-pub async fn digest_text(
-    d: &Arc<Daemon>,
+pub async fn digest_with(
+    d: &Context,
+    inputs: DigestInputs,
     mcp: Option<Arc<dyn McpAdmin>>,
 ) -> anyhow::Result<String> {
-    // Ce que le digest lit au-dessus du rêve (planifications, compactage), calculé ici
-    // et transmis en données (T26).
     let s = &d.services;
-    // Planifications dont la dernière exécution a échoué, ou n'a rien livré (#39, #120).
-    let failing: Vec<String> = {
-        let mut v = Vec::new();
-        for sched in s.schedules.list().await.unwrap_or_default() {
-            if sched.state == "active"
-                && let Some(err) = &sched.last_error
-            {
-                v.push(format!(
-                    "- {} : {err}",
-                    crate::scheduler::label(d, &sched).await
-                ));
-            }
-        }
-        v
-    };
-    let inputs = penelope_dream::DigestInputs {
-        failing_schedules: failing,
-        struggling_sessions: crate::compaction::struggling_sessions(s).await,
-        due_today: crate::scheduler::due_today(d).await,
-    };
-    digest_with(&d.services, inputs, mcp).await
-}
-
-/// Corps du digest, sans le daemon : les entrées d'au-dessus arrivent en données.
-async fn digest_with(
-    s: &Arc<Services>,
-    inputs: penelope_dream::DigestInputs,
-    mcp: Option<Arc<dyn McpAdmin>>,
-) -> anyhow::Result<String> {
     let mut t = format!("☀️ **Digest du {}**\n", today(s));
     // Une nuit ratée se dit : le rapport précédent ne passe pas pour celui de la nuit.
     let failed = last_failure(s).await;
@@ -247,12 +218,11 @@ async fn digest_with(
     let runs = s.runs.list(None, 50).await?;
     let (mut done, mut blocked, mut running) = (0, 0, 0);
     for r in &runs {
-        match r.state {
-            penelope_workflow::RunState::Done => done += 1,
-            penelope_workflow::RunState::Blocked => blocked += 1,
-            penelope_workflow::RunState::Running | penelope_workflow::RunState::Paused => {
-                running += 1
-            }
+        match r.state.as_str() {
+            // Par son nom : le rêve ne dépend pas de `penelope-workflow` (T26).
+            "done" => done += 1,
+            "blocked" => blocked += 1,
+            "running" | "paused" => running += 1,
             _ => {}
         }
     }
