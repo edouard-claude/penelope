@@ -66,6 +66,10 @@ async fn say(d: &Arc<Daemon>, sid: &str, text: &str) -> TurnOutcome {
         .await
         .unwrap()
         .expect("tour créé");
+    next_turn(d).await
+}
+
+async fn next_turn(d: &Arc<Daemon>) -> TurnOutcome {
     let turn = d.services.turns.claim("test").await.unwrap().unwrap();
     let out = tokio::time::timeout(Duration::from_secs(20), d.run_turn(&turn))
         .await
@@ -93,7 +97,23 @@ async fn background_shell(d: &Arc<Daemon>, p: &MockProvider, sid: &str, command:
         json!({"command": command, "background": true}),
     ));
     p.reply("C'est parti.");
-    let out = say(d, sid, "lance-le").await;
+    let mut out = say(d, sid, "lance-le").await;
+    // Une commande composée demande l'accord même en mode `auto` : le propriétaire le
+    // donne, le tour reprend. La carte n'est pas le sujet ici.
+    if let TurnOutcome::AwaitingApproval { approval_id } = &out {
+        penelope_daemon::agent::decide_approval(
+            &d.services,
+            approval_id,
+            &penelope_hitl::Decision::approve_once("cli"),
+        )
+        .await
+        .unwrap();
+        d.enqueue_resume(sid, approval_id, &Origin::Cli)
+            .await
+            .unwrap()
+            .expect("tour de reprise créé");
+        out = next_turn(d).await;
+    }
     assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
 }
 
@@ -325,4 +345,56 @@ async fn a_restart_during_a_job_fails_it_and_says_so_without_a_card() {
         "aucun effet rejoué"
     );
     d.services.jobs.cancel_all();
+}
+
+/// Processus vivants dont la ligne de commande contient `pattern`.
+fn alive(pattern: &str) -> usize {
+    std::process::Command::new("pgrep")
+        .args(["-f", pattern])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().count())
+        .unwrap_or(0)
+}
+
+/// T19 : `/stop` tue le **groupe** de processus du job, pas seulement le shell. Une
+/// commande qui lance ses propres enfants (`a | b`) ne laisse aucun survivant, et le
+/// ramasse-miettes des orphelins n'a plus rien à faire (#57, #65).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stop_kills_the_whole_process_group_of_a_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, p) = daemon_at(dir.path()).await;
+    let sid = session(&d).await;
+    // Durées singulières : `pgrep` ne doit voir que les enfants de ce test.
+    let marker = format!("sleep 30{}.", std::process::id() % 1000);
+    let command = format!("{marker}1 | {marker}2");
+    background_shell(&d, &p, &sid, &command).await;
+    let job = only_job(&d, &sid).await;
+
+    for _ in 0..100 {
+        if alive(&marker) >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(alive(&marker) >= 2, "les deux enfants doivent tourner");
+
+    assert_eq!(d.services.jobs.cancel_session(&sid), 1);
+    assert_eq!(settled(&d, &job.id).await.state, TaskState::Cancelled);
+    for _ in 0..100 {
+        if alive(&marker) == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(alive(&marker), 0, "un enfant du job a survécu à `/stop`");
+
+    use penelope_platform::ProcessHost;
+    let pid_dir = d.services.platform.dirs.pid_dir();
+    let orphans = d
+        .services
+        .platform
+        .processes
+        .reap_orphans(&pid_dir)
+        .unwrap_or_default();
+    assert!(orphans.is_empty(), "orphelins : {orphans:?}");
 }
