@@ -27,7 +27,6 @@ test_modules = [
 "crates/penelope-hitl/src/policy.rs" = 1120
 "crates/penelope-platform/src/backend/macos.rs" = 1082
 "crates/penelope-store/src/lib.rs" = 1036
-"crates/penelope-platform/src/process.rs" = 1008
 
 # Plafond de lignes de src/ par crate (R4) : 78 668 au gel, plus 2 500 de marge, soit une
 # vingtaine de correctifs de taille courante. Un autre crate se plafonne en ajoutant une
