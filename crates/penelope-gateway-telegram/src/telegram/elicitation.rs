@@ -177,8 +177,8 @@ impl TelegramGateway {
     /// Où poser une carte d'élicitation : la conversation de l'appel, sinon le foyer du
     /// propriétaire (issue #143).
     async fn elicitation_chat(&self, r: &crate::elicitation::Request) -> (i64, Option<i64>) {
-        match r.to.chat_id {
-            Some(chat_id) => (chat_id, r.to.topic_id),
+        match r.to.origin.as_ref().and_then(|o| o.telegram_chat()) {
+            Some(chat) => chat,
             None => self.home_chat(),
         }
     }
@@ -351,6 +351,18 @@ impl TelegramGateway {
 
 #[async_trait::async_trait]
 impl crate::elicitation::OwnerChannel for TelegramGateway {
+    fn place(&self) -> String {
+        "sur Telegram".into()
+    }
+
+    /// Un formulaire se présente champ par champ (§8.4) : ce que Telegram ne sait pas
+    /// demander est refusé au serveur avant toute carte.
+    fn check_form(&self, schema: &Value) -> Result<(), String> {
+        penelope_telegram::forms::fields_from_schema(schema)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
     async fn show(&self, r: &crate::elicitation::Request) -> Result<Option<i64>, String> {
         use crate::elicitation::Kind;
         let accept = match &r.kind {

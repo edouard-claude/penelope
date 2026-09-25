@@ -1308,7 +1308,6 @@ dependencies = [
  "penelope-platform",
  "penelope-skills",
  "penelope-store",
- "penelope-telegram",
  "penelope-tools",
  "penelope-workflow",
  "serde",

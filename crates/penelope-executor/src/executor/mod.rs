@@ -184,16 +184,15 @@ fn config_application_time(path: &str) -> (&'static str, Option<&'static str>) {
 
 impl NativeToolExecutor {
     /// Conversation à qui rendre une élicitation née de cet appel (issue #143) : celle
-    /// du tour, quand il vient de Telegram ; sinon rien, et le canal choisit son repli.
+    /// du tour, quand il vient d'un canal ; sinon rien, et le canal choisit son repli.
     fn elicitation_destination(&self) -> penelope_app::elicitation::Destination {
-        let (chat_id, topic_id) = match self.env.origin.telegram_chat() {
-            Some((c, t)) => (Some(c), t),
-            None => (None, None),
-        };
         penelope_app::elicitation::Destination {
             session_id: Some(self.env.session_id.clone()),
-            chat_id,
-            topic_id,
+            origin: self
+                .env
+                .origin
+                .is_channel()
+                .then(|| self.env.origin.clone()),
         }
     }
 

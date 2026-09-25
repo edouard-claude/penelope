@@ -2,7 +2,7 @@
 //!
 //! Un serveur demande au propriétaire de remplir un formulaire (`requestedSchema`), de
 //! confirmer une action (schéma sans champ) ou d'ouvrir un lien (mode URL). La demande part
-//! sur le canal du propriétaire (Telegram) ; sans réponse avant `elicitation_timeout`, elle
+//! sur le canal du propriétaire (`OwnerChannel`) ; sans réponse avant `elicitation_timeout`, elle
 //! est annulée. Chaque issue reste notée une heure pour annoter le résultat de l'outil
 //! appelant : le modèle sait qui a répondu, et n'invente pas de cause.
 
@@ -22,14 +22,14 @@ const NOTE_TTL: Duration = Duration::from_secs(3600);
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Destination {
     pub session_id: Option<String>,
-    pub chat_id: Option<i64>,
-    pub topic_id: Option<i64>,
+    /// La conversation du canal où l'appel est né (T36 : le canal la lit lui-même).
+    pub origin: Option<crate::bus::Origin>,
 }
 
 impl Destination {
     /// Vrai si la demande sait où revenir.
     pub fn is_known(&self) -> bool {
-        self.chat_id.is_some()
+        self.origin.is_some()
     }
 }
 
@@ -131,6 +131,16 @@ impl Outcome {
 /// Canal qui sait présenter une demande au propriétaire.
 #[async_trait::async_trait]
 pub trait OwnerChannel: Send + Sync {
+    /// Où le propriétaire répond, pour la phrase laissée au modèle : « sur Telegram ».
+    fn place(&self) -> String {
+        "sur son canal".into()
+    }
+    /// Vérifie qu'un formulaire (`requestedSchema` à champs) se présente sur ce canal ;
+    /// `Err` : paramètres invalides pour le serveur (−32602), avant toute carte.
+    fn check_form(&self, schema: &Value) -> Result<(), String> {
+        let _ = schema;
+        Ok(())
+    }
     /// Présente la demande ; rend l'identifiant de la carte, pour la mettre à jour.
     async fn show(&self, request: &Request) -> Result<Option<i64>, String>;
     /// Remplace la carte par une issue (délai dépassé, lien terminé). `retry` : la
@@ -245,6 +255,13 @@ impl Broker {
         timeout: Duration,
     ) -> Result<Outcome, String> {
         let mut request = parse(server, params, timeout)?;
+        if let (Kind::Form { schema }, Some(channel)) = (&request.kind, self.channel())
+            && request.field_count() > 0
+        {
+            channel
+                .check_form(schema)
+                .map_err(|e| format!("`requestedSchema` : {e}"))?;
+        }
         request.to = self.destination(server);
         let outcome = self.present(&request).await;
         self.note(&request, &outcome);
@@ -254,7 +271,7 @@ impl Broker {
     async fn present(&self, request: &Request) -> Outcome {
         let Some(channel) = self.channel() else {
             return Outcome::auto(
-                "aucun canal pour joindre le propriétaire (Telegram non configuré ou arrêté)",
+                "aucun canal pour joindre le propriétaire (canal non configuré ou arrêté)",
             );
         };
         let (tx, mut rx) = oneshot::channel();
@@ -437,7 +454,10 @@ impl Broker {
     }
 
     fn note(&self, request: &Request, outcome: &Outcome) {
-        let text = explain(request, outcome);
+        let place = self
+            .channel()
+            .map_or_else(|| "sur son canal".to_string(), |c| c.place());
+        let text = explain(request, outcome, &place);
         tracing::info!(server = %request.server, note = %text, "élicitation MCP");
         if let Ok(mut notes) = self.notes.lock() {
             notes.retain(|(_, at, _)| at.elapsed() < NOTE_TTL);
@@ -479,14 +499,6 @@ pub fn parse(server: &str, params: &Value, timeout: Duration) -> Result<Request,
                 .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
             if schema.get("properties").is_some_and(|p| !p.is_object()) {
                 return Err("`requestedSchema.properties` doit être un objet".into());
-            }
-            if schema
-                .get("properties")
-                .and_then(|p| p.as_object())
-                .is_some_and(|p| !p.is_empty())
-            {
-                penelope_telegram::forms::fields_from_schema(&schema)
-                    .map_err(|e| format!("`requestedSchema` : {e}"))?;
             }
             Kind::Form { schema }
         }
@@ -532,21 +544,23 @@ pub fn first_line(message: &str) -> String {
     }
 }
 
-/// Phrase pour le modèle : qui a répondu, et comment.
-pub fn explain(request: &Request, outcome: &Outcome) -> String {
+/// Phrase pour le modèle : qui a répondu, et comment. `place` : où le propriétaire a
+/// répondu, dit par son canal (« sur Telegram »).
+pub fn explain(request: &Request, outcome: &Outcome, place: &str) -> String {
     let what = match (&outcome.by, &outcome.action) {
         (By::Owner, Action::Accept(_)) => match &request.kind {
-            Kind::Url { .. } => "le propriétaire a accepté d'ouvrir le lien sur Telegram \
-                                 (accept) ; la suite se passe hors de Pénélope"
-                .to_string(),
+            Kind::Url { .. } => format!(
+                "le propriétaire a accepté d'ouvrir le lien {place} (accept) ; la suite se \
+                 passe hors de Pénélope"
+            ),
             Kind::Form { .. } if request.field_count() > 0 => {
-                "le propriétaire a rempli et envoyé le formulaire sur Telegram (accept)".into()
+                format!("le propriétaire a rempli et envoyé le formulaire {place} (accept)")
             }
-            Kind::Form { .. } => "le propriétaire a accepté sur Telegram (accept)".into(),
+            Kind::Form { .. } => format!("le propriétaire a accepté {place} (accept)"),
         },
-        (By::Owner, Action::Decline) => "le propriétaire a refusé sur Telegram (decline)".into(),
+        (By::Owner, Action::Decline) => format!("le propriétaire a refusé {place} (decline)"),
         (By::Owner, Action::Cancel) => {
-            "le propriétaire a annulé sans choisir, sur Telegram (cancel)".into()
+            format!("le propriétaire a annulé sans choisir, {place} (cancel)")
         }
         (By::Timeout(d), _) => format!(
             "le propriétaire n'a pas répondu en {} : Pénélope a annulé la demande (cancel), \
@@ -737,8 +751,11 @@ mod tests {
         let broker = Arc::new(Broker::default());
         let to = Destination {
             session_id: Some("s1".into()),
-            chat_id: Some(-100_394),
-            topic_id: Some(17),
+            origin: Some(crate::bus::Origin::Telegram {
+                chat_id: -100_394,
+                topic_id: Some(17),
+                message_id: None,
+            }),
         };
         {
             let _scope = broker.scope("redmine", to.clone());

@@ -259,8 +259,8 @@ pub fn dependency_rules() -> BTreeMap<&'static str, Vec<&'static str>> {
         vec!["penelope-kernel", "penelope-store", "penelope-observe"],
     );
     // Le socle de l'application (épopée #208, T21) : les crates métier, jamais le daemon
-    // ni une crate extraite du daemon, qui sont au-dessus de lui. `penelope-telegram` en
-    // sort avec T36 (gabarits et actions quittent `Services`).
+    // ni une crate extraite du daemon, qui sont au-dessus de lui, ni le canal (T36 :
+    // gabarits, actions et formulaires sont dans la passerelle, derrière les ports).
     m.insert("penelope-app", APP_ALLOWED_DEPS.to_vec());
     // L'hôte MCP (T25) : le socle et les crates métier dont il se sert, jamais le daemon,
     // qui le construit.
@@ -315,7 +315,7 @@ pub const MCP_HOST_ALLOWED_DEPS: &[&str] = &[
     "penelope-mcp",
 ];
 
-/// Ce dont `penelope-app` peut dépendre : les treize crates métier.
+/// Ce dont `penelope-app` peut dépendre : les douze crates métier, sans le canal.
 pub const APP_ALLOWED_DEPS: &[&str] = &[
     "penelope-kernel",
     "penelope-store",
@@ -328,7 +328,6 @@ pub const APP_ALLOWED_DEPS: &[&str] = &[
     "penelope-skills",
     "penelope-tools",
     "penelope-hitl",
-    "penelope-telegram",
     "penelope-workflow",
 ];
 
@@ -638,16 +637,23 @@ mod tests {
         );
     }
 
-    /// T21 : le socle de l'application ne connaît pas le daemon.
+    /// T21 : le socle de l'application ne connaît pas le daemon ; T36 : ni le canal,
+    /// qu'il n'atteint que par ses ports (`Cards`, `ChannelDelivery`, `OwnerChannel`).
     #[test]
-    fn the_app_crate_does_not_depend_on_the_daemon() {
+    fn the_app_crate_sees_neither_the_daemon_nor_the_channel() {
         let all = crates();
         let app = all.iter().find(|c| c.name == "penelope-app").unwrap();
-        assert!(
-            !app.internal_deps.contains("penelope-daemon"),
-            "penelope-app est sous le daemon : {:?}",
-            app.internal_deps
-        );
+        for above in [
+            "penelope-daemon",
+            "penelope-telegram",
+            "penelope-gateway-telegram",
+        ] {
+            assert!(
+                !app.internal_deps.contains(above),
+                "penelope-app dépend de {above} : {:?}",
+                app.internal_deps
+            );
+        }
     }
 
     /// T25 : l'hôte MCP ne connaît pas le daemon, qui le construit.
