@@ -102,7 +102,7 @@ couches de politique), T09 à T15 (ports, crate, sous-agents sur la crate, steer
 tentatives), T17 à T20 (jobs d'outils, par le port `JobRunner`), T26 (événements
 typés). Puis, sur `v1` après la 1.0.0-alpha.13 : T24 (couture du PTC, `CallContext {
 call_id, parent, root }` et refus d'une approbation dans un appel imbriqué, décision
-0016), T25 (`TurnRequest`, `AgentLoop::run` et `resume_after_approval` retirés), T27
+[0016](0016-ptc-hors-v1.md)), T25 (`TurnRequest`, `AgentLoop::run` et `resume_after_approval` retirés), T27
 (parties pures de l'audit du cache dans `penelope_llm::cache`, dernier appel lu dans le
 `BudgetLedger`, port `CacheAudit` retiré).
 
