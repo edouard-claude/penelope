@@ -1,7 +1,7 @@
 //! Arguments d'un appel tels que la politique les lit (sortis de l'exécuteur natif,
-//! épopée #208, T09) : la boucle en a besoin sans dépendre du daemon.
+//! épopée #208, T09) : la boucle et l'exécuteur en ont besoin sans se connaître (T24).
 
-use penelope_tools::{ToolError, ToolResult};
+use crate::{ToolError, ToolResult};
 use serde_json::{Value, json};
 
 /// Vrai quand un appel `shell_exec` demande le réseau (issue #106).
@@ -39,4 +39,14 @@ pub fn effective_arguments(tool: &str, args: &Value) -> Value {
     } else {
         args.clone()
     }
+}
+
+/// Arguments sans l'intention : elle ne change pas l'appel, ni pour la garde de boucle ni
+/// pour le serveur qui l'exécute.
+pub fn without_intention(args: &Value) -> Value {
+    let mut a = args.clone();
+    if let Some(o) = a.as_object_mut() {
+        o.remove(crate::WHY_FIELD);
+    }
+    a
 }

@@ -535,16 +535,6 @@ async fn turn_goal(conv: &dyn Conversation) -> Option<String> {
     Some(format!("Pour ta demande : « {short} »"))
 }
 
-/// Arguments sans l'intention : elle ne change pas l'appel, ni pour la garde de boucle ni
-/// pour le serveur qui l'exécute.
-pub fn without_intention(args: &Value) -> Value {
-    let mut a = args.clone();
-    if let Some(o) = a.as_object_mut() {
-        o.remove(penelope_tools::WHY_FIELD);
-    }
-    a
-}
-
 /// Forme d'une ligne `shell_exec`, pour la mesure (issue #150) : `simple` (une commande),
 /// `liste` (des `&&` nommables), `composee` (le reste, qui ne peut porter aucune règle).
 /// `None` pour tout autre outil.

@@ -32,7 +32,6 @@ use std::sync::{Arc, Mutex};
 mod attempts;
 mod cache;
 mod decisions;
-mod executor;
 mod guards;
 mod loop_abort;
 mod model;
@@ -50,7 +49,6 @@ pub use cache::{
     CACHE_TTL_MS, Fingerprint, Observed, PreviousCall, STICKY_MS, miss_cause, sticky_upstream,
 };
 pub use decisions::{EFFECT_DONE, EFFECT_IGNORE, EFFECT_RETRY, decide_approval};
-pub use executor::{call_arguments, effective_arguments, wants_network};
 pub use guards::budget_exceeded_text;
 use guards::{TurnContext, default_chain, run_guards};
 pub use loop_abort::{LOOP_STOP_NOTE, last_result_of, split_choices};
@@ -60,10 +58,13 @@ pub use pending::pending_calls;
 pub use penelope_app::conversation::{Compactor, Conversation, MemoryConversation};
 pub use penelope_app::outcome::{NullSink, RecordingSink, TurnEvent, TurnOutcome, TurnSink};
 pub use penelope_app::tool_executor::{CallInfo, ToolExecutor};
+pub use penelope_tools::args::{
+    call_arguments, effective_arguments, wants_network, without_intention,
+};
 use pipeline::Pending;
 pub use pipeline::effect_kind;
+pub use pipeline::server_of;
 pub use pipeline::{ApprovalMode, declared_allow, local_draft_allow};
-pub use pipeline::{server_of, without_intention};
 pub use ports::{
     AgentServices, CacheAudit, JobRequest, JobRunner, MemoryModes, NoAudit, NoJobs,
     PromptSnapshots, SessionInfo, SessionModes,
