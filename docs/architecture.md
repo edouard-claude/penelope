@@ -96,18 +96,18 @@ exclus), mesurées à la 1.0.0-alpha.13 :
 | `penelope-ops` | doctor, mise à jour, sauvegarde, Hermes, Codex, purge, fork et retour arrière | app, kernel, llm, mcp, memory, observe, platform, skills, store, vault | 10 762 |
 | `penelope-orchestrator` | moteur de workflows et ordonnanceur | agent, app, conversation, dream, executor, hitl, kernel, llm, mcp, observe, platform, store, tools, vault, workflow | 6 237 |
 | `penelope-daemon` | composition, moteur des tours, coureurs, supervision, RPC | toutes les crates ci-dessus sauf telegram | 14 986 |
-| `penelope-gateway-telegram` | la passerelle Telegram, adaptateur pilotant | app, context, daemon, hitl, kernel, llm, memory, observe, platform, skills, store, telegram, workflow | 18 703 |
-| `penelope-evals` | suites déterministes, scénarios rejouables, rejeu | context, daemon, hitl, kernel, llm, mcp, memory, observe, platform, skills, store, telegram, tools, vault, workflow | 4 701 |
-| `penelope-cli` | le binaire `penelope` : CLI, client RPC, composition | daemon, evals, gateway-telegram, kernel, observe, ops, platform, store, telegram, tools, workflow | 3 436 |
+| `penelope-gateway-telegram` | la passerelle Telegram, adaptateur pilotant | agent, app, context, conversation, daemon, dream, executor, hitl, kernel, llm, mcp-host, memory, observe, ops, orchestrator, platform, skills, store, telegram, vault, workflow | 18 703 |
+| `penelope-evals` | suites déterministes, scénarios rejouables, rejeu | agent, app, context, conversation, daemon, dream, executor, hitl, kernel, llm, mcp, memory, observe, ops, platform, skills, store, telegram, tools, vault, workflow | 4 701 |
+| `penelope-cli` | le binaire `penelope` : CLI, client RPC, composition | agent, daemon, evals, gateway-telegram, kernel, observe, ops, platform, store, telegram, tools, workflow | 3 436 |
 | `penelope-archtest` | les règles d'architecture et le gel | aucune | 3 311 |
 
-Le plus gros fichier source du dépôt fait 2 179 lignes (`penelope-cli/src/commands.rs`) ;
+Le plus gros fichier source du dépôt fait 2 148 lignes (`penelope-kernel/src/config.rs`) ;
 les fichiers au-dessus de 1 000 lignes sont nommés dans la liste de référence du gel
 (voir plus bas).
 
 ### Ce que le daemon garde
 
-`penelope-daemon/src` compte 21 modules (liste blanche `[daemon].modules` du budget) :
+`penelope-daemon/src` compte 20 modules (liste blanche `[daemon].modules` du budget) :
 
 - la composition : `runtime` (`Daemon`, `Hooks`, `Providers`, reprise au démarrage,
   état), `supervisor` (`Daemon::run`, boucles supervisées), `runner` (coureurs de la file
@@ -119,13 +119,26 @@ les fichiers au-dessus de 1 000 lignes sont nommés dans la liste de référence
   (`KvModes`), `prompt_snapshot` (`StoredSnapshots`), et à côté `cache_audit`
   (contexte volatil et préfixe stable de l'audit du cache) et `audit` ;
 - la façade RPC (`rpc/`) et le flux runtime (`runtime_events`) ;
-- des façades de transition : `agent`, `compaction`, `dream`, `executor`, `ingest`,
-  `scheduler`, `selfknow`, `workflow` réexportent la crate où leur code est parti et
-  gardent quelques entrées en `&Arc<Daemon>` ; `lib.rs` réexporte sous leur ancien chemin
-  les modules partis dans `penelope-app`, `penelope-vault`, `penelope-mcp-host`,
-  `penelope-ops`, `penelope-dream`, `penelope-executor` et `penelope-conversation`.
-  Ces réexports tiennent les anciens chemins `penelope_daemon::…` de la passerelle, des
-  évaluations et des tests jusqu'à T30.
+- les adaptateurs qui dérivent d'un `Daemon` ce qu'une crate du dessous attend, faute
+  d'autre place : `agent` (`services_of` et les entrées `decide_approval`,
+  `close_unopened`, `close_interrupted_turns` en `&Services` : `penelope-agent` ne nomme
+  pas `Services`, qui porte le moteur de contexte), `workflow` (`context_of`,
+  `orchestrator_of` : le contexte de l'orchestrateur lit les providers, le bus, l'état
+  des runs), `compaction` (`context_of`), `selfknow` (`codex_view`, servi par `Admin`) ;
+- des modules de tests seuls, qui jouent un tour réel sur le daemon : `dream`,
+  `executor`, `ingest`, `wiki_e2e`.
+
+Le daemon ne réexporte plus rien d'une autre crate (T30) : `lib.rs` exporte ses modules
+propres, `Daemon` et `VERSION`. Un appelant nomme la crate où vit le code
+(`penelope_app::services::Services`, `penelope_app::bus::Origin`,
+`penelope_orchestrator::workflow::start_run(&penelope_daemon::workflow::context_of(d), …)`).
+Hors de la passerelle, la CLI et les évaluations ne citent du daemon que `Daemon`,
+`VERSION`, `runner::{process, run_pool}`, `rpc::Rpc` et deux adaptateurs
+(`agent::decide_approval`, `compaction::context_of`) :
+
+```bash
+grep -rhoE 'penelope_daemon::[A-Za-z_]+(::[A-Za-z_]+)?' crates/penelope-evals crates/penelope-cli | sort | uniq -c
+```
 
 ### La composition
 
@@ -195,7 +208,7 @@ fournisseur collant, cause d'un raté) sont dans `penelope_llm::cache`.
 | `SessionModes` | mode d'approbation d'une session | `KvModes` (`approval_mode.rs`) | `MemoryModes` |
 | `SessionInfo` | nature d'une session | `SessionStore` (kernel) | le même, sur une base en mémoire |
 | `PromptSnapshots` | instantanés du préfixe, cause d'un raté de cache | `StoredSnapshots` (`prompt_snapshot.rs`) | `NoAudit` |
-| `JobRunner` | détacher un appel long en job | `DaemonJobs` (`agent.rs`, façade) | `NoJobs` |
+| `JobRunner` | détacher un appel long en job | `DaemonJobs` (`agent.rs`) | `NoJobs` |
 
 ### Autres ports
 
@@ -323,14 +336,11 @@ clé).
 
 ## Ce qui reste
 
-- **T30** : retirer les réexports de transition du daemon (`lib.rs`, façades `agent`,
-  `compaction`, `dream`, `executor`, `ingest`, `scheduler`, `selfknow`, `workflow`) et
-  ceux de la passerelle (`pub(crate) use penelope_daemon::{…}`), puis réécrire les
-  appelants sur les nouvelles crates. La CLI, les évaluations, la passerelle et les tests
-  du daemon citent encore 72 fois un chemin `penelope_daemon::<module>`, sans compter les
-  `crate::` que la passerelle résout par ses réexports ; pour recompter :
-  `grep -rhoE 'penelope_daemon::[a-z_]+' crates/penelope-{cli,evals,gateway-telegram} crates/penelope-daemon/{tests,examples} | wc -l`.
-- **T32** : resserrer les listes du gel une fois T30 fait.
+- **Découpage sous 800 lignes** : `engine.rs` (1 091 lignes) et `supervisor.rs` (930) sont
+  presque entièrement des blocs `impl Daemon`, que R6 réserve à quatre fichiers ;
+  les couper demande d'abord de convertir des méthodes en fonctions sur `&Services` ou
+  sur un port (T33), pas un déplacement.
+- **T32** : resserrer les listes du gel, maintenant que T30 est fait.
 - **Journal** : T16 (retrait de la double écriture et de `history.source`), puis la
   décision 0017 (le journal source unique de la conversation).
 - **Après la V1** : T33 (ports `TurnIntake`, `SessionModels`, `Transcriber`, pour tester
