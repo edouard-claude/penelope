@@ -146,9 +146,6 @@ impl Hooks {
     pub fn orchestrator(&self) -> Option<Arc<dyn crate::executor::Orchestrator>> {
         self.orchestrator.read().ok().and_then(|g| g.clone())
     }
-    pub fn telegram(&self) -> Option<Arc<dyn crate::bus::ChannelDelivery>> {
-        self.delivery()
-    }
     /// Le canal de livraison branché, sous le nom de son port.
     pub fn delivery(&self) -> Option<Arc<dyn crate::bus::ChannelDelivery>> {
         self.delivery.get()

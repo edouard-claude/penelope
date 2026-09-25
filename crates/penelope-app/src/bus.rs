@@ -71,6 +71,12 @@ pub trait ChannelDelivery: Send + Sync {
         outcome: &TurnOutcome,
     );
 
+    /// Seuils de la carte de rafale pour un tour né de `origin` (issues #49, #161) :
+    /// `None`, le canal n'en pose pas pour cette origine.
+    fn burst_limits(&self, _origin: &Origin) -> Option<BurstLimits> {
+        None
+    }
+
     /// Propose les actions de la carte de rafale pour des messages déjà en file.
     async fn offer_burst(
         &self,
@@ -92,6 +98,28 @@ pub trait ChannelDelivery: Send + Sync {
         _text: &str,
     ) -> Result<(), String> {
         Err("canal sans alerte de planification".into())
+    }
+}
+
+/// Seuils d'une rafale : au-delà de `messages` messages ou de `chars` caractères
+/// depuis le début du tour, le canal demande quoi en faire au lieu d'appeler le modèle.
+/// Zéro : pas de seuil.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BurstLimits {
+    pub messages: usize,
+    pub chars: usize,
+}
+
+impl BurstLimits {
+    pub const fn new(messages: usize, chars: usize) -> Self {
+        BurstLimits { messages, chars }
+    }
+
+    /// Vrai si ces morceaux de texte dépassent l'un des seuils.
+    pub fn exceeded(&self, parts: &[String]) -> bool {
+        let chars: usize = parts.iter().map(|part| part.chars().count()).sum();
+        (self.messages > 0 && parts.len() >= self.messages)
+            || (self.chars > 0 && chars >= self.chars)
     }
 }
 

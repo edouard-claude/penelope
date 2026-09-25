@@ -193,7 +193,6 @@ required = [
 # OwnerChannel ; ces entrées ne peuvent que décroître (lot D, T36), sauf les permanentes,
 # justifiées en commentaire, qui attendent T37 après la V1.
 [channel.allowed]
-"crates/penelope-conversation/src/lib.rs" = 6   # suit conversation.rs dans penelope-conversation (T23) ; la fusion des rafales part avec T36
 "crates/penelope-vault/src/session_project.rs" = 2   # descendu du daemon avec le vault (T22) : le sujet Telegram nomme le projet
 "crates/penelope-daemon/src/rpc/methods/workflows.rs" = 9   # découpage (lot G) : la mention suit son code
 "crates/penelope-daemon/src/rpc/methods/approvals.rs" = 9   # découpage (lot G) : la mention suit son code
@@ -215,12 +214,11 @@ required = [
 "crates/penelope-kernel/src/config.rs" = 25      # permanent : le schéma de configuration nomme ses canaux ([telegram])
 "crates/penelope-daemon/src/supervisor.rs" = 13
 "crates/penelope-ops/src/purge.rs" = 17   # purge.rs sorti du daemon (T28) : la mention suit son code
-"crates/penelope-daemon/src/runtime.rs" = 5
+"crates/penelope-daemon/src/runtime.rs" = 4
 "crates/penelope-app/src/services.rs" = 2   # réglage de test `telegram.text_group_window_ms` et nom du sous-système `telegram` (T36 a sorti gabarits et actions)
 "crates/penelope-executor/src/selfknow.rs" = 12   # selfknow.rs sorti du daemon (T24) : la mention suit son code ; T36 la passe par Admin
-"crates/penelope-daemon/src/runner.rs" = 11
 "crates/penelope-app/src/elicitation.rs" = 10
-"crates/penelope-daemon/src/engine.rs" = 10
+"crates/penelope-daemon/src/engine.rs" = 9
 "crates/penelope-app/src/bus.rs" = 9          # permanent pour Origin::Telegram, tant qu'Origin::Channel n'existe pas (T37)
 "crates/penelope-kernel/src/turn.rs" = 6
 "crates/penelope-kernel/src/effects.rs" = 5

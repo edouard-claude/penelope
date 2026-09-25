@@ -296,40 +296,35 @@ impl TurnInbox {
         })
     }
 
-    /// Rafale du canal : trop de messages ou trop de texte depuis le début du tour.
+    /// Rafale du canal : trop de messages ou trop de texte depuis le début du tour. Les
+    /// seuils sont ceux du canal (`ChannelDelivery::burst_limits`) ; sans canal, aucun.
     async fn burst_rule(&self) -> anyhow::Result<()> {
         let (s, turn) = (&self.services, &self.turn);
-        if matches!(Origin::from_payload(&turn.payload), Origin::Telegram { .. }) {
-            let merged = s.turns.merged_messages(turn.id.as_str()).await?;
-            let payloads =
-                std::iter::once(&turn.payload).chain(merged.iter().map(|message| &message.payload));
-            let parts: Vec<String> = payloads
-                .filter_map(|payload| payload.get("text").and_then(|text| text.as_str()))
-                .map(ToString::to_string)
-                .collect();
-            let cfg = s.config.config();
-            let too_many =
-                cfg.telegram.burst_messages > 0 && parts.len() >= cfg.telegram.burst_messages;
-            let too_long = cfg.telegram.burst_chars > 0
-                && parts.iter().map(|part| part.chars().count()).sum::<usize>()
-                    >= cfg.telegram.burst_chars;
-            if too_many || too_long {
-                let channel = self
-                    .channel
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("canal Telegram indisponible"))?;
-                let origin = merged
-                    .last()
-                    .map(|message| Origin::from_payload(&message.payload))
-                    .unwrap_or_else(|| Origin::from_payload(&turn.payload));
-                channel
-                    .offer_burst(&self.session_id, &origin, parts)
-                    .await
-                    .map_err(anyhow::Error::msg)?;
-                s.kv_set(&format!("turn.burst_card.{}", turn.id), "1")
-                    .await?;
-                self.cancel.cancel();
-            }
+        let Some(channel) = self.channel.as_ref() else {
+            return Ok(());
+        };
+        let Some(limits) = channel.burst_limits(&Origin::from_payload(&turn.payload)) else {
+            return Ok(());
+        };
+        let merged = s.turns.merged_messages(turn.id.as_str()).await?;
+        let payloads =
+            std::iter::once(&turn.payload).chain(merged.iter().map(|message| &message.payload));
+        let parts: Vec<String> = payloads
+            .filter_map(|payload| payload.get("text").and_then(|text| text.as_str()))
+            .map(ToString::to_string)
+            .collect();
+        if limits.exceeded(&parts) {
+            let origin = merged
+                .last()
+                .map(|message| Origin::from_payload(&message.payload))
+                .unwrap_or_else(|| Origin::from_payload(&turn.payload));
+            channel
+                .offer_burst(&self.session_id, &origin, parts)
+                .await
+                .map_err(anyhow::Error::msg)?;
+            s.kv_set(&format!("turn.burst_card.{}", turn.id), "1")
+                .await?;
+            self.cancel.cancel();
         }
         Ok(())
     }

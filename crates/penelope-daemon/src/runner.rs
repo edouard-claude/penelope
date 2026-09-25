@@ -76,7 +76,7 @@ pub async fn process(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> T
 async fn process_turn(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> TurnOutcome {
     let started = std::time::Instant::now();
     crate::history::catch_up(&daemon.services, &turn.session_id).await;
-    let outcome = if let Some(parts) = oversized_telegram_merge(daemon, &turn) {
+    let outcome = if let Some(parts) = oversized_burst(daemon, &turn) {
         let _ = daemon
             .services
             .events
@@ -93,9 +93,9 @@ async fn process_turn(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> 
             .last()
             .map(|message| Origin::from_payload(&message.payload))
             .unwrap_or_else(|| Origin::from_payload(&turn.payload));
-        let offered = match daemon.hooks.telegram() {
+        let offered = match daemon.hooks.delivery() {
             Some(channel) => channel.offer_burst(&turn.session_id, &origin, parts).await,
-            None => Err("canal Telegram indisponible".into()),
+            None => Err("canal du propriétaire indisponible".into()),
         };
         let outcome = match offered {
             Ok(()) => TurnOutcome::Cancelled,
@@ -134,20 +134,18 @@ async fn process_turn(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> 
     outcome
 }
 
-fn oversized_telegram_merge(daemon: &Daemon, turn: &Turn) -> Option<Vec<String>> {
-    if !matches!(Origin::from_payload(&turn.payload), Origin::Telegram { .. }) {
-        return None;
-    }
-    let cfg = daemon.services.config.config();
+/// Rafale en file avant même le tour : les seuils sont ceux du canal (T36).
+fn oversized_burst(daemon: &Daemon, turn: &Turn) -> Option<Vec<String>> {
+    let limits = daemon
+        .hooks
+        .delivery()?
+        .burst_limits(&Origin::from_payload(&turn.payload))?;
     let parts: Vec<String> = std::iter::once(&turn.payload)
         .chain(turn.merged_messages.iter().map(|message| &message.payload))
         .filter_map(|payload| payload.get("text").and_then(|text| text.as_str()))
         .map(ToString::to_string)
         .collect();
-    let chars: usize = parts.iter().map(|part| part.chars().count()).sum();
-    let too_many = cfg.telegram.burst_messages > 0 && parts.len() >= cfg.telegram.burst_messages;
-    let too_long = cfg.telegram.burst_chars > 0 && chars >= cfg.telegram.burst_chars;
-    (too_many || too_long).then_some(parts)
+    limits.exceeded(&parts).then_some(parts)
 }
 
 async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> TurnOutcome {
@@ -281,12 +279,11 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
 }
 
 impl Daemon {
-    /// Livre l'issue d'un tour à son canal, par le chemin durable.
+    /// Livre l'issue d'un tour à son canal, qui ignore les origines d'ailleurs (CLI).
     pub async fn deliver(&self, turn: &Turn, origin: &Origin, outcome: &TurnOutcome) {
-        if let Origin::Telegram { .. } = origin
-            && let Some(tg) = self.hooks.telegram()
-        {
-            tg.deliver(turn.id.as_str(), &turn.session_id, origin, outcome)
+        if let Some(channel) = self.hooks.delivery() {
+            channel
+                .deliver(turn.id.as_str(), &turn.session_id, origin, outcome)
                 .await;
         }
     }
@@ -318,6 +315,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::bus::ChannelDelivery for BurstChannel {
+        fn burst_limits(&self, _: &Origin) -> Option<crate::bus::BurstLimits> {
+            Some(crate::bus::BurstLimits::new(5, 20_000))
+        }
+
         async fn deliver(
             &self,
             _turn_id: &str,

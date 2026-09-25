@@ -4,6 +4,15 @@ use super::*;
 
 #[async_trait::async_trait]
 impl ChannelDelivery for TelegramGateway {
+    /// La carte de rafale ne vaut que pour une conversation Telegram (issues #49, #161).
+    fn burst_limits(&self, origin: &Origin) -> Option<crate::bus::BurstLimits> {
+        let cfg = self.daemon.services.config.config();
+        matches!(origin, Origin::Telegram { .. }).then_some(crate::bus::BurstLimits::new(
+            cfg.telegram.burst_messages,
+            cfg.telegram.burst_chars,
+        ))
+    }
+
     async fn offer_burst(
         &self,
         session_id: &str,

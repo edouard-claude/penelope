@@ -553,7 +553,7 @@ impl Daemon {
                 context: crate::compaction::context_of(self),
                 turn_id: Some(origin_turn.clone()),
             }));
-        let inbox = TurnInbox::for_turn(&s, turn, self.hooks.telegram(), &cancel);
+        let inbox = TurnInbox::for_turn(&s, turn, self.hooks.delivery(), &cancel);
 
         // 5. Outils.
         let mut exec = NativeToolExecutor::new(
