@@ -139,12 +139,10 @@ async fn inventory_section(
     }))
 }
 
-/// Rapport d'état. `section` : `all`, `model`, `config`, `costs`, `machine`, une partie de
-/// l'inventaire ([`INVENTORY`]), ou `inventory` pour tout l'inventaire.
 /// État du fournisseur `codex` : compte, plan, jauges du plan (issue #142). Le coût en
 /// dollars n'y veut rien dire — un abonnement ne facture pas l'appel —, c'est le quota
-/// qui borne.
-async fn codex_view(s: &Services, cfg: &penelope_kernel::config::Config) -> Value {
+/// qui borne. Servi par `Admin::codex_view`.
+pub async fn codex_view(s: &Services, cfg: &penelope_kernel::config::Config) -> Value {
     let status = crate::codex_auth::status(s).ok().flatten();
     let quota = crate::codex_quota::snapshot(s).await;
     json!({
@@ -161,6 +159,8 @@ async fn codex_view(s: &Services, cfg: &penelope_kernel::config::Config) -> Valu
     })
 }
 
+/// Rapport d'état. `section` : `all`, `model`, `config`, `costs`, `machine`, une partie de
+/// l'inventaire ([`INVENTORY`]), ou `inventory` pour tout l'inventaire.
 #[allow(clippy::too_many_lines)] // gel 0.17 : assemblage du statut
 pub async fn status(
     s: &Services,
@@ -200,7 +200,7 @@ pub async fn status(
                 "logs_dir": dirs.logs(),
                 "vault": dirs.vault(),
                 "secrets_backend": s.platform.secrets.backend(),
-                "rss_mb": (crate::runtime::rss_mb() * 10.0).round() / 10.0,
+                "rss_mb": admin.and_then(|a| a.rss_mb()).map(|mb| (mb * 10.0).round() / 10.0),
             }),
         );
     }
@@ -272,7 +272,10 @@ pub async fn status(
                     "enabled": cfg.providers.local.enabled,
                     "base_url": cfg.providers.local.base_url,
                 },
-                "codex": codex_view(s, &cfg).await,
+                "codex": match admin {
+                    Some(a) => a.codex_view().await,
+                    None => Value::Null,
+                },
                 "speech_to_text": {
                     "alias": cfg.role_alias("stt"),
                     "model": cfg.alias_model(&cfg.role_alias("stt")),
@@ -325,12 +328,10 @@ pub async fn status(
                 "session_limit_usd": cfg.budget.session_usd,
                 "today_by_model": rows(s.budget.report("model", None, Some(&today), 5).await?),
                 "this_session_by_request": rows(s.budget.report("turn", Some(session_id), None, 5).await?),
-                "context": crate::compaction::context_view(
-                    s,
-                    session_id,
-                    turn.map(|t| t.model_id.as_str()),
-                )
-                .await?,
+                "context": match admin {
+                    Some(a) => a.context_view(session_id, turn.map(|t| t.model_id.as_str())).await?,
+                    None => Value::Null,
+                },
             }),
         );
         if all {

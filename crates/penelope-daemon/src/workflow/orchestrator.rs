@@ -81,6 +81,40 @@ impl crate::executor::Orchestrator for WorkflowOrchestrator {
         crate::embeddings::query_vector(&self.daemon.embedder(), text).await
     }
 
+    async fn schedule_create(
+        &self,
+        kind: penelope_workflow::TriggerKind,
+        spec: Value,
+        target: Value,
+        dedup: Value,
+    ) -> Result<Value, String> {
+        crate::scheduler::create(&self.daemon.services, kind, spec, target, dedup).await
+    }
+
+    async fn schedule_list(&self) -> Result<Vec<Value>, String> {
+        crate::scheduler::listing(&self.daemon.services)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn schedule_move(
+        &self,
+        id: &str,
+        chat: i64,
+        topic: Option<i64>,
+    ) -> Result<String, String> {
+        crate::scheduler::retarget(&self.daemon.services, id, chat, topic).await
+    }
+
+    async fn schedule_delete(&self, id: &str) -> Result<(), String> {
+        self.daemon
+            .services
+            .schedules
+            .set_state(id, "deleted")
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     async fn start_workflow(
         &self,
         id: &str,

@@ -527,6 +527,10 @@ fn criteria_follow_their_contract() {
 async fn schedule_move_sends_a_schedule_here_or_home() {
     let (_dir, mut x) = executor().await;
     let s = x.services.clone();
+    // La planification passe par l'orchestrateur du daemon (port `Orchestrator`, T24).
+    x.orchestrator = Some(Arc::new(crate::workflow::WorkflowOrchestrator {
+        daemon: Arc::new(crate::runtime::Daemon::from_services(s.clone())),
+    }));
     s.config
         .mutate("test", |c| {
             c.owner.telegram_user_id = 42;

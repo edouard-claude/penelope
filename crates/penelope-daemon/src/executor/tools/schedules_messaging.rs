@@ -28,20 +28,21 @@ impl NativeToolExecutor {
                     o.entry("origin").or_insert(self.env.origin.to_value());
                 }
                 let spec = args.get("spec").cloned().unwrap_or(Value::Null);
-                crate::scheduler::create(
-                    s,
-                    kind,
-                    spec,
-                    target,
-                    args.get("dedup").cloned().unwrap_or(Value::Null),
-                )
-                .await
-                .map_err(ToolError::Invalid)?
+                self.scheduler()?
+                    .schedule_create(
+                        kind,
+                        spec,
+                        target,
+                        args.get("dedup").cloned().unwrap_or(Value::Null),
+                    )
+                    .await
+                    .map_err(ToolError::Invalid)?
             }
             "schedule_list" => json!(
-                crate::scheduler::listing(s)
+                self.scheduler()?
+                    .schedule_list()
                     .await
-                    .map_err(|e| ToolError::Other(e.to_string()))?
+                    .map_err(ToolError::Other)?
             ),
             "schedule_move" => {
                 let id = str_arg(args, "id")?;
@@ -60,21 +61,32 @@ impl NativeToolExecutor {
                         )));
                     }
                 };
-                let to = crate::scheduler::retarget(s, &id, chat_id, topic_id)
+                let to = self
+                    .scheduler()?
+                    .schedule_move(&id, chat_id, topic_id)
                     .await
                     .map_err(ToolError::Invalid)?;
                 json!({"id": id, "destination": to})
             }
             "schedule_delete" => {
-                s.schedules
-                    .set_state(&str_arg(args, "id")?, "deleted")
-                    .await?;
+                self.scheduler()?
+                    .schedule_delete(&str_arg(args, "id")?)
+                    .await
+                    .map_err(ToolError::Other)?;
                 json!({"deleted": true})
             }
 
             other => return Err(ToolError::Unknown(other.to_string())),
         };
         Ok(ToolOutcome::ok(v))
+    }
+
+    /// L'ordonnanceur, par le port `Orchestrator` : la planification vit au-dessus de
+    /// l'exécuteur (T24).
+    fn scheduler(&self) -> ToolResult<&Arc<dyn Orchestrator>> {
+        self.orchestrator
+            .as_ref()
+            .ok_or_else(|| ToolError::Other("planificateur indisponible ici".into()))
     }
 
     /// Messages.

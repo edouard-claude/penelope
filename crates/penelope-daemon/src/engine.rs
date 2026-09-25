@@ -55,6 +55,22 @@ impl crate::selfknow::Admin for Daemon {
         Ok(crate::backup::status(&self.services).await)
     }
 
+    fn rss_mb(&self) -> Option<f64> {
+        Some(crate::runtime::rss_mb())
+    }
+
+    async fn codex_view(&self) -> Value {
+        crate::selfknow::codex_view(&self.services, &self.services.config.config()).await
+    }
+
+    async fn context_view(
+        &self,
+        session_id: &str,
+        model_id: Option<&str>,
+    ) -> anyhow::Result<Value> {
+        crate::compaction::context_view(&self.services, session_id, model_id).await
+    }
+
     async fn send_voice(
         &self,
         session_id: &str,

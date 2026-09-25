@@ -321,7 +321,42 @@ pub trait Orchestrator: Send + Sync {
         let _ = text;
         None
     }
+    /// Crée une planification ; une planification active identique est signalée dans la
+    /// réponse (issue #39).
+    async fn schedule_create(
+        &self,
+        kind: penelope_workflow::TriggerKind,
+        spec: Value,
+        target: Value,
+        dedup: Value,
+    ) -> Result<Value, String> {
+        let _ = (kind, spec, target, dedup);
+        Err(SCHEDULER_MISSING.into())
+    }
+    /// Planifications avec leur destination (issue #124).
+    async fn schedule_list(&self) -> Result<Vec<Value>, String> {
+        Err(SCHEDULER_MISSING.into())
+    }
+    /// Déplace une planification vers la conversation `chat` (sujet `topic`), sans la
+    /// recréer (issue #124). Renvoie la nouvelle destination, en mots.
+    async fn schedule_move(
+        &self,
+        id: &str,
+        chat: i64,
+        topic: Option<i64>,
+    ) -> Result<String, String> {
+        let _ = (id, chat, topic);
+        Err(SCHEDULER_MISSING.into())
+    }
+    /// Supprime une planification (état `deleted`).
+    async fn schedule_delete(&self, id: &str) -> Result<(), String> {
+        let _ = id;
+        Err(SCHEDULER_MISSING.into())
+    }
 }
+
+/// Réponse des méthodes de planification quand aucun ordonnanceur n'est branché.
+const SCHEDULER_MISSING: &str = "planificateur indisponible ici";
 
 /// Accès du daemon dont les outils ont besoin pour parler de lui.
 #[async_trait::async_trait]
@@ -336,6 +371,24 @@ pub trait Admin: Send + Sync {
     /// Recherche mémoire : hybride ou lexicale seule, vecteurs calculés (issue #11).
     async fn memory_search(&self) -> Value {
         Value::Null
+    }
+    /// Mémoire résidente du processus, en mégaoctets.
+    fn rss_mb(&self) -> Option<f64> {
+        None
+    }
+    /// Fournisseur `codex` : compte, plan, jauges du plan (issue #142).
+    async fn codex_view(&self) -> Value {
+        Value::Null
+    }
+    /// Taille du contexte d'une session (issue #18) : dernier prompt, cache, seuils,
+    /// fenêtre du modèle.
+    async fn context_view(
+        &self,
+        session_id: &str,
+        model_id: Option<&str>,
+    ) -> anyhow::Result<Value> {
+        let _ = (session_id, model_id);
+        Ok(Value::Null)
     }
     /// Outil `send_voice` : synthèse, conversion et envoi, repli en texte (issue #41).
     /// État des sauvegardes (issue #42).
