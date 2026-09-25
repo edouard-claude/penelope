@@ -120,7 +120,7 @@ Critères de T23 (côté conversation) :
 |---|---|---|
 | `penelope-daemon/src`, lignes | 38 177 (plafond) | 35 241 |
 | `penelope-conversation/src`, lignes | | 3 149 |
-| `[daemon].modules` | 33 | 30 |
+| `[daemon].modules` | 31 | 28 |
 | `[daemon.daemon_users]` `compaction.rs` | 17 | 1 |
 | `[files.oversized]` | `compaction.rs` 1 308, `engine.rs` 1 105 | `compaction.rs` sorti, `engine.rs` 1 095 |
 
