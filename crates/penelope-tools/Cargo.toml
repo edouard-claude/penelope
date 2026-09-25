@@ -26,7 +26,6 @@ penelope-store.workspace = true
 penelope-platform.workspace = true
 penelope-observe.workspace = true
 penelope-memory.workspace = true
-penelope-context.workspace = true
 penelope-mcp.workspace = true
 penelope-skills.workspace = true
 penelope-hitl.workspace = true

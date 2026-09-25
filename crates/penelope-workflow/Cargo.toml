@@ -26,7 +26,6 @@ penelope-platform.workspace = true
 penelope-hitl.workspace = true
 penelope-llm.workspace = true
 penelope-tools.workspace = true
-penelope-context.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
