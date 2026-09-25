@@ -142,6 +142,7 @@ async fn ca_4_5_model_visible_is_logged() {
     // quatrième.
     assert_eq!(v.compared, 6, "{v:?}");
     assert_eq!(v.transformed, 0, "aucun niveau 0, 2 ou 4 attendu : {v:?}");
+    assert_eq!(v.unpinned, 0, "chaque appel cite sa requête : {v:?}");
     assert_eq!(v.within_turn.get("conv.tool_result"), Some(&1), "{v:?}");
     assert_eq!(v.within_turn.get("conv.summary"), Some(&1), "{v:?}");
 }

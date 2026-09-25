@@ -121,10 +121,8 @@ fn replace(
 
 #[test]
 fn only_two_replaces_may_fall_between_two_calls() {
-    let hashes = [("r".to_string(), "h".to_string())].into();
-    let within = |events: &[penelope_kernel::event::Event]| {
-        super::visible::replaces_within_turns(events, 0, &hashes)
-    };
+    let within =
+        |events: &[penelope_kernel::event::Event]| super::visible::replaces_within_turns(events, 0);
     // Niveau 1 d'un résultat ajouté depuis l'appel précédent : admis.
     let fresh = turn_with(
         "conv.assistant",

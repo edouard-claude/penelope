@@ -5,8 +5,9 @@
 //!
 //! 1. **Chaque appel est le pliage du journal.** Pour chaque réponse du modèle
 //!    (`conv.assistant`) et chaque tentative sans réponse (`conv.attempt`), la requête
-//!    reçue par le fournisseur, retrouvée par son empreinte (`request_hash`), est
-//!    comparée octet pour octet, corps « chat completions » compris, à
+//!    reçue par le fournisseur, retrouvée par l'empreinte que le journal cite
+//!    (`request_hash`, ou celle de la ligne `llm_requests` de la tentative ; à défaut,
+//!    celle du pliage), est comparée octet pour octet, corps « chat completions » compris, à
 //!    `derive_until(journal, avant l'événement).request_messages()`. Le pliage est refait
 //!    ici avec les seules fonctions pures de `penelope-context` (préfixe d'un fork
 //!    compris), sans passer par la lecture du daemon qu'il contrôle. Seul le marqueur
@@ -37,6 +38,9 @@ pub struct Visible {
     pub compared: usize,
     /// Appels dont la requête a été réduite par un niveau 0, 2 ou 4 (non comparés).
     pub transformed: usize,
+    /// Parmi les appels comparés, ceux dont le journal ne cite pas la requête (tentative
+    /// sans `llm_request_id`) : retrouvés par l'empreinte de leur pliage.
+    pub unpinned: usize,
     /// Remplacements admis entre deux appels d'un même tour, par kind.
     pub within_turn: BTreeMap<String, usize>,
 }
@@ -120,15 +124,22 @@ fn prefix(
     }
 }
 
-/// L'empreinte de la requête qui a produit l'événement, si c'est un appel.
-fn call_hash<'a>(e: &'a Event, hashes: &'a BTreeMap<String, String>) -> Option<&'a str> {
+/// L'événement est-il un appel du modèle : une réponse journalisée avec l'empreinte de
+/// sa requête, ou une tentative restée sans réponse ? Une réponse sans empreinte n'en est
+/// pas un (historique semé, réponse d'abandon composée par la boucle).
+fn is_call(e: &Event) -> bool {
+    e.kind == ATTEMPT || (e.kind == ASSISTANT && e.payload["request_hash"].is_string())
+}
+
+/// L'empreinte de la requête que l'appel cite : celle de la réponse, ou celle de la ligne
+/// `llm_requests` de la tentative.
+fn journaled_hash<'a>(e: &'a Event, hashes: &'a BTreeMap<String, String>) -> Option<&'a str> {
     match e.kind.as_str() {
         ASSISTANT => e.payload["request_hash"].as_str(),
-        ATTEMPT => e.payload["llm_request_id"]
+        _ => e.payload["llm_request_id"]
             .as_str()
             .and_then(|id| hashes.get(id))
             .map(String::as_str),
-        _ => None,
     }
 }
 
@@ -157,25 +168,32 @@ pub(super) async fn check(
     let mut out = Visible::default();
     for (sid, events) in &sessions {
         let (sealed, offset) = prefix(&sessions, sid, 0)?;
-        for e in events {
-            let Some(hash) = call_hash(e, &hashes) else {
-                continue;
-            };
-            let Some(req) = sent.get(hash) else {
-                anyhow::bail!(
-                    "scénario {name}, session {sid} : l'appel de `{}` (seq {}) cite une requête \
-                     que le fournisseur n'a jamais reçue",
-                    e.kind,
-                    e.seq
-                );
-            };
+        for e in events.iter().filter(|e| is_call(e)) {
             if e.payload.get("projection").is_some() {
                 out.transformed += 1;
                 continue;
             }
-            let surface = derive_until(&sealed, events, offset + e.seq - 1)?;
+            let messages = derive_until(&sealed, events, offset + e.seq - 1)?.request_messages("");
+            // Sans empreinte journalisée, la requête se retrouve par celle de son pliage :
+            // le contrôle dit alors « le journal a été envoyé », sans épingler l'appel.
+            let own = Fingerprint::of(&messages, &[]).request_hash();
+            let hash = match journaled_hash(e, &hashes) {
+                Some(h) => Some(h.to_string()),
+                None => {
+                    out.unpinned += 1;
+                    own
+                }
+            };
+            let Some(req) = hash.as_deref().and_then(|h| sent.get(h)) else {
+                anyhow::bail!(
+                    "scénario {name}, session {sid} : aucune requête reçue par le fournisseur \
+                     n'est celle de `{}` (seq {})",
+                    e.kind,
+                    e.seq
+                );
+            };
             let derived = ChatRequest {
-                messages: surface.request_messages(""),
+                messages,
                 ..(*req).clone()
             };
             let mut sent = (*req).clone();
@@ -199,7 +217,7 @@ pub(super) async fn check(
             }
             out.compared += 1;
         }
-        for (kind, n) in replaces_within_turns(events, offset, &hashes)
+        for (kind, n) in replaces_within_turns(events, offset)
             .map_err(|e| anyhow::anyhow!("scénario {name}, session {sid} : {e}"))?
         {
             *out.within_turn.entry(kind).or_default() += n;
@@ -214,7 +232,6 @@ pub(super) async fn check(
 pub(super) fn replaces_within_turns(
     events: &[Event],
     offset: i64,
-    hashes: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, usize>, String> {
     let mut out = BTreeMap::new();
     let mut in_turn = false;
@@ -231,7 +248,7 @@ pub(super) fn replaces_within_turns(
                 (in_turn, last_call) = (false, None);
                 pending.clear();
             }
-            _ if in_turn && call_hash(e, hashes).is_some() => {
+            _ if in_turn && is_call(e) => {
                 if let Some(previous) = last_call {
                     for r in pending.drain(..) {
                         admitted(r, previous, offset)?;
