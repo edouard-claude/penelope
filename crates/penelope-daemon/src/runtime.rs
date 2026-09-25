@@ -266,8 +266,7 @@ impl Daemon {
         let turns = s.turns.recover_on_boot().await?;
         crate::agent::close_interrupted_turns(s).await?;
         // Avant les effets : un job dont le processus est mort devient `failed` sans être
-        // relancé (décision 0012), et son effet suit le chemin `dispatching` → `unknown`
-        // qui pose **une** question au propriétaire (#83).
+        // relancé, son effet aussi, et aucune carte `effect_unknown` (décision 0012).
         let lost_jobs = crate::tool_jobs::store(s).recover_on_boot().await?;
         if !lost_jobs.is_empty() {
             tracing::warn!(

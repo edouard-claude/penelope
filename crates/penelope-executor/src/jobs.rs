@@ -257,9 +257,11 @@ impl JobStore {
     /// Au démarrage : le processus qui portait le job est mort avec le daemon.
     ///
     /// Aucun retry d'office, même pour un outil déclaré idempotent (décision 0012) : le
-    /// job devient `failed`, et son effet reste sur le chemin `dispatching` → `unknown`
-    /// du ledger, qui pose **une** question au propriétaire (#83). La livraison dira au
-    /// modèle que le job est mort, pour qu'il cesse de l'attendre.
+    /// job devient `failed`, **et son effet aussi**, dans la même transaction et avant
+    /// que le ledger ne passe ses `dispatching` en `unknown`. Un job est observable (son
+    /// processus est mort avec le daemon) : sa complétion n'est pas inconnaissable, la
+    /// carte `effect_unknown` de #83 n'a pas à la poser. La livraison dira au modèle que
+    /// le job est mort, pour qu'il cesse de l'attendre et propose la reprise lui-même.
     pub async fn recover_on_boot(&self) -> anyhow::Result<Vec<ToolJob>> {
         let ts = self.clock.now_rfc3339();
         Ok(self
@@ -274,6 +276,14 @@ impl JobStore {
                     }
                     v
                 };
+                tx.execute(
+                    &format!(
+                        "UPDATE effects SET state = 'failed', error = ?1, updated_at = ?2
+                         WHERE state = 'dispatching'
+                           AND id IN (SELECT effect_id FROM tool_jobs WHERE {LIVE})"
+                    ),
+                    params![LOST_ON_BOOT, ts],
+                )?;
                 tx.execute(
                     &format!(
                         "UPDATE tool_jobs SET state = 'failed', result = ?1, updated_at = ?2

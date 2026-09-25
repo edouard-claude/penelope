@@ -2103,11 +2103,13 @@ Deux plafonds empêchent un modèle de tout lancer en arrière-plan sans jamais 
 `tools.jobs_per_session` (3) et `tools.jobs_total` (10). Au-delà, l'appel est refusé avec
 ce qu'il faut pour s'en sortir.
 
-Un job est un effet comme un autre : il est planifié dans le ledger **avant** de partir, et
-un redémarrage pendant qu'il tourne le laisse incertain. Le job devient alors `failed` et
-la carte « C'est fait / Relancer / Ignorer » part une fois — il n'est jamais relancé tout
-seul, même si son outil est déclaré idempotent (voir la [décision
-0012](decisions/0012-jobs-outils-durables.md)).
+Un job est un effet comme un autre : il est planifié dans le ledger **avant** de partir.
+Un redémarrage pendant qu'il tourne tue son processus : le job et son effet deviennent
+`failed`, avec la raison, et le résultat revient dans la conversation comme celui de tout
+job fini, pour que Pénélope propose la reprise. Aucune carte « C'est fait / Relancer /
+Ignorer » : elle reste réservée aux effets dont on ne peut pas savoir s'ils ont abouti.
+Un job n'est jamais relancé tout seul, même si son outil est déclaré idempotent (voir la
+[décision 0012](decisions/0012-jobs-outils-durables.md)).
 
 ### Longues conversations
 

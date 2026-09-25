@@ -85,6 +85,18 @@ fn call(id: &str, name: &str, arguments: serde_json::Value) -> Scripted {
     )
 }
 
+/// Un tour qui lance `command` en arrière-plan puis répond.
+async fn background_shell(d: &Arc<Daemon>, p: &MockProvider, sid: &str, command: &str) {
+    p.push(call(
+        "c1",
+        "shell_exec",
+        json!({"command": command, "background": true}),
+    ));
+    p.reply("C'est parti.");
+    let out = say(d, sid, "lance-le").await;
+    assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
+}
+
 async fn only_job(d: &Daemon, sid: &str) -> ToolJob {
     let jobs = store(&d.services).of_session(sid, false).await.unwrap();
     assert_eq!(jobs.len(), 1, "{jobs:?}");
@@ -214,4 +226,103 @@ async fn a_long_sub_agent_job_frees_the_turn_and_stop_interrupts_it() {
         "{}",
         nudge.payload
     );
+}
+
+async fn cards_for(d: &Daemon, effect: &str) -> usize {
+    d.services
+        .approvals
+        .pending(50)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|a| a.payload["effect_id"] == effect)
+        .count()
+}
+
+async fn effects_of(d: &Daemon, tool: &str) -> usize {
+    let tool = tool.to_string();
+    d.services
+        .store
+        .read(move |c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM effects WHERE tool = ?1",
+                [&tool],
+                |r| r.get::<_, i64>(0),
+            )?)
+        })
+        .await
+        .unwrap() as usize
+}
+
+/// T19 : un redémarrage pendant un job. Le job devient `failed` avec sa raison, son
+/// effet aussi — un job est observable, sa complétion n'est pas inconnaissable —, aucune
+/// carte `effect_unknown` ne part, même après un second démarrage, rien n'est relancé, et
+/// un tour `Nudge` le dit dans la conversation (décision 0012, révisée au lot K).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_during_a_job_fails_it_and_says_so_without_a_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, p) = daemon_at(dir.path()).await;
+    let sid = session(&d).await;
+    background_shell(&d, &p, &sid, "sleep 300").await;
+    let job = only_job(&d, &sid).await;
+    let effect = job.effect_id.clone().unwrap();
+    assert_eq!(effect_state(&d, &effect).await, "dispatching");
+
+    // Redémarrage : un autre daemon reprend la même base.
+    let (after, _p) = daemon_at(dir.path()).await;
+    let report = after.recover().await.unwrap();
+    assert_eq!(report.tool_jobs_lost, 1, "{report:?}");
+    assert_eq!(report.effects_unknown, 0, "{report:?}");
+
+    let lost = store(&after.services).get(&job.id).await.unwrap().unwrap();
+    assert_eq!(lost.state, TaskState::Failed);
+    assert!(
+        lost.result.unwrap()["error"]
+            .as_str()
+            .unwrap()
+            .contains("redémarré")
+    );
+    assert_eq!(effect_state(&after, &effect).await, "failed");
+    assert_eq!(cards_for(&after, &effect).await, 0, "aucune carte");
+
+    // Le modèle l'apprend dans la conversation.
+    assert_eq!(
+        penelope_daemon::tool_jobs::deliver_due(&after)
+            .await
+            .unwrap(),
+        1
+    );
+    let nudge = after.services.turns.claim("test").await.unwrap().unwrap();
+    assert_eq!(nudge.kind, TurnKind::Nudge);
+    assert_eq!(nudge.session_id, sid);
+    let text = nudge.payload["text"].as_str().unwrap();
+    assert!(
+        text.contains(&job.id) && text.contains("redémarré") && text.contains("sleep 300"),
+        "{text}"
+    );
+
+    // Un second démarrage ne relance rien, ne redemande rien, ne relivre rien.
+    after.recover().await.unwrap();
+    assert_eq!(cards_for(&after, &effect).await, 0);
+    assert_eq!(
+        penelope_daemon::tool_jobs::deliver_due(&after)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        store(&after.services)
+            .of_session(&sid, false)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "aucun job relancé"
+    );
+    assert_eq!(
+        effects_of(&after, "shell_exec").await,
+        1,
+        "aucun effet rejoué"
+    );
+    d.services.jobs.cancel_all();
 }

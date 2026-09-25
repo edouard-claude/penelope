@@ -27,10 +27,10 @@ soit l'idempotence déclarée de son outil.**
 
 Au démarrage, `JobStore::recover_on_boot` passe tout job `working` ou `input_required` à
 `failed`, avec pour résultat « le daemon a redémarré pendant ce job : son processus est
-mort, rien n'a été relancé ». L'effet, lui, suit le chemin existant sans exception :
-`dispatching` → `unknown` → une carte, une seule, même après plusieurs redémarrages. Le
-job reste **à livrer** : sa relance part dans la session d'origine pour que le modèle
-cesse de l'attendre.
+mort, rien n'a été relancé ». Son effet passe à `failed` avec la même raison, dans la
+même transaction et avant que le ledger ne tranche ses `dispatching` : aucune carte
+`effect_unknown` (révision du lot K, ci-dessous). Le job reste **à livrer** : sa relance
+part dans la session d'origine pour que le modèle cesse de l'attendre.
 
 ### Pourquoi
 
@@ -44,18 +44,40 @@ cesse de l'attendre.
    l'un exécute une commande libre, l'autre dépense un budget de modèle. Écrire un chemin
    de relance automatique, ce serait écrire un chemin que rien n'emprunte et que le
    prochain outil détachable emprunterait par accident.
-3. **Le propriétaire a déjà le bouton.** La carte de #83 porte « Relancer » : la relance
-   existe, avec un humain dans la boucle, et elle coûte un clic. Ce n'est pas un manque,
-   c'est le même mécanisme sans le silence.
+3. **Le propriétaire a déjà la main.** Le tour de relance lui dit que le job est mort ;
+   « relance » dans la conversation suffit, et la reprise passe par la politique
+   d'approbation comme tout appel. Ce n'est pas un manque, c'est le même mécanisme sans
+   le silence.
 4. **La promesse « aucun retry silencieux » est le contrat du ledger.** L'ouvrir pour les
    jobs créerait exactement le chemin que le §4.2 interdit, pour le cas où il est le plus
    difficile à raisonner : un travail long, interrompu à un point inconnu.
 
+## Révision (épopée #208, lot K, tâche T19) : pas de carte pour un job mort
+
+La première version laissait l'effet d'un job perdu sur le chemin `dispatching` →
+`unknown`, donc une carte « C'est fait / Relancer / Ignorer » pour un `cargo test`
+interrompu. `design/v1/boucle-et-outils.md` (§3.5, risque 3) la retire, et c'est retenu :
+
+1. **La carte répond à « a-t-il eu lieu ? ».** #83 la réserve aux effets dont la
+   complétion est inconnaissable : un appel coupé entre l'envoi et la réponse. Un job,
+   lui, est observable : le daemon portait son processus, le daemon est mort, le
+   processus aussi (et `reap_orphans` tue un survivant au démarrage). La réponse est
+   connue : il n'a pas fini.
+2. **La question « jusqu'où est-il allé ? » reste ouverte**, mais la carte n'y répond
+   pas mieux que le modèle : le tour de relance lui dit quel job, quelle commande, quel
+   âge, et c'est lui qui voit l'état du dépôt et propose la reprise.
+3. **Deux messages pour un fait.** La carte et la relance arrivaient ensemble ; le
+   propriétaire devait trancher une question que la conversation posait déjà.
+
+Rien ne change à la règle principale : aucune relance automatique. Le modèle peut
+relancer, avec une nouvelle carte si la politique d'approbation le demande.
+
 ## Ce que ça coûte
 
-Le propriétaire reçoit une carte pour un `cargo test` interrompu, alors qu'un simple
-« relance » aurait suffi. C'est assumé : la carte dit quel job, quelle commande et quel
-âge, et le tour de relance qui suit donne au modèle de quoi proposer la reprise lui-même.
+Un job mort au milieu d'une écriture ne pose plus de question explicite au
+propriétaire : c'est la relance dans la conversation qui le dit, et le modèle qui décide
+s'il faut vérifier avant de reprendre. C'est assumé : la relance nomme la commande et son
+âge, et la politique d'approbation s'applique à toute reprise.
 
 ## Un job n'existe que pour une conversation
 
