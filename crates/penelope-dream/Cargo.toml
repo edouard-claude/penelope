@@ -37,5 +37,14 @@ penelope-hitl.workspace = true
 penelope-observe.workspace = true
 # OCR des PDF scannés.
 penelope-platform.workspace = true
-# Niveaux et provenance des entrées de mémoire.
+# Niveaux et provenance des entrées de mémoire ; candidats et opérations du rêve.
 penelope-memory.workspace = true
+# Journal des passes du rêve (`dream_runs`, `mem_history`).
+penelope-store.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Dépôt git du vault dans les tests du rêve.
+penelope-tools.workspace = true
+# `test-util` : horloge virtuelle des tests de reprise des lots (issue #152).
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util", "test-util"] }

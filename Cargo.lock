@@ -1436,9 +1436,12 @@ dependencies = [
  "penelope-memory",
  "penelope-observe",
  "penelope-platform",
+ "penelope-store",
+ "penelope-tools",
  "penelope-vault",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]

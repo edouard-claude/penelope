@@ -1,12 +1,13 @@
 //! `penelope-dream` : la mémoire qui mûrit (épopée #208, T26).
 //!
-//! Entretien d'accueil (`onboarding`) ; la consolidation nocturne (`dream/`) et
-//! l'ingestion de documents (`ingest`) y descendent quand leurs signatures ne citent plus
-//! `Daemon`. Au-dessus de `penelope-app` et de `penelope-vault`, sous le daemon, qui
-//! réexporte ces modules sous leurs anciens chemins jusqu'à T30.
+//! Consolidation nocturne et digest du matin (`dream`), ingestion de documents
+//! (`ingest`), entretien d'accueil (`onboarding`). Au-dessus de `penelope-app` et de
+//! `penelope-vault`, sous le daemon, qui construit le `Context`, implémente
+//! `DigestSource` et réexporte ces modules sous leurs anciens chemins jusqu'à T30.
 
 #![forbid(unsafe_code)]
 
+pub mod dream;
 pub mod ingest;
 pub mod onboarding;
 
@@ -65,6 +66,13 @@ impl Context {
 }
 
 // Modules du socle et du vault, sous les chemins que les fichiers déplacés du daemon
-// nomment encore (`crate::helpers`…).
-pub(crate) use penelope_app::{helpers, machine, media, ports};
-pub(crate) use penelope_vault::{concepts, vault_ops};
+// nomment encore (`crate::helpers`, `crate::vault_git`…).
+#[cfg(test)]
+pub(crate) use penelope_app::testing;
+pub(crate) use penelope_app::{bus, codex_scope, helpers, machine, media, ports};
+#[cfg(test)]
+pub(crate) use penelope_vault::review;
+pub(crate) use penelope_vault::{
+    concepts, embeddings, mem_audit, mem_split, secret_shelf, session_notes, session_project,
+    vault_git, vault_inventory, vault_ops,
+};
