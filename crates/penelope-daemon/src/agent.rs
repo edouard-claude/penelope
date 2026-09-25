@@ -55,6 +55,7 @@ fn with_ports(
         snapshots,
         cache,
         jobs,
+        attempts: Arc::new(penelope_app::journal::JournalAttempts(s.events.clone())),
     })
 }
 

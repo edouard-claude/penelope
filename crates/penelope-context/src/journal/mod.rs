@@ -19,8 +19,9 @@ mod verbatim;
 pub use build::*;
 pub use payload::*;
 pub use penelope_kernel::journal::{
-    KIND_TURN_FINISHED, KIND_TURN_STARTED, TurnCall, TurnEnd, TurnIdentity, TurnReason,
-    finished_payload, interrupted_payload, is_purged, started_payload,
+    AttemptCause, AttemptPayload, KIND_TURN_FINISHED, KIND_TURN_STARTED, TokenUsage, TurnCall,
+    TurnEnd, TurnIdentity, TurnReason, finished_payload, interrupted_payload, is_purged,
+    started_payload,
 };
 pub use verbatim::{restore_verbatim, verbatim_of};
 

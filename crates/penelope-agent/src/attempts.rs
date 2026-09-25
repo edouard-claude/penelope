@@ -2,8 +2,9 @@
 //! (issue #206, épopée #208, tâche T9).
 //!
 //! Un flux coupé après du texte, une erreur d'avant flux, un repli, une réponse vide
-//! relancée : chacun devient un `conv.attempt` du journal, qui n'entre jamais dans la
-//! surface (`design/v1/source-de-verite.md` §2.2). Seule la consigne de relance d'une
+//! relancée : chacun devient une [`Attempt`] remise au port [`AttemptSink`] (T15), que la
+//! composition écrit en `conv.attempt` du journal, jamais dans la surface
+//! (`design/v1/source-de-verite.md` §2.2). Seule la consigne de relance d'une
 //! réponse vide est lue par la requête suivante du même tour ; en phase 1 elle reste
 //! ajoutée à la main par la boucle, avec le même texte que le pliage.
 //!
@@ -11,7 +12,7 @@
 //! `budget.record`, et une tentative échouée n'a pas d'usage connu.
 
 use super::*;
-use penelope_app::journal::{AttemptCause, AttemptPayload, ConvEvent};
+use penelope_app::attempts::{Attempt, AttemptCause, TokenUsage};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Tentatives gardées par tour : au-delà, elles ne sont plus que dans les journaux
@@ -33,6 +34,8 @@ pub(super) struct Attempts {
     step: AtomicU32,
     recorded: AtomicU32,
     retry_prompt: Mutex<Option<&'static str>>,
+    /// La ligne `llm_requests` du dernier appel parti : celle d'une réponse vide.
+    last_request: Mutex<Option<String>>,
 }
 
 impl Attempts {
@@ -50,12 +53,27 @@ impl Attempts {
         *self.retry_prompt.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// Journalise une tentative. Le partiel et l'erreur sont rédigés (#134). Au-delà du
-    /// plafond, seule la ligne de journal reste. Un échec d'écriture ne change pas
-    /// l'issue de l'appel : il ne coûte que la trace.
-    pub(super) async fn record(&self, s: &AgentServices, spec: &TurnSpec, mut p: AttemptPayload) {
+    /// L'appel qui part, par sa ligne `llm_requests`.
+    pub(super) fn sent(&self, llm_request_id: &str) {
+        *self.last_request.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some(llm_request_id.to_string());
+    }
+
+    /// Garde une tentative par le port. Le partiel et l'erreur sont rédigés (#134).
+    /// Au-delà du plafond, seule la ligne de journal reste. Un échec d'écriture ne change
+    /// pas l'issue de l'appel : il ne coûte que la trace.
+    pub(super) async fn record(&self, s: &AgentServices, spec: &TurnSpec, mut p: Attempt) {
         p.turn = spec.turn_id.clone();
         p.step = self.step.load(Ordering::SeqCst);
+        // Une tentative est toujours celle du dernier appel parti : une réponse vide
+        // est épinglée à sa requête comme un échec (§2.2).
+        if p.llm_request_id.is_none() {
+            p.llm_request_id = self
+                .last_request
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+        }
         // La requête qui suit ajoute encore la consigne : le pliage doit la retrouver
         // sur la dernière tentative, quelle qu'en soit la cause.
         if p.retry_prompt.is_none() {
@@ -92,12 +110,7 @@ impl Attempts {
             }
             return;
         }
-        let event = ConvEvent::Attempt(p);
-        if let Err(e) = s
-            .events
-            .append(EventDraft::new(event.kind(), event.payload()).session(&spec.session_id))
-            .await
-        {
+        if let Err(e) = s.attempts.record(&spec.session_id, &p).await {
             tracing::warn!(session = %spec.session_id, error = %e, "tentative non journalisée");
         }
     }
@@ -126,11 +139,31 @@ impl Partial {
     }
 
     /// Verse le partiel dans la tentative ; rend le texte, que le propriétaire a vu.
-    pub(super) fn into_attempt(self, attempt: &mut AttemptPayload) -> String {
+    pub(super) fn into_attempt(self, attempt: &mut Attempt) -> String {
         let (text, reasoning) = self.0.into_inner().unwrap_or_else(|p| p.into_inner());
         attempt.partial_text = (!text.is_empty()).then(|| text.clone());
         attempt.partial_reasoning = (!reasoning.is_empty()).then_some(reasoning);
         text
+    }
+}
+
+/// Une réponse reçue puis écartée (réponse vide) : son appel, son usage et son coût,
+/// que `budget.record` a déjà comptés. Rien de son contenu n'entre en surface.
+pub(super) fn of_response(cause: AttemptCause, r: &ChatResponse) -> Attempt {
+    Attempt {
+        model: Some(r.model.clone()),
+        provider: Some(r.provider.clone()),
+        upstream: r.upstream.clone(),
+        usage: Some(TokenUsage {
+            prompt: r.usage.prompt,
+            completion: r.usage.completion,
+            cached: r.usage.cached,
+            cache_write: r.usage.cache_write,
+            reasoning: r.usage.reasoning,
+        }),
+        cost_usd: Some(r.cost_usd),
+        partial_reasoning: (!r.reasoning.is_empty()).then(|| r.reasoning.clone()),
+        ..Attempt::new(cause)
     }
 }
 

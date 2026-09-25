@@ -12,3 +12,21 @@ pub use penelope_context::journal::{
     KIND_TURN_STARTED, Provenance, TurnCall, TurnEnd, TurnIdentity, finished_payload,
     interrupted_payload, is_purged, started_payload,
 };
+
+use crate::attempts::{Attempt, AttemptSink};
+use penelope_kernel::event::{EventDraft, EventLog};
+
+/// Le port [`AttemptSink`] sur le journal : chaque tentative devient un `conv.attempt`
+/// de la session, versionné (`"v"`) et haché comme les autres événements de contenu.
+pub struct JournalAttempts(pub EventLog);
+
+#[async_trait::async_trait]
+impl AttemptSink for JournalAttempts {
+    async fn record(&self, session_id: &str, attempt: &Attempt) -> anyhow::Result<()> {
+        let event = penelope_context::journal::ConvEvent::Attempt(attempt.clone());
+        self.0
+            .append(EventDraft::new(event.kind(), event.payload()).session(session_id))
+            .await?;
+        Ok(())
+    }
+}

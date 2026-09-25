@@ -1,7 +1,8 @@
 //! Un tour, itération par itération.
 
+use super::attempts::of_response;
 use super::*;
-use penelope_app::journal::{AttemptCause, AttemptPayload};
+use penelope_app::attempts::{Attempt, AttemptCause};
 
 impl AgentLoop {
     /// Les itérations d'un tour, entre ses bornes (`turn_log`).
@@ -273,9 +274,9 @@ impl AgentLoop {
                     .record(
                         s,
                         spec,
-                        AttemptPayload {
+                        Attempt {
                             retry_prompt: retry.then(|| EMPTY_RETRY_PROMPT.to_string()),
-                            ..AttemptPayload::of_response(AttemptCause::EmptyAnswer, &response)
+                            ..of_response(AttemptCause::EmptyAnswer, &response)
                         },
                     )
                     .await;

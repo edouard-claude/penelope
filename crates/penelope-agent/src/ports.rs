@@ -1,13 +1,14 @@
 //! Ports de la boucle (épopée #208, T09) : ce qu'un tour reçoit du reste du daemon.
 //!
 //! `AgentServices` remplace `Services` dans la boucle : les registres du kernel, du LLM
-//! et du HITL qu'elle lit et écrit directement, plus cinq traits pour ce qui reste au
+//! et du HITL qu'elle lit et écrit directement, plus six traits pour ce qui reste au
 //! daemon (mode d'approbation d'une session, nature d'une session, instantanés du
-//! prompt, dernier appel de la session, jobs d'outils). Chaque trait a une
+//! prompt, dernier appel de la session, jobs d'outils, tentatives). Chaque trait a une
 //! implémentation unique dans le daemon ; `AgentServices::for_tests` en donne une en
 //! mémoire, sur `Store::open_memory`, pour que la boucle se teste sans daemon.
 
 use super::{ApprovalMode, PreviousCall, ToolExecutor};
+use penelope_app::attempts::{AttemptSink, MemoryAttempts};
 use penelope_app::conversation::PromptPrefix;
 use penelope_hitl::{ApprovalStore, PolicyEngine};
 use penelope_kernel::budget::BudgetLedger;
@@ -43,6 +44,8 @@ pub struct AgentServices {
     pub snapshots: Arc<dyn PromptSnapshots>,
     pub cache: Arc<dyn CacheAudit>,
     pub jobs: Arc<dyn JobRunner>,
+    /// Tentatives sans réponse (#206, T15).
+    pub attempts: Arc<dyn AttemptSink>,
 }
 
 /// Mode d'approbation d'une session (issue #111).
@@ -183,7 +186,7 @@ impl CacheAudit for NoAudit {
 
 impl AgentServices {
     /// Services de test sur une base en mémoire : configuration d'exemple (écrite, si un
-    /// test la change, sous `dir`), modes en mémoire, ni instantané ni job.
+    /// test la change, sous `dir`), modes et tentatives en mémoire, ni instantané ni job.
     pub fn for_tests(dir: &Path, clock: SharedClock) -> anyhow::Result<AgentServices> {
         let store = Store::open_memory()?;
         let mut sample = Config::sample(42);
@@ -217,6 +220,7 @@ impl AgentServices {
             snapshots: Arc::new(NoAudit),
             cache: Arc::new(NoAudit),
             jobs: Arc::new(NoJobs),
+            attempts: Arc::new(MemoryAttempts::default()),
             catalog: Catalog::new(),
             events,
             store,

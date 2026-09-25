@@ -5,7 +5,7 @@ use super::*;
 mod retry;
 
 use super::attempts::{Attempts, Partial, failure_cause, stream_cut_message};
-use penelope_app::journal::{AttemptCause, AttemptPayload};
+use penelope_app::attempts::{Attempt, AttemptCause};
 use retry::{Phase, RetryAction, RetryPlan};
 
 /// Échec d'un appel au modèle, déjà formulé pour l'utilisateur.
@@ -93,6 +93,7 @@ impl AgentLoop {
                 )
                 .await?;
             s.llm_state.dispatching(&llm_id).await?;
+            attempts.sent(&llm_id);
 
             let stream = match self
                 .provider
@@ -266,13 +267,13 @@ impl AgentLoop {
         e: &LlmError,
         llm_id: &str,
         cause: AttemptCause,
-    ) -> AttemptPayload {
-        AttemptPayload {
+    ) -> Attempt {
+        Attempt {
             model: Some(model_id.to_string()),
             provider: Some(self.provider.name().to_string()),
             error: Some(e.to_string()),
             llm_request_id: Some(llm_id.to_string()),
-            ..AttemptPayload::new(cause)
+            ..Attempt::new(cause)
         }
     }
 }

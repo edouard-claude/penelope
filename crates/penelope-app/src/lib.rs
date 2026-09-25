@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod attempts;
 pub mod bus;
 pub mod codex_scope;
 pub mod conversation;

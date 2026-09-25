@@ -73,42 +73,6 @@ impl AssistantPayload {
     }
 }
 
-impl AttemptPayload {
-    /// Une tentative de cette cause, sans rien d'autre : l'appelant remplit ce qu'il sait.
-    pub fn new(cause: AttemptCause) -> Self {
-        AttemptPayload {
-            turn: None,
-            step: 0,
-            cause,
-            model: None,
-            provider: None,
-            upstream: None,
-            error: None,
-            partial_text: None,
-            partial_reasoning: None,
-            usage: None,
-            cost_usd: None,
-            llm_request_id: None,
-            retry_prompt: None,
-        }
-    }
-
-    /// Une réponse reçue puis écartée (réponse vide, #206) : son appel, son usage et son
-    /// coût, que `budget.record` a déjà comptés. Rien de son contenu n'entre en surface.
-    pub fn of_response(cause: AttemptCause, r: &ChatResponse) -> Self {
-        let call = AssistantPayload::of_response(r);
-        AttemptPayload {
-            model: call.model,
-            provider: call.provider,
-            upstream: call.upstream,
-            usage: call.usage,
-            cost_usd: call.cost_usd,
-            partial_reasoning: (!r.reasoning.is_empty()).then(|| r.reasoning.clone()),
-            ..AttemptPayload::new(cause)
-        }
-    }
-}
-
 /// L'événement d'un message écrit dans `messages`. `None` pour un message système : le
 /// préfixe a son propre événement (`conv.system`, T6), un message système dans
 /// l'historique n'a pas d'équivalent au §2.2.

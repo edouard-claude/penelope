@@ -7,6 +7,7 @@
 use crate::anchors::Anchor;
 use crate::compaction::AppliedStep;
 use crate::tiers::TileMap;
+use penelope_kernel::journal::TokenUsage;
 use penelope_llm::types::{Content, ToolCall};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -79,21 +80,6 @@ pub struct ContextPayload {
     /// Adresse du `conv.user` visé.
     pub target: i64,
     pub block: String,
-}
-
-/// Tokens facturés d'un appel.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct TokenUsage {
-    #[serde(default)]
-    pub prompt: u64,
-    #[serde(default)]
-    pub completion: u64,
-    #[serde(default)]
-    pub cached: u64,
-    #[serde(default)]
-    pub cache_write: u64,
-    #[serde(default)]
-    pub reasoning: u64,
 }
 
 /// Ce que la projection a fait à la requête (niveaux 0, 2, 4), sans être journalisé.
@@ -196,60 +182,6 @@ pub struct ToolResultPayload {
 
 fn yes() -> bool {
     true
-}
-
-/// Cause d'une tentative d'appel qui n'a pas donné de réponse (#206).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AttemptCause {
-    StreamCut,
-    BeforeStream,
-    EmptyAnswer,
-    Fallback,
-}
-
-impl AttemptCause {
-    /// Le nom écrit dans le journal, repris par les journaux du daemon.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AttemptCause::StreamCut => "stream_cut",
-            AttemptCause::BeforeStream => "before_stream",
-            AttemptCause::EmptyAnswer => "empty_answer",
-            AttemptCause::Fallback => "fallback",
-        }
-    }
-}
-
-/// `conv.attempt` : hors surface ; seule sa consigne de relance entre dans la requête
-/// suivante du même tour.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AttemptPayload {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn: Option<String>,
-    #[serde(default)]
-    pub step: u32,
-    pub cause: AttemptCause,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub upstream: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub partial_text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub partial_reasoning: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<TokenUsage>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost_usd: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub llm_request_id: Option<String>,
-    /// Consigne ajoutée en dernier message utilisateur à la requête suivante.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry_prompt: Option<String>,
 }
 
 /// `conv.summary` : un nœud de résumé qui remplace une plage de la surface.

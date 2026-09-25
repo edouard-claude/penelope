@@ -128,6 +128,26 @@ async fn the_retry_prompt_sent_is_the_one_the_journal_derives() {
     assert_eq!(a.payload["cause"], "empty_answer");
     assert_eq!(a.payload["retry_prompt"], EMPTY_RETRY_PROMPT);
     assert!(a.payload["usage"].is_object());
+    // Épinglée à sa requête comme un échec (T15) : l'appel a rendu une réponse, vide,
+    // et sa ligne `llm_requests` est allée au bout.
+    let pinned = a.payload["llm_request_id"]
+        .as_str()
+        .expect("llm_request_id");
+    let state: String = s
+        .store
+        .read({
+            let pinned = pinned.to_string();
+            move |c| {
+                Ok(c.query_row(
+                    "SELECT state FROM llm_requests WHERE id = ?1",
+                    [&pinned],
+                    |r| r.get(0),
+                )?)
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(state, "completed");
     let history = s.context.history.load(&sid, 0).await.unwrap();
     assert!(
         history

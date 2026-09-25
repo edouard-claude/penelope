@@ -4,8 +4,10 @@
 //! boucle les écrit par le noyau, `penelope-context` les relit et les plie, et les
 //! réexporte à l'identique sous `penelope_context::journal`.
 
+mod attempt;
 mod turn;
 
+pub use attempt::*;
 pub use turn::*;
 
 use serde_json::Value;
