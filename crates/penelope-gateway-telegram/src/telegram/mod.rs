@@ -11,7 +11,7 @@
 use crate::agent::{TurnEvent, TurnOutcome, decide_approval};
 use crate::bus::{BusKind, ChannelDelivery, Origin};
 use crate::executor::Messenger;
-use crate::helpers::{SEEN_CHATS_KEY, chat_title_key, seen_chats, shown, topic_name_key};
+use crate::helpers::{SEEN_CHATS_KEY, seen_chats, shown, topic_name_key};
 use crate::runtime::Daemon;
 use penelope_hitl::{ApprovalRequest, ApprovalState, Decision};
 use penelope_kernel::api::method as m;
@@ -56,7 +56,7 @@ use cards::{
     background_note, cancelled_note, codex_status_text, context_line, fmt_usd, mcp_list_text,
     mcp_show_text, mcp_state_icon, routing_text, schedules_text,
 };
-pub use channel::BOT_USERNAME_KEY;
+pub use channel::{BOT_USERNAME_KEY, chat_title_key};
 use drafts::Activity;
 pub(crate) use drafts::StopReport;
 use forms::form_key;

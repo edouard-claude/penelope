@@ -108,16 +108,19 @@ impl Rpc {
             // `chat_id` et `topic_id`.
             method::SCHEDULE_MOVE => {
                 let id = required_str(p, "id")?;
-                let (chat_id, topic_id) =
-                    if p.get("private").and_then(|v| v.as_bool()) == Some(true) {
-                        (s.config.config().owner.telegram_user_id, None)
-                    } else {
-                        let chat = p.get("chat_id").and_then(|v| v.as_i64()).ok_or_else(|| {
-                            anyhow::anyhow!("`chat_id` (et `topic_id`) ou `private: true`")
-                        })?;
-                        (chat, p.get("topic_id").and_then(|v| v.as_i64()))
-                    };
-                let to = crate::scheduler::retarget(s, &id, chat_id, topic_id)
+                let to = if p.get("private").and_then(|v| v.as_bool()) == Some(true) {
+                    crate::helpers::owner_origin_of(s)
+                } else {
+                    let chat = p.get("chat_id").and_then(|v| v.as_i64()).ok_or_else(|| {
+                        anyhow::anyhow!("`chat_id` (et `topic_id`) ou `private: true`")
+                    })?;
+                    crate::bus::Origin::Telegram {
+                        chat_id: chat,
+                        topic_id: p.get("topic_id").and_then(|v| v.as_i64()),
+                        message_id: None,
+                    }
+                };
+                let to = crate::scheduler::retarget(s, &id, &to)
                     .await
                     .map_err(anyhow::Error::msg)?;
                 Ok(json!({"id": id, "destination": to}))

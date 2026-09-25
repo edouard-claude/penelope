@@ -191,7 +191,11 @@ impl Daemon {
 
     pub fn from_services(services: Arc<Services>) -> Daemon {
         let started_at_ms = services.clock.now_ms();
-        let hooks = Hooks::default();
+        let delivery = services.channel.delivery.clone();
+        let hooks = Hooks {
+            delivery,
+            ..Hooks::default()
+        };
         Daemon {
             handle: Handle::new(started_at_ms),
             bus: Arc::new(crate::bus::Bus::new()),

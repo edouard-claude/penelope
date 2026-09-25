@@ -46,15 +46,16 @@ impl NativeToolExecutor {
             ),
             "schedule_move" => {
                 let id = str_arg(args, "id")?;
-                let (chat_id, topic_id) = match str_arg(args, "to")?.as_str() {
-                    "private" => (s.config.config().owner.telegram_user_id, None),
-                    "here" => self.env.origin.telegram_chat().ok_or_else(|| {
-                        ToolError::Invalid(
-                            "`here` : cette conversation n'est pas Telegram, `private` ou \
-                             `penelope schedule move`"
+                let to = match str_arg(args, "to")?.as_str() {
+                    "private" => penelope_app::helpers::owner_origin_of(s),
+                    "here" if self.env.origin.is_channel() => self.env.origin.clone(),
+                    "here" => {
+                        return Err(ToolError::Invalid(
+                            "`here` : cette conversation n'est pas celle d'un canal, `private` \
+                             ou `penelope schedule move`"
                                 .into(),
-                        )
-                    })?,
+                        ));
+                    }
                     other => {
                         return Err(ToolError::Invalid(format!(
                             "`to` : `here` ou `private`, pas `{other}`"
@@ -63,7 +64,7 @@ impl NativeToolExecutor {
                 };
                 let to = self
                     .scheduler()?
-                    .schedule_move(&id, chat_id, topic_id)
+                    .schedule_move(&id, &to)
                     .await
                     .map_err(ToolError::Invalid)?;
                 json!({"id": id, "destination": to})

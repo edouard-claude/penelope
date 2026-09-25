@@ -49,12 +49,14 @@ impl Harness {
         ports.orchestrator.set(Some(Arc::new(WorkflowOrchestrator {
             context: cx.clone(),
         })));
+        // Le même emplacement que `Services.channel.delivery`, comme `Hooks` au daemon.
+        let delivery = cx.services.channel.delivery.clone();
         Harness {
             dir,
             cx,
             provider,
             ports,
-            delivery: Slot::default(),
+            delivery,
         }
     }
 

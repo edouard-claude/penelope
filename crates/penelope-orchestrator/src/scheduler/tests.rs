@@ -257,29 +257,40 @@ async fn a_recurring_prompt_survives_the_closing_of_its_conversation() {
     );
 }
 
-/// #124 : chaque planification dit où elle livre ; on la déplace sans la recréer
-/// (identifiant, exécutions et libellé gardés), vers une conversation autorisée
-/// seulement, et l'exécution suivante part au nouvel endroit ; le digest rappelle ce
-/// qui part aujourd'hui, et où.
+/// Un canal qui nomme ses conversations par leurs identifiants et refuse `-100999`.
+struct Places;
+
+#[async_trait::async_trait]
+impl ChannelDelivery for Places {
+    async fn deliver(&self, _: &str, _: &str, _: &Origin, _: &penelope_agent::TurnOutcome) {}
+
+    async fn describe_origin(&self, origin: &Origin) -> Option<String> {
+        Some(match origin.telegram_chat()? {
+            (chat, None) => format!("conv {chat}"),
+            (chat, Some(topic)) => format!("conv {chat} sujet {topic}"),
+        })
+    }
+
+    async fn destination_for(&self, origin: &Origin) -> Result<Origin, String> {
+        match origin.telegram_chat() {
+            Some((-100_999, _)) | None => Err("conversation non autorisée".into()),
+            Some((chat_id, topic_id)) => Ok(Origin::Telegram {
+                chat_id,
+                topic_id,
+                message_id: None,
+            }),
+        }
+    }
+}
+
+/// #124 : chaque planification dit où elle livre, avec les mots du canal ; on la déplace
+/// sans la recréer (identifiant, exécutions et libellé gardés), là où le canal l'accepte
+/// seulement, et l'exécution suivante part au nouvel endroit ; le digest rappelle ce qui
+/// part aujourd'hui, et où. Les noms Telegram sont vérifiés par la passerelle.
 #[tokio::test]
 async fn a_schedule_says_where_it_delivers_and_can_be_moved() {
     let (d, clock, rec) = harness().await;
     let s = &d.services;
-    d.services
-        .publish_config("test", |c| {
-            c.telegram.allowed_chats = vec![-100_777];
-            Ok(vec!["telegram.allowed_chats".into()])
-        })
-        .unwrap();
-    s.kv_set(&penelope_app::helpers::chat_title_key(-100_777), "Équipe")
-        .await
-        .unwrap();
-    s.kv_set(
-        &penelope_app::helpers::topic_name_key(-100_777, 12),
-        "Veille",
-    )
-    .await
-    .unwrap();
     let sched = s
         .schedules
         .create(
@@ -308,20 +319,38 @@ async fn a_schedule_says_where_it_delivers_and_can_be_moved() {
             .to_string()
     };
     let list = listing(s).await.unwrap();
-    assert_eq!(to_of(&list, &sched.id), "conversation privée");
-    assert_eq!(to_of(&list, &other.id), "conversation privée (par défaut)");
+    assert_eq!(
+        to_of(&list, &sched.id),
+        "aucune conversation (canal non configuré)"
+    );
+    let refused = retarget(s, &sched.id, &owner_origin_of(s)).await;
+    assert!(refused.unwrap_err().contains("aucun canal"));
 
-    let refused = retarget(s, &sched.id, -100_999, Some(1)).await.unwrap_err();
-    assert!(refused.contains("telegram.allowed_chats"), "{refused}");
-    assert!(retarget(s, "inconnu", 42, None).await.is_err());
+    s.channel.delivery.set(Some(Arc::new(Places)));
+    let list = listing(s).await.unwrap();
+    assert_eq!(to_of(&list, &sched.id), "conv 42");
+    assert_eq!(to_of(&list, &other.id), "conv 42 (par défaut)");
+
+    let group = |chat_id, topic_id| Origin::Telegram {
+        chat_id,
+        topic_id,
+        message_id: Some(7),
+    };
+    let refused = retarget(s, &sched.id, &group(-100_999, Some(1)))
+        .await
+        .unwrap_err();
+    assert!(refused.contains("non autorisée"), "{refused}");
+    assert!(retarget(s, "inconnu", &group(42, None)).await.is_err());
 
     clock.set_ms(1_767_243_630_000); // 2026-01-01T05:00:30Z = 09:00:30 à La Réunion
     assert_eq!(
         tick(&d, &d.scheduler()).await.unwrap().fired,
         vec![sched.id.clone()]
     );
-    let to = retarget(s, &sched.id, -100_777, Some(12)).await.unwrap();
-    assert_eq!(to, "sujet « Veille », groupe « Équipe »");
+    let to = retarget(s, &sched.id, &group(-100_777, Some(12)))
+        .await
+        .unwrap();
+    assert_eq!(to, "conv -100777 sujet 12");
     let moved = s.schedules.get(&sched.id).await.unwrap().unwrap();
     assert_eq!((moved.runs, moved.state.as_str()), (1, "active"));
     assert!(moved.last_run.is_some());
@@ -352,14 +381,74 @@ async fn a_schedule_says_where_it_delivers_and_can_be_moved() {
     let today = due_today(&d.services).await;
     assert_eq!(
         today,
-        vec!["- 09:00 Veille du matin → sujet « Veille », groupe « Équipe »".to_string()]
+        vec!["- 09:00 Veille du matin → conv -100777 sujet 12".to_string()]
     );
     let inputs = digest_inputs(&d.services).await;
     let digest = penelope_dream::digest_text(&d.dream(), inputs, d.ports.mcp_supervisor.get())
         .await
         .unwrap();
     assert!(digest.contains("Aujourd'hui"), "{digest}");
-    assert!(digest.contains("groupe « Équipe »"), "{digest}");
+    assert!(digest.contains("conv -100777 sujet 12"), "{digest}");
+}
+
+/// #124 : l'outil `schedule_move` déplace une planification vers la conversation de
+/// l'appel (sujet compris) ou vers la conversation privée ; `schedule_list` dit où livre
+/// chacune ; hors canal (CLI), `here` n'a pas de sens.
+#[tokio::test]
+async fn schedule_move_sends_a_schedule_here_or_home() {
+    use penelope_app::tool_executor::ToolExecutor;
+    use penelope_executor::executor::{NativeToolExecutor, ToolEnv};
+    let (d, _clock, _rec) = harness().await;
+    let s = d.services.clone();
+    s.channel.delivery.set(Some(Arc::new(Places)));
+    let env = ToolEnv {
+        session_id: "s1".into(),
+        run_id: None,
+        origin: Origin::Cli,
+        workspaces: vec![],
+        in_workflow: false,
+        turn_model: None,
+    };
+    let mut x = NativeToolExecutor::new(s.clone(), env);
+    x.orchestrator = d.ports.orchestrator.get();
+    let sched = s
+        .schedules
+        .create(
+            TriggerKind::Cron,
+            json!({"expr": "0 9 * * *"}),
+            json!({"type": "notify", "template": "🧭 Veille"}),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    let err = x
+        .execute("schedule_move", &json!({"id": sched.id, "to": "here"}))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("private"), "{err}");
+
+    x.env.origin = Origin::Telegram {
+        chat_id: -100_777,
+        topic_id: Some(12),
+        message_id: Some(5),
+    };
+    let moved = x
+        .execute("schedule_move", &json!({"id": sched.id, "to": "here"}))
+        .await
+        .unwrap();
+    assert_eq!(moved.value["destination"], "conv -100777 sujet 12");
+    let listed = x.execute("schedule_list", &json!({})).await.unwrap();
+    assert_eq!(listed.value[0]["destination"], "conv -100777 sujet 12");
+    assert_eq!(
+        listed.value[0]["target"]["origin"]["message_id"],
+        Value::Null
+    );
+
+    let home = x
+        .execute("schedule_move", &json!({"id": sched.id, "to": "private"}))
+        .await
+        .unwrap();
+    assert_eq!(home.value["destination"], "conv 42");
 }
 
 /// #133 : répéter un message déjà parti, c'est le même texte à la mise en forme près,

@@ -4,6 +4,7 @@
 //! passerelle ; le cœur n'en lit que le texte, par le port [`Cards`]. La passerelle se
 //! branche dans [`Channel`], que `Services` porte : le cœur ne nomme jamais le canal.
 
+use crate::bus::{ChannelDelivery, Origin};
 use crate::ports::Slot;
 use std::path::Path;
 use std::sync::Arc;
@@ -38,6 +39,9 @@ pub type CardsOf = fn(&Path, penelope_store::Store) -> Arc<dyn Cards>;
 #[derive(Default, Clone)]
 pub struct Channel {
     pub cards: Slot<dyn Cards>,
+    /// Livraison des tours et destinations : le même `Slot` que `Hooks::delivery` du
+    /// daemon, pour que ce qui ne tient que `Services` (planifications) le voie.
+    pub delivery: Slot<dyn ChannelDelivery>,
 }
 
 impl Channel {
@@ -50,5 +54,14 @@ impl Channel {
     /// ne les vérifie alors pas).
     pub fn catalog(&self) -> Vec<String> {
         self.cards.get().map(|c| c.catalog()).unwrap_or_default()
+    }
+
+    /// Nom lisible d'une conversation, par le canal branché (issue #124).
+    pub async fn describe(&self, origin: &Origin) -> String {
+        match self.delivery.get() {
+            Some(channel) => channel.describe_origin(origin).await,
+            None => None,
+        }
+        .unwrap_or_else(|| "aucune conversation (canal non configuré)".into())
     }
 }

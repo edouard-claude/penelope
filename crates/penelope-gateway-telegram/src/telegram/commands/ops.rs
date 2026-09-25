@@ -245,9 +245,12 @@ impl TelegramGateway {
                 }
                 // Livrer ici, dans cette conversation et ce sujet (#124).
                 ["ici" | "here", id] => {
-                    match crate::scheduler::retarget(&self.daemon.services, id, chat_id, topic_id)
-                        .await
-                    {
+                    let here = Origin::Telegram {
+                        chat_id,
+                        topic_id,
+                        message_id: None,
+                    };
+                    match crate::scheduler::retarget(&self.daemon.services, id, &here).await {
                         Ok(to) => format!("📍 `{id}` livrera désormais ici : {to}."),
                         Err(e) => format!("❌ {e}"),
                     }

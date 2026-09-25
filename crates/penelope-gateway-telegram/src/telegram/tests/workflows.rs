@@ -545,3 +545,75 @@ async fn plan_go_button_persists_approval_without_starting_a_run() {
             .is_empty()
     );
 }
+
+/// #124 : la passerelle nomme les conversations où livrent les planifications (titre du
+/// groupe et nom du sujet quand elle les a vus passer, identifiants sinon) et refuse
+/// d'en déplacer une vers une conversation non autorisée. Le cœur ne fait que relayer
+/// (`ChannelDelivery::describe_origin`, `destination_for`, T36).
+#[tokio::test]
+async fn schedules_are_named_and_moved_by_the_telegram_channel() {
+    let (_dir, g, _t, _p) = gateway().await;
+    let s = &g.daemon.services;
+    g.daemon
+        .publish_config("test", |c| {
+            c.telegram.allowed_chats = vec![-100_777];
+            Ok(vec!["telegram.allowed_chats".into()])
+        })
+        .unwrap();
+    let sched = s
+        .schedules
+        .create(
+            penelope_workflow::TriggerKind::Cron,
+            json!({"expr": "0 9 * * *"}),
+            json!({"type": "notify", "template": "🧭 Veille", "label": "Veille du matin",
+                   "origin": {"channel": "telegram", "chat_id": OWNER, "message_id": 99}}),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    let other = s
+        .schedules
+        .create(
+            penelope_workflow::TriggerKind::Cron,
+            json!({"expr": "0 9 1 6 *"}),
+            json!({"type": "notify", "template": "☀️ Été"}),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    let to_of = |list: &[Value], id: &str| {
+        list.iter().find(|v| v["id"] == id).unwrap()["destination"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let list = crate::scheduler::listing(s).await.unwrap();
+    assert_eq!(to_of(&list, &sched.id), "conversation privée");
+    assert_eq!(to_of(&list, &other.id), "conversation privée (par défaut)");
+
+    let group = |chat_id, topic_id| Origin::Telegram {
+        chat_id,
+        topic_id,
+        message_id: Some(5),
+    };
+    let refused = crate::scheduler::retarget(s, &sched.id, &group(-100_999, Some(1)))
+        .await
+        .unwrap_err();
+    assert!(refused.contains("telegram.allowed_chats"), "{refused}");
+    let to = crate::scheduler::retarget(s, &sched.id, &group(-100_777, Some(12)))
+        .await
+        .unwrap();
+    assert_eq!(to, "sujet 12, groupe -100777");
+    let moved = s.schedules.get(&sched.id).await.unwrap().unwrap();
+    assert_eq!(moved.target["origin"]["message_id"], Value::Null);
+
+    s.kv_set(&chat_title_key(-100_777), "Équipe").await.unwrap();
+    s.kv_set(&topic_name_key(-100_777, 12), "Veille")
+        .await
+        .unwrap();
+    let list = crate::scheduler::listing(s).await.unwrap();
+    assert_eq!(
+        to_of(&list, &sched.id),
+        "sujet « Veille », groupe « Équipe »"
+    );
+}

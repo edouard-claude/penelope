@@ -337,15 +337,10 @@ pub trait Orchestrator: Send + Sync {
     async fn schedule_list(&self) -> Result<Vec<Value>, String> {
         Err(SCHEDULER_MISSING.into())
     }
-    /// Déplace une planification vers la conversation `chat` (sujet `topic`), sans la
-    /// recréer (issue #124). Renvoie la nouvelle destination, en mots.
-    async fn schedule_move(
-        &self,
-        id: &str,
-        chat: i64,
-        topic: Option<i64>,
-    ) -> Result<String, String> {
-        let _ = (id, chat, topic);
+    /// Déplace une planification vers la conversation `to`, sans la recréer (issue
+    /// #124). Renvoie la nouvelle destination, en mots.
+    async fn schedule_move(&self, id: &str, to: &Origin) -> Result<String, String> {
+        let _ = (id, to);
         Err(SCHEDULER_MISSING.into())
     }
     /// Supprime une planification (état `deleted`).

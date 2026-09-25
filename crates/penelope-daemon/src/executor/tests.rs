@@ -1,12 +1,12 @@
-//! Tests de l'exécuteur qui ont besoin du daemon : la planification passe par
-//! l'orchestrateur (`WorkflowOrchestrator`, port `Orchestrator`, T24).
+//! Tests de l'exécuteur qui ont besoin du daemon : `self_status` par son `Admin` (T24).
+//! Celui de `schedule_move` est dans l'ordonnanceur (`penelope-orchestrator`, T36).
 
 use super::*;
 use crate::agent::ToolExecutor;
 use crate::bus::Origin;
 use crate::runtime::Services;
 use penelope_kernel::clock::TestClock;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::sync::Arc;
 
 async fn executor() -> (tempfile::TempDir, NativeToolExecutor) {
@@ -26,64 +26,6 @@ async fn executor() -> (tempfile::TempDir, NativeToolExecutor) {
         turn_model: None,
     };
     (dir, NativeToolExecutor::new(s, env))
-}
-
-/// #124 : `schedule_move` déplace une planification vers la conversation de l'appel
-/// (sujet compris) ou vers la conversation privée ; `schedule_list` dit où livre
-/// chacune ; hors Telegram, `here` n'a pas de sens.
-#[tokio::test]
-async fn schedule_move_sends_a_schedule_here_or_home() {
-    let (_dir, mut x) = executor().await;
-    let s = x.services.clone();
-    // La planification passe par l'orchestrateur du daemon (port `Orchestrator`, T24).
-    x.orchestrator = Some(Arc::new(crate::workflow::orchestrator_of(&Arc::new(
-        crate::runtime::Daemon::from_services(s.clone()),
-    ))));
-    s.config
-        .mutate("test", |c| {
-            c.owner.telegram_user_id = 42;
-            c.telegram.allowed_chats = vec![-100_777];
-            Ok(vec!["telegram.allowed_chats".into()])
-        })
-        .unwrap();
-    let sched = s
-        .schedules
-        .create(
-            penelope_workflow::TriggerKind::Cron,
-            json!({"expr": "0 9 * * *"}),
-            json!({"type": "notify", "template": "🧭 Veille"}),
-            json!({}),
-        )
-        .await
-        .unwrap();
-    let err = x
-        .execute("schedule_move", &json!({"id": sched.id, "to": "here"}))
-        .await
-        .unwrap_err();
-    assert!(err.to_string().contains("private"), "{err}");
-
-    x.env.origin = Origin::Telegram {
-        chat_id: -100_777,
-        topic_id: Some(12),
-        message_id: Some(5),
-    };
-    let moved = x
-        .execute("schedule_move", &json!({"id": sched.id, "to": "here"}))
-        .await
-        .unwrap();
-    assert_eq!(moved.value["destination"], "sujet 12, groupe -100777");
-    let listed = x.execute("schedule_list", &json!({})).await.unwrap();
-    assert_eq!(listed.value[0]["destination"], "sujet 12, groupe -100777");
-    assert_eq!(
-        listed.value[0]["target"]["origin"]["message_id"],
-        Value::Null
-    );
-
-    let home = x
-        .execute("schedule_move", &json!({"id": sched.id, "to": "private"}))
-        .await
-        .unwrap();
-    assert_eq!(home.value["destination"], "conversation privée");
 }
 
 /// T24 : en production, l'exécuteur d'un tour reçoit le daemon comme `Admin`

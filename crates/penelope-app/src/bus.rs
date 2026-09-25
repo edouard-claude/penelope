@@ -47,6 +47,12 @@ impl Origin {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
 
+    /// Vrai si l'origine est une conversation d'un canal (ni la CLI, ni un tour interne) :
+    /// une réponse, une planification ou une élicitation peuvent y revenir.
+    pub fn is_channel(&self) -> bool {
+        !matches!(self, Origin::Cli | Origin::Internal { .. })
+    }
+
     pub fn telegram_chat(&self) -> Option<(i64, Option<i64>)> {
         match self {
             Origin::Telegram {
@@ -89,6 +95,19 @@ pub trait ChannelDelivery: Send + Sync {
 
     /// Une session vient de recevoir son titre automatique.
     async fn session_titled(&self, _session_id: &str, _title: &str) {}
+
+    /// Nom lisible d'une conversation de ce canal (issue #124) : « conversation privée »,
+    /// « sujet « Veille », groupe « Équipe » »… `None` : l'origine n'est pas la sienne.
+    async fn describe_origin(&self, _origin: &Origin) -> Option<String> {
+        None
+    }
+
+    /// La conversation où livrer une planification désignée par `origin` (issue #124),
+    /// sans le message qui l'a désignée. `Err` : le canal refuse d'y livrer, et dit
+    /// pourquoi au propriétaire.
+    async fn destination_for(&self, _origin: &Origin) -> Result<Origin, String> {
+        Err("ce canal ne reçoit pas de planification".into())
+    }
 
     /// Alerte d'une planification qui n'a pas pu s'exécuter, avec ses boutons (issue #39).
     async fn schedule_alert(

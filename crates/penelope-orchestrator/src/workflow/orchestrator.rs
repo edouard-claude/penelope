@@ -97,13 +97,8 @@ impl penelope_executor::executor::Orchestrator for WorkflowOrchestrator {
             .map_err(|e| e.to_string())
     }
 
-    async fn schedule_move(
-        &self,
-        id: &str,
-        chat: i64,
-        topic: Option<i64>,
-    ) -> Result<String, String> {
-        crate::scheduler::retarget(&self.context.services, id, chat, topic).await
+    async fn schedule_move(&self, id: &str, to: &Origin) -> Result<String, String> {
+        crate::scheduler::retarget(&self.context.services, id, to).await
     }
 
     async fn schedule_delete(&self, id: &str) -> Result<(), String> {

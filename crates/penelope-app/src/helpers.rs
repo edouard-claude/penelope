@@ -138,11 +138,6 @@ pub fn topic_name_key(chat_id: i64, topic_id: i64) -> String {
     format!("tg.topic_name.{chat_id}.{topic_id}")
 }
 
-/// Titre d'un groupe autorisé, pour nommer où livre une planification (#124).
-pub fn chat_title_key(chat_id: i64) -> String {
-    format!("tg.chat_title.{chat_id}")
-}
-
 /// Conversations refusées récemment, les plus récentes d'abord (issue #113).
 pub const SEEN_CHATS_KEY: &str = "telegram.seen_chats";
 

@@ -144,7 +144,12 @@ impl TelegramGateway {
             // Livrer dans la conversation (et le sujet) où l'écran est affiché (#124).
             "schedule.here" => {
                 let id = str_of("id");
-                let to = crate::scheduler::retarget(s, &id, chat_id, topic_id)
+                let here = Origin::Telegram {
+                    chat_id,
+                    topic_id,
+                    message_id: None,
+                };
+                let to = crate::scheduler::retarget(s, &id, &here)
                     .await
                     .map_err(anyhow::Error::msg)?;
                 Done::toast(format!("📍 Livrera ici : {to}"))

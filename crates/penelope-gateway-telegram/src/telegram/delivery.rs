@@ -13,6 +13,14 @@ impl ChannelDelivery for TelegramGateway {
         ))
     }
 
+    async fn describe_origin(&self, origin: &Origin) -> Option<String> {
+        channel::place_name(&self.daemon.services, origin).await
+    }
+
+    async fn destination_for(&self, origin: &Origin) -> Result<Origin, String> {
+        channel::destination_for(&self.daemon.services, origin)
+    }
+
     async fn offer_burst(
         &self,
         session_id: &str,

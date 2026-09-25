@@ -7,11 +7,11 @@ use super::*;
 pub(super) fn own_origin(sched: &Schedule) -> Option<Origin> {
     let o = sched.target.get("origin")?;
     let origin = Origin::from_payload(&json!({ "origin": o }));
-    (!matches!(origin, Origin::Internal { .. } | Origin::Cli)).then_some(origin)
+    origin.is_channel().then_some(origin)
 }
 
-/// Canal de retour : celui de la conversation qui a créé le schedule, sinon le chat
-/// Telegram du propriétaire.
+/// Canal de retour : celui de la conversation qui a créé le schedule, sinon la
+/// conversation du propriétaire.
 pub(super) fn target_origin(s: &Services, sched: &Schedule) -> Origin {
     if let Some(origin) = own_origin(sched) {
         return origin;
@@ -20,7 +20,7 @@ pub(super) fn target_origin(s: &Services, sched: &Schedule) -> Origin {
         Origin::Internal { .. } => Origin::Internal {
             source: format!("schedule {}", sched.id),
         },
-        telegram => telegram,
+        owner => owner,
     }
 }
 
@@ -29,84 +29,36 @@ pub(super) fn target_origin(s: &Services, sched: &Schedule) -> Origin {
 pub async fn destination(s: &Services, sched: &Schedule) -> (Origin, String) {
     let origin = target_origin(s, sched);
     let mut name = place_name(s, &origin).await;
-    if own_origin(sched).is_none() && matches!(origin, Origin::Telegram { .. }) {
+    if own_origin(sched).is_none() && origin.is_channel() {
         name.push_str(" (par défaut)");
     }
     (origin, name)
 }
 
-/// Nom lisible d'une conversation Telegram : titre du groupe et nom du sujet quand
-/// Pénélope les a vus passer, identifiants sinon.
+/// Nom lisible d'une conversation : c'est le canal qui sait la nommer (T36).
 pub async fn place_name(s: &Services, origin: &Origin) -> String {
-    let Origin::Telegram {
-        chat_id, topic_id, ..
-    } = origin
-    else {
-        return "aucune conversation (Telegram non configuré)".into();
-    };
-    let kv = |k: String| async move {
-        s.store
-            .read(move |c| penelope_store::kv_get(c, &k))
-            .await
-            .ok()
-            .flatten()
-            .filter(|v| !v.trim().is_empty())
-    };
-    let owner = s.config.config().owner.telegram_user_id;
-    let chat = if *chat_id == owner {
-        "conversation privée".to_string()
-    } else if *chat_id > 0 {
-        format!("conversation {chat_id}")
-    } else {
-        match kv(penelope_app::helpers::chat_title_key(*chat_id)).await {
-            Some(title) => format!("groupe « {title} »"),
-            None => format!("groupe {chat_id}"),
-        }
-    };
-    match topic_id {
-        None => chat,
-        Some(t) => match kv(penelope_app::helpers::topic_name_key(*chat_id, *t)).await {
-            Some(name) => format!("sujet « {name} », {chat}"),
-            None => format!("sujet {t}, {chat}"),
-        },
-    }
+    s.channel.describe(origin).await
 }
 
 /// Déplace une planification vers une autre conversation, sans la recréer : son
-/// historique, ses exécutions et son état restent (issue #124). La conversation doit
-/// être celle du propriétaire ou une conversation autorisée. Renvoie la nouvelle
-/// destination, en mots.
-pub async fn retarget(
-    s: &Services,
-    id: &str,
-    chat_id: i64,
-    topic_id: Option<i64>,
-) -> Result<String, String> {
-    let cfg = s.config.config();
-    let owner = cfg.owner.telegram_user_id;
-    if chat_id == 0 {
-        return Err("Telegram n'est pas configuré (`owner.telegram_user_id`)".into());
-    }
-    if !(chat_id == owner || cfg.telegram.allowed_chats.contains(&chat_id)) {
-        return Err(format!(
-            "la conversation {chat_id} n'est pas autorisée : `penelope config set \
-             telegram.allowed_chats '[{chat_id}]'`"
-        ));
-    }
-    let origin = Origin::Telegram {
-        chat_id,
-        topic_id,
-        message_id: None,
-    };
+/// historique, ses exécutions et son état restent (issue #124). Le canal dit si la
+/// conversation peut la recevoir. Renvoie la nouvelle destination, en mots.
+pub async fn retarget(s: &Services, id: &str, to: &Origin) -> Result<String, String> {
+    let channel = s
+        .channel
+        .delivery
+        .get()
+        .ok_or("aucun canal du propriétaire n'est branché")?;
+    let to = channel.destination_for(to).await?;
     let moved = s
         .schedules
-        .set_origin(id, origin.to_value())
+        .set_origin(id, to.to_value())
         .await
         .map_err(|e| e.to_string())?;
     if !moved {
         return Err(format!("planification `{id}` introuvable"));
     }
-    Ok(place_name(s, &origin).await)
+    Ok(place_name(s, &to).await)
 }
 
 /// Planifications avec leur destination, pour `schedule list`, `/schedules` et l'outil
