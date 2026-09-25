@@ -68,6 +68,12 @@ enum Terminal {
     },
 }
 
+/// Ce que la décision d'un appel ajoute à la liste.
+enum Decided {
+    Step(Step),
+    Stop(Terminal),
+}
+
 pub(super) enum Pending {
     Nothing,
     Resolved,
@@ -82,7 +88,6 @@ pub(super) enum Pending {
 
 impl AgentLoop {
     /// Résout les appels d'outils sans résultat à la fin du transcript.
-    #[allow(clippy::too_many_lines)] // gel 0.17 : lot G (agent/pending.rs)
     pub(super) async fn resolve_pending(
         &self,
         spec: &TurnSpec,
@@ -118,120 +123,16 @@ impl AgentLoop {
             }
             let info = execute.describe_call(&call.name, &call.arguments).await;
             let described = DescribedCall { call, info };
-
-            // Gardes, dans l'ordre : liste blanche, décision déjà prise, boucles,
-            // arguments. Une décision déjà prise par le propriétaire est définitive.
-            match run_call_guards(&call_chain(), &described, &mut cx).await? {
-                None => {}
-                Some(GuardStop::Refuse(refusal)) => {
-                    steps.push(Step::Record(described.call, refusal.text()));
-                    continue;
-                }
-                Some(GuardStop::Suspend(Suspension::Prior { approval_id })) => {
-                    terminal = Some(Terminal::Stop(TurnOutcome::AwaitingApproval {
-                        approval_id,
-                    }));
+            match self
+                .decide_call(spec, conv, sink, &mut cx, described)
+                .await?
+            {
+                Decided::Step(step) => steps.push(step),
+                Decided::Stop(stop) => {
+                    terminal = Some(stop);
                     break;
-                }
-                Some(GuardStop::LoopAbort(message)) => {
-                    terminal = Some(Terminal::Loop {
-                        tool: described.info.effective_name.clone(),
-                        call: described.call,
-                        message,
-                    });
-                    break;
-                }
-                Some(GuardStop::Approved) => {
-                    steps.push(Step::Execute {
-                        call: described.call,
-                        info: described.info,
-                        parallel: false,
-                    });
-                    continue;
                 }
             }
-            let DescribedCall { call, info } = described;
-
-            // 4. Politique et approbation, sur les arguments de l'outil visé : par
-            // `tool_call`, ceux de l'appel interne (#110), sinon une règle
-            // « Toujours » couvrirait l'outil entier.
-            let effective_args = crate::effective_arguments(&call.name, &call.arguments);
-            let policy_workspace = execute.policy_workspace();
-            let verdict =
-                PolicyStage::evaluate(s, spec, policy_workspace.as_deref(), &info, &effective_args)
-                    .await?;
-
-            match verdict.decision {
-                PolicyDecision::Deny => {
-                    steps.push(Step::Record(
-                        call,
-                        Refusal::Policy {
-                            reason: verdict.reason,
-                        }
-                        .text(),
-                    ));
-                    continue;
-                }
-                PolicyDecision::Ask | PolicyDecision::AskTwice => {
-                    let double = verdict.decision == PolicyDecision::AskTwice;
-                    let arguments = penelope_observe::redact_json(&effective_args);
-                    // Ce que Pénélope cherche à faire, en tête de la carte : sa
-                    // phrase, sinon le message du propriétaire qui a lancé le tour,
-                    // jamais la raison de la politique (issue #116).
-                    let why = call_intention(&call.arguments)
-                        .or(call_intention(&effective_args))
-                        .map(|w| (w, "agent"))
-                        .or(turn_goal(conv).await.map(|g| (g, "tour")));
-                    let approval = s
-                        .approvals
-                        .create(
-                            ApprovalKind::ToolCall,
-                            &info.effective_name,
-                            info.risk,
-                            json!({
-                                "tool": info.effective_name,
-                                "arguments": arguments,
-                                "reason": verdict.reason,
-                                "why": why.as_ref().map(|(w, _)| w),
-                                "why_from": why.as_ref().map(|(_, f)| f),
-                                "double": double,
-                                "call_id": call.id,
-                                "turn_id": spec.turn_id,
-                            }),
-                            vec![
-                                "Autoriser".into(),
-                                "Pour cette session".into(),
-                                "Toujours".into(),
-                                "Refuser".into(),
-                            ],
-                            Some(&spec.session_id),
-                            spec.run_id.as_deref(),
-                            false,
-                        )
-                        .await?;
-                    sink.emit(TurnEvent::Approval {
-                        id: approval.id.0.clone(),
-                        tool: info.effective_name.clone(),
-                        risk: info.risk,
-                        arguments,
-                        reason: verdict.reason.clone(),
-                        double,
-                    });
-                    terminal = Some(Terminal::Stop(TurnOutcome::AwaitingApproval {
-                        approval_id: approval.id.0,
-                    }));
-                    break;
-                }
-                PolicyDecision::Auto => {}
-            }
-            // Lecture pure autorisée d'office : elle peut partir avec ses voisines.
-            let parallel = info.risk == RiskClass::Read
-                && PARALLEL_SAFE.contains(&info.effective_name.as_str());
-            steps.push(Step::Execute {
-                call,
-                info,
-                parallel,
-            });
         }
 
         // 2. Exécution et résultats, dans l'ordre des appels. Des lectures consécutives
@@ -364,6 +265,129 @@ impl AgentLoop {
         }
         conv.admit_tool_results(recorded).await?;
         Ok(Pending::Resolved)
+    }
+
+    /// Décide d'un appel, sans rien exécuter : gardes, politique, carte d'approbation.
+    async fn decide_call(
+        &self,
+        spec: &TurnSpec,
+        conv: &dyn Conversation,
+        sink: &dyn TurnSink,
+        cx: &mut CallContext<'_>,
+        described: DescribedCall,
+    ) -> anyhow::Result<Decided> {
+        let s = &self.services;
+        let execute = cx.execute;
+
+        // Gardes, dans l'ordre : liste blanche, décision déjà prise, boucles,
+        // arguments. Une décision déjà prise par le propriétaire est définitive.
+        match run_call_guards(&call_chain(), &described, cx).await? {
+            None => {}
+            Some(GuardStop::Refuse(refusal)) => {
+                return Ok(Decided::Step(Step::Record(described.call, refusal.text())));
+            }
+            Some(GuardStop::Suspend(Suspension::Prior { approval_id })) => {
+                return Ok(Decided::Stop(Terminal::Stop(
+                    TurnOutcome::AwaitingApproval { approval_id },
+                )));
+            }
+            Some(GuardStop::LoopAbort(message)) => {
+                return Ok(Decided::Stop(Terminal::Loop {
+                    tool: described.info.effective_name.clone(),
+                    call: described.call,
+                    message,
+                }));
+            }
+            Some(GuardStop::Approved) => {
+                return Ok(Decided::Step(Step::Execute {
+                    call: described.call,
+                    info: described.info,
+                    parallel: false,
+                }));
+            }
+        }
+        let DescribedCall { call, info } = described;
+
+        // 4. Politique et approbation, sur les arguments de l'outil visé : par
+        // `tool_call`, ceux de l'appel interne (#110), sinon une règle
+        // « Toujours » couvrirait l'outil entier.
+        let effective_args = crate::effective_arguments(&call.name, &call.arguments);
+        let policy_workspace = execute.policy_workspace();
+        let verdict =
+            PolicyStage::evaluate(s, spec, policy_workspace.as_deref(), &info, &effective_args)
+                .await?;
+
+        match verdict.decision {
+            PolicyDecision::Deny => {
+                return Ok(Decided::Step(Step::Record(
+                    call,
+                    Refusal::Policy {
+                        reason: verdict.reason,
+                    }
+                    .text(),
+                )));
+            }
+            PolicyDecision::Ask | PolicyDecision::AskTwice => {
+                let double = verdict.decision == PolicyDecision::AskTwice;
+                let arguments = penelope_observe::redact_json(&effective_args);
+                // Ce que Pénélope cherche à faire, en tête de la carte : sa
+                // phrase, sinon le message du propriétaire qui a lancé le tour,
+                // jamais la raison de la politique (issue #116).
+                let why = call_intention(&call.arguments)
+                    .or(call_intention(&effective_args))
+                    .map(|w| (w, "agent"))
+                    .or(turn_goal(conv).await.map(|g| (g, "tour")));
+                let approval = s
+                    .approvals
+                    .create(
+                        ApprovalKind::ToolCall,
+                        &info.effective_name,
+                        info.risk,
+                        json!({
+                            "tool": info.effective_name,
+                            "arguments": arguments,
+                            "reason": verdict.reason,
+                            "why": why.as_ref().map(|(w, _)| w),
+                            "why_from": why.as_ref().map(|(_, f)| f),
+                            "double": double,
+                            "call_id": call.id,
+                            "turn_id": spec.turn_id,
+                        }),
+                        vec![
+                            "Autoriser".into(),
+                            "Pour cette session".into(),
+                            "Toujours".into(),
+                            "Refuser".into(),
+                        ],
+                        Some(&spec.session_id),
+                        spec.run_id.as_deref(),
+                        false,
+                    )
+                    .await?;
+                sink.emit(TurnEvent::Approval {
+                    id: approval.id.0.clone(),
+                    tool: info.effective_name.clone(),
+                    risk: info.risk,
+                    arguments,
+                    reason: verdict.reason.clone(),
+                    double,
+                });
+                return Ok(Decided::Stop(Terminal::Stop(
+                    TurnOutcome::AwaitingApproval {
+                        approval_id: approval.id.0,
+                    },
+                )));
+            }
+            PolicyDecision::Auto => {}
+        }
+        // Lecture pure autorisée d'office : elle peut partir avec ses voisines.
+        let parallel =
+            info.risk == RiskClass::Read && PARALLEL_SAFE.contains(&info.effective_name.as_str());
+        Ok(Decided::Step(Step::Execute {
+            call,
+            info,
+            parallel,
+        }))
     }
 
     /// Clôt les appels qui ne partiront pas : un résultat pour chacun, pour que le
