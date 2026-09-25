@@ -13,6 +13,56 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.15
+
+Quatorzième vague de la V1, la clôture du code : les réexports de transition du daemon
+disparaissent (chaque consommateur nomme la crate d'origine), et presque tous les fichiers
+source passent sous 800 lignes, tests en fichiers frères (cible de sortie de la V1). Aucun
+changement de comportement. Restent au-dessus de 800 : `engine.rs` (1 091) et
+`supervisor.rs` (930) du daemon, dont le découpage demande de sortir le moteur de tours de
+`impl Daemon` (T33, après V1).
+
+#### Le daemon ne réexporte plus rien (#208, T30)
+
+- Les réexports de transition posés pendant le découpage (T21 à T29) disparaissent :
+  `penelope_daemon` n'exporte plus que ses modules propres, `Daemon` et `VERSION`. La
+  passerelle Telegram, les évaluations, la CLI, les tests et l'exemple du daemon nomment
+  la crate où vit le code (`penelope_app::services::Services`,
+  `penelope_orchestrator::workflow::start_run`, `penelope_ops::session_ops`…).
+- Les enveloppes `&Arc<Daemon>` de `workflow`, `scheduler` et `dream` sont retirées :
+  un seul adaptateur, `workflow::context_of`, dérive du daemon le contexte de
+  l'orchestrateur. Le module `scheduler` du daemon disparaît.
+- `penelope-cli/src/commands.rs` passe de 2 128 à 225 lignes en six modules
+  (`cli`, `route`, `offline`, `interactive`, `restore`, `upgrade`) ;
+  `penelope-daemon/src/tool_jobs.rs` de 1 135 à 345, ses tests à côté. Les deux sortent
+  de la liste de référence du gel.
+- Aucun changement de comportement.
+
+#### Plafonds : les crates socle sous 800 lignes par fichier (#208, T32)
+
+- `penelope-kernel`, `penelope-llm`, `penelope-tools`, `penelope-hitl`, `penelope-store` :
+  plus aucun fichier au-dessus de 800 lignes (charte V1 §3.4). Déplacements seuls, tests
+  en fichiers frères, chemins publics réexportés ; aucun changement de comportement.
+- Sept fichiers sortent de la liste de référence du gel (`config.rs`, `turn.rs`,
+  `provider.rs`, `codex.rs`, `spec.rs`, `policy.rs`, `penelope-store/src/lib.rs`) ; le
+  catalogue d'outils perd son `allow(clippy::too_many_lines)`.
+
+#### Plafonds : les autres crates sous 800 lignes par fichier (#208, T32)
+
+Vingt-cinq fichiers de `penelope-memory`, `penelope-mcp`, `penelope-context`,
+`penelope-workflow`, `penelope-platform`, `penelope-telegram`, `penelope-dream`,
+`penelope-executor`, `penelope-mcp-host`, `penelope-gateway-telegram` et `penelope-ops`
+passent sous 800 lignes (charte §3.4) : tests en fichiers frères et, pour les plus gros,
+une responsabilité sortie en module enfant (recherche de l'index mémoire, transport stdio,
+recherche du registre MCP, recherche de l'historique). Déplacements seuls, aucun chemin
+public ne change. Seize fichiers sortent de la liste de référence du gel.
+
+#### Archtest sous 800 lignes (#208, T32)
+
+Les tests de `penelope-archtest/src/lib.rs` sortent dans `tests.rs` : 912 → 578 lignes,
+mêmes 69 tests. Le `.gitignore`, qui ignorait tout chemin nommé `spec`, suit désormais
+`crates/penelope-tools/src/spec/`.
+
 ### 1.0.0-alpha.14
 
 Treizième vague de la V1 : `penelope approvals stats` mesure, en lecture seule, si le juge
