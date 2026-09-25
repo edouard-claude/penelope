@@ -10,6 +10,7 @@ mod apply;
 mod batches;
 mod candidates;
 mod digest;
+mod sizing;
 
 async fn daemon() -> (tempfile::TempDir, Arc<Daemon>, Arc<MockProvider>) {
     let dir = tempfile::tempdir().unwrap();
