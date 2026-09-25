@@ -19,11 +19,7 @@ impl Rpc {
                 "socket": s.platform.dirs.socket_path(),
             })),
             method::DOCTOR => {
-                let mut checks = crate::doctor::run(s).await;
-                checks.extend(super::doctor::daemon_checks(s).await);
-                if let Some(sup) = self.daemon.hooks.mcp_supervisor() {
-                    checks.extend(super::doctor::mcp_checks(s, &*sup).await);
-                }
+                let mut checks = super::doctor::run(s, self.daemon.hooks.mcp_supervisor()).await;
                 checks.push(crate::doctor::embedding_check(&self.daemon.embedder()).await);
                 checks.push(crate::doctor::vault_index_check(s).await);
                 checks.extend(crate::doctor::coherence_checks(s).await);

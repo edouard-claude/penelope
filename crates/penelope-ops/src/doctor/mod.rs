@@ -18,8 +18,15 @@ pub use memory::*;
 pub use models::*;
 pub use secrets::*;
 
-/// Exécute tous les contrôles.
+/// Exécute tous les contrôles de la crate, sans ceux du daemon.
 pub async fn run(s: &Services) -> Vec<DoctorCheck> {
+    run_with(s, Vec::new()).await
+}
+
+/// Exécute tous les contrôles ; `daemon` porte ceux que le daemon calcule (stabilité du
+/// prompt, historique, jobs d'outils), placés après la rétention comme avant la sortie
+/// de `penelope-ops` (T28) : la sortie de `penelope doctor` garde son ordre.
+pub async fn run_with(s: &Services, daemon: Vec<DoctorCheck>) -> Vec<DoctorCheck> {
     // Les contrôles de l'OS lancent des sous-processus (`pmset`, `docker --version`…) :
     // hors des fils asynchrones, pour ne pas geler les tours en cours.
     let platform = s.platform.clone();
@@ -153,6 +160,7 @@ pub async fn run(s: &Services) -> Vec<DoctorCheck> {
 
     // Rétention : dernière passe et contenu que gardent les tables d'effets (#78).
     checks.push(retention_check(s).await);
+    checks.extend(daemon);
 
     // Jour budgétaire : des lignes récentes comptées dans un autre fuseau (#79).
     checks.push(budget_days_check(s).await);

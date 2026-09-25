@@ -2,11 +2,23 @@
 //! `penelope-ops` (épopée #208, T28) : ils lisent des modules du daemon (`tool_jobs`,
 //! `prompt_snapshot`, `history`) ou l'hôte MCP (`stdio_profile`), dont ops ne dépend pas.
 
+use crate::ports::McpAdmin;
 use crate::runtime::Services;
 use penelope_kernel::api::DoctorCheck;
+use std::sync::Arc;
 
-/// Contrôles du daemon ajoutés à `doctor::run` : stabilité du prompt, journal, jobs
-/// d'outils.
+/// Les contrôles de `doctor::run` avec ceux du daemon à leur rang (après la rétention),
+/// puis ceux des serveurs MCP : l'ordre de la sortie d'avant T28.
+pub(super) async fn run(s: &Services, sup: Option<Arc<dyn McpAdmin>>) -> Vec<DoctorCheck> {
+    let mut checks = crate::doctor::run_with(s, daemon_checks(s).await).await;
+    if let Some(sup) = sup {
+        checks.extend(mcp_checks(s, &*sup).await);
+    }
+    checks
+}
+
+/// Contrôles du daemon que `doctor::run_with` place après la rétention : stabilité du
+/// prompt, journal, jobs d'outils.
 pub(super) async fn daemon_checks(s: &Services) -> Vec<DoctorCheck> {
     vec![
         prompt_stability_check(s).await,
@@ -16,7 +28,7 @@ pub(super) async fn daemon_checks(s: &Services) -> Vec<DoctorCheck> {
 }
 
 /// Serveurs MCP : état de chacun, secrets manquants, déclarations invalides.
-pub async fn mcp_checks(s: &Services, sup: &dyn crate::ports::McpAdmin) -> Vec<DoctorCheck> {
+pub async fn mcp_checks(s: &Services, sup: &dyn McpAdmin) -> Vec<DoctorCheck> {
     let mut out = Vec::new();
     // L'URL enregistrée chez le fournisseur doit être exactement celle-ci.
     let mcfg = &s.config.config().mcp;

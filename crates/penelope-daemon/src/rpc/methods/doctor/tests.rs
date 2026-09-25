@@ -314,3 +314,53 @@ async fn a_quiet_instance_keeps_a_green_prompt_check() {
     let r = checks.iter().find(|c| c.id == "retention").unwrap();
     assert!(r.detail.contains("prompts"), "{}", r.detail);
 }
+
+/// Les contrôles restés au daemon reprennent leur rang de la 1.0.0-alpha.7 dans la
+/// sortie de `penelope doctor` : stabilité du prompt, historique et jobs d'outils juste
+/// après la rétention, serveurs MCP après le réseau (épopée #208, T28).
+#[tokio::test]
+async fn doctor_keeps_the_order_of_alpha_7() {
+    let (_d, s, _c, _fake, sup) = setup().await;
+    let checks = super::run(&s, Some(sup)).await;
+    // Relevé sur la 1.0.0-alpha.7 (c5ecc92), où `doctor::run` appelait lui-même les trois
+    // contrôles du daemon ; les contrôles de l'OS, qui varient d'une machine à l'autre,
+    // précèdent `owner` et ne sont pas listés.
+    const ALPHA_7: &[&str] = &[
+        "owner",
+        "telegram.allowed_chats",
+        "secret.telegram_bot_token",
+        "secret.openrouter_api_key",
+        "db",
+        "audit",
+        "clock",
+        "store.writer",
+        "config.unknown",
+        "retention",
+        "prompt.stability",
+        "history.journal",
+        "tool_jobs",
+        "budget.day",
+        "models.tools",
+        "sandbox.deny_read",
+        "sandbox.shell_network",
+        "effects",
+        "workflows",
+        "skills",
+        "telegram_forms",
+        "shell_lines",
+        "redactor",
+        "reasoning_effort",
+        "dream_power",
+        "secret_roundtrip",
+        "machine.inventory",
+        "skills.requirements",
+        "memory.size",
+        "telegram.home",
+        "net.api.telegram.org",
+        "net.openrouter.ai",
+        "mcp.oauth.redirect",
+    ];
+    let ids: Vec<&str> = checks.iter().map(|c| c.id.as_str()).collect();
+    let owner = ids.iter().position(|id| *id == "owner").expect("owner");
+    assert_eq!(&ids[owner..], ALPHA_7, "ordre de la sortie de doctor");
+}
