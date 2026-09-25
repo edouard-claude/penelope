@@ -1,5 +1,6 @@
 use super::*;
 use penelope_kernel::clock::TestClock;
+use serde_json::json;
 
 async fn services() -> (tempfile::TempDir, Arc<Services>) {
     let dir = tempfile::tempdir().unwrap();
@@ -475,4 +476,78 @@ async fn huge_tool_results_are_externalised() {
         "le corps doit partir en artefact"
     );
     assert!(stored[0].message.text().len() < big.len() / 4);
+}
+
+/// Épopée #208, T12 : lire la conversation ne réclame rien ; la boîte du tour réclame
+/// un message arrivé pendant le tour une seule fois, et l'écrire deux fois n'en fait
+/// qu'une entrée, datée de son arrivée (#161).
+#[tokio::test]
+async fn reading_the_conversation_absorbs_nothing_and_the_inbox_claims_once() {
+    let (_d, s) = services().await;
+    let sid = session(&s).await;
+    let payload =
+        |text: &str| json!({"text": text, "origin": penelope_app::bus::Origin::Cli.to_value()});
+    let kind = penelope_kernel::turn::TurnKind::Message;
+    s.turns
+        .enqueue(&sid, kind, payload("initial"), None, 0)
+        .await
+        .unwrap();
+    let turn = s.turns.claim("test").await.unwrap().unwrap();
+    let tiers = build_tiers(&s, "initial", &[], None).await;
+    let conv = SessionConversation::new(s.clone(), &sid, "openrouter:mock/model", tiers, 0);
+    conv.record(&ChatMessage::user("initial"), false)
+        .await
+        .unwrap();
+    s.turns
+        .enqueue(&sid, kind, payload("nouvelle consigne"), None, 0)
+        .await
+        .unwrap();
+    let pending = s.turns.pending_count().await.unwrap();
+
+    for _ in 0..2 {
+        let texts: Vec<String> = conv
+            .request_messages()
+            .await
+            .unwrap()
+            .iter()
+            .map(ChatMessage::text)
+            .collect();
+        assert!(!texts.iter().any(|t| t.contains("nouvelle consigne")));
+        assert_eq!(
+            s.turns.pending_count().await.unwrap(),
+            pending,
+            "rien réclamé"
+        );
+    }
+
+    let inbox = TurnInbox::for_turn(&s, &turn, None, &CancelToken::new()).unwrap();
+    let steers = inbox.claim(Checkpoint::BeforeModelCall).await.unwrap();
+    assert_eq!(steers.len(), 1);
+    assert_eq!(steers[0].text.as_deref(), Some("nouvelle consigne"));
+    assert!(
+        inbox
+            .claim(Checkpoint::BeforeModelCall)
+            .await
+            .unwrap()
+            .is_empty(),
+        "une seule absorption"
+    );
+    for _ in 0..2 {
+        conv.record_steer(&steers[0]).await.unwrap();
+    }
+    let texts: Vec<String> = conv
+        .request_messages()
+        .await
+        .unwrap()
+        .iter()
+        .map(ChatMessage::text)
+        .collect();
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|t| t.contains("nouvelle consigne"))
+            .count(),
+        1,
+        "{texts:?}"
+    );
 }

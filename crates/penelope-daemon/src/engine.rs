@@ -6,7 +6,7 @@
 
 use crate::agent::{AgentLoop, TurnOutcome, TurnSink, TurnSpec};
 use crate::bus::Origin;
-use crate::conversation::SessionConversation;
+use crate::conversation::{SessionConversation, TurnInbox};
 use crate::executor::{NativeToolExecutor, ToolEnv, chat_tool_defs, default_workspaces};
 use crate::helpers::{last_model_key, pin_key};
 use crate::runtime::Daemon;
@@ -548,15 +548,12 @@ impl Daemon {
         {
             tracing::warn!(session = %turn.session_id, error = %e, "résumé en attente non publié");
         }
-        let mut conv =
-            SessionConversation::new(s.clone(), &turn.session_id, &model_id, tiers, episode)
-                .with_compactor(Arc::new(crate::compaction::OverflowCompactor {
-                    context: crate::compaction::context_of(self),
-                    turn_id: Some(origin_turn.clone()),
-                }));
-        if turn.kind == TurnKind::Message {
-            conv = conv.with_merge_turn(turn.clone(), self.hooks.telegram(), cancel.clone());
-        }
+        let conv = SessionConversation::new(s.clone(), &turn.session_id, &model_id, tiers, episode)
+            .with_compactor(Arc::new(crate::compaction::OverflowCompactor {
+                context: crate::compaction::context_of(self),
+                turn_id: Some(origin_turn.clone()),
+            }));
+        let inbox = TurnInbox::for_turn(&s, turn, self.hooks.telegram(), &cancel);
 
         // 5. Outils.
         let mut exec = NativeToolExecutor::new(
@@ -604,6 +601,7 @@ impl Daemon {
         };
 
         let outcome = AgentLoop::new(crate::agent::services_of(&s), provider)
+            .with_inbox(inbox)
             .run_conversation_as(&spec, Some(meta), &conv, &exec, sink)
             .await;
         // Estimation locale ou prompt réellement facturé : l'un ou l'autre au-delà du seuil

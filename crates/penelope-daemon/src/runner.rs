@@ -428,8 +428,14 @@ mod tests {
             "openrouter:mock/model",
             tiers,
             0,
+        );
+        let inbox = crate::conversation::TurnInbox::for_turn(
+            &services,
+            &turn,
+            Some(channel.clone()),
+            &cancel,
         )
-        .with_merge_turn(turn.clone(), Some(channel.clone()), cancel.clone());
+        .unwrap();
         conv.record(&penelope_llm::types::ChatMessage::user("début"), false)
             .await
             .unwrap();
@@ -450,7 +456,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        conv.request_messages().await.unwrap();
+        inbox
+            .claim(crate::agent::Checkpoint::BeforeModelCall)
+            .await
+            .unwrap();
         assert!(cancel.is_cancelled());
         assert_eq!(channel.0.lock().unwrap().len(), 5);
         assert!(

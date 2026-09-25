@@ -17,7 +17,7 @@ test_modules = [
 # Elle ne peut que rétrécir : un fichier repassé sous le plafond doit en sortir.
 [files.oversized]
 "crates/penelope-daemon/src/tool_jobs.rs" = 1207   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/engine.rs" = 1095
+"crates/penelope-daemon/src/engine.rs" = 1093
 "crates/penelope-kernel/src/config.rs" = 2148   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-cli/src/commands.rs" = 2179   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-llm/src/provider.rs" = 2048

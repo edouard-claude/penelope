@@ -24,6 +24,8 @@ impl AgentLoop {
         let attempts = Attempts::default();
         // Un dépassement de fenêtre prouvé a droit à une compaction, pas davantage.
         let mut overflow_compacted = false;
+        // Messages du propriétaire arrivés pendant le tour (§3.4).
+        let steering = Steering::new(self.inbox.as_deref());
 
         for iteration in 0..self.max_iterations {
             if spec.cancel.is_cancelled() {
@@ -68,8 +70,11 @@ impl AgentLoop {
                 return Ok(stop);
             }
 
-            // 3. Appel du modèle, avec repli sur panne transitoire.
-            let mut messages = conv.request_messages().await?;
+            // 3. Appel du modèle, avec repli sur panne transitoire. Ce qui est arrivé
+            // pendant le tour est réclamé et écrit d'abord : la lecture n'a pas d'effet.
+            let steers = steering.claim(Checkpoint::BeforeModelCall).await?;
+            steering.record(s, spec, conv, &steers).await?;
+            let mut messages = steering.with_merge_note(conv.request_messages().await?);
             if spec.cancel.is_cancelled() {
                 return Ok(TurnOutcome::Cancelled);
             }

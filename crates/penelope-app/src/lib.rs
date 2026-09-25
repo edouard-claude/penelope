@@ -19,6 +19,7 @@ pub mod media;
 pub mod outcome;
 pub mod ports;
 pub mod services;
+pub mod steering;
 pub mod tasks;
 pub mod testing;
 pub mod tool_executor;

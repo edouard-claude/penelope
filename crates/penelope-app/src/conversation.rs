@@ -1,5 +1,6 @@
 //! Le transcript sur lequel travaille un tour.
 
+use crate::steering::Steer;
 use penelope_context::journal::Provenance;
 use penelope_context::tiers::{Tiers, TileMap};
 use penelope_kernel::canonical::sha256_hex;
@@ -23,6 +24,15 @@ pub trait Conversation: Send + Sync {
         _prov: &Provenance,
     ) -> anyhow::Result<()> {
         self.record(message, eager).await
+    }
+    /// Écrit un message du propriétaire réclamé pendant le tour (`Inbox::claim`). Un
+    /// transcript de session l'écrit une seule fois sous son identifiant de file, avec
+    /// son heure d'arrivée (#161).
+    async fn record_steer(&self, steer: &Steer) -> anyhow::Result<()> {
+        match &steer.text {
+            Some(text) => self.record(&ChatMessage::user(text.as_str()), false).await,
+            None => Ok(()),
+        }
     }
     /// Queue du transcript, sans prompt système : sert à retrouver les appels en attente.
     async fn tail(&self) -> anyhow::Result<Vec<ChatMessage>>;

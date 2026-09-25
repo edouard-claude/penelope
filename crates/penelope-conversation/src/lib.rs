@@ -19,19 +19,18 @@ pub mod titles;
 use penelope_app::bus::{ChannelDelivery, Origin};
 use penelope_app::conversation::Conversation;
 pub use penelope_app::helpers::{local_now, vault_dir};
+use penelope_app::steering::{Checkpoint, Inbox, Steer};
 // Tuiles du prompt et instantanés mémoire, descendus dans `penelope-vault` (T22).
 use penelope_app::services::Services;
 use penelope_context::CompactionParams;
 use penelope_context::journal::{Provenance, UserSource};
 use penelope_context::tiers::Tiers;
 use penelope_context::transcript::Entry;
-use penelope_kernel::event::EventDraft;
-use penelope_kernel::turn::Turn;
+use penelope_kernel::turn::{Turn, TurnKind};
 use penelope_llm::CancelToken;
 use penelope_llm::types::{ChatMessage, Role};
 pub use penelope_vault::snapshot::{core_overflow, fresh_snapshot, snapshot_uids};
 pub use penelope_vault::tiers::{build_tiers, build_tiers_in, build_turn_prompt};
-use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -49,10 +48,6 @@ pub struct SessionConversation {
     compactor: Option<Arc<dyn penelope_app::conversation::Compactor>>,
     /// La dernière projection a atteint le seuil de la compaction de fond.
     wants_compaction: AtomicBool,
-    merge_turn: Option<Turn>,
-    merge_channel: Option<Arc<dyn ChannelDelivery>>,
-    merge_cancel: Option<CancelToken>,
-    absorbed_during_run: AtomicBool,
 }
 
 impl SessionConversation {
@@ -71,10 +66,6 @@ impl SessionConversation {
             episode,
             compactor: None,
             wants_compaction: AtomicBool::new(false),
-            merge_turn: None,
-            merge_channel: None,
-            merge_cancel: None,
-            absorbed_during_run: AtomicBool::new(false),
         }
     }
 
@@ -86,38 +77,9 @@ impl SessionConversation {
         self
     }
 
-    /// Rattache les messages arrivés pendant les appels d'outils au prochain appel modèle.
-    pub fn with_merge_turn(
-        mut self,
-        turn: Turn,
-        channel: Option<Arc<dyn ChannelDelivery>>,
-        cancel: CancelToken,
-    ) -> Self {
-        self.merge_turn = Some(turn);
-        self.merge_channel = channel;
-        self.merge_cancel = Some(cancel);
-        self
-    }
-
     /// Vrai si une projection de ce tour a atteint le seuil moins la marge (§5.4).
     pub fn wants_compaction(&self) -> bool {
         self.wants_compaction.load(Ordering::SeqCst)
-    }
-
-    fn with_merge_note(&self, mut messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
-        if self.absorbed_during_run.load(Ordering::SeqCst) {
-            let index = messages
-                .iter()
-                .take_while(|m| m.role == Role::System)
-                .count();
-            messages.insert(
-                index,
-                ChatMessage::system(
-                    "Un nouveau message utilisateur est arrivé pendant le tour ; ce qui précède est déjà exécuté. Tiens compte du nouveau message dans la réponse en cours.",
-                ),
-            );
-        }
-        messages
     }
 
     fn bare_model(&self) -> &str {
@@ -151,75 +113,6 @@ impl SessionConversation {
 impl Conversation for SessionConversation {
     async fn request_messages(&self) -> anyhow::Result<Vec<ChatMessage>> {
         let s = &self.services;
-        if let Some(turn) = &self.merge_turn {
-            let absorbed = s.turns.absorb_pending(turn).await?;
-            for message in &absorbed {
-                let Some(text) = message.payload.get("text").and_then(|v| v.as_str()) else {
-                    continue;
-                };
-                let tokens = s.context.estimator.text_tokens(&self.model_id, text);
-                // Absorbé pendant le tour : la requête porte la note de fusion (§2.3).
-                let prov = Provenance {
-                    mid_turn: true,
-                    ..Provenance::queued(
-                        UserSource::Merged,
-                        message.id.as_str(),
-                        &message.enqueued_at,
-                    )
-                };
-                let user = ChatMessage::user(text);
-                s.context
-                    .history
-                    .append_queued(&self.session_id, &user, tokens, self.episode, &prov)
-                    .await?;
-            }
-            if !absorbed.is_empty() {
-                self.absorbed_during_run.store(true, Ordering::SeqCst);
-                s.events
-                    .append(
-                        EventDraft::new(
-                            "turn.merged",
-                            json!({"turn": turn.id.as_str(), "count": absorbed.len(), "phase": "running"}),
-                        )
-                        .session(&self.session_id),
-                    )
-                    .await?;
-                if matches!(Origin::from_payload(&turn.payload), Origin::Telegram { .. }) {
-                    let merged = s.turns.merged_messages(turn.id.as_str()).await?;
-                    let payloads = std::iter::once(&turn.payload)
-                        .chain(merged.iter().map(|message| &message.payload));
-                    let parts: Vec<String> = payloads
-                        .filter_map(|payload| payload.get("text").and_then(|text| text.as_str()))
-                        .map(ToString::to_string)
-                        .collect();
-                    let cfg = s.config.config();
-                    let too_many = cfg.telegram.burst_messages > 0
-                        && parts.len() >= cfg.telegram.burst_messages;
-                    let too_long = cfg.telegram.burst_chars > 0
-                        && parts.iter().map(|part| part.chars().count()).sum::<usize>()
-                            >= cfg.telegram.burst_chars;
-                    if too_many || too_long {
-                        let channel = self
-                            .merge_channel
-                            .as_ref()
-                            .ok_or_else(|| anyhow::anyhow!("canal Telegram indisponible"))?;
-                        let origin = merged
-                            .last()
-                            .map(|message| Origin::from_payload(&message.payload))
-                            .unwrap_or_else(|| Origin::from_payload(&turn.payload));
-                        channel
-                            .offer_burst(&self.session_id, &origin, parts)
-                            .await
-                            .map_err(anyhow::Error::msg)?;
-                        s.kv_set(&format!("turn.burst_card.{}", turn.id), "1")
-                            .await?;
-                        if let Some(cancel) = &self.merge_cancel {
-                            cancel.cancel();
-                        }
-                    }
-                }
-            }
-        }
         let params = self.params();
         let entries = self.projected_entries().await?;
         let ctx = s.context.build_from_entries(
@@ -233,7 +126,7 @@ impl Conversation for SessionConversation {
             self.wants_compaction.store(true, Ordering::SeqCst);
         }
         if ctx.fits {
-            return Ok(self.with_merge_note(ctx.messages));
+            return Ok(ctx.messages);
         }
         // Niveau 4 : la requête ne tient pas, on la réduit en le prouvant (§5.4).
         let limit = params
@@ -243,7 +136,7 @@ impl Conversation for SessionConversation {
             .context
             .emergency(ctx.messages, limit, &self.model_id)
             .map_err(|e| anyhow::anyhow!(e))?;
-        Ok(self.with_merge_note(messages))
+        Ok(messages)
     }
 
     async fn record(&self, message: &ChatMessage, eager: bool) -> anyhow::Result<()> {
@@ -320,6 +213,31 @@ impl Conversation for SessionConversation {
         }
     }
 
+    /// Absorbé pendant le tour : écrit une fois sous sa clé de file, daté de son
+    /// arrivée, marqué `mid_turn` (§2.3, #161).
+    async fn record_steer(&self, steer: &Steer) -> anyhow::Result<()> {
+        let Some(text) = &steer.text else {
+            return Ok(());
+        };
+        let s = &self.services;
+        let tokens = s.context.estimator.text_tokens(&self.model_id, text);
+        let prov = Provenance {
+            mid_turn: true,
+            ..Provenance::queued(UserSource::Merged, &steer.id, &steer.arrived_at)
+        };
+        s.context
+            .history
+            .append_queued(
+                &self.session_id,
+                &ChatMessage::user(text.as_str()),
+                tokens,
+                self.episode,
+                &prov,
+            )
+            .await?;
+        Ok(())
+    }
+
     async fn tail(&self) -> anyhow::Result<Vec<ChatMessage>> {
         // Les dernières entrées seulement : `resolve_pending` appelle cette queue à
         // chaque itération (issue #55).
@@ -330,6 +248,113 @@ impl Conversation for SessionConversation {
 
     fn prompt_prefix(&self) -> Option<penelope_app::conversation::PromptPrefix> {
         Some(penelope_app::conversation::PromptPrefix::of(&self.tiers))
+    }
+}
+
+/// Les messages arrivés pendant un tour de message, réclamés sous le bail du tour
+/// (`Inbox`, §3.4). La règle de rafale du canal s'applique à la réclamation : au-delà,
+/// la carte de rafale part et le tour s'arrête.
+pub struct TurnInbox {
+    services: Arc<Services>,
+    session_id: String,
+    turn: Turn,
+    channel: Option<Arc<dyn ChannelDelivery>>,
+    cancel: CancelToken,
+}
+
+impl TurnInbox {
+    pub fn new(
+        services: Arc<Services>,
+        turn: Turn,
+        channel: Option<Arc<dyn ChannelDelivery>>,
+        cancel: CancelToken,
+    ) -> Self {
+        TurnInbox {
+            services,
+            session_id: turn.session_id.clone(),
+            turn,
+            channel,
+            cancel,
+        }
+    }
+
+    /// La boîte d'un tour de message : seul un message du propriétaire en reçoit
+    /// d'autres pendant qu'il tourne (#161).
+    pub fn for_turn(
+        services: &Arc<Services>,
+        turn: &Turn,
+        channel: Option<Arc<dyn ChannelDelivery>>,
+        cancel: &CancelToken,
+    ) -> Option<Arc<dyn Inbox>> {
+        (turn.kind == TurnKind::Message).then(|| {
+            Arc::new(TurnInbox::new(
+                services.clone(),
+                turn.clone(),
+                channel,
+                cancel.clone(),
+            )) as Arc<dyn Inbox>
+        })
+    }
+
+    /// Rafale du canal : trop de messages ou trop de texte depuis le début du tour.
+    async fn burst_rule(&self) -> anyhow::Result<()> {
+        let (s, turn) = (&self.services, &self.turn);
+        if matches!(Origin::from_payload(&turn.payload), Origin::Telegram { .. }) {
+            let merged = s.turns.merged_messages(turn.id.as_str()).await?;
+            let payloads =
+                std::iter::once(&turn.payload).chain(merged.iter().map(|message| &message.payload));
+            let parts: Vec<String> = payloads
+                .filter_map(|payload| payload.get("text").and_then(|text| text.as_str()))
+                .map(ToString::to_string)
+                .collect();
+            let cfg = s.config.config();
+            let too_many =
+                cfg.telegram.burst_messages > 0 && parts.len() >= cfg.telegram.burst_messages;
+            let too_long = cfg.telegram.burst_chars > 0
+                && parts.iter().map(|part| part.chars().count()).sum::<usize>()
+                    >= cfg.telegram.burst_chars;
+            if too_many || too_long {
+                let channel = self
+                    .channel
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("canal Telegram indisponible"))?;
+                let origin = merged
+                    .last()
+                    .map(|message| Origin::from_payload(&message.payload))
+                    .unwrap_or_else(|| Origin::from_payload(&turn.payload));
+                channel
+                    .offer_burst(&self.session_id, &origin, parts)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                s.kv_set(&format!("turn.burst_card.{}", turn.id), "1")
+                    .await?;
+                self.cancel.cancel();
+            }
+        }
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl Inbox for TurnInbox {
+    async fn claim(&self, _at: Checkpoint) -> anyhow::Result<Vec<Steer>> {
+        let absorbed = self.services.turns.absorb_pending(&self.turn).await?;
+        if absorbed.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.burst_rule().await?;
+        Ok(absorbed
+            .into_iter()
+            .map(|message| Steer {
+                id: message.id.as_str().to_string(),
+                text: message
+                    .payload
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                arrived_at: message.enqueued_at,
+            })
+            .collect())
     }
 }
 

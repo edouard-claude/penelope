@@ -35,6 +35,8 @@ pub struct AgentLoop {
     pub services: Arc<AgentServices>,
     pub provider: Arc<dyn Provider>,
     pub max_iterations: u32,
+    /// Messages du propriétaire arrivés pendant le tour (§3.4) ; `None` : aucun.
+    pub(crate) inbox: Option<Arc<dyn Inbox>>,
 }
 
 /// Appels au modèle par tour : au-delà, le tour s'arrête ; « Continuer » en redonne
@@ -51,7 +53,14 @@ impl AgentLoop {
             services,
             provider,
             max_iterations: TURN_CALLS,
+            inbox: None,
         }
+    }
+
+    /// Réclame les messages arrivés pendant le tour aux points de contrôle (§3.4).
+    pub fn with_inbox(mut self, inbox: Option<Arc<dyn Inbox>>) -> Self {
+        self.inbox = inbox;
+        self
     }
 
     /// Exécute un tour sur un transcript en mémoire.

@@ -71,11 +71,36 @@ async fn claimed_messages_keep_separate_user_entries_and_arrival_times() {
     assert_eq!(merge_events, 1);
 }
 
+/// Dépose un message du propriétaire pendant son premier appel d'outil.
+struct EnqueueDuringTool {
+    daemon: Arc<Daemon>,
+    session_id: String,
+    done: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl crate::agent::ToolExecutor for EnqueueDuringTool {
+    async fn execute(
+        &self,
+        _name: &str,
+        _args: &Value,
+    ) -> Result<penelope_tools::ToolOutcome, penelope_tools::ToolError> {
+        if !self.done.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            self.daemon
+                .enqueue_message(&self.session_id, "nouvelle consigne", &Origin::Cli, None)
+                .await
+                .unwrap();
+        }
+        Ok(penelope_tools::ToolOutcome::ok(json!("résultat")))
+    }
+}
+
 /// #161 : le message reçu pendant un outil rejoint la prochaine projection,
-/// après le résultat, et un second appel ne le rejoue pas.
+/// après le résultat, et un second appel ne le rejoue pas. Épopée #208, T12 : c'est
+/// la boucle qui le réclame (`Inbox`), pas la lecture de la conversation.
 #[tokio::test]
 async fn a_running_turn_absorbs_a_new_message_before_the_next_model_call() {
-    let (_dir, daemon, _provider) = daemon().await;
+    let (_dir, daemon, provider) = daemon().await;
     let sid = daemon.chat_session_for(&Origin::Cli).await.unwrap();
     daemon
         .enqueue_message(&sid, "initial", &Origin::Cli, None)
@@ -89,25 +114,52 @@ async fn a_running_turn_absorbs_a_new_message_before_the_next_model_call() {
         "openrouter:mock/model",
         tiers,
         0,
-    )
-    .with_merge_turn(turn.clone(), None, CancelToken::new());
+    );
     conv.record(&ChatMessage::user("initial"), false)
         .await
         .unwrap();
-    conv.record(
-        &ChatMessage::tool_result("call-1", "test", "résultat"),
-        false,
+    for id in ["call-1", "call-2"] {
+        let call = ToolCall {
+            id: id.into(),
+            name: "time_now".into(),
+            arguments: json!({}),
+        };
+        provider.push(Scripted::ToolCalls(String::new(), vec![call]));
+    }
+    provider.reply("fin");
+    let cancel = CancelToken::new();
+    let spec = TurnSpec {
+        session_id: sid.clone(),
+        run_id: None,
+        turn_id: Some(turn.id.to_string()),
+        model_id: "openrouter:mock/model".into(),
+        fallback_models: Vec::new(),
+        tools: Vec::new(),
+        allowed_tools: Vec::new(),
+        cancel: cancel.clone(),
+    };
+    let exec = EnqueueDuringTool {
+        daemon: daemon.clone(),
+        session_id: sid.clone(),
+        done: Default::default(),
+    };
+    let inbox = TurnInbox::for_turn(&daemon.services, &turn, None, &cancel);
+    let outcome = AgentLoop::new(
+        crate::agent::services_of(&daemon.services),
+        provider.clone(),
     )
+    .with_inbox(inbox)
+    .run_conversation(&spec, &conv, &exec, &crate::agent::NullSink)
     .await
     .unwrap();
-    daemon
-        .enqueue_message(&sid, "nouvelle consigne", &Origin::Cli, None)
-        .await
-        .unwrap();
-    let first = conv.request_messages().await.unwrap();
-    let second = conv.request_messages().await.unwrap();
-    for request in [&first, &second] {
-        let text: Vec<_> = request.iter().map(ChatMessage::text).collect();
+    assert!(
+        matches!(outcome, TurnOutcome::Answered { .. }),
+        "{outcome:?}"
+    );
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 3);
+    for request in &requests[1..] {
+        let text: Vec<_> = request.messages.iter().map(ChatMessage::text).collect();
         let tool = text.iter().position(|t| t.contains("résultat")).unwrap();
         let user = text
             .iter()
