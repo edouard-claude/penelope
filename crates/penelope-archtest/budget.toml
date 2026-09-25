@@ -17,10 +17,9 @@ test_modules = [
 # Elle ne peut que rétrécir : un fichier repassé sous le plafond doit en sortir.
 [files.oversized]
 "crates/penelope-daemon/src/tool_jobs.rs" = 1207   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/engine.rs" = 1105
+"crates/penelope-daemon/src/engine.rs" = 1095
 "crates/penelope-kernel/src/config.rs" = 2148   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-cli/src/commands.rs" = 2179   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-daemon/src/compaction.rs" = 1208
 "crates/penelope-llm/src/provider.rs" = 2048
 "crates/penelope-daemon/src/scheduler.rs" = 1095
 "crates/penelope-memory/src/index.rs" = 1622
@@ -46,7 +45,7 @@ test_modules = [
 # vingtaine de correctifs de taille courante. Un autre crate se plafonne en ajoutant une
 # ligne. UPDATE_BUDGET ne touche pas à cette table.
 [crates]
-"penelope-daemon" = 25800   # v1 : après la sortie de app, mcp-host, vault, ops, passerelle, agent, dream et executor ; redescend avec conversation, orchestrator
+"penelope-daemon" = 22863   # v1 : après la sortie de app, mcp-host, vault, ops, passerelle, agent, dream, executor et conversation ; redescend avec orchestrator
 
 # Liste blanche des modules du daemon (R5) : les déclarations `mod x;` de lib.rs et
 # `mod screens;` de telegram.rs. `mod tests;` est toujours permis. Les fichiers où un bloc
@@ -56,10 +55,8 @@ modules = [
     "agent",
     "approval_mode",
     "audit",
-    "budget_alert",
     "cache_audit",
     "compaction",
-    "conversation",
     "dream",
     "engine",
     "executor",
@@ -75,7 +72,6 @@ modules = [
     "selfknow",
     "session_ops",
     "supervisor",
-    "titles",
     "wiki_e2e",
     "workflow",  # aides de test sorties de mcp.rs (#215),
   "tool_jobs",  # sous-module de agent/ (lot F, T02 à T06)
@@ -100,7 +96,7 @@ impl_daemon = ["runtime.rs", "engine.rs", "runner.rs", "supervisor.rs"]
 "workflow/control.rs" = 3   # découpage (lot G) : la mention suit son code
 "tool_jobs.rs" = 3   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "scheduler.rs" = 25
-"compaction.rs" = 17
+"compaction.rs" = 1
 "dream/mod.rs" = 3
 "supervisor.rs" = 10
 "runner.rs" = 8
@@ -206,6 +202,7 @@ required = [
 # OwnerChannel ; ces entrées ne peuvent que décroître (lot D, T36), sauf les permanentes,
 # justifiées en commentaire, qui attendent T37 après la V1.
 [channel.allowed]
+"crates/penelope-conversation/src/lib.rs" = 6   # suit conversation.rs dans penelope-conversation (T23) ; la fusion des rafales part avec T36
 "crates/penelope-vault/src/session_project.rs" = 2   # descendu du daemon avec le vault (T22) : le sujet Telegram nomme le projet
 "crates/penelope-daemon/src/rpc/methods/workflows.rs" = 9   # découpage (lot G) : la mention suit son code
 "crates/penelope-daemon/src/rpc/methods/approvals.rs" = 9   # découpage (lot G) : la mention suit son code
@@ -232,7 +229,6 @@ required = [
 "crates/penelope-app/src/elicitation.rs" = 10
 "crates/penelope-daemon/src/engine.rs" = 10
 "crates/penelope-app/src/bus.rs" = 9          # permanent pour Origin::Telegram, tant qu'Origin::Channel n'existe pas (T37)
-"crates/penelope-daemon/src/conversation.rs" = 6
 "crates/penelope-kernel/src/turn.rs" = 6
 "crates/penelope-kernel/src/effects.rs" = 5
 "crates/penelope-tools/src/spec.rs" = 4
