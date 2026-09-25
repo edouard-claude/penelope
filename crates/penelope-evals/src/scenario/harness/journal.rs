@@ -80,7 +80,8 @@ fn sql_json(v: rusqlite::types::Value) -> Value {
     }
 }
 
-pub(super) async fn check(s: &Services, name: &str) -> anyhow::Result<()> {
+/// Rend le nombre de lignes de cache que la refonte a redonnées à l'identique.
+pub(super) async fn check(s: &Services, name: &str) -> anyhow::Result<usize> {
     let history = &s.context.history;
     let report = history.verify(None, None).await?;
     anyhow::ensure!(
@@ -128,5 +129,5 @@ pub(super) async fn check(s: &Services, name: &str) -> anyhow::Result<()> {
         before.len(),
         after.len()
     );
-    Ok(())
+    Ok(before.len())
 }

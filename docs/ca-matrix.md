@@ -9,7 +9,7 @@ Pour le régénérer après avoir ajouté un test :
 UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 ```
 
-75 tests d'acceptation, 14 sections couvertes.
+78 tests d'acceptation, 14 sections couvertes.
 
 ## §2. Plateformes, portabilité et exploitation headless
 
@@ -36,6 +36,8 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 | CA 4.2 | Dispatching becomes unknown without retry | `crates/penelope-kernel/src/effects.rs` |
 | CA 4.3 | Generations are monotonic | `crates/penelope-kernel/src/config/tests.rs` |
 | CA 4.4 | Config changes are published live | `crates/penelope-evals/tests/hot_reload.rs` |
+| CA 4.5 | Model visible is logged | `crates/penelope-evals/tests/scenarios.rs` |
+| CA 4.6 | Reindex is lossless | `crates/penelope-evals/tests/scenarios.rs` |
 
 ## §5. Sessions et moteur de contexte
 
@@ -44,6 +46,7 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 | CA 5.1 | Level4 proves it fits | `crates/penelope-context/src/compaction.rs` |
 | CA 5.3 | Prefix is byte identical across turns | `crates/penelope-context/src/tiers.rs` |
 | CA 5.4 | Each request extends the previous one | `crates/penelope-daemon/src/cache_audit.rs` |
+| CA 5.5 | Replace only at a turn boundary | `crates/penelope-evals/tests/scenarios.rs` |
 
 ## §6. Mémoire, apprentissage continu et second brain
 

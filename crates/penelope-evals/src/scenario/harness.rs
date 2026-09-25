@@ -11,8 +11,10 @@ mod lifecycle;
 mod steps;
 #[cfg(test)]
 mod tests;
+mod visible;
 
 use self::lifecycle::shut_down;
+pub use self::visible::Visible;
 use super::normalise::Normaliser;
 use super::{McpTool, Mode, Scenario, ScriptLine, Spec, Step, world};
 use anyhow::Context as _;
@@ -51,6 +53,18 @@ pub struct Run {
     pub surface: Vec<Value>,
     /// Le script capté sur le vrai fournisseur (mode enregistreur seulement).
     pub recorded: Option<Vec<ScriptLine>>,
+    /// Ce que les contrôles du journal ont vu (épopée #208, T22).
+    pub audit: Audit,
+}
+
+/// Ce que les contrôles du journal, à la fin du run, ont vu : les critères d'acceptation
+/// vérifient ainsi qu'ils n'ont pas réussi à vide.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Audit {
+    /// Requêtes comparées à leur pliage, remplacements admis dans un tour.
+    pub visible: Visible,
+    /// Lignes de cache que `history reindex` a redonnées à l'identique.
+    pub reindexed: usize,
 }
 
 type Shared<T> = Arc<Mutex<T>>;
@@ -113,12 +127,14 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
         !h.crashed,
         "le scénario finit sur un crash : une étape `restart` doit le suivre"
     );
-    let dumped = {
+    let (dumped, audit) = {
         let life = h.life.as_ref().context("services absents")?;
         let workspace = workspace_of(&life.services);
         let dumped = world::dump(&life.services, &workspace).await?;
-        journal::check(&life.services, &spec.name).await?;
-        dumped
+        let seen = lock(&h.seen).clone();
+        let visible = visible::check(&life.services, &seen, &spec.name).await?;
+        let reindexed = journal::check(&life.services, &spec.name).await?;
+        (dumped, Audit { visible, reindexed })
     };
     if let Some(life) = h.life.take() {
         shut_down(life, &spec.name).await;
@@ -153,6 +169,7 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
         expected,
         surface,
         recorded,
+        audit,
     })
 }
 

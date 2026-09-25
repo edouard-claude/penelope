@@ -422,6 +422,13 @@ pub async fn replay(dir: &Path) -> anyhow::Result<(Vec<Value>, Vec<Value>)> {
     Ok((run.expected, run.surface))
 }
 
+/// Rejoue un scénario sans lire ni écrire ses attendus et rend ce que les contrôles du
+/// journal ont vu (épopée #208, T22) ; un contrôle en échec est une erreur.
+pub async fn audit(dir: &Path) -> anyhow::Result<harness::Audit> {
+    let scenario = load(dir)?;
+    Ok(harness::run(&scenario, Mode::Replay).await?.audit)
+}
+
 /// Rejoue un scénario avec `history.source` imposé (`tables` ou `journal`, épopée #208,
 /// T14) : la surface seule, normalisée.
 pub async fn replay_from(dir: &Path, source: &str) -> anyhow::Result<Vec<Value>> {
