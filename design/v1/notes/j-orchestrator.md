@@ -53,3 +53,114 @@ garde les anciennes signatures en `&Arc<Daemon>` jusqu'à T30.
   `penelope_app::services::reload_skills`). Rien à faire.
 - Le test « le sous-agent transforme `AwaitingApproval` en erreur » annoncé comme
   existant n'existe pas : il est écrit dans la crate.
+
+## 1. Livré
+
+| Commit | Quoi |
+|---|---|
+| `aaed02c` | inventaire (ce fichier, §0) |
+| `addd37f` | déplacement : `scheduler.rs` (1 095, liste de référence) coupé en `triggers`, `fire`, `outcome`, `origin` ; sorti de `[files.oversized]` |
+| `a1ebb4d` | déplacement : le code descend dans `workflow/engine/` et `scheduler/engine/`, `workflow/mod.rs` et `scheduler/mod.rs` deviennent des façades (`pub use engine::*`) |
+| `3826867` | signature : `Context` au lieu du daemon, `Daemon.workflows: Arc<State>`, étapes et sous-agents sur `Context.agent` (T11), `digest_inputs` et `DigestFeed(Arc<Services>)` dans l'ordonnanceur, entrées en `&Arc<Daemon>` dans les façades, banc de test sans daemon, test du sous-agent |
+| `e9eb825` | déplacement : `git mv` de `engine/` vers `crates/penelope-orchestrator` ; seuls les chemins `crate::` changent |
+| `78e99b8` | déplacement : `workflow/tests.rs` (1 101) en `tests/{mod,steps,runs}.rs` |
+| `c472e35` | archtest : `ORCHESTRATOR_ALLOWED_DEPS`, `the_orchestrator_crate_sees_neither_the_daemon_nor_the_channel` |
+| `32ff863` | composition : le superviseur branche `penelope_orchestrator::WorkflowOrchestrator` |
+| (suivant) | `compat.rs` retiré, `workflow::orchestrator_of` aux cinq sites et au superviseur ; notes |
+
+Critères de T27 :
+
+- la crate ne dépend ni du daemon, ni de la passerelle, ni de `penelope-telegram`, ni de
+  `penelope-ops`, ni de `penelope-mcp-host` (règle et test d'archtest ; ces deux
+  dernières en dépendances de test seulement) ; elle est dans `CHANNEL_AGNOSTIC_CRATES` ;
+- `WorkflowOrchestrator: penelope_app::ports::Orchestrator` (`workflow/orchestrator.rs`),
+  branché en production par le superviseur ;
+- `Daemon.workflows: Arc<penelope_orchestrator::State>` ;
+- la livraison vers le canal : `scheduler::Ports.delivery: Slot<dyn ChannelDelivery>`,
+  port de `penelope-app` lu au moment de s'en servir (`get()` rend
+  l'`Option<Arc<dyn ChannelDelivery>>`) ;
+- `ticket_to_deploy_e2e` vert (passerelle, sans changement) ;
+- 31 tests dans la crate, sans `Daemon` ; **aucun ne reste au daemon**.
+
+T11 : `AgentLoop::new(ctx.agent.clone(), provider)` dans `step_agent.rs` (étape `agent`
+et `run_sub_agent`) ; le daemon pose `agent::services_of` dans `context_of`. Nouveau
+test `a_sub_agent_that_needs_an_approval_fails_instead_of_waiting` : vérifié rouge quand
+`AwaitingApproval` rend `Ok`. `skill_install` : rien à faire (§0).
+
+## 2. Choix
+
+- **Une façade `engine/` avant le déplacement.** Les entrées en `&Arc<Daemon>` devaient
+  garder leur nom (`workflow::start_run`, `answer`, `control`, `drive`, `origin_of`,
+  `scheduler::run_now`, `tick`, `trigger_outcome_of`…) : la passerelle, le RPC et le
+  coureur les appellent, hors périmètre. Dans le même module que le code, elles
+  entraient en conflit de nom avec les fonctions en `&Context`. Sous une façade
+  (`pub use engine::*` puis `pub use penelope_orchestrator::workflow::*`), une
+  définition locale masque le glob, sans toucher au code déplacé.
+- **`WorkflowOrchestrator` n'a pas de double au daemon** (arbitrage de l'intégrateur) :
+  cinq sites hors périmètre le construisaient par littéral (`tool_jobs.rs`,
+  `executor/tests.rs`, `engine/tests/models.rs`, passerelle `ticket_to_deploy_e2e.rs`
+  et `telegram/tests/workflows.rs`) ; ils écrivent `workflow::orchestrator_of(&d)`,
+  une expression par site, comme `x.dream()`. Un `WorkflowOrchestrator { daemon }` de
+  transition (`workflow/compat.rs`, onze méthodes déléguées) a existé de `3826867` à
+  l'avant-dernier commit.
+- **`Context` au lieu d'un port par besoin.** Même motif que `compaction::Context` et
+  `penelope_dream::Context` : ce que le code lisait du daemon, en champs. `admin` est
+  optionnel (le daemon le pose, les tests non) ; `agent` porte les ports de la boucle
+  que seul le daemon sait construire (`KvModes`, instantanés, audit de cache, jobs).
+- **Ce qui ne lit que `Services` le prend** (`origin_of`, `form_of`, `label`, `due_today`,
+  `final_already_sent`, `digest_inputs`) : les façades n'ont pas à construire un
+  contexte pour eux.
+- **Banc de test** (`workflow/harness.rs`, `#[cfg(test)]`) : `Services::for_tests`,
+  `MockProviders`, registres de la boucle en mémoire (`MemoryModes`, `NoAudit`,
+  `NoJobs`), `WorkflowOrchestrator` branché sur son propre contexte. Un test change de
+  corps : la session d'origine de `a_recurring_prompt_survives_the_closing_of_its_conversation`
+  est créée directement au lieu de `Daemon::chat_session_for`.
+- `Context` vit dans `workflow/context.rs`, réexporté à la racine
+  (`penelope_orchestrator::Context`) ; l'ordonnanceur le lit par `crate::workflow`.
+
+## 3. Mesures
+
+| Mesure | Avant (`8f701ff`) | Après |
+|---|---|---|
+| `penelope-daemon/src`, lignes | 22 863 (plafond) | 17 076 |
+| `penelope-orchestrator/src`, lignes | | 6 180 (plus gros : `workflow/tests/runs.rs` 717, code : `driver.rs` 438) |
+| `[daemon.daemon_users]` workflow + scheduler | 45 | 20 (façades : `workflow/mod.rs` 13, `scheduler/mod.rs` 7) ; `dream/mod.rs` 3 → 2 |
+| `[files.oversized]` | `scheduler.rs` 1 095, `tool_jobs.rs` 1 207 | `scheduler.rs` sorti, `tool_jobs.rs` 1 205 |
+
+## 4. Vérifications
+
+`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` :
+verts. `cargo test --workspace --no-fail-fast` sur macOS (en deux passes, evals à part) :
+80 suites, 2 016 tests, 0 échec, dont archtest, `docs`, `scenarios`, `rpc_golden`,
+`ticket_to_deploy_e2e` (passerelle).
+
+## 5. Reste et blocages
+
+- Plafond `[crates]` du daemon : 22 863 dans `budget.toml`, 17 076 mesurées ; à
+  abaisser par l'intégrateur.
+- Bissection : entre `addd37f` et `e9eb825` exclu, `crates_stay_under_their_ceiling` est
+  rouge (+23 lignes d'en-têtes de modules).
+- T30 : retirer les façades `workflow/mod.rs`, `scheduler/mod.rs`
+  et `dream::digest_inputs(&Daemon)` ; appelants sur `penelope_orchestrator::…` avec
+  `workflow::context_of(&d)`.
+- T36 : `scheduler/origin.rs` nomme encore le canal (30 mentions : noms de
+  conversations, `retarget`) ; `fire.rs` et `outcome.rs` une chacun.
+- T34 : l'exécuteur cite toujours `Orchestrator::schedule_*`.
+- Hors périmètre, une expression par site (arbitrage de l'intégrateur) : `tool_jobs.rs`,
+  `executor/tests.rs`, `engine/tests/models.rs`, passerelle `ticket_to_deploy_e2e.rs` et
+  `telegram/tests/workflows.rs` ; `dream/mod.rs` du daemon (entrée `digest_inputs`).
+
+## 6. Notes de version (pour docs/progress.md)
+
+#### Orchestrateur : crate `penelope-orchestrator` (épopée #208, lot J, T27 et T11)
+
+- Le moteur de workflows et l'ordonnanceur quittent le daemon pour la crate
+  `penelope-orchestrator`, au-dessus de la boucle d'agent, de l'exécuteur, de la
+  conversation et du rêve ; une règle d'architecture lui interdit le daemon, la
+  passerelle et le canal, qu'il n'atteint que par les ports de `penelope-app`.
+- Ils reçoivent un contexte (services, providers, état des runs, services de la boucle)
+  au lieu du daemon ; les étapes `agent` et les sous-agents appellent la boucle
+  directement. Un test vérifie qu'un sous-agent qui demande une approbation échoue au
+  lieu d'attendre.
+- `penelope-daemon` passe de 22 863 à 17 076 lignes. Aucun comportement visible ne
+  change.

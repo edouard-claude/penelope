@@ -171,9 +171,7 @@ impl Daemon {
 
         // Workflows, sous-agents et images : offerts aux outils et à l'ordonnanceur.
         self.hooks
-            .set_orchestrator(Arc::new(penelope_orchestrator::WorkflowOrchestrator {
-                context: crate::workflow::context_of(&self),
-            }));
+            .set_orchestrator(Arc::new(crate::workflow::orchestrator_of(&self)));
         // Chaque boucle est surveillée : une panique est journalisée, comptée et suivie
         // d'une relance, au lieu d'arrêter la boucle jusqu'au prochain démarrage (#84).
         let supervised = |name: &str, f: fn(Arc<Daemon>) -> _| {

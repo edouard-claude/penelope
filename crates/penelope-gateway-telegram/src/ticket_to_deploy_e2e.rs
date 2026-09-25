@@ -192,9 +192,7 @@ impl World {
         let g = TelegramGateway::with_transport(d.clone(), self.t.clone());
         g.register();
         d.hooks
-            .set_orchestrator(Arc::new(crate::workflow::WorkflowOrchestrator {
-                daemon: d.clone(),
-            }));
+            .set_orchestrator(Arc::new(crate::workflow::orchestrator_of(&d)));
         let sup = crate::mcp::testing::supervisor(d.services.clone(), self.fake.clone());
         declare(&sup, "redmine", "");
         declare(&sup, "github", "");

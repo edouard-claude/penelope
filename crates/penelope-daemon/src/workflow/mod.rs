@@ -29,6 +29,13 @@ pub fn context_of(d: &Arc<Daemon>) -> Context {
     }
 }
 
+/// L'orchestrateur offert aux outils et à l'ordonnanceur, sur le contexte du daemon.
+pub fn orchestrator_of(d: &Arc<Daemon>) -> WorkflowOrchestrator {
+    WorkflowOrchestrator {
+        context: context_of(d),
+    }
+}
+
 pub async fn start_run(
     d: &Arc<Daemon>,
     workflow_id: &str,
@@ -95,6 +102,3 @@ pub async fn drive_all(d: &Arc<Daemon>) -> anyhow::Result<usize> {
 pub async fn driver_loop(d: Arc<Daemon>) {
     inner::driver_loop(context_of(&d)).await
 }
-
-mod compat;
-pub use compat::WorkflowOrchestrator;

@@ -1077,9 +1077,7 @@ mod tests {
     async fn a_sub_agent_can_run_as_a_job_and_report_back() {
         let (_dir, d, p) = daemon().await;
         d.hooks
-            .set_orchestrator(Arc::new(crate::workflow::WorkflowOrchestrator {
-                daemon: d.clone(),
-            }));
+            .set_orchestrator(Arc::new(crate::workflow::orchestrator_of(&d)));
         let sid = session(&d).await;
         p.push(Scripted::ToolCalls(
             String::new(),
