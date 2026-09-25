@@ -26,3 +26,43 @@ pub async fn codex_view(s: &Services, cfg: &penelope_kernel::config::Config) -> 
                  pas `budget.*`",
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::Daemon;
+    use penelope_kernel::clock::TestClock;
+    use std::sync::Arc;
+
+    /// T24 : servis par `Admin` depuis que `self_status` vit dans l'exécuteur, la mémoire
+    /// du processus, l'état Codex et la taille du contexte gardent les valeurs que le
+    /// daemon calculait lui-même avant la sortie.
+    #[tokio::test]
+    async fn the_daemon_admin_serves_what_self_status_read_directly() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
+        let s = Arc::new(
+            Services::for_tests(dir.path().to_path_buf(), clock)
+                .await
+                .unwrap(),
+        );
+        let d = Daemon::from_services(s.clone());
+        let v = status(&s, "s1", None, Some(&d as &dyn Admin), "all")
+            .await
+            .unwrap();
+        let rss = v["penelope"]["rss_mb"].as_f64().expect("rss_mb chiffré");
+        assert!(rss > 0.0, "{v}");
+        assert_eq!(
+            v["config"]["providers"]["codex"],
+            codex_view(&s, &s.config.config()).await
+        );
+        assert_eq!(v["config"]["providers"]["codex"]["enabled"], json!(false));
+        assert_eq!(
+            v["costs"]["context"],
+            crate::compaction::context_view(&s, "s1", None)
+                .await
+                .unwrap()
+        );
+        assert!(v["costs"]["context"].is_object(), "{v}");
+    }
+}

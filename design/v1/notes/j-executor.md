@@ -87,7 +87,10 @@ façades `executor.rs` (`pub use penelope_executor::executor::*`), `selfknow.rs`
   `penelope-conversation` : même motif que `backup_status`, `memory_search`,
   `mcp_servers`. Sans `Admin` (tests seulement ; en production engine et workflow le
   posent toujours), `rss_mb`, `providers.codex` et `costs.context` de `self_status`
-  valent `null`.
+  valent `null`. Le test `the_daemon_admin_serves_what_self_status_read_directly`
+  (façade `selfknow.rs` du daemon) vérifie qu'avec l'`Admin` réel du daemon,
+  `self_status` rend les mêmes valeurs qu'avant : `rss_mb` chiffré, `codex_view` et
+  `context_view` identiques à leurs fonctions d'origine.
 - `schedule_move` garde dans l'exécuteur la lecture de `to` (`here`, `private`) et
   reçoit `(chat, topic)` : sortir cette lecture dans l'orchestrateur aurait déplacé sept
   mentions du canal dans le daemon ; T36 la fera passer par
@@ -117,7 +120,11 @@ façades `executor.rs` (`pub use penelope_executor::executor::*`), `selfknow.rs`
 - `[crates]` : plafond du daemon à abaisser de 38 177 à 31 486 par l'intégrateur.
 - Bissection : entre `82cbe69` et `9cd93ad` exclu, `penelope-archtest` est rouge
   (`engine.rs` à 1 121 lignes pour une borne de 1 105).
-- Sorties de périmètre, signalées au chef d'équipe : `penelope-agent` et
+- Le renommage des clés `[channel.allowed]` est dans le commit du déplacement
+  (`f275254`, trailer `Dérogation-budget: #208`) et non dans un commit à part : la
+  validation de l'intégrateur est arrivée après la poussée, et réécrire l'historique
+  poussé est exclu.
+- Sorties de périmètre, validées par l'intégrateur au chef d'équipe : `penelope-agent` et
   `penelope-tools` (fonctions d'arguments), `engine.rs` (`impl Admin`, `BusSink`),
   `tool_jobs.rs`, `engine/tests/turns.rs` (un chemin qualifié).
 - T34 : l'exécuteur cite encore `Orchestrator::schedule_*` ; T36 : `selfknow` nomme
