@@ -1349,6 +1349,7 @@ dependencies = [
  "penelope-telegram",
  "penelope-tools",
  "penelope-workflow",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

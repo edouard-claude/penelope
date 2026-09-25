@@ -1030,6 +1030,41 @@ lignes d'erreur. La sortie complète part en artefact, relisible par pages avec
 `artifact_read`. `output: "full"` dans l'appel rend la sortie brute : échouer sur 3 tests
 sur 1 200 ne fait plus entrer 1 197 lignes de succès dans le contexte.
 
+#### Mesurer avant d'activer le juge
+
+Le juge d'approbation de #203 (un modèle auxiliaire qui décrit les pouvoirs d'une ligne
+composée) ne se construit que si l'instance en a besoin. La mesure se lit dans la base, en
+lecture seule, daemon lancé ou arrêté :
+
+```bash
+penelope approvals stats --days 30          # lisible
+penelope approvals stats --days 30 --json   # à coller dans #203
+```
+
+Elle compte, sur la fenêtre, les cartes `shell_exec`, celles **sans motif possible** (un
+« Toujours » n'y écrirait aucune règle : `;`, `||`, `$(…)`, redirection, plus de trois
+familles), et parmi elles celles que le juge verrait (ni double confirmation, ni risque
+destructif) ; puis les commandes distinctes (blancs normalisés), les dix plus fréquentes
+(quarante caractères, secrets masqués, et l'empreinte SHA-256 de la ligne entière), les
+états finaux et la part de « oui » parmi les cartes tranchées. Le caractère « sans motif »
+est recalculé par le même prédicat que la carte, avec le lexer du binaire qui mesure.
+
+La commande n'existe que sur la branche `v1` : sur une instance 0.17, compiler le CLI de
+`v1` (`cargo build --release -p penelope-cli`) et le lancer avec `--home` sur la racine de
+l'instance. Il n'ouvre la base qu'avec `SQLITE_OPEN_READ_ONLY` et `query_only`, sans
+migration ni socket : le daemon en place n'est pas touché.
+
+Le verdict proposé est **go** quand les trois seuils tiennent :
+
+| Seuil | Valeur | Pourquoi |
+|---|---|---|
+| Cartes éligibles par semaine | ≥ 10 | En dessous (moins de deux par jour), répondre coûte moins qu'un appel de modèle par carte, un prompt à tenir contre l'injection et un mode de plus à maintenir. |
+| Commandes distinctes | ≥ 5 | Si la masse vient de quatre lignes ou moins, une consigne « une commande par appel » ou un correctif du lexer pour ces formes-là règle le problème sans modèle. |
+| Part de « oui » (cartes tranchées) | ≥ 80 % | Le juge propose « Toujours pour ces pouvoirs » : si plus d'une carte tranchée sur cinq est refusée, les cartes font leur travail et ne doivent pas être adoucies. |
+
+Chaque seuil manqué est nommé dans la sortie. `approval.judge` reste `off` tant que la
+mesure n'a pas donné go sur l'instance.
+
 ### Messages vocaux
 
 Un vocal (ou un fichier audio) envoyé sur Telegram est téléchargé, transcrit par le modèle

@@ -6,6 +6,7 @@
 
 use crate::client::{CliError, CliResult, call, socket_path};
 use crate::output;
+use approval_stats::ApprovalsCmd;
 use clap::{Parser, Subcommand};
 #[cfg(test)]
 use logs::filter_log_lines;
@@ -144,8 +145,11 @@ pub enum Command {
         all: bool,
     },
 
-    /// Demandes d'approbation en attente.
-    Approvals,
+    /// Demandes d'approbation en attente ; `stats` : la mesure préalable au juge (#203).
+    Approvals {
+        #[command(subcommand)]
+        cmd: Option<ApprovalsCmd>,
+    },
     /// Autorise une demande.
     Approve {
         id: String,
@@ -657,6 +661,9 @@ pub async fn run(cli: Cli) -> CliResult<()> {
     // Les commandes hors daemon d'abord : elles doivent marcher sans socket.
     match &cli.command {
         Command::Paths => return paths(&cli),
+        Command::Approvals {
+            cmd: Some(ApprovalsCmd::Stats { days }),
+        } => return approval_stats::run(&cli, *days),
         Command::Doctor => return doctor(&cli).await,
         Command::Config(ConfigCmd::Validate { file }) => {
             return validate_config(&cli, file.clone());
@@ -1013,7 +1020,7 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         }
 
         Command::Jobs { all } => (m::JOBS, json!({"all": all})),
-        Command::Approvals => (m::APPROVALS, json!({})),
+        Command::Approvals { .. } => (m::APPROVALS, json!({})),
         Command::Approve { id, always, effect } => (
             m::APPROVE,
             json!({"id": id, "always": always, "effect": effect}),
@@ -2113,6 +2120,7 @@ async fn follow_session(
     Ok(())
 }
 
+mod approval_stats;
 mod logs;
 mod purge;
 mod render;

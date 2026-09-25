@@ -32,6 +32,8 @@ penelope-ops.workspace = true
 # La passerelle Telegram, composée au-dessus du daemon par la commande `daemon` (T29).
 penelope-gateway-telegram.workspace = true
 penelope-store.workspace = true
+# Lecture seule de la base, sans daemon ni migration : `approvals stats` (#203, T21).
+rusqlite.workspace = true
 penelope-workflow.workspace = true
 penelope-tools.workspace = true
 penelope-telegram.workspace = true
