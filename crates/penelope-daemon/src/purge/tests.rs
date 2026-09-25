@@ -1,38 +1,53 @@
 use super::*;
-use crate::bus::Origin;
-use crate::runtime::Daemon;
+use penelope_kernel::session::SessionKind;
 use penelope_llm::types::ChatMessage;
 use std::sync::Arc;
 
-async fn daemon() -> (
+async fn services() -> (
     tempfile::TempDir,
-    Arc<Daemon>,
+    Arc<Services>,
     penelope_kernel::clock::TestClock,
 ) {
     let dir = tempfile::tempdir().unwrap();
     let test_clock = penelope_kernel::clock::TestClock::default();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(test_clock.clone());
     let s = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+        Services::for_tests(dir.path().to_path_buf(), clock)
             .await
             .unwrap(),
     );
-    (dir, Arc::new(Daemon::from_services(s)), test_clock)
+    (dir, s, test_clock)
+}
+
+/// Une session de conversation, comme celle qu'ouvre la CLI.
+async fn chat(s: &Services) -> String {
+    let sess = s
+        .sessions
+        .create(SessionKind::Chat, Some("CLI".into()))
+        .await
+        .unwrap();
+    sess.id.to_string()
+}
+
+/// `history verify` : chaque session (ou `session`) dérivée du journal, comparée à ses
+/// caches ; le rapport JSON de la méthode RPC.
+async fn history_verify(s: &Services, session: Option<&str>) -> serde_json::Value {
+    let report = s.context.history.verify(session, None).await.unwrap();
+    serde_json::to_value(report).unwrap()
 }
 
 /// #148 : les lignes déjà en file sont repassées au rédacteur, une seule fois. Le
 /// `Grant` du 20/09 y était en hexadécimal, forme que `redact` ignorait.
 #[tokio::test]
 async fn messages_already_queued_are_redacted_again() {
-    let (_dir, d, _clock) = daemon().await;
+    let (_dir, s, _clock) = services().await;
     let grant_hex = "7b22616363657373".repeat(200);
     let payload = format!(
         r#"{{"chat_id":1,"text":"❌ Connexion abandonnée : security: unknown command \"{grant_hex}"}}"#
     );
-    let now = d.services.clock.now_rfc3339();
+    let now = s.clock.now_rfc3339();
     let p2 = payload.clone();
-    d.services
-        .store
+    s.store
         .write(move |tx| {
             for (id, body) in [
                 ("o_1", p2.as_str()),
@@ -51,11 +66,10 @@ async fn messages_already_queued_are_redacted_again() {
         .unwrap();
 
     assert!(
-        reredact_outbox(&d.services).await.unwrap() >= 1,
+        reredact_outbox(&s).await.unwrap() >= 1,
         "la ligne fautive est réécrite"
     );
-    let rows: Vec<String> = d
-        .services
+    let rows: Vec<String> = s
         .store
         .read(|c| {
             let mut st = c.prepare("SELECT payload FROM tg_outbox ORDER BY id")?;
@@ -82,7 +96,7 @@ async fn messages_already_queued_are_redacted_again() {
     );
 
     // Une seule fois : la passe suivante ne relit rien.
-    assert_eq!(reredact_outbox(&d.services).await.unwrap(), 0);
+    assert_eq!(reredact_outbox(&s).await.unwrap(), 0);
 }
 
 /// #205 : un prompt système contient le profil et la mémoire rappelée. La purge
@@ -91,9 +105,8 @@ async fn messages_already_queued_are_redacted_again() {
 /// ligne comptable reste, la clé du texte part.
 #[tokio::test]
 async fn purging_a_session_takes_the_prompts_only_it_used() {
-    let (_dir, d, _clock) = daemon().await;
-    let s = d.services.clone();
-    let mine = d.chat_session_for(&Origin::Cli).await.unwrap();
+    let (_dir, s, _clock) = services().await;
+    let mine = chat(&s).await;
     let other = s
         .sessions
         .create(penelope_kernel::session::SessionKind::Chat, None)
@@ -125,7 +138,7 @@ async fn purging_a_session_takes_the_prompts_only_it_used() {
         .await
         .unwrap();
 
-    session(&d.services, &mine, "essai").await.unwrap();
+    session(&s, &mine, "essai").await.unwrap();
 
     let (kept, orphan, still_pointed) = s
         .store
@@ -169,8 +182,7 @@ async fn purging_a_session_takes_the_prompts_only_it_used() {
 /// #205 : la rétention n'efface qu'un instantané que plus personne ne cite.
 #[tokio::test]
 async fn retention_only_drops_prompts_nothing_points_to() {
-    let (_dir, d, clock) = daemon().await;
-    let s = d.services.clone();
+    let (_dir, s, clock) = services().await;
     clock.set_ms(
         chrono::DateTime::parse_from_rfc3339("2026-09-01T00:00:00Z")
             .unwrap()
@@ -202,7 +214,7 @@ async fn retention_only_drops_prompts_nothing_points_to() {
         .await
         .unwrap();
 
-    let report = retention(&d.services).await.unwrap();
+    let report = retention(&s).await.unwrap();
     assert_eq!(report["prompt_snapshots"], 1, "{report}");
     let left: Vec<String> = s
         .store
@@ -222,10 +234,9 @@ async fn retention_only_drops_prompts_nothing_points_to() {
 
 /// Le mot du transcript ne doit plus exister nulle part : neuf tables, l'index plein
 /// texte et les fichiers.
-async fn word_is_gone(d: &Daemon, word: &str) -> bool {
+async fn word_is_gone(s: &Services, word: &str) -> bool {
     let w = format!("%{word}%");
-    d.services
-        .store
+    s.store
         .read(move |c| {
             let tables = [
                 ("messages", "content"),
@@ -274,10 +285,9 @@ async fn word_is_gone(d: &Daemon, word: &str) -> bool {
 }
 
 /// Payloads `conv.*` du journal qui contiennent le mot.
-async fn conv_payloads_with(d: &Daemon, word: &str) -> i64 {
+async fn conv_payloads_with(s: &Services, word: &str) -> i64 {
     let w = format!("%{word}%");
-    d.services
-        .store
+    s.store
         .read(move |c| {
             Ok(c.query_row(
                 "SELECT count(*) FROM events WHERE kind LIKE 'conv.%' AND payload LIKE ?1",
@@ -293,9 +303,8 @@ async fn conv_payloads_with(d: &Daemon, word: &str) -> i64 {
 /// préfixe qu'elle lit dans le journal de sa mère) ; la fille se relit sans ce préfixe.
 #[tokio::test]
 async fn purging_a_forked_session_warns_about_its_forks() {
-    let (_dir, d, _clock) = daemon().await;
-    let s = d.services.clone();
-    let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+    let (_dir, s, _clock) = services().await;
+    let sid = chat(&s).await;
     let h = &s.context.history;
     h.append(&sid, &ChatMessage::user("Quetzal"), 5, 0, false, None)
         .await
@@ -305,17 +314,9 @@ async fn purging_a_forked_session_warns_about_its_forks() {
         .unwrap();
     let forked = crate::session_ops::fork(&s, &sid, None).await.unwrap();
     let child = forked["session"].as_str().unwrap().to_string();
-    // La lecture préalable, par le contrat RPC : le fork nommé, rien d'effacé.
-    let rpc = crate::rpc::Rpc::new(d.clone());
-    let preview = rpc
-        .handle(penelope_kernel::api::RpcRequest::new(
-            1,
-            penelope_kernel::api::method::SESSION_PURGE_PREVIEW,
-            serde_json::json!({"session": sid}),
-        ))
-        .await
-        .result
-        .expect("lecture préalable");
+    // La lecture préalable (méthode RPC `session.purge_preview`) : le fork nommé, rien
+    // d'effacé.
+    let preview = preview(&s, &sid).await.expect("lecture préalable");
     assert_eq!(preview["forks"][0]["id"], child, "{preview}");
     let warning = preview["avertissement"].as_str().unwrap();
     assert!(
@@ -364,9 +365,8 @@ fn the_fork_warning_counts_in_words_up_to_ten() {
 #[tokio::test]
 async fn retention_purges_old_attempts_by_payload() {
     use penelope_context::journal::{AttemptCause, AttemptPayload, ConvEvent};
-    let (_dir, d, clock) = daemon().await;
-    let s = d.services.clone();
-    let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+    let (_dir, s, clock) = services().await;
+    let sid = chat(&s).await;
     let h = &s.context.history;
     let attempt = |text: &str| {
         let e = ConvEvent::Attempt(AttemptPayload {
@@ -398,15 +398,13 @@ async fn retention_purges_old_attempts_by_payload() {
 
     let report = retention(&s).await.unwrap();
     assert_eq!(report["conv_attempts"], 1, "{report}");
-    assert_eq!(conv_payloads_with(&d, "brouillon ancien").await, 0);
-    assert_eq!(conv_payloads_with(&d, "brouillon récent").await, 1);
+    assert_eq!(conv_payloads_with(&s, "brouillon ancien").await, 0);
+    assert_eq!(conv_payloads_with(&s, "brouillon récent").await, 1);
     let again = retention(&s).await.unwrap();
     assert_eq!(again["conv_attempts"], 0, "idempotent");
     let verified = s.events.verify().await.unwrap();
     assert!(verified.ok, "chaîne rompue : {verified:?}");
-    let v = crate::history::verify(&s, &serde_json::json!({}))
-        .await
-        .unwrap();
+    let v = history_verify(&s, None).await;
     assert_eq!(v["ok"], true, "{v}");
     let read = h.read_journal(&sid).await.unwrap().unwrap().unwrap();
     assert_eq!(read.entries.len(), 2, "la surface ne perd rien");
@@ -416,9 +414,8 @@ async fn retention_purges_old_attempts_by_payload() {
 /// partis, la chaîne d'audit tient toujours.
 #[tokio::test]
 async fn purging_a_session_leaves_the_audit_chain_and_nothing_else() {
-    let (dir, d, _clock) = daemon().await;
-    let s = d.services.clone();
-    let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
+    let (dir, s, _clock) = services().await;
+    let sid = chat(&s).await;
     s.sessions.bind_telegram(&sid, 4242, None).await.unwrap();
     const SECRET: &str = "Zéphyrine";
 
@@ -587,29 +584,28 @@ async fn purging_a_session_leaves_the_audit_chain_and_nothing_else() {
         .await
         .unwrap();
 
-    assert!(!word_is_gone(&d, SECRET).await, "le mot doit être là avant");
+    assert!(!word_is_gone(&s, SECRET).await, "le mot doit être là avant");
     // T17 : le journal de la conversation (`conv.*`) porte le mot, il doit partir.
     assert!(
-        conv_payloads_with(&d, SECRET).await > 0,
+        conv_payloads_with(&s, SECRET).await > 0,
         "conv.user le porte"
     );
     assert!(!h.grep(SECRET, None, 10).await.unwrap().is_empty());
 
-    let report = session(&d.services, &sid, "essai").await.unwrap();
+    let report = session(&s, &sid, "essai").await.unwrap();
     assert!(report["events"].as_u64().unwrap() > 0);
     assert_eq!(report["files"], 2, "vocal et artefact effacés : {report}");
 
     assert!(
-        word_is_gone(&d, SECRET).await,
+        word_is_gone(&s, SECRET).await,
         "purge incomplète : {report}"
     );
-    assert_eq!(conv_payloads_with(&d, SECRET).await, 0);
+    assert_eq!(conv_payloads_with(&s, SECRET).await, 0);
     // T17 : refondue depuis son journal purgé, la session n'a plus de surface.
-    let p = serde_json::json!({"session": sid});
-    crate::history::reindex(&s, &p).await.unwrap();
-    assert_eq!(crate::history::verify(&s, &p).await.unwrap()["ok"], true);
+    s.context.history.reindex(Some(&sid)).await.unwrap();
+    assert_eq!(history_verify(&s, Some(&sid)).await["ok"], true);
     assert!(h.load(&sid, 0).await.unwrap().is_empty());
-    assert!(word_is_gone(&d, SECRET).await, "la refonte ne ramène rien");
+    assert!(word_is_gone(&s, SECRET).await, "la refonte ne ramène rien");
     assert!(h.grep(SECRET, None, 10).await.unwrap().is_empty());
     // L'idempotence survit : l'effet purgé est rejoué, jamais ré-exécuté.
     assert!(matches!(
@@ -630,8 +626,7 @@ async fn purging_a_session_leaves_the_audit_chain_and_nothing_else() {
 /// il n'est pas traité deux fois.
 #[tokio::test]
 async fn a_replayed_update_is_still_deduplicated_without_its_payload() {
-    let (_dir, d, _clock) = daemon().await;
-    let s = &d.services;
+    let (_dir, s, _clock) = services().await;
     s.store
         .write(|tx| {
             tx.execute(
@@ -666,8 +661,7 @@ async fn a_replayed_update_is_still_deduplicated_without_its_payload() {
 /// #46 : la rétention efface ce qui a passé l'âge, et rien d'autre.
 #[tokio::test]
 async fn retention_removes_what_is_past_its_age_only() {
-    let (_dir, d, clock) = daemon().await;
-    let s = &d.services;
+    let (_dir, s, clock) = services().await;
     // L'horloge de test démarre au 1er janvier 2026 : on avance de 91 jours et tout ce
     // qui date du jour 1 a dépassé les 90 jours de rétention.
     let vieux = "2026-01-01T00:00:00Z";
@@ -761,7 +755,7 @@ async fn retention_removes_what_is_past_its_age_only() {
         .await
         .unwrap();
 
-    let report = retention(&d.services).await.unwrap();
+    let report = retention(&s).await.unwrap();
     assert_eq!(report["effects"], 1, "{report}");
     assert_eq!(report["tg_outbox"], 1);
     assert_eq!(report["approvals"], 1);

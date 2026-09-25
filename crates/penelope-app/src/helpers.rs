@@ -264,6 +264,29 @@ pub fn default_workspaces(s: &Services) -> Vec<PathBuf> {
     v.iter().map(|p| canonical_workspace(p)).collect()
 }
 
+// ---------------------------------------- Sessions (depuis titles.rs)
+
+/// Titre avec sa date, pour les listes : « Refonte du site (16/09) ». La même forme que
+/// `penelope_conversation::titles::label`, lue ici par la purge (`penelope-ops`), qui ne
+/// dépend pas de la conversation (épopée #208, T28).
+pub fn session_label(session: &penelope_kernel::session::Session) -> String {
+    let date = session
+        .last_activity
+        .as_deref()
+        .unwrap_or(&session.created_at);
+    let day = match (date.get(8..10), date.get(5..7)) {
+        (Some(d), Some(m)) => format!(" ({d}/{m})"),
+        _ => String::new(),
+    };
+    let title = session
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or("(sans titre)");
+    format!("{title}{day}")
+}
+
 // ---------------------------------------- Adresses (depuis mcp_auth.rs et upgrade.rs)
 
 /// Un code, un vérificateur PKCE, un jeton ou une release ne voyagent que chiffrés :

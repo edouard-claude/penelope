@@ -394,24 +394,32 @@ pub async fn rebuild(s: &Services) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::Origin;
-    use crate::runtime::Daemon;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::types::ChatMessage;
 
-    async fn daemon() -> (tempfile::TempDir, Arc<Daemon>) {
+    async fn services() -> (tempfile::TempDir, Arc<Services>) {
         let dir = tempfile::tempdir().unwrap();
         let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );
-        (dir, Arc::new(Daemon::from_services(s)))
+        (dir, s)
     }
 
-    async fn say(d: &Daemon, sid: &str, user: &str, answer: &str) {
-        let h = &d.services.context.history;
+    /// Une session de conversation, comme celle qu'ouvre la CLI.
+    async fn chat(s: &Services) -> String {
+        let sess = s
+            .sessions
+            .create(SessionKind::Chat, Some("CLI".into()))
+            .await
+            .unwrap();
+        sess.id.to_string()
+    }
+
+    async fn say(s: &Services, sid: &str, user: &str, answer: &str) {
+        let h = &s.context.history;
         h.append(sid, &ChatMessage::user(user), 5, 0, false, None)
             .await
             .unwrap();
@@ -422,14 +430,14 @@ mod tests {
 
     #[tokio::test]
     async fn fork_copies_then_diverges() {
-        let (_dir, d) = daemon().await;
-        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
-        say(&d, &sid, "on parle du devis ACME", "d'accord").await;
-        let v = fork(&d.services, &sid, None).await.unwrap();
+        let (_dir, s) = services().await;
+        let sid = chat(&s).await;
+        say(&s, &sid, "on parle du devis ACME", "d'accord").await;
+        let v = fork(&s, &sid, None).await.unwrap();
         let fork_id = v["session"].as_str().unwrap().to_string();
         assert_eq!(v["messages"], 2);
-        say(&d, &fork_id, "variante sans remise", "noté").await;
-        let h = &d.services.context.history;
+        say(&s, &fork_id, "variante sans remise", "noté").await;
+        let h = &s.context.history;
         assert_eq!(
             h.load(&sid, 0).await.unwrap().len(),
             2,
@@ -442,14 +450,14 @@ mod tests {
 
     #[tokio::test]
     async fn rewind_archives_what_it_removes() {
-        let (_dir, d) = daemon().await;
-        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
-        say(&d, &sid, "un", "1").await;
-        say(&d, &sid, "deux", "2").await;
-        say(&d, &sid, "trois", "3").await;
-        let v = rewind(&d.services, &d.bus, &sid, 2).await.unwrap();
+        let (_dir, s) = services().await;
+        let sid = chat(&s).await;
+        say(&s, &sid, "un", "1").await;
+        say(&s, &sid, "deux", "2").await;
+        say(&s, &sid, "trois", "3").await;
+        let v = rewind(&s, &Bus::new(), &sid, 2).await.unwrap();
         assert_eq!(v["removed"], 4);
-        let h = &d.services.context.history;
+        let h = &s.context.history;
         let left: Vec<String> = h
             .load(&sid, 0)
             .await
@@ -461,9 +469,9 @@ mod tests {
         let archive = v["archive"].as_str().unwrap();
         assert_eq!(h.load(archive, 0).await.unwrap().len(), 4);
         // Le numéro suivant repart juste après ce qui reste.
-        say(&d, &sid, "reprise", "ok").await;
+        say(&s, &sid, "reprise", "ok").await;
         assert_eq!(h.load(&sid, 0).await.unwrap()[2].seq, 3);
-        assert!(rewind(&d.services, &d.bus, &sid, 0).await.is_err());
+        assert!(rewind(&s, &Bus::new(), &sid, 0).await.is_err());
     }
 
     /// T10 : le fork et le retour arrière entrent au journal, avec des bornes que le
@@ -471,19 +479,18 @@ mod tests {
     #[tokio::test]
     async fn fork_and_rewind_are_journaled_with_bounds_that_derive_accepts() {
         use penelope_context::derive::{Sealed, derive};
-        let (_dir, d) = daemon().await;
-        let s = &d.services;
-        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
-        say(&d, &sid, "un", "1").await;
-        say(&d, &sid, "deux", "2").await;
-        let fork_id = fork(&d.services, &sid, None).await.unwrap()["session"]
+        let (_dir, s) = services().await;
+        let sid = chat(&s).await;
+        say(&s, &sid, "un", "1").await;
+        say(&s, &sid, "deux", "2").await;
+        let fork_id = fork(&s, &sid, None).await.unwrap()["session"]
             .as_str()
             .unwrap()
             .to_string();
-        say(&d, &fork_id, "trois", "3").await;
-        say(&d, &fork_id, "quatre", "4").await;
-        rewind(&d.services, &d.bus, &fork_id, 1).await.unwrap();
-        say(&d, &fork_id, "cinq", "5").await;
+        say(&s, &fork_id, "trois", "3").await;
+        say(&s, &fork_id, "quatre", "4").await;
+        rewind(&s, &Bus::new(), &fork_id, 1).await.unwrap();
+        say(&s, &fork_id, "cinq", "5").await;
 
         let parent = s.events.session_events(&sid, 0).await.unwrap();
         let child = s.events.session_events(&fork_id, 0).await.unwrap();
@@ -531,10 +538,10 @@ mod tests {
 
     #[tokio::test]
     async fn export_writes_jsonl_and_rebuild_restores_search() {
-        let (_dir, d) = daemon().await;
-        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
-        say(&d, &sid, "le mot secret est framboise", "compris").await;
-        let v = export(&d.services, "session", Some(&sid)).await.unwrap();
+        let (_dir, s) = services().await;
+        let sid = chat(&s).await;
+        say(&s, &sid, "le mot secret est framboise", "compris").await;
+        let v = export(&s, "session", Some(&sid)).await.unwrap();
         let raw = std::fs::read_to_string(v["path"].as_str().unwrap()).unwrap();
         assert!(raw.lines().count() >= 2);
         let lines: Vec<Value> = raw
@@ -555,9 +562,8 @@ mod tests {
                 .iter()
                 .all(|l| l["type"] != "message" || l["sealed"] == false)
         );
-        assert!(export(&d.services, "inconnu", None).await.is_err());
+        assert!(export(&s, "inconnu", None).await.is_err());
 
-        let s = &d.services;
         s.store
             .write(|tx| {
                 tx.execute("DELETE FROM messages_fts", [])?;
@@ -573,7 +579,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let r = rebuild(&d.services).await.unwrap();
+        let r = rebuild(&s).await.unwrap();
         assert_eq!(r["messages_fts"], 2);
         assert_eq!(r["audit"]["ok"], true);
         assert!(

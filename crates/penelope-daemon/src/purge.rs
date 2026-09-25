@@ -376,7 +376,11 @@ pub async fn preview(s: &Services, session_id: &str) -> anyhow::Result<Value> {
     let mut forks = Vec::new();
     let mut named = Vec::new();
     for id in forks_of(s, session_id).await? {
-        let title = s.sessions.get(&id).await?.map(|f| crate::titles::label(&f));
+        let title = s
+            .sessions
+            .get(&id)
+            .await?
+            .map(|f| crate::helpers::session_label(&f));
         named.push(match &title {
             Some(t) => format!("{id} « {t} »"),
             None => id.clone(),
@@ -385,7 +389,7 @@ pub async fn preview(s: &Services, session_id: &str) -> anyhow::Result<Value> {
     }
     let mut out = json!({
         "session": session_id,
-        "title": crate::titles::label(&sess),
+        "title": crate::helpers::session_label(&sess),
         "forks": forks,
     });
     if !named.is_empty() {
