@@ -13,6 +13,57 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.11
+
+Dixième vague de la V1 : trois crates du cœur sortent du daemon (la conversation et la
+compaction, l'exécuteur des outils natifs, la consolidation nocturne entière), et trois
+critères d'acceptation prouvent, à chaque appel des scénarios, que le modèle voit
+exactement ce que le journal contient. Le daemon passe de 38 177 à 22 863 lignes. Aucun
+changement de comportement en production.
+
+#### Conversation : crate `penelope-conversation` (#208, T23)
+
+- La conversation d'une session, la compaction de fond et son état, les titres de
+  session et l'alerte de budget quittent le daemon pour la crate
+  `penelope-conversation`, au-dessus de `penelope-app` et de `penelope-vault` ; une
+  règle d'architecture lui interdit le daemon, la boucle d'agent et le canal.
+- La compaction ne reçoit plus le daemon mais son contexte (services, providers, bus
+  des tours, état) ; l'alias épinglé d'une session se lit dans `penelope-app`.
+- `penelope-daemon` passe de 38 177 à 35 241 lignes. Aucun comportement visible ne
+  change.
+
+#### Exécuteur des outils natifs : crate `penelope-executor` (#208, T24)
+
+- Les outils natifs, `self_status`, la documentation embarquée, la vision, les images,
+  la voix, les outils à la demande et le magasin des jobs d'outils quittent le daemon
+  pour la crate `penelope-executor`, qui ne dépend ni de la boucle d'agent ni de
+  l'orchestrateur ; une règle d'architecture le vérifie.
+- La planification (`schedule_*`) passe par le port `Orchestrator`, et ce que
+  `self_status` lit du processus (mémoire, Codex, contexte) par le port `Admin`.
+- `penelope-daemon` passe de 38 177 à 31 486 lignes. Aucun comportement visible ne
+  change.
+
+#### Crate `penelope-dream` : le rêve nocturne hors du daemon (#208, T26)
+
+La consolidation nocturne, le digest du matin et les crons qui les déclenchent quittent
+le daemon pour la crate `penelope-dream`, qui ne dépend pas de lui : ils reçoivent un
+contexte (services, providers, embeddings), et le digest obtient ce qu'il lit des
+planifications et du compactage par un port. Aucun comportement ne change ; les anciens
+chemins restent réexportés (épopée #208, lot J, T26).
+
+#### Journal d'événements : critères d'acceptation (#208, T22)
+
+- **Ce que le modèle lit est journalisé, vérifié à chaque appel** : à la fin de chaque
+  scénario enregistré, chaque requête reçue par le modèle est comparée, octet pour
+  octet, à la conversation repliée depuis le journal juste avant sa réponse (critère
+  CA 4.5).
+- **Rien ne se réécrit au milieu d'un tour** : entre deux appels d'un même tour, le
+  journal n'admet que le niveau 1 d'un résultat pas encore envoyé et le résumé d'un
+  dépassement prouvé (CA 5.5). La refonte des caches depuis le journal redonne tout à
+  l'identique (CA 4.6).
+- Nouveau scénario `outils-niveau-1-et-compaction` : un tour avec lecture d'un gros
+  fichier, niveau 1 et compaction d'urgence. 78 critères d'acceptation.
+
 ### 1.0.0-alpha.10
 
 Neuvième vague de la V1, courte : la crate `penelope-dream` naît avec l'accueil et
