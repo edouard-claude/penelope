@@ -360,7 +360,13 @@ async fn doctor_keeps_the_order_of_alpha_7() {
         "net.openrouter.ai",
         "mcp.oauth.redirect",
     ];
-    let ids: Vec<&str> = checks.iter().map(|c| c.id.as_str()).collect();
-    let owner = ids.iter().position(|id| *id == "owner").expect("owner");
-    assert_eq!(&ids[owner..], ALPHA_7, "ordre de la sortie de doctor");
+    // Certains contrôles n'apparaissent que sur certaines machines (`machine.missing`,
+    // `machine.gh` sur un runner de CI sans ces outils) : on compare l'ordre des contrôles
+    // de la référence, sans exiger qu'aucun autre ne s'intercale.
+    let ids: Vec<&str> = checks
+        .iter()
+        .map(|c| c.id.as_str())
+        .filter(|id| ALPHA_7.contains(id))
+        .collect();
+    assert_eq!(ids, ALPHA_7, "ordre de la sortie de doctor");
 }
