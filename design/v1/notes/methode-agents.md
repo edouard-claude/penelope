@@ -1,7 +1,7 @@
 # Consigne commune des agents de la V1
 
 Texte donné à chaque agent de lot (une branche `v1-<nom>` et un worktree par agent), tel
-qu'il était à la vague 9. Les lignes « (vague N) » sont à mettre à jour à chaque vague ; le
+qu'il était à la vague 14. Les lignes « (vague N) » sont à mettre à jour à chaque vague ; le
 chemin `scratchpad/` est celui de la session qui l'a écrit.
 
 RÈGLES COMMUNES (à respecter à la lettre)
@@ -17,7 +17,8 @@ RÈGLES COMMUNES (à respecter à la lettre)
 - IMPORTANT, leçon de la nuit dernière : ne lance JAMAIS une commande longue « en arrière-plan » en attendant une notification ; les notifications peuvent ne pas arriver. Lance tes `cargo test --workspace` au premier plan, avec un délai long.
 - Notes : design/v1/notes/<ton-nom>.md en français, sans tiret cadratin « — » : ce qui est livré, les choix, la section de notes de version prête pour docs/progress.md (titre `#### …`), les blocages. Commite-les.
 - Rapport final : 20 lignes maximum (commits, vérifications, reste, blocages). Le dépôt est le livrable.
-- (vague 9) Base : `v1` à la 1.0.0-alpha.9. HEURE LIMITE STRICTE : ton lot doit être commité, vérifié et poussé avant 22h35 (heure de la machine, `date`). Si le temps manque, livre moins mais vert : une tâche finie vaut mieux que deux à moitié ; écris ce qui reste dans tes notes. Rouges tolérés en fin de lot, à signaler seulement : `crates_stay_under_their_ceiling` (plafond du crate daemon) et la liste blanche R5 si tu crées un module de premier niveau du daemon prévu par ta tâche ; l'intégrateur ajuste `budget.toml`. Tout autre rouge est à corriger.
-- (vague 8) `runtime.rs` et `supervisor.rs` sont touchés par plusieurs agents : n'y ajoute que des appels d'une ligne vers des fonctions qui vivent dans ton module ; ne déplace rien dedans sauf si ta tâche le demande explicitement.
+- (vague 14) Base : `v1` à la 1.0.0-alpha.14 (lis aussi docs/architecture.md, les notes des lots k-api, l-docs, k-juge, et design/v1/notes/point-etape-2026-09-24.md, section « Dettes et points ouverts »). Pas d'heure limite : la qualité prime ; livre quand c'est vert.
+- (vague 14) `runtime.rs` et `supervisor.rs` sont touchés par plusieurs agents : n'y ajoute que des appels d'une ligne vers des fonctions qui vivent dans ton module ; ne déplace rien dedans sauf si ta tâche le demande explicitement.
 - Le test `the_budget_file_is_readable` n'impose plus de taille minimale à la liste de référence : sortir un fichier de la liste est toujours bienvenu.
 - Crate nouvelle : ajoute-la au workspace et aux listes d'archtest, avec `version` alignée sur le workspace (bump.sh compte les lignes, pas besoin d'y toucher). Plafond `[crates]` du daemon : laisse-le rouge, l'intégrateur le pose.
+- `cargo clean` dans ton worktree : UNE fois, juste AVANT ton rapport final, jamais après. Une fois ton rapport envoyé, ne lance plus aucune commande dans ton worktree : l’intégrateur y rebase et y teste.
