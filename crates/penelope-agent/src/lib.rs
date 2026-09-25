@@ -76,7 +76,7 @@ pub use ports::{
 };
 pub use rules::{MAX_FAMILIES_PER_CLICK, always_creates_no_rule};
 pub use rules::{arg_pattern, arg_patterns};
-pub use spec::{AgentLoop, CALLS_EXHAUSTED, TURN_CALLS, TurnRequest, TurnSpec};
+pub use spec::{AgentLoop, CALLS_EXHAUSTED, TURN_CALLS, TurnSpec};
 use steering::Steering;
 pub use steering::{
     Checkpoint, INTERRUPTED_NOTE, Inbox, Injection, MERGE_NOTE, NOT_RUN_NEW_MESSAGE,

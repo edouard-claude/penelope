@@ -119,16 +119,24 @@ async fn setup() -> (tempfile::TempDir, Arc<AgentServices>, Arc<MockProvider>) {
     (dir, s, p)
 }
 
-fn request(session_id: &str) -> TurnRequest {
-    TurnRequest {
-        session_id: session_id.to_string(),
-        run_id: None,
-        user_text: "corrige le bug".into(),
-        model_id: "mock/model".into(),
-        tools: vec![ToolDef::new("fs_read", "lire", json!({"type":"object"}))],
-        system_prompt: "Tu es Pénélope.".into(),
-        allowed_tools: vec![],
-        cancel: CancelToken::new(),
+/// Un tour sans tour d'origine, sur l'outil de lecture seul.
+fn request(session_id: &str) -> TurnSpec {
+    TurnSpec {
+        turn_id: None,
+        ..spec(session_id)
+    }
+}
+
+impl AgentLoop {
+    /// Un tour sur un transcript en mémoire : prompt système et demande du propriétaire.
+    async fn run_memory(
+        &self,
+        spec: TurnSpec,
+        execute: &(dyn ToolExecutor + Send + Sync),
+    ) -> anyhow::Result<TurnOutcome> {
+        let conv = MemoryConversation::new("Tu es Pénélope.", "corrige le bug");
+        self.run_conversation(&spec, &conv, execute, &NullSink)
+            .await
     }
 }
 

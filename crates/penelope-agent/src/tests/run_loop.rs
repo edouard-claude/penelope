@@ -7,7 +7,7 @@ async fn a_plain_answer_finishes_in_one_iteration() {
     let sid = session(&s).await;
     let loop_ = AgentLoop::new(s.clone(), p.clone());
     let e = exec(false);
-    match loop_.run(request(&sid), &e).await.unwrap() {
+    match loop_.run_memory(request(&sid), &e).await.unwrap() {
         TurnOutcome::Answered {
             text, iterations, ..
         } => {
@@ -30,7 +30,7 @@ async fn read_tools_run_without_approval() {
     let sid = session(&s).await;
     let e = exec(false);
     let out = AgentLoop::new(s.clone(), p.clone())
-        .run(request(&sid), &e)
+        .run_memory(request(&sid), &e)
         .await
         .unwrap();
     assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
@@ -170,7 +170,7 @@ async fn tool_errors_go_back_to_the_model() {
     let sid = session(&s).await;
     let e = exec(true);
     let out = AgentLoop::new(s.clone(), p.clone())
-        .run(request(&sid), &e)
+        .run_memory(request(&sid), &e)
         .await
         .unwrap();
     match out {
@@ -198,7 +198,7 @@ async fn loop_detector_aborts_the_turn() {
     let sid = session(&s).await;
     let e = exec(false);
     let out = AgentLoop::new(s.clone(), p.clone())
-        .run(request(&sid), &e)
+        .run_memory(request(&sid), &e)
         .await
         .unwrap();
     match out {
@@ -325,7 +325,7 @@ async fn cancellation_stops_the_turn() {
     let e = exec(false);
     assert_eq!(
         AgentLoop::new(s.clone(), p.clone())
-            .run(req, &e)
+            .run_memory(req, &e)
             .await
             .unwrap(),
         TurnOutcome::Cancelled
@@ -347,7 +347,7 @@ async fn exceeded_budget_stops_before_calling_the_model() {
     let sid = session(&s).await;
     let e = exec(false);
     let out = AgentLoop::new(s.clone(), p.clone())
-        .run(request(&sid), &e)
+        .run_memory(request(&sid), &e)
         .await
         .unwrap();
     match &out {
@@ -533,7 +533,7 @@ async fn tools_outside_the_allowlist_are_refused() {
     req.allowed_tools = vec!["fs_*".into()];
     let e = exec(false);
     let out = AgentLoop::new(s.clone(), p.clone())
-        .run(req, &e)
+        .run_memory(req, &e)
         .await
         .unwrap();
     assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");

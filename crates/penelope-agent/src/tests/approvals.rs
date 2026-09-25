@@ -11,7 +11,7 @@ async fn write_tools_suspend_the_turn_for_approval() {
     let sid = session(&s).await;
     let e = exec(false);
     let out = AgentLoop::new(s.clone(), p.clone())
-        .run(request(&sid), &e)
+        .run_memory(request(&sid), &e)
         .await
         .unwrap();
     let id = match out {
@@ -172,14 +172,14 @@ async fn always_decision_creates_a_revocable_rule() {
     let sid = session(&s).await;
     let e = exec(false);
     let loop_ = AgentLoop::new(s.clone(), p.clone());
-    let id = match loop_.run(request(&sid), &e).await.unwrap() {
+    let id = match loop_.run_memory(request(&sid), &e).await.unwrap() {
         TurnOutcome::AwaitingApproval { approval_id } => approval_id,
         other => panic!("{other:?}"),
     };
 
     assert!(
         loop_
-            .resume_after_approval(&id, &Decision::approve_always("telegram"))
+            .decide_approval(&id, &Decision::approve_always("telegram"))
             .await
             .unwrap()
     );
@@ -199,7 +199,7 @@ async fn a_session_window_creates_a_rule_bound_to_the_session() {
     let sid = session(&s).await;
     let e = exec(false);
     let loop_ = AgentLoop::new(s.clone(), p.clone());
-    let id = match loop_.run(request(&sid), &e).await.unwrap() {
+    let id = match loop_.run_memory(request(&sid), &e).await.unwrap() {
         TurnOutcome::AwaitingApproval { approval_id } => approval_id,
         other => panic!("{other:?}"),
     };
@@ -225,19 +225,19 @@ async fn a_second_decision_does_not_win() {
     let sid = session(&s).await;
     let e = exec(false);
     let loop_ = AgentLoop::new(s.clone(), p.clone());
-    let id = match loop_.run(request(&sid), &e).await.unwrap() {
+    let id = match loop_.run_memory(request(&sid), &e).await.unwrap() {
         TurnOutcome::AwaitingApproval { approval_id } => approval_id,
         other => panic!("{other:?}"),
     };
     assert!(
         loop_
-            .resume_after_approval(&id, &Decision::approve_once("telegram"))
+            .decide_approval(&id, &Decision::approve_once("telegram"))
             .await
             .unwrap()
     );
     assert!(
         !loop_
-            .resume_after_approval(&id, &Decision::deny("cli", None))
+            .decide_approval(&id, &Decision::deny("cli", None))
             .await
             .unwrap(),
         "la première décision gagne"

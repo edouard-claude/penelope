@@ -18,18 +18,6 @@ pub struct TurnSpec {
     pub cancel: CancelToken,
 }
 
-/// Forme historique d'une requête : prompt système et message utilisateur en mémoire.
-pub struct TurnRequest {
-    pub session_id: String,
-    pub run_id: Option<String>,
-    pub user_text: String,
-    pub model_id: String,
-    pub tools: Vec<ToolDef>,
-    pub system_prompt: String,
-    pub allowed_tools: Vec<String>,
-    pub cancel: CancelToken,
-}
-
 /// Un exécuteur de tour.
 pub struct AgentLoop {
     pub services: Arc<AgentServices>,
@@ -63,27 +51,6 @@ impl AgentLoop {
         self
     }
 
-    /// Exécute un tour sur un transcript en mémoire.
-    pub async fn run(
-        &self,
-        req: TurnRequest,
-        execute: &(dyn ToolExecutor + Send + Sync),
-    ) -> anyhow::Result<TurnOutcome> {
-        let conv = MemoryConversation::new(req.system_prompt, req.user_text);
-        let spec = TurnSpec {
-            session_id: req.session_id,
-            run_id: req.run_id,
-            turn_id: None,
-            model_id: req.model_id,
-            fallback_models: Vec::new(),
-            tools: req.tools,
-            allowed_tools: req.allowed_tools,
-            cancel: req.cancel,
-        };
-        self.run_conversation(&spec, &conv, execute, &NullSink)
-            .await
-    }
-
     /// Tranche une approbation et crée la règle éventuelle (§9.2). Ne relance pas le
     /// tour : c'est au canal de remettre un tour `resume` en file.
     pub async fn decide_approval(
@@ -92,14 +59,5 @@ impl AgentLoop {
         decision: &Decision,
     ) -> anyhow::Result<bool> {
         decisions::decide_approval(&self.services, approval_id, decision).await
-    }
-
-    /// Ancien nom, conservé pour les appelants existants.
-    pub async fn resume_after_approval(
-        &self,
-        approval_id: &str,
-        decision: &Decision,
-    ) -> anyhow::Result<bool> {
-        self.decide_approval(approval_id, decision).await
     }
 }

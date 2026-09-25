@@ -61,7 +61,7 @@ async fn completed_effects_are_replayed_not_reexecuted() {
     p.reply("lu");
     let e = exec(false);
     AgentLoop::new(s.clone(), p.clone())
-        .run(request(&sid), &e)
+        .run_memory(request(&sid), &e)
         .await
         .unwrap();
     assert_eq!(e.calls.load(Ordering::SeqCst), 1);
@@ -72,7 +72,7 @@ async fn completed_effects_are_replayed_not_reexecuted() {
     ));
     p.reply("relu");
     AgentLoop::new(s.clone(), p.clone())
-        .run(request(&sid), &e)
+        .run_memory(request(&sid), &e)
         .await
         .unwrap();
     assert_eq!(
