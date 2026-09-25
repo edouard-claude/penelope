@@ -92,10 +92,7 @@ pub(super) async fn missing_deliverable(
             outcome,
             penelope_agent::TurnOutcome::Answered { text, .. } if !text.trim().is_empty()
         );
-        let channel = matches!(
-            penelope_app::bus::Origin::from_payload(&turn.payload),
-            penelope_app::bus::Origin::Telegram { .. }
-        );
+        let channel = penelope_app::bus::Origin::from_payload(&turn.payload).is_channel();
         // Un message envoyé par l'agent lui-même compte aussi.
         let sent = s
             .context

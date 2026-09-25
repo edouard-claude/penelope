@@ -87,17 +87,8 @@ async fn inventory_section(
             Some(a) => a.mcp_servers().await,
             None => Value::Null,
         },
-        "commands" => json!(
-            penelope_telegram::commands::all()
-                .iter()
-                .map(|c| json!({
-                    "command": format!("/{}", c.name),
-                    "category": c.category,
-                    "description": c.description,
-                    "example": c.example,
-                }))
-                .collect::<Vec<_>>()
-        ),
+        // Les commandes sont celles du canal branché (T36).
+        "commands" => json!(s.channel.commands()),
         "schedules" => json!({
             "schedules": s.schedules.list().await?.iter().filter(|x| x.state != "deleted").map(|x| json!({
                 "id": x.id, "kind": x.kind.as_str(), "spec": x.spec, "state": x.state,
@@ -330,7 +321,7 @@ pub async fn status(
                     "workflows": s.workflows.all().iter().map(|e| e.workflow.metadata.id.clone()).collect::<Vec<_>>(),
                     "skills": s.skills.all().len(),
                     "native_tools": penelope_tools::all_tools().len(),
-                    "telegram_commands": penelope_telegram::commands::all().len(),
+                    "channel_commands": s.channel.commands().len(),
                     "detail": "self_status section=workflows|skills|tools|mcp|commands|schedules|install|limits, ou inventory ; documentation : self_docs",
                 }),
             );
@@ -568,13 +559,9 @@ mod tests {
                 .iter()
                 .any(|t| t["name"] == "self_docs")
         );
-        assert!(
-            all["commands"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|c| c["command"] == "/run")
-        );
+        // Les commandes sont celles du canal branché : aucune ici (la passerelle vérifie
+        // sa liste, T36).
+        assert_eq!(all["commands"], json!([]));
         assert!(!all["limits"].as_array().unwrap().is_empty());
 
         let first = penelope_vault::tiers::build_tiers(&s, "bonjour", &[], None).await;

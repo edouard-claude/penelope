@@ -56,7 +56,7 @@ use cards::{
     background_note, cancelled_note, codex_status_text, context_line, fmt_usd, mcp_list_text,
     mcp_show_text, mcp_state_icon, routing_text, schedules_text,
 };
-pub use channel::{BOT_USERNAME_KEY, chat_title_key};
+pub use channel::{BOT_USERNAME_KEY, TelegramChat, chat_title_key};
 use drafts::Activity;
 pub(crate) use drafts::StopReport;
 use forms::form_key;

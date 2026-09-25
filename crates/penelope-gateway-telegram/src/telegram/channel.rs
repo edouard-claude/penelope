@@ -11,6 +11,23 @@ use penelope_telegram::TemplateRegistry;
 use std::path::Path;
 use std::sync::Arc;
 
+/// Chat et sujet d'une origine Telegram. Méthode d'`Origin` jusqu'à T36 : le cœur ne
+/// lit plus ces identifiants, la passerelle seule.
+pub trait TelegramChat {
+    fn telegram_chat(&self) -> Option<(i64, Option<i64>)>;
+}
+
+impl TelegramChat for Origin {
+    fn telegram_chat(&self) -> Option<(i64, Option<i64>)> {
+        match self {
+            Origin::Telegram {
+                chat_id, topic_id, ..
+            } => Some((*chat_id, *topic_id)),
+            _ => None,
+        }
+    }
+}
+
 /// Nom du bot, relevé au démarrage : les liens profonds le citent (issue #30).
 pub const BOT_USERNAME_KEY: &str = "tg.bot_username";
 
@@ -54,6 +71,20 @@ impl Cards for TelegramCards {
             body: t.body.clone(),
             variables: t.variables.clone(),
         })
+    }
+
+    fn commands(&self) -> Vec<serde_json::Value> {
+        penelope_telegram::commands::all()
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "command": format!("/{}", c.name),
+                    "category": c.category,
+                    "description": c.description,
+                    "example": c.example,
+                })
+            })
+            .collect()
     }
 
     /// Lien `https://t.me/<bot>?start=<charge>`, quand le bot est connu.

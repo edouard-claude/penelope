@@ -75,12 +75,12 @@ pub async fn background(s: &Services, model_id: &str, work: &str) -> String {
 }
 
 /// Modèle appelable pour un tour, d'après son origine : un message du propriétaire
-/// (Telegram, CLI) garde l'abonnement, tout autre tour — planification à cible `prompt`,
+/// (canal, CLI) garde l'abonnement, tout autre tour — planification à cible `prompt`,
 /// veille, travail interne — se replie.
 pub async fn for_origin(s: &Services, model_id: &str, origin: &crate::bus::Origin) -> String {
     match origin {
-        crate::bus::Origin::Telegram { .. } | crate::bus::Origin::Cli => model_id.to_string(),
         crate::bus::Origin::Internal { source } => background(s, model_id, source).await,
+        _ => model_id.to_string(),
     }
 }
 

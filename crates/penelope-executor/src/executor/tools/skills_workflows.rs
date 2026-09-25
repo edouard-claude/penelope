@@ -215,7 +215,7 @@ impl NativeToolExecutor {
                 serde_json::to_value(&draft).unwrap_or_default()
             }
             "workflow_start" => {
-                if matches!(self.env.origin, Origin::Telegram { .. }) && !self.env.in_workflow {
+                if self.env.origin.is_channel() && !self.env.in_workflow {
                     return Err(ToolError::Invalid(
                         "propose d'abord un plan avec workflow_plan ; seul le propriétaire peut valider « vas-y »".into(),
                     ));

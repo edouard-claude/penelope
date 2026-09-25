@@ -38,7 +38,7 @@ pub(super) async fn fire(
                 None => substitute(template, &vars),
             };
             let messenger = ports.messenger.get().ok_or_else(|| {
-                anyhow::anyhow!("aucun canal de message : Telegram non configuré")
+                anyhow::anyhow!("aucun canal de message : canal du propriétaire non configuré")
             })?;
             messenger
                 .send_text(&origin, &body)

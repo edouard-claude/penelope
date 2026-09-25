@@ -260,19 +260,28 @@ async fn a_recurring_prompt_survives_the_closing_of_its_conversation() {
 /// Un canal qui nomme ses conversations par leurs identifiants et refuse `-100999`.
 struct Places;
 
+fn chat_of(origin: &Origin) -> Option<(i64, Option<i64>)> {
+    match origin {
+        Origin::Telegram {
+            chat_id, topic_id, ..
+        } => Some((*chat_id, *topic_id)),
+        _ => None,
+    }
+}
+
 #[async_trait::async_trait]
 impl ChannelDelivery for Places {
     async fn deliver(&self, _: &str, _: &str, _: &Origin, _: &penelope_agent::TurnOutcome) {}
 
     async fn describe_origin(&self, origin: &Origin) -> Option<String> {
-        Some(match origin.telegram_chat()? {
+        Some(match chat_of(origin)? {
             (chat, None) => format!("conv {chat}"),
             (chat, Some(topic)) => format!("conv {chat} sujet {topic}"),
         })
     }
 
     async fn destination_for(&self, origin: &Origin) -> Result<Origin, String> {
-        match origin.telegram_chat() {
+        match chat_of(origin) {
             Some((-100_999, _)) | None => Err("conversation non autorisée".into()),
             Some((chat_id, topic_id)) => Ok(Origin::Telegram {
                 chat_id,

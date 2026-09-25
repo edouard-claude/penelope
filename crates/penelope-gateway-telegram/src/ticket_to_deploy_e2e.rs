@@ -13,6 +13,7 @@
 use crate::bus::Origin;
 use crate::mcp::testing::{FakeConnector, declare, server, tool};
 use crate::runtime::{Daemon, Services};
+use crate::telegram::TelegramChat;
 use crate::telegram::TelegramGateway;
 use penelope_kernel::clock::TestClock;
 use penelope_llm::mock::{MockProvider, Scripted};

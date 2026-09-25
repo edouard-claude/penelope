@@ -16,7 +16,8 @@ pub struct CardTemplate {
     pub variables: Vec<String>,
 }
 
-/// Les cartes du canal : gabarits de texte, liens profonds.
+/// Ce que le canal montre au propriétaire : gabarits de cartes, liens profonds,
+/// commandes.
 #[async_trait::async_trait]
 pub trait Cards: Send + Sync {
     /// Identifiants des gabarits que le canal sait rendre : ce que valident les
@@ -28,6 +29,11 @@ pub trait Cards: Send + Sync {
     async fn deep_link(&self, payload: &str) -> Option<String> {
         let _ = payload;
         None
+    }
+    /// Commandes que le propriétaire peut taper (`command`, `category`, `description`,
+    /// `example`) : l'inventaire de `self_status` (issue #34).
+    fn commands(&self) -> Vec<serde_json::Value> {
+        Vec::new()
     }
 }
 
@@ -54,6 +60,12 @@ impl Channel {
     /// ne les vérifie alors pas).
     pub fn catalog(&self) -> Vec<String> {
         self.cards.get().map(|c| c.catalog()).unwrap_or_default()
+    }
+
+    /// Commandes du canal branché (inventaire de `self_status`, issue #34) ; aucune sans
+    /// canal.
+    pub fn commands(&self) -> Vec<serde_json::Value> {
+        self.cards.get().map(|c| c.commands()).unwrap_or_default()
     }
 
     /// Nom lisible d'une conversation, par le canal branché (issue #124).

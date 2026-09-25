@@ -52,15 +52,6 @@ impl Origin {
     pub fn is_channel(&self) -> bool {
         !matches!(self, Origin::Cli | Origin::Internal { .. })
     }
-
-    pub fn telegram_chat(&self) -> Option<(i64, Option<i64>)> {
-        match self {
-            Origin::Telegram {
-                chat_id, topic_id, ..
-            } => Some((*chat_id, *topic_id)),
-            _ => None,
-        }
-    }
 }
 
 /// Livraison durable de l'issue d'un tour vers son canal (Telegram).

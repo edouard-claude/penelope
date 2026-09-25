@@ -744,3 +744,16 @@ async fn a_scheduled_prompt_answers_after_new_and_warns_on_failure() {
     settle_click(&g).await;
     assert_eq!(s.turns.pending_count().await.unwrap(), 1, "relancée");
 }
+
+/// T36 : l'inventaire `commands` de `self_status` vient du canal branché ; l'exécuteur
+/// ne connaît plus la liste des commandes Telegram.
+#[tokio::test]
+async fn the_channel_lists_the_telegram_commands() {
+    let (_dir, g, _t, _p) = gateway().await;
+    let commands = g.daemon.services.channel.commands();
+    assert!(
+        commands.iter().any(|c| c["command"] == "/run"),
+        "{commands:?}"
+    );
+    assert_eq!(commands.len(), penelope_telegram::commands::all().len());
+}
