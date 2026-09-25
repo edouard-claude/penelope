@@ -1378,6 +1378,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "penelope-conversation"
+version = "1.0.0-alpha.10"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "penelope-app",
+ "penelope-context",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-memory",
+ "penelope-observe",
+ "penelope-store",
+ "penelope-vault",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "penelope-daemon"
 version = "1.0.0-alpha.10"
 dependencies = [
@@ -1393,6 +1415,7 @@ dependencies = [
  "penelope-agent",
  "penelope-app",
  "penelope-context",
+ "penelope-conversation",
  "penelope-dream",
  "penelope-executor",
  "penelope-hitl",

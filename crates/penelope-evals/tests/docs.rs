@@ -440,7 +440,8 @@ fn the_context_page_follows_the_code() {
         regex::Regex::new(r"`((?:context|budget|models|memory|sandbox|tools)\.[a-z_.]+)`").unwrap();
     let value_re = regex::Regex::new(r"`([a-z_]+\.[a-z_.]+)` = (`[^`]+`)").unwrap();
     // Un nom d'événement a la forme d'une clé : il existe s'il est émis par le daemon,
-    // sous-modules compris (les tests sortis dans `<module>/tests.rs` aussi).
+    // sous-modules compris (les tests sortis dans `<module>/tests.rs` aussi), ou par la
+    // conversation qui en est sortie (compaction, épopée #208, T23).
     fn walk(dir: &Path, out: &mut String) {
         for e in std::fs::read_dir(dir).unwrap().flatten() {
             let p = e.path();
@@ -452,10 +453,12 @@ fn the_context_page_follows_the_code() {
         }
     }
     let mut daemon_source = String::new();
-    walk(
-        &root().join("crates/penelope-daemon/src"),
-        &mut daemon_source,
-    );
+    for dir in [
+        "crates/penelope-daemon/src",
+        "crates/penelope-conversation/src",
+    ] {
+        walk(&root().join(dir), &mut daemon_source);
+    }
     let raw = read(&page);
     let mut wrong = Vec::new();
     for line in prose(&raw) {

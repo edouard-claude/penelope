@@ -5,10 +5,8 @@
 pub mod agent;
 pub mod approval_mode;
 pub mod audit;
-pub mod budget_alert;
 pub mod cache_audit;
 pub mod compaction;
-pub mod conversation;
 pub mod dream;
 pub mod engine;
 pub mod executor;
@@ -24,7 +22,6 @@ pub mod scheduler;
 pub mod selfknow;
 pub mod session_ops;
 pub mod supervisor;
-pub mod titles;
 pub mod tool_jobs;
 #[cfg(test)]
 mod wiki_e2e;
@@ -59,6 +56,11 @@ pub use penelope_dream::onboarding;
 // anciens chemins jusqu'à T30 ; `executor`, `selfknow` et `tool_jobs` en restent les
 // façades.
 pub use penelope_executor::{images, selfdocs, tools_on_demand, vision, voice};
+// Conversation de session, compaction, titres et alerte de budget sortis dans
+// `penelope-conversation` (T23), réexportés sous leurs anciens chemins jusqu'à T30 ;
+// `compaction` garde une façade (`compaction::context_of`).
+pub use penelope_conversation as conversation;
+pub use penelope_conversation::{budget_alert, titles};
 
 pub use agent::{AgentLoop, TurnOutcome};
 pub use ports::Handle;

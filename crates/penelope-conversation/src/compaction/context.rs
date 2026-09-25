@@ -1,9 +1,9 @@
 //! Ce que la compaction lit du daemon, sans le daemon (épopée #208, T23).
 
 use super::{Trigger, compact};
-use crate::bus::Bus;
-use crate::ports::ProviderSource;
-use crate::runtime::Services;
+use penelope_app::bus::Bus;
+use penelope_app::ports::ProviderSource;
+use penelope_app::services::Services;
 use std::sync::Arc;
 
 /// Les services, les providers de modèles, le bus des tours (un résumé prêt attend la
@@ -29,7 +29,7 @@ impl Context {
 
     /// Alias épinglé sur une session, comme `Daemon::pinned_model`.
     pub async fn pinned_model(&self, session_id: &str) -> Option<penelope_llm::StickyModel> {
-        crate::helpers::pinned_model(&self.services, session_id).await
+        penelope_app::helpers::pinned_model(&self.services, session_id).await
     }
 }
 
@@ -40,7 +40,7 @@ pub struct OverflowCompactor {
 }
 
 #[async_trait::async_trait]
-impl crate::agent::Compactor for OverflowCompactor {
+impl penelope_app::conversation::Compactor for OverflowCompactor {
     async fn compact_now(&self, session_id: &str) -> anyhow::Result<bool> {
         let r = compact(
             &self.context,

@@ -2,12 +2,25 @@
 //!
 //! L'historique canonique vit en base (`messages`) ; la requête envoyée au modèle en est
 //! une **projection** : tuiles T0 à T2 stables, résumés LCM, queue verbatim, T4 volatile.
+//!
+//! `penelope-conversation` (épopée #208, T23) : la conversation d'une session
+//! (`SessionConversation`, relue depuis le journal ou les tables selon
+//! `history.source`), la compaction de fond et son état (`compaction`), les titres de
+//! session (`titles`), l'alerte de budget (`budget_alert`). C'est l'implémentation du
+//! port `Conversation` que la boucle consomme. La crate ne connaît que `penelope-app`,
+//! `penelope-vault` et les crates métier : ni le daemon, ni la boucle, ni le canal.
 
-use crate::agent::Conversation;
-use crate::bus::{ChannelDelivery, Origin};
-pub use crate::helpers::{local_now, vault_dir};
+#![forbid(unsafe_code)]
+
+pub mod budget_alert;
+pub mod compaction;
+pub mod titles;
+
+use penelope_app::bus::{ChannelDelivery, Origin};
+use penelope_app::conversation::Conversation;
+pub use penelope_app::helpers::{local_now, vault_dir};
 // Tuiles du prompt et instantanés mémoire, descendus dans `penelope-vault` (T22).
-use crate::runtime::Services;
+use penelope_app::services::Services;
 use penelope_context::CompactionParams;
 use penelope_context::journal::{Provenance, UserSource};
 use penelope_context::tiers::Tiers;
@@ -33,7 +46,7 @@ pub struct SessionConversation {
     tiers: Tiers,
     episode: i64,
     /// Compaction immédiate, sur dépassement de fenêtre prouvé par le provider.
-    compactor: Option<Arc<dyn crate::agent::Compactor>>,
+    compactor: Option<Arc<dyn penelope_app::conversation::Compactor>>,
     /// La dernière projection a atteint le seuil de la compaction de fond.
     wants_compaction: AtomicBool,
     merge_turn: Option<Turn>,
@@ -65,7 +78,10 @@ impl SessionConversation {
         }
     }
 
-    pub fn with_compactor(mut self, compactor: Arc<dyn crate::agent::Compactor>) -> Self {
+    pub fn with_compactor(
+        mut self,
+        compactor: Arc<dyn penelope_app::conversation::Compactor>,
+    ) -> Self {
         self.compactor = Some(compactor);
         self
     }
@@ -312,8 +328,8 @@ impl Conversation for SessionConversation {
         Ok(entries.iter().map(|e| e.message.clone()).collect())
     }
 
-    fn prompt_prefix(&self) -> Option<crate::prompt_snapshot::PromptPrefix> {
-        Some(crate::prompt_snapshot::PromptPrefix::of(&self.tiers))
+    fn prompt_prefix(&self) -> Option<penelope_app::conversation::PromptPrefix> {
+        Some(penelope_app::conversation::PromptPrefix::of(&self.tiers))
     }
 }
 

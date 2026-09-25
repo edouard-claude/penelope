@@ -34,7 +34,7 @@ pub(super) async fn tell_mechanical(
     if let Some(m) = d.compaction.messenger.get() {
         let _ = m
             .send_text(
-                &crate::helpers::owner_origin_of(&d.services),
+                &penelope_app::helpers::owner_origin_of(&d.services),
                 &format!(
                     "⚠️ La session « {title} » ne se résumait plus : le résumeur (`{model}`) a \
                      échoué {MECHANICAL_AFTER} fois ({error}). {} messages ont été compactés \

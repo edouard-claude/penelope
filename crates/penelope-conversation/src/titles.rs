@@ -2,9 +2,9 @@
 //! modèle rapide propose 3 à 6 mots. Un titre posé à la main (`/title`, `/new <titre>`,
 //! `penelope session title`) n'est jamais remplacé.
 
-use crate::bus::ChannelDelivery;
-use crate::ports::ProviderSource;
-use crate::runtime::Services;
+use penelope_app::bus::ChannelDelivery;
+use penelope_app::ports::ProviderSource;
+use penelope_app::services::Services;
 use penelope_kernel::session::{Session, SessionKind};
 use penelope_llm::catalog::strip_provider;
 use penelope_llm::provider::{CancelToken, collect_stream};
@@ -124,7 +124,7 @@ pub async fn generate(
         .alias_model(&alias)
         .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}`"))?
         .to_string();
-    let model = crate::codex_scope::background(s, &model, "titre").await;
+    let model = penelope_app::codex_scope::background(s, &model, "titre").await;
     let provider = providers
         .provider_for(&model)
         .await

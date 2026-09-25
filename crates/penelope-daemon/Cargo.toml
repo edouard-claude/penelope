@@ -39,6 +39,9 @@ penelope-dream.workspace = true
 # Exécuteur des outils natifs, `self_status`, documentation embarquée, vision, voix
 # (épopée #208, T24).
 penelope-executor.workspace = true
+# Conversation de session, compaction, titres, alerte de budget, extraits du daemon
+# (épopée #208, T23).
+penelope-conversation.workspace = true
 penelope-kernel.workspace = true
 penelope-store.workspace = true
 penelope-platform.workspace = true

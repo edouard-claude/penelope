@@ -3,10 +3,10 @@
 //! trois plus gros postes, leur coût et leur part de cache. Le blocage à 100 % reste celui
 //! de la boucle d'agent.
 
-use crate::bus::Origin;
-use crate::executor::Messenger;
-use crate::ports::Slot;
-use crate::runtime::Services;
+use penelope_app::bus::Origin;
+use penelope_app::ports::Messenger;
+use penelope_app::ports::Slot;
+use penelope_app::services::Services;
 use penelope_kernel::budget::{BudgetScope, BudgetStatus, UsageRow, UsageWatcher};
 use std::sync::{Arc, Weak};
 
@@ -143,7 +143,7 @@ pub fn alert_text(status: &BudgetStatus, top: &[UsageRow]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::RecordingMessenger;
+    use penelope_app::testing::RecordingMessenger;
     use penelope_kernel::budget::UsageRecord;
     use penelope_kernel::clock::TestClock;
     use std::time::Duration;
@@ -167,7 +167,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let clock = Arc::new(TestClock::default());
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );

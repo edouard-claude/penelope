@@ -34,7 +34,7 @@ pub(super) struct Attempt<'a> {
 }
 
 /// Modèle inscrit sur un résumé fait sans modèle.
-pub(super) const MECHANICAL_MODEL: &str = "sans modèle";
+pub const MECHANICAL_MODEL: &str = "sans modèle";
 
 /// Un lot résumé, avec ses reprises (issue #131) : le lot tel quel ; sur un échec
 /// passager, le début du même lot en trois fois plus court ; puis, s'il est déclaré,
@@ -119,7 +119,8 @@ pub(super) async fn summarise_or_recover(
         ));
         return Err(Box::new((job, failure)));
     }
-    let fallback = crate::codex_scope::background(&d.services, &fallback, "compaction").await;
+    let fallback =
+        penelope_app::codex_scope::background(&d.services, &fallback, "compaction").await;
     let Ok(fb) = d.provider_for(&fallback).await else {
         return Err(Box::new((job, failure)));
     };

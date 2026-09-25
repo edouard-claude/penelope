@@ -97,6 +97,7 @@ penelope-vault    = { path = "crates/penelope-vault", version = "1.0.0-alpha.10"
 penelope-ops      = { path = "crates/penelope-ops", version = "1.0.0-alpha.10" }
 penelope-dream    = { path = "crates/penelope-dream", version = "1.0.0-alpha.10" }
 penelope-executor = { path = "crates/penelope-executor", version = "1.0.0-alpha.10" }
+penelope-conversation = { path = "crates/penelope-conversation", version = "1.0.0-alpha.10" }
 penelope-evals    = { path = "crates/penelope-evals", version = "1.0.0-alpha.10" }
 penelope-daemon   = { path = "crates/penelope-daemon", version = "1.0.0-alpha.10" }
 penelope-gateway-telegram = { path = "crates/penelope-gateway-telegram", version = "1.0.0-alpha.10" }

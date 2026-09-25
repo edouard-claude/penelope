@@ -33,12 +33,14 @@ async fn the_injected_memory_follows_the_session_subject() {
          ## LinkedIn\n- Trois publications par semaine ^01LINKED\n",
     )
     .unwrap();
-    crate::vault_ops::reindex(&s, &vault).await.unwrap();
+    penelope_vault::vault_ops::reindex(&s, &vault)
+        .await
+        .unwrap();
 
     let fid = session(&s).await;
     let lnk = session(&s).await;
-    crate::session_project::set(&s, &fid, Some("Fidelatoo")).await;
-    crate::session_project::set(&s, &lnk, Some("linkedin")).await;
+    penelope_vault::session_project::set(&s, &fid, Some("Fidelatoo")).await;
+    penelope_vault::session_project::set(&s, &lnk, Some("linkedin")).await;
     let t2 = |sid: String| {
         let s = s.clone();
         async move {
@@ -74,7 +76,7 @@ async fn the_injected_memory_follows_the_session_subject() {
     assert!(hits.iter().any(|h| h.entry.uid == "01FIDBASE"));
     let uids = snapshot_uids(
         &s,
-        &crate::session_project::Scope::Session(Some("linkedin".into())),
+        &penelope_vault::session_project::Scope::Session(Some("linkedin".into())),
     )
     .await;
     assert!(
@@ -103,7 +105,7 @@ async fn the_injected_memory_follows_the_session_subject() {
         "{c}"
     );
     assert_eq!(
-        crate::session_project::of_session(&s, &titled).await,
+        penelope_vault::session_project::of_session(&s, &titled).await,
         (Some("fidelatoo".into()), Some("titre".into()))
     );
     let topic = session(&s).await;
@@ -111,7 +113,7 @@ async fn the_injected_memory_follows_the_session_subject() {
         .bind_telegram(&topic, -10_042, Some(21))
         .await
         .unwrap();
-    let key = crate::helpers::topic_name_key(-10_042, 21);
+    let key = penelope_app::helpers::topic_name_key(-10_042, 21);
     s.kv_set(&key, "Posts LinkedIn").await.unwrap();
     let t = t2(topic.clone()).await;
     assert!(
@@ -162,7 +164,7 @@ async fn an_injected_entry_is_never_recalled_twice() {
     let (_d, s) = services().await;
     let vault = vault_dir(&s);
     std::fs::create_dir_all(&vault).unwrap();
-    crate::vault_ops::remember(
+    penelope_vault::vault_ops::remember(
         &s,
         &vault,
         penelope_memory::Level::Coeur,
@@ -189,7 +191,9 @@ async fn a_practice_is_recalled_with_its_default_and_never_its_deviations() {
     let vault = vault_dir(&s);
     std::fs::create_dir_all(vault.join("pratiques")).unwrap();
     std::fs::write(vault.join("pratiques/langage-backend.md"), PRATIQUE).unwrap();
-    crate::vault_ops::reindex(&s, &vault).await.unwrap();
+    penelope_vault::vault_ops::reindex(&s, &vault)
+        .await
+        .unwrap();
 
     let tiers = build_tiers(&s, "quel langage pour ce backend ?", &[], None).await;
     let t4 = tiers.volatile.clone();
@@ -226,7 +230,9 @@ async fn practice_sections_are_indexed_with_their_own_type() {
     let vault = vault_dir(&s);
     std::fs::create_dir_all(vault.join("pratiques")).unwrap();
     std::fs::write(vault.join("pratiques/langage-backend.md"), PRATIQUE).unwrap();
-    crate::vault_ops::reindex(&s, &vault).await.unwrap();
+    penelope_vault::vault_ops::reindex(&s, &vault)
+        .await
+        .unwrap();
 
     let types = s
         .memory
