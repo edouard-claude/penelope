@@ -7,10 +7,49 @@
 
 use super::*;
 
+/// Identifiant d'un appel d'outil, tel que le modèle (ou le programme parent) l'a émis.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CallId(pub String);
+
+/// Place d'un appel dans l'arbre des appels (couture PTC, décision 0016) : `root` est
+/// l'appel émis par le modèle, `parent` celui qui a émis cet appel quand il est imbriqué
+/// (sous-appel d'un programme `run_code`). Aujourd'hui, tout appel est une racine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallContext {
+    pub call_id: CallId,
+    pub parent: Option<CallId>,
+    pub root: CallId,
+}
+
+impl CallContext {
+    /// Un appel émis par le modèle.
+    pub fn root(call_id: &str) -> Self {
+        CallContext {
+            call_id: CallId(call_id.to_string()),
+            parent: None,
+            root: CallId(call_id.to_string()),
+        }
+    }
+
+    /// Un appel émis par celui-ci : même racine, parent = cet appel.
+    pub fn child(&self, call_id: &str) -> Self {
+        CallContext {
+            call_id: CallId(call_id.to_string()),
+            parent: Some(self.call_id.clone()),
+            root: self.root.clone(),
+        }
+    }
+
+    pub fn is_nested(&self) -> bool {
+        self.parent.is_some()
+    }
+}
+
 /// Un appel normalisé (issue #123) et ce qu'il faut savoir pour le décider.
 pub(crate) struct DescribedCall {
     pub call: ToolCall,
     pub info: CallInfo,
+    pub context: CallContext,
 }
 
 /// Un appel refusé sans être exécuté : son texte revient au modèle comme résultat.
@@ -28,6 +67,9 @@ pub(crate) enum Refusal {
     Invalid(String),
     /// Refusé par la politique (règle, déclaration du serveur), avec sa raison.
     Policy { reason: String },
+    /// Appel imbriqué qui demanderait une approbation : un programme en vol ne se suspend
+    /// pas, la demande est un refus (décision 0016).
+    NestedApproval { reason: String },
 }
 
 impl Refusal {
@@ -45,8 +87,24 @@ impl Refusal {
             Refusal::LoopWarn(m) => format!("[avertissement du harnais] {m}"),
             Refusal::Invalid(text) => text.clone(),
             Refusal::Policy { reason } => format!("Refusé par la politique : {reason}"),
+            Refusal::NestedApproval { reason } => not_run(&format!(
+                "un appel imbriqué ne peut pas demander d'approbation ({reason})"
+            )),
         }
     }
+}
+
+/// Un appel imbriqué dont la politique demande une approbation est refusé, sans carte :
+/// seul l'appel racine peut suspendre le tour (décision 0016).
+pub(crate) fn nested_ask(
+    context: &CallContext,
+    decision: PolicyDecision,
+    reason: &str,
+) -> Option<Refusal> {
+    (context.is_nested() && matches!(decision, PolicyDecision::Ask | PolicyDecision::AskTwice))
+        .then(|| Refusal::NestedApproval {
+            reason: reason.to_string(),
+        })
 }
 
 fn not_run(why: &str) -> String {
@@ -73,7 +131,7 @@ pub(crate) enum GuardStop {
 }
 
 /// Ce que voit une garde d'appel.
-pub(crate) struct CallContext<'a> {
+pub(crate) struct GuardContext<'a> {
     pub agent: &'a AgentLoop,
     pub spec: &'a TurnSpec,
     pub execute: &'a (dyn ToolExecutor + Send + Sync),
@@ -87,7 +145,7 @@ pub(crate) trait CallGuard: Send + Sync {
     async fn check(
         &self,
         call: &DescribedCall,
-        cx: &mut CallContext<'_>,
+        cx: &mut GuardContext<'_>,
     ) -> anyhow::Result<Option<GuardStop>>;
 }
 
@@ -100,7 +158,7 @@ pub(crate) fn call_chain() -> [&'static dyn CallGuard; 4] {
 pub(crate) async fn run_call_guards(
     chain: &[&dyn CallGuard],
     call: &DescribedCall,
-    cx: &mut CallContext<'_>,
+    cx: &mut GuardContext<'_>,
 ) -> anyhow::Result<Option<GuardStop>> {
     for guard in chain {
         if let Some(stop) = guard.check(call, cx).await? {
@@ -123,7 +181,7 @@ impl CallGuard for Allowlist {
     async fn check(
         &self,
         d: &DescribedCall,
-        cx: &mut CallContext<'_>,
+        cx: &mut GuardContext<'_>,
     ) -> anyhow::Result<Option<GuardStop>> {
         Ok(
             (!penelope_tools::is_allowed(&d.call.name, &cx.spec.allowed_tools)).then(|| {
@@ -147,7 +205,7 @@ impl CallGuard for PriorDecision {
     async fn check(
         &self,
         d: &DescribedCall,
-        cx: &mut CallContext<'_>,
+        cx: &mut GuardContext<'_>,
     ) -> anyhow::Result<Option<GuardStop>> {
         let prior = cx
             .agent
@@ -185,7 +243,7 @@ impl CallGuard for LoopGuard {
     async fn check(
         &self,
         d: &DescribedCall,
-        cx: &mut CallContext<'_>,
+        cx: &mut GuardContext<'_>,
     ) -> anyhow::Result<Option<GuardStop>> {
         Ok(
             match cx
@@ -213,7 +271,7 @@ impl CallGuard for Precheck {
     async fn check(
         &self,
         d: &DescribedCall,
-        cx: &mut CallContext<'_>,
+        cx: &mut GuardContext<'_>,
     ) -> anyhow::Result<Option<GuardStop>> {
         let Err(e) = cx.execute.precheck(&d.call.name, &d.call.arguments).await else {
             return Ok(None);

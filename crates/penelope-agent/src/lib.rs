@@ -69,6 +69,7 @@ use pipeline::Pending;
 pub use pipeline::effect_kind;
 pub use pipeline::server_of;
 pub use pipeline::{ApprovalMode, declared_allow, local_draft_allow};
+pub use pipeline::{CallContext, CallId};
 pub use ports::{
     AgentServices, CacheAudit, JobRequest, JobRunner, MemoryModes, NoAudit, NoJobs,
     PromptSnapshots, SessionInfo, SessionModes,

@@ -5,8 +5,10 @@ use super::*;
 pub(super) mod decide;
 pub(super) mod policy;
 
+pub use decide::{CallContext, CallId};
 use decide::{
-    CallContext, DescribedCall, GuardStop, Refusal, Suspension, call_chain, run_call_guards,
+    DescribedCall, GuardContext, GuardStop, Refusal, Suspension, call_chain, nested_ask,
+    run_call_guards,
 };
 use policy::PolicyStage;
 pub use policy::{ApprovalMode, declared_allow, local_draft_allow};
@@ -46,7 +48,7 @@ const PARALLEL_SAFE: &[&str] = &[
 ];
 
 /// Suite d'un appel, décidée avant toute exécution.
-enum Step {
+pub(crate) enum Step {
     /// Résultat connu sans exécuter : refus, avertissement du harnais.
     Record(ToolCall, String),
     /// À exécuter ; `parallel` : lecture autorisée d'office, qui peut partir avec ses
@@ -59,7 +61,7 @@ enum Step {
 }
 
 /// Ce qui arrête la liste des appels après l'exécution de ceux qui précèdent.
-enum Terminal {
+pub(crate) enum Terminal {
     Stop(TurnOutcome),
     Loop {
         call: ToolCall,
@@ -69,7 +71,7 @@ enum Terminal {
 }
 
 /// Ce que la décision d'un appel ajoute à la liste.
-enum Decided {
+pub(crate) enum Decided {
     Step(Step),
     Stop(Terminal),
 }
@@ -110,7 +112,7 @@ impl AgentLoop {
         //    approbation arrête la liste (ceux d'avant partent quand même).
         let mut steps: Vec<Step> = Vec::new();
         let mut terminal: Option<Terminal> = None;
-        let mut cx = CallContext {
+        let mut cx = GuardContext {
             agent: self,
             spec,
             execute,
@@ -122,7 +124,12 @@ impl AgentLoop {
                 call.arguments = args;
             }
             let info = execute.describe_call(&call.name, &call.arguments).await;
-            let described = DescribedCall { call, info };
+            let context = CallContext::root(&call.id);
+            let described = DescribedCall {
+                call,
+                info,
+                context,
+            };
             match self
                 .decide_call(spec, conv, sink, &mut cx, described)
                 .await?
@@ -268,12 +275,12 @@ impl AgentLoop {
     }
 
     /// Décide d'un appel, sans rien exécuter : gardes, politique, carte d'approbation.
-    async fn decide_call(
+    pub(crate) async fn decide_call(
         &self,
         spec: &TurnSpec,
         conv: &dyn Conversation,
         sink: &dyn TurnSink,
-        cx: &mut CallContext<'_>,
+        cx: &mut GuardContext<'_>,
         described: DescribedCall,
     ) -> anyhow::Result<Decided> {
         let s = &self.services;
@@ -306,7 +313,11 @@ impl AgentLoop {
                 }));
             }
         }
-        let DescribedCall { call, info } = described;
+        let DescribedCall {
+            call,
+            info,
+            context,
+        } = described;
 
         // 4. Politique et approbation, sur les arguments de l'outil visé : par
         // `tool_call`, ceux de l'appel interne (#110), sinon une règle
@@ -317,6 +328,9 @@ impl AgentLoop {
             PolicyStage::evaluate(s, spec, policy_workspace.as_deref(), &info, &effective_args)
                 .await?;
 
+        if let Some(refusal) = nested_ask(&context, verdict.decision, &verdict.reason) {
+            return Ok(Decided::Step(Step::Record(call, refusal.text())));
+        }
         match verdict.decision {
             PolicyDecision::Deny => {
                 return Ok(Decided::Step(Step::Record(

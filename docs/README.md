@@ -53,5 +53,6 @@ d'outils sont à jour.
 - [0011](decisions/0011-prompt-systeme-journalise.md) : le prompt système est journalisé en clair, adressé par son empreinte.
 - [0012](decisions/0012-jobs-outils-durables.md) : un job d'outil mort au redémarrage n'est jamais relancé d'office.
 - [0015](decisions/0015-gel-0.17-et-branche-v1.md) : gel de la 0.17 et branche `v1` ; `main` ne prend que des corrections, versions `1.0.0-alpha.N` jamais taguées.
+- [0016](decisions/0016-ptc-hors-v1.md) : le PTC (`run_code`) est hors V1 ; un appel imbriqué qui demanderait une approbation est refusé sans carte.
 
 Les numéros 0013, 0014, 0016 et 0017 sont réservés par la charte de la V1 (`design/v1/README.md` §9) et pas encore écrits (0017 : journal source unique).

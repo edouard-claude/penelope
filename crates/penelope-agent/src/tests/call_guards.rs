@@ -1,7 +1,8 @@
 use super::*;
 use crate::pipeline::decide::{
-    CallContext, DescribedCall, GuardStop, Refusal, Suspension, call_chain, run_call_guards,
+    DescribedCall, GuardContext, GuardStop, Refusal, Suspension, call_chain, run_call_guards,
 };
+use crate::pipeline::{Decided, Step, Terminal};
 
 /// L'ordre de la chaîne est fixé dans le code.
 #[test]
@@ -81,11 +82,12 @@ async fn the_allowlist_comes_before_a_prior_decision() {
         info: e
             .describe_call("shell_exec", &json!({"command": "cargo build"}))
             .await,
+        context: CallContext::root("c1"),
     };
 
     let mut restricted = spec(&sid);
     restricted.allowed_tools = vec!["fs_read".into()];
-    let mut cx = CallContext {
+    let mut cx = GuardContext {
         agent: &agent,
         spec: &restricted,
         execute: &e,
@@ -101,7 +103,7 @@ async fn the_allowlist_comes_before_a_prior_decision() {
     );
 
     let open = spec(&sid);
-    let mut cx = CallContext {
+    let mut cx = GuardContext {
         agent: &agent,
         spec: &open,
         execute: &e,
@@ -115,4 +117,66 @@ async fn the_allowlist_comes_before_a_prior_decision() {
             approval_id: pending.id.0.clone()
         }))
     );
+}
+
+/// Couture PTC (décision 0016) : un appel imbriqué dont la politique demande une
+/// approbation est refusé sans carte ; le même appel, émis par le modèle, pose la sienne.
+#[tokio::test]
+async fn a_nested_call_that_asks_is_refused_without_a_card() {
+    let (_d, s, p) = setup().await;
+    let sid = session(&s).await;
+    let agent = AgentLoop::new(s.clone(), p.clone());
+    let e = exec(false);
+    let conv = MemoryConversation::new("Tu es Pénélope.", "compile");
+    let turn = spec(&sid);
+    let args = json!({"command": "cargo build"});
+    let program = CallContext::root("c1");
+    let nested = program.child("c1:ptc:1");
+    assert_eq!(nested.parent, Some(CallId("c1".into())));
+    assert_eq!(nested.root, CallId("c1".into()));
+
+    let mut detector = LoopDetector::new(3);
+    let mut cx = GuardContext {
+        agent: &agent,
+        spec: &turn,
+        execute: &e,
+        detector: &mut detector,
+    };
+    let described = DescribedCall {
+        call: call("c1:ptc:1", "shell_exec", args.clone()),
+        info: e.describe_call("shell_exec", &args).await,
+        context: nested,
+    };
+    let decided = agent
+        .decide_call(&turn, &conv, &NullSink, &mut cx, described)
+        .await
+        .unwrap();
+    let Decided::Step(Step::Record(refused, text)) = decided else {
+        panic!("l'appel imbriqué n'est pas refusé");
+    };
+    assert_eq!(refused.id, "c1:ptc:1");
+    assert!(
+        text.starts_with("Non exécuté : un appel imbriqué ne peut pas demander d'approbation"),
+        "{text}"
+    );
+    assert!(
+        s.approvals.pending(10).await.unwrap().is_empty(),
+        "aucune carte"
+    );
+
+    let described = DescribedCall {
+        call: call("c2", "shell_exec", args.clone()),
+        info: e.describe_call("shell_exec", &args).await,
+        context: CallContext::root("c2"),
+    };
+    let decided = agent
+        .decide_call(&turn, &conv, &NullSink, &mut cx, described)
+        .await
+        .unwrap();
+    assert!(matches!(
+        decided,
+        Decided::Stop(Terminal::Stop(TurnOutcome::AwaitingApproval { .. }))
+    ));
+    assert_eq!(s.approvals.pending(10).await.unwrap().len(), 1);
+    assert_eq!(e.calls.load(Ordering::SeqCst), 0);
 }

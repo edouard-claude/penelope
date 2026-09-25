@@ -3744,6 +3744,7 @@ Les écarts assumés par rapport à un « DEVRAIT » du PRD sont documentés un 
 | [0011](decisions/0011-prompt-systeme-journalise.md) | Prompt système journalisé en clair | Ce que le modèle a lu est reconstituable, adressé par son empreinte ; une ligne par préfixe distinct |
 | [0012](decisions/0012-jobs-outils-durables.md) | Jobs d'outils durables | Un appel long sort du tour et rend la main ; un job mort au redémarrage n'est jamais relancé d'office (#204) |
 | [0015](decisions/0015-gel-0.17-et-branche-v1.md) | Gel de la 0.17 et branche `v1` | La dette ne grossit plus sur `main` (budget à cliquet) ; la V1 se refait à côté, versions jamais taguées |
+| [0016](decisions/0016-ptc-hors-v1.md) | PTC hors V1, avec une couture | Une approbation suspend le tour, pas un programme : un appel imbriqué qui la demanderait est refusé sans carte ; `run_code` viendra, s'il vient, par le même pipeline |
 
 Les numéros 0013, 0014, 0016 et 0017 sont réservés par la charte de la V1 (`design/v1/README.md`
 §9 : découpage du daemon, boucle en pipeline, PTC hors V1, journal source unique de la
