@@ -51,17 +51,14 @@ async fn decide_uncertain_effect(
                 .resolve_unknown(&EffectId(effect_id.clone()), ledger)
                 .await?;
             s.events
-                .append(EventDraft::new(
-                    "approval.decided",
-                    json!({
-                        "id": a.id.as_str(),
-                        "approved": decision.approved,
-                        "via": decision.via,
-                        "window": "once",
-                        "effect": effect_id,
-                        "choice": decision.choice,
-                    }),
-                ))
+                .append(TurnEventKind::ApprovalDecided.draft(json!({
+                    "id": a.id.as_str(),
+                    "approved": decision.approved,
+                    "via": decision.via,
+                    "window": "once",
+                    "effect": effect_id,
+                    "choice": decision.choice,
+                })))
                 .await?;
             Ok(decision.approved)
         }
@@ -161,15 +158,12 @@ pub async fn decide_approval(
                 }
             }
             s.events
-                .append(EventDraft::new(
-                    "approval.decided",
-                    json!({
-                        "id": approval_id,
-                        "approved": decision.approved,
-                        "via": decision.via,
-                        "window": decision.window.as_str(),
-                    }),
-                ))
+                .append(TurnEventKind::ApprovalDecided.draft(json!({
+                    "id": approval_id,
+                    "approved": decision.approved,
+                    "via": decision.via,
+                    "window": decision.window.as_str(),
+                })))
                 .await?;
             Ok(decision.approved)
         }

@@ -21,7 +21,6 @@
 
 use penelope_hitl::{ApprovalKind, ApprovalState, Decision};
 use penelope_kernel::effects::{EffectKind, EffectSpec, Planned};
-use penelope_kernel::event::EventDraft;
 use penelope_kernel::journal::Provenance;
 use penelope_kernel::risk::{PolicyDecision, PolicyWindow, RiskClass};
 use penelope_llm::provider::{CancelToken, Provider, collect_stream_observed};
@@ -34,6 +33,7 @@ use std::sync::{Arc, Mutex};
 mod attempts;
 mod cache;
 mod decisions;
+mod events;
 mod guards;
 mod loop_abort;
 mod model;
@@ -52,6 +52,7 @@ pub use cache::{
     CACHE_TTL_MS, Fingerprint, Observed, PreviousCall, STICKY_MS, miss_cause, sticky_upstream,
 };
 pub use decisions::{EFFECT_DONE, EFFECT_IGNORE, EFFECT_RETRY, decide_approval};
+pub use events::TurnEventKind;
 pub use guards::budget_exceeded_text;
 use guards::{TurnContext, default_chain, run_guards};
 pub use loop_abort::{LOOP_STOP_NOTE, last_result_of, split_choices};

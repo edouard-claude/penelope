@@ -102,11 +102,9 @@ impl<'a> Steering<'a> {
         services
             .events
             .append(
-                EventDraft::new(
-                    "turn.merged",
-                    json!({"turn": spec.turn_id, "count": steers.len(), "phase": "running"}),
-                )
-                .session(&spec.session_id),
+                TurnEventKind::Merged
+                    .draft(json!({"turn": spec.turn_id, "count": steers.len(), "phase": "running"}))
+                    .session(&spec.session_id),
             )
             .await?;
         Ok(())

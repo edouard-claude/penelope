@@ -324,7 +324,8 @@ impl AgentLoop {
                 let report = format!("{message}\n\n{}", detector.report());
                 s.events
                     .append(
-                        EventDraft::new("turn.loop_aborted", json!({"report": report}))
+                        TurnEventKind::LoopAborted
+                            .draft(json!({"report": report}))
                             .session(&spec.session_id),
                     )
                     .await?;
@@ -504,18 +505,16 @@ impl AgentLoop {
         self.services
             .events
             .append(
-                EventDraft::new(
-                    "tool.result",
-                    json!({
+                TurnEventKind::ToolResult
+                    .draft(json!({
                         "tool": info.effective_name,
                         "ok": !outcome.is_error,
                         // Forme de la ligne, pour mesurer la consigne « une commande par
                         // appel » (issue #150). La commande elle-même n'est pas journalée
                         // ici : seule sa forme l'est.
                         "shape": line_shape(&info.effective_name, &call.arguments),
-                    }),
-                )
-                .session(&spec.session_id),
+                    }))
+                    .session(&spec.session_id),
             )
             .await?;
         let mut text = outcome.text.clone();

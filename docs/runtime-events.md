@@ -85,6 +85,19 @@ même `turn_id` est un tour interrompu par un arrêt du processus : au démarrag
 le daemon le ferme `interrupted` avant de servir, et le tour rejoué par la file ouvre sa
 propre borne avec l'`attempt` suivant.
 
+Entre ces deux bornes, la boucle écrit les événements suivants, attachés à la session
+du tour (sauf `approval.decided`, qui ne l'est pas) :
+
+| Kind | Écrit quand | Payload |
+|---|---|---|
+| `turn.merged` | des messages du propriétaire rejoignent le tour : avant qu'il parte (`phase: queued`) ou pendant, avant un appel au modèle ou entre deux appels d'outils (`phase: running`) | `turn`, `count`, `phase` |
+| `turn.empty_answer` | le modèle n'a rendu ni texte ni appel d'outil ; relancé une fois, sauf si le raisonnement a mangé la sortie | `model`, `upstream`, `generation_id`, `finish`, `native_finish`, `completion_tokens`, `reasoning_tokens`, `retried` |
+| `turn.loop_aborted` | le détecteur de boucles arrête les outils du tour | `report` |
+| `tool.result` | un appel d'outil a rendu son résultat | `tool`, `ok`, `shape` (la forme de la ligne de commande, jamais la commande) |
+| `llm.retried` | nouvel essai du même modèle après une erreur d'avant flux | `model`, `attempt`, `wait_s`, `error` |
+| `llm.fallback_used` | la réponse vient d'un autre modèle que celui demandé (repli fait par OpenRouter) | `requested`, `served` |
+| `approval.decided` | une carte d'approbation, ou un effet au sort incertain, est tranchée ; la première décision gagne | `id`, `approved`, `via`, `window` ; pour un effet incertain, `effect` et `choice` |
+
 Les événements `conv.*` portent le **contenu** de la conversation, pour que le journal
 se suffise (épopée #208, `design/v1/source-de-verite.md` §2.2). Chaque payload a
 `"v": 1` et, pour ceux qui changent ce que le modèle lit, `surface` : `{"op":"append"}`

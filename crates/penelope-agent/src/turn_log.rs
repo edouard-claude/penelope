@@ -8,8 +8,8 @@
 
 use super::*;
 use penelope_kernel::journal::{
-    KIND_TURN_FINISHED, KIND_TURN_STARTED, TurnCall, TurnEnd, TurnIdentity, finished_payload,
-    interrupted_payload, is_purged, started_payload,
+    KIND_TURN_STARTED, TurnCall, TurnEnd, TurnIdentity, finished_payload, interrupted_payload,
+    is_purged, started_payload,
 };
 
 /// Identité d'un tour de la file, quand il y en a une : le tour d'une session de chat.
@@ -124,11 +124,13 @@ impl AgentLoop {
         self.services
             .events
             .append(
-                EventDraft::new(
-                    KIND_TURN_STARTED,
-                    started_payload(Some(&call), spec.turn_id.as_deref(), id.as_ref()),
-                )
-                .session(&spec.session_id),
+                TurnEventKind::Started
+                    .draft(started_payload(
+                        Some(&call),
+                        spec.turn_id.as_deref(),
+                        id.as_ref(),
+                    ))
+                    .session(&spec.session_id),
             )
             .await?;
         if let Some(m) = meta {
@@ -152,7 +154,7 @@ pub async fn close_turn(
 ) {
     let id = meta.map(TurnMeta::identity);
     let payload = finished_payload(&turn_end(outcome), spec.turn_id.as_deref(), id.as_ref());
-    append_bound(s, &spec.session_id, KIND_TURN_FINISHED, payload).await;
+    append_bound(s, &spec.session_id, TurnEventKind::Finished, payload).await;
 }
 
 /// Un tour qui échoue avant la boucle (session introuvable, fournisseur indisponible)
@@ -169,21 +171,26 @@ pub async fn close_unopened(
     }
     let id = meta.identity();
     let started = started_payload(None, None, Some(&id));
-    if append_bound(s, session_id, KIND_TURN_STARTED, started).await {
+    if append_bound(s, session_id, TurnEventKind::Started, started).await {
         let finished = finished_payload(&turn_end(outcome), None, Some(&id));
-        append_bound(s, session_id, KIND_TURN_FINISHED, finished).await;
+        append_bound(s, session_id, TurnEventKind::Finished, finished).await;
     }
 }
 
-async fn append_bound(s: &AgentServices, session_id: &str, kind: &str, payload: Value) -> bool {
+async fn append_bound(
+    s: &AgentServices,
+    session_id: &str,
+    kind: TurnEventKind,
+    payload: Value,
+) -> bool {
     match s
         .events
-        .append(EventDraft::new(kind, payload).session(session_id))
+        .append(kind.draft(payload).session(session_id))
         .await
     {
         Ok(_) => true,
         Err(e) => {
-            tracing::warn!(session = %session_id, kind, error = %e, "borne de tour non journalisée");
+            tracing::warn!(session = %session_id, kind = kind.as_str(), error = %e, "borne de tour non journalisée");
             false
         }
     }
@@ -217,7 +224,8 @@ pub async fn close_interrupted_turns(s: &AgentServices) -> anyhow::Result<usize>
         }
         s.events
             .append(
-                EventDraft::new(KIND_TURN_FINISHED, interrupted_payload(&started))
+                TurnEventKind::Finished
+                    .draft(interrupted_payload(&started))
                     .session(&session_id),
             )
             .await?;

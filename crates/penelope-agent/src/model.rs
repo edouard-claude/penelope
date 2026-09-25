@@ -118,16 +118,14 @@ impl AgentLoop {
                             );
                             s.events
                                 .append(
-                                    EventDraft::new(
-                                        "llm.retried",
-                                        json!({
+                                    TurnEventKind::LlmRetried
+                                        .draft(json!({
                                             "model": model_id,
                                             "attempt": plan.retries(),
                                             "wait_s": secs,
                                             "error": e.to_string(),
-                                        }),
-                                    )
-                                    .session(&spec.session_id),
+                                        }))
+                                        .session(&spec.session_id),
                                 )
                                 .await?;
                             if !sleep_unless_cancelled(&spec.cancel, secs).await {
@@ -196,11 +194,9 @@ impl AgentLoop {
                         );
                         s.events
                             .append(
-                                EventDraft::new(
-                                    "llm.fallback_used",
-                                    json!({"requested": requested, "served": r.model}),
-                                )
-                                .session(&spec.session_id),
+                                TurnEventKind::LlmFallbackUsed
+                                    .draft(json!({"requested": requested, "served": r.model}))
+                                    .session(&spec.session_id),
                             )
                             .await?;
                         sink.emit(TurnEvent::Model {

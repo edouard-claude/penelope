@@ -254,9 +254,8 @@ impl AgentLoop {
                 );
                 s.events
                     .append(
-                        EventDraft::new(
-                            "turn.empty_answer",
-                            json!({
+                        TurnEventKind::EmptyAnswer
+                            .draft(json!({
                                 "model": response.model,
                                 "upstream": response.upstream,
                                 "generation_id": response.id,
@@ -265,9 +264,8 @@ impl AgentLoop {
                                 "completion_tokens": response.usage.completion,
                                 "reasoning_tokens": response.usage.reasoning,
                                 "retried": empty_retry,
-                            }),
-                        )
-                        .session(&spec.session_id),
+                            }))
+                            .session(&spec.session_id),
                     )
                     .await?;
                 let retry = !empty_retry && !reasoning_ate_budget;
