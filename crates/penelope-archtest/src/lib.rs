@@ -280,6 +280,10 @@ pub fn dependency_rules() -> BTreeMap<&'static str, Vec<&'static str>> {
     // ni la boucle, qui l'appelle par `ToolExecutor`, ni l'orchestrateur (planification
     // par le port `Orchestrator`), ni les crates d'exploitation, ni le daemon.
     m.insert("penelope-executor", EXECUTOR_ALLOWED_DEPS.to_vec());
+    // La conversation de session (T23) : le socle, le vault et les crates métier, jamais
+    // le daemon, qui la compose, ni la boucle, qui la consomme par le port
+    // `Conversation`, ni le canal (`design/v1/README.md` §3.2).
+    m.insert("penelope-conversation", CONVERSATION_ALLOWED_DEPS.to_vec());
     m
 }
 
@@ -391,6 +395,19 @@ pub const EXECUTOR_ALLOWED_DEPS: &[&str] = &[
     "penelope-tools",
     "penelope-telegram",
     "penelope-workflow",
+];
+
+/// Ce dont `penelope-conversation` peut dépendre (§3.2 : `context`, `penelope-vault`,
+/// `penelope-app`, et les crates métier dont elle se sert). Ni `penelope-agent`, ni
+/// `penelope-telegram`, ni le daemon.
+pub const CONVERSATION_ALLOWED_DEPS: &[&str] = &[
+    "penelope-app",
+    "penelope-vault",
+    "penelope-kernel",
+    "penelope-store",
+    "penelope-observe",
+    "penelope-llm",
+    "penelope-context",
 ];
 
 /// Vérifie les règles de dépendance.
@@ -556,6 +573,7 @@ mod tests {
             "penelope-dream",
             "penelope-agent",
             "penelope-executor",
+            "penelope-conversation",
             "penelope-cli",
             "penelope-gateway-telegram",
         ] {
@@ -706,6 +724,24 @@ mod tests {
                 !agent.internal_deps.contains(above),
                 "penelope-agent dépend de {above} : {:?}",
                 agent.internal_deps
+            );
+        }
+    }
+
+    /// T23 : la conversation ne voit ni le daemon, ni la boucle qui la consomme, ni le
+    /// canal (`design/v1/README.md` §3.2).
+    #[test]
+    fn the_conversation_crate_sees_neither_daemon_loop_nor_channel() {
+        let all = crates();
+        let conversation = all
+            .iter()
+            .find(|c| c.name == "penelope-conversation")
+            .unwrap();
+        for above in ["penelope-daemon", "penelope-agent", "penelope-telegram"] {
+            assert!(
+                !conversation.internal_deps.contains(above),
+                "penelope-conversation dépend de {above} : {:?}",
+                conversation.internal_deps
             );
         }
     }
