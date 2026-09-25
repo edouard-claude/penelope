@@ -1,9 +1,10 @@
-//! Empreinte d'une requête et cause probable d'un raté de cache (§5, issue #17), sorties
-//! de `cache_audit.rs` (épopée #208, T09) : la boucle les calcule sans le daemon.
+//! Empreinte d'une requête et cause probable d'un raté de cache (§5, issue #17) : des
+//! fonctions pures sur la requête et le dernier appel de la session, que la boucle
+//! calcule sans le daemon (épopée #208, T09, T27).
 
+use crate::catalog::strip_provider;
+use crate::types::{ChatMessage, ToolDef};
 use penelope_kernel::canonical::sha256_hex;
-use penelope_llm::catalog::strip_provider;
-use penelope_llm::types::{ChatMessage, ToolDef};
 use serde_json::json;
 
 /// Au-delà, le cache des fournisseurs a expiré.
@@ -67,8 +68,8 @@ impl Fingerprint {
 
     /// Les trois clés qui rendent la requête retrouvable (issue #205) : c'est ce que
     /// `llm_requests` garde à la place du corps, jamais écrit depuis l'origine.
-    pub fn keys(&self) -> penelope_llm::RequestKeys {
-        penelope_llm::RequestKeys {
+    pub fn keys(&self) -> crate::RequestKeys {
+        crate::RequestKeys {
             system_hash: Some(self.system_hash.clone()),
             tools_hash: Some(self.tools_hash.clone()),
             request_hash: self.request_hash(),
@@ -147,4 +148,102 @@ pub fn miss_cause(previous: Option<&PreviousCall>, o: &Observed<'_>) -> Option<&
         return Some("fournisseur");
     }
     Some("fournisseur_sans_cache")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn previous(fp: &Fingerprint, n: usize, upstream: &str, ts_ms: i64) -> PreviousCall {
+        PreviousCall {
+            ts_ms,
+            model: "z-ai/glm-5.3".into(),
+            upstream: Some(upstream.into()),
+            msg_count: Some(n as i64),
+            request_hash: fp.chain.get(n - 1).cloned(),
+            system_hash: Some(fp.system_hash.clone()),
+            tools_hash: Some(fp.tools_hash.clone()),
+        }
+    }
+
+    #[test]
+    fn a_miss_is_explained_by_what_changed() {
+        let tools = vec![ToolDef::new("fs_read", "lire", json!({"type": "object"}))];
+        let first = vec![
+            ChatMessage::system("Tu es Pénélope."),
+            ChatMessage::user("question"),
+        ];
+        let mut second = first.clone();
+        second.push(ChatMessage::assistant("réponse"));
+        second.push(ChatMessage::user("suite"));
+        let fp1 = Fingerprint::of(&first, &tools);
+        let fp2 = Fingerprint::of(&second, &tools);
+        let prev = previous(&fp1, 2, "Together", 0);
+        let obs = |fp, upstream, cached, now_ms| Observed {
+            fingerprint: fp,
+            model: "openrouter:z-ai/glm-5.3",
+            upstream,
+            prompt: 100_000,
+            cached,
+            now_ms,
+        };
+
+        assert_eq!(
+            miss_cause(Some(&prev), &obs(&fp2, Some("Together"), 90_000, 1_000)),
+            None
+        );
+        assert_eq!(
+            miss_cause(None, &obs(&fp2, None, 0, 0)),
+            Some("premier_appel")
+        );
+        assert_eq!(
+            miss_cause(
+                Some(&prev),
+                &obs(&fp2, Some("Together"), 0, CACHE_TTL_MS + 1)
+            ),
+            Some("pause")
+        );
+        assert_eq!(
+            miss_cause(Some(&prev), &obs(&fp2, Some("Alibaba"), 0, 1_000)),
+            Some("fournisseur")
+        );
+        assert_eq!(
+            miss_cause(Some(&prev), &obs(&fp2, Some("Together"), 0, 1_000)),
+            Some("fournisseur_sans_cache")
+        );
+
+        let mut rewritten = second.clone();
+        rewritten[1] = ChatMessage::user("question reformulée");
+        let fp3 = Fingerprint::of(&rewritten, &tools);
+        assert_eq!(
+            miss_cause(Some(&prev), &obs(&fp3, Some("Together"), 0, 1_000)),
+            Some("historique")
+        );
+        let mut system = second.clone();
+        system[0] = ChatMessage::system("Tu es Pénélope, version 2.");
+        assert_eq!(
+            miss_cause(
+                Some(&prev),
+                &obs(
+                    &Fingerprint::of(&system, &tools),
+                    Some("Together"),
+                    0,
+                    1_000
+                )
+            ),
+            Some("prefixe")
+        );
+
+        // Le marqueur de cache ne compte pas.
+        let mut marked = second.clone();
+        marked[1].cache_marker = true;
+        assert_eq!(Fingerprint::of(&marked, &tools), fp2);
+
+        assert_eq!(
+            sticky_upstream(Some(&prev), "openrouter:z-ai/glm-5.3", 60_000).as_deref(),
+            Some("Together")
+        );
+        assert!(sticky_upstream(Some(&prev), "openrouter:z-ai/glm-5.3", STICKY_MS + 1).is_none());
+        assert!(sticky_upstream(Some(&prev), "openrouter:deepseek/v4", 60_000).is_none());
+    }
 }

@@ -31,7 +31,6 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 mod attempts;
-mod cache;
 mod decisions;
 mod events;
 mod guards;
@@ -48,9 +47,6 @@ mod turn_log;
 
 use attempts::Attempts;
 pub use attempts::{EMPTY_RETRY_PROMPT, MAX_ATTEMPTS_PER_TURN};
-pub use cache::{
-    CACHE_TTL_MS, Fingerprint, Observed, PreviousCall, STICKY_MS, miss_cause, sticky_upstream,
-};
 pub use decisions::{EFFECT_DONE, EFFECT_IGNORE, EFFECT_RETRY, decide_approval};
 pub use events::TurnEventKind;
 pub use guards::budget_exceeded_text;
@@ -62,6 +58,9 @@ pub use pending::pending_calls;
 pub use penelope_app::conversation::{Compactor, Conversation, MemoryConversation};
 pub use penelope_app::outcome::{NullSink, RecordingSink, TurnEvent, TurnOutcome, TurnSink};
 pub use penelope_app::tool_executor::{CallInfo, ToolExecutor};
+pub use penelope_llm::cache::{
+    CACHE_TTL_MS, Fingerprint, Observed, PreviousCall, STICKY_MS, miss_cause, sticky_upstream,
+};
 pub use penelope_tools::args::{
     call_arguments, effective_arguments, wants_network, without_intention,
 };
