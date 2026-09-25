@@ -1,9 +1,8 @@
 //! Le transcript sur lequel travaille un tour.
 
 use crate::steering::Steer;
-use penelope_context::journal::Provenance;
-use penelope_context::tiers::{Tiers, TileMap};
 use penelope_kernel::canonical::sha256_hex;
+use penelope_kernel::journal::{Provenance, TileMap};
 use penelope_llm::types::ChatMessage;
 use std::sync::Mutex;
 
@@ -115,14 +114,6 @@ pub struct PromptPrefix {
 }
 
 impl PromptPrefix {
-    /// Préfixe d'une conversation de session : la découpe suit les tuiles.
-    pub fn of(tiers: &Tiers) -> PromptPrefix {
-        PromptPrefix {
-            rendered: tiers.prefix(),
-            tiles: Some(tiers.tile_map()),
-        }
-    }
-
     /// Préfixe d'un transcript sans tuiles (sous-agent, workflow) : le texte seul.
     pub fn plain(rendered: impl Into<String>) -> PromptPrefix {
         PromptPrefix {

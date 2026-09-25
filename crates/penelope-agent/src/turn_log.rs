@@ -7,7 +7,7 @@
 //! après crash (§2.7) reconnaîtra un tour ouvert à cette seule absence.
 
 use super::*;
-use penelope_app::journal::{
+use penelope_kernel::journal::{
     KIND_TURN_FINISHED, KIND_TURN_STARTED, TurnCall, TurnEnd, TurnIdentity, finished_payload,
     interrupted_payload, is_purged, started_payload,
 };

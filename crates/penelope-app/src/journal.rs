@@ -1,17 +1,24 @@
-//! Le vocabulaire du journal que parlent les ports de la boucle (épopée #208, lot J).
+//! Ce que penelope-app écrit et calcule par le moteur de contexte (épopée #208, lot K).
 //!
-//! `Conversation::push_with` prend déjà une [`Provenance`] ; la boucle écrit aussi ses
-//! tentatives (`conv.attempt`) et les bornes de ses tours (`turn.started`,
-//! `turn.finished`). Ces charges restent définies dans `penelope-context`, qui les relit
-//! et les plie : elles s'appuient sur les types de `penelope-llm` et ne peuvent pas
-//! descendre dans `penelope-kernel`. Elles sont réexportées ici, à l'identique, pour que
-//! la boucle n'importe que `penelope-app` (`design/v1/README.md` §3.2).
+//! Les ports de la boucle (`attempts`, `conversation`, `outcome`, `steering`,
+//! `tool_executor`) ne parlent que des types du noyau et de `penelope-llm` : la boucle ne
+//! voit rien de `penelope-context`, même par un réexport (test d'architecture
+//! `the_agent_crate_reaches_no_context_type_through_its_ports`). Ce module est, pour
+//! eux, le seul pont vers lui, du côté de la composition : l'écriture des tentatives en
+//! `conv.attempt`, et le préfixe d'une conversation découpé en tuiles.
 
-pub use penelope_context::journal::{
-    AssistantPayload, AttemptCause, AttemptPayload, ConvEvent, KIND_TURN_FINISHED,
-    KIND_TURN_STARTED, Provenance, TurnCall, TurnEnd, TurnIdentity, finished_payload,
-    interrupted_payload, is_purged, started_payload,
-};
+use crate::conversation::PromptPrefix;
+use penelope_context::tiers::Tiers;
+
+impl PromptPrefix {
+    /// Préfixe d'une conversation de session : la découpe suit les tuiles.
+    pub fn of(tiers: &Tiers) -> PromptPrefix {
+        PromptPrefix {
+            rendered: tiers.prefix(),
+            tiles: Some(tiers.tile_map()),
+        }
+    }
+}
 
 use crate::attempts::{Attempt, AttemptSink};
 use penelope_kernel::event::{EventDraft, EventLog};

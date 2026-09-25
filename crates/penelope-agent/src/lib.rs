@@ -13,14 +13,16 @@
 //!
 //! La crate ne dépend que du noyau, des crates métier de la boucle et des ports de
 //! `penelope-app` ; jamais de `penelope-context`, `penelope-memory`, `penelope-telegram`
-//! (`design/v1/README.md` §3.2). Le daemon la compose par sa façade `agent.rs`.
+//! (`design/v1/README.md` §3.2), ni directement ni par les types des ports : le
+//! vocabulaire du journal qu'elle écrit est dans `penelope_kernel::journal`. Le daemon la
+//! compose par sa façade `agent.rs`.
 
 #![forbid(unsafe_code)]
 
-use penelope_app::journal::Provenance;
 use penelope_hitl::{ApprovalKind, ApprovalState, Decision};
 use penelope_kernel::effects::{EffectKind, EffectSpec, Planned};
 use penelope_kernel::event::EventDraft;
+use penelope_kernel::journal::Provenance;
 use penelope_kernel::risk::{PolicyDecision, PolicyWindow, RiskClass};
 use penelope_llm::provider::{CancelToken, Provider, collect_stream_observed};
 use penelope_llm::types::*;

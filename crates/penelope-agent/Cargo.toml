@@ -20,7 +20,8 @@ tokio.workspace = true
 async-trait.workspace = true
 # Composition des flux d'un appel au modèle.
 futures.workspace = true
-# Effets, budget, risque, événements, configuration, sessions, horloge.
+# Effets, budget, risque, événements, configuration, sessions, horloge ; vocabulaire pur
+# du journal (`penelope_kernel::journal` : bornes de tour, provenance, tentatives).
 penelope-kernel.workspace = true
 # Types des messages, providers, catalogue, état des requêtes.
 penelope-llm.workspace = true
@@ -32,7 +33,8 @@ penelope-hitl.workspace = true
 penelope-observe.workspace = true
 # La base partagée d'`AgentServices` ; bornes des tours interrompus.
 penelope-store.workspace = true
-# Les ports : `Conversation`, `ToolExecutor`, `TurnSink`, vocabulaire du journal.
+# Les ports : `Conversation`, `ToolExecutor`, `TurnSink`, `Inbox`, `AttemptSink`. Aucun ne
+# nomme `penelope-context` (archtest `the_agent_crate_reaches_no_context_type_through_its_ports`).
 penelope-app.workspace = true
 
 [dev-dependencies]
