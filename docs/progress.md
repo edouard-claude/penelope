@@ -13,6 +13,55 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.13
+
+Douzième vague de la V1 : **le cœur ne nomme plus le canal** (`penelope-app`, le daemon et
+l'exécuteur ne dépendent plus de `penelope-telegram` ; les mentions du canal dans le cœur
+passent de 166 à 74), la boucle écrit ses tentatives par un port et ne voit plus aucun type
+du moteur de contexte, et les jobs d'outils tiennent tous les critères de la
+spécification : un redémarrage pendant un job ne pose plus de carte d'effet incertain.
+Aucun texte ne change sur Telegram ; hors Telegram, « Telegram non configuré » devient
+« canal (non configuré) », et `self_status` rend `channel_commands` au lieu de
+`telegram_commands`.
+
+#### Frontière canal : le cœur ne nomme plus Telegram (#208, T36)
+
+- Les gabarits de cartes et les jetons de boutons quittent `Services` pour la
+  passerelle ; le cœur lit le texte d'un gabarit, le catalogue que valident les
+  workflows, les liens profonds et la liste des commandes par un port `Cards`.
+- La carte de rafale, le nom des conversations où livrent les planifications, le
+  contrôle des conversations autorisées et le formulaire d'une élicitation MCP sont
+  décidés par la passerelle, derrière `ChannelDelivery` et `OwnerChannel`.
+- `penelope-app`, `penelope-executor` et `penelope-daemon` ne dépendent plus de
+  `penelope-telegram` (règles d'architecture) ; les mentions du canal dans le cœur
+  passent de 166 à 74.
+- Aucun texte ne change sur Telegram. Sans canal, les messages disent « canal » au lieu
+  de « Telegram ».
+
+#### Tentatives par un port, boucle coupée du moteur de contexte (#208, T15, T26)
+
+- **Une réponse vide est épinglée à sa requête** : sa tentative (`conv.attempt`, cause
+  `empty_answer`) porte le `llm_request_id` de l'appel qui l'a rendue, comme les autres
+  causes ; l'audit retrouve la requête exacte au lieu de la recalculer.
+- La boucle remet ses tentatives au port `AttemptSink` ; le journal les écrit comme avant.
+  La table `turn_attempts` prévue n'est pas créée : le journal la remplace.
+- La boucle d'agent ne voit plus aucun type du moteur de contexte, même par les ports : le
+  vocabulaire du journal qu'elle écrit (bornes de tour, provenance, tentatives, tuiles du
+  préfixe) vit dans le noyau. Une règle d'architecture le vérifie.
+- Les événements de la boucle sont nommés par un type, et `docs/runtime-events.md` décrit
+  désormais `turn.merged`, `turn.empty_answer`, `turn.loop_aborted`, `tool.result`,
+  `llm.retried`, `llm.fallback_used` et `approval.decided`.
+
+#### Jobs d'outils : écarts de T17 à T20 comblés (#208)
+
+- Un redémarrage pendant un job d'outil ne pose plus la carte « C'est fait / Relancer /
+  Ignorer » : le job et son effet passent à `failed` avec la raison, et la conversation
+  reçoit le résultat comme pour tout job fini. Aucune relance automatique, comme avant
+  (décision 0012, révisée).
+- Nouveaux tests de bout en bout : un sous-agent long lancé en job et interrompu par
+  `/stop` (#57), le groupe de processus d'un job entièrement tué par `/stop`, les
+  plafonds par défaut (3 par conversation, 10 en tout) refusés avec leur texte.
+
 ### 1.0.0-alpha.12
 
 Onzième vague de la V1 : **un message qui arrive pendant un lot d'outils est pris en
