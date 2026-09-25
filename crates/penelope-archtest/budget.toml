@@ -18,7 +18,7 @@ test_modules = [
 [files.oversized]
 "crates/penelope-daemon/src/engine.rs" = 1091
 "crates/penelope-kernel/src/config.rs" = 2148   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
-"crates/penelope-cli/src/commands.rs" = 1495   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
+"crates/penelope-cli/src/commands.rs" = 1197   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
 "crates/penelope-llm/src/provider.rs" = 2048
 "crates/penelope-llm/src/codex.rs" = 1533
 "crates/penelope-tools/src/spec.rs" = 1377   # fusion de main 0.17.61 : #204 (jobs d'outils) ajouté avant le gel
