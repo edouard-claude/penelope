@@ -11,6 +11,7 @@ use penelope_telegram::api::method as tg;
 use penelope_telegram::mock::{MockTransport, updates};
 
 mod approvals;
+mod background;
 mod bursts;
 mod delivery;
 mod elicitation;
