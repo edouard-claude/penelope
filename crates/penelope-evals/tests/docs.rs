@@ -344,7 +344,19 @@ fn default_of(defaults: &Value, path: &[String]) -> String {
 
 /// Toutes les clés de configuration : (clé, défaut rendu, rôle).
 fn config_reference() -> Vec<(String, String, String)> {
-    let source = read(&root().join("crates/penelope-kernel/src/config.rs"));
+    // config.rs et ses sections, sorties dans config/*.rs (épopée #208, lot L).
+    let mut source = read(&root().join("crates/penelope-kernel/src/config.rs"));
+    let mut parts: Vec<PathBuf> =
+        std::fs::read_dir(root().join("crates/penelope-kernel/src/config"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "rs") && !p.ends_with("tests.rs"))
+            .collect();
+    parts.sort();
+    for p in parts {
+        source.push_str(&read(&p));
+    }
     let structs = config_structs(&source);
     let defaults = serde_json::to_value(penelope_kernel::config::Config::default()).unwrap();
     let mut rows = Vec::new();
