@@ -1,5 +1,7 @@
 use super::*;
 
+mod hybrid;
+
 fn descriptor(name: &str, desc: &str, ann: Value) -> ToolDescriptor {
     ToolDescriptor {
         name: name.into(),

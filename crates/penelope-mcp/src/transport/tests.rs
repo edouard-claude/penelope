@@ -1,5 +1,7 @@
 use super::*;
 
+mod http_headers;
+
 /// #126 : les en-têtes reprennent le corps ; `Mcp-Name` seulement pour les méthodes
 /// qui nomment une cible ; rien pour une requête d'avant 2026.
 #[test]
