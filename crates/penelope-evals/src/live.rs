@@ -77,6 +77,10 @@ pub async fn daemon(root: &Path, clock: SharedClock) -> Arc<Daemon> {
         }
         c.memory.review_max_candidates = 5;
         paths.push("memory.review_max_candidates".into());
+        // Personne ne répond aux cartes pendant une suite réseau : tout sauf le destructif
+        // passe sans approbation, sinon le premier outil demandé arrête le tour.
+        c.tools.approval_mode = "auto".into();
+        paths.push("tools.approval_mode".into());
         Ok(paths)
     })
     .expect("configuration");
