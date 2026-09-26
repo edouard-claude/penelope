@@ -109,17 +109,19 @@ les fichiers au-dessus de 1 000 lignes sont nommés dans la liste de référence
 
 `penelope-daemon/src` compte 20 modules (liste blanche `[daemon].modules` du budget) :
 
-- la composition : `runtime` (`Daemon`, `Hooks`, `Providers`, reprise au démarrage,
-  état), `supervisor` (`Daemon::run`, boucles supervisées), `runner` (coureurs de la file
-  des tours) ;
-- le moteur des tours : `engine` (admission d'un message, choix du modèle, `impl Admin`),
+- la composition : `runtime` (`Daemon`, son cœur `Core`, `Hooks`, `Providers`, reprise
+  au démarrage, état), `supervisor` (`Daemon::run`, boucles supervisées), `runner`
+  (coureurs de la file des tours) ;
+- le moteur des tours : `engine` (le tour dans `engine.rs` ; les ports du moteur
+  implémentés par `Core` dans `engine/intake.rs`, `engine/models.rs`, `engine/media.rs` ;
+  `impl Admin` dans `engine/admin.rs`),
   `tool_jobs` (lancement et livraison des jobs d'outils), `history` (rattrapage des caches
   à l'ouverture d'une session) ;
 - les implémentations des ports de la boucle qui lisent la base : `approval_mode`
   (`KvModes`), `prompt_snapshot` (`StoredSnapshots`), et à côté `cache_audit`
   (contexte volatil et préfixe stable de l'audit du cache) et `audit` ;
 - la façade RPC (`rpc/`) et le flux runtime (`runtime_events`) ;
-- les adaptateurs qui dérivent d'un `Daemon` ce qu'une crate du dessous attend, faute
+- les adaptateurs qui dérivent du cœur ce qu'une crate du dessous attend, faute
   d'autre place : `agent` (`services_of` et les entrées `decide_approval`,
   `close_unopened`, `close_interrupted_turns` en `&Services` : `penelope-agent` ne nomme
   pas `Services`, qui porte le moteur de contexte), `workflow` (`context_of`,
@@ -129,10 +131,11 @@ les fichiers au-dessus de 1 000 lignes sont nommés dans la liste de référence
   `executor`, `ingest`, `wiki_e2e`.
 
 Le daemon ne réexporte plus rien d'une autre crate (T30) : `lib.rs` exporte ses modules
-propres, `Daemon` et `VERSION`. Un appelant nomme la crate où vit le code
+propres et `VERSION` ; `Daemon` se nomme `runtime::Daemon` (T33). Un appelant nomme la
+crate où vit le code
 (`penelope_app::services::Services`, `penelope_app::bus::Origin`,
 `penelope_orchestrator::workflow::start_run(&penelope_daemon::workflow::context_of(d), …)`).
-Hors de la passerelle, la CLI et les évaluations ne citent du daemon que `Daemon`,
+Hors de la passerelle, la CLI et les évaluations ne citent du daemon que `runtime::Daemon`,
 `VERSION`, `runner::{process, run_pool}`, `rpc::Rpc` et deux adaptateurs
 (`agent::decide_approval`, `compaction::context_of`) :
 
@@ -155,6 +158,24 @@ grep -rhoE 'penelope_daemon::[A-Za-z_]+(::[A-Za-z_]+)?' crates/penelope-evals cr
 
 `Daemon::new(home, None)` démarre sans canal ; c'est ce que font les tests du daemon.
 
+### Le daemon et son cœur
+
+`Daemon` est le processus : reprise au démarrage, boucles, tours (`run_turn`), dans les
+blocs `impl Daemon` des quatre fichiers de `[daemon].impl_daemon`. Il ne tient qu'un
+`Arc<Core>` et se lit comme lui (`Deref`). `Core` porte l'état partagé (services, bus,
+`Handle`, branchements, providers, compactions, runs, embeddings, boucles surveillées)
+et implémente les ports du moteur ; c'est ce que tiennent les surfaces : `Rpc`, la
+passerelle (`TelegramGateway::daemon`), les contextes de l'orchestrateur et de la
+compaction, la livraison des jobs d'outils. Aucun module du daemon hors de ces quatre
+fichiers ne nomme `Daemon` (R6, T33) :
+
+```text
+ penelope-cli ── Daemon::new ──► Daemon ── Arc<Core> ──► Rpc, TelegramGateway,
+                                   │                      workflow / compaction::context_of,
+                                   │                      tool_jobs
+                                   └── run, recover, run_turn (process)
+```
+
 ## Les ports
 
 Un port est un trait défini sous la crate qui le consomme, implémenté au-dessus. Presque
@@ -170,7 +191,10 @@ par » liste les crates qui en tiennent un `dyn`, hors tests.
 | `McpAdmin` | `ports` | administrer les serveurs MCP (`mcp.*`) | `McpSupervisor` (mcp-host) | daemon, dream, mcp-host, ops, orchestrator, vault |
 | `Messenger` | `ports` | envoyer texte, fichier, carte, question au propriétaire | `TelegramGateway` (passerelle) | conversation, daemon, dream, executor, mcp-host, ops, orchestrator |
 | `Orchestrator` | `ports` | lancer un workflow, un sous-agent, une image ; planifier (`schedule_*`) | `WorkflowOrchestrator` (orchestrator) | daemon, executor, orchestrator |
-| `Admin` | `ports` | ce que `self_status` et `config_set` lisent du processus | `Daemon` (daemon, `engine.rs`) | daemon, executor, orchestrator |
+| `Admin` | `ports` | ce que `self_status` et `config_set` lisent du processus | `Core` (daemon, `engine/admin.rs`) | daemon, executor, orchestrator |
+| `TurnIntake` | `engine` | mettre en file un message, une relance, une reprise ; la session de chat d'un canal | `Core` (daemon, `engine/intake.rs`) | passerelle, rpc, daemon, evals |
+| `SessionModels` | `engine` | épingler un alias sur une session, l'état de son modèle (`/model`) | `Core` (daemon, `engine/models.rs`) | passerelle, rpc |
+| `Transcriber` | `engine` | transcrire un vocal (rôle `stt`), décrire des images (`image_describe`) | `Core` (daemon, `engine/media.rs`) | passerelle, daemon |
 | `ChannelDelivery` | `bus` | livraison durable d'un tour, seuils de rafale, nom et destination d'une origine | `TelegramGateway` ; `DeliveryChannel`, `BurstChannel` (daemon, `runner.rs`) | app, conversation, daemon, orchestrator |
 | `TurnSink` | `outcome` | fragments d'un tour en cours | `BusSink` (app), `NullSink`, `RecordingSink` | agent, daemon |
 | `OwnerChannel` | `elicitation` | montrer une élicitation MCP au propriétaire | `TelegramGateway` | app (`Broker`) |
@@ -329,10 +353,10 @@ Les nombres de `crates/penelope-archtest/budget.toml` ne montent jamais :
 |---|---|---|
 | R1 | plafond d'un fichier source, tests inline compris | 1 000 lignes |
 | R2 | plafond d'un fichier de tests | 1 500 lignes |
-| R3 | liste de référence des fichiers au-dessus, qui ne peut que rétrécir | 23 fichiers, dont 2 au daemon (`tool_jobs.rs`, `engine.rs`) |
+| R3 | liste de référence des fichiers au-dessus, qui ne peut que rétrécir | 23 fichiers, dont 2 au daemon (`tool_jobs.rs`, `engine.rs`) ; vide depuis T33 |
 | R4 | plafond de lignes de `penelope-daemon/src` | 14 986 |
 | R5 | liste blanche des modules du daemon ; `impl Daemon` dans quatre fichiers | 21 modules ; `runtime`, `engine`, `runner`, `supervisor` |
-| R6 | occurrences du type `Daemon` par fichier du daemon | 65, dans 16 fichiers |
+| R6 | occurrences du type `Daemon` par fichier du daemon | 65, dans 16 fichiers ; 23 dans les 4 fichiers de `impl_daemon` depuis T33 |
 | R7 | `#[allow(clippy::too_many_lines)]` comptés, seuil du lint à 200 lignes | 22 |
 | R8 | critères d'acceptation `ca_*` qui ne disparaissent pas | 77 |
 | frontière canal | voir plus haut | 31 fichiers, 249 mentions |
@@ -344,16 +368,15 @@ clé).
 
 ## Ce qui reste
 
-- **Découpage sous 800 lignes** : `engine.rs` (1 091 lignes) et `supervisor.rs` (930) sont
-  presque entièrement des blocs `impl Daemon`, que R6 réserve à quatre fichiers ;
-  les couper demande d'abord de convertir des méthodes en fonctions sur `&Services` ou
-  sur un port (T33), pas un déplacement.
+- **Découpage sous 800 lignes** : `supervisor.rs` (938 lignes) est presque entièrement un
+  bloc `impl Daemon`, que R6 réserve à quatre fichiers ; le couper demande de convertir
+  des méthodes en fonctions sur `Core` ou sur un port, comme T33 l'a fait pour
+  `engine.rs` (485 lignes).
 - **T32** : resserrer les listes du gel, maintenant que T30 est fait.
 - **Journal** : l'archive d'un `/rewind` n'est pas encore un fork par référence (elle
   n'a pas de journal à elle) ; un retour arrière qui coupe dans le préfixe scellé empêche
   la mère de se replier (décision 0017, écarts restants).
-- **Après la V1** : T33 (ports `TurnIntake`, `SessionModels`, `Transcriber`, pour tester
-  la passerelle sans daemon), T34 (registre d'outils natifs enfichable, au lieu des appels
+- **Après la V1** : T34 (registre d'outils natifs enfichable, au lieu des appels
   `Orchestrator::schedule_*` depuis l'exécuteur), T37 (`Origin::Channel` et liaison de
   session générique : la plupart des 249 mentions restantes du canal y sont).
 - **Graphe cargo** : `penelope-agent` atteint encore `penelope-context` par
