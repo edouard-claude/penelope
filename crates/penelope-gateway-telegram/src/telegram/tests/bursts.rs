@@ -420,7 +420,9 @@ async fn a_burst_asks_before_answering_and_can_be_ingested() {
         .unwrap();
     g.daemon
         .publish_config("test", |c| {
-            c.telegram.text_group_window_ms = 40;
+            // Fenêtre large : sous charge, deux transferts peuvent arriver à plus de
+            // 40 ms d'écart, et la rafale se coupait en deux (5 + 1, donc un tour).
+            c.telegram.text_group_window_ms = 1_000;
             c.telegram.burst_messages = 5;
             Ok(vec!["telegram.burst_messages".into()])
         })
@@ -433,8 +435,14 @@ async fn a_burst_asks_before_answering_and_can_be_ingested() {
             .await
             .unwrap();
     }
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    g.flush_outbox().await.unwrap();
+    // La carte part à la fin de la fenêtre : on l'attend, bornée, au lieu d'une durée.
+    for _ in 0..500 {
+        g.flush_outbox().await.unwrap();
+        if !t.calls_to(tg::SEND_MESSAGE).await.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert_eq!(
         g.daemon.services.turns.pending_count().await.unwrap(),
         0,
@@ -464,8 +472,8 @@ async fn a_burst_asks_before_answering_and_can_be_ingested() {
         .await
         .unwrap();
     settle_click(&g).await;
-    for _ in 0..50 {
-        tokio::time::sleep(Duration::from_millis(40)).await;
+    for _ in 0..500 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
         if penelope_app::helpers::vault_dir(&g.daemon.services)
             .join("sources")
             .read_dir()
