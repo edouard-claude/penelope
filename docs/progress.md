@@ -13,6 +13,47 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.16
+
+**Le juge d'approbation (#203)** : la mesure préalable sur l'instance réelle (112 cartes sans
+motif en 30 jours, 26 par semaine, 111 commandes distinctes, 96 % de « oui ») a donné go.
+Par défaut (`approval.judge = "explain"`), un modèle auxiliaire traité comme hostile décrit
+sur la carte ce que fait réellement une ligne composée et propose « Toujours pour ces
+pouvoirs » ; il n'autorise rien seul. Et le premier test de la V1 sur une copie des données
+réelles a trouvé un défaut du scellement, corrigé : `history verify` passe de 21 divergences
+à 0 sur la copie (69 sessions, 8 793 nœuds).
+
+#### Juge d'approbation (#203, #208, T22 et T23)
+
+- Une ligne `shell_exec` sans motif possible (`;`, `||`, `$(…)`, redirection…) n'est
+  plus une carte muette : un modèle auxiliaire (rôle `approval_judge`, alias `fast`)
+  dit ce qu'elle fait réellement (« lecture sur `tmp` », « réseau vers
+  `api.github.com` ») et donne un avis. Il est appelé seulement sous les planchers :
+  politique `Ask`, classe non destructive, aucune règle du propriétaire qui refuse une
+  famille de la ligne.
+- `approval.judge = "explain"` (défaut) : la carte est enrichie et propose « ♾️ Toujours
+  pour ces pouvoirs », une règle dérivée des pouvoirs reconnus et non de la forme de la
+  ligne. `auto_read` laisse en plus passer sans carte une lecture pure dans le
+  workspace. `off` : la carte d'avant.
+- Le texte jugé est traité comme hostile (secrets masqués, commentaires retirés, bloc
+  délimité, aucun outil) ; modèle absent, délai de 10 s, sortie hors schéma : la carte
+  d'avant, sans message. `rm`, `sudo`, `curl … | sh` et un avis `dangereux` ne sont
+  jamais automatisés.
+- Événement `approval.judged` ; usage compté sous `approval_judge` ; `/policies` et
+  `penelope policies` disent d'une règle qu'elle est née d'un jugement ; `penelope
+  doctor` donne le mode et la part des cartes jugées sur sept jours. `config_set` sur
+  `approval.*` demande deux confirmations.
+
+#### Journal : les résumés scellés vérifient (#208)
+
+- `penelope history verify` ne signale plus « jetons, ancres » sur chaque session scellée
+  qui porte un résumé actif : la relecture du préfixe scellé rend `tokens_src` et les
+  ancres du nœud. L'empreinte des `conv.import` existants est inchangée ; une base déjà
+  scellée vérifie sans rien refaire.
+- Une compaction qui prolonge un résumé scellé compte sa source héritée.
+- Le fork d'une session scellée garde ses lignes scellées : `verify` les apparie et
+  `reindex` accepte de refondre la fille.
+
 ### 1.0.0-alpha.15
 
 Quatorzième vague de la V1, la clôture du code : les réexports de transition du daemon
