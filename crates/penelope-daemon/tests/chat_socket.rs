@@ -125,6 +125,30 @@ async fn chat_stream_sends_deltas_then_the_final_answer() {
     d.handle.shutdown();
 }
 
+/// `chat.stream` ne double jamais la réponse finale d'une notification `done` : l'issue
+/// du tour sautée dans la boucle l'était aussi dans la vidange qui suit la fin, selon
+/// la branche que `select!` tirait (une fois sur deux environ, relevé du lot s-rpc).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chat_stream_never_sends_a_done_notification() {
+    let (_dir, d, p) = start().await;
+    for id in 0..16 {
+        p.reply(r#"{"complexity":"low"}"#);
+        p.reply("Présent.");
+        let lines = exchange(
+            &d,
+            RpcRequest::new(id, method::CHAT_STREAM, json!({"text": "tu es là ?"})),
+        )
+        .await;
+        assert_eq!(lines.last().unwrap()["result"]["text"], "Présent.");
+        let done: Vec<_> = lines
+            .iter()
+            .filter(|l| l["params"]["type"] == "done")
+            .collect();
+        assert!(done.is_empty(), "tour {id} : {lines:?}");
+    }
+    d.handle.shutdown();
+}
+
 /// #91 : sans jeton, ou avec un mauvais, la socket refuse et n'exécute rien ; le jeton
 /// n'apparaît pas dans `doctor`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -331,15 +331,8 @@ async fn stream(rpc: &Rpc, req: RpcRequest, close: &Notify) -> Reply {
         }
         json!(kinds)
     } else {
-        // `done` n'arrive que si l'issue du tour gagne la course contre le dernier
-        // fragment (`handle_streaming` saute `Finished` dans sa boucle, pas dans la
-        // vidange finale) : la réponse finale porte déjà l'issue.
-        json!(
-            notes
-                .into_iter()
-                .filter(|n| n["type"] != "done")
-                .collect::<Vec<_>>()
-        )
+        // L'issue du tour n'arrive que dans la réponse finale, jamais en notification.
+        json!(notes)
     };
     let last = lines.iter().rev().find(|l| l.get("id").is_some());
     Reply {

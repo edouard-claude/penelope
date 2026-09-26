@@ -65,9 +65,11 @@ impl Rpc {
                 loop {
                     tokio::select! {
                         outcome = &mut done => {
-                            // Les derniers fragments éventuels, puis la réponse.
+                            // Les derniers fragments éventuels, puis la réponse ; l'issue,
+                            // sautée dans la boucle, l'est ici aussi.
                             while let Ok(ev) = rx.try_recv() {
                                 if ev.turn_id == id.as_str()
+                                    && !matches!(ev.kind, BusKind::Finished(_))
                                     && let Some(se) = to_stream_event(&ev) {
                                         write_line(out, &notification(&se)).await?;
                                     }
