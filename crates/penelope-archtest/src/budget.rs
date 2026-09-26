@@ -255,6 +255,8 @@ fn update_file() -> Result<(), String> {
     let budget = Budget::parse(&raw)?;
     let m = measure(workspace_snapshot(), &budget);
     let new = tighten(&raw, &m)?;
+    let cov = crate::scenarios::workspace_coverage(workspace_snapshot())?;
+    let new = crate::scenarios::tighten(&new, &cov.uncovered)?;
     if new != raw {
         std::fs::write(&path, new).map_err(|e| format!("{BUDGET_FILE} : {e}"))?;
     }

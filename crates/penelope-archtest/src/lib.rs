@@ -8,7 +8,8 @@
 //! - les caches de la conversation écrits par `penelope-context` seule (`caches`) ;
 //! - le gel de la dette (`freeze`, `budget`, `ratchet`) : plafonds de taille, liste
 //!   blanche des modules du daemon, couplage au `Daemon`, allows comptés, critères
-//!   d'acceptation figés et frontière canal/cœur, confrontés à `budget.toml`.
+//!   d'acceptation figés et frontière canal/cœur, confrontés à `budget.toml` ;
+//! - chaque surface visible exercée par un scénario rejouable (`scenarios`, R10).
 
 #![forbid(unsafe_code)]
 
@@ -17,6 +18,7 @@ pub mod caches;
 pub mod freeze;
 pub mod ratchet;
 pub mod reach;
+pub mod scenarios;
 pub mod snapshot;
 
 use std::collections::{BTreeMap, BTreeSet};
