@@ -264,8 +264,13 @@ pub(super) async fn finish(
     reason: &str,
 ) -> anyhow::Result<RunState> {
     let s = &d.services;
-    let current = s.runs.get(&run.id).await?.map(|r| r.state);
-    if current != Some(state) {
+    let current = s.runs.get(&run.id).await?;
+    let unexplained = current
+        .as_ref()
+        .is_some_and(|r| r.error.as_deref().unwrap_or_default().is_empty());
+    // L'état déjà posé (`advance` a pu bloquer le run) n'est pas réécrit ; sa raison, si
+    // le run n'en a pas encore, l'est (#220).
+    if current.map(|r| r.state) != Some(state) || (unexplained && !reason.is_empty()) {
         s.runs
             .set_state(&run.id, state, (!reason.is_empty()).then_some(reason))
             .await?;

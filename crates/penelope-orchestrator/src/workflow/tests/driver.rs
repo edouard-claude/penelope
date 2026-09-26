@@ -116,6 +116,9 @@ async fn a_failing_step_is_retried_before_its_failure_counts() {
     .unwrap();
     assert_eq!(tries.lines().count(), 3, "un essai et deux relances");
     assert_eq!(done.step_outputs["essayer"]["exitCode"], 3);
+    // #220 : la raison du blocage est aussi celle du run, pas seulement de l'événement.
+    let why = done.error.clone().unwrap_or_default();
+    assert!(why.contains("au résultat `failure`"), "{why}");
     let finished =
         e.d.services
             .events
