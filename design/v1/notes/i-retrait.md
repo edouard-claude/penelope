@@ -8,7 +8,8 @@ Branche `v1-i-retrait`, dérivée de `v1` à `64b8e3d` (1.0.0-alpha.16), poussé
 | Commit | Quoi |
 |---|---|
 | `2ddb8ff` | T16 : retrait du chemin direct, journal obligatoire, clés retirées, règle d'architecture |
-| (suivant) | T19 : décision 0017, documentation, ces notes |
+| `c5bdd7a` | T16 : la fixture `config-0.17.toml` perd `[history]` (vue par la suite complète) |
+| `d887dee` | T19 : décision 0017, documentation, ces notes |
 
 ## Ce qui est livré
 
@@ -136,7 +137,11 @@ Pendant le lot : `penelope-context` (159 tests), `penelope-kernel`, `penelope-ar
 `penelope-daemon`, `penelope-agent`, `penelope-executor`, `penelope-orchestrator`,
 `penelope-dream`, `penelope-cli`, `penelope-evals` (scénarios : 23 sur 23 ; aucun
 `surface.jsonl` ni `expected.jsonl` modifié) ; `UPDATE_DOCS`, `UPDATE_GOLDEN`
-(`config.get` seul), `UPDATE_BUDGET`. Fin de lot : voir le rapport.
+(`config.get` seul), `UPDATE_BUDGET`. Fin de lot : `cargo fmt --all --check` et
+`cargo clippy --workspace --all-targets -- -D warnings` propres ; `cargo test --workspace
+--no-fail-fast` : 2 074 tests verts et un rouge,
+`the_fixture_carries_every_key_of_the_reference` (la fixture portait encore `[history]`),
+corrigé par `c5bdd7a` et relancé vert.
 
 ## Notes de version, à coller dans `docs/progress.md`
 
