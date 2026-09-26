@@ -168,7 +168,9 @@ pub fn is_source_build(exe: &Path) -> bool {
         .collect();
     parts
         .windows(2)
-        .any(|w| w[0] == "target" && (w[1] == "debug" || w[1] == "release"))
+        // `target/debug`, et `target/llvm-cov-target/debug` pour un binaire instrumenté par
+        // cargo-llvm-cov (mesure de couverture, critère 7).
+        .any(|w| w[0].ends_with("target") && (w[1] == "debug" || w[1] == "release"))
 }
 
 // ---------------------------------------- Clés kv de session et de workflow (engine.rs, workflow.rs)

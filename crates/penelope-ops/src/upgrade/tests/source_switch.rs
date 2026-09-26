@@ -363,3 +363,14 @@ async fn a_switch_without_a_usable_identity_changes_nothing() {
         assert!(host.relays.lock().unwrap().is_empty());
     }
 }
+
+/// Un binaire de compilation, instrumenté ou non, n'est jamais « installé » : le binaire de
+/// cargo-llvm-cov (`target/llvm-cov-target/debug`) compte comme un binaire de compilation.
+#[test]
+fn an_instrumented_build_is_a_source_build() {
+    use std::path::Path;
+    assert!(is_source_build(Path::new("/x/target/debug/penelope")));
+    assert!(is_source_build(Path::new("/x/target/llvm-cov-target/debug/penelope")));
+    assert!(!is_source_build(Path::new("/Users/e/.local/bin/penelope")));
+    assert!(!is_source_build(Path::new("/x/target/penelope")));
+}
