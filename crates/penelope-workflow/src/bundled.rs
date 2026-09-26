@@ -264,47 +264,13 @@ du serveur MCP du tracker (`tracker`), le titre et la description du ticket.";
 
 /// `ticket-to-deploy` : scénario de référence du §12.10. Tracker et forge sont ceux du
 /// ticket et du dépôt : leurs outils MCP sont trouvés à l'exécution (issue #35).
-#[allow(clippy::too_many_lines)] // gel 0.17 : table (définition du workflow livré)
 pub fn ticket_to_deploy() -> Workflow {
     Workflow {
         metadata: Metadata {
             id: "ticket-to-deploy".into(),
             name: "Ticket → correctif → déploiement".into(),
             description: "Du ticket au déploiement, avec approbations aux points sensibles.".into(),
-            parameters: vec![
-                Parameter {
-                    id: "ticket_url".into(),
-                    label: "Ticket".into(),
-                    kind: "string".into(),
-                    required: true,
-                    ..Default::default()
-                },
-                Parameter {
-                    id: "ticket_id".into(),
-                    label: "Identifiant du ticket".into(),
-                    kind: "string".into(),
-                    required: true,
-                    ..Default::default()
-                },
-                Parameter {
-                    id: "repo".into(),
-                    label: "Dépôt".into(),
-                    kind: "string".into(),
-                    required: false,
-                    default: Some(json!("")),
-                    description: "Adresse du dépôt, si elle est connue.".into(),
-                },
-                Parameter {
-                    id: "tracker".into(),
-                    label: "Tracker".into(),
-                    kind: "string".into(),
-                    required: false,
-                    default: Some(json!("")),
-                    description: "Serveur MCP du tracker (redmine, clickup…) ; déduit de \
-                                  l'adresse du ticket sinon."
-                        .into(),
-                },
-            ],
+            parameters: ticket_to_deploy_parameters(),
             ..Default::default()
         },
         entry_step: "fetch_ticket".into(),
@@ -313,252 +279,315 @@ pub fn ticket_to_deploy() -> Workflow {
             ..Default::default()
         },
         start_condition: json!({"type":"always"}),
-        steps: vec![
-            // 1 : le tracker est celui du ticket (Redmine, ClickUp…), trouvé par ses outils MCP.
-            Step {
-                sub_agent_type: "tracker".into(),
-                prompt: TRACKER_READ.into(),
-                tools: MCP_TOOLS.iter().map(|t| t.to_string()).collect(),
-                output_schema: Some(json!({
-                    "type":"object",
-                    "properties":{
-                        "tracker":{"type":"string"},
-                        "title":{"type":"string"},
-                        "description":{"type":"string"}
-                    },
-                    "required":["tracker","title"]
-                })),
-                transitions: vec![
-                    Transition::on_result("resolve_repo", "success"),
-                    Transition::always(BLOCKED),
-                ],
-                ..step("fetch_ticket", "sub_agent", Phase::Plan)
-            },
-            // 2
-            Step {
-                sub_agent_type: "repo_resolver".into(),
-                prompt: "À partir du ticket « {{steps.fetch_ticket.data.title}} » \
-                         ({{ticket_url}}), détermine le dépôt et sa forge (GitHub ou GitLab) : \
-                         dépôt indiqué « {{repo}} », réponse du propriétaire « {{reason}} », \
-                         champ du ticket, table `projects.toml` ; sinon échoue pour qu'on \
-                         demande.\n\nTicket :\n{{steps.fetch_ticket.data.description}}"
-                    .into(),
-                output_schema: Some(json!({
-                    "type":"object",
-                    "properties":{
-                        "forge":{"type":"string","enum":["github","gitlab"]},
-                        "repo":{"type":"string"},
-                        "base_branch":{"type":"string"}
-                    },
-                    "required":["forge","repo","base_branch"]
-                })),
-                transitions: vec![
-                    Transition::on_result("checkout", "success"),
-                    Transition::always("ask_repo"),
-                ],
-                ..step("resolve_repo", "sub_agent", Phase::Plan)
-            },
-            // 2b
-            Step {
-                template: "question".into(),
-                choices: vec!["Répondu".into()],
-                input: "text".into(),
-                // La réponse repasse par la résolution : `checkout` lit toujours sa sortie.
-                transitions: vec![Transition::always("resolve_repo")],
-                ..step("ask_repo", "user", Phase::Plan)
-            },
-            // 3
-            Step {
-                command: json!({
-                    "unix":"git clone --depth 50 {{steps.resolve_repo.data.repo}} {{workdir}}/repo && \
-                            cd {{workdir}}/repo && git checkout -b penelope/{{ticket_id}}",
-                    "windows":"git clone --depth 50 {{steps.resolve_repo.data.repo}} {{workdir}}/repo"
-                }),
-                transitions: vec![
-                    Transition::on_result("analyze", "success"),
-                    Transition::always(BLOCKED),
-                ],
-                network: true,
-                ..step("checkout", "shell", Phase::Plan)
-            },
-            // 4
-            Step {
-                model: "reasoning".into(),
-                prompt: "Ticket {{ticket_id}} ({{ticket_url}}) : « {{steps.fetch_ticket.data.title}} »\n\
-                         {{steps.fetch_ticket.data.description}}\n\n\
-                         Brief de la conversation qui a lancé le run :\n{{brief}}\n\n\
-                         Lis le code, localise le problème, écris les critères : \
-                         `session_metadata` op=set key=criteria entry=[{\"id\": \"…\", \
-                         \"text\": \"…\", \"status\": \"pending\"}, …], puis propose un \
-                         plan de correctif via `return_value`."
-                    .into(),
-                transitions: vec![Transition::always("propose")],
-                ..step("analyze", "agent", Phase::Plan)
-            },
-            // 5
-            Step {
-                template: "plan_proposal".into(),
-                choices: vec!["Appliquer".into(), "Réviser".into(), "Rejeter".into()],
-                input: "text".into(),
-                transitions: vec![
-                    Transition::on_result("implement", "Appliquer"),
-                    Transition::on_result("analyze", "Réviser"),
-                    Transition::on_result("report", "Rejeter"),
-                ],
-                ..step("propose", "user", Phase::Plan)
-            },
-            // 6
-            Step {
-                model: "reasoning".into(),
-                prompt: "Implémente le correctif. Quand un critère est rempli, coche-le : \
-                         `session_metadata` op=update key=criteria entry={\"id\": \"<id>\", \
-                         \"status\": \"completed\"}.\n{{criteriaList}}"
-                    .into(),
-                nudge_prompt: "Continue : {{pendingCount}} critère(s) restant(s).".into(),
-                transitions: vec![
-                    Transition {
-                        goto: "verify".into(),
-                        condition: json!({
-                            "type":"metadata_all_in","key":"criteria","field":"status",
-                            "values":["completed","passed"]
-                        }),
-                        tag: String::new(),
-                    },
-                    Transition::always("implement"),
-                ],
-                ..step("implement", "agent", Phase::Build)
-            },
-            // 7
-            Step {
-                children: vec![
-                    Step {
-                        command: json!({"unix": TEST_COMMAND, "windows": "cargo test"}),
-                        cwd: "{{workdir}}/repo".into(),
-                        ..step("tests", "shell", Phase::Verification)
-                    },
-                    Step {
-                        command: json!({"unix": LINT_COMMAND, "windows": "cargo clippy -- -D warnings"}),
-                        cwd: "{{workdir}}/repo".into(),
-                        ..step("lint", "shell", Phase::Verification)
-                    },
-                    Step {
-                        sub_agent_type: "code_reviewer".into(),
-                        prompt: "Relis le diff produit pour {{ticket_url}}.".into(),
-                        model: "reasoning".into(),
-                        ..step("review", "sub_agent", Phase::Verification)
-                    },
-                    Step {
-                        sub_agent_type: "verifier".into(),
-                        prompt: "Vérifie chaque critère de `session_metadata.criteria`.".into(),
-                        ..step("verifier", "sub_agent", Phase::Verification)
-                    },
-                ],
-                transitions: vec![
-                    Transition::on_result("open_pr", "success"),
-                    Transition::always("implement"),
-                ],
-                ..step("verify", "parallel", Phase::Verification)
-            },
-            // 8
-            Step {
-                tool: "git_push".into(),
-                args: json!({
-                    "cwd":"{{workdir}}/repo",
-                    "remote":"origin",
-                    "branch":"penelope/{{ticket_id}}"
-                }),
-                transitions: vec![
-                    Transition::on_result("create_pr", "success"),
-                    Transition::always(BLOCKED),
-                ],
-                ..step("open_pr", "tool", Phase::Verification)
-            },
-            // 8b : la PR (GitHub) ou MR (GitLab) via le MCP de la forge, liée au ticket.
-            Step {
-                prompt: "Ouvre la demande de fusion de la branche `penelope/{{ticket_id}}` vers \
-                         `{{steps.resolve_repo.data.base_branch}}` du dépôt \
-                         {{steps.resolve_repo.data.repo}}, sur sa forge \
-                         ({{steps.resolve_repo.data.forge}} : pull request GitHub ou merge \
-                         request GitLab). Trouve l'outil de la forge avec `tool_search`, \
-                         appelle-le avec `tool_call`. Titre : « Correctif du ticket \
-                         {{ticket_id}} » ; corps : {{ticket_url}} puis le plan retenu.\n\n\
-                         {{steps.analyze.content}}\n\n\
-                         Rends l'adresse de la demande avec `return_value`, puis `step_done()`."
-                    .into(),
-                tools: MCP_TOOLS.iter().map(|t| t.to_string()).collect(),
-                transitions: vec![
-                    Transition::on_result("approve_deploy", "completed"),
-                    Transition::on_result("approve_deploy", "success"),
-                    Transition::always(BLOCKED),
-                ],
-                ..step("create_pr", "agent", Phase::Verification)
-            },
-            // 9
-            Step {
-                template: "deploy_gate".into(),
-                choices: vec![
-                    "Déployer".into(),
-                    "Attendre la review".into(),
-                    "Annuler".into(),
-                ],
-                transitions: vec![
-                    Transition::on_result("deploy", "Déployer"),
-                    Transition::on_result("wait_review", "Attendre la review"),
-                    Transition::on_result("report", "Annuler"),
-                ],
-                ..step("approve_deploy", "user", Phase::Waiting)
-            },
-            // 9w
-            Step {
-                on: json!({"duration_ms": 3600000}),
-                transitions: vec![Transition::always("approve_deploy")],
-                ..step("wait_review", "wait", Phase::Waiting)
-            },
-            // 10
-            Step {
-                workflow_id: "deploy-generic".into(),
-                params: json!({"environnement":"prod","repo":"{{workdir}}/repo"}),
-                transitions: vec![
-                    Transition::on_result("update_ticket", "success"),
-                    Transition::always("deploy_failed"),
-                ],
-                ..step("deploy", "workflow", Phase::Deploy)
-            },
-            // 10f
-            Step {
-                template: "incident".into(),
-                choices: vec!["Rollback".into(), "Réessayer".into(), "Laisser".into()],
-                transitions: vec![
-                    Transition::on_result("report", "Rollback"),
-                    Transition::on_result("deploy", "Réessayer"),
-                    Transition::on_result("report", "Laisser"),
-                ],
-                ..step("deploy_failed", "user", Phase::Deploy)
-            },
-            // 11
-            Step {
-                prompt: "Dans le tracker `{{steps.fetch_ticket.data.tracker}}`, commente le \
-                         ticket {{ticket_id}} ({{ticket_url}}) : « Correctif déployé par \
-                         Pénélope. » et passe-le à l'état résolu (ou son équivalent). Un seul \
-                         appel d'écriture si l'outil le permet : `tool_search` puis \
-                         `tool_call`. Puis `step_done()`."
-                    .into(),
-                tools: MCP_TOOLS.iter().map(|t| t.to_string()).collect(),
-                transitions: vec![Transition::always(DONE)],
-                ..step("update_ticket", "agent", Phase::Done)
-            },
-            // 12
-            Step {
-                prompt: "Dans le tracker du ticket {{ticket_id}} ({{ticket_url}}), ajoute ce \
-                         commentaire : « Workflow interrompu : {{reason}} ». Outils : \
-                         `tool_search` puis `tool_call`. Puis `step_done()`."
-                    .into(),
-                tools: MCP_TOOLS.iter().map(|t| t.to_string()).collect(),
-                transitions: vec![Transition::always(DONE)],
-                ..step("report", "agent", Phase::Done)
-            },
-        ],
+        steps: [
+            ticket_plan_steps(),
+            ticket_build_steps(),
+            ticket_deploy_steps(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
     }
+}
+
+/// Paramètres de `ticket-to-deploy` : le ticket, et ce qu'on sait du dépôt et du tracker.
+fn ticket_to_deploy_parameters() -> Vec<Parameter> {
+    vec![
+        Parameter {
+            id: "ticket_url".into(),
+            label: "Ticket".into(),
+            kind: "string".into(),
+            required: true,
+            ..Default::default()
+        },
+        Parameter {
+            id: "ticket_id".into(),
+            label: "Identifiant du ticket".into(),
+            kind: "string".into(),
+            required: true,
+            ..Default::default()
+        },
+        Parameter {
+            id: "repo".into(),
+            label: "Dépôt".into(),
+            kind: "string".into(),
+            required: false,
+            default: Some(json!("")),
+            description: "Adresse du dépôt, si elle est connue.".into(),
+        },
+        Parameter {
+            id: "tracker".into(),
+            label: "Tracker".into(),
+            kind: "string".into(),
+            required: false,
+            default: Some(json!("")),
+            description: "Serveur MCP du tracker (redmine, clickup…) ; déduit de \
+                          l'adresse du ticket sinon."
+                .into(),
+        },
+    ]
+}
+
+/// Étapes 1 à 5 : lire le ticket, trouver le dépôt, analyser, proposer le plan.
+fn ticket_plan_steps() -> Vec<Step> {
+    vec![
+        // 1 : le tracker est celui du ticket (Redmine, ClickUp…), trouvé par ses outils MCP.
+        Step {
+            sub_agent_type: "tracker".into(),
+            prompt: TRACKER_READ.into(),
+            tools: MCP_TOOLS.iter().map(|t| t.to_string()).collect(),
+            output_schema: Some(json!({
+                "type":"object",
+                "properties":{
+                    "tracker":{"type":"string"},
+                    "title":{"type":"string"},
+                    "description":{"type":"string"}
+                },
+                "required":["tracker","title"]
+            })),
+            transitions: vec![
+                Transition::on_result("resolve_repo", "success"),
+                Transition::always(BLOCKED),
+            ],
+            ..step("fetch_ticket", "sub_agent", Phase::Plan)
+        },
+        // 2
+        Step {
+            sub_agent_type: "repo_resolver".into(),
+            prompt: "À partir du ticket « {{steps.fetch_ticket.data.title}} » \
+                     ({{ticket_url}}), détermine le dépôt et sa forge (GitHub ou GitLab) : \
+                     dépôt indiqué « {{repo}} », réponse du propriétaire « {{reason}} », \
+                     champ du ticket, table `projects.toml` ; sinon échoue pour qu'on \
+                     demande.\n\nTicket :\n{{steps.fetch_ticket.data.description}}"
+                .into(),
+            output_schema: Some(json!({
+                "type":"object",
+                "properties":{
+                    "forge":{"type":"string","enum":["github","gitlab"]},
+                    "repo":{"type":"string"},
+                    "base_branch":{"type":"string"}
+                },
+                "required":["forge","repo","base_branch"]
+            })),
+            transitions: vec![
+                Transition::on_result("checkout", "success"),
+                Transition::always("ask_repo"),
+            ],
+            ..step("resolve_repo", "sub_agent", Phase::Plan)
+        },
+        // 2b
+        Step {
+            template: "question".into(),
+            choices: vec!["Répondu".into()],
+            input: "text".into(),
+            // La réponse repasse par la résolution : `checkout` lit toujours sa sortie.
+            transitions: vec![Transition::always("resolve_repo")],
+            ..step("ask_repo", "user", Phase::Plan)
+        },
+        // 3
+        Step {
+            command: json!({
+                "unix":"git clone --depth 50 {{steps.resolve_repo.data.repo}} {{workdir}}/repo && \
+                        cd {{workdir}}/repo && git checkout -b penelope/{{ticket_id}}",
+                "windows":"git clone --depth 50 {{steps.resolve_repo.data.repo}} {{workdir}}/repo"
+            }),
+            transitions: vec![
+                Transition::on_result("analyze", "success"),
+                Transition::always(BLOCKED),
+            ],
+            network: true,
+            ..step("checkout", "shell", Phase::Plan)
+        },
+        // 4
+        Step {
+            model: "reasoning".into(),
+            prompt:
+                "Ticket {{ticket_id}} ({{ticket_url}}) : « {{steps.fetch_ticket.data.title}} »\n\
+                     {{steps.fetch_ticket.data.description}}\n\n\
+                     Brief de la conversation qui a lancé le run :\n{{brief}}\n\n\
+                     Lis le code, localise le problème, écris les critères : \
+                     `session_metadata` op=set key=criteria entry=[{\"id\": \"…\", \
+                     \"text\": \"…\", \"status\": \"pending\"}, …], puis propose un \
+                     plan de correctif via `return_value`."
+                    .into(),
+            transitions: vec![Transition::always("propose")],
+            ..step("analyze", "agent", Phase::Plan)
+        },
+        // 5
+        Step {
+            template: "plan_proposal".into(),
+            choices: vec!["Appliquer".into(), "Réviser".into(), "Rejeter".into()],
+            input: "text".into(),
+            transitions: vec![
+                Transition::on_result("implement", "Appliquer"),
+                Transition::on_result("analyze", "Réviser"),
+                Transition::on_result("report", "Rejeter"),
+            ],
+            ..step("propose", "user", Phase::Plan)
+        },
+    ]
+}
+
+/// Étapes 6 à 8b : implémenter, vérifier, pousser, ouvrir la demande de fusion.
+fn ticket_build_steps() -> Vec<Step> {
+    vec![
+        // 6
+        Step {
+            model: "reasoning".into(),
+            prompt: "Implémente le correctif. Quand un critère est rempli, coche-le : \
+                     `session_metadata` op=update key=criteria entry={\"id\": \"<id>\", \
+                     \"status\": \"completed\"}.\n{{criteriaList}}"
+                .into(),
+            nudge_prompt: "Continue : {{pendingCount}} critère(s) restant(s).".into(),
+            transitions: vec![
+                Transition {
+                    goto: "verify".into(),
+                    condition: json!({
+                        "type":"metadata_all_in","key":"criteria","field":"status",
+                        "values":["completed","passed"]
+                    }),
+                    tag: String::new(),
+                },
+                Transition::always("implement"),
+            ],
+            ..step("implement", "agent", Phase::Build)
+        },
+        // 7
+        Step {
+            children: vec![
+                Step {
+                    command: json!({"unix": TEST_COMMAND, "windows": "cargo test"}),
+                    cwd: "{{workdir}}/repo".into(),
+                    ..step("tests", "shell", Phase::Verification)
+                },
+                Step {
+                    command: json!({"unix": LINT_COMMAND, "windows": "cargo clippy -- -D warnings"}),
+                    cwd: "{{workdir}}/repo".into(),
+                    ..step("lint", "shell", Phase::Verification)
+                },
+                Step {
+                    sub_agent_type: "code_reviewer".into(),
+                    prompt: "Relis le diff produit pour {{ticket_url}}.".into(),
+                    model: "reasoning".into(),
+                    ..step("review", "sub_agent", Phase::Verification)
+                },
+                Step {
+                    sub_agent_type: "verifier".into(),
+                    prompt: "Vérifie chaque critère de `session_metadata.criteria`.".into(),
+                    ..step("verifier", "sub_agent", Phase::Verification)
+                },
+            ],
+            transitions: vec![
+                Transition::on_result("open_pr", "success"),
+                Transition::always("implement"),
+            ],
+            ..step("verify", "parallel", Phase::Verification)
+        },
+        // 8
+        Step {
+            tool: "git_push".into(),
+            args: json!({
+                "cwd":"{{workdir}}/repo",
+                "remote":"origin",
+                "branch":"penelope/{{ticket_id}}"
+            }),
+            transitions: vec![
+                Transition::on_result("create_pr", "success"),
+                Transition::always(BLOCKED),
+            ],
+            ..step("open_pr", "tool", Phase::Verification)
+        },
+        // 8b : la PR (GitHub) ou MR (GitLab) via le MCP de la forge, liée au ticket.
+        Step {
+            prompt: "Ouvre la demande de fusion de la branche `penelope/{{ticket_id}}` vers \
+                     `{{steps.resolve_repo.data.base_branch}}` du dépôt \
+                     {{steps.resolve_repo.data.repo}}, sur sa forge \
+                     ({{steps.resolve_repo.data.forge}} : pull request GitHub ou merge \
+                     request GitLab). Trouve l'outil de la forge avec `tool_search`, \
+                     appelle-le avec `tool_call`. Titre : « Correctif du ticket \
+                     {{ticket_id}} » ; corps : {{ticket_url}} puis le plan retenu.\n\n\
+                     {{steps.analyze.content}}\n\n\
+                     Rends l'adresse de la demande avec `return_value`, puis `step_done()`."
+                .into(),
+            tools: MCP_TOOLS.iter().map(|t| t.to_string()).collect(),
+            transitions: vec![
+                Transition::on_result("approve_deploy", "completed"),
+                Transition::on_result("approve_deploy", "success"),
+                Transition::always(BLOCKED),
+            ],
+            ..step("create_pr", "agent", Phase::Verification)
+        },
+    ]
+}
+
+/// Étapes 9 à 12 : approuver, déployer, clore ou commenter le ticket.
+fn ticket_deploy_steps() -> Vec<Step> {
+    vec![
+        // 9
+        Step {
+            template: "deploy_gate".into(),
+            choices: vec![
+                "Déployer".into(),
+                "Attendre la review".into(),
+                "Annuler".into(),
+            ],
+            transitions: vec![
+                Transition::on_result("deploy", "Déployer"),
+                Transition::on_result("wait_review", "Attendre la review"),
+                Transition::on_result("report", "Annuler"),
+            ],
+            ..step("approve_deploy", "user", Phase::Waiting)
+        },
+        // 9w
+        Step {
+            on: json!({"duration_ms": 3600000}),
+            transitions: vec![Transition::always("approve_deploy")],
+            ..step("wait_review", "wait", Phase::Waiting)
+        },
+        // 10
+        Step {
+            workflow_id: "deploy-generic".into(),
+            params: json!({"environnement":"prod","repo":"{{workdir}}/repo"}),
+            transitions: vec![
+                Transition::on_result("update_ticket", "success"),
+                Transition::always("deploy_failed"),
+            ],
+            ..step("deploy", "workflow", Phase::Deploy)
+        },
+        // 10f
+        Step {
+            template: "incident".into(),
+            choices: vec!["Rollback".into(), "Réessayer".into(), "Laisser".into()],
+            transitions: vec![
+                Transition::on_result("report", "Rollback"),
+                Transition::on_result("deploy", "Réessayer"),
+                Transition::on_result("report", "Laisser"),
+            ],
+            ..step("deploy_failed", "user", Phase::Deploy)
+        },
+        // 11
+        Step {
+            prompt: "Dans le tracker `{{steps.fetch_ticket.data.tracker}}`, commente le \
+                     ticket {{ticket_id}} ({{ticket_url}}) : « Correctif déployé par \
+                     Pénélope. » et passe-le à l'état résolu (ou son équivalent). Un seul \
+                     appel d'écriture si l'outil le permet : `tool_search` puis \
+                     `tool_call`. Puis `step_done()`."
+                .into(),
+            tools: MCP_TOOLS.iter().map(|t| t.to_string()).collect(),
+            transitions: vec![Transition::always(DONE)],
+            ..step("update_ticket", "agent", Phase::Done)
+        },
+        // 12
+        Step {
+            prompt: "Dans le tracker du ticket {{ticket_id}} ({{ticket_url}}), ajoute ce \
+                     commentaire : « Workflow interrompu : {{reason}} ». Outils : \
+                     `tool_search` puis `tool_call`. Puis `step_done()`."
+                .into(),
+            tools: MCP_TOOLS.iter().map(|t| t.to_string()).collect(),
+            transitions: vec![Transition::always(DONE)],
+            ..step("report", "agent", Phase::Done)
+        },
+    ]
 }
 
 /// Les quatre workflows livrés.
