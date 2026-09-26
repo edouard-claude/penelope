@@ -205,15 +205,15 @@ async fn mcp_elicitation_is_answered_from_telegram() {
     );
 }
 
-/// Issue #12, suite : en 2026-07-28 (MRTR) l'appel est relancé avec les réponses et
-/// l'état du serveur, le modèle lit qui a répondu ; un lien (2025-11-25) montre son
-/// domaine, s'ouvre après accord et sa fin signalée met la carte à jour.
-#[tokio::test]
-#[allow(clippy::too_many_lines)] // gel 0.17 : scénario de test bout en bout
-async fn mcp_links_and_mrtr_elicitations_from_telegram() {
-    use penelope_executor::executor::McpGateway;
+/// Deux serveurs branchés au démon : `tracker` en 2026-07-28 (MRTR : formulaire, ou lien
+/// quand `lien` est vrai), `drive` en 2025-11-25.
+async fn tracker_and_drive(
+    g: &Arc<TelegramGateway>,
+) -> (
+    Arc<penelope_mcp_host::testing::FakeConnector>,
+    Arc<penelope_mcp_host::McpSupervisor>,
+) {
     use penelope_mcp_host::testing::{FakeConnector, declare, server, tool};
-    let (_d, g, t, _p) = gateway().await;
     let fake = Arc::new(FakeConnector::default());
     fake.serve(
         "tracker",
@@ -267,6 +267,17 @@ async fn mcp_links_and_mrtr_elicitations_from_telegram() {
     declare(&sup, "drive", "");
     sup.reload().await;
     g.daemon.hooks.set_mcp(sup.clone());
+    (fake, sup)
+}
+
+/// Issue #12, suite : en 2026-07-28 (MRTR) l'appel est relancé avec les réponses et
+/// l'état du serveur, le modèle lit qui a répondu ; un lien (2025-11-25) montre son
+/// domaine, s'ouvre après accord et sa fin signalée met la carte à jour.
+#[tokio::test]
+async fn mcp_links_and_mrtr_elicitations_from_telegram() {
+    use penelope_executor::executor::McpGateway;
+    let (_d, g, t, _p) = gateway().await;
+    let (fake, sup) = tracker_and_drive(&g).await;
     let broker = g.daemon.services.elicitations.clone();
     let card = |needle: &'static str| {
         let (t, broker, g) = (t.clone(), broker.clone(), g.clone());
