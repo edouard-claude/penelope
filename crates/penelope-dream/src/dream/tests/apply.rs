@@ -143,7 +143,6 @@ async fn a_dream_is_committed_in_the_vault_history() {
 /// retrouve ailleurs, retente ce qui n'a pas de verdict, et propose au retrait ce qui ne
 /// sert jamais.
 #[tokio::test]
-#[allow(clippy::too_many_lines)] // gel 0.17 : scénario de test bout en bout
 async fn the_grid_updates_journals_and_ages_the_memory() {
     let dir = tempfile::tempdir().unwrap();
     let clock = TestClock::new(1_789_516_800_000);
@@ -254,73 +253,7 @@ async fn the_grid_updates_journals_and_ages_the_memory() {
     p.reply(&reply.to_string());
     let o = run(&d, &d.hooks.messenger, false).await.unwrap();
 
-    let memoire = std::fs::read_to_string(vault.join("memoire.md")).unwrap();
-    let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
-    let projets = std::fs::read_to_string(vault.join("projets.md")).unwrap();
-    // Mise à jour plutôt qu'accumulation : l'ancienne adresse est remplacée, liée, datée.
-    let base_line = memoire
-        .lines()
-        .find(|l| l.contains("40000"))
-        .expect("adresse");
-    assert!(
-        base_line.contains("remplace: 01OLDBASE") && base_line.contains("depuis: 2026-09-16"),
-        "{base_line}"
-    );
-    assert!(!memoire.contains("^01OLDBASE"), "{memoire}");
-    assert!(
-        !s.memory
-            .by_level(Level::Coeur)
-            .await
-            .unwrap()
-            .iter()
-            .any(|e| e.uid == "01OLDBASE")
-    );
-    assert_eq!(
-        profil.matches("pousser sur dev d'abord").count(),
-        1,
-        "jamais doublée"
-    );
-    assert_eq!(memoire.matches("Martin").count(), 1, "noop");
-    // Journal : états passagers, expirations bornées.
-    assert!(projets.contains("## États en cours"), "{projets}");
-    let ticket_line = projets
-        .lines()
-        .find(|l| l.contains("4821"))
-        .expect("journal");
-    assert!(ticket_line.contains("expire: 2026-09-30"), "{ticket_line}");
-    let propale_line = projets
-        .lines()
-        .find(|l| l.contains("Dupont"))
-        .expect("journal");
-    assert!(
-        propale_line.contains("expire: 2026-09-20"),
-        "{propale_line}"
-    );
-    assert_eq!(o.report.journal, 2, "{:?}", o.report);
-    // Retrouvable ailleurs : ignoré, même si le modèle proposait de l'écrire.
-    assert!(!memoire.contains("travaille sur"));
-    // Secret : la référence, jamais la valeur.
-    assert!(memoire.contains("${SECRET:cle-stripe-"), "{memoire}");
-    assert!(!memoire.contains("sk_test_"));
-    assert_eq!(o.report.secrets.len(), 1);
-    // Sans verdict : retenté la nuit suivante.
-    assert!(!memoire.contains("Debian"));
-    let pending = s.candidates.pending(None).await.unwrap();
-    assert_eq!(pending.len(), 1, "{pending:?}");
-    assert!(pending[0].text.contains("Debian"));
-    let dreams = std::fs::read_to_string(vault.join("DREAMS.md")).unwrap();
-    for expected in [
-        "✅ gardé « Sur Atlas on pousse",
-        "🗓 journal « La proposition commerciale Dupont",
-        "jusqu'au 2026-09-20",
-        "⏭ ignoré « Le propriétaire travaille sur le ticket 4821 »",
-        "introuvable ailleurs ✗",
-        "＝ déjà en mémoire « Le client Martin est basé à Lyon »",
-        "＝ déjà en mémoire « Sur Atlas, toujours pousser",
-        "⏳ en attente « Le serveur de prod Atlas tourne sous Debian 12 »",
-    ] {
-        assert!(dreams.contains(expected), "{expected} :\n{dreams}");
-    }
+    first_night_is_sorted_dated_and_journaled(s, &vault, &o).await;
 
     // Vingt jours plus tard : les états passagers expirés quittent le journal.
     clock.advance_secs(20 * 86_400);
@@ -393,6 +326,83 @@ async fn the_grid_updates_journals_and_ages_the_memory() {
         digest.contains("Jamais rappelées depuis 60 jours"),
         "{digest}"
     );
+}
+
+/// La première nuit de la grille (issue #37) : mise à jour plutôt qu'accumulation,
+/// états passagers au journal, secret rangé, ce qui est ailleurs ignoré, ce qui n'a pas
+/// de verdict retenté, et `DREAMS.md` qui dit chaque tri.
+async fn first_night_is_sorted_dated_and_journaled(
+    s: &Services,
+    vault: &std::path::Path,
+    o: &DreamOutcome,
+) {
+    let memoire = std::fs::read_to_string(vault.join("memoire.md")).unwrap();
+    let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
+    let projets = std::fs::read_to_string(vault.join("projets.md")).unwrap();
+    // Mise à jour plutôt qu'accumulation : l'ancienne adresse est remplacée, liée, datée.
+    let base_line = memoire
+        .lines()
+        .find(|l| l.contains("40000"))
+        .expect("adresse");
+    assert!(
+        base_line.contains("remplace: 01OLDBASE") && base_line.contains("depuis: 2026-09-16"),
+        "{base_line}"
+    );
+    assert!(!memoire.contains("^01OLDBASE"), "{memoire}");
+    assert!(
+        !s.memory
+            .by_level(Level::Coeur)
+            .await
+            .unwrap()
+            .iter()
+            .any(|e| e.uid == "01OLDBASE")
+    );
+    assert_eq!(
+        profil.matches("pousser sur dev d'abord").count(),
+        1,
+        "jamais doublée"
+    );
+    assert_eq!(memoire.matches("Martin").count(), 1, "noop");
+    // Journal : états passagers, expirations bornées.
+    assert!(projets.contains("## États en cours"), "{projets}");
+    let ticket_line = projets
+        .lines()
+        .find(|l| l.contains("4821"))
+        .expect("journal");
+    assert!(ticket_line.contains("expire: 2026-09-30"), "{ticket_line}");
+    let propale_line = projets
+        .lines()
+        .find(|l| l.contains("Dupont"))
+        .expect("journal");
+    assert!(
+        propale_line.contains("expire: 2026-09-20"),
+        "{propale_line}"
+    );
+    assert_eq!(o.report.journal, 2, "{:?}", o.report);
+    // Retrouvable ailleurs : ignoré, même si le modèle proposait de l'écrire.
+    assert!(!memoire.contains("travaille sur"));
+    // Secret : la référence, jamais la valeur.
+    assert!(memoire.contains("${SECRET:cle-stripe-"), "{memoire}");
+    assert!(!memoire.contains("sk_test_"));
+    assert_eq!(o.report.secrets.len(), 1);
+    // Sans verdict : retenté la nuit suivante.
+    assert!(!memoire.contains("Debian"));
+    let pending = s.candidates.pending(None).await.unwrap();
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert!(pending[0].text.contains("Debian"));
+    let dreams = std::fs::read_to_string(vault.join("DREAMS.md")).unwrap();
+    for expected in [
+        "✅ gardé « Sur Atlas on pousse",
+        "🗓 journal « La proposition commerciale Dupont",
+        "jusqu'au 2026-09-20",
+        "⏭ ignoré « Le propriétaire travaille sur le ticket 4821 »",
+        "introuvable ailleurs ✗",
+        "＝ déjà en mémoire « Le client Martin est basé à Lyon »",
+        "＝ déjà en mémoire « Sur Atlas, toujours pousser",
+        "⏳ en attente « Le serveur de prod Atlas tourne sous Debian 12 »",
+    ] {
+        assert!(dreams.contains(expected), "{expected} :\n{dreams}");
+    }
 }
 
 #[tokio::test]
