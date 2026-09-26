@@ -296,6 +296,9 @@ codesign_identity = ""
 codesign_identifier = "io.github.edouard-claude.penelope"
 install_dir = "~/.local/bin"
 
+[skills]
+archive_base_url = "https://codeload.github.com"
+
 [voice]
 tts_voice = "fr_female"
 max_chars = 1500
