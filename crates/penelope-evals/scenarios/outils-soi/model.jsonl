@@ -2,4 +2,6 @@
 {"tool_calls": {"text": "", "calls": [{"id": "c4", "name": "config_set", "arguments": {"path": "tools.shell_timeout", "value": "5m"}}]}}
 {"tool_calls": {"text": "", "calls": [{"id": "c5", "name": "session_metadata", "arguments": {"op": "set", "key": "criteria", "entry": [{"id": "devis", "text": "Le devis ACME est envoyé", "status": "pending"}]}}]}}
 {"tool_calls": {"text": "", "calls": [{"id": "c6", "name": "session_metadata", "arguments": {"op": "update", "key": "criteria", "entry": {"id": "devis", "status": "completed"}}}]}}
-{"text": "Il est 1 h du matin à Paris ; le shell attend désormais 5 minutes et le critère du devis est coché."}
+{"tool_calls": {"text": "", "calls": [{"id": "c7", "name": "session_notes", "arguments": {"action": "update_section", "section": "Objectif", "content": "Livrer le devis ACME."}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c8", "name": "session_notes", "arguments": {"action": "read"}}]}}
+{"text": "Il est 1 h du matin à Paris ; le shell attend désormais 5 minutes et le critère du devis est coché ; l'objectif est dans les notes de la session."}

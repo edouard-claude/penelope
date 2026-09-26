@@ -1,0 +1,31 @@
+name = "outils-historique-resumes"
+description = """Relire ce qui a quitté la fenêtre : deux échanges semés sur Borealis sont
+résumés par `/compact` (un nœud LCM). Le modèle lit ensuite un long rapport (`fs_read`),
+externalisé en artefact (niveau 1, `large_payload_tokens` patché à 800), qu'il relit par
+page (`artifact_read`) ; il cherche Borealis dans l'historique (`history_grep`), trouve
+le résumé, le décrit (`history_describe`) et en relit les messages d'origine
+(`history_expand`). Les identifiants de l'artefact et du nœud sont cités par le script
+(`{{id:art:1}}`, `{{id:n:1}}`)."""
+pin_model = "main"
+
+[config]
+"context.large_payload_tokens" = 800
+
+[[files]]
+path = "rapport.txt"
+content = "ligne du rapport Borealis : la TVA intracommunautaire reste à vérifier\n"
+repeat = 60
+
+[[steps]]
+kind = "seed"
+exchanges = 2
+user = "point {i} sur Borealis : la TVA intracommunautaire est à vérifier avec le comptable"
+assistant = "noté pour le point {i}"
+
+[[steps]]
+kind = "command"
+command = "/compact"
+
+[[steps]]
+kind = "message"
+text = "relis le rapport et retrouve ce qu'on avait dit de Borealis avant le résumé"

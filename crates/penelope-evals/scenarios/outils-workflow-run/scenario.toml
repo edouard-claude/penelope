@@ -1,0 +1,20 @@
+name = "outils-workflow-run"
+description = """Un run de workflow lancé depuis la conversation, avec l'orchestrateur et un
+canal simulé : le modèle écrit un workflow d'une étape `user` (`workflow_author`), le
+lance (`workflow_start`), relit son état (`workflow_status`), puis l'annule
+(`workflow_control`, `cancel`) et relit l'état final. L'identifiant du run est cité par
+le script (`{{id:r:1}}`). Le monde montre la session du run, les cartes de progression
+envoyées au canal (en cours, puis annulé) et les événements `workflow.started`,
+`workflow.control` et `workflow.finished`. Limite du harnais : l'étape `user` n'est pas
+exécutée (le run reste `running` sur `demander` jusqu'à l'annulation, et
+`workflow_start` rend après son attente de cinq secondes) ; le déroulé des étapes est
+couvert par les tests du moteur de workflows, pas ici."""
+pin_model = "main"
+messenger = true
+
+[config]
+"tools.approval_mode" = "auto"
+
+[[steps]]
+kind = "message"
+text = "lance une validation du devis ACME, puis finalement annule-la"

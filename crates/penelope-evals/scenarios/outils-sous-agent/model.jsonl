@@ -1,0 +1,4 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "sub_agent_spawn", "arguments": {"kind": "general", "prompt": "Lis notes.txt et liste ce qu'il reste à faire.", "tools": ["fs_read"]}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "s1", "name": "fs_read", "arguments": {"path": "notes.txt"}}]}}
+{"text": "Deux tâches : relancer Borealis et vérifier la TVA du devis ACME."}
+{"text": "Il reste à relancer Borealis et à vérifier la TVA du devis ACME."}

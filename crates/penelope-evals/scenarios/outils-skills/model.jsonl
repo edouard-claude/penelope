@@ -1,5 +1,6 @@
 {"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "skill_propose", "arguments": {"name": "preparer-devis", "description": "Préparer un devis client à partir d'une demande.", "body": "# Préparer un devis\n\n1. Relire la demande du client.\n2. Chiffrer chaque ligne.\n"}}]}}
-{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "skill_search", "arguments": {"query": "devis client"}}, {"id": "c3", "name": "skill_load", "arguments": {"name": "preparer-devis"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "skill_search", "arguments": {"query": "devis client"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c3", "name": "skill_load", "arguments": {"name": "preparer-devis"}}]}}
 {"tool_calls": {"text": "", "calls": [{"id": "c4", "name": "skill_patch", "arguments": {"name": "preparer-devis", "body": "# Préparer un devis\n\n1. Relire la demande du client.\n2. Chiffrer chaque ligne.\n3. Convertir en PDF.\n"}}]}}
 {"tool_calls": {"text": "", "calls": [{"id": "c5", "name": "skill_load", "arguments": {"name": "preparer-devis"}}]}}
 {"text": "La skill preparer-devis existe et finit par la conversion en PDF."}

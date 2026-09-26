@@ -1,0 +1,8 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "shell_exec", "arguments": {"command": "sleep 60", "background": true}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "shell_exec", "arguments": {"command": "sleep 2", "background": true}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c3", "name": "job_list", "arguments": {}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c4", "name": "job_status", "arguments": {"job": "{{id:tj:1}}"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c5", "name": "job_wait", "arguments": {"job": "{{id:tj:2}}", "timeout_ms": 30000}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c6", "name": "job_cancel", "arguments": {"job": "{{id:tj:1}}"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c7", "name": "job_wait", "arguments": {"job": "{{id:tj:1}}", "timeout_ms": 30000}}]}}
+{"text": "La courte attente est finie et la longue est annulée."}

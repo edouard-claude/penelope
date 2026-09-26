@@ -1,0 +1,21 @@
+name = "outils-images"
+description = """Images, avec l'orchestrateur et un canal simulé : le modèle génère une
+image (`image_generate`, réponse scriptée du modèle d'images) qui part aussitôt au
+propriétaire, puis fait décrire une maquette du workspace par le modèle de vision
+(`image_inspect`, réponse scriptée). La maquette est un GIF d'un pixel écrit en octets
+ASCII (le semis du workspace est du texte). Le monde montre le fichier généré envoyé au
+canal, la requête de vision avec son image, et la description rendue en donnée non
+fiable."""
+pin_model = "main"
+messenger = true
+
+[config]
+"tools.approval_mode" = "auto"
+
+[[files]]
+path = "maquette.gif"
+content = "GIF89a\u0001\u0000\u0001\u0000\u0000\u0000\u0000,\u0000\u0000\u0000\u0000\u0001\u0000\u0001\u0000\u0000\u0002\u0002D\u0001\u0000;"
+
+[[steps]]
+kind = "message"
+text = "dessine-moi un logo pour ACME, puis décris la maquette"

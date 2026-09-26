@@ -1,10 +1,12 @@
 name = "outils-memoire"
 description = """Outils de mémoire sur un vault vide : le modèle retient une préférence au
-niveau profil (`mem_remember`), la retrouve par une recherche (`mem_search`), relit les
-entrées d'un sujet (`mem_get` par slug) et ses voisins (`mem_neighbors`), puis note une
+niveau profil (`mem_remember`), la retrouve par une recherche (`mem_search`), relit l'entrée
+par son uid (`mem_get`) et les voisins du sujet (`mem_neighbors`), puis note une
 règle dictée par le propriétaire en citant son message mot pour mot (`mem_note`), qui
-devient candidate d'origine `owner`. Le monde montre les résultats d'outils (uid,
-niveau, score, origine vérifiée) et un effet par appel."""
+devient candidate d'origine `owner`. Le propriétaire se ravise sur les devis : le modèle
+oublie l'entrée par son uid (`mem_forget`, destructif, donc approuvé), et une nouvelle
+recherche ne la trouve plus. Le monde montre les résultats d'outils (uid, niveau, score,
+origine vérifiée, oubli) et un effet par appel."""
 pin_model = "main"
 
 [config]
@@ -12,4 +14,7 @@ pin_model = "main"
 
 [[steps]]
 kind = "message"
-text = "retiens que je veux mes devis en PDF, jamais en Word ; et note ceci : relance les clients le mardi matin"
+text = "retiens que je veux mes devis en PDF, jamais en Word ; et note ceci : relance les clients le mardi matin ; ah non, oublie ce que je viens de dire sur les devis"
+
+[[steps]]
+kind = "approve"

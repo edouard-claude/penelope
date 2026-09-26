@@ -80,6 +80,14 @@ scenario_cases! {
     outils_http_garde => "outils-http-garde",
     outils_workflows => "outils-workflows",
     outils_question => "outils-question",
+    outils_canal => "outils-canal",
+    outils_git => "outils-git",
+    outils_planification => "outils-planification",
+    outils_historique_resumes => "outils-historique-resumes",
+    outils_jobs => "outils-jobs",
+    outils_workflow_run => "outils-workflow-run",
+    outils_images => "outils-images",
+    outils_sous_agent => "outils-sous-agent",
 }
 
 #[test]

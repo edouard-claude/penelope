@@ -3,9 +3,10 @@ description = """Outils sur Pénélope elle-même et sur la session : l'heure da
 fuseau (`time_now`, horloge de test), la documentation embarquée (`self_docs`, recherche),
 l'inventaire des outils (`self_status`, section `tools`), un réglage changé à chaud
 (`config_set`, classé destructif : il attend l'accord du propriétaire, même en mode
-`auto`, puis la reprise l'applique) et les critères de la session (`session_metadata`, posés puis
-cochés). Le monde montre la génération de configuration et le critère passé à
-`completed`."""
+`auto`, puis la reprise l'applique), les critères de la session (`session_metadata`, posés puis
+cochés) et ses notes de travail (`session_notes`, section écrite puis relue). Le monde
+montre la génération de configuration, le critère passé à `completed` et le fichier de
+notes, nommé d'après la session."""
 pin_model = "main"
 
 [config]
@@ -13,7 +14,7 @@ pin_model = "main"
 
 [[steps]]
 kind = "message"
-text = "quelle heure est-il à Paris ? passe le délai du shell à 5 minutes et pose le critère : le devis ACME est envoyé (c'est fait)"
+text = "quelle heure est-il à Paris ? passe le délai du shell à 5 minutes et pose le critère : le devis ACME est envoyé (c'est fait), et note l'objectif"
 
 [[steps]]
 kind = "approve"

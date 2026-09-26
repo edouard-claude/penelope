@@ -1,0 +1,6 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "workflow_author", "arguments": {"draft": {"metadata": {"id": "validation", "name": "Validation", "description": "Demande au propriétaire de valider un devis."}, "entryStep": "demander", "steps": [{"id": "demander", "name": "Demander", "type": "user", "template": "Valider le devis ACME ?", "choices": ["oui", "non"], "transitions": [{"goto": "$done"}]}]}}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "workflow_start", "arguments": {"id": "validation"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c3", "name": "workflow_status", "arguments": {"run_id": "{{id:r:1}}"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c4", "name": "workflow_control", "arguments": {"run_id": "{{id:r:1}}", "op": "cancel"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c5", "name": "workflow_status", "arguments": {"run_id": "{{id:r:1}}"}}]}}
+{"text": "La validation a été lancée puis annulée."}

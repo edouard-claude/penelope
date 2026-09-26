@@ -1,0 +1,8 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "schedule_create", "arguments": {"kind": "cron", "spec": {"expr": "0 9 20 9 *", "once": true}, "target": {"type": "notify", "template": "⏰ Appeler Paul"}}}, {"id": "c2", "name": "intent_create", "arguments": {"texte": "Quand on reparle de Borealis, rappeler la question de la TVA.", "declencheurs": ["Borealis"]}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c3", "name": "intent_create", "arguments": {"texte": "Demain à 10 h, rappeler le comptable."}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c4", "name": "schedule_list", "arguments": {}}]}}
+{"text": "Le rappel du 20 septembre est posé et l'intention Borealis est armée."}
+{"tool_calls": {"text": "", "calls": [{"id": "c5", "name": "schedule_move", "arguments": {"id": "{{id:sch:1}}", "to": "private"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c6", "name": "schedule_delete", "arguments": {"id": "{{id:sch:1}}"}}, {"id": "c7", "name": "intent_cancel", "arguments": {"id": "{{id:i:1}}"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c8", "name": "intent_list", "arguments": {}}, {"id": "c9", "name": "self_status", "arguments": {"section": "schedules"}}]}}
+{"text": "Le rappel est supprimé et l'intention Borealis annulée."}

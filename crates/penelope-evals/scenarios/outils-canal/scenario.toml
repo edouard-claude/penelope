@@ -1,0 +1,26 @@
+name = "outils-canal"
+description = """Envois au propriétaire par le canal de la conversation, sur un canal
+simulé qui enregistre ce qu'il reçoit : un message d'avancement (`send_message`), le
+devis en pièce jointe avec sa légende (`send_file`). Le vocal (`send_voice`) est refusé
+avant la synthèse, le texte dépassant `voice.max_chars` : l'erreur demande un résumé.
+Le monde montre les envois (lignes `sent`) dans l'ordre, avec la session qui les a
+faits, et aucun vocal. Un vocal qui part demande `ffmpeg` sur la machine : le rejeu
+dépendrait de la plateforme, il n'est pas joué ici."""
+pin_model = "main"
+messenger = true
+
+[config]
+"tools.approval_mode" = "auto"
+"voice.max_chars" = 40
+
+[[files]]
+path = "devis/acme.md"
+content = """# Devis ACME
+
+- Audit : 1 200 €
+- Migration : 3 400 €
+"""
+
+[[steps]]
+kind = "message"
+text = "envoie-moi le devis ACME, préviens-moi quand c'est parti et fais-moi un résumé en vocal"

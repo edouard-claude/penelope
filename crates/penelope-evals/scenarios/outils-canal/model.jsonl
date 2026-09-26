@@ -1,0 +1,4 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "send_message", "arguments": {"text": "J'envoie le devis ACME."}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "send_file", "arguments": {"path": "devis/acme.md", "caption": "Devis ACME"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c3", "name": "send_voice", "arguments": {"text": "Le devis ACME est parti : quatre mille six cents euros."}}]}}
+{"text": "Le devis est parti, avec un résumé vocal."}
