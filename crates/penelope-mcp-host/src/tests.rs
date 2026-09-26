@@ -1,6 +1,8 @@
 use super::testing::*;
 use super::*;
 
+mod admin;
+mod calls;
 mod sandbox;
 
 use penelope_app::ports::McpGateway;

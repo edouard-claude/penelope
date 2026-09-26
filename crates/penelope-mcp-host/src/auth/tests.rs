@@ -550,3 +550,173 @@ async fn the_callback_host_is_configurable() {
         exchange.2
     );
 }
+
+/// Requête HTTP brute vers le serveur de retour local ; rend la réponse entière.
+async fn get(port: u16, target: &str) -> String {
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    stream
+        .write_all(format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    let mut out = String::new();
+    stream.read_to_string(&mut out).await.unwrap();
+    out
+}
+
+/// Le serveur de retour local mène l'autorisation à terme et prévient le propriétaire,
+/// explique un retour refusé sans injecter de HTML, sert le document CIMD et s'arrête
+/// avec le daemon.
+#[tokio::test]
+async fn the_local_callback_server_completes_an_authorization() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = TestClock::new(1_789_516_800_000);
+    let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
+    let s = Arc::new(
+        Services::for_tests(dir.path().to_path_buf(), shared.clone())
+            .await
+            .unwrap(),
+    );
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    s.config
+        .mutate("test", |c| {
+            c.mcp.callback_port = port;
+            c.mcp.cimd_url = "https://penelope.exemple.org/oauth/client.json".into();
+            Ok(vec!["mcp.callback_port".into(), "mcp.cimd_url".into()])
+        })
+        .unwrap();
+    let rec = penelope_app::testing::RecordingMessenger::new();
+    let ctx = AuthContext {
+        services: s.clone(),
+        messenger: Slot::default(),
+        mcp_admin: Slot::default(),
+        supervision: Supervision {
+            tasks: Arc::default(),
+            handle: penelope_app::ports::Handle::new(0),
+            clock: shared,
+            events: s.events.clone(),
+        },
+    };
+    ctx.messenger.set(Some(rec.clone()));
+    let handle = ctx.supervision.handle.clone();
+    let server = tokio::spawn(callback_server(ctx));
+    // Le serveur écoute dès que la connexion aboutit.
+    let mut ready = false;
+    for _ in 0..50 {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(ready, "serveur de retour à l'écoute");
+
+    let (base, _seen) = fake_authorization_server().await;
+    let cfg = ServerConfig {
+        name: "suivi".into(),
+        transport: "http".into(),
+        url: format!("{base}/mcp"),
+        ..Default::default()
+    };
+    let started = start(&s, &cfg, None).await.unwrap();
+    let ok = get(
+        port,
+        &format!(
+            "/oauth/callback?code=abc&state={}",
+            param(&started.url, "state")
+        ),
+    )
+    .await;
+    assert!(ok.starts_with("HTTP/1.1 200 OK"), "{ok}");
+    assert!(ok.contains("Autorisation de <b>suivi</b> reçue"), "{ok}");
+    assert_eq!(rec.texts(), vec!["🔐 `suivi` autorisé."]);
+
+    let refused = get(port, "/oauth/callback?code=<b>&state=<script>").await;
+    assert!(refused.starts_with("HTTP/1.1 400"), "{refused}");
+    assert!(!refused.contains("<script>"), "{refused}");
+
+    let cimd = get(port, "/oauth/client.json").await;
+    assert!(cimd.contains("application/json"), "{cimd}");
+    let body: Value = serde_json::from_str(cimd.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(
+        body["client_id"],
+        "https://penelope.exemple.org/oauth/client.json"
+    );
+    assert!(
+        body.to_string().contains(&format!("127.0.0.1:{port}")),
+        "{body}"
+    );
+
+    assert!(get(port, "/ailleurs").await.starts_with("HTTP/1.1 404"));
+
+    handle.shutdown();
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("arrêt avec le daemon")
+        .unwrap();
+}
+
+/// Port déjà pris : le serveur de retour renonce, le collage reste possible.
+#[tokio::test]
+async fn a_busy_callback_port_is_not_fatal() {
+    let dir = tempfile::tempdir().unwrap();
+    let shared: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
+    let s = Arc::new(
+        Services::for_tests(dir.path().to_path_buf(), shared.clone())
+            .await
+            .unwrap(),
+    );
+    let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = busy.local_addr().unwrap().port();
+    s.config
+        .mutate("test", |c| {
+            c.mcp.callback_port = port;
+            Ok(vec!["mcp.callback_port".into()])
+        })
+        .unwrap();
+    let ctx = AuthContext {
+        services: s.clone(),
+        messenger: Slot::default(),
+        mcp_admin: Slot::default(),
+        supervision: Supervision {
+            tasks: Arc::default(),
+            handle: penelope_app::ports::Handle::new(0),
+            clock: shared,
+            events: s.events.clone(),
+        },
+    };
+    tokio::time::timeout(Duration::from_secs(5), callback_server(ctx))
+        .await
+        .expect("rend la main sans écouter");
+}
+
+/// Après l'autorisation, la reconnexion qui échoue est dite au propriétaire.
+#[tokio::test]
+async fn a_failed_reconnection_after_authorization_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let shared: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
+    let s = Arc::new(
+        Services::for_tests(dir.path().to_path_buf(), shared)
+            .await
+            .unwrap(),
+    );
+    let sup = crate::testing::supervisor(
+        s.clone(),
+        Arc::new(crate::testing::FakeConnector::default()),
+    );
+    let rec = penelope_app::testing::RecordingMessenger::new();
+    reconnect_and_tell(&s, Some(sup), Some(rec.clone()), "fantome").await;
+    let texts = rec.texts();
+    assert_eq!(texts.len(), 1);
+    assert!(
+        texts[0].starts_with("🔐 `fantome` autorisé, mais la reconnexion échoue"),
+        "{texts:?}"
+    );
+}
