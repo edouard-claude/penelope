@@ -7,9 +7,11 @@
 # Vérifie mécaniquement ce qui se mesure : la CI de v1 verte sur son dernier commit
 # (points 1 et 6, le test docs en fait partie), budget.toml sans dette (point 2), les
 # [ca].required tous présents (point 3), le filet de migration sur la dernière 0.17
-# (point 4, sa partie automatique), les scénarios complets (point 7, sa partie
-# budget.toml). Liste chaque critère manquant, puis rappelle ceux qui ne se vérifient
-# qu'à la main (l'essai réel du point 4, les suites réseau du point 5).
+# (point 4, sa partie automatique), les scénarios complets et la couverture (point 7 :
+# budget.toml, puis scripts/coverage-check.sh, une mesure de vingt minutes et plus ;
+# SWITCH_SKIP_COVERAGE=1 la saute, COVERAGE_LCOV=<fichier> relit une mesure déjà
+# faite). Liste chaque critère manquant, puis rappelle ceux qui ne se vérifient qu'à la
+# main (l'essai réel du point 4, les suites réseau du point 5).
 #
 # Sortie : 0 tous les critères mesurables sont remplis, 1 il en manque (l'état normal
 # jusqu'à la bascule), 2 impossible de lire le budget.
@@ -126,12 +128,31 @@ else
     ok "7. [scenarios].missing vide"
 fi
 
+# 7. La couverture (R9) : chaque crate à son plancher, le socle au moins à main.
+if [ "${SWITCH_SKIP_COVERAGE:-0}" = 1 ]; then
+    ko "7. couverture non mesurée (SWITCH_SKIP_COVERAGE=1) : scripts/coverage-check.sh"
+elif ! grep -q '^\[coverage.crates\]' "$BUDGET"; then
+    ko "7. [coverage.crates] absent de budget.toml (R9 pas encore posée)"
+else
+    set +e
+    cov=$(scripts/coverage-check.sh 2>&1)
+    rc=$?
+    set -e
+    under=$(echo "$cov" | awk '$1 == "SOUS" { print $2 }')
+    if [ "$rc" -eq 0 ]; then
+        ok "7. couverture : chaque crate à son plancher, le socle au moins à main"
+    elif [ -n "$under" ]; then
+        ko "7. couverture : $(echo "$under" | wc -l | tr -d ' ') crate(s) sous leur plancher ou sous main, dont $(echo "$under" | head -1) (scripts/coverage-check.sh)"
+    else
+        ko "7. couverture illisible : $(echo "$cov" | tail -1)"
+    fi
+fi
+
 cat << 'EOF'
 À vérifier à la main (hors de ce script) :
   4. essai réel : fusion de v1 dans main, make bump V=1.0.0-rc.1 avec V1_RELEASES=1,
      installation par penelope upgrade --tag sur le MBP, penelope doctor propre, 24 h
   5. suites réseau lancées sur v1, résultats au moins égaux à la ligne de base (T12)
-  7. planchers de couverture de v1 au moins ceux de main au point de fourche (R9)
 EOF
 
 if [ "$missing" -gt 0 ]; then
