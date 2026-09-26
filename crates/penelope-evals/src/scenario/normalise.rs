@@ -70,7 +70,8 @@ pub struct Normaliser {
     note_suffixes: Vec<(String, String)>,
     ulid: Regex,
     marker: Regex,
-    /// Une durée mesurée dans un JSON rendu en texte (résultat d'outil relu par le modèle).
+    /// Une durée mesurée dans un JSON rendu en texte (résultat d'outil relu par le modèle),
+    /// une ou plusieurs fois échappé.
     duration: Regex,
     stamp: Regex,
     hex: Regex,
@@ -95,6 +96,11 @@ impl Normaliser {
             counters: HashMap::new(),
             note_suffixes: Vec::new(),
             marker: Regex::new(r"\b[0-9a-hjkmnp-tv-z]{26}\b").expect("regex marqueur"),
+            duration: Regex::new(&format!(
+                r#"(\\*")({})(\\*":\s*)\d+"#,
+                DURATION_KEYS.join("|")
+            ))
+            .expect("regex durée"),
             duration: Regex::new(&format!(r#""({})":\s*\d+"#, DURATION_KEYS.join("|")))
                 .expect("regex durée"),
             ulid: Regex::new(r"\b(?:([a-z]+)_)?([0-9A-HJKMNP-TV-Z]{26})\b").expect("regex ULID"),
@@ -196,7 +202,7 @@ impl Normaliser {
         }
         let out = self
             .duration
-            .replace_all(&out, r#""$1": "{{ms}}""#)
+            .replace_all(&out, "$1$2$3$1{{ms}}$1")
             .into_owned();
         let stamp = self.stamp.clone();
         let out = stamp
@@ -330,6 +336,11 @@ mod tests {
         assert_eq!(
             n.text("{\n  \"durationMs\": 22,\n  \"exitCode\": 0\n}"),
             "{\n  \"durationMs\": \"{{ms}}\",\n  \"exitCode\": 0\n}"
+        );
+        // Échappée une fois de plus (résultat d'un job rendu dans le résultat de job_wait).
+        assert_eq!(
+            n.text(r#"{"text": "{\"durationMs\": 2014}"}"#),
+            r#"{"text": "{\"durationMs\": \"{{ms}}\"}"}"#
         );
         assert_eq!(v["texte"], "empreinte {{hash}}");
         assert_eq!(v["n"], 3);
