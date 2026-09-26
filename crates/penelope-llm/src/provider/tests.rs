@@ -1,5 +1,6 @@
 use super::*;
 
+mod compat;
 mod server;
 
 /// #142 : un modèle `codex:` n'est servi que par le fournisseur Codex. Sans compte

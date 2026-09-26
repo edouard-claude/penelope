@@ -228,4 +228,62 @@ mod tests {
             "openai_compat"
         );
     }
+
+    struct NoTokens;
+
+    #[async_trait::async_trait]
+    impl TokenSource for NoTokens {
+        async fn token(&self) -> Result<CodexToken> {
+            Err(LlmError::new(LlmErrorKind::Auth, "pas de compte"))
+        }
+        async fn refreshed(&self) -> Result<CodexToken> {
+            self.token().await
+        }
+    }
+
+    /// OpenRouter éteint, serveur local à clé, Codex branché sur l'accès fourni par le
+    /// daemon : chacun n'existe que s'il est activé, et la clé locale est masquée.
+    #[test]
+    fn each_provider_exists_only_when_enabled() {
+        let secrets = MemorySecretStore::with(&[("local_key", "sk-local-abcdef123456")]);
+        let mut cfg = Config::sample(1);
+        cfg.providers.openrouter.enabled = false;
+        cfg.providers.local.enabled = true;
+        cfg.providers.local.api_key = "${SECRET:local_key}".into();
+        cfg.providers.codex.enabled = true;
+        let access = CodexAccess {
+            tokens: std::sync::Arc::new(NoTokens),
+            installation_id: "inst-1".into(),
+            quota_sink: None,
+        };
+        let set = build_providers(&cfg, &secrets, Catalog::new(), Some(access)).unwrap();
+        assert!(set.openrouter.is_none());
+        assert!(set.compat.is_some());
+        assert!(set.codex.is_some());
+        assert!(penelope_observe::redact("clé sk-local-abcdef123456").contains("masqué"));
+
+        // Codex activé sans accès du daemon : pas de fournisseur, pas d'erreur.
+        let set = build_providers(&cfg, &secrets, Catalog::new(), None).unwrap();
+        assert!(set.codex.is_none());
+    }
+
+    #[test]
+    fn routing_value_carries_every_departure_from_the_defaults() {
+        let r = penelope_kernel::config::OpenRouterRouting {
+            allow_fallbacks: false,
+            order: vec!["z-ai".into()],
+            require_parameters: true,
+            only: vec!["z-ai".into(), "groq".into()],
+            quantizations: vec!["fp8".into()],
+            data_collection: "allow".into(),
+            ..Default::default()
+        };
+        let v = routing_value(&r);
+        assert_eq!(v["allow_fallbacks"], false);
+        assert_eq!(v["order"], serde_json::json!(["z-ai"]));
+        assert_eq!(v["require_parameters"], true);
+        assert_eq!(v["only"][1], "groq");
+        assert_eq!(v["quantizations"][0], "fp8");
+        assert!(v.get("data_collection").is_none(), "`allow` est le défaut");
+    }
 }
