@@ -31,9 +31,21 @@ const fn c(
 
 use penelope_kernel::api::method as m;
 
-/// Toutes les commandes du tableau §14.6.
-#[allow(clippy::too_many_lines)] // gel 0.17 : table
+/// Toutes les commandes du tableau §14.6, dans l'ordre du catalogue.
 pub fn all() -> Vec<Command> {
+    [
+        session_commands(),
+        model_commands(),
+        memory_commands(),
+        mcp_and_skill_commands(),
+        workflow_commands(),
+        control_commands(),
+    ]
+    .concat()
+}
+
+/// Session : ouvrir, nommer, rembobiner, arrêter.
+fn session_commands() -> Vec<Command> {
     vec![
         // Session
         c(
@@ -113,6 +125,12 @@ pub fn all() -> Vec<Command> {
             "/stop",
             m::CHAT_STOP,
         ),
+    ]
+}
+
+/// Modèles, puis le sujet, le mode et le foyer de la session, puis les coûts.
+fn model_commands() -> Vec<Command> {
+    vec![
         // Modèles
         c(
             "model",
@@ -163,6 +181,12 @@ pub fn all() -> Vec<Command> {
             "/usage turn",
             m::USAGE,
         ),
+    ]
+}
+
+/// Mémoire.
+fn memory_commands() -> Vec<Command> {
+    vec![
         // Mémoire
         c(
             "audit",
@@ -248,6 +272,12 @@ pub fn all() -> Vec<Command> {
             "/forget s_01J8",
             m::MEM_FORGET,
         ),
+    ]
+}
+
+/// MCP et skills.
+fn mcp_and_skill_commands() -> Vec<Command> {
+    vec![
         // MCP
         c(
             "mcp",
@@ -278,6 +308,12 @@ pub fn all() -> Vec<Command> {
             "/skill rollback revue-de-code",
             m::SKILL_ROLLBACK,
         ),
+    ]
+}
+
+/// Workflows et planification.
+fn workflow_commands() -> Vec<Command> {
+    vec![
         // Workflows
         c("wf", "Workflows", "Liste les workflows", "/wf", m::WF_LIST),
         c(
@@ -309,6 +345,12 @@ pub fn all() -> Vec<Command> {
             "/schedules",
             m::SCHEDULE_LIST,
         ),
+    ]
+}
+
+/// Approbations, système et aide.
+fn control_commands() -> Vec<Command> {
+    vec![
         // HITL
         c(
             "approvals",
