@@ -11,7 +11,7 @@
 //!   `{{ts+600s}}` ou `{{ts+1500ms}}` : l'horloge de test rend l'écart exact ;
 //! - la racine temporaire des services (brute et canonique) devient `{{home}}` ;
 //! - un hachage (clé `*hash*`, `sha256`, `idem_key`, ou 64 hexadécimaux dans un texte)
-//!   devient `{{hash}}` ; une durée mesurée (`duration_ms`) devient `{{ms}}` ;
+//!   devient `{{hash}}` ; une durée mesurée (`duration_ms`, `durationMs`) devient `{{ms}}` ;
 //! - le jeton d'un bouton Telegram (`callback_data`) devient `{{action}}` : il est tiré
 //!   au hasard à chaque envoi ;
 //! - un texte qui répond à un motif `masks` du scénario (mémoire du processus, contrôles
@@ -40,6 +40,8 @@ const HASH_KEYS: &[&str] = &[
 /// Clés mesurées sur l'horloge murale, jamais reproductibles.
 const DURATION_KEYS: &[&str] = &[
     "duration_ms",
+    // Résultat de `shell_exec`.
+    "durationMs",
     "elapsed_ms",
     "latency_ms",
     // Réponses RPC : essai d'un serveur MCP, latences mesurées, instantané de la base.
@@ -251,6 +253,7 @@ mod tests {
             "system_hash": "abc",
             "sha256": "def",
             "duration_ms": 12,
+            "durationMs": 44,
             "texte": format!("empreinte {}", "0".repeat(64)),
             "n": 3,
         }));
@@ -258,6 +261,7 @@ mod tests {
         assert_eq!(v["system_hash"], "{{hash}}");
         assert_eq!(v["sha256"], "{{hash}}");
         assert_eq!(v["duration_ms"], "{{ms}}");
+        assert_eq!(v["durationMs"], "{{ms}}");
         assert_eq!(v["texte"], "empreinte {{hash}}");
         assert_eq!(v["n"], 3);
     }
