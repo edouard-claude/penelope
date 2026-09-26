@@ -635,7 +635,7 @@ impl Core {
         Ok((!block.is_empty()).then_some(block))
     }
     /// Message utilisateur d'un tour avec photos.
-    async fn photo_message(
+    pub(super) async fn photo_message(
         &self,
         text: &str,
         images: &[std::path::PathBuf],
