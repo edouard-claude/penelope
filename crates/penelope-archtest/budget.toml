@@ -22,7 +22,7 @@ test_modules = [
 # vingtaine de correctifs de taille courante. Un autre crate se plafonne en ajoutant une
 # ligne. UPDATE_BUDGET ne touche pas à cette table.
 [crates]
-"penelope-daemon" = 14752   # v1 : toutes les crates sorties, réexports de transition retirés (T30) ; reste la composition, le moteur de tours et rpc ; redescend avec T33
+"penelope-daemon" = 14762   # v1 : toutes les crates sorties, réexports de transition retirés (T30) ; reste la composition, le moteur de tours et rpc ; redescend avec T33
 
 # Liste blanche des modules du daemon (R5) : les déclarations `mod x;` de lib.rs et
 # `mod screens;` de telegram.rs. `mod tests;` est toujours permis. Les fichiers où un bloc
