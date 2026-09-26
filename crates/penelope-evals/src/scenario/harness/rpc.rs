@@ -15,9 +15,10 @@ use super::{HEARTBEAT, Harness, outcome_json};
 use crate::scenario::{McpServer, Observe};
 use anyhow::Context as _;
 use penelope_app::bus::Origin;
+use penelope_app::engine::TurnIntake as _;
 use penelope_app::services::Services;
 use penelope_daemon::rpc::Rpc;
-use penelope_daemon::{Daemon, runner};
+use penelope_daemon::{runner, runtime::Daemon};
 use penelope_kernel::api::{RpcRequest, method};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -54,7 +55,7 @@ impl Harness<'_> {
     pub(super) async fn rpc(&mut self, c: Call<'_>) -> anyhow::Result<Value> {
         let params = self.resolve(serde_json::to_value(c.params)?)?;
         let d = self.daemon()?;
-        let rpc = Rpc::new(d.clone());
+        let rpc = Rpc::new(d.core.clone());
         let req = RpcRequest::new(1, c.method, params);
         let streaming = matches!(c.method, method::CHAT_STREAM | method::TAIL);
         let (done, close) = (AtomicBool::new(false), Notify::new());
