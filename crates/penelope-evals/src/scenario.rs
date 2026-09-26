@@ -598,6 +598,43 @@ fn short(v: &Value) -> String {
 
 /// Compare le monde attendu et obtenu, groupe par groupe (`type`), et nomme la
 /// première divergence.
+/// Le premier chemin JSON où deux valeurs diffèrent, et les deux valeurs à cet endroit.
+fn first_difference(x: &Value, y: &Value, path: String) -> Option<(String, String, String)> {
+    if x == y {
+        return None;
+    }
+    match (x, y) {
+        (Value::Object(a), Value::Object(b)) => {
+            let mut keys: Vec<&String> = a.keys().chain(b.keys()).collect();
+            keys.sort();
+            keys.dedup();
+            for k in keys {
+                let (va, vb) = (
+                    a.get(k).unwrap_or(&Value::Null),
+                    b.get(k).unwrap_or(&Value::Null),
+                );
+                if let Some(d) = first_difference(va, vb, format!("{path}.{k}")) {
+                    return Some(d);
+                }
+            }
+            None
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            for n in 0..a.len().max(b.len()) {
+                let (va, vb) = (
+                    a.get(n).unwrap_or(&Value::Null),
+                    b.get(n).unwrap_or(&Value::Null),
+                );
+                if let Some(d) = first_difference(va, vb, format!("{path}[{n}]")) {
+                    return Some(d);
+                }
+            }
+            None
+        }
+        _ => Some((path, short(x), short(y))),
+    }
+}
+
 pub fn compare_world(name: &str, expected: &[Value], actual: &[Value]) -> Result<(), String> {
     let kind = |v: &Value| v["type"].as_str().unwrap_or("?").to_string();
     let mut kinds: Vec<String> = Vec::new();
@@ -620,9 +657,17 @@ pub fn compare_world(name: &str, expected: &[Value], actual: &[Value]) -> Result
             .unwrap_or(e.len().min(a.len()));
         let exp = e.get(i).map(|v| short(v)).unwrap_or("[absent]".into());
         let act = a.get(i).map(|v| short(v)).unwrap_or("[absent]".into());
+        // Les lignes sont longues et `short` les coupe : on nomme aussi le premier champ
+        // qui diffère, avec ses deux valeurs, pour lire la cause sans rejouer (CI).
+        let at = match (e.get(i), a.get(i)) {
+            (Some(x), Some(y)) => first_difference(x, y, String::new())
+                .map(|(path, x, y)| format!(" ; premier écart en {path} : attendu {x}, obtenu {y}"))
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
         return Err(format!(
             "scénario {name} : {EXPECTED_FILE} diffère ({} n°{} sur {} attendu(s), {} obtenu(s) : \
-             attendu {exp}, obtenu {act}) : le comportement a changé ; si c'est voulu, \
+             attendu {exp}, obtenu {act}{at}) : le comportement a changé ; si c'est voulu, \
              UPDATE_SCENARIOS=1 puis relire le diff",
             group_label(&k),
             i + 1,
@@ -693,6 +738,21 @@ pub fn compare_surface(name: &str, expected: &[Value], actual: &[Value]) -> Resu
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_world_difference_names_its_first_differing_field() {
+        let e = vec![
+            serde_json::json!({"type": "outcome", "result": [{"id": "a", "ok": true}, {"id": "b", "ok": true}]}),
+        ];
+        let a = vec![
+            serde_json::json!({"type": "outcome", "result": [{"id": "a", "ok": true}, {"id": "b", "ok": false}]}),
+        ];
+        let err = compare_world("x", &e, &a).unwrap_err();
+        assert!(
+            err.contains("premier écart en .result[1].ok : attendu true, obtenu false"),
+            "{err}"
+        );
+    }
     use super::*;
     use serde_json::json;
 
