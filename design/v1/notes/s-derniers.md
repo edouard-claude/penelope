@@ -94,3 +94,8 @@ rejoués seuls trois fois : `a_restart_during_a_job_fails_it_and_says_so_without
 (`penelope-daemon`, `tool_jobs_e2e`, déjà relevé par s-rpc) et
 `a_burst_asks_before_answering_and_can_be_ingested` (`penelope-gateway-telegram`).
 Aucun fichier de ces deux crates n'est touché ici : aléas préexistants, à surveiller.
+
+Second lot (modifications du produit et scénarios complets), finales : `cargo fmt --all
+--check` propre ; `cargo clippy --workspace --all-targets -- -D warnings` propre ;
+`cargo test --workspace --no-fail-fast` : 81 suites, 2 140 verts, 0 échec, 20 ignorés.
+`rpc-mise-a-jour` et `rpc-installation-skill` rejoués trois fois sans différence.
