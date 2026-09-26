@@ -13,6 +13,190 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.18
+
+La clôture de la V1 avant la bascule : les critères mesurables de `scripts/switch-check.sh`
+sont tenus. Le moteur de tours sort de `Daemon` (T33) ; plus aucune fonction ni aucun
+fichier au-dessus des plafonds ; la base de la dernière 0.17 (0.17.62) sert de fixture de
+migration ; chaque commande Telegram, outil natif et méthode RPC a un scénario rejouable
+(R10, R11) ; la couverture, comptée en lignes de produit non couvertes, est meilleure que
+sur `main` dans chaque crate (10 968 contre 14 045 au total) ; les suites réseau donnent
+les mêmes résultats sur `v1` et sur `main`. Dix défauts corrigés, dont #219, #220 et #221 ;
+une course réelle des jobs d'outils au redémarrage corrigée ; la suite de scénarios passe
+de 14 minutes à moins de 2.
+
+#### Suites réseau : ligne de base (#208, critère 5)
+
+Lancées le 26/09/2026 sur `v1` et sur `main` 0.17.62 avec une clé OpenRouter de test :
+`live_openrouter` 5/5 des deux côtés, `ctx_recall` réussi des deux côtés,
+`mem_longitudinal` 71 % (seuil 85 %) des deux côtés : un défaut de qualité antérieur à la
+V1, pas une régression. Les sessions de ces suites passent en mode d'approbation `auto`
+(personne ne répond aux cartes pendant une suite réseau).
+
+#### Dix défauts relevés par les tests de la V1 (#208, #219, #220, #221)
+
+- **Mémoire** : « Ignorer » sur une contradiction écarte bien le candidat au lieu de
+  répondre « Déjà tranché » (#219) ; un second refus d'une même demande dit « Déjà
+  tranché ». Un vecteur d'embeddings vide n'est plus gardé en cache ; le texte d'un
+  commentaire HTML jamais fermé n'entre plus en mémoire.
+- **Workflows** : la raison d'un run bloqué est dans `run.error` (`wf status`, écran du
+  run), pas seulement dans l'événement (#220).
+- **Planifications** : pause, reprise et suppression d'un identifiant inconnu répondent
+  « planification inconnue : <id> » (#221).
+- **Approbations** : `echo 'a'; b` est dit composé par `;` ; une règle sur un fichier à
+  la racine se lit « à la racine de l'espace de travail ».
+- **Cohérence** : `::1`, fc00::/7 et fe80::/10 sont reconnus privés dans
+  `tools.http_allowlist`.
+- **Outils à la demande** : deux lectures parallèles ne perdent plus de promotion.
+- **`chat.stream`** : plus de notification `done` en trop avant la réponse finale.
+
+#### Tests fiables sous charge, scénarios huit fois plus rapides (#208)
+
+- **Un job d'outil perdu au redémarrage le reste** : si sa tâche conclut quand même
+  (processus orphelin tué par la reprise), l'effet du ledger n'est réécrit que s'il est
+  encore `dispatching`. Avant, un effet `failed` pouvait redevenir `completed` derrière
+  un job `failed`. `tool_jobs_e2e` échouait une fois sur deux sous charge.
+- **Trois tests ne parient plus sur des durées** : la rafale Telegram (fenêtre de 40 ms
+  dépassée sous charge), le steering (message et arrêt déposés pendant l'appel au lieu
+  de 100 ms après le départ). Chacun passe 50 fois de suite sous charge.
+- **La suite `scenarios` passe de 832 s à 101 s** : la fermeture d'une vie comptait mal
+  les copies des services tenues par le daemon et attendait cinq secondes à chaque vie.
+- **Quatorze fonctions mortes retirées** (context, llm, mcp, memory, tools, workflow),
+  et la structure `ToolContext`, sans usage.
+
+#### Moteur : les surfaces tiennent le cœur du daemon et passent par trois ports (#208, T33)
+
+Le moteur de tours expose trois ports dans `penelope_app::engine` : `TurnIntake`,
+`SessionModels` et `Transcriber` (T33). Le daemon se scinde en `Core`, l'état partagé et
+les ports, et `Daemon`, le processus (reprise, boucles, tours). Le RPC, la passerelle
+Telegram, les contextes de l'orchestrateur et de la compaction et la livraison des jobs
+d'outils tiennent le cœur ; plus aucun module du daemon hors de ses quatre fichiers de
+composition ne nomme `Daemon`. `engine.rs` passe de 1 065 à 485 lignes
+(`engine/intake.rs`, `models.rs`, `media.rs`, `admin.rs`) et sort de la liste de
+référence du gel, qui est vide ; `execute_turn` perd son `allow(too_many_lines)`. Aucun
+comportement ne change.
+
+#### Fonctions trop longues : dix-neuf découpes (#208)
+
+Les dix-neuf fonctions qui dépassaient le seuil de 200 lignes de clippy sous un
+`#[allow(clippy::too_many_lines)]` du gel 0.17, hors moteur de tours, sont découpées par
+étapes nommées, sans changement de comportement : purge d'une session, validation de la
+configuration, statut de soi, classement des updates, catalogues de commandes et de
+gabarits, workflow `ticket-to-deploy`, routage de la CLI, étape `verify`, boucle d'agent,
+application et passe de consolidation du rêve, passerelle Telegram (message, clic,
+opérations d'écran), et quatre tests de scénario. `[lints].allow_too_many_lines` descend
+de 20 à 1 ; le dernier, `engine.rs`, part avec la refonte du moteur (T33).
+
+#### Clôture du gel : fixture 0.17.62, R10, R11 (#208)
+
+- **La dernière 0.17 dans le filet de migration** : `penelope-0.17.62.db` (221 184 octets,
+  19 migrations), produite par le code du tag `v0.17.62` et non par v1. Les tests de
+  migration et de scellement rejouent la 0.17.59 et la 0.17.62 et exigent les deux ;
+  `verify` sans divergence, chaîne vérifiée.
+- **R10, chaque surface visible a un scénario** : archtest lit les commandes Telegram, les
+  outils natifs et les méthodes RPC dans le code, et ce que les scénarios rejouables jouent
+  vraiment. Une surface nouvelle sans scénario fait échouer
+  `every_visible_surface_has_a_scenario` ; ce qui manque au départ est inscrit dans
+  `budget.toml` `[scenarios].missing` (213 sur 219), liste qui ne fait que rétrécir.
+- **R11, dans le même lot** : `scripts/check-budget.sh` refuse une plage qui touche un
+  catalogue de surfaces sans toucher `crates/penelope-evals/scenarios/`, sauf trailer
+  `Sans-scénario: <raison>`.
+
+#### Les méthodes RPC rejouées par des scénarios (#208, critère 7)
+
+- **Étape `rpc` des scénarios** : une méthode appelée comme la socket locale la sert
+  (`chat.stream` et `tail` compris), les tours qu'elle met en file joués pendant
+  qu'elle attend, la réponse normalisée dans le monde attendu ; `bind` et `$nom.chemin`
+  enchaînent les appels, `pick`, `mask` et `lines` écartent ce qui dépend de la
+  machine, `error = true` attend un refus. `[[observe]]` relève une table après le run,
+  `[[mcp_servers]]` branche le vrai superviseur MCP sur un connecteur de test.
+- **Douze scénarios par famille** (sessions, configuration et modèles, approbations,
+  planifications, workflows, mémoire, vault et accueil, conversation, MCP et import
+  Hermes, skills, exploitation, arrêt) : 104 méthodes sur 108 exercées et assertées sur
+  le monde après. Restent `doctor`, `mcp.auth`, `skill.install` et `upgrade`, qui
+  demandent la machine ou le réseau réels.
+- La version du workspace est normalisée dans les attendus : un bump n'en réécrit
+  aucun.
+
+#### Scénarios des outils natifs (#208, critère 7)
+
+- **Chaque outil natif a un scénario rejouable sans clé** : dix-sept scénarios, un par
+  famille (fichiers et shell, mémoire, skills, soi, garde http, workflows et runs,
+  historique et résumés, question, planification, canal, git, jobs, sous-agent, images).
+  Chacun asserte l'effet dans le monde : fichier corrigé, carte demandée, préférence
+  retenue puis oubliée, rappel créé puis supprimé, commit refusé par un crochet, job
+  annulé, run annulé, image envoyée. `[scenarios].missing` ne liste plus aucun outil.
+- **Le moteur de scénarios** branche l'orchestrateur à chaque vie, offre un canal simulé
+  (`messenger = true`, envois relevés en lignes `sent`), laisse le script citer un
+  identifiant créé pendant le run (`{{id:<préfixe>:<n>}}`, échec clair s'il manque), et
+  normalise les durées de `shell_exec`, les ULID à préfixe court, le marqueur du juge des
+  commandes et le fichier de notes de session.
+
+#### Les commandes Telegram ont leurs scénarios rejouables (#208, critère 7)
+
+- **Étape `telegram`** des scénarios : une commande, un message ou un clic du
+  propriétaire passe par la vraie passerelle sur un transport simulé ; les écrans
+  envoyés (texte, boutons), les réactions et les tours joués entrent dans les attendus.
+  Les jetons de boutons deviennent `{{action}}`, et un scénario peut masquer un texte
+  propre à l'hôte (`masks`).
+- **Sept scénarios** couvrent les 46 commandes qui n'en avaient pas : système,
+  sessions, réglages (épinglage vérifié sur l'appel suivant), approbations (carte, clic,
+  reprise, règle), mémoire (retenir, retrouver, oublier), workflows, extensions.
+  `[scenarios].missing` ne contient plus aucune commande.
+
+#### Les dernières méthodes RPC rejouées par des scénarios (#208, critère 7)
+
+- **Faux serveur HTTP local des scénarios** (`[[http]]`) : ce qu'une méthode va chercher
+  sur le réseau lui est servi depuis 127.0.0.1, les requêtes reçues relevées dans le
+  monde ; l'étape `open` joue le navigateur du propriétaire, `without` retire d'une
+  réponse ce qui décrit l'hôte.
+- `doctor`, `mcp.auth` (parcours OAuth complet : découverte, enregistrement, PKCE,
+  échange du code), `upgrade` (« à jour » et « mise à jour disponible » contre une
+  source locale, rien de remplacé) et `skill.install` (dépôt servi en local, skill
+  posée) ont leur scénario : plus aucune surface RPC sans scénario.
+- **`penelope upgrade --check` marche sous Linux** : la vérification dit la dernière
+  version sans exiger l'archive de l'OS, qui n'est cherchée qu'à l'installation.
+- **`skills.archive_base_url`** : l'origine des archives de `penelope skill install`
+  (défaut `https://codeload.github.com`), HTTPS ou boucle locale seulement ; un miroir
+  devient possible.
+
+#### Scénario du diagnostic stable en CI (#208)
+
+Le scénario `rpc-diagnostic` compare une liste explicite des contrôles de `doctor` propres
+à Pénélope (nouveau filtre `only` de l'étape `rpc`) au lieu de retirer ce qui décrit
+l'hôte : le contrôle `voice`, qui cherche `ffmpeg`, faisait échouer la CI de `v1` sur les
+runners qui ne l'ont pas.
+
+#### La couverture du socle au niveau de main, et ses plafonds (#208, critère 7, R9)
+
+La couverture des crates socle de v1 semblait avoir baissé depuis le point de fourche
+(86,6 % contre 88,3 % pour le workspace). C'était surtout un effet de mesure : R1 a sorti
+les tests inline vers des fichiers `tests.rs`, que `cargo-llvm-cov` ne compte pas, et ces
+lignes couvertes ont quitté le dénominateur. Le reste venait de code découpé ou descendu
+sans ses tests. Des tests de comportement comblent l'écart crate par crate : fournisseurs
+OpenAI-compatibles contre un faux serveur, recherche hybride MCP, chaque refus de la
+validation de configuration et de workflow, écarts de `history verify`, index FTS5
+irréparable. Le critère compte les lignes de produit non couvertes par crate, qui ne
+dépendent pas de l'endroit où vivent les tests : `budget.toml` porte le relevé de main
+(`[coverage.main]`) et un plafond par crate qui ne monte jamais (`[coverage.uncovered]`).
+`scripts/coverage-check.sh` mesure et compare ; `switch-check.sh` l'appelle pour le
+critère 7.
+
+#### Couverture des crates sorties du daemon (#208, critère 7)
+
+- Les crates extraites du daemon repassent au-dessus du niveau du daemon de `main`
+  (86,3 %) : passerelle Telegram 87,9 %, ops 87,0 %, orchestrateur 87,4 %, hôte MCP
+  89,1 %, rêve 87,8 % ; le workspace passe de 86,6 % à 89,2 % (88,3 % sur `main`).
+- La baisse venait du dénominateur : les tests en ligne de `main` comptaient comme lignes
+  couvertes, rangés dans `tests/` ils ne comptent plus. Les tests ajoutés vivent tous dans
+  des fichiers de tests.
+- Cent vingt-six tests, sans changement de comportement : écrans cliquables de Telegram,
+  démarrage de la passerelle, contrôles de `doctor`, connexion Codex, sauvegardes,
+  contrôle des runs, attentes, OAuth local, contradictions de la mémoire.
+- Quatre défauts relevés et consignés dans `design/v1/notes/c-extraites.md`, dont
+  « Ignorer » une contradiction depuis Telegram qui répond « Déjà tranché » sans écarter
+  le candidat.
+
 ### 1.0.0-alpha.17
 
 **Le journal est la seule source de la conversation** (décision 0017) : plus aucune
