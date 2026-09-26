@@ -118,35 +118,7 @@ impl TurnIntake for Core {
     }
 
     async fn chat_session_for(&self, origin: &Origin) -> anyhow::Result<String> {
-        let s = &self.services;
-        match origin {
-            Origin::Telegram {
-                chat_id, topic_id, ..
-            } => {
-                if let Some(sess) = s.sessions.find_by_topic(*chat_id, *topic_id).await? {
-                    return Ok(sess.id.to_string());
-                }
-                let sess = s.sessions.create(SessionKind::Chat, None).await?;
-                s.sessions
-                    .bind_telegram(sess.id.as_str(), *chat_id, *topic_id)
-                    .await?;
-                Ok(sess.id.to_string())
-            }
-            _ => {
-                if let Some(id) = s.kv_get("cli.session").await?
-                    && let Some(sess) = s.sessions.get(&id).await?
-                    && sess.state == "active"
-                {
-                    return Ok(id);
-                }
-                let sess = s
-                    .sessions
-                    .create(SessionKind::Chat, Some("CLI".into()))
-                    .await?;
-                s.kv_set("cli.session", sess.id.as_str()).await?;
-                Ok(sess.id.to_string())
-            }
-        }
+        chat_session(&self.services, origin).await
     }
 }
 
@@ -510,6 +482,42 @@ impl Daemon {
         )
         .await;
         outcome
+    }
+}
+
+/// Session de chat active d'un canal ; créée au besoin. Elle reste dans engine.rs : la
+/// liaison de session nomme encore le canal (`[channel.allowed]`) jusqu'à T37.
+async fn chat_session(
+    s: &penelope_app::services::Services,
+    origin: &Origin,
+) -> anyhow::Result<String> {
+    match origin {
+        Origin::Telegram {
+            chat_id, topic_id, ..
+        } => {
+            if let Some(sess) = s.sessions.find_by_topic(*chat_id, *topic_id).await? {
+                return Ok(sess.id.to_string());
+            }
+            let sess = s.sessions.create(SessionKind::Chat, None).await?;
+            s.sessions
+                .bind_telegram(sess.id.as_str(), *chat_id, *topic_id)
+                .await?;
+            Ok(sess.id.to_string())
+        }
+        _ => {
+            if let Some(id) = s.kv_get("cli.session").await?
+                && let Some(sess) = s.sessions.get(&id).await?
+                && sess.state == "active"
+            {
+                return Ok(id);
+            }
+            let sess = s
+                .sessions
+                .create(SessionKind::Chat, Some("CLI".into()))
+                .await?;
+            s.kv_set("cli.session", sess.id.as_str()).await?;
+            Ok(sess.id.to_string())
+        }
     }
 }
 
