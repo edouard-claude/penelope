@@ -3,7 +3,6 @@ use super::*;
 /// #165 : la session technique d'un run n'a pas de sujet ; la destination de la
 /// carte doit survivre au clic, même si le callback ne répète pas le thread id.
 #[tokio::test]
-#[allow(clippy::too_many_lines)] // gel 0.17 : scénario de test bout en bout
 async fn workflow_approval_confirmation_stays_in_the_cards_topic() {
     let (dir, g, t, _p) = gateway().await;
     let s = &g.daemon.services;
@@ -26,20 +25,7 @@ async fn workflow_approval_confirmation_stays_in_the_cards_topic() {
     .unwrap();
     let session = s.sessions.get(&run.session_id).await.unwrap().unwrap();
     assert_eq!((session.tg_chat_id, session.tg_topic_id), (None, None));
-    let approval = s
-        .approvals
-        .create(
-            penelope_hitl::ApprovalKind::ToolCall,
-            "fs_write",
-            penelope_kernel::risk::RiskClass::Write,
-            json!({"tool": "fs_write", "arguments": {"path": "note.txt", "content": "ok"}}),
-            vec!["Autoriser".into(), "Refuser".into()],
-            Some(&run.session_id),
-            Some(&run.id),
-            false,
-        )
-        .await
-        .unwrap();
+    let approval = fs_write_approval(s, "note.txt", "ok", &run.session_id, &run.id).await;
     g.send_approval_card(group, Some(topic), &approval)
         .await
         .unwrap();
@@ -107,22 +93,14 @@ async fn workflow_approval_confirmation_stays_in_the_cards_topic() {
     )
     .await
     .unwrap();
-    let second_approval = g2
-        .daemon
-        .services
-        .approvals
-        .create(
-            penelope_hitl::ApprovalKind::ToolCall,
-            "fs_write",
-            penelope_kernel::risk::RiskClass::Write,
-            json!({"tool": "fs_write", "arguments": {"path": "other.txt", "content": "x"}}),
-            vec!["Autoriser".into(), "Refuser".into()],
-            Some(&second.session_id),
-            Some(&second.id),
-            false,
-        )
-        .await
-        .unwrap();
+    let second_approval = fs_write_approval(
+        &g2.daemon.services,
+        "other.txt",
+        "x",
+        &second.session_id,
+        &second.id,
+    )
+    .await;
     t2.clear().await;
     g2.send_approval_card(group, Some(second_topic), &second_approval)
         .await
@@ -179,22 +157,14 @@ async fn workflow_approval_confirmation_stays_in_the_cards_topic() {
         ApprovalState::Denied
     );
 
-    let reason_approval = g2
-        .daemon
-        .services
-        .approvals
-        .create(
-            penelope_hitl::ApprovalKind::ToolCall,
-            "fs_write",
-            penelope_kernel::risk::RiskClass::Write,
-            json!({"tool": "fs_write", "arguments": {"path": "reason.txt", "content": "x"}}),
-            vec!["Autoriser".into(), "Refuser".into()],
-            Some(&second.session_id),
-            Some(&second.id),
-            false,
-        )
-        .await
-        .unwrap();
+    let reason_approval = fs_write_approval(
+        &g2.daemon.services,
+        "reason.txt",
+        "x",
+        &second.session_id,
+        &second.id,
+    )
+    .await;
     t2.clear().await;
     g2.send_approval_card(group, Some(second_topic), &reason_approval)
         .await
@@ -225,6 +195,29 @@ async fn workflow_approval_confirmation_stays_in_the_cards_topic() {
             .unwrap(),
         None
     );
+}
+
+/// Une demande d'écriture `fs_write` rattachée à un run, boutons Autoriser et Refuser.
+async fn fs_write_approval(
+    s: &penelope_app::services::Services,
+    path: &str,
+    content: &str,
+    session_id: &str,
+    run_id: &str,
+) -> penelope_hitl::ApprovalRequest {
+    s.approvals
+        .create(
+            penelope_hitl::ApprovalKind::ToolCall,
+            "fs_write",
+            penelope_kernel::risk::RiskClass::Write,
+            json!({"tool": "fs_write", "arguments": {"path": path, "content": content}}),
+            vec!["Autoriser".into(), "Refuser".into()],
+            Some(session_id),
+            Some(run_id),
+            false,
+        )
+        .await
+        .unwrap()
 }
 
 #[tokio::test]
