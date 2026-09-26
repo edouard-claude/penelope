@@ -149,8 +149,99 @@ pub(super) fn verifier_prompt(
     )
 }
 
+/// Le pas enfant d'un contrôle : un shell, un outil, ou les tests du projet.
+fn check_step(
+    step: &Step,
+    i: usize,
+    check: &Value,
+    kind: &str,
+    project_dir: &str,
+    project_command: &str,
+) -> Step {
+    let mut child = Step {
+        id: format!("{}-check-{}", step.id, i + 1),
+        kind: kind.to_string(),
+        command: check.get("command").cloned().unwrap_or(Value::Null),
+        cwd: check
+            .get("cwd")
+            .and_then(|c| c.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        tool: check
+            .get("tool")
+            .and_then(|t| t.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        args: check.get("args").cloned().unwrap_or(Value::Null),
+        ..Default::default()
+    };
+    // Les tests du projet, pas ceux de Pénélope (issue #137) : le répertoire et la
+    // commande déclarés par le plan (`project.dir`, `project.test_command`), sinon la
+    // commande déduite du dépôt (Makefile, Cargo.toml, package.json, go.mod).
+    if kind == "project_tests" {
+        // Même politique, approbation et sandbox qu'un shell_exec du builder.
+        child.kind = "tool".into();
+        child.tool = "shell_exec".into();
+        child.args = json!({"command": project_command, "cwd": project_dir});
+    }
+    child
+}
+
+/// Le commit présent dans le dépôt du projet, s'il y en a un.
+async fn repository_head(project_dir: &str) -> Option<String> {
+    if project_dir.is_empty() {
+        None
+    } else {
+        tokio::process::Command::new("git")
+            .args(["-C", project_dir, "rev-parse", "HEAD"])
+            .output()
+            .await
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+    }
+}
+
+/// Les preuves déclarées par le contrat (PR, CI), bornées en nombre et en taille.
+fn evidence_references(metadata: &Value) -> Vec<Value> {
+    metadata["verification"]["evidence"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(16)
+        .filter(|e| e["kind"].is_string() && e["ref"].is_string())
+        .map(|e| {
+            json!({
+                "kind": limited_text(&e["kind"], 32),
+                "ref": limited_text(&e["ref"], 512),
+                "sha": e["sha"].as_str().map(|_| limited_text(&e["sha"], 64)),
+            })
+        })
+        .collect()
+}
+
+/// Reporte sur les critères le statut et la note que le vérificateur leur donne.
+fn mark_criteria(v: &Value, criteria: &mut [Value]) {
+    for item in v["criteres"].as_array().cloned().unwrap_or_default() {
+        let Some(i) = item["index"].as_u64().map(|i| i as usize) else {
+            continue;
+        };
+        if let Some(c) = criteria.get_mut(i).and_then(|c| c.as_object_mut()) {
+            let status = if item["statut"].as_str() == Some("passed") {
+                "passed"
+            } else {
+                "failed"
+            };
+            c.insert("status".into(), json!(status));
+            if let Some(note) = item["note"].as_str() {
+                c.insert("note".into(), json!(note));
+            }
+        }
+    }
+}
+
 /// `verify` : contrôles puis vérificateur ; met à jour les critères.
-#[allow(clippy::too_many_lines)] // gel 0.17 : lot G (workflow/steps/verify.rs)
 pub(super) async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     let s = ctx.s();
     let step = ctx.step;
@@ -165,32 +256,7 @@ pub(super) async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome
             .and_then(|t| t.as_str())
             .unwrap_or("shell")
             .to_string();
-        let mut child = Step {
-            id: format!("{}-check-{}", step.id, i + 1),
-            kind: kind.clone(),
-            command: check.get("command").cloned().unwrap_or(Value::Null),
-            cwd: check
-                .get("cwd")
-                .and_then(|c| c.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            tool: check
-                .get("tool")
-                .and_then(|t| t.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            args: check.get("args").cloned().unwrap_or(Value::Null),
-            ..Default::default()
-        };
-        // Les tests du projet, pas ceux de Pénélope (issue #137) : le répertoire et la
-        // commande déclarés par le plan (`project.dir`, `project.test_command`), sinon la
-        // commande déduite du dépôt (Makefile, Cargo.toml, package.json, go.mod).
-        if kind == "project_tests" {
-            // Même politique, approbation et sandbox qu'un shell_exec du builder.
-            child.kind = "tool".into();
-            child.tool = "shell_exec".into();
-            child.args = json!({"command": project_command, "cwd": project_dir});
-        }
+        let child = check_step(step, i, check, &kind, &project_dir, &project_command);
         // Une vérification qui expire n'emporte pas les suivantes (issue #56).
         let child_cancel = ctx.cancel.child();
         let child_ctx = StepCtx {
@@ -225,32 +291,8 @@ pub(super) async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome
     // Une preuve de CI n'a de sens que pour le commit présent dans le dépôt. Lire le
     // SHA ici, après les contrôles, interdit qu'un ancien lien vert valide une révision
     // différente. Les références restent des pistes à examiner, jamais un verdict.
-    let head = if project_dir.is_empty() {
-        None
-    } else {
-        tokio::process::Command::new("git")
-            .args(["-C", &project_dir, "rev-parse", "HEAD"])
-            .output()
-            .await
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-    };
-    let references: Vec<Value> = metadata["verification"]["evidence"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .take(16)
-        .filter(|e| e["kind"].is_string() && e["ref"].is_string())
-        .map(|e| {
-            json!({
-                "kind": limited_text(&e["kind"], 32),
-                "ref": limited_text(&e["ref"], 512),
-                "sha": e["sha"].as_str().map(|_| limited_text(&e["sha"], 64)),
-            })
-        })
-        .collect();
+    let head = repository_head(&project_dir).await;
+    let references = evidence_references(&metadata);
     let missing_sha = references
         .iter()
         .any(|e| requires_current_sha(e) && !e["sha"].is_string());
@@ -366,22 +408,7 @@ pub(super) async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome
                         _ => Some("criterion_failed"),
                     };
                 }
-                for item in v["criteres"].as_array().cloned().unwrap_or_default() {
-                    let Some(i) = item["index"].as_u64().map(|i| i as usize) else {
-                        continue;
-                    };
-                    if let Some(c) = criteria.get_mut(i).and_then(|c| c.as_object_mut()) {
-                        let status = if item["statut"].as_str() == Some("passed") {
-                            "passed"
-                        } else {
-                            "failed"
-                        };
-                        c.insert("status".into(), json!(status));
-                        if let Some(note) = item["note"].as_str() {
-                            c.insert("note".into(), json!(note));
-                        }
-                    }
-                }
+                mark_criteria(&v, &mut criteria);
                 verdict = v;
             }
             Err(e) => {
