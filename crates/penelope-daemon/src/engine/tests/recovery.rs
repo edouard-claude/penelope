@@ -296,8 +296,9 @@ async fn an_uncertain_effect_ignored_is_not_rerun() {
     let (_d, s, p, sid, conv, approval) = crashed_push().await;
     let e = exec(false);
     let loop_ = AgentLoop::new(crate::agent::services_of(&s), p.clone());
-    let decided = loop_.decide_approval(&approval, &Decision::deny("telegram", None));
-    assert_eq!(decided.await.unwrap(), penelope_agent::Decided::Denied);
+    let deny = Decision::deny("telegram", None);
+    let decided = loop_.decide_approval(&approval, &deny).await.unwrap();
+    assert_eq!(decided, penelope_agent::Decided::Denied);
     p.reply("compris");
     loop_
         .run_conversation(&spec(&sid), &conv, &e, &NullSink)
