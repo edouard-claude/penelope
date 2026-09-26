@@ -41,6 +41,7 @@ pub(crate) struct Folded {
     prefix: Sealed,
     offset: i64,
     owners: BTreeMap<i64, Owner>,
+    sealed_seq: i64,
     folding: Folding,
     used: u64,
 }
@@ -71,6 +72,7 @@ impl Folded {
             prefix: lineage.prefix,
             offset: lineage.offset,
             owners: lineage.owners,
+            sealed_seq: lineage.sealed_seq,
             folding,
             used: 0,
         }))
@@ -100,7 +102,7 @@ impl Folded {
 
     /// Numéro de ligne de chaque adresse de message (`Lineage::row_seqs`).
     pub(crate) fn row_seqs(&self) -> BTreeMap<i64, i64> {
-        row_seqs(&self.owners, self.surface())
+        row_seqs(&self.owners, self.surface(), self.sealed_seq)
     }
 }
 

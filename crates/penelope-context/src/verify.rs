@@ -14,8 +14,9 @@
 //!   le `conv.rewind` de sa mère a coupés (`archive`) ;
 //! - les contextes figés qu'une fille de fork hérite ne sont pas recopiés par la V0 : ils
 //!   ne sont pas attendus (voir [`crate::replay`]) ;
-//! - un retour arrière qui coupe dans le préfixe scellé en retire des lignes : l'empreinte
-//!   n'est plus vérifiable, la session le dit (`notes`).
+//! - un retour arrière qui coupe dans le préfixe scellé masque ses lignes sans les
+//!   effacer (`sealed = 2`) : elles sont attendues masquées, contextes compris, et
+//!   l'empreinte reste vérifiable.
 
 use crate::replay::{Expected, Lineage, ReplayError, archive_expected, archive_of};
 use crate::store::{HistoryStore, deserialise_content, serialise_content};
@@ -100,6 +101,8 @@ struct TableRow {
     compacted: bool,
     event_id: Option<i64>,
     sealed: bool,
+    /// Ligne scellée masquée par une coupe (`sealed = 2`).
+    masked: bool,
 }
 
 fn table_rows(c: &Connection, sid: &str) -> rusqlite::Result<Vec<TableRow>> {
@@ -126,6 +129,7 @@ fn table_rows(c: &Connection, sid: &str) -> rusqlite::Result<Vec<TableRow>> {
             compacted: r.get::<_, i64>(9)? != 0,
             event_id: r.get(10)?,
             sealed: r.get::<_, i64>(11)? != 0,
+            masked: r.get::<_, i64>(11)? == 2,
         })
     })?;
     rows.collect()
@@ -244,7 +248,27 @@ impl Checker {
             .map(|(i, r)| (r.seq, i))
             .collect();
         let mut matched: BTreeMap<usize, i64> = BTreeMap::new();
-        for row in rows {
+        for row in rows.iter().filter(|r| r.masked) {
+            if !expected.masked.contains(&row.seq) {
+                self.diverge(
+                    None,
+                    Some(row.seq),
+                    "extra_row",
+                    "ligne masquée qu'aucune coupe du préfixe scellé ne retire".into(),
+                );
+            }
+        }
+        for seq in &expected.masked {
+            if !rows.iter().any(|r| r.masked && r.seq == *seq) {
+                self.diverge(
+                    None,
+                    Some(*seq),
+                    "missing_row",
+                    "ligne scellée coupée : attendue masquée".into(),
+                );
+            }
+        }
+        for row in rows.iter().filter(|r| !r.masked) {
             let hit = match (row.event_id, row.sealed) {
                 (Some(id), _) => by_event.get(&id),
                 (None, true) => by_seq.get(&row.seq),
@@ -510,11 +534,7 @@ fn expected_in(
     }
     if let crate::replay::Origin::Import(b) = &lineage.origin {
         let (import, legacy) = b.as_ref();
-        if lineage.cuts_sealed_prefix() {
-            check
-                .notes
-                .push("retour arrière dans le préfixe scellé : empreinte non vérifiable".into());
-        } else if legacy.digest() != import.digest {
+        if legacy.digest() != import.digest {
             check.divergences.push(Divergence {
                 session: sid.to_string(),
                 node: None,

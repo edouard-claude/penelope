@@ -202,8 +202,8 @@ async fn a_summary_extending_a_sealed_one_verifies_clean() {
 /// depuis le journal de sa mère, lignes scellées recopiées avec leur drapeau : le
 /// scellement du démarrage suivant ne la prend pas pour une session 0.17.
 ///
-/// La mère, elle, ne se replie plus : la coupe a retiré des lignes que son `conv.import`
-/// compte (défaut antérieur à T16, relevé dans `design/v1/notes/i-retrait.md`).
+/// La mère garde ses lignes coupées, masquées : son `conv.import` les compte toujours et
+/// elle se replie (`i-rewind-scelle`, défaut relevé dans `design/v1/notes/i-retrait.md`).
 #[tokio::test]
 async fn an_archive_cut_inside_the_sealed_prefix_keeps_its_sealed_rows() {
     let w = world().await;
@@ -230,4 +230,6 @@ async fn an_archive_cut_inside_the_sealed_prefix_keeps_its_sealed_rows() {
     );
     let report = w.history().seal_legacy().await.unwrap();
     assert!(report.sealed.is_empty(), "{:?}", report.sealed);
+    let report = w.history().verify(None, None).await.unwrap();
+    assert!(report.ok, "{:#?}", report.divergences);
 }

@@ -25,6 +25,13 @@
 //! changerait sans rien changer au contenu ; au scellement, il est porté par
 //! `lcm_active`, et la relecture le recalcule par couverture, comme la projection V0
 //! (`conversation.rs`, qui repart après la fin du dernier résumé).
+//!
+//! **Le préfixe scellé est une vérité, pas un cache.** Un retour arrière qui coupe dans
+//! le préfixe n'efface pas ses lignes : il les masque (`sealed = 2`), contextes figés
+//! gardés, et la coupe de son `conv.rewind` s'applique par-dessus au pliage. Le
+//! `conv.import` compte toujours ses lignes et son empreinte les couvre toujours
+//! (`i-rewind-scelle`). Une ligne masquée ne se lit plus comme un message de la session
+//! (`HistoryStore::load`, `tail`, la recherche) ; elle ne se relit qu'ici.
 
 use super::*;
 use crate::derive::{Sealed, SealedSummary};
@@ -159,7 +166,8 @@ impl LegacyPrefix {
         Sealed::import(entries, self.contexts.clone(), self.active.clone())
     }
 
-    /// Les lignes d'une session : V0 à sceller (`sealed = false`) ou déjà scellées.
+    /// Les lignes d'une session : V0 à sceller (`sealed = false`) ou déjà scellées,
+    /// masquées par un retour arrière comprises.
     fn read_rows(
         c: &Connection,
         sid: &str,
@@ -168,7 +176,7 @@ impl LegacyPrefix {
         let sql = if sealed {
             "SELECT seq, role, content, tool_call_id, tool_name, tokens_est, ts, episode,
                     eager, artifact_id, compacted
-             FROM messages WHERE session_id = ?1 AND sealed = 1 ORDER BY seq"
+             FROM messages WHERE session_id = ?1 AND sealed != 0 ORDER BY seq"
         } else {
             "SELECT seq, role, content, tool_call_id, tool_name, tokens_est, ts, episode,
                     eager, artifact_id, compacted
@@ -389,4 +397,19 @@ pub(crate) fn sealed_prefix_in(
             active,
         },
     )))
+}
+
+/// Dernière adresse du préfixe scellé de la session elle-même (l'`offset` de son
+/// `conv.import`), 0 sans scellement : les lignes scellées jusque-là sont masquées par une
+/// coupe, pas effacées. Les lignes scellées d'une fille de fork ou d'une archive sont des
+/// copies : elles s'effacent.
+pub(crate) fn sealed_offset_in(c: &Connection, sid: &str) -> penelope_store::Result<i64> {
+    Ok(c.query_row(
+        "SELECT COALESCE(json_extract(payload, '$.surface.offset'), 0) FROM events
+         WHERE session_id = ?1 AND kind = ?2 ORDER BY seq LIMIT 1",
+        params![sid, KIND_IMPORT],
+        |r| r.get(0),
+    )
+    .optional()?
+    .unwrap_or(0))
 }

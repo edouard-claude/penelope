@@ -237,6 +237,7 @@ impl HistoryStore {
                            JOIN messages m ON m.id = f.msg_id
                            WHERE messages_fts MATCH ?1
                              AND (?2 IS NULL OR m.session_id = ?2)
+                             AND m.sealed != 2
                            ORDER BY rank LIMIT ?3";
                 let mut st = c.prepare(sql)?;
                 let rows = st.query_map(params![q, sid, limit], |r| {

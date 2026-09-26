@@ -29,6 +29,7 @@ use crate::lcm::{NodeWrite, insert_leaf_in, replace_in};
 use crate::replay::{
     Expected, Lineage, Origin, ReplayError, archive_expected, archive_of, session_events,
 };
+use crate::store::seal::sealed_offset_in;
 use crate::store::{HistoryStore, mark_compacted_in, origin_in, serialise_content};
 use penelope_kernel::event::Event;
 use penelope_kernel::ids::NodeId;
@@ -359,8 +360,9 @@ pub(crate) fn apply_in(
                     .map(|(_, s)| s)
                     .collect()
             };
+            let sealed = sealed_offset_in(tx, sid)?;
             for seq in doomed {
-                delete_row(tx, sid, seq)?;
+                cut_row(tx, sid, seq, sealed)?;
             }
             Applied::Done
         }
@@ -409,6 +411,25 @@ fn ensure_snapshots_of(tx: &Transaction<'_>, sid: &str) -> penelope_store::Resul
         if let Ok(Some(ConvEvent::System(p))) = ConvEvent::decode(&ev.kind, &ev.payload) {
             ensure_snapshot(tx, &p, &ev.ts)?;
         }
+    }
+    Ok(())
+}
+
+/// Retire une ligne coupée ; celle du préfixe scellé de la session (`sealed_seq`, son
+/// dernier numéro) est masquée, entrée plein texte et contexte figé gardés (`store::seal`).
+fn cut_row(
+    tx: &Transaction<'_>,
+    sid: &str,
+    seq: i64,
+    sealed_seq: i64,
+) -> penelope_store::Result<()> {
+    let masked = tx.execute(
+        "UPDATE messages SET sealed = 2
+         WHERE session_id = ?1 AND seq = ?2 AND seq <= ?3 AND sealed != 0",
+        params![sid, seq, sealed_seq],
+    )?;
+    if masked == 0 {
+        delete_row(tx, sid, seq)?;
     }
     Ok(())
 }
@@ -554,10 +575,16 @@ fn write_plan(
         "DELETE FROM message_context WHERE session_id = ?1 AND seq > ?2",
         params![sid, sealed_offset],
     )?;
+    // Le préfixe scellé de la session est masqué en entier, puis démasqué ligne par
+    // ligne par ce que la surface garde.
+    tx.execute(
+        "UPDATE messages SET sealed = 2 WHERE session_id = ?1 AND sealed != 0 AND seq <= ?2",
+        params![sid, sealed_offset],
+    )?;
     for row in &expected.rows {
         if row.sealed {
             let kept = tx.execute(
-                "UPDATE messages SET compacted = ?3 WHERE session_id = ?1 AND seq = ?2",
+                "UPDATE messages SET compacted = ?3, sealed = 1 WHERE session_id = ?1 AND seq = ?2",
                 params![sid, row.seq, row.compacted as i64],
             )?;
             if kept == 0
@@ -615,7 +642,7 @@ fn copy_sealed_row(
             tokens_est, ts, episode, eager, artifact_id, compacted, event_id, sealed)
          SELECT ?2, seq, role, content, tool_call_id, tool_name, tokens_est, ts, episode,
             eager, artifact_id, ?4, event_id, 1
-         FROM messages WHERE session_id = ?1 AND seq = ?3 AND sealed = 1",
+         FROM messages WHERE session_id = ?1 AND seq = ?3 AND sealed != 0",
         params![source, sid, seq, compacted as i64],
     )?;
     if n > 0 {

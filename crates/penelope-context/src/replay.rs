@@ -11,7 +11,9 @@
 //! garde le sien, une copie de fork garde celui de la mère. Rangés par adresse, les
 //! messages non coupés reçoivent donc leur adresse s'ils sont scellés, sinon le numéro qui
 //! suit le précédent : la numérotation que la V0 aurait donnée. La comparaison apparie par
-//! `event_id` (une ligne scellée par son numéro) et ne vérifie que l'ordre.
+//! `event_id` (une ligne scellée par son numéro) et ne vérifie que l'ordre. Les lignes
+//! scellées qu'une coupe a masquées (`sealed = 2`, `store::seal`) gardent leur numéro :
+//! la première ligne neuve d'une session scellée suit donc le préfixe entier.
 //!
 //! **Ce que la V0 ne recopiait pas.** Une fille de fork ne reçoit pas les contextes figés
 //! de sa mère, l'archive d'un retour arrière non plus (le projecteur, qui les écrit depuis
@@ -25,7 +27,7 @@ use penelope_kernel::event::Event;
 use penelope_llm::types::ChatMessage;
 use penelope_store::rusqlite::{self, Connection, OptionalExtension, params};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Une chaîne de forks est finie ; la borne évite de boucler sur un journal corrompu.
 const MAX_DEPTH: usize = 64;
@@ -91,6 +93,9 @@ pub(crate) struct Lineage {
     pub offset: i64,
     /// Événement de chaque adresse de la chaîne ; une adresse absente est scellée.
     pub owners: BTreeMap<i64, Owner>,
+    /// Dernier numéro de ligne du préfixe scellé de la session elle-même, lignes
+    /// masquées comprises ; 0 sans scellement.
+    pub sealed_seq: i64,
 }
 
 /// Une ligne de `messages` attendue.
@@ -139,6 +144,8 @@ pub(crate) struct Expected {
     pub nodes: Vec<NodeRow>,
     /// Numéro de ligne de chaque adresse de message attendue.
     pub seqs: BTreeMap<i64, i64>,
+    /// Lignes scellées qu'une coupe a retirées de la surface : gardées, masquées.
+    pub masked: BTreeSet<i64>,
 }
 
 /// Les événements d'une session que le pliage lit (contenu et bornes de tour).
@@ -228,12 +235,17 @@ impl Lineage {
                 owners.insert(offset + e.seq, owner);
             }
         }
+        let sealed_seq = match &origin {
+            Origin::Import(b) => b.1.offset(),
+            _ => 0,
+        };
         Ok(Lineage {
             events,
             prefix,
             origin,
             offset,
             owners,
+            sealed_seq,
         })
     }
 
@@ -247,26 +259,10 @@ impl Lineage {
         self.events.iter().any(|e| e.kind.starts_with(KIND_PREFIX))
     }
 
-    /// La dernière adresse scellée coupée par un retour arrière, s'il y en a une : la
-    /// coupe retire des lignes que l'empreinte du scellement couvre.
-    pub fn cuts_sealed_prefix(&self) -> bool {
-        let Origin::Import(_) = self.origin else {
-            return false;
-        };
-        self.events.iter().any(|e| {
-            e.kind == KIND_REWIND
-                && matches!(
-                    ConvEvent::decode(&e.kind, &e.payload),
-                    Ok(Some(ConvEvent::Rewind(p)))
-                        if matches!(p.surface, SurfaceOp::Cut { after } if after < self.offset)
-                )
-        })
-    }
-
     /// Numéro de ligne de chaque adresse de message de la surface : l'adresse d'une
     /// ligne scellée, sinon le numéro qui suit le précédent (voir l'en-tête).
     pub fn row_seqs(&self, surface: &Surface) -> BTreeMap<i64, i64> {
-        row_seqs(&self.owners, surface)
+        row_seqs(&self.owners, surface, self.sealed_seq)
     }
 
     /// Ce que les caches de la session doivent contenir.
@@ -302,6 +298,22 @@ impl Lineage {
         for (addr, block) in &surface.contexts {
             if let Some(seq) = out.seqs.get(addr) {
                 out.contexts.insert(*seq, block.clone());
+            }
+        }
+        // Le préfixe scellé coupé reste en base avec ses contextes : l'empreinte du
+        // `conv.import` les couvre.
+        if let Origin::Import(b) = &self.origin {
+            let legacy = &b.1;
+            out.masked = legacy
+                .rows
+                .iter()
+                .map(|r| r.seq)
+                .filter(|seq| !surface.messages.contains_key(seq))
+                .collect();
+            for (seq, block) in &legacy.contexts {
+                if out.masked.contains(seq) {
+                    out.contexts.insert(*seq, block.clone());
+                }
             }
         }
         out.nodes = self.nodes(c, surface, &out.seqs)?;
@@ -401,10 +413,15 @@ impl Lineage {
 }
 
 /// Numéro de ligne de chaque adresse de message de la surface, `owners` étant
-/// l'événement de chaque adresse de la chaîne (voir l'en-tête).
-pub(crate) fn row_seqs(owners: &BTreeMap<i64, Owner>, surface: &Surface) -> BTreeMap<i64, i64> {
+/// l'événement de chaque adresse de la chaîne et `sealed_seq` le dernier numéro du
+/// préfixe scellé de la session, masqué ou non (voir l'en-tête).
+pub(crate) fn row_seqs(
+    owners: &BTreeMap<i64, Owner>,
+    surface: &Surface,
+    sealed_seq: i64,
+) -> BTreeMap<i64, i64> {
     let mut out = BTreeMap::new();
-    let mut last = 0;
+    let mut last = sealed_seq;
     for addr in surface.messages.keys() {
         let seq = match owners.get(addr) {
             None => *addr,

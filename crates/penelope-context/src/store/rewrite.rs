@@ -6,6 +6,7 @@ use super::*;
 use crate::journal::{ConvEvent, ForkPayload, RewindPayload, SurfaceOp, ToolResultPayload};
 use dual::address_in;
 use penelope_store::rusqlite::Transaction;
+use seal::sealed_offset_in;
 
 /// Ce qu'un retour arrière a fait.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -56,7 +57,8 @@ impl HistoryStore {
     /// Retour arrière journalisé (T10) : `conv.rewind` coupe la surface après le nœud qui
     /// précède `from_seq` (0 s'il n'y en a pas). La seconde transaction projette d'abord
     /// l'archive (`archive`, session déjà créée : ce que la coupe retire, relu dans le
-    /// journal de la mère), puis retire les lignes coupées.
+    /// journal de la mère), puis retire les lignes coupées ; celles du préfixe scellé
+    /// restent, masquées (`seal.rs`).
     pub async fn rewind_from(
         &self,
         session_id: &str,
@@ -69,7 +71,8 @@ impl HistoryStore {
             .store
             .read(move |c| {
                 let before: Option<i64> = c.query_row(
-                    "SELECT MAX(seq) FROM messages WHERE session_id = ?1 AND seq < ?2",
+                    "SELECT MAX(seq) FROM messages
+                     WHERE session_id = ?1 AND seq < ?2 AND sealed != 2",
                     params![sid, from_seq],
                     |r| r.get(0),
                 )?;
@@ -262,23 +265,35 @@ fn externalise_in(
 /// La coupe d'un retour arrière dans la transaction de l'appelant. Le contexte figé des
 /// messages retirés part avec eux : laissé, il collait au message suivant écrit sous le
 /// même numéro, et `freeze_context` le trouvait déjà figé (relevé par
-/// `history verify`, T12).
+/// `history verify`, T12). Les lignes du préfixe scellé de la session sont masquées, leur
+/// contexte gardé : le `conv.import` les compte (`seal.rs`). Rend le nombre de lignes
+/// retirées de la conversation, masquées comprises.
 fn truncate_in(
     tx: &Transaction<'_>,
     session_id: &str,
     from_seq: i64,
 ) -> penelope_store::Result<usize> {
+    let sealed = sealed_offset_in(tx, session_id)?;
+    let masked = tx.execute(
+        "UPDATE messages SET sealed = 2
+         WHERE session_id = ?1 AND seq >= ?2 AND seq <= ?3 AND sealed = 1",
+        params![session_id, from_seq, sealed],
+    )?;
     tx.execute(
         "DELETE FROM messages_fts WHERE msg_id IN
-            (SELECT id FROM messages WHERE session_id = ?1 AND seq >= ?2)",
+            (SELECT id FROM messages WHERE session_id = ?1 AND seq >= ?2 AND sealed != 2)",
         params![session_id, from_seq],
     )?;
     tx.execute(
-        "DELETE FROM message_context WHERE session_id = ?1 AND seq >= ?2",
+        "DELETE FROM message_context WHERE session_id = ?1 AND seq >= ?2 AND seq > ?3",
+        params![session_id, from_seq, sealed],
+    )?;
+    let removed = tx.execute(
+        "DELETE FROM messages WHERE session_id = ?1 AND seq >= ?2 AND sealed != 2",
         params![session_id, from_seq],
     )?;
-    Ok(tx.execute(
-        "DELETE FROM messages WHERE session_id = ?1 AND seq >= ?2",
-        params![session_id, from_seq],
-    )?)
+    Ok(masked + removed)
 }
+
+#[cfg(test)]
+mod tests;

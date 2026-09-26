@@ -102,7 +102,9 @@ impl HistoryStore {
         .await
     }
 
-    /// Charge l'historique canonique d'une session.
+    /// Charge l'historique canonique d'une session. Ici comme dans les autres lectures
+    /// de lignes, une ligne scellée masquée par un retour arrière (`sealed = 2`,
+    /// `seal.rs`) n'est plus un message de la session.
     pub async fn load(
         &self,
         session_id: &str,
@@ -114,7 +116,8 @@ impl HistoryStore {
                 let mut st = c.prepare(
                     "SELECT seq, role, content, tool_call_id, tool_name, tokens_est, episode,
                             eager, artifact_id, compacted
-                     FROM messages WHERE session_id = ?1 AND seq >= ?2 ORDER BY seq",
+                     FROM messages WHERE session_id = ?1 AND seq >= ?2 AND sealed != 2
+                     ORDER BY seq",
                 )?;
                 let rows = st.query_map(params![sid, from_seq], row_to_entry)?;
                 let mut out = Vec::new();
@@ -135,7 +138,8 @@ impl HistoryStore {
                 let mut st = c.prepare(
                     "SELECT seq, role, content, tool_call_id, tool_name, tokens_est, episode,
                             eager, artifact_id, compacted
-                     FROM messages WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2",
+                     FROM messages WHERE session_id = ?1 AND sealed != 2
+                     ORDER BY seq DESC LIMIT ?2",
                 )?;
                 let rows = st.query_map(params![sid, limit as i64], row_to_entry)?;
                 let mut out = Vec::new();
@@ -163,7 +167,7 @@ impl HistoryStore {
                 let mut st = c.prepare(
                     "SELECT seq, role, content, tool_call_id, tool_name
                      FROM messages
-                     WHERE session_id = ?1 AND role = 'tool' AND artifact_id IS NULL
+                     WHERE session_id = ?1 AND role = 'tool' AND artifact_id IS NULL AND sealed != 2
                      ORDER BY seq DESC LIMIT ?2",
                 )?;
                 let rows = st.query_map(params![sid, limit as i64], |r| {
@@ -232,7 +236,8 @@ impl HistoryStore {
                 let mut st = c.prepare(
                     "SELECT seq, role, content, tool_call_id, tool_name, tokens_est, episode,
                             eager, artifact_id, compacted
-                     FROM messages WHERE session_id = ?1 AND episode = ?2 ORDER BY seq",
+                     FROM messages WHERE session_id = ?1 AND episode = ?2 AND sealed != 2
+                     ORDER BY seq",
                 )?;
                 let rows = st.query_map(params![sid, episode], row_to_entry)?;
                 let mut out = Vec::new();
@@ -252,7 +257,8 @@ impl HistoryStore {
                 let mut st = c.prepare(
                     "SELECT seq, role, content, tool_call_id, tool_name, tokens_est, episode,
                             eager, artifact_id, compacted
-                     FROM messages WHERE session_id = ?1 ORDER BY seq DESC LIMIT 1",
+                     FROM messages WHERE session_id = ?1 AND sealed != 2
+                     ORDER BY seq DESC LIMIT 1",
                 )?;
                 let mut rows = st.query_map(params![sid], row_to_entry)?;
                 Ok(rows.next().transpose()?)
