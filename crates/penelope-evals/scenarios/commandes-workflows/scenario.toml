@@ -1,0 +1,36 @@
+name = "commandes-workflows"
+description = """Workflows par Telegram : `/wf` liste les quatre workflows livrés, un clic détaille
+les étapes du premier ; `/run` propose de lancer et le clic sur « Revue de PR » ouvre la
+préparation du plan avec le modèle (une réponse scriptée) : le run ne part qu'après
+« vas-y », rien ne s'exécute ici. `/runs`, `/resume` et `/schedules` rendent leur état vide."""
+
+[config]
+"models.routing.classifier" = false
+
+[[steps]]
+kind = "telegram"
+text = "/wf"
+
+[[steps]]
+kind = "telegram"
+click = "ℹ️"
+
+[[steps]]
+kind = "telegram"
+text = "/run"
+
+[[steps]]
+kind = "telegram"
+click = "▶️ Revue de PR"
+
+[[steps]]
+kind = "telegram"
+text = "/runs"
+
+[[steps]]
+kind = "telegram"
+text = "/resume"
+
+[[steps]]
+kind = "telegram"
+text = "/schedules"

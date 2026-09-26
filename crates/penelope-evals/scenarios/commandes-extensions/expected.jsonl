@@ -1,0 +1,12 @@
+{"type":"outcome","step":1,"input":"telegram : /skills","screens":[{"method":"sendMessage","text":"Aucune skill chargée."}]}
+{"type":"outcome","step":2,"input":"telegram : /skill rollback revue-de-code","screens":[{"method":"sendMessage","text":"⚠️ Revenir à la version précédente de <code>revue-de-code</code> ?","buttons":[["✅ Confirmer","✖️ Annuler"]]}]}
+{"type":"outcome","step":3,"input":"telegram : /mcp","screens":[{"method":"sendMessage","text":"❌ superviseur MCP non démarré dans ce daemon"}]}
+{"type":"outcome","step":4,"input":"telegram : /p redmine resume_ticket","screens":[{"method":"sendMessage","text":"❌ aucun serveur MCP chargé"}]}
+{"type":"session","id":"{{session:1}}","kind":"chat","title":"CLI","state":"active","parent":null,"model_alias":null,"episode":0}
+{"type":"event","session":"{{session:1}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"chat","parent_id":null}}
+{"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"tool_jobs_lost":0,"turns_requeued":0}}
+{"type":"outbox","chat_id":42,"method":"sendMessage","state":"sent","payload":{"chat_id":42,"text":"Aucune skill chargée.","parse_mode":"HTML","link_preview_options":{"is_disabled":true},"reply_parameters":{"message_id":10,"allow_sending_without_reply":true}}}
+{"type":"outbox","chat_id":42,"method":"sendMessage","state":"sent","payload":{"chat_id":42,"text":"⚠️ Revenir à la version précédente de <code>revue-de-code</code> ?","parse_mode":"HTML","link_preview_options":{"is_disabled":true},"reply_markup":{"inline_keyboard":[[{"text":"✅ Confirmer","callback_data":"{{action}}"},{"text":"✖️ Annuler","callback_data":"{{action}}"}]]},"reply_parameters":{"message_id":20,"allow_sending_without_reply":true}}}
+{"type":"outbox","chat_id":42,"method":"sendMessage","state":"sent","payload":{"chat_id":42,"text":"❌ superviseur MCP non démarré dans ce daemon","parse_mode":"HTML","link_preview_options":{"is_disabled":true},"reply_parameters":{"message_id":30,"allow_sending_without_reply":true}}}
+{"type":"outbox","chat_id":42,"method":"sendMessage","state":"sent","payload":{"chat_id":42,"text":"❌ aucun serveur MCP chargé","parse_mode":"HTML","link_preview_options":{"is_disabled":true},"reply_parameters":{"message_id":40,"allow_sending_without_reply":true}}}
+{"type":"audit","ok":true,"checked":2,"purged":0}

@@ -1,0 +1,83 @@
+name = "commandes-memoire"
+description = """Mémoire du propriétaire par Telegram, sans appel au modèle : `/retiens` écrit une
+entrée que `/recall` retrouve, `/note` écrit au journal du jour, `/appris`, `/pratique`,
+`/intentions` et `/audit` rendent leur état (vide, sauf l'entrée retenue), `/oublie`
+propose l'entrée, le clic puis la confirmation la retirent : le second `/recall` ne la trouve plus. `/mien`
+sans document dit comment s'en servir, `/accueil` pose la première question et la
+réponse en message passe à la deuxième, `/dream` consolide (rien à promouvoir), `/forget`
+propose les sessions à oublier ; le clic et la confirmation oublient celle du chat."""
+
+[config]
+"models.routing.classifier" = false
+
+[[steps]]
+kind = "telegram"
+text = "/retiens toujours répondre en français"
+
+[[steps]]
+kind = "telegram"
+text = "/note le client préfère les PR courtes"
+
+[[steps]]
+kind = "telegram"
+text = "/recall français"
+
+[[steps]]
+kind = "telegram"
+text = "/appris 7"
+
+[[steps]]
+kind = "telegram"
+text = "/pratique langage-backend"
+
+[[steps]]
+kind = "telegram"
+text = "/intentions"
+
+[[steps]]
+kind = "telegram"
+text = "/audit"
+
+[[steps]]
+kind = "telegram"
+text = "/oublie français"
+
+[[steps]]
+kind = "telegram"
+click = "🗑 1."
+
+[[steps]]
+kind = "telegram"
+click = "Confirmer"
+
+[[steps]]
+kind = "telegram"
+text = "/recall français"
+
+[[steps]]
+kind = "telegram"
+text = "/mien"
+
+[[steps]]
+kind = "telegram"
+text = "/accueil"
+
+[[steps]]
+kind = "telegram"
+text = "développeur indépendant"
+
+[[steps]]
+kind = "telegram"
+text = "/dream"
+
+[[steps]]
+kind = "telegram"
+text = "/forget"
+
+[[steps]]
+kind = "telegram"
+click = "🗑 (sans titre)"
+
+[[steps]]
+kind = "telegram"
+click = "Confirmer"

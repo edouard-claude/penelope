@@ -54,6 +54,11 @@ scenario_cases! {
     message_pendant_un_lot => "message-pendant-un-lot",
     commandes_systeme => "commandes-systeme",
     commandes_sessions => "commandes-sessions",
+    commandes_reglages => "commandes-reglages",
+    commandes_approbations => "commandes-approbations",
+    commandes_memoire => "commandes-memoire",
+    commandes_workflows => "commandes-workflows",
+    commandes_extensions => "commandes-extensions",
 }
 
 #[test]
