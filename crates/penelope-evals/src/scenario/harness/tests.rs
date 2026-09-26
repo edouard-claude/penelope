@@ -1,7 +1,7 @@
 //! Tests du harnais : le patch de configuration par chemin pointé et la transcription
 //! d'un flux en ligne de script.
 
-use super::lifecycle::{fold, set_path};
+use super::lifecycle::{fold, set_path, shut_down};
 use crate::scenario::ScriptLine;
 use penelope_llm::types::FinishReason;
 use serde_json::json;
@@ -166,4 +166,42 @@ fn only_two_replaces_may_fall_between_two_calls() {
     edge.extend(turn_with("conv.assistant", vec![]));
     edge.insert(2, replace(2, "conv.system", 0, 0, ""));
     assert!(within(&edge).unwrap().is_empty());
+}
+
+async fn life(dir: &std::path::Path) -> super::Life {
+    let clock: penelope_kernel::clock::SharedClock =
+        std::sync::Arc::new(penelope_kernel::clock::TestClock::default());
+    let services = std::sync::Arc::new(
+        penelope_app::services::Services::for_tests(dir.to_path_buf(), clock)
+            .await
+            .unwrap(),
+    );
+    let daemon = std::sync::Arc::new(penelope_daemon::runtime::Daemon::from_services(
+        services.clone(),
+    ));
+    super::Life {
+        services,
+        daemon,
+        gateway: None,
+    }
+}
+
+/// Une vie sans fuite se ferme sans attendre l'échéance. Avant, `shut_down` attendait
+/// deux copies des services là où le daemon en tient trois (cœur et `Providers`) :
+/// chaque vie de chaque scénario attendait cinq secondes, puis fermait « sans elles ».
+#[tokio::test]
+async fn a_life_without_leaks_closes_without_waiting() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(shut_down(life(dir.path()).await, "sans-fuite").await);
+}
+
+/// Une copie des services gardée hors de la vie : la fermeture le dit et rend la main à
+/// l'échéance, au lieu de pendre.
+#[tokio::test]
+async fn a_leaked_reference_is_reported_and_does_not_hang() {
+    let dir = tempfile::tempdir().unwrap();
+    let life = life(dir.path()).await;
+    let leak = life.services.clone();
+    assert!(!shut_down(life, "fuite").await);
+    assert_eq!(std::sync::Arc::strong_count(&leak), 1);
 }

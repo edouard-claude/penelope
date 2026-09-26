@@ -296,8 +296,9 @@ impl Harness<'_> {
 /// journal `-wal` retombe à zéro. Sans cette attente, la vie suivante rouvrait la base
 /// pendant ce checkpoint et son premier `write` échouait avec `database is locked`
 /// (runner macOS de la CI, run 35946713239). Bornée à `SHUTDOWN_WAIT` ; les attentes
-/// sont dites sur la sortie d'erreur, jamais écrites dans le monde.
-pub(super) async fn shut_down(life: Life, name: &str) {
+/// sont dites sur la sortie d'erreur, jamais écrites dans le monde. Vrai quand toutes
+/// les références ont été relâchées avant l'échéance.
+pub(super) async fn shut_down(life: Life, name: &str) -> bool {
     let Life {
         services,
         daemon,
@@ -340,6 +341,7 @@ pub(super) async fn shut_down(life: Life, name: &str) {
              {checks} attente(s) du checkpoint)"
         );
     }
+    daemon_left && services_left
 }
 
 /// Attend `done`, en rendant la main à l'ordonnanceur entre deux regards : les tâches
