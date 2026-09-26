@@ -1,0 +1,81 @@
+name = "rpc-approbations"
+description = """Les demandes d'accord tranchées par la socket locale, comme `penelope approve` et
+`penelope deny` : le modèle veut écrire `a.txt`, la demande est listée (`approvals`) puis
+refusée avec un motif, la reprise le dit au modèle, rien n'est écrit ; il veut écrire
+`b.txt`, l'accord est donné « toujours », la reprise écrit ; une nouvelle écriture passe
+sans demande grâce à la règle née de cet accord. La règle est listée (`policies`), puis
+révoquée ; trancher une demande déjà tranchée est refusé. Les heures calmes sont posées
+puis relues (`quiet`). Le monde après : deux fichiers sur trois demandés, les approbations
+refusée et approuvée, la règle révoquée."""
+pin_model = "main"
+
+[[observe]]
+name = "règles"
+sql = "SELECT scope, tool, arg_match, decision, window, created_by, revoked_at IS NOT NULL AS revoked FROM policies ORDER BY created_at, rowid"
+
+[[steps]]
+kind = "message"
+text = "écris « brouillon » dans a.txt"
+
+[[steps]]
+kind = "rpc"
+method = "approvals"
+bind = "attente"
+pick = ["/*/subject", "/*/state", "/*/request"]
+
+[[steps]]
+kind = "rpc"
+method = "deny"
+params = { id = "$attente.0.id", reason = "pas ce fichier" }
+
+[[steps]]
+kind = "rpc"
+method = "deny"
+params = { id = "$attente.0.id" }
+error = true
+
+[[steps]]
+kind = "message"
+text = "alors écris « version finale » dans b.txt"
+
+[[steps]]
+kind = "rpc"
+method = "approvals"
+bind = "attente2"
+pick = ["/*/subject"]
+
+[[steps]]
+kind = "rpc"
+method = "approve"
+params = { id = "$attente2.0.id", always = true }
+
+[[steps]]
+kind = "message"
+text = "ajoute « annexe » dans c.txt"
+
+[[steps]]
+kind = "rpc"
+method = "approvals"
+
+[[steps]]
+kind = "rpc"
+method = "policies"
+bind = "regles"
+
+[[steps]]
+kind = "rpc"
+method = "policy.revoke"
+params = { id = "$regles.0.id" }
+
+[[steps]]
+kind = "rpc"
+method = "policies"
+
+[[steps]]
+kind = "rpc"
+method = "quiet"
+params = { range = "22:00-07:00" }
+
+[[steps]]
+kind = "rpc"
+method = "quiet"

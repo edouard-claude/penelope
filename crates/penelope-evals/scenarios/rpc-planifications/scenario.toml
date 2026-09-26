@@ -1,0 +1,61 @@
+name = "rpc-planifications"
+description = """Les planifications par la socket locale, comme `penelope schedule …` : un digest
+hebdomadaire créé (`schedule.add`), une cadence refusée, la liste, la pause puis la
+reprise, le déplacement vers la conversation privée, un déclenchement immédiat
+(`schedule.run_now`) dont le tour est joué, puis la suppression. Le monde après : la
+planification supprimée avec son compteur de passages, le tour planifié et sa réponse."""
+pin_model = "main"
+
+[[observe]]
+name = "planifications"
+sql = "SELECT kind, spec, target, state, runs, last_error FROM schedules ORDER BY created_at, rowid"
+
+[[steps]]
+kind = "rpc"
+method = "schedule.add"
+bind = "digest"
+params = { kind = "cron", spec = { expr = "0 9 * * 1" }, target = { type = "prompt", prompt = "fais le digest de la semaine" } }
+
+[[steps]]
+kind = "rpc"
+method = "schedule.add"
+params = { kind = "tous-les-jours", spec = {}, target = {} }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "schedule.list"
+
+[[steps]]
+kind = "rpc"
+method = "schedule.pause"
+params = { id = "$digest.id" }
+
+[[steps]]
+kind = "rpc"
+method = "schedule.list"
+pick = ["/*/state"]
+
+[[steps]]
+kind = "rpc"
+method = "schedule.resume"
+params = { id = "$digest.id" }
+
+[[steps]]
+kind = "rpc"
+method = "schedule.move"
+params = { id = "$digest.id", private = true }
+
+[[steps]]
+kind = "rpc"
+method = "schedule.run_now"
+params = { id = "$digest.id" }
+
+[[steps]]
+kind = "rpc"
+method = "schedule.rm"
+params = { id = "$digest.id" }
+
+[[steps]]
+kind = "rpc"
+method = "schedule.list"

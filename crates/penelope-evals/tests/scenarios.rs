@@ -61,6 +61,10 @@ scenario_cases! {
     commandes_extensions => "commandes-extensions",
     // Méthodes RPC (critère 7, R10), une famille par scénario.
     rpc_sessions => "rpc-sessions",
+    rpc_config_et_modeles => "rpc-config-et-modeles",
+    rpc_approbations => "rpc-approbations",
+    rpc_planifications => "rpc-planifications",
+    rpc_workflows => "rpc-workflows",
 }
 
 #[test]

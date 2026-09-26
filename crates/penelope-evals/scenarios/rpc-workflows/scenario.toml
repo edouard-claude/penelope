@@ -1,0 +1,85 @@
+name = "rpc-workflows"
+description = """Les workflows par la socket locale, comme `penelope wf …` : la liste des
+workflows livrés, la définition de `build-verify`, sa validation telle quelle puis celle
+d'un texte qui n'est pas un workflow ; un run démarré (`wf.run`) avec son objectif, un
+paramètre inconnu refusé, les runs, la trace, puis le pilotage : plafond relevé, pause,
+reprise, annulation, et une opération inconnue refusée. Le moteur de runs ne tourne pas
+dans le harnais : le run reste à sa première étape, ce qui compte ici est ce que chaque
+commande de pilotage a écrit. Le monde après : le run annulé, sa session, ses
+événements."""
+pin_model = "main"
+
+[[observe]]
+name = "runs"
+sql = "SELECT workflow_id, params, state, current_step, iterations, error FROM workflow_runs ORDER BY started_at, rowid"
+
+[[steps]]
+kind = "rpc"
+method = "wf.list"
+
+[[steps]]
+kind = "rpc"
+method = "wf.show"
+params = { id = "build-verify" }
+bind = "bv"
+pick = ["/definition/metadata", "/definition/steps/*/id", "/graph"]
+
+[[steps]]
+kind = "rpc"
+method = "wf.validate"
+params = { json = "$json:bv.definition", name = "build-verify" }
+
+[[steps]]
+kind = "rpc"
+method = "wf.validate"
+params = { json = "{\"pas\": \"un workflow\"}" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "wf.run"
+params = { id = "build-verify", params = { objectif = "ajouter un test de non-régression" } }
+bind = "run"
+pick = ["/id", "/workflow_id", "/state", "/current_step", "/params"]
+
+[[steps]]
+kind = "rpc"
+method = "wf.run"
+params = { id = "build-verify", params = { objectif = "x", inconnu = 1 } }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "wf.runs"
+pick = ["/*/id", "/*/workflow_id", "/*/state"]
+
+[[steps]]
+kind = "rpc"
+method = "wf.trace"
+params = { run = "$run.id" }
+
+[[steps]]
+kind = "rpc"
+method = "wf.control"
+params = { run = "$run.id", op = "budget", usd = 3.0 }
+
+[[steps]]
+kind = "rpc"
+method = "wf.control"
+params = { run = "$run.id", op = "pause" }
+
+[[steps]]
+kind = "rpc"
+method = "wf.control"
+params = { run = "$run.id", op = "resume" }
+
+[[steps]]
+kind = "rpc"
+method = "wf.control"
+params = { run = "$run.id", op = "cancel" }
+
+[[steps]]
+kind = "rpc"
+method = "wf.control"
+params = { run = "$run.id", op = "accélérer" }
+error = true

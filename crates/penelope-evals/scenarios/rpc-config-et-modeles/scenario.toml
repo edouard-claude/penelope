@@ -1,0 +1,104 @@
+name = "rpc-config-et-modeles"
+description = """Réglages, secrets et modèles par la socket locale : l'état de la configuration,
+un réglage posé (`config.set`) puis relu (`config.get`), la relecture du disque qui le garde ; un secret
+posé, listé, retiré, le coffre nommé ; le catalogue des alias, un alias repointé
+(`model.set`) puis un identifiant mal écrit refusé, le routage déterministe d'un message,
+l'état du compte ChatGPT (local, sans réseau). Le monde après : la génération de
+configuration montée à chaque écriture, l'alias et le plafond posés, le coffre vide du
+secret retiré."""
+pin_model = "main"
+
+[[steps]]
+kind = "rpc"
+method = "config.status"
+pick = ["/generation", "/path"]
+
+[[steps]]
+kind = "rpc"
+method = "config.set"
+params = { path = "budget.daily_usd", value = 42.0 }
+
+[[steps]]
+kind = "rpc"
+method = "config.get"
+pick = ["/budget/daily_usd", "/models/aliases/main"]
+
+[[steps]]
+kind = "rpc"
+method = "config.set"
+params = { path = "budget.inexistant", value = 1 }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "config.reload"
+
+# Le plafond écrit sur le disque survit à la relecture.
+[[steps]]
+kind = "rpc"
+method = "config.get"
+pick = ["/budget/daily_usd"]
+
+[[steps]]
+kind = "rpc"
+method = "secret.backend"
+
+[[steps]]
+kind = "rpc"
+method = "secret.set"
+params = { name = "forge_token", value = "  jeton-de-test  " }
+
+[[steps]]
+kind = "rpc"
+method = "secret.set"
+params = { name = "../evasion", value = "x" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "secret.list"
+
+[[steps]]
+kind = "rpc"
+method = "secret.rm"
+params = { name = "forge_token" }
+
+[[steps]]
+kind = "rpc"
+method = "secret.list"
+
+[[steps]]
+kind = "rpc"
+method = "model.list"
+pick = ["/aliases/*/alias", "/aliases/*/model", "/routing/classifier", "/routing/default", "/catalog_size", "/models"]
+
+[[steps]]
+kind = "rpc"
+method = "model.set"
+params = { alias = "fast", model = "openrouter:anthropic/claude-haiku-4-5" }
+
+[[steps]]
+kind = "rpc"
+method = "model.set"
+params = { alias = "fast", model = "codx:gpt-5" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "model.list"
+pick = ["/aliases/*/alias", "/aliases/*/model"]
+
+[[steps]]
+kind = "rpc"
+method = "model.route_test"
+params = { text = "explique-moi la relativité générale" }
+
+[[steps]]
+kind = "rpc"
+method = "model.auth"
+params = { provider = "codex", action = "status" }
+
+[[steps]]
+kind = "rpc"
+method = "config.status"
+pick = ["/generation"]

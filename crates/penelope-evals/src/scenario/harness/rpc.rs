@@ -159,7 +159,13 @@ impl Harness<'_> {
     fn resolve(&self, v: Value) -> anyhow::Result<Value> {
         Ok(match v {
             Value::String(s) if s.starts_with('$') => {
-                let (name, path) = s[1..].split_once('.').unwrap_or((&s[1..], ""));
+                // `$json:nom.chemin` : la valeur sérialisée, pour un paramètre qui attend
+                // un texte JSON (`wf.validate`).
+                let (raw, as_text) = match s[1..].strip_prefix("json:") {
+                    Some(rest) => (rest, true),
+                    None => (&s[1..], false),
+                };
+                let (name, path) = raw.split_once('.').unwrap_or((raw, ""));
                 let base = if name == "session" {
                     json!(self.session)
                 } else {
@@ -168,10 +174,16 @@ impl Harness<'_> {
                         .cloned()
                         .with_context(|| format!("`{s}` : aucune réponse liée à `{name}`"))?
                 };
-                path.split('.')
+                let v = path
+                    .split('.')
                     .filter(|p| !p.is_empty())
                     .try_fold(base, |v, seg| step_into(&v, seg))
-                    .with_context(|| format!("`{s}` : chemin absent de la réponse"))?
+                    .with_context(|| format!("`{s}` : chemin absent de la réponse"))?;
+                if as_text {
+                    Value::String(v.to_string())
+                } else {
+                    v
+                }
             }
             Value::Array(items) => Value::Array(
                 items

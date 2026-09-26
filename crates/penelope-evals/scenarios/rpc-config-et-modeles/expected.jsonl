@@ -1,0 +1,23 @@
+{"type":"outcome","step":1,"input":"rpc : config.status","result":{"/generation":1,"/path":"{{home}}/config/config.toml"}}
+{"type":"outcome","step":2,"input":"rpc : config.set","result":{"generation":2,"warnings":[]}}
+{"type":"outcome","step":3,"input":"rpc : config.get","result":{"/budget/daily_usd":42.0,"/models/aliases/main":"openrouter:deepseek/deepseek-v4-pro"}}
+{"type":"outcome","step":4,"input":"rpc : config.set","error":{"code":-32603,"message":"configuration invalide : clé inconnue : budget.inexistant"}}
+{"type":"outcome","step":5,"input":"rpc : config.reload","result":{"generation":3,"changed":[]}}
+{"type":"outcome","step":6,"input":"rpc : config.get","result":{"/budget/daily_usd":42.0}}
+{"type":"outcome","step":7,"input":"rpc : secret.backend","result":{"backend":"mémoire (tests)"}}
+{"type":"outcome","step":8,"input":"rpc : secret.set","result":{"name":"forge_token","stored":true}}
+{"type":"outcome","step":9,"input":"rpc : secret.set","error":{"code":-32603,"message":"secrets : nom de secret invalide : `../evasion` (attendu 1 à 128 caractères parmi [A-Za-z0-9_.-], sans point initial)"}}
+{"type":"outcome","step":10,"input":"rpc : secret.list","result":["forge_token"]}
+{"type":"outcome","step":11,"input":"rpc : secret.rm","result":{"ok":true}}
+{"type":"outcome","step":12,"input":"rpc : secret.list","result":[]}
+{"type":"outcome","step":13,"input":"rpc : model.list","result":{"/aliases/*/alias":["embedding","fast","image","main","reasoning","stt","summarizer","tts","vision"],"/aliases/*/model":["openrouter:openai/text-embedding-3-small","openrouter:deepseek/deepseek-v4-flash","openrouter:google/gemini-3.1-flash-image","openrouter:deepseek/deepseek-v4-pro","openrouter:z-ai/glm-5.2","openai_compat:whisper-default","openrouter:deepseek/deepseek-v4-flash","openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit","openrouter:google/gemini-3.1-flash-image"],"/routing/classifier":true,"/routing/default":{"alias":"main","model":"openrouter:deepseek/deepseek-v4-pro"},"/catalog_size":0,"/models":[]}}
+{"type":"outcome","step":14,"input":"rpc : model.set","result":{"generation":4,"alias":"fast","model":"openrouter:anthropic/claude-haiku-4-5","known":true}}
+{"type":"outcome","step":15,"input":"rpc : model.set","error":{"code":-32603,"message":"`codx:gpt-5` : fournisseur `codx` inconnu (attendu openrouter, openai_compat, local, codex)"}}
+{"type":"outcome","step":16,"input":"rpc : model.list","result":{"/aliases/*/alias":["embedding","fast","image","main","reasoning","stt","summarizer","tts","vision"],"/aliases/*/model":["openrouter:openai/text-embedding-3-small","openrouter:anthropic/claude-haiku-4-5","openrouter:google/gemini-3.1-flash-image","openrouter:deepseek/deepseek-v4-pro","openrouter:z-ai/glm-5.2","openai_compat:whisper-default","openrouter:deepseek/deepseek-v4-flash","openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit","openrouter:google/gemini-3.1-flash-image"]}}
+{"type":"outcome","step":17,"input":"rpc : model.route_test","result":{"alias":"main","model_id":"openrouter:deepseek/deepseek-v4-pro","reason":"default"}}
+{"type":"outcome","step":18,"input":"rpc : model.auth","result":{"provider":"codex","status":null,"enabled":false}}
+{"type":"outcome","step":19,"input":"rpc : config.status","result":{"/generation":4}}
+{"type":"session","id":"{{session:1}}","kind":"chat","title":"CLI","state":"active","parent":null,"model_alias":null,"episode":0}
+{"type":"event","session":"{{session:1}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"chat","parent_id":null}}
+{"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"tool_jobs_lost":0,"turns_requeued":0}}
+{"type":"audit","ok":true,"checked":2,"purged":0}

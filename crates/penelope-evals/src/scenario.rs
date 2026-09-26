@@ -164,7 +164,8 @@ pub enum Step {
     Rpc {
         method: String,
         /// Paramètres ; une chaîne `$session` est la session du scénario, `$nom.chemin`
-        /// une valeur d'une réponse liée par `bind` (`$sch.id`, `$liste.0.uid`).
+        /// une valeur d'une réponse liée par `bind` (`$sch.id`, `$liste.0.uid`),
+        /// `$json:nom.chemin` la même valeur sérialisée en texte JSON.
         #[serde(default)]
         params: toml::Table,
         /// Garde la réponse sous ce nom pour les étapes suivantes.
