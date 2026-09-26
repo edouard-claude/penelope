@@ -94,4 +94,8 @@ l'extérieur est le seul cas, et il est couvert par sa garde.
 
 ## Vérifications
 
-À compléter en fin de lot.
+`cargo fmt --all --check` propre ; `cargo clippy --workspace --all-targets -- -D warnings`
+propre ; `cargo test --workspace` : 81 suites, 2 093 tests verts, 0 échec, 20 ignorés
+(suites réseau), sortie 0. Chaque scénario nouveau a été rejoué deux fois de suite après
+`UPDATE_SCENARIOS=1`, sans différence. `UPDATE_BUDGET=1 cargo test -p penelope-archtest`
+après chaque lot (79 tests verts).
