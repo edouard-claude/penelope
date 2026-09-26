@@ -133,7 +133,6 @@ impl Daemon {
         outcome
     }
 
-    #[allow(clippy::too_many_lines)] // gel 0.17 : lot G (engine/turn.rs)
     async fn execute_turn(
         self: &Arc<Self>,
         turn: &Turn,
@@ -152,16 +151,7 @@ impl Daemon {
             .unwrap_or("")
             .to_string();
 
-        let images: Vec<std::path::PathBuf> = turn
-            .payload
-            .get("images")
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|p| p.as_str().map(std::path::PathBuf::from))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let images = turn_images(turn);
 
         // 0. Frontière d'épisode (§6.6) : inactivité ou changement de sujet, vérifiés une
         // seule fois par message, avant qu'il soit écrit. Le message du tour entre au
@@ -177,55 +167,10 @@ impl Daemon {
 
         // 1. Le message utilisateur, écrit une seule fois même si le tour est rejoué. Avec
         // des photos, il attend le choix du modèle : lui les montrer ou les faire décrire.
-        if turn.kind != TurnKind::Resume && !text.trim().is_empty() && images.is_empty() {
-            let (content, source) = match turn.kind {
-                TurnKind::Trigger => (
-                    format!("[déclencheur planifié] {text}"),
-                    UserSource::Trigger,
-                ),
-                TurnKind::Nudge => (format!("[relance] {text}"), UserSource::Nudge),
-                _ => (text.clone(), UserSource::Owner),
-            };
-            let tokens = s.context.estimator.text_tokens("default", &content);
-            let user = ChatMessage::user(content);
-            history
-                .append_queued(&turn.session_id, &user, tokens, episode, &prov(source))
-                .await?;
-        }
-        if turn.kind == TurnKind::Message {
-            for merged in &turn.merged_messages {
-                let Some(message) = merged.payload.get("text").and_then(Value::as_str) else {
-                    continue;
-                };
-                let tokens = s.context.estimator.text_tokens("default", message);
-                let prov =
-                    Provenance::queued(UserSource::Merged, merged.id.as_str(), &merged.enqueued_at);
-                let user = ChatMessage::user(message);
-                s.context
-                    .history
-                    .append_queued(&turn.session_id, &user, tokens, episode, &prov)
-                    .await?;
-            }
-        }
+        record_messages(&s, turn, &text, images.is_empty(), episode).await?;
 
         // Tour d'origine : une reprise après approbation compte pour la requête initiale.
-        let origin_turn = match turn.kind {
-            TurnKind::Resume => {
-                let approval = match turn.payload.get("approval_id").and_then(|a| a.as_str()) {
-                    Some(id) => s.approvals.get(id).await?,
-                    None => None,
-                };
-                approval
-                    .and_then(|a| {
-                        a.payload
-                            .get("turn_id")
-                            .and_then(|t| t.as_str())
-                            .map(String::from)
-                    })
-                    .unwrap_or_else(|| turn.id.to_string())
-            }
-            _ => turn.id.to_string(),
-        };
+        let origin_turn = origin_turn_of(&s, turn).await?;
 
         // 2. Modèle : alias collant, sinon routage.
         let classified = if text.trim().is_empty() && !images.is_empty() {
@@ -327,24 +272,9 @@ impl Daemon {
         let inbox = TurnInbox::for_turn(&s, turn, self.hooks.delivery(), &cancel);
 
         // 5. Outils.
-        let mut exec = NativeToolExecutor::new(
-            s.clone(),
-            ToolEnv {
-                session_id: turn.session_id.clone(),
-                run_id: None,
-                origin: origin.clone(),
-                workspaces: default_workspaces(&s),
-                in_workflow: false,
-                turn_model: Some(penelope_executor::selfknow::TurnModel {
-                    alias: alias.clone(),
-                    model_id: model_id.clone(),
-                }),
-            },
-        );
-        exec.admin = Some(self.core.clone() as Arc<dyn penelope_executor::selfknow::Admin>);
-        exec.messenger = self.hooks.messenger();
-        exec.mcp = self.hooks.mcp();
-        exec.orchestrator = self.hooks.orchestrator();
+        let exec = self
+            .core
+            .tool_executor(&turn.session_id, origin, &alias, &model_id);
 
         let router = Router::new(s.catalog.clone());
         let spec = TurnSpec {
@@ -357,15 +287,7 @@ impl Daemon {
                 .into_iter()
                 .map(|d| d.model_id)
                 .collect(),
-            tools: {
-                // Noyau + outils à la demande découverts par la session (#104).
-                let discovered = tools_on_demand::exposed_for_turn(&s, &turn.session_id).await;
-                let mut tools = chat_tool_defs(&discovered);
-                if let Some(m) = self.hooks.mcp() {
-                    tools.extend(m.eager_tools().await);
-                }
-                tools
-            },
+            tools: self.turn_tools(&turn.session_id).await,
             allowed_tools: Vec::new(),
             cancel,
         };
@@ -385,6 +307,131 @@ impl Daemon {
         )
         .await;
         outcome
+    }
+}
+
+/// Photos jointes au message d'un tour (chemins enregistrés par la passerelle).
+fn turn_images(turn: &Turn) -> Vec<std::path::PathBuf> {
+    turn.payload
+        .get("images")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| p.as_str().map(std::path::PathBuf::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Le message du tour et les messages fusionnés avec lui, écrits au journal sous leur
+/// identifiant de file. Un message avec photos attend le choix du modèle (`photo_message`).
+async fn record_messages(
+    s: &penelope_app::services::Services,
+    turn: &Turn,
+    text: &str,
+    no_images: bool,
+    episode: i64,
+) -> anyhow::Result<()> {
+    let history = &s.context.history;
+    let prov = |source| Provenance::queued(source, turn.id.as_str(), &turn.enqueued_at);
+    if turn.kind != TurnKind::Resume && !text.trim().is_empty() && no_images {
+        let (content, source) = match turn.kind {
+            TurnKind::Trigger => (
+                format!("[déclencheur planifié] {text}"),
+                UserSource::Trigger,
+            ),
+            TurnKind::Nudge => (format!("[relance] {text}"), UserSource::Nudge),
+            _ => (text.to_string(), UserSource::Owner),
+        };
+        let tokens = s.context.estimator.text_tokens("default", &content);
+        let user = ChatMessage::user(content);
+        history
+            .append_queued(&turn.session_id, &user, tokens, episode, &prov(source))
+            .await?;
+    }
+    if turn.kind == TurnKind::Message {
+        for merged in &turn.merged_messages {
+            let Some(message) = merged.payload.get("text").and_then(Value::as_str) else {
+                continue;
+            };
+            let tokens = s.context.estimator.text_tokens("default", message);
+            let prov =
+                Provenance::queued(UserSource::Merged, merged.id.as_str(), &merged.enqueued_at);
+            let user = ChatMessage::user(message);
+            s.context
+                .history
+                .append_queued(&turn.session_id, &user, tokens, episode, &prov)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Tour d'origine : une reprise après approbation compte pour la requête initiale.
+async fn origin_turn_of(
+    s: &penelope_app::services::Services,
+    turn: &Turn,
+) -> anyhow::Result<String> {
+    Ok(match turn.kind {
+        TurnKind::Resume => {
+            let approval = match turn.payload.get("approval_id").and_then(|a| a.as_str()) {
+                Some(id) => s.approvals.get(id).await?,
+                None => None,
+            };
+            approval
+                .and_then(|a| {
+                    a.payload
+                        .get("turn_id")
+                        .and_then(|t| t.as_str())
+                        .map(String::from)
+                })
+                .unwrap_or_else(|| turn.id.to_string())
+        }
+        _ => turn.id.to_string(),
+    })
+}
+
+impl Core {
+    /// L'exécuteur des outils d'un tour de conversation, branché sur le cœur (`Admin`)
+    /// et ses ports (messagerie, MCP, orchestrateur).
+    fn tool_executor(
+        self: &Arc<Self>,
+        session_id: &str,
+        origin: &Origin,
+        alias: &str,
+        model_id: &str,
+    ) -> NativeToolExecutor {
+        let s = &self.services;
+        let mut exec = NativeToolExecutor::new(
+            s.clone(),
+            ToolEnv {
+                session_id: session_id.to_string(),
+                run_id: None,
+                origin: origin.clone(),
+                workspaces: default_workspaces(s),
+                in_workflow: false,
+                turn_model: Some(penelope_executor::selfknow::TurnModel {
+                    alias: alias.to_string(),
+                    model_id: model_id.to_string(),
+                }),
+            },
+        );
+        exec.admin = Some(self.clone() as Arc<dyn penelope_executor::selfknow::Admin>);
+        exec.messenger = self.hooks.messenger();
+        exec.mcp = self.hooks.mcp();
+        exec.orchestrator = self.hooks.orchestrator();
+        exec
+    }
+
+    /// Outils offerts au tour : le noyau, les outils à la demande découverts par la
+    /// session (#104) et les outils MCP chargés d'emblée.
+    async fn turn_tools(&self, session_id: &str) -> Vec<penelope_llm::ToolDef> {
+        let discovered = tools_on_demand::exposed_for_turn(&self.services, session_id).await;
+        let mut tools = chat_tool_defs(&discovered);
+        if let Some(m) = self.hooks.mcp() {
+            tools.extend(m.eager_tools().await);
+        }
+        tools
     }
 }
 
