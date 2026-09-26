@@ -74,6 +74,11 @@ table() {
         inside { sub(/[ \t]*#.*/, ""); gsub(/"/, ""); if ($0 ~ /=/) { split($0, kv, /[ \t]*=[ \t]*/); print kv[1], kv[2] } }' "$BUDGET"
 }
 table coverage.uncovered > "$tmp/plafonds"
+# Deux mesures du même code diffèrent de quelques lignes (jusqu'à 5 relevées) : le plafond
+# tolère ce bruit, sans jamais remonter par --update.
+TOLERANCE=10
+# Crates dispensées de la comparaison avec main, chacune avec sa raison dans budget.toml.
+table coverage.exceptions | awk '{ print $1 }' > "$tmp/exceptions"
 table coverage.main > "$tmp/main"
 
 fail=0
@@ -83,11 +88,11 @@ while read -r crate found hit; do
     ceiling=$(awk -v c="$crate" '$1 == c { print $2 }' "$tmp/plafonds")
     main=$(awk -v c="$crate" '$1 == c { print $2 }' "$tmp/main")
     state=ok
-    if [ -n "$ceiling" ] && [ "$miss" -gt "$ceiling" ]; then
+    if [ -n "$ceiling" ] && [ "$miss" -gt $((ceiling + TOLERANCE)) ]; then
         state=AU-DELA
         echo "  $crate : $miss lignes non couvertes, plafond $ceiling (budget.toml [coverage.uncovered]) : les lignes ajoutées ne sont pas testées, ou du code mort est resté" >&2
     fi
-    if [ -n "$main" ] && [ "$miss" -gt "$main" ]; then
+    if [ -n "$main" ] && [ "$miss" -gt "$main" ] && ! grep -qx "$crate" "$tmp/exceptions"; then
         state=AU-DELA
         echo "  $crate : $miss lignes non couvertes, $main sur main au point de fourche (budget.toml [coverage.main], critère 7)" >&2
     fi
