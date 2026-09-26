@@ -67,7 +67,6 @@ const EPHEMERAL_KEYS: &[&str] = &[
 const RETIRED_KEYS: &[&str] = &["prompt.prefix.", "turn.recorded."];
 
 /// Efface tout ce qu'une session a dit et fait dire, sauf la chaîne d'audit.
-#[allow(clippy::too_many_lines)] // gel 0.17 : purge d'une session table par table
 pub async fn session(s: &Services, session_id: &str, reason: &str) -> anyhow::Result<Value> {
     let sess = s.sessions.require(session_id).await?;
     let sid = session_id.to_string();
@@ -108,24 +107,7 @@ pub async fn session(s: &Services, session_id: &str, reason: &str) -> anyhow::Re
     let (counts, files) = s
         .store
         .write(move |tx| {
-            // Fichiers cités par le transcript (photos, vocaux) et artefacts externalisés.
-            let mut files: Vec<String> = Vec::new();
-            {
-                let mut st = tx.prepare("SELECT content FROM messages WHERE session_id = ?1")?;
-                let rows = st.query_map([&sid], |r| r.get::<_, String>(0))?;
-                for r in rows {
-                    files.extend(media_paths(&r?, &media_root));
-                }
-            }
-            {
-                let mut st = tx.prepare(
-                    "SELECT path FROM artifacts WHERE session_id = ?1 AND path IS NOT NULL",
-                )?;
-                let rows = st.query_map([&sid], |r| r.get::<_, String>(0))?;
-                for r in rows {
-                    files.push(r?);
-                }
-            }
+            let files = session_files(tx, &sid, &media_root)?;
 
             // Les caches de la conversation, prompts système compris (#205) : seule
             // `penelope-context` les écrit (T16).
@@ -157,86 +139,15 @@ pub async fn session(s: &Services, session_id: &str, reason: &str) -> anyhow::Re
                 "UPDATE sessions SET title = '(session purgée)' WHERE id = ?1",
                 [&sid],
             )?;
-            // Updates Telegram reçus pendant la session sur ce chat : leur payload porte le
-            // texte intégral.
-            let updates = match chat_id {
-                Some(chat) => tx.execute(
-                    "UPDATE tg_updates SET payload = '{}'
-                     WHERE received_at >= ?1 AND received_at < ?3 AND payload <> '{}'
-                       AND ?2 IN (
-                        json_extract(payload, '$.message.chat.id'),
-                        json_extract(payload, '$.edited_message.chat.id'),
-                        json_extract(payload, '$.callback_query.message.chat.id')
-                     )",
-                    params![since, chat, until_or_max],
-                )?,
-                None => 0,
-            };
-            // Ce que l'assistante a dit sur Telegram pendant la session (#78).
-            let outbox = match chat_id {
-                Some(chat) => tx.execute(
-                    "DELETE FROM tg_outbox
-                     WHERE chat_id = ?1 AND created_at >= ?2 AND created_at < ?3",
-                    params![chat, since, until_or_max],
-                )?,
-                None => 0,
-            };
-            // Ce que l'agent a fait (#78) : arguments et résultats d'outils, demandes
-            // d'approbation, tâches MCP, sorties de workflows. Les lignes, leurs états et
-            // les clés d'idempotence restent : un rejeu est toujours reconnu.
-            const RUNS: &str = "SELECT id FROM workflow_runs WHERE session_id = ?1";
-            let effects = tx.execute(
-                &format!(
-                    "UPDATE effects SET request = '{{}}', result = NULL, error = NULL
-                     WHERE session_id = ?1 OR run_id IN ({RUNS})"
-                ),
-                [&sid],
-            )?;
-            let approvals = tx.execute(
-                &format!(
-                    "UPDATE approval_requests SET subject = '(purgé)', payload = '{{}}',
-                        reason = NULL,
-                        state = CASE state WHEN 'pending' THEN 'cancelled' ELSE state END
-                     WHERE session_id = ?1 OR run_id IN ({RUNS})"
-                ),
-                [&sid],
-            )?;
-            let tasks = tx.execute(
-                &format!(
-                    "UPDATE mcp_tasks SET request = '{{}}', result = NULL
-                     WHERE session_id = ?1 OR run_id IN ({RUNS})"
-                ),
-                [&sid],
-            )?;
-            // #204 : un job d'outil porte la commande demandée et sa sortie. La ligne, son
-            // état et son effet restent : la chaîne d'audit tient, le contenu part. Un job
-            // encore en cours est déclaré annulé — la session n'existe plus pour l'accueillir.
-            let jobs = tx.execute(
-                &format!(
-                    "UPDATE tool_jobs SET request = '{{}}', result = NULL,
-                        state = CASE WHEN state IN ('working','input_required')
-                                     THEN 'cancelled' ELSE state END,
-                        delivered_at = COALESCE(delivered_at, updated_at)
-                     WHERE session_id = ?1 OR run_id IN ({RUNS})"
-                ),
-                [&sid],
-            )?;
-            let steps = tx.execute(
-                &format!(
-                    "UPDATE workflow_step_log SET output = NULL, error = NULL
-                     WHERE run_id IN ({RUNS})"
-                ),
-                [&sid],
-            )?;
-            let runs = tx.execute(
-                "UPDATE workflow_runs SET params = '{}', step_outputs = '{}', result = NULL,
-                    error = NULL,
-                    state = CASE WHEN state IN ('running','paused','blocked')
-                                 THEN 'cancelled' ELSE state END,
-                    finished_at = COALESCE(finished_at, updated_at)
-                 WHERE session_id = ?1",
-                [&sid],
-            )?;
+            let (updates, outbox) = purge_session_telegram(tx, chat_id, &since, &until_or_max)?;
+            let SessionWork {
+                effects,
+                approvals,
+                tasks,
+                jobs,
+                steps,
+                runs,
+            } = purge_session_work(tx, &sid)?;
             Ok((
                 json!({
                     "messages": messages,
@@ -260,27 +171,7 @@ pub async fn session(s: &Services, session_id: &str, reason: &str) -> anyhow::Re
         })
         .await?;
 
-    let mut removed = 0usize;
-    for f in &files {
-        let path = std::path::Path::new(f);
-        let under_media = f.starts_with(
-            &s.platform
-                .dirs
-                .data()
-                .join("media")
-                .to_string_lossy()
-                .to_string(),
-        );
-        let path = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            artifacts_root.join(path)
-        };
-        if (under_media || path.starts_with(&artifacts_root)) && std::fs::remove_file(&path).is_ok()
-        {
-            removed += 1;
-        }
-    }
+    let removed = remove_session_files(s, &files, &artifacts_root);
 
     // La chaîne d'audit garde ses lignes et ses hash : le payload seul est remplacé, et
     // `audit.purge` dit ce qui vient d'être fait.
@@ -299,6 +190,173 @@ pub async fn session(s: &Services, session_id: &str, reason: &str) -> anyhow::Re
     }
     tracing::info!(session = %session_id, %reason, "session purgée");
     Ok(report)
+}
+
+/// Fichiers cités par le transcript (photos, vocaux) et artefacts externalisés.
+fn session_files(
+    tx: &penelope_store::rusqlite::Transaction<'_>,
+    sid: &str,
+    media_root: &str,
+) -> penelope_store::rusqlite::Result<Vec<String>> {
+    let mut files: Vec<String> = Vec::new();
+    {
+        let mut st = tx.prepare("SELECT content FROM messages WHERE session_id = ?1")?;
+        let rows = st.query_map([sid], |r| r.get::<_, String>(0))?;
+        for r in rows {
+            files.extend(media_paths(&r?, media_root));
+        }
+    }
+    {
+        let mut st =
+            tx.prepare("SELECT path FROM artifacts WHERE session_id = ?1 AND path IS NOT NULL")?;
+        let rows = st.query_map([sid], |r| r.get::<_, String>(0))?;
+        for r in rows {
+            files.push(r?);
+        }
+    }
+    Ok(files)
+}
+
+/// Le côté Telegram de la session, sur la fenêtre `[since, until[` de son chat : updates
+/// reçus et messages envoyés. Rien sans chat.
+fn purge_session_telegram(
+    tx: &penelope_store::rusqlite::Transaction<'_>,
+    chat_id: Option<i64>,
+    since: &str,
+    until: &str,
+) -> penelope_store::rusqlite::Result<(usize, usize)> {
+    // Updates Telegram reçus pendant la session sur ce chat : leur payload porte le
+    // texte intégral.
+    let updates = match chat_id {
+        Some(chat) => tx.execute(
+            "UPDATE tg_updates SET payload = '{}'
+             WHERE received_at >= ?1 AND received_at < ?3 AND payload <> '{}'
+               AND ?2 IN (
+                json_extract(payload, '$.message.chat.id'),
+                json_extract(payload, '$.edited_message.chat.id'),
+                json_extract(payload, '$.callback_query.message.chat.id')
+             )",
+            params![since, chat, until],
+        )?,
+        None => 0,
+    };
+    // Ce que l'assistante a dit sur Telegram pendant la session (#78).
+    let outbox = match chat_id {
+        Some(chat) => tx.execute(
+            "DELETE FROM tg_outbox
+             WHERE chat_id = ?1 AND created_at >= ?2 AND created_at < ?3",
+            params![chat, since, until],
+        )?,
+        None => 0,
+    };
+    Ok((updates, outbox))
+}
+
+/// Lignes vidées par [`purge_session_work`], table par table.
+struct SessionWork {
+    effects: usize,
+    approvals: usize,
+    tasks: usize,
+    jobs: usize,
+    steps: usize,
+    runs: usize,
+}
+
+fn purge_session_work(
+    tx: &penelope_store::rusqlite::Transaction<'_>,
+    sid: &str,
+) -> penelope_store::rusqlite::Result<SessionWork> {
+    // Ce que l'agent a fait (#78) : arguments et résultats d'outils, demandes
+    // d'approbation, tâches MCP, sorties de workflows. Les lignes, leurs états et
+    // les clés d'idempotence restent : un rejeu est toujours reconnu.
+    const RUNS: &str = "SELECT id FROM workflow_runs WHERE session_id = ?1";
+    let effects = tx.execute(
+        &format!(
+            "UPDATE effects SET request = '{{}}', result = NULL, error = NULL
+             WHERE session_id = ?1 OR run_id IN ({RUNS})"
+        ),
+        [sid],
+    )?;
+    let approvals = tx.execute(
+        &format!(
+            "UPDATE approval_requests SET subject = '(purgé)', payload = '{{}}',
+                reason = NULL,
+                state = CASE state WHEN 'pending' THEN 'cancelled' ELSE state END
+             WHERE session_id = ?1 OR run_id IN ({RUNS})"
+        ),
+        [sid],
+    )?;
+    let tasks = tx.execute(
+        &format!(
+            "UPDATE mcp_tasks SET request = '{{}}', result = NULL
+             WHERE session_id = ?1 OR run_id IN ({RUNS})"
+        ),
+        [sid],
+    )?;
+    // #204 : un job d'outil porte la commande demandée et sa sortie. La ligne, son
+    // état et son effet restent : la chaîne d'audit tient, le contenu part. Un job
+    // encore en cours est déclaré annulé — la session n'existe plus pour l'accueillir.
+    let jobs = tx.execute(
+        &format!(
+            "UPDATE tool_jobs SET request = '{{}}', result = NULL,
+                state = CASE WHEN state IN ('working','input_required')
+                             THEN 'cancelled' ELSE state END,
+                delivered_at = COALESCE(delivered_at, updated_at)
+             WHERE session_id = ?1 OR run_id IN ({RUNS})"
+        ),
+        [sid],
+    )?;
+    let steps = tx.execute(
+        &format!(
+            "UPDATE workflow_step_log SET output = NULL, error = NULL
+             WHERE run_id IN ({RUNS})"
+        ),
+        [sid],
+    )?;
+    let runs = tx.execute(
+        "UPDATE workflow_runs SET params = '{}', step_outputs = '{}', result = NULL,
+            error = NULL,
+            state = CASE WHEN state IN ('running','paused','blocked')
+                         THEN 'cancelled' ELSE state END,
+            finished_at = COALESCE(finished_at, updated_at)
+         WHERE session_id = ?1",
+        [sid],
+    )?;
+    Ok(SessionWork {
+        effects,
+        approvals,
+        tasks,
+        jobs,
+        steps,
+        runs,
+    })
+}
+
+/// Efface du disque les fichiers de la session, s'ils vivent sous les médias ou les
+/// artefacts : un chemin cité ailleurs n'est jamais suivi.
+fn remove_session_files(s: &Services, files: &[String], artifacts_root: &std::path::Path) -> usize {
+    let mut removed = 0usize;
+    for f in files {
+        let path = std::path::Path::new(f);
+        let under_media = f.starts_with(
+            &s.platform
+                .dirs
+                .data()
+                .join("media")
+                .to_string_lossy()
+                .to_string(),
+        );
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            artifacts_root.join(path)
+        };
+        if (under_media || path.starts_with(artifacts_root)) && std::fs::remove_file(&path).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Les sessions nées d'un fork de celle-ci : elles lisent leur préfixe dans son journal
