@@ -237,4 +237,50 @@ mod tests {
     fn short_token_length() {
         assert_eq!(short_token(12).len(), 12);
     }
+
+    /// Crockford base32 : minuscules acceptées, `O` lu 0, `I` et `L` lus 1, `U` refusé.
+    #[test]
+    fn crockford_decoding_is_forgiving_but_not_lax() {
+        let u = Ulid::from_parts(1_757_000_000_000, 42);
+        let s = u.to_string();
+        assert_eq!(s.to_lowercase().parse::<Ulid>().unwrap(), u);
+        assert_eq!(
+            "O".repeat(26).parse::<Ulid>().unwrap(),
+            "0".repeat(26).parse::<Ulid>().unwrap()
+        );
+        let ones = "1".repeat(26).parse::<Ulid>().unwrap();
+        assert_eq!("I".repeat(26).parse::<Ulid>().unwrap(), ones);
+        assert_eq!("l".repeat(26).parse::<Ulid>().unwrap(), ones);
+        let e = "U".repeat(26).parse::<Ulid>().unwrap_err();
+        assert_eq!(e, UlidError::Char('U'));
+        assert_eq!(e.to_string(), "ULID invalide : caractère 'U'");
+        let e = "01J".parse::<Ulid>().unwrap_err();
+        assert_eq!(e.to_string(), "ULID invalide : 3 caractères au lieu de 26");
+        assert_eq!(format!("{u:?}"), format!("Ulid({s})"));
+    }
+
+    /// Un ULID se sérialise en texte et refuse de se relire depuis un texte invalide.
+    #[test]
+    fn ulids_round_trip_through_json() {
+        let u = Ulid::new();
+        let j = serde_json::to_string(&u).unwrap();
+        assert_eq!(j, format!("\"{u}\""));
+        assert_eq!(serde_json::from_str::<Ulid>(&j).unwrap(), u);
+        assert!(serde_json::from_str::<Ulid>("\"court\"").is_err());
+        assert!(Ulid::default().timestamp_ms() > 1_700_000_000_000);
+    }
+
+    /// Les identifiants typés portent leur préfixe et se lisent comme du texte.
+    #[test]
+    fn typed_ids_carry_their_prefix() {
+        assert!(RunId::default().as_str().starts_with("r_"));
+        assert!(ArtifactId::new().as_str().starts_with("art_"));
+        let t = TurnId::from("t_1");
+        assert_eq!(t, TurnId::from("t_1".to_string()));
+        assert_eq!(t.to_string(), "t_1");
+        assert_eq!(format!("{t:?}"), "TurnId(t_1)");
+        let tok = short_token(12);
+        assert_eq!(tok.len(), 12);
+        assert!(tok.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
 }

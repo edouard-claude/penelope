@@ -1,6 +1,8 @@
 use super::*;
 use crate::clock::TestClock;
 
+mod validation;
+
 fn cfg() -> Config {
     Config::sample(123)
 }

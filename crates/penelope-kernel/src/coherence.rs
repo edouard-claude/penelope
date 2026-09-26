@@ -306,4 +306,67 @@ mod tests {
         let refused = new_refusals(&before, &c, "tools.http_allowlist");
         assert_eq!(refused.len(), 1, "{refused:?}");
     }
+
+    /// Routage vers un alias absent, repli sur soi-même ou vers un absent, provider
+    /// désactivé sous un rôle, point de contrôle au-delà du plafond de session, queue
+    /// plus grande que le plafond de prompt : chacun est nommé.
+    #[test]
+    fn routing_budget_and_context_contradictions_are_named() {
+        let mut c = Config::sample(42);
+        c.models.routing.high = "fantome".into();
+        c.models
+            .routing
+            .fallback
+            .insert("main".into(), vec!["main".into(), "absent".into()]);
+        c.providers.openrouter.enabled = false;
+        c.budget.session_usd = 1.0;
+        c.budget.turn_checkpoint_usd = 2.0;
+        c.context.max_prompt_tokens = c.context.tail_max_tokens;
+        c.budget.alert_ratio = 0.0;
+        let found = contradictions(&c);
+        let msg = |k: &str| {
+            found
+                .iter()
+                .filter(|x| x.concerns(k))
+                .map(|x| x.message.clone())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+        assert!(
+            msg("models.routing.high").contains("`fantome`"),
+            "{found:?}"
+        );
+        let fb = msg("models.routing.fallback.main");
+        assert!(fb.contains("se replie sur lui-même"), "{fb}");
+        assert!(fb.contains("vise l'alias `absent`"), "{fb}");
+        assert!(
+            msg("providers.openrouter.enabled").contains("est désactivé"),
+            "{found:?}"
+        );
+        assert!(msg("budget.turn_checkpoint_usd").contains("n'arriverait jamais"));
+        assert!(msg("context.max_prompt_tokens").contains("chaque tour compacterait"));
+        assert!(msg("budget.alert_ratio").contains("à chaque appel"));
+    }
+
+    /// Les hôtes privés reconnus, et ceux qui ne le sont pas.
+    #[test]
+    fn private_hosts_are_recognised() {
+        for h in [
+            "localhost",
+            "http://nas.local/x",
+            "https://10.1.2.3",
+            "172.20.0.1:8080",
+            "169.254.1.1",
+            "app.localhost",
+        ] {
+            assert!(private_host(h), "{h}");
+        }
+        // `::1` n'est pas vérifié ici : le découpage sur `:` vide l'hôte avant la
+        // comparaison, la branche qui le nomme n'est jamais atteinte (relevé, non corrigé).
+        for h in ["api.example.com", "172.32.0.1", "8.8.8.8"] {
+            assert!(!private_host(h), "{h}");
+        }
+        assert_eq!(rank("inconnu"), rank("ask"));
+        assert!(rank("deny") > rank("ask_twice"));
+    }
 }
