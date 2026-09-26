@@ -50,3 +50,6 @@ pub fn without_intention(args: &Value) -> Value {
     }
     a
 }
+
+#[cfg(test)]
+mod tests;
