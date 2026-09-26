@@ -232,6 +232,16 @@ mod tests {
             n.text(concat!("v", env!("CARGO_PKG_VERSION"))),
             "v{{version}}"
         );
+        // Un préfixe court collé par `_` n'est jamais laissé en clair ; il garde son nom.
+        assert_eq!(
+            n.text("i_01JEEEEEEEEEEEEEEEEEEEEEEE tj_01JFFFFFFFFFFFFFFFFFFFFFFF"),
+            "{{i:1}} {{tj:1}}"
+        );
+        assert_eq!(n.text("zz_01JGGGGGGGGGGGGGGGGGGGGGGG"), "{{zz:1}}");
+        assert_eq!(
+            n.text("shell-01JHHHHHHHHHHHHHHHHHHHHHHH"),
+            "shell-{{ulid:2}}"
+        );
         assert_eq!(n.text("rien à voir"), "rien à voir");
     }
 
