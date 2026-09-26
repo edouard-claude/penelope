@@ -337,3 +337,194 @@ fn a_token_is_refreshed_before_it_dies_or_after_eight_days() {
         "neuf jours"
     );
 }
+
+fn expired_grant(s: &Services, refresh_token: &str) -> Grant {
+    let now = s.clock.now_ms();
+    Grant {
+        access_token: "a1".into(),
+        refresh_token: refresh_token.into(),
+        account_id: "acc_1".into(),
+        expires_at: now - 1,
+        last_refresh: now - 1,
+        ..Default::default()
+    }
+}
+
+/// #148 : la révocation envoie chaque jeton non vide et dit si l'un est passé.
+#[tokio::test]
+async fn revocation_sends_both_tokens_and_says_if_one_passed() {
+    let (url, seen) = scripted_server(vec![(500, "{}".into()), (200, "{}".into())]).await;
+    let (_dir, services) = with_issuer(&url).await;
+    let s = &*services;
+    assert!(revoke(s, &expired_grant(s, "r1")).await);
+    let reqs = seen.lock().unwrap().clone();
+    assert_eq!(reqs.len(), 2);
+    assert!(reqs[0].contains("/oauth/revoke") && reqs[0].contains("token=r1"));
+    assert!(reqs[1].contains("token=a1"));
+    let events = s.events.range(0, 50).await.unwrap();
+    let ev = events
+        .iter()
+        .find(|e| e.kind == "llm.provider_tokens_revoked")
+        .unwrap();
+    assert_eq!(ev.payload["ok"], true);
+
+    let (url, _) = scripted_server(vec![(500, "{}".into())]).await;
+    let (_dir, services) = with_issuer(&url).await;
+    let s = &*services;
+    assert!(
+        !revoke(s, &expired_grant(s, "")).await,
+        "seul le jeton d'accès part, et il est refusé"
+    );
+}
+
+#[tokio::test]
+async fn the_installation_id_is_created_once() {
+    let (_dir, services) = with_issuer("http://127.0.0.1:9").await;
+    let s = &*services;
+    let first = installation_id(s).await;
+    assert_eq!(first.len(), 26);
+    assert_eq!(first, first.to_lowercase());
+    assert_eq!(installation_id(s).await, first);
+}
+
+/// Un refus du serveur, à la demande du code ou au sondage, est dit avec son statut ;
+/// la demande en attente est oubliée même en échec.
+#[tokio::test]
+async fn device_code_refusals_are_reported_and_the_pending_code_forgotten() {
+    let (url, _) = scripted_server(vec![(500, json!({"error": "panne"}).to_string())]).await;
+    let (_dir, services) = with_issuer(&url).await;
+    let err = start(&services).await.unwrap_err();
+    assert!(
+        err.contains("refusée (500)") && err.contains("panne"),
+        "{err}"
+    );
+
+    let (url, _) = scripted_server(vec![
+        (
+            200,
+            json!({"device_auth_id": "dev_1", "usercode": "WXYZ", "interval": 1}).to_string(),
+        ),
+        (429, json!({"error": "trop"}).to_string()),
+    ])
+    .await;
+    let (_dir, services) = with_issuer(&url).await;
+    let s = &*services;
+    let err = wait_pending(s).await.unwrap_err();
+    assert!(err.contains("aucune connexion Codex en attente"), "{err}");
+    let login = start_pending(s).await.unwrap();
+    assert_eq!(login.user_code, "WXYZ", "ancien nom du champ accepté");
+    let err = wait_pending(s).await.unwrap_err();
+    assert!(err.contains("code d'appareil refusé (429)"), "{err}");
+    assert_eq!(
+        s.kv_get("codex.oauth.pending").await.unwrap().as_deref(),
+        Some(""),
+        "un code mort n'est pas resservi"
+    );
+}
+
+/// Un refus passager du rafraîchissement laisse la connexion ; un 401 la coupe, et le
+/// jeton n'est plus servi, raison comprise.
+#[tokio::test]
+async fn refresh_failures_are_transient_or_final() {
+    let (url, _) = scripted_server(vec![
+        (503, json!({"error": {"type": "surcharge"}}).to_string()),
+        (401, json!({"error": {"code": "token_expired"}}).to_string()),
+    ])
+    .await;
+    let (_dir, services) = with_issuer(&url).await;
+    let s = &*services;
+    let err = refresh(s).await.unwrap_err();
+    assert_eq!(err, NOT_CONNECTED, "sans connexion");
+
+    store(s, &expired_grant(s, "")).unwrap();
+    let err = refresh(s).await.unwrap_err();
+    assert!(err.contains("pas de jeton de rafraîchissement"), "{err}");
+
+    store(s, &expired_grant(s, "r1")).unwrap();
+    let err = refresh(s).await.unwrap_err();
+    assert!(err.contains("rafraîchissement refusé (503)"), "{err}");
+    assert!(load(s).unwrap().unwrap().disconnected.is_none());
+
+    let tokens = DaemonTokens::new(services.clone());
+    let err = penelope_llm::TokenSource::refreshed(&tokens)
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, LlmErrorKind::Auth);
+    assert!(err.message.contains("token_expired"), "{}", err.message);
+    let err = penelope_llm::TokenSource::token(&tokens).await.unwrap_err();
+    assert!(err.message.contains("(token_expired)"), "{}", err.message);
+    let err = refresh(s).await.unwrap_err();
+    assert!(err.contains("(token_expired)"), "{err}");
+}
+
+/// Un jeton encore frais est servi sans appel réseau ; l'état montre le compte à
+/// défaut d'adresse.
+#[tokio::test]
+async fn a_fresh_token_is_served_as_is() {
+    let (_dir, services) = with_issuer("http://127.0.0.1:9").await;
+    let s = &*services;
+    let now = s.clock.now_ms();
+    store(
+        s,
+        &Grant {
+            access_token: "frais".into(),
+            refresh_token: "r1".into(),
+            account_id: "acc_9".into(),
+            expires_at: now + 3_600_000,
+            last_refresh: now,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let tokens = DaemonTokens::new(services.clone());
+    let t = penelope_llm::TokenSource::token(&tokens).await.unwrap();
+    assert_eq!(t.access_token, "frais");
+    assert_eq!(refresh(s).await.unwrap().access_token, "frais");
+    let st = status(s).unwrap().unwrap();
+    assert!(st.connected);
+    assert_eq!(st.account, "acc_9");
+}
+
+/// La déconnexion révoque le jeton de rafraîchissement puis oublie la connexion.
+#[tokio::test]
+async fn logout_revokes_then_forgets() {
+    let (url, seen) = scripted_server(vec![(200, "{}".into())]).await;
+    let (_dir, services) = with_issuer(&url).await;
+    let s = &*services;
+    store(s, &expired_grant(s, "r1")).unwrap();
+    logout(s).await.unwrap();
+    assert!(load(s).unwrap().is_none());
+    let reqs = seen.lock().unwrap().clone();
+    assert_eq!(reqs.len(), 1);
+    assert!(reqs[0].contains("token=r1"), "{}", reqs[0]);
+    let events = s.events.range(0, 50).await.unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|e| e.kind == "llm.provider_disconnected" && e.payload["reason"] == "logout")
+    );
+}
+
+/// Une déconnexion n'est annoncée qu'une fois par raison.
+#[tokio::test]
+async fn a_disconnection_is_announced_once() {
+    let (_dir, services) = with_issuer("http://127.0.0.1:9").await;
+    let s = &*services;
+    let rec = penelope_app::testing::RecordingMessenger::new();
+    let dead = Grant {
+        disconnected: Some("refresh_token_reused".into()),
+        ..Default::default()
+    };
+    notify_disconnected(s, Some(rec.clone()), &dead).await;
+    notify_disconnected(s, Some(rec.clone()), &dead).await;
+    let texts = rec.texts();
+    assert_eq!(texts.len(), 1);
+    assert!(texts[0].contains("Compte ChatGPT déconnecté** (refresh_token_reused)"));
+    let other = Grant {
+        disconnected: Some("invalid_grant".into()),
+        ..Default::default()
+    };
+    notify_disconnected(s, None, &other).await;
+    notify_disconnected(s, Some(rec.clone()), &other).await;
+    assert_eq!(rec.texts().len(), 1, "déjà notée, même sans canal");
+}
