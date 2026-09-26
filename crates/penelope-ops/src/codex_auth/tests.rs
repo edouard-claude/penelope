@@ -601,3 +601,84 @@ async fn the_refresh_loop_alerts_on_quota_and_announces_a_disconnection() {
         "{gauge:?}"
     );
 }
+
+/// Magasin qui refuse d'écrire en recopiant la valeur, comme le Trousseau de #148.
+struct RefusingStore;
+impl penelope_platform::secrets::SecretStore for RefusingStore {
+    fn backend(&self) -> String {
+        "refus".into()
+    }
+    fn get(&self, _: &str) -> penelope_platform::Result<Option<String>> {
+        Ok(None)
+    }
+    fn set(&self, _: &str, value: &str) -> penelope_platform::Result<()> {
+        Err(penelope_platform::PlatformError::Secret(format!(
+            "security: valeur refusée : {value}"
+        )))
+    }
+    fn delete(&self, _: &str) -> penelope_platform::Result<()> {
+        Ok(())
+    }
+    fn list(&self) -> penelope_platform::Result<Vec<String>> {
+        Ok(vec![])
+    }
+}
+
+/// #148 : connexion réussie mais rangement impossible : les jetons sont révoqués et
+/// l'erreur ne les recopie pas.
+#[tokio::test]
+async fn an_unstorable_grant_is_revoked_and_never_echoed() {
+    let access = format!("x.{}.y", b64(&json!({"exp": 1_900_000_000i64})));
+    let (url, seen) = scripted_server(vec![
+        (
+            200,
+            json!({"device_auth_id": "dev_1", "user_code": "ABCD", "interval": "1"}).to_string(),
+        ),
+        (
+            200,
+            json!({"authorization_code": "code_1", "code_verifier": "ver_1"}).to_string(),
+        ),
+        (
+            200,
+            json!({"access_token": access, "refresh_token": "rt-secret-148", "id_token": id_token()})
+                .to_string(),
+        ),
+        (200, "{}".to_string()),
+        (200, "{}".to_string()),
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let clock: penelope_kernel::clock::SharedClock =
+        Arc::new(penelope_kernel::clock::TestClock::default());
+    let mut s = Services::for_tests(dir.path().to_path_buf(), clock)
+        .await
+        .unwrap();
+    let Some(platform) = Arc::get_mut(&mut s.platform) else {
+        panic!("la plateforme des services de test est partagée");
+    };
+    platform.secrets = Box::new(RefusingStore);
+    let issuer = url.clone();
+    s.publish_config("test", move |c| {
+        c.providers.codex.issuer = issuer.clone();
+        c.providers.codex.enabled = true;
+        Ok(vec!["providers.codex.issuer".into()])
+    })
+    .unwrap();
+
+    let login = start(&s).await.unwrap();
+    let err = wait_for(&s, &login).await.unwrap_err();
+    assert!(err.starts_with("connexion annulée"), "{err}");
+    assert!(err.contains("ils ont été révoqués"), "{err}");
+    assert!(!err.contains("rt-secret-148"), "{err}");
+    let reqs = seen.lock().unwrap().clone();
+    let revoked: Vec<&String> = reqs
+        .iter()
+        .filter(|r| r.contains("/oauth/revoke"))
+        .collect();
+    assert_eq!(
+        revoked.len(),
+        2,
+        "jeton de rafraîchissement et jeton d'accès"
+    );
+    assert!(revoked[0].contains("token=rt-secret-148"));
+}
