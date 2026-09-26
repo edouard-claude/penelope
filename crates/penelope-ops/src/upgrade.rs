@@ -214,13 +214,24 @@ fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Résout une release (`tag` absent : la plus haute version publiée). Les versions 0.x
-/// sont publiées en pre-release, que `releases/latest` ignore : on lit la liste.
-pub async fn release(
+/// Release retenue, avant d'y chercher l'archive de l'OS.
+#[derive(Debug, Clone)]
+pub struct Published {
+    pub tag: String,
+    pub version: String,
+    /// La release telle que l'API la rend (`assets`).
+    pub meta: Value,
+}
+
+/// Retient une release (`tag` absent : la plus haute version publiée) sans exiger son
+/// archive : `check` dit qu'une version existe sur tout OS, même sans artefact publié
+/// pour lui (sous Linux, `check` échouait sur « pas d'artefact publié »). Les versions
+/// 0.x sont publiées en pre-release, que `releases/latest` ignore : on lit la liste.
+pub async fn latest_tag(
     client: &reqwest::Client,
     source: &Source,
     tag: Option<&str>,
-) -> Result<Release, String> {
+) -> Result<Published, String> {
     let base = source.releases_url.trim_end_matches('/');
     let meta: Value = match tag {
         Some(t) => {
@@ -248,6 +259,16 @@ pub async fn release(
         .ok_or("release sans `tag_name`")?
         .to_string();
     let version = tag.trim_start_matches('v').to_string();
+    Ok(Published { tag, version, meta })
+}
+
+/// Résout une release et son archive pour l'OS : ce qu'une installation télécharge.
+pub async fn release(
+    client: &reqwest::Client,
+    source: &Source,
+    tag: Option<&str>,
+) -> Result<Release, String> {
+    let Published { tag, version, meta } = latest_tag(client, source, tag).await?;
     let archive_name = asset_name(&tag, &source.os)?;
     let url_of = |wanted: &str| {
         meta["assets"].as_array().and_then(|a| {
@@ -270,7 +291,7 @@ pub async fn release(
 
 /// Version publiée la plus récente, comparée à celle qui tourne.
 pub async fn check(source: &Source) -> Result<Value, String> {
-    let r = release(&client()?, source, None).await?;
+    let r = latest_tag(&client()?, source, None).await?;
     Ok(json!({
         "current": crate::VERSION,
         "latest": r.version,

@@ -109,6 +109,32 @@ async fn the_latest_release_skips_prereleases_unless_asked_by_tag() {
     assert_eq!(asked.version, "1.0.0-alpha.1");
 }
 
+/// `check` retient la version sans l'archive : sous Linux, où aucun artefact n'est
+/// publié, il disait « pas d'artefact publié pour linux » au lieu de la version.
+#[tokio::test]
+async fn check_names_the_latest_version_without_an_archive_for_the_os() {
+    let server = fake_releases(|_| {
+        let list = json!([
+            {"tag_name": "v9.9.9", "prerelease": true, "assets": []},
+            {"tag_name": "v0.1.0", "prerelease": true, "assets": []},
+        ]);
+        vec![("/r".to_string(), list.to_string().into_bytes())]
+    })
+    .await;
+    let source = Source {
+        releases_url: format!("{server}/r"),
+        os: "linux".into(),
+        pubkey: None,
+    };
+    let v = check(&source).await.unwrap();
+    assert_eq!(v["latest"], "9.9.9");
+    assert_eq!(v["up_to_date"], false);
+    let err = release(&client().unwrap(), &source, None)
+        .await
+        .unwrap_err();
+    assert!(err.contains("pas d'artefact publié pour linux"), "{err}");
+}
+
 #[cfg(unix)]
 fn fake_binary(path: &Path, version: &str) {
     std::fs::write(path, format!("#!/bin/sh\necho \"penelope {version}\"\n")).unwrap();
