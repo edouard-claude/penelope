@@ -7,6 +7,8 @@
 //!   dans l'ordre de première apparition ; un autre préfixe garde son nom (`sch_…` en
 //!   `{{sch:1}}`) ; un ULID nu devient `{{ulid:1}}` ;
 //! - la version du workspace devient `{{version}}` : un bump ne réécrit pas les attendus ;
+//! - le fichier de notes d'une session (`notes/<titre>-<6 derniers caractères de son
+//!   identifiant, en minuscules>.md`, `session_notes`) devient `<titre>-{{session:1}}.md` ;
 //! - un horodatage RFC 3339 devient `{{ts}}` à l'instant de départ du scénario, sinon
 //!   `{{ts+600s}}` ou `{{ts+1500ms}}` : l'horloge de test rend l'écart exact ;
 //! - la racine temporaire des services (brute et canonique) devient `{{home}}` ;
@@ -62,6 +64,8 @@ pub struct Normaliser {
     homes: Vec<String>,
     ids: HashMap<String, String>,
     counters: HashMap<String, usize>,
+    /// Suffixes de fichiers de notes de session (`-xa9cdw.md`) et leur jeton.
+    note_suffixes: Vec<(String, String)>,
     ulid: Regex,
     stamp: Regex,
     hex: Regex,
@@ -84,6 +88,7 @@ impl Normaliser {
             homes,
             ids: HashMap::new(),
             counters: HashMap::new(),
+            note_suffixes: Vec::new(),
             ulid: Regex::new(r"\b(?:([a-z]+)_)?([0-9A-HJKMNP-TV-Z]{26})\b").expect("regex ULID"),
             stamp: Regex::new(
                 r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})",
@@ -172,6 +177,10 @@ impl Normaliser {
                 self.token(&kind, &caps[0])
             })
             .into_owned();
+        let mut out = out;
+        for (suffix, token) in &self.note_suffixes {
+            out = out.replace(suffix.as_str(), token.as_str());
+        }
         let stamp = self.stamp.clone();
         let out = stamp
             .replace_all(&out, |caps: &regex::Captures| self.stamp_token(&caps[0]))
@@ -187,6 +196,15 @@ impl Normaliser {
         *n += 1;
         let t = format!("{{{{{kind}:{n}}}}}");
         self.ids.insert(raw.to_string(), t.clone());
+        if kind == "session" {
+            // `penelope_vault::session_notes` nomme le fichier par la fin de l'identifiant.
+            let tail: String = raw
+                .chars()
+                .skip(raw.chars().count().saturating_sub(6))
+                .collect();
+            self.note_suffixes
+                .push((format!("-{}.md", tail.to_lowercase()), format!("-{t}.md")));
+        }
         t
     }
 
@@ -243,6 +261,15 @@ mod tests {
             "shell-{{ulid:2}}"
         );
         assert_eq!(n.text("rien à voir"), "rien à voir");
+    }
+
+    #[test]
+    fn a_session_notes_file_is_named_by_its_session_token() {
+        let mut n = Normaliser::new(START, Path::new("/tmp/racine-v"));
+        let s = "s_01JZZZZZZZZZZZZZZZZZXA9CDW";
+        assert_eq!(n.text(s), "{{session:1}}");
+        assert_eq!(n.text("notes/cli-xa9cdw.md"), "notes/cli-{{session:1}}.md");
+        assert_eq!(n.text("notes/cli-abcdef.md"), "notes/cli-abcdef.md");
     }
 
     #[test]
