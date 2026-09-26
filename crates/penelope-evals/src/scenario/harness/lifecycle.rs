@@ -80,6 +80,13 @@ impl Harness<'_> {
         );
         self.db = Some(services.store.path().to_path_buf());
         let daemon = Arc::new(Daemon::from_services(services.clone()));
+        // L'orchestrateur, comme au démarrage du superviseur : planification, workflows,
+        // sous-agents, images et embeddings passent par lui.
+        daemon
+            .hooks
+            .set_orchestrator(Arc::new(penelope_daemon::workflow::orchestrator_of(
+                &daemon,
+            )));
         self.apply_config(&daemon)?;
         daemon.set_provider_override(self.provider(&services)?);
         let gateway = self.install_mcp(&daemon, &services).await?;
@@ -275,6 +282,10 @@ pub(super) async fn shut_down(life: Life, name: &str) {
         gateway,
     } = life;
     drop(gateway);
+    // L'orchestrateur tient une copie du daemon : la relâcher, sinon la vie ne finit pas.
+    if let Ok(mut slot) = daemon.hooks.orchestrator.write() {
+        *slot = None;
+    }
     let db = services.store.path().to_path_buf();
     let deadline = Instant::now() + SHUTDOWN_WAIT;
     let mut polls = 0u32;
