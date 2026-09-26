@@ -1,5 +1,5 @@
 use super::*;
-use crate::replay::fixture::{rewound, rich, sealed, world};
+use crate::replay::fixture::{rewound, rich, sealed, sealed_with_summary, world};
 
 fn whats(report: &VerifyReport) -> Vec<(&str, &str)> {
     report
@@ -130,44 +130,6 @@ async fn an_incoherent_journal_is_a_divergence() {
         .unwrap();
     let report = w.history().verify(None, None).await.unwrap();
     assert_eq!(whats(&report), vec![("s1", "journal")]);
-}
-
-/// `s3` en V0 : huit messages, un contexte figé par demande, un résumé actif sur 1..4 qui
-/// porte ses ancres et un `tokens_src` distinct de `tokens_self` (ce que la 0.17 écrit),
-/// puis le scellement.
-async fn sealed_with_summary(w: &crate::replay::fixture::World) {
-    use crate::anchors::{Anchor, AnchorKind};
-    let bare = w.history();
-    for i in 0..4 {
-        let seq = bare
-            .append_legacy("s3", &ChatMessage::user(format!("ancien {i}")), 300, 0)
-            .await
-            .unwrap();
-        bare.freeze_legacy("s3", seq, &format!("<ancien>{i}</ancien>"))
-            .await
-            .unwrap();
-        bare.append_legacy("s3", &ChatMessage::assistant(format!("vieux {i}")), 40, 0)
-            .await
-            .unwrap();
-    }
-    let anchors = [
-        Anchor {
-            kind: AnchorKind::Path,
-            value: "src/main.rs".into(),
-        },
-        Anchor {
-            kind: AnchorKind::Ticket,
-            value: "#147".into(),
-        },
-    ];
-    w.engine
-        .lcm
-        .insert_leaf("s3", 1, 4, "résumé ancien", &anchors, 680, 25)
-        .await
-        .unwrap();
-    bare.mark_compacted("s3", 1, 4).await.unwrap();
-    let report = w.history().seal_legacy().await.unwrap();
-    assert_eq!(report.sealed, vec![("s3".to_string(), 8)]);
 }
 
 /// Constat de la 1.0.0-alpha.15 sur une vraie base : une session scellée qui porte un

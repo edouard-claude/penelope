@@ -13,7 +13,7 @@ use penelope_llm::catalog::Catalog;
 use penelope_llm::tokens::TokenEstimator;
 use penelope_llm::types::{ChatMessage, ToolCall};
 use penelope_store::Store;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 pub(crate) struct World {
@@ -220,4 +220,127 @@ pub(crate) async fn rewound(w: &World) {
         .unwrap()
         .seq;
     h.rewind_from("s1", cutoff, 1, Some("s2")).await.unwrap();
+}
+
+/// `s3` en V0 : huit messages, un contexte figé par demande, un résumé actif sur 1..4 qui
+/// porte ses ancres et un `tokens_src` distinct de `tokens_self` (ce que la 0.17 écrit),
+/// puis le scellement.
+pub(crate) async fn sealed_with_summary(w: &World) {
+    use crate::anchors::{Anchor, AnchorKind};
+    let bare = w.history();
+    for i in 0..4 {
+        let seq = bare
+            .append_legacy("s3", &ChatMessage::user(format!("ancien {i}")), 300, 0)
+            .await
+            .unwrap();
+        bare.freeze_legacy("s3", seq, &format!("<ancien>{i}</ancien>"))
+            .await
+            .unwrap();
+        bare.append_legacy("s3", &ChatMessage::assistant(format!("vieux {i}")), 40, 0)
+            .await
+            .unwrap();
+    }
+    let anchors = [
+        Anchor {
+            kind: AnchorKind::Path,
+            value: "src/main.rs".into(),
+        },
+        Anchor {
+            kind: AnchorKind::Ticket,
+            value: "#147".into(),
+        },
+    ];
+    w.engine
+        .lcm
+        .insert_leaf("s3", 1, 4, "résumé ancien", &anchors, 680, 25)
+        .await
+        .unwrap();
+    bare.mark_compacted("s3", 1, 4).await.unwrap();
+    let report = w.history().seal_legacy().await.unwrap();
+    assert_eq!(report.sealed, vec![("s3".to_string(), 8)]);
+}
+
+/// Ce qu'une refonte doit redonner : lignes (contenu relu comme du JSON, le journal range
+/// les clés des arguments d'appel), contextes, nœuds LCM hors identifiants tirés au hasard.
+pub(crate) async fn caches(w: &World) -> Vec<String> {
+    w.store
+        .read(|c| {
+            let mut out = Vec::new();
+            let mut st = c.prepare(
+                "SELECT session_id, seq, role, content, tool_call_id, tool_name, tokens_est,
+                        episode, eager, artifact_id, compacted, event_id, sealed, source_turn_id
+                 FROM messages ORDER BY session_id, seq",
+            )?;
+            let rows = st.query_map([], |r| {
+                let content: String = r.get(3)?;
+                let content: Value = serde_json::from_str(&content).unwrap_or(Value::Null);
+                Ok(format!(
+                    "{:?} {:?} {:?} {} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    penelope_kernel::canonical::canonical_json(&content),
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, i64>(7)?,
+                    r.get::<_, i64>(8)?,
+                    r.get::<_, Option<String>>(9)?,
+                    r.get::<_, i64>(10)?,
+                    r.get::<_, Option<i64>>(11)?,
+                    r.get::<_, i64>(12)?,
+                    r.get::<_, Option<String>>(13)?,
+                ))
+            })?;
+            out.extend(rows.collect::<Result<Vec<_>, _>>()?);
+            let mut st = c.prepare(
+                "SELECT session_id, seq, context FROM message_context ORDER BY session_id, seq",
+            )?;
+            let rows = st.query_map([], |r| {
+                Ok(format!(
+                    "ctx {:?} {:?} {:?}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?
+                ))
+            })?;
+            out.extend(rows.collect::<Result<Vec<_>, _>>()?);
+            let mut st = c.prepare(
+                "SELECT session_id, from_seq, to_seq, summary, anchors, tokens_src, tokens_self,
+                        superseded_by IS NULL, event_id, id
+                 FROM lcm_nodes ORDER BY session_id, from_seq, to_seq, summary",
+            )?;
+            let rows = st.query_map([], |r| {
+                Ok(format!(
+                    "node {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<i64>>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, bool>(7)?,
+                    r.get::<_, Option<i64>>(8)?,
+                    r.get::<_, String>(9)?,
+                ))
+            })?;
+            out.extend(rows.collect::<Result<Vec<_>, _>>()?);
+            let mut st = c.prepare(
+                "SELECT f.session_id, m.seq, f.content FROM messages_fts f
+                 JOIN messages m ON m.id = f.msg_id ORDER BY f.session_id, m.seq",
+            )?;
+            let rows = st.query_map([], |r| {
+                Ok(format!(
+                    "fts {:?} {:?} {:?}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?
+                ))
+            })?;
+            out.extend(rows.collect::<Result<Vec<_>, _>>()?);
+            Ok(out)
+        })
+        .await
+        .unwrap()
 }
