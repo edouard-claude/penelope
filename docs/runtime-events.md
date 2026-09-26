@@ -106,12 +106,13 @@ se suffise (épopée #208, `design/v1/source-de-verite.md` §2.2). Chaque payloa
 `{"op":"cut","after":a}`, `{"op":"inherit",…}` ou `{"op":"seal",…}`. Les bornes sont des
 **adresses** de la surface : le `seq` de l'événement, plus l'`offset` hérité d'un fork
 ou d'un scellement ; une ligne copiée d'une mère garde l'adresse qu'elle y avait.
-Pendant la double écriture, les tables restent la source de lecture ; une ligne de
-`messages` (et un nœud de `lcm_nodes`) cite son événement par `event_id`.
+La conversation se relit dans ces événements (décision
+[0017](decisions/0017-journal-source-unique.md)) ; une ligne de `messages` (et un nœud
+de `lcm_nodes`), cache qu'ils alimentent, cite son événement par `event_id`.
 
 | Kind | Écrit quand | Payload |
 |---|---|---|
-| `conv.user` | un message utilisateur entre dans l'historique | `source` (`owner`, `merged`, `trigger`, `nudge`, `photo`), `content`, `episode`, `tokens_est` ; `turn_message_id` et `arrived_at` pour un message de la file ; `mid_turn` s'il est arrivé pendant le tour |
+| `conv.user` | un message utilisateur entre dans l'historique | `source` (`owner`, `merged`, `trigger`, `nudge`, `photo`), `content`, `episode`, `tokens_est` ; `turn_message_id` (l'identifiant du tour ou du message fusionné, clé d'idempotence) et `arrived_at` ; `mid_turn` s'il est arrivé pendant le tour |
 | `conv.assistant` | une réponse du modèle est gardée | `content`, `tool_calls`, `reasoning`, `turn`, `step`, `model`, `provider`, `upstream`, `generation_id`, `finish`, `usage`, `cost_usd`, `system_hash`, `tools_hash`, `request_hash` ; `interrupted` après un arrêt |
 | `conv.tool_result` | un résultat d'outil est gardé (`append`) ; ou son corps part en artefact (niveau 1) : `replace` de ce seul nœud, qui garde son adresse | `call_id`, `tool`, `ok`, `eager`, `content`, `tokens_est` ; en remplacement, `artifact_id`, `artifact_sha256`, `original_tokens` |
 | `conv.system` | le préfixe système retenu change ; le premier d'une session fille remplace celui qu'elle hérite | `hash`, `rendered` (le texte entier), `tiles`, `reason` (`first`, `cold`, `compaction`) |

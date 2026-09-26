@@ -2,7 +2,7 @@
 
 Ce que le code de la branche `v1` contient à la 1.0.0-alpha.13 : les crates, qui dépend de
 qui, les ports de `penelope-app` et qui les implémente, la frontière entre le cœur et le
-canal, le journal comme source de lecture, et les règles mécaniques qui tiennent le tout.
+canal, le journal source unique de la conversation, et les règles mécaniques qui tiennent le tout.
 Chaque chiffre se relit avec la commande donnée à côté ; ce qui n'est pas encore fait est
 dit dans la dernière section, jamais présenté comme livré.
 
@@ -93,7 +93,7 @@ exclus), mesurées à la 1.0.0-alpha.13 :
 | `penelope-conversation` | conversation d'une session, compaction de fond, titres, alerte de budget | app, context, kernel, llm, observe, store, vault | 3 244 |
 | `penelope-dream` | consolidation nocturne, digest, accueil, ingestion | app, hitl, kernel, llm, memory, observe, platform, store, vault | 7 542 |
 | `penelope-executor` | outils natifs, `self_status`, documentation embarquée, vision, voix, magasin des jobs | app, context, kernel, llm, mcp, memory, observe, platform, skills, store, tools, vault, workflow | 6 790 |
-| `penelope-ops` | doctor, mise à jour, sauvegarde, Hermes, Codex, purge, fork et retour arrière | app, kernel, llm, mcp, memory, observe, platform, skills, store, vault | 10 762 |
+| `penelope-ops` | doctor, mise à jour, sauvegarde, Hermes, Codex, purge, fork et retour arrière | app, context, kernel, llm, mcp, memory, observe, platform, skills, store, vault | 10 762 |
 | `penelope-orchestrator` | moteur de workflows et ordonnanceur | agent, app, conversation, dream, executor, hitl, kernel, llm, mcp, observe, platform, store, tools, vault, workflow | 6 237 |
 | `penelope-daemon` | composition, moteur des tours, coureurs, supervision, RPC | toutes les crates ci-dessus sauf telegram | 14 986 |
 | `penelope-gateway-telegram` | la passerelle Telegram, adaptateur pilotant | agent, app, context, conversation, daemon, dream, executor, hitl, kernel, llm, mcp-host, memory, observe, ops, orchestrator, platform, skills, store, telegram, vault, workflow | 18 703 |
@@ -260,7 +260,7 @@ dont la vérification du formulaire), `Cards` (gabarits, liens profonds, command
 `Gateway` (démarrage). Sans canal branché, les messages du cœur disent « canal » là où ils
 disaient « Telegram ».
 
-## Le journal, source de lecture
+## Le journal, source unique
 
 La conversation vit dans la table `events`, chaînée par hachage comme le reste du journal
 d'audit, sous des événements `conv.*` (`penelope-context/src/journal/`) : `conv.system`,
@@ -271,16 +271,24 @@ d'avant la V1, migration `0021_history_seal`). Les tentatives échouées (`conv.
 sont journalisées hors surface : elles ne repartent jamais dans un prompt.
 
 - **Lecture.** Ce que le modèle reçoit est dérivé du journal par un pliage pur
-  (`penelope_context::derive`, sans base ni horloge). La clé `history.source` vaut
-  `journal` par défaut ; `tables` relit l'ancien chemin, et la variable
-  `PENELOPE_HISTORY_SOURCE` l'emporte sur le fichier.
-- **Caches.** `messages`, `message_context`, `lcm_nodes` et leurs voisines sont des caches :
-  le projecteur (`penelope_context::projector`) rattrape à l'ouverture d'une session ce
-  qu'une écriture n'a pas posé, `penelope history verify` compare journal et tables,
-  `penelope history reindex` reconstruit les tables depuis le journal.
-- **Écriture.** Chaque message s'écrit encore deux fois : l'événement d'abord, commité
-  seul, puis la ligne de la table (`penelope-context/src/store/dual.rs`). Le retrait de ce
-  chemin direct et de la clé `history.source` est la tâche T16 du journal.
+  (`penelope_context::derive`, sans base ni horloge), repris sur les seuls événements
+  nouveaux (`read/cache.rs`). Il n'y a pas d'autre source : les caches ne servent qu'aux
+  autres lecteurs (plein texte, outils d'historique, préparation des résumés) et au
+  repli d'une session que le journal ne sait pas redonner (décision 0017).
+- **Écriture.** Toute écriture de la conversation est un événement `conv.*`, commité
+  seul, puis sa projection dans la seconde transaction du même thread écrivain
+  (`HistoryStore::journaled`, `penelope-context/src/store/dual.rs`) ; un fork et
+  l'archive d'un retour arrière sont projetés en entier depuis leur héritage
+  (`projector::project_in`). `HistoryStore` prend le journal à sa construction : il n'y a
+  plus de chemin d'écriture sans événement.
+- **Caches.** `messages`, `messages_fts`, `message_context`, `lcm_nodes`, `lcm_edges`,
+  `prompt_snapshots` et `projections_session` : seule `penelope-context` les écrit, ce que
+  vérifie `only_the_context_crate_writes_the_conversation_caches` (`caches.rs`). Le
+  projecteur rattrape à l'ouverture d'une session ce qu'une écriture n'a pas posé,
+  `penelope history verify` compare journal et caches, `penelope history reindex` refait
+  les caches depuis le journal.
+- **Plus d'état de conversation en `kv`** : le message d'un tour déjà écrit se lit au
+  journal par la clé du tour, le préfixe retenu dans le dernier `conv.system`.
 - **Pour la boucle.** Le vocabulaire qu'elle écrit (bornes de tour, provenance,
   tentatives, tuiles du préfixe) est dans `penelope_kernel::journal` ; elle remet ses
   tentatives au port `AttemptSink` et ne voit aucun type du moteur de contexte, ce que
@@ -341,8 +349,9 @@ clé).
   les couper demande d'abord de convertir des méthodes en fonctions sur `&Services` ou
   sur un port (T33), pas un déplacement.
 - **T32** : resserrer les listes du gel, maintenant que T30 est fait.
-- **Journal** : T16 (retrait de la double écriture et de `history.source`), puis la
-  décision 0017 (le journal source unique de la conversation).
+- **Journal** : l'archive d'un `/rewind` n'est pas encore un fork par référence (elle
+  n'a pas de journal à elle) ; un retour arrière qui coupe dans le préfixe scellé empêche
+  la mère de se replier (décision 0017, écarts restants).
 - **Après la V1** : T33 (ports `TurnIntake`, `SessionModels`, `Transcriber`, pour tester
   la passerelle sans daemon), T34 (registre d'outils natifs enfichable, au lieu des appels
   `Orchestrator::schedule_*` depuis l'exécuteur), T37 (`Origin::Channel` et liaison de

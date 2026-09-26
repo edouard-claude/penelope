@@ -235,6 +235,9 @@ ne les pose. Une clé que le binaire ne connaît pas (écrite par une version pl
 faute de frappe) est ignorée et nommée par `penelope config validate`, `penelope doctor`
 et le journal de démarrage, jamais fatale : un retour à la version précédente
 (`penelope upgrade --rollback`) redémarre donc sur le fichier laissé par la suivante.
+Une clé retirée n'est pas inconnue : elle est ignorée avec un avertissement au démarrage
+qui dit pourquoi, et la ligne peut être effacée. C'est le cas de la section `[history]`
+d'une version `1.0.0-alpha` (la conversation se relit toujours depuis le journal).
 `penelope config set` refuse toujours une clé qui n'existe pas.
 
 **Réglages qui s'annulent.** Un réglage qui annulerait sa propre intention est refusé,
@@ -2399,7 +2402,11 @@ penelope history verify --session s_01J8
 
 Dérive chaque conversation de son journal (événements `conv.*`, préfixe d'avant le journal
 scellé au démarrage, mère d'un fork) et la compare aux tables qui en sont les caches :
-messages, contextes figés, résumés actifs, empreinte du préfixe scellé. Le rapport est en
+messages, contextes figés, résumés actifs, empreinte du préfixe scellé. La requête envoyée
+au modèle se relit toujours dans le journal ; ces tables servent aux autres lecteurs
+(recherche plein texte, outils d'historique, préparation des résumés) et au repli, et
+seul le moteur de contexte les écrit (décision
+[0017](decisions/0017-journal-source-unique.md)). Le rapport est en
 JSON ; le code de sortie est non nul dès la première divergence, qui nomme la session, le
 nœud (son adresse dans le journal) et la ligne. `penelope doctor` fait la même
 vérification sur les sessions de la semaine (ligne « Historique et journal »).
@@ -2411,8 +2418,9 @@ penelope history reindex --session s_01J8
 
 Efface les lignes de cache non scellées d'une session (messages et leur plein texte,
 contextes figés, résumés) et les réécrit depuis le journal, dans une transaction par
-session ; l'historique d'avant le journal, scellé, n'est pas touché. Une session que le
-journal ne sait pas refaire (lignes sans événement) est laissée intacte et nommée. Les
+session ; l'historique d'avant le journal, scellé, n'est pas touché. L'archive d'un
+`/rewind` est refaite depuis le journal de sa mère. Une session que le journal ne sait pas
+refaire (lignes sans événement ni scellement) est laissée intacte et nommée. Les
 caches se rattrapent aussi seuls : à l'ouverture de chaque tour, ce qu'une écriture
 interrompue a laissé derrière le journal est refait ; un rattrapage en échec apparaît
 dans `penelope doctor`.
@@ -2471,7 +2479,7 @@ Ce qui n'est ni la mémoire ni la chaîne d'audit finit par disparaître, une pa
 
 | Réglage | Défaut | Ce qui est effacé au-delà |
 |---|---|---|
-| `retention.days` | `90` | tours terminés, requêtes au modèle abouties, payloads des updates Telegram, clés de travail (`turn.*`, `prompt.prefix.*`, `wf.*`, `tg.*`…), arguments et résultats des outils menés à terme (un effet incertain garde tout), messages Telegram envoyés, contenu des demandes décidées, tâches MCP terminées, jobs d'outils terminés, sorties des workflows finis, prompts système que plus aucune ligne ne cite |
+| `retention.days` | `90` | tours terminés, requêtes au modèle abouties, payloads des updates Telegram, clés de travail (`turn.*`, `wf.*`, `tg.*`…), arguments et résultats des outils menés à terme (un effet incertain garde tout), messages Telegram envoyés, contenu des demandes décidées, tâches MCP terminées, jobs d'outils terminés, sorties des workflows finis, prompts système que plus aucune ligne ne cite |
 | `retention.memory_history_days` | `30` | pré-images de la mémoire (`mem_history`), qui gardent chaque fichier avant et après chaque opération du rêve |
 
 `0` désactive la rétention correspondante. Le payload d'un update Telegram est de toute

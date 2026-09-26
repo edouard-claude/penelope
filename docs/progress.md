@@ -3880,10 +3880,7 @@ Les écarts assumés par rapport à un « DEVRAIT » du PRD sont documentés un 
 | [0014](decisions/0014-boucle-pipeline.md) | Boucle d'agent en pipeline d'étapes typées | Gardes et couches de politique en chaînes fixes testées dans leur ordre, plan de tentatives pur, steering explicite, crate qui ne connaît que des ports |
 | [0015](decisions/0015-gel-0.17-et-branche-v1.md) | Gel de la 0.17 et branche `v1` | La dette ne grossit plus sur `main` (budget à cliquet) ; la V1 se refait à côté, versions jamais taguées |
 | [0016](decisions/0016-ptc-hors-v1.md) | PTC hors V1, avec une couture | Une approbation suspend le tour, pas un programme : un appel imbriqué qui la demanderait est refusé sans carte ; `run_code` viendra, s'il vient, par le même pipeline |
-
-Le numéro 0017 est réservé par la charte de la V1 (`design/v1/README.md` §9 : journal
-source unique de la conversation) et pas encore écrit ; 0012 est pris par les jobs d'outils
-durables (#204, sur `main`).
+| [0017](decisions/0017-journal-source-unique.md) | Journal source unique de la conversation | Ce que le modèle lit est un pliage du journal, vérifié à chaque appel ; les tables sont des caches reconstructibles, écrites par `penelope-context` seule |
 
 ## Deux failles corrigées en écrivant la suite `security`
 
