@@ -71,8 +71,16 @@ impl Config {
     }
 
     /// Validation sémantique, au-delà du typage TOML (§4.4 étape 2).
-    #[allow(clippy::too_many_lines)] // gel 0.17 : validation clé par clé
     pub fn validate(&self) -> Result<()> {
+        self.validate_owner_and_channels()?;
+        self.validate_models()?;
+        self.validate_turn_limits()?;
+        self.validate_schedules()?;
+        self.validate_mcp_and_runtime()
+    }
+
+    /// Propriétaire, flux runtime et canal Telegram.
+    fn validate_owner_and_channels(&self) -> Result<()> {
         if self.owner.telegram_user_id == 0 {
             return Err(KernelError::config(
                 "owner.telegram_user_id est obligatoire (aucun propriétaire = bot ouvert)",
@@ -121,6 +129,11 @@ impl Config {
             TimeRange::parse(&self.telegram.quiet_hours)?;
         }
 
+        Ok(())
+    }
+
+    /// Rôles, routage et replis : chaque alias cité existe, chaque identifiant se lit.
+    fn validate_models(&self) -> Result<()> {
         for (role, alias) in &self.models.roles {
             if !self.models.aliases.contains_key(alias) {
                 return Err(KernelError::config(format!(
@@ -165,6 +178,11 @@ impl Config {
                 self.models.locate_frame
             )));
         }
+        Ok(())
+    }
+
+    /// Mode d'approbation et bornes du contexte d'un tour.
+    fn validate_turn_limits(&self) -> Result<()> {
         if !APPROVAL_MODES.contains(&self.tools.approval_mode.as_str()) {
             return Err(KernelError::config(format!(
                 "tools.approval_mode doit valoir {} (reçu `{}`)",
@@ -194,6 +212,11 @@ impl Config {
             ));
         }
 
+        Ok(())
+    }
+
+    /// Durées, quotas, baux, jobs d'outils et crons.
+    fn validate_schedules(&self) -> Result<()> {
         parse_duration(&self.memory.episode_idle)?;
         parse_duration(&self.memory.dream_retry_wait)?;
         // Une valeur mal écrite éteindrait ou garderait le raisonnement au hasard : elle
@@ -262,6 +285,11 @@ impl Config {
         }
         crate::cron::Cron::parse(&self.memory.digest_cron)?;
 
+        Ok(())
+    }
+
+    /// Hôte MCP et ses politiques, runners, bac à sable, budget.
+    fn validate_mcp_and_runtime(&self) -> Result<()> {
         if !matches!(self.mcp.registry_mode.as_str(), "lazy" | "eager") {
             return Err(KernelError::config(
                 "mcp.registry_mode doit valoir `lazy` ou `eager`",
