@@ -70,6 +70,8 @@ pub struct Normaliser {
     note_suffixes: Vec<(String, String)>,
     ulid: Regex,
     marker: Regex,
+    /// Une durée mesurée dans un JSON rendu en texte (résultat d'outil relu par le modèle).
+    duration: Regex,
     stamp: Regex,
     hex: Regex,
     masks: Vec<Regex>,
@@ -93,6 +95,8 @@ impl Normaliser {
             counters: HashMap::new(),
             note_suffixes: Vec::new(),
             marker: Regex::new(r"\b[0-9a-hjkmnp-tv-z]{26}\b").expect("regex marqueur"),
+            duration: Regex::new(&format!(r#""({})":\s*\d+"#, DURATION_KEYS.join("|")))
+                .expect("regex durée"),
             ulid: Regex::new(r"\b(?:([a-z]+)_)?([0-9A-HJKMNP-TV-Z]{26})\b").expect("regex ULID"),
             stamp: Regex::new(
                 r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})",
@@ -190,6 +194,10 @@ impl Normaliser {
         for (suffix, token) in &self.note_suffixes {
             out = out.replace(suffix.as_str(), token.as_str());
         }
+        let out = self
+            .duration
+            .replace_all(&out, r#""$1": "{{ms}}""#)
+            .into_owned();
         let stamp = self.stamp.clone();
         let out = stamp
             .replace_all(&out, |caps: &regex::Captures| self.stamp_token(&caps[0]))
@@ -318,6 +326,11 @@ mod tests {
         assert_eq!(v["sha256"], "{{hash}}");
         assert_eq!(v["duration_ms"], "{{ms}}");
         assert_eq!(v["durationMs"], "{{ms}}");
+        // La même durée, dans un JSON rendu en texte (job relu par le modèle).
+        assert_eq!(
+            n.text("{\n  \"durationMs\": 22,\n  \"exitCode\": 0\n}"),
+            "{\n  \"durationMs\": \"{{ms}}\",\n  \"exitCode\": 0\n}"
+        );
         assert_eq!(v["texte"], "empreinte {{hash}}");
         assert_eq!(v["n"], 3);
     }
