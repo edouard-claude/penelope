@@ -139,7 +139,7 @@ pub async fn session(s: &Services, session_id: &str, reason: &str) -> anyhow::Re
                 "UPDATE sessions SET title = '(session purgée)' WHERE id = ?1",
                 [&sid],
             )?;
-            let (updates, outbox) = purge_session_telegram(tx, chat_id, &since, &until_or_max)?;
+            let (updates, outbox) = purge_session_channel(tx, chat_id, &since, &until_or_max)?;
             let SessionWork {
                 effects,
                 approvals,
@@ -217,17 +217,17 @@ fn session_files(
     Ok(files)
 }
 
-/// Le côté Telegram de la session, sur la fenêtre `[since, until[` de son chat : updates
+/// Le côté canal de la session, sur la fenêtre `[since, until[` de son chat : updates
 /// reçus et messages envoyés. Rien sans chat.
-fn purge_session_telegram(
+fn purge_session_channel(
     tx: &penelope_store::rusqlite::Transaction<'_>,
-    chat_id: Option<i64>,
+    chat: Option<i64>,
     since: &str,
     until: &str,
 ) -> penelope_store::rusqlite::Result<(usize, usize)> {
     // Updates Telegram reçus pendant la session sur ce chat : leur payload porte le
     // texte intégral.
-    let updates = match chat_id {
+    let updates = match chat {
         Some(chat) => tx.execute(
             "UPDATE tg_updates SET payload = '{}'
              WHERE received_at >= ?1 AND received_at < ?3 AND payload <> '{}'
@@ -241,7 +241,7 @@ fn purge_session_telegram(
         None => 0,
     };
     // Ce que l'assistante a dit sur Telegram pendant la session (#78).
-    let outbox = match chat_id {
+    let outbox = match chat {
         Some(chat) => tx.execute(
             "DELETE FROM tg_outbox
              WHERE chat_id = ?1 AND created_at >= ?2 AND created_at < ?3",
