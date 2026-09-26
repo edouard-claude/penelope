@@ -274,6 +274,7 @@ impl Harness<'_> {
                     mask,
                     lines,
                     without,
+                    only,
                     error,
                     during,
                 } => {
@@ -285,6 +286,7 @@ impl Harness<'_> {
                         mask,
                         lines,
                         without,
+                        only,
                         error: *error,
                         during: during.as_deref(),
                     })

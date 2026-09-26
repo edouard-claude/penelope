@@ -210,6 +210,11 @@ pub enum Step {
         /// et dont le nombre même change d'une machine à l'autre (`doctor`).
         #[serde(default)]
         without: toml::Table,
+        /// L'inverse de `without`, appliqué après lui : ne garde que les éléments dont un
+        /// champ répond à un motif, dans l'ordre de la réponse. Une liste explicite de ce
+        /// que le scénario vérifie, pour que ce qu'ajoute un hôte ne l'atteigne jamais.
+        #[serde(default)]
+        only: toml::Table,
         /// L'appel doit échouer ; sans ce drapeau, une erreur fait échouer le scénario.
         #[serde(default)]
         error: bool,

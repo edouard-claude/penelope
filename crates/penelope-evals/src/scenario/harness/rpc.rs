@@ -40,6 +40,7 @@ pub(super) struct Call<'s> {
     pub mask: &'s [String],
     pub lines: &'s [String],
     pub without: &'s toml::Table,
+    pub only: &'s toml::Table,
     pub error: bool,
     pub during: Option<&'s str>,
 }
@@ -107,7 +108,8 @@ impl Harness<'_> {
                 .iter()
                 .map(|l| regex::Regex::new(l).with_context(|| format!("motif `{l}`")))
                 .collect::<anyhow::Result<Vec<_>>>()?;
-            let result = without(result, c.without)?;
+            let result = select(result, c.without, false)?;
+            let result = select(result, c.only, true)?;
             out["result"] = project(filter_lines(result, &keep), c.pick, c.mask);
         }
         if let Some(error) = reply.error {
@@ -267,20 +269,21 @@ fn harmless_upgrade(params: &Value) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Retire d'une réponse en tableau les éléments dont un champ répond à un motif de
-/// `without` (`*` final : préfixe).
-fn without(v: Value, rules: &toml::Table) -> anyhow::Result<Value> {
+/// Retire d'une réponse en tableau les éléments dont un champ répond à un motif
+/// (`without`), ou ne garde qu'eux (`only`, `keep`) ; `*` final : préfixe. L'ordre des
+/// éléments gardés est celui de la réponse.
+fn select(v: Value, rules: &toml::Table, keep: bool) -> anyhow::Result<Value> {
     if rules.is_empty() {
         return Ok(v);
     }
     let Value::Array(items) = v else {
-        anyhow::bail!("`without` s'applique à une réponse en tableau");
+        anyhow::bail!("`without` et `only` s'appliquent à une réponse en tableau");
     };
     let mut patterns: Vec<(&str, Vec<String>)> = Vec::new();
     for (field, list) in rules {
         let list = list
             .as_array()
-            .with_context(|| format!("`without.{field}` : une liste de motifs"))?;
+            .with_context(|| format!("`{field}` : une liste de motifs"))?;
         patterns.push((
             field,
             list.iter()
@@ -299,7 +302,7 @@ fn without(v: Value, rules: &toml::Table) -> anyhow::Result<Value> {
         })
     };
     Ok(Value::Array(
-        items.into_iter().filter(|x| !hit(x)).collect(),
+        items.into_iter().filter(|x| hit(x) == keep).collect(),
     ))
 }
 
@@ -510,11 +513,26 @@ mod tests {
         let v = json!([{"id": "service"}, {"id": "dep.git"}, {"id": "audit"}, {"x": 1}]);
         let rules: toml::Table = toml::from_str(r#"id = ["service", "dep.*"]"#).unwrap();
         assert_eq!(
-            without(v, &rules).unwrap(),
+            select(v, &rules, false).unwrap(),
             json!([{"id": "audit"}, {"x": 1}])
         );
-        assert!(without(json!({"id": "a"}), &rules).is_err());
-        assert_eq!(without(json!(1), &toml::Table::new()).unwrap(), json!(1));
+        assert!(select(json!({"id": "a"}), &rules, false).is_err());
+        assert_eq!(
+            select(json!(1), &toml::Table::new(), false).unwrap(),
+            json!(1)
+        );
+    }
+
+    #[test]
+    fn only_keeps_the_matching_elements_in_their_order() {
+        let v = json!([{"id": "voice"}, {"id": "db"}, {"id": "mcp.forge"}, {"id": "audit"},
+                       {"x": 1}]);
+        let rules: toml::Table = toml::from_str(r#"id = ["audit", "db", "mcp.*"]"#).unwrap();
+        assert_eq!(
+            select(v, &rules, true).unwrap(),
+            json!([{"id": "db"}, {"id": "mcp.forge"}, {"id": "audit"}])
+        );
+        assert!(select(json!({"id": "a"}), &rules, true).is_err());
     }
 
     #[test]

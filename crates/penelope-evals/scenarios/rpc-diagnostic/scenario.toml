@@ -1,18 +1,21 @@
 name = "rpc-diagnostic"
 description = """Le diagnostic par la socket locale, comme `penelope doctor`, joué en entier après un
-tour, une skill déposée et un serveur MCP déclaré. Ce qui décrit l'hôte et dont le nombre
-même change d'une machine à l'autre est retiré de la réponse (`without`) : service,
-disque, dépendances et inventaire des binaires, contrôles propres à l'OS, résolution DNS,
-signature et mode d'installation du binaire, source d'alimentation. La dérive de
-l'horloge de test et la durée de la synthèse vocale d'essai sont masquées. Restent dans
-les attendus, dans leur ordre, les contrôles propres à Pénélope : propriétaire,
-conversations, secrets attendus, intégrité de la base et chaîne d'audit, rétention,
-stabilité du prompt, journal, jobs d'outils, bac à sable, workflows, skills (la skill
-déposée comptée), juge, rédacteur, mémoire, retour OAuth et serveur MCP, embeddings,
-cohérence de la configuration, secrets des journaux, vault, mises à jour, planifications,
-voix, sauvegarde, boucles de fond."""
+tour, une skill déposée et un serveur MCP déclaré. Seuls les contrôles propres à Pénélope
+sont comparés, par une liste explicite (`only`) dans l'ordre où `doctor` les rend :
+propriétaire, conversations, secrets attendus, intégrité de la base et chaîne d'audit,
+écrivain, clés inconnues, rétention, stabilité du prompt, journal, jobs d'outils, jour
+budgétaire, bac à sable, workflows, skills (la skill déposée comptée), juge, rédacteur,
+mémoire, retour OAuth et serveur MCP, embeddings, cohérence de la configuration, secrets
+des journaux, vault, mises à jour, planifications, sauvegarde, boucles de fond.
+
+Tout le reste dépend de l'hôte et en est écarté, y compris ce qu'un hôte futur ajoutera :
+service, disque, binaires et dépendances, contrôles propres à l'OS, réseau, signature et
+installation du binaire, alimentation ; et deux contrôles qui lisent la machine sans le
+dire dans leur identifiant. `voice` cherche `ffmpeg` (absent des runners de CI : « `ffmpeg`
+absent », correction `brew install ffmpeg`, là où le poste rend une synthèse d'essai) ;
+`clock` compare l'horloge du scénario à celle du système. Une liste de refus (`without`)
+laissait passer ces deux-là : la CI de v1 a échoué sur ce scénario le 26/09 (s-doctor-ci)."""
 pin_model = "main"
-masks = ["dérive de \\d+ ms", "\\d+\\.\\d s de synthèse d'essai"]
 
 [[mcp_servers]]
 name = "forge"
@@ -45,15 +48,43 @@ params = { name = "forge", toml = "command = \"/opt/mcp/forge\"\ntimeout = \"20s
 [[steps]]
 kind = "rpc"
 method = "doctor"
-without = { id = [
-    "service",
-    "disk",
-    "dep.*",
-    "macos.*",
-    "platform.*",
-    "machine.*",
-    "net.*",
-    "binary_signature",
-    "install_mode",
-    "dream_power",
+only = { id = [
+    "secrets",
+    "owner",
+    "telegram.allowed_chats",
+    "secret.*",
+    "db",
+    "audit",
+    "store.writer",
+    "config.unknown",
+    "retention",
+    "prompt.stability",
+    "history.journal",
+    "tool_jobs",
+    "budget.day",
+    "models.tools",
+    "sandbox.*",
+    "effects",
+    "workflows",
+    "skills",
+    "telegram_forms",
+    "shell_lines",
+    "approval_judge",
+    "redactor",
+    "reasoning_effort",
+    "secret_roundtrip",
+    "skills.requirements",
+    "memory.size",
+    "telegram.home",
+    "mcp.*",
+    "embedding",
+    "vault_index",
+    "config_coherence",
+    "logs_secrets",
+    "stored_secrets",
+    "vault_git",
+    "upgrade_pending",
+    "schedules",
+    "backup",
+    "tasks",
 ] }
