@@ -92,10 +92,6 @@ impl McpClient {
         &self.negotiated
     }
 
-    pub fn set_log_level(&mut self, level: Option<String>) {
-        self.log_level = level;
-    }
-
     /// Requête avec `_meta` adapté à la version, sous contrôle de concurrence.
     async fn call(
         &self,
