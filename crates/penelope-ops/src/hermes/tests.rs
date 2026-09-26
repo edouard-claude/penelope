@@ -3,6 +3,9 @@ use super::*;
 use penelope_kernel::clock::TestClock;
 use penelope_mcp_host::testing::{FakeConnector, server, tool};
 
+mod files;
+mod yaml;
+
 const CONFIG: &str = r#"
 model:
   default: anthropic/claude-opus-4.6   # modèle

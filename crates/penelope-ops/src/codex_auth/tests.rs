@@ -528,3 +528,76 @@ async fn a_disconnection_is_announced_once() {
     notify_disconnected(s, Some(rec.clone()), &other).await;
     assert_eq!(rec.texts().len(), 1, "déjà notée, même sans canal");
 }
+
+/// #142 : la boucle hors tour lit la jauge rangée par le fournisseur et alerte, puis
+/// annonce la déconnexion ; `doctor` dit les deux.
+#[tokio::test]
+async fn the_refresh_loop_alerts_on_quota_and_announces_a_disconnection() {
+    let (_dir, services) = with_issuer("http://127.0.0.1:9").await;
+    let s = &*services;
+    let reset = s.clock.now_ms() / 1000 + 3600;
+    let quota = penelope_llm::Quota {
+        primary: Some(penelope_llm::codex::QuotaWindow {
+            used_percent: 99.0,
+            window_minutes: 300,
+            reset_at: reset,
+        }),
+        ..Default::default()
+    };
+    penelope_llm::QuotaSink::record(
+        &crate::codex_quota::QuotaWriter::new(services.clone()),
+        quota,
+    );
+    for _ in 0..100 {
+        if crate::codex_quota::snapshot(s).await.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        crate::codex_quota::snapshot(s).await.is_some(),
+        "jauge rangée"
+    );
+    store(
+        s,
+        &Grant {
+            disconnected: Some("refresh_token_reused".into()),
+            ..expired_grant(s, "r1")
+        },
+    )
+    .unwrap();
+
+    let rec = penelope_app::testing::RecordingMessenger::new();
+    let slot: Slot<dyn Messenger> = Slot::default();
+    slot.set(Some(rec.clone()));
+    let task = tokio::spawn(refresh_loop(services.clone(), slot));
+    for _ in 0..200 {
+        if rec.texts().len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    task.abort();
+    let texts = rec.texts();
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(texts[1].contains("Compte ChatGPT déconnecté"), "{texts:?}");
+
+    let checks = crate::doctor::codex_checks(s).await;
+    let provider = checks.iter().find(|c| c.id == "provider.codex").unwrap();
+    assert!(!provider.ok);
+    assert!(
+        provider
+            .detail
+            .starts_with("compte déconnecté (refresh_token_reused)"),
+        "{}",
+        provider.detail
+    );
+    let gauge = checks
+        .iter()
+        .find(|c| c.id == "provider.codex.quota")
+        .unwrap();
+    assert!(
+        !gauge.ok && gauge.detail.contains("en retrait"),
+        "{gauge:?}"
+    );
+}

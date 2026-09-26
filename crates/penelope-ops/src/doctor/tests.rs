@@ -161,7 +161,9 @@ use penelope_kernel::clock::TestClock;
 use std::sync::Arc;
 
 mod coherence;
+mod machine;
 mod memory;
+mod run;
 mod secrets;
 
 /// Issue #26 : un jeton déjà écrit dans un journal est signalé, avec révocation.

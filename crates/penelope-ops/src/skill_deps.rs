@@ -161,6 +161,9 @@ async fn npm_root() -> Option<String> {
 }
 
 #[cfg(test)]
+mod probe_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

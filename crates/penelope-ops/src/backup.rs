@@ -522,6 +522,9 @@ fn sha256_of(p: &Path) -> anyhow::Result<String> {
 }
 
 #[cfg(test)]
+mod push_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use penelope_kernel::config::Backup;

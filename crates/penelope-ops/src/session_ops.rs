@@ -368,6 +368,9 @@ pub async fn rebuild(s: &Services) -> anyhow::Result<Value> {
 }
 
 #[cfg(test)]
+mod more_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use penelope_kernel::clock::TestClock;
