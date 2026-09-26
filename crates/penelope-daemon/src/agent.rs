@@ -9,7 +9,7 @@ use penelope_agent::{
     AgentServices, JobRequest, JobRunner, MemoryModes, NoAudit, NoJobs, PromptSnapshots,
     SessionModes, ToolExecutor, TurnMeta, TurnOutcome,
 };
-use penelope_app::services::Services;
+use penelope_app::{model_judge::ModelJudge, ports::ProviderSource, services::Services};
 use penelope_hitl::Decision;
 use penelope_tools::ToolOutcome;
 use std::sync::Arc;
@@ -23,6 +23,11 @@ pub fn services_of(s: &Arc<Services>) -> Arc<AgentServices> {
         Arc::new(crate::prompt_snapshot::StoredSnapshots(s.clone())),
         Arc::new(DaemonJobs(s.clone())),
     )
+}
+
+/// Les services d'un tour, juge d'approbation (#203) compris : il appelle un modèle.
+pub fn judged(s: &Arc<Services>, p: Arc<dyn ProviderSource>) -> Arc<AgentServices> {
+    services_of(s).with_judge(Arc::new(ModelJudge::new(s.clone(), p)))
 }
 
 /// Les registres seuls, pour les entrées sans port (décision, bornes de tour) en `&Services`.
@@ -57,6 +62,7 @@ fn with_ports(
         snapshots,
         jobs,
         attempts: Arc::new(penelope_app::journal::JournalAttempts(s.events.clone())),
+        judge: Arc::new(penelope_app::judge::NoJudge),
     })
 }
 

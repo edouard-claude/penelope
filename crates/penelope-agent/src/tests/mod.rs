@@ -14,6 +14,7 @@ mod call_guards;
 mod effects;
 mod fallback;
 mod guards;
+mod judge;
 mod policy;
 mod run_loop;
 mod steering;

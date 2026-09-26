@@ -20,7 +20,7 @@ pub fn context_of(d: &Arc<Daemon>) -> Context {
         bus: d.bus.clone(),
         workflows: d.workflows.clone(),
         embeddings: d.embeddings.clone(),
-        agent: crate::agent::services_of(&d.services),
+        agent: crate::agent::judged(&d.services, d.providers.clone()),
         admin: Some(d.clone()),
     }
 }

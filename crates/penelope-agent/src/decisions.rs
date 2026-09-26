@@ -67,6 +67,16 @@ async fn decide_uncertain_effect(
     }
 }
 
+/// La règle de pouvoirs que la carte a proposée (#203), relue et revérifiée : la demande
+/// est en base, et une règle illisible n'est jamais écrite.
+fn power_grant_of(payload: &Value) -> Option<penelope_hitl::powers::PowerGrant> {
+    serde_json::from_value::<penelope_hitl::powers::PowerGrant>(
+        payload.get("judged")?.get("grant")?.clone(),
+    )
+    .ok()
+    .filter(|g| g.readable())
+}
+
 /// Tranche une approbation : la première décision gagne, une fenêtre crée une règle.
 pub async fn decide_approval(
     s: &AgentServices,
@@ -106,9 +116,31 @@ pub async fn decide_approval(
                 // répertoire, remote), pas à l'outil entier (issue #67). Une liste
                 // `a && b` en demande une par famille (issue #150).
                 let patterns = arg_patterns(&a.subject, a.payload.get("arguments"));
+                // Une commande sans famille, mais jugée (#203) : la règle porte sur les
+                // pouvoirs que la carte a nommés, jamais sur la forme de la ligne.
+                let grant = (patterns.is_empty() && a.subject == "shell_exec")
+                    .then(|| power_grant_of(&a.payload))
+                    .flatten();
+                if let Some(mut grant) = grant {
+                    grant.judged = Some(approval_id.to_string());
+                    s.policies
+                        .create_rule(
+                            penelope_hitl::RuleScope::Tool,
+                            Some(&a.subject),
+                            None,
+                            Some(grant.to_pattern()),
+                            PolicyDecision::Auto,
+                            window,
+                            window_ref.as_deref(),
+                        )
+                        .await?;
+                    s.approvals.note_powers_rule(approval_id).await?;
+                }
                 // Une commande sans famille (composée) : autorisée cette fois, jamais le
                 // shell entier (issue #111).
-                if patterns.is_empty() && matches!(a.subject.as_str(), "shell_exec" | "git_clone") {
+                else if patterns.is_empty()
+                    && matches!(a.subject.as_str(), "shell_exec" | "git_clone")
+                {
                     tracing::info!(
                         approval = approval_id,
                         "appel sans motif sûr : autorisé une fois, sans règle"

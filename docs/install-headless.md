@@ -360,6 +360,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `models.aliases.summarizer` | `"openrouter:deepseek/deepseek-v4-flash"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
 | `models.aliases.tts` | `"openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
 | `models.aliases.vision` | `"openrouter:google/gemini-3.1-flash-image"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
+| `models.roles.approval_judge` | `"fast"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.roles.chat_default` | `"main"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.roles.classifier` | `"fast"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.roles.code` | `"reasoning"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
@@ -579,6 +580,12 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | Clé | Défaut | Rôle |
 |---|---|---|
 | `history.source` | `"journal"` | D'où chaque requête relit la conversation : `journal` (pliage du journal d'événements) ou `tables` (lignes `messages`, lecture d'avant la V1). La variable d'environnement `PENELOPE_HISTORY_SOURCE` l'emporte (rejouer une suite sous l'autre). |
+
+**[approval]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `approval.judge` | `"explain"` | Juge des lignes `shell_exec` sans motif possible (issue #203), sous les planchers déterministes : `off` (aucun appel), `explain` (la carte dit ce que la ligne fait réellement et propose une règle sur les pouvoirs reconnus ; rien n'est autorisé seul), `auto_read` (comme `explain`, et une lecture pure dans les workspaces, sans réseau ni écriture ni processus détaché, passe sans carte). Modèle : rôle `approval_judge`. |
 <!-- reference:config:fin -->
 
 ## 6. Modèles
@@ -1062,8 +1069,48 @@ Le verdict proposé est **go** quand les trois seuils tiennent :
 | Commandes distinctes | ≥ 5 | Si la masse vient de quatre lignes ou moins, une consigne « une commande par appel » ou un correctif du lexer pour ces formes-là règle le problème sans modèle. |
 | Part de « oui » (cartes tranchées) | ≥ 80 % | Le juge propose « Toujours pour ces pouvoirs » : si plus d'une carte tranchée sur cinq est refusée, les cartes font leur travail et ne doivent pas être adoucies. |
 
-Chaque seuil manqué est nommé dans la sortie. `approval.judge` reste `off` tant que la
-mesure n'a pas donné go sur l'instance.
+Chaque seuil manqué est nommé dans la sortie. Mesure faite sur l'instance le 26/09/2026 :
+214 cartes `shell_exec` en trente jours, 112 sans motif possible, toutes éligibles (26 par
+semaine), 111 commandes distinctes, 96 % de « oui » : **go**, et `approval.judge` vaut
+`explain` par défaut.
+
+#### Le juge d'approbation
+
+`approval.judge` choisit ce que fait le juge (issue #203) :
+
+| Mode | Effet |
+|---|---|
+| `off` | Aucun appel : la carte d'avant. |
+| `explain` (défaut) | La carte dit ce que la ligne fait réellement (« lecture sur `tmp` », « réseau vers `api.github.com` ») et l'avis du juge ; quand la règle se lit d'un coup d'œil, le bouton « ♾️ Toujours pour ces pouvoirs » écrit une règle **dérivée des pouvoirs**, pas de la forme de la ligne. Rien n'est autorisé sans clic. |
+| `auto_read` | Comme `explain`, et une ligne jugée `sûr` dont les pouvoirs se réduisent à la **lecture dans les workspaces**, sans hôte, sans `network: true`, passe sans carte. |
+
+Le juge n'est appelé que dans le cas résiduel : outil `shell_exec`, politique `Ask` (jamais
+`Deny` ni double confirmation), ligne sans motif possible, classe non destructive, et aucune
+règle du propriétaire qui refuse ou redemande une famille présente dans la ligne. Il ne
+reçoit que la commande (secrets masqués, commentaires shell retirés, dans un bloc délimité
+par un marqueur tiré au hasard), le répertoire de travail et le workspace : ni transcript,
+ni mémoire, ni outil. Son modèle est celui du rôle `approval_judge` (alias `fast` par défaut,
+et `fast` aussi pour une configuration qui ne nomme pas le rôle), borné à dix secondes ;
+l'usage est compté sous ce rôle. Trois échecs de suite coupent le juge dix minutes.
+
+Ses bornes, toutes déterministes, passent avant son avis :
+
+- modèle absent, délai dépassé, sortie hors schéma : la carte d'avant, sans message ;
+- un avis `dangereux`, un programme destructeur (`rm`, `dd`, `sudo`, `kill`…) ou du réseau
+  versé dans un interpréteur (`curl … | sh`) : jamais d'automatisme, jamais de règle ;
+- `auto_read` exige en plus qu'aucun chemin ne sorte du workspace et que la ligne ne porte
+  ni programme réseau, ni interpréteur, ni écriture, ni redirection vers un fichier, ni
+  `&` d'arrière-plan, ni substitution ; un doute garde la carte ;
+- une règle de pouvoirs couvre une ligne dont les pouvoirs, chemins et hôtes jugés sont
+  **tous** dans ceux qu'elle nomme (trois chemins et trois hôtes au plus), jamais plus ;
+- le mode « demander tout » d'une session garde toutes ses cartes ;
+- `config_set` sur `approval.*` demande deux confirmations, comme le bac à sable.
+
+Chaque jugement laisse un événement `approval.judged` (empreinte de la ligne, jamais la
+ligne). `/policies` et `penelope policies` disent d'une règle de pouvoirs qu'elle est née
+d'un jugement, et de quelle demande ; `penelope approvals` montre le jugement d'une carte en
+attente (`payload.judged`) ; `penelope doctor` donne le mode et la part des cartes jugées
+sur sept jours.
 
 ### Messages vocaux
 

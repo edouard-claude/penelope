@@ -598,7 +598,7 @@ impl Daemon {
             cancel,
         };
 
-        let outcome = AgentLoop::new(crate::agent::services_of(&s), provider)
+        let outcome = AgentLoop::new(crate::agent::judged(&s, self.providers.clone()), provider)
             .with_inbox(inbox)
             .run_conversation_as(&spec, Some(meta), &conv, &exec, sink)
             .await;

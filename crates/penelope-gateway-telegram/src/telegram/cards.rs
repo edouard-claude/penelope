@@ -36,7 +36,7 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
         None => (None, a.subject.clone()),
     };
     let mut quals: Vec<String> = Vec::new();
-    let action = match (a.subject.as_str(), args["command"].as_str()) {
+    let mut action = match (a.subject.as_str(), args["command"].as_str()) {
         ("shell_exec", Some(command)) => {
             if penelope_executor::executor::wants_network(&a.subject, &a.payload["arguments"]) {
                 quals.push("réseau".into());
@@ -115,7 +115,7 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
             penelope_hitl::policy::describe_pattern(p)
         }
     };
-    let always = (!patterns.is_empty()).then(|| {
+    let mut always = (!patterns.is_empty()).then(|| {
         let network = patterns.iter().any(|p| p["network"] == Value::Bool(true));
         let names: Vec<String> = patterns.iter().map(&describe).collect();
         format!(
@@ -124,9 +124,20 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
             if network { " (réseau)" } else { "" }
         )
     });
+    // Ce que le juge a reconnu (#203) : sous la commande, en texte d'origine modèle.
+    let judged = &a.payload["judged"];
+    let grant = judged["grant"].is_object();
+    if judged.is_object() {
+        action.push_str(&format!("\n\n{}", judged_text(judged)));
+    }
+    // Une règle sur les pouvoirs reconnus, nommés juste au-dessus : le bouton de
+    // « Toujours » la propose.
+    if grant && always.is_none() {
+        always = Some("ces pouvoirs".into());
+    }
     // Une commande composée n'a pas de famille : « Toujours » l'autoriserait une fois,
     // sans créer de règle (#111). La carte le dit avant le clic (#141).
-    if penelope_agent::always_creates_no_rule(&a.subject, a.payload.get("arguments")) {
+    if !grant && penelope_agent::always_creates_no_rule(&a.subject, a.payload.get("arguments")) {
         // Dire *ce qui* empêche la règle, et par où sortir : une commande par appel
         // (issue #150). Sans cela, « pas de règle possible » se lit comme une fatalité.
         let why = a.payload["arguments"]["command"]
@@ -143,6 +154,65 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
         details: quals.join(" · "),
         always,
     }
+}
+
+/// Ce que le juge d'approbation a reconnu, en une ligne (#203). Chaque texte vient d'un
+/// modèle : il est rendu **tel quel**, en code, sans rien que le rendu interprète.
+fn judged_text(judged: &Value) -> String {
+    let literal = |v: &Value, max: usize| -> String {
+        let t: String = v
+            .as_str()
+            .unwrap_or_default()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .replace('`', "ʼ")
+            .replace("{{", "{ {");
+        let t: String = if t.chars().count() > max {
+            format!("{}…", t.chars().take(max - 1).collect::<String>())
+        } else {
+            t
+        };
+        format!("`{t}`")
+    };
+    let list = |k: &str| -> Vec<String> {
+        judged[k]
+            .as_array()
+            .map(|a| a.iter().take(5).map(|v| literal(v, 60)).collect())
+            .unwrap_or_default()
+    };
+    let powers: Vec<&str> = judged["powers"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| p.as_str())
+                .filter_map(penelope_hitl::powers::Power::parse)
+                .map(|p| p.label())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut reach = if powers.is_empty() {
+        "aucun pouvoir reconnu".to_string()
+    } else {
+        powers.join(", ")
+    };
+    let (paths, hosts) = (list("paths"), list("hosts"));
+    if !paths.is_empty() {
+        reach.push_str(&format!(" sur {}", paths.join(", ")));
+    }
+    if !hosts.is_empty() {
+        reach.push_str(&format!(", vers {}", hosts.join(", ")));
+    }
+    let verdict = match judged["verdict"].as_str() {
+        Some("sûr") => "sûr",
+        Some("à_confirmer") => "à confirmer",
+        _ => "dangereux",
+    };
+    format!(
+        "🔎 Ce que la ligne fait réellement, selon un modèle auxiliaire (avis : {verdict}) : \
+         {reach}. {}",
+        literal(&judged["why"], 200)
+    )
 }
 
 /// État d'une connexion de fournisseur à compte, en une bulle (issue #142).

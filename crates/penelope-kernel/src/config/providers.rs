@@ -341,6 +341,7 @@ impl Default for Models {
             ("classifier", "fast"),
             ("compaction", "summarizer"),
             ("memory_review", "fast"),
+            ("approval_judge", "fast"),
             ("code", "reasoning"),
             ("image_generate", "image"),
             ("image_describe", "vision"),

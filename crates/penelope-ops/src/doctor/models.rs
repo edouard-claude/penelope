@@ -239,6 +239,7 @@ const TOOLLESS_ROLES: &[&str] = &[
     "tts",
     "embeddings",
     "classifier",
+    "approval_judge",
     "summarizer",
     "titler",
     "vision",

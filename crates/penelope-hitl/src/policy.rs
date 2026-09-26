@@ -98,6 +98,11 @@ impl PolicyRule {
         {
             return false;
         }
+        // Une règle de pouvoirs ne se lit que sur un jugement (issue #203) : jamais sur
+        // les arguments d'un appel.
+        if self.power_grant().is_some() {
+            return false;
+        }
         // Le réseau d'une commande ne s'accorde jamais implicitement (issue #106) : une
         // règle sur `shell_exec` qui ne le nomme pas (antérieure, ou sur l'outil entier)
         // ne couvre pas un appel qui le demande.
@@ -108,6 +113,13 @@ impl PolicyRule {
             return false;
         }
         true
+    }
+
+    /// La règle de pouvoirs que porte cette règle, si c'en est une (issue #203).
+    pub fn power_grant(&self) -> Option<crate::powers::PowerGrant> {
+        self.arg_match
+            .as_ref()
+            .and_then(crate::powers::PowerGrant::from_pattern)
     }
 
     /// Vrai si la fenêtre est encore ouverte dans ce contexte.
@@ -297,6 +309,10 @@ fn origin_of(url: &str) -> Option<String> {
 
 /// Motif rendu lisible pour une carte ou `/policies`.
 pub fn describe_pattern(pattern: &Value) -> String {
+    // Une règle née d'un jugement de pouvoirs le dit, et nomme la demande (issue #203).
+    if let Some(grant) = crate::powers::PowerGrant::from_pattern(pattern) {
+        return grant.describe();
+    }
     let Some(obj) = pattern.as_object() else {
         return pattern.to_string();
     };
@@ -514,6 +530,71 @@ impl PolicyEngine {
             reason: format!("règles {} (chaque étape de la liste)", used.join(", ")),
             rule_id: used.first().cloned(),
         }))
+    }
+
+    /// Règles de pouvoirs `Auto` actives dans ce contexte (issue #203), avec ce qu'elles
+    /// accordent. Une règle illisible (motif abîmé, trop large) est ignorée.
+    pub async fn power_rules(
+        &self,
+        run_id: Option<&str>,
+        session_id: Option<&str>,
+    ) -> penelope_store::Result<Vec<(PolicyRule, crate::powers::PowerGrant)>> {
+        Ok(self
+            .active_rules()
+            .await?
+            .into_iter()
+            .filter(|r| {
+                r.tool.as_deref() == Some("shell_exec")
+                    && r.decision == PolicyDecision::Auto
+                    && r.in_window(run_id, session_id)
+            })
+            .filter_map(|r| {
+                let grant = r.power_grant().filter(|g| g.readable())?;
+                Some((r, grant))
+            })
+            .collect())
+    }
+
+    /// Une règle du propriétaire qui refuse (ou redemande) une famille paraissant dans
+    /// cette ligne, où qu'elle y soit : elle prime sur tout jugement (issue #203). Rend
+    /// son identifiant.
+    pub async fn owner_rule_in_line(
+        &self,
+        line: &str,
+        run_id: Option<&str>,
+        session_id: Option<&str>,
+    ) -> penelope_store::Result<Option<String>> {
+        let heads = crate::powers::command_heads(line);
+        for r in self.active_rules().await? {
+            if r.tool.as_deref() != Some("shell_exec")
+                || r.decision == PolicyDecision::Auto
+                || !r.in_window(run_id, session_id)
+            {
+                continue;
+            }
+            let Some(prefix) = r
+                .arg_match
+                .as_ref()
+                .and_then(|p| p["command"][CMD_PREFIX_OP].as_str())
+            else {
+                continue;
+            };
+            let Some(want) = crate::cmdline::family(prefix) else {
+                continue;
+            };
+            if heads
+                .iter()
+                .any(|h| h.len() >= want.len() && h.iter().zip(&want).all(|(a, b)| a == b))
+            {
+                return Ok(Some(r.id));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Compte un usage de la règle (celles de pouvoirs le sont par l'étape du juge).
+    pub async fn record_hit(&self, id: &str) -> penelope_store::Result<()> {
+        self.bump(id).await
     }
 
     /// Crée une règle à partir d'une décision « toujours », « pour ce run » ou

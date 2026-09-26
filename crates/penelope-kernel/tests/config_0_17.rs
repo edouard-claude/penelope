@@ -117,7 +117,7 @@ fn the_complete_0_17_configuration_loads_without_error_or_refusal() {
     assert_eq!(cfg.observability.runtime_consumers[0].name, "tableau");
     assert_eq!(cfg.tools.shell_allow, vec!["cargo test", "npm run lint"]);
     assert_eq!(cfg.tools.http_allowlist, vec!["api.github.com"]);
-    assert_eq!(cfg.models.roles.len(), 11);
+    assert_eq!(cfg.models.roles.len(), 12);
     assert_eq!(cfg.models.aliases.len(), 9);
 
     assert_eq!(

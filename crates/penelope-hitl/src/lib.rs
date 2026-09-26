@@ -9,6 +9,7 @@
 
 pub mod cmdline;
 pub mod policy;
+pub mod powers;
 
 pub use policy::{PolicyEngine, PolicyRule, RuleScope};
 
@@ -326,7 +327,18 @@ impl ApprovalStore {
     /// une ligne composée n'en écrit aucune ; le ledger doit le dire, sinon
     /// `penelope approvals` compte 107 « Toujours » pour 27 règles.
     pub async fn note_rules(&self, id: &str, created: usize) -> Result<()> {
-        let (id_s, value) = (id.to_string(), (created > 0).then(|| "always".to_string()));
+        self.note_rule_kind(id, (created > 0).then_some("always"))
+            .await
+    }
+
+    /// Une règle de pouvoirs est née de cette demande (issue #203) : `rule_created`
+    /// vaut `powers`, pour que `penelope approvals` et la mesure la distinguent.
+    pub async fn note_powers_rule(&self, id: &str) -> Result<()> {
+        self.note_rule_kind(id, Some("powers")).await
+    }
+
+    async fn note_rule_kind(&self, id: &str, kind: Option<&str>) -> Result<()> {
+        let (id_s, value) = (id.to_string(), kind.map(String::from));
         self.store
             .write(move |tx| {
                 tx.execute(

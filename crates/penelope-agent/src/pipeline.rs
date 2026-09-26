@@ -3,6 +3,7 @@
 use super::*;
 
 pub(super) mod decide;
+pub(super) mod judge;
 pub(super) mod policy;
 
 pub use decide::{CallContext, CallId};
@@ -10,6 +11,7 @@ use decide::{
     DescribedCall, GuardContext, GuardStop, Refusal, Suspension, call_chain, nested_ask,
     run_call_guards,
 };
+use judge::JudgeStep;
 use policy::PolicyStage;
 pub use policy::{ApprovalMode, declared_allow, local_draft_allow};
 
@@ -331,6 +333,28 @@ impl AgentLoop {
         if let Some(refusal) = nested_ask(&context, verdict.decision, &verdict.reason) {
             return Ok(Decided::Step(Step::Record(call, refusal.text())));
         }
+        // 5. Juge (#203) : seulement sur une carte `shell_exec` sans motif possible. Il
+        // enrichit la carte, ou la retire quand un contrôle déterministe le confirme.
+        let judged = match self
+            .judge_stage(
+                spec,
+                policy_workspace.as_deref(),
+                &info,
+                &effective_args,
+                &verdict,
+            )
+            .await?
+        {
+            JudgeStep::Auto(v) => {
+                tracing::info!(session = %spec.session_id, layer = ?v.layer, reason = %v.reason, "appel autorisé sans carte");
+                return Ok(Decided::Step(Step::Execute {
+                    call,
+                    info,
+                    parallel: false,
+                }));
+            }
+            JudgeStep::Card(judged) => judged,
+        };
         match verdict.decision {
             PolicyDecision::Deny => {
                 return Ok(Decided::Step(Step::Record(
@@ -366,6 +390,7 @@ impl AgentLoop {
                             "double": double,
                             "call_id": call.id,
                             "turn_id": spec.turn_id,
+                            "judged": judged,
                         }),
                         vec![
                             "Autoriser".into(),

@@ -107,6 +107,7 @@ tts = "openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"
 vision = "openrouter:google/gemini-3.1-flash-image"
 
 [models.roles]
+approval_judge = "fast"
 chat_default = "main"
 classifier = "fast"
 code = "reasoning"
@@ -315,3 +316,6 @@ max_push_bytes = 104857600
 
 [history]
 source = "tables"
+
+[approval]
+judge = "explain"

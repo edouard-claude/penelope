@@ -104,5 +104,6 @@ pub(crate) fn agent_services(s: &Services) -> Arc<AgentServices> {
         snapshots: Arc::new(NoAudit),
         jobs: Arc::new(NoJobs),
         attempts: Arc::new(penelope_app::journal::JournalAttempts(s.events.clone())),
+        judge: Arc::new(penelope_app::judge::NoJudge),
     })
 }

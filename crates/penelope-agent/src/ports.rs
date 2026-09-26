@@ -2,15 +2,16 @@
 //!
 //! `AgentServices` remplace `Services` dans la boucle : les registres du kernel, du LLM
 //! et du HITL qu'elle lit et écrit directement (le dernier appel d'une session, auquel
-//! le cache de prompt se compare, se lit dans le `BudgetLedger`), plus cinq traits pour
+//! le cache de prompt se compare, se lit dans le `BudgetLedger`), plus six traits pour
 //! ce qui reste au daemon (mode d'approbation d'une session, nature d'une session,
-//! instantanés du prompt, jobs d'outils, tentatives). Chaque trait a une
+//! instantanés du prompt, jobs d'outils, tentatives, juge). Chaque trait a une
 //! implémentation unique dans le daemon ; `AgentServices::for_tests` en donne une en
 //! mémoire, sur `Store::open_memory`, pour que la boucle se teste sans daemon.
 
 use super::{ApprovalMode, ToolExecutor};
 use penelope_app::attempts::{AttemptSink, MemoryAttempts};
 use penelope_app::conversation::PromptPrefix;
+use penelope_app::judge::{Judge, NoJudge};
 use penelope_hitl::{ApprovalStore, PolicyEngine};
 use penelope_kernel::budget::BudgetLedger;
 use penelope_kernel::clock::SharedClock;
@@ -46,6 +47,8 @@ pub struct AgentServices {
     pub jobs: Arc<dyn JobRunner>,
     /// Tentatives sans réponse (#206, T15).
     pub attempts: Arc<dyn AttemptSink>,
+    /// Juge d'approbation (#203, T22).
+    pub judge: Arc<dyn Judge>,
 }
 
 /// Mode d'approbation d'une session (issue #111).
@@ -171,6 +174,14 @@ impl PromptSnapshots for NoAudit {
 }
 
 impl AgentServices {
+    /// Les mêmes services, jugés par `judge` (#203).
+    pub fn with_judge(self: Arc<Self>, judge: Arc<dyn Judge>) -> Arc<Self> {
+        Arc::new(AgentServices {
+            judge,
+            ..(*self).clone()
+        })
+    }
+
     /// Services de test sur une base en mémoire : configuration d'exemple (écrite, si un
     /// test la change, sous `dir`), modes et tentatives en mémoire, ni instantané ni job.
     pub fn for_tests(dir: &Path, clock: SharedClock) -> anyhow::Result<AgentServices> {
@@ -206,6 +217,7 @@ impl AgentServices {
             snapshots: Arc::new(NoAudit),
             jobs: Arc::new(NoJobs),
             attempts: Arc::new(MemoryAttempts::default()),
+            judge: Arc::new(NoJudge),
             catalog: Catalog::new(),
             events,
             store,

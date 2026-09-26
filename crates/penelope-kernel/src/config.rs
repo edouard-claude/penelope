@@ -37,8 +37,10 @@ pub struct Config {
     pub retention: Retention,
     pub backup: Backup,
     pub history: History,
+    pub approval: Approval,
 }
 
+mod approval;
 mod channel;
 mod duration;
 mod edit;
@@ -47,6 +49,7 @@ mod sections;
 mod store;
 mod validate;
 mod write;
+pub use approval::*;
 pub use channel::*;
 pub use duration::*;
 pub use edit::edit_toml;

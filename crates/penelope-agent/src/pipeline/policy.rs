@@ -6,8 +6,11 @@
 //!  3. autorisation déclarée d'avance (brouillon de plan, `tools.shell_allow[_network]`)
 //!  4. mode de la session : `ask` redemande, `auto` laisse passer sauf le destructif
 //!  5. réseau demandé : la raison le dit (la couche ne change pas)
-//!  6. plancher : `config_set` sensible demande deux fois, malgré toute règle
+//!  6. plancher : `config_set` sensible (ou sur `approval.*`) demande deux fois, malgré
+//!     toute règle
 //! ```
+//!
+//! Le juge (#203, `judge.rs`) vient après, sur le verdict final.
 //!
 //! `Verdict.reason` est la chaîne que la carte affiche et que les tests lisent : elle
 //! reste celle d'avant les couches typées, à l'octet.
@@ -29,6 +32,8 @@ pub(crate) enum VerdictLayer {
     SessionMode,
     /// Plancher : réglage sensible, double confirmation.
     SensitiveConfig,
+    /// Le juge d'approbation, sous contrôle déterministe (#203).
+    Judge,
 }
 
 /// Décision de la politique sur un appel.
@@ -134,8 +139,14 @@ impl PolicyStage {
         }
         // Une règle « toujours » posée pour `config_set` vaut pour les réglages
         // ordinaires, jamais pour le bac à sable, les providers ou Telegram.
+        // Le juge d'approbation (`approval.*`, #203) en est un : le modèle ne choisit pas
+        // qui le juge.
+        let judge_setting = effective_args
+            .get("path")
+            .and_then(|p| p.as_str())
+            .is_some_and(|p| p == "approval" || p.starts_with("approval."));
         if info.effective_name == "config_set"
-            && info.risk == RiskClass::Destructive
+            && (info.risk == RiskClass::Destructive || judge_setting)
             && verdict.decision != PolicyDecision::Deny
         {
             verdict.decision = PolicyDecision::AskTwice;

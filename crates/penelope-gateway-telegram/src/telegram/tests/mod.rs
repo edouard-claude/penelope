@@ -16,6 +16,7 @@ mod bursts;
 mod delivery;
 mod elicitation;
 mod forms;
+mod judge;
 mod media;
 mod ops;
 mod sessions;

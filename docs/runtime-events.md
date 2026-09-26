@@ -97,6 +97,7 @@ du tour (sauf `approval.decided`, qui ne l'est pas) :
 | `llm.retried` | nouvel essai du même modèle après une erreur d'avant flux | `model`, `attempt`, `wait_s`, `error` |
 | `llm.fallback_used` | la réponse vient d'un autre modèle que celui demandé (repli fait par OpenRouter) | `requested`, `served` |
 | `approval.decided` | une carte d'approbation, ou un effet au sort incertain, est tranchée ; la première décision gagne | `id`, `approved`, `via`, `window` ; pour un effet incertain, `effect` et `choice` |
+| `approval.judged` | le juge d'approbation (#203) a jugé une ligne `shell_exec` sans motif possible, ou n'a pas pu | `command_sha` (seize caractères du SHA-256 de la ligne, jamais la ligne), `mode`, `outcome` (`carte`, `auto_read`, `regle_pouvoirs`, `echec`) ; jugée : `verdict`, `powers`, `hosts`, `model`, `duration_ms`, `cost_usd`, `rule` ; en échec : `failure` (`indisponible`, `delai`, `schema`) et `detail` |
 
 Les événements `conv.*` portent le **contenu** de la conversation, pour que le journal
 se suffise (épopée #208, `design/v1/source-de-verite.md` §2.2). Chaque payload a

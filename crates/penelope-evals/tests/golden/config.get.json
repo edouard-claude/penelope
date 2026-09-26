@@ -96,6 +96,7 @@
           "vision": "string"
         },
         "roles": {
+          "approval_judge": "string",
           "chat_default": "string",
           "classifier": "string",
           "code": "string",
@@ -292,6 +293,9 @@
       },
       "history": {
         "source": "string"
+      },
+      "approval": {
+        "judge": "string"
       }
     }
   }

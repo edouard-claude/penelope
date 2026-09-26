@@ -25,6 +25,7 @@ pub const BACKGROUND_ROLES: &[&str] = &[
     "classifier",
     "compaction",
     "memory_review",
+    "approval_judge",
     "embedding",
     "stt",
     "tts",
@@ -186,7 +187,7 @@ mod tests {
         let c = cfg();
         assert_eq!(
             background_roles_of(&c, "fast"),
-            ["classifier", "memory_review"]
+            ["approval_judge", "classifier", "memory_review"]
         );
         assert_eq!(background_roles_of(&c, "summarizer"), ["compaction"]);
         assert!(

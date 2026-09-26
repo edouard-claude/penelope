@@ -31,11 +31,13 @@ pub enum TurnEventKind {
     LlmFallbackUsed,
     /// Une approbation, ou un effet incertain, est tranché.
     ApprovalDecided,
+    /// Le juge d'approbation a rendu un avis, ou n'a pas pu (#203).
+    ApprovalJudged,
 }
 
 impl TurnEventKind {
     /// Toutes les variantes, pour les tests.
-    pub const ALL: [TurnEventKind; 9] = [
+    pub const ALL: [TurnEventKind; 10] = [
         TurnEventKind::Started,
         TurnEventKind::Finished,
         TurnEventKind::Merged,
@@ -45,6 +47,7 @@ impl TurnEventKind {
         TurnEventKind::LlmRetried,
         TurnEventKind::LlmFallbackUsed,
         TurnEventKind::ApprovalDecided,
+        TurnEventKind::ApprovalJudged,
     ];
 
     /// Le kind écrit dans le journal.
@@ -59,6 +62,7 @@ impl TurnEventKind {
             TurnEventKind::LlmRetried => "llm.retried",
             TurnEventKind::LlmFallbackUsed => "llm.fallback_used",
             TurnEventKind::ApprovalDecided => "approval.decided",
+            TurnEventKind::ApprovalJudged => "approval.judged",
         }
     }
 
