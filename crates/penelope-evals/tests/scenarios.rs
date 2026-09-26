@@ -52,6 +52,7 @@ scenario_cases! {
     redemarrages_en_serie => "redemarrages-en-serie",
     outils_niveau_1_et_compaction => "outils-niveau-1-et-compaction",
     message_pendant_un_lot => "message-pendant-un-lot",
+    commandes_systeme => "commandes-systeme",
 }
 
 #[test]
