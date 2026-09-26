@@ -673,4 +673,14 @@ mod tests {
     async fn describe_unknown_node_is_none() {
         assert!(lcm().describe("n_inconnu").await.unwrap().is_none());
     }
+
+    #[test]
+    fn node_kinds_have_their_stored_names() {
+        assert_eq!(NodeKind::Leaf.as_str(), "leaf");
+        assert_eq!(NodeKind::Condensed.as_str(), "condensed");
+        assert_eq!(
+            serde_json::to_string(&NodeKind::Condensed).unwrap(),
+            "\"condensed\""
+        );
+    }
 }

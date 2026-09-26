@@ -241,3 +241,36 @@ fn fts_sanitiser_quotes_terms_and_drops_operators() {
     assert_eq!(sanitise_fts("  "), "");
     assert_eq!(sanitise_fts("\"quoted\" AND (x)"), "\"quoted\"");
 }
+
+/// Images et audio survivent à l'écriture et à la relecture d'un message ; un bloc
+/// inconnu ou un contenu illisible ne font pas échouer la lecture.
+#[test]
+fn image_and_audio_blocks_round_trip() {
+    let mut m = ChatMessage::user("regarde");
+    m.content.push(Content::ImageUrl {
+        url: "data:image/png;base64,AAA".into(),
+        detail: Some("low".into()),
+    });
+    m.content.push(Content::InputAudio {
+        data: "T2dn".into(),
+        format: "ogg".into(),
+    });
+    let raw = serialise_content(&m).unwrap();
+    let back = deserialise_content(Role::User, &raw, None, None);
+    assert_eq!(back.content, m.content);
+
+    let odd = r#"{"blocks":[{"type":"hologramme"},{"type":"input_audio","data":"x"}]}"#;
+    let back = deserialise_content(Role::User, odd, None, None);
+    assert_eq!(
+        back.content,
+        vec![Content::InputAudio {
+            data: "x".into(),
+            format: "wav".into()
+        }]
+    );
+    assert!(
+        deserialise_content(Role::User, "pas du json", None, None)
+            .content
+            .is_empty()
+    );
+}

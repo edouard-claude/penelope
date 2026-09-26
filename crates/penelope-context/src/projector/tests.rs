@@ -173,3 +173,32 @@ async fn a_failed_catch_up_marks_the_watermark_dirty() {
     assert_eq!(dirty[0].0, "s1");
     assert!(dirty[0].1.contains("v99"), "{}", dirty[0].1);
 }
+
+/// Un fork rattrapé depuis son journal : ses lignes héritées présentes, rien ne bouge ;
+/// perdues, la session est refondue et les retrouve.
+#[tokio::test]
+async fn a_fork_is_caught_up_or_rebuilt_from_its_journal() {
+    let w = world().await;
+    rich(&w).await;
+    w.sql("INSERT INTO sessions(id, kind, created_at, updated_at) VALUES('s4', 'chat', 't', 't')")
+        .await;
+    let copied = w.history().fork("s4", "s1").await.unwrap();
+    assert!(copied > 0);
+    let rows = || w.int("SELECT COUNT(*) FROM messages WHERE session_id = 's4'");
+    let before = rows().await;
+
+    w.sql("DELETE FROM projections_session WHERE session_id = 's4'")
+        .await;
+    w.history().catch_up("s4").await.unwrap();
+    assert_eq!(rows().await, before, "les lignes héritées suffisent");
+
+    w.sql(
+        "DELETE FROM messages WHERE session_id = 's4';
+         DELETE FROM projections_session WHERE session_id = 's4';",
+    )
+    .await;
+    w.history().catch_up("s4").await.unwrap();
+    assert_eq!(rows().await, before, "la refonte rend les lignes héritées");
+    let report = w.history().verify(Some("s4"), None).await.unwrap();
+    assert!(report.ok, "{:#?}", report.divergences);
+}

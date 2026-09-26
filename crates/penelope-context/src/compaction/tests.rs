@@ -452,3 +452,93 @@ fn max_prompt_tokens_caps_the_thresholds() {
         "queue sous le quart du seuil de fond"
     );
 }
+
+/// Niveau 4, dernier recours : quand même les groupes récents ne tiennent pas, il ne
+/// reste que le système et le dernier message utilisateur ; la preuve dit si cela tient.
+#[test]
+fn level4_falls_back_to_system_and_last_user() {
+    let msgs = vec![
+        ChatMessage::system("sys"),
+        ChatMessage::user("ancienne question"),
+        ChatMessage::assistant("x".repeat(10_000)),
+        ChatMessage::user("dernière question"),
+        ChatMessage::assistant("y".repeat(10_000)),
+    ];
+    let estimate = |m: &[ChatMessage]| m.iter().map(|x| x.text().len() as u64).sum::<u64>();
+    let (out, fits) = level4_emergency(msgs.clone(), 100, &estimate);
+    assert!(fits);
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].role, Role::System);
+    assert_eq!(out[1].text(), "dernière question");
+
+    // Même le minimum dépasse : la réponse le dit au lieu de prétendre tenir.
+    let (out, fits) = level4_emergency(msgs, 5, &estimate);
+    assert!(!fits);
+    assert_eq!(out.len(), 2);
+
+    assert_eq!(proof_of_fit(&out, 1_000, &estimate), Ok(21));
+    let e = proof_of_fit(&out, 5, &estimate).unwrap_err();
+    assert!(
+        e.contains("pèse encore 21 tokens pour une limite de 5"),
+        "{e}"
+    );
+}
+
+/// Une réponse d'outil sans son appel n'est pas une requête valide : la preuve refuse.
+#[test]
+fn proof_of_fit_refuses_orphan_tool_results() {
+    let msgs = vec![
+        ChatMessage::user("q"),
+        ChatMessage::tool_result("c1", "fs_read", "contenu"),
+    ];
+    let e = proof_of_fit(&msgs, 1_000, &|_| 1).unwrap_err();
+    assert!(e.contains("paires appel/résultat invalides"), "{e}");
+}
+
+/// Un corps externalisé sans queue se termine sans séparateur d'élision.
+#[test]
+fn an_externalised_body_without_tail_has_no_elision() {
+    let b = externalised_body("art_2", "tout", "", 900, "json");
+    assert!(b.ends_with("tout\n--- fin ---"), "{b}");
+    assert!(!b.contains("--- … ---"), "{b}");
+}
+
+/// Quand l'aperçu ne suffit pas, la seconde passe remplace les anciens résultats par un
+/// stub qui dit comment les relire ; un résultat court n'est pas « aperçu », et un
+/// stub n'est pas restubbé.
+#[test]
+fn level2_second_pass_stubs_old_results() {
+    let short = "court".to_string();
+    let long = "b".repeat(4000);
+    let entries: Vec<Entry> = [short.clone(), long.clone(), long]
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| {
+            Entry::new(
+                i as i64 * 10,
+                ChatMessage::tool_result(format!("c{i}"), "t", text),
+                1000,
+            )
+        })
+        .chain(std::iter::once(Entry::new(
+            30,
+            ChatMessage::user("la suite"),
+            10,
+        )))
+        .collect();
+    let mut proj: Vec<ChatMessage> = entries.iter().map(|e| e.message.clone()).collect();
+    let before = est_all(&proj);
+    let (after, touched) = level2_degrade(&entries, &mut proj, 3, 1, before, &est);
+    assert!(after < before);
+    assert!(touched >= 3, "{touched}");
+    for (i, m) in proj.iter().take(3).enumerate() {
+        assert_eq!(
+            m.text(),
+            format!(
+                "[résultat élidé — récupérable via history_expand(seq:{})]",
+                i * 10
+            )
+        );
+    }
+    assert_eq!(proj[3].text(), "la suite");
+}

@@ -233,3 +233,81 @@ async fn an_archive_cut_inside_the_sealed_prefix_keeps_its_sealed_rows() {
     let report = w.history().verify(None, None).await.unwrap();
     assert!(report.ok, "{:#?}", report.divergences);
 }
+
+fn details<'a>(report: &'a VerifyReport, what: &str) -> Vec<&'a str> {
+    report
+        .divergences
+        .iter()
+        .filter(|d| d.what == what)
+        .map(|d| d.detail.as_str())
+        .collect()
+}
+
+/// Un contexte figé qu'aucun événement `conv.context` ne porte est un écart.
+#[tokio::test]
+async fn an_unjournaled_context_is_named() {
+    let w = world().await;
+    rich(&w).await;
+    w.sql("INSERT INTO message_context(session_id, seq, context) VALUES('s1', 7777, '<x/>')")
+        .await;
+    let report = w.history().verify(Some("s1"), None).await.unwrap();
+    assert_eq!(
+        details(&report, "context"),
+        ["contexte figé qu'aucun conv.context ne porte"],
+        "{:#?}",
+        report.divergences
+    );
+}
+
+/// Deux lignes qui portent le même événement, et deux lignes échangées : chaque écart a
+/// son nom.
+#[tokio::test]
+async fn duplicated_and_swapped_rows_are_named() {
+    let w = world().await;
+    rich(&w).await;
+    w.sql(
+        "INSERT INTO messages(session_id, seq, role, content, ts, event_id, sealed)
+           SELECT session_id, 8888, role, content, ts, event_id, sealed
+           FROM messages WHERE session_id = 's1' AND seq = 3",
+    )
+    .await;
+    let report = w.history().verify(Some("s1"), None).await.unwrap();
+    assert!(
+        details(&report, "extra_row").contains(&"deux lignes pour le même nœud"),
+        "{:#?}",
+        report.divergences
+    );
+
+    let w = world().await;
+    rich(&w).await;
+    w.sql(
+        "UPDATE messages SET seq = -1 WHERE session_id = 's1' AND seq = 3;
+         UPDATE messages SET seq = 3 WHERE session_id = 's1' AND seq = 4;
+         UPDATE messages SET seq = 4 WHERE session_id = 's1' AND seq = -1;",
+    )
+    .await;
+    let report = w.history().verify(Some("s1"), None).await.unwrap();
+    assert!(
+        report.divergences.iter().any(|d| d.what == "order"),
+        "{:#?}",
+        report.divergences
+    );
+}
+
+/// Un résumé dont l'événement, les jetons ou les ancres ne sont plus ceux du journal le
+/// dit, champ par champ.
+#[tokio::test]
+async fn a_summary_with_altered_fields_names_each_of_them() {
+    let w = world().await;
+    rich(&w).await;
+    w.sql(
+        "UPDATE lcm_nodes SET event_id = 424242, tokens_self = tokens_self + 1, anchors = '[\"x\"]'
+         WHERE session_id = 's1' AND superseded_by IS NULL",
+    )
+    .await;
+    let report = w.history().verify(Some("s1"), None).await.unwrap();
+    let d = details(&report, "summary").join(" | ");
+    assert!(d.contains("event_id"), "{d}");
+    assert!(d.contains("jetons"), "{d}");
+    assert!(d.contains("ancres"), "{d}");
+}

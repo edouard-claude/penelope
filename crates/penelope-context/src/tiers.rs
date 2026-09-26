@@ -625,4 +625,25 @@ mod tile_tests {
         assert!(!json.contains("Pénélope"), "{json}");
         assert!(json.len() < 300, "{json}");
     }
+
+    /// T4 sans message utilisateur devient un message système final ; un dernier
+    /// message utilisateur sans texte reçoit le bloc en tête.
+    #[test]
+    fn volatile_context_without_a_user_text_still_lands() {
+        let t = builder().volatile("Date : mardi").build();
+        let out = t.assemble(vec![ChatMessage::assistant("bonjour")], false);
+        let last = out.last().unwrap();
+        assert_eq!(last.role, Role::System);
+        assert_eq!(last.text(), "Date : mardi");
+
+        let mut image_only = ChatMessage::user("");
+        image_only.content = vec![Content::ImageUrl {
+            url: "https://x/y.png".into(),
+            detail: None,
+        }];
+        let out = t.assemble(vec![image_only], false);
+        let last = out.last().unwrap();
+        assert_eq!(last.content.len(), 2);
+        assert!(last.text().contains("<contexte>"), "{:?}", last.content);
+    }
 }
