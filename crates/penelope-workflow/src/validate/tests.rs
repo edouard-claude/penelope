@@ -1,6 +1,8 @@
 use super::*;
 use serde_json::json;
 
+mod refusals;
+
 fn known() -> Known {
     Known {
         workflow_ids: ["deploy-generic".to_string()].into_iter().collect(),
