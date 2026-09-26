@@ -489,3 +489,30 @@ fn fts_query_drops_short_words() {
     assert_eq!(fts_query("le déploiement"), "\"déploiement\"*");
     assert_eq!(fts_query("a b"), "");
 }
+
+/// Les entrées d'une fiche se relisent par son slug, dans l'ordre des uid, sans les
+/// entrées retirées ni celles d'une autre fiche.
+#[tokio::test]
+async fn entries_are_read_back_by_slug_without_retired_ones() {
+    let i = index(TestClock::default());
+    for (uid, slug) in [
+        ("u2", "acme"),
+        ("u1", "acme"),
+        ("u3", "autre"),
+        ("u4", "acme"),
+    ] {
+        let mut e = simple_entry(uid, &format!("fait {uid}"), Level::Cure, "2026-09-16");
+        e.slug = Some(slug.into());
+        i.upsert(&e, &prov()).await.unwrap();
+    }
+    i.retire("u4").await.unwrap();
+    let uids: Vec<String> = i
+        .by_slug("acme")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.uid)
+        .collect();
+    assert_eq!(uids, ["u1", "u2"]);
+    assert!(i.by_slug("inconnue").await.unwrap().is_empty());
+}

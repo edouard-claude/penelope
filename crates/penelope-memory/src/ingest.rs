@@ -575,6 +575,9 @@ pub fn source_entries(slug: &str, text: &str, maj: &str) -> Vec<IndexedEntry> {
 }
 
 #[cfg(test)]
+mod edge_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
