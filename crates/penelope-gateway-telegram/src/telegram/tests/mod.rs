@@ -21,6 +21,9 @@ mod forms;
 mod judge;
 mod media;
 mod ops;
+mod screens_admin;
+mod screens_memory;
+mod screens_runs;
 mod sessions;
 mod workflows;
 
@@ -218,4 +221,61 @@ async fn button(t: &MockTransport, label: &str) -> String {
         .find(|(l, _)| l.contains(label))
         .unwrap_or_else(|| panic!("pas de bouton « {label} »"))
         .1
+}
+
+/// Écran construit sans passer par le chat : texte et boutons (libellé, jeton).
+async fn screen_of(
+    g: &TelegramGateway,
+    name: &str,
+    args: Value,
+) -> (String, Vec<(String, String)>) {
+    let sc = g.build_screen(OWNER, None, name, &args).await.unwrap();
+    let buttons = sc
+        .rows
+        .iter()
+        .flatten()
+        .map(|b| {
+            let target = match &b.action {
+                penelope_telegram::render::ButtonAction::Callback { token } => token.clone(),
+                penelope_telegram::render::ButtonAction::Url { url } => url.clone(),
+                penelope_telegram::render::ButtonAction::CopyText { text } => text.clone(),
+            };
+            (b.label.clone(), target)
+        })
+        .collect();
+    (sc.text, buttons)
+}
+
+/// Jeton du bouton dont le libellé commence par `label`.
+fn token_of(buttons: &[(String, String)], label: &str) -> String {
+    buttons
+        .iter()
+        .find(|(l, _)| l.starts_with(label))
+        .unwrap_or_else(|| panic!("pas de bouton « {label} » : {buttons:?}"))
+        .1
+        .clone()
+}
+
+/// Clique un bouton (jeton de rappel) et laisse l'opération détachée finir.
+async fn press(g: &Arc<TelegramGateway>, token: &str) {
+    static NEXT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(70_000);
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    g.process_update(&updates::callback(id, OWNER, token, 900))
+        .await
+        .unwrap();
+    settle_click(g).await;
+}
+
+/// Bouton gardé : ouvre sa confirmation et clique « Confirmer ».
+async fn confirm(g: &Arc<TelegramGateway>, guarded: &str) {
+    let action = g
+        .actions
+        .get(guarded)
+        .await
+        .unwrap()
+        .expect("jeton d'écran");
+    assert_eq!(action.target, "confirm");
+    let (question, buttons) = screen_of(g, "confirm", action.args).await;
+    assert!(question.starts_with("⚠️ "), "{question}");
+    press(g, &token_of(&buttons, "✅ Confirmer")).await;
 }
