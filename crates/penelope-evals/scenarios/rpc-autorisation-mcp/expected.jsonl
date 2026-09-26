@@ -1,0 +1,24 @@
+{"type":"outcome","step":1,"input":"rpc : mcp.add","result":{"report":{"added":["notes"],"changed":[],"removed":[],"invalid":[]},"status":{"name":"notes","state":"ready","transport":"http","protocol":"2025-06-18","tool_count":1,"failures":0,"last_error":null,"last_ok":"{{ts}}","p50_ms":"{{ms}}","p95_ms":"{{ms}}","calls":0,"errors":0,"running":true,"lazy":true,"keychain":false}}}
+{"type":"outcome","step":2,"input":"rpc : mcp.auth","error":{"code":-32603,"message":"serveur MCP `absent` inconnu"}}
+{"type":"outcome","step":3,"input":"rpc : mcp.auth","result":{"server":"notes","url":"{{http}}/authorize?response_type=code&client_id=client-du-scenario&redirect_uri=http%3A%2F%2F127.0.0.1%3A7777%2Foauth%2Fcallback&{{masked}}&code_challenge_method=S256&{{masked}}&resource={{http}}%2Fmcp&scope=notes.read","mode":"paste_back","redirect_uri":"http://127.0.0.1:7777/oauth/callback","scopes":["notes.read"],"expires_at_ms":1767226200000,"text":"🔐 **Autorisation requise** pour `notes` (scopes : notes.read)\n\n[Autoriser]({{http}}/authorize?response_type=code&client_id=client-du-scenario&redirect_uri=http%3A%2F%2F127.0.0.1%3A7777%2Foauth%2Fcallback&{{masked}}&code_challenge_method=S256&{{masked}}&resource={{http}}%2Fmcp&scope=notes.read)\n\nSi la page finit sur une erreur `127.0.0.1`, copie l'adresse de la barre du navigateur et colle-la ici. Valable 10 minutes."}}
+{"type":"outcome","step":4,"input":"navigateur : $demande.url","status":302,"location":"http://127.0.0.1:7777/oauth/callback?code=code-du-scenario&{{masked}}"}
+{"type":"outcome","step":5,"input":"rpc : mcp.auth","result":{"server":"notes","authorized":true,"status":{"name":"notes","state":"ready","transport":"http","protocol":"2025-06-18","tool_count":1,"failures":0,"last_error":null,"last_ok":"{{ts}}","p50_ms":"{{ms}}","p95_ms":"{{ms}}","calls":0,"errors":0,"running":true,"lazy":true,"keychain":false}}}
+{"type":"outcome","step":6,"input":"rpc : mcp.auth","error":{"code":-32603,"message":"aucune autorisation en attente pour cette adresse (déjà utilisée ou expirée)"}}
+{"type":"outcome","step":7,"input":"rpc : secret.list","result":["mcp.notes.oauth"]}
+{"type":"outcome","step":8,"input":"rpc : mcp.auth","result":{"/server":"notes","/scopes":["notes.read"]}}
+{"type":"session","id":"{{session:1}}","kind":"chat","title":"CLI","state":"active","parent":null,"model_alias":null,"episode":0}
+{"type":"event","session":"{{session:1}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"chat","parent_id":null}}
+{"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"tool_jobs_lost":0,"turns_requeued":0}}
+{"type":"event","session":null,"seq":2,"kind":"mcp.auth_requested","payload":{"mode":"paste_back","scopes":["notes.read"],"server":"notes"}}
+{"type":"event","session":null,"seq":3,"kind":"mcp.authorized","payload":{"issuer":"{{http}}","scope":"notes.read","server":"notes"}}
+{"type":"event","session":null,"seq":4,"kind":"mcp.auth_requested","payload":{"mode":"paste_back","scopes":["notes.read"],"server":"notes"}}
+{"type":"audit","ok":true,"checked":5,"purged":0}
+{"type":"observed","name":"autorisations en attente","row":{"n":1}}
+{"type":"observed","name":"clients enregistrés","row":{"v":"client-du-scenario"}}
+{"type":"http_request","method":"GET","path":"/.well-known/oauth-protected-resource/mcp"}
+{"type":"http_request","method":"GET","path":"/.well-known/oauth-authorization-server"}
+{"type":"http_request","method":"POST","path":"/register","body":{"client_name":"Penelope","redirect_uris":["http://127.0.0.1:7777/oauth/callback"],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none","application_type":"native","scope":"notes.read"}}
+{"type":"http_request","method":"GET","path":"/authorize","query":{"client_id":"client-du-scenario","code_challenge":"{{masked}}","code_challenge_method":"S256","redirect_uri":"http://127.0.0.1:7777/oauth/callback","resource":"{{http}}/mcp","response_type":"code","scope":"notes.read","state":"{{masked}}"}}
+{"type":"http_request","method":"POST","path":"/token","body":{"client_id":"client-du-scenario","code":"code-du-scenario","code_verifier":"{{masked}}","grant_type":"authorization_code","redirect_uri":"http://127.0.0.1:7777/oauth/callback","resource":"{{http}}/mcp"}}
+{"type":"http_request","method":"GET","path":"/.well-known/oauth-protected-resource/mcp"}
+{"type":"http_request","method":"GET","path":"/.well-known/oauth-authorization-server"}

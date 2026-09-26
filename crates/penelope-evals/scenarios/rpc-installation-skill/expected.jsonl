@@ -1,0 +1,9 @@
+{"type":"outcome","step":1,"input":"rpc : skill.install","error":{"code":-32603,"message":"source `skills` : attendu `proprietaire/depot[@revision][:skill,skill]` (par exemple `anthropics/skills:docx,pdf`)"}}
+{"type":"outcome","step":2,"input":"rpc : skill.install","error":{"code":-32603,"message":"dépôt `../skills` invalide dans la source `anthropics/../skills`"}}
+{"type":"outcome","step":3,"input":"rpc : skill.install","error":{"code":-32603,"message":"skill demandée `Pas Un Slug` : slug invalide : caractères autorisés : [a-z0-9-] — reçu `Pas Un Slug`"}}
+{"type":"outcome","step":4,"input":"rpc : skill.install","error":{"code":-32603,"message":"propriétaire `anthropics skills` invalide dans la source `anthropics skills/docx`"}}
+{"type":"outcome","step":5,"input":"rpc : skill.list","result":{"/*/name":[]}}
+{"type":"session","id":"{{session:1}}","kind":"chat","title":"CLI","state":"active","parent":null,"model_alias":null,"episode":0}
+{"type":"event","session":"{{session:1}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"chat","parent_id":null}}
+{"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"tool_jobs_lost":0,"turns_requeued":0}}
+{"type":"audit","ok":true,"checked":2,"purged":0}

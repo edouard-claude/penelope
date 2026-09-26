@@ -1,0 +1,59 @@
+name = "rpc-diagnostic"
+description = """Le diagnostic par la socket locale, comme `penelope doctor`, joué en entier après un
+tour, une skill déposée et un serveur MCP déclaré. Ce qui décrit l'hôte et dont le nombre
+même change d'une machine à l'autre est retiré de la réponse (`without`) : service,
+disque, dépendances et inventaire des binaires, contrôles propres à l'OS, résolution DNS,
+signature et mode d'installation du binaire, source d'alimentation. La dérive de
+l'horloge de test et la durée de la synthèse vocale d'essai sont masquées. Restent dans
+les attendus, dans leur ordre, les contrôles propres à Pénélope : propriétaire,
+conversations, secrets attendus, intégrité de la base et chaîne d'audit, rétention,
+stabilité du prompt, journal, jobs d'outils, bac à sable, workflows, skills (la skill
+déposée comptée), juge, rédacteur, mémoire, retour OAuth et serveur MCP, embeddings,
+cohérence de la configuration, secrets des journaux, vault, mises à jour, planifications,
+voix, sauvegarde, boucles de fond."""
+pin_model = "main"
+masks = ["dérive de \\d+ ms", "\\d+\\.\\d s de synthèse d'essai"]
+
+[[mcp_servers]]
+name = "forge"
+tools = ["create_pr", "list_issues"]
+
+[[files]]
+root = "skills"
+path = "releve-compteurs/SKILL.md"
+content = """---
+name: releve-compteurs
+description: Relevé mensuel des compteurs d'eau et d'électricité
+version: 1.1.0
+---
+Relever les deux compteurs, comparer au mois précédent, signaler un écart de plus de 20 %.
+"""
+
+[[steps]]
+kind = "message"
+text = "bonjour"
+
+[[steps]]
+kind = "rpc"
+method = "skill.reload"
+
+[[steps]]
+kind = "rpc"
+method = "mcp.add"
+params = { name = "forge", toml = "command = \"/opt/mcp/forge\"\ntimeout = \"20s\"\n" }
+
+[[steps]]
+kind = "rpc"
+method = "doctor"
+without = { id = [
+    "service",
+    "disk",
+    "dep.*",
+    "macos.*",
+    "platform.*",
+    "machine.*",
+    "net.*",
+    "binary_signature",
+    "install_mode",
+    "dream_power",
+] }

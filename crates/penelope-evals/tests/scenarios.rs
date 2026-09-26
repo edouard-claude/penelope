@@ -88,6 +88,11 @@ scenario_cases! {
     outils_workflow_run => "outils-workflow-run",
     outils_images => "outils-images",
     outils_sous_agent => "outils-sous-agent",
+    // Les quatre dernières méthodes RPC, contre l'hôte masqué et un faux serveur local.
+    rpc_diagnostic => "rpc-diagnostic",
+    rpc_autorisation_mcp => "rpc-autorisation-mcp",
+    rpc_mise_a_jour => "rpc-mise-a-jour",
+    rpc_installation_skill => "rpc-installation-skill",
 }
 
 #[test]

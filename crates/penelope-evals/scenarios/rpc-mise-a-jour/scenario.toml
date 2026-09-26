@@ -1,0 +1,50 @@
+name = "rpc-mise-a-jour"
+description = """La mise à jour du binaire, comme `penelope upgrade`, contre une source de releases
+locale (`upgrade.base_url` vers le faux serveur `[[http]]`, 127.0.0.1), sans que le
+binaire de la machine puisse être remplacé : le harnais refuse `switch`, et n'admet une
+installation ou un retour arrière que depuis un binaire de compilation, que la méthode
+refuse de remplacer avant tout téléchargement. La source ne publie qu'un brouillon, une
+pré-release (`v1.0.0-alpha.99`, #212) et un tag illisible : la vérification n'en retient
+aucune (« aucune release publiée »). Installer (dernière version ou tag explicite) et
+revenir en arrière sont refusés sur un binaire de compilation, avec la sortie
+(`--switch`, `make deploy`). Le monde après : une seule requête reçue, la liste des
+releases ; aucun `upgrade.installed`, aucun redémarrage demandé. Le chemin « une mise à
+jour existe » n'est pas jouable à l'identique sous Linux : `check` exige l'archive de
+l'OS (voir design/v1/notes/s-derniers.md)."""
+pin_model = "main"
+masks = ["\\S*/target/(debug|release)/deps/scenarios-[0-9a-f]+"]
+
+[config]
+"upgrade.base_url" = "{{http}}/releases"
+
+[[http]]
+path = "/releases"
+method = "GET"
+body = """[
+  {"tag_name": "v9.9.9", "draft": true, "assets": []},
+  {"tag_name": "v1.0.0-alpha.99", "prerelease": true, "assets": []},
+  {"tag_name": "nightly", "assets": []}
+]"""
+
+[[steps]]
+kind = "rpc"
+method = "upgrade"
+params = { check = true }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "upgrade"
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "upgrade"
+params = { tag = "v9.9.9", force = true }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "upgrade"
+params = { rollback = true }
+error = true

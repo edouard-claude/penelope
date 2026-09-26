@@ -1,0 +1,38 @@
+name = "rpc-installation-skill"
+description = """L'import d'une skill tierce, comme `penelope skill install`, dans ce qu'il fait
+avant tout téléchargement : une source mal écrite (sans propriétaire, remontée de
+répertoire, liste de skills qui n'est pas un slug, espace) est refusée, rien n'est posé
+dans le répertoire des skills. L'archive elle-même se télécharge toujours depuis
+`https://codeload.github.com` (adresse construite, ni configurable ni locale) : une
+installation réussie n'est pas jouable sans réseau tant que le produit n'a pas de source
+d'archives configurable (voir design/v1/notes/s-derniers.md)."""
+pin_model = "main"
+
+[[steps]]
+kind = "rpc"
+method = "skill.install"
+params = { source = "skills" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "skill.install"
+params = { source = "anthropics/../skills" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "skill.install"
+params = { source = "anthropics/skills:Pas Un Slug" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "skill.install"
+params = { source = "anthropics skills/docx" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "skill.list"
+pick = ["/*/name"]

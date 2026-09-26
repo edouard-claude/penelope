@@ -201,8 +201,4 @@ required = [
 # scénario fait échouer `every_visible_surface_has_a_scenario`. Vide à la bascule (§4.5).
 [scenarios]
 missing = [
-    "rpc:doctor",
-    "rpc:mcp.auth",
-    "rpc:skill.install",
-    "rpc:upgrade",
 ]
