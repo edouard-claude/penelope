@@ -11,7 +11,7 @@
 {"type":"outcome","step":11,"input":"rpc : mem.retry_rejected","result":{"retried":0}}
 {"type":"outcome","step":12,"input":"rpc : mem.learned","result":[]}
 {"type":"outcome","step":13,"input":"rpc : mem.audit","result":{"/audit/total":21,"/audit/axes/*/name":["Connaissance du propriétaire","Portée","Savoir-faire","Autonomie","Qualité"],"/audit/axes/*/score":[0,0,5,0,16]}}
-{"type":"outcome","step":14,"input":"rpc : mem.dream","result":{"run_id":"{{d:1}}","dry_run":true,"report":{"candidates_seen":0,"groups":0,"promoted":0,"proposals":0,"rejected":[],"deferred":0,"reflections":[],"questions":[],"files_touched":[],"lint_problems":0,"journal":0,"journal_expired":0,"calls":0,"wasted_calls":0,"lots":0,"duration_ms":"{{ms}}"},"text":"Appris cette nuit : 0 entrées promues, 0 propositions en attente."}}
+{"type":"outcome","step":14,"input":"rpc : mem.dream","result":{"run_id":"{{dream:1}}","dry_run":true,"report":{"candidates_seen":0,"groups":0,"promoted":0,"proposals":0,"rejected":[],"deferred":0,"reflections":[],"questions":[],"files_touched":[],"lint_problems":0,"journal":0,"journal_expired":0,"calls":0,"wasted_calls":0,"lots":0,"duration_ms":"{{ms}}"},"text":"Appris cette nuit : 0 entrées promues, 0 propositions en attente."}}
 {"type":"session","id":"{{session:1}}","kind":"chat","title":"CLI","state":"active","parent":null,"model_alias":null,"episode":0}
 {"type":"event","session":"{{session:1}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"chat","parent_id":null}}
 {"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"tool_jobs_lost":0,"turns_requeued":0}}
