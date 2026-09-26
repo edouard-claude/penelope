@@ -107,6 +107,7 @@ impl penelope_executor::executor::Orchestrator for WorkflowOrchestrator {
             .schedules
             .set_state(id, "deleted")
             .await
+            .map(|_| ())
             .map_err(|e| e.to_string())
     }
 
