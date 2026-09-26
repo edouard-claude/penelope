@@ -477,3 +477,36 @@ fn origins_and_raw_patterns_are_described() {
     assert_eq!(d, "url sur « https://api.github.com »");
     assert_eq!(describe_pattern(&json!("brut")), "\"brut\"");
 }
+
+/// Une règle d'un autre serveur ne s'applique pas ; une règle de pouvoirs ne se lit
+/// jamais sur les arguments d'un appel (#203), même quand l'outil correspond.
+#[test]
+fn server_scoped_and_power_rules_do_not_match_plain_calls() {
+    let rule = |server: Option<&str>, arg_match: Option<serde_json::Value>| PolicyRule {
+        id: "x".into(),
+        scope: RuleScope::Server,
+        tool: None,
+        server: server.map(String::from),
+        arg_match,
+        decision: PolicyDecision::Auto,
+        window: PolicyWindow::Always,
+        window_ref: None,
+        created_at: String::new(),
+        revoked_at: None,
+        hits: 0,
+    };
+    let r = rule(Some("forge"), None);
+    assert!(r.matches("mcp__forge__merge", Some("forge"), &json!({})));
+    assert!(!r.matches("mcp__notes__read", Some("notes"), &json!({})));
+    assert!(!r.matches("fs_read", None, &json!({})));
+
+    let grant = crate::powers::PowerGrant {
+        powers: vec![crate::powers::Power::Read],
+        paths: vec!["/srv".into()],
+        hosts: Vec::new(),
+        judged: Some("a_1".into()),
+    };
+    let r = rule(None, Some(grant.to_pattern()));
+    assert!(r.power_grant().is_some());
+    assert!(!r.matches("shell_exec", None, &json!({"command": "ls /srv"})));
+}

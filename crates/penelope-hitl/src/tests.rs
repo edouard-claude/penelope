@@ -186,3 +186,42 @@ fn every_kind_maps_to_a_template() {
         assert_eq!(ApprovalKind::parse(k.as_str()), Some(k));
     }
 }
+
+/// Chaque sorte de demande et chaque état se relisent depuis leur nom stocké ; seules
+/// les demandes d'effet inconnu et de budget dépassé sont urgentes (§9.2).
+#[test]
+fn kinds_and_states_round_trip() {
+    let kinds = [
+        ApprovalKind::ToolCall,
+        ApprovalKind::McpSampling,
+        ApprovalKind::McpElicitation,
+        ApprovalKind::WorkflowGate,
+        ApprovalKind::PlanProposal,
+        ApprovalKind::EffectUnknown,
+        ApprovalKind::SkillProposal,
+        ApprovalKind::MemoryProposal,
+        ApprovalKind::ConfigChange,
+        ApprovalKind::BudgetExceeded,
+        ApprovalKind::McpAdmin,
+    ];
+    for k in kinds {
+        assert_eq!(ApprovalKind::parse(k.as_str()), Some(k));
+        assert!(!k.template().is_empty());
+    }
+    let urgent: Vec<_> = kinds.into_iter().filter(|k| k.is_urgent()).collect();
+    assert_eq!(
+        urgent,
+        [ApprovalKind::EffectUnknown, ApprovalKind::BudgetExceeded]
+    );
+    assert_eq!(ApprovalKind::parse("inconnue"), None);
+    for s in [
+        ApprovalState::Pending,
+        ApprovalState::Approved,
+        ApprovalState::Denied,
+        ApprovalState::Expired,
+        ApprovalState::Cancelled,
+    ] {
+        assert_eq!(ApprovalState::parse(s.as_str()), Some(s));
+    }
+    assert_eq!(ApprovalState::parse("perdue"), None);
+}
