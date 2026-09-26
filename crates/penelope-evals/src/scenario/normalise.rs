@@ -7,6 +7,8 @@
 //!   dans l'ordre de première apparition ; un autre préfixe garde son nom (`sch_…` en
 //!   `{{sch:1}}`) ; un ULID nu devient `{{ulid:1}}` ;
 //! - la version du workspace devient `{{version}}` : un bump ne réécrit pas les attendus ;
+//! - un ULID en minuscules, marqueur tiré au sort (balise `<commande-…>` du juge des
+//!   commandes shell), devient `{{marker:1}}` ;
 //! - le fichier de notes d'une session (`notes/<titre>-<6 derniers caractères de son
 //!   identifiant, en minuscules>.md`, `session_notes`) devient `<titre>-{{session:1}}.md` ;
 //! - un horodatage RFC 3339 devient `{{ts}}` à l'instant de départ du scénario, sinon
@@ -67,6 +69,7 @@ pub struct Normaliser {
     /// Suffixes de fichiers de notes de session (`-xa9cdw.md`) et leur jeton.
     note_suffixes: Vec<(String, String)>,
     ulid: Regex,
+    marker: Regex,
     stamp: Regex,
     hex: Regex,
     masks: Vec<Regex>,
@@ -89,6 +92,7 @@ impl Normaliser {
             ids: HashMap::new(),
             counters: HashMap::new(),
             note_suffixes: Vec::new(),
+            marker: Regex::new(r"\b[0-9a-hjkmnp-tv-z]{26}\b").expect("regex marqueur"),
             ulid: Regex::new(r"\b(?:([a-z]+)_)?([0-9A-HJKMNP-TV-Z]{26})\b").expect("regex ULID"),
             stamp: Regex::new(
                 r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})",
@@ -177,7 +181,12 @@ impl Normaliser {
                 self.token(&kind, &caps[0])
             })
             .into_owned();
-        let mut out = out;
+        let marker = self.marker.clone();
+        let mut out = marker
+            .replace_all(&out, |caps: &regex::Captures| {
+                self.token("marker", &caps[0])
+            })
+            .into_owned();
         for (suffix, token) in &self.note_suffixes {
             out = out.replace(suffix.as_str(), token.as_str());
         }
@@ -261,6 +270,16 @@ mod tests {
             "shell-{{ulid:2}}"
         );
         assert_eq!(n.text("rien à voir"), "rien à voir");
+    }
+
+    #[test]
+    fn a_lowercase_marker_is_masked() {
+        let mut n = Normaliser::new(START, Path::new("/tmp/racine-u"));
+        assert_eq!(
+            n.text("<commande-01m3f01ve1mdke4h36yc7xbz2q>"),
+            "<commande-{{marker:1}}>"
+        );
+        assert_eq!(n.text("intracommunautaire"), "intracommunautaire");
     }
 
     #[test]
