@@ -76,6 +76,9 @@ scenario_cases! {
     outils_memoire => "outils-memoire",
     outils_skills => "outils-skills",
     outils_soi => "outils-soi",
+    outils_historique => "outils-historique",
+    outils_http_garde => "outils-http-garde",
+    outils_workflows => "outils-workflows",
 }
 
 #[test]

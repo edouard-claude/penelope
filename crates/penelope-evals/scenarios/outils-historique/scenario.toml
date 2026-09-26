@@ -1,0 +1,16 @@
+name = "outils-historique"
+description = """Recherche dans l'historique : trois échanges semés parlent de Borealis et
+de sa TVA ; le modèle cherche par mots-clés dans la session (`history_grep`), puis par
+question en langage naturel dans toutes les sessions (`history_expand_query`). Le monde
+montre les extraits trouvés, avec leur numéro de message et le titre de leur session."""
+pin_model = "main"
+
+[[steps]]
+kind = "seed"
+exchanges = 3
+user = "point {i} sur le dossier Borealis : la TVA intracommunautaire reste à vérifier"
+assistant = "noté pour le point {i} : on vérifiera la TVA de Borealis avec le comptable"
+
+[[steps]]
+kind = "message"
+text = "qu'avait-on dit sur la TVA de Borealis ?"

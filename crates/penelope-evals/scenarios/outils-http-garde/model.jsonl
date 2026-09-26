@@ -1,0 +1,3 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "http_fetch", "arguments": {"url": "http://169.254.169.254/latest/meta-data/"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "http_fetch", "arguments": {"url": "https://exemple.org/tarifs"}}]}}
+{"text": "Les deux adresses sont refusées : l'une est le point de métadonnées du cloud, l'autre n'est pas dans la liste blanche."}

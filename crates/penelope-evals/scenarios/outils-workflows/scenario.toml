@@ -1,0 +1,15 @@
+name = "outils-workflows"
+description = """Workflows écrits et préparés depuis la conversation : le modèle écrit un
+workflow (`workflow_author`), le retrouve dans la liste (`workflow_list`) et le décrit
+(`workflow_describe`, définition et graphe), puis propose un plan pour le lancer
+(`workflow_plan`), sans le démarrer : c'est au propriétaire de dire « vas-y ». Hors d'un
+run, `step_done` et `return_value` sont refusés. Le monde montre le fichier écrit, le
+graphe, le plan en version 1 et les deux refus."""
+pin_model = "main"
+
+[config]
+"tools.approval_mode" = "auto"
+
+[[steps]]
+kind = "message"
+text = "écris un workflow de compte rendu hebdomadaire et propose-moi un plan pour la semaine 38"
