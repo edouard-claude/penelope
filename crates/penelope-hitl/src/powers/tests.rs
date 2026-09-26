@@ -201,3 +201,20 @@ fn deterministic_vetoes_come_before_any_judgement() {
         assert!(not_pure_read(line).is_some(), "{line}");
     }
 }
+
+/// Chaque pouvoir se relit depuis le nom du schéma du juge ; son libellé est accentué.
+#[test]
+fn every_power_round_trips_and_has_a_label() {
+    for p in Power::ALL {
+        assert_eq!(Power::parse(p.as_str()), Some(p));
+        assert!(!p.label().is_empty());
+    }
+    assert_eq!(Power::Write.label(), "écriture");
+    assert_eq!(Power::Network.label(), "réseau");
+    assert_eq!(Power::Package.label(), "paquet");
+    assert_eq!(
+        Power::parse("écriture"),
+        None,
+        "le schéma n'a pas d'accents"
+    );
+}

@@ -776,4 +776,37 @@ mod list_tests {
         assert!(pipeline("a && b").is_none());
         assert!(pipeline("ls -la").is_some());
     }
+
+    /// #150 : la carte nomme ce qui empêche une règle ; une ligne à famille n'a rien à
+    /// nommer.
+    #[test]
+    fn the_obstacle_to_a_family_is_named() {
+        assert_eq!(why_composed("cargo test && cargo build"), None);
+        for (line, why) in [
+            ("a; b", "`;`"),
+            ("a || b", "`||`"),
+            ("a & b", "`&` (arrière-plan)"),
+            ("a > f", "une redirection"),
+            ("(a)", "un sous-shell"),
+            ("echo $(id)", "`$(…)`"),
+            ("echo `id`", "`` ` ``"),
+            ("echo a\\ b", "un échappement"),
+            ("a\nb", "un retour à la ligne"),
+            ("echo \"$HOME\"", "`$` entre guillemets"),
+            ("echo \"abc", "guillemets non fermés"),
+            ("echo 'abc", "guillemets non fermés"),
+        ] {
+            assert_eq!(why_composed(line).as_deref(), Some(why), "{line}");
+        }
+    }
+
+    /// `||`, `&` seul et `&&&` ne sont pas des listes de commandes nommables.
+    #[test]
+    fn only_a_double_ampersand_chains() {
+        assert!(list("a && b").is_some());
+        assert!(list("a || b").is_none());
+        assert!(list("a & b").is_none());
+        assert!(list("a &&& b").is_none());
+        assert!(list("&& b").is_none());
+    }
 }

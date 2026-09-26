@@ -457,3 +457,23 @@ fn annotations_never_override_configuration() {
     assert!(r.matches("mcp__x__read", None, &json!({})));
     assert_eq!(r.decision, PolicyDecision::Deny);
 }
+
+/// La portée d'une règle se relit depuis son nom, et la plus précise gagne.
+#[test]
+fn rule_scopes_round_trip_and_order_by_specificity() {
+    for s in [RuleScope::Global, RuleScope::Server, RuleScope::Tool] {
+        assert_eq!(RuleScope::parse(s.as_str()), Some(s));
+    }
+    assert_eq!(RuleScope::parse("session"), None);
+    assert!(RuleScope::Global.specificity() < RuleScope::Server.specificity());
+    assert!(RuleScope::Server.specificity() < RuleScope::Tool.specificity());
+}
+
+/// `/policies` : l'origine d'un appel HTTP se lit, un motif qui n'est pas un objet est
+/// rendu tel quel.
+#[test]
+fn origins_and_raw_patterns_are_described() {
+    let d = describe_pattern(&json!({"url": {ORIGIN_OP: "https://api.github.com"}}));
+    assert_eq!(d, "url sur « https://api.github.com »");
+    assert_eq!(describe_pattern(&json!("brut")), "\"brut\"");
+}
