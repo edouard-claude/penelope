@@ -57,7 +57,7 @@ impl AgentLoop {
         &self,
         approval_id: &str,
         decision: &Decision,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<decisions::Decided> {
         decisions::decide_approval(&self.services, approval_id, decision).await
     }
 }

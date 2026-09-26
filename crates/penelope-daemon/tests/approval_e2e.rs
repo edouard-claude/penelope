@@ -144,10 +144,11 @@ async fn ca_9_4_an_approved_tool_runs_once_after_resume_and_the_ledger_shows_it(
     let (_dir, d, p) = setup().await;
     let (sid, id) = ask_to_write(&d, &p).await;
 
-    assert!(
+    assert_eq!(
         penelope_daemon::agent::decide_approval(&d.services, &id, &Decision::approve_once("cli"))
             .await
-            .unwrap()
+            .unwrap(),
+        penelope_agent::Decided::Approved
     );
     p.reply("Le rapport est écrit.");
     let outcome = resume(&d, &sid, &id).await;
@@ -180,14 +181,15 @@ async fn ca_9_5_a_denied_tool_is_reported_to_the_model_and_never_runs() {
     let (_dir, d, p) = setup().await;
     let (sid, id) = ask_to_write(&d, &p).await;
 
-    assert!(
-        !penelope_daemon::agent::decide_approval(
+    assert_eq!(
+        penelope_daemon::agent::decide_approval(
             &d.services,
             &id,
             &Decision::deny("cli", Some("pas aujourd'hui".into()))
         )
         .await
-        .unwrap()
+        .unwrap(),
+        penelope_agent::Decided::Denied
     );
     p.reply("Entendu, je n'écris rien.");
     let outcome = resume(&d, &sid, &id).await;
@@ -233,10 +235,11 @@ async fn ca_9_6_a_session_window_lets_the_same_call_pass_without_a_new_request()
         choice: "Pour cette session".into(),
         ..Decision::approve_once("cli")
     };
-    assert!(
+    assert_eq!(
         penelope_daemon::agent::decide_approval(&d.services, &id, &decision)
             .await
-            .unwrap()
+            .unwrap(),
+        penelope_agent::Decided::Approved
     );
     p.reply("Le rapport est écrit.");
     assert!(matches!(

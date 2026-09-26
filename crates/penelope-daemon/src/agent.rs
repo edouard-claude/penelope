@@ -85,7 +85,7 @@ pub async fn decide_approval(
     s: &Services,
     approval_id: &str,
     decision: &Decision,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<penelope_agent::Decided> {
     penelope_agent::decide_approval(&registries_of(s), approval_id, decision).await
 }
 

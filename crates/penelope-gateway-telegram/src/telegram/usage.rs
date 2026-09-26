@@ -297,7 +297,7 @@ impl TelegramGateway {
                 }
             }
         }
-        let won = decide_approval(
+        let decided = decide_approval(
             s,
             a.id.as_str(),
             &Decision {
@@ -314,7 +314,7 @@ impl TelegramGateway {
                 false,
             )
             .await;
-        if !won {
+        if !decided.recorded() {
             return self
                 .reply(chat_id, topic_id, None, "ℹ️ Déjà tranché.")
                 .await;

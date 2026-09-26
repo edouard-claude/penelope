@@ -8,6 +8,36 @@ pub const EFFECT_DONE: &str = "C'est fait";
 pub const EFFECT_RETRY: &str = "Relancer";
 pub const EFFECT_IGNORE: &str = "Ignorer";
 
+/// Ce qu'a produit une décision : enregistrée (approuvée ou refusée), ou arrivée après
+/// une autre. Un refus enregistré n'est pas une décision perdue (#219).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decided {
+    Approved,
+    Denied,
+    AlreadyDecided,
+}
+
+impl Decided {
+    fn of(decision: &Decision) -> Self {
+        if decision.approved {
+            Self::Approved
+        } else {
+            Self::Denied
+        }
+    }
+
+    /// La décision est celle qui a tranché (la première).
+    #[must_use]
+    pub fn recorded(self) -> bool {
+        self != Self::AlreadyDecided
+    }
+
+    #[must_use]
+    pub fn approved(self) -> bool {
+        self == Self::Approved
+    }
+}
+
 /// Tranche un effet incertain : la décision passe au ledger, **jamais** dans une règle.
 /// La transition est faite avant que le canal ne remette le tour en file : la reprise
 /// trouve l'effet `completed` (rejoué), `planned` (relancé) ou la demande refusée.
@@ -15,7 +45,7 @@ async fn decide_uncertain_effect(
     s: &AgentServices,
     a: &penelope_hitl::ApprovalRequest,
     decision: &Decision,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Decided> {
     use penelope_kernel::effects::UnknownDecision;
     use penelope_kernel::ids::EffectId;
     let ledger = match (decision.approved, decision.choice.as_str()) {
@@ -60,9 +90,9 @@ async fn decide_uncertain_effect(
                     "choice": decision.choice,
                 })))
                 .await?;
-            Ok(decision.approved)
+            Ok(Decided::of(decision))
         }
-        Err(penelope_hitl::HitlError::AlreadyDecided { .. }) => Ok(false),
+        Err(penelope_hitl::HitlError::AlreadyDecided { .. }) => Ok(Decided::AlreadyDecided),
         Err(e) => Err(e.into()),
     }
 }
@@ -82,7 +112,7 @@ pub async fn decide_approval(
     s: &AgentServices,
     approval_id: &str,
     decision: &Decision,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Decided> {
     if let Some(a) = s.approvals.get(approval_id).await?
         && a.kind == penelope_hitl::ApprovalKind::EffectUnknown
     {
@@ -197,10 +227,10 @@ pub async fn decide_approval(
                     "window": decision.window.as_str(),
                 })))
                 .await?;
-            Ok(decision.approved)
+            Ok(Decided::of(decision))
         }
         // Déjà tranché par l'autre canal : la première décision gagne.
-        Err(penelope_hitl::HitlError::AlreadyDecided { .. }) => Ok(false),
+        Err(penelope_hitl::HitlError::AlreadyDecided { .. }) => Ok(Decided::AlreadyDecided),
         Err(e) => Err(e.into()),
     }
 }

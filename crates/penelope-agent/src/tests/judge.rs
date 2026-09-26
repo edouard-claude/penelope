@@ -217,6 +217,7 @@ async fn explain_enriches_the_card_and_always_writes_a_power_rule() {
         )
         .await
         .unwrap()
+        .approved()
     );
     let decided = b.s.approvals.get(card.id.as_str()).await.unwrap().unwrap();
     assert_eq!(decided.rule_created.as_deref(), Some("powers"));

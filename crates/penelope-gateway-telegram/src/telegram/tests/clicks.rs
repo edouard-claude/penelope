@@ -203,3 +203,56 @@ async fn oauth_card_buttons() {
     );
     assert!(sent.iter().any(|x| x.contains("inconnu")), "{sent:?}");
 }
+
+/// #219 : « Ignorer » une contradiction applique le refus (le candidat est écarté) au lieu
+/// de répondre « Déjà tranché » ; une seconde carte sur la même demande, elle, l'est.
+#[tokio::test]
+async fn ignoring_a_contradiction_applies_it() {
+    let (_d, g, t, _p) = gateway().await;
+    let clash = json!({"contradiction": true, "existing_uid": "X1", "existing": "Café",
+                       "proposed": "Thé", "candidates": []});
+    let id = request(
+        &g,
+        penelope_hitl::ApprovalKind::MemoryProposal,
+        "mémoire",
+        clash,
+    )
+    .await;
+    press(&g, &button_for(&g, k::MEMORY_REJECT, &id).await).await;
+    g.flush_outbox().await.unwrap();
+    let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+    assert!(
+        sent.iter()
+            .any(|x| x.contains("Ignoré : la mémoire ne change pas")),
+        "{sent:?}"
+    );
+    assert!(!sent.iter().any(|x| x.contains("Déjà tranché")), "{sent:?}");
+    press(&g, &button_for(&g, k::MEMORY_ACCEPT, &id).await).await;
+    g.flush_outbox().await.unwrap();
+    let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+    assert!(sent.iter().any(|x| x.contains("Déjà tranché")), "{sent:?}");
+}
+
+/// #219 : un second refus sur une demande déjà refusée depuis Telegram dit « Déjà
+/// tranché », il ne refuse pas une seconde fois.
+#[tokio::test]
+async fn a_second_deny_says_already_decided() {
+    let (_d, g, t, _p) = gateway().await;
+    let id = request(
+        &g,
+        penelope_hitl::ApprovalKind::ToolCall,
+        "fs_write",
+        json!({}),
+    )
+    .await;
+    press(&g, &button_for(&g, k::DENY, &id).await).await;
+    press(&g, &button_for(&g, k::DENY, &id).await).await;
+    g.flush_outbox().await.unwrap();
+    let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+    assert_eq!(
+        sent.iter().filter(|x| x.contains("Refusé")).count(),
+        1,
+        "{sent:?}"
+    );
+    assert!(sent.iter().any(|x| x.contains("Déjà tranché")), "{sent:?}");
+}
