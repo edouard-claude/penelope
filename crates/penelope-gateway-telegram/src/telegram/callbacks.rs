@@ -262,8 +262,9 @@ impl TelegramGateway {
                         ..Decision::deny("telegram", None)
                     }
                 };
-                let won = decide_approval(s, &approval_id, &decision).await?;
-                let note = if !won {
+                let decided = decide_approval(s, &approval_id, &decision).await?;
+                // Un « Ignorer » enregistré est un refus qui a tranché : il s'applique (#219).
+                let note = if !decided.recorded() {
                     "ℹ️ Déjà tranché.".to_string()
                 } else {
                     match penelope_dream::ingest::apply_contradiction(
@@ -293,9 +294,11 @@ impl TelegramGateway {
                         ..Decision::deny("telegram", None)
                     }
                 };
-                let won = decide_approval(s, &approval_id, &decision).await?;
-                let note = match (accept, won) {
-                    (false, _) => "🗑 Propositions écartées : rien n'entre en mémoire.".to_string(),
+                let decided = decide_approval(s, &approval_id, &decision).await?;
+                let note = match (accept, decided.recorded()) {
+                    (false, true) => {
+                        "🗑 Propositions écartées : rien n'entre en mémoire.".to_string()
+                    }
                     (true, true) => {
                         let confirm = s
                             .approvals
@@ -316,7 +319,7 @@ impl TelegramGateway {
                             Err(e) => format!("❌ {e}"),
                         }
                     }
-                    (true, false) => "ℹ️ Déjà tranché.".to_string(),
+                    (_, false) => "ℹ️ Déjà tranché.".to_string(),
                 };
                 self.reply(chat_id, topic_id, None, &note).await?;
             }
@@ -368,12 +371,13 @@ impl TelegramGateway {
         topic_id: Option<i64>,
     ) -> anyhow::Result<()> {
         let s = &self.daemon.services;
-        let won = decide_approval(s, approval_id, decision).await?;
+        let decided = decide_approval(s, approval_id, decision).await?;
         let a = s.approvals.get(approval_id).await?;
         let Some(a) = a else { return Ok(()) };
 
-        // Une autre décision est passée avant (CLI) : on le dit, sans rien rejouer.
-        let first = won == decision.approved && a.decided_via.as_deref() == Some("telegram");
+        // Une autre décision est passée avant (CLI, ou un premier clic) : on le dit, sans
+        // rien rejouer (#219).
+        let first = decided.recorded() && a.decided_via.as_deref() == Some("telegram");
         let checkpoint = a.payload["checkpoint"].as_bool() == Some(true);
         let launch = a.subject == "workflow_start";
         let effect = a.kind == penelope_hitl::ApprovalKind::EffectUnknown;

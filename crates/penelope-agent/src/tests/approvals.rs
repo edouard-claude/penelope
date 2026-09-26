@@ -71,11 +71,12 @@ async fn an_approved_call_runs_on_resume_without_asking_again() {
     );
     assert_eq!(s.approvals.pending(10).await.unwrap().len(), 1);
 
-    assert!(
+    assert_eq!(
         loop_
             .decide_approval(&id, &Decision::approve_once("telegram"))
             .await
-            .unwrap()
+            .unwrap(),
+        crate::Decided::Approved
     );
     p.reply("compilé");
     let out = loop_
@@ -182,6 +183,7 @@ async fn always_decision_creates_a_revocable_rule() {
             .decide_approval(&id, &Decision::approve_always("telegram"))
             .await
             .unwrap()
+            .approved()
     );
     let rules = s.policies.active_rules().await.unwrap();
     assert_eq!(rules.len(), 1);
@@ -229,17 +231,19 @@ async fn a_second_decision_does_not_win() {
         TurnOutcome::AwaitingApproval { approval_id } => approval_id,
         other => panic!("{other:?}"),
     };
-    assert!(
+    assert_eq!(
         loop_
             .decide_approval(&id, &Decision::approve_once("telegram"))
             .await
-            .unwrap()
+            .unwrap(),
+        crate::Decided::Approved
     );
-    assert!(
-        !loop_
+    assert_eq!(
+        loop_
             .decide_approval(&id, &Decision::deny("cli", None))
             .await
             .unwrap(),
+        crate::Decided::AlreadyDecided,
         "la première décision gagne"
     );
 }

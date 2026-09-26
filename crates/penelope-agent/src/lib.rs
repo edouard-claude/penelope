@@ -47,7 +47,7 @@ mod turn_log;
 
 use attempts::Attempts;
 pub use attempts::{EMPTY_RETRY_PROMPT, MAX_ATTEMPTS_PER_TURN};
-pub use decisions::{EFFECT_DONE, EFFECT_IGNORE, EFFECT_RETRY, decide_approval};
+pub use decisions::{Decided, EFFECT_DONE, EFFECT_IGNORE, EFFECT_RETRY, decide_approval};
 pub use events::TurnEventKind;
 pub use guards::budget_exceeded_text;
 use guards::{TurnContext, default_chain, run_guards};

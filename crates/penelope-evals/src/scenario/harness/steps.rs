@@ -167,7 +167,7 @@ impl Harness<'_> {
         let turn = self.claim().await?.context("aucune reprise à réclamer")?;
         let mut v = outcome_json(&runner::process(&d, turn, HEARTBEAT).await);
         v["approval"] = json!(id);
-        v["resumable"] = json!(resumed);
+        v["resumable"] = json!(resumed.approved());
         Ok(v)
     }
 

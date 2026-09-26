@@ -245,7 +245,8 @@ async fn an_uncertain_effect_marked_done_is_replayed_not_rerun() {
         choice: EFFECT_DONE.into(),
         ..Decision::approve_always("telegram")
     };
-    assert!(loop_.decide_approval(&approval, &d).await.unwrap());
+    let decided = loop_.decide_approval(&approval, &d).await.unwrap();
+    assert!(decided.approved());
     assert!(
         s.policies.active_rules().await.unwrap().is_empty(),
         "aucune règle"
@@ -279,7 +280,8 @@ async fn an_uncertain_effect_retried_runs_once() {
         choice: EFFECT_RETRY.into(),
         ..Decision::approve_once("cli")
     };
-    assert!(loop_.decide_approval(&approval, &d).await.unwrap());
+    let decided = loop_.decide_approval(&approval, &d).await.unwrap();
+    assert!(decided.approved());
     p.reply("relancé");
     loop_
         .run_conversation(&spec(&sid), &conv, &e, &NullSink)
@@ -294,12 +296,8 @@ async fn an_uncertain_effect_ignored_is_not_rerun() {
     let (_d, s, p, sid, conv, approval) = crashed_push().await;
     let e = exec(false);
     let loop_ = AgentLoop::new(crate::agent::services_of(&s), p.clone());
-    assert!(
-        !loop_
-            .decide_approval(&approval, &Decision::deny("telegram", None))
-            .await
-            .unwrap()
-    );
+    let decided = loop_.decide_approval(&approval, &Decision::deny("telegram", None));
+    assert_eq!(decided.await.unwrap(), penelope_agent::Decided::Denied);
     p.reply("compris");
     loop_
         .run_conversation(&spec(&sid), &conv, &e, &NullSink)
