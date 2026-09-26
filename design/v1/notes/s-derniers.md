@@ -76,3 +76,17 @@ Chaque scénario a été régénéré puis rejoué au moins trois fois de suite 
   `skill.install` (sources refusées) ont leur scénario : plus aucune surface RPC sans
   scénario.
 ```
+
+## Vérifications
+
+Pendant l'itération : chaque scénario régénéré puis rejoué au moins trois fois sans
+différence ; `cargo test -p penelope-archtest` vert après `UPDATE_BUDGET=1` ;
+`scripts/switch-check.sh` : « 7. [scenarios].missing vide ».
+
+Finales, une fois : `cargo fmt --all --check` propre ; `cargo clippy --workspace
+--all-targets -- -D warnings` propre ; `cargo test --workspace --no-fail-fast` : 81
+suites, 2 135 verts, 20 ignorés, 2 échecs sous charge hors périmètre, tous deux verts
+rejoués seuls trois fois : `a_restart_during_a_job_fails_it_and_says_so_without_a_card`
+(`penelope-daemon`, `tool_jobs_e2e`, déjà relevé par s-rpc) et
+`a_burst_asks_before_answering_and_can_be_ingested` (`penelope-gateway-telegram`).
+Aucun fichier de ces deux crates n'est touché ici : aléas préexistants, à surveiller.
