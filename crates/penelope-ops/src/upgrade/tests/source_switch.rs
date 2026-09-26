@@ -370,7 +370,9 @@ async fn a_switch_without_a_usable_identity_changes_nothing() {
 fn an_instrumented_build_is_a_source_build() {
     use std::path::Path;
     assert!(is_source_build(Path::new("/x/target/debug/penelope")));
-    assert!(is_source_build(Path::new("/x/target/llvm-cov-target/debug/penelope")));
+    assert!(is_source_build(Path::new(
+        "/x/target/llvm-cov-target/debug/penelope"
+    )));
     assert!(!is_source_build(Path::new("/Users/e/.local/bin/penelope")));
     assert!(!is_source_build(Path::new("/x/target/penelope")));
 }
