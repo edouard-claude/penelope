@@ -489,13 +489,12 @@ pub fn why_composed(line: &str) -> Option<String> {
     let mut chars = line.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
+            // Entre guillemets simples, rien n'est un opérateur : la ligne reprend après
+            // la quote fermante.
             '\'' => {
-                for ch in chars.by_ref() {
-                    if ch == '\'' {
-                        return Some("guillemets non fermés".into());
-                    }
+                if !chars.by_ref().any(|ch| ch == '\'') {
+                    return Some("guillemets non fermés".into());
                 }
-                return Some("guillemets non fermés".into());
             }
             '"' => {
                 let mut closed = false;
@@ -795,6 +794,7 @@ mod list_tests {
             ("echo \"$HOME\"", "`$` entre guillemets"),
             ("echo \"abc", "guillemets non fermés"),
             ("echo 'abc", "guillemets non fermés"),
+            ("echo 'a'; b", "`;`"),
         ] {
             assert_eq!(why_composed(line).as_deref(), Some(why), "{line}");
         }
