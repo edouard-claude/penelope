@@ -1,6 +1,6 @@
 # Notes de livraison : c-extraites (couverture des crates sorties du daemon, critère 7)
 
-Branche `v1-c-extraites`, sur `v1` à `1f6fbc5` (1.0.0-alpha.17), sans rebase. Périmètre :
+Branche `v1-c-extraites`, partie de `v1` à `1f6fbc5` (1.0.0-alpha.17), rebasée ensuite par l'intégrateur. Périmètre :
 tests des crates `penelope-gateway-telegram`, `penelope-ops`, `penelope-orchestrator`,
 `penelope-mcp-host`, `penelope-dream` ; ces notes. Aucun changement de comportement du
 produit, aucune ligne de `budget.toml`, rien dans `upgrade` ni `skill_install` de
@@ -112,9 +112,24 @@ crates n'en construisent aucun.
    est gardé en cache ; la sonde de `doctor` le montre encore une fois le fournisseur
    réparé.
 
+## Second tour : tests là où le risque est le plus grand
+
+Après le relevé, quelques tests de plus sur les chemins qui touchent le propriétaire ou
+ses secrets, sans viser un chiffre :
+
+- passerelle : photo, document et vocal trop lourds ou impossibles à télécharger (la
+  raison est dite, rien ne part en tour) ; livraison du cœur au canal (arrêt, plafond
+  atteint, alerte de planification avec « Relancer » et « Voir », rafale traitée une seule
+  fois, titre reporté sur le message de nouvelle session) ;
+- ops : connexion Codex réussie mais jetons impossibles à ranger (#148) : connexion
+  annulée, jetons révoqués, erreur sans aucun jeton recopié. Le magasin refusant est posé
+  par `Arc::get_mut` sur la plateforme des services de test, avant tout partage.
+
+`upgrade` et `skill_install`, libérés par l'intégration de `s-derniers`, sont exercés par
+ses deux scénarios ; je n'y ai rien ajouté.
+
 ## Laissé de côté
 
-- `penelope-ops` : `upgrade` et `skill_install`, touchés par `s-derniers`.
 - Écran `upgrade.switch` : son contrôle préalable interroge la machine réelle (signature,
   répertoire d'installation, service) ; `/upgrade install` et `upgrade.check` appellent le
   réseau.
@@ -130,7 +145,7 @@ crates n'en construisent aucun.
 - La baisse venait du dénominateur : les tests en ligne de `main` comptaient comme lignes
   couvertes, rangés dans `tests/` ils ne comptent plus. Les tests ajoutés vivent tous dans
   des fichiers de tests.
-- Cent dix-neuf tests, sans changement de comportement : écrans cliquables de Telegram,
+- Cent vingt-six tests, sans changement de comportement : écrans cliquables de Telegram,
   démarrage de la passerelle, contrôles de `doctor`, connexion Codex, sauvegardes,
   contrôle des runs, attentes, OAuth local, contradictions de la mémoire.
 - Quatre défauts relevés et consignés dans `design/v1/notes/c-extraites.md`, dont
