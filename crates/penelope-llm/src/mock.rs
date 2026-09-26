@@ -178,11 +178,6 @@ impl MockProvider {
         self
     }
 
-    pub fn set_models(&self, m: Vec<ModelInfo>) -> &Self {
-        *self.models.lock().unwrap_or_else(|p| p.into_inner()) = m;
-        self
-    }
-
     /// Requêtes reçues, pour les assertions de test.
     pub fn requests(&self) -> Vec<ChatRequest> {
         self.seen.lock().unwrap_or_else(|p| p.into_inner()).clone()

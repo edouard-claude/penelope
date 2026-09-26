@@ -4,7 +4,7 @@
 //! *delta* ajouté depuis la dernière réponse connue (l'« ancre »), et se calibre tout seul
 //! sur l'écart constaté, par `model@provider`, en moyenne glissante.
 
-use crate::types::{ChatMessage, Content, Usage};
+use crate::types::{ChatMessage, Content};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
@@ -25,17 +25,6 @@ pub struct UsageAnchor {
 }
 
 impl UsageAnchor {
-    pub fn from_usage(u: &Usage, up_to_seq: i64, fingerprint: String, model: String) -> Self {
-        UsageAnchor {
-            prompt: u.prompt,
-            completion: u.completion,
-            cached: u.cached,
-            up_to_seq,
-            fingerprint,
-            model,
-        }
-    }
-
     /// Tokens d'entrée du prochain appel si rien n'était ajouté.
     pub fn base_prompt(&self) -> u64 {
         // L'entrée du prochain appel contient l'entrée précédente **plus** la sortie
@@ -162,10 +151,6 @@ impl TokenEstimator {
             raw += 6.0;
         }
         (raw * cal.factor).ceil() as u64
-    }
-
-    pub fn messages_tokens(&self, model: &str, msgs: &[ChatMessage]) -> u64 {
-        msgs.iter().map(|m| self.message_tokens(model, m)).sum()
     }
 
     /// Estimation de la taille d'une définition d'outil injectée dans le prompt.

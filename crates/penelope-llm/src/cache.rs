@@ -57,11 +57,6 @@ impl Fingerprint {
         self.chain.last().cloned()
     }
 
-    /// Empreinte du seul message système, telle que l'attend `prompt_snapshots`.
-    pub fn system_hash_of(rendered: &str) -> String {
-        sha256_hex(rendered.as_bytes())
-    }
-
     /// Empreinte de la liste d'outils, calculée comme dans [`Fingerprint::of`].
     pub fn tools_hash_of(tools: &[ToolDef]) -> String {
         sha256_hex(serde_json::to_string(tools).unwrap_or_default().as_bytes())

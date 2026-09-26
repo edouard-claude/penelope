@@ -351,10 +351,6 @@ impl StreamAccumulator {
         }
         out
     }
-
-    pub fn has_pending_calls(&self) -> bool {
-        !self.partial_calls.is_empty()
-    }
 }
 
 /// Fusionne les fragments de `reasoning_details` reçus en streaming.
