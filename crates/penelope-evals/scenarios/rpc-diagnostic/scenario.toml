@@ -63,7 +63,8 @@ only = { id = [
     "tool_jobs",
     "budget.day",
     "models.tools",
-    "sandbox.*",
+    # Pas de "sandbox.*" : le bac à sable dépend de l'OS (macOS : chemins refusés ;
+    # Linux, sans backend : « profil full »), la CI Linux le rendait différent.
     "effects",
     "workflows",
     "skills",
