@@ -132,7 +132,6 @@ async fn inventory_section(
 
 /// Rapport d'état. `section` : `all`, `model`, `config`, `costs`, `machine`, une partie de
 /// l'inventaire ([`INVENTORY`]), ou `inventory` pour tout l'inventaire.
-#[allow(clippy::too_many_lines)] // gel 0.17 : assemblage du statut
 pub async fn status(
     s: &Services,
     session_id: &str,
@@ -177,94 +176,11 @@ pub async fn status(
     }
 
     if all || section == "model" {
-        let routing = &cfg.models.routing;
-        let model_view = |id: &str| {
-            let info = s.catalog.get(penelope_llm::catalog::strip_provider(id));
-            json!({
-                "id": id,
-                "known_in_catalog": if s.catalog.is_empty() { Value::Null } else { json!(info.is_some()) },
-                "context_window": info.as_ref().map(|i| i.context_window),
-                "usd_per_m_in": info.as_ref().map(|i| per_m(i.price_prompt)),
-                "usd_per_m_out": info.as_ref().map(|i| per_m(i.price_completion)),
-                "tools": info.as_ref().map(|i| i.supports_tools()),
-                "reasoning": info.as_ref().map(|i| i.supports_reasoning()),
-                "images_in": info.as_ref().map(|i| i.accepts_images()),
-            })
-        };
-        let session = s.sessions.get(session_id).await.ok().flatten();
-        out.insert(
-            "this_turn".into(),
-            json!({
-                "session_id": session_id,
-                "session_title": session.as_ref().and_then(|x| x.title.clone()),
-                "alias": turn.map(|t| t.alias.clone()),
-                "model": turn.map(|t| model_view(&t.model_id)),
-                "sticky_alias": session.as_ref().and_then(|x| x.model_alias.clone()),
-                "project": penelope_vault::session_project::of_session(s, session_id).await.0,
-            }),
-        );
-        let alias_of = |a: &str| json!({"alias": a, "model": cfg.alias_model(a)});
-        out.insert(
-            "models".into(),
-            json!({
-                "aliases": cfg.models.aliases,
-                "roles": cfg.models.roles,
-                "routing": {
-                    "mode": if routing.classifier { "adaptatif (classifieur)" } else { "fixe (tout sur chat_default)" },
-                    "classifier": routing.classifier,
-                    "simple": alias_of(&routing.low),
-                    "ordinaire": alias_of(&routing.medium),
-                    "difficile": alias_of(&routing.high),
-                    "sticky": routing.sticky,
-                    "fallback_on_failure": routing.fallback,
-                    "note": "l'alias `low` ne colle jamais à une session ; `/model auto on|off` bascule le mode",
-                },
-                "catalog_size": s.catalog.len(),
-            }),
-        );
+        model_sections(s, &cfg, session_id, turn, &mut out).await;
     }
 
     if all || section == "config" {
-        let secrets = s.platform.secrets.list().unwrap_or_default();
-        let has = |name: &str| secrets.iter().any(|n| n == name);
-        let summary = json!({
-            "owner": {
-                "telegram_user_id_set": cfg.owner.telegram_user_id != 0,
-                "timezone": cfg.owner.timezone,
-                "language": cfg.owner.language,
-            },
-            "providers": {
-                "openrouter": {
-                    "enabled": cfg.providers.openrouter.enabled,
-                    "api_key_stored": has("openrouter_api_key"),
-                    "routing_preferences": cfg.providers.openrouter.routing,
-                },
-                "local_openai_compat": {
-                    "enabled": cfg.providers.local.enabled,
-                    "base_url": cfg.providers.local.base_url,
-                },
-                "codex": match admin {
-                    Some(a) => a.codex_view().await,
-                    None => Value::Null,
-                },
-                "speech_to_text": {
-                    "alias": cfg.role_alias("stt"),
-                    "model": cfg.alias_model(&cfg.role_alias("stt")),
-                },
-            },
-            "telegram": {
-                "bot_token_stored": has("telegram_bot_token"),
-                "mode": cfg.telegram.mode,
-                "rich_messages": cfg.telegram.rich_messages,
-            },
-            "sandbox": {
-                "shell_profile": cfg.sandbox.default_profile,
-                "shell_network": cfg.sandbox.shell_network,
-                "workspaces": crate::executor::default_workspaces(s),
-            },
-            "budget": cfg.budget,
-            "secrets_stored": secrets,
-        });
+        let summary = config_summary(s, &cfg, admin).await;
         if section == "config" {
             out.insert("config_summary".into(), summary);
             out.insert("config_full".into(), redacted_config(&cfg));
@@ -370,6 +286,109 @@ pub async fn status(
     }
 
     Ok(Value::Object(out))
+}
+
+/// Le modèle de ce tour et la table des alias, rôles et routage.
+async fn model_sections(
+    s: &Services,
+    cfg: &penelope_kernel::config::Config,
+    session_id: &str,
+    turn: Option<&TurnModel>,
+    out: &mut Map<String, Value>,
+) {
+    let routing = &cfg.models.routing;
+    let model_view = |id: &str| {
+        let info = s.catalog.get(penelope_llm::catalog::strip_provider(id));
+        json!({
+            "id": id,
+            "known_in_catalog": if s.catalog.is_empty() { Value::Null } else { json!(info.is_some()) },
+            "context_window": info.as_ref().map(|i| i.context_window),
+            "usd_per_m_in": info.as_ref().map(|i| per_m(i.price_prompt)),
+            "usd_per_m_out": info.as_ref().map(|i| per_m(i.price_completion)),
+            "tools": info.as_ref().map(|i| i.supports_tools()),
+            "reasoning": info.as_ref().map(|i| i.supports_reasoning()),
+            "images_in": info.as_ref().map(|i| i.accepts_images()),
+        })
+    };
+    let session = s.sessions.get(session_id).await.ok().flatten();
+    out.insert(
+        "this_turn".into(),
+        json!({
+            "session_id": session_id,
+            "session_title": session.as_ref().and_then(|x| x.title.clone()),
+            "alias": turn.map(|t| t.alias.clone()),
+            "model": turn.map(|t| model_view(&t.model_id)),
+            "sticky_alias": session.as_ref().and_then(|x| x.model_alias.clone()),
+            "project": penelope_vault::session_project::of_session(s, session_id).await.0,
+        }),
+    );
+    let alias_of = |a: &str| json!({"alias": a, "model": cfg.alias_model(a)});
+    out.insert(
+        "models".into(),
+        json!({
+            "aliases": cfg.models.aliases,
+            "roles": cfg.models.roles,
+            "routing": {
+                "mode": if routing.classifier { "adaptatif (classifieur)" } else { "fixe (tout sur chat_default)" },
+                "classifier": routing.classifier,
+                "simple": alias_of(&routing.low),
+                "ordinaire": alias_of(&routing.medium),
+                "difficile": alias_of(&routing.high),
+                "sticky": routing.sticky,
+                "fallback_on_failure": routing.fallback,
+                "note": "l'alias `low` ne colle jamais à une session ; `/model auto on|off` bascule le mode",
+            },
+            "catalog_size": s.catalog.len(),
+        }),
+    );
+}
+
+/// Résumé de la configuration : fournisseurs, canal, bac à sable, secrets présents.
+async fn config_summary(
+    s: &Services,
+    cfg: &penelope_kernel::config::Config,
+    admin: Option<&dyn Admin>,
+) -> Value {
+    let secrets = s.platform.secrets.list().unwrap_or_default();
+    let has = |name: &str| secrets.iter().any(|n| n == name);
+    json!({
+        "owner": {
+            "telegram_user_id_set": cfg.owner.telegram_user_id != 0,
+            "timezone": cfg.owner.timezone,
+            "language": cfg.owner.language,
+        },
+        "providers": {
+            "openrouter": {
+                "enabled": cfg.providers.openrouter.enabled,
+                "api_key_stored": has("openrouter_api_key"),
+                "routing_preferences": cfg.providers.openrouter.routing,
+            },
+            "local_openai_compat": {
+                "enabled": cfg.providers.local.enabled,
+                "base_url": cfg.providers.local.base_url,
+            },
+            "codex": match admin {
+                Some(a) => a.codex_view().await,
+                None => Value::Null,
+            },
+            "speech_to_text": {
+                "alias": cfg.role_alias("stt"),
+                "model": cfg.alias_model(&cfg.role_alias("stt")),
+            },
+        },
+        "telegram": {
+            "bot_token_stored": has("telegram_bot_token"),
+            "mode": cfg.telegram.mode,
+            "rich_messages": cfg.telegram.rich_messages,
+        },
+        "sandbox": {
+            "shell_profile": cfg.sandbox.default_profile,
+            "shell_network": cfg.sandbox.shell_network,
+            "workspaces": crate::executor::default_workspaces(s),
+        },
+        "budget": cfg.budget,
+        "secrets_stored": secrets,
+    })
 }
 
 fn per_m(x: f64) -> f64 {
