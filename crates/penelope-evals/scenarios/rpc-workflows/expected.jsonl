@@ -23,4 +23,4 @@
 {"type":"event","session":"{{session:2}}","seq":4,"kind":"workflow.finished","payload":{"reason":"annulé par le propriétaire","run":"{{run:1}}","state":"cancelled"}}
 {"type":"event","session":null,"seq":4,"kind":"workflow.control","payload":{"op":"Cancel","run":"{{run:1}}","state":"cancelled"}}
 {"type":"audit","ok":true,"checked":9,"purged":0}
-{"type":"observed","name":"runs","row":{"workflow_id":"build-verify","params":{"objectif":"ajouter un test de non-régression"},"state":"cancelled","current_step":"plan","iterations":0,"error":null}}
+{"type":"observed","name":"runs","row":{"workflow_id":"build-verify","params":{"objectif":"ajouter un test de non-régression"},"state":"cancelled","current_step":"plan","iterations":0,"error":"annulé par le propriétaire"}}
