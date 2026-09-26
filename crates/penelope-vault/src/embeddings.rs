@@ -121,7 +121,9 @@ pub async fn embed_texts(
             let m = model.clone();
             s.store
                 .write(move |tx| {
-                    for (h, v) in &rows {
+                    // Un vecteur vide (fournisseur en panne) n'est jamais gardé : le cache
+                    // le rendrait encore une fois le fournisseur réparé.
+                    for (h, v) in rows.iter().filter(|(_, v)| !v.is_empty()) {
                         tx.execute(
                             "INSERT OR REPLACE INTO embeddings_cache(content_hash, model, dim,
                                 embedding, created_at) VALUES(?1, ?2, ?3, ?4, ?5)",
@@ -442,5 +444,31 @@ mod tests {
             search_mode(&emb).await.unwrap()["mode"],
             "hybride (mots-clés et vecteurs)"
         );
+    }
+
+    /// Un vecteur vide rendu par le fournisseur n'est jamais gardé en cache : une fois le
+    /// fournisseur réparé, le texte reçoit son vrai vecteur.
+    #[tokio::test]
+    async fn an_empty_vector_is_never_cached() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(TestClock::default());
+        let s = Arc::new(
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
+                .await
+                .unwrap(),
+        );
+        let p = Arc::new(MockProvider::new());
+        let emb = Embedder {
+            services: s.clone(),
+            providers: penelope_app::testing::MockProviders::new(p.clone()),
+            state: Arc::default(),
+        };
+        let texts = vec!["une automobile".to_string()];
+        p.set_embedder(Some(Arc::new(|_: &str| Vec::new())));
+        let (_, broken) = embed_texts(&emb, &texts).await.unwrap();
+        assert!(broken[0].is_empty());
+        p.set_embedder(Some(embedder()));
+        let (_, fixed) = embed_texts(&emb, &texts).await.unwrap();
+        assert_eq!(fixed[0], vec![1.0, 0.0, 0.1]);
     }
 }
