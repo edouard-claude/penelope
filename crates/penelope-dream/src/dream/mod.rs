@@ -127,7 +127,6 @@ pub async fn run_as(
     result
 }
 
-#[allow(clippy::too_many_lines)] // gel 0.17 : phases de la nuit, lot G (dream/mod.rs)
 async fn run_locked(d: &Context, dry_run: bool) -> anyhow::Result<DreamOutcome> {
     let s = &d.services;
     let cfg = s.config.config();
@@ -158,45 +157,7 @@ async fn run_locked(d: &Context, dry_run: bool) -> anyhow::Result<DreamOutcome> 
         // ---------------------------------------------------------------- Light
         // Décisions des notes de travail : candidats, jamais réécrits (issue #32).
         if !dry_run {
-            let now = s.clock.now_rfc3339();
-            let mut harvested: Vec<Candidate> = Vec::new();
-            let mut sources: Vec<(String, String)> = Vec::new();
-            for (session, text) in crate::session_notes::harvest(s).await? {
-                // Genre de la session d'origine : une décision notée garde la provenance
-                // de la session où elle a été prise, sinon elle est filtrée sans un mot
-                // (issue #61).
-                let kind = s
-                    .sessions
-                    .get(&session)
-                    .await?
-                    .map(|x| x.kind.as_str().to_string())
-                    .unwrap_or_else(|| "interactive".into());
-                // Une session qui n'autorise pas de candidat (planifiée, sous-agent) ne
-                // passe pas par ce détour : la décision n'est ni enregistrée ni marquée.
-                if !penelope_memory::provenance::session_allows_candidate(&kind, "decision", true) {
-                    continue;
-                }
-                harvested.push(
-                    Candidate::new(
-                        penelope_memory::CandidateType::Decision,
-                        &text,
-                        Origin::Agent,
-                        &kind,
-                        &now,
-                    )
-                    .in_session(&session)
-                    .with_importance(6),
-                );
-                sources.push((session, text));
-            }
-            if !harvested.is_empty() {
-                // Pas de plafond de tour ici : ce sont les décisions de toute une journée.
-                let all = harvested.len();
-                s.candidates.record(harvested, all).await?;
-                for (session, text) in &sources {
-                    crate::session_notes::mark_harvested(s, session, text).await?;
-                }
-            }
+            harvest_decisions(s).await?;
         }
         let candidates = s.candidates.pending(None).await?;
         report.candidates_seen = candidates.len() as u32;
@@ -222,35 +183,7 @@ async fn run_locked(d: &Context, dry_run: bool) -> anyhow::Result<DreamOutcome> 
         // ---------------------------------------------------------------- Deep
         let gates = PromotionGates::from_config(&cfg.memory.promotion);
         let day = today(s);
-        let mut admitted: Vec<&CandidateGroup> = Vec::new();
-        // Verdicts de la grille : ils ne dépendent d'aucun appel au modèle, et sont
-        // écrits avant le premier lot (issue #152).
-        let mut gated: Vec<(Vec<String>, &'static str, Option<String>)> = Vec::new();
-        for g in &groups {
-            let ids: Vec<String> = g.members.iter().map(|m| m.id.clone()).collect();
-            for name in crate::secret_shelf::references(&g.representative.text) {
-                if !report.secrets.contains(&name) {
-                    report.secrets.push(name);
-                }
-            }
-            match gate(g, &gates) {
-                Gate::Promote | Gate::Sort => admitted.push(g),
-                Gate::Propose(reason) => {
-                    report.proposals += 1;
-                    report.questions.push(format!(
-                        "Proposition : « {} » ({reason})",
-                        short(&g.representative.text)
-                    ));
-                    gated.push((ids, "proposed", Some(reason)));
-                }
-                Gate::Reject(reason) => {
-                    report
-                        .rejected
-                        .push(format!("« {} » : {reason}", short(&g.representative.text)));
-                    gated.push((ids, "rejected", Some(reason)));
-                }
-            }
-        }
+        let (admitted, gated) = gate_groups(&groups, &gates, &mut report);
 
         if !dry_run {
             for (ids, state, reason) in &gated {
@@ -261,296 +194,23 @@ async fn run_locked(d: &Context, dry_run: bool) -> anyhow::Result<DreamOutcome> 
         }
 
         if !admitted.is_empty() {
-            let mut snapshot = VaultSnapshot::read(s, &vault).await?;
-            // Souvenirs proches : un seul appel d'embeddings pour tout le lot (issue #59).
-            let nearby_all = nearby_batch(
+            let night = Night {
                 d,
-                &admitted
-                    .iter()
-                    .map(|g| g.representative.text.clone())
-                    .collect::<Vec<_>>(),
-            )
-            .await;
-            let mut items: Vec<Item<'_>> = Vec::new();
-            for (i, g) in admitted.iter().enumerate() {
-                items.push(Item {
-                    group: g,
-                    nearby: nearby_all.get(i).cloned().unwrap_or_default(),
-                });
-            }
-
-            // Lots bornés : au-delà, la réponse du modèle ne tient pas et tout le lot
-            // repart en attente, nuit après nuit (issue #59). La taille suit ce qui a
-            // tenu, et la sortie demandée suit ce que le modèle écrit vraiment (#135).
-            let mut sizer = BatchSizer::new(cfg.memory.dream_batch.max(1));
-            let mut budget = OutputBudget::new(output_cap(d, &cfg));
-            // Budget de raisonnement de la nuit : il part bas et monte quand le modèle
-            // s'y heurte, plafonné par la configuration (issue #152). Réfléchir ne dépend
-            // pas du nombre de candidats : c'est ce budget qu'on relève, pas le lot qu'on
-            // réduit.
-            let reasoning_cap = cfg
-                .memory
-                .consolidation_reasoning_tokens
-                .max(REASONING_START);
-            let mut reasoning = REASONING_START.min(reasoning_cap);
-            // Famines survenues alors que le budget était déjà au plafond.
-            let mut at_cap = 0usize;
-            // Lots effectivement écrits : ce que la reprise n'aura pas à refaire.
-            let mut lots_written = 0usize;
-            // Candidats laissés par une passe arrêtée : ni jugés, ni reportés (#140).
-            let mut unjudged: BTreeSet<String> = BTreeSet::new();
-            let (mut lots, mut lone_lots) = (0usize, 0usize);
-            // Appels « raisonnement plein » de la passe, et alias de repli une fois qu'on
-            // y a basculé (issue #152).
-            let mut fallback_alias: Option<String> = None;
-            let mut i = 0usize;
-            while i < items.len() {
-                // Plus de la moitié des lots à un seul candidat : la passe ne converge
-                // pas, elle s'arrête et le dit plutôt que de finir en un appel par
-                // candidat (#140).
-                if lots >= LONE_WATCH && lone_lots * 2 > lots {
-                    let left = &items[i..];
-                    report.warnings.push(format!(
-                        "passe arrêtée : {lone_lots} lots sur {lots} n'ont tenu qu'à un seul \
-                         candidat ; {} candidat(s) restent en attente, sans report consommé",
-                        left.len()
-                    ));
-                    unjudged.extend(
-                        left.iter()
-                            .flat_map(|it| it.group.members.iter().map(|m| m.id.clone())),
-                    );
-                    break;
-                }
-                let mut size = budget.fit(sizer.size(items.len() - i));
-                let mut lone_retried = false;
-                loop {
-                    let slice = &items[i..i + size];
-                    let started = std::time::Instant::now();
-                    let requested = budget.max_tokens(size);
-                    let out = consolidate_retrying(
-                        d,
-                        slice,
-                        &snapshot,
-                        requested,
-                        reasoning,
-                        &mut report,
-                        fallback_alias.as_deref(),
-                        deadline,
-                        &run_id,
-                    )
-                    .await?;
-                    report.calls += 1;
-                    batch_event(d, &run_id, size, started.elapsed(), &out).await;
-                    // La sortie utile seule dimensionne les lots suivants : mesurer la
-                    // complétion entière faisait apprendre le raisonnement comme si
-                    // c'était du JSON (issue #152).
-                    let (response, truncated, useful) = (out.parsed, out.truncated, out.useful);
-                    // Raisonnement plein, sortie utile vide : réduire le lot n'y changerait
-                    // rien, réfléchir ne dépend pas du nombre de candidats (issue #152).
-                    // On relève le budget de réflexion et on rejoue le même lot ; au
-                    // plafond deux fois, on passe à l'alias de repli pour la nuit.
-                    if out.reasoning_starved {
-                        report.wasted_calls += 1;
-                        let on_fallback = fallback_alias.is_some();
-                        let quiet = cfg.memory.consolidation_reasoning == "off";
-                        report.warnings.push(format!(
-                            "raisonnement plein sur {size} candidat(s) : {} tokens dépensés \
-                             à réfléchir, aucune opération rendue",
-                            out.reasoning
-                        ));
-                        // Raisonnement éteint par configuration et le modèle réfléchit
-                        // quand même : relever un budget qu'on n'envoie pas ne sert à
-                        // rien, c'est le modèle qu'il faut changer.
-                        if !quiet && reasoning < reasoning_cap {
-                            reasoning = reasoning.saturating_mul(2).min(reasoning_cap);
-                            report.warnings.push(format!(
-                                "budget de raisonnement relevé à {reasoning} tokens, même lot \
-                                 rejoué"
-                            ));
-                            continue;
-                        }
-                        at_cap += 1;
-                        if at_cap < 2 && !quiet {
-                            report.warnings.push(format!(
-                                "budget de raisonnement au plafond ({reasoning_cap} tokens) : \
-                                 même lot rejoué une fois"
-                            ));
-                            continue;
-                        }
-                        if !on_fallback && let Some(next) = reasoning_fallback(&cfg) {
-                            report.warnings.push(format!(
-                                "bascule sur l'alias `{next}` pour le reste de la passe : le \
-                                 modèle du rôle `compaction` dépense son budget en \
-                                 raisonnement"
-                            ));
-                            fallback_alias = Some(next);
-                            reasoning = REASONING_START.min(reasoning_cap);
-                            at_cap = 0;
-                            continue;
-                        }
-                        // Déjà sur le repli, ou pas de repli déclaré : on s'arrête là
-                        // plutôt que de tourner, les candidats restants sont reportés.
-                        report.warnings.push(
-                            "plus rien à relever : passe arrêtée, candidats restants reportés"
-                                .into(),
-                        );
-                        unjudged.extend(
-                            items[i..]
-                                .iter()
-                                .flat_map(|it| it.group.members.iter().map(|m| m.id.clone())),
-                        );
-                        i = items.len();
-                        break;
-                    }
-                    if truncated {
-                        budget.cut(size, requested, useful);
-                    }
-                    if truncated && size > 1 {
-                        // Sortie coupée : on rejoue tout de suite le même début, en lot deux
-                        // fois plus petit, en le disant (#135).
-                        report.wasted_calls += 1;
-                        sizer.cut(size);
-                        let next = budget.fit(sizer.size(items.len() - i));
-                        report.warnings.push(format!(
-                            "consolidation coupée sur {size} candidats : reprise par {next}"
-                        ));
-                        size = next;
-                        continue;
-                    }
-                    if truncated && !lone_retried && budget.max_tokens(1) > requested {
-                        // Un seul candidat coupé : une reprise avec une sortie doublée avant
-                        // de garder une réponse tronquée (#140).
-                        lone_retried = true;
-                        report.wasted_calls += 1;
-                        report.warnings.push(format!(
-                            "consolidation coupée sur un seul candidat à {requested} tokens : \
-                             reprise à {}",
-                            budget.max_tokens(1)
-                        ));
-                        continue;
-                    }
-                    sizer.ok(size);
-                    lots += 1;
-                    if size == 1 {
-                        lone_lots += 1;
-                    }
-                    if truncated {
-                        // Gardée tronquée : ce qu'elle juge compte, l'appel est compté jeté.
-                        report.wasted_calls += 1;
-                        report.warnings.push(format!(
-                            "consolidation coupée sur un seul candidat, même à {requested} \
-                             tokens : réponse tronquée gardée"
-                        ));
-                    } else {
-                        budget.observe(size, useful);
-                    }
-                    let (batch_ops, updates, batch_clashes) =
-                        sort_and_plan(slice, &response, &snapshot, &day, &mut report);
-                    // Le lot est une unité de travail complète : validé, écrit, ses
-                    // candidats marqués, avant le suivant (issue #152). Accumuler
-                    // jusqu'à la fin faisait tout perdre sur une coupure — 126 candidats
-                    // traités puis jetés le 21/09.
-                    write_batch(
-                        d,
-                        &vault,
-                        &run_id,
-                        &day,
-                        &gates,
-                        &snapshot,
-                        slice,
-                        batch_ops,
-                        updates,
-                        batch_clashes,
-                        &mut report,
-                        dry_run,
-                    )
-                    .await?;
-                    if !dry_run {
-                        // Ce qui vient d'être écrit est connu du lot suivant : les
-                        // nouveaux UID, et les textes qui ne doivent pas se dédoubler.
-                        snapshot = VaultSnapshot::read(s, &vault).await?;
-                        save_stats(s, &run_id, &report).await?;
-                    }
-                    lots_written += 1;
-                    report.lots = lots_written as u32;
-                    break;
-                }
-                i += size;
-            }
+                cfg: &cfg,
+                vault: &vault,
+                run_id: &run_id,
+                day: &day,
+                deadline,
+                dry_run,
+            };
+            consolidate_admitted(&night, &gates, &admitted, &mut report).await?;
         }
 
         if dry_run {
             return Ok::<(), anyhow::Error>(());
         }
 
-        // États passagers expirés : retirés du journal, sans question (issue #37).
-        for op in expired_journal(s, &vault, &day).await {
-            match apply(d, &vault, &op, &run_id).await {
-                Ok(file) => {
-                    report.journal_expired += 1;
-                    if !report.files_touched.contains(&file) {
-                        report.files_touched.push(file);
-                    }
-                }
-                Err(e) => report.rejected.push(format!("{} : {e}", op.kind())),
-            }
-        }
-        report.unused = unused_entries(d, &day).await;
-        if let Some(w) = core_overflow(s, cfg.memory.core_budget_tokens as u64).await {
-            report.warnings.push(w);
-        }
-        // Entrées ajoutées ou réécrites cette nuit, adressables `[[note#^uid]]`.
-        let run = run_id.clone();
-        let touched: Vec<(String, String)> = s
-            .store
-            .read(move |c| {
-                let mut st = c.prepare(
-                    "SELECT DISTINCT uid, file FROM mem_history
-                     WHERE dream_run = ?1 AND uid IS NOT NULL
-                       AND op IN ('add_entry', 'replace_entry', 'supersede_entry',
-                                  'add_exception', 'record_ecart')",
-                )?;
-                let rows = st.query_map([&run], |r| Ok((r.get(0)?, r.get(1)?)))?;
-                Ok(rows.collect::<Result<Vec<_>, _>>()?)
-            })
-            .await?;
-        let resolver = penelope_memory::wiki::Resolver::scan(&vault);
-        report.promoted_refs = touched
-            .iter()
-            .filter(|(uid, _)| penelope_memory::vault::is_valid_block_id(uid))
-            .map(|(uid, file)| format!("[[{}#^{uid}]]", resolver.link_target(file)))
-            .collect();
-        // Ce que la nuit a appris, en clair : le digest montre ces lignes à la place des
-        // wikilinks bruts (issue #145).
-        for (uid, file) in touched.iter().take(5) {
-            if let Ok(Some(e)) = s.memory.get(uid).await {
-                report
-                    .promoted_examples
-                    .push(format!("{} ({file})", short(&e.text.replace('\n', " "))));
-            }
-        }
-        // Entrées fourre-tout : le digest propose le découpage, il ne le lance pas.
-        report.cleanup = crate::mem_split::oversized(s)
-            .await
-            .iter()
-            .map(|e| {
-                format!(
-                    "{} ({} caractères) — `penelope mem split {}`",
-                    short(&e.text.replace('\n', " ")),
-                    e.text.chars().count(),
-                    e.uid
-                )
-            })
-            .collect();
-        let (lint, proposals) = wiki_review(s, &vault).await;
-        report.lint = lint.summary();
-        report.lint_problems = lint.problems() as u32;
-        report.questions.extend(proposals);
-        // Élagage (§6.8) : écarts non promus depuis longtemps.
-        s.candidates
-            .expire_stale(cfg.memory.expire_ecart_days.max(1))
-            .await?;
-        Ok(())
+        after_pass(d, &cfg, &vault, &run_id, &day, &mut report).await
     }
     .await;
     report.duration_ms = pass_started.elapsed().as_millis() as u64;
@@ -597,6 +257,454 @@ async fn run_locked(d: &Context, dry_run: bool) -> anyhow::Result<DreamOutcome> 
             Err(e)
         }
     }
+}
+
+/// Light : les décisions des notes de travail deviennent des candidats, une fois.
+async fn harvest_decisions(s: &Services) -> anyhow::Result<()> {
+    let now = s.clock.now_rfc3339();
+    let mut harvested: Vec<Candidate> = Vec::new();
+    let mut sources: Vec<(String, String)> = Vec::new();
+    for (session, text) in crate::session_notes::harvest(s).await? {
+        // Genre de la session d'origine : une décision notée garde la provenance
+        // de la session où elle a été prise, sinon elle est filtrée sans un mot
+        // (issue #61).
+        let kind = s
+            .sessions
+            .get(&session)
+            .await?
+            .map(|x| x.kind.as_str().to_string())
+            .unwrap_or_else(|| "interactive".into());
+        // Une session qui n'autorise pas de candidat (planifiée, sous-agent) ne
+        // passe pas par ce détour : la décision n'est ni enregistrée ni marquée.
+        if !penelope_memory::provenance::session_allows_candidate(&kind, "decision", true) {
+            continue;
+        }
+        harvested.push(
+            Candidate::new(
+                penelope_memory::CandidateType::Decision,
+                &text,
+                Origin::Agent,
+                &kind,
+                &now,
+            )
+            .in_session(&session)
+            .with_importance(6),
+        );
+        sources.push((session, text));
+    }
+    if !harvested.is_empty() {
+        // Pas de plafond de tour ici : ce sont les décisions de toute une journée.
+        let all = harvested.len();
+        s.candidates.record(harvested, all).await?;
+        for (session, text) in &sources {
+            crate::session_notes::mark_harvested(s, session, text).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Verdict d'un groupe tranché sans le modèle : ses candidats, leur état, la raison.
+type Gated = (Vec<String>, &'static str, Option<String>);
+
+/// Verdicts de la grille : ce qui entre en consolidation, et ce qui est proposé ou rejeté
+/// sans appel au modèle.
+fn gate_groups<'g>(
+    groups: &'g [CandidateGroup],
+    gates: &PromotionGates,
+    report: &mut DreamReport,
+) -> (Vec<&'g CandidateGroup>, Vec<Gated>) {
+    let mut admitted: Vec<&CandidateGroup> = Vec::new();
+    // Verdicts de la grille : ils ne dépendent d'aucun appel au modèle, et sont
+    // écrits avant le premier lot (issue #152).
+    let mut gated: Vec<Gated> = Vec::new();
+    for g in groups {
+        let ids: Vec<String> = g.members.iter().map(|m| m.id.clone()).collect();
+        for name in crate::secret_shelf::references(&g.representative.text) {
+            if !report.secrets.contains(&name) {
+                report.secrets.push(name);
+            }
+        }
+        match gate(g, gates) {
+            Gate::Promote | Gate::Sort => admitted.push(g),
+            Gate::Propose(reason) => {
+                report.proposals += 1;
+                report.questions.push(format!(
+                    "Proposition : « {} » ({reason})",
+                    short(&g.representative.text)
+                ));
+                gated.push((ids, "proposed", Some(reason)));
+            }
+            Gate::Reject(reason) => {
+                report
+                    .rejected
+                    .push(format!("« {} » : {reason}", short(&g.representative.text)));
+                gated.push((ids, "rejected", Some(reason)));
+            }
+        }
+    }
+    (admitted, gated)
+}
+
+/// Ce que partage une passe : le contexte, la configuration lue au départ, le vault,
+/// le run, le jour, l'échéance de la nuit.
+struct Night<'a> {
+    d: &'a Context,
+    cfg: &'a penelope_kernel::config::Config,
+    vault: &'a Path,
+    run_id: &'a str,
+    day: &'a str,
+    deadline: std::time::Instant,
+    dry_run: bool,
+}
+
+/// Deep : les groupes admis passent au modèle par lots bornés, chaque lot écrit avant le
+/// suivant (issues #59, #135, #140, #152).
+async fn consolidate_admitted(
+    night: &Night<'_>,
+    gates: &PromotionGates,
+    admitted: &[&CandidateGroup],
+    report: &mut DreamReport,
+) -> anyhow::Result<()> {
+    let Night {
+        d,
+        cfg,
+        vault,
+        run_id,
+        day,
+        deadline,
+        dry_run,
+    } = *night;
+    let s = &d.services;
+    let mut snapshot = VaultSnapshot::read(s, vault).await?;
+    // Souvenirs proches : un seul appel d'embeddings pour tout le lot (issue #59).
+    let nearby_all = nearby_batch(
+        d,
+        &admitted
+            .iter()
+            .map(|g| g.representative.text.clone())
+            .collect::<Vec<_>>(),
+    )
+    .await;
+    let mut items: Vec<Item<'_>> = Vec::new();
+    for (i, g) in admitted.iter().enumerate() {
+        items.push(Item {
+            group: g,
+            nearby: nearby_all.get(i).cloned().unwrap_or_default(),
+        });
+    }
+
+    // Lots bornés : au-delà, la réponse du modèle ne tient pas et tout le lot
+    // repart en attente, nuit après nuit (issue #59). La taille suit ce qui a
+    // tenu, et la sortie demandée suit ce que le modèle écrit vraiment (#135).
+    let mut sizer = BatchSizer::new(cfg.memory.dream_batch.max(1));
+    let mut budget = OutputBudget::new(output_cap(d, cfg));
+    let mut reasoning = ReasoningBudget::new(cfg);
+    // Lots effectivement écrits : ce que la reprise n'aura pas à refaire.
+    let mut lots_written = 0usize;
+    // Candidats laissés par une passe arrêtée : ni jugés, ni reportés (#140).
+    let mut unjudged: BTreeSet<String> = BTreeSet::new();
+    let (mut lots, mut lone_lots) = (0usize, 0usize);
+    let mut i = 0usize;
+    while i < items.len() {
+        // Plus de la moitié des lots à un seul candidat : la passe ne converge
+        // pas, elle s'arrête et le dit plutôt que de finir en un appel par
+        // candidat (#140).
+        if lots >= LONE_WATCH && lone_lots * 2 > lots {
+            let left = &items[i..];
+            report.warnings.push(format!(
+                "passe arrêtée : {lone_lots} lots sur {lots} n'ont tenu qu'à un seul \
+                 candidat ; {} candidat(s) restent en attente, sans report consommé",
+                left.len()
+            ));
+            unjudged.extend(
+                left.iter()
+                    .flat_map(|it| it.group.members.iter().map(|m| m.id.clone())),
+            );
+            break;
+        }
+        let mut size = budget.fit(sizer.size(items.len() - i));
+        let mut lone_retried = false;
+        loop {
+            let slice = &items[i..i + size];
+            let started = std::time::Instant::now();
+            let requested = budget.max_tokens(size);
+            let out = consolidate_retrying(
+                d,
+                slice,
+                &snapshot,
+                requested,
+                reasoning.tokens,
+                report,
+                reasoning.fallback_alias.as_deref(),
+                deadline,
+                run_id,
+            )
+            .await?;
+            report.calls += 1;
+            batch_event(d, run_id, size, started.elapsed(), &out).await;
+            // La sortie utile seule dimensionne les lots suivants : mesurer la
+            // complétion entière faisait apprendre le raisonnement comme si
+            // c'était du JSON (issue #152).
+            let (response, truncated, useful) = (out.parsed, out.truncated, out.useful);
+            // Raisonnement plein, sortie utile vide : réduire le lot n'y changerait
+            // rien, réfléchir ne dépend pas du nombre de candidats (issue #152).
+            // On relève le budget de réflexion et on rejoue le même lot ; au
+            // plafond deux fois, on passe à l'alias de repli pour la nuit.
+            if out.reasoning_starved {
+                report.wasted_calls += 1;
+                if reasoning.starved(cfg, size, out.reasoning, report) {
+                    continue;
+                }
+                // Déjà sur le repli, ou pas de repli déclaré : on s'arrête là
+                // plutôt que de tourner, les candidats restants sont reportés.
+                report.warnings.push(
+                    "plus rien à relever : passe arrêtée, candidats restants reportés".into(),
+                );
+                unjudged.extend(
+                    items[i..]
+                        .iter()
+                        .flat_map(|it| it.group.members.iter().map(|m| m.id.clone())),
+                );
+                i = items.len();
+                break;
+            }
+            if truncated {
+                budget.cut(size, requested, useful);
+            }
+            if truncated && size > 1 {
+                // Sortie coupée : on rejoue tout de suite le même début, en lot deux
+                // fois plus petit, en le disant (#135).
+                report.wasted_calls += 1;
+                sizer.cut(size);
+                let next = budget.fit(sizer.size(items.len() - i));
+                report.warnings.push(format!(
+                    "consolidation coupée sur {size} candidats : reprise par {next}"
+                ));
+                size = next;
+                continue;
+            }
+            if truncated && !lone_retried && budget.max_tokens(1) > requested {
+                // Un seul candidat coupé : une reprise avec une sortie doublée avant
+                // de garder une réponse tronquée (#140).
+                lone_retried = true;
+                report.wasted_calls += 1;
+                report.warnings.push(format!(
+                    "consolidation coupée sur un seul candidat à {requested} tokens : \
+                     reprise à {}",
+                    budget.max_tokens(1)
+                ));
+                continue;
+            }
+            sizer.ok(size);
+            lots += 1;
+            if size == 1 {
+                lone_lots += 1;
+            }
+            if truncated {
+                // Gardée tronquée : ce qu'elle juge compte, l'appel est compté jeté.
+                report.wasted_calls += 1;
+                report.warnings.push(format!(
+                    "consolidation coupée sur un seul candidat, même à {requested} \
+                     tokens : réponse tronquée gardée"
+                ));
+            } else {
+                budget.observe(size, useful);
+            }
+            let (batch_ops, updates, batch_clashes) =
+                sort_and_plan(slice, &response, &snapshot, day, report);
+            // Le lot est une unité de travail complète : validé, écrit, ses
+            // candidats marqués, avant le suivant (issue #152). Accumuler
+            // jusqu'à la fin faisait tout perdre sur une coupure — 126 candidats
+            // traités puis jetés le 21/09.
+            write_batch(
+                d,
+                vault,
+                run_id,
+                day,
+                gates,
+                &snapshot,
+                slice,
+                batch_ops,
+                updates,
+                batch_clashes,
+                report,
+                dry_run,
+            )
+            .await?;
+            if !dry_run {
+                // Ce qui vient d'être écrit est connu du lot suivant : les
+                // nouveaux UID, et les textes qui ne doivent pas se dédoubler.
+                snapshot = VaultSnapshot::read(s, vault).await?;
+                save_stats(s, run_id, report).await?;
+            }
+            lots_written += 1;
+            report.lots = lots_written as u32;
+            break;
+        }
+        i += size;
+    }
+    Ok(())
+}
+
+/// Budget de raisonnement de la nuit (issue #152) : il part bas et monte quand le modèle
+/// s'y heurte, plafonné par la configuration ; au plafond deux fois, la passe bascule sur
+/// l'alias de repli. Réfléchir ne dépend pas du nombre de candidats : c'est ce budget
+/// qu'on relève, pas le lot qu'on réduit.
+struct ReasoningBudget {
+    tokens: u32,
+    cap: u32,
+    /// Famines survenues alors que le budget était déjà au plafond.
+    at_cap: usize,
+    /// Alias de repli, une fois qu'on y a basculé.
+    fallback_alias: Option<String>,
+}
+
+impl ReasoningBudget {
+    fn new(cfg: &penelope_kernel::config::Config) -> Self {
+        let cap = cfg
+            .memory
+            .consolidation_reasoning_tokens
+            .max(REASONING_START);
+        ReasoningBudget {
+            tokens: REASONING_START.min(cap),
+            cap,
+            at_cap: 0,
+            fallback_alias: None,
+        }
+    }
+
+    /// Raisonnement plein, sortie utile vide : `true` si le même lot est rejoué (budget
+    /// relevé, seconde chance au plafond, ou bascule sur le repli), `false` s'il n'y a
+    /// plus rien à relever.
+    fn starved(
+        &mut self,
+        cfg: &penelope_kernel::config::Config,
+        size: usize,
+        spent: u64,
+        report: &mut DreamReport,
+    ) -> bool {
+        let on_fallback = self.fallback_alias.is_some();
+        let quiet = cfg.memory.consolidation_reasoning == "off";
+        report.warnings.push(format!(
+            "raisonnement plein sur {size} candidat(s) : {} tokens dépensés \
+             à réfléchir, aucune opération rendue",
+            spent
+        ));
+        // Raisonnement éteint par configuration et le modèle réfléchit
+        // quand même : relever un budget qu'on n'envoie pas ne sert à
+        // rien, c'est le modèle qu'il faut changer.
+        if !quiet && self.tokens < self.cap {
+            self.tokens = self.tokens.saturating_mul(2).min(self.cap);
+            report.warnings.push(format!(
+                "budget de raisonnement relevé à {} tokens, même lot \
+                 rejoué",
+                self.tokens
+            ));
+            return true;
+        }
+        self.at_cap += 1;
+        if self.at_cap < 2 && !quiet {
+            report.warnings.push(format!(
+                "budget de raisonnement au plafond ({} tokens) : \
+                 même lot rejoué une fois",
+                self.cap
+            ));
+            return true;
+        }
+        if !on_fallback && let Some(next) = reasoning_fallback(cfg) {
+            report.warnings.push(format!(
+                "bascule sur l'alias `{next}` pour le reste de la passe : le \
+                 modèle du rôle `compaction` dépense son budget en \
+                 raisonnement"
+            ));
+            self.fallback_alias = Some(next);
+            self.tokens = REASONING_START.min(self.cap);
+            self.at_cap = 0;
+            return true;
+        }
+        false
+    }
+}
+
+/// Après les lots : journal expiré, entrées inutilisées, ce que la nuit a appris, entrées
+/// à découper, revue du wiki, élagage des écarts.
+async fn after_pass(
+    d: &Context,
+    cfg: &penelope_kernel::config::Config,
+    vault: &Path,
+    run_id: &str,
+    day: &str,
+    report: &mut DreamReport,
+) -> anyhow::Result<()> {
+    let s = &d.services;
+    // États passagers expirés : retirés du journal, sans question (issue #37).
+    for op in expired_journal(s, vault, day).await {
+        match apply(d, vault, &op, run_id).await {
+            Ok(file) => {
+                report.journal_expired += 1;
+                if !report.files_touched.contains(&file) {
+                    report.files_touched.push(file);
+                }
+            }
+            Err(e) => report.rejected.push(format!("{} : {e}", op.kind())),
+        }
+    }
+    report.unused = unused_entries(d, day).await;
+    if let Some(w) = core_overflow(s, cfg.memory.core_budget_tokens as u64).await {
+        report.warnings.push(w);
+    }
+    // Entrées ajoutées ou réécrites cette nuit, adressables `[[note#^uid]]`.
+    let run = run_id.to_string();
+    let touched: Vec<(String, String)> = s
+        .store
+        .read(move |c| {
+            let mut st = c.prepare(
+                "SELECT DISTINCT uid, file FROM mem_history
+                 WHERE dream_run = ?1 AND uid IS NOT NULL
+                   AND op IN ('add_entry', 'replace_entry', 'supersede_entry',
+                              'add_exception', 'record_ecart')",
+            )?;
+            let rows = st.query_map([&run], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await?;
+    let resolver = penelope_memory::wiki::Resolver::scan(vault);
+    report.promoted_refs = touched
+        .iter()
+        .filter(|(uid, _)| penelope_memory::vault::is_valid_block_id(uid))
+        .map(|(uid, file)| format!("[[{}#^{uid}]]", resolver.link_target(file)))
+        .collect();
+    // Ce que la nuit a appris, en clair : le digest montre ces lignes à la place des
+    // wikilinks bruts (issue #145).
+    for (uid, file) in touched.iter().take(5) {
+        if let Ok(Some(e)) = s.memory.get(uid).await {
+            report
+                .promoted_examples
+                .push(format!("{} ({file})", short(&e.text.replace('\n', " "))));
+        }
+    }
+    // Entrées fourre-tout : le digest propose le découpage, il ne le lance pas.
+    report.cleanup = crate::mem_split::oversized(s)
+        .await
+        .iter()
+        .map(|e| {
+            format!(
+                "{} ({} caractères) — `penelope mem split {}`",
+                short(&e.text.replace('\n', " ")),
+                e.text.chars().count(),
+                e.uid
+            )
+        })
+        .collect();
+    let (lint, proposals) = wiki_review(s, vault).await;
+    report.lint = lint.summary();
+    report.lint_problems = lint.problems() as u32;
+    report.questions.extend(proposals);
+    // Élagage (§6.8) : écarts non promus depuis longtemps.
+    s.candidates
+        .expire_stale(cfg.memory.expire_ecart_days.max(1))
+        .await?;
+    Ok(())
 }
 
 mod apply;
