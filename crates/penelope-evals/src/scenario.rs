@@ -24,6 +24,7 @@
 //! rejeux identiques octet pour octet.
 
 pub mod harness;
+pub mod http;
 pub mod normalise;
 pub mod world;
 
@@ -74,6 +75,11 @@ pub struct Spec {
     /// monde (lignes `sent`). Sans lui, `send_message` n'a aucun canal.
     #[serde(default)]
     pub messenger: bool,
+    /// Routes du faux serveur HTTP local (`127.0.0.1`, port tiré au sort) : `{{http}}`
+    /// est sa base dans la configuration, les paramètres RPC et les corps servis ; les
+    /// requêtes reçues sont relevées (`http_request`).
+    #[serde(default)]
+    pub http: Vec<http::Route>,
     pub steps: Vec<Step>,
 }
 
@@ -199,12 +205,25 @@ pub enum Step {
         /// satisfont un (`metrics` : les jauges calculées à la demande).
         #[serde(default)]
         lines: Vec<String>,
+        /// Éléments d'une réponse en tableau retirés avant tout le reste, par champ :
+        /// `{ id = ["service", "dep.*"] }` (`*` final : préfixe). Ce qui dépend de l'hôte
+        /// et dont le nombre même change d'une machine à l'autre (`doctor`).
+        #[serde(default)]
+        without: toml::Table,
         /// L'appel doit échouer ; sans ce drapeau, une erreur fait échouer le scénario.
         #[serde(default)]
         error: bool,
         /// `tail` seulement : message joué pendant que le flux est ouvert.
         #[serde(default)]
         during: Option<String>,
+    },
+    /// Le navigateur du propriétaire : `GET` d'une adresse du faux serveur HTTP, sans
+    /// suivre de redirection (statut, `location`, corps). `url` se résout comme un
+    /// paramètre RPC (`$auth.url`).
+    Open {
+        url: String,
+        #[serde(default)]
+        bind: Option<String>,
     },
     /// Sème `exchanges` échanges dans l'historique, sans appel au modèle. `{i}` et
     /// `{filler}` sont remplacés ; `tokens` est la taille déclarée de chaque message.
@@ -271,6 +290,7 @@ impl Step {
             Step::Usage { prompt } => format!("dernier appel facturé : {prompt} tokens"),
             Step::Seed { exchanges, .. } => format!("historique semé : {exchanges} échanges"),
             Step::Rpc { method, .. } => format!("rpc : {method}"),
+            Step::Open { url, .. } => format!("navigateur : {url}"),
         }
     }
 }

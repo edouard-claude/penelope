@@ -106,6 +106,8 @@ struct Harness<'a> {
     outcomes: Vec<Value>,
     crashed: bool,
     telegram: telegram::Chat,
+    /// Faux serveur HTTP local, s'il y a des routes `[[http]]`.
+    http: Option<crate::scenario::http::Server>,
 }
 
 pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
@@ -136,6 +138,10 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
         outcomes: Vec::new(),
         crashed: false,
         telegram: telegram::Chat::default(),
+        http: match spec.http.is_empty() {
+            true => None,
+            false => Some(crate::scenario::http::Server::start(spec.http.clone()).await?),
+        },
     };
     h.boot(true).await?;
     h.run_steps().await?;
@@ -152,6 +158,7 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
         let mut dumped = world::dump(&life.services, &workspace).await?;
         dumped.extend(rpc::observe(&life.services, &spec.observe).await?);
         dumped.extend(lock(&h.sent).iter().cloned());
+        dumped.extend(h.http.iter().flat_map(|s| s.requests()));
         let seen = lock(&h.seen).clone();
         let visible = visible::check(&life.services, &seen, &spec.name).await?;
         let reindexed = journal::check(&life.services, &spec.name).await?;
@@ -164,6 +171,10 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
     // Les jetons sont numérotés dans l'ordre du monde (sessions par création, tours par
     // mise en file, effets par appel…), pas dans celui de leur première mention.
     let mut n = Normaliser::new(start_ms, h.root.path()).with_masks(&spec.masks)?;
+    if let Some(server) = &h.http {
+        n = n.with_literal(server.base(), "{{http}}");
+        n = n.with_literal(&server.encoded_base(), "{{http}}");
+    }
     for line in &dumped {
         let key = if line["type"] == "summary" {
             "node"
@@ -262,6 +273,7 @@ impl Harness<'_> {
                     pick,
                     mask,
                     lines,
+                    without,
                     error,
                     during,
                 } => {
@@ -272,11 +284,13 @@ impl Harness<'_> {
                         pick,
                         mask,
                         lines,
+                        without,
                         error: *error,
                         during: during.as_deref(),
                     })
                     .await
                 }
+                Step::Open { url, bind } => self.open(url, bind.as_deref()).await,
                 Step::Approve => self.approve().await,
                 Step::Usage { prompt } => self.usage(*prompt).await,
                 Step::Seed {

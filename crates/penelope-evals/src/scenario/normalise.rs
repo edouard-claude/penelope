@@ -76,6 +76,8 @@ pub struct Normaliser {
     stamp: Regex,
     hex: Regex,
     masks: Vec<Regex>,
+    /// Textes exacts propres au rejeu (adresse du faux serveur HTTP) et leur jeton.
+    literals: Vec<(String, String)>,
 }
 
 impl Normaliser {
@@ -108,6 +110,7 @@ impl Normaliser {
             .expect("regex RFC 3339"),
             hex: Regex::new(r"\b[0-9a-f]{64}\b").expect("regex sha256"),
             masks: Vec::new(),
+            literals: Vec::new(),
         }
     }
 
@@ -118,6 +121,15 @@ impl Normaliser {
                 .push(Regex::new(m).map_err(|e| anyhow::anyhow!("motif `{m}` : {e}"))?);
         }
         Ok(self)
+    }
+
+    /// Un texte exact remplacé par `token` partout, avant les autres remplacements : le
+    /// port du faux serveur HTTP change à chaque rejeu.
+    pub fn with_literal(mut self, raw: &str, token: &str) -> Self {
+        if !raw.is_empty() {
+            self.literals.push((raw.to_string(), token.to_string()));
+        }
+        self
     }
 
     /// Normalise une valeur JSON entière.
@@ -160,6 +172,9 @@ impl Normaliser {
     /// Normalise un texte : chemins, identifiants, horodatages, hachages.
     pub fn text(&mut self, s: &str) -> String {
         let mut out = s.to_string();
+        for (raw, token) in &self.literals {
+            out = out.replace(raw.as_str(), token.as_str());
+        }
         for m in &self.masks {
             out = m.replace_all(&out, "{{masked}}").into_owned();
         }

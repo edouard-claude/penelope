@@ -129,7 +129,14 @@ impl Harness<'_> {
             .spec
             .config
             .iter()
-            .map(|(k, v)| Ok((k.clone(), serde_json::to_value(v)?)))
+            .map(|(k, v)| {
+                let v = serde_json::to_value(v)?;
+                let v = match &self.http {
+                    Some(h) => h.fill(v),
+                    None => v,
+                };
+                Ok((k.clone(), v))
+            })
             .collect::<anyhow::Result<_>>()?;
         daemon
             .publish_config("scenario", |c| {

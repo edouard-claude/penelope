@@ -39,6 +39,7 @@ pub(super) struct Call<'s> {
     pub pick: &'s [String],
     pub mask: &'s [String],
     pub lines: &'s [String],
+    pub without: &'s toml::Table,
     pub error: bool,
     pub during: Option<&'s str>,
 }
@@ -54,6 +55,9 @@ struct Reply {
 impl Harness<'_> {
     pub(super) async fn rpc(&mut self, c: Call<'_>) -> anyhow::Result<Value> {
         let params = self.resolve(serde_json::to_value(c.params)?)?;
+        if c.method == method::UPGRADE {
+            harmless_upgrade(&params)?;
+        }
         let d = self.daemon()?;
         let rpc = Rpc::new(d.core.clone());
         let req = RpcRequest::new(1, c.method, params);
@@ -103,6 +107,7 @@ impl Harness<'_> {
                 .iter()
                 .map(|l| regex::Regex::new(l).with_context(|| format!("motif `{l}`")))
                 .collect::<anyhow::Result<Vec<_>>>()?;
+            let result = without(result, c.without)?;
             out["result"] = project(filter_lines(result, &keep), c.pick, c.mask);
         }
         if let Some(error) = reply.error {
@@ -162,8 +167,32 @@ impl Harness<'_> {
         }
     }
 
-    /// Remplace `$session` et `$nom.chemin` par leur valeur, partout dans les paramètres.
+    /// Étape `open` : le propriétaire ouvre une adresse du faux serveur HTTP.
+    pub(super) async fn open(&mut self, url: &str, bind: Option<&str>) -> anyhow::Result<Value> {
+        let server = self
+            .http
+            .as_ref()
+            .context("`open` demande un faux serveur HTTP (`[[http]]`)")?;
+        let url = self.resolve(json!(url))?;
+        let url = url.as_str().context("`url` : une adresse attendue")?;
+        let got = crate::scenario::http::open(server, url).await?;
+        if let Some(name) = bind {
+            self.bound.insert(name.to_string(), got.clone());
+        }
+        Ok(got)
+    }
+
+    /// Remplace `$session` et `$nom.chemin` par leur valeur, et `{{http}}` par la base du
+    /// faux serveur HTTP, partout dans les paramètres.
     fn resolve(&self, v: Value) -> anyhow::Result<Value> {
+        let v = match &self.http {
+            Some(h) => h.fill(v),
+            None => v,
+        };
+        self.resolve_bound(v)
+    }
+
+    fn resolve_bound(&self, v: Value) -> anyhow::Result<Value> {
         Ok(match v {
             Value::String(s) if s.starts_with('$') => {
                 // `$json:nom.chemin` : la valeur sérialisée, pour un paramètre qui attend
@@ -195,12 +224,12 @@ impl Harness<'_> {
             Value::Array(items) => Value::Array(
                 items
                     .into_iter()
-                    .map(|x| self.resolve(x))
+                    .map(|x| self.resolve_bound(x))
                     .collect::<anyhow::Result<_>>()?,
             ),
             Value::Object(map) => Value::Object(
                 map.into_iter()
-                    .map(|(k, x)| Ok((k, self.resolve(x)?)))
+                    .map(|(k, x)| Ok((k, self.resolve_bound(x)?)))
                     .collect::<anyhow::Result<_>>()?,
             ),
             other => other,
@@ -214,6 +243,64 @@ fn step_into(v: &Value, seg: &str) -> Option<Value> {
         Value::Object(o) => o.get(seg).cloned(),
         _ => None,
     }
+}
+
+/// Un scénario ne remplace jamais le binaire qui le joue : `upgrade` n'y est permis
+/// qu'en vérification (`check`), ou depuis un binaire de compilation (`target/debug`),
+/// que la méthode refuse de remplacer avant tout téléchargement ; la bascule vers les
+/// releases (`switch`), qui réécrit le service, jamais.
+fn harmless_upgrade(params: &Value) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        params["switch"].as_bool() != Some(true),
+        "`upgrade` avec `switch` réécrirait le service de la machine : interdit en scénario"
+    );
+    if params["check"].as_bool() == Some(true) {
+        return Ok(());
+    }
+    let exe = penelope_app::helpers::running_binary().map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(
+        penelope_app::helpers::is_source_build(&exe),
+        "`upgrade` hors vérification depuis {} : seul un binaire de compilation le refuse \
+         sans rien remplacer",
+        exe.display()
+    );
+    Ok(())
+}
+
+/// Retire d'une réponse en tableau les éléments dont un champ répond à un motif de
+/// `without` (`*` final : préfixe).
+fn without(v: Value, rules: &toml::Table) -> anyhow::Result<Value> {
+    if rules.is_empty() {
+        return Ok(v);
+    }
+    let Value::Array(items) = v else {
+        anyhow::bail!("`without` s'applique à une réponse en tableau");
+    };
+    let mut patterns: Vec<(&str, Vec<String>)> = Vec::new();
+    for (field, list) in rules {
+        let list = list
+            .as_array()
+            .with_context(|| format!("`without.{field}` : une liste de motifs"))?;
+        patterns.push((
+            field,
+            list.iter()
+                .filter_map(|p| p.as_str().map(String::from))
+                .collect(),
+        ));
+    }
+    let hit = |item: &Value| {
+        patterns.iter().any(|(field, list)| {
+            item[*field].as_str().is_some_and(|x| {
+                list.iter().any(|p| match p.strip_suffix('*') {
+                    Some(prefix) => x.starts_with(prefix),
+                    None => x == p,
+                })
+            })
+        })
+    };
+    Ok(Value::Array(
+        items.into_iter().filter(|x| !hit(x)).collect(),
+    ))
 }
 
 /// `chat.stream` et `tail` sur un tampon : les notifications, puis la réponse finale.
@@ -416,6 +503,24 @@ mod tests {
             picked,
             json!({"/servers/*/name": ["a", "b"], "/absent": null})
         );
+    }
+
+    #[test]
+    fn without_drops_the_matching_elements() {
+        let v = json!([{"id": "service"}, {"id": "dep.git"}, {"id": "audit"}, {"x": 1}]);
+        let rules: toml::Table = toml::from_str(r#"id = ["service", "dep.*"]"#).unwrap();
+        assert_eq!(
+            without(v, &rules).unwrap(),
+            json!([{"id": "audit"}, {"x": 1}])
+        );
+        assert!(without(json!({"id": "a"}), &rules).is_err());
+        assert_eq!(without(json!(1), &toml::Table::new()).unwrap(), json!(1));
+    }
+
+    #[test]
+    fn an_upgrade_never_switches_the_service() {
+        assert!(harmless_upgrade(&json!({"switch": true, "check": true})).is_err());
+        assert!(harmless_upgrade(&json!({"check": true})).is_ok());
     }
 
     #[test]
