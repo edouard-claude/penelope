@@ -121,6 +121,7 @@ impl KeychainStore {
                 service,
                 "-w",
             ])
+            .stdin(Stdio::null())
             .stderr(Stdio::null())
             .output()
             .ok()?;
@@ -180,6 +181,7 @@ impl KeychainStore {
                 "-s",
                 service,
             ])
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
