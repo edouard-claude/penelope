@@ -129,6 +129,7 @@ impl Harness<'_> {
     async fn button(&self, label: &str) -> anyhow::Result<(String, i64)> {
         let mut next = FIRST_MESSAGE_ID;
         let mut found = None;
+        let mut seen: Vec<String> = Vec::new();
         for (m, body) in self.telegram.transport.calls().await {
             let message = match m.as_str() {
                 method::SEND_MESSAGE
@@ -142,15 +143,19 @@ impl Harness<'_> {
                 }
                 _ => body["message_id"].as_i64().unwrap_or(next),
             };
-            let hit = buttons(&body)
-                .into_iter()
-                .flatten()
-                .find(|(l, _)| l.contains(label));
+            let row: Vec<(String, String)> = buttons(&body).into_iter().flatten().collect();
+            seen.extend(row.iter().map(|(l, _)| l.clone()));
+            let hit = row.into_iter().find(|(l, _)| l.contains(label));
             if let Some((_, data)) = hit {
                 found = Some((data, message));
             }
         }
-        found.with_context(|| format!("aucun bouton « {label} » dans les écrans envoyés"))
+        found.with_context(|| {
+            format!(
+                "aucun bouton « {label} » dans les écrans envoyés ; boutons vus : {}",
+                seen.join(" | ")
+            )
+        })
     }
 }
 
