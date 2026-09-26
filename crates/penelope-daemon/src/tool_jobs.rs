@@ -192,6 +192,11 @@ async fn conclude(
     cancelled: bool,
 ) -> anyhow::Result<()> {
     s.jobs.forget(job_id);
+    // Déjà clos par la reprise d'un démarrage : le premier qui conclut gagne, pour le
+    // ledger comme pour la ligne, sinon l'effet `failed` redeviendrait `completed`.
+    if store(s).get(job_id).await?.is_some_and(|j| j.state.is_terminal()) {
+        return Ok(());
+    }
     let (state, result, error) = match &outcome {
         _ if cancelled => (
             TaskState::Cancelled,

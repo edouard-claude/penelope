@@ -297,6 +297,16 @@ async fn a_restart_during_a_job_fails_it_and_says_so_without_a_card() {
     let report = after.recover().await.unwrap();
     assert_eq!(report.tool_jobs_lost, 1, "{report:?}");
     assert_eq!(report.effects_unknown, 0, "{report:?}");
+    // Le premier daemon n'est pas mort, lui : la reprise tue son `sleep` orphelin, et sa
+    // tâche de job conclut à retardement. On attend cette conclusion fantôme, qui ne doit
+    // rien réécrire, au lieu de lire l'état avant ou après selon la charge de la machine.
+    for _ in 0..300 {
+        if d.services.jobs.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(d.services.jobs.is_empty(), "le job fantôme n'a pas conclu");
 
     let lost = store(&after.services).get(&job.id).await.unwrap().unwrap();
     assert_eq!(lost.state, TaskState::Failed);

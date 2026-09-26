@@ -788,3 +788,73 @@ async fn tool_results(d: &Daemon, sid: &str) -> Vec<String> {
         .map(|e| e.message.text())
         .collect()
 }
+
+/// Un job déclaré perdu par la reprise d'un démarrage, dont la tâche conclut ensuite
+/// quand même (son processus orphelin vient d'être tué) : la fin tardive ne réécrit ni
+/// l'effet ni la ligne. Sans cette garde, l'effet `failed` redevenait `completed`
+/// derrière un job `failed`, et `tool_jobs_e2e` échouait une fois sur deux sous charge.
+#[tokio::test]
+async fn a_late_conclusion_does_not_overwrite_a_job_lost_on_boot() {
+    let (_dir, d, _p) = daemon().await;
+    let s = d.services.clone();
+    let sid = session(&d).await;
+    let effect = match s
+        .effects
+        .plan(
+            penelope_kernel::effects::EffectSpec::new(
+                penelope_kernel::effects::EffectKind::Tool,
+                "shell_exec",
+                json!({"command": "sleep 300"}),
+            )
+            .session(&sid),
+        )
+        .await
+        .unwrap()
+    {
+        penelope_kernel::effects::Planned::Fresh(id) => id,
+        o => panic!("{o:?}"),
+    };
+    s.effects.dispatching(&effect).await.unwrap();
+    let job = store(&s)
+        .create(NewJob {
+            effect_id: Some(effect.as_str().to_string()),
+            ..spec(&sid, "shell_exec")
+        })
+        .await
+        .unwrap();
+    assert_eq!(store(&s).recover_on_boot().await.unwrap().len(), 1);
+
+    let late = ToolOutcome {
+        value: json!({"exit_code": -1}),
+        is_error: false,
+        text: "tué".into(),
+        eager: false,
+    };
+    conclude(&s, &job.id, &sid, &effect, Ok(late), false)
+        .await
+        .unwrap();
+
+    let got = store(&s).get(&job.id).await.unwrap().unwrap();
+    assert_eq!(got.state, TaskState::Failed);
+    assert!(
+        got.result.unwrap()["error"]
+            .as_str()
+            .unwrap()
+            .contains("redémarré")
+    );
+    let state: String = s
+        .store
+        .read({
+            let e = effect.as_str().to_string();
+            move |c| {
+                Ok(
+                    c.query_row("SELECT state FROM effects WHERE id = ?1", [&e], |r| {
+                        r.get(0)
+                    })?,
+                )
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(state, "failed", "la fin tardive ne rouvre pas l'effet");
+}
