@@ -101,7 +101,7 @@ if [ "$update" = 1 ]; then
     # Réécrit [coverage.crates] : max(plancher, mesure arrondie à l'inférieur), trié.
     awk -v meas="$tmp/pourcents" '
         BEGIN { while ((getline l < meas) > 0) { split(l, a, " "); m[a[1]] = int(a[2]) } }
-        /^\[/ { if (inside) flush(); inside = ($0 == "[coverage.crates]"); print; next }
+        /^\[/ { if (inside) { flush(); print "" } inside = ($0 == "[coverage.crates]"); print; next }
         inside && /=/ { k = $0; sub(/^[ \t]*"/, "", k); sub(/".*/, "", k)
                         v = $0; sub(/^[^=]*=[ \t]*/, "", v); sub(/[ \t]*#.*/, "", v)
                         cur[k] = v + 0; next }
@@ -114,7 +114,6 @@ if [ "$update" = 1 ]; then
             for (k in cur) keys[++n] = k
             for (i = 2; i <= n; i++) { t = keys[i]; for (j = i - 1; j > 0 && keys[j] > t; j--) keys[j + 1] = keys[j]; keys[j + 1] = t }
             for (i = 1; i <= n; i++) printf "\"%s\" = %d\n", keys[i], cur[keys[i]]
-            print ""
             inside = 0
         }' "$BUDGET" > "$tmp/budget.toml"
     cp "$tmp/budget.toml" "$BUDGET"

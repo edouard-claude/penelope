@@ -202,3 +202,54 @@ required = [
 [scenarios]
 missing = [
 ]
+
+# Couverture de lignes par crate (R9, critère 7 de bascule, §4.5), mesurée par
+# `scripts/coverage-check.sh` (cargo llvm-cov --workspace, filtre par défaut : tests/,
+# tests.rs et *_tests.rs ne comptent pas). Trop long pour la CI : lancé à la main et par
+# switch-check.sh.
+[coverage]
+
+# Relevé de `main` au point de fourche (0.17.62), fixe : les crates socle doivent
+# l'égaler pour la bascule. Les crates sorties du daemon n'ont pas d'équivalent sur main.
+[coverage.main]
+"penelope-cli" = 48.63
+"penelope-context" = 96.28
+"penelope-hitl" = 97.27
+"penelope-kernel" = 92.13
+"penelope-llm" = 91.51
+"penelope-mcp" = 92.88
+"penelope-memory" = 94.67
+"penelope-store" = 91.80
+"penelope-tools" = 94.69
+"penelope-workflow" = 94.66
+
+# Planchers (entiers) : la mesure arrondie à l'inférieur, remontés seulement, par
+# `scripts/coverage-check.sh --update` ; check-budget.sh refuse toute baisse.
+[coverage.crates]
+"penelope-agent" = 93
+"penelope-app" = 87
+"penelope-archtest" = 93
+"penelope-cli" = 50
+"penelope-context" = 96
+"penelope-conversation" = 90
+"penelope-daemon" = 87
+"penelope-dream" = 82
+"penelope-evals" = 87
+"penelope-executor" = 90
+"penelope-gateway-telegram" = 74
+"penelope-hitl" = 97
+"penelope-kernel" = 93
+"penelope-llm" = 93
+"penelope-mcp" = 94
+"penelope-mcp-host" = 80
+"penelope-memory" = 95
+"penelope-observe" = 93
+"penelope-ops" = 78
+"penelope-orchestrator" = 80
+"penelope-platform" = 80
+"penelope-skills" = 92
+"penelope-store" = 95
+"penelope-telegram" = 91
+"penelope-tools" = 95
+"penelope-vault" = 89
+"penelope-workflow" = 96
