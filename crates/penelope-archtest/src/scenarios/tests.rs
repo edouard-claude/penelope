@@ -20,7 +20,10 @@ pub fn all() -> Vec<Command> {
     ]
 }
 
-fn autre() { c("pas_une_commande", "", "", "", ""); }
+#[cfg(test)]
+mod tests {
+    fn autre() { c("pas_une_commande", "", "", "", ""); }
+}
 "#;
 
 const TOOLS: &str = r#"

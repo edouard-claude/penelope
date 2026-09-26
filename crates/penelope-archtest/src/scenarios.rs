@@ -3,9 +3,11 @@
 //!
 //! Les surfaces sont lues dans le code, comme le reste d'archtest, par motifs :
 //! - les commandes Telegram, entrées `c("nom", …)` de `commands::all`
-//!   (`crates/penelope-telegram/src/commands.rs`) ;
-//! - les outils natifs, entrées `spec("nom", …)` des sections du catalogue
-//!   (`crates/penelope-tools/src/spec/*.rs`, hors `tests.rs`) ;
+//!   (`crates/penelope-telegram/src/commands.rs` et `commands/*.rs` s'il est découpé) ;
+//! - les outils natifs, entrées `spec("nom", …)` du catalogue
+//!   (`crates/penelope-tools/src/spec.rs` et ses sections `spec/*.rs`) ;
+//!
+//! chaque fois hors fichiers et modules de tests.
 //! - les méthodes RPC, constantes `pub const X: &str = "nom";` de `api::method`
 //!   (`crates/penelope-kernel/src/api.rs`).
 //!
@@ -26,14 +28,14 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use crate::budget::{BUDGET_FILE, Budget};
-use crate::snapshot::Snapshot;
+use crate::snapshot::{Snapshot, SourceFile, test_module_start};
 
 /// Les scénarios, relatifs à la racine du dépôt.
 pub const SCENARIOS_DIR: &str = "crates/penelope-evals/scenarios";
 /// Catalogue des commandes Telegram.
 pub const COMMANDS_FILE: &str = "crates/penelope-telegram/src/commands.rs";
-/// Sections du catalogue des outils natifs.
-pub const TOOLS_DIR: &str = "crates/penelope-tools/src/spec/";
+/// Catalogue des outils natifs ; ses sections sont sous `spec/`.
+pub const TOOLS_FILE: &str = "crates/penelope-tools/src/spec.rs";
 /// Catalogue des méthodes RPC.
 pub const API_FILE: &str = "crates/penelope-kernel/src/api.rs";
 
@@ -41,14 +43,20 @@ fn regex(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pattern).expect("motif valide"))
 }
 
-/// Les commandes de `commands::all()` : `c("nom", …)` dans le corps de la fonction.
+/// Le code d'un fichier, sans son module de tests inline.
+fn code_part(raw: &str) -> String {
+    match test_module_start(raw) {
+        Some(i) => raw.lines().take(i).collect::<Vec<_>>().join("\n"),
+        None => raw.to_string(),
+    }
+}
+
+/// Les commandes du catalogue : `c("nom", …)`, où que `commands::all` les range (un
+/// découpage de la fonction en sections ne doit pas les faire disparaître).
 pub fn commands_in(raw: &str) -> BTreeSet<String> {
     static C: OnceLock<Regex> = OnceLock::new();
-    let body = raw
-        .split_once("pub fn all()")
-        .map_or("", |(_, rest)| rest.split("\n}\n").next().unwrap_or(rest));
     regex(&C, r#"\bc\(\s*"([a-z0-9_]+)""#)
-        .captures_iter(body)
+        .captures_iter(&code_part(raw))
         .map(|c| format!("/{}", &c[1]))
         .collect()
 }
@@ -57,7 +65,7 @@ pub fn commands_in(raw: &str) -> BTreeSet<String> {
 pub fn tools_in(raw: &str) -> BTreeSet<String> {
     static S: OnceLock<Regex> = OnceLock::new();
     regex(&S, r#"\bspec\(\s*"([a-z0-9_]+)""#)
-        .captures_iter(raw)
+        .captures_iter(&code_part(raw))
         .map(|c| format!("outil:{}", &c[1]))
         .collect()
 }
@@ -77,10 +85,17 @@ pub fn methods_in(raw: &str) -> BTreeSet<String> {
 /// Toutes les surfaces visibles du code.
 pub fn catalog(snap: &Snapshot) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
+    let under = |f: &SourceFile, file: &str| {
+        f.rel == file
+            || (f
+                .rel
+                .starts_with(&format!("{}/", file.trim_end_matches(".rs")))
+                && f.name() != "tests.rs")
+    };
     for f in &snap.files {
-        if f.rel == COMMANDS_FILE {
+        if under(f, COMMANDS_FILE) {
             out.extend(commands_in(&f.raw));
-        } else if f.rel.starts_with(TOOLS_DIR) && f.name() != "tests.rs" {
+        } else if under(f, TOOLS_FILE) {
             out.extend(tools_in(&f.raw));
         } else if f.rel == API_FILE {
             out.extend(methods_in(&f.raw));

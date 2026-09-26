@@ -43,11 +43,11 @@ base=$(git rev-parse --verify --quiet "$base^{commit}") || {
     echo "check-budget : base « ${1:-$base} » introuvable" >&2; exit 2; }
 short=$(git rev-parse --short "$base")
 
-# R11 : les catalogues de crates/penelope-archtest/src/scenarios.rs (COMMANDS_FILE,
-# TOOLS_DIR, API_FILE), plus spec.rs qui les assemble ; les fichiers de tests n'en sont pas.
+# R11 : les catalogues que lit crates/penelope-archtest/src/scenarios.rs (COMMANDS_FILE,
+# TOOLS_FILE et leurs sous-modules, API_FILE) ; les fichiers de tests n'en sont pas.
 r11=0
 catalogs=$(git diff --name-only "$base" HEAD -- \
-        crates/penelope-telegram/src/commands.rs \
+        crates/penelope-telegram/src/commands.rs crates/penelope-telegram/src/commands \
         crates/penelope-tools/src/spec.rs crates/penelope-tools/src/spec \
         crates/penelope-kernel/src/api.rs \
     | grep -v '/tests\.rs$' || true)
