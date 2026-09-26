@@ -72,7 +72,7 @@ impl Harness<'_> {
             }
             _ => anyhow::bail!("`telegram` : `text` ou `click`, l'un des deux"),
         };
-        let g = TelegramGateway::with_transport(d.clone(), self.telegram.transport.clone());
+        let g = TelegramGateway::with_transport(d.core.clone(), self.telegram.transport.clone());
         let (messenger, delivery) = (d.hooks.messenger.get(), d.hooks.delivery.get());
         d.hooks.messenger.set(Some(g.clone() as Arc<_>));
         d.hooks.delivery.set(Some(g.clone() as Arc<_>));
