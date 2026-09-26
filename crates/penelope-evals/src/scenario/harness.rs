@@ -249,6 +249,7 @@ impl Harness<'_> {
                     bind,
                     pick,
                     mask,
+                    lines,
                     error,
                     during,
                 } => {
@@ -258,6 +259,7 @@ impl Harness<'_> {
                         bind: bind.as_deref(),
                         pick,
                         mask,
+                        lines,
                         error: *error,
                         during: during.as_deref(),
                     })

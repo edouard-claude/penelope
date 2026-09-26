@@ -9,7 +9,7 @@ l'intention annulée."""
 pin_model = "main"
 
 [[files]]
-vault = true
+root = "vault"
 path = "memoire.md"
 content = """---
 type: memoire

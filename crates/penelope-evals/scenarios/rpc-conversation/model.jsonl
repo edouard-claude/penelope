@@ -1,0 +1,4 @@
+{"text": "Noté : migration PROJ-7 ce soir."}
+{"text": "Entendu, schéma dans db/schema.sql."}
+{"text": "PostgreSQL 17, c'est noté."}
+{"text": "{\"objectif\": \"préparer la migration PROJ-7\", \"contraintes_et_preferences\": \"\", \"fait\": \"schéma exporté\", \"en_cours\": \"\", \"bloque\": \"\", \"decisions_cles\": \"PostgreSQL 17\", \"fichiers_et_ressources\": \"db/schema.sql\", \"prochaines_etapes\": \"migrer ce soir\", \"contexte_critique\": \"\"}"}

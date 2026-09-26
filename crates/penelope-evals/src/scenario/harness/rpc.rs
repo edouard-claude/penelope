@@ -37,6 +37,7 @@ pub(super) struct Call<'s> {
     pub bind: Option<&'s str>,
     pub pick: &'s [String],
     pub mask: &'s [String],
+    pub lines: &'s [String],
     pub error: bool,
     pub during: Option<&'s str>,
 }
@@ -96,7 +97,12 @@ impl Harness<'_> {
         }
         let mut out = json!({});
         if let Some(result) = reply.result {
-            out["result"] = project(result, c.pick, c.mask);
+            let keep = c
+                .lines
+                .iter()
+                .map(|l| regex::Regex::new(l).with_context(|| format!("motif `{l}`")))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            out["result"] = project(filter_lines(result, &keep), c.pick, c.mask);
         }
         if let Some(error) = reply.error {
             out["error"] = error;
@@ -234,7 +240,15 @@ async fn stream(rpc: &Rpc, req: RpcRequest, close: &Notify) -> Reply {
         }
         json!(kinds)
     } else {
-        json!(notes)
+        // `done` n'arrive que si l'issue du tour gagne la course contre le dernier
+        // fragment (`handle_streaming` saute `Finished` dans sa boucle, pas dans la
+        // vidange finale) : la réponse finale porte déjà l'issue.
+        json!(
+            notes
+                .into_iter()
+                .filter(|n| n["type"] != "done")
+                .collect::<Vec<_>>()
+        )
     };
     let last = lines.iter().rev().find(|l| l.get("id").is_some());
     Reply {
@@ -246,6 +260,29 @@ async fn stream(rpc: &Rpc, req: RpcRequest, close: &Notify) -> Reply {
                 .map(|e| json!({"code": e["code"], "message": e["message"]})),
         },
         events: Some(events),
+    }
+}
+
+/// Chaque texte de la réponse réduit à ses lignes qui satisfont un des motifs ; sans
+/// motif, la réponse telle quelle.
+fn filter_lines(v: Value, keep: &[regex::Regex]) -> Value {
+    if keep.is_empty() {
+        return v;
+    }
+    match v {
+        Value::String(s) => Value::String(
+            s.lines()
+                .filter(|l| keep.iter().any(|r| r.is_match(l)))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Value::Array(a) => Value::Array(a.into_iter().map(|x| filter_lines(x, keep)).collect()),
+        Value::Object(o) => Value::Object(
+            o.into_iter()
+                .map(|(k, x)| (k, filter_lines(x, keep)))
+                .collect(),
+        ),
+        other => other,
     }
 }
 
@@ -378,6 +415,17 @@ mod tests {
             picked,
             json!({"/servers/*/name": ["a", "b"], "/absent": null})
         );
+    }
+
+    #[test]
+    fn only_the_matching_lines_of_a_text_are_kept() {
+        let keep = [regex::Regex::new("^# TYPE penelope_approvals").unwrap()];
+        let v = json!({"text": "# TYPE penelope_turns_total counter\n# TYPE penelope_approvals_pending gauge\npenelope_approvals_pending 0"});
+        assert_eq!(
+            filter_lines(v, &keep),
+            json!({"text": "# TYPE penelope_approvals_pending gauge"})
+        );
+        assert_eq!(filter_lines(json!("x"), &[]), json!("x"));
     }
 
     #[test]

@@ -67,6 +67,11 @@ scenario_cases! {
     rpc_workflows => "rpc-workflows",
     rpc_memoire => "rpc-memoire",
     rpc_coffre_et_accueil => "rpc-coffre-et-accueil",
+    rpc_conversation => "rpc-conversation",
+    rpc_mcp_et_import => "rpc-mcp-et-import",
+    rpc_skills => "rpc-skills",
+    rpc_exploitation => "rpc-exploitation",
+    rpc_arret => "rpc-arret",
 }
 
 #[test]

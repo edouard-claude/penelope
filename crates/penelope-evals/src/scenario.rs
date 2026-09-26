@@ -99,9 +99,19 @@ pub struct SeedFile {
     /// `content` répété : un gros fichier sans le stocker dans le dépôt.
     #[serde(default = "one")]
     pub repeat: usize,
-    /// Semé dans le vault de mémoire (`memory.vault_path`) plutôt que dans le workspace.
+    /// Où semer : le workspace par défaut, `vault` (le vault de mémoire,
+    /// `memory.vault_path`) ou `skills` (le répertoire des skills).
     #[serde(default)]
-    pub vault: bool,
+    pub root: SeedRoot,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SeedRoot {
+    #[default]
+    Workspace,
+    Vault,
+    Skills,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -181,6 +191,10 @@ pub enum Step {
         /// Pointeurs dont la valeur est masquée (`{{masked}}`), appliqués avant `pick`.
         #[serde(default)]
         mask: Vec<String>,
+        /// Motifs (regex) : un texte de la réponse ne garde que ses lignes qui en
+        /// satisfont un (`metrics` : les jauges calculées à la demande).
+        #[serde(default)]
+        lines: Vec<String>,
         /// L'appel doit échouer ; sans ce drapeau, une erreur fait échouer le scénario.
         #[serde(default)]
         error: bool,

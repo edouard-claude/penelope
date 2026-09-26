@@ -1,0 +1,79 @@
+name = "rpc-conversation"
+description = """La conversation par la socket locale, comme `penelope chat` et `penelope tail` :
+un message en flux (`chat.stream`, chaque fragment puis l'issue), un message joué pendant
+qu'un `tail` écoute (les types d'événements vus), un troisième échange ; la session est
+compactée (`session.compact`, le résumeur scripté), bifurquée (`session.fork`), puis
+remontée d'un tour (`session.rewind`) ; l'export, ce que le modèle avait sous les yeux au
+dernier appel (`audit.show`), les contrôles du journal (`audit.verify`,
+`history.verify`, `history.reindex`), la reconstruction des projections
+(`store.rebuild`) et l'usage par session. Le monde après : la session d'origine remontée,
+la bifurcation et l'archive du retour en arrière, le résumé publié."""
+pin_model = "main"
+
+[[steps]]
+kind = "rpc"
+method = "chat.stream"
+params = { text = "note : la migration PROJ-7 part ce soir" }
+
+[[steps]]
+kind = "rpc"
+method = "tail"
+during = "le schéma est exporté dans db/schema.sql"
+
+[[steps]]
+kind = "message"
+text = "on garde PostgreSQL 17"
+
+[[steps]]
+kind = "rpc"
+method = "session.compact"
+params = { session = "$session" }
+
+[[steps]]
+kind = "rpc"
+method = "session.fork"
+params = { session = "$session", title = "Variante MySQL" }
+
+[[steps]]
+kind = "rpc"
+method = "session.rewind"
+params = { session = "$session", turns = 1 }
+
+[[steps]]
+kind = "rpc"
+method = "export"
+params = { what = "session", id = "$session" }
+
+[[steps]]
+kind = "rpc"
+method = "audit.show"
+params = { session = "$session" }
+# Le prompt système rendu est déjà dans surface.jsonl : ici, ce que l'audit en dit.
+pick = ["/tour", "/appels", "/prompt_systeme/exact", "/prompt_systeme/appels", "/messages", "/exact"]
+
+[[steps]]
+kind = "rpc"
+method = "audit.verify"
+
+[[steps]]
+kind = "rpc"
+method = "history.verify"
+
+[[steps]]
+kind = "rpc"
+method = "history.reindex"
+
+[[steps]]
+kind = "rpc"
+method = "store.rebuild"
+
+[[steps]]
+kind = "rpc"
+method = "usage"
+params = { by = "session", limit = 5 }
+
+[[steps]]
+kind = "rpc"
+method = "usage"
+params = { by = "planète" }
+error = true

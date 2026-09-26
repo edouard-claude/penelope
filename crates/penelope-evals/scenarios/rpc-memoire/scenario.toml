@@ -9,7 +9,7 @@ de rêve à blanc. Le monde après : l'index, l'entrée oubliée marquée retir�
 pin_model = "main"
 
 [[files]]
-vault = true
+root = "vault"
 path = "memoire.md"
 content = """---
 type: memoire
@@ -21,7 +21,7 @@ type: memoire
 """
 
 [[files]]
-vault = true
+root = "vault"
 path = "clients/martin.md"
 content = """---
 type: client

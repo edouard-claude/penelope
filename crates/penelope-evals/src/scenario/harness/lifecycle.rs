@@ -3,7 +3,7 @@
 //! fermeture attendue plutôt que supposée (références relâchées, checkpoint de l'écrivain
 //! SQLite fini) ; nouvel essai borné quand la base est encore verrouillée.
 
-use super::super::{Mode, ScriptLine};
+use super::super::{Mode, ScriptLine, SeedRoot};
 use super::{
     Gateway, HEARTBEAT, Harness, Life, RETRY_STEP, SHUTDOWN_WAIT, descriptor, lock, outcome_json,
     workspace_of,
@@ -135,8 +135,14 @@ impl Harness<'_> {
     fn seed_files(&self, services: &Services) -> anyhow::Result<()> {
         let workspace = workspace_of(services);
         let vault = penelope_app::helpers::vault_dir(services);
+        let skills = services.platform.dirs.skills();
         for f in &self.spec.files {
-            let path = if f.vault { &vault } else { &workspace }.join(&f.path);
+            let root = match f.root {
+                SeedRoot::Workspace => &workspace,
+                SeedRoot::Vault => &vault,
+                SeedRoot::Skills => &skills,
+            };
+            let path = root.join(&f.path);
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
             }

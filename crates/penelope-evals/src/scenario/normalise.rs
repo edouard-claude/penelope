@@ -38,7 +38,16 @@ const HASH_KEYS: &[&str] = &[
 ];
 
 /// Clés mesurées sur l'horloge murale, jamais reproductibles.
-const DURATION_KEYS: &[&str] = &["duration_ms", "elapsed_ms", "latency_ms"];
+const DURATION_KEYS: &[&str] = &[
+    "duration_ms",
+    "elapsed_ms",
+    "latency_ms",
+    // Réponses RPC : essai d'un serveur MCP, latences mesurées, instantané de la base.
+    "ms",
+    "p50_ms",
+    "p95_ms",
+    "snapshot_ms",
+];
 
 /// Clés comptées sur un texte qui peut contenir la racine temporaire.
 const SIZE_KEYS: &[&str] = &["tokens_est"];
