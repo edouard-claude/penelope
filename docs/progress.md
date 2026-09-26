@@ -13,6 +13,50 @@ bump par lot, jamais de tag ni de release. Les sections `### 0.17.x` restent dan
 ci-dessous et y arrivent par les fusions de `main`. La charte et les spécifications sont
 dans `design/v1/`.
 
+### 1.0.0-alpha.17
+
+**Le journal est la seule source de la conversation** (décision 0017) : plus aucune
+écriture de l'historique sans son événement, la clé `history.source` est retirée (une
+ancienne configuration qui la porte se charge avec un avertissement), et une règle
+d'architecture interdit d'écrire dans les tables de cache hors de `penelope-context`. Un
+`/rewind` qui remonte dans l'historique scellé d'une ancienne session masque les lignes au
+lieu de les effacer, et le journal reste cohérent. C'est la version candidate à la bascule
+vers `main`.
+
+#### Journal : la seule source de la conversation (#208, T16, T19)
+
+- **Plus aucune écriture de la conversation sans son événement** : messages, contextes
+  figés, résumés, fork et retour arrière entrent au journal d'abord, et les tables
+  `messages`, `message_context`, `lcm_nodes`, `prompt_snapshots` n'en sont que les
+  caches, écrits par le moteur de contexte seul (un test d'architecture l'interdit
+  ailleurs). Un `/fork` et l'archive d'un `/rewind` sont refaits depuis le journal, lignes
+  scellées comprises.
+- **La clé `history.source` est retirée** : la conversation se relit toujours depuis le
+  journal. Un fichier de configuration qui la porte encore se charge, avec un
+  avertissement ; la ligne peut être effacée.
+- Les clés de travail `turn.recorded.*` et `prompt.prefix.*` disparaissent : le message
+  d'un tour déjà écrit et le préfixe retenu se lisent dans le journal. La rétention efface
+  celles qui restent. Un projet fixé à la main entre au journal (`session.project`).
+- Décision [0017](decisions/0017-journal-source-unique.md) : le journal d'événements est
+  la source unique de la conversation.
+
+#### Journal : un retour arrière dans l'historique d'avant la mise à jour (#208)
+
+- **Un `/rewind` sur une ancienne session ne casse plus sa lecture** : revenir de
+  quelques échanges juste après la mise à jour, avant tout message nouveau, retirait des
+  messages que le scellement de l'historique compte ; la session se relisait alors dans
+  ses caches, avec une erreur au journal, et `penelope history verify` la signalait. Les
+  messages scellés défaits restent en base, masqués : la conversation vue par le modèle
+  ne change pas, l'empreinte du scellement se vérifie de nouveau, et l'archive du retour
+  arrière garde ce qu'elle gardait.
+
+#### Corrections d'intégration (#208)
+
+- Les lignes masquées par un rewind (`sealed = 2`) sont ignorées aussi par le titre de
+  repli d'une session, la numérotation de `self_status` et l'audit du cache.
+- Le Trousseau : `security` reçoit une entrée vide pour lire et effacer un item ; un test
+  bloquait indéfiniment quand l'entrée standard restait ouverte.
+
 ### 1.0.0-alpha.16
 
 **Le juge d'approbation (#203)** : la mesure préalable sur l'instance réelle (112 cartes sans
