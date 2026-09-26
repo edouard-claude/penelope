@@ -310,29 +310,27 @@ pub(super) async fn shut_down(life: Life, name: &str) {
     }
     let db = services.store.path().to_path_buf();
     let deadline = Instant::now() + SHUTDOWN_WAIT;
+    // D'abord le daemon, dont seule notre copie doit rester ; puis les services, dont
+    // seule la nôtre doit rester une fois le daemon lâché. Compter les copies des
+    // services tant que le daemon vit supposait qu'il n'en tient qu'une : le cœur et ses
+    // `Providers` en tiennent deux, et chaque vie attendait `SHUTDOWN_WAIT` pour rien.
     let mut polls = 0u32;
-    loop {
-        for _ in 0..4 {
-            tokio::task::yield_now().await;
-        }
-        // Une copie du daemon (la nôtre) et deux des services (la nôtre, celle du daemon).
-        let (d, s) = (Arc::strong_count(&daemon), Arc::strong_count(&services));
-        if d == 1 && s == 2 {
-            break;
-        }
-        if Instant::now() >= deadline {
-            eprintln!(
-                "scénario {name} : des références survivent à la vie ({} sur le daemon, {} sur \
-                 les services) ; fermeture sans les attendre",
-                d - 1,
-                s - 2
-            );
-            break;
-        }
-        polls += 1;
-        tokio::time::sleep(RETRY_STEP).await;
-    }
+    let daemon_left = wait_until(&mut polls, deadline, || Arc::strong_count(&daemon) == 1).await;
     drop(daemon);
+    let services_left =
+        wait_until(&mut polls, deadline, || Arc::strong_count(&services) == 1).await;
+    if !(daemon_left && services_left) {
+        eprintln!(
+            "scénario {name} : des références survivent à la vie ({} sur les services, daemon \
+             {}) ; fermeture sans les attendre",
+            Arc::strong_count(&services) - 1,
+            if daemon_left {
+                "relâché"
+            } else {
+                "encore tenu"
+            }
+        );
+    }
     drop(services);
     let checks = wait_for_wal(&db, deadline).await;
     // Une attente ou deux sont l'ordinaire du checkpoint ; au-delà, c'est à lire.
@@ -341,6 +339,24 @@ pub(super) async fn shut_down(life: Life, name: &str) {
             "scénario {name} : fermeture de la vie attendue ({polls} attente(s) de références, \
              {checks} attente(s) du checkpoint)"
         );
+    }
+}
+
+/// Attend `done`, en rendant la main à l'ordonnanceur entre deux regards : les tâches
+/// encore vivantes relâchent leurs copies à leur prochain passage. Faux à l'échéance.
+async fn wait_until(polls: &mut u32, deadline: Instant, done: impl Fn() -> bool) -> bool {
+    loop {
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        if done() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        *polls += 1;
+        tokio::time::sleep(RETRY_STEP).await;
     }
 }
 
