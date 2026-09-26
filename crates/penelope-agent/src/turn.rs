@@ -7,7 +7,6 @@ use penelope_kernel::journal::CallRecord;
 
 impl AgentLoop {
     /// Les itérations d'un tour, entre ses bornes (`turn_log`).
-    #[allow(clippy::too_many_lines)] // gel 0.17 : boucle d'agent, découpée au lot G (agent/loop.rs)
     pub(super) async fn run_steps(
         &self,
         spec: &TurnSpec,
@@ -149,54 +148,7 @@ impl AgentLoop {
             {
                 tracing::warn!(error = %e, "instantané du prompt non enregistré");
             }
-            let miss = miss_cause(
-                previous.as_ref(),
-                &Observed {
-                    fingerprint: &fingerprint,
-                    model: &response.model,
-                    upstream: response.upstream.as_deref(),
-                    prompt: response.usage.prompt,
-                    cached: response.usage.cached,
-                    now_ms: s.clock.now_ms(),
-                },
-            );
-            // « Le préfixe a changé » ne suffit pas : dire laquelle des tuiles a bougé.
-            let miss = match miss {
-                Some("prefixe") => Some(
-                    s.snapshots
-                        .prefix_cause(
-                            previous.as_ref().and_then(|p| p.system_hash.as_deref()),
-                            &fingerprint.system_hash,
-                        )
-                        .await,
-                ),
-                other => other.map(String::from),
-            };
-            s.budget
-                .record(penelope_kernel::budget::UsageRecord {
-                    msg_count: Some(fingerprint.chain.len() as i64),
-                    request_hash: fingerprint.request_hash(),
-                    system_hash: Some(fingerprint.system_hash.clone()),
-                    tools_hash: Some(fingerprint.tools_hash.clone()),
-                    miss_cause: miss,
-                    session_id: Some(spec.session_id.clone()),
-                    run_id: spec.run_id.clone(),
-                    turn_id: spec.turn_id.clone(),
-                    model: response.model.clone(),
-                    provider: response.provider.clone(),
-                    role: Some("chat".into()),
-                    generation_id: (!response.id.is_empty()).then(|| response.id.clone()),
-                    upstream: response.upstream.clone(),
-                    finish: Some(format!("{:?}", response.finish).to_lowercase()),
-                    prompt: response.usage.prompt,
-                    completion: response.usage.completion,
-                    cached: response.usage.cached,
-                    cache_write: response.usage.cache_write,
-                    reasoning: response.usage.reasoning,
-                    cost_usd: response.cost_usd,
-                    estimated: response.cost_estimated,
-                    ..Default::default()
-                })
+            self.record_usage(spec, previous.as_ref(), &fingerprint, &response)
                 .await?;
 
             // Ce que l'appel dit de lui-même, pour le journal (T5).
@@ -231,91 +183,14 @@ impl AgentLoop {
 
             // Ni texte ni appel d'outil : on ne livre jamais une réponse vide en silence.
             if response.message.tool_calls.is_empty() && response.message.text().trim().is_empty() {
-                // Budget de sortie mangé par le raisonnement : relancer ne changerait rien.
-                let reasoning_ate_budget = response.finish == FinishReason::Length
-                    && response.usage.reasoning > 0
-                    && response
-                        .usage
-                        .completion
-                        .saturating_sub(response.usage.reasoning)
-                        <= 2;
-                tracing::warn!(
-                    session = %spec.session_id,
-                    model = %response.model,
-                    upstream = ?response.upstream,
-                    finish = ?response.finish,
-                    native_finish = ?response.native_finish,
-                    prompt_tokens = response.usage.prompt,
-                    completion_tokens = response.usage.completion,
-                    reasoning_tokens = response.usage.reasoning,
-                    reasoning_chars = response.reasoning.chars().count(),
-                    retried = empty_retry,
-                    "réponse vide du modèle"
-                );
-                s.events
-                    .append(
-                        TurnEventKind::EmptyAnswer
-                            .draft(json!({
-                                "model": response.model,
-                                "upstream": response.upstream,
-                                "generation_id": response.id,
-                                "finish": format!("{:?}", response.finish),
-                                "native_finish": response.native_finish,
-                                "completion_tokens": response.usage.completion,
-                                "reasoning_tokens": response.usage.reasoning,
-                                "retried": empty_retry,
-                            }))
-                            .session(&spec.session_id),
-                    )
-                    .await?;
-                let retry = !empty_retry && !reasoning_ate_budget;
-                attempts
-                    .record(
-                        s,
-                        spec,
-                        Attempt {
-                            retry_prompt: retry.then(|| EMPTY_RETRY_PROMPT.to_string()),
-                            ..of_response(AttemptCause::EmptyAnswer, &response)
-                        },
-                    )
-                    .await;
-                if retry {
-                    empty_retry = true;
-                    attempts.set_retry_prompt(Some(EMPTY_RETRY_PROMPT));
-                    continue;
+                if let Some(failed) = self
+                    .empty_answer(spec, &response, empty_retry, &attempts)
+                    .await?
+                {
+                    return Ok(failed);
                 }
-                let upstream = response
-                    .upstream
-                    .as_deref()
-                    .map(|u| format!(" chez {u}"))
-                    .unwrap_or_default();
-                let cause = if reasoning_ate_budget {
-                    format!(
-                        "le raisonnement a consommé tout le budget de sortie ({} tokens sur {})",
-                        response.usage.reasoning, response.usage.completion
-                    )
-                } else {
-                    format!(
-                        "aucun texte, deux fois (fin : {:?}{} ; {} tokens produits dont {} de \
-                         raisonnement)",
-                        response.finish,
-                        response
-                            .native_finish
-                            .as_deref()
-                            .map(|n| format!(", amont : {n}"))
-                            .unwrap_or_default(),
-                        response.usage.completion,
-                        response.usage.reasoning
-                    )
-                };
-                return Ok(TurnOutcome::Failed {
-                    error: format!(
-                        "le modèle `{}`{upstream} n'a pas répondu : {cause}. Essayer un autre \
-                         modèle (`/model main openrouter:<identifiant>`) ; `/models` montre le \
-                         routage en vigueur",
-                        response.model
-                    ),
-                });
+                empty_retry = true;
+                continue;
             }
 
             conv.record_as(&response.message, false, &prov).await?;
@@ -350,5 +225,162 @@ impl AgentLoop {
         Ok(TurnOutcome::Failed {
             error: format!("{CALLS_EXHAUSTED} en {} itérations", self.max_iterations),
         })
+    }
+
+    /// L'appel entre au budget, avec son empreinte et la cause d'un raté de cache.
+    async fn record_usage(
+        &self,
+        spec: &TurnSpec,
+        previous: Option<&penelope_kernel::budget::PreviousCall>,
+        fingerprint: &Fingerprint,
+        response: &penelope_llm::types::ChatResponse,
+    ) -> anyhow::Result<()> {
+        let s = &self.services;
+        let miss = miss_cause(
+            previous,
+            &Observed {
+                fingerprint,
+                model: &response.model,
+                upstream: response.upstream.as_deref(),
+                prompt: response.usage.prompt,
+                cached: response.usage.cached,
+                now_ms: s.clock.now_ms(),
+            },
+        );
+        // « Le préfixe a changé » ne suffit pas : dire laquelle des tuiles a bougé.
+        let miss = match miss {
+            Some("prefixe") => Some(
+                s.snapshots
+                    .prefix_cause(
+                        previous.and_then(|p| p.system_hash.as_deref()),
+                        &fingerprint.system_hash,
+                    )
+                    .await,
+            ),
+            other => other.map(String::from),
+        };
+        s.budget
+            .record(penelope_kernel::budget::UsageRecord {
+                msg_count: Some(fingerprint.chain.len() as i64),
+                request_hash: fingerprint.request_hash(),
+                system_hash: Some(fingerprint.system_hash.clone()),
+                tools_hash: Some(fingerprint.tools_hash.clone()),
+                miss_cause: miss,
+                session_id: Some(spec.session_id.clone()),
+                run_id: spec.run_id.clone(),
+                turn_id: spec.turn_id.clone(),
+                model: response.model.clone(),
+                provider: response.provider.clone(),
+                role: Some("chat".into()),
+                generation_id: (!response.id.is_empty()).then(|| response.id.clone()),
+                upstream: response.upstream.clone(),
+                finish: Some(format!("{:?}", response.finish).to_lowercase()),
+                prompt: response.usage.prompt,
+                completion: response.usage.completion,
+                cached: response.usage.cached,
+                cache_write: response.usage.cache_write,
+                reasoning: response.usage.reasoning,
+                cost_usd: response.cost_usd,
+                estimated: response.cost_estimated,
+                ..Default::default()
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Ni texte ni appel d'outil : une relance au plus, puis une erreur qui dit pourquoi.
+    /// `None` : relancer.
+    async fn empty_answer(
+        &self,
+        spec: &TurnSpec,
+        response: &penelope_llm::types::ChatResponse,
+        empty_retry: bool,
+        attempts: &Attempts,
+    ) -> anyhow::Result<Option<TurnOutcome>> {
+        let s = &self.services;
+        // Budget de sortie mangé par le raisonnement : relancer ne changerait rien.
+        let reasoning_ate_budget = response.finish == FinishReason::Length
+            && response.usage.reasoning > 0
+            && response
+                .usage
+                .completion
+                .saturating_sub(response.usage.reasoning)
+                <= 2;
+        tracing::warn!(
+            session = %spec.session_id,
+            model = %response.model,
+            upstream = ?response.upstream,
+            finish = ?response.finish,
+            native_finish = ?response.native_finish,
+            prompt_tokens = response.usage.prompt,
+            completion_tokens = response.usage.completion,
+            reasoning_tokens = response.usage.reasoning,
+            reasoning_chars = response.reasoning.chars().count(),
+            retried = empty_retry,
+            "réponse vide du modèle"
+        );
+        s.events
+            .append(
+                TurnEventKind::EmptyAnswer
+                    .draft(json!({
+                        "model": response.model,
+                        "upstream": response.upstream,
+                        "generation_id": response.id,
+                        "finish": format!("{:?}", response.finish),
+                        "native_finish": response.native_finish,
+                        "completion_tokens": response.usage.completion,
+                        "reasoning_tokens": response.usage.reasoning,
+                        "retried": empty_retry,
+                    }))
+                    .session(&spec.session_id),
+            )
+            .await?;
+        let retry = !empty_retry && !reasoning_ate_budget;
+        attempts
+            .record(
+                s,
+                spec,
+                Attempt {
+                    retry_prompt: retry.then(|| EMPTY_RETRY_PROMPT.to_string()),
+                    ..of_response(AttemptCause::EmptyAnswer, response)
+                },
+            )
+            .await;
+        if retry {
+            attempts.set_retry_prompt(Some(EMPTY_RETRY_PROMPT));
+            return Ok(None);
+        }
+        let upstream = response
+            .upstream
+            .as_deref()
+            .map(|u| format!(" chez {u}"))
+            .unwrap_or_default();
+        let cause = if reasoning_ate_budget {
+            format!(
+                "le raisonnement a consommé tout le budget de sortie ({} tokens sur {})",
+                response.usage.reasoning, response.usage.completion
+            )
+        } else {
+            format!(
+                "aucun texte, deux fois (fin : {:?}{} ; {} tokens produits dont {} de \
+                 raisonnement)",
+                response.finish,
+                response
+                    .native_finish
+                    .as_deref()
+                    .map(|n| format!(", amont : {n}"))
+                    .unwrap_or_default(),
+                response.usage.completion,
+                response.usage.reasoning
+            )
+        };
+        Ok(Some(TurnOutcome::Failed {
+            error: format!(
+                "le modèle `{}`{upstream} n'a pas répondu : {cause}. Essayer un autre \
+                 modèle (`/model main openrouter:<identifiant>`) ; `/models` montre le \
+                 routage en vigueur",
+                response.model
+            ),
+        }))
     }
 }
