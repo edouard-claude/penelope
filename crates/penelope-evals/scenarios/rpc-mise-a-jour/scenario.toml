@@ -1,24 +1,25 @@
 name = "rpc-mise-a-jour"
-description = """La mise à jour du binaire, comme `penelope upgrade`, contre une source de releases
-locale (`upgrade.base_url` vers le faux serveur `[[http]]`, 127.0.0.1), sans que le
-binaire de la machine puisse être remplacé : le harnais refuse `switch`, et n'admet une
-installation ou un retour arrière que depuis un binaire de compilation, que la méthode
-refuse de remplacer avant tout téléchargement. La source ne publie qu'un brouillon, une
-pré-release (`v1.0.0-alpha.99`, #212) et un tag illisible : la vérification n'en retient
-aucune (« aucune release publiée »). Installer (dernière version ou tag explicite) et
-revenir en arrière sont refusés sur un binaire de compilation, avec la sortie
-(`--switch`, `make deploy`). Le monde après : une seule requête reçue, la liste des
-releases ; aucun `upgrade.installed`, aucun redémarrage demandé. Le chemin « une mise à
-jour existe » n'est pas jouable à l'identique sous Linux : `check` exige l'archive de
-l'OS (voir design/v1/notes/s-derniers.md)."""
+description = """La mise à jour du binaire, comme `penelope upgrade`, contre des sources de releases
+locales (`upgrade.base_url` vers le faux serveur `[[http]]`, 127.0.0.1, changée par
+`config.set` entre deux vérifications), sans que le binaire de la machine puisse être
+remplacé : le harnais refuse `switch`, et n'admet une installation ou un retour arrière
+que depuis un binaire de compilation, que la méthode refuse de remplacer avant tout
+téléchargement. Trois sources : la première ne publie qu'un brouillon, une pré-release
+(#212) et un tag illisible, rien n'est retenu ; la deuxième une 0.17, plus basse que la
+version qui tourne : à jour ; la troisième une `v9.9.9` sans archive pour l'OS : une
+mise à jour existe, sur Linux comme sur macOS (`check` n'exige plus l'archive).
+Installer (dernière version ou tag explicite, `force`) et revenir en arrière sont
+refusés sur un binaire de compilation, avec la sortie (`--switch`, `make deploy`). Le
+monde après : trois requêtes reçues, les trois listes ; aucun `upgrade.installed`,
+aucun redémarrage demandé."""
 pin_model = "main"
 masks = ["\\S*/target/(debug|release)/deps/scenarios-[0-9a-f]+"]
 
 [config]
-"upgrade.base_url" = "{{http}}/releases"
+"upgrade.base_url" = "{{http}}/vides"
 
 [[http]]
-path = "/releases"
+path = "/vides"
 method = "GET"
 body = """[
   {"tag_name": "v9.9.9", "draft": true, "assets": []},
@@ -26,11 +27,48 @@ body = """[
   {"tag_name": "nightly", "assets": []}
 ]"""
 
+[[http]]
+path = "/anciennes"
+method = "GET"
+body = """[
+  {"tag_name": "v1.0.0-alpha.99", "prerelease": true, "assets": []},
+  {"tag_name": "v0.17.60", "prerelease": true, "assets": []},
+  {"tag_name": "v0.17.59", "prerelease": true, "assets": []}
+]"""
+
+[[http]]
+path = "/nouvelle"
+method = "GET"
+body = """[
+  {"tag_name": "v9.9.9", "prerelease": false, "assets": []},
+  {"tag_name": "v0.17.60", "prerelease": true, "assets": []}
+]"""
+
 [[steps]]
 kind = "rpc"
 method = "upgrade"
 params = { check = true }
 error = true
+
+[[steps]]
+kind = "rpc"
+method = "config.set"
+params = { path = "upgrade.base_url", value = "{{http}}/anciennes" }
+
+[[steps]]
+kind = "rpc"
+method = "upgrade"
+params = { check = true }
+
+[[steps]]
+kind = "rpc"
+method = "config.set"
+params = { path = "upgrade.base_url", value = "{{http}}/nouvelle" }
+
+[[steps]]
+kind = "rpc"
+method = "upgrade"
+params = { check = true }
 
 [[steps]]
 kind = "rpc"

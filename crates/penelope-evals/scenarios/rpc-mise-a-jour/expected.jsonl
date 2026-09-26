@@ -1,9 +1,15 @@
 {"type":"outcome","step":1,"input":"rpc : upgrade","error":{"code":-32603,"message":"aucune release publiée"}}
-{"type":"outcome","step":2,"input":"rpc : upgrade","error":{"code":-32603,"message":"{{masked}} est un binaire de compilation : `penelope upgrade --switch` (ou `/upgrade install` sur Telegram) bascule vers les releases au chemin stable, `make deploy` y installe une compilation"}}
-{"type":"outcome","step":3,"input":"rpc : upgrade","error":{"code":-32603,"message":"{{masked}} est un binaire de compilation : `penelope upgrade --switch` (ou `/upgrade install` sur Telegram) bascule vers les releases au chemin stable, `make deploy` y installe une compilation"}}
-{"type":"outcome","step":4,"input":"rpc : upgrade","error":{"code":-32603,"message":"{{masked}} est un binaire de compilation : `penelope upgrade --switch` (ou `/upgrade install` sur Telegram) bascule vers les releases au chemin stable, `make deploy` y installe une compilation"}}
+{"type":"outcome","step":2,"input":"rpc : config.set","result":{"generation":3,"warnings":[]}}
+{"type":"outcome","step":3,"input":"rpc : upgrade","result":{"current":"{{version}}","latest":"0.17.60","tag":"v0.17.60","up_to_date":true,"source_install":true}}
+{"type":"outcome","step":4,"input":"rpc : config.set","result":{"generation":4,"warnings":[]}}
+{"type":"outcome","step":5,"input":"rpc : upgrade","result":{"current":"{{version}}","latest":"9.9.9","tag":"v9.9.9","up_to_date":false,"source_install":true}}
+{"type":"outcome","step":6,"input":"rpc : upgrade","error":{"code":-32603,"message":"{{masked}} est un binaire de compilation : `penelope upgrade --switch` (ou `/upgrade install` sur Telegram) bascule vers les releases au chemin stable, `make deploy` y installe une compilation"}}
+{"type":"outcome","step":7,"input":"rpc : upgrade","error":{"code":-32603,"message":"{{masked}} est un binaire de compilation : `penelope upgrade --switch` (ou `/upgrade install` sur Telegram) bascule vers les releases au chemin stable, `make deploy` y installe une compilation"}}
+{"type":"outcome","step":8,"input":"rpc : upgrade","error":{"code":-32603,"message":"{{masked}} est un binaire de compilation : `penelope upgrade --switch` (ou `/upgrade install` sur Telegram) bascule vers les releases au chemin stable, `make deploy` y installe une compilation"}}
 {"type":"session","id":"{{session:1}}","kind":"chat","title":"CLI","state":"active","parent":null,"model_alias":null,"episode":0}
 {"type":"event","session":"{{session:1}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"chat","parent_id":null}}
 {"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"tool_jobs_lost":0,"turns_requeued":0}}
 {"type":"audit","ok":true,"checked":2,"purged":0}
-{"type":"http_request","method":"GET","path":"/releases","query":{"per_page":"30"}}
+{"type":"http_request","method":"GET","path":"/vides","query":{"per_page":"30"}}
+{"type":"http_request","method":"GET","path":"/anciennes","query":{"per_page":"30"}}
+{"type":"http_request","method":"GET","path":"/nouvelle","query":{"per_page":"30"}}

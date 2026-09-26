@@ -1,18 +1,37 @@
 name = "rpc-installation-skill"
-description = """L'import d'une skill tierce, comme `penelope skill install`, dans ce qu'il fait
-avant tout téléchargement : une source mal écrite (sans propriétaire, remontée de
-répertoire, liste de skills qui n'est pas un slug, espace) est refusée, rien n'est posé
-dans le répertoire des skills. L'archive elle-même se télécharge toujours depuis
-`https://codeload.github.com` (adresse construite, ni configurable ni locale) : une
-installation réussie n'est pas jouable sans réseau tant que le produit n'a pas de source
-d'archives configurable (voir design/v1/notes/s-derniers.md)."""
+description = """L'import d'une skill tierce, comme `penelope skill install`, depuis un dépôt servi par
+le faux serveur local (`skills.archive_base_url = "{{http}}"`, archive ZIP au format de
+codeload : `<depot>-<revision>/…`). Une source mal écrite est refusée avant tout
+téléchargement ; un dépôt absent rend 404 et le dit ; une skill que l'archive ne
+contient pas est refusée avec la liste des disponibles. La skill demandée est posée avec
+tous ses fichiers (script compris), son frontmatter complété, chargée sans attendre,
+listée et montrée ; l'autre skill du dépôt n'est pas posée. Une seconde installation
+sans `force` est refusée, avec `force` elle remplace. Le monde après : les requêtes
+reçues, l'événement `skill.installed`, la skill posée."""
 pin_model = "main"
 
-[[steps]]
-kind = "rpc"
-method = "skill.install"
-params = { source = "skills" }
-error = true
+[config]
+"skills.archive_base_url" = "{{http}}"
+
+[[http]]
+path = "/acme/skills-maison/zip/main"
+method = "GET"
+
+[http.zip]
+"skills-maison-main/README.md" = "Skills de la maison.\n"
+"skills-maison-main/releve-compteurs/SKILL.md" = """---
+name: releve-compteurs
+description: Relevé mensuel des compteurs d'eau et d'électricité
+---
+Relever les deux compteurs avec `scripts/ecart.sh`, signaler un écart de plus de 20 %.
+"""
+"skills-maison-main/releve-compteurs/scripts/ecart.sh" = "#!/bin/sh\necho \"$1 $2\"\n"
+"skills-maison-main/arrosage/SKILL.md" = """---
+name: arrosage
+description: Programme d'arrosage du jardin
+---
+Arroser si la semaine a été sèche.
+"""
 
 [[steps]]
 kind = "rpc"
@@ -23,16 +42,38 @@ error = true
 [[steps]]
 kind = "rpc"
 method = "skill.install"
-params = { source = "anthropics/skills:Pas Un Slug" }
+params = { source = "acme/absent" }
 error = true
 
 [[steps]]
 kind = "rpc"
 method = "skill.install"
-params = { source = "anthropics skills/docx" }
+params = { source = "acme/skills-maison:inconnue" }
 error = true
 
 [[steps]]
 kind = "rpc"
+method = "skill.install"
+params = { source = "acme/skills-maison:releve-compteurs" }
+
+[[steps]]
+kind = "rpc"
 method = "skill.list"
-pick = ["/*/name"]
+pick = ["/*/name", "/*/scope"]
+
+[[steps]]
+kind = "rpc"
+method = "skill.show"
+params = { name = "releve-compteurs" }
+
+[[steps]]
+kind = "rpc"
+method = "skill.install"
+params = { source = "acme/skills-maison:releve-compteurs" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "skill.install"
+params = { source = "acme/skills-maison:releve-compteurs", force = true }
+pick = ["/source", "/installed/0/name", "/installed/0/files", "/installed/0/replaced", "/missing"]

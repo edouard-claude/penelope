@@ -47,6 +47,10 @@ pub struct Route {
     /// En-tête `Location` d'une redirection (retour d'un serveur d'autorisation).
     #[serde(default)]
     pub location: Option<String>,
+    /// Archive ZIP servie à la place de `body`, chemin → contenu (l'archive d'un dépôt,
+    /// `skill.install`) ; `content_type` passe alors à `application/zip`.
+    #[serde(default)]
+    pub zip: BTreeMap<String, String>,
 }
 
 fn json_type() -> String {
@@ -199,11 +203,19 @@ async fn serve(
         Some(r) => (
             r.status
                 .unwrap_or(if r.location.is_some() { 302 } else { 200 }),
-            fill(&r.body),
-            r.content_type.clone(),
+            if r.zip.is_empty() {
+                fill(&r.body).into_bytes()
+            } else {
+                zip_of(&r.zip)?
+            },
+            if r.zip.is_empty() {
+                r.content_type.clone()
+            } else {
+                "application/zip".to_string()
+            },
             r.location.as_deref().map(fill),
         ),
-        None => (404, "{}".to_string(), json_type(), None),
+        None => (404, b"{}".to_vec(), json_type(), None),
     };
     let mut head = format!(
         "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n",
@@ -215,9 +227,24 @@ async fn serve(
     }
     head.push_str("\r\n");
     stream.write_all(head.as_bytes()).await?;
-    stream.write_all(body.as_bytes()).await?;
+    stream.write_all(&body).await?;
     stream.shutdown().await?;
     Ok(())
+}
+
+/// Une archive ZIP stockée (sans compression), entrées dans l'ordre des chemins et
+/// datées du défaut du format : les mêmes octets à chaque rejeu.
+fn zip_of(files: &BTreeMap<String, String>) -> anyhow::Result<Vec<u8>> {
+    use std::io::Write as _;
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .last_modified_time(zip::DateTime::default());
+    for (path, content) in files {
+        w.start_file(path.as_str(), opts)?;
+        w.write_all(content.as_bytes())?;
+    }
+    Ok(w.finish()?.into_inner())
 }
 
 fn reason(status: u16) -> &'static str {
@@ -351,7 +378,24 @@ mod tests {
             body: body.into(),
             content_type: json_type(),
             location: None,
+            zip: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn a_zip_route_is_the_same_archive_every_time() {
+        let files = BTreeMap::from([
+            (
+                "depot-main/a/SKILL.md".to_string(),
+                "---\nname: a\n---\n".to_string(),
+            ),
+            ("depot-main/a/notes.md".to_string(), "x".to_string()),
+        ]);
+        let bytes = zip_of(&files).unwrap();
+        assert_eq!(bytes, zip_of(&files).unwrap());
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(archive.len(), 2);
+        assert_eq!(archive.by_index(1).unwrap().name(), "depot-main/a/notes.md");
     }
 
     #[test]

@@ -57,6 +57,9 @@ penelope-gateway-telegram.workspace = true
 # Les méthodes `mcp.*` des scénarios administrent le vrai superviseur, branché sur le
 # connecteur de test de l'hôte (aucun processus lancé).
 penelope-mcp-host.workspace = true
+# Le faux serveur HTTP des scénarios sert l'archive ZIP d'un dépôt de skills
+# (`skill.install`), construite depuis `scenario.toml` : même crate que le lecteur.
+zip.workspace = true
 
 [dev-dependencies]
 base64.workspace = true

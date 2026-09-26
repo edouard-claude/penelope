@@ -1,9 +1,19 @@
-{"type":"outcome","step":1,"input":"rpc : skill.install","error":{"code":-32603,"message":"source `skills` : attendu `proprietaire/depot[@revision][:skill,skill]` (par exemple `anthropics/skills:docx,pdf`)"}}
-{"type":"outcome","step":2,"input":"rpc : skill.install","error":{"code":-32603,"message":"dépôt `../skills` invalide dans la source `anthropics/../skills`"}}
-{"type":"outcome","step":3,"input":"rpc : skill.install","error":{"code":-32603,"message":"skill demandée `Pas Un Slug` : slug invalide : caractères autorisés : [a-z0-9-] — reçu `Pas Un Slug`"}}
-{"type":"outcome","step":4,"input":"rpc : skill.install","error":{"code":-32603,"message":"propriétaire `anthropics skills` invalide dans la source `anthropics skills/docx`"}}
-{"type":"outcome","step":5,"input":"rpc : skill.list","result":{"/*/name":[]}}
+{"type":"outcome","step":1,"input":"rpc : skill.install","error":{"code":-32603,"message":"dépôt `../skills` invalide dans la source `anthropics/../skills`"}}
+{"type":"outcome","step":2,"input":"rpc : skill.install","error":{"code":-32000,"message":"dépôt ou révision introuvable ({{http}}/acme/absent/zip/main) : vérifier le nom et la branche"}}
+{"type":"outcome","step":3,"input":"rpc : skill.install","error":{"code":-32603,"message":"skill `inconnue` absente de l'archive ; disponibles : arrosage, releve-compteurs"}}
+{"type":"outcome","step":4,"input":"rpc : skill.install","result":{"source":"acme/skills-maison@main","installed":[{"name":"releve-compteurs","description":"Relevé mensuel des compteurs d'eau et d'électricité","path":"{{home}}/data/skills/releve-compteurs","files":2,"bytes":210,"allowed_tools":[],"requires":[],"replaced":false}],"missing":[],"report":"1 skill(s) installée(s) depuis acme/skills-maison@main\n- `releve-compteurs` : Relevé mensuel des compteurs d'eau et d'électricité (2 fichiers)\n"}}
+{"type":"outcome","step":5,"input":"rpc : skill.list","result":{"/*/name":["releve-compteurs","wiki-markdown"],"/*/scope":["user","bundled"]}}
+{"type":"outcome","step":6,"input":"rpc : skill.show","result":{"name":"releve-compteurs","description":"Relevé mensuel des compteurs d'eau et d'électricité","version":"1.0.0","allowed_tools":[],"activation":[],"sub_agent":false,"requires":[],"scope":"user","path":"{{home}}/data/skills/releve-compteurs/SKILL.md","body":"Relever les deux compteurs avec `scripts/ecart.sh`, signaler un écart de plus de 20 %.\n","body_hash":"{{hash}}"}}
+{"type":"outcome","step":7,"input":"rpc : skill.install","error":{"code":-32603,"message":"la skill `releve-compteurs` existe déjà dans {{home}}/data/skills : relancer avec `--force` pour la remplacer"}}
+{"type":"outcome","step":8,"input":"rpc : skill.install","result":{"/source":"acme/skills-maison@main","/installed/0/name":"releve-compteurs","/installed/0/files":2,"/installed/0/replaced":true,"/missing":[]}}
 {"type":"session","id":"{{session:1}}","kind":"chat","title":"CLI","state":"active","parent":null,"model_alias":null,"episode":0}
 {"type":"event","session":"{{session:1}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"chat","parent_id":null}}
 {"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"tool_jobs_lost":0,"turns_requeued":0}}
-{"type":"audit","ok":true,"checked":2,"purged":0}
+{"type":"event","session":null,"seq":2,"kind":"skill.installed","payload":{"missing_requirements":0,"skills":["releve-compteurs"],"source":"acme/skills-maison@main"}}
+{"type":"event","session":null,"seq":3,"kind":"skill.installed","payload":{"missing_requirements":0,"skills":["releve-compteurs"],"source":"acme/skills-maison@main"}}
+{"type":"audit","ok":true,"checked":4,"purged":0}
+{"type":"http_request","method":"GET","path":"/acme/absent/zip/main"}
+{"type":"http_request","method":"GET","path":"/acme/skills-maison/zip/main"}
+{"type":"http_request","method":"GET","path":"/acme/skills-maison/zip/main"}
+{"type":"http_request","method":"GET","path":"/acme/skills-maison/zip/main"}
+{"type":"http_request","method":"GET","path":"/acme/skills-maison/zip/main"}
