@@ -57,6 +57,10 @@ pub struct Spec {
     /// Outils d'un serveur MCP simulé, exposés au modèle et inscrits au registre.
     #[serde(default)]
     pub mcp_tools: Vec<McpTool>,
+    /// Motifs (expressions régulières) des textes propres à la machine, remplacés par
+    /// `{{masked}}` dans les attendus : mémoire du processus, contrôles de l'hôte.
+    #[serde(default)]
+    pub masks: Vec<String>,
     pub steps: Vec<Step>,
 }
 
@@ -108,6 +112,15 @@ pub enum Step {
     Enqueue { text: String },
     /// `/compact`, `/fork [titre]`, `/rewind [n]`, `/purge`.
     Command { command: String },
+    /// Mise à jour Telegram du propriétaire, par la vraie passerelle sur un transport
+    /// simulé : `text` (commande `/…` ou message), ou `click` (le bouton dont le
+    /// libellé contient ce texte, sur le dernier écran qui en porte un).
+    Telegram {
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        click: Option<String>,
+    },
     /// Avance de l'horloge de test (`10m`, `3h`, `2d`).
     AdvanceClock { by: String },
     /// Services détruits puis reconstruits sur le même répertoire, reprise au démarrage,
@@ -170,6 +183,13 @@ impl Step {
             } => format!("message : {text} (pendant l'appel d'outil : {steer})"),
             Step::Enqueue { text } => format!("en file : {text}"),
             Step::Command { command } => format!("commande : {command}"),
+            Step::Telegram { text: Some(t), .. } => format!("telegram : {t}"),
+            Step::Telegram { click, .. } => {
+                format!(
+                    "telegram : clic « {} »",
+                    click.as_deref().unwrap_or_default()
+                )
+            }
             Step::AdvanceClock { by } => format!("horloge : +{by}"),
             Step::Restart => "redémarrage".into(),
             Step::Approve => "approbation".into(),

@@ -12,7 +12,8 @@
 //!   (`crates/penelope-kernel/src/api.rs`).
 //!
 //! Ce qu'un scénario exerce est lu dans ses fichiers, pas déclaré à la main : une étape
-//! `kind = "command"` de `scenario.toml` exerce sa commande ; un appel d'outil de
+//! `kind = "command"` de `scenario.toml` exerce sa commande, une étape `kind = "telegram"`
+//! dont le `text` commence par `/` aussi ; un appel d'outil de
 //! `model.jsonl` (champ `"name"`, y compris le nom passé à `tool_call`) exerce l'outil.
 //! Le harnais n'a pas encore d'étape RPC : aucune méthode n'est couverte tant qu'il n'en
 //! a pas. Une déclaration aurait pu mentir ; ce qui est joué ne ment pas.
@@ -129,9 +130,15 @@ pub fn exercised(s: &ScenarioFiles) -> Result<BTreeSet<String>, String> {
         .into_iter()
         .flatten()
     {
-        if step.get("kind").and_then(|k| k.as_str()) == Some("command")
-            && let Some(cmd) = step.get("command").and_then(|c| c.as_str())
-            && let Some(name) = cmd.split_whitespace().next()
+        let cmd = match step.get("kind").and_then(|k| k.as_str()) {
+            Some("command") => step.get("command"),
+            Some("telegram") => step.get("text"),
+            _ => None,
+        };
+        if let Some(name) = cmd
+            .and_then(|c| c.as_str())
+            .and_then(|c| c.split_whitespace().next())
+            .filter(|n| n.starts_with('/'))
         {
             out.insert(name.to_string());
         }

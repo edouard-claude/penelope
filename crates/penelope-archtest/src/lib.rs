@@ -470,7 +470,9 @@ pub fn dependency_violations() -> Vec<String> {
 /// (épopée #208, T29, `decoupage-daemon.md` §7 R2). Le daemon la connaît par ses ports
 /// (`Gateway`, `ChannelDelivery`, `Messenger`, `OwnerChannel`), jamais par son type ; les
 /// `dev-dependencies` restent hors règle, comme pour les autres.
-pub const GATEWAY_DEPENDENTS: &[&str] = &["penelope-cli"];
+/// `penelope-evals` y est aussi : l'étape `telegram` de ses scénarios joue les commandes
+/// par la vraie passerelle, sur un transport simulé (critère 7 de bascule).
+pub const GATEWAY_DEPENDENTS: &[&str] = &["penelope-cli", "penelope-evals"];
 
 /// Crates hors `GATEWAY_DEPENDENTS` qui déclarent la passerelle dans `[dependencies]`.
 pub fn gateway_dependent_violations() -> Vec<String> {

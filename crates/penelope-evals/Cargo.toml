@@ -51,6 +51,9 @@ penelope-conversation.workspace = true
 penelope-dream.workspace = true
 penelope-executor.workspace = true
 penelope-ops.workspace = true
+# L'étape `telegram` des scénarios joue les commandes du propriétaire par la vraie
+# passerelle, sur le transport simulé de `penelope-telegram` (critère 7, épopée #208).
+penelope-gateway-telegram.workspace = true
 
 [dev-dependencies]
 base64.workspace = true

@@ -9,6 +9,7 @@
 mod journal;
 mod lifecycle;
 mod steps;
+mod telegram;
 #[cfg(test)]
 mod tests;
 mod visible;
@@ -95,6 +96,7 @@ struct Harness<'a> {
     session: String,
     outcomes: Vec<Value>,
     crashed: bool,
+    telegram: telegram::Chat,
 }
 
 pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
@@ -121,6 +123,7 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
         session: String::new(),
         outcomes: Vec::new(),
         crashed: false,
+        telegram: telegram::Chat::default(),
     };
     h.boot(true).await?;
     h.run_steps().await?;
@@ -143,7 +146,7 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
 
     // Les jetons sont numérotés dans l'ordre du monde (sessions par création, tours par
     // mise en file, effets par appel…), pas dans celui de leur première mention.
-    let mut n = Normaliser::new(start_ms, h.root.path());
+    let mut n = Normaliser::new(start_ms, h.root.path()).with_masks(&spec.masks)?;
     for line in &dumped {
         let key = if line["type"] == "summary" {
             "node"
@@ -226,6 +229,9 @@ impl Harness<'_> {
                 }
                 Step::Enqueue { text } => self.enqueue(text).await,
                 Step::Command { command } => self.command(command).await,
+                Step::Telegram { text, click } => {
+                    self.telegram(text.as_deref(), click.as_deref()).await
+                }
                 Step::AdvanceClock { by } => {
                     let d = parse_duration(by).with_context(|| format!("durée `{by}`"))?;
                     self.clock.advance_ms(d.as_millis() as i64);

@@ -1488,6 +1488,7 @@ dependencies = [
  "penelope-daemon",
  "penelope-dream",
  "penelope-executor",
+ "penelope-gateway-telegram",
  "penelope-hitl",
  "penelope-kernel",
  "penelope-llm",

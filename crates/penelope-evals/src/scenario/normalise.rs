@@ -10,6 +10,10 @@
 //! - la racine temporaire des services (brute et canonique) devient `{{home}}` ;
 //! - un hachage (clé `*hash*`, `sha256`, `idem_key`, ou 64 hexadécimaux dans un texte)
 //!   devient `{{hash}}` ; une durée mesurée (`duration_ms`) devient `{{ms}}` ;
+//! - le jeton d'un bouton Telegram (`callback_data`) devient `{{action}}` : il est tiré
+//!   au hasard à chaque envoi ;
+//! - un texte qui répond à un motif `masks` du scénario (mémoire du processus, contrôles
+//!   propres à l'hôte) devient `{{masked}}` ;
 //! - une estimation de jetons (`tokens_est`) devient `{{tokens}}` quand l'objet qui la
 //!   porte cite la racine temporaire : sa longueur change d'une machine à l'autre.
 
@@ -37,6 +41,9 @@ const DURATION_KEYS: &[&str] = &["duration_ms", "elapsed_ms", "latency_ms"];
 /// Clés comptées sur un texte qui peut contenir la racine temporaire.
 const SIZE_KEYS: &[&str] = &["tokens_est"];
 
+/// Clés dont la valeur est un jeton aléatoire.
+const RANDOM_KEYS: &[&str] = &["callback_data"];
+
 pub struct Normaliser {
     start_ms: i64,
     homes: Vec<String>,
@@ -45,6 +52,7 @@ pub struct Normaliser {
     ulid: Regex,
     stamp: Regex,
     hex: Regex,
+    masks: Vec<Regex>,
 }
 
 impl Normaliser {
@@ -70,7 +78,17 @@ impl Normaliser {
             )
             .expect("regex RFC 3339"),
             hex: Regex::new(r"\b[0-9a-f]{64}\b").expect("regex sha256"),
+            masks: Vec::new(),
         }
+    }
+
+    /// Motifs `masks` du scénario, appliqués avant tout autre remplacement.
+    pub fn with_masks(mut self, masks: &[String]) -> anyhow::Result<Self> {
+        for m in masks {
+            self.masks
+                .push(Regex::new(m).map_err(|e| anyhow::anyhow!("motif `{m}` : {e}"))?);
+        }
+        Ok(self)
     }
 
     /// Normalise une valeur JSON entière.
@@ -84,6 +102,8 @@ impl Normaliser {
                 for (k, v) in map {
                     let v = if HASH_KEYS.contains(&k.as_str()) && v.is_string() {
                         Value::String("{{hash}}".into())
+                    } else if RANDOM_KEYS.contains(&k.as_str()) && v.is_string() {
+                        Value::String("{{action}}".into())
                     } else if DURATION_KEYS.contains(&k.as_str()) && v.is_number() {
                         Value::String("{{ms}}".into())
                     } else if mentions_home && SIZE_KEYS.contains(&k.as_str()) && v.is_number() {
@@ -111,6 +131,9 @@ impl Normaliser {
     /// Normalise un texte : chemins, identifiants, horodatages, hachages.
     pub fn text(&mut self, s: &str) -> String {
         let mut out = s.to_string();
+        for m in &self.masks {
+            out = m.replace_all(&out, "{{masked}}").into_owned();
+        }
         for home in &self.homes {
             if !home.is_empty() {
                 out = out.replace(home, "{{home}}");
@@ -217,6 +240,16 @@ mod tests {
         assert_eq!(v["duration_ms"], "{{ms}}");
         assert_eq!(v["texte"], "empreinte {{hash}}");
         assert_eq!(v["n"], 3);
+    }
+
+    #[test]
+    fn button_tokens_and_masked_texts_are_replaced() {
+        let mut n = Normaliser::new(START, Path::new("/tmp/racine-v"))
+            .with_masks(&[r"Mémoire : \d+ Mo".into()])
+            .unwrap();
+        let v = n.value(json!({"callback_data": "a:oOC3riTSHISF", "text": "• Mémoire : 35 Mo"}));
+        assert_eq!(v["callback_data"], "{{action}}");
+        assert_eq!(v["text"], "• {{masked}}");
     }
 
     #[test]

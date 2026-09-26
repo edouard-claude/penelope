@@ -124,6 +124,26 @@ command = "/compact"
     );
 }
 
+/// L'étape `telegram` exerce la commande de son `text` ; un message ou un clic, rien.
+#[test]
+fn a_telegram_step_exercises_its_command() {
+    let s = scenario(
+        r#"name = "essai"
+[[steps]]
+kind = "telegram"
+text = "/status maintenant"
+[[steps]]
+kind = "telegram"
+text = "bonjour, pas une commande"
+[[steps]]
+kind = "telegram"
+click = "Approuver"
+"#,
+        "",
+    );
+    assert_eq!(exercised(&s).unwrap(), set(&["/status"]));
+}
+
 #[test]
 fn an_unreadable_scenario_is_an_error_not_a_pass() {
     let err = exercised(&scenario("steps = [", "")).unwrap_err();
