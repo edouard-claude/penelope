@@ -443,17 +443,6 @@ pub async fn audit(dir: &Path) -> anyhow::Result<harness::Audit> {
     Ok(harness::run(&scenario, Mode::Replay).await?.audit)
 }
 
-/// Rejoue un scénario avec `history.source` imposé (`tables` ou `journal`, épopée #208,
-/// T14) : la surface seule, normalisée.
-pub async fn replay_from(dir: &Path, source: &str) -> anyhow::Result<Vec<Value>> {
-    let mut scenario = load(dir)?;
-    scenario
-        .spec
-        .config
-        .insert("history.source".into(), toml::Value::String(source.into()));
-    Ok(harness::run(&scenario, Mode::Replay).await?.surface)
-}
-
 /// Libellé français d'un groupe de lignes de `expected.jsonl`.
 fn group_label(kind: &str) -> &str {
     match kind {

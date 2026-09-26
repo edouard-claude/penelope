@@ -1,33 +1,34 @@
 use super::*;
 use crate::replay::fixture::{World, compact, exchanges, rewound, rich, sealed, tool_round, world};
 
+/// La projection lue dans les caches, puis celle que la lecture rend (le journal).
 async fn both(w: &World, sid: &str) -> (Vec<Entry>, Vec<Entry>) {
     let e = &w.engine;
-    let tables = e.projected_entries(sid, HistorySource::Tables).await;
-    let journal = e.projected_entries(sid, HistorySource::Journal).await;
-    (tables.unwrap(), journal.unwrap())
+    let caches = e.projected_from_tables(sid).await;
+    let journal = e.projected_entries(sid).await;
+    (caches.unwrap(), journal.unwrap())
 }
 
 fn text(entries: &[Entry]) -> String {
     serde_json::to_string(entries).unwrap()
 }
 
-/// Critère de T14, sans daemon : compaction, niveau 1, arguments d'appel dans l'ordre du
-/// fournisseur, scellement, retour arrière ; les deux sources donnent les mêmes octets
-/// (la comparaison du mode `tables` passe), numéros de ligne compris.
+/// Sans daemon : compaction, niveau 1, arguments d'appel dans l'ordre du fournisseur,
+/// scellement, retour arrière ; la lecture depuis le journal et les caches que le
+/// projecteur a écrits donnent les mêmes octets, numéros de ligne compris (T14, T16).
 #[tokio::test]
-async fn both_sources_read_the_same_bytes() {
+async fn the_journal_and_its_caches_read_the_same_bytes() {
     let w = world().await;
     rich(&w).await;
     sealed(&w).await;
     rewound(&w).await;
     for sid in ["s1", "s2", "s3"] {
-        let (tables, journal) = both(&w, sid).await;
-        assert!(!tables.is_empty(), "{sid}");
-        assert_eq!(text(&tables), text(&journal), "{sid}");
+        let (caches, journal) = both(&w, sid).await;
+        assert!(!caches.is_empty(), "{sid}");
+        assert_eq!(text(&caches), text(&journal), "{sid}");
         let e = &w.engine;
-        let tail = e.tail(sid, 7, HistorySource::Tables).await.unwrap();
-        let from_journal = e.tail(sid, 7, HistorySource::Journal).await.unwrap();
+        let tail = w.history().tail(sid, 7).await.unwrap();
+        let from_journal = e.tail(sid, 7).await.unwrap();
         assert_eq!(tail.len(), if sid == "s2" { 2 } else { 7 }, "{sid}");
         assert_eq!(text(&tail), text(&from_journal), "{sid}");
     }
@@ -36,14 +37,14 @@ async fn both_sources_read_the_same_bytes() {
     assert!(h.read_journal("s3").await.unwrap().unwrap().is_some());
     assert!(
         h.read_journal("s2").await.unwrap().unwrap().is_none(),
-        "l'archive d'un retour arrière se lit dans les tables"
+        "l'archive d'un retour arrière se lit dans ses caches, projetés du journal de sa mère"
     );
 }
 
-/// Une ligne modifiée à la main : le mode `tables` le dit (session et entrée nommées),
-/// le mode `journal` ne la lit pas.
+/// Une ligne de cache modifiée à la main n'est pas lue : la conversation vient du
+/// journal (`history verify` nomme la ligne).
 #[tokio::test]
-async fn a_hand_edited_row_fails_the_comparison_and_is_not_read_from_the_journal() {
+async fn a_hand_edited_cache_row_is_not_read() {
     let w = world().await;
     rich(&w).await;
     let before = both(&w, "s1").await.1;
@@ -52,58 +53,44 @@ async fn a_hand_edited_row_fails_the_comparison_and_is_not_read_from_the_journal
          WHERE session_id = 's1' AND seq = (SELECT MAX(seq) FROM messages WHERE session_id = 's1')",
     )
     .await;
-    let e = &w.engine;
-    let err = e
-        .projected_entries("s1", HistorySource::Tables)
-        .await
-        .unwrap_err();
-    let said = err.to_string();
-    assert!(
-        matches!(err, ReadError::Diverged { .. })
-            && said.contains("session s1")
-            && said.contains("falsifié"),
-        "{said}"
-    );
-    assert!(e.tail("s1", 4, HistorySource::Tables).await.is_err());
-    let journal = e
-        .projected_entries("s1", HistorySource::Journal)
-        .await
-        .unwrap();
+    let (caches, journal) = both(&w, "s1").await;
+    assert!(text(&caches).contains("falsifié"));
     assert_eq!(text(&journal), text(&before));
+    let tail = w.engine.tail("s1", 4).await.unwrap();
+    assert!(!text(&tail).contains("falsifié"));
+    let report = w.history().verify(Some("s1"), None).await.unwrap();
+    assert!(!report.ok, "la vérification voit la ligne");
 }
 
-/// Une session écrite sans journal (lignes sans événement) se lit dans les tables, quelle
-/// que soit la source.
+/// Des lignes V0 ni journalisées ni scellées (une base que le scellement n'a pas encore
+/// vue) se lisent dans les caches.
 #[tokio::test]
-async fn rows_without_events_are_read_from_the_tables() {
+async fn rows_without_events_are_read_from_the_caches() {
     let w = world().await;
-    let bare = HistoryStore::new(w.store.clone(), w.clock.clone());
-    bare.append("s9", &ChatMessage::user("sans journal"), 3, 0, false, None)
+    w.history()
+        .append_legacy("s2", &ChatMessage::user("sans journal"), 3, 0)
         .await
         .unwrap();
     assert!(
         w.history()
-            .read_journal("s9")
+            .read_journal("s2")
             .await
             .unwrap()
             .unwrap()
             .is_none()
     );
-    let (tables, journal) = both(&w, "s9").await;
-    assert_eq!(tables.len(), 1);
-    assert_eq!(text(&tables), text(&journal));
+    let (caches, journal) = both(&w, "s2").await;
+    assert_eq!(caches.len(), 1);
+    assert_eq!(text(&caches), text(&journal));
 }
 
 /// Temps d'une lecture depuis le journal (projection et queue) et ce qu'elle a plié.
 async fn timed(w: &World, sid: &str) -> (std::time::Duration, usize, Vec<Entry>) {
     let e = &w.engine;
     let start = std::time::Instant::now();
-    let projected = e
-        .projected_entries(sid, HistorySource::Journal)
-        .await
-        .unwrap();
+    let projected = e.projected_entries(sid).await.unwrap();
     let folded = w.history().reads.lock().unwrap().folded;
-    e.tail(sid, 40, HistorySource::Journal).await.unwrap();
+    e.tail(sid, 40).await.unwrap();
     (start.elapsed(), folded, projected)
 }
 
@@ -111,8 +98,8 @@ async fn timed(w: &World, sid: &str) -> (std::time::Duration, usize, Vec<Entry>)
 async fn fresh(w: &World, sid: &str) -> (Vec<Entry>, Vec<Entry>) {
     w.history().reads.lock().unwrap().clear();
     let e = &w.engine;
-    let projected = e.projected_entries(sid, HistorySource::Journal).await;
-    let tail = e.tail(sid, 40, HistorySource::Journal).await;
+    let projected = e.projected_entries(sid).await;
+    let tail = e.tail(sid, 40).await;
     (projected.unwrap(), tail.unwrap())
 }
 
@@ -124,8 +111,7 @@ async fn a_read_after_a_new_exchange_folds_only_what_is_new() {
     let w = world().await;
     exchanges(&w, "s1", 0..1_000).await;
     let h = w.history();
-    h.journal_fork("s3", "s1").await.unwrap();
-    h.copy_messages("s1", "s3", 0, None).await.unwrap();
+    h.fork("s3", "s1").await.unwrap();
     exchanges(&w, "s3", 0..2).await;
     for sid in ["s1", "s3"] {
         h.reads.lock().unwrap().clear();
@@ -144,11 +130,7 @@ async fn a_read_after_a_new_exchange_folds_only_what_is_new() {
             (0, 4),
             "{sid} : turn.started, user, context, assistant"
         );
-        let tail = w
-            .engine
-            .tail(sid, 40, HistorySource::Journal)
-            .await
-            .unwrap();
+        let tail = w.engine.tail(sid, 40).await.unwrap();
         let (again, again_tail) = fresh(&w, sid).await;
         assert_eq!(text(&projected), text(&again), "{sid}");
         assert_eq!(text(&tail), text(&again_tail), "{sid}");
@@ -156,7 +138,7 @@ async fn a_read_after_a_new_exchange_folds_only_what_is_new() {
 }
 
 /// Lire entre chaque écriture (compaction, prolongation, niveau 1, retour arrière) : la
-/// surface reprise est celle d'un pliage complet, et celle des tables.
+/// surface reprise est celle d'un pliage complet, et celle des caches.
 #[tokio::test]
 async fn a_resumed_read_matches_a_full_fold_at_every_step() {
     let w = world().await;
@@ -164,18 +146,12 @@ async fn a_resumed_read_matches_a_full_fold_at_every_step() {
         let w = &w;
         async move {
             let e = &w.engine;
-            let journal = e
-                .projected_entries("s1", HistorySource::Journal)
-                .await
-                .unwrap();
-            let tail = e.tail("s1", 40, HistorySource::Journal).await.unwrap();
+            let journal = e.projected_entries("s1").await.unwrap();
+            let tail = e.tail("s1", 40).await.unwrap();
             if label != "purge" {
-                // Les tables d'une session purgée sont effacées par le daemon, pas ici.
-                let tables = e
-                    .projected_entries("s1", HistorySource::Tables)
-                    .await
-                    .unwrap();
-                assert_eq!(text(&tables), text(&journal), "{label}");
+                // Les caches d'une session purgée sont effacés par `penelope-ops`.
+                let caches = e.projected_from_tables("s1").await.unwrap();
+                assert_eq!(text(&caches), text(&journal), "{label}");
             }
             let (again, again_tail) = fresh(w, "s1").await;
             assert_eq!(text(&journal), text(&again), "{label}");
@@ -199,9 +175,6 @@ async fn a_resumed_read_matches_a_full_fold_at_every_step() {
     w.log.purge_session("s1", "test").await.unwrap();
     check("purge").await;
     let e = &w.engine;
-    let purged = e
-        .projected_entries("s1", HistorySource::Journal)
-        .await
-        .unwrap();
+    let purged = e.projected_entries("s1").await.unwrap();
     assert!(purged.is_empty(), "une purge jette la surface pliée");
 }

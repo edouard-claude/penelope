@@ -2,12 +2,31 @@
 
 use super::*;
 
+/// Clés retirées, avec la raison : un fichier écrit par une version antérieure les porte
+/// encore, il se lit sans erreur. Une section retirée en entier est nommée seule.
+pub const RETIRED_KEYS: &[(&str, &str)] = &[(
+    "history",
+    "`history.source` est retirée en 1.0 (épopée #208, T16) : la conversation se relit \
+     toujours depuis le journal d'événements ; la ligne peut être effacée",
+)];
+
+/// La raison du retrait d'une clé (ou de la section qui la contient), si elle l'est.
+pub fn retired(key: &str) -> Option<&'static str> {
+    RETIRED_KEYS
+        .iter()
+        .find(|(k, _)| key == *k || key.starts_with(&format!("{k}.")))
+        .map(|(_, why)| *why)
+}
+
 impl Config {
     /// Lecture **tolérante** (issue #76) : une clé que ce binaire ne connaît pas (écrite
     /// par une version plus récente, ou faute de frappe) est ignorée et renvoyée pour être
     /// signalée par `doctor`, `config validate` et le démarrage. Un retour arrière ne
     /// dépend ainsi d'aucun état écrit par la version que l'on quitte. Une valeur mal
     /// typée reste une erreur.
+    ///
+    /// Une clé retirée ([`RETIRED_KEYS`]) n'est pas inconnue : elle est ignorée avec un
+    /// avertissement qui dit pourquoi, et n'est pas renvoyée.
     pub fn parse(s: &str) -> Result<(Config, Vec<String>)> {
         let cfg: Config = toml::from_str(s).map_err(|e| KernelError::config(e.to_string()))?;
         let raw: toml::Table = toml::from_str(s).map_err(|e| KernelError::config(e.to_string()))?;
@@ -16,6 +35,13 @@ impl Config {
         if let Some(known) = known.as_table() {
             unknown_keys("", &raw, known, &mut unknown);
         }
+        unknown.retain(|key| match retired(key) {
+            Some(why) => {
+                tracing::warn!(cle = %key, "clé de configuration retirée, ignorée : {why}");
+                false
+            }
+            None => true,
+        });
         Ok((cfg, unknown))
     }
 

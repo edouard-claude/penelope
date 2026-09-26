@@ -3,6 +3,12 @@
 //! **Store immuable** : chaque message, appel et résultat d'outil est persisté verbatim
 //! et indexé en FTS5. Les payloads volumineux partent en artefact et ne sont jamais
 //! chargés directement dans le contexte.
+//!
+//! **Le journal d'abord** (épopée #208, T16) : toute écriture de la conversation est un
+//! événement `conv.*`, puis sa projection dans les caches (`messages`, `messages_fts`,
+//! `message_context`, `lcm_nodes`, `prompt_snapshots`), dans la seconde transaction du
+//! même thread écrivain. Aucune méthode publique n'écrit ces tables sans événement, et
+//! aucune autre crate ne les écrit (`penelope-archtest`, `cache_writes`).
 
 use crate::transcript::Entry;
 use penelope_kernel::clock::SharedClock;
@@ -18,8 +24,8 @@ use std::collections::BTreeMap;
 pub struct HistoryStore {
     store: Store,
     pub(crate) clock: SharedClock,
-    /// Journal de la double écriture (T5) ; absent, les lignes s'écrivent seules.
-    pub(crate) events: Option<penelope_kernel::event::EventLog>,
+    /// Le journal : chaque écriture y entre avant sa ligne de cache (T5, T16).
+    pub(crate) events: penelope_kernel::event::EventLog,
     /// Surfaces déjà pliées, reprises sur les seuls événements nouveaux (T14).
     pub(crate) reads: crate::read::SharedReadCache,
 }
@@ -59,11 +65,11 @@ pub struct Artifact {
 }
 
 impl HistoryStore {
-    pub fn new(store: Store, clock: SharedClock) -> Self {
+    pub fn new(store: Store, clock: SharedClock, events: penelope_kernel::event::EventLog) -> Self {
         HistoryStore {
             store,
             clock,
-            events: None,
+            events,
             reads: Default::default(),
         }
     }
@@ -72,7 +78,8 @@ impl HistoryStore {
         &self.store
     }
 
-    /// Ajoute un message à l'historique canonique et à l'index FTS.
+    /// Ajoute un message à l'historique, sans provenance : son événement `conv.*`, puis sa
+    /// ligne et son entrée plein texte ([`append_as`](Self::append_as)).
     pub async fn append(
         &self,
         session_id: &str,
@@ -93,26 +100,6 @@ impl HistoryStore {
             &prov,
         )
         .await
-    }
-
-    /// Ajoute une seule fois un message reçu par la file, avec son horodatage
-    /// original. L'ID du tour est la clé d'idempotence après crash (#161).
-    pub async fn append_user_turn_at(
-        &self,
-        session_id: &str,
-        turn_id: &str,
-        text: &str,
-        arrived_at: &str,
-        tokens: u64,
-        episode: i64,
-    ) -> penelope_store::Result<i64> {
-        let prov = crate::journal::Provenance::queued(
-            crate::journal::UserSource::Owner,
-            turn_id,
-            arrived_at,
-        );
-        self.append_queued(session_id, &ChatMessage::user(text), tokens, episode, &prov)
-            .await
     }
 
     /// Charge l'historique canonique d'une session.
@@ -584,10 +571,17 @@ fn row_to_entry(r: &penelope_store::rusqlite::Row<'_>) -> penelope_store::rusqli
 }
 
 mod dual;
+#[cfg(test)]
+mod legacy;
+mod prompt;
+mod purge;
 mod rewrite;
 pub mod seal;
 mod search;
 pub(crate) use dual::origin_in;
+pub use prompt::{KIND_SESSION_PROJECT, PREFIX_RELEASES};
+pub use purge::CachesPurged;
+pub use rewrite::Rewound;
 pub(crate) use rewrite::mark_compacted_in;
 pub use search::{sanitise_fts, significant_terms};
 

@@ -87,7 +87,11 @@ mod tests {
             .unwrap();
         let clock: SharedClock = Arc::new(TestClock::default());
         ContextEngine::new(
-            HistoryStore::new(store.clone(), clock.clone()),
+            HistoryStore::new(
+                store.clone(),
+                clock.clone(),
+                penelope_kernel::event::EventLog::new(store.clone(), clock.clone()),
+            ),
             Lcm::new(store, clock.clone()),
             TokenEstimator::new(),
             Catalog::new(),

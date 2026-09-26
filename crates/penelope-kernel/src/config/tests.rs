@@ -245,6 +245,35 @@ fn files_written_by_released_versions_still_load() {
     }
 }
 
+/// T16 (épopée #208) : un fichier écrit par une alpha porte encore `history.source`. Il
+/// se charge sans erreur, et la clé n'est pas signalée comme inconnue : elle est retirée,
+/// avec sa raison dans l'avertissement.
+#[test]
+fn a_file_with_the_retired_history_source_still_loads() {
+    for value in ["journal", "tables"] {
+        let raw = format!("[owner]\ntelegram_user_id = 1\n\n[history]\nsource = \"{value}\"\n");
+        let (c, unknown) = Config::parse(&raw).unwrap();
+        assert_eq!(c.owner.telegram_user_id, 1);
+        assert!(unknown.is_empty(), "{value} : {unknown:?}");
+    }
+    let why = retired("history.source").unwrap();
+    assert!(why.contains("journal"), "{why}");
+    assert_eq!(retired("history"), Some(why));
+    assert!(retired("historique").is_none());
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "[owner]\ntelegram_user_id = 5\n\n[history]\nsource = \"tables\"\n",
+    )
+    .unwrap();
+    let cs = ConfigStore::load_or_create(&path, None, std::sync::Arc::new(TestClock::default()), 0)
+        .unwrap();
+    assert!(cs.unknown_keys().is_empty(), "{:?}", cs.unknown_keys());
+    assert_eq!(cs.config().owner.telegram_user_id, 5);
+}
+
 /// #106 : une instance en service garde le réseau qu'elle a écrit ; un fichier sans
 /// la clé prend le nouveau défaut, fermé.
 #[test]

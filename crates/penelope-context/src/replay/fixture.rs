@@ -20,7 +20,6 @@ pub(crate) struct World {
     pub engine: ContextEngine,
     pub log: EventLog,
     pub store: Store,
-    pub clock: SharedClock,
 }
 
 impl World {
@@ -66,18 +65,13 @@ pub(crate) async fn world() -> World {
     let clock: SharedClock = Arc::new(TestClock::default());
     let log = EventLog::new(store.clone(), clock.clone());
     let engine = ContextEngine::new(
-        HistoryStore::new(store.clone(), clock.clone()).with_events(log.clone()),
+        HistoryStore::new(store.clone(), clock.clone(), log.clone()),
         Lcm::new(store.clone(), clock.clone()),
         TokenEstimator::new(),
         Catalog::new(),
         clock.clone(),
     );
-    World {
-        engine,
-        log,
-        store,
-        clock,
-    }
+    World { engine, log, store }
 }
 
 pub(crate) fn params() -> CompactionParams {
@@ -197,30 +191,16 @@ pub(crate) async fn rich(w: &World) {
 
 /// `s3` : un historique V0 (écrit sans journal) scellé, puis deux échanges journalisés.
 pub(crate) async fn sealed(w: &World) {
-    let bare = HistoryStore::new(w.store.clone(), w.clock.clone());
+    let bare = w.history();
     for i in 0..3 {
         let seq = bare
-            .append(
-                "s3",
-                &ChatMessage::user(format!("ancien {i}")),
-                3,
-                0,
-                false,
-                None,
-            )
+            .append_legacy("s3", &ChatMessage::user(format!("ancien {i}")), 3, 0)
             .await
             .unwrap();
-        bare.freeze_context("s3", seq, "<ancien/>").await.unwrap();
-        bare.append(
-            "s3",
-            &ChatMessage::assistant(format!("vieux {i}")),
-            3,
-            0,
-            false,
-            None,
-        )
-        .await
-        .unwrap();
+        bare.freeze_legacy("s3", seq, "<ancien/>").await.unwrap();
+        bare.append_legacy("s3", &ChatMessage::assistant(format!("vieux {i}")), 3, 0)
+            .await
+            .unwrap();
     }
     let report = w.history().seal_legacy().await.unwrap();
     assert_eq!(report.sealed, vec![("s3".to_string(), 6)]);
@@ -239,6 +219,5 @@ pub(crate) async fn rewound(w: &World) {
         .find(|e| e.message.role == penelope_llm::types::Role::User)
         .unwrap()
         .seq;
-    h.copy_messages("s1", "s2", cutoff, None).await.unwrap();
     h.rewind_from("s1", cutoff, 1, Some("s2")).await.unwrap();
 }

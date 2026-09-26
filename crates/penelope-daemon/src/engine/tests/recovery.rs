@@ -124,9 +124,9 @@ async fn a_turn_open_at_the_crash_is_closed_as_interrupted_then_replayed() {
         )
         .await
         .unwrap();
-    s.kv_set(&format!("turn.recorded.{}", t.id), "1")
-        .await
-        .unwrap();
+    // Le message est au journal sous l'identifiant du tour : le rejeu ne le réécrit pas
+    // (T16, plus de clé `turn.recorded.*`).
+    assert!(history.recorded(&sid, t.id.as_str()).await.unwrap());
     let asks = ChatMessage::assistant("").with_tool_calls(vec![call("c1", "time_now", json!({}))]);
     let prov = Provenance {
         turn: Some(t.id.to_string()),

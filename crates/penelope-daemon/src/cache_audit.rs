@@ -8,7 +8,6 @@
 //! (épopée #208, T27) ; ici, le contexte volatil et le préfixe stable.
 
 use penelope_llm::cache::{CACHE_TTL_MS, PreviousCall};
-use serde_json::json;
 
 /// Le dernier appel de conversation de la session (voir `BudgetLedger::previous_call`).
 pub async fn previous_call(
@@ -56,43 +55,32 @@ pub async fn freeze_volatile(
     Ok(())
 }
 
-// Descendue dans les helpers (T22) : les épisodes du vault l'effacent.
-use penelope_app::helpers::prefix_key;
-
 /// Préfixe stable (T0 à T2) : tant que le cache de la session est chaud, un préfixe
 /// modifié (nouvel instantané mémoire, skill ou serveur MCP) attend la prochaine pause ou
-/// la prochaine compaction, qui le cassent de toute façon.
+/// la prochaine compaction, qui le cassent de toute façon. Le préfixe retenu est celui du
+/// dernier `conv.system` de la session (`HistoryStore::retained_prefix`, T16).
 pub async fn stable_prefix(
     d: &crate::runtime::Daemon,
     session_id: &str,
     tiers: &mut penelope_context::Tiers,
 ) -> anyhow::Result<()> {
     let s = &d.services;
-    let key = prefix_key(session_id);
     let warm = previous_call(s, session_id)
         .await?
         .is_some_and(|p| s.clock.now_ms() - p.ts_ms < CACHE_TTL_MS);
-    let built = json!([tiers.identity, tiers.index, tiers.context]);
     if warm
-        && let Some(stored) = s
-            .kv_get(&key)
-            .await?
-            .and_then(|raw| serde_json::from_str::<[String; 3]>(&raw).ok())
+        && let Some(stored) = s.context.history.retained_prefix(session_id).await?
+        && (&stored.identity, &stored.index, &stored.context)
+            != (&tiers.identity, &tiers.index, &tiers.context)
     {
-        if built != json!(stored) {
-            tracing::debug!(
-                session = session_id,
-                "préfixe modifié : attend un cache froid"
-            );
-            let [identity, index, context] = stored;
-            tiers.identity = identity;
-            tiers.index = index;
-            tiers.context = context;
-        }
-        journal_prefix(s, session_id, tiers).await;
-        return Ok(());
+        tracing::debug!(
+            session = session_id,
+            "préfixe modifié : attend un cache froid"
+        );
+        tiers.identity = stored.identity;
+        tiers.index = stored.index;
+        tiers.context = stored.context;
     }
-    s.kv_set(&key, &built.to_string()).await?;
     journal_prefix(s, session_id, tiers).await;
     Ok(())
 }
@@ -118,6 +106,7 @@ mod tests {
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::{MockProvider, Scripted};
     use penelope_llm::types::ToolCall;
+    use serde_json::json;
     use std::sync::Arc;
 
     /// CA 5 étendu au transcript (issue #17) : d'un appel au suivant, dans un tour comme

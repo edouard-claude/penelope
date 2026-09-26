@@ -450,8 +450,14 @@ async fn retention_removes_what_is_past_its_age_only() {
                 p,
             )?;
             tx.execute(
-                "INSERT INTO kv(k, v, ts) VALUES('turn.recorded.x','1',?1)",
+                "INSERT INTO kv(k, v, ts) VALUES('turn.intents.x','1',?1)",
                 p,
+            )?;
+            // T16 : une clé retirée part quel que soit son âge.
+            tx.execute(
+                "INSERT INTO kv(k, v, ts)
+                 VALUES('prompt.prefix.s','[]','2026-04-01T00:00:00Z')",
+                [],
             )?;
             tx.execute(
                 "INSERT INTO kv(k, v, ts) VALUES('upgrade.state','{}',?1)",
@@ -548,7 +554,10 @@ async fn retention_removes_what_is_past_its_age_only() {
     assert_eq!(report["llm_requests"], 1);
     assert_eq!(report["tg_updates"], 1);
     assert_eq!(report["mem_history"], 1);
-    assert_eq!(report["kv"], 1);
+    assert_eq!(
+        report["kv"], 2,
+        "une clé de travail ancienne, une clé retirée récente"
+    );
 
     let (turns, keys): (i64, i64) = s
         .store

@@ -69,11 +69,13 @@ impl Lcm {
         Lcm { store, clock }
     }
 
-    /// Crée un nœud feuille couvrant `[from_seq, to_seq]`.
+    /// Crée un nœud feuille couvrant `[from_seq, to_seq]`, sans événement : un résumé de
+    /// la V0, pour les tests. En production, un nœud naît d'un `conv.summary` (T16).
     // Chaque paramètre est une colonne du ledger : les regrouper dans une structure
     // ne ferait que déplacer la liste.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
-    pub async fn insert_leaf(
+    pub(crate) async fn insert_leaf(
         &self,
         session_id: &str,
         from_seq: i64,
@@ -113,8 +115,9 @@ impl Lcm {
         }
     }
 
-    /// Crée un nœud condensé au-dessus d'enfants existants.
-    pub async fn insert_condensed(
+    /// Crée un nœud condensé au-dessus d'enfants existants (tests : aucun appelant).
+    #[cfg(test)]
+    pub(crate) async fn insert_condensed(
         &self,
         session_id: &str,
         children: &[String],
@@ -199,8 +202,10 @@ impl Lcm {
     }
 
     /// Remplace un nœud par une version mise à jour (la re-compaction **met à jour** le
-    /// résumé précédent au lieu de repartir de zéro, §5.4).
-    pub async fn supersede(
+    /// résumé précédent au lieu de repartir de zéro, §5.4). Tests : en production, c'est
+    /// un `conv.summary` qui porte `previous_node_id`.
+    #[cfg(test)]
+    pub(crate) async fn supersede(
         &self,
         old_id: &str,
         new_summary: &str,
@@ -213,8 +218,9 @@ impl Lcm {
 
     /// Met à jour un nœud **et** prolonge sa couverture jusqu'à `to_seq` : le résumé
     /// précédent absorbe les messages qui le suivent. La provenance suit : l'intervalle
-    /// s'étend et les tokens source s'additionnent.
-    pub async fn extend(
+    /// s'étend et les tokens source s'additionnent. Tests, comme [`Lcm::supersede`].
+    #[cfg(test)]
+    pub(crate) async fn extend(
         &self,
         old_id: &str,
         to_seq: i64,
@@ -233,6 +239,7 @@ impl Lcm {
         .await
     }
 
+    #[cfg(test)]
     async fn replace(
         &self,
         old_id: &str,

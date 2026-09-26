@@ -137,32 +137,18 @@ async fn an_incoherent_journal_is_a_divergence() {
 /// puis le scellement.
 async fn sealed_with_summary(w: &crate::replay::fixture::World) {
     use crate::anchors::{Anchor, AnchorKind};
-    let bare = HistoryStore::new(w.store.clone(), w.clock.clone());
+    let bare = w.history();
     for i in 0..4 {
         let seq = bare
-            .append(
-                "s3",
-                &ChatMessage::user(format!("ancien {i}")),
-                300,
-                0,
-                false,
-                None,
-            )
+            .append_legacy("s3", &ChatMessage::user(format!("ancien {i}")), 300, 0)
             .await
             .unwrap();
-        bare.freeze_context("s3", seq, &format!("<ancien>{i}</ancien>"))
+        bare.freeze_legacy("s3", seq, &format!("<ancien>{i}</ancien>"))
             .await
             .unwrap();
-        bare.append(
-            "s3",
-            &ChatMessage::assistant(format!("vieux {i}")),
-            40,
-            0,
-            false,
-            None,
-        )
-        .await
-        .unwrap();
+        bare.append_legacy("s3", &ChatMessage::assistant(format!("vieux {i}")), 40, 0)
+            .await
+            .unwrap();
     }
     let anchors = [
         Anchor {
@@ -194,27 +180,16 @@ async fn a_sealed_summary_and_its_fork_verify_clean() {
     let report = w.history().verify(Some("s3"), None).await.unwrap();
     assert!(report.ok, "{:#?}", report.divergences);
 
-    // Le fork tel que `penelope-ops` le fait : conv.fork, copie V0, nœuds actifs recopiés.
+    // Le fork tel que `penelope-ops` le fait : `conv.fork`, puis la fille projetée depuis
+    // son héritage (lignes scellées recopiées avec leur drapeau, résumé actif recopié).
     w.sql("INSERT INTO sessions(id, kind, created_at, updated_at) VALUES('s4', 'chat', 't', 't')")
         .await;
-    let h = w.history();
-    h.journal_fork("s4", "s3").await.unwrap();
-    h.copy_messages("s3", "s4", 0, None).await.unwrap();
-    for n in w.engine.lcm.active_nodes("s3").await.unwrap() {
-        w.engine
-            .lcm
-            .insert_leaf(
-                "s4",
-                n.from_seq.unwrap(),
-                n.to_seq.unwrap(),
-                &n.summary,
-                &n.anchors,
-                n.tokens_src,
-                n.tokens_self,
-            )
-            .await
-            .unwrap();
-    }
+    assert_eq!(w.history().fork("s4", "s3").await.unwrap(), 8);
+    assert_eq!(
+        w.int("SELECT COUNT(*) FROM messages WHERE session_id = 's4' AND sealed = 1")
+            .await,
+        8
+    );
     crate::replay::fixture::exchanges(&w, "s4", 0..1).await;
     let report = w.history().verify(None, None).await.unwrap();
     assert!(report.ok, "{:#?}", report.divergences);
@@ -259,4 +234,38 @@ async fn a_summary_extending_a_sealed_one_verifies_clean() {
     );
     let report = w.history().verify(None, None).await.unwrap();
     assert!(report.ok, "{:#?}", report.divergences);
+}
+
+/// T16 : l'archive d'un retour arrière qui coupe dans le préfixe scellé est projetée
+/// depuis le journal de sa mère, lignes scellées recopiées avec leur drapeau : le
+/// scellement du démarrage suivant ne la prend pas pour une session 0.17.
+///
+/// La mère, elle, ne se replie plus : la coupe a retiré des lignes que son `conv.import`
+/// compte (défaut antérieur à T16, relevé dans `design/v1/notes/i-retrait.md`).
+#[tokio::test]
+async fn an_archive_cut_inside_the_sealed_prefix_keeps_its_sealed_rows() {
+    let w = world().await;
+    sealed_with_summary(&w).await;
+    w.sql("INSERT INTO sessions(id, kind, created_at, updated_at) VALUES('s4', 'chat', 't', 't')")
+        .await;
+    // Le dernier échange scellé (7, 8) part dans l'archive `s4`.
+    let done = w
+        .history()
+        .rewind_from("s3", 7, 1, Some("s4"))
+        .await
+        .unwrap();
+    assert_eq!(
+        done,
+        crate::store::Rewound {
+            removed: 2,
+            archived: 2
+        }
+    );
+    assert_eq!(
+        w.int("SELECT COUNT(*) FROM messages WHERE session_id = 's4' AND sealed = 1 AND seq >= 7")
+            .await,
+        2
+    );
+    let report = w.history().seal_legacy().await.unwrap();
+    assert!(report.sealed.is_empty(), "{:?}", report.sealed);
 }

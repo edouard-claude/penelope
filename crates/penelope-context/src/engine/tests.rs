@@ -22,7 +22,11 @@ async fn engine() -> ContextEngine {
         .unwrap();
     let clock: SharedClock = Arc::new(TestClock::default());
     ContextEngine::new(
-        HistoryStore::new(store.clone(), clock.clone()),
+        HistoryStore::new(
+            store.clone(),
+            clock.clone(),
+            penelope_kernel::event::EventLog::new(store.clone(), clock.clone()),
+        ),
         Lcm::new(store, clock.clone()),
         TokenEstimator::new(),
         Catalog::new(),
@@ -408,7 +412,14 @@ async fn ctx_safety_recovery_after_crash() {
 
     // « kill -9 » : nouveau moteur sur la même base.
     let e2 = ContextEngine::new(
-        HistoryStore::new(e.history.store().clone(), Arc::new(TestClock::default())),
+        HistoryStore::new(
+            e.history.store().clone(),
+            Arc::new(TestClock::default()),
+            penelope_kernel::event::EventLog::new(
+                e.history.store().clone(),
+                Arc::new(TestClock::default()),
+            ),
+        ),
         Lcm::new(e.history.store().clone(), Arc::new(TestClock::default())),
         TokenEstimator::new(),
         Catalog::new(),

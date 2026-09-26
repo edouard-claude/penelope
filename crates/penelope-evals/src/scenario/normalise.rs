@@ -182,8 +182,8 @@ mod tests {
             "{{session:1}} {{session:2}} {{session:1}}"
         );
         assert_eq!(
-            n.text(&format!("turn.recorded.{t}")),
-            "turn.recorded.{{turn:1}}"
+            n.text(&format!("turn.intents.{t}")),
+            "turn.intents.{{turn:1}}"
         );
         assert_eq!(n.text("art_01JCCCCCCCCCCCCCCCCCCCCCCC"), "{{artifact:1}}");
         assert_eq!(n.text("01JDDDDDDDDDDDDDDDDDDDDDDD"), "{{ulid:1}}");

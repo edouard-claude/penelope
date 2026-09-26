@@ -16,7 +16,7 @@ test_modules = [
 # Liste de référence (R3) : les fichiers autorisés à dépasser, chacun avec sa borne.
 # Elle ne peut que rétrécir : un fichier repassé sous le plafond doit en sortir.
 [files.oversized]
-"crates/penelope-daemon/src/engine.rs" = 1091
+"crates/penelope-daemon/src/engine.rs" = 1067
 
 # Plafond de lignes de src/ par crate (R4) : 78 668 au gel, plus 2 500 de marge, soit une
 # vingtaine de correctifs de taille courante. Un autre crate se plafonne en ajoutant une

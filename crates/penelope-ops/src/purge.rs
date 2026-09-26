@@ -32,6 +32,7 @@
 //! à la purge d'une session (#205).
 
 use penelope_app::services::Services;
+use penelope_context::HistoryStore;
 use penelope_kernel::event::EventDraft;
 use penelope_store::rusqlite::params;
 use serde_json::{Value, json};
@@ -40,7 +41,6 @@ use serde_json::{Value, json};
 /// run, sans valeur une fois la trace éteinte.
 const EPHEMERAL_KEYS: &[&str] = &[
     "turn.",
-    "prompt.prefix.",
     "session.model_last.",
     "session.tools.",
     "session.served.",
@@ -60,6 +60,11 @@ const EPHEMERAL_KEYS: &[&str] = &[
     "episode.ingested.",
     "wf.",
 ];
+
+/// Clés que plus rien n'écrit ni ne lit, effacées quel que soit leur âge : le journal
+/// d'événements les remplace (épopée #208, T16 : `conv.system` pour le préfixe retenu,
+/// `conv.user` et sa clé de tour pour le message déjà écrit).
+const RETIRED_KEYS: &[&str] = &["prompt.prefix.", "turn.recorded."];
 
 /// Efface tout ce qu'une session a dit et fait dire, sauf la chaîne d'audit.
 #[allow(clippy::too_many_lines)] // gel 0.17 : purge d'une session table par table
@@ -122,46 +127,11 @@ pub async fn session(s: &Services, session_id: &str, reason: &str) -> anyhow::Re
                 }
             }
 
-            let messages = tx.execute(
-                "DELETE FROM messages_fts WHERE msg_id IN
-                   (SELECT id FROM messages WHERE session_id = ?1)",
-                [&sid],
-            )?;
-            tx.execute("DELETE FROM messages WHERE session_id = ?1", [&sid])?;
-            tx.execute("DELETE FROM message_context WHERE session_id = ?1", [&sid])?;
-            tx.execute(
-                "DELETE FROM lcm_edges WHERE parent_id IN
-                   (SELECT id FROM lcm_nodes WHERE session_id = ?1)
-                 OR child_id IN (SELECT id FROM lcm_nodes WHERE session_id = ?1)",
-                [&sid],
-            )?;
-            let nodes = tx.execute("DELETE FROM lcm_nodes WHERE session_id = ?1", [&sid])?;
+            // Les caches de la conversation, prompts système compris (#205) : seule
+            // `penelope-context` les écrit (T16).
+            let caches = HistoryStore::purge_session_in(tx, &sid)?;
+            let (messages, nodes, prompts) = (caches.messages, caches.nodes, caches.prompts);
             let artifacts = tx.execute("DELETE FROM artifacts WHERE session_id = ?1", [&sid])?;
-            // #205 : le prompt système gardé sous son empreinte contient le profil, la
-            // mémoire rappelée et les notes de session. Part ce que cette session seule
-            // référençait ; ce qu'une autre lit encore attend sa purge à elle.
-            let prompts = tx.execute(
-                "DELETE FROM prompt_snapshots WHERE hash IN (
-                    SELECT system_hash FROM usage
-                     WHERE session_id = ?1 AND system_hash IS NOT NULL
-                    UNION
-                    SELECT system_hash FROM llm_requests
-                     WHERE session_id = ?1 AND system_hash IS NOT NULL
-                    UNION
-                    SELECT json_extract(payload, '$.hash') FROM events
-                     WHERE session_id = ?1 AND kind = 'conv.system')
-                 AND hash NOT IN (
-                    SELECT system_hash FROM usage
-                     WHERE COALESCE(session_id, '') <> ?1 AND system_hash IS NOT NULL)
-                 AND hash NOT IN (
-                    SELECT system_hash FROM llm_requests
-                     WHERE COALESCE(session_id, '') <> ?1 AND system_hash IS NOT NULL)
-                 AND hash NOT IN (
-                    SELECT json_extract(payload, '$.hash') FROM events
-                     WHERE kind = 'conv.system' AND COALESCE(session_id, '') <> ?1
-                       AND json_extract(payload, '$.hash') IS NOT NULL)",
-                [&sid],
-            )?;
             // La ligne comptable reste, avec ses jetons et son coût : seule la clé qui
             // menait au texte est coupée.
             tx.execute(
@@ -491,6 +461,9 @@ pub async fn retention(s: &Services) -> anyhow::Result<Value> {
                         params![c, format!("{prefix}%")],
                     )?;
                 }
+                for prefix in RETIRED_KEYS {
+                    keys += tx.execute("DELETE FROM kv WHERE k LIKE ?1", [format!("{prefix}%")])?;
+                }
                 // #78 : le contenu de ce qui est tranché. Un effet `unknown` attend une
                 // décision : il garde tout. La ligne d'un effet reste pour l'idempotence.
                 effects = tx.execute(
@@ -524,15 +497,7 @@ pub async fn retention(s: &Services) -> anyhow::Result<Value> {
                 )?;
                 // #205 : un instantané de prompt suit la ligne d'`usage` qui le cite ; il
                 // ne part qu'une fois que plus personne ne le désigne.
-                prompts = tx.execute(
-                    "DELETE FROM prompt_snapshots
-                     WHERE last_seen_at < ?1
-                       AND hash NOT IN (SELECT system_hash FROM usage
-                                         WHERE system_hash IS NOT NULL)
-                       AND hash NOT IN (SELECT system_hash FROM llm_requests
-                                         WHERE system_hash IS NOT NULL)",
-                    [c],
-                )?;
+                prompts = HistoryStore::retire_prompts_in(tx, c)?;
                 steps = tx.execute(
                     "UPDATE workflow_step_log SET output = NULL, error = NULL
                      WHERE (output IS NOT NULL OR error IS NOT NULL) AND run_id IN (

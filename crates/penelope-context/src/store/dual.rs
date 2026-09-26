@@ -1,13 +1,11 @@
-//! Double écriture de l'historique (épopée #208, tâche T5 ; phase 1 de
-//! `design/v1/source-de-verite.md` §4.1).
+//! Écriture de l'historique : l'événement, puis sa ligne (épopée #208, tâche T5 ; phase 1
+//! de `design/v1/source-de-verite.md` §4.1, contractée en T16, §4.4).
 //!
 //! Une ligne de `messages` s'écrit avec son événement `conv.*` : l'événement d'abord,
 //! commité seul (c'est la vérité), puis la ligne dans une seconde transaction du même
-//! thread écrivain, qui reçoit `event_id` (`EventLog::append_with`). Les tables restent
-//! la source de lecture : rien de ce que le modèle lit ne change.
-//!
-//! Sans journal attaché (`with_events` jamais appelé : outils, tests unitaires), la ligne
-//! s'écrit seule, comme avant.
+//! thread écrivain, qui reçoit `event_id` (`EventLog::append_with`). La ligne est un
+//! cache : la conversation se relit depuis le journal (`read.rs`), et le projecteur
+//! rattrape une ligne que la seconde transaction n'a pas écrite.
 
 use super::*;
 use crate::journal::{
@@ -15,7 +13,7 @@ use crate::journal::{
     Provenance, SurfaceOp, SystemPayload, SystemReason, message_event,
 };
 use crate::tiers::Tiers;
-use penelope_kernel::event::{EventDraft, EventLog};
+use penelope_kernel::event::EventDraft;
 use penelope_store::rusqlite::{Connection, Transaction};
 use std::sync::{Arc, Mutex};
 
@@ -65,19 +63,14 @@ impl Row {
 /// Insère la ligne et son entrée FTS ; rend son `seq`. Un message de la file déjà écrit,
 /// ou dont le projecteur a déjà écrit la ligne (rattrapage passé entre l'événement et
 /// cette transaction, T13), rend le `seq` existant sans rien écrire.
-fn insert_row(
-    tx: &Transaction<'_>,
-    row: &Row,
-    event_id: Option<i64>,
-) -> penelope_store::Result<i64> {
-    if let Some(id) = event_id
-        && let Some(seq) = tx
-            .query_row(
-                "SELECT seq FROM messages WHERE session_id = ?1 AND event_id = ?2",
-                params![row.sid, id],
-                |r| r.get(0),
-            )
-            .optional()?
+fn insert_row(tx: &Transaction<'_>, row: &Row, event_id: i64) -> penelope_store::Result<i64> {
+    if let Some(seq) = tx
+        .query_row(
+            "SELECT seq FROM messages WHERE session_id = ?1 AND event_id = ?2",
+            params![row.sid, event_id],
+            |r| r.get(0),
+        )
+        .optional()?
     {
         return Ok(seq);
     }
@@ -126,12 +119,6 @@ fn insert_row(
 }
 
 impl HistoryStore {
-    /// Attache le journal : chaque message écrit ensuite l'est aussi en `conv.*`.
-    pub fn with_events(mut self, events: EventLog) -> Self {
-        self.events = Some(events);
-        self
-    }
-
     /// Ajoute un message avec ce que l'appelant sait de sa provenance (tour, étape,
     /// appel au modèle) : l'événement `conv.*` le porte, la ligne n'en garde rien.
     #[allow(clippy::too_many_arguments)] // la signature de `append`, plus la provenance
@@ -206,17 +193,40 @@ impl HistoryStore {
         if let Some(seq) = seq {
             return Ok(seq);
         }
-        match (journaled, &self.events) {
-            (Some(event_id), Some(_)) => {
+        match journaled {
+            Some(event_id) => {
                 self.store
-                    .write(move |tx| insert_row(tx, &row, Some(event_id)))
+                    .write(move |tx| insert_row(tx, &row, event_id))
                     .await
             }
-            _ => {
+            None => {
                 let event = message_event(message, tokens, episode, false, prov);
                 self.write_row(row, event).await
             }
         }
+    }
+
+    /// Vrai si le message de file de clé `turn_message_id` est déjà au journal de la
+    /// session : un tour rejoué ne le réécrit pas et ne revérifie pas sa frontière
+    /// d'épisode (§2.7 ; remplace la clé `kv turn.recorded.*`, T16).
+    pub async fn recorded(
+        &self,
+        session_id: &str,
+        turn_message_id: &str,
+    ) -> penelope_store::Result<bool> {
+        let (sid, key) = (session_id.to_string(), turn_message_id.to_string());
+        self.store
+            .read(move |c| {
+                Ok(c.query_row(
+                    "SELECT 1 FROM events WHERE session_id=?1 AND kind=?2
+                       AND json_extract(payload, '$.turn_message_id')=?3 LIMIT 1",
+                    params![sid, KIND_USER, key],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some())
+            })
+            .await
     }
 
     /// Fige le contexte volatil (T4) d'un message utilisateur : il l'accompagnera dans
@@ -236,9 +246,6 @@ impl HistoryStore {
                  VALUES(?1, ?2, ?3)",
                 params![sid, seq, ctx],
             )? > 0)
-        };
-        let Some(log) = &self.events else {
-            return self.store.write(insert).await;
         };
         let sid = session_id.to_string();
         let (frozen, target) = self
@@ -265,19 +272,19 @@ impl HistoryStore {
         let done = Arc::new(Mutex::new(false));
         let out = done.clone();
         let draft = EventDraft::new(event.kind(), event.payload()).session(session_id);
-        log.append_with(draft, move |tx, _| {
-            *out.lock().unwrap_or_else(|p| p.into_inner()) = insert(tx)?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| penelope_store::StoreError::other(e.to_string()))?;
+        self.events
+            .append_with(draft, move |tx, _| {
+                *out.lock().unwrap_or_else(|p| p.into_inner()) = insert(tx)?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| penelope_store::StoreError::other(e.to_string()))?;
         Ok(*done.lock().unwrap_or_else(|p| p.into_inner()))
     }
 
     /// Journalise le préfixe système retenu pour la prochaine requête, en entier
     /// (`conv.system`, T6, arbitrage du propriétaire README §10.2), s'il diffère du
-    /// dernier journalisé. Rend la raison écrite, ou `None` si le préfixe n'a pas bougé
-    /// ou qu'aucun journal n'est attaché.
+    /// dernier journalisé. Rend la raison écrite, ou `None` si le préfixe n'a pas bougé.
     ///
     /// La raison : `first` pour le premier de la session, `compaction` si un résumé a été
     /// publié depuis le précédent (`context.compacted`), `cold` sinon (le préfixe en
@@ -288,9 +295,6 @@ impl HistoryStore {
         session_id: &str,
         tiers: &Tiers,
     ) -> penelope_store::Result<Option<SystemReason>> {
-        if self.events.is_none() {
-            return Ok(None);
-        }
         let rendered = tiers.prefix();
         let hash = penelope_kernel::canonical::sha256_hex(rendered.as_bytes());
         let sid = session_id.to_string();
@@ -350,20 +354,26 @@ impl HistoryStore {
         let event = ConvEvent::System(payload.clone());
         // L'instantané du prompt (#205) suit l'événement, dans la seconde transaction,
         // comme toute ligne de cache.
-        self.journaled(session_id, Some(event), move |tx, event_id| {
-            let ts: String = tx.query_row(
-                "SELECT ts FROM events WHERE id = ?1",
-                [event_id.unwrap_or_default()],
-                |r| r.get(0),
-            )?;
+        self.journaled(session_id, event, move |tx, event_id| {
+            let ts: String =
+                tx.query_row("SELECT ts FROM events WHERE id = ?1", [event_id], |r| {
+                    r.get(0)
+                })?;
             crate::projector::ensure_snapshot(tx, &payload, &ts)
         })
         .await?;
         Ok(Some(reason))
     }
 
-    /// L'événement puis la ligne, ou la ligne seule sans journal ou sans événement.
+    /// L'événement puis la ligne. Un message système n'a pas d'événement (§2.2 : le
+    /// préfixe a le sien, `conv.system`) : il n'entre pas dans l'historique.
     async fn write_row(&self, row: Row, event: Option<ConvEvent>) -> penelope_store::Result<i64> {
+        let Some(event) = event else {
+            return Err(penelope_store::StoreError::other(
+                "un message système n'entre pas dans l'historique : le préfixe a son \
+                 événement (`conv.system`)",
+            ));
+        };
         let sid = row.sid.clone();
         self.journaled(&sid, event, move |tx, event_id| {
             insert_row(tx, &row, event_id)
@@ -372,31 +382,29 @@ impl HistoryStore {
     }
 
     /// Écrit `event` au journal, puis `write` dans la seconde transaction du même thread
-    /// écrivain, avec l'identifiant de l'événement (`EventLog::append_with`). Sans
-    /// journal attaché ou sans événement, `write` seul, sans identifiant.
+    /// écrivain, avec l'identifiant de l'événement (`EventLog::append_with`). C'est le
+    /// seul chemin d'écriture des caches de la conversation (T16).
     pub(crate) async fn journaled<T, F>(
         &self,
         session_id: &str,
-        event: Option<ConvEvent>,
+        event: ConvEvent,
         write: F,
     ) -> penelope_store::Result<T>
     where
         T: Send + 'static,
-        F: FnOnce(&Transaction<'_>, Option<i64>) -> penelope_store::Result<T> + Send + 'static,
+        F: FnOnce(&Transaction<'_>, i64) -> penelope_store::Result<T> + Send + 'static,
     {
-        let (Some(log), Some(event)) = (&self.events, event) else {
-            return self.store.write(move |tx| write(tx, None)).await;
-        };
         let out = Arc::new(Mutex::new(None));
         let slot = out.clone();
         let draft = EventDraft::new(event.kind(), event.payload()).session(session_id);
-        log.append_with(draft, move |tx, ev| {
-            let v = write(tx, Some(ev.id))?;
-            *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(v);
-            Ok(())
-        })
-        .await
-        .map_err(|e| penelope_store::StoreError::other(e.to_string()))?;
+        self.events
+            .append_with(draft, move |tx, ev| {
+                let v = write(tx, ev.id)?;
+                *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(v);
+                Ok(())
+            })
+            .await
+            .map_err(|e| penelope_store::StoreError::other(e.to_string()))?;
         let v = out.lock().unwrap_or_else(|p| p.into_inner()).take();
         v.ok_or_else(|| penelope_store::StoreError::other("écriture journalisée sans résultat"))
     }
@@ -422,11 +430,6 @@ impl HistoryStore {
                 .optional()?)
             })
             .await
-    }
-
-    /// Vrai si un journal est attaché.
-    pub(crate) fn journals(&self) -> bool {
-        self.events.is_some()
     }
 
     /// Adresse de surface (§2.3) du message `seq` d'une session : `offset + events.seq`

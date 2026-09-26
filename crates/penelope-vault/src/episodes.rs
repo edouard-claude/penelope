@@ -428,16 +428,14 @@ pub fn snapshot_key(session_id: &str, episode: i64) -> String {
 }
 
 /// Instantané T2 à reconstruire au prochain tour (après une compaction, frontière sûre).
+/// Le préfixe retenu suit de lui-même : la compaction, comme un projet fixé à la main,
+/// est au journal et le libère (`penelope_context::store::PREFIX_RELEASES`, T16).
 pub async fn refresh_snapshot(s: &Services, session_id: &str) {
     if let Ok(Some(sess)) = s.sessions.get(session_id).await {
         let _ = s
             .kv_delete(&snapshot_key(session_id, sess.episode_seq))
             .await;
     }
-    // La compaction casse le cache : le préfixe peut suivre ses changements.
-    let _ = s
-        .kv_delete(&penelope_app::helpers::prefix_key(session_id))
-        .await;
 }
 
 #[cfg(test)]

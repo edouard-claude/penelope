@@ -1,60 +1,29 @@
-//! Réécritures de l'historique canonique : copie et coupe (fork, retour arrière),
-//! marquage d'une plage résumée, corps externalisé (niveau 1).
+//! Réécritures de l'historique : fork et retour arrière, marquage d'une plage résumée,
+//! corps externalisé (niveau 1). Chacune est un événement `conv.*` d'abord ; ses lignes
+//! de cache suivent dans la seconde transaction (T16).
 
 use super::*;
 use crate::journal::{ConvEvent, ForkPayload, RewindPayload, SurfaceOp, ToolResultPayload};
 use dual::address_in;
-use penelope_kernel::event::EventDraft;
 use penelope_store::rusqlite::Transaction;
 
-impl HistoryStore {
-    /// Copie l'historique d'une session vers une autre, numéros et état de compaction
-    /// compris, index plein texte avec (fork, archive d'un rewind). Une copie cite
-    /// l'événement de sa ligne d'origine (`event_id`) : c'est l'adresse qu'elle a dans la
-    /// surface héritée (T10). Une ligne scellée reste scellée (`sealed`) : sans
-    /// événement, c'est ce qui l'apparie à son adresse et la garde à la refonte.
-    pub async fn copy_messages(
-        &self,
-        from: &str,
-        to: &str,
-        from_seq: i64,
-        to_seq: Option<i64>,
-    ) -> penelope_store::Result<usize> {
-        let (from, to) = (from.to_string(), to.to_string());
-        self.store
-            .write(move |tx| {
-                let n = tx.execute(
-                    "INSERT INTO messages(session_id, seq, role, content, tool_call_id, tool_name,
-                        tokens_est, ts, episode, eager, artifact_id, compacted, event_id, sealed)
-                     SELECT ?2, seq, role, content, tool_call_id, tool_name, tokens_est, ts,
-                        episode, eager, artifact_id, compacted, event_id, sealed
-                     FROM messages
-                     WHERE session_id = ?1 AND seq >= ?3 AND (?4 IS NULL OR seq <= ?4)
-                     ORDER BY seq",
-                    params![from, to, from_seq, to_seq],
-                )?;
-                tx.execute(
-                    "INSERT INTO messages_fts(content, session_id, msg_id)
-                     SELECT f.content, ?2, dst.id
-                     FROM messages dst
-                     JOIN messages src ON src.session_id = ?1 AND src.seq = dst.seq
-                     JOIN messages_fts f ON f.msg_id = src.id
-                     WHERE dst.session_id = ?2 AND dst.seq >= ?3 AND (?4 IS NULL OR dst.seq <= ?4)",
-                    params![from, to, from_seq, to_seq],
-                )?;
-                Ok(n)
-            })
-            .await
-    }
+/// Ce qu'un retour arrière a fait.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Rewound {
+    /// Lignes retirées de la session.
+    pub removed: usize,
+    /// Lignes projetées dans la session d'archive.
+    pub archived: usize,
+}
 
-    /// Journalise le fork par référence (T10) : `conv.fork` en tête du journal de la
-    /// fille, qui hérite de toute la surface de sa mère (`up_to` = sa dernière adresse,
-    /// qui sert aussi d'`offset`). À écrire avant tout autre `conv.*` de la fille ; la
-    /// copie V0 reste. Sans journal, rien.
-    pub async fn journal_fork(&self, child: &str, parent: &str) -> penelope_store::Result<()> {
-        let Some(log) = &self.events else {
-            return Ok(());
-        };
+impl HistoryStore {
+    /// Fork par référence (T10) : `conv.fork` en tête du journal de la fille, qui hérite
+    /// de toute la surface de sa mère (`up_to` = sa dernière adresse, qui sert aussi
+    /// d'`offset`). À écrire avant tout autre `conv.*` de la fille. La seconde transaction
+    /// projette les caches de la fille depuis cet héritage : lignes (scellées comprises,
+    /// avec leur drapeau), résumés actifs recopiés ; plus de copie hors du projecteur
+    /// (T16). Rend le nombre de messages hérités.
+    pub async fn fork(&self, child: &str, parent: &str) -> penelope_store::Result<usize> {
         let p = parent.to_string();
         let up_to = self
             .store
@@ -77,69 +46,65 @@ impl HistoryStore {
             up_to,
             offset: up_to,
         });
-        log.append(EventDraft::new(event.kind(), event.payload()).session(child))
-            .await
-            .map_err(|e| penelope_store::StoreError::other(e.to_string()))?;
-        Ok(())
+        let (sid, ts) = (child.to_string(), self.clock.now_rfc3339());
+        self.journaled(child, event, move |tx, _| {
+            Ok(crate::projector::project_in(tx, &sid, &ts)?.rows)
+        })
+        .await
     }
 
     /// Retour arrière journalisé (T10) : `conv.rewind` coupe la surface après le nœud qui
-    /// précède `from_seq` (0 s'il n'y en a pas), puis la seconde transaction retire les
-    /// lignes comme [`truncate_from`](Self::truncate_from). Rend le nombre de lignes
-    /// retirées.
+    /// précède `from_seq` (0 s'il n'y en a pas). La seconde transaction projette d'abord
+    /// l'archive (`archive`, session déjà créée : ce que la coupe retire, relu dans le
+    /// journal de la mère), puis retire les lignes coupées.
     pub async fn rewind_from(
         &self,
         session_id: &str,
         from_seq: i64,
         turns: u64,
         archive: Option<&str>,
-    ) -> penelope_store::Result<usize> {
-        let event = match self.journals() {
-            true => {
-                let sid = session_id.to_string();
-                let after = self
-                    .store
-                    .read(move |c| {
-                        let before: Option<i64> = c.query_row(
-                            "SELECT MAX(seq) FROM messages WHERE session_id = ?1 AND seq < ?2",
-                            params![sid, from_seq],
-                            |r| r.get(0),
-                        )?;
-                        match before {
-                            Some(seq) => address_in(c, &sid, seq),
-                            None => Ok(0),
-                        }
-                    })
-                    .await?;
-                Some(ConvEvent::Rewind(RewindPayload {
-                    surface: SurfaceOp::Cut { after },
-                    turns,
-                    archive_session: archive.map(String::from),
-                }))
-            }
-            false => None,
-        };
+    ) -> penelope_store::Result<Rewound> {
         let sid = session_id.to_string();
+        let after = self
+            .store
+            .read(move |c| {
+                let before: Option<i64> = c.query_row(
+                    "SELECT MAX(seq) FROM messages WHERE session_id = ?1 AND seq < ?2",
+                    params![sid, from_seq],
+                    |r| r.get(0),
+                )?;
+                match before {
+                    Some(seq) => address_in(c, &sid, seq),
+                    None => Ok(0),
+                }
+            })
+            .await?;
+        let event = ConvEvent::Rewind(RewindPayload {
+            surface: SurfaceOp::Cut { after },
+            turns,
+            archive_session: archive.map(String::from),
+        });
+        let (sid, archive, ts) = (
+            session_id.to_string(),
+            archive.map(String::from),
+            self.clock.now_rfc3339(),
+        );
         self.journaled(session_id, event, move |tx, _| {
-            truncate_in(tx, &sid, from_seq)
+            let archived = match &archive {
+                Some(a) => crate::projector::project_in(tx, a, &ts)?.rows,
+                None => 0,
+            };
+            Ok(Rewound {
+                removed: truncate_in(tx, &sid, from_seq)?,
+                archived,
+            })
         })
         .await
     }
 
-    /// Retire les messages d'une session à partir d'une séquence (incluse).
-    pub async fn truncate_from(
-        &self,
-        session_id: &str,
-        from_seq: i64,
-    ) -> penelope_store::Result<usize> {
-        let sid = session_id.to_string();
-        self.store
-            .write(move |tx| truncate_in(tx, &sid, from_seq))
-            .await
-    }
-
-    /// Marque une plage de séquences comme couverte par un nœud de résumé.
-    pub async fn mark_compacted(
+    /// Marque une plage de séquences comme couverte par un nœud de résumé : un résumé
+    /// déjà publié sur exactement cette plage (`publish_summary`).
+    pub(crate) async fn mark_compacted(
         &self,
         session_id: &str,
         from_seq: i64,
@@ -151,30 +116,11 @@ impl HistoryStore {
             .await
     }
 
-    /// Remplace le corps d'un message par sa version externalisée (niveau 1, canonique).
-    pub async fn externalise(
-        &self,
-        session_id: &str,
-        seq: i64,
-        new_body: &str,
-        artifact_id: &str,
-        new_tokens: u64,
-    ) -> penelope_store::Result<()> {
-        let (sid, body, art) = (
-            session_id.to_string(),
-            new_body.to_string(),
-            artifact_id.to_string(),
-        );
-        self.store
-            .write(move |tx| externalise_in(tx, &sid, seq, &body, &art, new_tokens))
-            .await
-    }
-
-    /// Externalise le corps d'un résultat d'outil (niveau 1) et, journal attaché, le
-    /// journalise comme un `conv.tool_result` qui remplace ce seul nœud (T8) : l'artefact
-    /// est déjà écrit, l'événement le cite (`artifact_id`, `artifact_sha256`) avec le
-    /// `call_id` du nœud, puis la ligne est réécrite dans la seconde transaction. Le nœud
-    /// garde son adresse (§2.3) : les paires appel/résultat ne bougent pas.
+    /// Externalise le corps d'un résultat d'outil (niveau 1) : un `conv.tool_result` qui
+    /// remplace ce seul nœud (T8), l'artefact déjà écrit et cité (`artifact_id`,
+    /// `artifact_sha256`) avec le `call_id` du nœud, puis la ligne réécrite dans la
+    /// seconde transaction. Le nœud garde son adresse (§2.3) : les paires appel/résultat
+    /// ne bougent pas. Une ligne qui n'est pas un résultat d'outil n'a rien à citer : erreur.
     pub async fn externalise_as(
         &self,
         session_id: &str,
@@ -184,16 +130,16 @@ impl HistoryStore {
         new_tokens: u64,
         original_tokens: u64,
     ) -> penelope_store::Result<()> {
-        let event = match self.journals() {
-            true => self
-                .replacement(session_id, seq, new_body, artifact, new_tokens)
-                .await?
-                .map(|mut p| {
-                    p.original_tokens = Some(original_tokens);
-                    ConvEvent::ToolResult(p)
-                }),
-            false => None,
-        };
+        let mut payload = self
+            .replacement(session_id, seq, new_body, artifact, new_tokens)
+            .await?
+            .ok_or_else(|| {
+                penelope_store::StoreError::other(format!(
+                    "{session_id} #{seq} n'est pas un résultat d'outil : rien à externaliser"
+                ))
+            })?;
+        payload.original_tokens = Some(original_tokens);
+        let event = ConvEvent::ToolResult(payload);
         let (sid, body, art) = (
             session_id.to_string(),
             new_body.to_string(),
@@ -283,7 +229,7 @@ pub(crate) fn mark_compacted_in(
     )?)
 }
 
-/// [`HistoryStore::externalise`] dans la transaction de l'appelant.
+/// [`HistoryStore::externalise_as`] dans la transaction de l'appelant.
 fn externalise_in(
     tx: &Transaction<'_>,
     session_id: &str,
@@ -313,7 +259,7 @@ fn externalise_in(
     Ok(())
 }
 
-/// [`HistoryStore::truncate_from`] dans la transaction de l'appelant. Le contexte figé des
+/// La coupe d'un retour arrière dans la transaction de l'appelant. Le contexte figé des
 /// messages retirés part avec eux : laissé, il collait au message suivant écrit sous le
 /// même numéro, et `freeze_context` le trouvait déjà figé (relevé par
 /// `history verify`, T12).

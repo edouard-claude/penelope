@@ -24,7 +24,7 @@
 
 use penelope_app::services::Services;
 use penelope_context::tiers::TileMap;
-use penelope_store::rusqlite::{OptionalExtension, params};
+use penelope_store::rusqlite::OptionalExtension;
 
 /// Un prompt système gardé sous son empreinte.
 #[derive(Debug, Clone, PartialEq)]
@@ -49,26 +49,9 @@ pub async fn record(s: &Services, hash: &str, prefix: &PromptPrefix) -> anyhow::
         tracing::debug!("préfixe et empreinte divergent : pas d'instantané pour cette requête");
         return Ok(false);
     }
-    let (hash, rendered, ts) = (
-        hash.to_string(),
-        prefix.rendered.clone(),
-        s.clock.now_rfc3339(),
-    );
-    let tiles = prefix
-        .tiles
-        .as_ref()
-        .and_then(|t| serde_json::to_string(t).ok());
-    s.store
-        .write(move |tx| {
-            tx.execute(
-                "INSERT INTO prompt_snapshots(hash, rendered, tiers, first_seen_at,
-                    last_seen_at, uses)
-                 VALUES(?1,?2,?3,?4,?4,1)
-                 ON CONFLICT(hash) DO UPDATE SET last_seen_at = ?4, uses = uses + 1",
-                params![hash, rendered, tiles, ts],
-            )?;
-            Ok(())
-        })
+    s.context
+        .history
+        .prompt_sent(hash, &prefix.rendered, prefix.tiles.as_ref())
         .await?;
     Ok(true)
 }

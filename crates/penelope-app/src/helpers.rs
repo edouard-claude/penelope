@@ -211,11 +211,6 @@ pub async fn pinned_model(s: &Services, session_id: &str) -> Option<penelope_llm
 /// lise celle-ci (T30).
 pub const CACHE_TTL_MS: i64 = 5 * 60_000;
 
-/// Préfixe stable (T0 à T2) retenu pour une session (`cache_audit`).
-pub fn prefix_key(session_id: &str) -> String {
-    format!("prompt.prefix.{session_id}")
-}
-
 /// Clé du `step_done()` / `return_value` d'un run.
 pub fn step_done_key(run_id: &str) -> String {
     format!("wf.step_done.{run_id}")

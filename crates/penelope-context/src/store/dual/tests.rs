@@ -2,6 +2,7 @@ use super::*;
 use crate::derive::{Sealed, derive};
 use crate::journal::{KIND_REWIND, UserSource};
 use penelope_kernel::clock::TestClock;
+use penelope_kernel::event::EventLog;
 
 async fn journaled() -> (HistoryStore, EventLog) {
     let store = Store::open_memory().unwrap();
@@ -18,10 +19,22 @@ async fn journaled() -> (HistoryStore, EventLog) {
         .unwrap();
     let clock: SharedClock = Arc::new(TestClock::default());
     let log = EventLog::new(store.clone(), clock.clone());
-    (
-        HistoryStore::new(store, clock).with_events(log.clone()),
-        log,
-    )
+    (HistoryStore::new(store, clock, log.clone()), log)
+}
+
+/// Un message du propriétaire venu de la file, sous sa clé et son heure d'arrivée.
+async fn queued(
+    h: &HistoryStore,
+    key: &str,
+    text: &str,
+    at: &str,
+    tokens: u64,
+    episode: i64,
+) -> i64 {
+    let prov = Provenance::queued(UserSource::Owner, key, at);
+    h.append_queued("s1", &ChatMessage::user(text), tokens, episode, &prov)
+        .await
+        .unwrap()
 }
 
 /// `(seq, event_id)` de chaque ligne de la session.
@@ -63,9 +76,7 @@ async fn assert_each_row_has_its_event(h: &HistoryStore, log: &EventLog) {
 #[tokio::test]
 async fn every_message_is_written_with_its_event() {
     let (h, log) = journaled().await;
-    h.append_user_turn_at("s1", "q1", "lis le fichier", "2026-09-24T08:00:00Z", 4, 1)
-        .await
-        .unwrap();
+    queued(&h, "q1", "lis le fichier", "2026-09-24T08:00:00Z", 4, 1).await;
     let call = ToolCall {
         id: "c1".into(),
         name: "fs_read".into(),
@@ -127,14 +138,8 @@ async fn every_message_is_written_with_its_event() {
 #[tokio::test]
 async fn a_queued_message_is_written_once_even_across_a_crash() {
     let (h, log) = journaled().await;
-    let first = h
-        .append_user_turn_at("s1", "q1", "bonjour", "2026-09-24T08:00:00Z", 2, 0)
-        .await
-        .unwrap();
-    let again = h
-        .append_user_turn_at("s1", "q1", "bonjour", "2026-09-24T08:00:00Z", 2, 0)
-        .await
-        .unwrap();
+    let first = queued(&h, "q1", "bonjour", "2026-09-24T08:00:00Z", 2, 0).await;
+    let again = queued(&h, "q1", "bonjour", "2026-09-24T08:00:00Z", 2, 0).await;
     assert_eq!(first, again);
 
     // Crash simulé : l'événement de q2 est commité, sa ligne jamais écrite.
@@ -158,28 +163,6 @@ async fn a_queued_message_is_written_once_even_across_a_crash() {
         "la ligne réparée cite l'événement existant"
     );
     assert_each_row_has_its_event(&h, &log).await;
-}
-
-/// Sans journal attaché, rien ne change : la ligne s'écrit seule.
-#[tokio::test]
-async fn without_a_journal_the_row_is_written_alone() {
-    let store = Store::open_memory().unwrap();
-    let h = HistoryStore::new(store, Arc::new(TestClock::default()));
-    h.store()
-        .write(|tx| {
-            tx.execute(
-                "INSERT INTO sessions(id, kind, created_at, updated_at)
-                 VALUES('s1','chat','t','t')",
-                [],
-            )?;
-            Ok(())
-        })
-        .await
-        .unwrap();
-    h.append("s1", &ChatMessage::user("seul"), 1, 0, false, None)
-        .await
-        .unwrap();
-    assert_eq!(rows(&h).await, [(1, None)]);
 }
 
 fn tiers(context: &str) -> Tiers {
@@ -281,8 +264,7 @@ async fn a_fork_addresses_its_own_events_after_what_it_inherits() {
         .await
         .unwrap();
 
-    h.journal_fork("s2", "s1").await.unwrap();
-    h.copy_messages("s1", "s2", 0, None).await.unwrap();
+    assert_eq!(h.fork("s2", "s1").await.unwrap(), 2);
     let first = h.journal_system("s2", &tiers("a")).await.unwrap();
     assert_eq!(first, Some(SystemReason::First), "le premier de la fille");
     let seq = h
@@ -328,8 +310,14 @@ async fn a_fork_addresses_its_own_events_after_what_it_inherits() {
     assert!(address > up_to);
 
     // La coupe vise le nœud qui précède le message retiré.
-    let removed = h.rewind_from("s2", seq, 1, None).await.unwrap();
-    assert_eq!(removed, 2);
+    let done = h.rewind_from("s2", seq, 1, None).await.unwrap();
+    assert_eq!(
+        done,
+        Rewound {
+            removed: 2,
+            archived: 0
+        }
+    );
     let child = log.session_events("s2", 0).await.unwrap();
     let cut = child.iter().find(|e| e.kind == KIND_REWIND).unwrap();
     let before = h.address("s2", seq - 1).await.unwrap();
@@ -386,4 +374,34 @@ async fn the_prompt_snapshot_follows_the_system_event() {
     erase(&h).await;
     h.reindex(Some("s1")).await.unwrap();
     assert_eq!(snapshot(&h).await, Some((tiers("a").prefix(), 0)));
+}
+
+/// T16 : le préfixe retenu se relit dans le dernier `conv.system` (plus de clé
+/// `prompt.prefix.*`) ; une compaction ou un projet fixé à la main le libère jusqu'au
+/// prochain appel au modèle.
+#[tokio::test]
+async fn the_retained_prefix_is_read_from_the_journal_until_released() {
+    let (h, log) = journaled().await;
+    assert!(
+        h.retained_prefix("s1").await.unwrap().is_none(),
+        "aucun préfixe"
+    );
+    h.journal_system("s1", &tiers("a")).await.unwrap();
+    let retained = h.retained_prefix("s1").await.unwrap().unwrap();
+    assert_eq!(retained, tiers("a"));
+
+    for release in crate::store::PREFIX_RELEASES {
+        log.append(EventDraft::new(*release, json!({})).session("s1"))
+            .await
+            .unwrap();
+        assert!(
+            h.retained_prefix("s1").await.unwrap().is_none(),
+            "{release}"
+        );
+        // Le préfixe d'après la libération est retenu dès l'appel suivant.
+        h.append("s1", &ChatMessage::assistant("vu"), 1, 0, false, None)
+            .await
+            .unwrap();
+        assert_eq!(h.retained_prefix("s1").await.unwrap(), Some(tiers("a")));
+    }
 }

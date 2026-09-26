@@ -265,10 +265,7 @@ impl HistoryStore {
     /// sont commités ensemble, sans fenêtre de crash entre les deux. L'événement n'est pas
     /// diffusé en direct : l'étape tourne au démarrage, avant tout abonné.
     pub async fn seal_legacy(&self) -> penelope_store::Result<SealReport> {
-        let events = self
-            .events
-            .clone()
-            .ok_or_else(|| penelope_store::StoreError::other("scellement sans journal attaché"))?;
+        let events = self.events.clone();
         let candidates: Vec<String> = self
             .store
             .read(|c| {

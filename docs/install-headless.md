@@ -575,12 +575,6 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `backup.include_media` | `false` | Inclure les artefacts et les médias reçus. Lourd, et reconstructible. |
 | `backup.max_push_bytes` | `104857600` | Taille maximale d'une archive poussée, en octets (limite de fichier de GitHub). |
 
-**[history]**
-
-| Clé | Défaut | Rôle |
-|---|---|---|
-| `history.source` | `"journal"` | D'où chaque requête relit la conversation : `journal` (pliage du journal d'événements) ou `tables` (lignes `messages`, lecture d'avant la V1). La variable d'environnement `PENELOPE_HISTORY_SOURCE` l'emporte (rejouer une suite sous l'autre). |
-
 **[approval]**
 
 | Clé | Défaut | Rôle |

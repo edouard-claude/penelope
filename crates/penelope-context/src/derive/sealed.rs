@@ -57,8 +57,8 @@ impl Sealed {
     ///
     /// Les messages hérités viennent **sans** leur contexte figé (§2.3 : le fork hérite
     /// des nœuds et des messages) : la fille repart comme la V0 l'a toujours fait
-    /// (`copy_messages` ne recopie pas `message_context`), et ses requêtes gardent leurs
-    /// octets quand la lecture passe au journal (T14).
+    /// (sa copie ne reprenait pas `message_context`), et ses requêtes gardent leurs
+    /// octets depuis que la lecture passe au journal (T14).
     pub fn fork(
         parent: &str,
         parent_prefix: &Sealed,

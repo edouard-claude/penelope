@@ -92,7 +92,7 @@ impl Services {
         let catalog = Catalog::new();
         let llm_state = LlmStateMachine::new(store.clone(), clock.clone());
         let estimator = TokenEstimator::new();
-        let history = HistoryStore::new(store.clone(), clock.clone()).with_events(events.clone());
+        let history = HistoryStore::new(store.clone(), clock.clone(), events.clone());
         let lcm = Lcm::new(store.clone(), clock.clone());
         let context = ContextEngine::new(history, lcm, estimator, catalog.clone(), clock.clone());
 
@@ -194,7 +194,7 @@ impl Services {
         let catalog = Catalog::new();
         let events = EventLog::new(store.clone(), clock.clone());
         let context = ContextEngine::new(
-            HistoryStore::new(store.clone(), clock.clone()).with_events(events.clone()),
+            HistoryStore::new(store.clone(), clock.clone(), events.clone()),
             Lcm::new(store.clone(), clock.clone()),
             TokenEstimator::new(),
             catalog.clone(),

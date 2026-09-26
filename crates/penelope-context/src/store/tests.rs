@@ -15,7 +15,9 @@ async fn hs() -> HistoryStore {
         })
         .await
         .unwrap();
-    HistoryStore::new(store, Arc::new(TestClock::default()))
+    let clock: SharedClock = Arc::new(TestClock::default());
+    let events = penelope_kernel::event::EventLog::new(store.clone(), clock.clone());
+    HistoryStore::new(store, clock, events)
 }
 
 #[tokio::test]
@@ -84,14 +86,12 @@ async fn append_and_load_roundtrip() {
 async fn queued_user_message_keeps_arrival_time_and_is_idempotent() {
     let h = hs().await;
     let at = "2026-09-22T10:00:00.000Z";
-    let first = h
-        .append_user_turn_at("s1", "t1", "bonjour", at, 10, 0)
-        .await
-        .unwrap();
-    let again = h
-        .append_user_turn_at("s1", "t1", "bonjour", at, 10, 0)
-        .await
-        .unwrap();
+    let prov = crate::journal::Provenance::queued(crate::journal::UserSource::Owner, "t1", at);
+    let user = ChatMessage::user("bonjour");
+    let first = h.append_queued("s1", &user, 10, 0, &prov).await.unwrap();
+    assert!(h.recorded("s1", "t1").await.unwrap());
+    assert!(!h.recorded("s1", "t2").await.unwrap());
+    let again = h.append_queued("s1", &user, 10, 0, &prov).await.unwrap();
     assert_eq!(first, again);
     let entries = h.load("s1", 0).await.unwrap();
     assert_eq!(entries.len(), 1);
@@ -199,18 +199,23 @@ async fn externalise_rewrites_the_canonical_body() {
     )
     .await
     .unwrap();
-    h.externalise(
+    let art = h
+        .put_artifact(Some("s1"), None, "text", None, &"x".repeat(5000))
+        .await
+        .unwrap();
+    h.externalise_as(
         "s1",
         1,
-        "[résultat externalisé — artefact art_1]",
-        "art_1",
+        &format!("[résultat externalisé — artefact {}]", art.id),
+        &art,
         30,
+        2000,
     )
     .await
     .unwrap();
     let e = h.load("s1", 0).await.unwrap();
     assert!(e[0].message.text().contains("externalisé"));
-    assert_eq!(e[0].artifact_id.as_deref(), Some("art_1"));
+    assert_eq!(e[0].artifact_id.as_deref(), Some(art.id.as_str()));
     assert_eq!(e[0].tokens, 30);
 }
 

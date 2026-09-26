@@ -4,8 +4,7 @@
 //! une **projection** : tuiles T0 à T2 stables, résumés LCM, queue verbatim, T4 volatile.
 //!
 //! `penelope-conversation` (épopée #208, T23) : la conversation d'une session
-//! (`SessionConversation`, relue depuis le journal ou les tables selon
-//! `history.source`), la compaction de fond et son état (`compaction`), les titres de
+//! (`SessionConversation`, relue depuis le journal d'événements), la compaction de fond et son état (`compaction`), les titres de
 //! session (`titles`), l'alerte de budget (`budget_alert`). C'est l'implémentation du
 //! port `Conversation` que la boucle consomme. La crate ne connaît que `penelope-app`,
 //! `penelope-vault` et les crates métier : ni le daemon, ni la boucle, ni le canal.
@@ -97,15 +96,10 @@ impl SessionConversation {
         self.bare_model().starts_with("anthropic/")
     }
 
-    /// D'où la conversation se relit (`history.source`, épopée #208, T14).
-    fn source(&self) -> penelope_kernel::config::HistorySource {
-        self.services.config.config().history.effective_source()
-    }
-
     /// Entrées à projeter : résumés LCM actifs, puis tout ce qu'ils ne couvrent pas.
     async fn projected_entries(&self) -> anyhow::Result<Vec<Entry>> {
         let (s, sid) = (&self.services, &self.session_id);
-        Ok(s.context.projected_entries(sid, self.source()).await?)
+        Ok(s.context.projected_entries(sid).await?)
     }
 }
 
@@ -242,7 +236,7 @@ impl Conversation for SessionConversation {
         // Les dernières entrées seulement : `resolve_pending` appelle cette queue à
         // chaque itération (issue #55).
         let (s, sid) = (&self.services, &self.session_id);
-        let entries = s.context.tail(sid, TAIL_ENTRIES, self.source()).await?;
+        let entries = s.context.tail(sid, TAIL_ENTRIES).await?;
         Ok(entries.iter().map(|e| e.message.clone()).collect())
     }
 

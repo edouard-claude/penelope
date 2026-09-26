@@ -13,8 +13,9 @@
 //! suit le précédent : la numérotation que la V0 aurait donnée. La comparaison apparie par
 //! `event_id` (une ligne scellée par son numéro) et ne vérifie que l'ordre.
 //!
-//! **Ce que la V0 ne recopie pas.** Une fille de fork ne reçoit pas les contextes figés de
-//! sa mère (`copy_messages`), l'archive d'un retour arrière non plus. Le pliage ne les
+//! **Ce que la V0 ne recopiait pas.** Une fille de fork ne reçoit pas les contextes figés
+//! de sa mère, l'archive d'un retour arrière non plus (le projecteur, qui les écrit depuis
+//! T16, garde cette règle). Le pliage ne les
 //! hérite pas non plus (`Sealed::fork`) ; l'archive n'en attend pas.
 
 use crate::derive::{DeriveError, Sealed, SealedSummary, Slot, Surface, derive, derive_until};

@@ -5,6 +5,7 @@
 //! - l'absence de chemins littéraux, d'appels shell, de signaux Unix et d'API Trousseau
 //!   **hors** `penelope-platform` ;
 //! - l'interdiction de `unsafe` hors des crates FFI explicitement listés ;
+//! - les caches de la conversation écrits par `penelope-context` seule (`caches`) ;
 //! - le gel de la dette (`freeze`, `budget`, `ratchet`) : plafonds de taille, liste
 //!   blanche des modules du daemon, couplage au `Daemon`, allows comptés, critères
 //!   d'acceptation figés et frontière canal/cœur, confrontés à `budget.toml`.
@@ -12,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 pub mod budget;
+pub mod caches;
 pub mod freeze;
 pub mod ratchet;
 pub mod reach;
@@ -349,8 +351,10 @@ pub const VAULT_ALLOWED_DEPS: &[&str] = &[
 ];
 
 /// Ce dont `penelope-ops` peut dépendre : `penelope-app`, `penelope-vault` et les crates
-/// métier dont elle se sert. Ni le daemon, ni l'hôte MCP (§3.2 : `McpAdmin` par le port),
-/// ni `penelope-telegram`, `penelope-workflow`, qu'elle ne lit que par `Services`.
+/// métier dont elle se sert, dont `penelope-context`, seule à écrire les caches de la
+/// conversation que la purge efface (T16). Ni le daemon, ni l'hôte MCP (§3.2 : `McpAdmin`
+/// par le port), ni `penelope-telegram`, `penelope-workflow`, qu'elle ne lit que par
+/// `Services`.
 pub const OPS_ALLOWED_DEPS: &[&str] = &[
     "penelope-app",
     "penelope-vault",
@@ -362,6 +366,7 @@ pub const OPS_ALLOWED_DEPS: &[&str] = &[
     "penelope-memory",
     "penelope-mcp",
     "penelope-skills",
+    "penelope-context",
 ];
 
 /// Ce dont `penelope-dream` peut dépendre (§3.2 : app, vault et métier). Pas

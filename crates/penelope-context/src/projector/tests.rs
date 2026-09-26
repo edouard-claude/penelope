@@ -152,7 +152,7 @@ async fn a_failed_second_transaction_is_caught_up_at_next_access() {
         "q9",
         "2026-01-01T00:00:09Z",
     );
-    let event = message_event(&ChatMessage::user("perdu"), 3, 0, false, &prov);
+    let event = message_event(&ChatMessage::user("perdu"), 3, 0, false, &prov).unwrap();
     let failed = w
         .history()
         .journaled("s1", event, |_, _| -> penelope_store::Result<()> {

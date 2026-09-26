@@ -51,6 +51,9 @@ penelope-memory.workspace = true
 penelope-mcp.workspace = true
 # Registre et installation des skills.
 penelope-skills.workspace = true
+# Caches de la conversation effacés par la purge et la rétention : seule
+# `penelope-context` écrit ces tables (épopée #208, T16).
+penelope-context.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -58,7 +61,4 @@ tempfile.workspace = true
 penelope-hitl.workspace = true
 # Doubles du superviseur MCP pour le test d'import Hermes (hors règle de dépendance).
 penelope-mcp-host.workspace = true
-# Charges du journal (`conv.attempt`) et sa dérivation dans les tests de purge et de
-# session_ops (hors règle de dépendance).
-penelope-context.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util", "test-util"] }

@@ -91,8 +91,7 @@ impl ContextEngine {
 
     /// La publication, avec ou sans déclencheur.
     ///
-    /// Journal attaché, le résumé devient un `conv.summary` qui remplace la plage couverte
-    /// (T7) : l'événement d'abord, puis, dans la seconde transaction, le nœud (qui cite
+    /// Le résumé est un `conv.summary` qui remplace la plage couverte (T7) : l'événement d'abord, puis, dans la seconde transaction, le nœud (qui cite
     /// l'événement par `event_id`) et le marquage de la plage, ensemble. Un événement
     /// déjà écrit pour ce travail (`SummaryJob::idempotency_key`) n'est pas réécrit : un
     /// arrêt entre l'événement et le nœud se répare en écrivant le nœud qu'il annonce.
@@ -165,30 +164,27 @@ impl ContextEngine {
             }
             return Ok(node_id);
         }
-        let event = match self.history.journals() {
-            true => Some(ConvEvent::Summary(SummaryPayload {
-                surface: SurfaceOp::Replace {
-                    from: self.history.address(&sid, job.from_seq).await?,
-                    to: self.history.address(&sid, job.to_seq).await?,
-                },
-                node_id: node.id.clone(),
-                previous_node_id: job.previous_node_id.clone(),
-                summary: rendered,
-                anchors: job.anchors.clone(),
-                verbatim_users: job.verbatim_users.clone(),
-                model: Some(model_id.to_string()),
-                tokens_src: job.tokens_src,
-                tokens_self,
-                batches_left: job.remaining_batches() as u64,
-                trigger: trigger.map(String::from),
-                idempotency_key: Some(key),
-            })),
-            false => None,
-        };
+        let event = ConvEvent::Summary(SummaryPayload {
+            surface: SurfaceOp::Replace {
+                from: self.history.address(&sid, job.from_seq).await?,
+                to: self.history.address(&sid, job.to_seq).await?,
+            },
+            node_id: node.id.clone(),
+            previous_node_id: job.previous_node_id.clone(),
+            summary: rendered,
+            anchors: job.anchors.clone(),
+            verbatim_users: job.verbatim_users.clone(),
+            model: Some(model_id.to_string()),
+            tokens_src: job.tokens_src,
+            tokens_self,
+            batches_left: job.remaining_batches() as u64,
+            trigger: trigger.map(String::from),
+            idempotency_key: Some(key),
+        });
         let id = node.id.clone();
         self.history
             .journaled(&sid, event, move |tx, event_id| {
-                node.event_id = event_id;
+                node.event_id = Some(event_id);
                 place.write(tx, &node)
             })
             .await?;

@@ -36,7 +36,6 @@ pub struct Config {
     pub voice: Voice,
     pub retention: Retention,
     pub backup: Backup,
-    pub history: History,
     pub approval: Approval,
 }
 
@@ -57,6 +56,7 @@ use edit::{SAMPLE_HEADER, unknown_keys};
 pub use providers::*;
 pub use sections::*;
 pub use store::*;
+pub use validate::{RETIRED_KEYS, retired};
 pub use write::atomic_write;
 use write::diff_paths;
 

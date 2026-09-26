@@ -645,37 +645,6 @@ impl Default for Backup {
     }
 }
 
-/// Lecture de la conversation pendant la bascule vers le journal d'événements (épopée
-/// #208, `design/v1/source-de-verite.md` §4.3). La section disparaît avec le chemin direct.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct History {
-    /// D'où chaque requête relit la conversation : `journal` (pliage du journal
-    /// d'événements) ou `tables` (lignes `messages`, lecture d'avant la V1). La variable
-    /// d'environnement `PENELOPE_HISTORY_SOURCE` l'emporte (rejouer une suite sous l'autre).
-    pub source: HistorySource,
-}
-
-/// Source de lecture de la conversation.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HistorySource {
-    Tables,
-    #[default]
-    Journal,
-}
-
-impl History {
-    /// La source en vigueur : la variable d'environnement, sinon le fichier.
-    pub fn effective_source(&self) -> HistorySource {
-        match std::env::var("PENELOPE_HISTORY_SOURCE").as_deref() {
-            Ok("journal") => HistorySource::Journal,
-            Ok("tables") => HistorySource::Tables,
-            _ => self.source,
-        }
-    }
-}
-
 /// Rétention des traces (issue #46) : ce qui n'est ni la mémoire ni la chaîne d'audit
 /// finit par disparaître.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -291,9 +291,6 @@
         "include_media": "bool",
         "max_push_bytes": "integer"
       },
-      "history": {
-        "source": "string"
-      },
       "approval": {
         "judge": "string"
       }

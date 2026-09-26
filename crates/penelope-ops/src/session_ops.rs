@@ -39,30 +39,9 @@ pub async fn fork(s: &Services, session_id: &str, title: Option<String>) -> anyh
         )
         .await?;
     let fork_id = fork.id.as_str().to_string();
-    // Le fork par référence entre au journal avant la copie V0 (T10).
-    s.context.history.journal_fork(&fork_id, session_id).await?;
-    let copied = s
-        .context
-        .history
-        .copy_messages(session_id, &fork_id, 0, None)
-        .await?;
-    // Les résumés couvrent les mêmes numéros de message : ils suivent tels quels.
-    for node in s.context.lcm.active_nodes(session_id).await? {
-        if let (Some(from), Some(to)) = (node.from_seq, node.to_seq) {
-            s.context
-                .lcm
-                .insert_leaf(
-                    &fork_id,
-                    from,
-                    to,
-                    &node.summary,
-                    &node.anchors,
-                    node.tokens_src,
-                    node.tokens_self,
-                )
-                .await?;
-        }
-    }
+    // Le fork par référence entre au journal ; les messages et les résumés actifs de la
+    // fille en sont projetés, sous les mêmes numéros (T10, T16).
+    let copied = s.context.history.fork(&fork_id, session_id).await?;
     if let Some(obj) = source.metadata.as_object() {
         // Le fichier de notes n'est pas partagé : le fork reçoit sa propre copie.
         for (k, v) in obj
@@ -234,18 +213,15 @@ pub async fn rewind(
         )
         .await?;
     let archive_id = archive.id.as_str().to_string();
-    let archived = s
-        .context
-        .history
-        .copy_messages(session_id, &archive_id, cutoff, None)
-        .await?;
     s.sessions.set_state(&archive_id, "closed").await?;
-    // `conv.rewind` d'abord, puis la coupe V0 dans la même écriture (T10).
-    let removed = s
+    // `conv.rewind` d'abord ; l'archive projetée depuis le journal, puis la coupe, dans la
+    // même écriture (T10, T16).
+    let done = s
         .context
         .history
         .rewind_from(session_id, cutoff, turns as u64, Some(&archive_id))
         .await?;
+    let (removed, archived) = (done.removed, done.archived);
     // L'ancre d'usage décrivait un transcript qui n'existe plus.
     s.sessions
         .set_usage_anchor(session_id, &Value::Null)

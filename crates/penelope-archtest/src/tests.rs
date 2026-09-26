@@ -331,3 +331,46 @@ fn every_crate_has_sources() {
         );
     }
 }
+
+/// T16 (épopée #208) : hors de `penelope-context`, aucun code n'écrit un cache de la
+/// conversation ; il passe par un événement et le projecteur.
+#[test]
+fn only_the_context_crate_writes_the_conversation_caches() {
+    let v = caches::cache_write_violations();
+    assert!(
+        v.is_empty(),
+        "écritures de cache hors de penelope-context (passer par HistoryStore, qui \
+         journalise puis projette) :\n{}",
+        v.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+/// Garde-fou de la règle précédente : réintroduire un `INSERT INTO messages` ailleurs la
+/// fait échouer, requête sur une ou plusieurs lignes, quelle que soit la table de cache.
+#[test]
+fn a_cache_write_outside_the_context_crate_is_caught() {
+    let raw = "fn f(tx: &Tx) {\n\
+        tx.execute(\"INSERT INTO messages(session_id, seq) VALUES(?1, ?2)\", p)?;\n\
+        tx.execute(\"INSERT OR IGNORE INTO\n    message_context(session_id) VALUES(?1)\", p)?;\n\
+        tx.execute(\"DELETE FROM lcm_nodes WHERE id = ?1\", p)?;\n\
+        tx.execute(\"update prompt_snapshots set uses = 0\", [])?;\n\
+        tx.execute(\"DELETE FROM messages_fts\", [])?;\n\
+        let n: i64 = c.query_row(\"SELECT COUNT(*) FROM messages\", [], |r| r.get(0))?;\n\
+        tx.execute(\"INSERT INTO messages_archive(x) VALUES(1)\", [])?;\n\
+        // tx.execute(\"INSERT INTO messages ...\") : un commentaire\n\
+        }\n\
+        #[cfg(test)]\n\
+        mod tests { fn g() { \"DELETE FROM messages\"; } }\n";
+    let file = Path::new("crates/penelope-ops/src/purge.rs");
+    let v = caches::cache_writes_in("penelope-ops", file, raw);
+    let lines: Vec<usize> = v.iter().map(|v| v.line).collect();
+    assert_eq!(lines, [2, 3, 5, 6, 7], "{v:#?}");
+    assert!(v[0].text.contains("INSERT INTO messages"));
+
+    assert!(caches::cache_writes_in("penelope-context", file, raw).is_empty());
+    let tests = Path::new("crates/penelope-ops/src/purge/tests.rs");
+    assert!(caches::cache_writes_in("penelope-ops", tests, raw).is_empty());
+}

@@ -206,7 +206,16 @@ async fn the_digest_follows_content_not_compaction() {
     seal_legacy(&s).await.unwrap();
     let history = &s.context.history;
 
-    history.mark_compacted(PLAIN, 1, 2).await.unwrap();
+    s.store
+        .write(|tx| {
+            tx.execute(
+                "UPDATE messages SET compacted = 1 WHERE session_id = ?1 AND seq <= 2",
+                [PLAIN],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
     let (import, prefix) = history.sealed_prefix(PLAIN).await.unwrap().unwrap();
     assert_eq!(import.digest, prefix.digest());
 

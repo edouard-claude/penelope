@@ -1,11 +1,12 @@
 //! Le projecteur : les caches de la conversation maintenus depuis le journal (épopée #208,
 //! T13 ; `design/v1/source-de-verite.md` §2.4).
 //!
-//! Tant que les tables restent la source de lecture (jusqu'à T14), le chemin direct de la
-//! V0 écrit les lignes dans la seconde transaction de chaque événement
-//! (`EventLog::append_with`). Le projecteur ne double pas ce chemin : il **rattrape** ce
-//! qu'une seconde transaction n'a pas écrit (arrêt du processus, écriture en erreur) et
-//! **refond** les caches d'une session.
+//! Chaque écriture de la conversation (`HistoryStore`, `ContextEngine`) projette ses
+//! lignes dans la seconde transaction de son événement (`EventLog::append_with`) ; un
+//! fork et l'archive d'un retour arrière sont projetés ici en entier ([`project_in`]).
+//! Depuis T16, aucune autre crate n'écrit ces tables (`penelope-archtest`). Le projecteur
+//! **rattrape** en plus ce qu'une seconde transaction n'a pas écrit (arrêt du processus,
+//! écriture en erreur) et **refond** les caches d'une session.
 //!
 //! - [`apply_in`] : un événement `conv.*`, une écriture idempotente ; ce qui est déjà en
 //!   base n'est pas réécrit. Le chemin direct l'est aussi (`dual.rs`, `publish.rs`) : l'un
@@ -61,7 +62,7 @@ pub struct ReindexReport {
 /// Ce qu'un rattrapage a fait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CatchUp {
-    /// Aucun journal attaché, ou rien après le filigrane.
+    /// Rien après le filigrane.
     Current,
     /// Des événements rejoués un à un.
     Applied(usize),
@@ -430,13 +431,27 @@ fn delete_row(tx: &Transaction<'_>, sid: &str, seq: i64) -> penelope_store::Resu
     Ok(())
 }
 
+/// Ce qu'une refonte écrit.
+struct Plan {
+    expected: Expected,
+    /// Dernière adresse du préfixe scellé de la session elle-même ; 0 sans scellement.
+    sealed_offset: i64,
+    /// La session qui porte les lignes scellées héritées (mère d'un fork ou d'une
+    /// archive) : une ligne scellée absente y est recopiée telle quelle, octets compris.
+    source: Option<String>,
+}
+
 /// Ce que la session doit contenir, pour une refonte ; `None` pour une session sans rien
 /// à rejouer.
-fn rebuild_plan(tx: &Transaction<'_>, sid: &str) -> Result<Option<(Expected, i64)>, ReplayError> {
+fn rebuild_plan(tx: &Transaction<'_>, sid: &str) -> Result<Option<Plan>, ReplayError> {
     let lineage = Lineage::load(tx, sid)?;
     if !lineage.journaled() {
         if let Some((mother, seq, after)) = archive_of(tx, sid)? {
-            return Ok(Some((archive_expected(tx, &mother, seq, after)?, 0)));
+            return Ok(Some(Plan {
+                expected: archive_expected(tx, &mother, seq, after)?,
+                sealed_offset: 0,
+                source: Some(mother),
+            }));
         }
         let rows: i64 = tx.query_row(
             "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
@@ -461,11 +476,16 @@ fn rebuild_plan(tx: &Transaction<'_>, sid: &str) -> Result<Option<(Expected, i64
         )));
     }
     let surface = lineage.surface()?;
-    let sealed_offset = match lineage.origin {
-        Origin::Import(_) => lineage.offset,
-        _ => 0,
+    let (sealed_offset, source) = match lineage.origin {
+        Origin::Import(_) => (lineage.offset, None),
+        Origin::Fork => (0, origin_in(tx, sid)?.parent.map(|(p, _)| p)),
+        Origin::None => (0, None),
     };
-    Ok(Some((lineage.expected(tx, &surface)?, sealed_offset)))
+    Ok(Some(Plan {
+        expected: lineage.expected(tx, &surface)?,
+        sealed_offset,
+        source,
+    }))
 }
 
 /// Refond les caches d'une session dans la transaction de l'appelant : lignes non
@@ -479,12 +499,28 @@ pub(crate) fn reindex_in(
     Ok(write_plan(tx, sid, plan, ts)?)
 }
 
+/// Projette les caches d'une session neuve depuis ce qu'elle hérite (fille d'un fork,
+/// archive d'un retour arrière), dans la seconde transaction de l'événement qui la fait
+/// naître. Un journal qui ne se plie pas annule l'écriture.
+pub(crate) fn project_in(
+    tx: &Transaction<'_>,
+    sid: &str,
+    ts: &str,
+) -> penelope_store::Result<Reindexed> {
+    reindex_in(tx, sid, ts).map_err(|e| match e {
+        ReplayError::Store(e) => e,
+        ReplayError::Journal(e) => {
+            penelope_store::StoreError::other(format!("projection de {sid} : {e}"))
+        }
+    })
+}
+
 /// Écrit ce que [`rebuild_plan`] a calculé. Une erreur ici est une erreur de base :
 /// l'appelant annule la transaction.
 fn write_plan(
     tx: &Transaction<'_>,
     sid: &str,
-    plan: Option<(Expected, i64)>,
+    plan: Option<Plan>,
     ts: &str,
 ) -> penelope_store::Result<Reindexed> {
     let last_event: i64 = tx.query_row(
@@ -496,7 +532,12 @@ fn write_plan(
         session: sid.to_string(),
         ..Reindexed::default()
     };
-    let Some((expected, sealed_offset)) = plan else {
+    let Some(Plan {
+        expected,
+        sealed_offset,
+        source,
+    }) = plan
+    else {
         set_watermark(tx, sid, last_event, state(0, false, None), ts)?;
         return Ok(done);
     };
@@ -515,10 +556,15 @@ fn write_plan(
     )?;
     for row in &expected.rows {
         if row.sealed {
-            tx.execute(
+            let kept = tx.execute(
                 "UPDATE messages SET compacted = ?3 WHERE session_id = ?1 AND seq = ?2",
                 params![sid, row.seq, row.compacted as i64],
             )?;
+            if kept == 0
+                && let Some(source) = &source
+            {
+                done.rows += copy_sealed_row(tx, source, sid, row.seq, row.compacted)?;
+            }
             continue;
         }
         let node = MessageNode {
@@ -552,6 +598,37 @@ fn write_plan(
     ensure_snapshots_of(tx, sid)?;
     set_watermark(tx, sid, last_event, state(sealed_offset, false, None), ts)?;
     Ok(done)
+}
+
+/// Recopie une ligne scellée de `source` dans `sid`, sous le même numéro, drapeau
+/// `sealed` et entrée plein texte compris : sans événement, c'est ce qui l'apparie à son
+/// adresse et la garde à la refonte (i-scelle-resumes). Rend 1 si la ligne existait.
+fn copy_sealed_row(
+    tx: &Transaction<'_>,
+    source: &str,
+    sid: &str,
+    seq: i64,
+    compacted: bool,
+) -> penelope_store::Result<usize> {
+    let n = tx.execute(
+        "INSERT INTO messages(session_id, seq, role, content, tool_call_id, tool_name,
+            tokens_est, ts, episode, eager, artifact_id, compacted, event_id, sealed)
+         SELECT ?2, seq, role, content, tool_call_id, tool_name, tokens_est, ts, episode,
+            eager, artifact_id, ?4, event_id, 1
+         FROM messages WHERE session_id = ?1 AND seq = ?3 AND sealed = 1",
+        params![source, sid, seq, compacted as i64],
+    )?;
+    if n > 0 {
+        let id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO messages_fts(content, session_id, msg_id)
+             SELECT f.content, ?2, ?4 FROM messages_fts f
+             JOIN messages m ON m.id = f.msg_id
+             WHERE m.session_id = ?1 AND m.seq = ?3",
+            params![source, sid, seq, id],
+        )?;
+    }
+    Ok(n)
 }
 
 /// Les nœuds LCM de la session, hors scellés, effacés puis réécrits ; les scellés
@@ -655,13 +732,9 @@ fn catch_up_in(tx: &Transaction<'_>, sid: &str, ts: &str) -> Result<CatchUp, Rep
 
 impl HistoryStore {
     /// Rattrape les caches d'une session depuis son filigrane (§2.4) : à l'ouverture
-    /// d'une session, avant de la lire. Sans journal attaché, rien. En erreur, le
-    /// filigrane porte `dirty` et l'erreur remonte ; l'appelant la journalise sans
-    /// échouer.
+    /// d'une session, avant de la lire. En erreur, le filigrane porte `dirty` et l'erreur
+    /// remonte ; l'appelant la journalise sans échouer.
     pub async fn catch_up(&self, session_id: &str) -> penelope_store::Result<CatchUp> {
-        if self.events.is_none() {
-            return Ok(CatchUp::Current);
-        }
         let sid = session_id.to_string();
         let ts = self.clock.now_rfc3339();
         // Une erreur annule toute la transaction : le rattrapage ne laisse rien à moitié.

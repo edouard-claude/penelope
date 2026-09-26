@@ -60,7 +60,7 @@ async fn a_real_0_17_database_is_sealed_once() {
         let store = Store::open(&copy).unwrap();
         let clock: SharedClock = Arc::new(TestClock::new(START_MS + 86_400_000));
         let log = EventLog::new(store.clone(), clock.clone());
-        let history = HistoryStore::new(store.clone(), clock).with_events(log.clone());
+        let history = HistoryStore::new(store.clone(), clock, log.clone());
 
         let report = history.seal_legacy().await.unwrap();
         assert_eq!(

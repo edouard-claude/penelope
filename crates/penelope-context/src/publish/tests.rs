@@ -29,7 +29,7 @@ async fn journaled() -> (ContextEngine, EventLog) {
     let clock: SharedClock = Arc::new(TestClock::default());
     let log = EventLog::new(store.clone(), clock.clone());
     let engine = ContextEngine::new(
-        HistoryStore::new(store.clone(), clock.clone()).with_events(log.clone()),
+        HistoryStore::new(store.clone(), clock.clone(), log.clone()),
         Lcm::new(store, clock.clone()),
         TokenEstimator::new(),
         Catalog::new(),
@@ -233,26 +233,6 @@ async fn an_extension_replaces_the_previous_summary_and_what_follows() {
         unreachable!()
     };
     assert_eq!(surface.summaries[&key].node_id, two);
-}
-
-#[tokio::test]
-async fn without_a_journal_nothing_is_journaled_and_the_node_has_no_event() {
-    let (e, log) = journaled().await;
-    let bare = ContextEngine::new(
-        HistoryStore::new(e.history.store().clone(), Arc::new(TestClock::default())),
-        e.lcm.clone(),
-        TokenEstimator::new(),
-        Catalog::new(),
-        Arc::new(TestClock::default()),
-    );
-    exchanges(&bare, &log, 0..30).await;
-    let job = job(&bare).await;
-    let node = bare
-        .apply_summary(&job, &json!({"objectif": "suivre"}), "m")
-        .await
-        .unwrap();
-    assert!(summaries(&events(&log).await).is_empty());
-    assert_eq!(node_event(&bare, &node).await, None);
 }
 
 #[tokio::test]

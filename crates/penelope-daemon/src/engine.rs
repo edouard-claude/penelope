@@ -368,15 +368,13 @@ impl Daemon {
             .unwrap_or_default();
 
         // 0. Frontière d'épisode (§6.6) : inactivité ou changement de sujet, vérifiés une
-        // seule fois par message, avant qu'il soit écrit.
+        // seule fois par message, avant qu'il soit écrit. Le message du tour entre au
+        // journal sous l'identifiant du tour, qui dit s'il est déjà écrit (§2.7, T16).
+        let history = &s.context.history;
+        let recorded = history.recorded(&turn.session_id, turn.id.as_str()).await?;
+        let prov = |source| Provenance::queued(source, turn.id.as_str(), &turn.enqueued_at);
         let mut episode = session.episode_seq;
-        if turn.kind == TurnKind::Message
-            && self
-                .services
-                .kv_get(&format!("turn.recorded.{}", turn.id))
-                .await?
-                .is_none()
-        {
+        if turn.kind == TurnKind::Message && !recorded {
             let (s, p) = (self.services.clone(), self.providers.clone());
             episode = penelope_vault::episodes::before_message(s, p, &session, &text).await?;
         }
@@ -384,33 +382,19 @@ impl Daemon {
         // 1. Le message utilisateur, écrit une seule fois même si le tour est rejoué. Avec
         // des photos, il attend le choix du modèle : lui les montrer ou les faire décrire.
         if turn.kind != TurnKind::Resume && !text.trim().is_empty() && images.is_empty() {
-            let flag = format!("turn.recorded.{}", turn.id);
-            if self.services.kv_get(&flag).await?.is_none() {
-                let content = match turn.kind {
-                    TurnKind::Trigger => format!("[déclencheur planifié] {text}"),
-                    TurnKind::Nudge => format!("[relance] {text}"),
-                    _ => text.clone(),
-                };
-                let tokens = s.context.estimator.text_tokens("default", &content);
-                let (history, user) = (&s.context.history, ChatMessage::user(content));
-                if turn.kind == TurnKind::Message {
-                    let prov =
-                        Provenance::queued(UserSource::Owner, turn.id.as_str(), &turn.enqueued_at);
-                    history
-                        .append_queued(&turn.session_id, &user, tokens, episode, &prov)
-                        .await?;
-                } else {
-                    let source = match turn.kind {
-                        TurnKind::Trigger => UserSource::Trigger,
-                        _ => UserSource::Nudge,
-                    };
-                    let prov = Provenance::user(source);
-                    history
-                        .append_as(&turn.session_id, &user, tokens, episode, false, None, &prov)
-                        .await?;
-                }
-                self.services.kv_set(&flag, "1").await?;
-            }
+            let (content, source) = match turn.kind {
+                TurnKind::Trigger => (
+                    format!("[déclencheur planifié] {text}"),
+                    UserSource::Trigger,
+                ),
+                TurnKind::Nudge => (format!("[relance] {text}"), UserSource::Nudge),
+                _ => (text.clone(), UserSource::Owner),
+            };
+            let tokens = s.context.estimator.text_tokens("default", &content);
+            let user = ChatMessage::user(content);
+            history
+                .append_queued(&turn.session_id, &user, tokens, episode, &prov(source))
+                .await?;
         }
         if turn.kind == TurnKind::Message {
             for merged in &turn.merged_messages {
@@ -469,28 +453,20 @@ impl Daemon {
 
         // Photos : montrées au modèle de la session s'il lit les images, sinon décrites par
         // le rôle `image_describe` et jointes en texte (§10.4).
-        if turn.kind == TurnKind::Message && !images.is_empty() {
-            let flag = format!("turn.recorded.{}", turn.id);
-            if self.services.kv_get(&flag).await?.is_none() {
-                let message = self
-                    .photo_message(&text, &images, &model_id, &turn.session_id, &origin_turn)
-                    .await;
-                let tokens = s.context.estimator.message_tokens(&model_id, &message);
-                let prov = Provenance::user(UserSource::Photo);
-                s.context
-                    .history
-                    .append_as(
-                        &turn.session_id,
-                        &message,
-                        tokens,
-                        episode,
-                        false,
-                        None,
-                        &prov,
-                    )
-                    .await?;
-                self.services.kv_set(&flag, "1").await?;
-            }
+        if turn.kind == TurnKind::Message && !images.is_empty() && !recorded {
+            let message = self
+                .photo_message(&text, &images, &model_id, &turn.session_id, &origin_turn)
+                .await;
+            let tokens = s.context.estimator.message_tokens(&model_id, &message);
+            history
+                .append_queued(
+                    &turn.session_id,
+                    &message,
+                    tokens,
+                    episode,
+                    &prov(UserSource::Photo),
+                )
+                .await?;
         }
 
         // 3. Provider. L'abonnement ChatGPT ne sert que les tours du propriétaire : une
