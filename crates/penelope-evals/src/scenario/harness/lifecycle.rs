@@ -134,8 +134,9 @@ impl Harness<'_> {
 
     fn seed_files(&self, services: &Services) -> anyhow::Result<()> {
         let workspace = workspace_of(services);
+        let vault = penelope_app::helpers::vault_dir(services);
         for f in &self.spec.files {
-            let path = workspace.join(&f.path);
+            let path = if f.vault { &vault } else { &workspace }.join(&f.path);
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
             }

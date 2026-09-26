@@ -65,6 +65,8 @@ scenario_cases! {
     rpc_approbations => "rpc-approbations",
     rpc_planifications => "rpc-planifications",
     rpc_workflows => "rpc-workflows",
+    rpc_memoire => "rpc-memoire",
+    rpc_coffre_et_accueil => "rpc-coffre-et-accueil",
 }
 
 #[test]

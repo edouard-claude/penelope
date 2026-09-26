@@ -1,0 +1,2 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "intent_create", "arguments": {"texte": "vérifier la TVA du devis Martin", "declencheurs": ["devis", "Martin"]}}]}}
+{"text": "C'est noté : je te le rappellerai quand on reparlera du devis."}

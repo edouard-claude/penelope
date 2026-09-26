@@ -1,0 +1,21 @@
+{"type":"outcome","step":1,"input":"rpc : mem.reindex","result":{"entries":3}}
+{"type":"outcome","step":2,"input":"rpc : mem.search","result":{"/*/uid":["01J9C","01J9A"],"/*/text":["Martin préfère être appelé le matin.","Le client Martin est basé à Lyon."],"/*/level":["cure","coeur"],"/*/file":["clients/martin.md","memoire.md"]}}
+{"type":"outcome","step":3,"input":"rpc : mem.show","result":{"uid":"01J9A","file":"memoire.md","anchor":null,"level":"coeur","etype":"fait","slug":null,"text":"Le client Martin est basé à Lyon.","quand":null,"importance":null,"projet":null,"confiance":null,"statut":"active","depuis":null,"maj":"2026-01-01","pinned":true,"declencheurs":[],"content_hash":"{{hash}}","retired_at":null}}
+{"type":"outcome","step":4,"input":"rpc : mem.signals","result":{"uid":"01J9A","fichier":"memoire.md","texte":"Le client Martin est basé à Lyon.","rappels":0,"rappels_utiles":0,"vu_sans_etre_retenu":0,"succes":0,"contradictions":0,"dernier_rappel":null,"requetes_distinctes":0,"facteur_usage":1.0}}
+{"type":"outcome","step":5,"input":"rpc : mem.split","error":{"code":-32603,"message":"`01J9A` tient déjà en 300 caractères : rien à découper"}}
+{"type":"outcome","step":6,"input":"rpc : mem.forget","result":{"uid":"01J9C","forgotten":true}}
+{"type":"outcome","step":7,"input":"rpc : mem.show","result":{"uid":"01J9C","file":"clients/martin.md","anchor":null,"level":"cure","etype":"fait","slug":null,"text":"Martin préfère être appelé le matin.","quand":null,"importance":null,"projet":null,"confiance":null,"statut":"retiree","depuis":null,"maj":"2026-01-01","pinned":false,"declencheurs":[],"content_hash":"{{hash}}","retired_at":"{{ts}}"}}
+{"type":"outcome","step":8,"input":"rpc : mem.history","result":[]}
+{"type":"outcome","step":9,"input":"rpc : mem.restore","error":{"code":-32000,"message":"historique 1 introuvable"}}
+{"type":"outcome","step":10,"input":"rpc : mem.candidates","result":[]}
+{"type":"outcome","step":11,"input":"rpc : mem.retry_rejected","result":{"retried":0}}
+{"type":"outcome","step":12,"input":"rpc : mem.learned","result":[]}
+{"type":"outcome","step":13,"input":"rpc : mem.audit","result":{"/audit/total":21,"/audit/axes/*/name":["Connaissance du propriétaire","Portée","Savoir-faire","Autonomie","Qualité"],"/audit/axes/*/score":[0,0,5,0,16]}}
+{"type":"outcome","step":14,"input":"rpc : mem.dream","result":{"run_id":"{{d:1}}","dry_run":true,"report":{"candidates_seen":0,"groups":0,"promoted":0,"proposals":0,"rejected":[],"deferred":0,"reflections":[],"questions":[],"files_touched":[],"lint_problems":0,"journal":0,"journal_expired":0,"calls":0,"wasted_calls":0,"lots":0,"duration_ms":"{{ms}}"},"text":"Appris cette nuit : 0 entrées promues, 0 propositions en attente."}}
+{"type":"session","id":"{{session:1}}","kind":"chat","title":"CLI","state":"active","parent":null,"model_alias":null,"episode":0}
+{"type":"event","session":"{{session:1}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"chat","parent_id":null}}
+{"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"tool_jobs_lost":0,"turns_requeued":0}}
+{"type":"audit","ok":true,"checked":2,"purged":0}
+{"type":"observed","name":"mémoire","row":{"uid":"01J9A","file":"memoire.md","level":"coeur","text":"Le client Martin est basé à Lyon.","statut":"active","retired_at":null}}
+{"type":"observed","name":"mémoire","row":{"uid":"01J9B","file":"memoire.md","level":"coeur","text":"Le dépôt de facturation est sur la forge interne.","statut":"active","retired_at":null}}
+{"type":"observed","name":"mémoire","row":{"uid":"01J9C","file":"clients/martin.md","level":"cure","text":"Martin préfère être appelé le matin.","statut":"retiree","retired_at":"{{ts}}"}}

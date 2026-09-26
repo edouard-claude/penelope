@@ -1,0 +1,108 @@
+name = "rpc-memoire"
+description = """La mémoire par la socket locale, comme `penelope mem …` : un vault semé (trois
+entrées dans deux fichiers) est indexé (`mem.reindex`), cherché, montré, ses signaux
+lus ; une entrée trop courte n'est pas découpée ; une entrée est oubliée (retirée de
+l'index, le fichier intact) ; l'historique des versions, qui ne garde que les écritures
+de la consolidation, est vide et la restauration le dit. Puis les listes de la
+consolidation (candidats, rejets à reprendre, appris de la semaine), l'audit, une passe
+de rêve à blanc. Le monde après : l'index, l'entrée oubliée marquée retirée."""
+pin_model = "main"
+
+[[files]]
+vault = true
+path = "memoire.md"
+content = """---
+type: memoire
+---
+# Mémoire
+
+- Le client Martin est basé à Lyon. ^01J9A
+- Le dépôt de facturation est sur la forge interne. ^01J9B
+"""
+
+[[files]]
+vault = true
+path = "clients/martin.md"
+content = """---
+type: client
+---
+# Martin
+
+- Martin préfère être appelé le matin. ^01J9C
+"""
+
+[[observe]]
+name = "mémoire"
+sql = "SELECT uid, file, level, text, statut, retired_at FROM mem_entries ORDER BY uid"
+
+[[steps]]
+kind = "rpc"
+method = "mem.reindex"
+
+[[steps]]
+kind = "rpc"
+method = "mem.search"
+params = { query = "Martin" }
+pick = ["/*/uid", "/*/text", "/*/level", "/*/file"]
+
+[[steps]]
+kind = "rpc"
+method = "mem.show"
+params = { uid = "01J9A" }
+
+[[steps]]
+kind = "rpc"
+method = "mem.signals"
+params = { uid = "01J9A" }
+
+[[steps]]
+kind = "rpc"
+method = "mem.split"
+params = { uid = "01J9A" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "mem.forget"
+params = { uid = "01J9C" }
+
+[[steps]]
+kind = "rpc"
+method = "mem.show"
+params = { uid = "01J9C" }
+
+# L'oubli retire l'entrée sans réécrire le fichier : l'historique des versions ne
+# contient que les écritures de la consolidation, il n'y a rien à restaurer.
+[[steps]]
+kind = "rpc"
+method = "mem.history"
+params = { file = "clients/martin.md" }
+
+[[steps]]
+kind = "rpc"
+method = "mem.restore"
+params = { id = 1 }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "mem.candidates"
+
+[[steps]]
+kind = "rpc"
+method = "mem.retry_rejected"
+
+[[steps]]
+kind = "rpc"
+method = "mem.learned"
+params = { days = 7 }
+
+[[steps]]
+kind = "rpc"
+method = "mem.audit"
+pick = ["/audit/total", "/audit/axes/*/name", "/audit/axes/*/score"]
+
+[[steps]]
+kind = "rpc"
+method = "mem.dream"
+params = { dry_run = true }

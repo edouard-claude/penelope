@@ -99,6 +99,9 @@ pub struct SeedFile {
     /// `content` répété : un gros fichier sans le stocker dans le dépôt.
     #[serde(default = "one")]
     pub repeat: usize,
+    /// Semé dans le vault de mémoire (`memory.vault_path`) plutôt que dans le workspace.
+    #[serde(default)]
+    pub vault: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

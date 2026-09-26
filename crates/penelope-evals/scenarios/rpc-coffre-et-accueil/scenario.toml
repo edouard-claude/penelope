@@ -1,0 +1,92 @@
+name = "rpc-coffre-et-accueil"
+description = """Le vault, les intentions et l'accueil par la socket locale : le vault semé est
+versionné (`vault.sync`, un dépôt git local dans le répertoire du test, sans réseau),
+contrôlé, relu par le lint. Le modèle arme une intention (« quand on reparle du
+devis… »), accordée, listée puis annulée. Une séance d'accueil s'ouvre, la première
+question reçoit sa réponse, le profil est écrit : `mem.diff` montre ce changement du
+vault, la synchronisation suivante le valide et le diff redevient vide. Le monde après :
+l'intention annulée."""
+pin_model = "main"
+
+[[files]]
+vault = true
+path = "memoire.md"
+content = """---
+type: memoire
+---
+# Mémoire
+
+- Le client Martin est basé à Lyon. ^01J9A
+"""
+
+[[observe]]
+name = "intentions"
+sql = "SELECT texte, declencheurs, budget_tirs, tirs, etat FROM intents ORDER BY created_at, rowid"
+
+[[steps]]
+kind = "rpc"
+method = "vault.sync"
+pick = ["/git", "/commit/ok", "/commit/committed"]
+
+[[steps]]
+kind = "rpc"
+method = "vault.check"
+
+[[steps]]
+kind = "rpc"
+method = "vault.lint"
+
+[[steps]]
+kind = "message"
+text = "quand on reparle du devis Martin, rappelle-moi de vérifier la TVA"
+
+[[steps]]
+kind = "approve"
+
+[[steps]]
+kind = "rpc"
+method = "intent.list"
+bind = "intentions"
+
+[[steps]]
+kind = "rpc"
+method = "intent.cancel"
+params = { id = "$intentions.0.id" }
+
+[[steps]]
+kind = "rpc"
+method = "intent.list"
+
+[[steps]]
+kind = "rpc"
+method = "onboard.next"
+bind = "seance"
+
+[[steps]]
+kind = "rpc"
+method = "onboard.answer"
+params = { rel = "$seance.question.rel", n = "$seance.question.n", answer = "Édouard" }
+
+[[steps]]
+kind = "rpc"
+method = "onboard.write"
+params = { rel = "$seance.question.rel" }
+
+# La réponse écrite dans le profil est un changement du vault depuis le dernier commit,
+# que la synchronisation suivante valide.
+# Le texte du diff, l'empreinte et la sortie de git dépendent de la version et de la
+# configuration de git sur la machine (nom de branche par défaut, date du commit).
+[[steps]]
+kind = "rpc"
+method = "mem.diff"
+pick = ["/added", "/removed", "/untracked"]
+
+[[steps]]
+kind = "rpc"
+method = "vault.sync"
+pick = ["/git", "/commit/ok", "/commit/committed"]
+
+[[steps]]
+kind = "rpc"
+method = "mem.diff"
+pick = ["/added", "/removed", "/untracked"]
