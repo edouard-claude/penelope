@@ -1,10 +1,10 @@
 //! Normalisation du monde et des requêtes : identifiants, horodatages, chemins et
 //! hachages remplacés par des jetons stables entre deux rejeux.
 //!
-//! - un identifiant ULID préfixé (`s_`, `t_`, `e_`, `a_`, `art_`, `n_`, `q_`, `r_`)
+//! - un identifiant ULID préfixé (`s_`, `t_`, `e_`, `a_`, `art_`, `n_`, `q_`, `r_`, `d_`)
 //!   devient `{{session:1}}`, `{{turn:1}}`, `{{effect:1}}`, `{{approval:1}}`,
-//!   `{{artifact:1}}`, `{{node:1}}`, `{{llm:1}}`, `{{run:1}}`, numéroté dans l'ordre de
-//!   première apparition ; un ULID nu devient `{{ulid:1}}` ;
+//!   `{{artifact:1}}`, `{{node:1}}`, `{{llm:1}}`, `{{run:1}}`, `{{dream:1}}`, numéroté
+//!   dans l'ordre de première apparition ; un ULID nu devient `{{ulid:1}}` ;
 //! - un horodatage RFC 3339 devient `{{ts}}` à l'instant de départ du scénario, sinon
 //!   `{{ts+600s}}` ou `{{ts+1500ms}}` : l'horloge de test rend l'écart exact ;
 //! - la racine temporaire des services (brute et canonique) devient `{{home}}` ;
@@ -71,7 +71,7 @@ impl Normaliser {
             homes,
             ids: HashMap::new(),
             counters: HashMap::new(),
-            ulid: Regex::new(r"\b(?:(art|s|t|e|a|n|q|r)_)?([0-9A-HJKMNP-TV-Z]{26})\b")
+            ulid: Regex::new(r"\b(?:(art|s|t|e|a|n|q|r|d)_)?([0-9A-HJKMNP-TV-Z]{26})\b")
                 .expect("regex ULID"),
             stamp: Regex::new(
                 r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})",
@@ -151,6 +151,7 @@ impl Normaliser {
                     Some("n") => "node",
                     Some("q") => "llm",
                     Some("r") => "run",
+                    Some("d") => "dream",
                     _ => "ulid",
                 };
                 self.token(kind, &caps[0])
@@ -209,6 +210,7 @@ mod tests {
             "turn.intents.{{turn:1}}"
         );
         assert_eq!(n.text("art_01JCCCCCCCCCCCCCCCCCCCCCCC"), "{{artifact:1}}");
+        assert_eq!(n.text("d_01JEEEEEEEEEEEEEEEEEEEEEEE"), "{{dream:1}}");
         assert_eq!(n.text("01JDDDDDDDDDDDDDDDDDDDDDDD"), "{{ulid:1}}");
         assert_eq!(n.text("rien à voir"), "rien à voir");
     }

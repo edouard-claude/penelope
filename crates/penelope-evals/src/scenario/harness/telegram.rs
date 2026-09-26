@@ -82,12 +82,21 @@ impl Harness<'_> {
         drop(g);
         let turns = result?;
         let calls = self.telegram.transport.calls().await;
-        let screens: Vec<Value> = calls[self.telegram.reported..]
+        let fresh = &calls[self.telegram.reported..];
+        let screens: Vec<Value> = fresh.iter().filter_map(|(m, b)| screen(m, b)).collect();
+        // Les réactions partent de tâches détachées : leur place parmi les envois n'est
+        // pas reproductible, leur ordre entre elles l'est.
+        let reactions: Vec<Value> = fresh
             .iter()
-            .filter_map(|(m, body)| screen(m, body))
+            .filter(|(m, _)| m == method::SET_MESSAGE_REACTION)
+            .flat_map(|(_, b)| b["reaction"].as_array().cloned().unwrap_or_default())
+            .map(|r| r["emoji"].clone())
             .collect();
         self.telegram.reported = calls.len();
         let mut v = json!({"screens": screens});
+        if !reactions.is_empty() {
+            v["reactions"] = json!(reactions);
+        }
         if !turns.is_empty() {
             v["turns"] = json!(turns);
         }
@@ -161,16 +170,19 @@ impl Harness<'_> {
 
 /// Un appel du transport tel que le propriétaire le voit : méthode, texte ou légende,
 /// fichier, libellés des boutons (les jetons sont des identifiants, pas l'écran).
-/// Les indicateurs de frappe et les brouillons de flux n'en sont pas.
+/// Les indicateurs de frappe, les brouillons de flux et les réactions n'en sont pas.
 fn screen(m: &str, body: &Value) -> Option<Value> {
     if matches!(
         m,
-        method::SEND_CHAT_ACTION | method::SEND_MESSAGE_DRAFT | method::SEND_RICH_MESSAGE_DRAFT
+        method::SEND_CHAT_ACTION
+            | method::SEND_MESSAGE_DRAFT
+            | method::SEND_RICH_MESSAGE_DRAFT
+            | method::SET_MESSAGE_REACTION
     ) {
         return None;
     }
     let mut v = json!({"method": m});
-    for key in ["text", "caption", "document", "reaction", "name"] {
+    for key in ["text", "caption", "document", "name"] {
         if let Some(x) = body.get(key)
             && !x.is_null()
         {
