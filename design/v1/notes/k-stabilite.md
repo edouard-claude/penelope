@@ -38,7 +38,8 @@ Personne ne gardait les services : `shut_down` comptait deux copies des services
 le daemon vivait (la sienne et celle du cœur), or le cœur en tient deux depuis que
 `Providers` garde la sienne (T33). La condition ne pouvait jamais être vraie, chaque vie
 attendait `SHUTDOWN_WAIT`. `shut_down` attend désormais que seule sa copie du daemon
-reste, le lâche, puis attend que seule sa copie des services reste.
+reste, le lâche, puis attend que seule sa copie des services reste. Elle rend vrai quand
+tout est relâché ; deux tests du harnais le tiennent (vie sans fuite, copie gardée).
 
 Suite `scenarios` (binaire seul, même machine) : **832 s avant, 101 s après**, 62 sur 62
 verts contre les mêmes attendus, aucun message « références survivantes » ni attente
@@ -74,6 +75,24 @@ relevé. Aucune fonction morte ne tombait dans les fichiers de `k-corrections`.
 `ToolJob`) descend dans `penelope_executor::jobs`, commit de déplacement sans changement
 de corps : le daemon repasse sous son plafond (R4). Aucune valeur de `budget.toml` à
 changer (`UPDATE_BUDGET=1` n'a rien réécrit).
+
+## Vérifications de fin
+
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace` : verts.
+- `scripts/switch-check.sh` : deux critères manquants, aucun de mon fait. Point 1 : la CI
+  de `v1` sur GitHub (dernier run en échec, état distant). Point 7 : la mesure de
+  couverture échoue, parce que le scénario `rpc-mise-a-jour` (et donc
+  `two_replays_of_every_scenario_are_identical`) refuse de jouer `upgrade` depuis
+  `target/llvm-cov-target/debug/…` : `penelope_app::helpers::is_source_build` ne
+  reconnaît que `target/debug` et `target/release`. Préexistant ; à corriger dans
+  `helpers.rs` (hors périmètre) ou à sauter dans la mesure.
+- `scripts/coverage-check.sh -- --skip rpc_mise_a_jour --skip
+  two_replays_of_every_scenario_are_identical` : toutes les crates sous leur plafond
+  sauf `penelope-evals`, 491 lignes non couvertes pour un plafond de 473. La même mesure
+  sur la base (`d6d6dd1`, worktree temporaire) donne **493** : l'écart vient des deux
+  tests sautés, pas de ce lot, qui gagne deux lignes. Les conditions de la mesure qui a
+  posé 473 ne sont pas écrites ; je ne les ai pas retrouvées.
 
 ## Incident
 
