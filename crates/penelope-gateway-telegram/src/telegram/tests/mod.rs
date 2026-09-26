@@ -16,6 +16,7 @@ mod approval_cards;
 mod approvals;
 mod background;
 mod bursts;
+mod clicks;
 mod commands_ops;
 mod delivery;
 mod elicitation;
