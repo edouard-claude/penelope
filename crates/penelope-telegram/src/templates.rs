@@ -350,8 +350,19 @@ fn burl(label: &str, url: &str) -> ButtonDef {
 }
 
 /// Catalogue livré : un template par ligne du tableau §14.5.
-#[allow(clippy::too_many_lines)] // gel 0.17 : table
 pub fn builtin_templates() -> Vec<Template> {
+    [
+        conversation_templates(),
+        run_templates(),
+        exchange_templates(),
+        proposal_templates(),
+        status_templates(),
+    ]
+    .concat()
+}
+
+/// Réponse, approbations et portes : ce qui attend une décision.
+fn conversation_templates() -> Vec<Template> {
     use crate::actions::kind as k;
     vec![
         t(
@@ -415,6 +426,13 @@ pub fn builtin_templates() -> Vec<Template> {
                 b("✋ Annuler", k::DENY, "danger"),
             ]],
         ),
+    ]
+}
+
+/// Runs de workflow, incidents et tickets.
+fn run_templates() -> Vec<Template> {
+    use crate::actions::kind as k;
+    vec![
         t(
             "run_card",
             "**{{nom}}**\n\n\
@@ -481,6 +499,13 @@ pub fn builtin_templates() -> Vec<Template> {
                 b("⏰ Plus tard", k::CHOICE, ""),
             ]],
         ),
+    ]
+}
+
+/// Questions, formulaires, serveurs MCP et effets incertains.
+fn exchange_templates() -> Vec<Template> {
+    use crate::actions::kind as k;
+    vec![
         t(
             "question",
             "❓ {{question}}",
@@ -543,6 +568,13 @@ pub fn builtin_templates() -> Vec<Template> {
                 b("⏭ Ignorer", k::EFFECT_IGNORE, ""),
             ]],
         ),
+    ]
+}
+
+/// Propositions : skill, mémoire, déclencheur, workflow.
+fn proposal_templates() -> Vec<Template> {
+    use crate::actions::kind as k;
+    vec![
         t(
             "skill_proposal",
             "🧩 **Skill proposée : {{nom}}**\n\n{{resume}}",
@@ -595,6 +627,13 @@ pub fn builtin_templates() -> Vec<Template> {
                 b("❌ Rejeter", k::DENY, "danger"),
             ]],
         ),
+    ]
+}
+
+/// Alertes, états et génération arrêtée.
+fn status_templates() -> Vec<Template> {
+    use crate::actions::kind as k;
+    vec![
         t(
             "budget_alert",
             "💸 **Budget {{perimetre}}**\n\nConsommé : {{consomme}} / {{plafond}}",
