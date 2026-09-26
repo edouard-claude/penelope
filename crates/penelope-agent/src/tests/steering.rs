@@ -33,6 +33,40 @@ impl Inbox for MemoryInbox {
     }
 }
 
+/// Fait arriver quelque chose (un message, un `/stop`) pendant l'appel `key`, et
+/// seulement lui : « pendant la première lecture » par construction. Avant, une tâche le
+/// faisait au bout de 100 ms ; sous charge la boucle n'avait pas encore lancé le lot, et
+/// le message ou l'arrêt tombait avant l'appel au modèle, pas entre deux appels.
+struct During {
+    inner: TimedExecutor,
+    key: &'static str,
+    then: Box<dyn Fn() + Send + Sync>,
+}
+
+#[async_trait::async_trait]
+impl ToolExecutor for During {
+    async fn execute(
+        &self,
+        name: &str,
+        args: &Value,
+    ) -> Result<ToolOutcome, penelope_tools::ToolError> {
+        self.execute_cancellable(name, args, &CancelToken::new())
+            .await
+    }
+
+    async fn execute_cancellable(
+        &self,
+        name: &str,
+        args: &Value,
+        cancel: &CancelToken,
+    ) -> Result<ToolOutcome, penelope_tools::ToolError> {
+        if args["path"] == self.key {
+            (self.then)();
+        }
+        self.inner.execute_cancellable(name, args, cancel).await
+    }
+}
+
 /// T13 : trois lectures et une écriture, un message pendant la première. La première
 /// finit, les trois autres reçoivent « Non exécuté », le message est écrit après leurs
 /// résultats, le modèle est rappelé une fois ; aucun appel ne reste sans résultat.
@@ -63,13 +97,13 @@ async fn a_message_during_a_batch_skips_the_calls_not_started() {
     ));
     p.reply("d'accord, je lis d.rs");
     let conv = MemoryConversation::new("Tu es Pénélope.", "lis et formate");
-    let e = TimedExecutor::new(300);
     let inbox = Arc::new(MemoryInbox::default());
     let arriving = inbox.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        arriving.push("laisse tomber, lis plutôt d.rs");
-    });
+    let e = During {
+        inner: TimedExecutor::new(50),
+        key: "a.rs",
+        then: Box::new(move || arriving.push("laisse tomber, lis plutôt d.rs")),
+    };
     let out = AgentLoop::new(s.clone(), p.clone())
         .with_inbox(Some(inbox.clone()))
         .run_conversation(&spec(&sid), &conv, &e, &NullSink)
@@ -77,7 +111,7 @@ async fn a_message_during_a_batch_skips_the_calls_not_started() {
         .unwrap();
     assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
 
-    let log = e.log.lock().unwrap();
+    let log = e.inner.log.lock().unwrap();
     assert_eq!(log.len(), 1, "seule la première lecture est partie");
     assert_eq!(log[0].0, "a.rs");
     assert_eq!(
@@ -167,20 +201,20 @@ async fn a_stop_during_a_batch_closes_the_calls_and_notes_it_next_turn() {
         ],
     ));
     let conv = MemoryConversation::new("Tu es Pénélope.", "lis et formate");
-    let e = TimedExecutor::new(10_000);
     let first = spec(&sid);
     let cancel = first.cancel.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        cancel.cancel();
-    });
+    let e = During {
+        inner: TimedExecutor::new(10_000),
+        key: "a.rs",
+        then: Box::new(move || cancel.cancel()),
+    };
     let out = AgentLoop::new(s.clone(), p.clone())
         .run_conversation(&first, &conv, &e, &NullSink)
         .await
         .unwrap();
     assert_eq!(out, TurnOutcome::Cancelled);
     assert_eq!(
-        e.log.lock().unwrap().len(),
+        e.inner.log.lock().unwrap().len(),
         1,
         "seule la première est partie"
     );
