@@ -34,6 +34,12 @@ pub struct SealedSummary {
     pub tokens_self: u64,
     pub from: i64,
     pub to: i64,
+    /// Provenance du nœud, relue en base ; hors surface (la requête au modèle n'en lit
+    /// que le texte) et hors empreinte (`store::seal`), mais attendue par `verify` et
+    /// par la refonte des nœuds qui le prolongent ou le recopient.
+    pub tokens_src: u64,
+    /// Ancres, texte JSON tel que stocké dans `lcm_nodes.anchors`.
+    pub anchors: String,
 }
 
 impl Sealed {

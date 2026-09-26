@@ -22,6 +22,12 @@ const SESSION_ID: &str = "s_01K5N0Q5T3B9V8X2M4R7C6A1E0";
 const LCM_ACTIVE_NODE: &str = "lcm_01K5N0Q5T3B9V8X2M4R7C6A1E1";
 const MESSAGES: i64 = 12;
 const EVENT_COUNT: u64 = 7;
+/// Empreinte du préfixe de chaque fixture, telle que les alphas l'ont posée dans son
+/// `conv.import` : une base déjà scellée doit continuer à vérifier.
+const SEALED_DIGESTS: &[(&str, &str)] = &[(
+    "penelope-0.17.59.db",
+    "ce06951cc2add7e3cea1d128d0d52b9f138c8e44e055d31408ade20e986433fd",
+)];
 
 fn fixtures() -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../penelope-store/tests/fixtures");
@@ -70,6 +76,12 @@ async fn a_real_0_17_database_is_sealed_once() {
 
         let (import, prefix) = history.sealed_prefix(SESSION_ID).await.unwrap().unwrap();
         assert_eq!(import.digest, prefix.digest(), "{name}");
+        if let Some((_, digest)) = SEALED_DIGESTS.iter().find(|(f, _)| *f == name) {
+            assert_eq!(
+                import.digest, *digest,
+                "{name} : empreinte d'une alpha antérieure"
+            );
+        }
         assert_eq!((import.messages, import.contexts), (MESSAGES, 1), "{name}");
         assert_eq!(import.lcm_active.len(), 1, "{name}");
         assert_eq!(import.lcm_active[0].node, LCM_ACTIVE_NODE, "{name}");
@@ -86,6 +98,11 @@ async fn a_real_0_17_database_is_sealed_once() {
             "{name}"
         );
         assert_eq!(projected[4].message.text(), "Noté.", "{name}");
+
+        // Le nœud actif de la fixture porte des ancres et un `tokens_src` (900) distinct
+        // de `tokens_self` (80) : la relecture du préfixe scellé doit les rendre.
+        let verify = history.verify(None, None).await.unwrap();
+        assert!(verify.ok, "{name} : {:#?}", verify.divergences);
 
         let chain = log.verify().await.unwrap();
         assert!(chain.ok, "{name} : {:?}", chain.detail);

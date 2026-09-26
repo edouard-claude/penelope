@@ -507,6 +507,8 @@ fn a_sealed_prefix_comes_first_with_its_summaries() {
             tokens_self: 5,
             from: 1,
             to: 1,
+            tokens_src: 0,
+            anchors: "[]".into(),
         }],
     );
     let mut j = Journal::default();

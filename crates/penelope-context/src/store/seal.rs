@@ -18,7 +18,9 @@
 //!  [[node_id, from_seq, to_seq, tokens_self, summary], ...]   par (from, to, id)]
 //! ```
 //!
-//! `content` est le texte stocké, octet pour octet. Le drapeau `compacted` n'y entre pas :
+//! `content` est le texte stocké, octet pour octet. Les nœuds n'y entrent que par leur
+//! texte, leurs bornes et `tokens_self` : `tokens_src` et `anchors` sont relus avec eux
+//! mais hors empreinte, pour que les `conv.import` déjà posés vérifient encore. Le drapeau `compacted` n'y entre pas :
 //! c'est un état dérivé, qu'une compaction ultérieure du préfixe (`mark_compacted`)
 //! changerait sans rien changer au contenu ; au scellement, il est porté par
 //! `lcm_active`, et la relecture le recalcule par couverture, comme la projection V0
@@ -211,7 +213,8 @@ impl LegacyPrefix {
         let up_to = rows.last().map_or(0, |r| r.seq);
         let contexts = Self::read_contexts(c, sid, up_to)?;
         let mut st = c.prepare(
-            "SELECT n.id, n.summary, n.tokens_self, n.from_seq, n.to_seq
+            "SELECT n.id, n.summary, n.tokens_self, n.from_seq, n.to_seq, n.tokens_src,
+                    n.anchors
              FROM lcm_nodes n
              WHERE n.session_id = ?1
                AND n.superseded_by IS NULL
@@ -230,6 +233,8 @@ impl LegacyPrefix {
                     tokens_self: r.get::<_, i64>(2)? as u64,
                     from: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
                     to: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    tokens_src: r.get::<_, i64>(5)? as u64,
+                    anchors: r.get(6)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -355,18 +360,27 @@ pub(crate) fn sealed_prefix_in(
     for n in &import.lcm_active {
         let found = c
             .query_row(
-                "SELECT summary, tokens_self FROM lcm_nodes WHERE id = ?1",
+                "SELECT summary, tokens_self, tokens_src, anchors FROM lcm_nodes WHERE id = ?1",
                 [&n.node],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                },
             )
             .optional()?;
-        if let Some((summary, tokens_self)) = found {
+        if let Some((summary, tokens_self, tokens_src, anchors)) = found {
             active.push(SealedSummary {
                 node_id: n.node.clone(),
                 summary,
                 tokens_self: tokens_self as u64,
                 from: n.from,
                 to: n.to,
+                tokens_src: tokens_src as u64,
+                anchors,
             });
         }
     }

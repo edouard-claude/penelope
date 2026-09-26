@@ -131,3 +131,132 @@ async fn an_incoherent_journal_is_a_divergence() {
     let report = w.history().verify(None, None).await.unwrap();
     assert_eq!(whats(&report), vec![("s1", "journal")]);
 }
+
+/// `s3` en V0 : huit messages, un contexte figé par demande, un résumé actif sur 1..4 qui
+/// porte ses ancres et un `tokens_src` distinct de `tokens_self` (ce que la 0.17 écrit),
+/// puis le scellement.
+async fn sealed_with_summary(w: &crate::replay::fixture::World) {
+    use crate::anchors::{Anchor, AnchorKind};
+    let bare = HistoryStore::new(w.store.clone(), w.clock.clone());
+    for i in 0..4 {
+        let seq = bare
+            .append(
+                "s3",
+                &ChatMessage::user(format!("ancien {i}")),
+                300,
+                0,
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+        bare.freeze_context("s3", seq, &format!("<ancien>{i}</ancien>"))
+            .await
+            .unwrap();
+        bare.append(
+            "s3",
+            &ChatMessage::assistant(format!("vieux {i}")),
+            40,
+            0,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    let anchors = [
+        Anchor {
+            kind: AnchorKind::Path,
+            value: "src/main.rs".into(),
+        },
+        Anchor {
+            kind: AnchorKind::Ticket,
+            value: "#147".into(),
+        },
+    ];
+    w.engine
+        .lcm
+        .insert_leaf("s3", 1, 4, "résumé ancien", &anchors, 680, 25)
+        .await
+        .unwrap();
+    bare.mark_compacted("s3", 1, 4).await.unwrap();
+    let report = w.history().seal_legacy().await.unwrap();
+    assert_eq!(report.sealed, vec![("s3".to_string(), 8)]);
+}
+
+/// Constat de la 1.0.0-alpha.15 sur une vraie base : une session scellée qui porte un
+/// résumé actif divergeait (« jetons, ancres ») parce que la relecture du préfixe scellé
+/// perdait `tokens_src` et `anchors` ; un fork de cette session héritait de l'écart.
+#[tokio::test]
+async fn a_sealed_summary_and_its_fork_verify_clean() {
+    let w = world().await;
+    sealed_with_summary(&w).await;
+    let report = w.history().verify(Some("s3"), None).await.unwrap();
+    assert!(report.ok, "{:#?}", report.divergences);
+
+    // Le fork tel que `penelope-ops` le fait : conv.fork, copie V0, nœuds actifs recopiés.
+    w.sql("INSERT INTO sessions(id, kind, created_at, updated_at) VALUES('s4', 'chat', 't', 't')")
+        .await;
+    let h = w.history();
+    h.journal_fork("s4", "s3").await.unwrap();
+    h.copy_messages("s3", "s4", 0, None).await.unwrap();
+    for n in w.engine.lcm.active_nodes("s3").await.unwrap() {
+        w.engine
+            .lcm
+            .insert_leaf(
+                "s4",
+                n.from_seq.unwrap(),
+                n.to_seq.unwrap(),
+                &n.summary,
+                &n.anchors,
+                n.tokens_src,
+                n.tokens_self,
+            )
+            .await
+            .unwrap();
+    }
+    crate::replay::fixture::exchanges(&w, "s4", 0..1).await;
+    let report = w.history().verify(None, None).await.unwrap();
+    assert!(report.ok, "{:#?}", report.divergences);
+    let s4 = w.history().verify_session("s4").await.unwrap();
+    assert_eq!(
+        (s4.kind.as_str(), s4.nodes),
+        ("fork", 10),
+        "8 lignes héritées, 2 neuves"
+    );
+
+    // La refonte garde les lignes héritées du préfixe scellé et la provenance du résumé
+    // recopié ; tout revérifie.
+    w.history().reindex(None).await.unwrap();
+    assert_eq!(
+        w.int("SELECT COUNT(*) FROM messages WHERE session_id = 's4'")
+            .await,
+        10
+    );
+    assert_eq!(
+        w.int("SELECT tokens_src FROM lcm_nodes WHERE session_id = 's4' AND anchors LIKE '%#147%'")
+            .await,
+        680
+    );
+    let report = w.history().verify(None, None).await.unwrap();
+    assert!(report.ok, "{:#?}", report.divergences);
+}
+
+/// Une compaction journalisée qui prolonge le résumé scellé additionne son `tokens_src`
+/// à celui du nœud scellé, comme `Lcm::replace` en base.
+#[tokio::test]
+async fn a_summary_extending_a_sealed_one_verifies_clean() {
+    let w = world().await;
+    sealed_with_summary(&w).await;
+    crate::replay::fixture::exchanges(&w, "s3", 0..60).await;
+    crate::replay::fixture::compact(&w, "s3").await;
+    let src: i64 = w
+        .int("SELECT tokens_src FROM lcm_nodes WHERE session_id = 's3' AND superseded_by IS NULL")
+        .await;
+    assert!(
+        src > 680,
+        "la prolongation compte la source scellée ({src})"
+    );
+    let report = w.history().verify(None, None).await.unwrap();
+    assert!(report.ok, "{:#?}", report.divergences);
+}

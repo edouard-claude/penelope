@@ -17,7 +17,7 @@
 //! sa mère (`copy_messages`), l'archive d'un retour arrière non plus. Le pliage ne les
 //! hérite pas non plus (`Sealed::fork`) ; l'archive n'en attend pas.
 
-use crate::derive::{DeriveError, Sealed, Slot, Surface, derive, derive_until};
+use crate::derive::{DeriveError, Sealed, SealedSummary, Slot, Surface, derive, derive_until};
 use crate::journal::{ConvEvent, ImportPayload, KIND_PREFIX, KIND_REWIND, SurfaceOp, is_purged};
 use crate::store::seal::{LegacyPrefix, sealed_prefix_in};
 use penelope_kernel::event::Event;
@@ -316,13 +316,8 @@ impl Lineage {
         seqs: &BTreeMap<i64, i64>,
     ) -> Result<Vec<NodeRow>> {
         let seq_of = |a: i64| seqs.get(&a).copied().unwrap_or(a);
-        let sealed_ids: BTreeMap<i64, String> = match &self.origin {
-            Origin::Import(b) => {
-                b.1.active
-                    .iter()
-                    .map(|n| (n.to, n.node_id.clone()))
-                    .collect()
-            }
+        let sealed_nodes: BTreeMap<i64, &SealedSummary> = match &self.origin {
+            Origin::Import(b) => b.1.active.iter().map(|n| (n.to, n)).collect(),
             _ => BTreeMap::new(),
         };
         let inherited: Vec<i64> = match self.origin {
@@ -343,20 +338,24 @@ impl Lineage {
             let owner = self.owners.get(key);
             let meta = owner.and_then(|o| o.summary.clone());
             let own = owner.is_some_and(|o| o.own) && *key > self.offset;
-            let sealed = sealed_ids.get(key).filter(|_| *key <= self.offset);
+            let sealed = sealed_nodes.get(key).filter(|_| *key <= self.offset);
             let copied = !own && sealed.is_none();
             if copied && !inherited.contains(key) {
                 continue;
             }
             let source_id = match (&meta, sealed) {
                 (Some(m), _) => Some(m.node_id.clone()),
-                (None, Some(id)) => Some(id.clone()),
+                (None, Some(s)) => Some(s.node_id.clone()),
                 (None, None) => None,
             };
-            let (mut anchors, mut tokens_src) = meta.as_ref().map_or_else(
-                || ("[]".to_string(), 0),
-                |m| (m.anchors.clone(), m.tokens_src),
-            );
+            let (mut anchors, mut tokens_src) = match (&meta, sealed) {
+                (Some(m), _) => (m.anchors.clone(), m.tokens_src),
+                (None, Some(s)) => (s.anchors.clone(), s.tokens_src),
+                (None, None) => ("[]".to_string(), 0),
+            };
+            // La copie d'un résumé scellé chez la mère n'a pas d'événement : le nœud de
+            // la surface nomme la source.
+            let source_id = source_id.or_else(|| copied.then(|| n.node_id.clone()));
             if copied && let Some(id) = &source_id {
                 let stored = c
                     .query_row(

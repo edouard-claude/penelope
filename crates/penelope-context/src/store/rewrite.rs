@@ -11,7 +11,8 @@ impl HistoryStore {
     /// Copie l'historique d'une session vers une autre, numéros et état de compaction
     /// compris, index plein texte avec (fork, archive d'un rewind). Une copie cite
     /// l'événement de sa ligne d'origine (`event_id`) : c'est l'adresse qu'elle a dans la
-    /// surface héritée (T10).
+    /// surface héritée (T10). Une ligne scellée reste scellée (`sealed`) : sans
+    /// événement, c'est ce qui l'apparie à son adresse et la garde à la refonte.
     pub async fn copy_messages(
         &self,
         from: &str,
@@ -24,9 +25,9 @@ impl HistoryStore {
             .write(move |tx| {
                 let n = tx.execute(
                     "INSERT INTO messages(session_id, seq, role, content, tool_call_id, tool_name,
-                        tokens_est, ts, episode, eager, artifact_id, compacted, event_id)
+                        tokens_est, ts, episode, eager, artifact_id, compacted, event_id, sealed)
                      SELECT ?2, seq, role, content, tool_call_id, tool_name, tokens_est, ts,
-                        episode, eager, artifact_id, compacted, event_id
+                        episode, eager, artifact_id, compacted, event_id, sealed
                      FROM messages
                      WHERE session_id = ?1 AND seq >= ?3 AND (?4 IS NULL OR seq <= ?4)
                      ORDER BY seq",
