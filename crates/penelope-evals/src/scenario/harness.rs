@@ -9,8 +9,8 @@
 mod ids;
 mod journal;
 mod lifecycle;
-mod rpc;
 mod messenger;
+mod rpc;
 mod steps;
 mod telegram;
 #[cfg(test)]

@@ -85,7 +85,7 @@ impl Harness<'_> {
         daemon
             .hooks
             .set_orchestrator(Arc::new(penelope_daemon::workflow::orchestrator_of(
-                &daemon,
+                &daemon.core,
             )));
         self.apply_config(&daemon)?;
         if self.spec.messenger {

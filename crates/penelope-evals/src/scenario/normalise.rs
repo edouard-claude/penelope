@@ -101,8 +101,6 @@ impl Normaliser {
                 DURATION_KEYS.join("|")
             ))
             .expect("regex durée"),
-            duration: Regex::new(&format!(r#""({})":\s*\d+"#, DURATION_KEYS.join("|")))
-                .expect("regex durée"),
             ulid: Regex::new(r"\b(?:([a-z]+)_)?([0-9A-HJKMNP-TV-Z]{26})\b").expect("regex ULID"),
             stamp: Regex::new(
                 r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})",
