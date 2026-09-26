@@ -28,6 +28,7 @@
 use crate::runtime::Core;
 use penelope_agent::{JobRequest, ToolExecutor};
 use penelope_app::{bus::Origin, services::Services};
+use penelope_kernel::effects::EffectState;
 use penelope_kernel::event::EventDraft;
 use penelope_kernel::ids::EffectId;
 use penelope_kernel::turn::TurnKind;
@@ -192,15 +193,6 @@ async fn conclude(
     cancelled: bool,
 ) -> anyhow::Result<()> {
     s.jobs.forget(job_id);
-    // Déjà clos par la reprise d'un démarrage : le premier qui conclut gagne, pour le
-    // ledger comme pour la ligne, sinon l'effet `failed` redeviendrait `completed`.
-    if store(s)
-        .get(job_id)
-        .await?
-        .is_some_and(|j| j.state.is_terminal())
-    {
-        return Ok(());
-    }
     let (state, result, error) = match &outcome {
         _ if cancelled => (
             TaskState::Cancelled,
@@ -220,8 +212,11 @@ async fn conclude(
         ),
     };
     // Le ledger d'abord : un job conclu dont l'effet serait resté `dispatching`
-    // poserait une question au propriétaire au prochain démarrage pour rien (#83).
+    // poserait une question au propriétaire au prochain démarrage pour rien (#83). Un
+    // effet déjà clos (job déclaré perdu par la reprise) ne se réécrit pas.
+    let open = s.effects.get(effect).await?;
     match &error {
+        _ if !open.is_some_and(|e| e.state == EffectState::Dispatching) => {}
         None => s.effects.complete(effect, result.clone()).await?,
         Some(e) => s.effects.fail(effect, e.clone()).await?,
     }
