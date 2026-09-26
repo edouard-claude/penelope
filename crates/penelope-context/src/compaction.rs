@@ -8,9 +8,7 @@
 //! | 3 | Résumé LCM | **canonique** | oui |
 //! | 4 | Urgence | projection | non |
 
-use crate::transcript::{
-    Entry, Group, GroupKind, group, head_tail, pairs_are_valid, repair_pairs, stub_message,
-};
+use crate::transcript::{Entry, group, head_tail, pairs_are_valid, repair_pairs, stub_message};
 use penelope_llm::types::{ChatMessage, Role};
 use serde::{Deserialize, Serialize};
 
@@ -656,11 +654,6 @@ pub fn plan_levels(usage_tokens: u64, params: &CompactionParams, request_fits: b
         levels.push(3);
     }
     levels
-}
-
-/// Vrai si `group` est un groupe d'outils (utilisé par la sélection de résumé).
-pub fn is_tool_group(g: &Group) -> bool {
-    g.kind == GroupKind::ToolGroup
 }
 
 #[cfg(test)]
