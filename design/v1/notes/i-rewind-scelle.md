@@ -83,7 +83,9 @@ Décision de l'intégrateur appliquée : le préfixe scellé est une vérité, p
 
 Pendant le lot : `penelope-context` (161 tests), `penelope-ops`, `penelope-evals --test
 scenarios` (23 sur 23, CA 4.5, 4.6 et 5.5 compris ; aucun `surface.jsonl` modifié).
-Fin de lot : voir le rapport.
+Fin de lot : `cargo fmt --all --check` et `cargo clippy --workspace --all-targets -- -D
+warnings` propres ; `cargo test --workspace --no-fail-fast` : 2 077 tests verts, aucun
+rouge.
 
 ## Notes de version, à coller dans `docs/progress.md`
 
