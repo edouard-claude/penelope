@@ -13,10 +13,10 @@
 //!
 //! Ce qu'un scénario exerce est lu dans ses fichiers, pas déclaré à la main : une étape
 //! `kind = "command"` de `scenario.toml` exerce sa commande, une étape `kind = "telegram"`
-//! dont le `text` commence par `/` aussi ; un appel d'outil de
-//! `model.jsonl` (champ `"name"`, y compris le nom passé à `tool_call`) exerce l'outil.
-//! Le harnais n'a pas encore d'étape RPC : aucune méthode n'est couverte tant qu'il n'en
-//! a pas. Une déclaration aurait pu mentir ; ce qui est joué ne ment pas.
+//! dont le `text` commence par `/` aussi, une étape `kind = "rpc"` sa méthode
+//! (`method = "session.new"`) ; un appel d'outil de `model.jsonl` (champ `"name"`, y
+//! compris le nom passé à `tool_call`) exerce l'outil. Une déclaration aurait pu mentir ;
+//! ce qui est joué ne ment pas.
 //!
 //! Identifiants : `/compact`, `outil:fs_read`, `rpc:session.new`. Ce qui n'a pas de
 //! scénario est inscrit dans `budget.toml` `[scenarios].missing`, liste qui ne fait que
@@ -115,8 +115,8 @@ pub struct ScenarioFiles {
     pub model: String,
 }
 
-/// Les surfaces qu'un scénario joue réellement : ses commandes et les outils que le
-/// modèle scripté appelle.
+/// Les surfaces qu'un scénario joue réellement : ses commandes, ses méthodes RPC et les
+/// outils que le modèle scripté appelle.
 pub fn exercised(s: &ScenarioFiles) -> Result<BTreeSet<String>, String> {
     static NAME: OnceLock<Regex> = OnceLock::new();
     let doc: toml::Table = s
@@ -141,6 +141,11 @@ pub fn exercised(s: &ScenarioFiles) -> Result<BTreeSet<String>, String> {
             .filter(|n| n.starts_with('/'))
         {
             out.insert(name.to_string());
+        }
+        if step.get("kind").and_then(|k| k.as_str()) == Some("rpc")
+            && let Some(m) = step.get("method").and_then(|m| m.as_str())
+        {
+            out.insert(format!("rpc:{m}"));
         }
     }
     let name = regex(&NAME, r#""name"\s*:\s*"([A-Za-z0-9_]+)""#);

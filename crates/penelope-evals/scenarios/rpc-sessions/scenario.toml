@@ -1,0 +1,99 @@
+name = "rpc-sessions"
+description = """Le cycle de vie des sessions par la socket locale, comme `penelope session …` :
+un tour par `chat.send`, une session neuve (`session.new`) devenue courante
+(`session.switch`), titrée, épinglée sur un alias, passée en mode « lectures », rattachée à
+un projet, dotée d'un budget ; la liste, l'export, l'aperçu de purge, la fermeture de la
+neuve, puis la purge d'une troisième et `chat.stop` sur une session sans tour. Le monde
+après : trois sessions (la purgée vide, la neuve fermée et titrée), les événements de
+chaque réglage, le budget posé."""
+pin_model = "main"
+
+[[observe]]
+name = "sessions"
+sql = "SELECT title, state, model_alias, budget_usd, metadata FROM sessions ORDER BY created_at, rowid"
+
+[[observe]]
+name = "kv"
+sql = "SELECT k, v FROM kv ORDER BY k"
+
+[[steps]]
+kind = "rpc"
+method = "chat.send"
+params = { text = "bonjour, note que la réunion est jeudi" }
+
+[[steps]]
+kind = "rpc"
+method = "session.new"
+params = { title = "Dossier Martin" }
+bind = "neuve"
+
+[[steps]]
+kind = "rpc"
+method = "session.switch"
+params = { session = "$neuve.id" }
+
+[[steps]]
+kind = "rpc"
+method = "session.title"
+params = { session = "$neuve.id", title = "Dossier Martin, devis" }
+
+[[steps]]
+kind = "rpc"
+method = "session.model"
+params = { session = "$neuve.id", alias = "main" }
+
+[[steps]]
+kind = "rpc"
+method = "session.mode"
+params = { session = "$neuve.id", mode = "reads" }
+
+[[steps]]
+kind = "rpc"
+method = "session.mode"
+params = { session = "$neuve.id", mode = "partout" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "session.project"
+params = { session = "$neuve.id", project = "martin" }
+
+[[steps]]
+kind = "rpc"
+method = "session.budget"
+params = { session = "$neuve.id", usd = 2.5 }
+
+[[steps]]
+kind = "rpc"
+method = "session.list"
+
+[[steps]]
+kind = "rpc"
+method = "session.export"
+params = { session = "$session" }
+
+[[steps]]
+kind = "rpc"
+method = "session.purge_preview"
+params = { session = "$session" }
+
+[[steps]]
+kind = "rpc"
+method = "session.close"
+params = { session = "$neuve.id" }
+
+[[steps]]
+kind = "rpc"
+method = "session.new"
+params = { title = "À effacer" }
+bind = "jetable"
+
+[[steps]]
+kind = "rpc"
+method = "session.purge"
+params = { session = "$jetable.id", reason = "scénario" }
+
+[[steps]]
+kind = "rpc"
+method = "chat.stop"
+params = { session = "$session" }

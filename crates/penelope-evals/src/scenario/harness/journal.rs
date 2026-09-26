@@ -69,7 +69,7 @@ async fn caches(s: &Services) -> anyhow::Result<Vec<Value>> {
         .await?)
 }
 
-fn sql_json(v: rusqlite::types::Value) -> Value {
+pub(super) fn sql_json(v: rusqlite::types::Value) -> Value {
     use rusqlite::types::Value as V;
     match v {
         V::Null => Value::Null,

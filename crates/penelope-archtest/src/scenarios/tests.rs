@@ -107,6 +107,10 @@ text = "/new ne compte pas : c'est un message"
 [[steps]]
 kind = "command"
 command = "/compact"
+[[steps]]
+kind = "rpc"
+method = "schedule.add"
+params = { kind = "cron", note = "method = \"session.new\" ne compte pas" }
 "#,
         r#"{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "fs_read", "arguments": {"path": "a"}}]}}
 {"text": "le mot \"name\": \"fs_write\" dans une réponse ne compte pas"}
@@ -119,7 +123,8 @@ command = "/compact"
             "/compact",
             "outil:config_set",
             "outil:fs_read",
-            "outil:tool_call"
+            "outil:tool_call",
+            "rpc:schedule.add"
         ])
     );
 }

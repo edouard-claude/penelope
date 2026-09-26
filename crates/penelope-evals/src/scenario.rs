@@ -61,7 +61,33 @@ pub struct Spec {
     /// `{{masked}}` dans les attendus : mémoire du processus, contrôles de l'hôte.
     #[serde(default)]
     pub masks: Vec<String>,
+    /// Serveurs MCP simulés derrière le vrai superviseur (connecteur de test, aucun
+    /// processus lancé) : ce que les méthodes `mcp.*` administrent. Servis, pas déclarés ;
+    /// `mcp.add` les déclare.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServer>,
+    /// Requêtes SQL en lecture relevées dans le monde après le run (`observed`) : l'effet
+    /// d'une méthode RPC sur une table que le relevé ordinaire ne lit pas.
+    #[serde(default)]
+    pub observe: Vec<Observe>,
     pub steps: Vec<Step>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServer {
+    pub name: String,
+    /// Noms des outils que le serveur annonce.
+    pub tools: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Observe {
+    /// Nom du relevé dans `expected.jsonl`.
+    pub name: String,
+    /// Une requête `SELECT` ordonnée : chaque ligne devient un objet colonne → valeur.
+    pub sql: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -131,6 +157,33 @@ pub enum Step {
     /// Fait comme si le dernier appel facturé avait pesé `prompt` tokens : la session
     /// est alors froide au sens de l'issue #40 après une pause.
     Usage { prompt: u64 },
+    /// Appel d'une méthode RPC, comme la socket locale le servirait (`Rpc::handle`, ou
+    /// `handle_streaming` pour `chat.stream` et `tail`). Les tours que l'appel met en file
+    /// sont joués pendant qu'il attend, comme le ferait le pool de runners. La réponse,
+    /// normalisée, entre dans l'issue de l'étape.
+    Rpc {
+        method: String,
+        /// Paramètres ; une chaîne `$session` est la session du scénario, `$nom.chemin`
+        /// une valeur d'une réponse liée par `bind` (`$sch.id`, `$liste.0.uid`).
+        #[serde(default)]
+        params: toml::Table,
+        /// Garde la réponse sous ce nom pour les étapes suivantes.
+        #[serde(default)]
+        bind: Option<String>,
+        /// Ne garde de la réponse que ces pointeurs JSON (`/id`, `/servers/*/name`) : ce
+        /// qui compte, sans ce qui dépend de la machine.
+        #[serde(default)]
+        pick: Vec<String>,
+        /// Pointeurs dont la valeur est masquée (`{{masked}}`), appliqués avant `pick`.
+        #[serde(default)]
+        mask: Vec<String>,
+        /// L'appel doit échouer ; sans ce drapeau, une erreur fait échouer le scénario.
+        #[serde(default)]
+        error: bool,
+        /// `tail` seulement : message joué pendant que le flux est ouvert.
+        #[serde(default)]
+        during: Option<String>,
+    },
     /// Sème `exchanges` échanges dans l'historique, sans appel au modèle. `{i}` et
     /// `{filler}` sont remplacés ; `tokens` est la taille déclarée de chaque message.
     Seed {
@@ -195,6 +248,7 @@ impl Step {
             Step::Approve => "approbation".into(),
             Step::Usage { prompt } => format!("dernier appel facturé : {prompt} tokens"),
             Step::Seed { exchanges, .. } => format!("historique semé : {exchanges} échanges"),
+            Step::Rpc { method, .. } => format!("rpc : {method}"),
         }
     }
 }

@@ -4,7 +4,9 @@
 //! - un identifiant ULID préfixé (`s_`, `t_`, `e_`, `a_`, `art_`, `n_`, `q_`, `r_`, `d_`)
 //!   devient `{{session:1}}`, `{{turn:1}}`, `{{effect:1}}`, `{{approval:1}}`,
 //!   `{{artifact:1}}`, `{{node:1}}`, `{{llm:1}}`, `{{run:1}}`, `{{dream:1}}`, numéroté
-//!   dans l'ordre de première apparition ; un ULID nu devient `{{ulid:1}}` ;
+//!   dans l'ordre de première apparition ; un autre préfixe garde son nom (`sch_…` en
+//!   `{{sch:1}}`) ; un ULID nu devient `{{ulid:1}}` ;
+//! - la version du workspace devient `{{version}}` : un bump ne réécrit pas les attendus ;
 //! - un horodatage RFC 3339 devient `{{ts}}` à l'instant de départ du scénario, sinon
 //!   `{{ts+600s}}` ou `{{ts+1500ms}}` : l'horloge de test rend l'écart exact ;
 //! - la racine temporaire des services (brute et canonique) devient `{{home}}` ;
@@ -71,8 +73,7 @@ impl Normaliser {
             homes,
             ids: HashMap::new(),
             counters: HashMap::new(),
-            ulid: Regex::new(r"\b(?:(art|s|t|e|a|n|q|r|d)_)?([0-9A-HJKMNP-TV-Z]{26})\b")
-                .expect("regex ULID"),
+            ulid: Regex::new(r"\b(?:([a-z]+)_)?([0-9A-HJKMNP-TV-Z]{26})\b").expect("regex ULID"),
             stamp: Regex::new(
                 r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})",
             )
@@ -139,6 +140,7 @@ impl Normaliser {
                 out = out.replace(home, "{{home}}");
             }
         }
+        out = out.replace(env!("CARGO_PKG_VERSION"), "{{version}}");
         let ulid = self.ulid.clone();
         let out = ulid
             .replace_all(&out, |caps: &regex::Captures| {
@@ -152,9 +154,11 @@ impl Normaliser {
                     Some("q") => "llm",
                     Some("r") => "run",
                     Some("d") => "dream",
-                    _ => "ulid",
-                };
-                self.token(kind, &caps[0])
+                    Some(other) => other,
+                    None => "ulid",
+                }
+                .to_string();
+                self.token(&kind, &caps[0])
             })
             .into_owned();
         let stamp = self.stamp.clone();
@@ -212,6 +216,11 @@ mod tests {
         assert_eq!(n.text("art_01JCCCCCCCCCCCCCCCCCCCCCCC"), "{{artifact:1}}");
         assert_eq!(n.text("d_01JEEEEEEEEEEEEEEEEEEEEEEE"), "{{dream:1}}");
         assert_eq!(n.text("01JDDDDDDDDDDDDDDDDDDDDDDD"), "{{ulid:1}}");
+        assert_eq!(n.text("sch_01JEEEEEEEEEEEEEEEEEEEEEEE"), "{{sch:1}}");
+        assert_eq!(
+            n.text(concat!("v", env!("CARGO_PKG_VERSION"))),
+            "v{{version}}"
+        );
         assert_eq!(n.text("rien à voir"), "rien à voir");
     }
 

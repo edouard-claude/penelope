@@ -192,8 +192,17 @@ impl Harness<'_> {
     async fn install_mcp(
         &self,
         daemon: &Daemon,
-        services: &Services,
+        services: &Arc<Services>,
     ) -> anyhow::Result<Option<Arc<Gateway>>> {
+        if !self.spec.mcp_servers.is_empty() {
+            anyhow::ensure!(
+                self.spec.mcp_tools.is_empty(),
+                "`[[mcp_tools]]` (passerelle simulée) et `[[mcp_servers]]` (superviseur) \
+                 s'excluent"
+            );
+            super::rpc::install_supervisor(daemon, services, &self.spec.mcp_servers).await;
+            return Ok(None);
+        }
         if self.spec.mcp_tools.is_empty() {
             return Ok(None);
         }

@@ -59,6 +59,8 @@ scenario_cases! {
     commandes_memoire => "commandes-memoire",
     commandes_workflows => "commandes-workflows",
     commandes_extensions => "commandes-extensions",
+    // Méthodes RPC (critère 7, R10), une famille par scénario.
+    rpc_sessions => "rpc-sessions",
 }
 
 #[test]

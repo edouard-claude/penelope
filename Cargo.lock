@@ -1493,6 +1493,7 @@ dependencies = [
  "penelope-kernel",
  "penelope-llm",
  "penelope-mcp",
+ "penelope-mcp-host",
  "penelope-memory",
  "penelope-observe",
  "penelope-ops",

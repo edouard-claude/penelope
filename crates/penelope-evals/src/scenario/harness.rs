@@ -8,6 +8,7 @@
 
 mod journal;
 mod lifecycle;
+mod rpc;
 mod steps;
 mod telegram;
 #[cfg(test)]
@@ -94,6 +95,8 @@ struct Harness<'a> {
     /// Chemin de la base, connu dès la première vie : la fermeture s'y vérifie.
     db: Option<PathBuf>,
     session: String,
+    /// Réponses RPC gardées par `bind`, lues par `$nom.chemin`.
+    bound: BTreeMap<String, Value>,
     outcomes: Vec<Value>,
     crashed: bool,
     telegram: telegram::Chat,
@@ -121,6 +124,7 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
         life: None,
         db: None,
         session: String::new(),
+        bound: BTreeMap::new(),
         outcomes: Vec::new(),
         crashed: false,
         telegram: telegram::Chat::default(),
@@ -134,7 +138,8 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
     let (dumped, audit) = {
         let life = h.life.as_ref().context("services absents")?;
         let workspace = workspace_of(&life.services);
-        let dumped = world::dump(&life.services, &workspace).await?;
+        let mut dumped = world::dump(&life.services, &workspace).await?;
+        dumped.extend(rpc::observe(&life.services, &spec.observe).await?);
         let seen = lock(&h.seen).clone();
         let visible = visible::check(&life.services, &seen, &spec.name).await?;
         let reindexed = journal::check(&life.services, &spec.name).await?;
@@ -238,6 +243,26 @@ impl Harness<'_> {
                     Ok(json!({"clock": self.clock.now_rfc3339()}))
                 }
                 Step::Restart => self.restart().await,
+                Step::Rpc {
+                    method,
+                    params,
+                    bind,
+                    pick,
+                    mask,
+                    error,
+                    during,
+                } => {
+                    self.rpc(rpc::Call {
+                        method,
+                        params,
+                        bind: bind.as_deref(),
+                        pick,
+                        mask,
+                        error: *error,
+                        during: during.as_deref(),
+                    })
+                    .await
+                }
                 Step::Approve => self.approve().await,
                 Step::Usage { prompt } => self.usage(*prompt).await,
                 Step::Seed {
