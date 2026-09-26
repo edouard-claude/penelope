@@ -15,7 +15,7 @@
 //! doit garder. Avec le vrai modèle, il mesure la qualité du tri lui-même.
 
 use penelope_app::services::Services;
-use penelope_daemon::Daemon;
+use penelope_daemon::runtime::Daemon;
 use penelope_memory::grid::{JOURNAL_SECTION, normalized};
 use serde::Deserialize;
 use serde_json::{Value, json};

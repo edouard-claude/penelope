@@ -12,6 +12,7 @@ pub mod channel;
 pub mod codex_scope;
 pub mod conversation;
 pub mod elicitation;
+pub mod engine;
 pub mod gateway;
 pub mod helpers;
 pub mod jobs;

@@ -335,7 +335,7 @@ impl TelegramGateway {
 
 /// Met les photos reçues en file, dans la session de la conversation.
 async fn enqueue_photos(
-    daemon: &Arc<Daemon>,
+    daemon: &Arc<Core>,
     origin: &Origin,
     images: Vec<std::path::PathBuf>,
     caption: Option<String>,
@@ -357,7 +357,7 @@ async fn enqueue_photos(
 /// Range une pièce jointe non ingérable. Texte : artefact lisible par `artifact_read` ;
 /// binaire : fichier dans le workspace. Renvoie le bilan et la mention à joindre au tour.
 async fn store_attachment(
-    daemon: &Arc<Daemon>,
+    daemon: &Arc<Core>,
     session: &str,
     name: &str,
     bytes: &[u8],

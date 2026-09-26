@@ -12,6 +12,7 @@
 
 use crate::runtime::Daemon;
 use penelope_app::bus::Origin as Channel;
+use penelope_app::engine::TurnIntake;
 use penelope_kernel::clock::TestClock;
 use penelope_llm::mock::MockProvider;
 use penelope_llm::types::ChatMessage;

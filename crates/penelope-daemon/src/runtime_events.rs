@@ -1,6 +1,5 @@
 //! Contrat public des événements runtime, établi après commit dans le journal.
 
-use crate::runtime::Daemon;
 use futures::{SinkExt, StreamExt};
 use penelope_app::helpers::bounded_redacted;
 use penelope_kernel::event::Event;
@@ -174,16 +173,15 @@ pub async fn serve_connection(
 
 /// Écoute locale activée par la configuration. Un secret absent ou trop court empêche
 /// tout bind : le flux ne démarre jamais avec une authentification vide.
-pub async fn serve(daemon: Arc<Daemon>) -> anyhow::Result<()> {
-    let config = daemon.services.config.config();
+pub async fn serve(services: Arc<penelope_app::services::Services>) -> anyhow::Result<()> {
+    let config = services.config.config();
     if config.observability.runtime_consumers.is_empty() {
         return Ok(());
     }
     let mut consumers = Vec::new();
     let mut tokens = std::collections::BTreeSet::new();
     for configured in &config.observability.runtime_consumers {
-        let token = daemon
-            .services
+        let token = services
             .platform
             .secrets
             .get(&configured.token_secret)?
@@ -212,7 +210,7 @@ pub async fn serve(daemon: Arc<Daemon>) -> anyhow::Result<()> {
     }
     let listener = tokio::net::TcpListener::bind(&config.observability.runtime_stream_bind).await?;
     tracing::info!(bind = %config.observability.runtime_stream_bind, "flux runtime prêt");
-    let log = Arc::new(daemon.services.events.clone());
+    let log = Arc::new(services.events.clone());
     loop {
         let (socket, _) = listener.accept().await?;
         let log = log.clone();
@@ -504,15 +502,14 @@ mod tests {
                 Ok(vec!["observability.runtime_consumers".into()])
             })
             .unwrap();
-        let daemon = Arc::new(crate::runtime::Daemon::from_services(services.clone()));
-        let error = serve(daemon.clone()).await.unwrap_err();
+        let error = serve(services.clone()).await.unwrap_err();
         assert!(error.to_string().contains("absent"), "{error}");
         services
             .platform
             .secrets
             .set("runtime_watchdog", "court")
             .unwrap();
-        let error = serve(daemon).await.unwrap_err();
+        let error = serve(services).await.unwrap_err();
         assert!(error.to_string().contains("trop court"), "{error}");
     }
 }

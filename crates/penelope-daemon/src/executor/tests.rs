@@ -35,7 +35,7 @@ async fn executor() -> (tempfile::TempDir, NativeToolExecutor) {
 async fn self_status_through_the_daemon_admin_keeps_memory_codex_and_context() {
     let (_dir, mut x) = executor().await;
     let d = Arc::new(crate::runtime::Daemon::from_services(x.services.clone()));
-    x.admin = Some(d.clone() as Arc<dyn penelope_executor::selfknow::Admin>);
+    x.admin = Some(d.core.clone() as Arc<dyn penelope_executor::selfknow::Admin>);
     x.env.turn_model = Some(penelope_executor::selfknow::TurnModel {
         alias: "main".into(),
         model_id: "openrouter:z-ai/glm-5.3".into(),

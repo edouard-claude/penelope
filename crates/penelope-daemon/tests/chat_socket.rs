@@ -1,7 +1,7 @@
 //! Bout en bout sur la vraie socket : `chat.stream` puis `chat.send`, comme la CLI.
 
 use penelope_app::services::Services;
-use penelope_daemon::Daemon;
+use penelope_daemon::runtime::Daemon;
 use penelope_kernel::api::{RpcRequest, method};
 use penelope_kernel::clock::SystemClock;
 use penelope_llm::mock::MockProvider;
@@ -25,7 +25,7 @@ async fn start() -> (tempfile::TempDir, Arc<Daemon>, Arc<MockProvider>) {
     let p = Arc::new(MockProvider::new());
     d.set_provider_override(p.clone());
     tokio::spawn(penelope_daemon::runner::run_pool(d.clone()));
-    tokio::spawn(penelope_daemon::rpc::serve(d.clone()));
+    tokio::spawn(penelope_daemon::rpc::serve(d.core.clone()));
     // Attendre que la socket accepte : le fichier existe entre `bind` et `listen`, une
     // connexion à ce moment-là est refusée.
     let sock = d.services.platform.dirs.socket_path();

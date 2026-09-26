@@ -60,11 +60,10 @@ pub async fn freeze_volatile(
 /// la prochaine compaction, qui le cassent de toute façon. Le préfixe retenu est celui du
 /// dernier `conv.system` de la session (`HistoryStore::retained_prefix`, T16).
 pub async fn stable_prefix(
-    d: &crate::runtime::Daemon,
+    s: &penelope_app::services::Services,
     session_id: &str,
     tiers: &mut penelope_context::Tiers,
 ) -> anyhow::Result<()> {
-    let s = &d.services;
     let warm = previous_call(s, session_id)
         .await?
         .is_some_and(|p| s.clock.now_ms() - p.ts_ms < CACHE_TTL_MS);
@@ -102,6 +101,7 @@ mod tests {
     use super::*;
     use crate::runtime::Daemon;
     use penelope_app::bus::Origin;
+    use penelope_app::engine::TurnIntake;
     use penelope_app::services::Services;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::{MockProvider, Scripted};
@@ -218,7 +218,9 @@ mod tests {
                 .map(|e| e.payload["reason"].as_str().unwrap().to_string())
                 .collect::<Vec<_>>()
         };
-        stable_prefix(&d, &sid, &mut tiers("revue")).await.unwrap();
+        stable_prefix(&d.services, &sid, &mut tiers("revue"))
+            .await
+            .unwrap();
         s.budget
             .record(penelope_kernel::budget::UsageRecord {
                 session_id: Some(sid.clone()),
@@ -231,12 +233,12 @@ mod tests {
             .unwrap();
         // Skill rechargée à cache chaud : le préfixe d'avant est gardé, rien de neuf.
         let mut warm = tiers("revue, deploiement");
-        stable_prefix(&d, &sid, &mut warm).await.unwrap();
+        stable_prefix(&d.services, &sid, &mut warm).await.unwrap();
         assert_eq!(warm.index, "revue");
         assert_eq!(systems().await, ["first"]);
         // À cache froid, le nouveau préfixe sort et entre au journal.
         clock.advance_ms(CACHE_TTL_MS + 1);
-        stable_prefix(&d, &sid, &mut tiers("revue, deploiement"))
+        stable_prefix(&d.services, &sid, &mut tiers("revue, deploiement"))
             .await
             .unwrap();
         assert_eq!(systems().await, ["first", "cold"]);

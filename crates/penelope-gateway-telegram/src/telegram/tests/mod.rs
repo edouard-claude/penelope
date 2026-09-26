@@ -1,5 +1,7 @@
 use super::*;
 
+use penelope_daemon::runtime::Daemon;
+
 use penelope_kernel::clock::TestClock;
 
 use penelope_llm::mock::{MockProvider, Scripted};
@@ -47,7 +49,7 @@ async fn gateway() -> (
     let p = Arc::new(MockProvider::new());
     d.set_provider_override(p.clone());
     let t = MockTransport::new();
-    let g = TelegramGateway::with_transport(d, t.clone());
+    let g = TelegramGateway::with_transport(d.core.clone(), t.clone());
     g.register();
     (dir, g, t, p)
 }
@@ -72,10 +74,17 @@ async fn settle(g: &TelegramGateway) {
     }
 }
 
+/// Le daemon d'une passerelle de test : elle n'en tient que le cœur (T33).
+fn daemon_of(g: &TelegramGateway) -> Arc<Daemon> {
+    Arc::new(Daemon {
+        core: g.daemon.clone(),
+    })
+}
+
 /// Exécute les tours en file, comme le ferait le pool de runners.
 async fn drain(g: &TelegramGateway) {
     while let Some(turn) = g.daemon.services.turns.claim("test").await.unwrap() {
-        penelope_daemon::runner::process(&g.daemon, turn, Duration::from_secs(30)).await;
+        penelope_daemon::runner::process(&daemon_of(g), turn, Duration::from_secs(30)).await;
     }
     g.flush_outbox().await.unwrap();
 }

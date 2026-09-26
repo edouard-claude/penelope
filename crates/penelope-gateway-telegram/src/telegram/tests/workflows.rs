@@ -49,7 +49,7 @@ async fn workflow_approval_confirmation_stays_in_the_cards_topic() {
     );
     let d2 = Arc::new(Daemon::from_services(reopened));
     let t2 = MockTransport::new();
-    let g2 = TelegramGateway::with_transport(d2, t2.clone());
+    let g2 = TelegramGateway::with_transport(d2.core.clone(), t2.clone());
     g2.callback("cb165", &token, group, None, 1001, OWNER)
         .await
         .unwrap();

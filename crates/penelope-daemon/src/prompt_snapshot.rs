@@ -140,6 +140,7 @@ pub async fn weight_bytes(s: &Services) -> anyhow::Result<(i64, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use penelope_app::engine::TurnIntake;
     use penelope_context::tiers::{Tiers, TiersBuilder};
     use penelope_kernel::clock::TestClock;
     use std::sync::Arc;

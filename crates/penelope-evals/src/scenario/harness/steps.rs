@@ -7,6 +7,7 @@ use super::lifecycle::shut_down;
 use super::{CRASH_WAIT, HEARTBEAT, Harness, outcome_json};
 use anyhow::Context as _;
 use penelope_app::bus::Origin;
+use penelope_app::engine::TurnIntake;
 use penelope_conversation::compaction;
 use penelope_daemon::runner;
 use penelope_kernel::budget::UsageRecord;

@@ -1,4 +1,6 @@
 use super::*;
+use crate::runtime::Daemon;
+use penelope_app::engine::{SessionModels, TurnIntake};
 use penelope_kernel::clock::TestClock;
 use penelope_kernel::turn::Turn;
 use penelope_llm::mock::{MockProvider, Scripted};
@@ -265,7 +267,7 @@ async fn a_background_shell_frees_the_turn_and_comes_back_as_a_nudge() {
 async fn the_delivery_loop_brings_the_result_back_on_its_own() {
     let (_dir, d, p) = daemon().await;
     let sid = session(&d).await;
-    let loop_handle = tokio::spawn(deliver_loop(d.clone()));
+    let loop_handle = tokio::spawn(deliver_loop(d.core.clone()));
     background_turn(&d, &p, &sid, "true").await;
 
     let mut delivered = None;
@@ -661,7 +663,7 @@ async fn the_model_can_follow_and_cancel_a_job() {
 async fn a_sub_agent_can_run_as_a_job_and_report_back() {
     let (_dir, d, p) = daemon().await;
     d.hooks
-        .set_orchestrator(Arc::new(crate::workflow::orchestrator_of(&d)));
+        .set_orchestrator(Arc::new(crate::workflow::orchestrator_of(&d.core)));
     let sid = session(&d).await;
     p.push(Scripted::ToolCalls(
         String::new(),

@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::Daemon;
 use penelope_kernel::clock::TestClock;
 
 async fn rpc() -> (tempfile::TempDir, Rpc) {
@@ -9,7 +10,7 @@ async fn rpc() -> (tempfile::TempDir, Rpc) {
             .await
             .unwrap(),
     );
-    (dir, Rpc::new(Arc::new(Daemon::from_services(s))))
+    (dir, Rpc::new(Daemon::from_services(s).core))
 }
 
 async fn call(rpc: &Rpc, method: &str, params: Value) -> RpcResponse {

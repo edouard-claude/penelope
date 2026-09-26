@@ -188,7 +188,7 @@ async fn mem_candidates(s: &Services) -> anyhow::Result<Value> {
 }
 
 /// Propose le découpage d'une entrée fourre-tout : une carte, jamais une écriture (#145).
-async fn mem_split(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
+async fn mem_split(d: &Core, p: &Value) -> anyhow::Result<Value> {
     let uid = required_str(p, "uid")?;
     let id = penelope_vault::mem_split::propose(&d.services, d.providers.as_ref(), &uid).await?;
     Ok(json!({"approval": id}))

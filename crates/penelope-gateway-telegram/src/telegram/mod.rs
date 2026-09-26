@@ -10,9 +10,10 @@
 
 use penelope_agent::{TurnEvent, TurnOutcome};
 use penelope_app::bus::{BusKind, ChannelDelivery, Origin};
+use penelope_app::engine::{SessionModels, Transcriber, TurnIntake};
 use penelope_app::helpers::{SEEN_CHATS_KEY, seen_chats, shown, topic_name_key};
-use penelope_daemon::Daemon;
 use penelope_daemon::agent::decide_approval;
+use penelope_daemon::runtime::Core;
 use penelope_executor::executor::Messenger;
 use penelope_hitl::{ApprovalRequest, ApprovalState, Decision};
 use penelope_kernel::api::method as m;
@@ -73,7 +74,8 @@ use media::{ALBUM_WINDOW, audio_filename};
 use outbox::shorten_failure;
 
 pub struct TelegramGateway {
-    pub daemon: Arc<Daemon>,
+    /// Le cœur du daemon : son état partagé et les ports du moteur (T33).
+    pub daemon: Arc<Core>,
     pub bot: Arc<Bot>,
     /// Gabarits des cartes (§14.5) : sortis de `Services` (T36), le cœur les lit par le
     /// port `Cards`.
@@ -100,7 +102,7 @@ pub struct TelegramGateway {
 impl TelegramGateway {
     /// Construit la passerelle depuis la configuration. `Ok(None)` : Telegram n'est
     /// pas configuré (pas de propriétaire ou pas de jeton), ce n'est pas une erreur.
-    pub async fn from_config(daemon: Arc<Daemon>) -> Result<Option<Arc<Self>>, String> {
+    pub async fn from_config(daemon: Arc<Core>) -> Result<Option<Arc<Self>>, String> {
         let s = &daemon.services;
         let cfg = s.config.config();
         if cfg.owner.telegram_user_id == 0 {
@@ -118,7 +120,7 @@ impl TelegramGateway {
         )))
     }
 
-    pub fn with_transport(daemon: Arc<Daemon>, transport: Arc<dyn BotTransport>) -> Arc<Self> {
+    pub fn with_transport(daemon: Arc<Core>, transport: Arc<dyn BotTransport>) -> Arc<Self> {
         let s = &daemon.services;
         let cfg = s.config.config();
         let bot = Arc::new(Bot::new(

@@ -21,7 +21,7 @@ use anyhow::Context as _;
 use penelope_agent::TurnOutcome;
 use penelope_app::elicitation::Destination;
 use penelope_app::services::Services;
-use penelope_daemon::Daemon;
+use penelope_daemon::runtime::Daemon;
 use penelope_executor::executor::{McpGateway, default_workspaces};
 use penelope_kernel::clock::{Clock, TestClock};
 use penelope_kernel::config::parse_duration;

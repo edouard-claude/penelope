@@ -5,8 +5,9 @@
 //! en mémoire doit être le seul du processus.
 
 use penelope_app::bus::Origin;
+use penelope_app::engine::TurnIntake;
 use penelope_app::services::Services;
-use penelope_daemon::Daemon;
+use penelope_daemon::runtime::Daemon;
 use penelope_llm::mock::{MockProvider, Scripted};
 use std::sync::Arc;
 use std::time::Duration;

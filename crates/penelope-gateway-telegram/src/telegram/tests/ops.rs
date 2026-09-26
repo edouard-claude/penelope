@@ -67,7 +67,7 @@ async fn a_scheduled_digest_is_delivered_once() {
         .await
         .unwrap();
         let turn = s.turns.claim("t").await.unwrap().expect("tour planifié");
-        penelope_daemon::runner::process(&g.daemon, turn, Duration::from_secs(30)).await;
+        penelope_daemon::runner::process(&daemon_of(&g), turn, Duration::from_secs(30)).await;
         g.flush_outbox().await.unwrap();
         let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
         let digests = sent.iter().filter(|x| x.contains("6 retenus")).count();
@@ -97,7 +97,7 @@ async fn the_reminder_of_a_go_template_command_is_delivered() {
     })
     .unwrap();
     let t = MockTransport::new();
-    let g = TelegramGateway::with_transport(d.clone(), t.clone());
+    let g = TelegramGateway::with_transport(d.core.clone(), t.clone());
     g.register();
     s.approvals
         .create(

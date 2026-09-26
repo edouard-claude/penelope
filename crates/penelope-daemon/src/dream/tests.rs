@@ -1,6 +1,7 @@
 //! Tests du rêve qui ont besoin du daemon : la session de chat et l'exécuteur d'outils
 //! du propriétaire. Les autres sont dans `penelope-dream`.
 
+use penelope_app::engine::TurnIntake;
 use penelope_app::services::Services;
 use penelope_dream::dream::*;
 use penelope_kernel::clock::TestClock;

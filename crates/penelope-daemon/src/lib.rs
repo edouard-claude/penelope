@@ -27,7 +27,5 @@ pub mod tool_jobs;
 mod wiki_e2e;
 pub mod workflow;
 
-pub use runtime::Daemon;
-
 /// Version du daemon.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -191,9 +191,12 @@ async fn daemon(cli: &Cli) -> CliResult<()> {
         }
         Boot::Normal => {}
     }
-    let d = penelope_daemon::Daemon::new(cli.home.clone(), Some(penelope_gateway_telegram::cards))
-        .await
-        .map_err(|e| CliError::Io(e.to_string()))?;
+    let d = penelope_daemon::runtime::Daemon::new(
+        cli.home.clone(),
+        Some(penelope_gateway_telegram::cards),
+    )
+    .await
+    .map_err(|e| CliError::Io(e.to_string()))?;
     let cfg = d.services.config.config();
     // Sous launchd, stderr est `daemon.err.log`, jamais tourné : le JSON à rétention suffit,
     // `penelope logs` le relit. Une panique y reste visible, elle passe par le crochet de

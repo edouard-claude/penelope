@@ -5,7 +5,7 @@
 //! jamais ce qui tournait déjà.
 
 use penelope_app::services::{Services, workflow_known};
-use penelope_daemon::Daemon;
+use penelope_daemon::runtime::Daemon;
 use penelope_kernel::clock::{SharedClock, TestClock};
 use penelope_mcp::protocol::ToolDescriptor;
 use penelope_mcp::registry::RegisteredTool;

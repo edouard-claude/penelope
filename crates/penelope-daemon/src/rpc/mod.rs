@@ -1,7 +1,8 @@
 //! Serveur RPC local (§2.7, §15) : JSON-RPC 2.0 en NDJSON sur socket de domaine.
 
-use crate::runtime::Daemon;
+use crate::runtime::Core;
 use penelope_app::bus::Origin;
+use penelope_app::engine::{SessionModels, TurnIntake};
 use penelope_app::services::Services;
 use penelope_kernel::api::*;
 use serde_json::{Value, json};
@@ -14,13 +15,14 @@ mod stream;
 pub use server::{serve, serve_on};
 pub use stream::outcome_json;
 
-/// Routeur : une méthode, des paramètres, une valeur.
+/// Routeur : une méthode, des paramètres, une valeur. Il tient le cœur du daemon, pas le
+/// daemon : ses ports et son état partagé (T33).
 pub struct Rpc {
-    pub daemon: Arc<Daemon>,
+    pub daemon: Arc<Core>,
 }
 
 impl Rpc {
-    pub fn new(daemon: Arc<Daemon>) -> Self {
+    pub fn new(daemon: Arc<Core>) -> Self {
         Rpc { daemon }
     }
 
@@ -83,7 +85,7 @@ fn classify(e: &anyhow::Error) -> i32 {
 }
 
 /// Avertissements de cohérence qui touchent un réglage, après son écriture.
-pub(crate) fn config_warnings(daemon: &Daemon, path: &str) -> Vec<String> {
+pub(crate) fn config_warnings(daemon: &Core, path: &str) -> Vec<String> {
     penelope_kernel::coherence::contradictions(&daemon.services.config.config())
         .into_iter()
         .filter(|c| c.concerns(path))

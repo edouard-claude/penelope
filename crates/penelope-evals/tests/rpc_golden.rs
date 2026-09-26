@@ -18,9 +18,10 @@
 //! ```
 
 use penelope_app::bus::Origin;
+use penelope_app::engine::TurnIntake;
 use penelope_app::services::Services;
-use penelope_daemon::Daemon;
 use penelope_daemon::rpc::Rpc;
+use penelope_daemon::runtime::Daemon;
 use penelope_evals::ca_matrix;
 use penelope_hitl::{ApprovalKind, RuleScope};
 use penelope_kernel::api::{RpcRequest, RpcResponse, method};
@@ -187,7 +188,7 @@ async fn world() -> World {
     let p = Arc::new(MockProvider::new());
     d.set_provider_override(p.clone());
     let runners = tokio::spawn(penelope_daemon::runner::run_pool(d.clone()));
-    let rpc = Rpc::new(d.clone());
+    let rpc = Rpc::new(d.core.clone());
     let s = &d.services;
     let mut tokens = Tokens::new();
 

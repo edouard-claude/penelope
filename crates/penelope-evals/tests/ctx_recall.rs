@@ -10,6 +10,7 @@
 //! le résumé et l'outillage d'historique.
 
 use penelope_app::bus::Origin;
+use penelope_app::engine::TurnIntake;
 use penelope_conversation::compaction::{Trigger, compact};
 use penelope_daemon::compaction::context_of;
 use penelope_evals::live;

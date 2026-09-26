@@ -25,7 +25,7 @@
 //! sonde pas chez un serveur : il tourne ici, porte un outil, ses arguments et l'effet du
 //! ledger. Sans `poll_at`, donc : rien ne le sonde (décision 0012).
 
-use crate::runtime::Daemon;
+use crate::runtime::Core;
 use penelope_agent::{JobRequest, ToolExecutor};
 use penelope_app::{bus::Origin, services::Services};
 use penelope_kernel::event::EventDraft;
@@ -293,7 +293,7 @@ async fn origin_of(s: &Services, session_id: &str) -> Origin {
 /// Livre les résultats prêts. Un job dont la session est fermée attend sa réouverture :
 /// `TurnQueue::claim` annule les tours d'une session fermée, une relance enfilée là
 /// serait perdue.
-pub async fn deliver_due(d: &Arc<Daemon>) -> anyhow::Result<usize> {
+pub async fn deliver_due(d: &Core) -> anyhow::Result<usize> {
     let s = &d.services;
     let now = s.clock.now_ms();
     let mut sent = 0;
@@ -329,7 +329,7 @@ pub async fn deliver_due(d: &Arc<Daemon>) -> anyhow::Result<usize> {
 const DELIVERY_POLL: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Boucle de livraison, surveillée comme les autres (issue #84).
-pub async fn deliver_loop(d: Arc<Daemon>) {
+pub async fn deliver_loop(d: Arc<Core>) {
     while !d.handle.is_shutting_down() {
         if let Err(e) = deliver_due(&d).await {
             tracing::warn!(error = %e, "livraison des jobs d'outils");

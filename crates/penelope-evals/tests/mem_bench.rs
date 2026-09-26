@@ -12,7 +12,7 @@
 //!
 //! `PENELOPE_BENCH_REPORT=<fichier>` écrit le rapport Markdown (joint aux releases).
 
-use penelope_daemon::Daemon;
+use penelope_daemon::runtime::Daemon;
 use penelope_evals::live;
 use penelope_evals::mem_bench::{self, BENCH_START_MS, Fixture, LIVE, SIMULATED, Score};
 use penelope_kernel::clock::{SharedClock, TestClock};

@@ -18,14 +18,14 @@ pub use telegram::channel::cards;
 pub use telegram::{TelegramGateway, parse_params};
 
 use penelope_app::gateway::Gateway;
-use penelope_daemon::Daemon;
+use penelope_daemon::runtime::Daemon;
 use std::sync::Arc;
 
 /// La passerelle que la composition (`penelope-cli`) passe à `Daemon::run` : construite
 /// ici, sans réseau, avant `run`, qui l'annonce avant les serveurs MCP (issue #12) puis la
 /// démarre. `None` sans propriétaire ni jeton, ou si le transport ne se construit pas.
 pub async fn compose(d: &Arc<Daemon>) -> Option<Arc<dyn Gateway>> {
-    match TelegramGateway::from_config(d.clone()).await {
+    match TelegramGateway::from_config(d.core.clone()).await {
         Ok(Some(gw)) => Some(gw),
         Ok(None) => {
             tracing::info!(

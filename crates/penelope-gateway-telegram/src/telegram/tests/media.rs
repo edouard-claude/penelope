@@ -321,7 +321,7 @@ async fn a_voice_note_without_local_stt_explains_what_to_configure() {
     let (_d, g, t, _p) = gateway().await;
     // Sans provider imposé : la configuration par défaut vise un serveur local éteint.
     let g = TelegramGateway::with_transport(
-        Arc::new(Daemon::from_services(g.daemon.services.clone())),
+        Daemon::from_services(g.daemon.services.clone()).core,
         t.clone(),
     );
     t.set_file("v1", b"OggS").await;

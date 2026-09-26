@@ -17,6 +17,7 @@ use super::{
     mcp_state_icon, recent_log_lines, routing_text, schedules_text, short_model, shown,
 };
 use penelope_app::bus::Origin;
+use penelope_app::engine::TurnIntake;
 use penelope_kernel::api::method as m;
 use penelope_telegram::actions::{Action, kind as k};
 use penelope_telegram::api::inline_keyboard;

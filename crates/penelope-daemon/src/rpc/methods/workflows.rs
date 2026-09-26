@@ -221,7 +221,7 @@ impl Rpc {
 }
 
 /// Installe des skills tierces et rend ce qui a été posé, avec ce qui manque (#146).
-async fn skill_install(d: &Arc<Daemon>, p: &Value) -> anyhow::Result<Value> {
+async fn skill_install(d: &Core, p: &Value) -> anyhow::Result<Value> {
     let source = required_str(p, "source")?;
     let force = p.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
     let (src, installed, missing) =

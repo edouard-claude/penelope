@@ -46,7 +46,7 @@ mod tests {
                 .unwrap(),
         );
         let d = Daemon::from_services(s.clone());
-        let v = status(&s, "s1", None, Some(&d as &dyn Admin), "all")
+        let v = status(&s, "s1", None, Some(&*d.core as &dyn Admin), "all")
             .await
             .unwrap();
         let rss = v["penelope"]["rss_mb"].as_f64().expect("rss_mb chiffré");

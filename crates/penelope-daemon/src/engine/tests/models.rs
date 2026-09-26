@@ -116,7 +116,7 @@ async fn the_sticky_model_is_revisited_at_boundaries() {
 async fn an_element_is_located_on_a_screenshot() {
     let (_dir, d, p) = daemon().await;
     d.hooks
-        .set_orchestrator(Arc::new(crate::workflow::orchestrator_of(&d)));
+        .set_orchestrator(Arc::new(crate::workflow::orchestrator_of(&d.core)));
     d.publish_config("test", |c| {
         c.models.aliases.insert(
             "pointage".into(),

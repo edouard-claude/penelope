@@ -37,7 +37,7 @@ async fn background_sessions_hold_their_replies_until_switched_back() {
 
     p.reply(r#"{"complexity":"low"}"#);
     p.reply("réponse de fond");
-    penelope_daemon::runner::process(&d, running, Duration::from_secs(30)).await;
+    penelope_daemon::runner::process(&daemon_of(&g), running, Duration::from_secs(30)).await;
     let m: Arc<dyn Messenger> = g.clone();
     m.send_session_text(&first, &chat, "question de fond ?")
         .await

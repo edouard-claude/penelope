@@ -13,8 +13,16 @@ use penelope_app::channel::CardsOf;
 use penelope_app::ports::{Handle, McpAdmin, ProviderSource, Slot};
 use penelope_app::services::Services;
 
-/// Le daemon.
+/// Le daemon : son cœur, plus ce qui fait tourner le processus (reprise, boucles, tours,
+/// dans les blocs `impl Daemon` de `runtime`, `engine`, `runner` et `supervisor`).
 pub struct Daemon {
+    pub core: Arc<Core>,
+}
+
+/// Ce que les surfaces (RPC, passerelle, boucles de fond) tiennent du daemon : l'état
+/// partagé et les ports du moteur (`TurnIntake`, `SessionModels`, `Transcriber`, `Admin`),
+/// sans le processus (épopée #208, T33).
+pub struct Core {
     pub services: Arc<Services>,
     pub handle: Handle,
     /// Événements des tours, attentes de réponse, tours actifs.
@@ -31,6 +39,14 @@ pub struct Daemon {
     pub tasks: Arc<penelope_app::tasks::Tasks>,
     /// Providers construits à la demande (la clé peut arriver après le démarrage).
     pub providers: Arc<Providers>,
+}
+
+/// Les méthodes du daemon lisent son cœur comme leurs propres champs.
+impl std::ops::Deref for Daemon {
+    type Target = Core;
+    fn deref(&self) -> &Core {
+        &self.core
+    }
 }
 
 /// Providers des modèles : construits à la première demande, reconstruits après
@@ -180,20 +196,20 @@ impl Hooks {
 }
 
 impl Daemon {
-    pub async fn new(home: Option<PathBuf>, cards: Option<CardsOf>) -> anyhow::Result<Daemon> {
+    pub async fn new(home: Option<PathBuf>, cards: Option<CardsOf>) -> anyhow::Result<Self> {
         let clock: SharedClock = Arc::new(SystemClock);
         let services = Arc::new(Services::bootstrap(home, clock.clone(), cards).await?);
-        Ok(Daemon::from_services(services))
+        Ok(Self::from_services(services))
     }
 
-    pub fn from_services(services: Arc<Services>) -> Daemon {
+    pub fn from_services(services: Arc<Services>) -> Self {
         let started_at_ms = services.clock.now_ms();
         let delivery = services.channel.delivery.clone();
         let hooks = Hooks {
             delivery,
             ..Hooks::default()
         };
-        Daemon {
+        let core = Core {
             handle: Handle::new(started_at_ms),
             bus: Arc::new(penelope_app::bus::Bus::new()),
             compaction: Arc::new(penelope_conversation::compaction::State::with_messenger(
@@ -207,56 +223,10 @@ impl Daemon {
             providers: Arc::new(Providers::new(services.clone())),
             services,
             hooks,
+        };
+        Self {
+            core: Arc::new(core),
         }
-    }
-
-    /// Calcul des embeddings, vu des modules qui ne tiennent pas le daemon.
-    pub fn embedder(&self) -> penelope_vault::embeddings::Embedder {
-        penelope_vault::embeddings::Embedder {
-            services: self.services.clone(),
-            providers: self.providers.clone(),
-            state: self.embeddings.clone(),
-        }
-    }
-
-    /// Contexte du rêve et de l'ingestion (`penelope-dream`, T26) : ce qu'ils lisent du
-    /// daemon, sans le daemon.
-    pub fn dream(&self) -> penelope_dream::Context {
-        penelope_dream::Context {
-            services: self.services.clone(),
-            providers: self.providers.clone(),
-            embeddings: self.embeddings.clone(),
-        }
-    }
-
-    /// Contexte des boucles de fond surveillées.
-    pub fn supervision(&self) -> penelope_app::ports::Supervision {
-        penelope_app::ports::Supervision {
-            tasks: self.tasks.clone(),
-            handle: self.handle.clone(),
-            clock: self.services.clock.clone(),
-            events: self.services.events.clone(),
-        }
-    }
-
-    pub fn provider_override_active(&self) -> Option<Arc<dyn penelope_llm::Provider>> {
-        self.providers.provider_override_active()
-    }
-
-    /// Impose un provider pour tous les modèles (tests, suites sans réseau).
-    pub fn set_provider_override(&self, p: Arc<dyn penelope_llm::Provider>) {
-        self.providers.set_override(p);
-    }
-
-    pub async fn invalidate_providers(&self) {
-        self.providers.invalidate().await;
-    }
-
-    pub async fn provider_for(
-        &self,
-        model_id: &str,
-    ) -> Result<Arc<dyn penelope_llm::Provider>, String> {
-        self.providers.provider_for(model_id).await
     }
 
     /// Reprise au démarrage (§17) : leases, effets, requêtes LLM, tâches MCP, runs.
@@ -341,6 +311,57 @@ impl Daemon {
                 .await;
         }
         Ok(report)
+    }
+}
+
+impl Core {
+    /// Calcul des embeddings, vu des modules qui ne tiennent pas le daemon.
+    pub fn embedder(&self) -> penelope_vault::embeddings::Embedder {
+        penelope_vault::embeddings::Embedder {
+            services: self.services.clone(),
+            providers: self.providers.clone(),
+            state: self.embeddings.clone(),
+        }
+    }
+
+    /// Contexte du rêve et de l'ingestion (`penelope-dream`, T26) : ce qu'ils lisent du
+    /// daemon, sans le daemon.
+    pub fn dream(&self) -> penelope_dream::Context {
+        penelope_dream::Context {
+            services: self.services.clone(),
+            providers: self.providers.clone(),
+            embeddings: self.embeddings.clone(),
+        }
+    }
+
+    /// Contexte des boucles de fond surveillées.
+    pub fn supervision(&self) -> penelope_app::ports::Supervision {
+        penelope_app::ports::Supervision {
+            tasks: self.tasks.clone(),
+            handle: self.handle.clone(),
+            clock: self.services.clock.clone(),
+            events: self.services.events.clone(),
+        }
+    }
+
+    pub fn provider_override_active(&self) -> Option<Arc<dyn penelope_llm::Provider>> {
+        self.providers.provider_override_active()
+    }
+
+    /// Impose un provider pour tous les modèles (tests, suites sans réseau).
+    pub fn set_provider_override(&self, p: Arc<dyn penelope_llm::Provider>) {
+        self.providers.set_override(p);
+    }
+
+    pub async fn invalidate_providers(&self) {
+        self.providers.invalidate().await;
+    }
+
+    pub async fn provider_for(
+        &self,
+        model_id: &str,
+    ) -> Result<Arc<dyn penelope_llm::Provider>, String> {
+        self.providers.provider_for(model_id).await
     }
 
     /// Publie une génération de configuration et collecte les résultats par sous-système.

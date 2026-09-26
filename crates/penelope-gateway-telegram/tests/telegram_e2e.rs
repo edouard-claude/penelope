@@ -15,7 +15,7 @@
 //! qu'elle appelle pour chaque update reçu.
 
 use penelope_app::services::Services;
-use penelope_daemon::Daemon;
+use penelope_daemon::runtime::Daemon;
 use penelope_gateway_telegram::TelegramGateway;
 use penelope_kernel::clock::{SharedClock, TestClock};
 use penelope_llm::mock::{MockProvider, Scripted};
@@ -66,7 +66,7 @@ async fn boot(
     })
     .unwrap();
     d.set_provider_override(p.clone());
-    let g = TelegramGateway::with_transport(d.clone(), t.clone());
+    let g = TelegramGateway::with_transport(d.core.clone(), t.clone());
     g.register();
     let report = d.recover().await.unwrap();
     let runners = tokio::spawn(penelope_daemon::runner::run_pool(d.clone()));

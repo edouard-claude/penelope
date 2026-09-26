@@ -13,6 +13,7 @@
 
 use crate::runtime::Daemon;
 use penelope_app::bus::Origin;
+use penelope_app::engine::TurnIntake;
 use penelope_app::gateway::Gateway;
 use penelope_workflow::RunState;
 use std::path::{Path, PathBuf};
@@ -174,7 +175,7 @@ impl Daemon {
 
         // Workflows, sous-agents et images : offerts aux outils et à l'ordonnanceur.
         self.hooks
-            .set_orchestrator(Arc::new(crate::workflow::orchestrator_of(&self)));
+            .set_orchestrator(Arc::new(crate::workflow::orchestrator_of(&self.core)));
         // Chaque boucle est surveillée : une panique est journalisée, comptée et suivie
         // d'une relance, au lieu d'arrêter la boucle jusqu'au prochain démarrage (#84).
         let supervised = |name: &str, f: fn(Arc<Daemon>) -> _| {
@@ -188,16 +189,16 @@ impl Daemon {
             supervised("machine", |d| Box::pin(machine_loop(d)) as BoxLoop),
             supervised("scheduler", |d| {
                 let ports = d.hooks.scheduler();
-                let cx = crate::workflow::context_of(&d);
+                let cx = crate::workflow::context_of(&d.core);
                 Box::pin(penelope_orchestrator::scheduler::scheduler_loop(cx, ports)) as BoxLoop
             }),
             supervised("workflows", |d| {
-                let cx = crate::workflow::context_of(&d);
+                let cx = crate::workflow::context_of(&d.core);
                 Box::pin(penelope_orchestrator::workflow::driver_loop(cx)) as BoxLoop
             }),
             // Résultats des jobs d'outils rendus à leur session (issue #204).
             supervised("tool_jobs", |d| {
-                Box::pin(crate::tool_jobs::deliver_loop(d)) as BoxLoop
+                Box::pin(crate::tool_jobs::deliver_loop(d.core.clone())) as BoxLoop
             }),
             supervised("codex.refresh", |d| {
                 let (s, messenger) = (d.services.clone(), d.hooks.messenger.clone());
@@ -228,7 +229,7 @@ impl Daemon {
         {
             tasks.push(supervised("runtime.stream", |d| {
                 Box::pin(async move {
-                    if let Err(error) = crate::runtime_events::serve(d).await {
+                    if let Err(error) = crate::runtime_events::serve(d.services.clone()).await {
                         tracing::error!(%error, "flux runtime indisponible");
                     }
                 }) as BoxLoop
@@ -266,7 +267,7 @@ impl Daemon {
             }
         }
 
-        let serve = crate::rpc::serve_on(self.clone(), listener);
+        let serve = crate::rpc::serve_on(self.core.clone(), listener);
         tokio::select! {
             r = serve => {
                 if let Err(e) = r {

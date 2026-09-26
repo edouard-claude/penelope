@@ -5,7 +5,7 @@ use super::*;
 use tokio::io::AsyncWriteExt;
 
 /// Sert la socket locale jusqu'à l'arrêt du daemon.
-pub async fn serve(daemon: Arc<Daemon>) -> anyhow::Result<()> {
+pub async fn serve(daemon: Arc<Core>) -> anyhow::Result<()> {
     let path = daemon.services.platform.dirs.socket_path();
     let listener = penelope_platform::ipc::IpcListener::bind(&path).await?;
     serve_on(daemon, listener).await
@@ -14,7 +14,7 @@ pub async fn serve(daemon: Arc<Daemon>) -> anyhow::Result<()> {
 /// Sert une socket déjà ouverte. Le daemon l'ouvre **avant** de lancer ses boucles : un
 /// second daemon s'arrête ainsi avant d'avoir touché à la file des tours.
 pub async fn serve_on(
-    daemon: Arc<Daemon>,
+    daemon: Arc<Core>,
     listener: penelope_platform::ipc::IpcListener,
 ) -> anyhow::Result<()> {
     use tokio::io::{AsyncBufReadExt, BufReader};

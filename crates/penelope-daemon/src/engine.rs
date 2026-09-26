@@ -4,10 +4,11 @@
 //! classifieur à la première demande), prompt assemblé, boucle d'agent sur le
 //! transcript persistant, événements publiés sur le bus.
 
-use crate::runtime::Daemon;
+use crate::runtime::{Core, Daemon};
 use penelope_agent::{AgentLoop, TurnOutcome, TurnSink, TurnSpec};
 use penelope_app::bus::{BusSink, Origin};
 use penelope_app::codex_scope;
+use penelope_app::engine::{SessionModels, Transcriber, TurnIntake};
 use penelope_app::helpers::{last_model_key, pin_key};
 use penelope_context::journal::{Provenance, UserSource};
 use penelope_conversation::{SessionConversation, TurnInbox, compaction};
@@ -39,7 +40,7 @@ fn boundary_label(b: &str) -> &'static str {
 }
 
 #[async_trait::async_trait]
-impl penelope_executor::selfknow::Admin for Daemon {
+impl penelope_executor::selfknow::Admin for Core {
     fn uptime_s(&self) -> u64 {
         self.handle.uptime_s(self.services.clock.now_ms())
     }
@@ -100,9 +101,9 @@ impl penelope_executor::selfknow::Admin for Daemon {
     }
 }
 
-impl Daemon {
-    /// Met un message en file pour une session. `dedup` rend l'ajout idempotent.
-    pub async fn enqueue_message(
+#[async_trait::async_trait]
+impl TurnIntake for Core {
+    async fn enqueue_message(
         &self,
         session_id: &str,
         text: &str,
@@ -119,9 +120,7 @@ impl Daemon {
         Ok(id)
     }
 
-    /// Met en file un message accompagné de photos (chemins enregistrés par
-    /// [`penelope_app::media::save_photo`]).
-    pub async fn enqueue_message_with_images(
+    async fn enqueue_message_with_images(
         &self,
         session_id: &str,
         text: &str,
@@ -143,9 +142,7 @@ impl Daemon {
         Ok(id)
     }
 
-    /// Relance la réponse d'une session sur son transcript, sans nouveau message
-    /// (bouton « Réessayer » après un échec).
-    pub async fn enqueue_retry(
+    async fn enqueue_retry(
         &self,
         session_id: &str,
         origin: &Origin,
@@ -167,8 +164,7 @@ impl Daemon {
         Ok(id)
     }
 
-    /// Remet en file la suite d'un tour suspendu par une approbation.
-    pub async fn enqueue_resume(
+    async fn enqueue_resume(
         &self,
         session_id: &str,
         approval_id: &str,
@@ -197,8 +193,7 @@ impl Daemon {
         Ok(id)
     }
 
-    /// Session de chat active d'un canal ; créée au besoin.
-    pub async fn chat_session_for(&self, origin: &Origin) -> anyhow::Result<String> {
+    async fn chat_session_for(&self, origin: &Origin) -> anyhow::Result<String> {
         let s = &self.services;
         match origin {
             Origin::Telegram {
@@ -229,7 +224,9 @@ impl Daemon {
             }
         }
     }
+}
 
+impl Daemon {
     /// Exécute un tour complet et publie son issue.
     pub async fn run_turn(self: &Arc<Self>, turn: &Turn) -> TurnOutcome {
         if !turn.merged_messages.is_empty()
@@ -514,7 +511,7 @@ impl Daemon {
         // Cache de prompt (issue #17) : le contexte volatil reste avec son message, et un
         // préfixe modifié attend que le cache soit froid.
         crate::cache_audit::freeze_volatile(&s, &turn.session_id, &mut tiers).await?;
-        crate::cache_audit::stable_prefix(self, &turn.session_id, &mut tiers).await?;
+        crate::cache_audit::stable_prefix(&s, &turn.session_id, &mut tiers).await?;
         // Un résumé prêt depuis le tour précédent (ou avant un redémarrage) est publié
         // avant de construire la projection.
         if let Err(e) =
@@ -545,7 +542,7 @@ impl Daemon {
                 }),
             },
         );
-        exec.admin = Some(self.clone() as Arc<dyn penelope_executor::selfknow::Admin>);
+        exec.admin = Some(self.core.clone() as Arc<dyn penelope_executor::selfknow::Admin>);
         exec.messenger = self.hooks.messenger();
         exec.mcp = self.hooks.mcp();
         exec.orchestrator = self.hooks.orchestrator();
@@ -590,7 +587,9 @@ impl Daemon {
         .await;
         outcome
     }
+}
 
+impl Core {
     /// Intentions armées que ce message réveille (§6.9) : elles tirent une fois, et leur
     /// texte rejoint le contexte volatil du tour. Un tour rejoué retrouve le même bloc
     /// sans tirer une seconde fois.
@@ -635,60 +634,6 @@ impl Daemon {
         s.kv_set(&key, &block).await?;
         Ok((!block.is_empty()).then_some(block))
     }
-
-    /// Transcrit un audio avec le modèle du rôle `stt` (§14.4) et en compte le coût.
-    ///
-    /// Un alias `openai_compat:…` vise le serveur local (`providers.local`) : s'il n'est
-    /// pas activé, on le dit plutôt que d'envoyer l'audio à OpenRouter par défaut.
-    pub async fn transcribe(
-        &self,
-        audio: Vec<u8>,
-        filename: &str,
-        session_id: &str,
-    ) -> Result<String, String> {
-        let s = &self.services;
-        let cfg = s.config.config();
-        let alias = cfg.role_alias("stt");
-        let model = cfg
-            .alias_model(&alias)
-            .ok_or_else(|| format!("aucun modèle pour l'alias `{alias}` du rôle `stt`"))?
-            .to_string();
-        if penelope_llm::catalog::provider_of(&model) != "openrouter"
-            && !cfg.providers.local.enabled
-            && self.provider_override_active().is_none()
-        {
-            return Err(format!(
-                "l'alias `{alias}` vise un serveur local (`{model}`) mais `providers.local` \
-                 n'est pas activé : `penelope config set providers.local.enabled true`, ou \
-                 transcrire via OpenRouter : `penelope model set {alias} \
-                 openrouter:openai/whisper-large-v3`"
-            ));
-        }
-        let model = codex_scope::background(&self.services, &model, "transcription").await;
-        let provider = self.provider_for(&model).await?;
-        let language = Some(cfg.owner.language.clone()).filter(|l| !l.is_empty());
-        let t = tokio::time::timeout(
-            std::time::Duration::from_secs(180),
-            provider.transcribe(&model, audio, filename, language.as_deref()),
-        )
-        .await
-        .map_err(|_| "transcription trop longue (plus de 3 min)".to_string())?
-        .map_err(|e| format!("{} ({model})", e.message))?;
-        let _ = s
-            .budget
-            .record(penelope_kernel::budget::UsageRecord {
-                session_id: Some(session_id.to_string()),
-                model: penelope_llm::catalog::strip_provider(&model).to_string(),
-                provider: provider.name().to_string(),
-                role: Some("stt".into()),
-                cost_usd: t.cost_usd.unwrap_or(0.0),
-                estimated: t.cost_usd.is_none(),
-                ..Default::default()
-            })
-            .await;
-        Ok(t.text)
-    }
-
     /// Message utilisateur d'un tour avec photos.
     async fn photo_message(
         &self,
@@ -764,26 +709,6 @@ impl Daemon {
 [{count} : description par le modèle de vision, le modèle de la              conversation ne lit pas les images]
 {description}"
         ))
-    }
-
-    /// Décrit des images avec le modèle du rôle `image_describe` (alias `vision`).
-    pub async fn describe_images(
-        &self,
-        urls: &[String],
-        caption: &str,
-        session_id: &str,
-        turn_id: &str,
-    ) -> Result<String, String> {
-        let request = if caption.trim().is_empty() {
-            "Décris ces images.".to_string()
-        } else {
-            format!("Légende du propriétaire : {}", caption.trim())
-        };
-        let (s, p) = (&self.services, self.providers.as_ref());
-        let task = penelope_executor::vision::Task::Describe;
-        penelope_executor::vision::ask(s, p, task, urls, &request, None, session_id, turn_id)
-            .await
-            .map(|a| a.text)
     }
 
     /// Choisit l'alias et le modèle d'un tour (§10.3).
@@ -923,59 +848,6 @@ impl Daemon {
         }
     }
 
-    /// Alias épinglé sur une session, s'il existe encore dans la configuration.
-    pub async fn pinned_model(&self, session_id: &str) -> Option<StickyModel> {
-        penelope_app::helpers::pinned_model(&self.services, session_id).await
-    }
-
-    /// Épingle un alias sur une session, ou revient à l'automatique (`None`).
-    pub async fn pin_model(&self, session_id: &str, alias: Option<&str>) -> anyhow::Result<()> {
-        if let Some(a) = alias {
-            let cfg = self.services.config.config();
-            if cfg.alias_model(a).is_none() {
-                anyhow::bail!(
-                    "alias inconnu `{a}` ; alias disponibles : {}",
-                    conversation_aliases(&cfg).join(", ")
-                );
-            }
-        }
-        self.services
-            .kv_set(&pin_key(session_id), alias.unwrap_or(""))
-            .await
-    }
-
-    /// État du modèle d'une session : épinglé ou automatique, dernier alias utilisé, choix.
-    pub async fn session_model_view(&self, session_id: &str) -> anyhow::Result<Value> {
-        let cfg = self.services.config.config();
-        let model_of = |a: &str| cfg.alias_model(a).map(String::from);
-        let pinned = self.pinned_model(session_id).await;
-        let last = self
-            .services
-            .kv_get(&last_model_key(session_id))
-            .await?
-            .filter(|a| !a.is_empty());
-        let why = self
-            .services
-            .kv_get(&last_model_why_key(session_id))
-            .await?
-            .filter(|a| !a.is_empty());
-        let choices: Vec<Value> = conversation_aliases(&cfg)
-            .into_iter()
-            .map(|a| json!({"alias": a, "model": model_of(&a)}))
-            .collect();
-        Ok(json!({
-            "session": session_id,
-            "mode": if pinned.is_some() { "épinglé" } else { "automatique" },
-            "pinned": pinned.as_ref().map(|p| p.alias.clone()),
-            "pinned_model": pinned.as_ref().map(|p| p.model_id.clone()),
-            "last_alias": last,
-            "last_model": last.as_deref().and_then(model_of),
-            "last_boundary": why,
-            "classifier": cfg.models.routing.classifier,
-            "choices": choices,
-        }))
-    }
-
     /// Classifieur de complexité : un petit modèle, une réponse JSON, 8 s au plus.
     ///
     /// Raisonnement réduit au minimum que le modèle accepte, sortie structurée quand le
@@ -1054,6 +926,132 @@ impl Daemon {
             })
             .await;
         parse_classification(&response.message.text())
+    }
+}
+
+#[async_trait::async_trait]
+impl Transcriber for Core {
+    /// Un alias `openai_compat:…` vise le serveur local (`providers.local`) : s'il n'est
+    /// pas activé, on le dit plutôt que d'envoyer l'audio à OpenRouter par défaut.
+    async fn transcribe(
+        &self,
+        audio: Vec<u8>,
+        filename: &str,
+        session_id: &str,
+    ) -> Result<String, String> {
+        let s = &self.services;
+        let cfg = s.config.config();
+        let alias = cfg.role_alias("stt");
+        let model = cfg
+            .alias_model(&alias)
+            .ok_or_else(|| format!("aucun modèle pour l'alias `{alias}` du rôle `stt`"))?
+            .to_string();
+        if penelope_llm::catalog::provider_of(&model) != "openrouter"
+            && !cfg.providers.local.enabled
+            && self.provider_override_active().is_none()
+        {
+            return Err(format!(
+                "l'alias `{alias}` vise un serveur local (`{model}`) mais `providers.local` \
+                 n'est pas activé : `penelope config set providers.local.enabled true`, ou \
+                 transcrire via OpenRouter : `penelope model set {alias} \
+                 openrouter:openai/whisper-large-v3`"
+            ));
+        }
+        let model = codex_scope::background(&self.services, &model, "transcription").await;
+        let provider = self.provider_for(&model).await?;
+        let language = Some(cfg.owner.language.clone()).filter(|l| !l.is_empty());
+        let t = tokio::time::timeout(
+            std::time::Duration::from_secs(180),
+            provider.transcribe(&model, audio, filename, language.as_deref()),
+        )
+        .await
+        .map_err(|_| "transcription trop longue (plus de 3 min)".to_string())?
+        .map_err(|e| format!("{} ({model})", e.message))?;
+        let _ = s
+            .budget
+            .record(penelope_kernel::budget::UsageRecord {
+                session_id: Some(session_id.to_string()),
+                model: penelope_llm::catalog::strip_provider(&model).to_string(),
+                provider: provider.name().to_string(),
+                role: Some("stt".into()),
+                cost_usd: t.cost_usd.unwrap_or(0.0),
+                estimated: t.cost_usd.is_none(),
+                ..Default::default()
+            })
+            .await;
+        Ok(t.text)
+    }
+
+    async fn describe_images(
+        &self,
+        urls: &[String],
+        caption: &str,
+        session_id: &str,
+        turn_id: &str,
+    ) -> Result<String, String> {
+        let request = if caption.trim().is_empty() {
+            "Décris ces images.".to_string()
+        } else {
+            format!("Légende du propriétaire : {}", caption.trim())
+        };
+        let (s, p) = (&self.services, self.providers.as_ref());
+        let task = penelope_executor::vision::Task::Describe;
+        penelope_executor::vision::ask(s, p, task, urls, &request, None, session_id, turn_id)
+            .await
+            .map(|a| a.text)
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionModels for Core {
+    async fn pinned_model(&self, session_id: &str) -> Option<StickyModel> {
+        penelope_app::helpers::pinned_model(&self.services, session_id).await
+    }
+
+    async fn pin_model(&self, session_id: &str, alias: Option<&str>) -> anyhow::Result<()> {
+        if let Some(a) = alias {
+            let cfg = self.services.config.config();
+            if cfg.alias_model(a).is_none() {
+                anyhow::bail!(
+                    "alias inconnu `{a}` ; alias disponibles : {}",
+                    conversation_aliases(&cfg).join(", ")
+                );
+            }
+        }
+        self.services
+            .kv_set(&pin_key(session_id), alias.unwrap_or(""))
+            .await
+    }
+
+    async fn session_model_view(&self, session_id: &str) -> anyhow::Result<Value> {
+        let cfg = self.services.config.config();
+        let model_of = |a: &str| cfg.alias_model(a).map(String::from);
+        let pinned = self.pinned_model(session_id).await;
+        let last = self
+            .services
+            .kv_get(&last_model_key(session_id))
+            .await?
+            .filter(|a| !a.is_empty());
+        let why = self
+            .services
+            .kv_get(&last_model_why_key(session_id))
+            .await?
+            .filter(|a| !a.is_empty());
+        let choices: Vec<Value> = conversation_aliases(&cfg)
+            .into_iter()
+            .map(|a| json!({"alias": a, "model": model_of(&a)}))
+            .collect();
+        Ok(json!({
+            "session": session_id,
+            "mode": if pinned.is_some() { "épinglé" } else { "automatique" },
+            "pinned": pinned.as_ref().map(|p| p.alias.clone()),
+            "pinned_model": pinned.as_ref().map(|p| p.model_id.clone()),
+            "last_alias": last,
+            "last_model": last.as_deref().and_then(model_of),
+            "last_boundary": why,
+            "classifier": cfg.models.routing.classifier,
+            "choices": choices,
+        }))
     }
 }
 

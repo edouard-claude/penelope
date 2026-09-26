@@ -14,7 +14,7 @@ use crate::telegram::TelegramChat;
 use crate::telegram::TelegramGateway;
 use penelope_app::bus::Origin;
 use penelope_app::services::Services;
-use penelope_daemon::Daemon;
+use penelope_daemon::runtime::Daemon;
 use penelope_kernel::clock::TestClock;
 use penelope_llm::mock::{MockProvider, Scripted};
 use penelope_llm::types::ToolCall;
@@ -191,10 +191,12 @@ impl World {
         })
         .unwrap();
         d.set_provider_override(self.p.clone());
-        let g = TelegramGateway::with_transport(d.clone(), self.t.clone());
+        let g = TelegramGateway::with_transport(d.core.clone(), self.t.clone());
         g.register();
         d.hooks
-            .set_orchestrator(Arc::new(penelope_daemon::workflow::orchestrator_of(&d)));
+            .set_orchestrator(Arc::new(penelope_daemon::workflow::orchestrator_of(
+                &d.core,
+            )));
         let sup = penelope_mcp_host::testing::supervisor(d.services.clone(), self.fake.clone());
         declare(&sup, "redmine", "");
         declare(&sup, "github", "");
@@ -229,7 +231,7 @@ async fn drive_everything(d: &Arc<Daemon>) {
             .unwrap()
         {
             penelope_orchestrator::workflow::drive(
-                &penelope_daemon::workflow::context_of(d),
+                &penelope_daemon::workflow::context_of(&d.core),
                 &r.id,
             )
             .await
@@ -381,7 +383,7 @@ async fn ca_12_1_ticket_to_deploy_runs_end_to_end_and_survives_restarts() {
         message_id: None,
     };
     let run = penelope_orchestrator::workflow::start_run(
-        &penelope_daemon::workflow::context_of(&d),
+        &penelope_daemon::workflow::context_of(&d.core),
         "ticket-to-deploy",
         json!({"ticket_url": "https://redmine.example/issues/42", "ticket_id": "42"}),
         &chat,
@@ -563,7 +565,7 @@ async fn a_conversation_launches_ticket_to_deploy_with_its_brief() {
     let mut clicked = BTreeSet::new();
     let mut update = 10;
     let run = penelope_orchestrator::workflow::start_run_briefed(
-        &penelope_daemon::workflow::context_of(&d),
+        &penelope_daemon::workflow::context_of(&d.core),
         "ticket-to-deploy",
         json!({"ticket_id":"42", "ticket_url":"https://redmine.example/issues/42"}),
         &penelope_app::bus::Origin::Telegram {

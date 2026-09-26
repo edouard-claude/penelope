@@ -5,6 +5,7 @@ use super::*;
 use crate::runtime::Daemon;
 use penelope_agent::Conversation;
 use penelope_app::bus::Origin;
+use penelope_app::engine::TurnIntake;
 use penelope_app::services::Services;
 use penelope_app::testing::RecordingMessenger;
 use penelope_conversation::SessionConversation;

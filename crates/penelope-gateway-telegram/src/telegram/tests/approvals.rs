@@ -21,7 +21,7 @@ async fn an_uncertain_effect_is_pushed_then_decided_from_telegram() {
         o => panic!("{o:?}"),
     };
     s.effects.dispatching(&id).await.unwrap();
-    g.daemon.recover().await.unwrap();
+    daemon_of(&g).recover().await.unwrap();
 
     assert_eq!(g.announce_uncertain_effects().await.unwrap(), 1);
     assert_eq!(g.announce_uncertain_effects().await.unwrap(), 0, "une fois");

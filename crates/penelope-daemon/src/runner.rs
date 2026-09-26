@@ -239,7 +239,7 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     let scheduled = turn.kind == penelope_kernel::turn::TurnKind::Trigger;
     if scheduled && let Some(schedule) = turn.payload["schedule"].as_str() {
         let ports = daemon.hooks.scheduler();
-        let cx = crate::workflow::context_of(daemon);
+        let cx = crate::workflow::context_of(&daemon.core);
         penelope_orchestrator::scheduler::trigger_outcome_of(
             &cx, &ports, schedule, &outcome, &turn,
         )
@@ -297,6 +297,7 @@ impl Daemon {
 mod tests {
     use super::*;
     use penelope_agent::Conversation;
+    use penelope_app::engine::TurnIntake;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::MockProvider;
 

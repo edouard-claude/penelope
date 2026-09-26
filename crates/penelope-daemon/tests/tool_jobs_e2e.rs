@@ -11,8 +11,9 @@
 
 use penelope_agent::TurnOutcome;
 use penelope_app::bus::Origin;
+use penelope_app::engine::{SessionModels, TurnIntake};
 use penelope_app::services::Services;
-use penelope_daemon::Daemon;
+use penelope_daemon::runtime::Daemon;
 use penelope_executor::jobs::{ToolJob, store};
 use penelope_kernel::clock::{SharedClock, SystemClock};
 use penelope_kernel::turn::TurnKind;
@@ -42,7 +43,9 @@ async fn daemon_at(root: &Path) -> (Arc<Daemon>, Arc<MockProvider>) {
     let p = Arc::new(MockProvider::new());
     d.set_provider_override(p.clone());
     d.hooks
-        .set_orchestrator(Arc::new(penelope_daemon::workflow::orchestrator_of(&d)));
+        .set_orchestrator(Arc::new(penelope_daemon::workflow::orchestrator_of(
+            &d.core,
+        )));
     (d, p)
 }
 

@@ -4,7 +4,7 @@
 //! reconstruits sur le même répertoire. Rien n'est gardé en mémoire d'une vie à l'autre.
 
 use penelope_app::services::Services;
-use penelope_daemon::Daemon;
+use penelope_daemon::runtime::Daemon;
 use penelope_kernel::clock::{SharedClock, TestClock};
 use penelope_kernel::effects::{EffectKind, EffectSpec, Planned, UnknownDecision};
 use penelope_kernel::session::SessionKind;
