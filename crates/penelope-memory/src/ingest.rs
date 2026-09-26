@@ -264,7 +264,11 @@ pub fn html_to_text(html: &str) -> String {
                     rest = &rest[lt + end + 3..];
                     continue;
                 }
-                None => break,
+                // Jamais fermé : tout le reste est commentaire.
+                None => {
+                    rest = "";
+                    break;
+                }
             }
         }
         let Some(gt) = rest[lt..].find('>') else {

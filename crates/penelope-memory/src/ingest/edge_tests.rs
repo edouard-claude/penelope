@@ -52,12 +52,12 @@ fn entities_are_decoded_and_unknown_ones_kept() {
 }
 
 /// Du HTML tronqué (commentaire ou balise jamais fermés) ne fait rien perdre avant la
-/// coupure, et le contenu des scripts n'entre pas. (Le texte d'un commentaire jamais
-/// fermé, lui, est gardé : relevé, non vérifié ici.)
+/// coupure, et le contenu des scripts n'entre pas. Un commentaire jamais fermé est
+/// retiré jusqu'à la fin.
 #[test]
 fn truncated_html_keeps_what_came_before() {
     let t = html_to_text("<p>Bonjour</p><!-- jamais fermé");
-    assert!(t.contains("Bonjour"), "{t}");
+    assert_eq!(t.trim(), "Bonjour");
     let t = html_to_text("<p>Salut</p><div");
     assert!(t.contains("Salut"), "{t}");
     let t = html_to_text("<script>var x = 1;</script><p>Texte</p>");
