@@ -67,7 +67,7 @@ impl NativeToolExecutor {
             .store
             .read(move |c| {
                 Ok(c.query_row(
-                    "SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session_id = ?1",
+                    "SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session_id = ?1 AND sealed IS NOT 2",
                     [sid],
                     |r| r.get(0),
                 )?)

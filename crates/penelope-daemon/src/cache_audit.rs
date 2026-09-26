@@ -36,7 +36,7 @@ pub async fn freeze_volatile(
         .store
         .read(move |c| {
             Ok(c.query_row(
-                "SELECT MAX(seq) FROM messages WHERE session_id = ?1 AND role = 'user'",
+                "SELECT MAX(seq) FROM messages WHERE session_id = ?1 AND role = 'user' AND sealed IS NOT 2",
                 [sid],
                 |r| r.get(0),
             )?)

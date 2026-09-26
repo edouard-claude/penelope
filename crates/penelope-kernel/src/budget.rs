@@ -697,7 +697,7 @@ fn session_label(c: &penelope_store::rusqlite::Connection, id: &str) -> Option<S
     }
     c.query_row(
         "SELECT json_extract(content, '$.blocks[0].text') FROM messages
-         WHERE session_id = ?1 AND role = 'user' ORDER BY seq LIMIT 1",
+         WHERE session_id = ?1 AND role = 'user' AND sealed IS NOT 2 ORDER BY seq LIMIT 1",
         [id],
         |r| r.get::<_, Option<String>>(0),
     )
