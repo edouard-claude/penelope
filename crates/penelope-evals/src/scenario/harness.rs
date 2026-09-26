@@ -6,6 +6,7 @@
 //! `runner::process`, `compaction::compact`, `session_ops`, `purge`) : le scénario
 //! survit aux déplacements internes de la V1.
 
+mod ids;
 mod journal;
 mod lifecycle;
 mod rpc;
@@ -94,6 +95,8 @@ struct Harness<'a> {
     recorded: Shared<Vec<ScriptLine>>,
     /// Envois du canal simulé, toutes vies confondues (`messenger = true`).
     sent: Shared<Vec<Value>>,
+    /// Jetons `{{id:…}}` du script restés sans identifiant : le rejeu échoue.
+    script_errors: Shared<Vec<String>>,
     life: Option<Life>,
     /// Chemin de la base, connu dès la première vie : la fermeture s'y vérifie.
     db: Option<PathBuf>,
@@ -125,6 +128,7 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
         seen: Arc::new(Mutex::new(Vec::new())),
         recorded: Arc::new(Mutex::new(Vec::new())),
         sent: Arc::new(Mutex::new(Vec::new())),
+        script_errors: Arc::new(Mutex::new(Vec::new())),
         life: None,
         db: None,
         session: String::new(),
@@ -135,6 +139,9 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
     };
     h.boot(true).await?;
     h.run_steps().await?;
+    if let Some(e) = lock(&h.script_errors).first() {
+        anyhow::bail!("model.jsonl cite un identifiant introuvable : {e}");
+    }
     anyhow::ensure!(
         !h.crashed,
         "le scénario finit sur un crash : une étape `restart` doit le suivre"

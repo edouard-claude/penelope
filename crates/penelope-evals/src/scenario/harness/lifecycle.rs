@@ -195,10 +195,17 @@ impl Harness<'_> {
         }
         let mock = MockProvider::new();
         let (script, seen) = (self.script.clone(), self.seen.clone());
+        let errors = self.script_errors.clone();
         mock.set_responder(Some(Arc::new(move |req: &ChatRequest| {
             lock(&seen).push(req.clone());
             match lock(&script).pop_front() {
-                Some(line) => line.to_scripted(),
+                Some(line) => match super::ids::resolve(&line, req) {
+                    Ok(line) => line.to_scripted(),
+                    Err(e) => {
+                        lock(&errors).push(e.clone());
+                        Scripted::Error(LlmErrorKind::Other, e)
+                    }
+                },
                 None => Scripted::Error(
                     LlmErrorKind::Other,
                     "script épuisé : model.jsonl prévoit moins d'appels que le scénario n'en fait"
