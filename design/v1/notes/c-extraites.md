@@ -26,6 +26,28 @@ Objectif du lot : chaque crate extraite au moins au niveau du daemon de `main` (
 le daemon au moins à 86,3, `app` sans baisse. Tenu partout. Le total du workspace dépasse
 celui de `main` au point de fourche (88,3 %).
 
+## Critère redéfini : lignes de produit non couvertes, main → v1
+
+L'intégrateur a redéfini le critère 7 en lignes non couvertes par zone d'origine (v1 ≤
+main), le pourcentage étant faussé par le code de test en ligne de `main`. Relevé
+`cargo llvm-cov --workspace` : `main` à 0.17.62, v1 à `1f6fbc5` (avant ce lot), v1 à la tête
+de cette branche (avant l'intégration de `s-derniers`) :
+
+| Zone d'origine (modules du daemon de main) | Crate v1 | main | v1 avant | v1 après |
+|---|---|---|---|---|
+| `telegram`, `ticket_to_deploy_e2e` | gateway-telegram | 2 596 | 2 602 | **1 231** |
+| `dream`, `ingest`, `onboarding` | dream | 725 | 716 | **491** |
+| `workflow`, `scheduler` | orchestrator | 679 | 649 | **422** |
+| `mcp`, `mcp_auth` | mcp-host | 473 | 434 | **240** |
+| `backup`, `codex_auth`, `codex_quota`, `doctor`, `hermes`, `purge`, `session_ops`, `skill_deps`, `skill_install`, `upgrade` | ops | 1 467 | 1 335 | **805** |
+| reste du daemon | daemon + agent + app + conversation + executor + vault | 2 889 | 2 377 | **2 333** |
+| workspace entier | | 14 045 | 13 647 | **10 968** |
+
+Seule la passerelle était au-dessus de main avant ce lot (2 602 contre 2 596) ; toutes les
+zones sont maintenant sous leur niveau de main. Hors de mon périmètre, deux crates socle
+ont plus de lignes non couvertes que sur main : `penelope-context` (157 → 351) et
+`penelope-evals` (151 → 467), relevées pour `c-socle`.
+
 ## Pourquoi les crates extraites avaient baissé
 
 Ce n'était pas du code devenu non couvert. Lignes non couvertes, modules du daemon de
