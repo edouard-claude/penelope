@@ -5,7 +5,7 @@
 //! par `entry_uid`, qui est stable.
 
 use crate::provenance::{Origin, Provenance};
-use crate::vault::{Annotations, Level, VaultEntry, When};
+use crate::vault::{Level, VaultEntry, When};
 use penelope_kernel::clock::SharedClock;
 use penelope_store::{
     Store, cosine_similarity, decode_embedding, encode_embedding, rusqlite::params,
@@ -257,11 +257,6 @@ impl MemoryIndex {
             half_life: None,
             vectors_decoded: Default::default(),
         }
-    }
-
-    pub fn with_params(mut self, p: ScoreParams) -> Self {
-        self.params = p;
-        self
     }
 
     /// Demi-vie de la récence relue à chaque recherche (configuration à chaud, #86).
@@ -713,26 +708,6 @@ pub fn simple_entry(uid: &str, text: &str, level: Level, maj: &str) -> IndexedEn
         declencheurs: Vec::new(),
         content_hash: penelope_kernel::canonical::sha256_hex(text.as_bytes()),
         retired_at: None,
-    }
-}
-
-/// Annotations d'une entrée indexée, pour réécriture du fichier.
-pub fn annotations_of(e: &IndexedEntry) -> Annotations {
-    Annotations {
-        uid: Some(e.uid.clone()),
-        importance: e.importance,
-        declencheurs: e.declencheurs.clone(),
-        projet: e.projet.clone(),
-        depuis: e.depuis.clone(),
-        source: None,
-        quand: e.quand.clone(),
-        confiance: e.confiance,
-        preuves: Vec::new(),
-        occurrences: None,
-        revue: None,
-        expire: None,
-        sensible: false,
-        remplace: None,
     }
 }
 

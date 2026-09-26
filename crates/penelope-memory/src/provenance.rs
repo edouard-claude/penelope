@@ -187,12 +187,6 @@ impl InjectionMarker {
         self.injected.insert(normalise(text));
     }
 
-    pub fn mark_all<'a>(&mut self, texts: impl IntoIterator<Item = &'a str>) {
-        for t in texts {
-            self.mark(t);
-        }
-    }
-
     /// Vrai si ce candidat n'est qu'un écho de ce que l'on a injecté.
     pub fn is_echo(&self, text: &str) -> bool {
         self.injected.contains(&normalise(text))
