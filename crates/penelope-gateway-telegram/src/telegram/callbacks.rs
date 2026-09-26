@@ -5,7 +5,6 @@ use super::*;
 impl TelegramGateway {
     // ================================================================ boutons
 
-    #[allow(clippy::too_many_lines)] // gel 0.17 : lot G (telegram/callbacks.rs)
     pub(super) async fn callback(
         self: &Arc<Self>,
         callback_id: &str,
@@ -15,7 +14,6 @@ impl TelegramGateway {
         message_id: i64,
         from_id: i64,
     ) -> anyhow::Result<()> {
-        let s = &self.daemon.services;
         let outcome = self.actions.click(data, from_id).await?;
         if let ClickOutcome::Accepted(action) = &outcome
             && action.action == k::MODEL_PIN
@@ -171,6 +169,19 @@ impl TelegramGateway {
             return Ok(());
         };
 
+        self.approval_clicked(&action, chat_id, topic_id, message_id)
+            .await
+    }
+    /// Un bouton d'approbation : la demande est tranchée, confirmée, ou sa raison
+    /// attendue.
+    async fn approval_clicked(
+        self: &Arc<Self>,
+        action: &Action,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        message_id: i64,
+    ) -> anyhow::Result<()> {
+        let s = &self.daemon.services;
         let approval_id = action.target.clone();
         let Some(approval) = s.approvals.get(&approval_id).await? else {
             let _ = self.bot.edit_markup(chat_id, message_id, None).await;
@@ -347,6 +358,7 @@ impl TelegramGateway {
         }
         Ok(())
     }
+
     /// Tranche, confirme, et remet la suite du tour en file.
     pub(super) async fn finalize_decision(
         &self,
