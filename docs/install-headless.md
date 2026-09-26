@@ -551,6 +551,12 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `upgrade.codesign_identifier` | `"io.github.edouard-claude.penelope"` | Identifiant fixe de la signature macOS. |
 | `upgrade.install_dir` | `"~/.local/bin"` | Répertoire du binaire de release quand une installation source bascule vers les releases (issue #33). |
 
+**[skills]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `skills.archive_base_url` | `"https://codeload.github.com"` | Origine des archives ZIP des dépôts (`<base>/<proprietaire>/<depot>/zip/<revision>`) : HTTPS, ou HTTP vers la boucle locale seulement (miroir, scénarios). |
+
 **[voice]**
 
 | Clé | Défaut | Rôle |

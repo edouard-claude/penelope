@@ -33,6 +33,7 @@ pub struct Config {
     pub tools: Tools,
     pub workflows: Workflows,
     pub upgrade: Upgrade,
+    pub skills: Skills,
     pub voice: Voice,
     pub retention: Retention,
     pub backup: Backup,

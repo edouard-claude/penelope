@@ -273,6 +273,9 @@
         "codesign_identifier": "string",
         "install_dir": "string"
       },
+      "skills": {
+        "archive_base_url": "string"
+      },
       "voice": {
         "tts_voice": "string",
         "max_chars": "integer",

@@ -590,6 +590,23 @@ impl Default for Upgrade {
     }
 }
 
+/// Import de skills tierces (`penelope skill install`, issue #146).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Skills {
+    /// Origine des archives ZIP des dépôts (`<base>/<proprietaire>/<depot>/zip/<revision>`) :
+    /// HTTPS, ou HTTP vers la boucle locale seulement (miroir, scénarios).
+    pub archive_base_url: String,
+}
+
+impl Default for Skills {
+    fn default() -> Self {
+        Skills {
+            archive_base_url: "https://codeload.github.com".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Voice {

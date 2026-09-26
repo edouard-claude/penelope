@@ -19,7 +19,7 @@ pub async fn install(
     force: bool,
 ) -> anyhow::Result<(Source, Vec<Installed>, Vec<crate::skill_deps::Missing>)> {
     let (source, wanted) = Source::parse(spec).map_err(anyhow::Error::msg)?;
-    let url = source.archive_url();
+    let url = source.archive_url(&archive_base(&s.config.config())?);
     let bytes = fetch(&url).await.map_err(anyhow::Error::msg)?;
 
     let root = s.platform.dirs.skills();
@@ -49,9 +49,24 @@ pub async fn install(
     Ok((source, installed, missing))
 }
 
+/// Origine des archives (`skills.archive_base_url`) : HTTPS, ou HTTP vers la boucle
+/// locale seulement, jamais d'identifiants dans l'URL. Une skill posée reçoit des outils :
+/// son archive ne transite pas en clair sur le réseau.
+fn archive_base(cfg: &penelope_kernel::config::Config) -> anyhow::Result<String> {
+    let base = cfg.skills.archive_base_url.trim();
+    crate::helpers::check_endpoint(base).map_err(|_| {
+        anyhow::anyhow!(
+            "skills.archive_base_url refusée : HTTPS, ou HTTP vers 127.0.0.1 ou localhost \
+             seulement ({base})"
+        )
+    })?;
+    Ok(base.to_string())
+}
+
 async fn fetch(url: &str) -> Result<Vec<u8>, String> {
-    // L'adresse n'est pas fournie par l'appelant : `Source::archive_url` la construit,
-    // hôte compris, à partir d'un `proprietaire/depot` validé. Rien à filtrer de plus.
+    // L'adresse n'est pas fournie par l'appelant : `Source::archive_url` la construit à
+    // partir d'un `proprietaire/depot` validé, sous une origine vérifiée par
+    // `archive_base`. Rien à filtrer de plus.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
         .build()
@@ -135,6 +150,38 @@ mod tests {
             allowed_tools: vec!["fs_read".into(), "shell_exec".into()],
             requires,
             replaced: false,
+        }
+    }
+
+    /// L'origine des archives n'accepte le HTTP qu'en boucle locale.
+    #[test]
+    fn the_archive_base_is_https_or_loopback() {
+        let mut cfg = penelope_kernel::config::Config::default();
+        assert_eq!(
+            archive_base(&cfg).unwrap(),
+            "https://codeload.github.com",
+            "le défaut"
+        );
+        for ok in [
+            "http://127.0.0.1:8080",
+            "http://localhost:1",
+            "https://miroir.example",
+        ] {
+            cfg.skills.archive_base_url = ok.into();
+            assert!(archive_base(&cfg).is_ok(), "{ok}");
+        }
+        for bad in [
+            "http://miroir.example",
+            "https://u:p@miroir.example",
+            "ftp://x",
+            "",
+        ] {
+            cfg.skills.archive_base_url = bad.into();
+            let err = archive_base(&cfg).unwrap_err().to_string();
+            assert!(
+                err.contains("skills.archive_base_url refusée"),
+                "{bad} : {err}"
+            );
         }
     }
 
