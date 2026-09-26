@@ -781,3 +781,40 @@ fn model_ids_default_to_openrouter() {
     );
     assert_eq!(normalise_model_id("local:llama"), "local:llama");
 }
+
+/// #145 : un texte qui déborderait en chapelet de bulles part en pièce jointe, avec sa
+/// première ligne pour légende ; un texte court reste un message.
+#[tokio::test]
+async fn a_long_text_is_sent_as_a_document() {
+    let (_d, g, t, _p) = gateway().await;
+    g.daemon
+        .publish_config("test", |c| {
+            c.telegram.max_fragments = 2;
+            Ok(vec!["telegram.max_fragments".into()])
+        })
+        .unwrap();
+    let long = format!(
+        "Digest du matin\n{}",
+        "Une ligne de rapport assez longue.\n".repeat(600)
+    );
+    g.reply_or_document(OWNER, None, &long).await.unwrap();
+    let docs = t.calls_to(tg::SEND_DOCUMENT).await;
+    assert_eq!(docs.len(), 1, "{docs:?}");
+    assert!(
+        docs[0]
+            .to_string()
+            .contains("Digest du matin (texte complet en pièce jointe)"),
+        "{}",
+        docs[0]
+    );
+    let outgoing = g.daemon.services.platform.dirs.data().join("outgoing");
+    assert_eq!(
+        std::fs::read_dir(&outgoing).unwrap().count(),
+        0,
+        "le fichier ne traîne pas"
+    );
+    g.reply_or_document(OWNER, None, "Court.").await.unwrap();
+    g.flush_outbox().await.unwrap();
+    assert_eq!(t.calls_to(tg::SEND_DOCUMENT).await.len(), 1);
+    assert!(texts(&t.calls_to(tg::SEND_MESSAGE).await).contains(&"Court.".to_string()));
+}

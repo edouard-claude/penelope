@@ -371,3 +371,6 @@ impl TelegramGateway {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests;
