@@ -61,3 +61,6 @@ pub(super) fn tool_payload(result: &Value) -> Value {
         .unwrap_or_default();
     serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string()))
 }
+
+#[cfg(test)]
+mod tests;

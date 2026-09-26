@@ -767,3 +767,76 @@ async fn internal_events_fire_their_schedules_once() {
     tick(&d, &d.scheduler()).await.unwrap();
     assert_eq!(rec.texts(), vec!["✅ run terminé (s_42)"]);
 }
+
+/// #120 : un fichier promis doit avoir été écrit pendant l'exécution, dans les
+/// workspaces ; un run promis doit avoir été lancé ; un livrable inconnu est ignoré.
+#[tokio::test]
+async fn file_and_run_deliverables_are_checked_after_the_turn() {
+    let (d, clock, rec) = harness().await;
+    let s = &d.services;
+    let ws = penelope_executor::executor::default_workspaces(s)[0].clone();
+    std::fs::create_dir_all(&ws).unwrap();
+    let ports = d.scheduler();
+    let cases = [
+        ("fichier:rapport.md", Some("rapport.md"), None),
+        (
+            "fichier:absent.md",
+            None,
+            Some("fichier `absent.md` non écrit"),
+        ),
+        (
+            "fichier:/hors/des/workspaces.md",
+            None,
+            Some("hors des workspaces"),
+        ),
+        ("run", None, Some("aucun run lancé")),
+        ("inconnu", None, None),
+    ];
+    for (livrable, write, expected) in cases {
+        let sched = s
+            .schedules
+            .create(
+                TriggerKind::Interval,
+                json!({"every_ms": 3_600_000}),
+                json!({"type": "prompt", "prompt": "Rédige", "livrable": livrable}),
+                json!({}),
+            )
+            .await
+            .unwrap();
+        clock.advance_ms(3_600_500);
+        tick(&d, &ports).await.unwrap();
+        let turn = s.turns.claim("t").await.unwrap().expect("tour");
+        if let Some(name) = write {
+            std::fs::write(ws.join(name), "fait").unwrap();
+        }
+        let outcome = penelope_agent::TurnOutcome::Answered {
+            text: "Fait.".into(),
+            iterations: 1,
+            cost_usd: 0.0,
+        };
+        s.turns.complete(&turn).await.unwrap();
+        trigger_outcome_of(&d, &ports, &sched.id, &outcome, &turn).await;
+        let after = s.schedules.get(&sched.id).await.unwrap().unwrap();
+        match expected {
+            None => assert!(after.last_error.is_none(), "{livrable} : {after:?}"),
+            Some(why) => assert!(
+                after
+                    .last_error
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains(why),
+                "{livrable} : {after:?}"
+            ),
+        }
+        s.schedules.set_state(&sched.id, "paused").await.unwrap();
+    }
+    assert_eq!(
+        rec.texts()
+            .iter()
+            .filter(|t| t.contains("sans livrable"))
+            .count(),
+        3,
+        "chaque livrable manquant est signalé : {:?}",
+        rec.texts()
+    );
+}
