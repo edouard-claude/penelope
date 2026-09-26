@@ -70,6 +70,10 @@ pub struct Spec {
     /// d'une méthode RPC sur une table que le relevé ordinaire ne lit pas.
     #[serde(default)]
     pub observe: Vec<Observe>,
+    /// Canal de messages simulé : ce qui est envoyé au propriétaire est relevé dans le
+    /// monde (lignes `sent`). Sans lui, `send_message` n'a aucun canal.
+    #[serde(default)]
+    pub messenger: bool,
     pub steps: Vec<Step>,
 }
 
@@ -551,6 +555,7 @@ fn group_label(kind: &str) -> &str {
         "usage" => "usage",
         "outbox" => "tg_outbox",
         "file" => "fichiers",
+        "sent" => "envois",
         "audit" => "audit",
         other => other,
     }
@@ -742,6 +747,7 @@ mod tests {
 name = "exemple"
 description = "un exemple"
 pin_model = "main"
+messenger = true
 
 [config]
 "context.large_payload_tokens" = 300
@@ -798,6 +804,7 @@ assistant = "réponse {i}"
         assert_eq!(spec.steps[2].label(), "redémarrage");
         assert_eq!(spec.files[0].repeat, 3);
         assert!(spec.mcp_tools[0].read_only);
+        assert!(spec.messenger);
         assert_eq!(spec.config.len(), 1);
         assert!(toml::from_str::<Spec>("name = \"x\"\n[[steps]]\nkind = \"inconnu\"\n").is_err());
     }

@@ -9,6 +9,7 @@
 mod journal;
 mod lifecycle;
 mod rpc;
+mod messenger;
 mod steps;
 mod telegram;
 #[cfg(test)]
@@ -91,6 +92,8 @@ struct Harness<'a> {
     script: Shared<VecDeque<ScriptLine>>,
     seen: Shared<Vec<ChatRequest>>,
     recorded: Shared<Vec<ScriptLine>>,
+    /// Envois du canal simulé, toutes vies confondues (`messenger = true`).
+    sent: Shared<Vec<Value>>,
     life: Option<Life>,
     /// Chemin de la base, connu dès la première vie : la fermeture s'y vérifie.
     db: Option<PathBuf>,
@@ -121,6 +124,7 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
         script: Arc::new(Mutex::new(scenario.script.iter().cloned().collect())),
         seen: Arc::new(Mutex::new(Vec::new())),
         recorded: Arc::new(Mutex::new(Vec::new())),
+        sent: Arc::new(Mutex::new(Vec::new())),
         life: None,
         db: None,
         session: String::new(),
@@ -140,6 +144,7 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
         let workspace = workspace_of(&life.services);
         let mut dumped = world::dump(&life.services, &workspace).await?;
         dumped.extend(rpc::observe(&life.services, &spec.observe).await?);
+        dumped.extend(lock(&h.sent).iter().cloned());
         let seen = lock(&h.seen).clone();
         let visible = visible::check(&life.services, &seen, &spec.name).await?;
         let reindexed = journal::check(&life.services, &spec.name).await?;

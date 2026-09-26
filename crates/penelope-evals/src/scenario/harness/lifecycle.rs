@@ -88,6 +88,14 @@ impl Harness<'_> {
                 &daemon,
             )));
         self.apply_config(&daemon)?;
+        if self.spec.messenger {
+            let recorder = super::messenger::Recorder {
+                sent: self.sent.clone(),
+            };
+            if let Ok(mut slot) = daemon.hooks.messenger.write() {
+                *slot = Some(Arc::new(recorder));
+            }
+        }
         daemon.set_provider_override(self.provider(&services)?);
         let gateway = self.install_mcp(&daemon, &services).await?;
         if first {
