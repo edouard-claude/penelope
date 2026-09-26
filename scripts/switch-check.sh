@@ -121,7 +121,7 @@ fi
 if ! grep -q '^\[scenarios\]' "$BUDGET"; then
     ko "7. [scenarios] absent de budget.toml (R10, R11 pas encore posées)"
 elif [ -n "$(array scenarios missing)" ]; then
-    ko "7. [scenarios].missing : $(array scenarios missing | wc -l | tr -d ' ') scénario(s) manquant(s)"
+    ko "7. [scenarios].missing : $(array scenarios missing | wc -l | tr -d ' ') surface(s) visible(s) sans scénario (R10), dont $(array scenarios missing | head -1)"
 else
     ok "7. [scenarios].missing vide"
 fi
