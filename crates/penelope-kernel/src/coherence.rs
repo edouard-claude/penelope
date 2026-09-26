@@ -72,19 +72,37 @@ fn rank(p: &str) -> u8 {
 }
 
 fn private_host(entry: &str) -> bool {
-    let host = entry
+    let authority = entry
         .trim()
         .trim_start_matches("https://")
         .trim_start_matches("http://")
-        .split(['/', ':'])
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    // Une adresse IPv6 : entre crochets (suivie d'un port), ou nue (plusieurs `:`). Le
+    // découpage sur `:` qui suit la viderait.
+    let v6 = match authority.strip_prefix('[') {
+        Some(rest) => rest.split(']').next(),
+        None => (authority.matches(':').count() > 1).then_some(authority),
+    };
+    if let Some(ip) = v6.and_then(|h| h.parse::<std::net::Ipv6Addr>().ok()) {
+        if let Some(v4) = ip.to_ipv4_mapped() {
+            return private_host(&v4.to_string());
+        }
+        let first = ip.segments()[0];
+        // Boucle locale, adresse non spécifiée, fc00::/7 (locales uniques), fe80::/10
+        // (lien local).
+        return ip.is_loopback()
+            || ip.is_unspecified()
+            || first & 0xfe00 == 0xfc00
+            || first & 0xffc0 == 0xfe80;
+    }
+    let host = authority
+        .split(':')
         .next()
         .unwrap_or_default()
         .to_lowercase();
-    if host == "localhost"
-        || host.ends_with(".local")
-        || host.ends_with(".localhost")
-        || host == "::1"
-    {
+    if host == "localhost" || host.ends_with(".local") || host.ends_with(".localhost") {
         return true;
     }
     let octets: Vec<u8> = host.split('.').filter_map(|o| o.parse().ok()).collect();
@@ -358,12 +376,24 @@ mod tests {
             "172.20.0.1:8080",
             "169.254.1.1",
             "app.localhost",
+            "::1",
+            "[::1]:8080",
+            "http://[::1]/x",
+            "fd12:3456::1",
+            "https://[fc00::2]:443/api",
+            "fe80::1",
+            "::",
+            "::ffff:192.168.1.2",
         ] {
             assert!(private_host(h), "{h}");
         }
-        // `::1` n'est pas vérifié ici : le découpage sur `:` vide l'hôte avant la
-        // comparaison, la branche qui le nomme n'est jamais atteinte (relevé, non corrigé).
-        for h in ["api.example.com", "172.32.0.1", "8.8.8.8"] {
+        for h in [
+            "api.example.com",
+            "172.32.0.1",
+            "8.8.8.8",
+            "2001:db8::1",
+            "[2606:4700::1111]:443",
+        ] {
             assert!(!private_host(h), "{h}");
         }
         assert_eq!(rank("inconnu"), rank("ask"));
