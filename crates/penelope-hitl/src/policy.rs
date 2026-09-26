@@ -321,9 +321,11 @@ pub fn describe_pattern(pattern: &Value) -> String {
             Some((op, val)) if op == CMD_PREFIX_OP => {
                 format!("{k} : famille « {} »", val.as_str().unwrap_or_default())
             }
-            Some((op, val)) if op == PATH_PREFIX_OP => {
-                format!("{k} sous « {} »", val.as_str().unwrap_or_default())
-            }
+            // Un fichier à la racine donne un préfixe vide : le dire en mots.
+            Some((op, val)) if op == PATH_PREFIX_OP => match val.as_str().unwrap_or_default() {
+                "" => format!("{k} à la racine de l'espace de travail"),
+                dir => format!("{k} sous « {dir} »"),
+            },
             Some((op, val)) if op == ORIGIN_OP => {
                 format!("{k} sur « {} »", val.as_str().unwrap_or_default())
             }

@@ -476,6 +476,11 @@ fn origins_and_raw_patterns_are_described() {
     let d = describe_pattern(&json!({"url": {ORIGIN_OP: "https://api.github.com"}}));
     assert_eq!(d, "url sur « https://api.github.com »");
     assert_eq!(describe_pattern(&json!("brut")), "\"brut\"");
+    // Un fichier à la racine donne un préfixe vide : la carte le dit en mots.
+    let root = describe_pattern(&json!({"path": {PATH_PREFIX_OP: ""}}));
+    assert_eq!(root, "path à la racine de l'espace de travail");
+    let sub = describe_pattern(&json!({"path": {PATH_PREFIX_OP: "notes"}}));
+    assert_eq!(sub, "path sous « notes »");
 }
 
 /// Une règle d'un autre serveur ne s'applique pas ; une règle de pouvoirs ne se lit
