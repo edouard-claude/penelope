@@ -160,6 +160,10 @@ fn image_roles_do_not_need_tool_calling() {
 use penelope_kernel::clock::TestClock;
 use std::sync::Arc;
 
+mod coherence;
+mod memory;
+mod secrets;
+
 /// Issue #26 : un jeton déjà écrit dans un journal est signalé, avec révocation.
 #[tokio::test]
 async fn a_token_left_in_a_log_is_reported() {
