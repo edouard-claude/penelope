@@ -241,38 +241,6 @@ async fn conclude(
 
 // ---------------------------------------------------------------- livraison
 
-/// Ce que le tour de relance lit. Il nomme l'outil et la demande : le job revient dans
-/// une conversation qui a pu changer de sujet entre-temps.
-pub fn delivery_text(job: &ToolJob, now_ms: i64) -> String {
-    let demande = job.request["command"]
-        .as_str()
-        .or_else(|| job.request["prompt"].as_str())
-        .map(|c| c.chars().take(300).collect::<String>())
-        .unwrap_or_else(|| job.tool.clone());
-    let corps = job
-        .result
-        .as_ref()
-        .map(|r| {
-            let text = r["text"].as_str().unwrap_or_default();
-            if text.is_empty() {
-                r["error"].as_str().unwrap_or(&r.to_string()).to_string()
-            } else {
-                text.to_string()
-            }
-        })
-        .unwrap_or_else(|| "sans résultat".into());
-    format!(
-        "Résultat du job `{}` lancé plus tôt dans cette conversation : `{}` — {}, \
-         après {} s.\n\nDemande d'origine : {demande}\n\nRésultat :\n{}\n\n\
-         Reprends la suite si elle a encore un sens, ou dis-le si le sujet a changé.",
-        job.id,
-        job.tool,
-        job.state.as_str(),
-        job.age_s(now_ms),
-        corps.chars().take(6_000).collect::<String>()
-    )
-}
-
 /// Origine de livraison d'une session : le chat Telegram auquel elle est liée, sinon un
 /// canal interne. Elle se relit après une purge, contrairement à ce qu'on aurait rangé
 /// dans les arguments du job.
