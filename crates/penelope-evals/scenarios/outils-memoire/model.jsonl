@@ -1,0 +1,4 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "mem_remember", "arguments": {"niveau": "profil", "texte": "Le propriétaire veut ses devis en PDF, jamais en Word."}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "mem_search", "arguments": {"query": "devis PDF"}}, {"id": "c3", "name": "mem_get", "arguments": {"slug": "devis"}}, {"id": "c4", "name": "mem_neighbors", "arguments": {"slug": "devis"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c5", "name": "mem_note", "arguments": {"type": "preference", "texte": "Relancer les clients le mardi matin.", "citation": "relance les clients le mardi matin"}}]}}
+{"text": "C'est retenu : devis en PDF, et la relance du mardi matin est notée."}

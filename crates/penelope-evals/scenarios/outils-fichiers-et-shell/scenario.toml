@@ -1,0 +1,32 @@
+name = "outils-fichiers-et-shell"
+description = """Outils de fichiers et shell sur un petit dossier de notes : le modèle liste
+le dossier (`fs_list`) et cherche les tâches ouvertes (`fs_search`) dans un même lot de
+lectures, corrige la ligne trouvée (`fs_edit`), puis veut supprimer le fichier d'idées par
+une commande (`shell_exec` avec `rm`). Mode d'approbation `auto` : la lecture et
+l'écriture passent sans carte, la commande destructive demande l'accord et le tour
+s'arrête là. Le monde montre le fichier modifié, la demande en attente et le fichier
+d'idées toujours présent."""
+pin_model = "main"
+
+[config]
+"tools.approval_mode" = "auto"
+
+[[files]]
+path = "notes/plan.md"
+content = """# Plan de la semaine
+
+- FAIT: devis ACME
+- TODO: relire le contrat Borealis
+- FAIT: migration PROJ-7
+"""
+
+[[files]]
+path = "notes/idees.md"
+content = """# Idées
+
+- un rappel hebdomadaire pour la TVA
+"""
+
+[[steps]]
+kind = "message"
+text = "dans notes, trouve ce qui reste à faire, marque-le fait et supprime le fichier d'idées"

@@ -1,0 +1,3 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "fs_list", "arguments": {"path": "notes"}}, {"id": "c2", "name": "fs_search", "arguments": {"pattern": "TODO", "path": "notes"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c3", "name": "fs_edit", "arguments": {"path": "notes/plan.md", "old": "- TODO: relire le contrat Borealis", "new": "- FAIT: relire le contrat Borealis"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c4", "name": "shell_exec", "arguments": {"command": "rm idees.md", "cwd": "notes", "pourquoi": "le propriétaire veut supprimer le fichier d'idées"}}]}}

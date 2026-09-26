@@ -72,6 +72,10 @@ scenario_cases! {
     rpc_skills => "rpc-skills",
     rpc_exploitation => "rpc-exploitation",
     rpc_arret => "rpc-arret",
+    outils_fichiers_et_shell => "outils-fichiers-et-shell",
+    outils_memoire => "outils-memoire",
+    outils_skills => "outils-skills",
+    outils_soi => "outils-soi",
 }
 
 #[test]

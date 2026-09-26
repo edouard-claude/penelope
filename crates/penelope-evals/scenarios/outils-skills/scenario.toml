@@ -1,0 +1,13 @@
+name = "outils-skills"
+description = """Skills écrites par Pénélope : le modèle propose une skill (`skill_propose`),
+la retrouve (`skill_search`), la charge (`skill_load`), puis la corrige (`skill_patch`) et
+la recharge. Le registre est relu après chaque écriture : le monde montre le chemin écrit,
+le score de recherche et le corps avant et après correction."""
+pin_model = "main"
+
+[config]
+"tools.approval_mode" = "auto"
+
+[[steps]]
+kind = "message"
+text = "fais-toi une skill pour préparer un devis, puis ajoute l'étape de conversion en PDF"

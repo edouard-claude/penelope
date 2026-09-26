@@ -1,0 +1,15 @@
+name = "outils-memoire"
+description = """Outils de mémoire sur un vault vide : le modèle retient une préférence au
+niveau profil (`mem_remember`), la retrouve par une recherche (`mem_search`), relit les
+entrées d'un sujet (`mem_get` par slug) et ses voisins (`mem_neighbors`), puis note une
+règle dictée par le propriétaire en citant son message mot pour mot (`mem_note`), qui
+devient candidate d'origine `owner`. Le monde montre les résultats d'outils (uid,
+niveau, score, origine vérifiée) et un effet par appel."""
+pin_model = "main"
+
+[config]
+"tools.approval_mode" = "auto"
+
+[[steps]]
+kind = "message"
+text = "retiens que je veux mes devis en PDF, jamais en Word ; et note ceci : relance les clients le mardi matin"
