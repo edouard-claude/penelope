@@ -90,8 +90,7 @@ fn hidden_entries(vault: &Path) -> Vec<(String, Vec<u8>)> {
     out
 }
 
-/// Le validateur du vault de référence : propriétés typées, blocs, liens, noms et alias
-/// uniques, fiches et journal reliés, `log.md` croissant.
+/// Le validateur de l'en-tête du module.
 fn assert_valid_wiki(vault: &Path) {
     let lint = wiki::lint(vault);
     assert!(
@@ -348,7 +347,6 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
         .unwrap();
     assert!(dream.report.promoted >= 1, "{:?}", dream.report);
 
-    // Validateur.
     assert_valid_wiki(&vault);
 
     assert_eq!(
