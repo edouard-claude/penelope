@@ -154,3 +154,79 @@ fn a_broken_search_index_does_not_stop_the_daemon() {
     assert_eq!(store.repaired_fts(), ["messages_fts"]);
     assert_eq!(store.integrity().unwrap(), "ok");
 }
+
+/// #158 : un index abîmé **après** l'ouverture est vu par le pool, confirmé par une
+/// connexion neuve, et nommé comme seul dérivé à reconstruire.
+#[test]
+fn a_fault_seen_by_the_pool_is_confirmed_by_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    let store = Store::open(&path).unwrap();
+    {
+        let c = open_connection(&path, false).unwrap();
+        c.execute_batch(
+            "INSERT INTO messages_fts(content, session_id, msg_id) VALUES('bonjour', 's1', 1);
+             DELETE FROM messages_fts_data WHERE id > 1;",
+        )
+        .unwrap();
+    }
+    let r = store.integrity_report().unwrap();
+    assert_ne!(r.pool, "ok");
+    assert_eq!(
+        r.fresh.as_deref(),
+        Some(r.pool.as_str()),
+        "le fichier confirme"
+    );
+    assert!(!r.sound());
+    assert!(!r.reader_lied());
+    assert_eq!(r.fts_only(), Some(vec!["messages_fts".to_string()]));
+    // Le lecteur qui a accusé la base n'est pas rendu au pool : le suivant répond encore.
+    assert_ne!(store.integrity().unwrap(), "ok");
+}
+
+/// #158 : un index si abîmé que SQLite ne construit plus sa table virtuelle est recréé
+/// vide depuis sa déclaration ; son contenu revient de la source de vérité.
+#[test]
+fn an_unconstructible_search_index_is_recreated() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    drop(Store::open(&path).unwrap());
+    {
+        let c = open_connection(&path, false).unwrap();
+        c.execute_batch("DROP TABLE messages_fts_config;").unwrap();
+        let err = check_lines(&c, "PRAGMA quick_check;").unwrap_err();
+        assert!(
+            err.to_string().contains("vtable constructor failed"),
+            "{err}"
+        );
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.repaired_fts(), ["messages_fts"]);
+    assert_eq!(store.integrity().unwrap(), "ok");
+    let rows: i64 = store
+        .read_blocking(|c| Ok(c.query_row("SELECT count(*) FROM messages_fts", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(rows, 0, "recréé vide");
+}
+
+/// Une erreur « vtable constructor failed » ne désigne un index à recréer que si la
+/// table nommée est déclarée `USING fts5` : une table ordinaire n'est jamais touchée.
+#[test]
+fn only_a_declared_fts5_table_is_recreated() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    drop(Store::open(&path).unwrap());
+    let c = open_connection(&path, false).unwrap();
+    let err = |name: &str| StoreError::other(format!("vtable constructor failed: {name}"));
+    assert_eq!(
+        unconstructible_fts(&c, &err("messages_fts")).as_deref(),
+        Some("messages_fts")
+    );
+    assert_eq!(unconstructible_fts(&c, &err("kv")), None, "table ordinaire");
+    assert_eq!(unconstructible_fts(&c, &err("absente")), None);
+    assert_eq!(unconstructible_fts(&c, &err("x'; DROP")), None);
+    assert_eq!(
+        unconstructible_fts(&c, &StoreError::other("disk I/O error")),
+        None
+    );
+}

@@ -233,3 +233,83 @@ fn backup_produces_readable_copy() {
         .unwrap();
     assert_eq!(v, "b");
 }
+
+/// Un store fermé refuse les écritures, ordinaires comme durables, au lieu de les
+/// envoyer à un écrivain qui ne les servira plus.
+#[tokio::test]
+async fn a_closed_store_refuses_writes() {
+    let s = Store::open_memory().unwrap();
+    s.close();
+    let plain = s.write(|tx| kv_set(tx, "k", "v")).await.unwrap_err();
+    assert!(matches!(plain, StoreError::WriterGone), "{plain}");
+    let durable = s
+        .write_durable(|tx| kv_set(tx, "k", "v"))
+        .await
+        .unwrap_err();
+    assert!(matches!(durable, StoreError::WriterGone), "{durable}");
+    assert_eq!(s.durable_commits(), 0);
+    assert_eq!(durable.to_string(), "l'acteur écrivain est arrêté");
+}
+
+/// Rouvrir une base déjà migrée ne rejoue aucune migration et garde les données.
+#[tokio::test]
+async fn reopening_keeps_data_and_replays_no_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sub").join("p.db");
+    {
+        let s = Store::open(&path).unwrap();
+        assert_eq!(s.path(), path.as_path());
+        assert!(format!("{s:?}").contains("p.db"), "{s:?}");
+        s.write(|tx| kv_set(tx, "garde", "oui")).await.unwrap();
+    }
+    let s = Store::open(&path).unwrap();
+    let applied = s.read(applied_versions).await.unwrap();
+    assert_eq!(applied.len(), MIGRATIONS.len());
+    let v = s.read_blocking(|c| kv_get(c, "garde")).unwrap();
+    assert_eq!(v.as_deref(), Some("oui"));
+}
+
+/// Une migration qui échoue le dit avec son numéro, et la base n'est pas ouverte.
+#[test]
+fn a_failing_migration_names_its_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("p.db");
+    {
+        // Une table `kv` d'un autre âge : `0001_init` ne peut pas la créer.
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch("CREATE TABLE kv(x INTEGER);").unwrap();
+    }
+    let err = Store::open(&path).unwrap_err();
+    match &err {
+        StoreError::Migration { version, .. } => assert_eq!(*version, "0001_init"),
+        other => panic!("erreur de migration attendue : {other}"),
+    }
+    assert!(
+        err.to_string().starts_with("migration 0001_init a échoué"),
+        "{err}"
+    );
+}
+
+/// Une sauvegarde remplace une copie précédente au lieu d'échouer sur elle, y compris
+/// par `snapshot_to` depuis un runtime async.
+#[tokio::test]
+async fn a_snapshot_overwrites_the_previous_one() {
+    let s = Store::open_memory().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("b").join("backup.db");
+    s.write(|tx| kv_set(tx, "a", "1")).await.unwrap();
+    s.snapshot_to(dest.clone()).await.unwrap();
+    s.write(|tx| kv_set(tx, "a", "2")).await.unwrap();
+    s.snapshot_to(dest.clone()).await.unwrap();
+    let c = Connection::open(&dest).unwrap();
+    let v: String = c
+        .query_row("SELECT v FROM kv WHERE k='a'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(v, "2", "la seconde copie remplace la première");
+}
+
+#[test]
+fn the_read_pool_has_the_announced_capacity() {
+    let s = Store::open_memory().unwrap();
+    assert_eq!(s.inner.readers.capacity(), 4);
+}
