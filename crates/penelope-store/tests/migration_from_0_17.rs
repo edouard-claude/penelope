@@ -49,6 +49,10 @@ const APPROVAL_ID: &str = "apr_01K5N0Q5T3B9V8X2M4R7C6A1E7";
 const POLICY_ID: &str = "pol_01K5N0Q5T3B9V8X2M4R7C6A1E8";
 const LLM_REQUEST_ID: &str = "llm_01K5N0Q5T3B9V8X2M4R7C6A1E9";
 const SYSTEM_HASH: &str = "3f1c9a7e5b2d4068c1e3a5b7d9f0246813579bdf02468ace13579bdf02468ace";
+/// Les fixtures que le filet exige : la 0.17.59 (lot B) et la 0.17.62, dernière 0.17
+/// avant la bascule, produite par le code de son tag (`design/v1/notes/l-gel-fin.md`).
+/// Le test les rejoue toutes ; en retirer une doit être une décision, pas un oubli.
+const REQUIRED_FIXTURES: &[&str] = &["penelope-0.17.59.db", "penelope-0.17.62.db"];
 /// Événements écrits par `seed_kernel`.
 const EVENT_COUNT: u64 = 7;
 
@@ -198,6 +202,17 @@ async fn a_real_0_17_database_migrates_and_reads_back() {
          UPDATE_FIXTURE=1 cargo test -p penelope-store --test migration_from_0_17 -- --ignored",
         fixtures_dir().display()
     );
+    let names: Vec<String> = fixtures
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    for required in REQUIRED_FIXTURES {
+        assert!(
+            names.iter().any(|n| n == required),
+            "{required} absente de {} (présentes : {names:?})",
+            fixtures_dir().display()
+        );
+    }
     let code = version_triple(env!("CARGO_PKG_VERSION"));
     for fixture in fixtures {
         let name = fixture.file_name().unwrap().to_string_lossy().into_owned();

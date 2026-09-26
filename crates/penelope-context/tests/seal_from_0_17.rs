@@ -23,11 +23,19 @@ const LCM_ACTIVE_NODE: &str = "lcm_01K5N0Q5T3B9V8X2M4R7C6A1E1";
 const MESSAGES: i64 = 12;
 const EVENT_COUNT: u64 = 7;
 /// Empreinte du préfixe de chaque fixture, telle que les alphas l'ont posée dans son
-/// `conv.import` : une base déjà scellée doit continuer à vérifier.
-const SEALED_DIGESTS: &[(&str, &str)] = &[(
-    "penelope-0.17.59.db",
-    "ce06951cc2add7e3cea1d128d0d52b9f138c8e44e055d31408ade20e986433fd",
-)];
+/// `conv.import` : une base déjà scellée doit continuer à vérifier. Une ligne par
+/// fixture, et chacune doit être présente : la 0.17.59 (lot B) et la 0.17.62, dernière
+/// 0.17 avant la bascule. Le semis étant le même, l'empreinte l'est aussi.
+const SEALED_DIGESTS: &[(&str, &str)] = &[
+    (
+        "penelope-0.17.59.db",
+        "ce06951cc2add7e3cea1d128d0d52b9f138c8e44e055d31408ade20e986433fd",
+    ),
+    (
+        "penelope-0.17.62.db",
+        "ce06951cc2add7e3cea1d128d0d52b9f138c8e44e055d31408ade20e986433fd",
+    ),
+];
 
 fn fixtures() -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../penelope-store/tests/fixtures");
@@ -51,7 +59,12 @@ fn fixtures() -> Vec<PathBuf> {
 #[tokio::test]
 async fn a_real_0_17_database_is_sealed_once() {
     let fixtures = fixtures();
-    assert!(!fixtures.is_empty(), "aucune fixture penelope-*.db");
+    let names: Vec<String> = fixtures
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    let expected: Vec<&str> = SEALED_DIGESTS.iter().map(|(f, _)| *f).collect();
+    assert_eq!(names, expected, "une fixture par ligne de SEALED_DIGESTS");
     for fixture in fixtures {
         let name = fixture.file_name().unwrap().to_string_lossy().into_owned();
         let dir = tempfile::tempdir().unwrap();
@@ -76,12 +89,11 @@ async fn a_real_0_17_database_is_sealed_once() {
 
         let (import, prefix) = history.sealed_prefix(SESSION_ID).await.unwrap().unwrap();
         assert_eq!(import.digest, prefix.digest(), "{name}");
-        if let Some((_, digest)) = SEALED_DIGESTS.iter().find(|(f, _)| *f == name) {
-            assert_eq!(
-                import.digest, *digest,
-                "{name} : empreinte d'une alpha antérieure"
-            );
-        }
+        let (_, digest) = SEALED_DIGESTS.iter().find(|(f, _)| *f == name).unwrap();
+        assert_eq!(
+            import.digest, *digest,
+            "{name} : empreinte d'une alpha antérieure"
+        );
         assert_eq!((import.messages, import.contexts), (MESSAGES, 1), "{name}");
         assert_eq!(import.lcm_active.len(), 1, "{name}");
         assert_eq!(import.lcm_active[0].node, LCM_ACTIVE_NODE, "{name}");
