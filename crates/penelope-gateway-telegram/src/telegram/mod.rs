@@ -386,7 +386,6 @@ impl TelegramGateway {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)] // gel 0.17 : lot G (telegram/mod.rs)
     async fn handle(self: &Arc<Self>, incoming: Incoming) -> anyhow::Result<()> {
         let s = &self.daemon.services;
         match incoming {
@@ -399,83 +398,10 @@ impl TelegramGateway {
                 forwarded,
                 ..
             } => {
-                // Renommage demandé depuis le menu `/sessions` il y a moins de 5 min : ce
-                // message est le titre.
-                let title_key = format!("tg.await_title.{chat_id}");
-                if let Some(raw) = s.kv_get(&title_key).await?
-                    && let Some((target, at)) = raw.split_once(' ')
-                    && s.clock.now_ms() - at.parse::<i64>().unwrap_or(0) < 5 * 60_000
+                if self
+                    .awaited_answer(chat_id, topic_id, message_id, &text)
+                    .await?
                 {
-                    let target = target.to_string();
-                    s.kv_set(&title_key, "").await?;
-                    let note = match penelope_conversation::titles::clean(&text) {
-                        Some(title) => {
-                            s.sessions.set_title(&target, &title, false).await?;
-                            format!("✏️ Session renommée : « {title} ».")
-                        }
-                        None => "Titre vide : rien n'a changé.".to_string(),
-                    };
-                    return self.reply(chat_id, topic_id, Some(message_id), &note).await;
-                }
-                // Entretien d'accueil en cours : ce message répond à la question posée.
-                let onboard_key = format!("tg.onboard.{chat_id}");
-                if let Some(raw) = s.kv_get(&onboard_key).await?
-                    && let Ok(v) = serde_json::from_str::<Value>(&raw)
-                    && let Some(rel) = v["rel"].as_str()
-                {
-                    let n = v["n"].as_u64().unwrap_or(0) as u32;
-                    return match penelope_dream::onboarding::answer(
-                        &self.daemon.services,
-                        rel,
-                        n,
-                        Some(&text),
-                    )
-                    .await
-                    {
-                        Ok(sitting) => self.onboarding_ask(chat_id, topic_id, &sitting).await,
-                        Err(e) => {
-                            self.reply(chat_id, topic_id, Some(message_id), &format!("⚠️ {e}"))
-                                .await
-                        }
-                    };
-                }
-                // Un formulaire d'étape `user` est en cours : ce message remplit le champ.
-                if let Some(raw) = self.form_pending(chat_id, topic_id).await?
-                    && !raw.is_empty()
-                {
-                    return self.form_input(chat_id, &raw, Some(&text)).await;
-                }
-                // Une saisie était attendue par une étape `user` de workflow.
-                let input_key = format!("tg.await_input.{chat_id}");
-                if let Some(raw) = s.kv_get(&input_key).await?
-                    && !raw.is_empty()
-                {
-                    s.kv_set(&input_key, "").await?;
-                    let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
-                    let note = match penelope_orchestrator::workflow::answer(
-                        &penelope_daemon::workflow::context_of(&self.daemon),
-                        v["run"].as_str().unwrap_or_default(),
-                        v["visit"].as_str().unwrap_or_default(),
-                        v["choice"].as_str().unwrap_or_default(),
-                        Some(&text),
-                    )
-                    .await
-                    {
-                        Ok(()) => "✔️ Réponse transmise au workflow.".to_string(),
-                        Err(e) => format!("ℹ️ {e}"),
-                    };
-                    return self.reply(chat_id, topic_id, Some(message_id), &note).await;
-                }
-
-                // Une raison de refus était attendue : ce message la donne.
-                let reason_key = approval_reason_key(chat_id, topic_id);
-                if let Some(approval_id) = s.kv_get(&reason_key).await?
-                    && !approval_id.is_empty()
-                {
-                    s.kv_set(&reason_key, "").await?;
-                    let d = Decision::deny("telegram", Some(text.clone()));
-                    self.finalize_decision(&approval_id, &d, chat_id, topic_id)
-                        .await?;
                     return Ok(());
                 }
 
@@ -632,6 +558,100 @@ impl TelegramGateway {
             }
         }
         Ok(())
+    }
+
+    /// Une réponse attendue dans ce chat : titre de session, accueil, formulaire, saisie
+    /// de workflow, raison de refus. `true` : le message y a répondu, il ne part pas en
+    /// tour.
+    async fn awaited_answer(
+        self: &Arc<Self>,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        message_id: i64,
+        text: &str,
+    ) -> anyhow::Result<bool> {
+        let s = &self.daemon.services;
+        // Renommage demandé depuis le menu `/sessions` il y a moins de 5 min : ce
+        // message est le titre.
+        let title_key = format!("tg.await_title.{chat_id}");
+        if let Some(raw) = s.kv_get(&title_key).await?
+            && let Some((target, at)) = raw.split_once(' ')
+            && s.clock.now_ms() - at.parse::<i64>().unwrap_or(0) < 5 * 60_000
+        {
+            let target = target.to_string();
+            s.kv_set(&title_key, "").await?;
+            let note = match penelope_conversation::titles::clean(text) {
+                Some(title) => {
+                    s.sessions.set_title(&target, &title, false).await?;
+                    format!("✏️ Session renommée : « {title} ».")
+                }
+                None => "Titre vide : rien n'a changé.".to_string(),
+            };
+            self.reply(chat_id, topic_id, Some(message_id), &note)
+                .await?;
+            return Ok(true);
+        }
+        // Entretien d'accueil en cours : ce message répond à la question posée.
+        let onboard_key = format!("tg.onboard.{chat_id}");
+        if let Some(raw) = s.kv_get(&onboard_key).await?
+            && let Ok(v) = serde_json::from_str::<Value>(&raw)
+            && let Some(rel) = v["rel"].as_str()
+        {
+            let n = v["n"].as_u64().unwrap_or(0) as u32;
+            match penelope_dream::onboarding::answer(&self.daemon.services, rel, n, Some(text))
+                .await
+            {
+                Ok(sitting) => self.onboarding_ask(chat_id, topic_id, &sitting).await?,
+                Err(e) => {
+                    self.reply(chat_id, topic_id, Some(message_id), &format!("⚠️ {e}"))
+                        .await?
+                }
+            }
+            return Ok(true);
+        }
+        // Un formulaire d'étape `user` est en cours : ce message remplit le champ.
+        if let Some(raw) = self.form_pending(chat_id, topic_id).await?
+            && !raw.is_empty()
+        {
+            self.form_input(chat_id, &raw, Some(text)).await?;
+            return Ok(true);
+        }
+        // Une saisie était attendue par une étape `user` de workflow.
+        let input_key = format!("tg.await_input.{chat_id}");
+        if let Some(raw) = s.kv_get(&input_key).await?
+            && !raw.is_empty()
+        {
+            s.kv_set(&input_key, "").await?;
+            let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+            let note = match penelope_orchestrator::workflow::answer(
+                &penelope_daemon::workflow::context_of(&self.daemon),
+                v["run"].as_str().unwrap_or_default(),
+                v["visit"].as_str().unwrap_or_default(),
+                v["choice"].as_str().unwrap_or_default(),
+                Some(text),
+            )
+            .await
+            {
+                Ok(()) => "✔️ Réponse transmise au workflow.".to_string(),
+                Err(e) => format!("ℹ️ {e}"),
+            };
+            self.reply(chat_id, topic_id, Some(message_id), &note)
+                .await?;
+            return Ok(true);
+        }
+
+        // Une raison de refus était attendue : ce message la donne.
+        let reason_key = approval_reason_key(chat_id, topic_id);
+        if let Some(approval_id) = s.kv_get(&reason_key).await?
+            && !approval_id.is_empty()
+        {
+            s.kv_set(&reason_key, "").await?;
+            let d = Decision::deny("telegram", Some(text.to_string()));
+            self.finalize_decision(&approval_id, &d, chat_id, topic_id)
+                .await?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 }
 
