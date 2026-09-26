@@ -374,3 +374,66 @@ fn paths_works_without_a_daemon() {
     let cli = parse(&["--home", "/srv/pen", "--json", "paths"]);
     paths(&cli).unwrap();
 }
+
+/// `penelope session list` : le titre et la date d'abord, un titre vide se dit, la date
+/// de création remplace une activité absente.
+#[test]
+fn session_list_reads_title_date_and_state() {
+    assert_eq!(render_session_list(&json!([])), "Aucune session.");
+    let out = render_session_list(&json!([
+        {"id": "s-1", "title": "Courses", "last_activity": "2026-09-20T08:15:42Z", "state": "active"},
+        {"id": "s-2", "title": "  ", "created_at": "2026-09-19T21:00:00Z", "state": "archived"},
+    ]));
+    let line = |id: &str| out.lines().find(|l| l.contains(id)).unwrap().to_string();
+    assert!(line("s-1").contains("Courses"), "{out}");
+    assert!(line("s-1").contains("2026-09-20 08:15"), "{out}");
+    assert!(line("s-2").contains("(sans titre)"), "{out}");
+    assert!(line("s-2").contains("2026-09-19 21:00"), "{out}");
+}
+
+/// `penelope mcp list` sans serveur nomme le répertoire lu, et signale chaque
+/// déclaration invalide.
+#[test]
+fn mcp_list_without_servers_names_the_directory_and_the_invalid_files() {
+    let out = render_mcp_list(&json!({
+        "servers": [], "dir": "/srv/pen/mcp.d",
+        "invalid": [{"file": "casse.toml", "error": "clé inconnue"}]
+    }));
+    assert!(
+        out.starts_with("Aucun serveur MCP déclaré dans /srv/pen/mcp.d"),
+        "{out}"
+    );
+    assert!(out.contains("⚠️ casse.toml : clé inconnue"), "{out}");
+}
+
+/// #124 : chaque sorte de planification dit quand elle tourne.
+#[test]
+fn schedule_list_says_when_each_kind_runs() {
+    assert_eq!(render_schedule_list(&json!([])), "Aucune planification.");
+    let out = render_schedule_list(&json!([
+        {"id": "p-1", "kind": "interval", "spec": {"every_ms": 900_000}, "target": {"prompt": "relève"}},
+        {"id": "p-2", "kind": "watch_file", "spec": {"path": "/tmp/boîte"}, "target": {"template": "tri"}},
+        {"id": "p-3", "kind": "event", "spec": {"event": "mail.received"}, "target": {"workflowId": "wf-1"}},
+    ]));
+    let line = |id: &str| out.lines().find(|l| l.contains(id)).unwrap().to_string();
+    assert!(line("p-1").contains("toutes les 15 min"), "{out}");
+    assert!(line("p-2").contains("/tmp/boîte"), "{out}");
+    assert!(line("p-3").contains("mail.received"), "{out}");
+    assert!(line("p-3").contains("wf-1"), "{out}");
+}
+
+/// Routage fixe : tout passe par l'alias par défaut, et la commande pour l'adapter est
+/// donnée.
+#[test]
+fn a_fixed_routing_says_how_to_become_adaptive() {
+    let out = render_model_list(&json!({
+        "aliases": [],
+        "routing": {"classifier": false, "default": {"alias": "main", "model": "openrouter:a/b"}},
+        "models": [{"id": "a/b", "fenêtre": 128000}],
+        "note": "catalogue vieux de 3 jours",
+    }));
+    assert!(out.contains("fixe : tout passe par"), "{out}");
+    assert!(out.contains("models.routing.classifier true"), "{out}");
+    assert!(out.contains("Catalogue"), "{out}");
+    assert!(out.ends_with("catalogue vieux de 3 jours"), "{out}");
+}
