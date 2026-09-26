@@ -79,6 +79,7 @@ scenario_cases! {
     outils_historique => "outils-historique",
     outils_http_garde => "outils-http-garde",
     outils_workflows => "outils-workflows",
+    outils_question => "outils-question",
 }
 
 #[test]

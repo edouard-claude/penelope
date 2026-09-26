@@ -202,7 +202,6 @@ required = [
 [scenarios]
 missing = [
     "outil:artifact_read",
-    "outil:ask_user",
     "outil:git_branch",
     "outil:git_clone",
     "outil:git_commit",
