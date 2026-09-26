@@ -202,3 +202,33 @@ async fn a_fork_is_caught_up_or_rebuilt_from_its_journal() {
     let report = w.history().verify(Some("s4"), None).await.unwrap();
     assert!(report.ok, "{:#?}", report.divergences);
 }
+
+/// Des lignes d'avant le journal (V0), sans événement ni scellement, ne se refondent
+/// pas : la session est refusée et gardée telle quelle ; une session vide n'a rien à
+/// refondre ; un fork qui en hériterait est refusé, avec le nom de la fille.
+#[tokio::test]
+async fn v0_rows_without_journal_are_refused_not_rebuilt() {
+    let w = world().await;
+    w.sql(
+        "INSERT INTO sessions(id, kind, created_at, updated_at) VALUES('v0', 'chat', 't', 't');
+         INSERT INTO sessions(id, kind, created_at, updated_at) VALUES('vide', 'chat', 't', 't');
+         INSERT INTO messages(session_id, seq, role, content, ts)
+           VALUES('v0', 1, 'user', '{\"blocks\":[{\"type\":\"text\",\"text\":\"ancien\"}]}', 't');",
+    )
+    .await;
+    let report = w.history().reindex(Some("v0")).await.unwrap();
+    assert!(!report.ok);
+    assert!(
+        report.refused[0].1.contains("lignes V0 sans journal"),
+        "{:?}",
+        report.refused
+    );
+    assert_eq!(
+        w.int("SELECT COUNT(*) FROM messages WHERE session_id = 'v0'")
+            .await,
+        1,
+        "rien n'est effacé"
+    );
+    let report = w.history().reindex(Some("vide")).await.unwrap();
+    assert!(report.ok, "{:?}", report.refused);
+}

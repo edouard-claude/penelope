@@ -274,3 +274,18 @@ fn image_and_audio_blocks_round_trip() {
             .is_empty()
     );
 }
+
+/// Un message système n'entre pas dans l'historique : le préfixe a son propre
+/// événement (`conv.system`).
+#[tokio::test]
+async fn a_system_message_is_refused_by_the_history() {
+    let h = hs().await;
+    let e = h
+        .append("s1", &ChatMessage::system("règles"), 3, 0, false, None)
+        .await
+        .unwrap_err();
+    assert!(
+        e.to_string().contains("n'entre pas dans l'historique"),
+        "{e}"
+    );
+}

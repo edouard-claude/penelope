@@ -128,21 +128,22 @@ else
     ok "7. [scenarios].missing vide"
 fi
 
-# 7. La couverture (R9) : chaque crate à son plancher, le socle au moins à main.
+# 7. La couverture (R9) : lignes non couvertes par crate, sous leur plafond et pas plus
+#    que sur main.
 if [ "${SWITCH_SKIP_COVERAGE:-0}" = 1 ]; then
     ko "7. couverture non mesurée (SWITCH_SKIP_COVERAGE=1) : scripts/coverage-check.sh"
-elif ! grep -q '^\[coverage.crates\]' "$BUDGET"; then
-    ko "7. [coverage.crates] absent de budget.toml (R9 pas encore posée)"
+elif ! grep -q '^\[coverage.uncovered\]' "$BUDGET"; then
+    ko "7. [coverage.uncovered] absent de budget.toml (R9 pas encore posée)"
 else
     set +e
     cov=$(scripts/coverage-check.sh 2>&1)
     rc=$?
     set -e
-    under=$(echo "$cov" | awk '$1 == "SOUS" { print $2 }')
+    under=$(echo "$cov" | awk '$1 == "AU-DELA" { print $2 }')
     if [ "$rc" -eq 0 ]; then
-        ok "7. couverture : chaque crate à son plancher, le socle au moins à main"
+        ok "7. couverture : aucune crate n'a plus de lignes non couvertes que son plafond ni que main"
     elif [ -n "$under" ]; then
-        ko "7. couverture : $(echo "$under" | wc -l | tr -d ' ') crate(s) sous leur plancher ou sous main, dont $(echo "$under" | head -1) (scripts/coverage-check.sh)"
+        ko "7. couverture : $(echo "$under" | wc -l | tr -d ' ') crate(s) avec plus de lignes non couvertes que leur plafond ou que main, dont $(echo "$under" | head -1) (scripts/coverage-check.sh)"
     else
         ko "7. couverture illisible : $(echo "$cov" | tail -1)"
     fi

@@ -203,55 +203,59 @@ required = [
 missing = [
 ]
 
-# Couverture de lignes par crate (R9, critère 7 de bascule, §4.5), mesurée par
-# `scripts/coverage-check.sh` (cargo llvm-cov --workspace, filtre par défaut : tests/,
-# tests.rs et *_tests.rs ne comptent pas). Trop long pour la CI : lancé à la main et par
-# switch-check.sh.
+# Lignes de produit non couvertes par crate (R9, critère 7 de bascule, §4.5), mesurées
+# par `scripts/coverage-check.sh` (cargo llvm-cov --workspace, filtre par défaut : tests/,
+# tests.rs et *_tests.rs ne comptent pas). Un nombre de lignes et non un pourcentage :
+# il ne dépend pas de l'endroit où vivent les tests. Trop long pour la CI : lancé à la
+# main et par switch-check.sh.
 [coverage]
 
-# Relevé de `main` au point de fourche (0.17.62), fixe : les crates socle doivent
-# l'égaler pour la bascule. Les crates sorties du daemon n'ont pas d'équivalent sur main.
+# Relevé de `main` au point de fourche (0.17.62), fixe : v1 n'en a pas plus par crate
+# pour la bascule. Le daemon de main (8 829) a été découpé en crates : pas de relevé.
 [coverage.main]
-"penelope-cli" = 48.63
-"penelope-context" = 96.28
-"penelope-hitl" = 97.27
-"penelope-kernel" = 92.13
-"penelope-llm" = 91.51
-"penelope-mcp" = 92.88
-"penelope-memory" = 94.67
-"penelope-store" = 91.80
-"penelope-tools" = 94.69
-"penelope-workflow" = 94.66
+"penelope-archtest" = 102
+"penelope-cli" = 1121
+"penelope-context" = 157
+"penelope-evals" = 151
+"penelope-hitl" = 55
+"penelope-kernel" = 521
+"penelope-llm" = 481
+"penelope-mcp" = 346
+"penelope-memory" = 374
+"penelope-observe" = 93
+"penelope-platform" = 822
+"penelope-skills" = 77
+"penelope-store" = 91
+"penelope-telegram" = 333
+"penelope-tools" = 235
+"penelope-workflow" = 257
 
-# Planchers (entiers) : la mesure arrondie à l'inférieur, remontés seulement, par
-# `scripts/coverage-check.sh --update` ; check-budget.sh refuse toute baisse.
-[coverage.crates]
-# Plancher = mesure du 26/09/2026 moins 1 point (gel-et-outillage.md §R9) : la mesure varie
-# de quelques centièmes d'un passage à l'autre ; le cliquet ne fait que monter.
-"penelope-agent" = 92
-"penelope-app" = 86
-"penelope-archtest" = 92
-"penelope-cli" = 49
-"penelope-context" = 95
-"penelope-conversation" = 89
-"penelope-daemon" = 86
-"penelope-dream" = 81
-"penelope-evals" = 86
-"penelope-executor" = 89
-"penelope-gateway-telegram" = 73
-"penelope-hitl" = 96
-"penelope-kernel" = 92
-"penelope-llm" = 92
-"penelope-mcp" = 93
-"penelope-mcp-host" = 79
-"penelope-memory" = 94
-"penelope-observe" = 92
-"penelope-ops" = 77
-"penelope-orchestrator" = 79
-"penelope-platform" = 79
-"penelope-skills" = 91
-"penelope-store" = 94
-"penelope-telegram" = 90
-"penelope-tools" = 94
-"penelope-vault" = 88
-"penelope-workflow" = 95
+# Plafonds : la mesure, abaissés seulement, par `scripts/coverage-check.sh --update`.
+[coverage.uncovered]
+"penelope-agent" = 178
+"penelope-app" = 374
+"penelope-archtest" = 118
+"penelope-cli" = 1090
+"penelope-context" = 247
+"penelope-conversation" = 137
+"penelope-daemon" = 788
+"penelope-dream" = 716
+"penelope-evals" = 473
+"penelope-executor" = 435
+"penelope-gateway-telegram" = 2603
+"penelope-hitl" = 45
+"penelope-kernel" = 394
+"penelope-llm" = 269
+"penelope-mcp" = 205
+"penelope-mcp-host" = 434
+"penelope-memory" = 251
+"penelope-observe" = 85
+"penelope-ops" = 1335
+"penelope-orchestrator" = 649
+"penelope-platform" = 690
+"penelope-skills" = 75
+"penelope-store" = 25
+"penelope-telegram" = 311
+"penelope-tools" = 181
+"penelope-vault" = 467
+"penelope-workflow" = 155

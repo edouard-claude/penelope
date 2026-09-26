@@ -1,24 +1,26 @@
 #!/bin/sh
-# Planchers de couverture par crate (R9, design/v1/gel-et-outillage.md §R9 ; critère 7
-# de bascule, §4.5).
+# Plafonds de lignes non couvertes par crate (R9, design/v1/gel-et-outillage.md §R9 ;
+# critère 7 de bascule, §4.5).
 #
-#   scripts/coverage-check.sh                 mesure et compare aux planchers
-#   scripts/coverage-check.sh --update        remonte les planchers à la mesure
+#   scripts/coverage-check.sh                 mesure et compare aux plafonds
+#   scripts/coverage-check.sh --update        abaisse les plafonds à la mesure
 #   COVERAGE_LCOV=f.lcov scripts/coverage-check.sh   relit une mesure déjà faite
 #   scripts/coverage-check.sh -- --skip nom   arguments passés aux binaires de test
 #
-# Mesure `cargo llvm-cov --workspace` (couverture de lignes, filtre par défaut de
-# cargo-llvm-cov : `tests/`, `tests.rs` et `*_tests.rs` ne comptent pas), additionne les
-# lignes par crate et compare à [coverage.crates] de budget.toml : un plancher entier,
-# la mesure arrondie à l'inférieur, qui ne descend jamais (cliquet tenu par
-# scripts/check-budget.sh). `--update` réécrit une valeur seulement si la mesure arrondie
-# la dépasse, et ajoute les crates qui n'en ont pas encore. Les crates listées dans
-# [coverage.main] (relevé de main au point de fourche) doivent aussi l'égaler.
+# Mesure `cargo llvm-cov --workspace` (filtre par défaut de cargo-llvm-cov : `tests/`,
+# `tests.rs` et `*_tests.rs` ne comptent pas) et compte, par crate, les lignes de
+# produit non couvertes. Un pourcentage dépend de l'endroit où vivent les tests (R1 a
+# sorti les tests inline, couverts, du dénominateur) ; le nombre de lignes non couvertes,
+# non. Deux comparaisons :
+# - [coverage.uncovered] de budget.toml : un plafond par crate, qui ne monte jamais ;
+#   `--update` n'abaisse une valeur que si la mesure est plus basse, et ajoute les
+#   crates qui n'en ont pas encore ;
+# - [coverage.main] : le relevé de `main` au point de fourche (critère 7 : v1 ≤ main).
 #
 # Trop long pour la CI (vingt minutes et plus) : lancé à la main, et par
 # scripts/switch-check.sh pour le critère 7.
 #
-# Sortie : 0 tout est au-dessus, 1 une crate est sous son plancher ou sous main,
+# Sortie : 0 aucune crate au-dessus, 1 une crate dépasse son plafond ou main,
 # 2 impossible de mesurer.
 set -eu
 export LC_ALL=C
@@ -71,57 +73,56 @@ table() {
         /^\[/ { inside = ($0 == t); next }
         inside { sub(/[ \t]*#.*/, ""); gsub(/"/, ""); if ($0 ~ /=/) { split($0, kv, /[ \t]*=[ \t]*/); print kv[1], kv[2] } }' "$BUDGET"
 }
-table coverage.crates > "$tmp/planchers"
+table coverage.uncovered > "$tmp/plafonds"
 table coverage.main > "$tmp/main"
 
 fail=0
-echo "Couverture de lignes par crate (plancher budget.toml [coverage.crates], main au point de fourche)"
+echo "Lignes non couvertes par crate (plafond budget.toml [coverage.uncovered], main au point de fourche)"
 while read -r crate found hit; do
-    # Comparée à quatre décimales, affichée à deux : 92,125 % n'égale pas 92,13 %.
-    raw=$(awk -v h="$hit" -v f="$found" 'BEGIN { printf "%.4f", 100 * h / f }')
-    pct=$(awk -v r="$raw" 'BEGIN { printf "%.2f", int(r * 100) / 100 }')
-    floor=$(awk -v c="$crate" '$1 == c { print $2 }' "$tmp/planchers")
+    miss=$((found - hit))
+    ceiling=$(awk -v c="$crate" '$1 == c { print $2 }' "$tmp/plafonds")
     main=$(awk -v c="$crate" '$1 == c { print $2 }' "$tmp/main")
     state=ok
-    if [ -n "$floor" ] && awk -v p="$raw" -v f="$floor" 'BEGIN { exit !(p < f) }'; then
-        state=SOUS
-        echo "  $crate : couverture de lignes $pct %, plancher $floor % (budget.toml [coverage.crates]) : les lignes ajoutées ne sont pas testées, ou du code mort est resté" >&2
+    if [ -n "$ceiling" ] && [ "$miss" -gt "$ceiling" ]; then
+        state=AU-DELA
+        echo "  $crate : $miss lignes non couvertes, plafond $ceiling (budget.toml [coverage.uncovered]) : les lignes ajoutées ne sont pas testées, ou du code mort est resté" >&2
     fi
-    if [ -n "$main" ] && awk -v p="$raw" -v m="$main" 'BEGIN { exit !(p < m) }'; then
-        state=SOUS
-        echo "  $crate : couverture de lignes $pct %, main au point de fourche $main % (budget.toml [coverage.main], critère 7)" >&2
+    if [ -n "$main" ] && [ "$miss" -gt "$main" ]; then
+        state=AU-DELA
+        echo "  $crate : $miss lignes non couvertes, $main sur main au point de fourche (budget.toml [coverage.main], critère 7)" >&2
     fi
     [ "$state" = ok ] || fail=$((fail + 1))
-    printf '  %-8s %-28s %6s %%  plancher %-4s main %s\n' "$state" "$crate" "$pct" \
-        "${floor:--}" "${main:--}"
-    echo "$crate $raw" >> "$tmp/pourcents"
+    printf '  %-8s %-28s %6d / %-6d  plafond %-5s main %s\n' "$state" "$crate" "$miss" "$found" \
+        "${ceiling:--}" "${main:--}"
+    echo "$crate $miss" >> "$tmp/non-couvertes"
 done < "$tmp/mesure"
 
 if [ "$update" = 1 ]; then
-    # Réécrit [coverage.crates] : max(plancher, mesure arrondie à l'inférieur), trié.
-    awk -v meas="$tmp/pourcents" '
-        BEGIN { while ((getline l < meas) > 0) { split(l, a, " "); m[a[1]] = int(a[2]) } }
-        /^\[/ { if (inside) { flush(); print "" } inside = ($0 == "[coverage.crates]"); print; next }
+    # Réécrit [coverage.uncovered] : min(plafond, mesure), trié ; une crate nouvelle
+    # reçoit sa mesure.
+    awk -v meas="$tmp/non-couvertes" '
+        BEGIN { while ((getline l < meas) > 0) { split(l, a, " "); m[a[1]] = a[2] + 0 } }
+        /^\[/ { if (inside) { flush(); print "" } inside = ($0 == "[coverage.uncovered]"); print; next }
         inside && /=/ { k = $0; sub(/^[ \t]*"/, "", k); sub(/".*/, "", k)
                         v = $0; sub(/^[^=]*=[ \t]*/, "", v); sub(/[ \t]*#.*/, "", v)
                         cur[k] = v + 0; next }
         inside && /^[ \t]*$/ { next }
         { print }
         END { if (inside) flush() }
-        function flush(   k, n, keys, i, j, t, v) {
+        function flush(   k, n, keys, i, j, t) {
             n = 0
-            for (k in m) cur[k] = (k in cur && cur[k] > m[k]) ? cur[k] : m[k]
+            for (k in m) cur[k] = (k in cur && cur[k] < m[k]) ? cur[k] : m[k]
             for (k in cur) keys[++n] = k
             for (i = 2; i <= n; i++) { t = keys[i]; for (j = i - 1; j > 0 && keys[j] > t; j--) keys[j + 1] = keys[j]; keys[j + 1] = t }
             for (i = 1; i <= n; i++) printf "\"%s\" = %d\n", keys[i], cur[keys[i]]
             inside = 0
         }' "$BUDGET" > "$tmp/budget.toml"
     cp "$tmp/budget.toml" "$BUDGET"
-    echo "coverage-check : [coverage.crates] remonté à la mesure (jamais descendu)"
+    echo "coverage-check : [coverage.uncovered] abaissé à la mesure (jamais remonté)"
 fi
 
 if [ "$fail" -gt 0 ]; then
-    echo "coverage-check : $fail crate(s) sous leur plancher ou sous main"
+    echo "coverage-check : $fail crate(s) au-delà de leur plafond ou de main"
     exit 1
 fi
-echo "coverage-check : toutes les crates tiennent leur plancher"
+echo "coverage-check : aucune crate au-delà de son plafond ni de main"
