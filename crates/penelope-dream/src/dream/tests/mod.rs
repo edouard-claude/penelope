@@ -9,7 +9,9 @@ use penelope_memory::CandidateType;
 mod apply;
 mod batches;
 mod candidates;
+mod clash;
 mod digest;
+mod operations;
 mod sizing;
 
 /// Ce que tiennent les tests du rêve, sans le daemon : le contexte de la crate, le
