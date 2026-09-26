@@ -29,10 +29,7 @@ async fn a_run_is_paused_resumed_and_stopped_from_its_screens() {
 
     let (text, buttons) = screen_of(&g, "runs", json!({})).await;
     assert!(text.starts_with("**Runs** (1)"), "{text}");
-    assert!(
-        text.contains(&format!("🏃 **build-verify** · running")),
-        "{text}"
-    );
+    assert!(text.contains("🏃 **build-verify** · running"), "{text}");
     token_of(&buttons, "🔎 build-verify");
     press(&g, &token_of(&buttons, "⏸")).await;
     assert_eq!(
