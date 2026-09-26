@@ -176,6 +176,24 @@ impl Bench {
 
 const LISTING: &str = "cd tmp && ls -la | jq .";
 
+/// `cd tmp && ls -la | jq .` en `auto_read` : lecture pure dans le workspace, sans carte.
+#[tokio::test]
+async fn a_pure_read_in_the_workspace_passes_without_a_card_in_auto_read() {
+    let j = FakeJudge::says(JudgeVerdict::Safe, &[Power::Read], &["tmp"], &[]);
+    let b = bench(j.clone(), JudgeMode::AutoRead).await;
+    assert!(b.shell(LISTING).await.is_none(), "aucune carte");
+    assert_eq!(b.ran(), 1);
+    assert_eq!(j.calls(), 1);
+    let ev = b.judged().await;
+    assert_eq!(ev.len(), 1);
+    assert_eq!(ev[0]["outcome"], "auto_read");
+    assert_eq!(ev[0]["verdict"], "sûr");
+    assert_eq!(ev[0]["powers"], json!(["lecture"]));
+    // La commande n'est jamais dans l'événement : son empreinte seulement.
+    assert!(!ev[0].to_string().contains("ls -la"));
+    assert_eq!(ev[0]["command_sha"].as_str().unwrap().len(), 16);
+}
+
 /// La même ligne en `explain` : carte enrichie, bouton de pouvoirs ; « Toujours » écrit
 /// une règle sur les pouvoirs, et l'appel suivant passe sans carte.
 #[tokio::test]

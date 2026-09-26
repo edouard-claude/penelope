@@ -54,6 +54,8 @@ penelope-skills.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Cartes d'approbation posées par le test du contrôle du juge (#203).
+penelope-hitl.workspace = true
 # Doubles du superviseur MCP pour le test d'import Hermes (hors règle de dépendance).
 penelope-mcp-host.workspace = true
 # Charges du journal (`conv.attempt`) et sa dérivation dans les tests de purge et de

@@ -60,6 +60,10 @@ impl Rpc {
                         if let Some(note) = crate::approval_mode::rule_note(r, now) {
                             v["remarque"] = json!(note);
                         }
+                        // Une règle née d'un jugement de pouvoirs le dit (#203).
+                        if let Some(grant) = r.power_grant() {
+                            v["origine"] = json!(grant.describe());
+                        }
                         v
                     })
                     .collect();

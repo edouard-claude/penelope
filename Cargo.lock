@@ -1748,6 +1748,7 @@ dependencies = [
  "minisign-verify",
  "penelope-app",
  "penelope-context",
+ "penelope-hitl",
  "penelope-kernel",
  "penelope-llm",
  "penelope-mcp",

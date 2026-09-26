@@ -14,6 +14,7 @@
 //!  mode explain                               → carte enrichie ; « Toujours pour ces
 //!                                               pouvoirs » si la règle se lit d'un coup
 //!  règle de pouvoirs qui couvre le jugement   → sans carte, sauf verdict dangereux
+//!  mode auto_read, lecture pure au workspace  → sans carte
 //! ```
 //!
 //! Rien de ce que dit le juge n'autorise sans un contrôle déterministe derrière : chemins
@@ -83,6 +84,7 @@ fn reach_of(j: &Judgement, cwd: Option<&Path>) -> Option<Reach> {
 struct Line<'a> {
     command: &'a str,
     network: bool,
+    workspaces: &'a [PathBuf],
 }
 
 /// Un appel qui part sans carte : la couche, le nom de l'issue, la règle de pouvoirs.
@@ -90,6 +92,23 @@ struct Automation {
     verdict: Verdict,
     outcome: &'static str,
     rule: Option<String>,
+}
+
+/// `auto_read` : un verdict sûr, la lecture seule, sans hôte ni réseau, tout dans les
+/// workspaces, et rien que les vetos reconnaissent comme autre chose qu'une lecture.
+fn pure_read(j: &Judgement, reach: &Reach, line: &Line<'_>) -> bool {
+    let inside = |p: &String| {
+        line.workspaces
+            .iter()
+            .any(|w| powers::within(p, &w.to_string_lossy()))
+    };
+    j.verdict == JudgeVerdict::Safe
+        && j.powers == [Power::Read]
+        && reach.hosts.is_empty()
+        && !line.network
+        && !reach.paths.is_empty()
+        && reach.paths.iter().all(inside)
+        && powers::not_pure_read(line.command).is_none()
 }
 
 /// Règle de pouvoirs proposée au propriétaire, si elle se lit d'un coup d'œil.
@@ -179,8 +198,12 @@ impl AgentLoop {
         // L'automatisme ne vaut que hors du mode « demander tout » de la session.
         let step = match reach.as_ref() {
             Some(reach) if s.modes.of_session(&spec.session_id).await != ApprovalMode::Ask => {
-                let line = Line { command, network };
-                self.automation(spec, &j, reach, &line).await?
+                let line = Line {
+                    command,
+                    network,
+                    workspaces: &workspaces,
+                };
+                self.automation(spec, mode, &j, reach, &line).await?
             }
             _ => None,
         };
@@ -219,16 +242,29 @@ impl AgentLoop {
         }))))
     }
 
-    /// Ce que le jugement permet sans carte : une règle de pouvoirs qui le couvre. Jamais un verdict dangereux, jamais une ligne
+    /// Ce que le jugement permet sans carte : une lecture pure en `auto_read`, ou une
+    /// règle de pouvoirs qui le couvre. Jamais un verdict dangereux, jamais une ligne
     /// qu'un veto déterministe retient.
     async fn automation(
         &self,
         spec: &TurnSpec,
+        mode: JudgeMode,
         j: &Judgement,
         reach: &Reach,
         line: &Line<'_>,
     ) -> anyhow::Result<Option<Automation>> {
         let s = &self.services;
+        if mode == JudgeMode::AutoRead && pure_read(j, reach, line) {
+            return Ok(Some(Automation {
+                verdict: Verdict {
+                    decision: PolicyDecision::Auto,
+                    layer: VerdictLayer::Judge,
+                    reason: "lecture seule dans les workspaces (juge, mode auto_read)".into(),
+                },
+                outcome: "auto_read",
+                rule: None,
+            }));
+        }
         if j.verdict == JudgeVerdict::Dangerous || powers::never_automatic(line.command).is_some() {
             return Ok(None);
         }

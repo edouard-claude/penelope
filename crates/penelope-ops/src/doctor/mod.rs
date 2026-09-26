@@ -7,12 +7,14 @@ use penelope_app::services::Services;
 use penelope_kernel::api::DoctorCheck;
 
 mod coherence;
+mod judge;
 mod machine;
 mod memory;
 mod models;
 mod secrets;
 
 pub use coherence::*;
+pub use judge::*;
 pub use machine::*;
 pub use memory::*;
 pub use models::*;
@@ -236,6 +238,8 @@ pub async fn run_with(s: &Services, daemon: Vec<DoctorCheck>) -> Vec<DoctorCheck
 
     // Part des lignes `shell_exec` collées, sur sept jours (#150).
     checks.push(glued_lines_check(s).await);
+    // Le juge d'approbation : son mode, et ce qu'il a jugé en sept jours (#203).
+    checks.push(approval_judge_check(s).await);
 
     // Le rédacteur rend, sur toutes les formes connues (#153).
     checks.push(redactor_check().await);
