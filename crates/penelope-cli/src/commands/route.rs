@@ -4,9 +4,12 @@
 use super::*;
 
 /// Associe une commande à sa méthode RPC (CA 15 : parité Telegram ↔ CLI).
-#[allow(clippy::too_many_lines)] // gel 0.17 : table de routage des commandes vers les méthodes RPC
 pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
     Ok(match cmd {
+        Command::Session(c) => session_route(c),
+        Command::Mcp(c) => mcp_route(c)?,
+        Command::Schedule(c) => schedule_route(c)?,
+        Command::Mem(c) => mem_route(c),
         Command::Status => (m::STATUS, json!({})),
         Command::Metrics => (m::METRICS, json!({})),
         Command::Doctor => (m::DOCTOR, json!({})),
@@ -34,50 +37,6 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
             json!({"check": check, "rollback": rollback, "tag": tag, "force": force, "switch": switch}),
         ),
 
-        Command::Session(SessionCmd::List) => (m::SESSION_LIST, json!({})),
-        Command::Session(SessionCmd::New { title }) => (m::SESSION_NEW, json!({"title": title})),
-        Command::Session(SessionCmd::Close { session }) => {
-            (m::SESSION_CLOSE, json!({"session": session}))
-        }
-        Command::Session(SessionCmd::Purge {
-            session, reason, ..
-        }) => (
-            m::SESSION_PURGE,
-            json!({"session": session, "reason": reason}),
-        ),
-        Command::Session(SessionCmd::Title { session, title }) => (
-            m::SESSION_TITLE,
-            json!({"session": session, "title": title.join(" ")}),
-        ),
-        Command::Session(SessionCmd::Budget { session, usd }) => (
-            m::SESSION_BUDGET,
-            json!({
-                "session": session,
-                "usd": match usd.as_deref() {
-                    None => Value::Null,
-                    Some("off") => json!(0),
-                    Some(x) => json!(x),
-                },
-            }),
-        ),
-        Command::Session(SessionCmd::Model { alias, session }) => (
-            m::SESSION_MODEL,
-            json!({"alias": alias, "session": session}),
-        ),
-        Command::Session(SessionCmd::Export { session }) => {
-            (m::SESSION_EXPORT, json!({"session": session}))
-        }
-        Command::Session(SessionCmd::Compact { session }) => {
-            (m::SESSION_COMPACT, json!({"session": session}))
-        }
-        Command::Session(SessionCmd::Mode { mode, session }) => {
-            (m::SESSION_MODE, json!({"mode": mode, "session": session}))
-        }
-        Command::Session(SessionCmd::Project { project, session }) => (
-            m::SESSION_PROJECT,
-            json!({"project": project, "session": session}),
-        ),
-
         Command::Config(ConfigCmd::Get) => (m::CONFIG_GET, json!({})),
         Command::Config(ConfigCmd::Status) => (m::CONFIG_STATUS, json!({})),
         Command::Config(ConfigCmd::Reload) => (m::CONFIG_RELOAD, json!({})),
@@ -91,29 +50,6 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Secret(SecretCmd::Rm { name }) => (m::SECRET_RM, json!({"name": name})),
 
         Command::Model(ModelCmd::List { filter }) => (m::MODEL_LIST, json!({"filter": filter})),
-        Command::Mcp(McpCmd::List) => (m::MCP_LIST, json!({})),
-        Command::Mcp(McpCmd::Show { name }) => (m::MCP_SHOW, json!({"name": name})),
-        Command::Mcp(McpCmd::Auth { name, callback }) => {
-            (m::MCP_AUTH, json!({"name": name, "callback": callback}))
-        }
-        Command::Mcp(McpCmd::Add { file, name }) => {
-            (m::MCP_ADD, json!({"toml": read_toml(file)?, "name": name}))
-        }
-        Command::Mcp(McpCmd::Edit { name, field, value }) => (
-            m::MCP_EDIT,
-            json!({"name": name, "patch": {field.clone(): parse_scalar(value)}}),
-        ),
-        Command::Mcp(McpCmd::Rm { name }) => (m::MCP_RM, json!({"name": name})),
-        Command::Mcp(McpCmd::Enable { name }) => (m::MCP_ENABLE, json!({"name": name})),
-        Command::Mcp(McpCmd::Disable { name }) => (m::MCP_DISABLE, json!({"name": name})),
-        Command::Mcp(McpCmd::Restart { name }) => (m::MCP_RESTART, json!({"name": name})),
-        Command::Mcp(McpCmd::Test { name, file }) => match file {
-            Some(f) => (m::MCP_TEST, json!({"toml": read_toml(f)?, "name": name})),
-            None => (m::MCP_TEST, json!({"name": name})),
-        },
-        Command::Mcp(McpCmd::Logs { name, lines }) => {
-            (m::MCP_LOGS, json!({"name": name, "lines": lines}))
-        }
         Command::Model(ModelCmd::Set { alias, model }) => {
             (m::MODEL_SET, json!({"alias": alias, "model": model}))
         }
@@ -152,69 +88,6 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
                    "usd": usd, "tokens": tokens}),
         ),
 
-        Command::Schedule(ScheduleCmd::List) => (m::SCHEDULE_LIST, json!({})),
-        Command::Schedule(ScheduleCmd::Pause { id }) => (m::SCHEDULE_PAUSE, json!({"id": id})),
-        Command::Schedule(ScheduleCmd::Resume { id }) => (m::SCHEDULE_RESUME, json!({"id": id})),
-        Command::Schedule(ScheduleCmd::Rm { id }) => (m::SCHEDULE_RM, json!({"id": id})),
-        Command::Schedule(ScheduleCmd::Run { id }) => (m::SCHEDULE_RUN_NOW, json!({"id": id})),
-        Command::Schedule(ScheduleCmd::Move {
-            id,
-            chat,
-            topic,
-            private,
-        }) => {
-            if !private && chat.is_none() {
-                return Err(CliError::Usage(
-                    "où l'envoyer : `--private`, ou `--chat <id>` (et `--topic <id>`)".into(),
-                ));
-            }
-            (
-                m::SCHEDULE_MOVE,
-                json!({"id": id, "private": private, "chat_id": chat, "topic_id": topic}),
-            )
-        }
-        Command::Schedule(ScheduleCmd::Add {
-            kind,
-            spec,
-            target,
-            dedup,
-        }) => {
-            let json_arg = |name: &str, raw: &str| {
-                serde_json::from_str::<Value>(raw)
-                    .map_err(|e| CliError::Usage(format!("--{name} n'est pas du JSON : {e}")))
-            };
-            (
-                m::SCHEDULE_ADD,
-                json!({
-                    "kind": kind,
-                    "spec": json_arg("spec", spec)?,
-                    "target": json_arg("target", target)?,
-                    "dedup": match dedup {
-                        Some(d) => json_arg("dedup", d)?,
-                        None => json!({}),
-                    },
-                }),
-            )
-        }
-
-        Command::Mem(MemCmd::Search { query }) => (m::MEM_SEARCH, json!({"query": query})),
-        Command::Mem(MemCmd::Show { uid }) => (m::MEM_SHOW, json!({"uid": uid})),
-        Command::Mem(MemCmd::History { uid, file }) => {
-            (m::MEM_HISTORY, json!({"uid": uid, "file": file}))
-        }
-        Command::Mem(MemCmd::Restore { id }) => (m::MEM_RESTORE, json!({"id": id})),
-        Command::Mem(MemCmd::Reindex { embeddings }) => {
-            (m::MEM_REINDEX, json!({"embeddings": embeddings}))
-        }
-        Command::Mem(MemCmd::Forget { uid }) => (m::MEM_FORGET, json!({"uid": uid})),
-        Command::Mem(MemCmd::Candidates) => (m::MEM_CANDIDATES, json!({})),
-        Command::Mem(MemCmd::Split { uid }) => (m::MEM_SPLIT, json!({"uid": uid})),
-        Command::Mem(MemCmd::Audit) => (m::MEM_AUDIT, json!({})),
-        Command::Mem(MemCmd::RetryRejected) => (m::MEM_RETRY_REJECTED, json!({})),
-        Command::Mem(MemCmd::Diff { since }) => (m::MEM_DIFF, json!({"since": since})),
-        Command::Mem(MemCmd::Dream { dry_run }) => (m::MEM_DREAM, json!({"dry_run": dry_run})),
-        Command::Mem(MemCmd::Learned { days }) => (m::MEM_LEARNED, json!({"days": days})),
-        Command::Mem(MemCmd::Signals { uid }) => (m::MEM_SIGNALS, json!({"uid": uid})),
         Command::Vault(VaultCmd::Sync) => (m::VAULT_SYNC, json!({})),
         Command::Vault(VaultCmd::Check) => (m::VAULT_CHECK, json!({})),
         Command::Vault(VaultCmd::Lint) => (m::VAULT_LINT, json!({})),
@@ -266,18 +139,155 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         ),
         Command::Export { what, id } => (m::EXPORT, json!({"what": what, "id": id})),
         Command::Store(StoreCmd::Rebuild) => (m::STORE_REBUILD, json!({})),
-        Command::Session(SessionCmd::Fork { session, title }) => {
-            (m::SESSION_FORK, json!({"session": session, "title": title}))
-        }
-        Command::Session(SessionCmd::Rewind { turns, session }) => (
-            m::SESSION_REWIND,
-            json!({"session": session, "turns": turns}),
-        ),
-
         other => {
             return Err(CliError::Usage(format!("commande non routée : {other:?}")));
         }
     })
+}
+
+/// Sessions : ouvrir, nommer, borner, forker, rembobiner.
+fn session_route(cmd: &SessionCmd) -> (&'static str, Value) {
+    match cmd {
+        SessionCmd::List => (m::SESSION_LIST, json!({})),
+        SessionCmd::New { title } => (m::SESSION_NEW, json!({"title": title})),
+        SessionCmd::Close { session } => (m::SESSION_CLOSE, json!({"session": session})),
+        SessionCmd::Purge {
+            session, reason, ..
+        } => (
+            m::SESSION_PURGE,
+            json!({"session": session, "reason": reason}),
+        ),
+        SessionCmd::Title { session, title } => (
+            m::SESSION_TITLE,
+            json!({"session": session, "title": title.join(" ")}),
+        ),
+        SessionCmd::Budget { session, usd } => (
+            m::SESSION_BUDGET,
+            json!({
+                "session": session,
+                "usd": match usd.as_deref() {
+                    None => Value::Null,
+                    Some("off") => json!(0),
+                    Some(x) => json!(x),
+                },
+            }),
+        ),
+        SessionCmd::Model { alias, session } => (
+            m::SESSION_MODEL,
+            json!({"alias": alias, "session": session}),
+        ),
+        SessionCmd::Export { session } => (m::SESSION_EXPORT, json!({"session": session})),
+        SessionCmd::Compact { session } => (m::SESSION_COMPACT, json!({"session": session})),
+        SessionCmd::Mode { mode, session } => {
+            (m::SESSION_MODE, json!({"mode": mode, "session": session}))
+        }
+        SessionCmd::Project { project, session } => (
+            m::SESSION_PROJECT,
+            json!({"project": project, "session": session}),
+        ),
+        SessionCmd::Fork { session, title } => {
+            (m::SESSION_FORK, json!({"session": session, "title": title}))
+        }
+        SessionCmd::Rewind { turns, session } => (
+            m::SESSION_REWIND,
+            json!({"session": session, "turns": turns}),
+        ),
+    }
+}
+
+/// Serveurs MCP : administration et diagnostic.
+fn mcp_route(cmd: &McpCmd) -> CliResult<(&'static str, Value)> {
+    Ok(match cmd {
+        McpCmd::List => (m::MCP_LIST, json!({})),
+        McpCmd::Show { name } => (m::MCP_SHOW, json!({"name": name})),
+        McpCmd::Auth { name, callback } => {
+            (m::MCP_AUTH, json!({"name": name, "callback": callback}))
+        }
+        McpCmd::Add { file, name } => (m::MCP_ADD, json!({"toml": read_toml(file)?, "name": name})),
+        McpCmd::Edit { name, field, value } => (
+            m::MCP_EDIT,
+            json!({"name": name, "patch": {field.clone(): parse_scalar(value)}}),
+        ),
+        McpCmd::Rm { name } => (m::MCP_RM, json!({"name": name})),
+        McpCmd::Enable { name } => (m::MCP_ENABLE, json!({"name": name})),
+        McpCmd::Disable { name } => (m::MCP_DISABLE, json!({"name": name})),
+        McpCmd::Restart { name } => (m::MCP_RESTART, json!({"name": name})),
+        McpCmd::Test { name, file } => match file {
+            Some(f) => (m::MCP_TEST, json!({"toml": read_toml(f)?, "name": name})),
+            None => (m::MCP_TEST, json!({"name": name})),
+        },
+        McpCmd::Logs { name, lines } => (m::MCP_LOGS, json!({"name": name, "lines": lines})),
+    })
+}
+
+/// Déclencheurs planifiés ; `move` et `add` valident leurs arguments.
+fn schedule_route(cmd: &ScheduleCmd) -> CliResult<(&'static str, Value)> {
+    Ok(match cmd {
+        ScheduleCmd::List => (m::SCHEDULE_LIST, json!({})),
+        ScheduleCmd::Pause { id } => (m::SCHEDULE_PAUSE, json!({"id": id})),
+        ScheduleCmd::Resume { id } => (m::SCHEDULE_RESUME, json!({"id": id})),
+        ScheduleCmd::Rm { id } => (m::SCHEDULE_RM, json!({"id": id})),
+        ScheduleCmd::Run { id } => (m::SCHEDULE_RUN_NOW, json!({"id": id})),
+        ScheduleCmd::Move {
+            id,
+            chat,
+            topic,
+            private,
+        } => {
+            if !private && chat.is_none() {
+                return Err(CliError::Usage(
+                    "où l'envoyer : `--private`, ou `--chat <id>` (et `--topic <id>`)".into(),
+                ));
+            }
+            (
+                m::SCHEDULE_MOVE,
+                json!({"id": id, "private": private, "chat_id": chat, "topic_id": topic}),
+            )
+        }
+        ScheduleCmd::Add {
+            kind,
+            spec,
+            target,
+            dedup,
+        } => {
+            let json_arg = |name: &str, raw: &str| {
+                serde_json::from_str::<Value>(raw)
+                    .map_err(|e| CliError::Usage(format!("--{name} n'est pas du JSON : {e}")))
+            };
+            (
+                m::SCHEDULE_ADD,
+                json!({
+                    "kind": kind,
+                    "spec": json_arg("spec", spec)?,
+                    "target": json_arg("target", target)?,
+                    "dedup": match dedup {
+                        Some(d) => json_arg("dedup", d)?,
+                        None => json!({}),
+                    },
+                }),
+            )
+        }
+    })
+}
+
+/// Mémoire durable.
+fn mem_route(cmd: &MemCmd) -> (&'static str, Value) {
+    match cmd {
+        MemCmd::Search { query } => (m::MEM_SEARCH, json!({"query": query})),
+        MemCmd::Show { uid } => (m::MEM_SHOW, json!({"uid": uid})),
+        MemCmd::History { uid, file } => (m::MEM_HISTORY, json!({"uid": uid, "file": file})),
+        MemCmd::Restore { id } => (m::MEM_RESTORE, json!({"id": id})),
+        MemCmd::Reindex { embeddings } => (m::MEM_REINDEX, json!({"embeddings": embeddings})),
+        MemCmd::Forget { uid } => (m::MEM_FORGET, json!({"uid": uid})),
+        MemCmd::Candidates => (m::MEM_CANDIDATES, json!({})),
+        MemCmd::Split { uid } => (m::MEM_SPLIT, json!({"uid": uid})),
+        MemCmd::Audit => (m::MEM_AUDIT, json!({})),
+        MemCmd::RetryRejected => (m::MEM_RETRY_REJECTED, json!({})),
+        MemCmd::Diff { since } => (m::MEM_DIFF, json!({"since": since})),
+        MemCmd::Dream { dry_run } => (m::MEM_DREAM, json!({"dry_run": dry_run})),
+        MemCmd::Learned { days } => (m::MEM_LEARNED, json!({"days": days})),
+        MemCmd::Signals { uid } => (m::MEM_SIGNALS, json!({"uid": uid})),
+    }
 }
 
 /// Contenu d'un fichier de déclaration MCP.
