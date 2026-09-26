@@ -35,7 +35,7 @@ Reproduction : `sandbox-exec` avec un profil qui refuse la lecture de tout chemi
 - Dix rejeux ordinaires, puis dix rejeux sous `sandbox-exec` sans `ffmpeg`, `PATH`
   réduit, `HOME` vide, `TZ=UTC` : tous verts.
 - `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace` : voir le rapport du lot.
+  `cargo test --workspace` : verts sur ce Mac (tests macOS compilés).
 
 ## Notes de version
 
