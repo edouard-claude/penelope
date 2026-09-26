@@ -357,6 +357,29 @@ mod tests {
         );
     }
 
+    /// #110 : un schéma sans `properties` nomme ses requis, ou dit qu'il n'y a rien ;
+    /// un type multiple, une énumération non textuelle et une longue description se
+    /// lisent aussi.
+    #[test]
+    fn expected_arguments_without_properties_or_with_odd_types() {
+        assert_eq!(
+            expected_args(&json!({}), 1_000),
+            "- aucun paramètre déclaré"
+        );
+        assert_eq!(
+            expected_args(&json!({"required": ["a", "b"]}), 1_000),
+            "- `a` (requis)\n- `b` (requis)"
+        );
+        let schema = json!({"properties": {
+            "n": {"type": ["integer", "null"], "enum": [1, 2]},
+            "x": {"description": "d".repeat(200)},
+        }});
+        let t = expected_args(&schema, 1_000);
+        assert!(t.starts_with("- `n` (integer|null, une de : 1, 2)"), "{t}");
+        assert!(t.contains("- `x` (valeur) : "), "{t}");
+        assert!(t.ends_with("…"), "description coupée : {t}");
+    }
+
     /// #110 : un nom inconnu rapproche les noms à quelques fautes près ou aux mots
     /// communs, pas n'importe lequel.
     #[test]
