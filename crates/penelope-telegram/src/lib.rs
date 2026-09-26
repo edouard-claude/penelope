@@ -190,10 +190,59 @@ impl Access {
     }
 }
 
+/// Un clic sur un bouton : du propriétaire, ou de l'administrateur anonyme d'un groupe
+/// autorisé.
+fn classify_callback(cb: &Value, update_id: i64, access: &Access) -> Incoming {
+    let from_id = cb
+        .get("from")
+        .and_then(|f| f.get("id"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let chat_id = cb
+        .get("message")
+        .and_then(|m| m.get("chat"))
+        .and_then(|c| c.get("id"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let anonymous = from_id == ANONYMOUS_ADMIN_ID && access.allowed_chats.contains(&chat_id);
+    if from_id != access.owner_id && !anonymous {
+        return Incoming::Unauthorized { update_id, from_id };
+    }
+    let from_id = access.owner_id;
+    Incoming::Callback {
+        update_id,
+        from_id,
+        callback_id: cb
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        data: cb
+            .get("data")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        message_id: cb
+            .get("message")
+            .and_then(|m| m.get("message_id"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0),
+        chat_id: cb
+            .get("message")
+            .and_then(|m| m.get("chat"))
+            .and_then(|c| c.get("id"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0),
+        topic_id: cb
+            .get("message")
+            .and_then(|m| m.get("message_thread_id"))
+            .and_then(|v| v.as_i64()),
+    }
+}
+
 /// Classe un update brut. Le propriétaire est la **liste blanche d'un seul élément**
 /// (§13.4) ; un groupe n'est ouvert que s'il figure dans `access.allowed_chats`, et y
 /// parler en administrateur anonyme vaut propriétaire (issue #113).
-#[allow(clippy::too_many_lines)] // gel 0.17 : classification des mises à jour Telegram
 pub fn classify(update: &Value, access: &Access) -> Incoming {
     let owner_id = access.owner_id;
     let update_id = update
@@ -202,51 +251,7 @@ pub fn classify(update: &Value, access: &Access) -> Incoming {
         .unwrap_or(0);
 
     if let Some(cb) = update.get("callback_query") {
-        let from_id = cb
-            .get("from")
-            .and_then(|f| f.get("id"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-        let chat_id = cb
-            .get("message")
-            .and_then(|m| m.get("chat"))
-            .and_then(|c| c.get("id"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-        let anonymous = from_id == ANONYMOUS_ADMIN_ID && access.allowed_chats.contains(&chat_id);
-        if from_id != owner_id && !anonymous {
-            return Incoming::Unauthorized { update_id, from_id };
-        }
-        let from_id = owner_id;
-        return Incoming::Callback {
-            update_id,
-            from_id,
-            callback_id: cb
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            data: cb
-                .get("data")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            message_id: cb
-                .get("message")
-                .and_then(|m| m.get("message_id"))
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0),
-            chat_id: cb
-                .get("message")
-                .and_then(|m| m.get("chat"))
-                .and_then(|c| c.get("id"))
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0),
-            topic_id: cb
-                .get("message")
-                .and_then(|m| m.get("message_thread_id"))
-                .and_then(|v| v.as_i64()),
-        };
+        return classify_callback(cb, update_id, access);
     }
 
     if let Some(s) = update.get("stopped_message_generation") {
