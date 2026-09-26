@@ -161,22 +161,17 @@ impl Rpc {
                 penelope_orchestrator::scheduler::run_now(&context_of(&self.daemon), &ports, &id)
                     .await
             }
-            method::SCHEDULE_PAUSE => {
-                s.schedules
-                    .set_state(&required_str(p, "id")?, "paused")
-                    .await?;
-                Ok(json!({"ok": true}))
-            }
-            method::SCHEDULE_RESUME => {
-                s.schedules
-                    .set_state(&required_str(p, "id")?, "active")
-                    .await?;
-                Ok(json!({"ok": true}))
-            }
-            method::SCHEDULE_RM => {
-                s.schedules
-                    .set_state(&required_str(p, "id")?, "deleted")
-                    .await?;
+            method::SCHEDULE_PAUSE | method::SCHEDULE_RESUME | method::SCHEDULE_RM => {
+                let id = required_str(p, "id")?;
+                let state = match method {
+                    method::SCHEDULE_PAUSE => "paused",
+                    method::SCHEDULE_RESUME => "active",
+                    _ => "deleted",
+                };
+                // Une faute de frappe ne passe pas pour une pause réussie (#221).
+                if !s.schedules.set_state(&id, state).await? {
+                    anyhow::bail!("planification inconnue : {id}");
+                }
                 Ok(json!({"ok": true}))
             }
             other => Err(anyhow::anyhow!("méthode inconnue : {other}")),

@@ -480,15 +480,17 @@ impl ScheduleStore {
             .collect())
     }
 
-    pub async fn set_state(&self, id: &str, state: &str) -> penelope_store::Result<()> {
+    /// Faux si la planification n'existe pas ou a été supprimée (#221).
+    pub async fn set_state(&self, id: &str, state: &str) -> penelope_store::Result<bool> {
         let (id, state, now) = (id.to_string(), state.to_string(), self.clock.now_rfc3339());
         self.store
             .write(move |tx| {
-                tx.execute(
-                    "UPDATE schedules SET state = ?2, updated_at = ?3 WHERE id = ?1",
+                let changed = tx.execute(
+                    "UPDATE schedules SET state = ?2, updated_at = ?3
+                     WHERE id = ?1 AND state != 'deleted'",
                     params![id, state, now],
                 )?;
-                Ok(())
+                Ok(changed > 0)
             })
             .await
     }

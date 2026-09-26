@@ -138,6 +138,54 @@ async fn schedules_are_driven_by_id() {
     }
 }
 
+/// #221 : pause, reprise et suppression d'un identifiant inconnu sont refusées (RPC et
+/// `/schedules`) ; mettre en pause une planification déjà en pause reste sans erreur.
+#[tokio::test]
+async fn unknown_schedules_are_refused() {
+    use penelope_kernel::api::method as m;
+    let (_d, g, t, _p) = gateway().await;
+    let rpc = penelope_daemon::rpc::Rpc::new(g.daemon.clone());
+    for method in [m::SCHEDULE_PAUSE, m::SCHEDULE_RESUME, m::SCHEDULE_RM] {
+        let err = rpc
+            .call(method, json!({"id": "sch_absent"}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "planification inconnue : sch_absent", "{method}");
+    }
+    for cmd in [
+        "/schedules pause sch_absent",
+        "/schedules resume sch_absent",
+    ] {
+        let out = say(&g, &t, cmd).await;
+        assert!(
+            out.iter()
+                .any(|x| x.contains("❌ planification inconnue : sch_absent")),
+            "{cmd} : {out:?}"
+        );
+    }
+    let sched = g
+        .daemon
+        .services
+        .schedules
+        .create(
+            penelope_workflow::TriggerKind::Interval,
+            json!({"every_ms": 3_600_000}),
+            json!({"type": "notify", "template": "Bonjour"}),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        rpc.call(m::SCHEDULE_PAUSE, json!({"id": sched.id}))
+            .await
+            .unwrap();
+    }
+    rpc.call(m::SCHEDULE_RM, json!({"id": sched.id}))
+        .await
+        .unwrap();
+}
+
 /// `/mcp` : test, journal, désactivation et activation d'un serveur ; un serveur inconnu
 /// est dit à chaque sous-commande.
 #[tokio::test]
