@@ -19,26 +19,28 @@ fn key(session_id: &str) -> String {
     format!("session.tools.{session_id}")
 }
 
-async fn load(s: &Services, session_id: &str) -> BTreeMap<String, u32> {
+/// Lit, modifie et réécrit la table d'une session dans une seule transaction du
+/// rédacteur : deux outils touchés en parallèle (#85) ne s'écrasent pas.
+async fn update<R: Send + 'static>(
+    s: &Services,
+    session_id: &str,
+    f: impl FnOnce(&mut BTreeMap<String, u32>) -> Option<R> + Send + 'static,
+) -> Option<R> {
     let k = key(session_id);
     s.store
-        .read(move |c| penelope_store::kv_get(c, &k))
+        .write(move |tx| {
+            let mut map: BTreeMap<String, u32> = penelope_store::kv_get(tx, &k)?
+                .and_then(|v| serde_json::from_str(&v).ok())
+                .unwrap_or_default();
+            let out = f(&mut map);
+            if out.is_some() {
+                penelope_store::kv_set(tx, &k, &serde_json::to_string(&map).unwrap_or_default())?;
+            }
+            Ok(out)
+        })
         .await
         .ok()
         .flatten()
-        .and_then(|v| serde_json::from_str(&v).ok())
-        .unwrap_or_default()
-}
-
-async fn save(s: &Services, session_id: &str, map: &BTreeMap<String, u32>) {
-    let (k, v) = (
-        key(session_id),
-        serde_json::to_string(map).unwrap_or_default(),
-    );
-    let _ = s
-        .store
-        .write(move |tx| penelope_store::kv_set(tx, &k, &v))
-        .await;
 }
 
 /// Un outil à la demande vient d'être décrit ou appelé : il est exposé directement aux
@@ -47,27 +49,30 @@ pub async fn touch(s: &Services, session_id: &str, tool: &str) {
     if session_id.is_empty() || !penelope_tools::is_on_demand(tool) {
         return;
     }
-    let mut map = load(s, session_id).await;
-    if map.get(tool) == Some(&0) {
-        return;
-    }
-    map.insert(tool.to_string(), 0);
-    save(s, session_id, &map).await;
+    let tool = tool.to_string();
+    update(s, session_id, move |map| {
+        (map.get(&tool) != Some(&0)).then(|| {
+            map.insert(tool, 0);
+        })
+    })
+    .await;
 }
 
 /// Outils à la demande à exposer au tour qui commence, triés : chaque compteur avance
 /// d'un tour, ceux restés sans usage au-delà de [`FORGET_AFTER`] sortent.
 pub async fn exposed_for_turn(s: &Services, session_id: &str) -> Vec<String> {
-    let mut map = load(s, session_id).await;
-    if map.is_empty() {
-        return Vec::new();
-    }
-    for n in map.values_mut() {
-        *n += 1;
-    }
-    map.retain(|_, n| *n <= FORGET_AFTER);
-    save(s, session_id, &map).await;
-    map.into_keys().collect()
+    update(s, session_id, |map| {
+        if map.is_empty() {
+            return None;
+        }
+        for n in map.values_mut() {
+            *n += 1;
+        }
+        map.retain(|_, n| *n <= FORGET_AFTER);
+        Some(map.keys().cloned().collect())
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -105,5 +110,45 @@ mod tests {
         // Tour 11 : `schedule_create` sort, `git_status` (touché au tour 5) reste.
         assert_eq!(exposed_for_turn(&s, "s1").await, ["git_status"]);
         assert!(exposed_for_turn(&s, "s2").await.is_empty(), "par session");
+    }
+
+    /// Des lectures d'outils à la demande dans un même lot partent en parallèle (#85) :
+    /// aucune promotion ne se perd (relevé du lot s-outils).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parallel_touches_keep_every_promotion() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
+        let s = Arc::new(
+            Services::for_tests(dir.path().to_path_buf(), clock)
+                .await
+                .unwrap(),
+        );
+        for _ in 0..5 {
+            let tasks: Vec<_> = penelope_tools::ON_DEMAND
+                .iter()
+                .map(|tool| {
+                    let s = s.clone();
+                    tokio::spawn(async move { touch(&s, "s1", tool).await })
+                })
+                .collect();
+            for t in tasks {
+                t.await.unwrap();
+            }
+            let mut want: Vec<String> = penelope_tools::ON_DEMAND
+                .iter()
+                .map(|t| t.to_string())
+                .collect();
+            want.sort();
+            assert_eq!(exposed_for_turn(&s, "s1").await, want);
+            // Le tour suivant repart d'une session vierge.
+            let k = key("s1");
+            s.store
+                .write(move |tx| {
+                    tx.execute("DELETE FROM kv WHERE k = ?1", [&k])?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+        }
     }
 }
