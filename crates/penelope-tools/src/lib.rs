@@ -27,28 +27,6 @@ pub use spec::{
 use penelope_kernel::risk::RiskClass;
 use serde_json::Value;
 
-/// Contexte d'exécution d'un appel d'outil.
-pub struct ToolContext {
-    pub session_id: String,
-    pub run_id: Option<String>,
-    pub workspaces: Vec<std::path::PathBuf>,
-    pub sandbox_profile: String,
-    pub http_allowlist: Vec<String>,
-    pub block_private_ips: bool,
-    pub max_output_bytes: usize,
-    pub shell_timeout: std::time::Duration,
-    pub in_workflow: bool,
-}
-
-impl ToolContext {
-    pub fn workspace(&self) -> std::path::PathBuf {
-        self.workspaces
-            .first()
-            .cloned()
-            .unwrap_or_else(std::env::temp_dir)
-    }
-}
-
 /// Résultat normalisé d'un appel d'outil.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolOutcome {

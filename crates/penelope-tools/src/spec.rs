@@ -20,25 +20,6 @@ pub struct ToolSpec {
     pub workflow_only: bool,
 }
 
-impl ToolSpec {
-    pub const fn new(
-        name: &'static str,
-        risk: RiskClass,
-        description: &'static str,
-        schema: Value,
-    ) -> Self {
-        ToolSpec {
-            name,
-            risk,
-            description,
-            schema,
-            idempotent: false,
-            network: false,
-            workflow_only: false,
-        }
-    }
-}
-
 /// Champ d'intention des appels qui peuvent demander l'approbation du propriétaire : une
 /// phrase, montrée en tête de sa carte (issue #116).
 pub const WHY_FIELD: &str = "pourquoi";
