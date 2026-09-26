@@ -90,8 +90,104 @@ fn hidden_entries(vault: &Path) -> Vec<(String, Vec<u8>)> {
     out
 }
 
+/// Le validateur du vault de référence : propriétés typées, blocs, liens, noms et alias
+/// uniques, fiches et journal reliés, `log.md` croissant.
+fn assert_valid_wiki(vault: &Path) {
+    let lint = wiki::lint(vault);
+    assert!(
+        lint.bad_properties.is_empty(),
+        "propriétés : {:?}",
+        lint.bad_properties
+    );
+    assert!(
+        lint.invalid_block_ids.is_empty(),
+        "blocs : {:?}",
+        lint.invalid_block_ids
+    );
+    assert!(
+        lint.duplicate_block_ids.is_empty(),
+        "blocs : {:?}",
+        lint.duplicate_block_ids
+    );
+    assert!(lint.unresolved.is_empty(), "liens : {:?}", lint.unresolved);
+    assert!(
+        lint.broken_blocks.is_empty(),
+        "renvois : {:?}",
+        lint.broken_blocks
+    );
+    assert!(
+        lint.name_collisions.is_empty(),
+        "noms : {:?}",
+        lint.name_collisions
+    );
+    assert!(
+        lint.duplicate_aliases.is_empty(),
+        "alias : {:?}",
+        lint.duplicate_aliases
+    );
+
+    for rel in wiki::vault_files(vault) {
+        if let Some(kind) = wiki::note_type(&rel) {
+            let raw = std::fs::read_to_string(vault.join(&rel)).unwrap();
+            let fm = penelope_kernel::frontmatter::parse(&raw).unwrap();
+            assert_eq!(fm.str("type"), Some(kind), "{rel}");
+            assert!(fm.has("created") && fm.has("updated"), "{rel}");
+        }
+    }
+    let concept = std::fs::read_to_string(vault.join("concepts/factur-x.md")).unwrap();
+    assert!(concept.contains("aliases:\n  - ZUGFeRD\n"), "{concept}");
+    let source = std::fs::read_to_string(vault.join("sources/contrat-cadre.md")).unwrap();
+    assert!(source.contains("![[contrat-cadre.pdf]]"), "{source}");
+    assert!(vault.join("attachments/contrat-cadre.pdf").is_file());
+    let journal: String = std::fs::read_dir(vault.join("journal"))
+        .unwrap()
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap())
+        .collect();
+    assert!(
+        journal.contains("type: journal") && journal.contains("\ndate: "),
+        "{journal}"
+    );
+    assert!(
+        journal.contains("[[factur-x]]"),
+        "concept cité relié : {journal}"
+    );
+    assert!(
+        journal.contains("[[contrat-cadre]]"),
+        "source de l'épisode reliée : {journal}"
+    );
+    assert!(
+        vault
+            .join("accueil")
+            .read_dir()
+            .unwrap()
+            .flatten()
+            .all(|e| { e.file_name().to_string_lossy().starts_with("accueil-") })
+    );
+
+    let log = std::fs::read_to_string(vault.join("log.md")).unwrap();
+    let ops: Vec<(String, String)> = log
+        .lines()
+        .filter_map(|l| l.strip_prefix("## ["))
+        .map(|l| {
+            let (date, rest) = l.split_once("] ").unwrap();
+            (
+                date.to_string(),
+                rest.split(" | ").next().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let kinds: Vec<&str> = ops.iter().map(|(_, op)| op.as_str()).collect();
+    for op in ["accueil", "ingest", "dream"] {
+        assert!(kinds.contains(&op), "{op} absent de log.md : {log}");
+    }
+    assert!(
+        ops.windows(2).all(|w| w[0].0 <= w[1].0),
+        "log.md croissant : {log}"
+    );
+}
+
 #[tokio::test]
-#[allow(clippy::too_many_lines)] // gel 0.17 : scénario de test bout en bout
 async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::new(1_789_516_800_000));
@@ -253,98 +349,7 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
     assert!(dream.report.promoted >= 1, "{:?}", dream.report);
 
     // Validateur.
-    let lint = wiki::lint(&vault);
-    assert!(
-        lint.bad_properties.is_empty(),
-        "propriétés : {:?}",
-        lint.bad_properties
-    );
-    assert!(
-        lint.invalid_block_ids.is_empty(),
-        "blocs : {:?}",
-        lint.invalid_block_ids
-    );
-    assert!(
-        lint.duplicate_block_ids.is_empty(),
-        "blocs : {:?}",
-        lint.duplicate_block_ids
-    );
-    assert!(lint.unresolved.is_empty(), "liens : {:?}", lint.unresolved);
-    assert!(
-        lint.broken_blocks.is_empty(),
-        "renvois : {:?}",
-        lint.broken_blocks
-    );
-    assert!(
-        lint.name_collisions.is_empty(),
-        "noms : {:?}",
-        lint.name_collisions
-    );
-    assert!(
-        lint.duplicate_aliases.is_empty(),
-        "alias : {:?}",
-        lint.duplicate_aliases
-    );
-
-    for rel in wiki::vault_files(&vault) {
-        if let Some(kind) = wiki::note_type(&rel) {
-            let raw = std::fs::read_to_string(vault.join(&rel)).unwrap();
-            let fm = penelope_kernel::frontmatter::parse(&raw).unwrap();
-            assert_eq!(fm.str("type"), Some(kind), "{rel}");
-            assert!(fm.has("created") && fm.has("updated"), "{rel}");
-        }
-    }
-    let concept = std::fs::read_to_string(vault.join("concepts/factur-x.md")).unwrap();
-    assert!(concept.contains("aliases:\n  - ZUGFeRD\n"), "{concept}");
-    let source = std::fs::read_to_string(vault.join("sources/contrat-cadre.md")).unwrap();
-    assert!(source.contains("![[contrat-cadre.pdf]]"), "{source}");
-    assert!(vault.join("attachments/contrat-cadre.pdf").is_file());
-    let journal: String = std::fs::read_dir(vault.join("journal"))
-        .unwrap()
-        .flatten()
-        .map(|e| std::fs::read_to_string(e.path()).unwrap())
-        .collect();
-    assert!(
-        journal.contains("type: journal") && journal.contains("\ndate: "),
-        "{journal}"
-    );
-    assert!(
-        journal.contains("[[factur-x]]"),
-        "concept cité relié : {journal}"
-    );
-    assert!(
-        journal.contains("[[contrat-cadre]]"),
-        "source de l'épisode reliée : {journal}"
-    );
-    assert!(
-        vault
-            .join("accueil")
-            .read_dir()
-            .unwrap()
-            .flatten()
-            .all(|e| { e.file_name().to_string_lossy().starts_with("accueil-") })
-    );
-
-    let log = std::fs::read_to_string(vault.join("log.md")).unwrap();
-    let ops: Vec<(String, String)> = log
-        .lines()
-        .filter_map(|l| l.strip_prefix("## ["))
-        .map(|l| {
-            let (date, rest) = l.split_once("] ").unwrap();
-            (
-                date.to_string(),
-                rest.split(" | ").next().unwrap().to_string(),
-            )
-        })
-        .collect();
-    let kinds: Vec<&str> = ops.iter().map(|(_, op)| op.as_str()).collect();
-    for op in ["accueil", "ingest", "dream"] {
-        assert!(kinds.contains(&op), "{op} absent de log.md : {log}");
-    }
-    assert!(
-        ops.windows(2).all(|w| w[0].0 <= w[1].0),
-        "log.md croissant : {log}"
-    );
+    assert_valid_wiki(&vault);
 
     assert_eq!(
         hidden_entries(&vault),
