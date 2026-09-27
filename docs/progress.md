@@ -43,6 +43,8 @@ déduction de l'agent écartée, contenu non fiable jamais promu.
 
 Closes #245
 
+### 1.0.10
+
 - Constat (#242, suite du point 3 de #231) : une photo plus lourde que ce que le
   fournisseur accepte partait telle quelle, se faisait refuser (reprise de la 1.0.6) et
   n'était pas lue ; au-delà de 10 Mo, la passerelle la refusait même quand Telegram en
