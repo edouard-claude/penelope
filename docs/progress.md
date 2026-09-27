@@ -12,6 +12,24 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.4
+
+Deux petits défauts relevés en corrigeant #219 à #221.
+
+- **Ingestion** : un texte brut contenant un `<` isolé (`a < b`, `x <- y`) sortait avec
+  son début doublé (« a a < b »). `html_to_text` repoussait le reste depuis le début
+  quand aucun `>` ne suivait ; il repart maintenant du `<`, traité comme du texte. Un
+  commentaire jamais fermé reste retiré.
+- **Outil `schedule_delete`** : il répondait `deleted: true` pour un identifiant inconnu,
+  et le modèle pouvait annoncer supprimée une planification qui tournait encore. Le port
+  `Orchestrator::schedule_delete` refuse désormais « planification inconnue : <id> »,
+  comme la RPC, Telegram et la CLI depuis #221 ; `schedule_move` refusait déjà.
+- Tests : `a_lone_less_than_is_kept_once`, `schedule_delete_rejects_an_unknown_id`
+  (suppression d'une planification existante comprise) ; scénario `outils-planification`
+  enrichi d'un appel à identifiant inconnu.
+
+Closes #223.
+
 ### 1.0.3
 
 Pénélope ne savait pas qu'elle avait dormi (veille du 26/09, OpenClaw #158592). Un

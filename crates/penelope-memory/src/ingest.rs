@@ -271,7 +271,10 @@ pub fn html_to_text(html: &str) -> String {
                 }
             }
         }
+        // Aucun `>` : ce `<` est du texte (`a < b`, `x <- y`) ; le reste repart de lui,
+        // le texte d'avant est déjà sorti (#223).
         let Some(gt) = rest[lt..].find('>') else {
+            rest = &rest[lt..];
             break;
         };
         let tag = rest[lt + 1..lt + gt].trim();

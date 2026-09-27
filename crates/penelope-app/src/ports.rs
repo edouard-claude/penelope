@@ -417,7 +417,8 @@ pub trait Orchestrator: Send + Sync {
         let _ = (id, to);
         Err(SCHEDULER_MISSING.into())
     }
-    /// Supprime une planification (état `deleted`).
+    /// Supprime une planification (état `deleted`) ; un identifiant inconnu est une
+    /// erreur (#223).
     async fn schedule_delete(&self, id: &str) -> Result<(), String> {
         let _ = id;
         Err(SCHEDULER_MISSING.into())

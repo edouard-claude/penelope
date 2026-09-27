@@ -3,7 +3,8 @@ description = """Planification et intentions, avec l'orchestrateur branché : un
 (`schedule_create`, cron une fois, cible `notify`) puis la liste des planifications
 (`schedule_list`) ; une intention événementielle (`intent_create`), et une intention
 datée refusée avec le renvoi vers `schedule_create`. Ensuite le rappel est déplacé vers
-le chat privé du propriétaire (`schedule_move`) puis supprimé (`schedule_delete`),
+le chat privé du propriétaire (`schedule_move`) puis supprimé (`schedule_delete`) ;
+un identifiant inconnu est refusé (« planification inconnue », #223),
 l'intention annulée (`intent_cancel`), et les deux listes relues (`intent_list`,
 section `schedules` de `self_status`) sont vides d'éléments actifs. Les identifiants
 créés sont cités par le script (`{{id:sch:1}}`, `{{id:i:1}}`)."""
