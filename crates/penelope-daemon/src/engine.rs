@@ -9,7 +9,7 @@ use penelope_agent::{AgentLoop, TurnOutcome, TurnSink, TurnSpec};
 use penelope_app::bus::{BusSink, Origin};
 use penelope_app::codex_scope;
 use penelope_app::engine::{SessionModels, Transcriber, TurnIntake};
-use penelope_app::helpers::{last_model_key, pin_key};
+use penelope_app::helpers::{keep_awake, last_model_key, pin_key};
 use penelope_context::journal::{Provenance, UserSource};
 use penelope_conversation::{SessionConversation, TurnInbox, compaction};
 use penelope_executor::executor::{NativeToolExecutor, ToolEnv};
@@ -28,6 +28,7 @@ use std::sync::Arc;
 impl Daemon {
     /// Exécute un tour complet et publie son issue.
     pub async fn run_turn(self: &Arc<Self>, turn: &Turn) -> TurnOutcome {
+        let _awake = keep_awake(&self.services, &format!("tour {}", turn.id));
         if !turn.merged_messages.is_empty()
             && let Err(error) = self
                 .services

@@ -7,7 +7,9 @@
 //! macOS : `/usr/bin/caffeinate -i` maintenu comme processus enfant. Décision
 //! d'architecture : l'API `IOPMAssertionCreateWithName` exigerait du FFI `unsafe` dans un
 //! workspace qui interdit `unsafe` (§3.2) ; `caffeinate` est l'outil système documenté
-//! pour exactement cet usage et se relâche tout seul si le daemon meurt.
+//! pour exactement cet usage ; lancé avec `-w <pid du daemon>`, il se relâche tout seul si
+//! le daemon meurt (#228 : une assertion orpheline garderait la machine éveillée sur
+//! batterie).
 
 use crate::Result;
 use std::sync::Arc;
@@ -47,7 +49,7 @@ pub struct CountingPower {
     count: Arc<AtomicU32>,
     child: Arc<std::sync::Mutex<Option<std::process::Child>>>,
     program: &'static str,
-    args: &'static [&'static str],
+    args: Vec<String>,
 }
 
 impl CountingPower {
@@ -57,8 +59,9 @@ impl CountingPower {
             count: Arc::new(AtomicU32::new(0)),
             child: Arc::new(std::sync::Mutex::new(None)),
             program: "/usr/bin/caffeinate",
-            // -i : empêche la mise en veille système par inactivité.
-            args: &["-i"],
+            // -i : empêche la mise en veille système par inactivité ; -w : s'arrête avec le
+            // processus qui l'a pris.
+            args: vec!["-i".into(), "-w".into(), std::process::id().to_string()],
         }
     }
 
@@ -68,24 +71,27 @@ impl CountingPower {
             count: Arc::new(AtomicU32::new(0)),
             child: Arc::new(std::sync::Mutex::new(None)),
             program: "",
-            args: &[],
+            args: Vec::new(),
         }
     }
 
+    /// Compteur et processus changent sous le même verrou : un relâchement du dernier garde
+    /// ne tue pas l'inhibiteur qu'une prise concurrente vient de trouver vivant (#228).
     fn acquire(&self) {
-        if self.count.fetch_add(1, Ordering::SeqCst) == 0 && !self.program.is_empty() {
-            let mut guard = self.child.lock().unwrap_or_else(|p| p.into_inner());
-            if guard.is_none() {
-                match std::process::Command::new(self.program)
-                    .args(self.args)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn()
-                {
-                    Ok(c) => *guard = Some(c),
-                    Err(e) => tracing::warn!(error = %e, "assertion anti-veille indisponible"),
-                }
+        let mut guard = self.child.lock().unwrap_or_else(|p| p.into_inner());
+        if self.count.fetch_add(1, Ordering::SeqCst) == 0
+            && !self.program.is_empty()
+            && guard.is_none()
+        {
+            match std::process::Command::new(self.program)
+                .args(&self.args)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                Ok(c) => *guard = Some(c),
+                Err(e) => tracing::warn!(error = %e, "assertion anti-veille indisponible"),
             }
         }
     }
@@ -98,12 +104,12 @@ struct CountingGuard {
 
 impl GuardInner for CountingGuard {
     fn release(&self) {
-        if self.count.fetch_sub(1, Ordering::SeqCst) == 1 {
-            let mut guard = self.child.lock().unwrap_or_else(|p| p.into_inner());
-            if let Some(mut c) = guard.take() {
-                let _ = c.kill();
-                let _ = c.wait();
-            }
+        let mut guard = self.child.lock().unwrap_or_else(|p| p.into_inner());
+        if self.count.fetch_sub(1, Ordering::SeqCst) == 1
+            && let Some(mut c) = guard.take()
+        {
+            let _ = c.kill();
+            let _ = c.wait();
         }
     }
 }
@@ -146,6 +152,17 @@ mod tests {
         assert_eq!(p.active(), 1, "un seul relâchement ne libère pas tout");
         drop(b);
         assert_eq!(p.active(), 0, "l'assertion est relâchée au repos");
+    }
+
+    #[test]
+    fn caffeinate_stops_with_the_daemon() {
+        let p = CountingPower::caffeinate();
+        let pid = std::process::id().to_string();
+        assert_eq!(
+            p.args,
+            ["-i", "-w", pid.as_str()],
+            "#228 : pas d'assertion orpheline"
+        );
     }
 
     #[test]

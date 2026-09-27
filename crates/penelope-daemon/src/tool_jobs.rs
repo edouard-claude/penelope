@@ -149,7 +149,9 @@ pub async fn maybe_spawn(
     let effect = req.effect.clone();
     let id = job.id.clone();
     let session = req.session_id.to_string();
+    let awake = penelope_app::helpers::keep_awake(&s, &format!("job {id}"));
     tokio::spawn(async move {
+        let _awake = awake;
         // Une tâche qui panique s'arrête en silence (#84). Ici, le silence laisserait le
         // job `working` et son effet `dispatching` pour toujours : la panique devient un
         // échec ordinaire, que le ledger et la livraison savent traiter.

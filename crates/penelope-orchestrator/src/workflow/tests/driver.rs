@@ -138,3 +138,51 @@ async fn a_failing_step_is_retried_before_its_failure_counts() {
         finished.payload
     );
 }
+
+/// #228 : un run piloté tient l'assertion anti-veille pendant ses étapes et la relâche
+/// quand il finit, bloqué compris.
+#[tokio::test]
+async fn a_driven_run_keeps_the_machine_awake_until_it_stops() {
+    let e = env().await;
+    install(
+        &e.d,
+        wf(
+            "eveil",
+            "analyser",
+            json!([
+                {"id": "analyser", "type": "agent", "prompt": "Analyse.",
+                 "transitions": [{"goto": "echouer"}]},
+                {"id": "echouer", "type": "shell", "command": "exit 3",
+                 "transitions": [
+                    {"goto": "$done", "condition": {"type": "step_result", "result": "success"}},
+                    {"goto": "$blocked"}
+                 ]}
+            ]),
+        ),
+    )
+    .await;
+    let power = e.d.services.platform.clone();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (during, log) = (power.clone(), seen.clone());
+    e.p.set_responder(Some(Arc::new(move |_| {
+        log.lock().unwrap().push(during.power.active());
+        Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "c1".into(),
+                name: "step_done".into(),
+                arguments: json!({}),
+            }],
+        )
+    })));
+    let run = start_run(&e.d, "eveil", json!({}), &owner(), None, 0)
+        .await
+        .unwrap();
+    assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Blocked);
+    assert_eq!(
+        seen.lock().unwrap().first(),
+        Some(&1),
+        "l'étape travaille sous l'assertion"
+    );
+    assert_eq!(power.power.active(), 0, "relâchée quand le run s'arrête");
+}

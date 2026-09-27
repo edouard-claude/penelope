@@ -12,6 +12,38 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.6
+
+Pénélope ne savait pas qu'elle avait dormi (veille du 26/09, OpenClaw #158592). Un
+créneau manqué pendant une veille partait au réveil comme s'il était à l'heure, les
+connexions n'étaient vérifiées qu'au premier appel raté, et l'assertion anti-veille
+`PowerManager::prevent_sleep` (§2.8), testée, n'était appelée par aucun code de production.
+
+- Assertion anti-veille tenue par un garde RAII (`helpers::keep_awake`) pendant un tour
+  (`run_turn`), un job d'outil (sa tâche, jusqu'à sa conclusion) et un run de workflow
+  piloté (`drive`) ; relâchée à toute sortie, erreur et panique comprises. Compteur et
+  processus changent sous le même verrou (un relâchement concurrent pouvait tuer
+  l'inhibiteur d'une prise vivante) ; `caffeinate -i -w <pid>` s'arrête avec le daemon.
+- Sortie de veille détectée à chaque passage de l'ordonnanceur par l'écart entre temps
+  mural et temps monotone (au-delà de 60 s ; un passage lent n'en crée pas) : événement
+  `host.woke` avec sa durée.
+- Passe de santé au réveil, avant les créneaux en retard : sonde du canal
+  (`ChannelDelivery::probe`, `getMe` pour Telegram, quelques essais), relance des serveurs
+  MCP dégradés, en échec ou en attente de reprise ; `host.health` la journalise.
+- Un créneau parti plus de cinq minutes après son heure le dit : « ⏰ Exécution en retard :
+  prévue à 8h30, lancée à 10h02 après une veille de 3 h 32. » En tête d'une notification ;
+  message immédiat au propriétaire pour un prompt ou un workflow, et dans le prompt. Les
+  créneaux manqués d'une planification sont comptés et partent en un seul run.
+- Déjà là et gardé : le compteur de nuits ratées de la consolidation, l'état
+  d'alimentation de `doctor`, un seul tir après un arrêt.
+- Tests : `daemon/tests/keep_awake.rs` (tour qui répond, échoue, panique ; job qui
+  survit à son tour), `a_driven_run_keeps_the_machine_awake_until_it_stops`,
+  `a_three_hour_sleep_is_noticed_and_each_schedule_catches_up_once_late`,
+  `a_late_prompt_is_announced_before_its_answer`, `only_a_real_delay_is_announced`,
+  `a_slow_step_is_not_a_sleep`, `caffeinate_stops_with_the_daemon`.
+
+Closes #228.
+
 ### 1.0.2
 
 `penelope vault check` rendait `ok: false` en permanence sur l'instance : 14 erreurs

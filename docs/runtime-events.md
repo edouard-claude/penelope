@@ -45,7 +45,16 @@ session s'applique au replay du journal.
 `runtime.llm` contient modèle, fournisseur, rôle, compteurs de tokens et coût
 mesuré ou estimé. Les événements de session et HITL portent leur cycle de vie ;
 les événements préexistants couvrent les tours, runs, étapes, intents, planifications
-et erreurs. L'ordonnanceur émet aussi `schedule.fired` après un déclenchement réussi.
+et erreurs. L'ordonnanceur émet aussi `schedule.fired` après un déclenchement réussi ;
+un créneau parti plus de cinq minutes après son heure y ajoute `planned` (l'heure prévue)
+et `late` (la phrase qui l'annonce au propriétaire).
+
+`host.woke` dit que la machine sort de veille : l'horloge murale a avancé de plus de 60 s
+de plus que l'horloge monotone entre deux passages de l'ordonnanceur. Il porte `slept_ms`
+et `slept` (« 3 h 02 »). `host.health` le suit : `channel` (`ok`, `absent` ou `{error}`
+après quelques essais de la sonde du canal) et `mcp_restarted` (les serveurs dégradés, en
+échec ou en attente de reprise, relancés avec leur nouvel état). Les créneaux en retard
+partent après cette passe, une fois chacun (#228).
 
 `tool.job.started` et `tool.job.completed` encadrent un appel d'outil sorti de son tour
 (un `shell_exec` ou un `sub_agent_spawn` lancé avec `background: true`). Le premier porte
