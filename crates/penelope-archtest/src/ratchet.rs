@@ -38,9 +38,13 @@ const SHRINKING_LISTS: &[&str] = &[
 /// Listes qui ne peuvent que s'allonger.
 const GROWING_LISTS: &[&str] = &["ca.required"];
 
-/// Planchers (R9, à venir) : pas de baisse, pas de suppression.
+/// Plafonds par crate : pas de hausse, pas de retrait ; une crate nouvelle y entre.
+/// `[coverage.uncovered]` (R9, #243) est abaissé et complété par
+/// `scripts/coverage-check.sh --update` ; sans son entrée, une crate n'y est plus mesurée.
+const CRATE_CEILING_TABLES: &[&str] = &["crates", "coverage.uncovered"];
+
+/// Planchers : pas de baisse.
 const FLOOR_SCALARS: &[&str] = &["coverage.new_file_floor"];
-const FLOOR_TABLES: &[&str] = &["coverage.crates"];
 
 /// Compare le budget de la base à celui de HEAD ; chaque refus est une ligne.
 ///
@@ -65,7 +69,7 @@ pub fn regressions(
         if let (Some(b), Some(h)) = (int_at(&base, path), int_at(&head, path))
             && h > b
         {
-            out.push(rise(path, "", b, h, base_label));
+            out.push(rise(&entry(path, ""), b, h, base_label));
         }
     }
     for (path, prefix) in CEILING_TABLES {
@@ -77,21 +81,25 @@ pub fn regressions(
                     "budget.toml [{path}] : entrée ajoutée \"{key}\" = {hv} par rapport à \
                      {base_label} ; la liste de référence ne peut que rétrécir {HINT}"
                 )),
-                Some(bv) if hv > bv => out.push(rise(path, key, *bv, *hv, base_label)),
+                Some(bv) if hv > bv => out.push(rise(&entry(path, key), *bv, *hv, base_label)),
                 Some(_) => {}
             }
         }
     }
-    {
-        let b = int_table(&base, "crates");
-        let h = int_table(&head, "crates");
+    for path in CRATE_CEILING_TABLES {
+        let b = int_table(&base, path);
+        let h = int_table(&head, path);
         for (key, bv) in &b {
             match h.get(key) {
                 None => out.push(format!(
-                    "budget.toml [crates] : plafond retiré \"{key}\" par rapport à \
+                    "budget.toml [{path}] : plafond retiré \"{key}\" par rapport à \
                      {base_label} ; un plafond de crate ne se retire pas {HINT}"
                 )),
-                Some(hv) if hv > bv => out.push(rise("crates", key, *bv, *hv, base_label)),
+                // Les mêmes noms de crates figurent dans les deux tables : la table est
+                // nommée dans le message.
+                Some(hv) if hv > bv => {
+                    out.push(rise(&format!("[{path}] \"{key}\""), *bv, *hv, base_label))
+                }
                 Some(_) => {}
             }
         }
@@ -129,39 +137,24 @@ pub fn regressions(
         if let (Some(b), Some(h)) = (int_at(&base, path), int_at(&head, path))
             && h < b
         {
-            out.push(fall(path, "", b, h, base_label));
-        }
-    }
-    for path in FLOOR_TABLES {
-        let b = int_table(&base, path);
-        let h = int_table(&head, path);
-        for (key, bv) in &b {
-            match h.get(key) {
-                None => out.push(format!(
-                    "budget.toml [{path}] : plancher retiré \"{key}\" par rapport à \
-                     {base_label} ; un plancher ne se retire pas {HINT}"
-                )),
-                Some(hv) if hv < bv => out.push(fall(path, key, *bv, *hv, base_label)),
-                Some(_) => {}
-            }
+            out.push(fall(&entry(path, ""), b, h, base_label));
         }
     }
     Ok(out)
 }
 
-fn rise(path: &str, key: &str, from: i64, to: i64, base_label: &str) -> String {
+/// `what` : l'entrée telle que le message la nomme (`entry`, ou qualifiée par sa table).
+fn rise(what: &str, from: i64, to: i64, base_label: &str) -> String {
     format!(
-        "budget.toml : {} passe de {from} à {to} par rapport à {base_label} ; un budget ne \
-         monte jamais {HINT}",
-        entry(path, key)
+        "budget.toml : {what} passe de {from} à {to} par rapport à {base_label} ; un budget \
+         ne monte jamais {HINT}"
     )
 }
 
-fn fall(path: &str, key: &str, from: i64, to: i64, base_label: &str) -> String {
+fn fall(what: &str, from: i64, to: i64, base_label: &str) -> String {
     format!(
-        "budget.toml : {} passe de {from} à {to} par rapport à {base_label} ; un plancher \
-         ne descend jamais {HINT}",
-        entry(path, key)
+        "budget.toml : {what} passe de {from} à {to} par rapport à {base_label} ; un plancher \
+         ne descend jamais {HINT}"
     )
 }
 
@@ -241,8 +234,8 @@ required = ["ca_1_1_a", "ca_5_4_b"]
 "crates/penelope-daemon/src/media.rs" = 2
 [coverage]
 new_file_floor = 90
-[coverage.crates]
-"penelope-kernel" = 70
+[coverage.uncovered]
+"penelope-kernel" = 394
 "#;
 
     fn check(head: &str) -> Vec<String> {
@@ -262,8 +255,7 @@ new_file_floor = 90
             .replace("\"voice.rs\" = 5", "\"voice.rs\" = 4")
             .replace("= 25", "= 24")
             .replace("modules = [\"agent\", \"dream\"]", "modules = [\"agent\"]")
-            .replace("\"ca_5_4_b\"]", "\"ca_5_4_b\", \"ca_16_1_new\"]")
-            .replace("\"penelope-kernel\" = 70", "\"penelope-kernel\" = 75");
+            .replace("\"ca_5_4_b\"]", "\"ca_5_4_b\", \"ca_16_1_new\"]");
         assert!(check(&head).is_empty(), "{:?}", check(&head));
     }
 
@@ -345,10 +337,9 @@ new_file_floor = 90
     fn removing_a_crate_ceiling_or_lowering_a_floor_is_refused() {
         let head = BASE
             .replace("\"penelope-daemon\" = 80000\n", "")
-            .replace("new_file_floor = 90", "new_file_floor = 80")
-            .replace("\"penelope-kernel\" = 70", "\"penelope-kernel\" = 60");
+            .replace("new_file_floor = 90", "new_file_floor = 80");
         let r = check(&head);
-        assert_eq!(r.len(), 3, "{}", r.join("\n"));
+        assert_eq!(r.len(), 2, "{}", r.join("\n"));
         assert!(
             r.iter()
                 .any(|m| m.contains("plafond retiré \"penelope-daemon\""))
@@ -357,6 +348,41 @@ new_file_floor = 90
             r.iter()
                 .any(|m| m.contains("un plancher ne descend jamais"))
         );
+    }
+
+    #[test]
+    fn an_uncovered_ceiling_that_rises_is_refused() {
+        // #243 : `[coverage.uncovered]` n'était comparé par personne.
+        let head = BASE.replace("\"penelope-kernel\" = 394", "\"penelope-kernel\" = 420");
+        let r = check(&head);
+        assert_eq!(r.len(), 1, "{r:?}");
+        assert!(
+            r[0].starts_with(
+                "budget.toml : [coverage.uncovered] \"penelope-kernel\" passe de 394 à 420 \
+                 par rapport à a1b2c3d ; un budget ne monte jamais"
+            ),
+            "{}",
+            r[0]
+        );
+    }
+
+    #[test]
+    fn an_uncovered_ceiling_that_falls_or_a_new_crate_passes() {
+        // `coverage-check.sh --update` abaisse à la mesure et ajoute les crates nouvelles.
+        let head = BASE.replace(
+            "\"penelope-kernel\" = 394",
+            "\"penelope-agent\" = 178\n\"penelope-kernel\" = 380",
+        );
+        assert!(check(&head).is_empty(), "{:?}", check(&head));
+    }
+
+    #[test]
+    fn a_removed_uncovered_ceiling_is_refused() {
+        // Sans son entrée, une crate n'est plus mesurée contre rien par coverage-check.sh.
+        let head = BASE.replace("\"penelope-kernel\" = 394\n", "");
+        let r = check(&head);
+        assert_eq!(r.len(), 1, "{r:?}");
+        assert!(r[0].contains("[coverage.uncovered] : plafond retiré \"penelope-kernel\""));
     }
 
     #[test]

@@ -6,8 +6,9 @@
 # Compare crates/penelope-archtest/budget.toml de HEAD à celui de BASE (un commit ; par
 # défaut le point de fourche entre HEAD et origin/$GITHUB_BASE_REF, sinon origin/main) et
 # refuse tout ce qui remonte : une valeur plus haute, une entrée ajoutée dans
-# [files.oversized], [daemon].modules, [daemon.daemon_users] ou [channel.allowed], une
-# suppression dans [ca].required. Un fichier renommé garde son entrée sous son nouveau
+# [files.oversized], [daemon].modules, [daemon.daemon_users] ou [channel.allowed], un
+# plafond retiré de [crates] ou de [coverage.uncovered] (#243), une suppression dans
+# [ca].required. Un fichier renommé garde son entrée sous son nouveau
 # chemin (git diff --find-renames). La dérogation : un commit de la plage porte le
 # trailer « Dérogation-budget: #<issue> », auditable par `git log --grep`.
 #
