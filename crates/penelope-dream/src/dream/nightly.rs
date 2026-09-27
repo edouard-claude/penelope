@@ -262,13 +262,19 @@ pub async fn vault_check(s: &Services) -> Value {
         if rel.starts_with("sources/") {
             continue;
         }
+        // Le conseil doit être exécutable : `reindex` saute les fichiers exclus.
         let (_, rewritten) = penelope_memory::vault::parse_entries(&raw);
-        if rewritten.is_some() {
+        if rewritten.is_some() && crate::vault_inventory::excluded(&rel).is_none() {
             issues.push(json!({"file": rel, "severity": "info", "message": "entrées sans uid : `penelope mem reindex` les numérote"}));
         }
         for (i, line) in raw.lines().enumerate() {
-            if penelope_observe::contains_secret(line) {
-                issues.push(json!({"file": rel, "line": i + 1, "severity": "error", "message": "secret ou numéro sensible dans le vault"}));
+            // Même critère que le filtre d'écriture, nature et fragment cités (issue #207).
+            if let Some(f) = penelope_observe::redact::forbidden_secret(line) {
+                let severity = if f.certain { "error" } else { "warning" };
+                let message = format!("secret dans le vault : {} (« {} »)", f.kind, f.fragment);
+                issues.push(
+                    json!({"file": rel, "line": i + 1, "severity": severity, "message": message}),
+                );
             }
         }
     }

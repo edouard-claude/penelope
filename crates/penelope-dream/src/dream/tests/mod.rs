@@ -13,6 +13,7 @@ mod clash;
 mod digest;
 mod operations;
 mod sizing;
+mod vault_check;
 
 /// Ce que tiennent les tests du rêve, sans le daemon : le contexte de la crate, le
 /// canal du propriétaire (`hooks.messenger`) et aucun superviseur MCP. Les tests lisent
