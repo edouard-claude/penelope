@@ -329,9 +329,12 @@ pub fn validate(
 
         // 1. Filtre de contenu interdit (§6.10), y compris pour la consolidation.
         if let Some(t) = &text {
-            if penelope_observe::contains_secret(t) {
-                let kind = penelope_observe::redact::secret_kind(t).unwrap_or("secret");
-                v.rejected.push((op, format!("contenu interdit : {kind}")));
+            // Détecté et nommé par la même fonction (issue #207).
+            if let Some(f) = penelope_observe::redact::forbidden_secret(t) {
+                v.rejected.push((
+                    op,
+                    format!("contenu interdit : {} (« {} »)", f.kind, f.fragment),
+                ));
                 continue;
             }
             if penelope_observe::is_suspicious(t) {

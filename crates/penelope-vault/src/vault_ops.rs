@@ -43,8 +43,8 @@ pub fn write_filter(text: &str) -> Result<(), String> {
     if t.contains('\n') {
         return Err("une entrée de mémoire tient sur une ligne".into());
     }
-    if let Some(kind) = penelope_observe::redact::secret_kind(t) {
-        return Err(refusal(kind, t));
+    if let Some(f) = penelope_observe::redact::forbidden_secret(t) {
+        return Err(refusal(&f));
     }
     if penelope_observe::is_suspicious(t) {
         return Err("refusé : le texte ressemble à une consigne injectée".into());
@@ -54,11 +54,11 @@ pub fn write_filter(text: &str) -> Result<(), String> {
 
 /// Refus nommé : la nature et le fragment masqué au milieu, pour retirer ce qu'il faut
 /// au lieu de tronquer au hasard (issue #132).
-fn refusal(kind: &str, text: &str) -> String {
-    match penelope_observe::redact::secret_fragment(text) {
-        Some(f) => format!("refusé : le texte contient un {kind} (« {f} »)"),
-        None => format!("refusé : le texte contient un {kind}"),
-    }
+fn refusal(f: &penelope_observe::redact::Forbidden) -> String {
+    format!(
+        "refusé : le texte contient un {} (« {} »)",
+        f.kind, f.fragment
+    )
 }
 
 /// Une entrée, un fait (issue #145) : les dossiers de 3 000 caractères écrits d'un bloc
@@ -83,8 +83,8 @@ pub fn size_filter(level: Level, text: &str) -> Result<(), String> {
 
 /// Comme [`write_filter`], pour un bloc de plusieurs lignes (notes de travail).
 pub fn write_filter_block(text: &str) -> Result<(), String> {
-    if let Some(kind) = penelope_observe::redact::secret_kind(text) {
-        return Err(refusal(kind, text));
+    if let Some(f) = penelope_observe::redact::forbidden_secret(text) {
+        return Err(refusal(&f));
     }
     if penelope_observe::is_suspicious(text) {
         return Err("refusé : le texte ressemble à une consigne injectée".into());

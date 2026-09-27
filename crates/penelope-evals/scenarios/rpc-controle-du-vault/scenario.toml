@@ -1,0 +1,40 @@
+name = "rpc-controle-du-vault"
+description = """Le contrôle du vault par la socket locale (`vault.check`, issue #207) juge avec
+le même critère que le filtre d'écriture. Le journal cite un identifiant numérique en
+prose (clé de Luhn vraie), une référence `${SECRET:nom}` et une affectation qui décrit un
+schéma (`token = base64url(<champs>)`) : seule l'affectation est signalée, en `warning`.
+La note porte une clé `ghp_…` collée à la main : une erreur qui nomme sa nature et son
+fragment masqué, et `ok` vaut `false`. Une page de compte rendu sans uid ne reçoit pas le
+conseil `reindex`, qui la sauterait."""
+pin_model = "main"
+
+[[files]]
+root = "vault"
+path = "journal/2026-09-23.md"
+content = """# Journal
+
+- la page Meta `100000000000009` publie le lundi
+- la clé du service reste ${SECRET:service_login}
+- le jeton se construit : token = base64url(<champs>)
+"""
+
+[[files]]
+root = "vault"
+path = "notes.md"
+content = """# Notes
+
+- mot de passe ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+"""
+
+[[files]]
+root = "vault"
+path = "accueil/2026-09-23.md"
+content = """# Accueil
+
+- une ligne sans uid
+"""
+
+[[steps]]
+kind = "rpc"
+method = "vault.check"
+pick = ["/ok", "/issues"]

@@ -1911,8 +1911,24 @@ affiche une pratique. Chaque modification garde son état antérieur :
 penelope mem history --file profil.md
 ```
 
-puis `penelope mem restore <id>`. `penelope vault check` signale un frontmatter cassé ou
-un secret écrit à la main.
+puis `penelope mem restore <id>`. `penelope vault check` signale un frontmatter cassé, une
+pratique invalide, le contenu hors index, et un secret écrit à la main.
+
+**Ce que `vault check` regarde.** Chaque ligne du vault, hors `sources/`, est jugée par le
+même critère que ce qui a le droit d'y être écrit : une clé de fournisseur (`ghp_…`,
+`sk-…`, clé privée, JWT…), un numéro de carte (groupé par quatre, ou nommé par la ligne :
+« carte », « visa »…), une valeur du magasin de secrets **qui a la forme d'un secret**
+(jeton long et aléatoire). Chaque erreur cite sa nature et un fragment masqué
+(`jeton github (« ghp_… »)`, `numéro de carte (« …6467 »)`) pour retrouver la ligne. Une
+affectation `token = …` dont la valeur n'a pas la forme d'un secret est un `warning` :
+elle décrit souvent un schéma. Ce qui passe sans bruit : une référence `${SECRET:nom}`,
+un identifiant numérique cité en prose, une adresse, une URL ou un identifiant de
+connexion rangés au magasin (ils restent masqués dans les journaux). Le verdict ne dépend
+que du vault et du magasin, jamais de ce que le daemon a lu depuis son démarrage. `ok`
+vaut `true` quand aucune ligne n'est une `error` ; les `warning` et les `info` n'engagent
+rien, et l'`info` « entrées sans uid » n'est posée que sur un fichier que
+`penelope mem reindex` numérotera. `penelope doctor` ne rejoue pas ce contrôle : il ne
+reprend que le contenu hors index.
 
 La qualité du tri se mesure sur un banc d'essai : cinq conversations anonymisées, les
 souvenirs attendus (gardés, mis à jour, au journal, ignorés, rangés en secret) et des

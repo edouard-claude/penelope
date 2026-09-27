@@ -289,7 +289,11 @@ fn redact_card_numbers(s: &str) -> String {
 /// Premier numéro de carte d'un texte, pour le **refus d'écriture** (issue #132) : même
 /// longueur, même clé de Luhn que le masquage, mais un nombre collé à un identifiant
 /// (`command-output:38228-1743576040856618`, `id=…`, `run/…`, `…_x`) n'en est pas un,
-/// sauf si le mot collé désigne une carte (`carte:…`, `cb=…`). Rend la plage du nombre.
+/// sauf si le mot collé désigne une carte (`carte:…`, `cb=…`). Un nombre isolé d'un seul
+/// tenant n'en est un que si la ligne nomme une carte avant lui : sinon c'est un
+/// identifiant cité en prose, comme un numéro de page Meta entre accents graves (issue
+/// #207). Groupé par quatre (`4539 1488 …`), il a la forme d'une carte. Rend la plage du
+/// nombre.
 fn card_to_refuse(input: &str) -> Option<std::ops::Range<usize>> {
     const GLUE: &[char] = &[':', '-', '_', '/', '=', '#', '@'];
     const CARD_WORDS: &[&str] = &[
@@ -304,6 +308,7 @@ fn card_to_refuse(input: &str) -> Option<std::ops::Range<usize>> {
         "numero",
         "numéro",
     ];
+    let is_card_word = |w: &str| CARD_WORDS.contains(&w.to_lowercase().as_str());
     card_re().find_iter(input).find_map(|m| {
         let digits: String = m.as_str().chars().filter(|c| c.is_ascii_digit()).collect();
         if !(13..=19).contains(&digits.len()) || !luhn(&digits) {
@@ -322,9 +327,14 @@ fn card_to_refuse(input: &str) -> Option<std::ops::Range<usize>> {
                 .collect::<Vec<_>>()
                 .into_iter()
                 .rev()
-                .collect::<String>()
-                .to_lowercase();
-            if !CARD_WORDS.contains(&word.as_str()) {
+                .collect::<String>();
+            if !is_card_word(&word) {
+                return None;
+            }
+        } else if !m.as_str().contains([' ', '-']) {
+            // D'un seul tenant : une carte seulement si la ligne la nomme avant.
+            let line = input[..m.start()].rsplit('\n').next().unwrap_or_default();
+            if !line.split(|c: char| !c.is_alphanumeric()).any(is_card_word) {
                 return None;
             }
         }
@@ -336,16 +346,7 @@ fn card_to_refuse(input: &str) -> Option<std::ops::Range<usize>> {
 /// sans l'exposer (issue #132) : les quatre derniers chiffres d'une carte, les quatre
 /// premiers caractères d'une clé.
 pub fn secret_fragment(input: &str) -> Option<String> {
-    let clean = &*without_references(input);
-    if let Some(span) = secret_spans(clean).first() {
-        let value = &clean[span.start..span.end];
-        let head: String = value.chars().take(4).collect();
-        return Some(format!("{head}…"));
-    }
-    card_to_refuse(clean).map(|r| {
-        let digits: String = clean[r].chars().filter(|c| c.is_ascii_digit()).collect();
-        format!("…{}", &digits[digits.len() - 4..])
-    })
+    forbidden_secret(input).map(|f| f.fragment)
 }
 
 /// Clé de Luhn.
@@ -368,17 +369,99 @@ pub fn luhn(digits: &str) -> bool {
     sum.is_multiple_of(10)
 }
 
-/// Vrai si le texte contient quelque chose qui ressemble à un secret. Utilisé par le
-/// filtre d'écriture mémoire (§6.10), qui **refuse** l'écriture au lieu de masquer.
-pub fn contains_secret(input: &str) -> bool {
+/// Secret interdit dans ce qui est **gardé** : sa nature, un fragment masqué au milieu,
+/// et s'il est certain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Forbidden {
+    pub kind: &'static str,
+    /// Début de la valeur ou fin d'une carte (`ghp_…`, `…6467`) : de quoi retrouver la
+    /// ligne sans exposer le secret (issue #132).
+    pub fragment: String,
+    /// Faux pour une affectation (`token = …`) dont la valeur n'a pas la forme d'un
+    /// secret : la phrase peut décrire un schéma (`token = base64url(<champs>)`).
+    pub certain: bool,
+}
+
+const ASSIGNMENT: &str = "affectation de secret";
+
+/// Le critère unique de ce qui n'a pas le droit d'être **gardé** : mémoire (§6.10),
+/// consolidation, entités, skills, et contrôle du vault (issue #207). Motifs, numéro de
+/// carte, et valeur du magasin **si elle a la forme d'un secret**.
+///
+/// Masquer et accuser sont deux usages : `redact` masque aussi les valeurs apprises en
+/// lecture (#134) et toute valeur du magasin, identifiant de connexion ou URL compris, où
+/// un faux positif ne coûte rien. Ici un faux positif interdit un mot ordinaire du vault,
+/// et un verdict qui dépendrait de ce que le processus a lu changerait sans que le texte
+/// ait bougé : ni valeur apprise, ni valeur du magasin sans forme de secret.
+pub fn forbidden_secret(input: &str) -> Option<Forbidden> {
     let input = &*without_references(input);
-    if known_values().iter().any(|v| input.contains(&**v)) {
-        return true;
+    let head = |v: &str| format!("{}…", v.chars().take(4).collect::<String>());
+    // Du plus sûr au moins sûr : l'affectation générique vient en dernier.
+    for (re, label) in &patterns().rules {
+        if *label == ASSIGNMENT {
+            continue;
+        }
+        if let Some(c) = re.captures(input) {
+            let m = c.name("v").or_else(|| c.get(0)).expect("capture complète");
+            return Some(Forbidden {
+                kind: label,
+                fragment: head(m.as_str()),
+                certain: true,
+            });
+        }
     }
-    if patterns().rules.iter().any(|(re, _)| re.is_match(input)) {
-        return true;
+    if let Some(r) = card_to_refuse(input) {
+        let digits: String = input[r].chars().filter(|c| c.is_ascii_digit()).collect();
+        return Some(Forbidden {
+            kind: "numéro de carte",
+            fragment: format!("…{}", &digits[digits.len() - 4..]),
+            certain: true,
+        });
     }
-    card_to_refuse(input).is_some()
+    let registered = known().read().map(|g| g.clone()).unwrap_or_default();
+    if let Some(v) = registered
+        .iter()
+        .find(|v| secret_shaped(v) && input.contains(&***v))
+    {
+        return Some(Forbidden {
+            kind: "secret enregistré",
+            fragment: head(v),
+            certain: true,
+        });
+    }
+    let (re, _) = patterns().rules.iter().find(|(_, l)| *l == ASSIGNMENT)?;
+    let value = re.captures(input)?.name("v")?.as_str();
+    Some(Forbidden {
+        kind: ASSIGNMENT,
+        fragment: head(value),
+        certain: random_token(value),
+    })
+}
+
+/// Valeur qui a la forme d'un secret : un motif connu, ou un jeton aléatoire. Une
+/// adresse électronique, une URL, un identifiant lisible n'en sont pas.
+fn secret_shaped(v: &str) -> bool {
+    random_token(v)
+        || patterns()
+            .rules
+            .iter()
+            .any(|(re, label)| *label != ASSIGNMENT && re.is_match(v))
+}
+
+/// Jeton d'un seul tenant, sans `@`, `.` ni `:` (qui font les adresses et les URL), de 20
+/// caractères au moins, aléatoire au sens de [`looks_random`] ou long bloc hexadécimal.
+fn random_token(v: &str) -> bool {
+    const TOKEN_MIN: usize = 20;
+    v.len() >= TOKEN_MIN
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "+/=_*~!$#%^&-".contains(c))
+        && (looks_random(v) || looks_hex_blob(v))
+}
+
+/// Vrai si le texte contient un secret qui n'a pas le droit d'être gardé : voir
+/// [`forbidden_secret`], dont c'est le raccourci.
+pub fn contains_secret(input: &str) -> bool {
+    forbidden_secret(input).is_some()
 }
 
 /// Secret laissé en clair dans un journal : valeur enregistrée ou jeton reconnaissable.
@@ -463,18 +546,9 @@ pub fn secret_spans(input: &str) -> Vec<SecretSpan> {
     out
 }
 
-/// Nature du secret détecté, pour le message d'erreur du filtre d'écriture.
+/// Nature du secret interdit ([`forbidden_secret`]), pour nommer un refus.
 pub fn secret_kind(input: &str) -> Option<&'static str> {
-    let input = &*without_references(input);
-    for (re, label) in &patterns().rules {
-        if re.is_match(input) {
-            return Some(label);
-        }
-    }
-    if card_to_refuse(input).is_some() {
-        return Some("numéro de carte");
-    }
-    None
+    forbidden_secret(input).map(|f| f.kind)
 }
 
 /// Redaction récursive d'une valeur JSON (payloads d'événements, arguments d'outils).
@@ -514,6 +588,9 @@ pub fn redact_json(v: &serde_json::Value) -> serde_json::Value {
         other => other.clone(),
     }
 }
+
+#[cfg(test)]
+mod forbidden_tests;
 
 #[cfg(test)]
 mod tests {

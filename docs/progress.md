@@ -12,6 +12,30 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.2
+
+`penelope vault check` rendait `ok: false` en permanence sur l'instance : 14 erreurs
+« secret », aucune n'en était une. Cause : le contrôle jugeait avec `contains_secret`
+(motifs, carte, **et** toute valeur du magasin ou apprise en lecture), le filtre d'écriture
+avec `secret_kind` (sans les valeurs). Une adresse électronique rangée au magasin pour un
+serveur MCP condamnait onze lignes, et le verdict changeait selon ce que le daemon avait lu.
+
+- Un seul critère, `redact::forbidden_secret`, pour tout ce qui est gardé : filtre
+  d'écriture, consolidation (qui détecte et nomme avec la même fonction), entités, skills,
+  contrôle du vault. Une valeur du magasin n'y compte que si elle a la forme d'un secret
+  (motif ou jeton aléatoire) ; jamais une valeur apprise. `redact` masque comme avant.
+- Chaque erreur cite sa nature et son fragment masqué (`jeton github (« ghp_… »)`).
+- Un nombre isolé qui passe Luhn n'est une carte que groupé par quatre ou nommé par la
+  ligne (« carte », « visa »…) : un identifiant cité en prose passe ; les cas de #132
+  restent refusés.
+- Une affectation `token = …` sans valeur de forme secrète est un `warning` au contrôle.
+- Plus d'`info` « entrées sans uid » sur un fichier que `reindex` exclut.
+- `doctor` ne rejoue pas ce contrôle (il ne reprend que le hors-index) : inchangé.
+- Tests : `redact/forbidden_tests.rs`, `dream/tests/vault_check.rs` ; documentation dans
+  `install-headless.md`.
+
+Closes #207.
+
 ### 1.0.1
 
 Un redémarrage demandé depuis Telegram ne laissait aucune trace au journal : le 27/09 à
