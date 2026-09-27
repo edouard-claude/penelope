@@ -39,8 +39,8 @@ n'est jamais déplacé.
 Dans le lot, la seule commande est donc :
 
 ```bash
-make bump V=0.17.60     # vérifie la section de docs/progress.md, réécrit les seize lignes, commite
-git push                # la CI pose v0.17.60 et publie la release
+make bump V=1.0.4       # vérifie la section de docs/progress.md, réécrit les lignes de version, commite
+git push                # la CI pose v1.0.4 et publie la release
 ```
 
 `git tag` à la main est interdit (`CLAUDE.md`). Une section de version écrite dans
@@ -56,7 +56,7 @@ Sur un tag `vX.Y.Z`, ou à la main avec le tag en paramètre (c'est ainsi que `l
 l'appelle).
 
 ```
-tag v0.17.60
+tag v1.0.4
    │
    ├── verification   le tag = la version du workspace, fmt + clippy + tests   (macos-14)
    │                  banc d'essai de la mémoire (rapport joint, issue #37)

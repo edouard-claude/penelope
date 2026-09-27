@@ -115,7 +115,9 @@ Reste :
   variante `Execution::Job` (le port `JobRunner` en rend l'équivalent).
 - T21 à T23 : le juge d'approbation (#203), seulement si la mesure préalable sur
   l'instance le justifie ; aucune couche `Judge` ni plancher `Destructive` n'existe
-  encore dans `VerdictLayer`.
+  encore dans `VerdictLayer`. Fait depuis, avant la bascule : port `Judge`
+  (`penelope-app`), couche `VerdictLayer::Judge`, appelée seulement pour une classe non
+  destructive (`pipeline/judge.rs`).
 - La note de fusion d'un message arrivé pendant le tour reste un message système après
   les messages système ; la passer en `Injection::Note` en queue change la surface d'un
   scénario et se fera à part.

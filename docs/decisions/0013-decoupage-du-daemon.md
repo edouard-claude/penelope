@@ -111,6 +111,13 @@ Reste :
   (`Origin::Channel`, `EffectKind::Message`, liaison de session générique ; la plupart des
   mentions restantes du canal y sont).
 
+À la 1.0.3, sur `main` : T30 (le daemon ne réexporte plus rien), T32 (liste de référence
+du gel vide) et T33 (le moteur des tours sort de `Daemon`, ports `TurnIntake`,
+`SessionModels`, `Transcriber` implémentés par `Core`) sont faits ; T34 et T37 restent.
+`penelope-evals` dépend aussi de la passerelle, pour jouer l'étape `telegram` de ses
+scénarios par le vrai canal (`GATEWAY_DEPENDENTS`). L'état courant est dans
+[docs/architecture.md](../architecture.md).
+
 Écarts à la spécification, assumés :
 
 - le daemon garde 14 986 lignes au lieu d'environ 9 200 : façades de transition,

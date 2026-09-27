@@ -74,12 +74,13 @@ détaillée, avec `design/v1/gel-et-outillage.md` §3).
   `impl Daemon` réservé à quatre fichiers : prendre `&Services` ou un trait, pas le daemon.
 - R7 : `clippy::too_many_lines` à 200 lignes ; les `#[allow(clippy::too_many_lines)]`
   existants sont comptés (`[lints]`) : découper la fonction, jamais ajouter un allow.
-- R8 : les 71 tests `ca_*` de `docs/ca-matrix.md` sont figés (`[ca].required`) : les
-  déplacer est permis, les renommer ou les supprimer est interdit.
-- Frontière canal/cœur (#214) : hors `telegram.rs` et `screens.rs`, le cœur ne nomme pas
-  Telegram (`penelope_telegram::`, `cfg.telegram.`, `Origin::Telegram`, `tg_`, `chat_id`)
-  au-delà du relevé `[channel.allowed]` ; il passe par `ChannelDelivery`, `Messenger`,
-  `OwnerChannel`.
+- R8 : les tests `ca_*` de `[ca].required` sont figés (77 à la 1.0.3) : les déplacer est
+  permis, les renommer ou les supprimer est interdit.
+- Frontière canal/cœur (#214) : le canal vit dans `penelope-telegram` et
+  `penelope-gateway-telegram` ; les crates agnostiques (`CHANNEL_AGNOSTIC_CRATES`) ne
+  nomment pas Telegram (`penelope_telegram::`, `cfg.telegram.`, `Origin::Telegram`, `tg_`,
+  `chat_id`) au-delà du relevé `[channel.allowed]` ; elles passent par `ChannelDelivery`,
+  `Messenger`, `OwnerChannel`.
 
 `UPDATE_BUDGET=1 cargo test -p penelope-archtest` réécrit `budget.toml` **vers le bas
 seulement** : le lancer dès qu'un fichier listé est touché, pour ne pas laisser de marge
