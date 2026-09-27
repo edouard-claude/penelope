@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.9
+### 1.0.12
 
 **Cache de prompt : la différence part en fin (#236).** Un banc de stabilité du cache
 (dix harnais, 27/09) montre que le meilleur ajoute la différence en fin quand le fichier
