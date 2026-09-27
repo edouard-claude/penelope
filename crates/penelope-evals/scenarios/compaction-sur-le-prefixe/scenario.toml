@@ -1,0 +1,34 @@
+name = "compaction-sur-le-prefixe"
+description = """Compaction sur le préfixe de la conversation (#236), `context.compaction_on_prefix`
+à `always`. Après deux échanges à cache chaud, `/compact` envoie la dernière requête de la
+conversation telle quelle (même modèle, même prompt système, mêmes outils, même
+historique) avec la consigne de résumé en dernier message : l'appel de résumé a le
+`system_hash` et le `tools_hash` de la conversation. Le tour suivant part du résumé."""
+pin_model = "main"
+
+[config]
+"context.compaction_on_prefix" = "always"
+
+[[steps]]
+kind = "message"
+text = "on prépare la migration PROJ-7 vers PostgreSQL 17, le schéma est exporté dans db/schema.sql"
+
+[[steps]]
+kind = "message"
+text = "réponses courtes s'il te plaît ; on migre ce soir"
+
+[[steps]]
+kind = "command"
+command = "/compact"
+
+[[steps]]
+kind = "message"
+text = "où en est-on ?"
+
+[[observe]]
+name = "cache"
+sql = "SELECT role, model, COUNT(*) AS calls, COUNT(DISTINCT system_hash) AS prefixes, COUNT(DISTINCT tools_hash) AS tool_lists FROM usage GROUP BY role, model ORDER BY role"
+
+[[observe]]
+name = "compaction_sur_le_prefixe"
+sql = "SELECT COUNT(*) AS calls FROM usage c WHERE c.role = 'compaction' AND EXISTS (SELECT 1 FROM usage u WHERE u.role = 'chat' AND u.system_hash = c.system_hash AND u.tools_hash = c.tools_hash)"

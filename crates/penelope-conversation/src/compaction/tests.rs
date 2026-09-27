@@ -160,7 +160,9 @@ async fn manual_compaction_replaces_old_turns_with_a_summary() {
     p.reply(SUMMARY);
     // Un outil MCP marqué en cours de session attend la frontière (§8.9, #236).
     let marked = "mcp__compta__list_invoices".to_string();
-    d.services.mcp_tools.mark_for_promotion(std::slice::from_ref(&marked));
+    d.services
+        .mcp_tools
+        .mark_for_promotion(std::slice::from_ref(&marked));
 
     let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
     assert_eq!(r.published, 1, "{r:?}");
@@ -441,4 +443,179 @@ async fn budgets_do_not_block_compaction_until_the_summary_reserve_is_spent() {
         "{:?}",
         kinds(&events)
     );
+}
+
+/// Un tour de conversation vient de partir : préfixe journalisé, liste d'outils gelée,
+/// appel facturé avec leurs empreintes. Rend la requête envoyée et ses empreintes.
+async fn warm_conversation(
+    d: &Context,
+    sid: &str,
+    model: &str,
+) -> (Vec<ChatMessage>, penelope_llm::cache::Fingerprint) {
+    let s = &d.services;
+    let mut tiers = crate::build_tiers(s, "", &[], None).await;
+    crate::prefix::settle(s, sid, None, &mut tiers)
+        .await
+        .unwrap();
+    let tools = vec![penelope_llm::ToolDef::new(
+        "time_now",
+        "L'heure.",
+        json!({"type": "object"}),
+    )];
+    penelope_app::frozen_tools::freeze(s, sid, &tools).await;
+    let conv = SessionConversation::new(s.clone(), sid, model, tiers, 0);
+    let sent = conv.request_messages().await.unwrap();
+    let fp = penelope_llm::cache::Fingerprint::of(&sent, &tools);
+    s.budget
+        .record(penelope_kernel::budget::UsageRecord {
+            session_id: Some(sid.into()),
+            role: Some("chat".into()),
+            model: model.into(),
+            provider: "mock".into(),
+            system_hash: Some(fp.system_hash.clone()),
+            tools_hash: Some(fp.tools_hash.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    (sent, fp)
+}
+
+fn hashes_of(
+    d: &Context,
+    role: &'static str,
+) -> impl std::future::Future<Output = Vec<(String, String)>> {
+    let store = d.services.store.clone();
+    async move {
+        store
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT system_hash, tools_hash FROM usage WHERE role = ?1 ORDER BY rowid",
+                )?;
+                let rows = st.query_map([role], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await
+            .unwrap()
+    }
+}
+
+/// #236 : à cache chaud, le résumé part sur le préfixe de la conversation. Même modèle,
+/// même prompt système, mêmes outils, l'historique tel qu'envoyé puis la consigne en
+/// dernier message ; ses empreintes égalent celles de la conversation.
+#[tokio::test]
+async fn a_summary_reads_the_conversation_prefix() {
+    let (_dir, d, p) = context().await;
+    d.services
+        .publish_config("test", |c| {
+            c.context.compaction_on_prefix = penelope_kernel::config::PrefixCompaction::Always;
+            Ok(vec!["context.compaction_on_prefix".into()])
+        })
+        .unwrap();
+    let sid = long_session(&d).await;
+    let conv_model = "openrouter:deepseek/deepseek-v4-pro";
+    let (sent, fp) = warm_conversation(&d, &sid, conv_model).await;
+    p.reply(SUMMARY);
+
+    let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+    assert_eq!(r.published, 1, "{r:?}");
+    assert_eq!(r.model.as_deref(), Some(conv_model));
+    assert!(summarizer_requests(&p).is_empty(), "pas de résumeur à part");
+    let asked = p.requests().last().unwrap().clone();
+    assert_eq!(asked.model, conv_model);
+    assert_eq!(asked.tools.len(), 1);
+    assert_eq!(
+        &asked.messages[..sent.len()],
+        &sent[..],
+        "le préfixe tel qu'envoyé"
+    );
+    assert_eq!(asked.messages.len(), sent.len() + 1);
+    let last = asked.messages.last().unwrap().text();
+    assert!(last.starts_with("<consigne-de-compaction>"), "{last}");
+    assert!(last.contains("module de compaction"), "{last}");
+    assert!(
+        last.contains("jusqu'au message qui commence par « réponse"),
+        "{last}"
+    );
+
+    let chat = hashes_of(&d, "chat").await;
+    let compaction = hashes_of(&d, "compaction").await;
+    assert_eq!(chat, [(fp.system_hash.clone(), fp.tools_hash.clone())]);
+    assert_eq!(compaction, chat, "même système, mêmes outils");
+}
+
+/// #236 : un résumé inutilisable sur le préfixe passe la main au résumeur classique,
+/// et le bilan le dit ; `never` et un cache froid ne le tentent pas.
+#[tokio::test]
+async fn a_failed_prefix_summary_falls_back_to_the_summarizer() {
+    let (_dir, d, p) = context().await;
+    d.services
+        .publish_config("test", |c| {
+            c.context.compaction_on_prefix = penelope_kernel::config::PrefixCompaction::Always;
+            Ok(vec!["context.compaction_on_prefix".into()])
+        })
+        .unwrap();
+    let sid = long_session(&d).await;
+    warm_conversation(&d, &sid, "openrouter:deepseek/deepseek-v4-pro").await;
+    p.reply("Voici le résumé, en prose.");
+    p.reply(SUMMARY);
+    let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+    assert_eq!(r.published, 1, "{r:?}");
+    assert!(
+        r.recovered
+            .iter()
+            .any(|m| m.contains("préfixe de la conversation écarté")),
+        "{r:?}"
+    );
+    assert_eq!(
+        summarizer_requests(&p).len(),
+        1,
+        "le résumeur a pris la suite"
+    );
+}
+
+/// `auto` sans prix connus au catalogue : le résumeur classique, comme avant.
+#[tokio::test]
+async fn auto_without_prices_keeps_the_summarizer() {
+    let (_dir, d, p) = context().await;
+    let sid = long_session(&d).await;
+    warm_conversation(&d, &sid, "openrouter:deepseek/deepseek-v4-pro").await;
+    p.reply(SUMMARY);
+    let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+    assert_eq!(r.published, 1, "{r:?}");
+    assert_eq!(summarizer_requests(&p).len(), 1);
+}
+
+/// `auto` avec les prix du catalogue : le préfixe relu au prix du cache l'emporte sur un
+/// résumeur au prix plein quand le modèle de conversation est bon marché ; un grand
+/// modèle cher en sortie laisse le résumé au résumeur.
+#[tokio::test]
+async fn auto_picks_the_cheaper_call() {
+    let (_dir, d, p) = context().await;
+    let price = |id: &str, prompt: f64, cached: f64, completion: f64| {
+        let mut info = ModelInfo::minimal(id, "test", 128_000);
+        (info.price_prompt, info.price_cached_read) = (prompt, cached);
+        info.price_completion = completion;
+        info
+    };
+    d.services.catalog.upsert(vec![
+        price("deepseek/deepseek-v4-flash", 0.3e-6, 0.03e-6, 1.2e-6),
+        price("deepseek/deepseek-v4-pro", 0.4e-6, 0.04e-6, 1.6e-6),
+        price("anthropic/claude-opus", 5e-6, 0.5e-6, 25e-6),
+    ]);
+    for (model, on_prefix) in [
+        ("openrouter:deepseek/deepseek-v4-pro", true),
+        ("openrouter:anthropic/claude-opus", false),
+    ] {
+        let sid = long_session(&d).await;
+        warm_conversation(&d, &sid, model).await;
+        p.reply(SUMMARY);
+        let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+        assert_eq!(r.published, 1, "{r:?}");
+        assert_eq!(
+            r.model.as_deref() == Some(model),
+            on_prefix,
+            "{model} : {r:?}"
+        );
+    }
 }

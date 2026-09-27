@@ -174,6 +174,16 @@ modèle, historique réécrit, fournisseur amont différent. Quand la cause est 
 elle nomme la tuile qui a bougé : `prefixe:T1` (index des capacités), `prefixe:T2`
 (contexte et mémoire), `prefixe:T1+T2`.
 
+La liste d'outils suit le préfixe : elle est gelée entre deux frontières (#236), et un
+outil décrit en cours de route s'appelle par `tool_call` jusqu'à la suivante. L'appel de
+résumé peut lui aussi relire le cache (`context.compaction_on_prefix`) : il reprend la
+dernière requête de la conversation telle qu'envoyée (même modèle, même prompt système,
+mêmes outils, même historique) et ajoute la consigne de résumé en dernier message ; son
+`system_hash` et son `tools_hash` sont ceux de la conversation. `auto`, le défaut, ne le
+fait que si c'est moins cher que le résumeur selon les prix du catalogue (préfixe au prix
+du cache, même sortie estimée des deux côtés) ; sans préfixe chaud, sur un dépassement
+prouvé ou après un échec, le résumeur classique prend la main.
+
 ## Relire ce que le modèle a lu
 
 Le préfixe stable est réassemblé à chaque tour ; il n'existait donc nulle part une fois

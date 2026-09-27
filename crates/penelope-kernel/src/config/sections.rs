@@ -72,6 +72,22 @@ pub struct Context {
     pub cooldown_ms: Vec<u64>,
     /// Titre de 3 à 6 mots donné par le modèle rapide après le premier échange.
     pub auto_title: bool,
+    /// Appel de résumé sur le préfixe de la conversation (#236) : même modèle, même prompt
+    /// système, mêmes outils et historique tel qu'envoyé, la consigne en dernier message,
+    /// pour relire le cache au lieu de tout repayer. `auto` (le moins cher des deux selon
+    /// les prix du catalogue, cache compris ; sans prix connus, le résumeur), `always`
+    /// (dès que le préfixe est chaud), `never` (toujours le rôle `compaction`).
+    pub compaction_on_prefix: PrefixCompaction,
+}
+
+/// Où se fait l'appel de résumé (`context.compaction_on_prefix`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrefixCompaction {
+    #[default]
+    Auto,
+    Always,
+    Never,
 }
 
 impl Default for Context {
@@ -89,6 +105,7 @@ impl Default for Context {
             background_compaction_margin: 0.10,
             cooldown_ms: vec![60_000, 300_000, 900_000],
             auto_title: true,
+            compaction_on_prefix: PrefixCompaction::Auto,
         }
     }
 }

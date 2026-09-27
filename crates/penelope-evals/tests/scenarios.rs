@@ -98,6 +98,7 @@ scenario_cases! {
     // Cache de prompt (#236) : différence en fin, liste d'outils gelée, compaction.
     prefixe_mise_a_jour => "prefixe-mise-a-jour",
     outils_geles => "outils-geles",
+    compaction_sur_le_prefixe => "compaction-sur-le-prefixe",
     // Les quatre dernières méthodes RPC, contre l'hôte masqué et un faux serveur local.
     rpc_diagnostic => "rpc-diagnostic",
     rpc_autorisation_mcp => "rpc-autorisation-mcp",

@@ -57,6 +57,34 @@ compaction ») n'était appelée que par des tests.
   régénérés : l'outil n'entre plus à cache chaud ; `rpc-sessions` ne relève plus la clé
   gelée.
 
+**Cache de prompt : le résumé relit le préfixe de la conversation (#236).** L'appel de
+résumé avait son propre système, aucun outil, la conversation rendue en un message, souvent
+un autre modèle : tout était relu au prix fort (rôle `compaction` : 110 appels, 5 % de
+cache depuis le 13/09).
+
+- Nouvelle clé `context.compaction_on_prefix` (`auto`, `always`, `never`). Sur le préfixe,
+  la demande reprend la dernière requête de la conversation (modèle du dernier appel,
+  préfixe retenu, liste gelée, historique projeté, même `tool_choice`) et ajoute la
+  consigne de résumé en dernier message, portée repérée par le début du dernier message
+  du lot. Pas de tentative sans préfixe chaud ni liste gelée, sur un modèle de l'abonnement
+  ChatGPT, sur un dépassement prouvé, si la projection ne tient pas, ni au-delà du premier
+  lot ; un échec (sortie invalide, appel d'outil) passe la main au résumeur, et le bilan le
+  dit. L'usage du résumé garde `system_hash` et `tools_hash`.
+- Défaut `auto` : le modèle de conversation coûte plus cher par jeton que celui de
+  `compaction`, mais relu au prix du cache ; `auto` compare les deux estimations aux prix du
+  catalogue (préfixe au prix du cache, lot du résumeur au prix plein, 4 000 tokens de sortie
+  des deux côtés) et garde le résumeur quand un prix manque. Avec un grand modèle cher en
+  sortie, le résumeur reste choisi ; avec `main` = `deepseek-v4-pro` et un cache chaud, le
+  préfixe l'emporte dès que la conversation est longue. `always` sert au banc et aux
+  scénarios.
+- Tests : `a_summary_reads_the_conversation_prefix` (préfixe identique, empreintes égales),
+  `a_failed_prefix_summary_falls_back_to_the_summarizer`,
+  `auto_without_prices_keeps_the_summarizer`, `auto_picks_the_cheaper_call` ; scénario
+  `compaction-sur-le-prefixe` (un seul `system_hash` et `tools_hash` pour la conversation et
+  le résumé).
+- Reste à mesurer sur l'instance : `cacheRatio` du rôle `compaction` avant et après
+  (`penelope usage --by role`).
+
 Closes #236.
 
 ### 1.0.11

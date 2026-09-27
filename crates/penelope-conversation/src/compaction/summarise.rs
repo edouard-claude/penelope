@@ -31,6 +31,8 @@ pub(super) struct Attempt<'a> {
     pub(super) window: u64,
     pub(super) force: bool,
     pub(super) turn_id: Option<&'a str>,
+    /// Essayer d'abord l'appel sur le préfixe de la conversation (#236).
+    pub(super) on_prefix: bool,
 }
 
 /// Modèle inscrit sur un résumé fait sans modèle.
@@ -50,6 +52,11 @@ pub(super) async fn summarise_or_recover(
     report: &mut Report,
 ) -> Result<(SummaryJob, Value, String), Box<(SummaryJob, SummaryFailure)>> {
     let s = &d.services;
+    if at.on_prefix
+        && let Some((summary, used)) = super::on_prefix::summarise(d, &job, at, report).await
+    {
+        return Ok((job, summary, used));
+    }
     let first = match summarise(d, provider, model, &job, at.turn_id).await {
         Ok((summary, cost)) => {
             report.cost_usd += cost;
@@ -182,17 +189,36 @@ async fn summarise(
         model: model.to_string(),
         messages: job.summarizer_messages(),
         stream: true,
-        // Neuf sections de 4 000 caractères au plus, plus le raisonnement éventuel.
-        max_tokens: Some(if effort.as_deref() == Some("none") {
-            8_000
-        } else {
-            16_000
-        }),
+        max_tokens: Some(summary_max_tokens(effort.as_deref())),
         reasoning_effort: effort,
         response_format: structured.then(penelope_context::compaction::summary_response_format),
         session_id: Some(job.session_id.clone()),
         ..Default::default()
     };
+    call_summarizer(d, provider, request, job, turn_id).await
+}
+
+/// Neuf sections de 4 000 caractères au plus, plus le raisonnement éventuel.
+pub(super) fn summary_max_tokens(effort: Option<&str>) -> u32 {
+    if effort == Some("none") {
+        8_000
+    } else {
+        16_000
+    }
+}
+
+/// Envoie une demande de résumé, compte son coût (rôle `compaction`, avec les empreintes
+/// du prompt système et des outils : #236) et valide la sortie.
+pub(super) async fn call_summarizer(
+    d: &Context,
+    provider: &dyn Provider,
+    request: ChatRequest,
+    job: &SummaryJob,
+    turn_id: Option<&str>,
+) -> Result<(Value, f64), SummaryFailure> {
+    let s = &d.services;
+    let model = request.model.clone();
+    let fingerprint = penelope_llm::cache::Fingerprint::of(&request.messages, &request.tools);
     let failed = |e: penelope_llm::types::LlmError| SummaryFailure {
         passing: e.kind.is_retryable(),
         message: e.to_string(),
@@ -202,7 +228,7 @@ async fn summarise(
             .chat_stream(request, CancelToken::new())
             .await
             .map_err(failed)?;
-        collect_stream(rx, model, provider.name(), &s.catalog)
+        collect_stream(rx, &model, provider.name(), &s.catalog)
             .await
             .map_err(failed)
     };
@@ -231,9 +257,17 @@ async fn summarise(
             reasoning: response.usage.reasoning,
             cost_usd: response.cost_usd,
             estimated: response.cost_estimated,
+            system_hash: Some(fingerprint.system_hash),
+            tools_hash: Some(fingerprint.tools_hash),
             ..Default::default()
         })
         .await;
+    if !response.message.tool_calls.is_empty() {
+        return Err(SummaryFailure {
+            message: "le modèle a appelé un outil au lieu de résumer".into(),
+            passing: false,
+        });
+    }
     let summary = penelope_context::compaction::validate_summary(&response.message.text())
         .map_err(|message| SummaryFailure {
             message,
