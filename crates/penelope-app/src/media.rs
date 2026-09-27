@@ -126,6 +126,136 @@ pub fn data_url(path: &Path) -> Result<String, String> {
     ))
 }
 
+/// Une image réduite pour tenir dans les limites du fournisseur (issue #242).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reduction {
+    pub before_bytes: usize,
+    pub before: Option<(u32, u32)>,
+    pub after: Option<(u32, u32)>,
+    /// L'image réduite, en JPEG.
+    pub bytes: Vec<u8>,
+}
+
+/// Grand côté en dessous duquel on ne réduit plus : une capture y deviendrait illisible.
+const MIN_SIDE: u32 = 512;
+
+/// Réduit l'image de `path` si elle dépasse `limits` : `None` si elle passe telle quelle.
+/// Chaque essai part de l'original ; le suivant vise un grand côté plus petit, à
+/// proportion du poids en trop. Une erreur laisse partir l'original (reprise de la 1.0.6
+/// si le fournisseur le refuse).
+pub fn fit_image(
+    shrinker: &dyn penelope_platform::ImageShrinker,
+    path: &Path,
+    limits: penelope_llm::attachment::ImageLimits,
+) -> Result<Option<Reduction>, String> {
+    let original =
+        std::fs::read(path).map_err(|e| format!("image {} illisible : {e}", path.display()))?;
+    let before = image_size(&original);
+    let long = before.map(|(w, h)| w.max(h));
+    if limits.fits(original.len(), long) {
+        return Ok(None);
+    }
+    let dst = path.with_extension("reduite.jpg");
+    let mut side = long.unwrap_or(limits.max_side).min(limits.max_side);
+    let outcome = loop {
+        if let Err(e) = shrinker.shrink(path, &dst, side) {
+            break Err(format!("réduction impossible : {e}"));
+        }
+        let bytes = match std::fs::read(&dst) {
+            Ok(b) => b,
+            Err(e) => break Err(format!("image réduite illisible : {e}")),
+        };
+        let after = image_size(&bytes);
+        if image_mime(&bytes).is_none() {
+            break Err("réduction impossible : le résultat n'est pas une image".into());
+        }
+        if limits.fits(bytes.len(), after.map(|(w, h)| w.max(h))) {
+            break Ok(Some(Reduction {
+                before_bytes: original.len(),
+                before,
+                after,
+                bytes,
+            }));
+        }
+        let excess = limits.max_encoded_bytes as f64
+            / penelope_llm::attachment::encoded_len(bytes.len()) as f64;
+        let next = (side as f64 * excess.sqrt().min(0.9)) as u32;
+        if next < MIN_SIDE {
+            break Err(format!(
+                "toujours trop lourde à {side} px de côté ({} octets)",
+                bytes.len()
+            ));
+        }
+        side = next;
+    };
+    let _ = std::fs::remove_file(&dst);
+    outcome
+}
+
+/// L'image de `path` en URI `data:` pour `model_id`, réduite d'abord si elle dépasse les
+/// limites de son fournisseur (issue #242). La réduction est journalisée
+/// (`media.image_reduced`) ; son échec laisse partir l'original.
+pub async fn model_data_url(
+    s: &Services,
+    path: &Path,
+    model_id: &str,
+    session_id: &str,
+) -> Result<String, String> {
+    let limits = penelope_llm::attachment::image_limits(model_id);
+    let (platform, owned) = (s.platform.clone(), path.to_path_buf());
+    let fitted =
+        tokio::task::spawn_blocking(move || fit_image(platform.images.as_ref(), &owned, limits))
+            .await
+            .unwrap_or_else(|e| Err(format!("réduction interrompue : {e}")));
+    sent_data_url(s, path, model_id, session_id, fitted).await
+}
+
+/// L'URI envoyée après l'essai de réduction : l'image réduite, journalisée, ou l'original.
+async fn sent_data_url(
+    s: &Services,
+    path: &Path,
+    model_id: &str,
+    session_id: &str,
+    fitted: Result<Option<Reduction>, String>,
+) -> Result<String, String> {
+    let r = match fitted {
+        Ok(Some(r)) => r,
+        Ok(None) => return data_url(path),
+        Err(e) => {
+            tracing::warn!(error = %e, model = model_id, "image non réduite : envoyée telle quelle");
+            return data_url(path);
+        }
+    };
+    let dims = |d: Option<(u32, u32)>| d.map(|(w, h)| format!("{w}x{h}"));
+    tracing::info!(
+        model = model_id,
+        before = r.before_bytes,
+        after = r.bytes.len(),
+        "image réduite pour le fournisseur"
+    );
+    let _ = s
+        .events
+        .append(
+            penelope_kernel::event::EventDraft::new(
+                "media.image_reduced",
+                serde_json::json!({
+                    "model": model_id,
+                    "path": path.display().to_string(),
+                    "before_bytes": r.before_bytes,
+                    "after_bytes": r.bytes.len(),
+                    "before": dims(r.before),
+                    "after": dims(r.after),
+                }),
+            )
+            .session(session_id),
+        )
+        .await;
+    Ok(format!(
+        "data:image/jpeg;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&r.bytes)
+    ))
+}
+
 /// Dépose un fichier reçu dans le workspace (`<workspace>/telegram/`), sous un nom sûr.
 pub fn save_attachment(s: &Services, name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
     let workspace = crate::helpers::default_workspaces(s)
@@ -255,5 +385,122 @@ mod tests {
         assert_eq!(safe_file_name(".env"), "env");
         assert_eq!(safe_file_name("a\u{0}b:c.txt"), "a_b_c.txt");
         assert_eq!(safe_file_name(""), "fichier");
+    }
+
+    /// Un JPEG de `w`×`h` pixels (en-tête SOF0) complété jusqu'à `len` octets.
+    fn jpeg(w: u32, h: u32, len: usize) -> Vec<u8> {
+        let mut b = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00];
+        b.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x11, 0x08]);
+        b.extend_from_slice(&(h as u16).to_be_bytes());
+        b.extend_from_slice(&(w as u16).to_be_bytes());
+        b.extend_from_slice(&[3; 13]);
+        b.resize(len.max(b.len()), 0);
+        b
+    }
+
+    /// Réduction déterministe : un quart d'octet par pixel, format 4:3 ; retient les
+    /// côtés demandés.
+    #[derive(Default)]
+    struct FakeShrinker(std::sync::Mutex<Vec<u32>>);
+
+    impl penelope_platform::ImageShrinker for FakeShrinker {
+        fn shrink(&self, _src: &Path, dst: &Path, side: u32) -> penelope_platform::Result<()> {
+            self.0.lock().unwrap().push(side);
+            let h = side * 3 / 4;
+            std::fs::write(dst, jpeg(side, h, (side * h / 3) as usize))?;
+            Ok(())
+        }
+    }
+
+    /// #242 : une photo trop lourde pour Anthropic est réduite, au besoin en plusieurs
+    /// essais, jusqu'à passer ; l'original reste intact.
+    #[test]
+    fn an_oversized_image_is_shrunk_until_it_fits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.jpg");
+        std::fs::write(&path, jpeg(4_000, 3_000, 6_000_000)).unwrap();
+        let limits = penelope_llm::attachment::ImageLimits::ANTHROPIC;
+        let shrinker = FakeShrinker::default();
+        let r = fit_image(&shrinker, &path, limits)
+            .unwrap()
+            .expect("réduite");
+        assert_eq!(*shrinker.0.lock().unwrap(), vec![4_000, 3_600]);
+        assert_eq!(r.before, Some((4_000, 3_000)));
+        assert_eq!(r.after, Some((3_600, 2_700)));
+        assert_eq!(r.before_bytes, 6_000_000);
+        assert!(limits.fits(r.bytes.len(), Some(3_600)));
+        assert_eq!(
+            std::fs::read(&path).unwrap().len(),
+            6_000_000,
+            "original gardé"
+        );
+        assert!(
+            !path.with_extension("reduite.jpg").exists(),
+            "copie de travail retirée"
+        );
+    }
+
+    /// Ce qui passe déjà ne touche pas à l'outil ; un côté trop grand suffit à réduire.
+    #[test]
+    fn an_image_within_limits_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.jpg");
+        let limits = penelope_llm::attachment::ImageLimits::ANTHROPIC;
+        let shrinker = FakeShrinker::default();
+        std::fs::write(&path, jpeg(2_000, 1_500, 1_000_000)).unwrap();
+        assert_eq!(fit_image(&shrinker, &path, limits).unwrap(), None);
+        assert!(shrinker.0.lock().unwrap().is_empty());
+        std::fs::write(&path, jpeg(9_000, 300, 100_000)).unwrap();
+        fit_image(&shrinker, &path, limits)
+            .unwrap()
+            .expect("réduite");
+        assert_eq!(
+            shrinker.0.lock().unwrap()[0],
+            8_000,
+            "ramenée au côté permis"
+        );
+    }
+
+    /// Réduction journalisée avec les tailles avant et après ; échec (stub Linux, `sips`
+    /// en panne) : l'original part tel quel, comme en 1.0.6, sans événement.
+    #[tokio::test]
+    async fn a_reduction_is_journaled_and_a_failure_sends_the_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock =
+            std::sync::Arc::new(penelope_kernel::clock::SystemClock);
+        let s = Services::for_tests(dir.path().join("home"), clock)
+            .await
+            .unwrap();
+        let path = dir.path().join("p.jpg");
+        std::fs::write(&path, jpeg(4_000, 3_000, 6_000_000)).unwrap();
+        let model = "openrouter:anthropic/claude-sonnet-4.5";
+
+        // Services de test : pas d'outil système, l'original part.
+        let url = model_data_url(&s, &path, model, "s1").await.unwrap();
+        assert_eq!(url, data_url(&path).unwrap());
+        let events = s
+            .events
+            .session_events_of_kind("s1", "media.image_reduced")
+            .await
+            .unwrap();
+        assert!(events.is_empty());
+
+        let limits = penelope_llm::attachment::image_limits(model);
+        let fitted = fit_image(&FakeShrinker::default(), &path, limits);
+        let url = sent_data_url(&s, &path, model, "s1", fitted).await.unwrap();
+        assert!(url.starts_with("data:image/jpeg;base64,"));
+        assert!(url.len() <= limits.max_encoded_bytes + 32);
+        let events = s
+            .events
+            .session_events_of_kind("s1", "media.image_reduced")
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        let p = &events[0].payload;
+        assert_eq!(p["model"], model);
+        assert_eq!(p["before_bytes"], 6_000_000);
+        assert_eq!(p["before"], "4000x3000");
+        assert_eq!(p["after"], "3600x2700");
+        assert_eq!(p["after_bytes"], 3_600 * 2_700 / 3);
     }
 }

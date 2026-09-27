@@ -17,6 +17,7 @@ pub mod codesign;
 pub mod dirs;
 pub mod handoff;
 pub mod host;
+pub mod image;
 pub mod ipc;
 pub mod ocr;
 pub mod power;
@@ -28,6 +29,7 @@ pub mod terminal;
 pub mod watcher;
 
 pub use dirs::{Dir, Directories, RootedDirs, resolve_directories, slugify, validate_slug};
+pub use image::ImageShrinker;
 pub use power::{PowerManager, SleepGuard};
 pub use process::{ProcessHost, ProcessSpec, UnixProcessHost, which};
 pub use sandbox::{Coverage, Profile, ProfileKind, Sandbox};
@@ -88,6 +90,8 @@ pub struct Platform {
     pub sandbox: Box<dyn Sandbox>,
     pub power: Box<dyn PowerManager>,
     pub processes: UnixProcessHost,
+    /// Réduction d'une image trop lourde pour le fournisseur (issue #242).
+    pub images: Box<dyn ImageShrinker>,
 }
 
 impl Platform {
@@ -105,6 +109,7 @@ impl Platform {
             sandbox: backend::sandbox(),
             power: backend::power_manager(),
             processes,
+            images: backend::image_shrinker(),
         })
     }
 
@@ -119,6 +124,7 @@ impl Platform {
             sandbox: backend::sandbox(),
             power: Box::new(power::CountingPower::noop()),
             processes,
+            images: Box::new(image::NoShrinker),
             dirs,
         })
     }

@@ -63,3 +63,32 @@ async fn an_undownloadable_media_says_so() {
         assert_eq!(g.daemon.services.turns.pending_count().await.unwrap(), 0);
     }
 }
+
+/// #242 : une photo de 12 Mo n'est plus refusée quand Telegram en propose une taille plus
+/// légère ; c'est elle qui est téléchargée et part en tour. Aucune taille sous la limite
+/// (ci-dessus) : le refus reste.
+#[tokio::test]
+async fn a_heavy_photo_falls_back_on_a_lighter_telegram_size() {
+    let (_d, g, t, _p) = gateway().await;
+    let mut u = updates::photo(7_201, OWNER, OWNER, None);
+    u["message"]["photo"] = json!([
+        {"file_id": "p-s", "width": 320, "height": 240, "file_size": 20_000},
+        {"file_id": "p-m", "width": 1280, "height": 960, "file_size": 3_000_000},
+        {"file_id": "p-x", "width": 4000, "height": 3000, "file_size": 12_000_000},
+    ]);
+    t.set_file("p-m", JPEG).await;
+    g.process_update(&u).await.unwrap();
+    let queued =
+        eventually(|| async { g.daemon.services.turns.pending_count().await.unwrap() == 1 }).await;
+    assert!(queued, "la photo part en tour");
+    let fetched: Vec<_> = t
+        .calls_to(tg::GET_FILE)
+        .await
+        .iter()
+        .map(|c| c["file_id"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(fetched, vec!["p-m"], "la plus grande taille sous 10 Mo");
+    let _ = g.flush_outbox().await;
+    let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+    assert!(sent.iter().all(|m| !m.contains("trop lourde")), "{sent:?}");
+}
