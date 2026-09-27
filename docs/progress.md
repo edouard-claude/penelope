@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.5
+### 1.0.6
 
 Une photo refusée par le fournisseur (400 : image trop lourde, format refusé, illisible)
 faisait échouer le tour, **et tous les suivants** : vérifié par un test rouge avant le
@@ -44,6 +44,8 @@ compaction sur `ContextLength`.
 - Hors lot : réduire à l'entrée une photo trop lourde (point 3 de l'issue).
 
 Closes #231.
+
+### 1.0.5
 
 Une planification qui échouait à chaque exécution envoyait une alerte Telegram à chaque
 échec : 24 messages identiques par jour pour une planification horaire cassée, que le
