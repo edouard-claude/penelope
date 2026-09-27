@@ -1,0 +1,59 @@
+name = "rpc-skills"
+description = """Les skills par la socket locale, comme `penelope skill …` : une skill utilisateur
+déposée à la main dans le répertoire des skills (version 1.1.0, avec la sauvegarde de sa
+version 1.0.0) est relue sans attendre l'entretien (`skill.reload`), listée, montrée ;
+`skill.rollback` remet la version sauvegardée, la relit, et `skill.show` montre la 1.0.0 ;
+un second retour, sans sauvegarde, est refusé. Le monde après : la skill en 1.0.0."""
+pin_model = "main"
+
+[[files]]
+root = "skills"
+path = "releve-compteurs/SKILL.md"
+content = """---
+name: releve-compteurs
+description: Relevé mensuel des compteurs d'eau et d'électricité
+version: 1.1.0
+---
+Relever les deux compteurs, comparer au mois précédent, signaler un écart de plus de 20 %.
+"""
+
+[[files]]
+root = "skills"
+path = "releve-compteurs/SKILL.2026-01-01.bak.md"
+content = """---
+name: releve-compteurs
+description: Relevé mensuel des compteurs d'eau
+version: 1.0.0
+---
+Relever le compteur d'eau.
+"""
+
+[[steps]]
+kind = "rpc"
+method = "skill.reload"
+
+[[steps]]
+kind = "rpc"
+method = "skill.list"
+pick = ["/*/name", "/*/version", "/*/scope"]
+
+[[steps]]
+kind = "rpc"
+method = "skill.show"
+params = { name = "releve-compteurs" }
+
+[[steps]]
+kind = "rpc"
+method = "skill.rollback"
+params = { name = "releve-compteurs" }
+
+[[steps]]
+kind = "rpc"
+method = "skill.show"
+params = { name = "releve-compteurs" }
+
+[[steps]]
+kind = "rpc"
+method = "skill.rollback"
+params = { name = "releve-compteurs" }
+error = true

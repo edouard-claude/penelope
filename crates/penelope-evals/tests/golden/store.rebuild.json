@@ -1,0 +1,17 @@
+{
+  "method": "store.rebuild",
+  "params": {},
+  "response": {
+    "result": {
+      "messages_fts": "integer",
+      "memory_entries": "integer",
+      "audit": {
+        "checked": "integer",
+        "purged": "integer",
+        "ok": "bool",
+        "first_broken": "null",
+        "detail": "null"
+      }
+    }
+  }
+}

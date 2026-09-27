@@ -1,0 +1,97 @@
+name = "rpc-autorisation-mcp"
+description = """Le parcours OAuth d'un serveur MCP HTTP, comme `penelope mcp auth`, en entier contre
+un faux serveur local (`[[http]]`, 127.0.0.1) qui joue à la fois la ressource protégée et
+le serveur d'autorisation. Le serveur `notes` est déclaré sur `{{http}}/mcp` ; un serveur
+inconnu est refusé. `mcp.auth` découvre la ressource (RFC 9728), les métadonnées du
+serveur d'autorisation (RFC 8414), enregistre le client (RFC 7591) et rend l'URL
+d'autorisation, PKCE S256, la demande restant en attente dans `kv`. Le propriétaire
+l'ouvre (`open`) : le serveur d'autorisation le renvoie vers l'adresse de retour avec un
+code et le même `state`. `mcp.auth` avec cette adresse échange le code contre un jeton
+(indicateur de ressource compris), range l'autorisation en secret et redémarre le
+serveur ; la même adresse rejouée est refusée (usage unique). Une seconde demande
+réutilise le client enregistré, sans nouvel enregistrement. Le monde après : les
+requêtes reçues par le faux serveur, dans l'ordre, les valeurs tirées au sort masquées ;
+le secret `mcp.notes.oauth` ; les demandes en attente."""
+pin_model = "main"
+masks = ["state=[A-Za-z0-9_~.%-]+", "code_challenge=[A-Za-z0-9_~.%-]+"]
+
+[[mcp_servers]]
+name = "notes"
+tools = ["search_notes"]
+
+[[http]]
+path = "/.well-known/oauth-protected-resource/mcp"
+method = "GET"
+body = """{"resource": "{{http}}/mcp", "authorization_servers": ["{{http}}"], "scopes_supported": ["notes.read", "notes.write"]}"""
+
+[[http]]
+path = "/.well-known/oauth-authorization-server"
+method = "GET"
+body = """{"issuer": "{{http}}", "authorization_endpoint": "{{http}}/authorize", "token_endpoint": "{{http}}/token", "registration_endpoint": "{{http}}/register", "code_challenge_methods_supported": ["S256"], "grant_types_supported": ["authorization_code", "refresh_token"], "token_endpoint_auth_methods_supported": ["none"]}"""
+
+[[http]]
+path = "/register"
+method = "POST"
+status = 201
+body = """{"client_id": "client-du-scenario", "token_endpoint_auth_method": "none"}"""
+
+[[http]]
+path = "/authorize"
+method = "GET"
+location = "{{q:redirect_uri}}?code=code-du-scenario&state={{q:state}}"
+
+[[http]]
+path = "/token"
+method = "POST"
+body = """{"access_token": "jeton-du-scenario", "token_type": "Bearer", "expires_in": 3600, "refresh_token": "renouvellement-du-scenario", "scope": "notes.read"}"""
+
+[[observe]]
+name = "autorisations en attente"
+sql = "SELECT count(*) AS n FROM kv WHERE k LIKE 'mcp.oauth.pending.%'"
+
+[[observe]]
+name = "clients enregistrés"
+sql = "SELECT v FROM kv WHERE k LIKE 'mcp.oauth.client.%'"
+
+[[steps]]
+kind = "rpc"
+method = "mcp.add"
+params = { name = "notes", toml = "transport = \"http\"\nurl = \"{{http}}/mcp\"\nscopes = [\"notes.read\"]\n" }
+
+[[steps]]
+kind = "rpc"
+method = "mcp.auth"
+params = { name = "absent" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "mcp.auth"
+params = { name = "notes" }
+bind = "demande"
+
+[[steps]]
+kind = "open"
+url = "$demande.url"
+bind = "retour"
+
+[[steps]]
+kind = "rpc"
+method = "mcp.auth"
+params = { name = "notes", callback = "$retour.location" }
+
+[[steps]]
+kind = "rpc"
+method = "mcp.auth"
+params = { name = "notes", callback = "$retour.location" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "secret.list"
+
+[[steps]]
+kind = "rpc"
+method = "mcp.auth"
+params = { name = "notes" }
+pick = ["/server", "/scopes"]

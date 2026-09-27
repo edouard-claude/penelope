@@ -6,41 +6,9 @@
 //!  auto   tout sans demande, sauf le destructif et ce qu'un serveur MCP impose
 //! ```
 
-use crate::runtime::Services;
+use penelope_app::services::Services;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ApprovalMode {
-    Ask,
-    Reads,
-    Auto,
-}
-
-impl ApprovalMode {
-    pub fn parse(s: &str) -> Option<Self> {
-        Some(match s.trim() {
-            "ask" | "demander" | "tout" => ApprovalMode::Ask,
-            "reads" | "lectures" | "defaut" | "défaut" => ApprovalMode::Reads,
-            "auto" => ApprovalMode::Auto,
-            _ => return None,
-        })
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ApprovalMode::Ask => "ask",
-            ApprovalMode::Reads => "reads",
-            ApprovalMode::Auto => "auto",
-        }
-    }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            ApprovalMode::Ask => "demander tout",
-            ApprovalMode::Reads => "lectures sans demande",
-            ApprovalMode::Auto => "tout sauf le destructif",
-        }
-    }
-}
+use penelope_agent::ApprovalMode;
 
 fn key(session_id: &str) -> String {
     format!("session.approval_mode.{session_id}")
@@ -58,6 +26,16 @@ pub async fn of_session(s: &Services, session_id: &str) -> ApprovalMode {
         .and_then(|v| ApprovalMode::parse(&v));
     own.or_else(|| ApprovalMode::parse(&s.config.config().tools.approval_mode))
         .unwrap_or(ApprovalMode::Reads)
+}
+
+/// Le port `SessionModes` de la boucle : le kv de la session (épopée #208, T09).
+pub struct KvModes(pub std::sync::Arc<Services>);
+
+#[async_trait::async_trait]
+impl penelope_agent::SessionModes for KvModes {
+    async fn of_session(&self, session_id: &str) -> ApprovalMode {
+        of_session(&self.0, session_id).await
+    }
 }
 
 /// Fixe le mode d'une session ; `None` : retour au mode de la configuration.
@@ -78,55 +56,6 @@ pub async fn set(
             Ok(())
         })
         .await
-}
-
-/// Un brouillon de plan ne lance rien et reste révisable : sa persistance locale
-/// est autorisée d'avance. Le gate « vas-y » garde l'approbation du propriétaire.
-pub fn local_draft_allow(tool: &str) -> Option<String> {
-    (tool == "workflow_plan").then(|| "brouillon local sans exécution".into())
-}
-
-/// Autorisation déclarée d'avance dans la configuration (issue #111) : une commande
-/// `shell_exec` d'une famille de `tools.shell_allow`, ou de `tools.shell_allow_network`
-/// quand elle demande le réseau. Renvoie la raison, pour la trace.
-pub fn declared_allow(
-    cfg: &penelope_kernel::config::Config,
-    tool: &str,
-    args: &serde_json::Value,
-) -> Option<String> {
-    if tool != "shell_exec" {
-        return None;
-    }
-    let command = args.get("command").and_then(|v| v.as_str())?.trim();
-    let (families, key) = if crate::executor::wants_network(tool, args) {
-        (&cfg.tools.shell_allow_network, "tools.shell_allow_network")
-    } else {
-        (&cfg.tools.shell_allow, "tools.shell_allow")
-    };
-    // Une liste `a && b` est autorisée d'avance quand **chaque** étape l'est, comme pour
-    // les règles (issue #150) : une famille déclarée ne couvre pas ses voisines.
-    let list = penelope_hitl::cmdline::list(command)?;
-    let mut matched: Vec<String> = Vec::new();
-    for step in &list.steps {
-        // Une seule commande : la famille déclarée doit la couvrir, lecture comprise —
-        // en mode « demander tout », `tools.shell_allow` vaut aussi pour `ls` (#111).
-        if list.steps.len() > 1 && penelope_hitl::cmdline::needs_no_rule(step) {
-            continue;
-        }
-        let f = families
-            .iter()
-            .find(|f| penelope_hitl::policy::family_covers(f.trim(), step))?;
-        if !matched.contains(f) {
-            matched.push(f.clone());
-        }
-    }
-    if matched.is_empty() {
-        return None;
-    }
-    Some(format!(
-        "autorisé d'avance : famille(s) « {} » de `{key}`",
-        matched.join(" », « ")
-    ))
 }
 
 /// Ce qui rend une règle inutile, pour `penelope policies` et `/policies` (issue #111) :
@@ -171,7 +100,7 @@ pub fn rule_note(r: &penelope_hitl::PolicyRule, now_ms: i64) -> Option<String> {
 
 #[cfg(test)]
 mod list_allow_tests {
-    use super::*;
+    use penelope_agent::{declared_allow, local_draft_allow};
 
     fn cfg_with(allow: &[&str], network: &[&str]) -> penelope_kernel::config::Config {
         let mut c = penelope_kernel::config::Config::default();

@@ -176,74 +176,53 @@ impl EventLog {
         let ts = self.clock.now_rfc3339();
         let event = self
             .store
-            .write(move |tx| {
-                // Journal vide : GENESIS. Toute autre erreur de lecture remonte : un
-                // maillon chaîné sur GENESIS au milieu du journal serait indiscernable
-                // d'une altération, et la chaîne ne se répare pas (issue #47).
-                let prev_hash: String = tx
-                    .query_row(
-                        "SELECT hash FROM events ORDER BY id DESC LIMIT 1",
-                        [],
-                        |r| r.get(0),
-                    )
-                    .optional()?
-                    .unwrap_or_else(|| GENESIS.to_string());
-
-                let seq: i64 = match draft.session_id.as_deref() {
-                    Some(sid) => tx.query_row(
-                        "SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE session_id = ?1",
-                        [sid],
-                        |r| r.get(0),
-                    )?,
-                    None => tx.query_row(
-                        "SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE session_id IS NULL",
-                        [],
-                        |r| r.get(0),
-                    )?,
-                };
-
-                let payload_s = canonical_json(&draft.payload);
-                let hash = compute_hash(
-                    &prev_hash,
-                    draft.session_id.as_deref(),
-                    draft.run_id.as_deref(),
-                    seq,
-                    &ts,
-                    &draft.kind,
-                    &draft.payload,
-                );
-
-                tx.execute(
-                    "INSERT INTO events(session_id, run_id, seq, ts, kind, payload, hash, prev_hash)
-                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
-                    params![
-                        draft.session_id,
-                        draft.run_id,
-                        seq,
-                        ts,
-                        draft.kind,
-                        payload_s,
-                        hash,
-                        prev_hash
-                    ],
-                )?;
-                let id = tx.last_insert_rowid();
-
-                Ok(Event {
-                    id,
-                    session_id: draft.session_id,
-                    run_id: draft.run_id,
-                    seq,
-                    ts,
-                    kind: draft.kind,
-                    payload: draft.payload,
-                    hash,
-                    prev_hash,
-                })
-            })
+            .write(move |tx| insert(tx, draft, ts))
             .await
             .map_err(KernelError::from)?;
         let _ = self.live.send(event.clone());
+        Ok(event)
+    }
+
+    /// Ajoute un événement dans la transaction de l'appelant (épopée #208, T2).
+    ///
+    /// Synchrone, pour une closure de `Store::write` : l'événement et les écritures qui
+    /// l'accompagnent sont commités ou annulés ensemble. Deux différences avec
+    /// [`EventLog::append`] : l'événement n'est **pas** diffusé aux abonnés (la transaction
+    /// peut encore être annulée ; `range` le rend après le commit), et le verrou d'ordre
+    /// n'est pas pris (on est déjà sur le thread écrivain, qui sérialise les insertions).
+    pub fn append_in(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        draft: EventDraft,
+    ) -> penelope_store::Result<Event> {
+        insert(tx, draft, self.clock.now_rfc3339())
+    }
+
+    /// Ajoute un événement, puis exécute `after` dans une **seconde** transaction du même
+    /// thread écrivain, sous le même verrou d'ordre, avant la diffusion (épopée #208, T2).
+    ///
+    /// L'événement est la vérité : il est commité d'abord et le reste quoi qu'il arrive à
+    /// `after`. Une erreur de `after` annule ses seules écritures et remonte à l'appelant ;
+    /// l'événement est tout de même diffusé, puisqu'il est dans le journal. Le cache que
+    /// `after` maintient peut donc être en retard, jamais en avance : il se rattrape depuis
+    /// le journal (`source-de-verite.md` §2.4).
+    pub async fn append_with<F>(&self, draft: EventDraft, after: F) -> Result<Event>
+    where
+        F: FnOnce(&rusqlite::Transaction<'_>, &Event) -> penelope_store::Result<()>
+            + Send
+            + 'static,
+    {
+        let _ordered = self.live_order.lock().await;
+        let ts = self.clock.now_rfc3339();
+        let event = self
+            .store
+            .write(move |tx| insert(tx, draft, ts))
+            .await
+            .map_err(KernelError::from)?;
+        let seen = event.clone();
+        let followed = self.store.write(move |tx| after(tx, &seen)).await;
+        let _ = self.live.send(event.clone());
+        followed.map_err(KernelError::from)?;
         Ok(event)
     }
 
@@ -409,6 +388,77 @@ impl EventLog {
             .read(|c| Ok(c.query_row("SELECT count(*) FROM events", [], |r| r.get(0))?))
             .await?)
     }
+}
+
+/// Chaîne et insère un événement dans `tx`. Seul chemin d'écriture du journal.
+fn insert(
+    tx: &rusqlite::Transaction<'_>,
+    draft: EventDraft,
+    ts: String,
+) -> penelope_store::Result<Event> {
+    // Journal vide : GENESIS. Toute autre erreur de lecture remonte : un maillon chaîné
+    // sur GENESIS au milieu du journal serait indiscernable d'une altération, et la
+    // chaîne ne se répare pas (issue #47).
+    let prev_hash: String = tx
+        .query_row(
+            "SELECT hash FROM events ORDER BY id DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| GENESIS.to_string());
+
+    let seq: i64 = match draft.session_id.as_deref() {
+        Some(sid) => tx.query_row(
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE session_id = ?1",
+            [sid],
+            |r| r.get(0),
+        )?,
+        None => tx.query_row(
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE session_id IS NULL",
+            [],
+            |r| r.get(0),
+        )?,
+    };
+
+    let payload_s = canonical_json(&draft.payload);
+    let hash = compute_hash(
+        &prev_hash,
+        draft.session_id.as_deref(),
+        draft.run_id.as_deref(),
+        seq,
+        &ts,
+        &draft.kind,
+        &draft.payload,
+    );
+
+    tx.execute(
+        "INSERT INTO events(session_id, run_id, seq, ts, kind, payload, hash, prev_hash)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+        params![
+            draft.session_id,
+            draft.run_id,
+            seq,
+            ts,
+            draft.kind,
+            payload_s,
+            hash,
+            prev_hash
+        ],
+    )?;
+    let id = tx.last_insert_rowid();
+
+    Ok(Event {
+        id,
+        session_id: draft.session_id,
+        run_id: draft.run_id,
+        seq,
+        ts,
+        kind: draft.kind,
+        payload: draft.payload,
+        hash,
+        prev_hash,
+    })
 }
 
 fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
@@ -674,3 +724,6 @@ mod float_payloads {
         assert_eq!(report.checked, payloads.len() as u64);
     }
 }
+
+#[cfg(test)]
+mod transactional;

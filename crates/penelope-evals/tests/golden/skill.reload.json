@@ -1,0 +1,10 @@
+{
+  "method": "skill.reload",
+  "params": {},
+  "response": {
+    "result": {
+      "generation": "integer",
+      "skills": "integer"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+name = "tour-simple"
+description = """Un message du propriétaire, le classifieur choisit l'alias, le modèle répond :
+le tour de base, avec le routage normal (un « low » ne rend pas la session collante)."""
+
+[[steps]]
+kind = "message"
+text = "bonjour, où en est la facturation du mois ?"

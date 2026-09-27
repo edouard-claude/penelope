@@ -1,0 +1,91 @@
+name = "rpc-diagnostic"
+description = """Le diagnostic par la socket locale, comme `penelope doctor`, joué en entier après un
+tour, une skill déposée et un serveur MCP déclaré. Seuls les contrôles propres à Pénélope
+sont comparés, par une liste explicite (`only`) dans l'ordre où `doctor` les rend :
+propriétaire, conversations, secrets attendus, intégrité de la base et chaîne d'audit,
+écrivain, clés inconnues, rétention, stabilité du prompt, journal, jobs d'outils, jour
+budgétaire, bac à sable, workflows, skills (la skill déposée comptée), juge, rédacteur,
+mémoire, retour OAuth et serveur MCP, embeddings, cohérence de la configuration, secrets
+des journaux, vault, mises à jour, planifications, sauvegarde, boucles de fond.
+
+Tout le reste dépend de l'hôte et en est écarté, y compris ce qu'un hôte futur ajoutera :
+service, disque, binaires et dépendances, contrôles propres à l'OS, réseau, signature et
+installation du binaire, alimentation ; et deux contrôles qui lisent la machine sans le
+dire dans leur identifiant. `voice` cherche `ffmpeg` (absent des runners de CI : « `ffmpeg`
+absent », correction `brew install ffmpeg`, là où le poste rend une synthèse d'essai) ;
+`clock` compare l'horloge du scénario à celle du système. Une liste de refus (`without`)
+laissait passer ces deux-là : la CI de v1 a échoué sur ce scénario le 26/09 (s-doctor-ci)."""
+pin_model = "main"
+
+[[mcp_servers]]
+name = "forge"
+tools = ["create_pr", "list_issues"]
+
+[[files]]
+root = "skills"
+path = "releve-compteurs/SKILL.md"
+content = """---
+name: releve-compteurs
+description: Relevé mensuel des compteurs d'eau et d'électricité
+version: 1.1.0
+---
+Relever les deux compteurs, comparer au mois précédent, signaler un écart de plus de 20 %.
+"""
+
+[[steps]]
+kind = "message"
+text = "bonjour"
+
+[[steps]]
+kind = "rpc"
+method = "skill.reload"
+
+[[steps]]
+kind = "rpc"
+method = "mcp.add"
+params = { name = "forge", toml = "command = \"/opt/mcp/forge\"\ntimeout = \"20s\"\n" }
+
+[[steps]]
+kind = "rpc"
+method = "doctor"
+only = { id = [
+    "secrets",
+    "owner",
+    "telegram.allowed_chats",
+    "secret.*",
+    "db",
+    "audit",
+    "store.writer",
+    "config.unknown",
+    "retention",
+    "prompt.stability",
+    "history.journal",
+    "tool_jobs",
+    "budget.day",
+    "models.tools",
+    # Pas de "sandbox.*" : le bac à sable dépend de l'OS (macOS : chemins refusés ;
+    # Linux, sans backend : « profil full »), la CI Linux le rendait différent.
+    "effects",
+    "workflows",
+    "skills",
+    "telegram_forms",
+    "shell_lines",
+    "approval_judge",
+    "redactor",
+    "reasoning_effort",
+    "secret_roundtrip",
+    "skills.requirements",
+    "memory.size",
+    "telegram.home",
+    "mcp.*",
+    "embedding",
+    "vault_index",
+    "config_coherence",
+    "logs_secrets",
+    "stored_secrets",
+    "vault_git",
+    "upgrade_pending",
+    "schedules",
+    "backup",
+    "tasks",
+] }

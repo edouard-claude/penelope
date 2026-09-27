@@ -127,6 +127,8 @@ pub mod method {
     pub const SESSION_EXPORT: &str = "session.export";
     /// Purge RGPD : efface le contenu d'une session, garde la chaîne d'audit (issue #46).
     pub const SESSION_PURGE: &str = "session.purge";
+    /// Lecture préalable à la purge : les forks qui perdraient leur début, sans rien effacer.
+    pub const SESSION_PURGE_PREVIEW: &str = "session.purge_preview";
     /// Modèle d'une session : lecture, épinglage d'un alias, retour à l'automatique.
     pub const SESSION_MODEL: &str = "session.model";
     /// Mode d'approbation d'une session : `ask`, `reads`, `auto` (issue #111).
@@ -230,6 +232,10 @@ pub mod method {
     pub const AUDIT_VERIFY: &str = "audit.verify";
     /// Reconstitue une requête : prompt système, messages, outils (issue #205).
     pub const AUDIT_SHOW: &str = "audit.show";
+    /// Les caches de la conversation contre le journal (épopée #208, T12).
+    pub const HISTORY_VERIFY: &str = "history.verify";
+    /// Les caches de la conversation refondus depuis le journal (épopée #208, T13).
+    pub const HISTORY_REINDEX: &str = "history.reindex";
     pub const STORE_REBUILD: &str = "store.rebuild";
     pub const USAGE: &str = "usage";
     pub const TAIL: &str = "tail";
@@ -262,6 +268,7 @@ pub mod method {
         SESSION_COMPACT,
         SESSION_EXPORT,
         SESSION_PURGE,
+        SESSION_PURGE_PREVIEW,
         SESSION_MODEL,
         SESSION_MODE,
         SESSION_PROJECT,
@@ -342,6 +349,8 @@ pub mod method {
         RESTORE,
         AUDIT_VERIFY,
         AUDIT_SHOW,
+        HISTORY_VERIFY,
+        HISTORY_REINDEX,
         STORE_REBUILD,
         USAGE,
         TAIL,

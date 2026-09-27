@@ -1,0 +1,9 @@
+{
+  "method": "mem.reindex",
+  "params": {},
+  "response": {
+    "result": {
+      "entries": "integer"
+    }
+  }
+}

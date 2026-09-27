@@ -1,0 +1,15 @@
+{
+  "method": "wf.list",
+  "params": {},
+  "response": {
+    "result": [
+      {
+        "name": "string",
+        "scope": "string",
+        "steps": "integer",
+        "id": "string",
+        "runsHere": "bool"
+      }
+    ]
+  }
+}

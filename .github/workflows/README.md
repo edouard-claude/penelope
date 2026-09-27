@@ -46,9 +46,9 @@ git push                # la CI pose v0.17.60 et publie la release
 `git tag` à la main est interdit (`CLAUDE.md`). Une section de version écrite dans
 `docs/progress.md` sans bump fait échouer le test `docs`.
 
-Branche `v1` (décision 0015) : ses versions `1.0.0-alpha.N` ne sont **jamais** taguées ;
-`livraison` reste réservé à `main`, et la variable de dépôt `V1_RELEASES` qui autorisera un
-jour une release 1.x n'existe pas encore (#212 pose les gardes ; d'ici là, aucun tag `v1*`).
+Depuis la bascule (#208), `main` porte les versions 1.x ; la variable de dépôt
+`V1_RELEASES=1` autorise `release.yml` à les publier (#212). La branche `0.17` ne publie
+qu'à la main, par `workflow_dispatch` avec son tag.
 
 ## `release.yml`
 

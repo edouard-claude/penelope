@@ -1,0 +1,21 @@
+name = "outils-planification"
+description = """Planification et intentions, avec l'orchestrateur branché : un rappel daté
+(`schedule_create`, cron une fois, cible `notify`) puis la liste des planifications
+(`schedule_list`) ; une intention événementielle (`intent_create`), et une intention
+datée refusée avec le renvoi vers `schedule_create`. Ensuite le rappel est déplacé vers
+le chat privé du propriétaire (`schedule_move`) puis supprimé (`schedule_delete`),
+l'intention annulée (`intent_cancel`), et les deux listes relues (`intent_list`,
+section `schedules` de `self_status`) sont vides d'éléments actifs. Les identifiants
+créés sont cités par le script (`{{id:sch:1}}`, `{{id:i:1}}`)."""
+pin_model = "main"
+
+[config]
+"tools.approval_mode" = "auto"
+
+[[steps]]
+kind = "message"
+text = "rappelle-moi d'appeler Paul le 20 septembre à 9 h, et quand on reparle de Borealis, rappelle-moi la TVA"
+
+[[steps]]
+kind = "message"
+text = "finalement, envoie ce rappel en privé, puis annule tout"

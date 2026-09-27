@@ -1,0 +1,27 @@
+{
+  "method": "session.export",
+  "params": {
+    "session": "$session"
+  },
+  "response": {
+    "result": [
+      {
+        "artifact_id": "null",
+        "tokens": "integer",
+        "episode": "integer",
+        "seq": "integer",
+        "message": {
+          "role": "string",
+          "content": [
+            {
+              "type": "string",
+              "text": "string"
+            }
+          ]
+        },
+        "eager": "bool",
+        "compacted": "bool"
+      }
+    ]
+  }
+}

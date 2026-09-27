@@ -313,4 +313,23 @@ mod tests {
         );
         assert!(replace_entry_line(raw, "01Z", "- x").is_none());
     }
+
+    /// Les annotations changent, le texte, la puce et l'indentation restent ; un uid
+    /// absent ne réécrit rien.
+    #[test]
+    fn updating_annotations_keeps_the_text() {
+        let out = update_annotations(RAW, "A1", |a| a.importance = Some(9)).unwrap();
+        let line = out.lines().find(|l| l.contains("A1")).unwrap();
+        assert!(line.starts_with("- Le serveur est à Paris"), "{line}");
+        assert!(line.contains("importance: 9"), "{line}");
+        assert!(!line.contains("importance: 7"), "{line}");
+        assert!(out.contains("ACME paie à 30 jours"));
+        assert_eq!(update_annotations(RAW, "Z9", |_| {}), None);
+
+        let starred = "# M\n  * Sous-point <!-- uid: S1 -->\n";
+        let out =
+            update_annotations(starred, "S1", |a| a.projet = Some("penelope".into())).unwrap();
+        assert!(out.contains("  * Sous-point"), "{out}");
+        assert!(out.contains("penelope"), "{out}");
+    }
 }

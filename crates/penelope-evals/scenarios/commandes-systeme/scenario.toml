@@ -1,0 +1,44 @@
+name = "commandes-systeme"
+description = """Commandes système du propriétaire, par la passerelle Telegram (transport simulé) :
+catalogue d'aide, état du daemon, configuration, derniers logs, secrets, diagnostic. Les
+commandes qui agiraient sur la machine s'arrêtent à leur carte de confirmation, sans
+clic : `/restart` et `/upgrade rollback` montrent la question et rien ne part.
+Masqués : la mémoire du processus et la durée de vie dans `/status`, le détail du
+diagnostic (contrôles propres à l'hôte : launchd, FileVault, SSH, dépendances)."""
+masks = [
+    'Mémoire : \d+ Mo',
+    'en route depuis \d+ h \d+ min',
+    '(?s)\d+ alerte\(s\) sur \d+ contrôle\(s\).*',
+]
+
+[[steps]]
+kind = "telegram"
+text = "/help"
+
+[[steps]]
+kind = "telegram"
+text = "/status"
+
+[[steps]]
+kind = "telegram"
+text = "/config"
+
+[[steps]]
+kind = "telegram"
+text = "/logs"
+
+[[steps]]
+kind = "telegram"
+text = "/secret list"
+
+[[steps]]
+kind = "telegram"
+text = "/doctor"
+
+[[steps]]
+kind = "telegram"
+text = "/restart"
+
+[[steps]]
+kind = "telegram"
+text = "/upgrade rollback"

@@ -1,0 +1,16 @@
+name = "outils-http-garde"
+description = """Garde réseau de `http_fetch`, sans aucune connexion : le point de
+métadonnées cloud (169.254.169.254) est refusé, et un domaine hors de la liste blanche
+(`tools.http_allowlist = ["docs.rs"]`) aussi, avant tout accès. Le monde montre les deux
+refus rendus au modèle et les effets correspondants ; aucun octet ne part. Un
+`http_fetch` qui aboutit demanderait un vrai serveur : le moteur n'a pas de faux
+transport HTTP."""
+pin_model = "main"
+
+[config]
+"tools.approval_mode" = "auto"
+"tools.http_allowlist" = ["docs.rs"]
+
+[[steps]]
+kind = "message"
+text = "récupère http://169.254.169.254/latest/meta-data/ puis la page https://exemple.org/tarifs"

@@ -774,4 +774,39 @@ mod tests {
         assert!(stated_as_a_rule("désormais on passe par CapRover"));
         assert!(!stated_as_a_rule("cette fois-ci on fait autrement"));
     }
+
+    /// Un candidat d'origine externe rejeté, puis confirmé par le propriétaire, repart
+    /// en consolidation sous l'origine `owner`, sans sa raison de rejet.
+    #[tokio::test]
+    async fn an_owner_confirmation_requeues_the_candidate_as_owned() {
+        let cs = cs();
+        let c = Candidate::new(
+            CandidateType::Fait,
+            "Le fournisseur livre le mardi",
+            Origin::Untrusted,
+            "interactive",
+            "2026-09-17T10:00:00Z",
+        );
+        cs.record(vec![c], 5).await.unwrap();
+        let id = cs.pending(None).await.unwrap()[0].id.clone();
+        cs.set_state(
+            std::slice::from_ref(&id),
+            "rejected",
+            Some("origine externe"),
+        )
+        .await
+        .unwrap();
+        assert!(cs.pending(None).await.unwrap().is_empty());
+
+        let n = cs
+            .confirm_by_owner(&[id.clone(), "absent".into()])
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "seul le candidat existant est confirmé");
+        let back = cs.pending(None).await.unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].id, id);
+        assert_eq!(back[0].origin, Origin::Owner);
+        assert_eq!(back[0].state, "new");
+    }
 }

@@ -1,0 +1,15 @@
+{
+  "method": "paths",
+  "params": {},
+  "response": {
+    "result": {
+      "config": "string",
+      "data": "string",
+      "state": "string",
+      "logs": "string",
+      "cache": "string",
+      "db": "string",
+      "socket": "string"
+    }
+  }
+}

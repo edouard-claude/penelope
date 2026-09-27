@@ -1,0 +1,16 @@
+name = "outils-jobs"
+description = """Jobs d'outils (#204) : deux commandes lancées en arrière-plan (`shell_exec`
+avec `background: true`) rendent la main tout de suite avec leur identifiant de job. Le
+modèle liste les jobs de la session (`job_list`, deux `working`), lit l'état du long
+(`job_status`), attend la fin du court (`job_wait`, `completed`), annule le long
+(`job_cancel`) puis attend sa conclusion (`job_wait`, `cancelled`) : chaque état relu
+l'est après que le job l'a atteint, jamais pendant une course. Les identifiants sont
+cités par le script (`{{id:tj:1}}`, `{{id:tj:2}}`)."""
+pin_model = "main"
+
+[config]
+"tools.approval_mode" = "auto"
+
+[[steps]]
+kind = "message"
+text = "lance une longue et une courte attente en arrière-plan, attends la courte puis arrête la longue"

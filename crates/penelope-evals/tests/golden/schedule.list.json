@@ -1,0 +1,32 @@
+{
+  "method": "schedule.list",
+  "params": {},
+  "response": {
+    "result": [
+      {
+        "next_run": "string",
+        "runs": "integer",
+        "last_error": "null",
+        "destination": "string",
+        "id": "string",
+        "kind": "string",
+        "spec": {
+          "expr": "string"
+        },
+        "target": {
+          "type": "string",
+          "prompt": "string"
+        },
+        "dedup": {},
+        "state": "string",
+        "last_run": "null",
+        "destination_origin": {
+          "topic_id": "null",
+          "channel": "string",
+          "chat_id": "integer",
+          "message_id": "null"
+        }
+      }
+    ]
+  }
+}

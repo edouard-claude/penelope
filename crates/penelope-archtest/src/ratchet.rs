@@ -97,6 +97,12 @@ pub fn regressions(
         }
     }
     for path in SHRINKING_LISTS {
+        // Une liste absente de la base est posée par ce lot (R10 a posé
+        // `[scenarios].missing` ainsi) : rien à comparer. La retirer ensuite ne passe pas
+        // non plus inaperçu : la règle qui la lit échoue sans elle.
+        if at(&base, path).is_none() {
+            continue;
+        }
         let b = str_list(&base, path);
         for name in str_list(&head, path) {
             if !b.contains(&name) {
@@ -392,6 +398,22 @@ new_file_floor = 90
         let r = regressions(BASE, &head, &renames, "a1b2c3d").unwrap();
         assert_eq!(r.len(), 1, "{r:?}");
         assert!(r[0].contains("entrée ajoutée \"elsewhere.rs\""));
+    }
+
+    #[test]
+    fn a_shrinking_list_posed_by_the_lot_is_not_an_addition() {
+        let head = format!("{BASE}[scenarios]\nmissing = [\"/reminders\", \"rpc:status\"]\n");
+        assert!(check(&head).is_empty(), "{:?}", check(&head));
+        // Une fois posée, elle ne peut que raccourcir.
+        let r = regressions(
+            &head,
+            &head.replace("\"/reminders\",", "\"/reminders\", \"/veille\","),
+            &BTreeMap::new(),
+            "a1b2c3d",
+        )
+        .unwrap();
+        assert_eq!(r.len(), 1, "{r:?}");
+        assert!(r[0].contains("[scenarios.missing] : entrée ajoutée \"/veille\""));
     }
 
     #[test]

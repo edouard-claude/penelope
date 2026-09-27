@@ -216,10 +216,19 @@ fn daemon_code_files<'a>(snap: &'a Snapshot, budget: &Budget) -> Vec<&'a SourceF
         .collect()
 }
 
-/// R5 : tout module déclaré dans le daemon est dans `[daemon].modules`.
+/// R5 ne regarde que les modules de premier niveau, déclarés dans `lib.rs` : découper un
+/// fichier existant en sous-modules est le but de la V1, pas une fonctionnalité nouvelle.
+fn daemon_root_files<'a>(snap: &'a Snapshot, budget: &Budget) -> Vec<&'a SourceFile> {
+    daemon_code_files(snap, budget)
+        .into_iter()
+        .filter(|f| f.daemon_rel() == Some("lib.rs"))
+        .collect()
+}
+
+/// R5 : tout module de premier niveau du daemon est dans `[daemon].modules`.
 pub fn daemon_module_violations(snap: &Snapshot, budget: &Budget) -> Vec<Violation> {
     let mut out = Vec::new();
-    for f in daemon_code_files(snap, budget) {
+    for f in daemon_root_files(snap, budget) {
         for (line, name) in declared_modules(&f.raw) {
             if !budget.daemon_modules.contains(&name) {
                 out.push(violation(
@@ -427,10 +436,14 @@ pub const CHANNEL_AGNOSTIC_CRATES: &[&str] = &[
     "penelope-workflow",
     "penelope-daemon",
     "penelope-app",
+    "penelope-mcp-host",
     "penelope-agent",
     "penelope-executor",
     "penelope-vault",
     "penelope-dream",
+    "penelope-ops",
+    "penelope-conversation",
+    "penelope-orchestrator",
 ];
 
 /// Crates qui ont le droit de nommer un canal : la passerelle, ce qui est au-dessus
@@ -442,13 +455,6 @@ pub const CHANNEL_CRATES: &[&str] = &[
     "penelope-evals",
     "penelope-archtest",
 ];
-
-/// Fichiers de la passerelle dans le daemon, exclus de la mesure : `telegram.rs` et tout
-/// `telegram/` (les morceaux que le lot G en tirera restent de la passerelle).
-pub fn is_gateway_file(rel: &str) -> bool {
-    rel == "crates/penelope-daemon/src/telegram.rs"
-        || rel.starts_with("crates/penelope-daemon/src/telegram/")
-}
 
 /// Motifs de canal : `telegram` (toute casse : import `penelope_telegram::`, chemin
 /// `crate::telegram::`, configuration `cfg.telegram.`, comparaison `Origin::Telegram`,
@@ -472,7 +478,6 @@ fn channel_files<'a>(snap: &'a Snapshot, budget: &Budget) -> Vec<&'a SourceFile>
         .iter()
         .filter(|f| {
             CHANNEL_AGNOSTIC_CRATES.contains(&f.crate_name.as_str())
-                && !is_gateway_file(&f.rel)
                 && file_kind(&f.rel, budget) == FileKind::Source
         })
         .collect()
@@ -532,10 +537,12 @@ pub fn measure(snap: &Snapshot, budget: &Budget) -> Measures {
             m.oversized.insert(f.rel.clone(), n);
         }
     }
-    for f in daemon_code_files(snap, budget) {
-        let rel = f.daemon_rel().unwrap_or(&f.rel).to_string();
+    for f in daemon_root_files(snap, budget) {
         m.daemon_modules
             .extend(declared_modules(&f.raw).into_iter().map(|(_, name)| name));
+    }
+    for f in daemon_code_files(snap, budget) {
+        let rel = f.daemon_rel().unwrap_or(&f.rel).to_string();
         if !impl_daemon_lines(&f.raw).is_empty() {
             m.impl_daemon.insert(rel.clone());
         }

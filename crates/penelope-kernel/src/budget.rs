@@ -88,6 +88,19 @@ pub struct UsageRecord {
     pub miss_cause: Option<String>,
 }
 
+/// Dernier appel de conversation d'une session : ce à quoi la requête suivante se compare
+/// pour expliquer un raté de cache (issue #17).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreviousCall {
+    pub ts_ms: i64,
+    pub model: String,
+    pub upstream: Option<String>,
+    pub msg_count: Option<i64>,
+    pub request_hash: Option<String>,
+    pub system_hash: Option<String>,
+    pub tools_hash: Option<String>,
+}
+
 /// Une ligne de rapport de consommation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsageRow {
@@ -361,6 +374,45 @@ impl BudgetLedger {
             .await?)
     }
 
+    /// Le dernier appel de conversation de la session (issue #17) : l'empreinte à laquelle
+    /// la requête suivante se compare, et le fournisseur amont à garder.
+    pub async fn previous_call(&self, session_id: &str) -> Result<Option<PreviousCall>> {
+        use penelope_store::rusqlite::OptionalExtension;
+        let sid = session_id.to_string();
+        let row = self
+            .store
+            .read(move |c| {
+                Ok(c.query_row(
+                    "SELECT ts, model, upstream, msg_count, request_hash, system_hash, tools_hash
+                     FROM usage WHERE session_id = ?1 AND COALESCE(role, 'chat') = 'chat'
+                     ORDER BY ts DESC, rowid DESC LIMIT 1",
+                    [sid],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            PreviousCall {
+                                ts_ms: 0,
+                                model: r.get(1)?,
+                                upstream: r.get(2)?,
+                                msg_count: r.get(3)?,
+                                request_hash: r.get(4)?,
+                                system_hash: r.get(5)?,
+                                tools_hash: r.get(6)?,
+                            },
+                        ))
+                    },
+                )
+                .optional()?)
+            })
+            .await?;
+        Ok(row.map(|(ts, mut p)| {
+            p.ts_ms = chrono::DateTime::parse_from_rfc3339(&ts)
+                .map(|t| t.timestamp_millis())
+                .unwrap_or(0);
+            p
+        }))
+    }
+
     /// Appels de conversation et coût total d'un tour, reprises après approbation
     /// comprises.
     pub async fn turn_totals(&self, turn_id: &str) -> Result<(i64, f64)> {
@@ -587,6 +639,11 @@ impl BudgetLedger {
     }
 }
 
+/// « 16,10 $ »
+pub fn usd(x: f64) -> String {
+    format!("{x:.2} $").replace('.', ",")
+}
+
 /// Libellé d'une cause de raté de cache.
 ///
 /// La cause « préfixe » porte, quand l'instantané du prompt le permet (issue #205), les
@@ -640,7 +697,7 @@ fn session_label(c: &penelope_store::rusqlite::Connection, id: &str) -> Option<S
     }
     c.query_row(
         "SELECT json_extract(content, '$.blocks[0].text') FROM messages
-         WHERE session_id = ?1 AND role = 'user' ORDER BY seq LIMIT 1",
+         WHERE session_id = ?1 AND role = 'user' AND sealed IS NOT 2 ORDER BY seq LIMIT 1",
         [id],
         |r| r.get::<_, Option<String>>(0),
     )
@@ -682,250 +739,4 @@ fn short_label(t: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::clock::TestClock;
-    use std::sync::Arc;
-
-    #[test]
-    fn status_thresholds() {
-        let s = BudgetStatus::compute(BudgetScope::Daily, 16.0, 20.0, 0.8);
-        assert!(s.alerting && !s.exceeded);
-        let s = BudgetStatus::compute(BudgetScope::Daily, 20.0, 20.0, 0.8);
-        assert!(s.exceeded && !s.alerting);
-        let s = BudgetStatus::compute(BudgetScope::Daily, 1.0, 20.0, 0.8);
-        assert!(!s.alerting && !s.exceeded);
-    }
-
-    #[test]
-    fn no_limit_never_alerts() {
-        let s = BudgetStatus::compute(BudgetScope::Run, 999.0, 0.0, 0.8);
-        assert!(!s.alerting && !s.exceeded);
-    }
-
-    #[tokio::test]
-    async fn records_and_sums() {
-        let store = Store::open_memory().unwrap();
-        let l = BudgetLedger::new(store, Arc::new(TestClock::default()));
-        for i in 0..3 {
-            l.record(UsageRecord {
-                session_id: Some("s1".into()),
-                model: "m".into(),
-                provider: "openrouter".into(),
-                prompt: 100,
-                completion: 10,
-                cost_usd: 0.5 * (i as f64 + 1.0),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        }
-        assert!((l.spent_today().await.unwrap() - 3.0).abs() < 1e-9);
-        assert!((l.spent_session("s1").await.unwrap() - 3.0).abs() < 1e-9);
-
-        let b = l.breakdown("model", 10).await.unwrap();
-        assert_eq!(b.len(), 1);
-        assert_eq!(b[0].0, "m");
-        assert_eq!(b[0].2, 330);
-    }
-
-    #[tokio::test]
-    async fn every_recorded_model_usage_has_a_runtime_event() {
-        let store = Store::open_memory().unwrap();
-        let clock = Arc::new(TestClock::default());
-        let events = crate::event::EventLog::new(store.clone(), clock.clone());
-        let ledger = BudgetLedger::new(store, clock).with_events(events.clone());
-        ledger
-            .record(UsageRecord {
-                session_id: Some("s1".into()),
-                model: "model-a".into(),
-                provider: "openrouter".into(),
-                prompt: 12,
-                completion: 3,
-                cost_usd: 0.02,
-                estimated: true,
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        let logged = events.range(0, 10).await.unwrap();
-        assert_eq!(logged.len(), 1);
-        assert_eq!(logged[0].kind, "runtime.llm");
-        assert_eq!(logged[0].payload["prompt_tokens"], 12);
-        assert_eq!(logged[0].payload["cost_usd"], 0.02);
-    }
-
-    fn conso(cost: f64) -> UsageRecord {
-        UsageRecord {
-            model: "m".into(),
-            provider: "openrouter".into(),
-            cost_usd: cost,
-            ..Default::default()
-        }
-    }
-
-    /// #79 : à La Réunion (UTC+4), 00:30 le 2 janvier est encore le 1er en UTC. La
-    /// consommation compte pour le 2, le relèvement du jour vaut jusqu'à 23:59 locale.
-    #[tokio::test]
-    async fn the_budget_day_is_the_owners_day() {
-        let store = Store::open_memory().unwrap();
-        // 2026-01-01T20:30:00Z = 2026-01-02T00:30+04:00
-        let clock = Arc::new(TestClock::new(1_767_299_400_000));
-        let tz = Arc::new(std::sync::RwLock::new("Indian/Reunion".to_string()));
-        let l = BudgetLedger::new(store.clone(), clock.clone()).with_timezone({
-            let tz = tz.clone();
-            move || tz.read().unwrap().clone()
-        });
-        assert_eq!(l.today(), "2026-01-02");
-        l.record(conso(1.5)).await.unwrap();
-        assert!((l.spent_today().await.unwrap() - 1.5).abs() < 1e-9);
-        let day: String = store
-            .read(|c| Ok(c.query_row("SELECT day FROM usage", [], |r| r.get(0))?))
-            .await
-            .unwrap();
-        assert_eq!(day, "2026-01-02");
-
-        let cfg = crate::config::Budget::default();
-        l.raise_daily(99.0).await.unwrap();
-        let key: i64 = store
-            .read(|c| {
-                Ok(c.query_row(
-                    "SELECT count(*) FROM kv WHERE k = 'budget.daily.2026-01-02'",
-                    [],
-                    |r| r.get(0),
-                )?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(key, 1);
-        // 23:59 locale : toujours relevé.
-        clock.set_ms(1_767_383_940_000); // 2026-01-02T19:59:00Z
-        assert_eq!(l.limits(&cfg, None, None).await.unwrap().0, 99.0);
-        // Minuit local : un nouveau jour, plafond de la configuration, compteur à zéro.
-        clock.set_ms(1_767_384_000_000); // 2026-01-02T20:00:00Z
-        assert_eq!(l.today(), "2026-01-03");
-        assert_eq!(l.limits(&cfg, None, None).await.unwrap().0, cfg.daily_usd);
-        assert_eq!(l.spent_today().await.unwrap(), 0.0);
-        l.record(conso(0.5)).await.unwrap();
-
-        let days = l.report("day", None, None, 10).await.unwrap();
-        let mut keys: Vec<String> = days.iter().map(|r| r.key.clone()).collect();
-        keys.sort();
-        assert_eq!(keys, vec!["2026-01-02", "2026-01-03"]);
-        assert_eq!(l.mixed_days().await.unwrap(), 0);
-
-        // Changement de fuseau à chaud : les lignes suivantes le suivent, et les lignes
-        // récentes comptées dans l'ancien sont signalées.
-        *tz.write().unwrap() = "UTC".into();
-        assert_eq!(l.today(), "2026-01-02");
-        assert_eq!(l.mixed_days().await.unwrap(), 2);
-    }
-
-    #[tokio::test]
-    async fn costs_are_attributed_to_sessions_and_requests() {
-        let store = Store::open_memory().unwrap();
-        let clock = Arc::new(TestClock::default());
-        let l = BudgetLedger::new(store.clone(), clock.clone());
-        store
-            .write(|tx| {
-                tx.execute(
-                    "INSERT INTO sessions(id, kind, title, created_at, updated_at)
-                     VALUES('s1', 'chat', NULL, 'x', 'x'), ('s2', 'chat', 'Refonte', 'x', 'x')",
-                    [],
-                )?;
-                tx.execute(
-                    "INSERT INTO messages(session_id, seq, role, content, ts)
-                     VALUES('s1', 1, 'user', '{\"blocks\":[{\"type\":\"text\",\"text\":\"Liste mes repo  qui contiennent mcp\"}]}', 'x')",
-                    [],
-                )?;
-                tx.execute(
-                    "INSERT INTO turn_queue(id, session_id, kind, payload, state, enqueued_at)
-                     VALUES('t1', 's1', 'message', '{\"text\":\"Liste mes repo qui contiennent mcp\"}', 'done', 'x'),
-                           ('t2', 's1', 'resume', '{\"approval_id\":\"a1\"}', 'done', 'x')",
-                    [],
-                )?;
-                Ok(())
-            })
-            .await
-            .unwrap();
-        let call =
-            |session: &str, turn: &str, role: &str, cost: f64, estimated: bool| UsageRecord {
-                session_id: Some(session.into()),
-                turn_id: Some(turn.into()),
-                role: Some(role.into()),
-                model: "z-ai/glm-5.3".into(),
-                provider: "openrouter".into(),
-                generation_id: Some("gen-1".into()),
-                upstream: Some("Z.AI".into()),
-                prompt: 1000,
-                completion: 100,
-                cost_usd: cost,
-                estimated,
-                ..Default::default()
-            };
-        l.record(call("s1", "t1", "classifier", 0.0001, false))
-            .await
-            .unwrap();
-        l.record(call("s1", "t1", "chat", 0.03, false))
-            .await
-            .unwrap();
-        l.record(call("s1", "t1", "chat", 0.02, true))
-            .await
-            .unwrap();
-        l.record(call("s2", "t3", "chat", 0.01, false))
-            .await
-            .unwrap();
-
-        let by_session = l.report("session", None, None, 10).await.unwrap();
-        assert_eq!(by_session[0].key, "s1");
-        assert_eq!(by_session[0].calls, 3);
-        assert_eq!(by_session[0].estimated, 1);
-        assert_eq!(
-            by_session[0].label.as_deref(),
-            Some("Liste mes repo qui contiennent mcp")
-        );
-        assert_eq!(by_session[1].label.as_deref(), Some("Refonte"));
-
-        let by_turn = l.report("turn", Some("s1"), None, 10).await.unwrap();
-        assert_eq!(
-            by_turn.len(),
-            1,
-            "la reprise est rattachée au tour d'origine"
-        );
-        assert!((by_turn[0].cost_usd - 0.0501).abs() < 1e-9);
-        assert_eq!(
-            by_turn[0].label.as_deref(),
-            Some("Liste mes repo qui contiennent mcp")
-        );
-
-        let by_role = l
-            .report("role", None, Some("1970-01-01"), 10)
-            .await
-            .unwrap();
-        assert_eq!(by_role[0].key, "chat");
-        assert!(
-            l.report("day", None, Some("2999-01-01"), 10)
-                .await
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    /// CA 10 : le budget journalier dépassé déclenche la demande HITL.
-    #[tokio::test]
-    async fn ca_10_4_daily_budget_exceeded_is_detected() {
-        let store = Store::open_memory().unwrap();
-        let l = BudgetLedger::new(store, Arc::new(TestClock::default()));
-        l.record(UsageRecord {
-            model: "m".into(),
-            provider: "p".into(),
-            cost_usd: 25.0,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-        let cfg = crate::config::Budget::default();
-        let st = l.status(&cfg, None, None).await.unwrap();
-        assert!(st[0].exceeded, "{st:?}");
-    }
-}
+mod tests;

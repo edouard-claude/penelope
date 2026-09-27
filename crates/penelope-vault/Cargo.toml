@@ -1,0 +1,49 @@
+[package]
+name = "penelope-vault"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# La mémoire en fichiers (épopée #208, T22) : vault, concepts, épisodes, revue,
+# embeddings, instantanés et tuiles du prompt. Au-dessus de `penelope-app`, sous le
+# daemon et sous les crates du cœur qui en sortiront (agent, executor, dream).
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+# Jour du vault dans le fuseau du propriétaire (`vault_ops::day`, `mem_audit`).
+chrono-tz.workspace = true
+# `Services`, les ports (`ProviderSource`, `McpAdmin`), les helpers, les doubles de test.
+penelope-app.workspace = true
+# Configuration, sessions, frontmatter, journal, horloge.
+penelope-kernel.workspace = true
+# Table `kv`, vecteurs encodés, requêtes SQLite.
+penelope-store.workspace = true
+# Noms et validation des secrets mis de côté (`secret_shelf`), présence de git.
+penelope-platform.workspace = true
+# Caviardage de ce qui part dans le vault.
+penelope-observe.workspace = true
+# Appels de modèle (revue, épisodes, découpage, embeddings).
+penelope-llm.workspace = true
+# Historique des sessions, tuiles du prompt.
+penelope-context.workspace = true
+# Index, candidats, rappel, format du vault.
+penelope-memory.workspace = true
+# Méta-outils MCP nommés dans les tuiles du prompt.
+penelope-mcp.workspace = true
+# Demande d'approbation d'un découpage de mémoire (`mem_split`).
+penelope-hitl.workspace = true
+# Git du vault, outils à la demande nommés dans les tuiles.
+penelope-tools.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util", "test-util"] }

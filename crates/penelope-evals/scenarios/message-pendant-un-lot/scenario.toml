@@ -1,0 +1,28 @@
+name = "message-pendant-un-lot"
+description = """Steering entre deux appels (épopée #208, T13) : le modèle demande une lecture MCP
+puis deux `fs_read` ; le propriétaire écrit pendant la lecture MCP. Elle finit, les deux
+lectures qui ne sont pas parties reçoivent « Non exécuté : nouveau message du
+propriétaire. », le message est écrit après ces résultats, et le modèle est rappelé une
+fois, avec la note de fusion. Aucun appel ne reste sans résultat."""
+pin_model = "main"
+
+[[files]]
+path = "a.txt"
+content = "alpha : 1\n"
+
+[[files]]
+path = "b.txt"
+content = "bravo : 2\n"
+
+[[mcp_tools]]
+server = "banc"
+name = "lire"
+description = "Lit un fichier du dépôt distant de test."
+read_only = true
+params = ["path"]
+result = "rapport.txt : 42 lignes, la dernière dit « fin »."
+
+[[steps]]
+kind = "message"
+text = "lis rapport.txt sur le banc, puis a.txt et b.txt"
+steer = "laisse a.txt et b.txt, dis-moi seulement comment finit le rapport"

@@ -1,0 +1,35 @@
+{
+  "method": "deny",
+  "params": {
+    "id": "$approval_no",
+    "reason": "pas maintenant"
+  },
+  "response": {
+    "result": {
+      "id": "string",
+      "kind": "string",
+      "subject": "string",
+      "risk": "string",
+      "payload": {
+        "tool": "string",
+        "arguments": {
+          "path": "string"
+        }
+      },
+      "choices": [
+        "string"
+      ],
+      "session_id": "null",
+      "run_id": "null",
+      "created_at": "string",
+      "expires_at": "string",
+      "state": "string",
+      "decision": "string",
+      "reason": "string",
+      "decided_by": "string",
+      "decided_via": "string",
+      "decided_at": "string",
+      "rule_created": "null"
+    }
+  }
+}

@@ -12,6 +12,7 @@
 //! entre deux tours consécutifs sans action utilisateur.
 
 use penelope_kernel::canonical::sha256_hex;
+pub use penelope_kernel::journal::{Tile, TileMap};
 use penelope_llm::types::{ChatMessage, Content, Role};
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +70,16 @@ pub struct Tiers {
 }
 
 impl Tiers {
+    /// La découpe du préfixe rendu en tuiles.
+    pub fn tile_map(&self) -> TileMap {
+        let rendered = self.prefix();
+        TileMap {
+            t0: Tile::of(&rendered, &self.identity),
+            t1: Tile::of(&rendered, &self.index),
+            t2: Tile::of(&rendered, &self.context),
+        }
+    }
+
     /// Concaténation exacte du préfixe stable (T0 + T1 + T2).
     pub fn prefix(&self) -> String {
         let mut s =
@@ -375,82 +386,6 @@ impl TiersBuilder {
     }
 }
 
-/// Une tuile du préfixe, repérée dans le texte rendu : où elle commence, ce qu'elle pèse,
-/// et une empreinte courte qui dit si elle a bougé.
-///
-/// Aucun texte n'y est recopié : la découpe accompagne un instantané de prompt
-/// (issue #205) qui porte déjà le rendu, et doit rester négligeable devant lui.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Tile {
-    /// Décalage du premier octet de la tuile dans le préfixe rendu.
-    pub at: usize,
-    pub len: usize,
-    /// Seize caractères de l'empreinte : assez pour nommer la tuile qui a changé.
-    pub hash: String,
-}
-
-impl Tile {
-    fn of(rendered: &str, text: &str) -> Tile {
-        Tile {
-            at: rendered.find(text).unwrap_or(0),
-            len: text.len(),
-            hash: sha256_hex(text.as_bytes())[..16].to_string(),
-        }
-    }
-}
-
-/// Découpe du préfixe stable en tuiles (T0 identité, T1 index, T2 mémoire).
-///
-/// T3 (historique) et T4 (volatile) n'en sont pas : ils ne sont pas dans le message
-/// système. Le premier vit dans `messages`, le second dans `message_context`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct TileMap {
-    pub t0: Tile,
-    pub t1: Tile,
-    pub t2: Tile,
-}
-
-impl TileMap {
-    pub fn of(tiers: &Tiers) -> TileMap {
-        let rendered = tiers.prefix();
-        TileMap {
-            t0: Tile::of(&rendered, &tiers.identity),
-            t1: Tile::of(&rendered, &tiers.index),
-            t2: Tile::of(&rendered, &tiers.context),
-        }
-    }
-
-    fn tile(&self, name: &str) -> Option<&Tile> {
-        match name {
-            "T0" => Some(&self.t0),
-            "T1" => Some(&self.t1),
-            "T2" => Some(&self.t2),
-            _ => None,
-        }
-    }
-
-    /// Le texte d'une tuile, relu dans le préfixe rendu. `None` si la découpe ne
-    /// correspond pas au texte : l'instantané est alors le seul à faire foi.
-    pub fn slice<'a>(&self, rendered: &'a str, name: &str) -> Option<&'a str> {
-        let t = self.tile(name)?;
-        rendered.get(t.at..t.at + t.len)
-    }
-
-    /// Les tuiles dont l'empreinte diffère, dans l'ordre du prompt : ce qui a changé
-    /// entre deux préfixes, tuile par tuile plutôt que ligne par ligne.
-    pub fn changed(&self, other: &TileMap) -> Vec<&'static str> {
-        [
-            ("T0", &self.t0, &other.t0),
-            ("T1", &self.t1, &other.t1),
-            ("T2", &self.t2, &other.t2),
-        ]
-        .into_iter()
-        .filter(|(_, a, b)| a.hash != b.hash)
-        .map(|(n, _, _)| n)
-        .collect()
-    }
-}
-
 /// Bloc volatile standard : date et heure locales, état du run.
 pub fn volatile_header(now_local: &str, timezone: &str, run_state: Option<&str>) -> String {
     let mut s = format!("Date et heure : {now_local} ({timezone}).");
@@ -649,7 +584,7 @@ mod tile_tests {
     fn tiles_slice_the_rendered_prefix() {
         let t = builder().build();
         let rendered = t.prefix();
-        let map = TileMap::of(&t);
+        let map = t.tile_map();
         assert_eq!(map.slice(&rendered, "T0"), Some(t.identity.as_str()));
         assert_eq!(map.slice(&rendered, "T1"), Some(t.index.as_str()));
         assert_eq!(map.slice(&rendered, "T2"), Some(t.context.as_str()));
@@ -660,8 +595,11 @@ mod tile_tests {
     /// doit nommer.
     #[test]
     fn only_the_changed_tile_is_named() {
-        let before = TileMap::of(&builder().build());
-        let after = TileMap::of(&builder().skill("autre", "une autre skill").build());
+        let before = builder().build().tile_map();
+        let after = builder()
+            .skill("autre", "une autre skill")
+            .build()
+            .tile_map();
         assert_eq!(before.changed(&after), vec!["T1"]);
         assert!(before.changed(&before).is_empty());
     }
@@ -670,13 +608,12 @@ mod tile_tests {
     /// l'ordre des tuiles.
     #[test]
     fn several_tiles_are_named_in_order() {
-        let before = TileMap::of(&builder().build());
-        let after = TileMap::of(
-            &builder()
-                .skill("autre", "une autre skill")
-                .memory_snapshot("- Répondre en anglais.", "", "")
-                .build(),
-        );
+        let before = builder().build().tile_map();
+        let after = builder()
+            .skill("autre", "une autre skill")
+            .memory_snapshot("- Répondre en anglais.", "", "")
+            .build()
+            .tile_map();
         assert_eq!(before.changed(&after), vec!["T1", "T2"]);
     }
 
@@ -684,8 +621,29 @@ mod tile_tests {
     #[test]
     fn the_map_carries_no_text() {
         let t = builder().build();
-        let json = serde_json::to_string(&TileMap::of(&t)).unwrap();
+        let json = serde_json::to_string(&t.tile_map()).unwrap();
         assert!(!json.contains("Pénélope"), "{json}");
         assert!(json.len() < 300, "{json}");
+    }
+
+    /// T4 sans message utilisateur devient un message système final ; un dernier
+    /// message utilisateur sans texte reçoit le bloc en tête.
+    #[test]
+    fn volatile_context_without_a_user_text_still_lands() {
+        let t = builder().volatile("Date : mardi").build();
+        let out = t.assemble(vec![ChatMessage::assistant("bonjour")], false);
+        let last = out.last().unwrap();
+        assert_eq!(last.role, Role::System);
+        assert_eq!(last.text(), "Date : mardi");
+
+        let mut image_only = ChatMessage::user("");
+        image_only.content = vec![Content::ImageUrl {
+            url: "https://x/y.png".into(),
+            detail: None,
+        }];
+        let out = t.assemble(vec![image_only], false);
+        let last = out.last().unwrap();
+        assert_eq!(last.content.len(), 2);
+        assert!(last.text().contains("<contexte>"), "{:?}", last.content);
     }
 }

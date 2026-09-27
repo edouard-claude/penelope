@@ -1,0 +1,16 @@
+{
+  "method": "session.rewind",
+  "params": {
+    "session": "$session_rewind",
+    "turns": 1
+  },
+  "response": {
+    "result": {
+      "session": "string",
+      "turns": "integer",
+      "removed": "integer",
+      "archived": "integer",
+      "archive": "string"
+    }
+  }
+}

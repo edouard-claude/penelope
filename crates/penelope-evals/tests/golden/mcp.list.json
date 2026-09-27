@@ -1,0 +1,10 @@
+{
+  "method": "mcp.list",
+  "params": {},
+  "response": {
+    "error": {
+      "code": -32603,
+      "message": "string"
+    }
+  }
+}

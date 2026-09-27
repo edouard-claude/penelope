@@ -1,0 +1,22 @@
+name = "outils-sous-agent"
+description = """Sous-agent à contexte neuf : le modèle délègue une recherche
+(`sub_agent_spawn`) ; le sous-agent (réponses scriptées, dans l'ordre des appels) lit le
+fichier demandé et rend sa conclusion, que le modèle reprend. Le monde montre l'appel
+`fs_read` du sous-agent dans le journal, ses deux requêtes au modèle (il y voit les
+définitions de tous les outils natifs, la liste blanche `tools` étant appliquée à
+l'exécution) et la conclusion rendue comme résultat d'outil. Le sous-agent ne
+laisse pas de session dans le monde : son contexte est jetable."""
+pin_model = "main"
+
+[config]
+"tools.approval_mode" = "auto"
+
+[[files]]
+path = "notes.txt"
+content = """- relancer le client Borealis
+- vérifier la TVA du devis ACME
+"""
+
+[[steps]]
+kind = "message"
+text = "demande à un sous-agent ce qu'il reste à faire dans notes.txt"

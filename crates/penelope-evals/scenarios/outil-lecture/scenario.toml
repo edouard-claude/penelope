@@ -1,0 +1,15 @@
+name = "outil-lecture"
+description = """Appel d'outil de lecture puis réponse : le modèle lit un fichier du workspace
+avec `fs_read`, reçoit le résultat, répond. L'alias est épinglé : pas de classifieur."""
+pin_model = "main"
+
+[[files]]
+path = "notes.txt"
+content = """- relancer le client Borealis
+- vérifier la TVA du devis ACME
+- préparer la migration PROJ-7
+"""
+
+[[steps]]
+kind = "message"
+text = "lis notes.txt et dis-moi la première tâche"

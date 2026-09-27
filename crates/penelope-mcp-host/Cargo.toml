@@ -1,0 +1,47 @@
+[package]
+name = "penelope-mcp-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# L'hôte MCP (épopée #208, T25) : le superviseur des serveurs de `mcp.d/`, son connecteur
+# de processus et l'autorisation OAuth des serveurs HTTP. Au-dessus de `penelope-app`,
+# dont il implémente `McpGateway` et `McpAdmin` ; le daemon le construit, il ne connaît
+# pas le daemon.
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+# Découverte des serveurs en parallèle (`join_all`).
+futures.workspace = true
+# Découverte OAuth, enregistrement du client, échange et rafraîchissement des jetons.
+reqwest.workspace = true
+# Contrôle des adresses OAuth (HTTPS, boucle locale) et encodage des formulaires.
+url.workspace = true
+# Services, ports (`McpGateway`, `McpAdmin`, `Messenger`, `Slot`, `Supervision`),
+# élicitation, helpers.
+penelope-app.workspace = true
+# Journal d'événements, horloge, classes de risque.
+penelope-kernel.workspace = true
+# Table des serveurs MCP.
+penelope-store.workspace = true
+# Bac à sable des serveurs stdio, secrets, processus.
+penelope-platform.workspace = true
+# Caviardage des secrets OAuth.
+penelope-observe.workspace = true
+# Définition d'outil des schémas chargés d'emblée.
+penelope-llm.workspace = true
+# Client, protocole, transports, registre, OAuth.
+penelope-mcp.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+base64.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util", "test-util"] }

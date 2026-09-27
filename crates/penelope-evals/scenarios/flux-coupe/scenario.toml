@@ -1,0 +1,13 @@
+name = "flux-coupe"
+description = """Flux coupé après du texte : le fournisseur a commencé à répondre (HTTP 200, des
+fragments affichés) puis le flux tombe. Pas de repli silencieux : le tour échoue en le
+disant, rien de partiel n'entre dans l'historique, et le message suivant repart sainement."""
+pin_model = "main"
+
+[[steps]]
+kind = "message"
+text = "explique-moi le plan de migration"
+
+[[steps]]
+kind = "message"
+text = "tu es toujours là ?"

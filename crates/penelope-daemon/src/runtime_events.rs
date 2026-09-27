@@ -1,7 +1,7 @@
 //! Contrat public des événements runtime, établi après commit dans le journal.
 
-use crate::runtime::Daemon;
 use futures::{SinkExt, StreamExt};
+use penelope_app::helpers::bounded_redacted;
 use penelope_kernel::event::Event;
 use penelope_kernel::event::EventLog;
 use serde_json::{Value, json};
@@ -38,18 +38,6 @@ pub fn public_frame(event: &Event) -> Value {
         "payload": bounded_redacted(&event.payload),
         "actuation": null,
     })
-}
-
-/// Les résultats volumineux (listings, pages, images) n'envahissent pas le journal.
-/// La rédaction précède le calcul de taille pour ne jamais exposer le brut.
-pub fn bounded_redacted(value: &Value) -> Value {
-    let cleaned = penelope_observe::redact_json(value);
-    let bytes = cleaned.to_string().len();
-    if bytes > 64 * 1024 {
-        json!({"truncated": true, "bytes": bytes})
-    } else {
-        cleaned
-    }
 }
 
 fn rejected(
@@ -185,16 +173,15 @@ pub async fn serve_connection(
 
 /// Écoute locale activée par la configuration. Un secret absent ou trop court empêche
 /// tout bind : le flux ne démarre jamais avec une authentification vide.
-pub async fn serve(daemon: Arc<Daemon>) -> anyhow::Result<()> {
-    let config = daemon.services.config.config();
+pub async fn serve(services: Arc<penelope_app::services::Services>) -> anyhow::Result<()> {
+    let config = services.config.config();
     if config.observability.runtime_consumers.is_empty() {
         return Ok(());
     }
     let mut consumers = Vec::new();
     let mut tokens = std::collections::BTreeSet::new();
     for configured in &config.observability.runtime_consumers {
-        let token = daemon
-            .services
+        let token = services
             .platform
             .secrets
             .get(&configured.token_secret)?
@@ -223,7 +210,7 @@ pub async fn serve(daemon: Arc<Daemon>) -> anyhow::Result<()> {
     }
     let listener = tokio::net::TcpListener::bind(&config.observability.runtime_stream_bind).await?;
     tracing::info!(bind = %config.observability.runtime_stream_bind, "flux runtime prêt");
-    let log = Arc::new(daemon.services.events.clone());
+    let log = Arc::new(services.events.clone());
     loop {
         let (socket, _) = listener.accept().await?;
         let log = log.clone();
@@ -348,6 +335,119 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// Un client WebSocket authentifié, pour un consommateur au filtre `kinds`.
+    async fn consumer(log: Arc<EventLog>, kinds: &[&str]) -> WebSocketStream<TcpStream> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let kinds = kinds.iter().map(|k| k.to_string()).collect();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let consumer = StreamConsumer {
+                token: "local-secret".into(),
+                kinds,
+            };
+            let _ = serve_connection(socket, log, vec![consumer]).await;
+        });
+        let mut request = format!("ws://{addr}/events?after_id=0")
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert("authorization", "Bearer local-secret".parse().unwrap());
+        let stream = TcpStream::connect(addr).await.unwrap();
+        tokio_tungstenite::client_async(request, stream)
+            .await
+            .unwrap()
+            .0
+    }
+
+    async fn frame(ws: &mut WebSocketStream<TcpStream>) -> Value {
+        let next = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        serde_json::from_str(next.to_text().unwrap()).unwrap()
+    }
+
+    fn assistant(text: &str) -> Value {
+        use penelope_context::journal::{AssistantPayload, ConvEvent};
+        let content = penelope_llm::types::ChatMessage::assistant(text).content;
+        ConvEvent::Assistant(Box::new(AssistantPayload {
+            content,
+            ..Default::default()
+        }))
+        .payload()
+    }
+
+    /// T18 : le contenu de la conversation ne sort que pour qui le demande ; un filtre
+    /// par kind exact (`runtime.tool`) n'en reçoit rien, en rejeu comme en direct.
+    #[tokio::test]
+    async fn a_consumer_of_runtime_tool_receives_no_conv_event() {
+        let log = Arc::new(EventLog::new(
+            Store::open_memory().unwrap(),
+            Arc::new(TestClock::default()),
+        ));
+        let conv = |kind: &str, payload: Value| EventDraft::new(kind, payload).session("s1");
+        log.append(conv("conv.assistant", assistant("avant")))
+            .await
+            .unwrap();
+        let old = log
+            .append(EventDraft::new("runtime.tool", json!({"tool": "fs_read"})))
+            .await
+            .unwrap();
+        let mut ws = consumer(log.clone(), &["runtime.tool"]).await;
+        assert_eq!(frame(&mut ws).await["event_id"], old.id);
+        log.append(conv("conv.assistant", assistant("pendant")))
+            .await
+            .unwrap();
+        log.append(conv("conv.user", json!({"v": 1, "content": []})))
+            .await
+            .unwrap();
+        let fresh = log
+            .append(EventDraft::new("runtime.tool", json!({"tool": "fs_list"})))
+            .await
+            .unwrap();
+        let next = frame(&mut ws).await;
+        assert_eq!(next["kind"], "runtime.tool", "aucun conv.* entre les deux");
+        assert_eq!(next["event_id"], fresh.id);
+    }
+
+    /// T18 : sans filtre, un `conv.assistant` arrive rédigé, et borné à 64 Kio comme
+    /// n'importe quel payload.
+    #[tokio::test]
+    async fn an_unfiltered_consumer_receives_conv_assistant_redacted_and_bounded() {
+        let log = Arc::new(EventLog::new(
+            Store::open_memory().unwrap(),
+            Arc::new(TestClock::default()),
+        ));
+        let secret = "sk-FauxSecretDeConversation1234567890";
+        let said = format!("la clé est {secret}");
+        let small = log
+            .append(EventDraft::new("conv.assistant", assistant(&said)).session("s1"))
+            .await
+            .unwrap();
+        let big = log
+            .append(EventDraft::new("conv.assistant", assistant(&"x".repeat(70_000))).session("s1"))
+            .await
+            .unwrap();
+        let mut ws = consumer(log, &[]).await;
+        let first = frame(&mut ws).await;
+        assert_eq!(first["event_id"], small.id);
+        assert_eq!(first["kind"], "conv.assistant");
+        assert!(!first.to_string().contains(secret), "rédigé");
+        assert!(
+            first["payload"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("la clé est")
+        );
+        let second = frame(&mut ws).await;
+        assert_eq!(second["event_id"], big.id);
+        assert_eq!(second["payload"]["truncated"], true);
+        assert!(second["payload"]["bytes"].as_u64().unwrap() > 64 * 1024);
+    }
+
     #[tokio::test]
     async fn websocket_rejects_unauthenticated_clients() {
         let log = Arc::new(EventLog::new(
@@ -383,7 +483,7 @@ mod tests {
     async fn stream_does_not_bind_without_a_valid_stored_secret() {
         let dir = tempfile::tempdir().unwrap();
         let services = Arc::new(
-            crate::runtime::Services::for_tests(
+            penelope_app::services::Services::for_tests(
                 dir.path().to_path_buf(),
                 Arc::new(TestClock::default()),
             )
@@ -402,15 +502,14 @@ mod tests {
                 Ok(vec!["observability.runtime_consumers".into()])
             })
             .unwrap();
-        let daemon = Arc::new(crate::runtime::Daemon::from_services(services.clone()));
-        let error = serve(daemon.clone()).await.unwrap_err();
+        let error = serve(services.clone()).await.unwrap_err();
         assert!(error.to_string().contains("absent"), "{error}");
         services
             .platform
             .secrets
             .set("runtime_watchdog", "court")
             .unwrap();
-        let error = serve(daemon).await.unwrap_err();
+        let error = serve(services).await.unwrap_err();
         assert!(error.to_string().contains("trop court"), "{error}");
     }
 }

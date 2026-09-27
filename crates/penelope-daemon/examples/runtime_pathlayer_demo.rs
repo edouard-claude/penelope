@@ -1,10 +1,10 @@
 //! Session locale reproductible pour éprouver le relais Pathlayer (#162).
 
-use penelope_daemon::agent::ToolExecutor;
-use penelope_daemon::bus::Origin;
-use penelope_daemon::executor::{NativeToolExecutor, ToolEnv};
-use penelope_daemon::runtime::Services;
+use penelope_agent::ToolExecutor;
+use penelope_app::bus::Origin;
+use penelope_app::services::Services;
 use penelope_daemon::runtime_events::{StreamConsumer, serve_connection};
+use penelope_executor::executor::{NativeToolExecutor, ToolEnv};
 use penelope_kernel::session::SessionKind;
 use serde_json::json;
 use std::sync::Arc;

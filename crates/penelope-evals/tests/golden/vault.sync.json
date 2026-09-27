@@ -1,0 +1,15 @@
+{
+  "method": "vault.sync",
+  "params": {},
+  "response": {
+    "result": {
+      "git": "bool",
+      "commit": {
+        "stdout": "string",
+        "ok": "bool",
+        "committed": "bool",
+        "sha": "string"
+      }
+    }
+  }
+}

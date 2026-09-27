@@ -3,6 +3,12 @@
 //! **Store immuable** : chaque message, appel et résultat d'outil est persisté verbatim
 //! et indexé en FTS5. Les payloads volumineux partent en artefact et ne sont jamais
 //! chargés directement dans le contexte.
+//!
+//! **Le journal d'abord** (épopée #208, T16) : toute écriture de la conversation est un
+//! événement `conv.*`, puis sa projection dans les caches (`messages`, `messages_fts`,
+//! `message_context`, `lcm_nodes`, `prompt_snapshots`), dans la seconde transaction du
+//! même thread écrivain. Aucune méthode publique n'écrit ces tables sans événement, et
+//! aucune autre crate ne les écrit (`penelope-archtest`, `cache_writes`).
 
 use crate::transcript::Entry;
 use penelope_kernel::clock::SharedClock;
@@ -17,7 +23,11 @@ use std::collections::BTreeMap;
 #[derive(Clone)]
 pub struct HistoryStore {
     store: Store,
-    clock: SharedClock,
+    pub(crate) clock: SharedClock,
+    /// Le journal : chaque écriture y entre avant sa ligne de cache (T5, T16).
+    pub(crate) events: penelope_kernel::event::EventLog,
+    /// Surfaces déjà pliées, reprises sur les seuls événements nouveaux (T14).
+    pub(crate) reads: crate::read::SharedReadCache,
 }
 
 /// Résultat d'une recherche FTS sur l'historique (`history_grep`).
@@ -40,191 +50,6 @@ pub struct RankedHit {
     pub matched: Vec<String>,
 }
 
-/// Mots vides retirés d'une question avant la recherche : sans eux, une phrase
-/// entière ne correspond à rien, puisque le plein texte exige chaque mot.
-const STOPWORDS: &[&str] = &[
-    "au",
-    "aux",
-    "avec",
-    "avait",
-    "avais",
-    "avions",
-    "avoir",
-    "ai",
-    "as",
-    "avons",
-    "avez",
-    "ont",
-    "ce",
-    "ces",
-    "cet",
-    "cette",
-    "ceci",
-    "cela",
-    "ça",
-    "comme",
-    "comment",
-    "dans",
-    "de",
-    "des",
-    "du",
-    "déjà",
-    "donc",
-    "dont",
-    "elle",
-    "elles",
-    "en",
-    "est",
-    "et",
-    "été",
-    "être",
-    "était",
-    "étaient",
-    "il",
-    "ils",
-    "je",
-    "la",
-    "le",
-    "les",
-    "leur",
-    "leurs",
-    "lui",
-    "ma",
-    "mais",
-    "me",
-    "mes",
-    "moi",
-    "mon",
-    "ne",
-    "nos",
-    "notre",
-    "nous",
-    "on",
-    "ou",
-    "où",
-    "par",
-    "pas",
-    "plus",
-    "pour",
-    "pourquoi",
-    "quand",
-    "que",
-    "quel",
-    "quelle",
-    "quelles",
-    "quels",
-    "qui",
-    "quoi",
-    "sa",
-    "sans",
-    "se",
-    "ses",
-    "si",
-    "son",
-    "sont",
-    "sur",
-    "ta",
-    "te",
-    "tes",
-    "toi",
-    "ton",
-    "tu",
-    "un",
-    "une",
-    "vos",
-    "votre",
-    "vous",
-    "parlé",
-    "parler",
-    "parlions",
-    "discuté",
-    "dit",
-    "session",
-    "sessions",
-    "précédente",
-    "précédent",
-    "dernière",
-    "dernier",
-    "fois",
-    "chose",
-    "truc",
-    "retrouve",
-    "retrouver",
-    "souviens",
-    "rappelle",
-    "vers",
-    "pendant",
-    "faut",
-    "fait",
-    "faire",
-    "doit",
-    "doivent",
-    "peut",
-    "peux",
-    "bien",
-    "aussi",
-    "alors",
-    "encore",
-    "très",
-    "tout",
-    "tous",
-    "toute",
-    "toutes",
-    "rien",
-    "oui",
-    "non",
-    "merci",
-    "the",
-    "a",
-    "an",
-    "and",
-    "or",
-    "of",
-    "to",
-    "in",
-    "on",
-    "for",
-    "with",
-    "about",
-    "was",
-    "were",
-    "is",
-    "are",
-    "we",
-    "you",
-    "it",
-    "that",
-    "this",
-    "what",
-    "which",
-    "who",
-    "how",
-    "when",
-    "why",
-    "did",
-    "do",
-    "does",
-    "had",
-    "have",
-    "has",
-    "be",
-    "been",
-];
-
-/// Mots significatifs d'une question en langage naturel, dans l'ordre, sans doublon.
-pub fn significant_terms(question: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    // Les apostrophes coupent aussi : « d'un projet » donne « d », « un », « projet ».
-    for raw in question.split(|c: char| !(c.is_alphanumeric() || c == '-' || c == '_')) {
-        let w = raw.trim_matches(['-', '_']).to_lowercase();
-        if w.chars().count() < 2 || STOPWORDS.contains(&w.as_str()) || out.contains(&w) {
-            continue;
-        }
-        out.push(w);
-    }
-    out
-}
-
 /// Artefact externalisé (§5.5 « payloads volumineux »).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Artifact {
@@ -240,15 +65,21 @@ pub struct Artifact {
 }
 
 impl HistoryStore {
-    pub fn new(store: Store, clock: SharedClock) -> Self {
-        HistoryStore { store, clock }
+    pub fn new(store: Store, clock: SharedClock, events: penelope_kernel::event::EventLog) -> Self {
+        HistoryStore {
+            store,
+            clock,
+            events,
+            reads: Default::default(),
+        }
     }
 
     pub fn store(&self) -> &Store {
         &self.store
     }
 
-    /// Ajoute un message à l'historique canonique et à l'index FTS.
+    /// Ajoute un message à l'historique, sans provenance : son événement `conv.*`, puis sa
+    /// ligne et son entrée plein texte ([`append_as`](Self::append_as)).
     pub async fn append(
         &self,
         session_id: &str,
@@ -258,103 +89,22 @@ impl HistoryStore {
         eager: bool,
         artifact_id: Option<String>,
     ) -> penelope_store::Result<i64> {
-        let sid = session_id.to_string();
-        let content = serialise_content(message)?;
-        let searchable = message.text();
-        let ts = self.clock.now_rfc3339();
-        let role = message.role.as_str().to_string();
-        let tool_call_id = message.tool_call_id.clone();
-        let tool_name = message.name.clone();
-
-        self.store
-            .write(move |tx| {
-                let seq: i64 = tx
-                    .query_row(
-                        "SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE session_id = ?1",
-                        [&sid],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(1);
-                tx.execute(
-                    "INSERT INTO messages(session_id, seq, role, content, tool_call_id, tool_name,
-                        tokens_est, ts, episode, eager, artifact_id)
-                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-                    params![
-                        sid,
-                        seq,
-                        role,
-                        content,
-                        tool_call_id,
-                        tool_name,
-                        tokens as i64,
-                        ts,
-                        episode,
-                        eager as i64,
-                        artifact_id
-                    ],
-                )?;
-                let id = tx.last_insert_rowid();
-                tx.execute(
-                    "INSERT INTO messages_fts(content, session_id, msg_id) VALUES(?1,?2,?3)",
-                    params![searchable, sid, id],
-                )?;
-                Ok(seq)
-            })
-            .await
+        let prov = crate::journal::Provenance::default();
+        self.append_as(
+            session_id,
+            message,
+            tokens,
+            episode,
+            eager,
+            artifact_id,
+            &prov,
+        )
+        .await
     }
 
-    /// Ajoute une seule fois un message reçu par la file, avec son horodatage
-    /// original. L'ID du tour est la clé d'idempotence après crash (#161).
-    pub async fn append_user_turn_at(
-        &self,
-        session_id: &str,
-        turn_id: &str,
-        text: &str,
-        arrived_at: &str,
-        tokens: u64,
-        episode: i64,
-    ) -> penelope_store::Result<i64> {
-        let (sid, source, ts) = (
-            session_id.to_string(),
-            turn_id.to_string(),
-            arrived_at.to_string(),
-        );
-        let message = ChatMessage::user(text);
-        let content = serialise_content(&message)?;
-        let searchable = text.to_string();
-        self.store
-            .write(move |tx| {
-                if let Some(seq) = tx
-                    .query_row(
-                        "SELECT seq FROM messages WHERE source_turn_id=?1",
-                        [&source],
-                        |r| r.get(0),
-                    )
-                    .optional()?
-                {
-                    return Ok(seq);
-                }
-                let seq: i64 = tx.query_row(
-                    "SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE session_id=?1",
-                    [&sid],
-                    |r| r.get(0),
-                )?;
-                tx.execute(
-                    "INSERT INTO messages(session_id, seq, role, content, tokens_est, ts,
-                        episode, source_turn_id) VALUES(?1,?2,'user',?3,?4,?5,?6,?7)",
-                    params![sid, seq, content, tokens as i64, ts, episode, source],
-                )?;
-                let id = tx.last_insert_rowid();
-                tx.execute(
-                    "INSERT INTO messages_fts(content, session_id, msg_id) VALUES(?1,?2,?3)",
-                    params![searchable, sid, id],
-                )?;
-                Ok(seq)
-            })
-            .await
-    }
-
-    /// Charge l'historique canonique d'une session.
+    /// Charge l'historique canonique d'une session. Ici comme dans les autres lectures
+    /// de lignes, une ligne scellée masquée par un retour arrière (`sealed = 2`,
+    /// `seal.rs`) n'est plus un message de la session.
     pub async fn load(
         &self,
         session_id: &str,
@@ -366,7 +116,8 @@ impl HistoryStore {
                 let mut st = c.prepare(
                     "SELECT seq, role, content, tool_call_id, tool_name, tokens_est, episode,
                             eager, artifact_id, compacted
-                     FROM messages WHERE session_id = ?1 AND seq >= ?2 ORDER BY seq",
+                     FROM messages WHERE session_id = ?1 AND seq >= ?2 AND sealed != 2
+                     ORDER BY seq",
                 )?;
                 let rows = st.query_map(params![sid, from_seq], row_to_entry)?;
                 let mut out = Vec::new();
@@ -387,7 +138,8 @@ impl HistoryStore {
                 let mut st = c.prepare(
                     "SELECT seq, role, content, tool_call_id, tool_name, tokens_est, episode,
                             eager, artifact_id, compacted
-                     FROM messages WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2",
+                     FROM messages WHERE session_id = ?1 AND sealed != 2
+                     ORDER BY seq DESC LIMIT ?2",
                 )?;
                 let rows = st.query_map(params![sid, limit as i64], row_to_entry)?;
                 let mut out = Vec::new();
@@ -415,7 +167,7 @@ impl HistoryStore {
                 let mut st = c.prepare(
                     "SELECT seq, role, content, tool_call_id, tool_name
                      FROM messages
-                     WHERE session_id = ?1 AND role = 'tool' AND artifact_id IS NULL
+                     WHERE session_id = ?1 AND role = 'tool' AND artifact_id IS NULL AND sealed != 2
                      ORDER BY seq DESC LIMIT ?2",
                 )?;
                 let rows = st.query_map(params![sid, limit as i64], |r| {
@@ -435,27 +187,6 @@ impl HistoryStore {
                 }
                 out.reverse();
                 Ok(out)
-            })
-            .await
-    }
-
-    /// Fige le contexte volatil (T4) d'un message utilisateur : il l'accompagnera dans
-    /// toutes les requêtes suivantes, pour que le préfixe ne change plus (issue #17).
-    /// Sans effet s'il est déjà figé.
-    pub async fn freeze_context(
-        &self,
-        session_id: &str,
-        seq: i64,
-        context: &str,
-    ) -> penelope_store::Result<bool> {
-        let (sid, ctx) = (session_id.to_string(), context.to_string());
-        self.store
-            .write(move |tx| {
-                Ok(tx.execute(
-                    "INSERT OR IGNORE INTO message_context(session_id, seq, context)
-                     VALUES(?1, ?2, ?3)",
-                    params![sid, seq, ctx],
-                )? > 0)
             })
             .await
     }
@@ -505,7 +236,8 @@ impl HistoryStore {
                 let mut st = c.prepare(
                     "SELECT seq, role, content, tool_call_id, tool_name, tokens_est, episode,
                             eager, artifact_id, compacted
-                     FROM messages WHERE session_id = ?1 AND episode = ?2 ORDER BY seq",
+                     FROM messages WHERE session_id = ?1 AND episode = ?2 AND sealed != 2
+                     ORDER BY seq",
                 )?;
                 let rows = st.query_map(params![sid, episode], row_to_entry)?;
                 let mut out = Vec::new();
@@ -525,264 +257,13 @@ impl HistoryStore {
                 let mut st = c.prepare(
                     "SELECT seq, role, content, tool_call_id, tool_name, tokens_est, episode,
                             eager, artifact_id, compacted
-                     FROM messages WHERE session_id = ?1 ORDER BY seq DESC LIMIT 1",
+                     FROM messages WHERE session_id = ?1 AND sealed != 2
+                     ORDER BY seq DESC LIMIT 1",
                 )?;
                 let mut rows = st.query_map(params![sid], row_to_entry)?;
                 Ok(rows.next().transpose()?)
             })
             .await
-    }
-
-    /// Copie l'historique d'une session vers une autre, numéros et état de compaction
-    /// compris, index plein texte avec (fork, archive d'un rewind).
-    pub async fn copy_messages(
-        &self,
-        from: &str,
-        to: &str,
-        from_seq: i64,
-        to_seq: Option<i64>,
-    ) -> penelope_store::Result<usize> {
-        let (from, to) = (from.to_string(), to.to_string());
-        self.store
-            .write(move |tx| {
-                let n = tx.execute(
-                    "INSERT INTO messages(session_id, seq, role, content, tool_call_id, tool_name,
-                        tokens_est, ts, episode, eager, artifact_id, compacted)
-                     SELECT ?2, seq, role, content, tool_call_id, tool_name, tokens_est, ts,
-                        episode, eager, artifact_id, compacted
-                     FROM messages
-                     WHERE session_id = ?1 AND seq >= ?3 AND (?4 IS NULL OR seq <= ?4)
-                     ORDER BY seq",
-                    params![from, to, from_seq, to_seq],
-                )?;
-                tx.execute(
-                    "INSERT INTO messages_fts(content, session_id, msg_id)
-                     SELECT f.content, ?2, dst.id
-                     FROM messages dst
-                     JOIN messages src ON src.session_id = ?1 AND src.seq = dst.seq
-                     JOIN messages_fts f ON f.msg_id = src.id
-                     WHERE dst.session_id = ?2 AND dst.seq >= ?3 AND (?4 IS NULL OR dst.seq <= ?4)",
-                    params![from, to, from_seq, to_seq],
-                )?;
-                Ok(n)
-            })
-            .await
-    }
-
-    /// Retire les messages d'une session à partir d'une séquence (incluse).
-    pub async fn truncate_from(
-        &self,
-        session_id: &str,
-        from_seq: i64,
-    ) -> penelope_store::Result<usize> {
-        let sid = session_id.to_string();
-        self.store
-            .write(move |tx| {
-                tx.execute(
-                    "DELETE FROM messages_fts WHERE msg_id IN
-                        (SELECT id FROM messages WHERE session_id = ?1 AND seq >= ?2)",
-                    params![sid, from_seq],
-                )?;
-                Ok(tx.execute(
-                    "DELETE FROM messages WHERE session_id = ?1 AND seq >= ?2",
-                    params![sid, from_seq],
-                )?)
-            })
-            .await
-    }
-
-    /// Reconstruit l'index plein texte des messages depuis l'historique canonique.
-    pub async fn rebuild_fts(&self) -> penelope_store::Result<usize> {
-        self.store
-            .write(|tx| {
-                tx.execute("DELETE FROM messages_fts", [])?;
-                let mut st = tx.prepare("SELECT id, session_id, role, content FROM messages")?;
-                let rows: Vec<(i64, String, String, String)> = st
-                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-                    .collect::<Result<_, _>>()?;
-                drop(st);
-                let mut n = 0;
-                for (id, sid, role, content) in rows {
-                    let message = deserialise_content(
-                        Role::parse(&role).unwrap_or(Role::User),
-                        &content,
-                        None,
-                        None,
-                    );
-                    tx.execute(
-                        "INSERT INTO messages_fts(content, session_id, msg_id) VALUES(?1,?2,?3)",
-                        params![message.text(), sid, id],
-                    )?;
-                    n += 1;
-                }
-                Ok(n)
-            })
-            .await
-    }
-
-    /// Marque une plage de séquences comme couverte par un nœud de résumé.
-    pub async fn mark_compacted(
-        &self,
-        session_id: &str,
-        from_seq: i64,
-        to_seq: i64,
-    ) -> penelope_store::Result<usize> {
-        let sid = session_id.to_string();
-        self.store
-            .write(move |tx| {
-                Ok(tx.execute(
-                    "UPDATE messages SET compacted = 1
-                     WHERE session_id = ?1 AND seq >= ?2 AND seq <= ?3",
-                    params![sid, from_seq, to_seq],
-                )?)
-            })
-            .await
-    }
-
-    /// Remplace le corps d'un message par sa version externalisée (niveau 1, canonique).
-    pub async fn externalise(
-        &self,
-        session_id: &str,
-        seq: i64,
-        new_body: &str,
-        artifact_id: &str,
-        new_tokens: u64,
-    ) -> penelope_store::Result<()> {
-        let (sid, body, art) = (
-            session_id.to_string(),
-            new_body.to_string(),
-            artifact_id.to_string(),
-        );
-        self.store
-            .write(move |tx| {
-                let content: String = tx.query_row(
-                    "SELECT content FROM messages WHERE session_id=?1 AND seq=?2",
-                    params![sid, seq],
-                    |r| r.get(0),
-                )?;
-                let mut v: Value =
-                    serde_json::from_str(&content).unwrap_or_else(|_| json!({"blocks": []}));
-                v["blocks"] = json!([{"type":"text","text": body}]);
-                tx.execute(
-                    "UPDATE messages SET content=?3, artifact_id=?4, tokens_est=?5
-                     WHERE session_id=?1 AND seq=?2",
-                    params![sid, seq, v.to_string(), art, new_tokens as i64],
-                )?;
-                Ok(())
-            })
-            .await
-    }
-
-    /// Recherche plein texte sur les messages bruts et sur les résumés (`history_grep`).
-    pub async fn grep(
-        &self,
-        query: &str,
-        session_id: Option<&str>,
-        limit: i64,
-    ) -> penelope_store::Result<Vec<GrepHit>> {
-        let q = sanitise_fts(query);
-        let sid = session_id.map(String::from);
-        self.store
-            .read(move |c| {
-                let mut out = Vec::new();
-                if q.is_empty() {
-                    return Ok(out);
-                }
-                // 1. Messages bruts.
-                let sql =
-                    "SELECT m.session_id, m.seq, m.role, snippet(messages_fts, 0, '', '', '…', 12)
-                           FROM messages_fts f
-                           JOIN messages m ON m.id = f.msg_id
-                           WHERE messages_fts MATCH ?1
-                             AND (?2 IS NULL OR m.session_id = ?2)
-                           ORDER BY rank LIMIT ?3";
-                let mut st = c.prepare(sql)?;
-                let rows = st.query_map(params![q, sid, limit], |r| {
-                    Ok(GrepHit {
-                        session_id: r.get(0)?,
-                        seq: r.get(1)?,
-                        role: r.get(2)?,
-                        excerpt: r.get(3)?,
-                        source: "raw".into(),
-                        node_id: None,
-                    })
-                })?;
-                for r in rows {
-                    out.push(r?);
-                }
-
-                // 2. Résumés LCM (recherche simple : ils sont peu nombreux). Comme en plein
-                // texte, tous les mots doivent y être.
-                let mut st = c.prepare(
-                    "SELECT id, session_id, from_seq, summary FROM lcm_nodes
-                     WHERE (?2 IS NULL OR session_id = ?2) AND superseded_by IS NULL
-                     ORDER BY level DESC, created_at DESC LIMIT 200",
-                )?;
-                let words: Vec<String> = q
-                    .split_whitespace()
-                    .map(|w| w.trim_matches('"').to_lowercase())
-                    .filter(|w| !w.is_empty())
-                    .collect();
-                let rows = st.query_map(params![q, sid], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, Option<i64>>(2)?,
-                        r.get::<_, String>(3)?,
-                    ))
-                })?;
-                for r in rows {
-                    let (id, session, from_seq, summary) = r?;
-                    let lower = summary.to_lowercase();
-                    if words.iter().all(|w| lower.contains(w.as_str())) {
-                        out.push(GrepHit {
-                            session_id: session,
-                            seq: from_seq.unwrap_or(0),
-                            role: "summary".into(),
-                            excerpt: excerpt_around(&summary, &words[0], 160),
-                            source: "summary".into(),
-                            node_id: Some(id),
-                        });
-                    }
-                }
-                Ok(out)
-            })
-            .await
-    }
-
-    /// Recherche mot par mot (`history_expand_query`) : un passage par message, classé
-    /// par nombre de mots trouvés, puis du plus récent au plus ancien.
-    pub async fn grep_terms(
-        &self,
-        terms: &[String],
-        session_id: Option<&str>,
-        per_term: i64,
-        limit: usize,
-    ) -> penelope_store::Result<Vec<RankedHit>> {
-        let mut found: BTreeMap<(String, i64, String), RankedHit> = BTreeMap::new();
-        for term in terms {
-            for hit in self.grep(term, session_id, per_term).await? {
-                let key = (hit.session_id.clone(), hit.seq, hit.source.clone());
-                let entry = found.entry(key).or_insert_with(|| RankedHit {
-                    hit,
-                    matched: Vec::new(),
-                });
-                if !entry.matched.contains(term) {
-                    entry.matched.push(term.clone());
-                }
-            }
-        }
-        let mut ranked: Vec<RankedHit> = found.into_values().collect();
-        // Les identifiants de session sont des ULID : l'ordre lexical suit le temps.
-        ranked.sort_by(|a, b| {
-            b.matched
-                .len()
-                .cmp(&a.matched.len())
-                .then_with(|| b.hit.session_id.cmp(&a.hit.session_id))
-                .then_with(|| b.hit.seq.cmp(&a.hit.seq))
-        });
-        ranked.truncate(limit);
-        Ok(ranked)
     }
 
     // ------------------------------------------------------------- artefacts
@@ -972,7 +453,7 @@ pub fn guess_kind(body: &str) -> &'static str {
     "text"
 }
 
-fn serialise_content(m: &ChatMessage) -> penelope_store::Result<String> {
+pub(crate) fn serialise_content(m: &ChatMessage) -> penelope_store::Result<String> {
     let blocks: Vec<Value> = m
         .content
         .iter()
@@ -1001,7 +482,7 @@ fn serialise_content(m: &ChatMessage) -> penelope_store::Result<String> {
     Ok(v.to_string())
 }
 
-fn deserialise_content(
+pub(crate) fn deserialise_content(
     role: Role,
     raw: &str,
     tool_call_id: Option<String>,
@@ -1095,285 +576,20 @@ fn row_to_entry(r: &penelope_store::rusqlite::Row<'_>) -> penelope_store::rusqli
     })
 }
 
-/// Neutralise la syntaxe FTS5 d'une requête utilisateur : une recherche ne doit jamais
-/// échouer parce que le texte contient un guillemet ou un opérateur.
-pub fn sanitise_fts(q: &str) -> String {
-    let cleaned: String = q
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c.is_whitespace() {
-                c
-            } else {
-                ' '
-            }
-        })
-        .collect();
-    cleaned
-        .split_whitespace()
-        // Les opérateurs FTS5 écrits en clair sont retirés plutôt que cités : sinon une
-        // requête « E0308 AND a.rs » exigerait le mot « AND » dans le document.
-        .filter(|w| !matches!(*w, "AND" | "OR" | "NOT" | "NEAR"))
-        .filter(|w| w.chars().count() > 1)
-        .map(|w| format!("\"{w}\""))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn excerpt_around(text: &str, needle: &str, width: usize) -> String {
-    let lower = text.to_lowercase();
-    let pos = lower.find(needle).unwrap_or(0);
-    let start = text[..pos]
-        .char_indices()
-        .rev()
-        .nth(width / 2)
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-    let end = text[pos..]
-        .char_indices()
-        .nth(width)
-        .map(|(i, _)| pos + i)
-        .unwrap_or(text.len());
-    text[start..end].replace('\n', " ")
-}
+mod dual;
+#[cfg(test)]
+mod legacy;
+mod prompt;
+mod purge;
+mod rewrite;
+pub mod seal;
+mod search;
+pub(crate) use dual::origin_in;
+pub use prompt::{KIND_SESSION_PROJECT, PREFIX_RELEASES};
+pub use purge::CachesPurged;
+pub use rewrite::Rewound;
+pub(crate) use rewrite::mark_compacted_in;
+pub use search::{sanitise_fts, significant_terms};
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use penelope_kernel::clock::TestClock;
-    use std::sync::Arc;
-
-    async fn hs() -> HistoryStore {
-        let store = Store::open_memory().unwrap();
-        store
-            .write(|tx| {
-                tx.execute(
-                    "INSERT INTO sessions(id, kind, created_at, updated_at)
-                     VALUES('s1','chat','t','t')",
-                    [],
-                )?;
-                Ok(())
-            })
-            .await
-            .unwrap();
-        HistoryStore::new(store, Arc::new(TestClock::default()))
-    }
-
-    #[tokio::test]
-    async fn reasoning_survives_a_reload() {
-        let h = hs().await;
-        let m = ChatMessage {
-            reasoning: Some("je dois lire le fichier".into()),
-            reasoning_details: Some(json!([{"type":"reasoning.text","text":"je dois","index":0}])),
-            ..ChatMessage::assistant("")
-        }
-        .with_tool_calls(vec![ToolCall {
-            id: "c1".into(),
-            name: "fs_read".into(),
-            arguments: json!({"path":"a.rs"}),
-        }]);
-        h.append("s1", &m, 10, 0, false, None).await.unwrap();
-        let back = &h.load("s1", 0).await.unwrap()[0].message;
-        assert_eq!(back.reasoning.as_deref(), Some("je dois lire le fichier"));
-        assert_eq!(
-            back.reasoning_details.as_ref().unwrap()[0]["text"],
-            "je dois"
-        );
-        assert_eq!(back.tool_calls[0].id, "c1");
-    }
-
-    #[tokio::test]
-    async fn append_and_load_roundtrip() {
-        let h = hs().await;
-        h.append("s1", &ChatMessage::user("bonjour"), 10, 0, false, None)
-            .await
-            .unwrap();
-        let call = ChatMessage::assistant("je lis").with_tool_calls(vec![ToolCall {
-            id: "c1".into(),
-            name: "fs_read".into(),
-            arguments: json!({"path":"a.rs"}),
-        }]);
-        h.append("s1", &call, 20, 0, false, None).await.unwrap();
-        h.append(
-            "s1",
-            &ChatMessage::tool_result("c1", "fs_read", "contenu"),
-            30,
-            0,
-            true,
-            None,
-        )
-        .await
-        .unwrap();
-
-        let entries = h.load("s1", 0).await.unwrap();
-        assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0].message.text(), "bonjour");
-        assert_eq!(entries[1].message.tool_calls[0].name, "fs_read");
-        assert_eq!(entries[2].message.tool_call_id.as_deref(), Some("c1"));
-        assert!(entries[2].eager);
-        assert!(crate::transcript::pairs_are_valid(
-            &entries
-                .iter()
-                .map(|e| e.message.clone())
-                .collect::<Vec<_>>()
-        ));
-    }
-
-    /// #161 : le message venu de la file porte sa date de réception et n'est pas
-    /// dupliqué si le tour est rejoué après une écriture interrompue.
-    #[tokio::test]
-    async fn queued_user_message_keeps_arrival_time_and_is_idempotent() {
-        let h = hs().await;
-        let at = "2026-09-22T10:00:00.000Z";
-        let first = h
-            .append_user_turn_at("s1", "t1", "bonjour", at, 10, 0)
-            .await
-            .unwrap();
-        let again = h
-            .append_user_turn_at("s1", "t1", "bonjour", at, 10, 0)
-            .await
-            .unwrap();
-        assert_eq!(first, again);
-        let entries = h.load("s1", 0).await.unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].message.text(), "bonjour");
-        let timestamp: String = h
-            .store()
-            .read(|c| {
-                Ok(c.query_row(
-                    "SELECT ts FROM messages WHERE source_turn_id='t1'",
-                    [],
-                    |r| r.get(0),
-                )?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(timestamp, at);
-    }
-
-    #[tokio::test]
-    async fn fts_finds_messages_without_accents() {
-        let h = hs().await;
-        h.append(
-            "s1",
-            &ChatMessage::user("le déploiement a échoué en préproduction"),
-            10,
-            0,
-            false,
-            None,
-        )
-        .await
-        .unwrap();
-        let hits = h.grep("deploiement", Some("s1"), 10).await.unwrap();
-        assert_eq!(hits.len(), 1, "{hits:?}");
-        assert_eq!(hits[0].source, "raw");
-    }
-
-    #[tokio::test]
-    async fn fts_query_with_punctuation_does_not_fail() {
-        let h = hs().await;
-        h.append(
-            "s1",
-            &ChatMessage::user("erreur E0308 dans a.rs"),
-            5,
-            0,
-            false,
-            None,
-        )
-        .await
-        .unwrap();
-        let hits = h
-            .grep("\"E0308\" AND (a.rs)", Some("s1"), 10)
-            .await
-            .unwrap();
-        assert!(
-            !hits.is_empty(),
-            "une requête bruitée doit quand même chercher"
-        );
-    }
-
-    #[tokio::test]
-    async fn artifact_cursor_only_advances_over_returned_bytes() {
-        let h = hs().await;
-        let body = "0123456789".repeat(100); // 1000 octets
-        let a = h
-            .put_artifact(Some("s1"), None, "text", None, &body)
-            .await
-            .unwrap();
-        let (chunk, cursor, done) = h.read_artifact(&a.id, 0, 400).await.unwrap().unwrap();
-        assert_eq!(chunk.len(), 400);
-        assert_eq!(cursor, 400);
-        assert!(!done);
-        let (chunk2, cursor2, done2) = h.read_artifact(&a.id, cursor, 1000).await.unwrap().unwrap();
-        assert_eq!(chunk2.len(), 600);
-        assert_eq!(cursor2, 1000);
-        assert!(done2);
-    }
-
-    #[tokio::test]
-    async fn artifact_read_never_splits_utf8() {
-        let h = hs().await;
-        let body = "éàü".repeat(100);
-        let a = h
-            .put_artifact(None, None, "text", None, &body)
-            .await
-            .unwrap();
-        // 5 octets tombe au milieu d'un caractère multi-octets.
-        let (chunk, cursor, _) = h.read_artifact(&a.id, 0, 5).await.unwrap().unwrap();
-        assert!(
-            !chunk.contains('\u{FFFD}'),
-            "aucun caractère de remplacement"
-        );
-        assert!(cursor <= 5);
-    }
-
-    #[tokio::test]
-    async fn externalise_rewrites_the_canonical_body() {
-        let h = hs().await;
-        h.append(
-            "s1",
-            &ChatMessage::tool_result("c1", "t", "x".repeat(5000)),
-            2000,
-            0,
-            false,
-            None,
-        )
-        .await
-        .unwrap();
-        h.externalise(
-            "s1",
-            1,
-            "[résultat externalisé — artefact art_1]",
-            "art_1",
-            30,
-        )
-        .await
-        .unwrap();
-        let e = h.load("s1", 0).await.unwrap();
-        assert!(e[0].message.text().contains("externalisé"));
-        assert_eq!(e[0].artifact_id.as_deref(), Some("art_1"));
-        assert_eq!(e[0].tokens, 30);
-    }
-
-    #[test]
-    fn payload_description_is_typed() {
-        assert!(describe_payload("json", r#"[{"a":1},{"a":2}]"#).contains("tableau de 2"));
-        assert!(describe_payload("csv", "a,b,c\n1,2,3").contains("colonnes"));
-        assert!(describe_payload("log", "info\nerror: x\nerror: y").contains("2 lignes d'erreur"));
-    }
-
-    #[test]
-    fn kind_guessing() {
-        assert_eq!(guess_kind(r#"{"a":1}"#), "json");
-        assert_eq!(guess_kind("a,b,c\n1,2,3\n4,5,6\n7,8,9\n1,1,1"), "csv");
-        assert_eq!(guess_kind("<!DOCTYPE html><html>"), "html");
-        assert_eq!(guess_kind("fn main() {}"), "code");
-        assert_eq!(guess_kind("une phrase"), "text");
-    }
-
-    #[test]
-    fn fts_sanitiser_quotes_terms_and_drops_operators() {
-        assert_eq!(sanitise_fts("a.rs OR erreur"), "\"rs\" \"erreur\"");
-        assert_eq!(sanitise_fts("  "), "");
-        assert_eq!(sanitise_fts("\"quoted\" AND (x)"), "\"quoted\"");
-    }
-}
+mod tests;

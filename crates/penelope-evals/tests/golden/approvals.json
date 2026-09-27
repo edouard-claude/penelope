@@ -1,0 +1,34 @@
+{
+  "method": "approvals",
+  "params": {},
+  "response": {
+    "result": [
+      {
+        "decided_at": "null",
+        "id": "string",
+        "kind": "string",
+        "subject": "string",
+        "risk": "string",
+        "payload": {
+          "tool": "string",
+          "arguments": {
+            "path": "string"
+          }
+        },
+        "choices": [
+          "string"
+        ],
+        "session_id": "null",
+        "run_id": "null",
+        "created_at": "string",
+        "expires_at": "string",
+        "state": "string",
+        "decision": "null",
+        "reason": "null",
+        "decided_by": "null",
+        "decided_via": "null",
+        "rule_created": "null"
+      }
+    ]
+  }
+}

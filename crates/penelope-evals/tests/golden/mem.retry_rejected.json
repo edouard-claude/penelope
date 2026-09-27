@@ -1,0 +1,9 @@
+{
+  "method": "mem.retry_rejected",
+  "params": {},
+  "response": {
+    "result": {
+      "retried": "integer"
+    }
+  }
+}

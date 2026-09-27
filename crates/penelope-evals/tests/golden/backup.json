@@ -1,0 +1,10 @@
+{
+  "method": "backup",
+  "params": {},
+  "response": {
+    "result": {
+      "path": "string",
+      "snapshot_ms": "integer"
+    }
+  }
+}

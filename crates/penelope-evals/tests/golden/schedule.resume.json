@@ -1,0 +1,11 @@
+{
+  "method": "schedule.resume",
+  "params": {
+    "id": "$schedule_resume"
+  },
+  "response": {
+    "result": {
+      "ok": "bool"
+    }
+  }
+}

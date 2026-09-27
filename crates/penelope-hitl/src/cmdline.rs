@@ -489,13 +489,12 @@ pub fn why_composed(line: &str) -> Option<String> {
     let mut chars = line.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
+            // Entre guillemets simples, rien n'est un opérateur : la ligne reprend après
+            // la quote fermante.
             '\'' => {
-                for ch in chars.by_ref() {
-                    if ch == '\'' {
-                        return Some("guillemets non fermés".into());
-                    }
+                if !chars.by_ref().any(|ch| ch == '\'') {
+                    return Some("guillemets non fermés".into());
                 }
-                return Some("guillemets non fermés".into());
             }
             '"' => {
                 let mut closed = false;
@@ -775,5 +774,39 @@ mod list_tests {
     fn pipeline_still_refuses_a_list() {
         assert!(pipeline("a && b").is_none());
         assert!(pipeline("ls -la").is_some());
+    }
+
+    /// #150 : la carte nomme ce qui empêche une règle ; une ligne à famille n'a rien à
+    /// nommer.
+    #[test]
+    fn the_obstacle_to_a_family_is_named() {
+        assert_eq!(why_composed("cargo test && cargo build"), None);
+        for (line, why) in [
+            ("a; b", "`;`"),
+            ("a || b", "`||`"),
+            ("a & b", "`&` (arrière-plan)"),
+            ("a > f", "une redirection"),
+            ("(a)", "un sous-shell"),
+            ("echo $(id)", "`$(…)`"),
+            ("echo `id`", "`` ` ``"),
+            ("echo a\\ b", "un échappement"),
+            ("a\nb", "un retour à la ligne"),
+            ("echo \"$HOME\"", "`$` entre guillemets"),
+            ("echo \"abc", "guillemets non fermés"),
+            ("echo 'abc", "guillemets non fermés"),
+            ("echo 'a'; b", "`;`"),
+        ] {
+            assert_eq!(why_composed(line).as_deref(), Some(why), "{line}");
+        }
+    }
+
+    /// `||`, `&` seul et `&&&` ne sont pas des listes de commandes nommables.
+    #[test]
+    fn only_a_double_ampersand_chains() {
+        assert!(list("a && b").is_some());
+        assert!(list("a || b").is_none());
+        assert!(list("a & b").is_none());
+        assert!(list("a &&& b").is_none());
+        assert!(list("&& b").is_none());
     }
 }

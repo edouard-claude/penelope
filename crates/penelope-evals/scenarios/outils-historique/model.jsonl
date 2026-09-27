@@ -1,0 +1,2 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "history_grep", "arguments": {"query": "Borealis TVA"}}, {"id": "c2", "name": "history_expand_query", "arguments": {"question": "Qu'avait-on décidé pour la TVA intracommunautaire de Borealis ?"}}]}}
+{"text": "On devait vérifier la TVA intracommunautaire de Borealis avec le comptable."}

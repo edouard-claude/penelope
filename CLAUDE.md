@@ -9,10 +9,10 @@ Une issue fermée, c'est **trois** choses dans le même lot :
 
 1. le code et ses tests ;
 2. une section `### x.y.z` dans `docs/progress.md`, qui devient les notes de la release ;
-3. la version posée dans `Cargo.toml` (seize lignes) et `Cargo.lock`.
+3. la version posée dans `Cargo.toml` (une ligne par crate, plus celle du workspace) et `Cargo.lock`.
 
 ```bash
-make bump V=0.17.31        # vérifie la section, réécrit les seize lignes, commite
+make bump V=1.0.1          # vérifie la section, réécrit les lignes de version, commite
 git push
 ```
 
@@ -54,9 +54,10 @@ compile. Quand une signature change, relis-en les appels à la main :
 
 ## Gel de la dette
 
-La 0.17 est gelée (décision [0015](docs/decisions/0015-gel-0.17-et-branche-v1.md), épopée
-#208) : `main` ne prend plus que des corrections (bug, régression, sécurité) ; **un nouveau
-module ou une fonctionnalité va dans `v1`**. Les règles sont mécaniques, tenues par
+La V1 est sur `main` depuis la bascule (décision
+[0015](docs/decisions/0015-gel-0.17-et-branche-v1.md), épopée #208) ; la 0.17 ne vit plus
+que sur la branche `0.17`, pour un correctif d'urgence publié par `workflow_dispatch`. Les
+règles du gel restent : elles tiennent la dette au niveau atteint par la V1. Les règles sont mécaniques, tenues par
 `penelope-archtest` et par `crates/penelope-archtest/budget.toml`, dont les nombres ne
 montent jamais (#209 à #214 les posent ; leurs messages d'erreur sont la documentation
 détaillée, avec `design/v1/gel-et-outillage.md` §3).
@@ -66,9 +67,9 @@ détaillée, avec `design/v1/gel-et-outillage.md` §3).
 - R2 : un fichier de tests (`tests/*.rs`, `src/**/tests.rs`) tient sous 1 500 lignes.
 - R3 : les fichiers déjà au-dessus sont dans `[files.oversized]` avec leur taille ; chaque
   entrée ne peut que descendre, et disparaît dès que le fichier repasse sous le plafond.
-- R4 : `penelope-daemon/src` a un plafond de lignes (`[crates]`) : la 0.17 ne grossit plus.
+- R4 : `penelope-daemon/src` a un plafond de lignes (`[crates]`) : le daemon ne regrossit pas.
 - R5 : tout `mod x;` du daemon est dans la liste blanche `[daemon].modules` ; un module
-  nouveau se fait dans `v1`, pas dans la 0.17.
+  nouveau va dans le crate de son domaine, pas dans le daemon.
 - R6 : les occurrences de `Daemon` par fichier sont budgétées (`[daemon.daemon_users]`) et
   `impl Daemon` réservé à quatre fichiers : prendre `&Services` ou un trait, pas le daemon.
 - R7 : `clippy::too_many_lines` à 200 lignes ; les `#[allow(clippy::too_many_lines)]`
@@ -92,33 +93,9 @@ mois, relus par `git log --grep=Dérogation-budget`.
 La sortie normale d'un correctif qui fait déborder un fichier de la liste : déplacer un
 test dans `tests.rs`, pas le trailer.
 
-**Aucun tag `v1*` avant la bascule.** La variable de dépôt `V1_RELEASES` n'existe pas
-encore : `release.yml` refuse toute release 1.x sans elle, et `penelope upgrade` ignore une
-version à suffixe (#212). Une pré-release 1.x publiée par erreur serait installée par toutes
-les instances 0.17.
-
-## Travailler sur v1
-
-- La branche `v1` est créée depuis `main` **après** le gel et les filets (lots A et B), sur
-  le dernier tag `0.17.x`. Elle porte les versions `1.0.0-alpha.N`, un bump par lot
-  (`make bump V=1.0.0-alpha.7` : `scripts/bump.sh` accepte le suffixe), **jamais taguées**.
-- Le même `docs/progress.md` : le bloc `## Version 1 (branche v1)` en tête reçoit les
-  sections `### 1.0.0-alpha.N` ; les `### 0.17.x` restent dessous et arrivent par les
-  fusions. Jamais de section `1.0.0-alpha.N` dans un lot poussé sur `main` : le test `docs`
-  l'attrape.
-- Synchronisation `main` → `v1` par **fusion** (`git merge --no-ff origin/main`, script
-  `scripts/sync-main.sh` pour les seize lignes de version), après chaque release 0.17.x et
-  au moins une fois par jour ; jamais de rebase. Une fusion en conflit depuis plus de
-  **24 h bloque tout autre lot sur `v1`**.
-- `budget.toml` en conflit de fusion : la valeur la plus stricte clé par clé (minimum des
-  plafonds, intersection des listes de dette, union de `[ca].required`), jamais un seul
-  côté.
-- Sens inverse `v1` → `main` : cherry-pick `-x` au cas par cas, pour une correction
-  seulement.
-- La CI tourne sur `v1` (`tests`, `verification`, `dependances`) ; le job `livraison` reste
-  réservé à `main` : aucun tag, aucune release depuis `v1`. Les rulesets GitHub (suppression
-  et push forcé interdits sur `main` et `v1`, tags `v*` réservés à GitHub Actions) sont
-  posés par le propriétaire : une couche de plus, pas la garantie.
+**Releases 1.x.** La variable de dépôt `V1_RELEASES=1` autorise `release.yml` à publier
+une 1.x (#212). `penelope upgrade` ignore une version à suffixe (`1.0.0-rc.1`) : une
+pré-release ne s'installe que par `penelope upgrade --tag`.
 
 ## Conventions
 

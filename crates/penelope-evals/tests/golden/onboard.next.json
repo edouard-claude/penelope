@@ -1,0 +1,18 @@
+{
+  "method": "onboard.next",
+  "params": {},
+  "response": {
+    "result": {
+      "question": {
+        "rel": "string",
+        "n": "integer",
+        "position": "integer",
+        "total": "integer",
+        "text": "string",
+        "hint": "string",
+        "choices": [],
+        "list": "bool"
+      }
+    }
+  }
+}

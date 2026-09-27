@@ -1,0 +1,32 @@
+name = "outils-niveau-1-et-compaction"
+description = """Critères d'acceptation du journal (épopée #208, T22) : un seul tour avec un
+appel d'outil dont le gros résultat part en artefact (niveau 1), puis un dépassement prouvé
+qui compacte d'urgence au milieu du tour, puis la réponse ; un tour de plus prolonge la
+conversation. Chaque requête doit être le pliage du journal, aucun remplacement ne doit
+tomber entre deux appels hors des deux cas admis, et la refonte des caches doit tout
+redonner. `context.large_payload_tokens` est abaissé pour que 200 lignes suffisent."""
+pin_model = "main"
+
+[config]
+"context.large_payload_tokens" = 300
+
+[[files]]
+path = "journal.log"
+content = "2026-01-01 00:00:00 INFO  migration PROJ-7 : table rejouée, 200 OK\n"
+repeat = 200
+
+[[steps]]
+kind = "message"
+text = "on prépare la migration PROJ-7 vers PostgreSQL 17, le schéma est exporté"
+
+[[steps]]
+kind = "message"
+text = "réponses courtes ; on migre ce soir"
+
+[[steps]]
+kind = "message"
+text = "lis journal.log et dis-moi ce qui reste à faire"
+
+[[steps]]
+kind = "message"
+text = "merci, on migre après le rejeu"

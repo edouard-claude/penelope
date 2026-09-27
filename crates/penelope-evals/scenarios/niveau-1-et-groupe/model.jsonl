@@ -1,0 +1,4 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "fs_read", "arguments": {"path": "journal.log"}}]}}
+{"text": "Aucune erreur dans journal.log : 200 lignes, toutes en 200 OK."}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "fs_read", "arguments": {"path": "journal.log"}}, {"id": "c3", "name": "fs_read", "arguments": {"path": "a.txt"}}, {"id": "c4", "name": "fs_read", "arguments": {"path": "b.txt"}}]}}
+{"text": "Journal sans erreur, alpha vaut 1, bravo vaut 2."}

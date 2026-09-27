@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 toml.workspace = true
 # `UPDATE_BUDGET=1` réécrit `budget.toml` sans perdre les commentaires qui justifient les

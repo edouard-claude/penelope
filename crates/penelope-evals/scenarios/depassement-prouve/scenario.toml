@@ -1,0 +1,17 @@
+name = "depassement-prouve"
+description = """Dépassement prouvé : le fournisseur refuse la requête pour dépassement de fenêtre
+(`context_length`), la conversation est compactée d'urgence (déclencheur `overflow`), la
+requête repart avec le résumé et le modèle accepte."""
+pin_model = "main"
+
+[[steps]]
+kind = "message"
+text = "on prépare la migration PROJ-7 vers PostgreSQL 17, le schéma est exporté"
+
+[[steps]]
+kind = "message"
+text = "réponses courtes ; on migre ce soir"
+
+[[steps]]
+kind = "message"
+text = "qu'est-ce qui reste à faire ?"

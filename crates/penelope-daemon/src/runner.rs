@@ -3,9 +3,9 @@
 //! Le verrou de session de `TurnQueue` garantit une seule exécution par session ; le
 //! pool apporte la concurrence entre sessions.
 
-use crate::agent::TurnOutcome;
-use crate::bus::Origin;
 use crate::runtime::Daemon;
+use penelope_agent::TurnOutcome;
+use penelope_app::bus::Origin;
 use penelope_kernel::turn::Turn;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,8 +22,8 @@ pub async fn run_pool(daemon: Arc<Daemon>) {
         // `runners.count` runners (#84).
         let holder = format!("runner-{i}");
         let d = daemon.clone();
-        tasks.push(crate::tasks::spawn_supervised(
-            daemon.clone(),
+        tasks.push(penelope_app::tasks::spawn_supervised(
+            &daemon.supervision(),
             holder.clone(),
             move || runner_loop(d.clone(), holder.clone(), heartbeat),
         ));
@@ -75,7 +75,8 @@ pub async fn process(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> T
 
 async fn process_turn(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> TurnOutcome {
     let started = std::time::Instant::now();
-    let outcome = if let Some(parts) = oversized_telegram_merge(daemon, &turn) {
+    crate::history::catch_up(&daemon.services, &turn.session_id).await;
+    let outcome = if let Some(parts) = oversized_burst(daemon, &turn) {
         let _ = daemon
             .services
             .events
@@ -92,9 +93,9 @@ async fn process_turn(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> 
             .last()
             .map(|message| Origin::from_payload(&message.payload))
             .unwrap_or_else(|| Origin::from_payload(&turn.payload));
-        let offered = match daemon.hooks.telegram() {
+        let offered = match daemon.hooks.delivery() {
             Some(channel) => channel.offer_burst(&turn.session_id, &origin, parts).await,
-            None => Err("canal Telegram indisponible".into()),
+            None => Err("canal du propriétaire indisponible".into()),
         };
         let outcome = match offered {
             Ok(()) => TurnOutcome::Cancelled,
@@ -133,20 +134,18 @@ async fn process_turn(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> 
     outcome
 }
 
-fn oversized_telegram_merge(daemon: &Daemon, turn: &Turn) -> Option<Vec<String>> {
-    if !matches!(Origin::from_payload(&turn.payload), Origin::Telegram { .. }) {
-        return None;
-    }
-    let cfg = daemon.services.config.config();
+/// Rafale en file avant même le tour : les seuils sont ceux du canal (T36).
+fn oversized_burst(daemon: &Daemon, turn: &Turn) -> Option<Vec<String>> {
+    let limits = daemon
+        .hooks
+        .delivery()?
+        .burst_limits(&Origin::from_payload(&turn.payload))?;
     let parts: Vec<String> = std::iter::once(&turn.payload)
         .chain(turn.merged_messages.iter().map(|message| &message.payload))
         .filter_map(|payload| payload.get("text").and_then(|text| text.as_str()))
         .map(ToString::to_string)
         .collect();
-    let chars: usize = parts.iter().map(|part| part.chars().count()).sum();
-    let too_many = cfg.telegram.burst_messages > 0 && parts.len() >= cfg.telegram.burst_messages;
-    let too_long = cfg.telegram.burst_chars > 0 && chars >= cfg.telegram.burst_chars;
-    (too_many || too_long).then_some(parts)
+    limits.exceeded(&parts).then_some(parts)
 }
 
 async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> TurnOutcome {
@@ -183,7 +182,7 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     let beat = StopBeat(beat);
     // Une panique pendant le tour ne tue ni le runner ni le verrou de session : le tour
     // échoue, le propriétaire le sait, le bail est rendu (#84).
-    crate::tasks::install_panic_hook();
+    penelope_app::tasks::install_panic_hook();
     let outcome = {
         use futures::FutureExt;
         match std::panic::AssertUnwindSafe(daemon.run_turn(&turn))
@@ -192,8 +191,8 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
         {
             Ok(o) => o,
             Err(payload) => {
-                let msg = crate::tasks::panic_text(payload.as_ref());
-                crate::tasks::report_panic(daemon, "tour", &msg).await;
+                let msg = penelope_app::tasks::panic_text(payload.as_ref());
+                penelope_app::tasks::report_panic(&daemon.supervision(), "tour", &msg).await;
                 TurnOutcome::Failed {
                     error: format!(
                         "erreur interne pendant le tour ({msg}) : il est arrêté, rien d'autre \
@@ -239,7 +238,12 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     // (issue #39).
     let scheduled = turn.kind == penelope_kernel::turn::TurnKind::Trigger;
     if scheduled && let Some(schedule) = turn.payload["schedule"].as_str() {
-        crate::scheduler::trigger_outcome_of(daemon, schedule, &outcome, &turn).await;
+        let ports = daemon.hooks.scheduler();
+        let cx = crate::workflow::context_of(&daemon.core);
+        penelope_orchestrator::scheduler::trigger_outcome_of(
+            &cx, &ports, schedule, &outcome, &turn,
+        )
+        .await;
     }
 
     // Tour planifié : la réponse finale est le livrable, livrée une fois ; si l'agent a
@@ -247,9 +251,11 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     // livrable a été évalué avant, sur ce qui est réellement parti.
     let repeated = scheduled
         && matches!(&outcome, TurnOutcome::Answered { text, .. }
-            if crate::scheduler::final_already_sent(daemon, &turn.session_id, text).await);
+            if penelope_orchestrator::scheduler::final_already_sent(&daemon.services, &turn.session_id, text).await);
     let burst_card_sent = matches!(outcome, TurnOutcome::Cancelled)
-        && crate::workflow::kv_get(&daemon.services, &format!("turn.burst_card.{}", turn.id))
+        && daemon
+            .services
+            .kv_get(&format!("turn.burst_card.{}", turn.id))
             .await
             .ok()
             .flatten()
@@ -277,12 +283,11 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
 }
 
 impl Daemon {
-    /// Livre l'issue d'un tour à son canal, par le chemin durable.
+    /// Livre l'issue d'un tour à son canal, qui ignore les origines d'ailleurs (CLI).
     pub async fn deliver(&self, turn: &Turn, origin: &Origin, outcome: &TurnOutcome) {
-        if let Origin::Telegram { .. } = origin
-            && let Some(tg) = self.hooks.telegram()
-        {
-            tg.deliver(turn.id.as_str(), &turn.session_id, origin, outcome)
+        if let Some(channel) = self.hooks.delivery() {
+            channel
+                .deliver(turn.id.as_str(), &turn.session_id, origin, outcome)
                 .await;
         }
     }
@@ -291,7 +296,8 @@ impl Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::Conversation;
+    use penelope_agent::Conversation;
+    use penelope_app::engine::TurnIntake;
     use penelope_kernel::clock::TestClock;
     use penelope_llm::mock::MockProvider;
 
@@ -300,7 +306,7 @@ mod tests {
     struct DeliveryChannel(std::sync::Mutex<Option<Origin>>);
 
     #[async_trait::async_trait]
-    impl crate::bus::ChannelDelivery for DeliveryChannel {
+    impl penelope_app::bus::ChannelDelivery for DeliveryChannel {
         async fn deliver(
             &self,
             _turn_id: &str,
@@ -313,7 +319,11 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl crate::bus::ChannelDelivery for BurstChannel {
+    impl penelope_app::bus::ChannelDelivery for BurstChannel {
+        fn burst_limits(&self, _: &Origin) -> Option<penelope_app::bus::BurstLimits> {
+            Some(penelope_app::bus::BurstLimits::new(5, 20_000))
+        }
+
         async fn deliver(
             &self,
             _turn_id: &str,
@@ -338,7 +348,7 @@ mod tests {
     async fn six_pending_telegram_messages_show_a_card_without_calling_the_model() {
         let dir = tempfile::tempdir().unwrap();
         let services = Arc::new(
-            crate::runtime::Services::for_tests(
+            penelope_app::services::Services::for_tests(
                 dir.path().to_path_buf(),
                 Arc::new(TestClock::default()),
             )
@@ -349,7 +359,7 @@ mod tests {
         let provider = Arc::new(MockProvider::new());
         daemon.set_provider_override(provider.clone());
         let channel = Arc::new(BurstChannel(std::sync::Mutex::new(Vec::new())));
-        *daemon.hooks.telegram.write().unwrap() = Some(channel.clone());
+        *daemon.hooks.delivery.write().unwrap() = Some(channel.clone());
         let origin = Origin::Telegram {
             chat_id: 10,
             topic_id: None,
@@ -396,7 +406,7 @@ mod tests {
     async fn messages_arriving_during_tools_hit_the_burst_limit_before_another_model_call() {
         let dir = tempfile::tempdir().unwrap();
         let services = Arc::new(
-            crate::runtime::Services::for_tests(
+            penelope_app::services::Services::for_tests(
                 dir.path().to_path_buf(),
                 Arc::new(TestClock::default()),
             )
@@ -416,16 +426,22 @@ mod tests {
             .await
             .unwrap();
         let turn = services.turns.claim("test").await.unwrap().unwrap();
-        let tiers = crate::conversation::build_tiers(&services, "début", &[], None).await;
+        let tiers = penelope_conversation::build_tiers(&services, "début", &[], None).await;
         let cancel = penelope_llm::CancelToken::new();
-        let conv = crate::conversation::SessionConversation::new(
+        let conv = penelope_conversation::SessionConversation::new(
             services.clone(),
             &sid,
             "openrouter:mock/model",
             tiers,
             0,
+        );
+        let inbox = penelope_conversation::TurnInbox::for_turn(
+            &services,
+            &turn,
+            Some(channel.clone()),
+            &cancel,
         )
-        .with_merge_turn(turn.clone(), Some(channel.clone()), cancel.clone());
+        .unwrap();
         conv.record(&penelope_llm::types::ChatMessage::user("début"), false)
             .await
             .unwrap();
@@ -446,11 +462,15 @@ mod tests {
                 .await
                 .unwrap();
         }
-        conv.request_messages().await.unwrap();
+        inbox
+            .claim(penelope_agent::Checkpoint::BeforeModelCall)
+            .await
+            .unwrap();
         assert!(cancel.is_cancelled());
         assert_eq!(channel.0.lock().unwrap().len(), 5);
         assert!(
-            crate::workflow::kv_get(&services, &format!("turn.burst_card.{}", turn.id))
+            services
+                .kv_get(&format!("turn.burst_card.{}", turn.id))
                 .await
                 .unwrap()
                 .is_some()
@@ -463,7 +483,7 @@ mod tests {
     async fn a_merged_reply_targets_the_last_telegram_message() {
         let dir = tempfile::tempdir().unwrap();
         let services = Arc::new(
-            crate::runtime::Services::for_tests(
+            penelope_app::services::Services::for_tests(
                 dir.path().to_path_buf(),
                 Arc::new(TestClock::default()),
             )
@@ -476,7 +496,7 @@ mod tests {
         provider.reply("réponse unique");
         daemon.set_provider_override(provider);
         let channel = Arc::new(DeliveryChannel(std::sync::Mutex::new(None)));
-        *daemon.hooks.telegram.write().unwrap() = Some(channel.clone());
+        *daemon.hooks.delivery.write().unwrap() = Some(channel.clone());
         let first = Origin::Telegram {
             chat_id: 10,
             topic_id: None,
@@ -521,7 +541,7 @@ mod tests {
             Arc::new(penelope_kernel::clock::SystemClock);
         let _ = TestClock::default();
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );
@@ -569,7 +589,7 @@ mod tests {
         let clock: penelope_kernel::clock::SharedClock =
             Arc::new(penelope_kernel::clock::SystemClock);
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );
@@ -633,7 +653,7 @@ mod tests {
         let clock: penelope_kernel::clock::SharedClock =
             Arc::new(penelope_kernel::clock::SystemClock);
         let s = Arc::new(
-            crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
                 .await
                 .unwrap(),
         );

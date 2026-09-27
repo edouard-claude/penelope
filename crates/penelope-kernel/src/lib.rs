@@ -25,6 +25,7 @@ pub mod error;
 pub mod event;
 pub mod frontmatter;
 pub mod ids;
+pub mod journal;
 pub mod risk;
 pub mod schema;
 pub mod session;

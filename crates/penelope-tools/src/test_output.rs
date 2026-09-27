@@ -364,6 +364,9 @@ pub fn digest(command: &str, exit_code: i32, stdout: &str, stderr: &str) -> Opti
 }
 
 #[cfg(test)]
+mod runners_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

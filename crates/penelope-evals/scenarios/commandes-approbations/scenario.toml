@@ -1,0 +1,26 @@
+name = "commandes-approbations"
+description = """Approbations par Telegram : le modèle veut écrire un fichier (`fs_write`), la carte
+d'approbation part et le tour se suspend. `/approvals` liste la demande en attente, le
+clic « Toujours pour ce répertoire » la décide et pose une règle : le tour de reprise
+écrit le fichier et le modèle conclut.
+`/policies` montre ensuite la règle posée. Le monde montre l'approbation
+décidée, l'effet exécuté et le fichier écrit."""
+
+[config]
+"models.routing.classifier" = false
+
+[[steps]]
+kind = "telegram"
+text = "écris « migration ce soir » dans rappel.txt"
+
+[[steps]]
+kind = "telegram"
+text = "/approvals"
+
+[[steps]]
+kind = "telegram"
+click = "Toujours pour ce répertoire"
+
+[[steps]]
+kind = "telegram"
+text = "/policies"

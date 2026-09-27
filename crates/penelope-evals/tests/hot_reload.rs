@@ -4,7 +4,8 @@
 //! Invariant commun à tous les tests : un fichier invalide est signalé mais ne casse
 //! jamais ce qui tournait déjà.
 
-use penelope_daemon::{Daemon, Services, runtime::workflow_known};
+use penelope_app::services::{Services, workflow_known};
+use penelope_daemon::runtime::Daemon;
 use penelope_kernel::clock::{SharedClock, TestClock};
 use penelope_mcp::protocol::ToolDescriptor;
 use penelope_mcp::registry::RegisteredTool;
@@ -126,7 +127,7 @@ async fn scopes_override_in_the_right_order() {
 async fn ca_12_5_workflows_reload_and_reject_without_losing_the_previous_version() {
     let (_d, s) = services().await;
     let cfg = s.config.config();
-    let known = workflow_known(&cfg, &s.mcp_tools).await;
+    let known = workflow_known(&cfg, &s.mcp_tools, &s.channel).await;
     let dir = s.platform.dirs.workflows();
     let before = s.workflows.generation();
 
@@ -183,7 +184,9 @@ async fn ca_12_5_workflows_reload_and_reject_without_losing_the_previous_version
 async fn templates_reload_from_disk() {
     let (_d, s) = services().await;
     let dir = s.platform.dirs.templates();
-    let builtin = s.templates.get("tool_approval").expect("gabarit intégré");
+    // Les gabarits vivent dans la passerelle depuis T36 : ceux du démarrage.
+    let loaded = penelope_telegram::TemplateRegistry::with_builtins();
+    let builtin = loaded.get("tool_approval").expect("gabarit intégré");
     assert!(!builtin.body.is_empty());
 
     write(
@@ -205,7 +208,7 @@ async fn templates_reload_from_disk() {
     );
     assert!(fresh.errors().is_empty());
     assert!(
-        fresh.ids().len() >= s.templates.ids().len(),
+        fresh.ids().len() >= loaded.ids().len(),
         "les gabarits intégués restent disponibles"
     );
 }
@@ -356,7 +359,7 @@ async fn ca_4_4_config_changes_are_published_live() {
 
     // Tous les sous-systèmes ont confirmé cette génération.
     let results = s.config.apply_results();
-    for subsystem in penelope_daemon::runtime::SUBSYSTEMS {
+    for subsystem in penelope_app::services::SUBSYSTEMS {
         let r = results.get(*subsystem).expect("résultat manquant");
         assert_eq!(r.generation(), 2, "{subsystem}");
         assert_eq!(r.kind(), "applied_live", "{subsystem}");

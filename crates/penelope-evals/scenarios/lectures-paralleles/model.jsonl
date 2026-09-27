@@ -1,0 +1,2 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "fs_read", "arguments": {"path": "a.txt"}}, {"id": "c2", "name": "fs_read", "arguments": {"path": "b.txt"}}, {"id": "c3", "name": "fs_read", "arguments": {"path": "c.txt"}}]}}
+{"text": "alpha 1 + bravo 2 + charlie 3 = 6."}

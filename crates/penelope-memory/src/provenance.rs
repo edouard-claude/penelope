@@ -187,12 +187,6 @@ impl InjectionMarker {
         self.injected.insert(normalise(text));
     }
 
-    pub fn mark_all<'a>(&mut self, texts: impl IntoIterator<Item = &'a str>) {
-        for t in texts {
-            self.mark(t);
-        }
-    }
-
     /// Vrai si ce candidat n'est qu'un écho de ce que l'on a injecté.
     pub fn is_echo(&self, text: &str) -> bool {
         self.injected.contains(&normalise(text))
@@ -389,5 +383,32 @@ mod tests {
         assert_eq!(p.origin, Origin::Owner);
         assert_eq!(p.supersedes_uid.as_deref(), Some("01J7Z"));
         assert!(p.source_ref.unwrap().contains("journal"));
+    }
+
+    /// Chaque origine se relit depuis son nom.
+    #[test]
+    fn origins_round_trip() {
+        for o in [
+            Origin::Owner,
+            Origin::Agent,
+            Origin::Untrusted,
+            Origin::System,
+        ] {
+            assert_eq!(Origin::parse(o.as_str()), Some(o));
+        }
+        assert_eq!(Origin::parse("web"), None);
+    }
+
+    /// Le marqueur d'injection se vide entre deux tours.
+    #[test]
+    fn the_injection_marker_is_cleared_between_turns() {
+        let mut m = InjectionMarker::new();
+        assert!(m.is_empty());
+        m.mark("Le serveur est à Paris.");
+        m.mark("Le serveur est à Paris.");
+        assert_eq!(m.len(), 1);
+        m.clear();
+        assert!(m.is_empty());
+        assert!(!m.is_echo("Le serveur est à Paris."));
     }
 }

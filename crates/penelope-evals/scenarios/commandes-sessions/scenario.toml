@@ -1,0 +1,53 @@
+name = "commandes-sessions"
+description = """Sessions du propriétaire par Telegram : un échange, `/title` renomme la session,
+`/new` en ouvre une seconde (nommée) et ferme la première, `/sessions` liste les
+ouvertes, un clic montre les fermées et un autre rebascule vers la première, `/switch` sans argument montre le choix, `/export` envoie la conversation en
+document, `/stop` sans tour en cours le dit, `/close` demande confirmation et le clic
+ferme la session. Le monde montre les titres, la session fermée et la file vide."""
+
+[config]
+"models.routing.classifier" = false
+
+[[steps]]
+kind = "telegram"
+text = "bonjour, on travaille sur le site"
+
+[[steps]]
+kind = "telegram"
+text = "/title Refonte du site"
+
+[[steps]]
+kind = "telegram"
+text = "/new refonte facturation"
+
+[[steps]]
+kind = "telegram"
+text = "/sessions"
+
+[[steps]]
+kind = "telegram"
+click = "Voir les fermées"
+
+[[steps]]
+kind = "telegram"
+click = "Refonte du site"
+
+[[steps]]
+kind = "telegram"
+text = "/switch"
+
+[[steps]]
+kind = "telegram"
+text = "/export"
+
+[[steps]]
+kind = "telegram"
+text = "/stop"
+
+[[steps]]
+kind = "telegram"
+text = "/close"
+
+[[steps]]
+kind = "telegram"
+click = "Confirmer"

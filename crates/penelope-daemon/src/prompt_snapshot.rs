@@ -20,12 +20,11 @@
 //!   figer ici ferait s'effondrer la déduplication.
 //!
 //! Le prompt contient le profil, la mémoire rappelée et les notes de session : c'est de
-//! la donnée personnelle. Purge et rétention sont livrées dans le même lot ([`crate::purge`]).
+//! la donnée personnelle. Purge et rétention sont livrées dans le même lot ([`penelope_ops::purge`]).
 
-use crate::runtime::Services;
-use penelope_context::tiers::{Tiers, TileMap};
-use penelope_kernel::canonical::sha256_hex;
-use penelope_store::rusqlite::{OptionalExtension, params};
+use penelope_app::services::Services;
+use penelope_context::tiers::TileMap;
+use penelope_store::rusqlite::OptionalExtension;
 
 /// Un prompt système gardé sous son empreinte.
 #[derive(Debug, Clone, PartialEq)]
@@ -38,34 +37,7 @@ pub struct Snapshot {
     pub uses: i64,
 }
 
-/// Le préfixe tel qu'il part au modèle, et sa découpe quand la conversation la connaît.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PromptPrefix {
-    pub rendered: String,
-    pub tiles: Option<TileMap>,
-}
-
-impl PromptPrefix {
-    /// Préfixe d'une conversation de session : la découpe suit les tuiles.
-    pub fn of(tiers: &Tiers) -> PromptPrefix {
-        PromptPrefix {
-            rendered: tiers.prefix(),
-            tiles: Some(TileMap::of(tiers)),
-        }
-    }
-
-    /// Préfixe d'un transcript sans tuiles (sous-agent, workflow) : le texte seul.
-    pub fn plain(rendered: impl Into<String>) -> PromptPrefix {
-        PromptPrefix {
-            rendered: rendered.into(),
-            tiles: None,
-        }
-    }
-
-    pub fn hash(&self) -> String {
-        sha256_hex(self.rendered.as_bytes())
-    }
-}
+use penelope_app::conversation::PromptPrefix;
 
 /// Enregistre le prompt qui vient d'être envoyé, sous l'empreinte déjà calculée.
 ///
@@ -77,26 +49,9 @@ pub async fn record(s: &Services, hash: &str, prefix: &PromptPrefix) -> anyhow::
         tracing::debug!("préfixe et empreinte divergent : pas d'instantané pour cette requête");
         return Ok(false);
     }
-    let (hash, rendered, ts) = (
-        hash.to_string(),
-        prefix.rendered.clone(),
-        s.clock.now_rfc3339(),
-    );
-    let tiles = prefix
-        .tiles
-        .as_ref()
-        .and_then(|t| serde_json::to_string(t).ok());
-    s.store
-        .write(move |tx| {
-            tx.execute(
-                "INSERT INTO prompt_snapshots(hash, rendered, tiers, first_seen_at,
-                    last_seen_at, uses)
-                 VALUES(?1,?2,?3,?4,?4,1)
-                 ON CONFLICT(hash) DO UPDATE SET last_seen_at = ?4, uses = uses + 1",
-                params![hash, rendered, tiles, ts],
-            )?;
-            Ok(())
-        })
+    s.context
+        .history
+        .prompt_sent(hash, &prefix.rendered, prefix.tiles.as_ref())
         .await?;
     Ok(true)
 }
@@ -154,6 +109,21 @@ pub async fn prefix_cause(s: &Services, before: Option<&str>, after: &str) -> St
     }
 }
 
+/// Le port `PromptSnapshots` de la boucle : la table `prompt_snapshots` (épopée #208,
+/// T09).
+pub struct StoredSnapshots(pub std::sync::Arc<Services>);
+
+#[async_trait::async_trait]
+impl penelope_agent::PromptSnapshots for StoredSnapshots {
+    async fn record(&self, hash: &str, prefix: &PromptPrefix) -> anyhow::Result<bool> {
+        record(&self.0, hash, prefix).await
+    }
+
+    async fn prefix_cause(&self, before: Option<&str>, after: &str) -> String {
+        prefix_cause(&self.0, before, after).await
+    }
+}
+
 /// Poids de la table, pour `doctor`.
 pub async fn weight_bytes(s: &Services) -> anyhow::Result<(i64, i64)> {
     Ok(s.store
@@ -170,7 +140,8 @@ pub async fn weight_bytes(s: &Services) -> anyhow::Result<(i64, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use penelope_context::tiers::TiersBuilder;
+    use penelope_app::engine::TurnIntake;
+    use penelope_context::tiers::{Tiers, TiersBuilder};
     use penelope_kernel::clock::TestClock;
     use std::sync::Arc;
 
@@ -269,8 +240,8 @@ mod tests {
     /// Deux tours d'une session sans rechargement : un seul instantané, deux usages.
     #[tokio::test]
     async fn two_turns_without_a_reload_share_one_snapshot() {
-        use crate::bus::Origin;
         use crate::runtime::Daemon;
+        use penelope_app::bus::Origin;
         use penelope_llm::mock::MockProvider;
 
         let dir = tempfile::tempdir().unwrap();
@@ -307,6 +278,11 @@ mod tests {
             &snap.rendered[..snap.rendered.len().min(120)]
         );
         assert!(snap.tiles.is_some(), "la découpe accompagne le prompt");
+        // T6 : le journal porte le même préfixe, une seule fois.
+        let events = s.events.session_events(&sid, 0).await.unwrap();
+        let systems: Vec<_> = events.iter().filter(|e| e.kind == "conv.system").collect();
+        assert_eq!(systems.len(), 1);
+        assert_eq!(systems[0].payload["hash"], hash.as_str());
     }
 
     async fn previous_system_hash(s: &Services, session_id: &str) -> String {

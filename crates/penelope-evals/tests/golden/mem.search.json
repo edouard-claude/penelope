@@ -1,0 +1,17 @@
+{
+  "method": "mem.search",
+  "params": {
+    "query": "Martin"
+  },
+  "response": {
+    "result": [
+      {
+        "text": "string",
+        "level": "string",
+        "file": "string",
+        "uid": "string",
+        "score": "number"
+      }
+    ]
+  }
+}

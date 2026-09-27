@@ -321,10 +321,6 @@ impl Step {
             _ => None,
         }
     }
-
-    pub fn is_terminal_kind(&self) -> bool {
-        matches!(self.kind.as_str(), "user" | "wait")
-    }
 }
 
 fn unix_family(os: &str) -> &'static str {

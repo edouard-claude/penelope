@@ -1,0 +1,19 @@
+{
+  "method": "wf.validate",
+  "params": {
+    "json": "$workflow_json",
+    "name": "ticket-to-deploy"
+  },
+  "response": {
+    "result": {
+      "valid": "bool",
+      "issues": [
+        {
+          "path": "string",
+          "message": "string",
+          "severity": "string"
+        }
+      ]
+    }
+  }
+}

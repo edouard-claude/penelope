@@ -333,13 +333,14 @@ journal, les jobs et le juge.
 
 ## 9. Décisions à écrire dans `docs/decisions/`
 
-Le numéro 0011 est pris par le lot #205 en cours (`0011-prompt-systeme-journalise.md`).
+Les numéros 0011 (prompt système journalisé, #205) et 0012 (jobs d'outils durables, #204)
+ont été pris par des lots livrés sur `main` pendant la rédaction ; 0015 (gel de la 0.17 et
+branche `v1`) est écrite. Restent à écrire, dans l'ordre de leur lot :
 
-- 0012 : le journal d'événements est la source unique de la conversation.
 - 0013 : découpage de `penelope-daemon` en crates, passerelle au-dessus du daemon.
 - 0014 : la boucle d'agent est un pipeline d'étapes typées.
-- 0015 : gel de la 0.17 et branche `v1`.
 - 0016 : le PTC (`run_code`) hors V1, avec sa couture.
+- 0017 : le journal d'événements est la source unique de la conversation (au lot E).
 
 ## 10. Arbitrages rendus par le propriétaire (23 septembre 2026)
 

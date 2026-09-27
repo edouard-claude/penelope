@@ -1,0 +1,9 @@
+name = "reponse-vide-relancee"
+description = """Réponse vide relancée (#206) : le modèle rend ni texte ni appel d'outil ; le
+tour le journalise, relance une fois avec une consigne vue du modèle seulement (rien dans
+l'historique), et la seconde réponse est livrée."""
+pin_model = "main"
+
+[[steps]]
+kind = "message"
+text = "résume le devis ACME en une phrase"

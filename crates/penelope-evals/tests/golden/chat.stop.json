@@ -1,0 +1,14 @@
+{
+  "method": "chat.stop",
+  "params": {
+    "session": "$session"
+  },
+  "response": {
+    "result": {
+      "session": "string",
+      "stopped": "bool",
+      "dropped": "integer",
+      "jobs": "integer"
+    }
+  }
+}

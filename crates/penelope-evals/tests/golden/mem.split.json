@@ -1,0 +1,12 @@
+{
+  "method": "mem.split",
+  "params": {
+    "uid": "u_split"
+  },
+  "response": {
+    "error": {
+      "code": -32603,
+      "message": "string"
+    }
+  }
+}

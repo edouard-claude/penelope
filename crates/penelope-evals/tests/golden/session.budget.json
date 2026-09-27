@@ -1,0 +1,16 @@
+{
+  "method": "session.budget",
+  "params": {
+    "session": "$session",
+    "usd": 2.5
+  },
+  "response": {
+    "result": {
+      "session": "string",
+      "budget_usd": "number",
+      "limit_usd": "number",
+      "spent_usd": "number",
+      "daily_limit_usd": "number"
+    }
+  }
+}

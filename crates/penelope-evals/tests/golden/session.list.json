@@ -1,0 +1,29 @@
+{
+  "method": "session.list",
+  "params": {},
+  "response": {
+    "result": [
+      {
+        "state": "string",
+        "episode_seq": "integer",
+        "last_activity": "string",
+        "id": "string",
+        "kind": "string",
+        "title": "string",
+        "model_alias": "string",
+        "model_id": "string",
+        "created_at": "string",
+        "updated_at": "string",
+        "closed_at": "null",
+        "parent_id": "null",
+        "tg_chat_id": "null",
+        "tg_topic_id": "null",
+        "workspace": "null",
+        "metadata": {},
+        "usage_anchor": "null",
+        "spent_usd": "number",
+        "budget_usd": "null"
+      }
+    ]
+  }
+}

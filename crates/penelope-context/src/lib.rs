@@ -4,16 +4,26 @@
 
 pub mod anchors;
 pub mod compaction;
+pub mod derive;
 pub mod engine;
+pub mod journal;
 pub mod lcm;
+pub mod numbering;
+pub mod projector;
+mod publish;
+mod read;
+mod render;
+pub mod replay;
 pub mod store;
 pub mod tiers;
 pub mod transcript;
+pub mod verify;
 
 pub use anchors::{Anchor, AnchorKind};
 pub use compaction::{AppliedStep, CompactionParams, Cooldown, Projection};
 pub use engine::{ContextEngine, SummaryJob, TurnContext};
 pub use lcm::{Lcm, Manifest, Node, NodeKind};
+pub use read::at::{CallNode, CallView};
 pub use store::{Artifact, GrepHit, HistoryStore};
 pub use tiers::{Tiers, TiersBuilder};
 pub use transcript::{Entry, Group, GroupKind};

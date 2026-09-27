@@ -1,0 +1,3 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "ask_user", "arguments": {"question": "Sous quel format veux-tu le devis ACME ?", "choices": ["PDF", "Word"]}}]}}
+{"text": "Je t'ai demandé le format du devis."}
+{"text": "Entendu, le devis ACME sera en PDF."}

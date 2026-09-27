@@ -264,7 +264,11 @@ pub fn html_to_text(html: &str) -> String {
                     rest = &rest[lt + end + 3..];
                     continue;
                 }
-                None => break,
+                // Jamais fermé : tout le reste est commentaire.
+                None => {
+                    rest = "";
+                    break;
+                }
             }
         }
         let Some(gt) = rest[lt..].find('>') else {
@@ -573,6 +577,9 @@ pub fn source_entries(slug: &str, text: &str, maj: &str) -> Vec<IndexedEntry> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod edge_tests;
 
 #[cfg(test)]
 mod tests {

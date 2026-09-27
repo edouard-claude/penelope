@@ -1,0 +1,14 @@
+{
+  "method": "skill.list",
+  "params": {},
+  "response": {
+    "result": [
+      {
+        "name": "string",
+        "version": "string",
+        "scope": "string",
+        "description": "string"
+      }
+    ]
+  }
+}

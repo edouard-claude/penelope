@@ -1,0 +1,12 @@
+{
+  "method": "onboard.write",
+  "params": {
+    "rel": "$rel"
+  },
+  "response": {
+    "result": {
+      "added": "integer",
+      "replaced": "integer"
+    }
+  }
+}

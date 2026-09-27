@@ -1,0 +1,3 @@
+{"text": "{\"complexity\": \"medium\"}"}
+{"text": "{\"objectif\": \"préparer la migration PROJ-7\", \"contraintes_et_preferences\": \"réponses courtes\", \"fait\": \"schéma exporté\", \"en_cours\": \"vérification du schéma\", \"bloque\": \"\", \"decisions_cles\": \"PostgreSQL 17\", \"fichiers_et_ressources\": \"db/schema.sql\", \"prochaines_etapes\": \"migrer ce soir\", \"contexte_critique\": \"\"}"}
+{"text": "On reprend : la migration PROJ-7 est prête, il reste à migrer ce soir."}

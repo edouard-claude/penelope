@@ -1,0 +1,2 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "fs_write", "arguments": {"path": "rappel.txt", "content": "migration ce soir\n"}}]}}
+{"text": "C'est écrit dans rappel.txt."}

@@ -1,0 +1,52 @@
+{
+  "method": "model.list",
+  "params": {
+    "filter": "claude"
+  },
+  "response": {
+    "result": {
+      "aliases": [
+        {
+          "context": "null",
+          "usd_per_m_in": "null",
+          "usd_per_m_out": "null",
+          "alias": "string",
+          "model": "string",
+          "known": "null"
+        }
+      ],
+      "routing": {
+        "classifier": "bool",
+        "default": {
+          "alias": "string",
+          "model": "string"
+        },
+        "low": {
+          "alias": "string",
+          "model": "string"
+        },
+        "medium": {
+          "alias": "string",
+          "model": "string"
+        },
+        "high": {
+          "alias": "string",
+          "model": "string"
+        },
+        "classifier_model": "string",
+        "fallback": {
+          "main": [
+            "string"
+          ],
+          "reasoning": [
+            "string"
+          ]
+        }
+      },
+      "catalog_size": "integer",
+      "models": [],
+      "codex": "null",
+      "note": "string"
+    }
+  }
+}

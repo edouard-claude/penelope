@@ -1,0 +1,131 @@
+name = "rpc-mcp-et-import"
+description = """Les serveurs MCP administrés par la socket locale, comme `penelope mcp …`, sur le
+vrai superviseur branché sur un connecteur de test (aucun processus lancé) : un serveur
+servi est essayé sans être déclaré (`mcp.test`), déclaré (`mcp.add`), listé, montré,
+modifié, désactivé, réactivé, redémarré, ses journaux lus, puis retiré ; un serveur
+inconnu est refusé. Ensuite une instance Hermes semée dans le workspace est simulée
+puis importée (`import.hermes`) : sa skill, sa mémoire, son profil et ses serveurs MCP
+(l'un servi et essayé avec succès, l'autre absent), le jeton de son `env` rangé en
+secret. Le monde après : les déclarations et l'état des serveurs, le secret importé."""
+pin_model = "main"
+
+[[mcp_servers]]
+name = "forge"
+tools = ["create_pr", "list_issues"]
+
+[[mcp_servers]]
+name = "tickets"
+tools = ["get_ticket"]
+
+[[files]]
+path = "hermes/skills/recherche/arxiv/SKILL.md"
+content = """---
+name: arxiv
+description: Cherche sur arXiv
+---
+Étapes.
+"""
+
+[[files]]
+path = "hermes/memories/MEMORY.md"
+content = "La prod tourne sous Debian.\n"
+
+[[files]]
+path = "hermes/memories/USER.md"
+content = "Préfère le tutoiement.\n"
+
+[[files]]
+path = "hermes/config.yaml"
+content = """mcp_servers:
+  tickets:
+    command: /opt/mcp/tickets
+    env:
+      TICKETS_TOKEN: "tok_1234567890abcdef"
+  absent:
+    command: /opt/mcp/absent
+"""
+
+[[observe]]
+name = "serveurs MCP"
+sql = "SELECT name, transport, state, tool_count, failures, last_error FROM mcp_servers ORDER BY name"
+
+[[steps]]
+kind = "rpc"
+method = "mcp.list"
+
+[[steps]]
+kind = "rpc"
+method = "mcp.test"
+params = { name = "forge", toml = "command = \"/opt/mcp/forge\"\ntimeout = \"20s\"\n" }
+
+[[steps]]
+kind = "rpc"
+method = "mcp.add"
+params = { name = "forge", toml = "command = \"/opt/mcp/forge\"\ntimeout = \"20s\"\n" }
+
+[[steps]]
+kind = "rpc"
+method = "mcp.list"
+
+[[steps]]
+kind = "rpc"
+method = "mcp.show"
+params = { name = "forge" }
+
+[[steps]]
+kind = "rpc"
+method = "mcp.edit"
+params = { name = "forge", patch = { timeout = "45s" } }
+
+[[steps]]
+kind = "rpc"
+method = "mcp.disable"
+params = { name = "forge" }
+
+[[steps]]
+kind = "rpc"
+method = "mcp.enable"
+params = { name = "forge" }
+
+[[steps]]
+kind = "rpc"
+method = "mcp.restart"
+params = { name = "forge" }
+
+[[steps]]
+kind = "rpc"
+method = "mcp.logs"
+params = { name = "forge", lines = 20 }
+
+[[steps]]
+kind = "rpc"
+method = "mcp.restart"
+params = { name = "inconnu" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "mcp.rm"
+params = { name = "forge" }
+
+[[steps]]
+kind = "rpc"
+method = "mcp.list"
+
+[[steps]]
+kind = "rpc"
+method = "import.hermes"
+params = { path = "{data}/workspace/hermes" }
+
+[[steps]]
+kind = "rpc"
+method = "import.hermes"
+params = { path = "{data}/workspace/hermes", apply = true }
+
+[[steps]]
+kind = "rpc"
+method = "secret.list"
+
+[[steps]]
+kind = "rpc"
+method = "mcp.list"

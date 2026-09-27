@@ -1,0 +1,14 @@
+name = "outils-question"
+description = """Question au propriétaire : le modèle pose une question à choix (`ask_user`)
+au lieu de deviner, et l'outil rend la main tout de suite (la réponse arrivera comme un
+nouveau message) ; le tour se clôt. Le message suivant du propriétaire porte la réponse,
+et le modèle la voit dans l'historique, juste après sa question."""
+pin_model = "main"
+
+[[steps]]
+kind = "message"
+text = "prépare le devis ACME"
+
+[[steps]]
+kind = "message"
+text = "en PDF"

@@ -274,4 +274,32 @@ mod tests {
         let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
         assert!(extract_many(&refs, 10).len() <= 10);
     }
+
+    #[test]
+    fn anchor_kinds_have_french_names() {
+        let names: Vec<&str> = [
+            AnchorKind::Path,
+            AnchorKind::Sha,
+            AnchorKind::Ticket,
+            AnchorKind::PullRequest,
+            AnchorKind::Url,
+            AnchorKind::Error,
+            AnchorKind::Identifier,
+        ]
+        .iter()
+        .map(|k| k.as_str())
+        .collect();
+        assert_eq!(
+            names,
+            [
+                "chemin",
+                "sha",
+                "ticket",
+                "pr",
+                "url",
+                "erreur",
+                "identifiant"
+            ]
+        );
+    }
 }

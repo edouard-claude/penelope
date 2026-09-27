@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
@@ -23,7 +26,6 @@ penelope-store.workspace = true
 penelope-platform.workspace = true
 penelope-observe.workspace = true
 penelope-memory.workspace = true
-penelope-context.workspace = true
 penelope-mcp.workspace = true
 penelope-skills.workspace = true
 penelope-hitl.workspace = true

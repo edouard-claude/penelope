@@ -1,0 +1,14 @@
+{
+  "method": "session.fork",
+  "params": {
+    "session": "$session",
+    "title": "Branche"
+  },
+  "response": {
+    "result": {
+      "session": "string",
+      "from": "string",
+      "messages": "integer"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "method": "mem.signals",
+  "params": {
+    "uid": "u_signals"
+  },
+  "response": {
+    "result": {
+      "uid": "string",
+      "fichier": "string",
+      "texte": "string",
+      "rappels": "integer",
+      "rappels_utiles": "integer",
+      "vu_sans_etre_retenu": "integer",
+      "succes": "integer",
+      "contradictions": "integer",
+      "dernier_rappel": "null",
+      "requetes_distinctes": "integer",
+      "facteur_usage": "number"
+    }
+  }
+}

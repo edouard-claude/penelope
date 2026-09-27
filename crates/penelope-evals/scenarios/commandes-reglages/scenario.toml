@@ -1,0 +1,59 @@
+name = "commandes-reglages"
+description = """Réglages de la session du propriétaire par Telegram, après un échange facturé :
+`/model` propose les alias en boutons et un clic épingle l'un d'eux, `/models deepseek`
+filtre le catalogue, `/mode auto` change ce qui part sans demande, `/projet` pose le
+sujet de travail, `/home` fait de ce chat le foyer des avis, `/quiet` règle les heures
+silencieuses ; `/mode` relit le mode posé. Le message suivant part sur le modèle épinglé
+(`deepseek-v4-flash` dans la surface et les requêtes), et `/budget` et `/usage` rendent
+la dépense et la consommation des deux échanges, par modèle."""
+
+[config]
+"models.routing.classifier" = false
+
+[[steps]]
+kind = "telegram"
+text = "bonjour"
+
+[[steps]]
+kind = "telegram"
+text = "/model"
+
+[[steps]]
+kind = "telegram"
+click = "fast"
+
+[[steps]]
+kind = "telegram"
+text = "/models deepseek"
+
+[[steps]]
+kind = "telegram"
+text = "/mode auto"
+
+[[steps]]
+kind = "telegram"
+text = "/projet fidelatoo"
+
+[[steps]]
+kind = "telegram"
+text = "/home"
+
+[[steps]]
+kind = "telegram"
+text = "/quiet 22:00-07:00"
+
+[[steps]]
+kind = "telegram"
+text = "/mode"
+
+[[steps]]
+kind = "telegram"
+text = "et maintenant, en rapide ?"
+
+[[steps]]
+kind = "telegram"
+text = "/budget"
+
+[[steps]]
+kind = "telegram"
+text = "/usage"

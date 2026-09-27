@@ -1,0 +1,12 @@
+{
+  "method": "mem.restore",
+  "params": {
+    "id": 1
+  },
+  "response": {
+    "error": {
+      "code": -32000,
+      "message": "string"
+    }
+  }
+}

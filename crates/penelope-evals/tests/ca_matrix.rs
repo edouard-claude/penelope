@@ -7,9 +7,20 @@ use penelope_evals::ca_matrix;
 fn the_matrix_is_up_to_date() {
     let root = ca_matrix::repo_root();
     let tests = ca_matrix::collect(&root);
+    // Le plancher est la liste figée par le gel (#213) : budget.toml [ca].required.
+    let budget = std::fs::read_to_string(root.join("crates/penelope-archtest/budget.toml"))
+        .expect("budget.toml lisible");
+    let required = budget
+        .parse::<toml::Value>()
+        .expect("budget.toml valide")
+        .get("ca")
+        .and_then(|c| c.get("required"))
+        .and_then(|r| r.as_array())
+        .map_or(0, Vec::len);
+    assert!(required > 0, "budget.toml : [ca].required vide ou absent");
     assert!(
-        tests.len() >= 50,
-        "trop peu de tests d'acceptation trouvés : {}",
+        tests.len() >= required,
+        "trop peu de tests d'acceptation trouvés : {} (attendus : {required})",
         tests.len()
     );
     let rendered = ca_matrix::render(&tests);

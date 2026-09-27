@@ -1269,8 +1269,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "penelope-agent"
+version = "1.0.0-rc.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "penelope-app",
+ "penelope-hitl",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-observe",
+ "penelope-store",
+ "penelope-tools",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "penelope-app"
+version = "1.0.0-rc.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "chrono",
+ "chrono-tz",
+ "futures",
+ "penelope-context",
+ "penelope-hitl",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-mcp",
+ "penelope-memory",
+ "penelope-observe",
+ "penelope-platform",
+ "penelope-skills",
+ "penelope-store",
+ "penelope-tools",
+ "penelope-workflow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "penelope-archtest"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "regex",
  "tempfile",
@@ -1281,21 +1331,27 @@ dependencies = [
 
 [[package]]
 name = "penelope-cli"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "futures",
+ "penelope-agent",
+ "penelope-app",
  "penelope-daemon",
  "penelope-evals",
+ "penelope-gateway-telegram",
  "penelope-kernel",
+ "penelope-llm",
  "penelope-observe",
+ "penelope-ops",
  "penelope-platform",
  "penelope-store",
  "penelope-telegram",
  "penelope-tools",
  "penelope-workflow",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
@@ -1306,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-context"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "penelope-kernel",
@@ -1324,8 +1380,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "penelope-conversation"
+version = "1.0.0-rc.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "penelope-app",
+ "penelope-context",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-memory",
+ "penelope-observe",
+ "penelope-store",
+ "penelope-vault",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "penelope-daemon"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1336,18 +1414,26 @@ dependencies = [
  "futures",
  "lopdf",
  "minisign-verify",
+ "penelope-agent",
+ "penelope-app",
  "penelope-context",
+ "penelope-conversation",
+ "penelope-dream",
+ "penelope-executor",
  "penelope-hitl",
  "penelope-kernel",
  "penelope-llm",
  "penelope-mcp",
+ "penelope-mcp-host",
  "penelope-memory",
  "penelope-observe",
+ "penelope-ops",
+ "penelope-orchestrator",
  "penelope-platform",
  "penelope-skills",
  "penelope-store",
- "penelope-telegram",
  "penelope-tools",
+ "penelope-vault",
  "penelope-workflow",
  "regex",
  "reqwest",
@@ -1362,26 +1448,62 @@ dependencies = [
 ]
 
 [[package]]
-name = "penelope-evals"
-version = "0.17.62"
+name = "penelope-dream"
+version = "1.0.0-rc.1"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "chrono",
+ "chrono-tz",
+ "penelope-app",
+ "penelope-hitl",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-memory",
+ "penelope-observe",
+ "penelope-platform",
+ "penelope-store",
+ "penelope-tools",
+ "penelope-vault",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "penelope-evals"
+version = "1.0.0-rc.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
  "base64",
  "chrono",
  "futures",
+ "penelope-agent",
+ "penelope-app",
  "penelope-context",
+ "penelope-conversation",
  "penelope-daemon",
+ "penelope-dream",
+ "penelope-executor",
+ "penelope-gateway-telegram",
  "penelope-hitl",
  "penelope-kernel",
  "penelope-llm",
  "penelope-mcp",
+ "penelope-mcp-host",
  "penelope-memory",
  "penelope-observe",
+ "penelope-ops",
+ "penelope-orchestrator",
  "penelope-platform",
  "penelope-skills",
  "penelope-store",
  "penelope-telegram",
  "penelope-tools",
+ "penelope-vault",
  "penelope-workflow",
  "regex",
  "serde",
@@ -1390,12 +1512,84 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "toml",
+ "tracing",
+ "zip",
+]
+
+[[package]]
+name = "penelope-executor"
+version = "1.0.0-rc.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "chrono",
+ "chrono-tz",
+ "penelope-app",
+ "penelope-context",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-mcp",
+ "penelope-memory",
+ "penelope-observe",
+ "penelope-platform",
+ "penelope-skills",
+ "penelope-store",
+ "penelope-tools",
+ "penelope-vault",
+ "penelope-workflow",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "penelope-gateway-telegram"
+version = "1.0.0-rc.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "chrono-tz",
+ "penelope-agent",
+ "penelope-app",
+ "penelope-context",
+ "penelope-conversation",
+ "penelope-daemon",
+ "penelope-dream",
+ "penelope-executor",
+ "penelope-hitl",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-mcp",
+ "penelope-mcp-host",
+ "penelope-memory",
+ "penelope-observe",
+ "penelope-ops",
+ "penelope-orchestrator",
+ "penelope-platform",
+ "penelope-skills",
+ "penelope-store",
+ "penelope-telegram",
+ "penelope-vault",
+ "penelope-workflow",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "tracing",
 ]
 
 [[package]]
 name = "penelope-hitl"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "penelope-kernel",
@@ -1412,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-kernel"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1434,7 +1628,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-llm"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1457,7 +1651,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-mcp"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -1483,8 +1677,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "penelope-mcp-host"
+version = "1.0.0-rc.1"
+dependencies = [
+ "async-trait",
+ "base64",
+ "futures",
+ "penelope-app",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-mcp",
+ "penelope-observe",
+ "penelope-platform",
+ "penelope-store",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "penelope-memory"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1508,7 +1725,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-observe"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "regex",
@@ -1522,8 +1739,73 @@ dependencies = [
 ]
 
 [[package]]
+name = "penelope-ops"
+version = "1.0.0-rc.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "chrono",
+ "chrono-tz",
+ "futures",
+ "minisign-verify",
+ "penelope-app",
+ "penelope-context",
+ "penelope-hitl",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-mcp",
+ "penelope-mcp-host",
+ "penelope-memory",
+ "penelope-observe",
+ "penelope-platform",
+ "penelope-skills",
+ "penelope-store",
+ "penelope-vault",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "penelope-orchestrator"
+version = "1.0.0-rc.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "chrono-tz",
+ "futures",
+ "penelope-agent",
+ "penelope-app",
+ "penelope-conversation",
+ "penelope-dream",
+ "penelope-executor",
+ "penelope-hitl",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-mcp",
+ "penelope-mcp-host",
+ "penelope-observe",
+ "penelope-ops",
+ "penelope-platform",
+ "penelope-store",
+ "penelope-tools",
+ "penelope-vault",
+ "penelope-workflow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "penelope-platform"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "argon2",
  "async-trait",
@@ -1542,7 +1824,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-skills"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "flate2",
@@ -1562,8 +1844,9 @@ dependencies = [
 
 [[package]]
 name = "penelope-store"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
+ "penelope-kernel",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1575,7 +1858,7 @@ dependencies = [
 
 [[package]]
 name = "penelope-telegram"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1600,12 +1883,11 @@ dependencies = [
 
 [[package]]
 name = "penelope-tools"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "async-trait",
  "chrono",
  "futures",
- "penelope-context",
  "penelope-hitl",
  "penelope-kernel",
  "penelope-llm",
@@ -1628,20 +1910,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "penelope-vault"
+version = "1.0.0-rc.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "chrono-tz",
+ "penelope-app",
+ "penelope-context",
+ "penelope-hitl",
+ "penelope-kernel",
+ "penelope-llm",
+ "penelope-mcp",
+ "penelope-memory",
+ "penelope-observe",
+ "penelope-platform",
+ "penelope-store",
+ "penelope-tools",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "penelope-workflow"
-version = "0.17.62"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "chrono-tz",
  "futures",
- "penelope-context",
  "penelope-hitl",
  "penelope-kernel",
  "penelope-llm",
  "penelope-observe",
  "penelope-platform",
  "penelope-store",
- "penelope-telegram",
  "penelope-tools",
  "regex",
  "serde",

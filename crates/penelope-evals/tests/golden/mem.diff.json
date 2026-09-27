@@ -1,0 +1,16 @@
+{
+  "method": "mem.diff",
+  "params": {},
+  "response": {
+    "result": {
+      "since": "string",
+      "base": "string",
+      "added": "integer",
+      "removed": "integer",
+      "untracked": [
+        "string"
+      ],
+      "text": "string"
+    }
+  }
+}

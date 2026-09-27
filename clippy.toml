@@ -1,0 +1,4 @@
+# Gel 0.17 (règle R7, issue #211) : plafond de lignes par fonction, promu erreur par le
+# `-D warnings` de la CI. À 100, 92 fonctions seraient signalées ; à 200, la liste des
+# `#[allow(clippy::too_many_lines)]` nomme exactement les monstres.
+too-many-lines-threshold = 200

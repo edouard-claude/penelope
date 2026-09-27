@@ -74,7 +74,7 @@ fn anchors(markdown: &str) -> BTreeSet<String> {
         if level == 0 || !line[level..].starts_with(' ') {
             continue;
         }
-        let base = penelope_daemon::selfdocs::anchor(line[level..].trim());
+        let base = penelope_executor::selfdocs::anchor(line[level..].trim());
         let n = seen.entry(base.clone()).or_insert(0);
         out.insert(if *n == 0 {
             base.clone()
@@ -344,7 +344,19 @@ fn default_of(defaults: &Value, path: &[String]) -> String {
 
 /// Toutes les clés de configuration : (clé, défaut rendu, rôle).
 fn config_reference() -> Vec<(String, String, String)> {
-    let source = read(&root().join("crates/penelope-kernel/src/config.rs"));
+    // config.rs et ses sections, sorties dans config/*.rs (épopée #208, lot L).
+    let mut source = read(&root().join("crates/penelope-kernel/src/config.rs"));
+    let mut parts: Vec<PathBuf> =
+        std::fs::read_dir(root().join("crates/penelope-kernel/src/config"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "rs") && !p.ends_with("tests.rs"))
+            .collect();
+    parts.sort();
+    for p in parts {
+        source.push_str(&read(&p));
+    }
     let structs = config_structs(&source);
     let defaults = serde_json::to_value(penelope_kernel::config::Config::default()).unwrap();
     let mut rows = Vec::new();
@@ -439,15 +451,25 @@ fn the_context_page_follows_the_code() {
     let key_re =
         regex::Regex::new(r"`((?:context|budget|models|memory|sandbox|tools)\.[a-z_.]+)`").unwrap();
     let value_re = regex::Regex::new(r"`([a-z_]+\.[a-z_.]+)` = (`[^`]+`)").unwrap();
-    // Un nom d'événement a la forme d'une clé : il existe s'il est émis par le daemon.
-    let mut daemon_source = String::new();
-    for e in std::fs::read_dir(root().join("crates/penelope-daemon/src"))
-        .unwrap()
-        .flatten()
-    {
-        if e.path().extension().is_some_and(|x| x == "rs") {
-            daemon_source.push_str(&read(&e.path()));
+    // Un nom d'événement a la forme d'une clé : il existe s'il est émis par le daemon,
+    // sous-modules compris (les tests sortis dans `<module>/tests.rs` aussi), ou par la
+    // conversation qui en est sortie (compaction, épopée #208, T23).
+    fn walk(dir: &Path, out: &mut String) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push_str(&read(&p));
+            }
         }
+    }
+    let mut daemon_source = String::new();
+    for dir in [
+        "crates/penelope-daemon/src",
+        "crates/penelope-conversation/src",
+    ] {
+        walk(&root().join(dir), &mut daemon_source);
     }
     let raw = read(&page);
     let mut wrong = Vec::new();

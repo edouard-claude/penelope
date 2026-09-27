@@ -1,0 +1,13 @@
+{
+  "method": "export",
+  "params": {
+    "what": "session",
+    "id": "$session"
+  },
+  "response": {
+    "result": {
+      "path": "string",
+      "lines": "integer"
+    }
+  }
+}

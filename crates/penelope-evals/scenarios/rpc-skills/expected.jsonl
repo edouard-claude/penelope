@@ -1,0 +1,10 @@
+{"type":"outcome","step":1,"input":"rpc : skill.reload","result":{"generation":1,"skills":2}}
+{"type":"outcome","step":2,"input":"rpc : skill.list","result":{"/*/name":["releve-compteurs","wiki-markdown"],"/*/version":["1.1.0","1.0.0"],"/*/scope":["user","bundled"]}}
+{"type":"outcome","step":3,"input":"rpc : skill.show","result":{"name":"releve-compteurs","description":"Relevé mensuel des compteurs d'eau et d'électricité","version":"1.1.0","allowed_tools":[],"activation":[],"sub_agent":false,"requires":[],"scope":"user","path":"{{home}}/data/skills/releve-compteurs/SKILL.md","body":"Relever les deux compteurs, comparer au mois précédent, signaler un écart de plus de 20 %.\n","body_hash":"{{hash}}"}}
+{"type":"outcome","step":4,"input":"rpc : skill.rollback","result":{"name":"releve-compteurs","restored":"{{home}}/data/skills/releve-compteurs/SKILL.md"}}
+{"type":"outcome","step":5,"input":"rpc : skill.show","result":{"name":"releve-compteurs","description":"Relevé mensuel des compteurs d'eau","version":"1.0.0","allowed_tools":[],"activation":[],"sub_agent":false,"requires":[],"scope":"user","path":"{{home}}/data/skills/releve-compteurs/SKILL.md","body":"Relever le compteur d'eau.\n","body_hash":"{{hash}}"}}
+{"type":"outcome","step":6,"input":"rpc : skill.rollback","error":{"code":-32603,"message":"aucune sauvegarde pour la skill `releve-compteurs`"}}
+{"type":"session","id":"{{session:1}}","kind":"chat","title":"CLI","state":"active","parent":null,"model_alias":null,"episode":0}
+{"type":"event","session":"{{session:1}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"chat","parent_id":null}}
+{"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"tool_jobs_lost":0,"turns_requeued":0}}
+{"type":"audit","ok":true,"checked":2,"purged":0}

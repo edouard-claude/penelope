@@ -12,8 +12,10 @@
 //!
 //! Les secrets viennent de l'environnement du processus de test, jamais d'un argument.
 
-use penelope_daemon::bus::Origin;
-use penelope_daemon::{Daemon, Services};
+use penelope_app::bus::Origin;
+use penelope_app::engine::TurnIntake;
+use penelope_app::services::Services;
+use penelope_daemon::runtime::Daemon;
 use penelope_kernel::clock::SharedClock;
 use std::path::Path;
 use std::sync::Arc;
@@ -76,6 +78,10 @@ pub async fn daemon(root: &Path, clock: SharedClock) -> Arc<Daemon> {
         }
         c.memory.review_max_candidates = 5;
         paths.push("memory.review_max_candidates".into());
+        // Personne ne répond aux cartes pendant une suite réseau : tout sauf le destructif
+        // passe sans approbation, sinon le premier outil demandé arrête le tour.
+        c.tools.approval_mode = "auto".into();
+        paths.push("tools.approval_mode".into());
         Ok(paths)
     })
     .expect("configuration");
@@ -100,7 +106,7 @@ pub async fn turn(d: &Arc<Daemon>, session: &str, text: &str) -> String {
         }
     };
     match penelope_daemon::runner::process(d, turn, Duration::from_secs(30)).await {
-        penelope_daemon::agent::TurnOutcome::Answered { text, .. } => text,
+        penelope_agent::TurnOutcome::Answered { text, .. } => text,
         other => panic!("tour sans réponse : {other:?}"),
     }
 }

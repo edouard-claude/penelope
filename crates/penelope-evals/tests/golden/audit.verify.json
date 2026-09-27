@@ -1,0 +1,13 @@
+{
+  "method": "audit.verify",
+  "params": {},
+  "response": {
+    "result": {
+      "checked": "integer",
+      "purged": "integer",
+      "ok": "bool",
+      "first_broken": "null",
+      "detail": "null"
+    }
+  }
+}

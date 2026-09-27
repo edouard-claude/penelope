@@ -72,19 +72,37 @@ fn rank(p: &str) -> u8 {
 }
 
 fn private_host(entry: &str) -> bool {
-    let host = entry
+    let authority = entry
         .trim()
         .trim_start_matches("https://")
         .trim_start_matches("http://")
-        .split(['/', ':'])
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    // Une adresse IPv6 : entre crochets (suivie d'un port), ou nue (plusieurs `:`). Le
+    // découpage sur `:` qui suit la viderait.
+    let v6 = match authority.strip_prefix('[') {
+        Some(rest) => rest.split(']').next(),
+        None => (authority.matches(':').count() > 1).then_some(authority),
+    };
+    if let Some(ip) = v6.and_then(|h| h.parse::<std::net::Ipv6Addr>().ok()) {
+        if let Some(v4) = ip.to_ipv4_mapped() {
+            return private_host(&v4.to_string());
+        }
+        let first = ip.segments()[0];
+        // Boucle locale, adresse non spécifiée, fc00::/7 (locales uniques), fe80::/10
+        // (lien local).
+        return ip.is_loopback()
+            || ip.is_unspecified()
+            || first & 0xfe00 == 0xfc00
+            || first & 0xffc0 == 0xfe80;
+    }
+    let host = authority
+        .split(':')
         .next()
         .unwrap_or_default()
         .to_lowercase();
-    if host == "localhost"
-        || host.ends_with(".local")
-        || host.ends_with(".localhost")
-        || host == "::1"
-    {
+    if host == "localhost" || host.ends_with(".local") || host.ends_with(".localhost") {
         return true;
     }
     let octets: Vec<u8> = host.split('.').filter_map(|o| o.parse().ok()).collect();
@@ -305,5 +323,80 @@ mod tests {
         let before = Config::sample(42);
         let refused = new_refusals(&before, &c, "tools.http_allowlist");
         assert_eq!(refused.len(), 1, "{refused:?}");
+    }
+
+    /// Routage vers un alias absent, repli sur soi-même ou vers un absent, provider
+    /// désactivé sous un rôle, point de contrôle au-delà du plafond de session, queue
+    /// plus grande que le plafond de prompt : chacun est nommé.
+    #[test]
+    fn routing_budget_and_context_contradictions_are_named() {
+        let mut c = Config::sample(42);
+        c.models.routing.high = "fantome".into();
+        c.models
+            .routing
+            .fallback
+            .insert("main".into(), vec!["main".into(), "absent".into()]);
+        c.providers.openrouter.enabled = false;
+        c.budget.session_usd = 1.0;
+        c.budget.turn_checkpoint_usd = 2.0;
+        c.context.max_prompt_tokens = c.context.tail_max_tokens;
+        c.budget.alert_ratio = 0.0;
+        let found = contradictions(&c);
+        let msg = |k: &str| {
+            found
+                .iter()
+                .filter(|x| x.concerns(k))
+                .map(|x| x.message.clone())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+        assert!(
+            msg("models.routing.high").contains("`fantome`"),
+            "{found:?}"
+        );
+        let fb = msg("models.routing.fallback.main");
+        assert!(fb.contains("se replie sur lui-même"), "{fb}");
+        assert!(fb.contains("vise l'alias `absent`"), "{fb}");
+        assert!(
+            msg("providers.openrouter.enabled").contains("est désactivé"),
+            "{found:?}"
+        );
+        assert!(msg("budget.turn_checkpoint_usd").contains("n'arriverait jamais"));
+        assert!(msg("context.max_prompt_tokens").contains("chaque tour compacterait"));
+        assert!(msg("budget.alert_ratio").contains("à chaque appel"));
+    }
+
+    /// Les hôtes privés reconnus, et ceux qui ne le sont pas.
+    #[test]
+    fn private_hosts_are_recognised() {
+        for h in [
+            "localhost",
+            "http://nas.local/x",
+            "https://10.1.2.3",
+            "172.20.0.1:8080",
+            "169.254.1.1",
+            "app.localhost",
+            "::1",
+            "[::1]:8080",
+            "http://[::1]/x",
+            "fd12:3456::1",
+            "https://[fc00::2]:443/api",
+            "fe80::1",
+            "::",
+            "::ffff:192.168.1.2",
+        ] {
+            assert!(private_host(h), "{h}");
+        }
+        for h in [
+            "api.example.com",
+            "172.32.0.1",
+            "8.8.8.8",
+            "2001:db8::1",
+            "[2606:4700::1111]:443",
+        ] {
+            assert!(!private_host(h), "{h}");
+        }
+        assert_eq!(rank("inconnu"), rank("ask"));
+        assert!(rank("deny") > rank("ask_twice"));
     }
 }

@@ -1,0 +1,23 @@
+{
+  "method": "vault.check",
+  "params": {},
+  "response": {
+    "result": {
+      "files": "integer",
+      "ok": "bool",
+      "issues": [],
+      "inventory": {
+        "files": "integer",
+        "indexed_files": "integer",
+        "entries": "integer",
+        "not_indexed": [],
+        "excluded": [
+          {
+            "path": "string",
+            "reason": "string"
+          }
+        ]
+      }
+    }
+  }
+}

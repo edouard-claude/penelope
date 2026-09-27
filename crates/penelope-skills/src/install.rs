@@ -95,13 +95,17 @@ impl Source {
         ))
     }
 
-    /// Archive ZIP de la révision. `codeload` sert le même contenu que `git clone
+    /// Archive ZIP de la révision sous `base` (`skills.archive_base_url`, par défaut
+    /// `https://codeload.github.com`). `codeload` sert le même contenu que `git clone
     /// --depth 1`, sans dépôt local ni sous-processus, et le format ZIP est déjà lu par
     /// le crate mémoire.
-    pub fn archive_url(&self) -> String {
+    pub fn archive_url(&self, base: &str) -> String {
         format!(
-            "https://codeload.github.com/{}/{}/zip/{}",
-            self.owner, self.repo, self.git_ref
+            "{}/{}/{}/zip/{}",
+            base.trim_end_matches('/'),
+            self.owner,
+            self.repo,
+            self.git_ref
         )
     }
 
@@ -507,8 +511,13 @@ mod tests {
         assert_eq!(s.git_ref, "v2");
         assert_eq!(w, ["docx", "pdf"]);
         assert_eq!(
-            s.archive_url(),
+            s.archive_url("https://codeload.github.com"),
             "https://codeload.github.com/anthropics/skills/zip/v2"
+        );
+        assert_eq!(
+            s.archive_url("http://127.0.0.1:8080/"),
+            "http://127.0.0.1:8080/anthropics/skills/zip/v2",
+            "une origine configurée, barre finale comprise"
         );
 
         for bad in ["skills", "an/../skills", "a/b:Pas Un Slug", "a b/c"] {

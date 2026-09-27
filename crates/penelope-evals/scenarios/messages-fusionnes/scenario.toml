@@ -1,0 +1,17 @@
+name = "messages-fusionnes"
+description = """Messages fusionnés (#161) : deux messages en file avant que le runner ne réclame
+le tour ; un troisième arrive avec le tour lui-même. Le modèle voit trois messages
+utilisateur distincts, dans l'ordre d'arrivée, et répond une fois."""
+pin_model = "main"
+
+[[steps]]
+kind = "enqueue"
+text = "premier message : le devis ACME"
+
+[[steps]]
+kind = "enqueue"
+text = "complément : hors taxes"
+
+[[steps]]
+kind = "message"
+text = "correction : en euros, pas en dollars"

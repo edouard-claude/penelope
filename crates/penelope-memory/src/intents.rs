@@ -677,4 +677,19 @@ mod tests {
         assert_eq!(i.lexical_score("déploiement et changelog"), 1.0);
         assert_eq!(i.lexical_score("rien à voir"), 0.0);
     }
+
+    /// Chaque état d'intention se relit depuis son nom ; un nom inconnu n'en est pas un.
+    #[test]
+    fn intent_states_round_trip() {
+        for st in [
+            IntentState::Armee,
+            IntentState::Tiree,
+            IntentState::Terminee,
+            IntentState::Annulee,
+            IntentState::Expiree,
+        ] {
+            assert_eq!(IntentState::parse(st.as_str()), Some(st));
+        }
+        assert_eq!(IntentState::parse("armée"), None);
+    }
 }

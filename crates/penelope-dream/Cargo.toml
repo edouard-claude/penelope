@@ -1,0 +1,50 @@
+[package]
+name = "penelope-dream"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# La mémoire qui mûrit (épopée #208, T26) : consolidation nocturne (`dream/`), ingestion
+# de documents (`ingest`), entretien d'accueil (`onboarding`). Au-dessus de `penelope-app`
+# et de `penelope-vault`, sous le daemon et l'orchestrateur, qui déclenchent le rêve.
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+# Port `DigestSource`, implémenté par le daemon.
+async-trait.workspace = true
+# Jour du propriétaire dans son fuseau (nom de la séance d'accueil).
+chrono-tz.workspace = true
+# `Services`, helpers (`vault_dir`), inventaire machine.
+penelope-app.workspace = true
+# Écriture des notes et des entrées de mémoire (`vault_ops`).
+penelope-vault.workspace = true
+# Providers de modèles (`Context::provider_for`).
+penelope-llm.workspace = true
+# Configuration du propriétaire (fuseau).
+penelope-kernel.workspace = true
+# Approbations des propositions de mémoire et des contradictions (ingestion).
+penelope-hitl.workspace = true
+# Caviardage du texte extrait.
+penelope-observe.workspace = true
+# OCR des PDF scannés.
+penelope-platform.workspace = true
+# Niveaux et provenance des entrées de mémoire ; candidats et opérations du rêve.
+penelope-memory.workspace = true
+# Journal des passes du rêve (`dream_runs`, `mem_history`).
+penelope-store.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Dépôt git du vault dans les tests du rêve.
+penelope-tools.workspace = true
+# `test-util` : horloge virtuelle des tests de reprise des lots (issue #152).
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util", "test-util"] }

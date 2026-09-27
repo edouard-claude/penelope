@@ -1,0 +1,9 @@
+{
+  "method": "shutdown",
+  "params": {},
+  "response": {
+    "result": {
+      "ok": "bool"
+    }
+  }
+}

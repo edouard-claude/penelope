@@ -1,0 +1,5 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "image_generate", "arguments": {"prompt": "logo minimaliste pour ACME, un carré bleu"}}]}}
+{"images": {"text": "", "urls": ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "image_inspect", "arguments": {"path": "maquette.gif", "mode": "describe"}}]}}
+{"text": "Un unique pixel, sans autre élément."}
+{"text": "Le logo est envoyé ; la maquette ne contient qu'un pixel."}

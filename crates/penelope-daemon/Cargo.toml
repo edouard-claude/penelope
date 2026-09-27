@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
@@ -19,6 +22,28 @@ chrono.workspace = true
 chrono-tz.workspace = true
 regex.workspace = true
 arc-swap.workspace = true
+# Services, ports et bus, extraits du daemon (épopée #208, T21).
+penelope-app.workspace = true
+# La boucle d'agent (T10) ; `agent.rs` en est la façade.
+penelope-agent.workspace = true
+# Hôte MCP : superviseur des serveurs et autorisation OAuth, extraits du daemon
+# (épopée #208, T25).
+penelope-mcp-host.workspace = true
+# La mémoire en fichiers, extraite du daemon (épopée #208, T22).
+penelope-vault.workspace = true
+# Exploitation : doctor, mise à jour, sauvegarde, Hermes, Codex, skills, extraits du
+# daemon (épopée #208, T28).
+penelope-ops.workspace = true
+# Accueil, rêve, ingestion, extraits du daemon (épopée #208, T26).
+penelope-dream.workspace = true
+# Exécuteur des outils natifs, `self_status`, documentation embarquée, vision, voix
+# (épopée #208, T24).
+penelope-executor.workspace = true
+# Conversation de session, compaction, titres, alerte de budget, extraits du daemon
+# (épopée #208, T23).
+penelope-conversation.workspace = true
+# Moteur de workflows et ordonnanceur, extraits du daemon (épopée #208, T27).
+penelope-orchestrator.workspace = true
 penelope-kernel.workspace = true
 penelope-store.workspace = true
 penelope-platform.workspace = true
@@ -30,7 +55,6 @@ penelope-mcp.workspace = true
 penelope-skills.workspace = true
 penelope-tools.workspace = true
 penelope-hitl.workspace = true
-penelope-telegram.workspace = true
 penelope-workflow.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true

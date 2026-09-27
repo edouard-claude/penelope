@@ -206,6 +206,42 @@ rétention n'efface que ce que plus aucune ligne ne cite. `penelope doctor` dit 
 gardé et le nombre de changements de préfixe des dernières 24 h : au-delà de cinq, c'est
 un rechargement qui casse le cache, et le contrôle nomme la tuile.
 
+## Le journal
+
+Tout ce que le modèle a lu est dans le journal d'événements (décision
+[0017](decisions/0017-journal-source-unique.md)) : chaque message, contexte figé, réponse,
+résultat d'outil, résumé, retour arrière et fork est un événement `conv.*` de la table
+`events`, chaîné par hachage comme le reste de la trace d'audit. Rien n'y change en
+place : un gros résultat parti en artefact, un résumé ou un `/rewind` sont des événements
+de plus, qui remplacent ou coupent ce qui précède.
+
+```
+ events (conv.*) ──pliage pur──▶ ce que le modèle reçoit
+       │
+       └──projecteur──▶ messages, message_context, lcm_nodes, prompt_snapshots (caches)
+```
+
+- **La requête se relit dans le journal**, pas dans les tables : le pliage reprend sur
+  les seuls événements arrivés depuis la requête précédente. Les tables sont des
+  caches écrits juste après chaque événement, dans la même file d'écriture ; seul le
+  moteur de contexte les écrit, et le test d'architecture le vérifie.
+- **Les conversations d'avant le journal sont scellées** au premier démarrage d'une
+  version 1 : un événement `conv.import` par session porte l'empreinte de son historique,
+  qui reste dans les tables sans être recopié.
+- **Ce qui a été lu se prouve** : `penelope history verify` replie chaque session et la
+  compare aux caches (la ligne « Historique et journal » de `penelope doctor` le fait
+  sur la semaine) ; `penelope history reindex` refait les caches depuis le journal. Une
+  session dont le journal ne se plie pas se lit dans ses caches, et `doctor` la nomme.
+- **Le préfixe retenu** pendant que le cache est chaud est celui du dernier
+  `conv.system` de la session ; une compaction (`context.compacted`) ou un projet fixé à
+  la main (`session.project`) le libère jusqu'à l'appel suivant.
+- **Une tentative échouée** (réponse vide, flux coupé, repli) laisse un `conv.attempt`
+  hors de la conversation : elle ne repart jamais dans un prompt, et son texte partiel
+  suit la rétention.
+
+Le catalogue des événements `conv.*` et de leurs champs est dans
+[runtime-events.md](runtime-events.md).
+
 ## Observer
 
 Chaque décision laisse un événement : `context.compaction_requested` (avec la taille qui

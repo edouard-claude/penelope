@@ -1,0 +1,22 @@
+{
+  "method": "onboard.answer",
+  "params": {
+    "rel": "$rel",
+    "n": "$n_question",
+    "answer": "Édouard"
+  },
+  "response": {
+    "result": {
+      "next": {
+        "rel": "string",
+        "n": "integer",
+        "position": "integer",
+        "total": "integer",
+        "text": "string",
+        "hint": "string",
+        "choices": [],
+        "list": "bool"
+      }
+    }
+  }
+}

@@ -1,6 +1,7 @@
 //! Bout en bout sur la vraie socket : `chat.stream` puis `chat.send`, comme la CLI.
 
-use penelope_daemon::runtime::{Daemon, Services};
+use penelope_app::services::Services;
+use penelope_daemon::runtime::Daemon;
 use penelope_kernel::api::{RpcRequest, method};
 use penelope_kernel::clock::SystemClock;
 use penelope_llm::mock::MockProvider;
@@ -24,7 +25,7 @@ async fn start() -> (tempfile::TempDir, Arc<Daemon>, Arc<MockProvider>) {
     let p = Arc::new(MockProvider::new());
     d.set_provider_override(p.clone());
     tokio::spawn(penelope_daemon::runner::run_pool(d.clone()));
-    tokio::spawn(penelope_daemon::rpc::serve(d.clone()));
+    tokio::spawn(penelope_daemon::rpc::serve(d.core.clone()));
     // Attendre que la socket accepte : le fichier existe entre `bind` et `listen`, une
     // connexion à ce moment-là est refusée.
     let sock = d.services.platform.dirs.socket_path();
@@ -124,6 +125,30 @@ async fn chat_stream_sends_deltas_then_the_final_answer() {
     d.handle.shutdown();
 }
 
+/// `chat.stream` ne double jamais la réponse finale d'une notification `done` : l'issue
+/// du tour sautée dans la boucle l'était aussi dans la vidange qui suit la fin, selon
+/// la branche que `select!` tirait (une fois sur deux environ, relevé du lot s-rpc).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chat_stream_never_sends_a_done_notification() {
+    let (_dir, d, p) = start().await;
+    for id in 0..16 {
+        p.reply(r#"{"complexity":"low"}"#);
+        p.reply("Présent.");
+        let lines = exchange(
+            &d,
+            RpcRequest::new(id, method::CHAT_STREAM, json!({"text": "tu es là ?"})),
+        )
+        .await;
+        assert_eq!(lines.last().unwrap()["result"]["text"], "Présent.");
+        let done: Vec<_> = lines
+            .iter()
+            .filter(|l| l["params"]["type"] == "done")
+            .collect();
+        assert!(done.is_empty(), "tour {id} : {lines:?}");
+    }
+    d.handle.shutdown();
+}
+
 /// #91 : sans jeton, ou avec un mauvais, la socket refuse et n'exécute rien ; le jeton
 /// n'apparaît pas dans `doctor`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -214,7 +239,7 @@ async fn a_stream_client_that_leaves_cancels_its_turn() {
         .await
         .expect("le tour s'arrête")
         .unwrap();
-    assert_eq!(out, penelope_daemon::agent::TurnOutcome::Cancelled);
+    assert_eq!(out, penelope_agent::TurnOutcome::Cancelled);
     assert!(
         left.elapsed() < Duration::from_secs(2),
         "{:?}",

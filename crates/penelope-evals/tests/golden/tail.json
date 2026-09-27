@@ -1,0 +1,10 @@
+{
+  "method": "tail",
+  "params": {},
+  "response": {
+    "error": {
+      "code": -32603,
+      "message": "string"
+    }
+  }
+}

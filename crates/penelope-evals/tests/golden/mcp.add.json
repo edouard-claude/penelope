@@ -1,0 +1,13 @@
+{
+  "method": "mcp.add",
+  "params": {
+    "name": "forge",
+    "toml": "command = \"forge-mcp\""
+  },
+  "response": {
+    "error": {
+      "code": -32603,
+      "message": "string"
+    }
+  }
+}

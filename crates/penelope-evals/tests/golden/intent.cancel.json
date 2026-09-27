@@ -1,0 +1,11 @@
+{
+  "method": "intent.cancel",
+  "params": {
+    "id": "$intent"
+  },
+  "response": {
+    "result": {
+      "cancelled": "bool"
+    }
+  }
+}

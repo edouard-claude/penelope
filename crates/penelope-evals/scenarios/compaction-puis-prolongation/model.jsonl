@@ -1,0 +1,6 @@
+{"text": "Noté : migration PROJ-7 vers PostgreSQL 17, schéma exporté dans db/schema.sql."}
+{"text": "Entendu, court. Migration ce soir."}
+{"text": "{\"objectif\": \"préparer la migration PROJ-7\", \"contraintes_et_preferences\": \"réponses courtes\", \"fait\": \"schéma exporté\", \"en_cours\": \"vérification du schéma\", \"bloque\": \"\", \"decisions_cles\": \"PostgreSQL 17\", \"fichiers_et_ressources\": \"db/schema.sql\", \"prochaines_etapes\": \"migrer ce soir\", \"contexte_critique\": \"\"}"}
+{"text": "Index relus ; rejeu des migrations à faire."}
+{"text": "D'accord, après le rejeu."}
+{"text": "{\"objectif\": \"préparer la migration PROJ-7\", \"contraintes_et_preferences\": \"réponses courtes\", \"fait\": \"schéma exporté, index relus\", \"en_cours\": \"rejeu des migrations\", \"bloque\": \"\", \"decisions_cles\": \"PostgreSQL 17\", \"fichiers_et_ressources\": \"db/schema.sql\", \"prochaines_etapes\": \"migrer ce soir après le rejeu\", \"contexte_critique\": \"\"}"}

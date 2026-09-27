@@ -1,0 +1,12 @@
+{
+  "method": "skill.rollback",
+  "params": {
+    "name": "wiki-markdown"
+  },
+  "response": {
+    "error": {
+      "code": -32603,
+      "message": "string"
+    }
+  }
+}

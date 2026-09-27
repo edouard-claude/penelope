@@ -1,0 +1,22 @@
+name = "commandes-extensions"
+description = """Extensions par Telegram, sur une instance de test sans skill ni serveur MCP :
+`/skills` et `/skill` le disent, `/mcp` dit que le superviseur MCP n'est pas démarré
+(le harnais sert ses outils MCP simulés sans superviseur), `/p` qu'aucun serveur n'est
+chargé. Ce scénario fixe les écrans d'état vide ; les listes pleines relèvent des tests
+de la passerelle."""
+
+[[steps]]
+kind = "telegram"
+text = "/skills"
+
+[[steps]]
+kind = "telegram"
+text = "/skill rollback revue-de-code"
+
+[[steps]]
+kind = "telegram"
+text = "/mcp"
+
+[[steps]]
+kind = "telegram"
+text = "/p redmine resume_ticket"

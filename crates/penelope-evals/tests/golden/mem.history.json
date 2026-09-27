@@ -1,0 +1,7 @@
+{
+  "method": "mem.history",
+  "params": {},
+  "response": {
+    "result": []
+  }
+}

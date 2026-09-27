@@ -1,0 +1,23 @@
+name = "crash-deux-vies"
+description = """Crash en deux vies : le modèle demande un outil MCP (lecture, idempotent), le
+processus meurt pendant l'appel, après que la réponse du modèle est écrite et avant tout
+résultat. Au redémarrage, la reprise remet le tour en file, l'effet en vol redevient
+planifié sans demande humaine (idempotent), le tour retrouve l'appel en attente dans la
+queue du transcript, l'exécute, et le modèle répond."""
+pin_model = "main"
+
+[[mcp_tools]]
+server = "banc"
+name = "lire"
+description = "Lit un fichier du dépôt distant de test."
+read_only = true
+params = ["path"]
+result = "rapport.txt : 42 lignes, la dernière dit « fin »."
+
+[[steps]]
+kind = "message"
+text = "lis rapport.txt sur le banc et dis-moi comment il finit"
+crash = "during_tool"
+
+[[steps]]
+kind = "restart"

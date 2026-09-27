@@ -624,7 +624,10 @@ est discutée au §7). La V1 scelle donc chaque session existante par **un** év
   l'horloge, pas d'une migration SQL). Une session sans message n'est pas scellée.
 - Les lignes du préfixe sont marquées `sealed = 1` (colonne de la migration 0019) et ne sont
   jamais touchées par `reindex` ; `verify` recalcule le digest et signale toute modification
-  du préfixe.
+  du préfixe. Un `/rewind` qui coupe dans le préfixe ne les efface pas : il les passe à
+  `sealed = 2` (masquées), la coupe s'appliquant au pliage par-dessus le préfixe ; toute
+  lecture de `messages` hors de `penelope-context` filtre `sealed IS NOT 2` (correctif
+  i-rewind-scelle, 26/09/2026).
 - La dérivation d'une session scellée = préfixe (lignes `sealed`) puis événements après
   l'import ; `offset` = `MAX(messages.seq)` du préfixe, donc tout nouveau nœud a une adresse
   supérieure.

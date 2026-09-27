@@ -1,0 +1,19 @@
+name = "rpc-arret"
+description = """Arrêt et redémarrage demandés par la socket locale (`shutdown`, puis `restart`) :
+chaque appel pose le drapeau que la boucle principale du daemon lit ; le premier
+demande l'arrêt sans redémarrage, le second l'arrêt avec redémarrage. L'issue de chaque
+étape relève l'état des drapeaux."""
+pin_model = "main"
+
+[[steps]]
+kind = "rpc"
+method = "status"
+pick = ["/config_generation"]
+
+[[steps]]
+kind = "rpc"
+method = "shutdown"
+
+[[steps]]
+kind = "rpc"
+method = "restart"

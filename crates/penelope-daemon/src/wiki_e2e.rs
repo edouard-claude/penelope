@@ -10,8 +10,9 @@
 //!                                                       └─ dossiers cachés intacts
 //! ```
 
-use crate::bus::Origin as Channel;
 use crate::runtime::Daemon;
+use penelope_app::bus::Origin as Channel;
+use penelope_app::engine::TurnIntake;
 use penelope_kernel::clock::TestClock;
 use penelope_llm::mock::MockProvider;
 use penelope_llm::types::ChatMessage;
@@ -90,149 +91,9 @@ fn hidden_entries(vault: &Path) -> Vec<(String, Vec<u8>)> {
     out
 }
 
-#[tokio::test]
-async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
-    let dir = tempfile::tempdir().unwrap();
-    let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::new(1_789_516_800_000));
-    let s = Arc::new(
-        crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
-            .await
-            .unwrap(),
-    );
-    let d = Arc::new(Daemon::from_services(s.clone()));
-    let p = Arc::new(MockProvider::new());
-    d.set_provider_override(p.clone());
-    d.publish_config("test", |c| {
-        c.memory.review_max_candidates = 5;
-        c.memory.vault_git_autocommit = "0s".into();
-        Ok(vec!["memory.review_max_candidates".into()])
-    })
-    .unwrap();
-    let vault = crate::conversation::vault_dir(&s);
-    std::fs::create_dir_all(vault.join(".editeur")).unwrap();
-    std::fs::write(
-        vault.join(".editeur/etat.json"),
-        br#"{"ouvert":"profil.md"}"#,
-    )
-    .unwrap();
-    let hidden_before = hidden_entries(&vault);
-    let sid = d.chat_session_for(&Channel::Cli).await.unwrap();
-
-    // Accueil complet.
-    let mut sitting = crate::onboarding::start(&d, None).await.unwrap();
-    let questions: Vec<u32> = sitting.answers.keys().copied().collect();
-    for n in questions {
-        let q = crate::onboarding::question(n).unwrap();
-        let answer = match q.choices.first() {
-            Some(c) => c.to_string(),
-            None if q.list => "Refonte du site Durand\nMigration Factur-X".to_string(),
-            None => "développeur indépendant".to_string(),
-        };
-        sitting = crate::onboarding::answer(&d, &sitting.rel, n, Some(&answer))
-            .await
-            .unwrap();
-    }
-    crate::onboarding::write(&d, &sitting, &sid).await.unwrap();
-
-    // Trois tours relus.
-    let episode = s.sessions.require(&sid).await.unwrap().episode_seq;
-    for (i, (user, answer, candidate)) in [
-        (
-            "On passe la facturation en Factur-X",
-            "Je note.",
-            "La facturation passe en Factur-X",
-        ),
-        (
-            "Désormais les PR restent courtes",
-            "D'accord.",
-            "Les PR restent courtes",
-        ),
-        (
-            "Le client Durand veut une démo vendredi",
-            "Je prépare.",
-            "Démo prévue pour le client Durand",
-        ),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        for m in [ChatMessage::user(user), ChatMessage::assistant(answer)] {
-            s.context
-                .history
-                .append(&sid, &m, 10, episode, false, None)
-                .await
-                .unwrap();
-        }
-        p.reply(&format!(
-            r#"{{"candidats": [{{"type": "fait", "texte": "{candidate}", "importance": 6, "quand": ""}}]}}"#
-        ));
-        crate::review::review(&d, &sid, &format!("t{i}"), user, answer, None)
-            .await
-            .unwrap();
-    }
-
-    // Un PDF reçu : fiche, original embarqué, concepts, index, log.md.
-    p.reply(
-        r#"{"resume": "Contrat-cadre de facturation électronique.", "faits": [],
-            "concepts": [{"nom": "Factur-X", "definition": "Norme franco-allemande de facture électronique.", "alias": ["ZUGFeRD"]}],
-            "a_definir": ["PDP"]}"#,
-    );
-    let pdf = pdf_with_text(&["Contrat-cadre", "Les factures sont emises en Factur-X."]);
-    crate::ingest::ingest(
-        &d,
-        "Contrat cadre.pdf",
-        pdf,
-        "telegram",
-        Origin::Owner,
-        Some(&sid),
-        &penelope_llm::CancelToken::new(),
-    )
-    .await
-    .unwrap();
-
-    // Clôture de l'épisode.
-    p.reply(
-        r#"{"resume": "Passage de la facturation en Factur-X et démo Durand.",
-            "candidats": [{"type": "preference", "texte": "Les PR restent courtes", "importance": 7, "quand": ""}]}"#,
-    );
-    crate::episodes::ingest(&d, &sid, episode, crate::episodes::Boundary::Idle)
-        .await
-        .unwrap();
-
-    // Un rêve qui promeut une entrée.
-    let c = Candidate::new(
-        CandidateType::Fait,
-        "Le propriétaire facture ses clients en Factur-X",
-        Origin::Owner,
-        "interactive",
-        &s.clock.now_rfc3339(),
-    )
-    .in_session(&sid)
-    .with_importance(9);
-    s.candidates.record(vec![c], 5).await.unwrap();
-    // Verdict de la grille (issue #37) rattaché au numéro du candidat soumis.
-    let n = crate::dream::submission_order(&s)
-        .await
-        .unwrap()
-        .iter()
-        .position(|t| t.contains("facture ses clients en Factur-X"))
-        .expect("candidat soumis")
-        + 1;
-    p.reply(
-        &serde_json::json!({
-            "tri": [{"candidat": n, "durable": true, "utile": true, "precis": true,
-                     "introuvable": true, "endosse": true, "justification": "mode de facturation"}],
-            "operations": [{"op": "add_entry", "candidat": n, "file": "memoire.md",
-                            "section": "Facturation",
-                            "text": "Le propriétaire facture ses clients en Factur-X", "importance": 8}]
-        })
-        .to_string(),
-    );
-    let dream = crate::dream::run(&d, false).await.unwrap();
-    assert!(dream.report.promoted >= 1, "{:?}", dream.report);
-
-    // Validateur.
-    let lint = wiki::lint(&vault);
+/// Le validateur de l'en-tête du module.
+fn assert_valid_wiki(vault: &Path) {
+    let lint = wiki::lint(vault);
     assert!(
         lint.bad_properties.is_empty(),
         "propriétés : {:?}",
@@ -265,7 +126,7 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
         lint.duplicate_aliases
     );
 
-    for rel in wiki::vault_files(&vault) {
+    for rel in wiki::vault_files(vault) {
         if let Some(kind) = wiki::note_type(&rel) {
             let raw = std::fs::read_to_string(vault.join(&rel)).unwrap();
             let fm = penelope_kernel::frontmatter::parse(&raw).unwrap();
@@ -324,6 +185,170 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
         ops.windows(2).all(|w| w[0].0 <= w[1].0),
         "log.md croissant : {log}"
     );
+}
+
+#[tokio::test]
+async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::new(1_789_516_800_000));
+    let s = Arc::new(
+        penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
+            .await
+            .unwrap(),
+    );
+    let d = Arc::new(Daemon::from_services(s.clone()));
+    let p = Arc::new(MockProvider::new());
+    d.set_provider_override(p.clone());
+    d.publish_config("test", |c| {
+        c.memory.review_max_candidates = 5;
+        c.memory.vault_git_autocommit = "0s".into();
+        Ok(vec!["memory.review_max_candidates".into()])
+    })
+    .unwrap();
+    let vault = penelope_app::helpers::vault_dir(&s);
+    std::fs::create_dir_all(vault.join(".editeur")).unwrap();
+    std::fs::write(
+        vault.join(".editeur/etat.json"),
+        br#"{"ouvert":"profil.md"}"#,
+    )
+    .unwrap();
+    let hidden_before = hidden_entries(&vault);
+    let sid = d.chat_session_for(&Channel::Cli).await.unwrap();
+
+    // Accueil complet.
+    let mut sitting = penelope_dream::onboarding::start(&d.services, None)
+        .await
+        .unwrap();
+    let questions: Vec<u32> = sitting.answers.keys().copied().collect();
+    for n in questions {
+        let q = penelope_dream::onboarding::question(n).unwrap();
+        let answer = match q.choices.first() {
+            Some(c) => c.to_string(),
+            None if q.list => "Refonte du site Durand\nMigration Factur-X".to_string(),
+            None => "développeur indépendant".to_string(),
+        };
+        sitting = penelope_dream::onboarding::answer(&d.services, &sitting.rel, n, Some(&answer))
+            .await
+            .unwrap();
+    }
+    penelope_dream::onboarding::write(&d.services, &sitting, &sid)
+        .await
+        .unwrap();
+
+    // Trois tours relus.
+    let episode = s.sessions.require(&sid).await.unwrap().episode_seq;
+    for (i, (user, answer, candidate)) in [
+        (
+            "On passe la facturation en Factur-X",
+            "Je note.",
+            "La facturation passe en Factur-X",
+        ),
+        (
+            "Désormais les PR restent courtes",
+            "D'accord.",
+            "Les PR restent courtes",
+        ),
+        (
+            "Le client Durand veut une démo vendredi",
+            "Je prépare.",
+            "Démo prévue pour le client Durand",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for m in [ChatMessage::user(user), ChatMessage::assistant(answer)] {
+            s.context
+                .history
+                .append(&sid, &m, 10, episode, false, None)
+                .await
+                .unwrap();
+        }
+        p.reply(&format!(
+            r#"{{"candidats": [{{"type": "fait", "texte": "{candidate}", "importance": 6, "quand": ""}}]}}"#
+        ));
+        penelope_vault::review::review(
+            &d.services,
+            d.providers.as_ref(),
+            &sid,
+            &format!("t{i}"),
+            user,
+            answer,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    // Un PDF reçu : fiche, original embarqué, concepts, index, log.md.
+    p.reply(
+        r#"{"resume": "Contrat-cadre de facturation électronique.", "faits": [],
+            "concepts": [{"nom": "Factur-X", "definition": "Norme franco-allemande de facture électronique.", "alias": ["ZUGFeRD"]}],
+            "a_definir": ["PDP"]}"#,
+    );
+    let pdf = pdf_with_text(&["Contrat-cadre", "Les factures sont emises en Factur-X."]);
+    penelope_dream::ingest::ingest(
+        &d.dream(),
+        "Contrat cadre.pdf",
+        pdf,
+        "telegram",
+        Origin::Owner,
+        Some(&sid),
+        &penelope_llm::CancelToken::new(),
+    )
+    .await
+    .unwrap();
+
+    // Clôture de l'épisode.
+    p.reply(
+        r#"{"resume": "Passage de la facturation en Factur-X et démo Durand.",
+            "candidats": [{"type": "preference", "texte": "Les PR restent courtes", "importance": 7, "quand": ""}]}"#,
+    );
+    penelope_vault::episodes::ingest(
+        &d.services,
+        d.providers.as_ref(),
+        &sid,
+        episode,
+        penelope_vault::episodes::Boundary::Idle,
+    )
+    .await
+    .unwrap();
+
+    // Un rêve qui promeut une entrée.
+    let c = Candidate::new(
+        CandidateType::Fait,
+        "Le propriétaire facture ses clients en Factur-X",
+        Origin::Owner,
+        "interactive",
+        &s.clock.now_rfc3339(),
+    )
+    .in_session(&sid)
+    .with_importance(9);
+    s.candidates.record(vec![c], 5).await.unwrap();
+    // Verdict de la grille (issue #37) rattaché au numéro du candidat soumis.
+    let n = penelope_dream::dream::submission_order(&s)
+        .await
+        .unwrap()
+        .iter()
+        .position(|t| t.contains("facture ses clients en Factur-X"))
+        .expect("candidat soumis")
+        + 1;
+    p.reply(
+        &serde_json::json!({
+            "tri": [{"candidat": n, "durable": true, "utile": true, "precis": true,
+                     "introuvable": true, "endosse": true, "justification": "mode de facturation"}],
+            "operations": [{"op": "add_entry", "candidat": n, "file": "memoire.md",
+                            "section": "Facturation",
+                            "text": "Le propriétaire facture ses clients en Factur-X", "importance": 8}]
+        })
+        .to_string(),
+    );
+    let dream = penelope_dream::dream::run(&d.dream(), &d.hooks.messenger, false)
+        .await
+        .unwrap();
+    assert!(dream.report.promoted >= 1, "{:?}", dream.report);
+
+    assert_valid_wiki(&vault);
 
     assert_eq!(
         hidden_entries(&vault),
@@ -345,10 +370,10 @@ async fn a_full_simulated_journey_leaves_a_valid_markdown_wiki() {
 async fn the_wiki_markdown_skill_is_bundled() {
     let dir = tempfile::tempdir().unwrap();
     let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
-    let s = crate::runtime::Services::for_tests(dir.path().to_path_buf(), clock)
+    let s = penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
         .await
         .unwrap();
-    crate::runtime::reload_skills(&s).await.unwrap();
+    penelope_app::services::reload_skills(&s).await.unwrap();
     let skill = s.skills.get("wiki-markdown").expect("skill livrée");
     assert_eq!(skill.scope, penelope_skills::Scope::Bundled);
     assert!(skill.body.contains("Propriétés YAML") && skill.body.contains("log.md"));
@@ -361,7 +386,7 @@ async fn the_wiki_markdown_skill_is_bundled() {
         "---\nname: wiki-markdown\ndescription: version maison\n---\nRègles maison.\n",
     )
     .unwrap();
-    crate::runtime::reload_skills(&s).await.unwrap();
+    penelope_app::services::reload_skills(&s).await.unwrap();
     assert_eq!(
         s.skills.get("wiki-markdown").unwrap().description,
         "version maison"

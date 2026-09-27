@@ -432,10 +432,6 @@ impl LlmError {
     pub fn context_length(m: impl Into<String>) -> Self {
         Self::new(LlmErrorKind::ContextLength, m)
     }
-    pub fn with_status(mut self, s: u16) -> Self {
-        self.status = Some(s);
-        self
-    }
     pub fn billed(mut self) -> Self {
         self.maybe_billed = true;
         self

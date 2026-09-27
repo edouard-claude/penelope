@@ -235,6 +235,9 @@ ne les pose. Une clé que le binaire ne connaît pas (écrite par une version pl
 faute de frappe) est ignorée et nommée par `penelope config validate`, `penelope doctor`
 et le journal de démarrage, jamais fatale : un retour à la version précédente
 (`penelope upgrade --rollback`) redémarre donc sur le fichier laissé par la suivante.
+Une clé retirée n'est pas inconnue : elle est ignorée avec un avertissement au démarrage
+qui dit pourquoi, et la ligne peut être effacée. C'est le cas de la section `[history]`
+d'une version `1.0.0-alpha` (la conversation se relit toujours depuis le journal).
 `penelope config set` refuse toujours une clé qui n'existe pas.
 
 **Réglages qui s'annulent.** Un réglage qui annulerait sa propre intention est refusé,
@@ -360,6 +363,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `models.aliases.summarizer` | `"openrouter:deepseek/deepseek-v4-flash"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
 | `models.aliases.tts` | `"openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
 | `models.aliases.vision` | `"openrouter:google/gemini-3.1-flash-image"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
+| `models.roles.approval_judge` | `"fast"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.roles.chat_default` | `"main"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.roles.classifier` | `"fast"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
 | `models.roles.code` | `"reasoning"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
@@ -547,6 +551,12 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `upgrade.codesign_identifier` | `"io.github.edouard-claude.penelope"` | Identifiant fixe de la signature macOS. |
 | `upgrade.install_dir` | `"~/.local/bin"` | Répertoire du binaire de release quand une installation source bascule vers les releases (issue #33). |
 
+**[skills]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `skills.archive_base_url` | `"https://codeload.github.com"` | Origine des archives ZIP des dépôts (`<base>/<proprietaire>/<depot>/zip/<revision>`) : HTTPS, ou HTTP vers la boucle locale seulement (miroir, scénarios). |
+
 **[voice]**
 
 | Clé | Défaut | Rôle |
@@ -573,6 +583,12 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `backup.keep_monthly` | `12` | Sauvegardes mensuelles gardées. |
 | `backup.include_media` | `false` | Inclure les artefacts et les médias reçus. Lourd, et reconstructible. |
 | `backup.max_push_bytes` | `104857600` | Taille maximale d'une archive poussée, en octets (limite de fichier de GitHub). |
+
+**[approval]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `approval.judge` | `"explain"` | Juge des lignes `shell_exec` sans motif possible (issue #203), sous les planchers déterministes : `off` (aucun appel), `explain` (la carte dit ce que la ligne fait réellement et propose une règle sur les pouvoirs reconnus ; rien n'est autorisé seul), `auto_read` (comme `explain`, et une lecture pure dans les workspaces, sans réseau ni écriture ni processus détaché, passe sans carte). Modèle : rôle `approval_judge`. |
 <!-- reference:config:fin -->
 
 ## 6. Modèles
@@ -1023,6 +1039,81 @@ pile courte) ; une autre commande en échec à longue sortie, sa tête, sa queue
 lignes d'erreur. La sortie complète part en artefact, relisible par pages avec
 `artifact_read`. `output: "full"` dans l'appel rend la sortie brute : échouer sur 3 tests
 sur 1 200 ne fait plus entrer 1 197 lignes de succès dans le contexte.
+
+#### Mesurer avant d'activer le juge
+
+Le juge d'approbation de #203 (un modèle auxiliaire qui décrit les pouvoirs d'une ligne
+composée) ne se construit que si l'instance en a besoin. La mesure se lit dans la base, en
+lecture seule, daemon lancé ou arrêté :
+
+```bash
+penelope approvals stats --days 30          # lisible
+penelope approvals stats --days 30 --json   # à coller dans #203
+```
+
+Elle compte, sur la fenêtre, les cartes `shell_exec`, celles **sans motif possible** (un
+« Toujours » n'y écrirait aucune règle : `;`, `||`, `$(…)`, redirection, plus de trois
+familles), et parmi elles celles que le juge verrait (ni double confirmation, ni risque
+destructif) ; puis les commandes distinctes (blancs normalisés), les dix plus fréquentes
+(quarante caractères, secrets masqués, et l'empreinte SHA-256 de la ligne entière), les
+états finaux et la part de « oui » parmi les cartes tranchées. Le caractère « sans motif »
+est recalculé par le même prédicat que la carte, avec le lexer du binaire qui mesure.
+
+La commande n'existe que sur la branche `v1` : sur une instance 0.17, compiler le CLI de
+`v1` (`cargo build --release -p penelope-cli`) et le lancer avec `--home` sur la racine de
+l'instance. Il n'ouvre la base qu'avec `SQLITE_OPEN_READ_ONLY` et `query_only`, sans
+migration ni socket : le daemon en place n'est pas touché.
+
+Le verdict proposé est **go** quand les trois seuils tiennent :
+
+| Seuil | Valeur | Pourquoi |
+|---|---|---|
+| Cartes éligibles par semaine | ≥ 10 | En dessous (moins de deux par jour), répondre coûte moins qu'un appel de modèle par carte, un prompt à tenir contre l'injection et un mode de plus à maintenir. |
+| Commandes distinctes | ≥ 5 | Si la masse vient de quatre lignes ou moins, une consigne « une commande par appel » ou un correctif du lexer pour ces formes-là règle le problème sans modèle. |
+| Part de « oui » (cartes tranchées) | ≥ 80 % | Le juge propose « Toujours pour ces pouvoirs » : si plus d'une carte tranchée sur cinq est refusée, les cartes font leur travail et ne doivent pas être adoucies. |
+
+Chaque seuil manqué est nommé dans la sortie. Mesure faite sur l'instance le 26/09/2026 :
+214 cartes `shell_exec` en trente jours, 112 sans motif possible, toutes éligibles (26 par
+semaine), 111 commandes distinctes, 96 % de « oui » : **go**, et `approval.judge` vaut
+`explain` par défaut.
+
+#### Le juge d'approbation
+
+`approval.judge` choisit ce que fait le juge (issue #203) :
+
+| Mode | Effet |
+|---|---|
+| `off` | Aucun appel : la carte d'avant. |
+| `explain` (défaut) | La carte dit ce que la ligne fait réellement (« lecture sur `tmp` », « réseau vers `api.github.com` ») et l'avis du juge ; quand la règle se lit d'un coup d'œil, le bouton « ♾️ Toujours pour ces pouvoirs » écrit une règle **dérivée des pouvoirs**, pas de la forme de la ligne. Rien n'est autorisé sans clic. |
+| `auto_read` | Comme `explain`, et une ligne jugée `sûr` dont les pouvoirs se réduisent à la **lecture dans les workspaces**, sans hôte, sans `network: true`, passe sans carte. |
+
+Le juge n'est appelé que dans le cas résiduel : outil `shell_exec`, politique `Ask` (jamais
+`Deny` ni double confirmation), ligne sans motif possible, classe non destructive, et aucune
+règle du propriétaire qui refuse ou redemande une famille présente dans la ligne. Il ne
+reçoit que la commande (secrets masqués, commentaires shell retirés, dans un bloc délimité
+par un marqueur tiré au hasard), le répertoire de travail et le workspace : ni transcript,
+ni mémoire, ni outil. Son modèle est celui du rôle `approval_judge` (alias `fast` par défaut,
+et `fast` aussi pour une configuration qui ne nomme pas le rôle), borné à dix secondes ;
+l'usage est compté sous ce rôle. Trois échecs de suite coupent le juge dix minutes.
+
+Ses bornes, toutes déterministes, passent avant son avis :
+
+- modèle absent, délai dépassé, sortie hors schéma : la carte d'avant, sans message ;
+- un avis `dangereux`, un programme destructeur (`rm`, `dd`, `sudo`, `kill`…) ou du réseau
+  versé dans un interpréteur (`curl … | sh`) : jamais d'automatisme, jamais de règle ;
+- `auto_read` exige en plus qu'aucun chemin ne sorte du workspace et que la ligne ne porte
+  ni programme réseau, ni interpréteur, ni écriture, ni redirection vers un fichier, ni
+  `&` d'arrière-plan, ni substitution ; un doute garde la carte ;
+- une règle de pouvoirs couvre une ligne dont les pouvoirs, chemins et hôtes jugés sont
+  **tous** dans ceux qu'elle nomme (trois chemins et trois hôtes au plus), jamais plus ;
+- le mode « demander tout » d'une session garde toutes ses cartes ;
+- `config_set` sur `approval.*` demande deux confirmations, comme le bac à sable.
+
+Chaque jugement laisse un événement `approval.judged` (empreinte de la ligne, jamais la
+ligne). `/policies` et `penelope policies` disent d'une règle de pouvoirs qu'elle est née
+d'un jugement, et de quelle demande ; `penelope approvals` montre le jugement d'une carte en
+attente (`payload.judged`) ; `penelope doctor` donne le mode et la part des cartes jugées
+sur sept jours.
 
 ### Messages vocaux
 
@@ -2097,11 +2188,13 @@ Deux plafonds empêchent un modèle de tout lancer en arrière-plan sans jamais 
 `tools.jobs_per_session` (3) et `tools.jobs_total` (10). Au-delà, l'appel est refusé avec
 ce qu'il faut pour s'en sortir.
 
-Un job est un effet comme un autre : il est planifié dans le ledger **avant** de partir, et
-un redémarrage pendant qu'il tourne le laisse incertain. Le job devient alors `failed` et
-la carte « C'est fait / Relancer / Ignorer » part une fois — il n'est jamais relancé tout
-seul, même si son outil est déclaré idempotent (voir la [décision
-0012](decisions/0012-jobs-outils-durables.md)).
+Un job est un effet comme un autre : il est planifié dans le ledger **avant** de partir.
+Un redémarrage pendant qu'il tourne tue son processus : le job et son effet deviennent
+`failed`, avec la raison, et le résultat revient dans la conversation comme celui de tout
+job fini, pour que Pénélope propose la reprise. Aucune carte « C'est fait / Relancer /
+Ignorer » : elle reste réservée aux effets dont on ne peut pas savoir s'ils ont abouti.
+Un job n'est jamais relancé tout seul, même si son outil est déclaré idempotent (voir la
+[décision 0012](decisions/0012-jobs-outils-durables.md)).
 
 ### Longues conversations
 
@@ -2308,6 +2401,36 @@ Recalcule la chaîne de hachage du journal d'événements et nomme le premier ma
 s'il y en a un. Une purge RGPD conserve le hachage d'origine : purger n'invalide pas la
 chaîne.
 
+```bash
+penelope history verify                   # toutes les sessions
+penelope history verify --session s_01J8
+```
+
+Dérive chaque conversation de son journal (événements `conv.*`, préfixe d'avant le journal
+scellé au démarrage, mère d'un fork) et la compare aux tables qui en sont les caches :
+messages, contextes figés, résumés actifs, empreinte du préfixe scellé. La requête envoyée
+au modèle se relit toujours dans le journal ; ces tables servent aux autres lecteurs
+(recherche plein texte, outils d'historique, préparation des résumés) et au repli, et
+seul le moteur de contexte les écrit (décision
+[0017](decisions/0017-journal-source-unique.md)). Le rapport est en
+JSON ; le code de sortie est non nul dès la première divergence, qui nomme la session, le
+nœud (son adresse dans le journal) et la ligne. `penelope doctor` fait la même
+vérification sur les sessions de la semaine (ligne « Historique et journal »).
+
+```bash
+penelope history reindex                  # toutes les sessions
+penelope history reindex --session s_01J8
+```
+
+Efface les lignes de cache non scellées d'une session (messages et leur plein texte,
+contextes figés, résumés) et les réécrit depuis le journal, dans une transaction par
+session ; l'historique d'avant le journal, scellé, n'est pas touché. L'archive d'un
+`/rewind` est refaite depuis le journal de sa mère. Une session que le journal ne sait pas
+refaire (lignes sans événement ni scellement) est laissée intacte et nommée. Les
+caches se rattrapent aussi seuls : à l'ouverture de chaque tour, ce qu'une écriture
+interrompue a laissé derrière le journal est refait ; un rattrapage en échec apparaît
+dans `penelope doctor`.
+
 ### Relire une requête envoyée
 
 ```bash
@@ -2346,6 +2469,11 @@ coûts ; seule la clé qui menait au texte du prompt est coupée. Le journal d'�
 hachages, avec le contenu remplacé, et note la purge dans `audit.purge` : `audit-verify`
 reste vert. La commande demande confirmation (`--yes` pour s'en passer, `--reason` pour
 noter pourquoi) ; depuis Telegram, `/purge` affiche la même question avec un bouton.
+Une session dont d'autres sont nées par `fork` leur prête son début : la purger le leur
+retire. La commande le dit avant la question (« Cette session a deux forks, ils perdront
+leur début : … », avec leurs identifiants et titres), l'écran de `/purge` aussi. Sans
+terminal pour répondre (script, tube), elle refuse sans `--yes`. La méthode
+`session.purge_preview` rend cette lecture sans rien effacer.
 
 La mémoire durable n'est pas touchée : elle vit dans le vault et s'édite avec ses propres
 outils (`penelope mem …`). Une entrée née d'une conversation purgée reste donc en mémoire
@@ -2357,7 +2485,7 @@ Ce qui n'est ni la mémoire ni la chaîne d'audit finit par disparaître, une pa
 
 | Réglage | Défaut | Ce qui est effacé au-delà |
 |---|---|---|
-| `retention.days` | `90` | tours terminés, requêtes au modèle abouties, payloads des updates Telegram, clés de travail (`turn.*`, `prompt.prefix.*`, `wf.*`, `tg.*`…), arguments et résultats des outils menés à terme (un effet incertain garde tout), messages Telegram envoyés, contenu des demandes décidées, tâches MCP terminées, jobs d'outils terminés, sorties des workflows finis, prompts système que plus aucune ligne ne cite |
+| `retention.days` | `90` | tours terminés, requêtes au modèle abouties, payloads des updates Telegram, clés de travail (`turn.*`, `wf.*`, `tg.*`…), arguments et résultats des outils menés à terme (un effet incertain garde tout), messages Telegram envoyés, contenu des demandes décidées, tâches MCP terminées, jobs d'outils terminés, sorties des workflows finis, prompts système que plus aucune ligne ne cite |
 | `retention.memory_history_days` | `30` | pré-images de la mémoire (`mem_history`), qui gardent chaque fichier avant et après chaque opération du rêve |
 
 `0` désactive la rétention correspondante. Le payload d'un update Telegram est de toute

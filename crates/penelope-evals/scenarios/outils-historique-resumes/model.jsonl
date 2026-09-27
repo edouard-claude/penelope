@@ -1,0 +1,6 @@
+{"text": "{\"objectif\": \"suivre le dossier Borealis\", \"contraintes_et_preferences\": \"\", \"fait\": \"deux points notés\", \"en_cours\": \"vérification de la TVA\", \"bloque\": \"\", \"decisions_cles\": \"voir le comptable\", \"fichiers_et_ressources\": \"\", \"prochaines_etapes\": \"vérifier la TVA intracommunautaire\", \"contexte_critique\": \"\"}"}
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "fs_read", "arguments": {"path": "rapport.txt"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "artifact_read", "arguments": {"id": "{{id:art:1}}"}}, {"id": "c3", "name": "history_grep", "arguments": {"query": "Borealis"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c4", "name": "history_describe", "arguments": {"node_id": "{{id:n:1}}"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c5", "name": "history_expand", "arguments": {"node_id": "{{id:n:1}}"}}]}}
+{"text": "Le rapport répète que la TVA intracommunautaire de Borealis reste à vérifier, et avant le résumé on avait prévu de voir le comptable."}

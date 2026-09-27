@@ -1,0 +1,16 @@
+{
+  "method": "doctor",
+  "params": {},
+  "response": {
+    "result": [
+      {
+        "ok": "bool",
+        "detail": "string",
+        "fix": "string",
+        "id": "string",
+        "label": "string",
+        "severity": "string"
+      }
+    ]
+  }
+}

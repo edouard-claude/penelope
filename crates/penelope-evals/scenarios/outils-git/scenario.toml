@@ -1,0 +1,21 @@
+name = "outils-git"
+description = """Outils git sur un dépôt local, sans réseau. Une commande (`shell_exec`),
+composée, passe par le juge des commandes (réponse scriptée) puis par l'accord du
+propriétaire, et prépare le dépôt : premier commit à date fixe, remote `origin` vers GitHub, crochet
+`pre-commit` qui refuse. Le modèle corrige le README (`fs_edit`), lit l'état
+(`git_status`) et le diff (`git_diff`), ouvre une branche (`git_branch`), tente un commit
+(`git_commit`) que le crochet refuse, demande un clone du même dépôt (`git_clone`) que
+l'outil reconnaît déjà présent sans rien télécharger, puis un push d'une branche nommée
+comme une option (`git_push`), refusé avant git. Les sorties traduites de git (commit
+réussi, push) ne sont pas jouées : elles dépendent de la locale et de la version."""
+pin_model = "main"
+
+[config]
+"tools.approval_mode" = "auto"
+
+[[steps]]
+kind = "message"
+text = "prépare le dépôt, corrige le titre du README sur une branche, commite, et pousse"
+
+[[steps]]
+kind = "approve"

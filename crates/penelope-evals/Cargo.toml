@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
@@ -16,6 +19,13 @@ futures.workspace = true
 chrono.workspace = true
 regex.workspace = true
 sha2.workspace = true
+# Scénarios rejouables (R11) : `scenario.toml` est lu avec le `toml` du workspace, et
+# chaque rejeu boote les services sur un répertoire temporaire.
+toml.workspace = true
+tempfile.workspace = true
+# Le fournisseur enregistreur et le serveur MCP simulé des scénarios implémentent des
+# traits `async_trait` de `penelope-llm` et du daemon.
+async-trait.workspace = true
 penelope-kernel.workspace = true
 penelope-store.workspace = true
 penelope-platform.workspace = true
@@ -30,8 +40,29 @@ penelope-hitl.workspace = true
 penelope-telegram.workspace = true
 penelope-workflow.workspace = true
 penelope-daemon.workspace = true
+# Réindexation du vault et enregistrement des candidats du banc de mémoire (T22).
+penelope-vault.workspace = true
+# Les chemins d'origine des modules sortis du daemon, nommés directement depuis que le
+# daemon ne les réexporte plus (épopée #208, T30) : `Services`, `Origin` (app), la boucle,
+# la compaction, le rêve et l'ingestion, l'exécuteur natif, la purge et le fork.
+penelope-app.workspace = true
+penelope-agent.workspace = true
+penelope-conversation.workspace = true
+penelope-dream.workspace = true
+penelope-executor.workspace = true
+penelope-ops.workspace = true
+# L'étape `telegram` des scénarios joue les commandes du propriétaire par la vraie
+# passerelle, sur le transport simulé de `penelope-telegram` (critère 7, épopée #208).
+penelope-gateway-telegram.workspace = true
+# Les méthodes `mcp.*` des scénarios administrent le vrai superviseur, branché sur le
+# connecteur de test de l'hôte (aucun processus lancé).
+penelope-mcp-host.workspace = true
+# Le faux serveur HTTP des scénarios sert l'archive ZIP d'un dépôt de skills
+# (`skill.install`), construite depuis `scenario.toml` : même crate que le lecteur.
+zip.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
-tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util"] }
+# Les entrées du digest (`scheduler::digest_inputs`) du banc longitudinal (T30).
+penelope-orchestrator.workspace = true

@@ -1,0 +1,12 @@
+{
+  "method": "import.hermes",
+  "params": {
+    "path": "$missing_dir"
+  },
+  "response": {
+    "error": {
+      "code": -32000,
+      "message": "string"
+    }
+  }
+}

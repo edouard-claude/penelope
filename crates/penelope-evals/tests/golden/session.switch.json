@@ -1,0 +1,11 @@
+{
+  "method": "session.switch",
+  "params": {
+    "session": "$session"
+  },
+  "response": {
+    "result": {
+      "session": "string"
+    }
+  }
+}

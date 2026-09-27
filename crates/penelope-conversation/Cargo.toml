@@ -1,0 +1,47 @@
+[package]
+name = "penelope-conversation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# La conversation d'une session (épopée #208, T23) : `SessionConversation`, la
+# compaction de fond et son état, les titres de session, l'alerte de budget. Au-dessus de
+# `penelope-app` et de `penelope-vault`, sous le daemon ; ni la boucle
+# (`penelope-agent`), qui la consomme par le port `Conversation`, ni le canal.
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+# Instants du ledger de coûts et des événements (dernier prompt facturé, sessions en
+# échec de compaction).
+chrono.workspace = true
+# `Services`, ports (`Conversation`, `Compactor`, `ProviderSource`, `Messenger`), bus
+# des tours, helpers, doubles de test.
+penelope-app.workspace = true
+# Tuiles du prompt et instantanés mémoire (`build_turn_prompt`), rafraîchis après une
+# compaction.
+penelope-vault.workspace = true
+# Configuration, sessions, tours, événements, budget.
+penelope-kernel.workspace = true
+# Lectures SQLite du ledger de coûts et de la table `kv`.
+penelope-store.workspace = true
+# Appels du résumeur et du titreur, catalogue des modèles, types des messages.
+penelope-llm.workspace = true
+# Historique, projection, résumés LCM, paramètres de compaction, provenance du journal.
+penelope-context.workspace = true
+# Métriques de compaction, caviardage des titres.
+penelope-observe.workspace = true
+
+[dev-dependencies]
+# Mémoire indexée des tests de tuiles (rappel, pratiques).
+penelope-memory.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util", "test-util"] }

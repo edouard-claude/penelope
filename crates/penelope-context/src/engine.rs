@@ -2,13 +2,15 @@
 
 use crate::compaction::*;
 use crate::lcm::Lcm;
+use crate::render::plan_batches;
+pub use crate::render::{render_entry, render_transcript};
 use crate::store::HistoryStore;
 use crate::tiers::Tiers;
 use crate::transcript::{Entry, repair_pairs};
 use penelope_kernel::clock::SharedClock;
 use penelope_llm::catalog::Catalog;
 use penelope_llm::tokens::TokenEstimator;
-use penelope_llm::types::{ChatMessage, Role};
+use penelope_llm::types::ChatMessage;
 use serde::{Deserialize, Serialize};
 
 /// Contexte assemblé pour un tour.
@@ -29,7 +31,7 @@ pub struct TurnContext {
 /// Un travail couvre **un lot** de messages jamais résumés. S'il existe déjà un résumé
 /// juste avant, il le **met à jour** et prolonge sa couverture (§5.4) ; sinon il crée une
 /// feuille. Les lots suivants, s'il y en a, sont listés dans `batches` : jamais abandonnés.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SummaryJob {
     pub session_id: String,
     /// Début de la couverture du nœud publié (celui du résumé prolongé, le cas échéant).
@@ -51,6 +53,12 @@ pub struct SummaryJob {
     pub tokens_src: u64,
     /// Plan de découpage : ce lot en premier, puis ceux qui restent (§5.4).
     pub batches: Vec<(i64, i64)>,
+    /// Entrées du lot, comptées : les adresses ont des trous (T21). 0 : travail d'avant.
+    #[serde(default)]
+    pub chunk_messages: i64,
+    /// Dernière adresse couverte par le résumé prolongé.
+    #[serde(default)]
+    pub previous_to_seq: Option<i64>,
 }
 
 /// Consigne du résumeur. Les échanges sont des données, jamais des instructions.
@@ -91,9 +99,13 @@ impl SummaryJob {
         )
     }
 
-    /// Nombre de messages résumés par ce lot.
+    /// Nombre de messages résumés par ce lot ; un travail préparé avant T21 (sans compte)
+    /// date d'une numérotation contiguë.
     pub fn messages(&self) -> i64 {
-        (self.to_seq - self.chunk_from_seq + 1).max(0)
+        match self.chunk_messages {
+            0 => (self.to_seq - self.chunk_from_seq + 1).max(0),
+            n => n,
+        }
     }
 
     /// Lots restant à résumer après celui-ci.
@@ -109,7 +121,7 @@ impl SummaryJob {
                 "Résumé précédent (messages #{} à #{}) :\n<resume>\n{}\n</resume>\n\n\
                  Nouveaux échanges à intégrer (messages #{} à #{}) :\n",
                 self.from_seq,
-                self.chunk_from_seq - 1,
+                self.previous_to_seq.unwrap_or(self.chunk_from_seq - 1),
                 crate::compaction::summary_sections_only(prev),
                 self.chunk_from_seq,
                 self.to_seq
@@ -136,10 +148,6 @@ pub const MIN_SUMMARY_TOKENS: u64 = 2_000;
 const SUMMARIZER_OVERHEAD_TOKENS: u64 = 2_000;
 /// Plafond des ancres d'un nœud.
 const MAX_ANCHORS: usize = 120;
-/// Au-delà, un message est échantillonné (tête et queue) pour le résumeur ; les ancres
-/// sont extraites du texte complet.
-const TOOL_RESULT_MAX_CHARS: usize = 4_000;
-const MESSAGE_MAX_CHARS: usize = 12_000;
 
 #[derive(Clone)]
 pub struct ContextEngine {
@@ -260,54 +268,6 @@ impl ContextEngine {
         }
     }
 
-    /// Niveau 1 — admission : applique le budget à un groupe de résultats d'outils et
-    /// externalise le surplus. C'est une modification du **canonique**.
-    pub async fn admit_tool_group(
-        &self,
-        session_id: &str,
-        results: &[(i64, String)],
-        params: &CompactionParams,
-        model_id: &str,
-    ) -> penelope_store::Result<Vec<AppliedStep>> {
-        let sized: Vec<(usize, String, u64)> = results
-            .iter()
-            .enumerate()
-            .map(|(i, (_, text))| (i, text.clone(), self.estimator.text_tokens(model_id, text)))
-            .collect();
-        let decisions = level1_admission(&sized, params);
-        let mut steps = Vec::new();
-
-        for (i, decision) in decisions {
-            let Admission::Externalise {
-                head,
-                tail,
-                original_tokens,
-            } = decision
-            else {
-                continue;
-            };
-            let (seq, full) = &results[i];
-            let kind = crate::store::guess_kind(full);
-            let artifact = self
-                .history
-                .put_artifact(Some(session_id), None, kind, None, full)
-                .await?;
-            let body = externalised_body(&artifact.id, &head, &tail, original_tokens, kind);
-            let new_tokens = self.estimator.text_tokens(model_id, &body);
-            self.history
-                .externalise(session_id, *seq, &body, &artifact.id, new_tokens)
-                .await?;
-            steps.push(AppliedStep {
-                level: 1,
-                label: format!("résultat externalisé en artefact {}", artifact.id),
-                before_tokens: original_tokens,
-                after_tokens: new_tokens,
-                touched: 1,
-            });
-        }
-        Ok(steps)
-    }
-
     /// Prépare le prochain lot de résumé (niveau 3), ou `None` s'il n'y a rien à faire.
     ///
     /// Seuls les messages que les résumés actifs ne couvrent pas encore sont candidats,
@@ -425,87 +385,14 @@ impl ContextEngine {
             chunk_from_seq: chunk_from,
             source_text,
             previous_summary: previous.as_ref().map(|n| n.summary.clone()),
+            previous_to_seq: previous.as_ref().and_then(|n| n.to_seq),
+            chunk_messages: chunk_len as i64,
             previous_node_id: previous.map(|n| n.id),
             anchors,
             verbatim_users,
             tokens_src: chunk.iter().map(|e| e.tokens).sum(),
             batches,
         }))
-    }
-
-    /// Publie un résumé validé. **Idempotent** : republier le même travail ne crée pas un
-    /// second nœud (CA 5). Un travail préparé avant qu'un autre ne mette à jour le même
-    /// résumé est périmé : erreur, rien n'est écrit.
-    pub async fn apply_summary(
-        &self,
-        job: &SummaryJob,
-        validated: &serde_json::Value,
-        model_id: &str,
-    ) -> penelope_store::Result<String> {
-        // Un nœud vivant couvrant déjà exactement cet intervalle vaut publication faite.
-        let existing = self.lcm.active_nodes(&job.session_id).await?;
-        if let Some(n) = existing
-            .iter()
-            .find(|n| n.from_seq == Some(job.from_seq) && n.to_seq == Some(job.to_seq))
-        {
-            self.history
-                .mark_compacted(&job.session_id, job.chunk_from_seq, job.to_seq)
-                .await?;
-            return Ok(n.id.clone());
-        }
-
-        let rendered = render_summary(
-            validated,
-            &crate::anchors::render(&job.anchors),
-            &job.verbatim_users,
-        );
-        let tokens_self = self.estimator.text_tokens(model_id, &rendered);
-
-        let id = match &job.previous_node_id {
-            Some(prev) => {
-                if !existing.iter().any(|n| &n.id == prev) {
-                    return Err(penelope_store::StoreError::other(format!(
-                        "résumé périmé : le nœud {prev} a changé depuis la préparation"
-                    )));
-                }
-                self.lcm
-                    .extend(
-                        prev,
-                        job.to_seq,
-                        job.tokens_src,
-                        &rendered,
-                        &job.anchors,
-                        tokens_self,
-                    )
-                    .await?
-            }
-            None => {
-                if existing
-                    .iter()
-                    .any(|n| n.to_seq.is_some_and(|t| t >= job.chunk_from_seq))
-                {
-                    return Err(penelope_store::StoreError::other(
-                        "résumé périmé : un autre résumé couvre déjà ces messages",
-                    ));
-                }
-                self.lcm
-                    .insert_leaf(
-                        &job.session_id,
-                        job.chunk_from_seq,
-                        job.to_seq,
-                        &rendered,
-                        &job.anchors,
-                        job.tokens_src,
-                        tokens_self,
-                    )
-                    .await?
-            }
-        };
-
-        self.history
-            .mark_compacted(&job.session_id, job.chunk_from_seq, job.to_seq)
-            .await?;
-        Ok(id)
     }
 
     /// Niveau 4 — urgence, après une erreur `context_length` du provider.
@@ -552,663 +439,5 @@ impl ContextEngine {
     }
 }
 
-/// Met le transcript en forme pour le résumeur.
-pub fn render_transcript(entries: &[Entry]) -> String {
-    entries.iter().map(render_entry).collect()
-}
-
-/// Une ligne de transcript : rôle, numéro, appels d'outils, texte échantillonné au-delà
-/// d'une taille raisonnable (tête et queue, le nombre de caractères élidés est dit).
-pub fn render_entry(e: &Entry) -> String {
-    let who = match e.message.role {
-        Role::User => "UTILISATEUR",
-        Role::Assistant => "ASSISTANT",
-        Role::Tool => "OUTIL",
-        Role::System => "SYSTÈME",
-    };
-    let mut s = format!("[{} #{}] ", who, e.seq);
-    if !e.message.tool_calls.is_empty() {
-        let names: Vec<&str> = e
-            .message
-            .tool_calls
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
-        s.push_str(&format!("(appelle {}) ", names.join(", ")));
-    }
-    let max = if e.message.role == Role::Tool {
-        TOOL_RESULT_MAX_CHARS
-    } else {
-        MESSAGE_MAX_CHARS
-    };
-    s.push_str(&sample(&e.message.text(), max));
-    s.push('\n');
-    s
-}
-
-/// Tête et queue d'un texte trop long pour le résumeur.
-fn sample(text: &str, max: usize) -> String {
-    let n = text.chars().count();
-    if n <= max {
-        return text.to_string();
-    }
-    let head: String = text.chars().take(max * 2 / 3).collect();
-    let tail: String = text.chars().skip(n - max / 3).collect();
-    format!(
-        "{head}\n[… {} caractères non montrés au résumeur …]\n{tail}",
-        n - head.chars().count() - tail.chars().count()
-    )
-}
-
-/// Découpe les candidats en lots qui tiennent dans la fenêtre du résumeur, sans
-/// jamais séparer un appel d'outils de ses résultats. Un groupe plus gros que le budget
-/// forme un lot à lui seul (ses messages sont déjà échantillonnés).
-fn plan_batches(entries: &[Entry], sizes: &[u64], budget: u64) -> Vec<(i64, i64)> {
-    let mut out = Vec::new();
-    let mut start: Option<i64> = None;
-    let mut end = 0i64;
-    let mut acc = 0u64;
-    for g in crate::transcript::group(entries) {
-        let g_tokens: u64 = sizes[g.range.clone()].iter().sum();
-        let (g_from, g_to) = (entries[g.range.start].seq, entries[g.range.end - 1].seq);
-        if let Some(s) = start
-            && acc + g_tokens > budget
-        {
-            out.push((s, end));
-            start = None;
-            acc = 0;
-        }
-        start.get_or_insert(g_from);
-        end = g_to;
-        acc += g_tokens;
-    }
-    if let Some(s) = start {
-        out.push((s, end));
-    }
-    out
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::tiers::TiersBuilder;
-    use crate::transcript::pairs_are_valid;
-    use penelope_kernel::clock::TestClock;
-    use penelope_llm::types::ToolCall;
-    use penelope_store::Store;
-    use serde_json::json;
-    use std::sync::Arc;
-
-    async fn engine() -> ContextEngine {
-        let store = Store::open_memory().unwrap();
-        store
-            .write(|tx| {
-                tx.execute(
-                    "INSERT INTO sessions(id, kind, created_at, updated_at)
-                     VALUES('s1','chat','t','t')",
-                    [],
-                )?;
-                Ok(())
-            })
-            .await
-            .unwrap();
-        let clock: SharedClock = Arc::new(TestClock::default());
-        ContextEngine::new(
-            HistoryStore::new(store.clone(), clock.clone()),
-            Lcm::new(store, clock.clone()),
-            TokenEstimator::new(),
-            Catalog::new(),
-            clock,
-        )
-    }
-
-    fn params(window: u64) -> CompactionParams {
-        CompactionParams {
-            window,
-            threshold: 0.70,
-            tail_ratio: 0.025,
-            tail_min_tokens: 1_000,
-            tail_max_tokens: 25_000,
-            min_tail_user_messages: 2,
-            max_tool_result_share: 0.25,
-            large_payload_tokens: 25_000,
-            background_margin: 0.10,
-            max_prompt_tokens: 0,
-        }
-    }
-
-    fn tiers() -> Tiers {
-        TiersBuilder::new().soul("Pénélope.").build()
-    }
-
-    fn tool_pair(seq: i64, id: &str, body: &str, tokens: u64) -> Vec<Entry> {
-        vec![
-            Entry::new(
-                seq,
-                ChatMessage::assistant("").with_tool_calls(vec![ToolCall {
-                    id: id.into(),
-                    name: "fs_read".into(),
-                    arguments: json!({}),
-                }]),
-                10,
-            ),
-            Entry::new(
-                seq + 1,
-                ChatMessage::tool_result(id, "fs_read", body),
-                tokens,
-            )
-            .eager(true),
-        ]
-    }
-
-    /// `ctx-safety` — niveau 0 : les résultats volatils anciens deviennent des stubs,
-    /// le canonique est intact, les paires restent valides.
-    #[tokio::test]
-    async fn ctx_safety_level0() {
-        let e = engine().await;
-        let big = "x".repeat(200_000);
-        let mut entries = vec![Entry::new(1, ChatMessage::user("analyse"), 10)];
-        entries.extend(tool_pair(2, "c1", &big, 50_000));
-        entries.push(Entry::new(4, ChatMessage::user("et ensuite ?"), 10));
-        entries.push(Entry::new(5, ChatMessage::user("alors ?"), 10));
-
-        let ctx = e.build_from_entries(&entries, &tiers(), &params(20_000), "m", false);
-        assert!(
-            ctx.steps.iter().any(|s| s.level == 0),
-            "le niveau 0 doit s'appliquer : {:?}",
-            ctx.steps
-        );
-        assert!(pairs_are_valid(&ctx.messages[1..]));
-        assert_eq!(
-            entries[2].message.text().len(),
-            200_000,
-            "le canonique n'est pas modifié"
-        );
-    }
-
-    /// `ctx-safety` — niveau 1 : admission sous budget, externalisation en artefact.
-    #[tokio::test]
-    async fn ctx_safety_level1() {
-        let e = engine().await;
-        let big = "y".repeat(500_000);
-        e.history
-            .append(
-                "s1",
-                &ChatMessage::assistant("").with_tool_calls(vec![ToolCall {
-                    id: "c1".into(),
-                    name: "fs_read".into(),
-                    arguments: json!({}),
-                }]),
-                10,
-                0,
-                false,
-                None,
-            )
-            .await
-            .unwrap();
-        let seq = e
-            .history
-            .append(
-                "s1",
-                &ChatMessage::tool_result("c1", "fs_read", &big),
-                140_000,
-                0,
-                false,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let steps = e
-            .admit_tool_group("s1", &[(seq, big.clone())], &params(100_000), "m")
-            .await
-            .unwrap();
-        assert_eq!(steps.len(), 1);
-        assert_eq!(steps[0].level, 1);
-        assert!(steps[0].after_tokens < steps[0].before_tokens);
-
-        let entries = e.history.load("s1", 0).await.unwrap();
-        let body = entries[1].message.text();
-        assert!(body.contains("artifact_read"), "{body:.200}");
-        assert!(entries[1].artifact_id.is_some());
-
-        // Le contenu complet reste lisible depuis l'artefact.
-        let id = entries[1].artifact_id.clone().unwrap();
-        let (chunk, _, _) = e.history.read_artifact(&id, 0, 100).await.unwrap().unwrap();
-        assert_eq!(chunk.len(), 100);
-    }
-
-    /// `ctx-safety` — niveau 2 : dégradation progressive, queue protégée.
-    #[tokio::test]
-    async fn ctx_safety_level2() {
-        let e = engine().await;
-        let mut entries = Vec::new();
-        for i in 0..12 {
-            entries.push(Entry::new(
-                i * 2 + 1,
-                ChatMessage::user(format!("q{i}")),
-                20,
-            ));
-            entries.push(Entry::new(
-                i * 2 + 2,
-                ChatMessage::tool_result(format!("c{i}"), "t", "z".repeat(8000)),
-                2200,
-            ));
-        }
-        // Les résultats sans appel sont réparés ; on vérifie surtout la réduction.
-        let ctx = e.build_from_entries(&entries, &tiers(), &params(10_000), "m", false);
-        assert!(
-            ctx.steps.iter().any(|s| s.level == 2),
-            "le niveau 2 doit s'appliquer : {:?}",
-            ctx.steps
-        );
-        assert!(pairs_are_valid(&ctx.messages[1..]));
-    }
-
-    /// `ctx-safety` — niveau 3 : résumé publié une seule fois, même republié.
-    #[tokio::test]
-    async fn ctx_safety_level3_publication_is_idempotent() {
-        let e = engine().await;
-        for i in 0..30 {
-            e.history
-                .append(
-                    "s1",
-                    &ChatMessage::user(format!("message {i}")),
-                    500,
-                    0,
-                    false,
-                    None,
-                )
-                .await
-                .unwrap();
-            e.history
-                .append(
-                    "s1",
-                    &ChatMessage::assistant("réponse"),
-                    500,
-                    0,
-                    false,
-                    None,
-                )
-                .await
-                .unwrap();
-        }
-        let p = params(40_000);
-        let job = e
-            .prepare_summary("s1", &p, 128_000, "m", false)
-            .await
-            .unwrap()
-            .expect("un travail de résumé");
-        assert!(job.from_seq >= 1 && job.to_seq > job.from_seq);
-        assert_eq!(job.batches.len(), 1, "un seul lot suffit au résumeur");
-
-        let validated = json!({
-            "objectif": "suivre la conversation",
-            "fait": "30 échanges",
-            "en_cours": "rien",
-            "prochaines_etapes": "continuer"
-        });
-        let a = e.apply_summary(&job, &validated, "m").await.unwrap();
-        let b = e.apply_summary(&job, &validated, "m").await.unwrap();
-        assert_eq!(a, b, "republier le même résumé ne crée pas un second nœud");
-        assert_eq!(e.lcm.count("s1").await.unwrap(), 1);
-
-        let active = e.active_context("s1", &p).await.unwrap();
-        assert!(active[0].text().contains("### Objectif"));
-        assert!(pairs_are_valid(&active));
-    }
-
-    /// Niveau 3 incrémental : le résumé suivant **met à jour** le précédent et prolonge
-    /// sa couverture ; un travail préparé avant cette mise à jour est périmé.
-    #[tokio::test]
-    async fn recompaction_extends_the_previous_summary() {
-        let e = engine().await;
-        let say = |i: usize| ChatMessage::user(format!("demande {i} sur PROJ-{i}"));
-        for i in 0..30 {
-            e.history
-                .append("s1", &say(i), 500, 0, false, None)
-                .await
-                .unwrap();
-        }
-        let p = params(40_000);
-        let first = e
-            .prepare_summary("s1", &p, 128_000, "m", false)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(first.previous_node_id.is_none());
-        let summary = json!({"objectif": "suivre", "fait": "première partie"});
-        e.apply_summary(&first, &summary, "m").await.unwrap();
-
-        // Rien de neuf au-delà de la queue : pas d'appel au résumeur.
-        assert!(
-            e.prepare_summary("s1", &p, 128_000, "m", false)
-                .await
-                .unwrap()
-                .is_none()
-        );
-
-        for i in 30..60 {
-            e.history
-                .append("s1", &say(i), 500, 0, false, None)
-                .await
-                .unwrap();
-        }
-        let second = e
-            .prepare_summary("s1", &p, 128_000, "m", false)
-            .await
-            .unwrap()
-            .expect("un second lot");
-        assert!(
-            second.previous_node_id.is_some(),
-            "le résumé précédent est repris"
-        );
-        assert_eq!(second.from_seq, first.from_seq);
-        assert_eq!(second.chunk_from_seq, first.to_seq + 1);
-        assert!(
-            second
-                .previous_summary
-                .as_deref()
-                .unwrap()
-                .contains("première partie"),
-            "le résumeur reçoit le résumé à mettre à jour"
-        );
-        let prompt = second.summarizer_messages()[1].text();
-        assert!(prompt.contains("Résumé précédent"));
-        assert!(
-            !prompt.contains("verbatim"),
-            "seules les sections rédigées sont reprises"
-        );
-        assert!(
-            second.anchors.iter().any(|a| a.value == "PROJ-1"),
-            "les ancres du résumé prolongé survivent"
-        );
-        assert!(
-            second
-                .anchors
-                .iter()
-                .any(|a| a.value == format!("PROJ-{}", second.to_seq - 1))
-        );
-
-        let node = e
-            .apply_summary(&second, &json!({"objectif": "suivre", "fait": "tout"}), "m")
-            .await
-            .unwrap();
-        let active = e.lcm.active_nodes("s1").await.unwrap();
-        assert_eq!(active.len(), 1, "un seul résumé vivant");
-        assert_eq!(active[0].id, node);
-        assert_eq!(
-            (active[0].from_seq, active[0].to_seq),
-            (Some(first.from_seq), Some(second.to_seq))
-        );
-        assert_eq!(active[0].tokens_src, first.tokens_src + second.tokens_src);
-        let history = e.history.load("s1", 0).await.unwrap();
-        assert!(
-            history
-                .iter()
-                .all(|m| m.compacted == (m.seq <= second.to_seq)),
-            "le canonique est marqué exactement sur la couverture"
-        );
-
-        // Republier le premier travail ne défait rien.
-        assert!(e.apply_summary(&first, &summary, "m").await.is_err());
-        assert_eq!(e.lcm.active_nodes("s1").await.unwrap()[0].id, node);
-    }
-
-    #[tokio::test]
-    async fn only_a_forced_compaction_summarises_a_short_history() {
-        let e = engine().await;
-        for i in 0..6 {
-            e.history
-                .append(
-                    "s1",
-                    &ChatMessage::user(format!("m{i}")),
-                    100,
-                    0,
-                    false,
-                    None,
-                )
-                .await
-                .unwrap();
-        }
-        let p = params(40_000);
-        assert!(
-            e.prepare_summary("s1", &p, 128_000, "m", false)
-                .await
-                .unwrap()
-                .is_none()
-        );
-        let job = e
-            .prepare_summary("s1", &p, 128_000, "m", true)
-            .await
-            .unwrap()
-            .expect("`/compact` force un lot");
-        assert!(job.to_seq < 6, "la queue reste verbatim");
-    }
-
-    #[tokio::test]
-    async fn a_crash_between_node_and_marking_is_repaired() {
-        let e = engine().await;
-        for i in 0..30 {
-            e.history
-                .append(
-                    "s1",
-                    &ChatMessage::user(format!("m{i}")),
-                    500,
-                    0,
-                    false,
-                    None,
-                )
-                .await
-                .unwrap();
-        }
-        // Nœud écrit, canonique pas encore marqué.
-        e.lcm
-            .insert_leaf("s1", 1, 20, "résumé", &[], 10_000, 50)
-            .await
-            .unwrap();
-        let _ = e
-            .prepare_summary("s1", &params(40_000), 128_000, "m", false)
-            .await
-            .unwrap();
-        let history = e.history.load("s1", 0).await.unwrap();
-        assert!(history.iter().filter(|m| m.seq <= 20).all(|m| m.compacted));
-        assert!(history.iter().filter(|m| m.seq > 20).all(|m| !m.compacted));
-    }
-
-    /// `ctx-safety` — reprise après crash : l'historique persistant suffit à reconstruire
-    /// exactement la même projection.
-    #[tokio::test]
-    async fn ctx_safety_recovery_after_crash() {
-        let e = engine().await;
-        for i in 0..10 {
-            e.history
-                .append(
-                    "s1",
-                    &ChatMessage::user(format!("m{i}")),
-                    100,
-                    0,
-                    false,
-                    None,
-                )
-                .await
-                .unwrap();
-        }
-        let p = params(100_000);
-        let t = tiers();
-        let a = e.build_request("s1", &t, &p, "m", false).await.unwrap();
-
-        // « kill -9 » : nouveau moteur sur la même base.
-        let e2 = ContextEngine::new(
-            HistoryStore::new(e.history.store().clone(), Arc::new(TestClock::default())),
-            Lcm::new(e.history.store().clone(), Arc::new(TestClock::default())),
-            TokenEstimator::new(),
-            Catalog::new(),
-            Arc::new(TestClock::default()),
-        );
-        let b = e2.build_request("s1", &t, &p, "m", false).await.unwrap();
-        assert_eq!(
-            a.messages, b.messages,
-            "la projection doit être reproductible"
-        );
-        assert_eq!(a.prefix_hash, b.prefix_hash);
-    }
-
-    /// `ctx-safety` — niveau 4 : preuve locale avant envoi.
-    #[tokio::test]
-    async fn ctx_safety_level4() {
-        let e = engine().await;
-        let long = "w".repeat(80_000);
-        let mut msgs = vec![ChatMessage::system("règles")];
-        for i in 0..6 {
-            msgs.push(ChatMessage::assistant("").with_tool_calls(vec![ToolCall {
-                id: format!("c{i}"),
-                name: "t".into(),
-                arguments: json!({}),
-            }]));
-            msgs.push(ChatMessage::tool_result(format!("c{i}"), "t", long.clone()));
-        }
-        msgs.push(ChatMessage::user("dernière question"));
-
-        let (out, tokens) = e.emergency(msgs, 3_000, "m").unwrap();
-        assert!(tokens <= 3_000);
-        assert!(pairs_are_valid(&out));
-        assert!(out.iter().any(|m| m.text() == "dernière question"));
-    }
-
-    #[tokio::test]
-    async fn summary_job_batches_when_summarizer_window_is_too_small() {
-        let e = engine().await;
-        for i in 0..40 {
-            e.history
-                .append(
-                    "s1",
-                    &ChatMessage::user("x".repeat(2000)),
-                    600,
-                    0,
-                    false,
-                    None,
-                )
-                .await
-                .unwrap();
-            let _ = i;
-        }
-        let job = e
-            .prepare_summary("s1", &params(40_000), 4_000, "m", false)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(
-            job.batches.len() > 1,
-            "une fenêtre de résumeur trop petite impose un découpage explicite"
-        );
-        assert_eq!(
-            (job.chunk_from_seq, job.to_seq),
-            job.batches[0],
-            "le travail ne couvre que le premier lot"
-        );
-        for w in job.batches.windows(2) {
-            assert_eq!(
-                w[1].0,
-                w[0].1 + 1,
-                "aucun message n'est abandonné entre deux lots"
-            );
-        }
-        assert_eq!(job.remaining_batches(), job.batches.len() - 1);
-    }
-
-    #[tokio::test]
-    async fn summary_job_key_is_stable() {
-        let e = engine().await;
-        for i in 0..10 {
-            e.history
-                .append(
-                    "s1",
-                    &ChatMessage::user(format!("m{i}")),
-                    500,
-                    0,
-                    false,
-                    None,
-                )
-                .await
-                .unwrap();
-        }
-        let a = e
-            .prepare_summary("s1", &params(6_000), 128_000, "m", false)
-            .await
-            .unwrap();
-        let b = e
-            .prepare_summary("s1", &params(6_000), 128_000, "m", false)
-            .await
-            .unwrap();
-        assert!(a.is_some());
-        assert_eq!(
-            a.as_ref().map(|j| j.idempotency_key()),
-            b.as_ref().map(|j| j.idempotency_key())
-        );
-    }
-
-    #[tokio::test]
-    async fn short_session_has_nothing_to_summarise() {
-        let e = engine().await;
-        e.history
-            .append("s1", &ChatMessage::user("bonjour"), 5, 0, false, None)
-            .await
-            .unwrap();
-        assert!(
-            e.prepare_summary("s1", &params(100_000), 128_000, "m", true)
-                .await
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn background_compaction_flag_trips_ten_points_early() {
-        let e = engine().await;
-        let entries: Vec<Entry> = (0..40)
-            .map(|i| Entry::new(i, ChatMessage::user("x".repeat(1200)), 350))
-            .collect();
-        let ctx = e.build_from_entries(&entries, &tiers(), &params(20_000), "m", false);
-        assert!(
-            ctx.needs_background_compaction,
-            "à 60 % de la fenêtre, la compaction de fond doit être demandée ({} tokens)",
-            ctx.tokens
-        );
-    }
-
-    #[test]
-    fn transcript_rendering_marks_roles_and_calls() {
-        let entries = vec![
-            Entry::new(1, ChatMessage::user("fais X"), 5),
-            Entry::new(
-                2,
-                ChatMessage::assistant("ok").with_tool_calls(vec![ToolCall {
-                    id: "c".into(),
-                    name: "fs_read".into(),
-                    arguments: json!({}),
-                }]),
-                5,
-            ),
-        ];
-        let t = render_transcript(&entries);
-        assert!(t.contains("[UTILISATEUR #1]"));
-        assert!(t.contains("(appelle fs_read)"));
-    }
-
-    #[test]
-    fn huge_messages_are_sampled_for_the_summarizer() {
-        let body = format!("DEBUT{}FIN", "y".repeat(50_000));
-        let e = Entry::new(3, ChatMessage::tool_result("c", "shell_exec", body), 12_000);
-        let line = render_entry(&e);
-        assert!(line.chars().count() < TOOL_RESULT_MAX_CHARS + 200);
-        assert!(
-            line.contains("DEBUT") && line.contains("FIN"),
-            "tête et queue gardées"
-        );
-        assert!(
-            line.contains("caractères non montrés"),
-            "l'échantillonnage est dit"
-        );
-    }
-}
+mod tests;

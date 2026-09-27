@@ -66,11 +66,11 @@ fn the_budget_file_is_readable() {
     let b = workspace_budget();
     assert_eq!(b.ceiling, 1000);
     assert_eq!(b.test_ceiling, 1500);
-    assert!(
-        b.oversized.len() >= 30,
-        "liste de référence : {}",
-        b.oversized.len()
-    );
+    // La liste de référence ne fait que rétrécir : aucun compte minimal, mais chaque
+    // entrée doit dépasser le plafond, sinon elle n'a rien à faire là.
+    for (path, n) in &b.oversized {
+        assert!(*n > b.ceiling, "{path} : {n} lignes, sous le plafond");
+    }
     assert!(
         b.ca_required.len() >= 70,
         "critères : {}",
@@ -285,6 +285,8 @@ fn the_module_whitelist_detector_actually_detects() {
     // le module de tests, un commentaire, un autre crate : rien.
     let quiet = Snapshot::of(vec![
         daemon("telegram/tests.rs", "mod commands;\nmod cards;\n"),
+        // Découper un fichier existant en sous-modules est le but de la V1.
+        daemon("agent/mod.rs", "mod pipeline;\npub mod outcome;\n"),
         daemon(
             "a.rs",
             "mod inline {\n}\n// mod ghost;\n#[cfg(test)]\nmod tests {\n    mod sub;\n}\n",
@@ -480,9 +482,11 @@ fn the_channel_detector_ignores_the_gateway_tests_comments_and_channel_crates() 
     let b = budget();
     let noisy = "Origin::Telegram chat_id topic_id\n";
     let quiet = Snapshot::of(vec![
-        daemon("telegram.rs", noisy),
-        daemon("telegram/screens.rs", noisy),
-        daemon("telegram/commands.rs", noisy),
+        SourceFile::new(
+            "penelope-gateway-telegram",
+            "crates/penelope-gateway-telegram/src/telegram/mod.rs",
+            noisy,
+        ),
         daemon(
             "media.rs",
             "// Telegram\n/// chat_id\n#[cfg(test)]\nmod tests {\n    Origin::Telegram\n}\n",
@@ -512,6 +516,9 @@ fn the_channel_detector_ignores_the_gateway_tests_comments_and_channel_crates() 
     ]);
     let v = channel_violations(&quiet, &b);
     assert!(v.is_empty(), "{}", show(&v));
+    // La passerelle a quitté le daemon (T29) : un `telegram/` qui y reviendrait est mesuré.
+    let back = daemon("telegram/mod.rs", noisy);
+    assert_eq!(channel_violations(&Snapshot::of(vec![back]), &b).len(), 1);
     // Une crate future est protégée dès sa création ; une crate inconnue doit se déclarer.
     let app = SourceFile::new("penelope-app", "crates/penelope-app/src/lib.rs", noisy);
     assert_eq!(channel_violations(&Snapshot::of(vec![app]), &b).len(), 1);
