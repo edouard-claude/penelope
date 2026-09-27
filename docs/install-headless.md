@@ -1059,9 +1059,9 @@ destructif) ; puis les commandes distinctes (blancs normalisés), les dix plus f
 états finaux et la part de « oui » parmi les cartes tranchées. Le caractère « sans motif »
 est recalculé par le même prédicat que la carte, avec le lexer du binaire qui mesure.
 
-La commande n'existe que sur la branche `v1` : sur une instance 0.17, compiler le CLI de
-`v1` (`cargo build --release -p penelope-cli`) et le lancer avec `--home` sur la racine de
-l'instance. Il n'ouvre la base qu'avec `SQLITE_OPEN_READ_ONLY` et `query_only`, sans
+La commande existe depuis la V1 (1.0.0-rc.1) : sur une instance restée en 0.17, compiler
+le CLI de `main` (`cargo build --release -p penelope-cli`) et le lancer avec `--home` sur la
+racine de l'instance. Il n'ouvre la base qu'avec `SQLITE_OPEN_READ_ONLY` et `query_only`, sans
 migration ni socket : le daemon en place n'est pas touché.
 
 Le verdict proposé est **go** quand les trois seuils tiennent :

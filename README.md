@@ -12,7 +12,7 @@ peut relire et corriger à la main, appelle des serveurs MCP, exécute des workf
 survivent à un redémarrage, et demande l'accord de son propriétaire avant tout ce qui
 engage.
 
-Rust, 17 crates, `#![forbid(unsafe_code)]` dans chacun. La suite de tests
+Rust, 27 crates, `#![forbid(unsafe_code)]` dans chacun. La suite de tests
 fonctionne hors réseau externe.
 
 ## Pourquoi celle-ci
@@ -189,7 +189,8 @@ Il faut le dire aussi, sinon le tableau ci-dessus ne vaut rien.
 
 ## Ce qu'elle ne fait pas
 
-Version 0.x, publiée en pre-release, une seule instance réelle en service.
+Version 1.0 : la V1 est sur `main` depuis le 27 septembre 2026 et publiée en release
+(plus en pre-release depuis la 1.0.0). Une seule instance réelle en service.
 
 - macOS seulement. Les backends Linux et Windows compilent et renvoient `Unsupported`.
 - Telegram seulement, en long polling. Le mode webhook n'est pas servi.
@@ -227,29 +228,44 @@ toucher au vrai profil.
 
 ## Comment c'est fait
 
-17 crates, dépendances orientées, aucune dépendance circulaire. La règle est vérifiée
-par un test (`cargo test -p penelope-archtest`), pas par la discipline.
+27 crates, dépendances orientées, aucune dépendance circulaire. Les règles sont vérifiées
+par des tests (`cargo test -p penelope-archtest`), pas par la discipline. Le graphe exact,
+les ports et les chiffres sont dans [docs/architecture.md](docs/architecture.md) ; en gros,
+de haut en bas :
 
 ```
-penelope-store ──────────► penelope-kernel ──┬──► penelope-llm ────┐
-   (SQLite, écrivain          (événements,    │                     │
-    unique, pool de            effets, config,│    penelope-context ┤
-    lecture)                   sessions, tours)│                     │
-                                              ├──► penelope-memory  │
-penelope-platform            penelope-observe ├──► penelope-mcp     ├──► penelope-daemon ──► penelope-cli
-   (OS : chemins,               (traces,      ├──► penelope-tools   │       (composition,
-    service, bac à sable,        redaction,   ├──► penelope-hitl    │        RPC, boucle
-    processus, secrets,          injection)   ├──► penelope-skills  │        d'agent)
-    surveillance)                             ├──► penelope-telegram│
-                                              └──► penelope-workflow┘
-                                                   penelope-evals ──┘  penelope-archtest
+ penelope-cli                      le binaire : CLI, client RPC, composition
+   ▼
+ penelope-evals                    suites déterministes, scénarios rejouables
+   ▼
+ penelope-gateway-telegram ──────► penelope-telegram (client Bot API)
+   ▼
+ penelope-daemon                   composition, moteur des tours, RPC
+   ▼
+ orchestrator, ops, mcp-host
+   ▼
+ agent, conversation, dream, executor, vault
+   ▼
+ penelope-app                      Services, ports, bus des tours
+   ▼
+ workflow, tools, context, memory, mcp, llm, hitl, skills
+   ▼
+ penelope-kernel ──► penelope-store              socle : store, observe, platform
 ```
 
-- `penelope-store` ne dépend de rien et réexporte `rusqlite` : aucun crate métier ne
-  connaît le pilote SQL.
+- `penelope-store` ne dépend de rien et réexporte `rusqlite` : aucune crate métier ne
+  connaît le pilote SQL (seule la CLI ouvre la base elle-même, en lecture seule, pour
+  `penelope approvals stats`).
 - `penelope-platform` isole tout ce qui est spécifique à un OS. Un chemin littéral, un
   appel shell, un signal Unix ou une API Keychain ailleurs fait échouer le test
   d'architecture.
+- La boucle d'agent ne voit ni la conversation ni l'exécuteur, l'exécuteur ne voit ni la
+  boucle ni l'orchestrateur : ils se parlent par les ports de `penelope-app`. Le cœur
+  ne nomme pas Telegram au-delà d'un relevé qui ne peut que descendre : le canal passe par
+  la passerelle, au-dessus du daemon.
+- La dette est gelée par `crates/penelope-archtest/budget.toml` : aucun fichier au-delà de
+  1 000 lignes, le daemon plafonné, les critères d'acceptation figés ; ses nombres ne
+  montent jamais.
 - Le client MCP, le client Bot API, le validateur JSON Schema, la recherche vectorielle
   et la surveillance de fichiers sont écrits ici : aucun
   framework d'agent, aucune bibliothèque C ajoutée.
@@ -269,6 +285,14 @@ qu'un chemin de test diverge de l'autre.
 
 ```bash
 cargo test -p penelope-evals --test mcp_conformance
+```
+
+Chaque commande Telegram, outil natif et méthode RPC est exercé par au moins un scénario
+de session rejouable sans clé (`crates/penelope-evals/scenarios/`) ; une surface nouvelle
+sans scénario fait échouer `penelope-archtest`.
+
+```bash
+cargo test -p penelope-evals --test scenarios
 ```
 
 La matrice des critères d'acceptation, [docs/ca-matrix.md](docs/ca-matrix.md), est
@@ -302,7 +326,10 @@ cargo deny check
 - [docs/runtime-events.md](docs/runtime-events.md) : flux runtime local, replay et démonstration Pathlayer.
 - [docs/ca-matrix.md](docs/ca-matrix.md) : critères d'acceptation et tests qui les
   couvrent.
-- [docs/progress.md](docs/progress.md) : avancement, décisions, reste à faire.
+- [docs/architecture.md](docs/architecture.md) : crates, couches, ports, frontière canal,
+  règles d'architecture et gel.
+- [docs/progress.md](docs/progress.md) : notes de chaque version de la V1 ; celles de la
+  0.17 sont archivées dans [docs/progress-0.17.md](docs/progress-0.17.md).
 
 Un test vérifie que cet index cite chaque page, qu'aucun lien n'est mort, et que les
 tables de référence correspondent au code.

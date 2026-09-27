@@ -62,15 +62,15 @@ Pour une 0.17 plus récente encore :
 
 ```bash
 git worktree add --detach ../fixture-0.17.N v0.17.N
-# copier tests/migration_from_0_17.rs et tests/migration_from_0_17/ de v1,
+# copier tests/migration_from_0_17.rs et tests/migration_from_0_17/ de main,
 # ajouter `penelope-kernel.workspace = true` aux dev-dependencies du store
 UPDATE_FIXTURE=1 cargo test -p penelope-store --test migration_from_0_17 -- --ignored
-cp crates/penelope-store/tests/fixtures/penelope-0.17.N.db <v1>/crates/penelope-store/tests/fixtures/
+cp crates/penelope-store/tests/fixtures/penelope-0.17.N.db <main>/crates/penelope-store/tests/fixtures/
 git worktree remove --force ../fixture-0.17.N
 ```
 
-Lancé sur v1, le générateur nommerait la base `penelope-1.0.0-alpha.N.db` et l'écrirait
-avec le schéma de la V1 : ce n'est plus une base 0.17.
+Lancé sur `main`, le générateur nommerait la base `penelope-1.x.y.db` et l'écrirait avec
+le schéma de la V1 : ce n'est plus une base 0.17.
 
 **Quand ne pas.** Jamais à chaque migration nouvelle. Le test vaut par l'écart entre la
 fixture et le code : régénérer après chaque migration reviendrait à tester une base neuve

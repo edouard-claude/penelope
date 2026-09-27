@@ -12,6 +12,28 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.7
+
+La documentation en prose décrivait encore la 0.17 ou la branche `v1` : « 17 crates »
+dans le README, une architecture photographiée à la 1.0.0-alpha.13, une commande « qui
+n'existe que sur la branche `v1` », l'avancement pointé sur l'archive 0.17. Elle est
+remise à l'état de `main` à la 1.0.3, chaque chiffre recalculé par la commande que le
+document donne.
+
+- `README.md` : 27 crates, « Comment c'est fait » redessiné sur les couches de la V1,
+  version 1.0 publiée en release, scénarios rejouables dans « Tests ».
+- `docs/architecture.md` : couches (évaluations au-dessus de la passerelle), lignes par
+  crate, port `Judge`, frontière canal (35 fichiers, 248 mentions ; la passerelle admise
+  aussi pour `penelope-evals`), valeurs du gel lues dans `budget.toml` (R3 vide, R7 à 0,
+  R9 et R10 posées), « Ce qui reste » vérifié contre le code : six fichiers au-dessus de
+  800 lignes, `[coverage.uncovered]` hors du cliquet de `check-budget.sh`.
+- `docs/README.md` : l'avancement pointe vers la Version 1, l'archive 0.17 en lien
+  secondaire ; la décision 0015 est close par la bascule (aussi dans son statut). 0013 et
+  0014 disent ce qui est fait depuis leur rédaction.
+- `docs/install-headless.md` (`approvals stats`), `CLAUDE.md` (R8, frontière canal),
+  `.github/workflows/README.md`, le modèle de PR et le README des fixtures du store :
+  exemples et affirmations à l'état de `main`.
+
 ### 1.0.6
 
 Une photo refusée par le fournisseur (400 : image trop lourde, format refusé, illisible)
