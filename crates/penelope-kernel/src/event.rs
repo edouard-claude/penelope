@@ -246,6 +246,27 @@ impl EventLog {
             .await?)
     }
 
+    /// Les événements d'un kind dans une session, dans l'ordre : l'index `events_kind`
+    /// sert, un kind rare se lit sans parcourir la session.
+    pub async fn session_events_of_kind(&self, session_id: &str, kind: &str) -> Result<Vec<Event>> {
+        let (sid, kind) = (session_id.to_string(), kind.to_string());
+        Ok(self
+            .store
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT id, session_id, run_id, seq, ts, kind, payload, hash, prev_hash
+                     FROM events WHERE kind = ?1 AND session_id = ?2 ORDER BY id",
+                )?;
+                let rows = st.query_map(params![kind, sid], row_to_event)?;
+                let mut out = Vec::new();
+                for r in rows {
+                    out.push(r?);
+                }
+                Ok(out)
+            })
+            .await?)
+    }
+
     /// Lit une tranche du log global (utilisé par `penelope tail` et le rejeu).
     pub async fn range(&self, after_id: i64, limit: i64) -> Result<Vec<Event>> {
         Ok(self

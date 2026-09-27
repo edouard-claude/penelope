@@ -29,6 +29,7 @@ pub use surface::{MERGE_NOTE, summary_message};
 
 use crate::journal::AttemptPayload;
 use penelope_kernel::event::Event;
+use penelope_llm::attachment::RejectedImages;
 use penelope_llm::types::ChatMessage;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -89,6 +90,9 @@ pub struct Surface {
     pub attempts_tail: Option<AttemptPayload>,
     /// Un message utilisateur est arrivé pendant le tour en cours.
     pub merge_note: bool,
+    /// Images refusées par le fournisseur (`llm.attachment_rejected`, #231) : la
+    /// requête dérivée porte leur mention à leur place.
+    pub rejected_images: RejectedImages,
     /// Plus grande adresse héritée (fork ou scellement).
     pub offset: i64,
     /// Une purge a effacé des événements de contenu (ici ou dans le préfixe hérité).

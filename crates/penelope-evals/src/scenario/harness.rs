@@ -252,9 +252,12 @@ impl Harness<'_> {
                 );
             }
             let detail = match step {
-                Step::Message { text, crash, steer } => {
-                    self.message(text, *crash, steer.as_deref()).await
-                }
+                Step::Message {
+                    text,
+                    crash,
+                    steer,
+                    photos,
+                } => self.message(text, photos, *crash, steer.as_deref()).await,
                 Step::Enqueue { text } => self.enqueue(text).await,
                 Step::Command { command } => self.command(command).await,
                 Step::Telegram { text, click } => {

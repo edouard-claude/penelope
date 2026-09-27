@@ -21,13 +21,21 @@ impl Harness<'_> {
     pub(super) async fn message(
         &mut self,
         text: &str,
+        photos: &[String],
         crash: Option<Crash>,
         steer: Option<&str>,
     ) -> anyhow::Result<Value> {
         let d = self.daemon()?;
-        d.enqueue_message(&self.session, text, &Origin::Cli, None)
-            .await?
-            .context("tour non créé")?;
+        if photos.is_empty() {
+            d.enqueue_message(&self.session, text, &Origin::Cli, None)
+                .await?
+        } else {
+            let workspace = super::workspace_of(&*self.services()?);
+            let paths: Vec<_> = photos.iter().map(|p| workspace.join(p)).collect();
+            d.enqueue_message_with_images(&self.session, text, &paths, &Origin::Cli, None)
+                .await?
+        }
+        .context("tour non créé")?;
         let turn = self.claim().await?.context("aucun tour à réclamer")?;
         let merged = turn.merged_messages.len();
         match crash {

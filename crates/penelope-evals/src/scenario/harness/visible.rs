@@ -59,7 +59,8 @@ async fn journal(s: &Services) -> anyhow::Result<Journal> {
                 "SELECT id, session_id, run_id, seq, ts, kind, payload, hash, prev_hash
                  FROM events
                  WHERE session_id IS NOT NULL
-                   AND (kind LIKE 'conv.%' OR kind IN ('turn.started', 'turn.finished'))
+                   AND (kind LIKE 'conv.%'
+                        OR kind IN ('turn.started', 'turn.finished', 'llm.attachment_rejected'))
                  ORDER BY session_id, seq",
             )?;
             let rows = st.query_map([], |r| {

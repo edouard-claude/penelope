@@ -148,7 +148,8 @@ pub(crate) struct Expected {
     pub masked: BTreeSet<i64>,
 }
 
-/// Les événements d'une session que le pliage lit (contenu et bornes de tour).
+/// Les événements d'une session que le pliage lit : contenu, bornes de tour, images
+/// refusées (`llm.attachment_rejected`, #231).
 pub(crate) fn session_events(c: &Connection, sid: &str) -> rusqlite::Result<Vec<Event>> {
     session_events_after(c, sid, i64::MIN)
 }
@@ -163,7 +164,8 @@ pub(crate) fn session_events_after(
         "SELECT id, session_id, run_id, seq, ts, kind, payload, hash, prev_hash
          FROM events
          WHERE session_id = ?1 AND seq > ?2
-           AND (kind LIKE 'conv.%' OR kind IN ('turn.started', 'turn.finished'))
+           AND (kind LIKE 'conv.%'
+                OR kind IN ('turn.started', 'turn.finished', 'llm.attachment_rejected'))
          ORDER BY seq",
     )?;
     let rows = st.query_map(params![sid, after], |r| {

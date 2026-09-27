@@ -44,6 +44,7 @@ scenario_cases! {
     compaction_puis_prolongation => "compaction-puis-prolongation",
     session_froide => "session-froide",
     depassement_prouve => "depassement-prouve",
+    piece_jointe_refusee => "piece-jointe-refusee",
     fork_puis_divergence => "fork-puis-divergence",
     rewind => "rewind",
     purge => "purge",
