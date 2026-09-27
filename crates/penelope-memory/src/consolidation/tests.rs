@@ -556,6 +556,106 @@ fn a_file_is_not_a_rule_and_two_unrelated_directives_do_not_clash() {
     ));
 }
 
+/// #224 : une valeur mise à la place d'une autre sur le même sujet est une contradiction,
+/// même sans polarité opposée ni vocabulaire commun. La nuit du jour 10 de
+/// `mem_longitudinal`, « je préfère qu'on se vouvoie » a remplacé le tutoiement sans
+/// question.
+#[test]
+fn a_substituted_value_is_a_contradiction() {
+    let pref = |text: &str| {
+        Candidate::new(
+            CandidateType::Preference,
+            text,
+            Origin::Owner,
+            "interactive",
+            "t",
+        )
+    };
+    for (candidate, existing) in [
+        (
+            "Je préfère qu'on se vouvoie.",
+            "Toujours tutoyer le propriétaire.",
+        ),
+        (
+            "Le propriétaire préfère être vouvoyé.",
+            "Tutoyer le propriétaire dans les réponses.",
+        ),
+        (
+            "Facturer ACME en euros.",
+            "Facturer ACME en dollars américains.",
+        ),
+        (
+            "Les réunions d'équipe ont lieu le jeudi.",
+            "Les réunions d'équipe ont lieu le mardi matin.",
+        ),
+    ] {
+        assert!(
+            matches!(
+                detect_contradiction(&pref(candidate), existing, None),
+                Some(Contradiction::NeedsQuestion { .. })
+            ),
+            "« {candidate} » contre « {existing} »"
+        );
+        assert!(contradicts(existing, candidate), "symétrique");
+    }
+}
+
+/// Ce que la substitution ne doit pas attraper : la même valeur redite, deux valeurs
+/// citées ensemble, un sujet différent, un mot qui ressemble (« européen » n'est pas
+/// « euro »), et toujours les garde-fous de #145 (fait, longueur, contexte distinct).
+#[test]
+fn a_substitution_needs_two_different_values_on_one_subject() {
+    let pref = |text: &str| {
+        Candidate::new(
+            CandidateType::Preference,
+            text,
+            Origin::Owner,
+            "interactive",
+            "t",
+        )
+    };
+    for (candidate, existing) in [
+        (
+            "Rappel : pour ACME, la facture part en dollars.",
+            "Facturer ACME en dollars.",
+        ),
+        (
+            "Pour ACME, facturer en dollars américains, pas en euros.",
+            "Facturer ACME en euros.",
+        ),
+        (
+            "Rédiger les commits en anglais.",
+            "Répondre aux clients en français.",
+        ),
+        (
+            "Viser les clients européens.",
+            "Facturer les clients en dollars.",
+        ),
+        ("Tutoie-moi toujours.", "Toujours tutoyer le propriétaire."),
+    ] {
+        assert!(
+            detect_contradiction(&pref(candidate), existing, None).is_none(),
+            "« {candidate} » contre « {existing} »"
+        );
+    }
+    let fait = Candidate::new(
+        CandidateType::Fait,
+        "Le propriétaire est vouvoyé par ses clients.",
+        Origin::Owner,
+        "interactive",
+        "t",
+    );
+    assert!(detect_contradiction(&fait, "Toujours tutoyer le propriétaire.", None).is_none());
+    let dossier = format!("Tutoyer. {}", "Contexte du dossier client. ".repeat(20));
+    assert!(detect_contradiction(&pref("Vouvoyer le propriétaire."), &dossier, None).is_none());
+    let mut scoped = pref("Vouvoyer le propriétaire devant le client ACME.");
+    scoped.quand = When::parse("client=acme").ok();
+    assert_eq!(
+        detect_contradiction(&scoped, "Toujours tutoyer le propriétaire.", None),
+        Some(Contradiction::DistinctContext)
+    );
+}
+
 #[test]
 fn phases_progress() {
     assert_eq!(Phase::Light.next(), Phase::Rem);

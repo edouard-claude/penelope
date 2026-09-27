@@ -1,0 +1,4 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "mem_remember", "arguments": {"niveau": "profil", "texte": "Toujours tutoyer le propriétaire."}}]}}
+{"text": "C'est noté, je te tutoie."}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "mem_remember", "arguments": {"niveau": "profil", "texte": "Le propriétaire préfère être vouvoyé."}}]}}
+{"text": "Vous m'aviez demandé le tutoiement : je le remplace par le vouvoiement ?"}

@@ -15,10 +15,16 @@ pub(super) struct VaultSnapshot {
     pub(super) practice_lines: Vec<String>,
     /// Textes normalisés des entrées des fichiers de mémoire, contre les doublons.
     pub(super) texts: BTreeSet<String>,
+    /// Texte de chaque entrée des fichiers de mémoire, par uid : ce qu'une réécriture
+    /// remplacerait, montré au propriétaire avant (issue #224).
+    pub(super) uid_text: BTreeMap<String, String>,
+    /// Entrées écrites par le propriétaire lui-même (provenance `owner`) : comme le
+    /// profil, elles ne se réécrivent pas sans lui (issue #224).
+    pub(super) owner_uids: BTreeSet<String>,
 }
 
 impl VaultSnapshot {
-    pub(super) async fn read(_s: &Services, vault: &Path) -> anyhow::Result<VaultSnapshot> {
+    pub(super) async fn read(s: &Services, vault: &Path) -> anyhow::Result<VaultSnapshot> {
         let mut snap = VaultSnapshot {
             uids: BTreeSet::new(),
             entries_per_file: BTreeMap::new(),
@@ -28,6 +34,8 @@ impl VaultSnapshot {
             excerpts: Vec::new(),
             practice_lines: Vec::new(),
             texts: BTreeSet::new(),
+            uid_text: BTreeMap::new(),
+            owner_uids: BTreeSet::new(),
         };
         for rel in markdown_files(vault) {
             if rel.starts_with("sources/")
@@ -72,11 +80,22 @@ impl VaultSnapshot {
                         .iter()
                         .map(|e| penelope_memory::grid::normalized(&e.text)),
                 );
+                for e in &entries {
+                    snap.uid_text.insert(e.uid.clone(), e.text.clone());
+                    if s.memory.origin_of(&e.uid).await.ok().flatten() == Some(Origin::Owner) {
+                        snap.owner_uids.insert(e.uid.clone());
+                    }
+                }
                 snap.excerpts
                     .push((rel.clone(), raw.chars().take(FILE_EXCERPT_CHARS).collect()));
             }
         }
         Ok(snap)
+    }
+
+    /// L'entrée `uid` est au profil du propriétaire.
+    pub(super) fn in_profile(&self, uid: &str) -> bool {
+        self.uid_file.get(uid).is_some_and(|f| f == "profil.md")
     }
 
     /// uids des fichiers modifiés depuis la lecture : leurs opérations sont reportées.

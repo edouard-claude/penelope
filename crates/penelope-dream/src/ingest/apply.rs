@@ -55,12 +55,23 @@ pub async fn apply_contradiction(
                 Err(e) => format!("❌ {e}"),
             }
         }
-        // Remplacer : l'ancienne entrée est retirée, la nouvelle prend sa place.
+        // Remplacer : l'ancienne entrée est retirée, la nouvelle prend sa place, à son
+        // niveau. Écrite dans `notes.md`, une préférence remplacée quittait le profil et
+        // n'était plus injectée (issue #224).
         _ => {
+            let level = s
+                .memory
+                .get(uid)
+                .await
+                .ok()
+                .flatten()
+                .map(|e| e.level)
+                .filter(|l| matches!(l, Level::Profil | Level::Coeur | Level::Projet))
+                .unwrap_or(Level::Cure);
             let removed = crate::vault_ops::forget(s, &vault, uid)
                 .await
                 .unwrap_or(false);
-            match crate::vault_ops::remember(s, &vault, Level::Cure, &proposed, "dream").await {
+            match crate::vault_ops::remember(s, &vault, level, &proposed, "dream").await {
                 Ok(_) if removed => "♻️ Remplacé : l'ancienne entrée est retirée.".to_string(),
                 Ok(_) => "🧠 Écrit : l'ancienne entrée était déjà partie.".to_string(),
                 Err(e) => format!("❌ {e}"),

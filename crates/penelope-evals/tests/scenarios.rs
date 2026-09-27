@@ -78,6 +78,7 @@ scenario_cases! {
     rpc_arret => "rpc-arret",
     outils_fichiers_et_shell => "outils-fichiers-et-shell",
     outils_memoire => "outils-memoire",
+    outils_memoire_contradiction => "outils-memoire-contradiction",
     outils_skills => "outils-skills",
     outils_soi => "outils-soi",
     outils_historique => "outils-historique",

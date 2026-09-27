@@ -12,6 +12,53 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.8
+
+**Mémoire : une préférence du propriétaire ne se remplace plus sans lui (#224).** La
+suite réseau `mem_longitudinal` perdait le tutoiement la nuit du jour 10 (5/7, 71 %).
+Cause : seul un `add_entry` passait par le contrôle de contradiction ; un
+`supersede_entry` ou un `replace_entry` proposé par le modèle réécrivait la ligne du profil
+sans question, et l'heuristique ne voyait qu'une négation (« toujours » contre
+« jamais »), jamais une valeur mise à la place d'une autre (tu contre vous).
+
+- Le rêve pose la carte de contradiction (Remplacer, Exception, Ignorer) au lieu
+  d'appliquer un `supersede_entry` ou un `replace_entry` qui vise le profil, ou une entrée
+  écrite par le propriétaire quand c'est une règle qui la remplace. Passent sans question :
+  la correction explicite du propriétaire (type `correction`, « non, … »), la précision qui
+  garde l'ancien texte entier, la mise à jour d'un fait hors du profil.
+- Le contrôle de contradiction voit la substitution : deux valeurs d'une même famille
+  exclusive (tutoiement et vouvoiement, langue, devise, jour de la semaine) sur le même
+  sujet. Les garde-fous de #145 tiennent : ni fait ni écart, borne et rapport de longueur,
+  contexte distinct, similarité 0,80.
+- « Remplacer » sur une carte écrit la nouvelle entrée au niveau de l'ancienne : une
+  préférence remplacée partait dans `notes.md`, qui n'est pas injecté d'office.
+- `mem_remember` refuse d'écrire au profil ou au cœur une entrée qui en contredit une
+  autre, et nomme l'uid à trancher avec le propriétaire (scénario
+  `outils-memoire-contradiction`) ; un niveau inconnu est refusé au lieu d'aller dans
+  `notes.md` (le schéma le refusait déjà).
+- `mem_longitudinal` : critères tutoiement et vouvoiement sous toutes leurs formes
+  (« tutoyer » était compté absent) ; la question tu/vous se prouve par une carte ou la
+  section « Questions sans réponse », plus par tout `DREAMS.md` (son tri recopiait le
+  candidat du jour 1 : le critère passait à vide) ; le mardi, un fait, se cherche aussi
+  dans `notes.md` et `entites/`. En échec, le dossier est gardé avec `preuves/`
+  (réponses entières, digest, appels d'outils, événements de mémoire, cartes).
+
+Tests : `a_substituted_value_is_a_contradiction`,
+`a_substitution_needs_two_different_values_on_one_subject` (memory) ;
+`a_preference_does_not_supersede_the_owner_profile_without_asking`,
+`corrections_precisions_and_facts_still_rewrite_without_a_card`,
+`an_entry_written_by_the_owner_is_protected_outside_the_profile`,
+`an_added_substitution_of_the_owner_preference_asks` (dream) ;
+`mem_remember_refuses_an_unknown_level_and_a_contradicted_profile` (executor). Rouges
+avant le correctif. Sans clé de fournisseur ici, la suite réseau reste à lancer, trois
+fois, par l'intégrateur :
+
+```bash
+OPENROUTER_API_KEY=… cargo test -p penelope-evals --test mem_longitudinal -- --ignored --nocapture
+```
+
+Closes #224.
+
 ### 1.0.7
 
 La documentation en prose décrivait encore la 0.17 ou la branche `v1` : « 17 crates »

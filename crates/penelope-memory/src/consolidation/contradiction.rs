@@ -23,8 +23,7 @@ pub fn detect_contradiction(
     if matches!(candidate.ctype, CandidateType::Fait | CandidateType::Ecart) {
         return None;
     }
-    let contradicts = negates(existing_text, &candidate.text);
-    if !contradicts {
+    if !contradicts(existing_text, &candidate.text) {
         return None;
     }
     match (&candidate.quand, existing_when) {
@@ -43,9 +42,10 @@ pub fn detect_contradiction(
 /// La comparaison de sujet se fait par **containment** sur les mots significatifs (le plus
 /// petit énoncé sert de dénominateur) : « Toujours répondre en anglais aux clients » et
 /// « Jamais de réponse en anglais » se contredisent malgré des longueurs différentes.
-/// Deux entrées se contredisent : directives de polarité opposée sur le même sujet.
+/// Deux entrées se contredisent : directives de polarité opposée sur le même sujet, ou
+/// une valeur mise à la place d'une autre (« tutoyer » contre « vouvoyer », issue #224).
 pub fn contradicts(a: &str, b: &str) -> bool {
-    negates(a, b)
+    comparable(a, b) && (negates(a, b) || substitutes(a, b))
 }
 
 /// Part de sujet commun exigée, en Jaccard (dénominateur : l'union). Le containment
@@ -63,18 +63,18 @@ pub const CONTRADICTION_SIMILARITY: f64 = 0.80;
 /// « toujours payé » au milieu d'un dossier n'est pas une polarité.
 const DIRECTIVE_WORDS: usize = 6;
 
-fn negates(a: &str, b: &str) -> bool {
-    // Deux règles, pas un dossier : au-delà de la borne d'une entrée, ou d'un rapport de
-    // longueur de trois, la comparaison n'a pas de sens (issue #145).
+/// Deux règles, pas un dossier : au-delà de la borne d'une entrée, ou d'un rapport de
+/// longueur de trois, la comparaison n'a pas de sens (issue #145).
+fn comparable(a: &str, b: &str) -> bool {
     let (la, lb) = (a.chars().count(), b.chars().count());
-    if la == 0
-        || lb == 0
-        || la > crate::quality::MAX_ENTRY_CHARS
-        || lb > crate::quality::MAX_ENTRY_CHARS
-        || la.max(lb) as f64 / la.min(lb) as f64 > MAX_LENGTH_RATIO
-    {
-        return false;
-    }
+    la > 0
+        && lb > 0
+        && la <= crate::quality::MAX_ENTRY_CHARS
+        && lb <= crate::quality::MAX_ENTRY_CHARS
+        && la.max(lb) as f64 / la.min(lb) as f64 <= MAX_LENGTH_RATIO
+}
+
+fn negates(a: &str, b: &str) -> bool {
     let (pa, pb) = (polarity(a), polarity(b));
     if pa == 0 || pb == 0 || pa == pb {
         return false;
@@ -86,6 +86,89 @@ fn negates(a: &str, b: &str) -> bool {
     let inter = wa.intersection(&wb).count() as f64;
     let union = wa.union(&wb).count() as f64;
     inter / union >= SUBJECT_JACCARD
+}
+
+/// Valeurs qui s'excluent sur un même sujet : dire l'une, c'est renoncer à l'autre. Un
+/// motif finissant par `*` est un radical (« tutoi* » : tutoie, tutoiement), sinon le
+/// mot entier (« euro », pas « européen »). `true` : la famille est son propre sujet
+/// (tutoyer ou vouvoyer, c'est toujours la façon de s'adresser au propriétaire) ; sinon
+/// il faut en plus un mot de sujet commun hors de la famille, « facturer en dollars »
+/// contre « facturer en euros ».
+const EXCLUSIVE_VALUES: &[(bool, &[&[&str]])] = &[
+    (true, &[&["tutoi*", "tutoy*"], &["vouvoi*", "vouvoy*"]]),
+    (
+        false,
+        &[
+            &["françai*", "francai*"],
+            &["anglai*"],
+            &["allemand*"],
+            &["espagnol*"],
+            &["italien*"],
+        ],
+    ),
+    (false, &[&["euro", "euros"], &["dollar*"], &["sterling"]]),
+    (
+        false,
+        &[
+            &["lundi*"],
+            &["mardi*"],
+            &["mercredi*"],
+            &["jeudi*"],
+            &["vendredi*"],
+            &["samedi*"],
+            &["dimanche*"],
+        ],
+    ),
+];
+
+fn matches_value(word: &str, pattern: &str) -> bool {
+    match pattern.strip_suffix('*') {
+        Some(stem) => word.starts_with(stem),
+        None => word == pattern,
+    }
+}
+
+/// Substitution (issue #224) : les deux énoncés nomment chacun une valeur d'une même
+/// famille exclusive, et aucune valeur en commun. « Toujours tutoyer » et « je préfère
+/// qu'on se vouvoie » n'ont ni polarité opposée ni vocabulaire commun : la négation ne
+/// les voyait jamais. Deux énoncés qui citent les deux valeurs (« en dollars, pas en
+/// euros ») ne se substituent pas : dans le doute, pas de question.
+fn substitutes(a: &str, b: &str) -> bool {
+    let words = |s: &str| -> Vec<String> {
+        s.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .map(String::from)
+            .collect()
+    };
+    let (wa, wb) = (words(a), words(b));
+    let values = |ws: &[String], family: &[&[&str]]| -> std::collections::BTreeSet<usize> {
+        family
+            .iter()
+            .enumerate()
+            .filter(|(_, pats)| ws.iter().any(|w| pats.iter().any(|p| matches_value(w, p))))
+            .map(|(i, _)| i)
+            .collect()
+    };
+    EXCLUSIVE_VALUES.iter().any(|(own_subject, family)| {
+        let (va, vb) = (values(&wa, family), values(&wb, family));
+        if va.is_empty() || vb.is_empty() || !va.is_disjoint(&vb) {
+            return false;
+        }
+        // Les mots de la famille ne font pas le sujet : « euros » et « dollars » ne
+        // sont pas un vocabulaire commun.
+        let subject = |s: &str| -> std::collections::BTreeSet<String> {
+            significant_words(s)
+                .into_iter()
+                .filter(|w| {
+                    !family.iter().flat_map(|pats| pats.iter()).any(|p| {
+                        matches_value(w, p) || p.trim_end_matches('*').starts_with(w.as_str())
+                    })
+                })
+                .collect()
+        };
+        *own_subject || !subject(a).is_disjoint(&subject(b))
+    })
 }
 
 /// Polarité d'une **directive** : le marqueur se lit en tête de la première phrase, là où

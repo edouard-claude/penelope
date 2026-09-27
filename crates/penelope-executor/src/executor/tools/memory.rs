@@ -156,18 +156,35 @@ impl NativeToolExecutor {
                 })
             }
             "mem_remember" => {
+                // Un niveau inconnu tombait en silence dans `notes.md`, qui n'est pas
+                // injecté d'office : la préférence semblait notée et ne servait pas (#224).
                 let level = match str_arg(args, "niveau")?.as_str() {
                     "profil" => penelope_memory::Level::Profil,
                     "coeur" => penelope_memory::Level::Coeur,
                     "projet" => penelope_memory::Level::Projet,
-                    _ => penelope_memory::Level::Cure,
+                    "cure" => penelope_memory::Level::Cure,
+                    other => {
+                        return Err(ToolError::Invalid(format!(
+                            "niveau inconnu « {other} » : profil, coeur, projet ou cure"
+                        )));
+                    }
                 };
+                let texte = str_arg(args, "texte")?;
+                // Deux règles opposées ne cohabitent pas dans ce qui est injecté d'office :
+                // le propriétaire tranche, pas le modèle (#224).
+                if let Some(e) = penelope_vault::vault_ops::contradicted(s, level, &texte).await {
+                    return Err(ToolError::Invalid(format!(
+                        "contredit l'entrée {} « {} » : demande au propriétaire s'il la \
+                         remplace ; s'il le confirme, `mem_forget` {} puis `mem_remember`",
+                        e.uid, e.text, e.uid
+                    )));
+                }
                 let vault = penelope_app::helpers::vault_dir(s);
                 let uid = penelope_vault::vault_ops::remember(
                     s,
                     &vault,
                     level,
-                    &str_arg(args, "texte")?,
+                    &texte,
                     &self.env.session_id,
                 )
                 .await
