@@ -5,9 +5,10 @@
 //!
 //! Les parties pures (empreinte, fournisseur collant, cause d'un raté) vivent dans
 //! `penelope_llm::cache`, la lecture du dernier appel dans le `BudgetLedger` du kernel
-//! (épopée #208, T27) ; ici, le contexte volatil et le préfixe stable.
+//! (épopée #208, T27), le contexte volatil et le préfixe stable dans
+//! `penelope_conversation::prefix` (#236).
 
-use penelope_llm::cache::{CACHE_TTL_MS, PreviousCall};
+use penelope_llm::cache::PreviousCall;
 
 /// Le dernier appel de conversation de la session (voir `BudgetLedger::previous_call`).
 pub async fn previous_call(
@@ -15,85 +16,6 @@ pub async fn previous_call(
     session_id: &str,
 ) -> anyhow::Result<Option<PreviousCall>> {
     Ok(s.budget.previous_call(session_id).await?)
-}
-
-/// Bloc de contexte volatil, tel qu'il précède le texte d'un message utilisateur.
-pub fn context_block(volatile: &str) -> String {
-    format!("<contexte>\n{}\n</contexte>\n\n", volatile.trim())
-}
-
-/// Fige le contexte volatil (T4) avec le dernier message utilisateur de la session, avant
-/// son premier envoi : il l'accompagnera dans toutes les requêtes suivantes, reprises
-/// après approbation et tours suivants compris, au lieu de se déplacer à chaque tour et
-/// de réécrire l'historique.
-pub async fn freeze_volatile(
-    s: &penelope_app::services::Services,
-    session_id: &str,
-    tiers: &mut penelope_context::Tiers,
-) -> anyhow::Result<()> {
-    let sid = session_id.to_string();
-    let last_user: Option<i64> = s
-        .store
-        .read(move |c| {
-            Ok(c.query_row(
-                "SELECT MAX(seq) FROM messages WHERE session_id = ?1 AND role = 'user' AND sealed IS NOT 2",
-                [sid],
-                |r| r.get(0),
-            )?)
-        })
-        .await?;
-    let Some(seq) = last_user else {
-        return Ok(());
-    };
-    if !tiers.volatile.trim().is_empty() {
-        s.context
-            .history
-            .freeze_context(session_id, seq, &context_block(&tiers.volatile))
-            .await?;
-    }
-    tiers.volatile.clear();
-    Ok(())
-}
-
-/// Préfixe stable (T0 à T2) : tant que le cache de la session est chaud, un préfixe
-/// modifié (nouvel instantané mémoire, skill ou serveur MCP) attend la prochaine pause ou
-/// la prochaine compaction, qui le cassent de toute façon. Le préfixe retenu est celui du
-/// dernier `conv.system` de la session (`HistoryStore::retained_prefix`, T16).
-pub async fn stable_prefix(
-    s: &penelope_app::services::Services,
-    session_id: &str,
-    tiers: &mut penelope_context::Tiers,
-) -> anyhow::Result<()> {
-    let warm = previous_call(s, session_id)
-        .await?
-        .is_some_and(|p| s.clock.now_ms() - p.ts_ms < CACHE_TTL_MS);
-    if warm
-        && let Some(stored) = s.context.history.retained_prefix(session_id).await?
-        && (&stored.identity, &stored.index, &stored.context)
-            != (&tiers.identity, &tiers.index, &tiers.context)
-    {
-        tracing::debug!(
-            session = session_id,
-            "préfixe modifié : attend un cache froid"
-        );
-        tiers.identity = stored.identity;
-        tiers.index = stored.index;
-        tiers.context = stored.context;
-    }
-    journal_prefix(s, session_id, tiers).await;
-    Ok(())
-}
-
-/// Le préfixe retenu entre au journal quand il change, en entier (`conv.system`,
-/// épopée #208, T6). Un échec ne coûte que l'événement : le tour continue.
-async fn journal_prefix(
-    s: &penelope_app::services::Services,
-    session_id: &str,
-    tiers: &penelope_context::Tiers,
-) {
-    if let Err(e) = s.context.history.journal_system(session_id, tiers).await {
-        tracing::warn!(session = session_id, error = %e, "préfixe non journalisé");
-    }
 }
 
 #[cfg(test)]
@@ -190,57 +112,5 @@ mod tests {
             fp.request_hash.is_some() && fp.msg_count.unwrap() >= 4,
             "{fp:?}"
         );
-    }
-
-    /// T6 (épopée #208) : un préfixe modifié à cache chaud attend, sans entrer au
-    /// journal ; à cache froid, il y entre avec la raison `cold`.
-    #[tokio::test]
-    async fn a_changed_prefix_is_journaled_only_when_the_cache_is_cold() {
-        let dir = tempfile::tempdir().unwrap();
-        let clock = Arc::new(TestClock::default());
-        let s = Arc::new(
-            Services::for_tests(dir.path().to_path_buf(), clock.clone())
-                .await
-                .unwrap(),
-        );
-        let d = Daemon::from_services(s.clone());
-        let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
-        let tiers = |skills: &str| penelope_context::Tiers {
-            identity: "Tu es Pénélope.".into(),
-            index: skills.into(),
-            ..Default::default()
-        };
-        let systems = || async {
-            let events = s.events.session_events(&sid, 0).await.unwrap();
-            events
-                .into_iter()
-                .filter(|e| e.kind == "conv.system")
-                .map(|e| e.payload["reason"].as_str().unwrap().to_string())
-                .collect::<Vec<_>>()
-        };
-        stable_prefix(&d.services, &sid, &mut tiers("revue"))
-            .await
-            .unwrap();
-        s.budget
-            .record(penelope_kernel::budget::UsageRecord {
-                session_id: Some(sid.clone()),
-                role: Some("chat".into()),
-                model: "m".into(),
-                provider: "mock".into(),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        // Skill rechargée à cache chaud : le préfixe d'avant est gardé, rien de neuf.
-        let mut warm = tiers("revue, deploiement");
-        stable_prefix(&d.services, &sid, &mut warm).await.unwrap();
-        assert_eq!(warm.index, "revue");
-        assert_eq!(systems().await, ["first"]);
-        // À cache froid, le nouveau préfixe sort et entre au journal.
-        clock.advance_ms(CACHE_TTL_MS + 1);
-        stable_prefix(&d.services, &sid, &mut tiers("revue, deploiement"))
-            .await
-            .unwrap();
-        assert_eq!(systems().await, ["first", "cold"]);
     }
 }

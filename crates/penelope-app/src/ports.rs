@@ -347,6 +347,12 @@ pub trait McpGateway: Send + Sync {
     async fn eager_tools(&self) -> Vec<penelope_llm::ToolDef> {
         Vec::new()
     }
+    /// Outils promus (ensemble collant, `apply_promotions`) des serveurs actifs sans
+    /// `eager_schemas` : exposés d'office aux conversations à partir de leur frontière
+    /// suivante (§8.9, #236).
+    async fn promoted_tools(&self) -> Vec<penelope_llm::ToolDef> {
+        Vec::new()
+    }
 }
 
 /// Capacités qui dépendent du moteur de workflows et des sous-agents.

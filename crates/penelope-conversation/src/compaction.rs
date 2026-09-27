@@ -549,6 +549,8 @@ async fn compact_inner(
             window,
             force,
             turn_id,
+            // Un dépassement prouvé ne renvoie pas la même conversation (#236).
+            on_prefix: pass == 0 && trigger != Trigger::Overflow,
         };
         let (job, summary, used) =
             match summarise_or_recover(d, provider.as_ref(), &model, job, &attempt, &mut report)
@@ -702,6 +704,7 @@ pub fn report_text(r: &Report) -> String {
 mod context;
 mod fidelity;
 mod health;
+mod on_prefix;
 mod publish;
 mod summarise;
 mod view;

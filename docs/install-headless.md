@@ -413,6 +413,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `context.background_compaction_margin` | `0.1` | Marge sous le seuil à partir de laquelle la compaction se prépare en tâche de fond. |
 | `context.cooldown_ms` | `[60000,300000,900000]` | Attentes successives après une compaction en échec, en millisecondes. |
 | `context.auto_title` | `true` | Titre de 3 à 6 mots donné par le modèle rapide après le premier échange. |
+| `context.compaction_on_prefix` | `"auto"` | Appel de résumé sur le préfixe de la conversation (#236) : même modèle, même prompt système, mêmes outils et historique tel qu'envoyé, la consigne en dernier message, pour relire le cache au lieu de tout repayer. `auto` (le moins cher des deux selon les prix du catalogue, cache compris ; sans prix connus, le résumeur), `always` (dès que le préfixe est chaud), `never` (toujours le rôle `compaction`). |
 
 **[memory]**
 

@@ -12,9 +12,10 @@ pin_model = "main"
 name = "sessions"
 sql = "SELECT title, state, model_alias, budget_usd, metadata FROM sessions ORDER BY created_at, rowid"
 
+# La liste d'outils gelée (#236) reste hors du relevé : elle recopie chaque description.
 [[observe]]
 name = "kv"
-sql = "SELECT k, v FROM kv ORDER BY k"
+sql = "SELECT k, v FROM kv WHERE k NOT LIKE 'session.tools.frozen.%' ORDER BY k"
 
 [[steps]]
 kind = "rpc"

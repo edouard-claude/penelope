@@ -28,6 +28,9 @@ pub(super) async fn publish(
     // Frontière sûre pour le cache : le préfixe change de toute façon, les instantanés
     // mémoire T2 se rafraîchissent au tour suivant (§6.6).
     penelope_vault::episodes::refresh_snapshot(s, session_id).await;
+    // Même frontière pour les outils MCP marqués depuis la précédente : ils rejoignent
+    // l'ensemble collant, que chaque session expose à sa frontière suivante (§8.9, #236).
+    s.mcp_tools.apply_promotions();
 
     report.published += 1;
     report.messages += job.messages();

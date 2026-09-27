@@ -11,6 +11,8 @@
 //! Invariant vérifié par le CA 5 : **le préfixe T0 à T2 est identique octet pour octet**
 //! entre deux tours consécutifs sans action utilisateur.
 
+pub mod update;
+
 use penelope_kernel::canonical::sha256_hex;
 pub use penelope_kernel::journal::{Tile, TileMap};
 use penelope_llm::types::{ChatMessage, Content, Role};
@@ -333,7 +335,8 @@ impl TiersBuilder {
                 "Hors de ta liste d'outils pour alléger chaque appel : {}. `tool_search` les \
                  trouve par ce qu'ils font, `tool_describe` donne leur schéma, `tool_call` les \
                  appelle (même approbation qu'un appel direct) ; un outil décrit ou appelé \
-                 rejoint ta liste pour les tours suivants.\n",
+                 rejoint ta liste après la prochaine pause ou compaction, d'ici là passe par \
+                 `tool_call`.\n",
                 self.on_demand
                     .iter()
                     .map(|n| format!("`{n}`"))

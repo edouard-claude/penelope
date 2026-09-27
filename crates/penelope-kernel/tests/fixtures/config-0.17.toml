@@ -153,6 +153,7 @@ max_prompt_tokens = 120000
 background_compaction_margin = 0.1
 cooldown_ms = [60000, 300000, 900000]
 auto_title = true
+compaction_on_prefix = "auto"
 
 # Table à clés libres : `context.model_thresholds.<nom>` dans la référence.
 [context.model_thresholds]

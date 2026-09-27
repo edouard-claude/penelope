@@ -296,6 +296,11 @@ impl Harness<'_> {
                     .await
                 }
                 Step::Open { url, bind } => self.open(url, bind.as_deref()).await,
+                Step::File {
+                    path,
+                    content,
+                    root,
+                } => self.write_file(*root, path, content),
                 Step::Approve => self.approve().await,
                 Step::Usage { prompt } => self.usage(*prompt).await,
                 Step::Seed {

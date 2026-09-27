@@ -19,9 +19,13 @@ n'existe plus ou un défaut qui a changé fait échouer le test.
 Le préfixe ne change pas en cours de conversation (décision
 [0008](decisions/0008-cache-de-prompt.md)) : un souvenir, une skill ou un serveur MCP
 ajoutés n'y entrent qu'après une pause plus longue que le cache (5 min) ou à la
-compaction suivante. Le contexte volatil est figé avec le message qu'il accompagne : un
-ancien message garde l'heure et le rappel de son tour, et rien ne bouge avant le dernier
-message. Les outils rares ne sont que nommés (voir « Outils natifs » dans
+compaction suivante. D'ici là, leur différence part en fin, une seule fois, dans le
+contexte volatil du message qui suit : un bloc `<mise-a-jour>` avec les lignes retirées et
+ajoutées de chaque tuile (AGENTS.md, index des skills, serveurs MCP), ou la tuile dite
+réécrite au-delà de 1 500 caractères, et les skills chargées dont le corps a changé depuis
+(événement `prompt.updated`, #236). Le contexte volatil est figé avec le message qu'il
+accompagne : un ancien message garde l'heure et le rappel de son tour, et rien ne bouge
+avant le dernier message. Les outils rares ne sont que nommés (voir « Outils natifs » dans
 [install-headless.md](install-headless.md#outils-natifs)).
 
 ## Les chiffres par fenêtre
@@ -169,6 +173,16 @@ donne, pour chaque raté, sa cause probable : premier appel, pause, préfixe, ou
 modèle, historique réécrit, fournisseur amont différent. Quand la cause est le préfixe,
 elle nomme la tuile qui a bougé : `prefixe:T1` (index des capacités), `prefixe:T2`
 (contexte et mémoire), `prefixe:T1+T2`.
+
+La liste d'outils suit le préfixe : elle est gelée entre deux frontières (#236), et un
+outil décrit en cours de route s'appelle par `tool_call` jusqu'à la suivante. L'appel de
+résumé peut lui aussi relire le cache (`context.compaction_on_prefix`) : il reprend la
+dernière requête de la conversation telle qu'envoyée (même modèle, même prompt système,
+mêmes outils, même historique) et ajoute la consigne de résumé en dernier message ; son
+`system_hash` et son `tools_hash` sont ceux de la conversation. `auto`, le défaut, ne le
+fait que si c'est moins cher que le résumeur selon les prix du catalogue (préfixe au prix
+du cache, même sortie estimée des deux côtés) ; sans préfixe chaud, sur un dépassement
+prouvé ou après un échec, le résumeur classique prend la main.
 
 ## Relire ce que le modèle a lu
 

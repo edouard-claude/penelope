@@ -291,10 +291,18 @@ async fn a_message_is_answered_and_the_transcript_persists() {
 /// #104 : premier tour d'une session en configuration d'exemple : au plus 20
 /// définitions d'outils et moins de 3 000 tokens de schémas ; les outils rares sont
 /// nommés dans le message système. Décrit par `tool_describe`, `schedule_create`
-/// rejoint la liste dès le tour suivant.
+/// rejoint la liste à la frontière suivante, pas au tour d'après à cache chaud (#236).
 #[tokio::test]
 async fn a_turn_offers_the_core_then_what_the_session_discovered() {
-    let (_dir, d, p) = daemon().await;
+    let dir = tempfile::tempdir().unwrap();
+    let clock = TestClock::default();
+    let services = penelope_app::services::Services::for_tests(
+        dir.path().to_path_buf(),
+        Arc::new(clock.clone()),
+    );
+    let d = Arc::new(Daemon::from_services(Arc::new(services.await.unwrap())));
+    let p = Arc::new(MockProvider::new());
+    d.set_provider_override(p.clone());
     let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
     d.pin_model(&sid, Some("main")).await.unwrap();
     let say = |text: &'static str| {
@@ -337,11 +345,13 @@ async fn a_turn_offers_the_core_then_what_the_session_discovered() {
 
     p.reply("Avec plaisir.");
     say("Merci.").await;
+    let warm = p.requests().last().unwrap().clone();
+    assert_eq!(warm.tools, first.tools, "liste gelée à cache chaud");
+    clock.advance_ms(penelope_llm::cache::CACHE_TTL_MS + 1);
+    p.reply("Bonne journée.");
+    say("À plus tard.").await;
     let next = p.requests().last().unwrap().clone();
-    assert!(
-        offers(&next, "schedule_create"),
-        "découvert au tour précédent"
-    );
+    assert!(offers(&next, "schedule_create"), "découvert avant la pause");
     assert!(next.tools.len() <= 21);
 }
 

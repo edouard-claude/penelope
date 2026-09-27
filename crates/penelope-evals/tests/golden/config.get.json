@@ -150,7 +150,8 @@
         "cooldown_ms": [
           "integer"
         ],
-        "auto_title": "bool"
+        "auto_title": "bool",
+        "compaction_on_prefix": "string"
       },
       "memory": {
         "vault_path": "string",

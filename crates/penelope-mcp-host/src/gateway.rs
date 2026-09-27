@@ -47,33 +47,53 @@ impl penelope_app::ports::McpGateway for McpSupervisor {
 
     /// Outils des serveurs `eager_schemas`, exposés directement au modèle.
     async fn eager_tools(&self) -> Vec<penelope_llm::ToolDef> {
-        let slots: Vec<Arc<Slot>> = self.slots.read().await.values().cloned().collect();
-        let names: Vec<String> = slots
-            .iter()
-            .filter(|s| {
-                let c = s.config();
-                c.enabled && c.eager_schemas
-            })
-            .map(|s| s.name.clone())
-            .collect();
+        let names = self.enabled_servers(true).await;
         if names.is_empty() {
             return Vec::new();
         }
-        self.services
-            .mcp_tools
-            .eager_schemas(&names)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|d| {
-                Some(penelope_llm::ToolDef::new(
-                    d.get("name")?.as_str()?,
-                    d.get("description").and_then(|x| x.as_str()).unwrap_or(""),
-                    d.get("inputSchema")
-                        .cloned()
-                        .unwrap_or(json!({"type": "object"})),
-                ))
+        let schemas = self.services.mcp_tools.eager_schemas(&names).await;
+        tool_defs(schemas.unwrap_or_default())
+    }
+
+    /// Outils promus des serveurs actifs sans `eager_schemas` (ceux-là sont déjà tous
+    /// exposés).
+    async fn promoted_tools(&self) -> Vec<penelope_llm::ToolDef> {
+        let names = self.enabled_servers(false).await;
+        if names.is_empty() {
+            return Vec::new();
+        }
+        let schemas = self.services.mcp_tools.promoted_schemas(&names).await;
+        tool_defs(schemas.unwrap_or_default())
+    }
+}
+
+impl McpSupervisor {
+    /// Serveurs actifs, avec ou sans `eager_schemas`.
+    async fn enabled_servers(&self, eager: bool) -> Vec<String> {
+        let slots: Vec<Arc<Slot>> = self.slots.read().await.values().cloned().collect();
+        slots
+            .iter()
+            .filter(|s| {
+                let c = s.config();
+                c.enabled && c.eager_schemas == eager
             })
+            .map(|s| s.name.clone())
             .collect()
     }
+}
+
+/// Les schémas exposés du registre, en définitions d'outils.
+fn tool_defs(schemas: Vec<serde_json::Value>) -> Vec<penelope_llm::ToolDef> {
+    schemas
+        .into_iter()
+        .filter_map(|d| {
+            Some(penelope_llm::ToolDef::new(
+                d.get("name")?.as_str()?,
+                d.get("description").and_then(|x| x.as_str()).unwrap_or(""),
+                d.get("inputSchema")
+                    .cloned()
+                    .unwrap_or(json!({"type": "object"})),
+            ))
+        })
+        .collect()
 }

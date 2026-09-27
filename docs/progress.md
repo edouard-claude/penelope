@@ -12,6 +12,81 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.12
+
+**Cache de prompt : la différence part en fin (#236).** Un banc de stabilité du cache
+(dix harnais, 27/09) montre que le meilleur ajoute la différence en fin quand le fichier
+d'instructions change. Chez Pénélope, un AGENTS.md, un index de skills ou un serveur MCP
+modifié pendant un cache chaud était caché au modèle (`stable_prefix` renvoyait l'ancien
+préfixe) jusqu'à la pause suivante, puis le prompt système entier repartait ; une skill
+chargée puis modifiée restait périmée dans l'historique, sans avis.
+
+- Le préfixe retenu part toujours inchangé ; le message qui suit le changement porte, dans
+  son contexte volatil, un bloc `<mise-a-jour>` : lignes retirées et ajoutées de chaque
+  tuile, la tuile dite réécrite au-delà de 1 500 caractères, les skills chargées dont le
+  corps a changé (`skill_load` journalise `skill.loaded`). Une seule fois : la différence
+  est journalisée (`prompt.updated`) quand elle part avec son message, et la suivante ne
+  porte que ce qui est nouveau depuis.
+- Le préfixe et le volatil d'un tour quittent le daemon pour
+  `penelope_conversation::prefix` (`held_prefix`, `settle`).
+- Tests : `tiers::update` (différence, seuil, lignes vides), `prefix::tests` (envoyée une
+  fois, incrémentale, attend un message, skill modifiée), scénario `prefixe-mise-a-jour`
+  (trois appels, un seul `system_hash`, un seul `tools_hash`) ; `outils-skills` régénéré
+  pour `skill.loaded`.
+
+**Cache de prompt : la liste d'outils ne bouge qu'à une frontière (#236).** Un outil natif
+décrit ou appelé entrait dans la liste au tour suivant et en sortait après dix tours sans
+usage ; chez Anthropic les outils précèdent le prompt système, chaque entrée ou sortie
+cassait tout le cache. `apply_promotions` (outils MCP marqués, « à la frontière de
+compaction ») n'était appelée que par des tests.
+
+- La liste d'un tour de conversation se calcule à une frontière (premier tour, pause plus
+  longue que le cache, compaction : la même que le préfixe), puis est resservie telle
+  quelle (`penelope_app::frozen_tools`, `tools_on_demand::turn_tools`). Entre deux
+  frontières, `tool_call` atteint l'outil nouvellement décrit ; la tuile T1 le dit.
+- La publication d'un résumé applique les promotions MCP ; les outils promus des serveurs
+  actifs sans `eager_schemas` rejoignent la liste de chaque session à sa frontière suivante
+  (`McpGateway::promoted_tools`, même plafond d'octets que les schémas `eager`).
+- Tests : `the_tool_list_only_moves_at_a_boundary`,
+  `promoted_tools_follow_the_compaction_boundary`, promotion vérifiée dans
+  `manual_compaction_replaces_old_turns_with_a_summary`,
+  `a_turn_offers_the_core_then_what_the_session_discovered` (gelée à cache chaud, offerte
+  après la pause) ; scénario `outils-geles` (`tool_describe` puis `tool_call` sur trois tours
+  chauds : un seul `tools_hash`, le second après la pause). Les scénarios dont un outil
+  entrait au tour suivant (`outils-planification`, `outils-memoire`, `outils-soi`…) sont
+  régénérés : l'outil n'entre plus à cache chaud ; `rpc-sessions` ne relève plus la clé
+  gelée.
+
+**Cache de prompt : le résumé relit le préfixe de la conversation (#236).** L'appel de
+résumé avait son propre système, aucun outil, la conversation rendue en un message, souvent
+un autre modèle : tout était relu au prix fort (rôle `compaction` : 110 appels, 5 % de
+cache depuis le 13/09).
+
+- Nouvelle clé `context.compaction_on_prefix` (`auto`, `always`, `never`). Sur le préfixe,
+  la demande reprend la dernière requête de la conversation (modèle du dernier appel,
+  préfixe retenu, liste gelée, historique projeté, même `tool_choice`) et ajoute la
+  consigne de résumé en dernier message, portée repérée par le début du dernier message
+  du lot. Pas de tentative sans préfixe chaud ni liste gelée, sur un modèle de l'abonnement
+  ChatGPT, sur un dépassement prouvé, si la projection ne tient pas, ni au-delà du premier
+  lot ; un échec (sortie invalide, appel d'outil) passe la main au résumeur, et le bilan le
+  dit. L'usage du résumé garde `system_hash` et `tools_hash`.
+- Défaut `auto` : le modèle de conversation coûte plus cher par jeton que celui de
+  `compaction`, mais relu au prix du cache ; `auto` compare les deux estimations aux prix du
+  catalogue (préfixe au prix du cache, lot du résumeur au prix plein, 4 000 tokens de sortie
+  des deux côtés) et garde le résumeur quand un prix manque. Avec un grand modèle cher en
+  sortie, le résumeur reste choisi ; avec `main` = `deepseek-v4-pro` et un cache chaud, le
+  préfixe l'emporte dès que la conversation est longue. `always` sert au banc et aux
+  scénarios.
+- Tests : `a_summary_reads_the_conversation_prefix` (préfixe identique, empreintes égales),
+  `a_failed_prefix_summary_falls_back_to_the_summarizer`,
+  `auto_without_prices_keeps_the_summarizer`, `auto_picks_the_cheaper_call` ; scénario
+  `compaction-sur-le-prefixe` (un seul `system_hash` et `tools_hash` pour la conversation et
+  le résumé).
+- Reste à mesurer sur l'instance : `cacheRatio` du rôle `compaction` avant et après
+  (`penelope usage --by role`).
+
+Closes #236.
+
 ### 1.0.11
 
 **Mémoire : « Retiens que… » reste la parole du propriétaire sans citation mot pour mot

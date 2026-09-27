@@ -430,6 +430,32 @@ async fn tool_policy_and_eager_schemas_come_from_the_declaration() {
     assert_eq!(eager, vec!["mcp__a__create_issue", "mcp__a__list_issues"]);
 }
 
+/// #236 : un outil marqué n'est exposé d'office qu'après `apply_promotions` (frontière
+/// de compaction), et seulement pour un serveur actif sans `eager_schemas`.
+#[tokio::test]
+async fn promoted_tools_follow_the_compaction_boundary() {
+    let (_d, s, _c, fake, sup) = setup().await;
+    fake.serve("a", server(two_tools()));
+    declare(&sup, "a", "");
+    sup.reload().await;
+    s.mcp_tools
+        .mark_for_promotion(&["mcp__a__list_issues".to_string()]);
+    assert!(
+        sup.promoted_tools().await.is_empty(),
+        "pas avant la frontière"
+    );
+    s.mcp_tools.apply_promotions();
+    let promoted = sup.promoted_tools().await;
+    assert_eq!(promoted.len(), 1);
+    assert_eq!(promoted[0].name, "mcp__a__list_issues");
+    assert!(
+        promoted[0].description.contains("description non vérifiée"),
+        "{}",
+        promoted[0].description
+    );
+    assert!(sup.eager_tools().await.is_empty());
+}
+
 /// T25 : le superviseur est à la fois la passerelle des outils MCP (`McpGateway`) et
 /// l'administration des serveurs (`McpAdmin`) : le daemon ne connaît que ces deux ports.
 #[test]
