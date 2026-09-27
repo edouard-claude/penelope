@@ -23,8 +23,12 @@ La 1.0.0-rc.1 a été installée sur l'instance réelle le 27/09 par `penelope u
 binaire re-signé « Penelope Dev », redémarrage confirmé, Telegram en écoute,
 `history verify` sans divergence sur 70 sessions. La 1.0.0 est le même code.
 
-- Scénario `outils-soi` : l'attendu suit la longueur du numéro de version (`tokens_est`
-  est estimé sur le texte brut), régénéré.
+- Scénarios : la version du workspace n'est plus remplacée que là où elle désigne
+  Pénélope (`v1.0.0` d'un lien, « version 1.0.0 », champs `version` et `current` hors
+  définition de skill ou de workflow). En 1.0.0, le remplacement aveugle prenait aussi le
+  `version = "1.0.0"` des skills et workflows (quatre scénarios rouges). Un `tokens_est`
+  voisin de la version est masqué : il changeait avec la longueur du numéro à chaque bump
+  (cause du rouge de `outils-soi` après la rc.1).
 
 ### 1.0.0-rc.1
 
