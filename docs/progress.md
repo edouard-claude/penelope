@@ -12,6 +12,20 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.0
+
+La V1. Même comportement pour le propriétaire que la 0.17.62, code réorganisé : 27 crates,
+architecture hexagonale tenue par `penelope-archtest`, journal d'événements comme source
+unique de vérité (décision 0017), un scénario rejouable par commande Telegram, outil natif
+et méthode RPC. Le détail est dans les sections `1.0.0-alpha.1` à `1.0.0-rc.1` ci-dessous.
+
+La 1.0.0-rc.1 a été installée sur l'instance réelle le 27/09 par `penelope upgrade --tag` :
+binaire re-signé « Penelope Dev », redémarrage confirmé, Telegram en écoute,
+`history verify` sans divergence sur 70 sessions. La 1.0.0 est le même code.
+
+- Scénario `outils-soi` : l'attendu suit la longueur du numéro de version (`tokens_est`
+  est estimé sur le texte brut), régénéré.
+
 ### 1.0.0-rc.1
 
 La V1 passe sur `main` (PR #226, épopée #208). Aucun changement de comportement depuis la
