@@ -12,6 +12,17 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.0-rc.1
+
+La V1 passe sur `main` (PR #226, épopée #208). Aucun changement de comportement depuis la
+1.0.0-alpha.18, en service sur l'instance réelle depuis le 26/09 : 0 erreur au journal,
+consolidation nocturne passée, `history verify` à 0 divergence. Cette version exerce le
+chemin de publication : tag posé par `livraison`, release autorisée par `V1_RELEASES=1`,
+installation par `penelope upgrade --tag v1.0.0-rc.1`.
+
+- La CI refuse une version 0.x sur `main` ; la 0.17 vit sur la branche `0.17`.
+- Les notes de la série 0.17 sont archivées dans [progress-0.17.md](progress-0.17.md).
+
 ### 1.0.0-alpha.18
 
 La clôture de la V1 avant la bascule : les critères mesurables de `scripts/switch-check.sh`
