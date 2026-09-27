@@ -158,9 +158,17 @@ async fn manual_compaction_replaces_old_turns_with_a_summary() {
     let (_dir, d, p) = context().await;
     let sid = long_session(&d).await;
     p.reply(SUMMARY);
+    // Un outil MCP marqué en cours de session attend la frontière (§8.9, #236).
+    let marked = "mcp__compta__list_invoices".to_string();
+    d.services.mcp_tools.mark_for_promotion(std::slice::from_ref(&marked));
 
     let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
     assert_eq!(r.published, 1, "{r:?}");
+    assert_eq!(
+        d.services.mcp_tools.sticky_set(),
+        [marked],
+        "promu à la frontière"
+    );
     assert!(r.messages > 10 && r.tokens_src > 0 && r.tokens_summary > 0);
     assert!(r.skipped.is_none());
     assert!(report_text(&r).contains("messages résumés"));

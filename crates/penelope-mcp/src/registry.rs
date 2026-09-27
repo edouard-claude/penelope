@@ -139,6 +139,33 @@ impl RegisteredTool {
             "schemaTruncated": self.schema_bytes > max_bytes,
         })
     }
+
+    /// [`Self::describe`] pour un outil exposé d'office au modèle (`eager`, promu) : la
+    /// description dit d'où elle vient, et disparaît si le détecteur y voit une consigne
+    /// (#92).
+    pub fn exposed(&self, max_bytes: usize) -> Value {
+        let mut d = self.describe(max_bytes);
+        let flags = self.flags();
+        d["description"] = json!(if flags.is_empty() {
+            format!(
+                "[outil du serveur MCP `{}`, description non vérifiée] {}",
+                self.server, self.description
+            )
+        } else {
+            // Les motifs seulement : l'extrait redirait la consigne.
+            let rules: Vec<&str> = flags
+                .iter()
+                .map(|f| f.split(" «").next().unwrap_or(f))
+                .collect();
+            format!(
+                "[description de `{}` retirée : le détecteur local de Pénélope y a vu une \
+                 consigne ({})]",
+                self.server,
+                rules.join(", ")
+            )
+        });
+        d
+    }
 }
 
 /// Descriptions des propriétés d'un schéma, à toute profondeur.
@@ -505,28 +532,7 @@ impl ToolRegistry {
                     let rows = st.query_map([s], row_to_tool)?;
                     for r in rows {
                         let t = r?;
-                        let mut d = t.describe(per_schema);
-                        // Exposée d'office au modèle : la description dit d'où elle vient, et
-                        // disparaît si le détecteur y voit une consigne (#92).
-                        let flags = t.flags();
-                        d["description"] = json!(if flags.is_empty() {
-                            format!(
-                                "[outil du serveur MCP `{}`, description non vérifiée] {}",
-                                t.server, t.description
-                            )
-                        } else {
-                            // Les motifs seulement : l'extrait redirait la consigne.
-                            let rules: Vec<&str> = flags
-                                .iter()
-                                .map(|f| f.split(" «").next().unwrap_or(f))
-                                .collect();
-                            format!(
-                                "[description de `{}` retirée : le détecteur local de \
-                                 Pénélope y a vu une consigne ({})]",
-                                t.server,
-                                rules.join(", ")
-                            )
-                        });
+                        let d = t.exposed(per_schema);
                         let size = d.to_string().len();
                         if total + size > total_max {
                             return Ok(out);
@@ -534,6 +540,46 @@ impl ToolRegistry {
                         total += size;
                         out.push(d);
                     }
+                }
+                Ok(out)
+            })
+            .await
+    }
+
+    /// Schémas des outils promus (ensemble collant) des serveurs `servers`, sous le même
+    /// plafond global que les schémas `eager` (§8.9) : exposés d'office à partir de la
+    /// frontière qui suit leur promotion (`apply_promotions`, #236).
+    pub async fn promoted_schemas(&self, servers: &[String]) -> penelope_store::Result<Vec<Value>> {
+        let wanted: Vec<String> = self
+            .sticky_set()
+            .into_iter()
+            .filter(|q| {
+                servers
+                    .iter()
+                    .any(|s| q.starts_with(&format!("mcp__{s}__")))
+            })
+            .collect();
+        let per_schema = self.schema_max_bytes;
+        let total_max = self.eager_total_max;
+        self.store
+            .read(move |c| {
+                let (mut out, mut total) = (Vec::new(), 0usize);
+                for q in &wanted {
+                    let mut st = c.prepare(
+                        "SELECT qualified, server, name, title, description, input_schema,
+                                output_schema, annotations, risk, schema_bytes
+                         FROM mcp_tools WHERE qualified = ?1",
+                    )?;
+                    let Some(t) = st.query_map([q], row_to_tool)?.next().transpose()? else {
+                        continue;
+                    };
+                    let d = t.exposed(per_schema);
+                    let size = d.to_string().len();
+                    if total + size > total_max {
+                        break;
+                    }
+                    total += size;
+                    out.push(d);
                 }
                 Ok(out)
             })

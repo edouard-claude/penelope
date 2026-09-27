@@ -1,0 +1,35 @@
+name = "outils-geles"
+description = """Liste d'outils gelée entre deux frontières (#236). Au premier tour, le modèle
+décrit `intent_list`, un outil natif à la demande : il n'entre pas dans la liste des trois
+tours suivants, joués à cache chaud (un seul `tools_hash`), et le modèle l'atteint par
+`tool_call` en attendant. Après une pause plus longue que le cache, la frontière le fait
+entrer : une seconde liste, un second `tools_hash`."""
+pin_model = "main"
+
+[[steps]]
+kind = "message"
+text = "quelles intentions sont armées ?"
+
+[[steps]]
+kind = "message"
+text = "et maintenant ?"
+
+[[steps]]
+kind = "message"
+text = "merci"
+
+[[steps]]
+kind = "message"
+text = "rien d'autre"
+
+[[steps]]
+kind = "advance_clock"
+by = "10m"
+
+[[steps]]
+kind = "message"
+text = "on reprend"
+
+[[observe]]
+name = "cache"
+sql = "SELECT role, COUNT(*) AS calls, COUNT(DISTINCT system_hash) AS prefixes, COUNT(DISTINCT tools_hash) AS tool_lists FROM usage GROUP BY role ORDER BY role"

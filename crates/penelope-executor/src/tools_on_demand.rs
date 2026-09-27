@@ -4,10 +4,14 @@
 //!  tour N    : noyau (17) + méta-outils (3)        ← « Merci » ne paie que ça
 //!              tool_search "planifier" → schedule_create
 //!              tool_describe / tool_call schedule_create   ── marqué pour la session
-//!  tour N+1  : noyau + méta-outils + schedule_create        ── appel direct possible
+//!  frontière : noyau + méta-outils + schedule_create        ── appel direct possible
 //!  …
 //!  tour N+11 : sans usage depuis 10 tours, schedule_create sort de la liste
 //! ```
+//!
+//! La liste ne change qu'à une frontière de cache (issue #236, [`turn_tools`]) : un outil
+//! découvert y entre, un outil oublié en sort, à la première pause plus longue que le
+//! cache ou à la compaction suivante ; d'ici là, `tool_call` l'atteint.
 
 use penelope_app::services::Services;
 use std::collections::BTreeMap;
@@ -43,8 +47,9 @@ async fn update<R: Send + 'static>(
         .flatten()
 }
 
-/// Un outil à la demande vient d'être décrit ou appelé : il est exposé directement aux
-/// tours suivants de la session, et son compteur d'inactivité repart de zéro.
+/// Un outil à la demande vient d'être décrit ou appelé : il est exposé directement à la
+/// session à partir de sa prochaine frontière ([`turn_tools`]), et son compteur
+/// d'inactivité repart de zéro.
 pub async fn touch(s: &Services, session_id: &str, tool: &str) {
     if session_id.is_empty() || !penelope_tools::is_on_demand(tool) {
         return;
@@ -73,6 +78,35 @@ pub async fn exposed_for_turn(s: &Services, session_id: &str) -> Vec<String> {
     })
     .await
     .unwrap_or_default()
+}
+
+/// Outils offerts à un tour de conversation : le noyau, les outils à la demande
+/// découverts par la session (#104), les outils MCP `eager` et promus. Hors frontière
+/// (`boundary` faux : cache chaud, préfixe retenu), la liste gelée au dernier passage est
+/// resservie telle quelle (#236) : chez Anthropic les outils précèdent le prompt système,
+/// une entrée ou une sortie casserait tout le cache. Les compteurs d'inactivité avancent
+/// à chaque tour.
+pub async fn turn_tools(
+    s: &Services,
+    session_id: &str,
+    mcp: Option<&dyn penelope_app::ports::McpGateway>,
+    boundary: bool,
+) -> Vec<penelope_llm::ToolDef> {
+    let discovered = exposed_for_turn(s, session_id).await;
+    if !boundary && let Some(tools) = penelope_app::frozen_tools::frozen(s, session_id).await {
+        return tools;
+    }
+    let mut tools = crate::executor::chat_tool_defs(&discovered);
+    if let Some(m) = mcp {
+        tools.extend(m.eager_tools().await);
+        for t in m.promoted_tools().await {
+            if !tools.iter().any(|d| d.name == t.name) {
+                tools.push(t);
+            }
+        }
+    }
+    penelope_app::frozen_tools::freeze(s, session_id, &tools).await;
+    tools
 }
 
 #[cfg(test)]
@@ -110,6 +144,32 @@ mod tests {
         // Tour 11 : `schedule_create` sort, `git_status` (touché au tour 5) reste.
         assert_eq!(exposed_for_turn(&s, "s1").await, ["git_status"]);
         assert!(exposed_for_turn(&s, "s2").await.is_empty(), "par session");
+    }
+
+    /// #236 : un outil décrit entre deux frontières n'entre pas dans la liste ; il y
+    /// entre à la frontière suivante, et un outil oublié n'en sort qu'à une frontière.
+    #[tokio::test]
+    async fn the_tool_list_only_moves_at_a_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
+        let s = Services::for_tests(dir.path().to_path_buf(), clock)
+            .await
+            .unwrap();
+        let names = |tools: &[penelope_llm::ToolDef]| -> Vec<String> {
+            tools.iter().map(|t| t.name.clone()).collect()
+        };
+        let first = turn_tools(&s, "s1", None, true).await;
+        touch(&s, "s1", "schedule_create").await;
+        for _ in 0..3 {
+            assert_eq!(turn_tools(&s, "s1", None, false).await, first, "gelée");
+        }
+        let after = turn_tools(&s, "s1", None, true).await;
+        assert!(names(&after).contains(&"schedule_create".to_string()));
+        // Oublié après dix tours sans usage, mais resservi tant que le cache est chaud.
+        for _ in 0..FORGET_AFTER {
+            assert_eq!(turn_tools(&s, "s1", None, false).await, after);
+        }
+        assert_eq!(turn_tools(&s, "s1", None, true).await, first);
     }
 
     /// Des lectures d'outils à la demande dans un même lot partent en parallèle (#85) :

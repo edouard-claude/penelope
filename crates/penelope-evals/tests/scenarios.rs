@@ -97,6 +97,7 @@ scenario_cases! {
     outils_sous_agent => "outils-sous-agent",
     // Cache de prompt (#236) : différence en fin, liste d'outils gelée, compaction.
     prefixe_mise_a_jour => "prefixe-mise-a-jour",
+    outils_geles => "outils-geles",
     // Les quatre dernières méthodes RPC, contre l'hôte masqué et un faux serveur local.
     rpc_diagnostic => "rpc-diagnostic",
     rpc_autorisation_mcp => "rpc-autorisation-mcp",

@@ -335,7 +335,8 @@ impl TiersBuilder {
                 "Hors de ta liste d'outils pour alléger chaque appel : {}. `tool_search` les \
                  trouve par ce qu'ils font, `tool_describe` donne leur schéma, `tool_call` les \
                  appelle (même approbation qu'un appel direct) ; un outil décrit ou appelé \
-                 rejoint ta liste pour les tours suivants.\n",
+                 rejoint ta liste après la prochaine pause ou compaction, d'ici là passe par \
+                 `tool_call`.\n",
                 self.on_demand
                     .iter()
                     .map(|n| format!("`{n}`"))

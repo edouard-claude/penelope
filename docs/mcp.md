@@ -162,15 +162,18 @@ trois méta-outils, et découvre le reste à la demande.
 Les mêmes méta-outils mènent aux outils natifs rares (planification, git, skills,
 intentions, gestion des workflows), sortis de la liste de chaque appel de conversation
 pour la garder sous 20 définitions : voir « Outils natifs » dans
-[install-headless.md](install-headless.md#outils-natifs). Contrairement à la promotion
-MCP ci-dessous, un outil natif décrit ou appelé rejoint la liste dès le tour suivant : la
-liste change à son arrivée et à son départ (dix tours sans usage), deux préfixes non
-cachés au lieu de 3 000 tokens de schémas payés à chaque appel.
+[install-headless.md](install-headless.md#outils-natifs). Un outil natif décrit ou appelé
+rejoint la liste de la session, et un outil sans usage depuis dix tours la quitte, à la
+frontière suivante seulement : une pause plus longue que le cache ou une compaction. Entre
+deux frontières, la liste est gelée (#236) ; chez Anthropic les outils précèdent le prompt
+système, et chaque entrée ou sortie casserait tout le cache. D'ici là, `tool_call` atteint
+l'outil.
 
 Un outil réellement utilisé est marqué pour promotion dans l'ensemble « collant », qui
-sera injecté directement au prompt. La promotion ne prend effet **qu'à une frontière de
-compaction** : promouvoir en cours de session casserait le préfixe stable et donc le
-cache du fournisseur. C'est l'unique moment où la liste d'outils change.
+sera injecté directement dans la liste d'outils. La promotion ne prend effet **qu'à une
+frontière de compaction** (`apply_promotions`, à la publication d'un résumé) ; chaque
+session expose ensuite les outils promus à sa propre frontière suivante, avec les schémas
+`eager`, sous le même plafond d'octets.
 
 `eager_schemas = true` force les schémas d'un petit serveur critique en tuile T1, sous un
 plafond global d'octets.

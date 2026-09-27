@@ -34,6 +34,29 @@ chargée puis modifiée restait périmée dans l'historique, sans avis.
   (trois appels, un seul `system_hash`, un seul `tools_hash`) ; `outils-skills` régénéré
   pour `skill.loaded`.
 
+**Cache de prompt : la liste d'outils ne bouge qu'à une frontière (#236).** Un outil natif
+décrit ou appelé entrait dans la liste au tour suivant et en sortait après dix tours sans
+usage ; chez Anthropic les outils précèdent le prompt système, chaque entrée ou sortie
+cassait tout le cache. `apply_promotions` (outils MCP marqués, « à la frontière de
+compaction ») n'était appelée que par des tests.
+
+- La liste d'un tour de conversation se calcule à une frontière (premier tour, pause plus
+  longue que le cache, compaction : la même que le préfixe), puis est resservie telle
+  quelle (`penelope_app::frozen_tools`, `tools_on_demand::turn_tools`). Entre deux
+  frontières, `tool_call` atteint l'outil nouvellement décrit ; la tuile T1 le dit.
+- La publication d'un résumé applique les promotions MCP ; les outils promus des serveurs
+  actifs sans `eager_schemas` rejoignent la liste de chaque session à sa frontière suivante
+  (`McpGateway::promoted_tools`, même plafond d'octets que les schémas `eager`).
+- Tests : `the_tool_list_only_moves_at_a_boundary`,
+  `promoted_tools_follow_the_compaction_boundary`, promotion vérifiée dans
+  `manual_compaction_replaces_old_turns_with_a_summary`,
+  `a_turn_offers_the_core_then_what_the_session_discovered` (gelée à cache chaud, offerte
+  après la pause) ; scénario `outils-geles` (`tool_describe` puis `tool_call` sur trois tours
+  chauds : un seul `tools_hash`, le second après la pause). Les scénarios dont un outil
+  entrait au tour suivant (`outils-planification`, `outils-memoire`, `outils-soi`…) sont
+  régénérés : l'outil n'entre plus à cache chaud ; `rpc-sessions` ne relève plus la clé
+  gelée.
+
 Closes #236.
 
 ### 1.0.11

@@ -1,0 +1,7 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "tool_describe", "arguments": {"names": ["intent_list"]}}]}}
+{"text": "Je regarde avec intent_list."}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "tool_call", "arguments": {"name": "intent_list", "args": {}}}]}}
+{"text": "Aucune intention n'est armée."}
+{"text": "Avec plaisir."}
+{"text": "Entendu."}
+{"text": "On reprend."}
