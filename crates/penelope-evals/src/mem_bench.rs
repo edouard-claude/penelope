@@ -61,6 +61,11 @@ pub struct Fixture {
     pub attendu: Expected,
     #[serde(default)]
     pub questions: Vec<Question>,
+    /// Réponses du propriétaire aux cartes de contradiction que la passe pose, dans
+    /// l'ordre : `remplacer`, `exception` ou `ignorer`. Une préférence du profil ne se
+    /// remplace plus sans lui (issue #224) : le jeu dit ce qu'il répond.
+    #[serde(default)]
+    pub cartes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -253,6 +258,39 @@ pub async fn seed(d: &Arc<Daemon>, f: &Fixture) {
         .await
         .expect("candidats");
     }
+}
+
+/// Répond aux cartes de contradiction posées par la passe, comme le propriétaire
+/// (`cartes` du jeu), par le même chemin que les boutons. Renvoie le nombre de cartes
+/// répondues.
+pub async fn answer_cards(d: &Arc<Daemon>, f: &Fixture) -> usize {
+    let s = &d.services;
+    let cards: Vec<_> = s
+        .approvals
+        .pending(100)
+        .await
+        .expect("cartes en attente")
+        .into_iter()
+        .filter(|a| a.payload["contradiction"] == true)
+        .collect();
+    for (card, answer) in cards.iter().zip(&f.cartes) {
+        let (action, decision) = match answer.as_str() {
+            "remplacer" => ("memory_accept", penelope_hitl::Decision::approve_once("bench")),
+            "exception" => (
+                "memory_as_exception",
+                penelope_hitl::Decision::approve_once("bench"),
+            ),
+            _ => ("memory_reject", penelope_hitl::Decision::deny("bench", None)),
+        };
+        s.approvals
+            .decide(card.id.as_str(), &decision)
+            .await
+            .expect("décision");
+        penelope_dream::ingest::apply_contradiction(&d.dream(), card.id.as_str(), action)
+            .await
+            .expect("réponse à la carte");
+    }
+    cards.len().min(f.cartes.len())
 }
 
 /// Réponse du modèle simulé : les candidats désignés par un extrait de leur texte

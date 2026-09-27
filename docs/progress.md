@@ -42,6 +42,10 @@ sans question, et l'heuristique ne voyait qu'une négation (« toujours » contr
   candidat du jour 1 : le critère passait à vide) ; le mardi, un fait, se cherche aussi
   dans `notes.md` et `entites/`. En échec, le dossier est gardé avec `preuves/`
   (réponses entières, digest, appels d'outils, événements de mémoire, cartes).
+- Banc `mem-bench`, jeu `style-de-reponse` : « désormais vouvoie-moi » remplaçait le
+  tutoiement en silence, c'était l'attendu ; le jeu dit maintenant ce que le propriétaire
+  répond à la carte (`cartes`, « remplacer »), et le banc le joue par le chemin des
+  boutons.
 
 Tests : `a_substituted_value_is_a_contradiction`,
 `a_substitution_needs_two_different_values_on_one_subject` (memory) ;

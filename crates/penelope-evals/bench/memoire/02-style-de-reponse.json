@@ -1,6 +1,6 @@
 {
   "id": "style-de-reponse",
-  "titre": "Préférence remplacée, préférence nouvelle, déduction non endossée, humeur du jour",
+  "titre": "Préférence remplacée après question, préférence nouvelle, déduction non endossée, humeur du jour",
   "vault": {
     "profil.md": "# Profil du propriétaire\n\n## Style\n- Toujours tutoyer le propriétaire <!-- depuis: 2026-05-02 --> ^01STYLETUTOI\n"
   },
@@ -37,6 +37,7 @@
     "perime": ["01STYLETUTOI"],
     "perime_textes": ["tutoyer"]
   },
+  "cartes": ["remplacer"],
   "questions": [
     {"question": "Faut-il tutoyer ou vouvoyer le propriétaire ?", "reponse": "vouvoyer"},
     {"question": "Quel format de réponse le propriétaire préfère-t-il ?", "reponse": "courtes"}
