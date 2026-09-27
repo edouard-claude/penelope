@@ -585,7 +585,10 @@ mod rewrite;
 pub mod seal;
 mod search;
 pub(crate) use dual::origin_in;
-pub use prompt::{KIND_SESSION_PROJECT, PREFIX_RELEASES};
+pub use prompt::{
+    Announced, KIND_PROMPT_UPDATED, KIND_SESSION_PROJECT, KIND_SKILL_LOADED, PREFIX_RELEASES,
+    PromptUpdated,
+};
 pub use purge::CachesPurged;
 pub use rewrite::Rewound;
 pub(crate) use rewrite::mark_compacted_in;

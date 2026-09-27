@@ -238,6 +238,14 @@ pub enum Step {
         #[serde(default)]
         bind: Option<String>,
     },
+    /// Écrit un fichier entre deux étapes, comme le propriétaire le ferait à la main
+    /// (AGENTS.md modifié en cours de session, #236) ; mêmes racines que `[[files]]`.
+    File {
+        path: String,
+        content: String,
+        #[serde(default)]
+        root: SeedRoot,
+    },
     /// Sème `exchanges` échanges dans l'historique, sans appel au modèle. `{i}` et
     /// `{filler}` sont remplacés ; `tokens` est la taille déclarée de chaque message.
     Seed {
@@ -309,6 +317,7 @@ impl Step {
             Step::Approve => "approbation".into(),
             Step::Usage { prompt } => format!("dernier appel facturé : {prompt} tokens"),
             Step::Seed { exchanges, .. } => format!("historique semé : {exchanges} échanges"),
+            Step::File { path, .. } => format!("fichier écrit : {path}"),
             Step::Rpc { method, .. } => format!("rpc : {method}"),
             Step::Open { url, .. } => format!("navigateur : {url}"),
         }

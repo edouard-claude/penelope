@@ -161,23 +161,26 @@ impl Harness<'_> {
     }
 
     fn seed_files(&self, services: &Services) -> anyhow::Result<()> {
-        let workspace = workspace_of(services);
-        let vault = penelope_app::helpers::vault_dir(services);
-        let skills = services.platform.dirs.skills();
         for f in &self.spec.files {
-            let root = match f.root {
-                SeedRoot::Workspace => &workspace,
-                SeedRoot::Vault => &vault,
-                SeedRoot::Skills => &skills,
-            };
-            let path = root.join(&f.path);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&path, f.content.repeat(f.repeat.max(1)))
-                .with_context(|| format!("fichier semé {}", path.display()))?;
+            write_under(
+                services,
+                f.root,
+                &f.path,
+                &f.content.repeat(f.repeat.max(1)),
+            )?;
         }
         Ok(())
+    }
+
+    /// Étape `file` : un fichier écrit entre deux étapes.
+    pub(super) fn write_file(
+        &self,
+        root: SeedRoot,
+        path: &str,
+        content: &str,
+    ) -> anyhow::Result<Value> {
+        write_under(&*self.services()?, root, path, content)?;
+        Ok(json!({"path": path, "bytes": content.len()}))
     }
 
     /// Le fournisseur de la vie : mock qui rejoue le script, ou enregistreur autour du
@@ -583,4 +586,23 @@ impl Provider for Recorder {
     ) -> penelope_llm::types::Result<Vec<u8>> {
         self.inner(model)?.speak(model, input, voice, format).await
     }
+}
+
+/// Écrit `content` sous la racine d'un fichier semé (workspace, vault, skills).
+fn write_under(
+    services: &Services,
+    root: SeedRoot,
+    path: &str,
+    content: &str,
+) -> anyhow::Result<()> {
+    let root = match root {
+        SeedRoot::Workspace => workspace_of(services),
+        SeedRoot::Vault => penelope_app::helpers::vault_dir(services),
+        SeedRoot::Skills => services.platform.dirs.skills(),
+    };
+    let path = root.join(path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, content).with_context(|| format!("fichier écrit {}", path.display()))
 }

@@ -19,9 +19,13 @@ n'existe plus ou un défaut qui a changé fait échouer le test.
 Le préfixe ne change pas en cours de conversation (décision
 [0008](decisions/0008-cache-de-prompt.md)) : un souvenir, une skill ou un serveur MCP
 ajoutés n'y entrent qu'après une pause plus longue que le cache (5 min) ou à la
-compaction suivante. Le contexte volatil est figé avec le message qu'il accompagne : un
-ancien message garde l'heure et le rappel de son tour, et rien ne bouge avant le dernier
-message. Les outils rares ne sont que nommés (voir « Outils natifs » dans
+compaction suivante. D'ici là, leur différence part en fin, une seule fois, dans le
+contexte volatil du message qui suit : un bloc `<mise-a-jour>` avec les lignes retirées et
+ajoutées de chaque tuile (AGENTS.md, index des skills, serveurs MCP), ou la tuile dite
+réécrite au-delà de 1 500 caractères, et les skills chargées dont le corps a changé depuis
+(événement `prompt.updated`, #236). Le contexte volatil est figé avec le message qu'il
+accompagne : un ancien message garde l'heure et le rappel de son tour, et rien ne bouge
+avant le dernier message. Les outils rares ne sont que nommés (voir « Outils natifs » dans
 [install-headless.md](install-headless.md#outils-natifs)).
 
 ## Les chiffres par fenêtre

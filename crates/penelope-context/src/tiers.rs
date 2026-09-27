@@ -11,6 +11,8 @@
 //! Invariant vérifié par le CA 5 : **le préfixe T0 à T2 est identique octet pour octet**
 //! entre deux tours consécutifs sans action utilisateur.
 
+pub mod update;
+
 use penelope_kernel::canonical::sha256_hex;
 pub use penelope_kernel::journal::{Tile, TileMap};
 use penelope_llm::types::{ChatMessage, Content, Role};

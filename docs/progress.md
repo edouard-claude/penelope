@@ -12,6 +12,30 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.9
+
+**Cache de prompt : la différence part en fin (#236).** Un banc de stabilité du cache
+(dix harnais, 27/09) montre que le meilleur ajoute la différence en fin quand le fichier
+d'instructions change. Chez Pénélope, un AGENTS.md, un index de skills ou un serveur MCP
+modifié pendant un cache chaud était caché au modèle (`stable_prefix` renvoyait l'ancien
+préfixe) jusqu'à la pause suivante, puis le prompt système entier repartait ; une skill
+chargée puis modifiée restait périmée dans l'historique, sans avis.
+
+- Le préfixe retenu part toujours inchangé ; le message qui suit le changement porte, dans
+  son contexte volatil, un bloc `<mise-a-jour>` : lignes retirées et ajoutées de chaque
+  tuile, la tuile dite réécrite au-delà de 1 500 caractères, les skills chargées dont le
+  corps a changé (`skill_load` journalise `skill.loaded`). Une seule fois : la différence
+  est journalisée (`prompt.updated`) quand elle part avec son message, et la suivante ne
+  porte que ce qui est nouveau depuis.
+- Le préfixe et le volatil d'un tour quittent le daemon pour
+  `penelope_conversation::prefix` (`held_prefix`, `settle`).
+- Tests : `tiers::update` (différence, seuil, lignes vides), `prefix::tests` (envoyée une
+  fois, incrémentale, attend un message, skill modifiée), scénario `prefixe-mise-a-jour`
+  (trois appels, un seul `system_hash`, un seul `tools_hash`) ; `outils-skills` régénéré
+  pour `skill.loaded`.
+
+Closes #236.
+
 ### 1.0.11
 
 **Mémoire : « Retiens que… » reste la parole du propriétaire sans citation mot pour mot

@@ -246,10 +246,10 @@ impl Daemon {
             tiers.volatile.push_str("\n\n");
             tiers.volatile.push_str(&block);
         }
-        // Cache de prompt (issue #17) : le contexte volatil reste avec son message, et un
-        // préfixe modifié attend que le cache soit froid.
-        crate::cache_audit::freeze_volatile(&s, &turn.session_id, &mut tiers).await?;
-        crate::cache_audit::stable_prefix(&s, &turn.session_id, &mut tiers).await?;
+        // Cache de prompt (issue #17, #236) : un préfixe modifié attend que le cache soit
+        // froid, sa différence part en fin, le contexte volatil reste avec son message.
+        let held = penelope_conversation::prefix::held_prefix(&s, &turn.session_id).await?;
+        penelope_conversation::prefix::settle(&s, &turn.session_id, held, &mut tiers).await?;
         // Un résumé prêt depuis le tour précédent (ou avant un redémarrage) est publié
         // avant de construire la projection.
         if let Err(e) =

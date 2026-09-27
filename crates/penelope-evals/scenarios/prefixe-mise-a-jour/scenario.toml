@@ -1,0 +1,34 @@
+name = "prefixe-mise-a-jour"
+description = """AGENTS.md modifié entre deux tours à cache chaud (#236). Le prompt système part
+inchangé (même `system_hash`, même liste d'outils) et le message suivant porte, dans son
+contexte volatil, un bloc `<mise-a-jour>` avec les lignes retirées et ajoutées ; la
+différence est journalisée (`prompt.updated`) et n'est envoyée qu'une fois : le troisième
+tour ne la répète pas."""
+pin_model = "main"
+
+[[files]]
+root = "vault"
+path = "AGENTS.md"
+content = "Réponds en français.\nLes tests passent avant tout commit.\n"
+
+[[steps]]
+kind = "message"
+text = "rappelle-moi la règle des commits"
+
+[[steps]]
+kind = "file"
+root = "vault"
+path = "AGENTS.md"
+content = "Réponds en anglais.\nLes tests passent avant tout commit.\n"
+
+[[steps]]
+kind = "message"
+text = "et maintenant ?"
+
+[[steps]]
+kind = "message"
+text = "merci"
+
+[[observe]]
+name = "cache"
+sql = "SELECT role, COUNT(*) AS calls, COUNT(DISTINCT system_hash) AS prefixes, COUNT(DISTINCT tools_hash) AS tool_lists FROM usage GROUP BY role ORDER BY role"

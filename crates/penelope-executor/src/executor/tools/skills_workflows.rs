@@ -64,6 +64,19 @@ impl NativeToolExecutor {
                         missing.join(", ")
                     ));
                 }
+                // Le corps lu reste dans l'historique : sa modification ultérieure sera
+                // dite au modèle (`<mise-a-jour>`, #236).
+                if !self.env.session_id.is_empty() {
+                    let loaded = json!({"name": sk.name, "body_hash": sk.body_hash});
+                    let draft = penelope_kernel::event::EventDraft::new(
+                        penelope_context::store::KIND_SKILL_LOADED,
+                        loaded,
+                    )
+                    .session(&self.env.session_id);
+                    if let Err(e) = s.events.append(draft).await {
+                        tracing::warn!(error = %e, "chargement de skill non journalisé");
+                    }
+                }
                 out
             }
             "skill_propose" | "skill_patch" => {
