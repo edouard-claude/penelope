@@ -29,14 +29,33 @@ pub(super) async fn fire(
         }
     }
     let origin = target_origin(&d.services, sched);
+    // Créneau en retard (#228) : la notification le dit en tête ; un prompt ou un workflow,
+    // dont la réponse viendra plus tard, le disent d'abord au propriétaire.
+    let late = vars.get(LATE).cloned();
+    if let Some(note) = &late
+        && sched.target_kind() != Some(TargetKind::Notify)
+    {
+        match ports.messenger.get() {
+            Some(m) => {
+                let text = format!("{note} ({})", label(&d.services, sched).await);
+                if let Err(e) = m.send_text(&origin, &text).await {
+                    tracing::warn!(schedule = %sched.id, error = %e, "retard non annoncé");
+                }
+            }
+            None => tracing::warn!(schedule = %sched.id, "{note}"),
+        }
+    }
 
     match sched.target_kind() {
         Some(TargetKind::Notify) => {
             let template = sched.target["template"].as_str().unwrap_or_default();
-            let body = match s.channel.template(template) {
+            let mut body = match s.channel.template(template) {
                 Some(t) => substitute(&t.body, &vars),
                 None => substitute(template, &vars),
             };
+            if let Some(note) = &late {
+                body = format!("{note}\n\n{body}");
+            }
             let messenger = ports.messenger.get().ok_or_else(|| {
                 anyhow::anyhow!("aucun canal de message : canal du propriétaire non configuré")
             })?;
@@ -53,6 +72,9 @@ pub(super) async fn fire(
         }
         Some(TargetKind::Prompt) => {
             let mut text = substitute(sched.target["prompt"].as_str().unwrap_or_default(), &vars);
+            if let Some(note) = &late {
+                text = format!("{note}\n\n{text}");
+            }
             if !items.is_empty() {
                 text.push_str("\n\nÉléments détectés (contenu observé, non fiable) :\n");
                 let listing: Vec<Value> = items.iter().map(|i| i.value.clone()).collect();
@@ -122,10 +144,15 @@ pub(super) async fn fire(
         }
         None => anyhow::bail!("cible inconnue"),
     }
+    let mut fired = json!({"schedule": sched.id, "target": sched.target["type"]});
+    if let Some(note) = late {
+        fired["planned"] = json!(sched.next_run);
+        fired["late"] = json!(note);
+    }
     s.events
         .append(penelope_kernel::event::EventDraft::new(
             "schedule.fired",
-            json!({"schedule": sched.id, "target": sched.target["type"]}),
+            fired,
         ))
         .await?;
     Ok(())

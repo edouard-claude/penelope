@@ -318,3 +318,18 @@ pub fn bounded_redacted(value: &Value) -> Value {
         cleaned
     }
 }
+
+// ---------------------------------------- Veille (#228)
+
+/// Assertion anti-veille (§2.8) tenue le temps d'un travail : tour, job d'outil, run de
+/// workflow. Le garde la relâche à sa destruction, sur erreur ou panique comme à la fin
+/// normale. Refusée par la plateforme, le travail continue sans elle.
+pub fn keep_awake(s: &Services, reason: &str) -> Option<penelope_platform::SleepGuard> {
+    match s.platform.power.prevent_sleep(reason) {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            tracing::warn!(reason, error = %e, "assertion anti-veille refusée");
+            None
+        }
+    }
+}

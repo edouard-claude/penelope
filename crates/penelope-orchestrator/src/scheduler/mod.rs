@@ -15,7 +15,8 @@
 //! ```
 //!
 //! Un schedule `once` (rappel daté) passe en `done` après son tir. Un tir manqué pendant
-//! un arrêt part une fois au redémarrage, jamais en rafale.
+//! un arrêt ou une veille part une fois au redémarrage ou au réveil, jamais en rafale, et
+//! dit l'heure à laquelle il était prévu (`wake.rs`, #228).
 
 use crate::workflow::Context;
 use penelope_app::bus::ChannelDelivery;
@@ -57,7 +58,10 @@ pub async fn scheduler_loop(d: Context, ports: Ports) {
     // La boîte de dépôt du vault passe à côté : une ingestion (résumé compris) ne doit pas
     // retarder un rappel.
     let inbox_busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut watch = WakeWatch::new(d.services.clock.now_ms());
     while !d.handle.is_shutting_down() {
+        // Au réveil, connexions vérifiées avant que rien ne parte (#228).
+        wake_check(&d, &ports, &mut watch).await;
         if !inbox_busy.swap(true, std::sync::atomic::Ordering::SeqCst) {
             let (d2, busy, messenger) = (d.clone(), inbox_busy.clone(), ports.messenger.clone());
             tokio::spawn(async move {
@@ -74,7 +78,7 @@ pub async fn scheduler_loop(d: Context, ports: Ports) {
         if let Err(e) = crons.await {
             tracing::warn!(error = %e, "consolidation ou digest programmés");
         }
-        match tick(&d, &ports).await {
+        match tick_after(&d, &ports, watch.last()).await {
             Ok(r) if !r.fired.is_empty() || !r.errors.is_empty() => {
                 tracing::info!(?r, "ordonnanceur")
             }
@@ -91,18 +95,32 @@ pub async fn scheduler_loop(d: Context, ports: Ports) {
 
 /// Un passage.
 pub async fn tick(d: &Context, ports: &Ports) -> anyhow::Result<TickReport> {
+    tick_after(d, ports, None).await
+}
+
+/// Un passage, `wake` : la dernière sortie de veille, qui explique un créneau en retard.
+pub async fn tick_after(
+    d: &Context,
+    ports: &Ports,
+    wake: Option<Wake>,
+) -> anyhow::Result<TickReport> {
     let s = &d.services;
     let mut report = TickReport {
         intents_expired: s.intents.expire_due().await?,
         ..Default::default()
     };
 
+    let tz = s.config.config().owner.timezone.clone();
     for sched in s.schedules.due().await? {
+        // Les créneaux manqués ne partent qu'une fois : le suivant se compte depuis
+        // maintenant. Le tir le dit, avec l'heure prévue (#228).
+        let mut vars = BTreeMap::new();
+        if let Some(late) = late_of(&sched, s.clock.now_ms(), &tz, wake) {
+            vars.insert(LATE.to_string(), late_text(&late, s.clock.now_ms(), &tz));
+        }
         let result = match sched.kind {
             TriggerKind::McpPoll => poll(d, ports, &sched).await,
-            _ => fire(d, ports, &sched, &[], &BTreeMap::new())
-                .await
-                .map(|_| true),
+            _ => fire(d, ports, &sched, &[], &vars).await.map(|_| true),
         };
         finish(d, ports, &sched, result, &mut report).await?;
     }
@@ -215,6 +233,7 @@ mod origin;
 mod outcome;
 mod templating;
 mod triggers;
+mod wake;
 pub use digest::{DigestFeed, digest_inputs};
 use fire::fire;
 pub use fire::{alert, create, label};
@@ -224,6 +243,8 @@ use outcome::{cancelled_triggers, save_state};
 pub use outcome::{final_already_sent, repeats, trigger_outcome, trigger_outcome_of};
 use templating::{items_lines, substitute, template_params, tool_payload};
 use triggers::{event, event_cursor, events_between, last_event_id, poll, watch_file};
+use wake::LATE;
+pub use wake::{Late, Wake, WakeWatch, health, late_of, late_text, wake_check};
 
 #[cfg(test)]
 mod tests;

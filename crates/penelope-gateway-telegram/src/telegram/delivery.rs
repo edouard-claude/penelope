@@ -41,6 +41,16 @@ impl ChannelDelivery for TelegramGateway {
         .map_err(|error| error.to_string())
     }
 
+    /// `getMe` : une requête neuve, qui ne dépend pas du long poll resté pendu pendant la
+    /// veille (#228).
+    async fn probe(&self) -> Result<(), String> {
+        self.bot
+            .get_me()
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("Telegram injoignable : {e}"))
+    }
+
     async fn schedule_alert(
         &self,
         origin: &Origin,

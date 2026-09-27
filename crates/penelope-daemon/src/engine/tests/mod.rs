@@ -1,11 +1,8 @@
 use super::*;
 
 use penelope_agent::Conversation;
-
 use penelope_kernel::clock::{Clock, TestClock};
-
 use penelope_llm::mock::{MockProvider, Scripted};
-
 use penelope_llm::types::ToolCall;
 
 mod attempts;

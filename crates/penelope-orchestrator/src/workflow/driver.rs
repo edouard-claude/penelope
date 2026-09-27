@@ -77,6 +77,9 @@ pub async fn drive(d: &Context, run_id: &str) -> anyhow::Result<RunState> {
     let Some(cancel) = d.workflows.claim(run_id) else {
         return Ok(RunState::Running);
     };
+    // La machine ne s'endort pas pendant qu'un run avance (#228) : l'assertion tombe dès
+    // qu'il attend, s'arrête ou finit.
+    let awake = penelope_app::helpers::keep_awake(&d.services, &format!("run {run_id}"));
     // Tout ce que le run journalise porte son identifiant (issue #103).
     let result = {
         use tracing::Instrument;
@@ -85,6 +88,7 @@ pub async fn drive(d: &Context, run_id: &str) -> anyhow::Result<RunState> {
             .await
     };
     d.workflows.release(run_id);
+    drop(awake);
     result
 }
 

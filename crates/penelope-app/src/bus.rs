@@ -100,6 +100,12 @@ pub trait ChannelDelivery: Send + Sync {
         Err("ce canal ne reçoit pas de planification".into())
     }
 
+    /// Le canal répond-il ? Sonde légère, appelée au réveil de la machine avant que les
+    /// créneaux en retard ne partent (#228). Par défaut : rien à vérifier.
+    async fn probe(&self) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Alerte d'une planification qui n'a pas pu s'exécuter, avec ses boutons (issue #39).
     async fn schedule_alert(
         &self,
