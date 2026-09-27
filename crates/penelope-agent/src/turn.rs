@@ -1,6 +1,8 @@
 //! Un tour, itération par itération.
 
+use super::attachments::{self, RejectedImages, owner_note};
 use super::attempts::{call_record, of_response};
+use super::model::CallFailure;
 use super::*;
 use penelope_app::attempts::{Attempt, AttemptCause};
 use penelope_kernel::journal::CallRecord;
@@ -23,8 +25,12 @@ impl AgentLoop {
         let mut empty_retry = false;
         // Les tentatives sans réponse du tour, hors historique (#206).
         let attempts = Attempts::default();
-        // Un dépassement de fenêtre prouvé a droit à une compaction, pas davantage.
-        let mut overflow_compacted = false;
+        // Reprises hors boucle : une compaction sur dépassement, une relance sans images.
+        let mut recovery = Recovery {
+            overflow_compacted: false,
+            rejected: attachments::load(s, &spec.session_id).await?,
+            dropped: None,
+        };
         // Messages du propriétaire arrivés pendant le tour (§3.4).
         let steering = Steering::new(self.inbox.as_deref());
 
@@ -94,6 +100,8 @@ impl AgentLoop {
             if let Some(prompt) = attempts.retry_prompt() {
                 messages.push(ChatMessage::user(prompt));
             }
+            // Les images déjà refusées ne repartent pas, dans ce tour ni les suivants (#231).
+            let sent_images = recovery.rejected.prepare(&mut messages);
             attempts.at_step(iteration + 1);
             // Empreinte et fournisseur amont collant : le cache de préfixe reste chaud et
             // un raté est expliqué (issue #17).
@@ -105,37 +113,14 @@ impl AgentLoop {
                 .await?
             {
                 Ok(r) => r,
-                Err(failure) if failure.context_length && !overflow_compacted => {
-                    overflow_compacted = true;
-                    match conv.compact_for_overflow().await {
-                        Ok(true) => {
-                            tracing::info!(
-                                session = %spec.session_id,
-                                "fenêtre dépassée : historique compacté, nouvel essai"
-                            );
-                            continue;
-                        }
-                        Ok(false) => {
-                            return Ok(TurnOutcome::Failed {
-                                error: failure.message,
-                            });
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                session = %spec.session_id,
-                                error = %e,
-                                "compaction sur dépassement impossible"
-                            );
-                            return Ok(TurnOutcome::Failed {
-                                error: failure.message,
-                            });
-                        }
-                    }
-                }
                 Err(failure) => {
-                    return Ok(TurnOutcome::Failed {
-                        error: failure.message,
-                    });
+                    match self
+                        .recover(spec, conv, failure, &mut recovery, sent_images)
+                        .await?
+                    {
+                        Some(outcome) => return Ok(outcome),
+                        None => continue,
+                    }
                 }
             };
 
@@ -201,6 +186,11 @@ impl AgentLoop {
             // 4. Pas d'appel d'outil : c'est la réponse finale.
             if response.message.tool_calls.is_empty() {
                 let mut text = response.message.text();
+                // L'image que le fournisseur a refusée n'a pas été lue : on le dit, hors
+                // historique.
+                if let Some(motif) = recovery.dropped {
+                    text.push_str(&owner_note(motif));
+                }
                 // Un tour coûteux le dit, sans que la mention entre dans l'historique.
                 if let Some(turn_id) = &spec.turn_id
                     && cfg.budget.show_turn_cost_usd > 0.0
@@ -225,6 +215,55 @@ impl AgentLoop {
         Ok(TurnOutcome::Failed {
             error: format!("{CALLS_EXHAUSTED} en {} itérations", self.max_iterations),
         })
+    }
+
+    /// Un appel au modèle a échoué : `None` si une reprise permet de reconstruire la
+    /// requête (compaction sur dépassement prouvé, relance sans les images refusées),
+    /// chacune une fois par tour ; sinon l'échec du tour.
+    async fn recover(
+        &self,
+        spec: &TurnSpec,
+        conv: &dyn Conversation,
+        failure: CallFailure,
+        recovery: &mut Recovery,
+        sent_images: Vec<String>,
+    ) -> anyhow::Result<Option<TurnOutcome>> {
+        if failure.context_length && !recovery.overflow_compacted {
+            recovery.overflow_compacted = true;
+            match conv.compact_for_overflow().await {
+                Ok(true) => {
+                    tracing::info!(
+                        session = %spec.session_id,
+                        "fenêtre dépassée : historique compacté, nouvel essai"
+                    );
+                    return Ok(None);
+                }
+                Ok(false) => {}
+                Err(e) => tracing::warn!(
+                    session = %spec.session_id,
+                    error = %e,
+                    "compaction sur dépassement impossible"
+                ),
+            }
+        }
+        if let Some(motif) = failure.attachment
+            && recovery.dropped.is_none()
+            && attachments::reject(
+                &self.services,
+                spec,
+                &mut recovery.rejected,
+                sent_images,
+                motif,
+                &failure.message,
+            )
+            .await?
+        {
+            recovery.dropped = Some(motif);
+            return Ok(None);
+        }
+        Ok(Some(TurnOutcome::Failed {
+            error: failure.message,
+        }))
     }
 
     /// L'appel entre au budget, avec son empreinte et la cause d'un raté de cache.
@@ -383,4 +422,14 @@ impl AgentLoop {
             ),
         }))
     }
+}
+
+/// Les reprises d'un tour, chacune permise une fois.
+struct Recovery {
+    /// Un dépassement de fenêtre prouvé a droit à une compaction, pas davantage.
+    overflow_compacted: bool,
+    /// Les images refusées de la session, retirées de chaque requête.
+    rejected: RejectedImages,
+    /// Le motif du refus d'image de ce tour, dit au propriétaire sous la réponse.
+    dropped: Option<&'static str>,
 }

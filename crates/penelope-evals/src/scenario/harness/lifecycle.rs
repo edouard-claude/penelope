@@ -79,6 +79,12 @@ impl Harness<'_> {
                 .context("services de test")?,
         );
         self.db = Some(services.store.path().to_path_buf());
+        for id in &self.spec.vision_models {
+            let bare = penelope_llm::catalog::strip_provider(id);
+            let mut model = ModelInfo::minimal(bare, "openrouter", 128_000);
+            model.input_modalities = vec!["text".into(), "image".into()];
+            services.catalog.upsert(vec![model]);
+        }
         let daemon = Arc::new(Daemon::from_services(services.clone()));
         // L'orchestrateur, comme au démarrage du superviseur : planification, workflows,
         // sous-agents, images et embeddings passent par lui.

@@ -123,6 +123,15 @@ impl<'a> Fold<'a> {
                     self.surface.merge_note = false;
                     self.surface.attempts_tail = None;
                 }
+                // Pas un contenu : les images restent dans la surface, la requête dérivée
+                // les remplace par leur mention (#231).
+                KIND_ATTACHMENT_REJECTED => {
+                    if let Ok(p) =
+                        serde_json::from_value::<AttachmentRejectedPayload>(ev.payload.clone())
+                    {
+                        self.surface.rejected_images.insert(&p.images, &p.motif);
+                    }
+                }
                 // Une tentative purgée par la rétention (T17) ne porte aucun nœud : la
                 // surface ne perd rien, le pliage reste strict.
                 k if k.starts_with(KIND_PREFIX) && k != KIND_ATTEMPT && is_purged(&ev.payload) => {

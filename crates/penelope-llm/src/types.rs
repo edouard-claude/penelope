@@ -391,6 +391,9 @@ pub enum LlmErrorKind {
     PaymentRequired,
     /// Refus du modèle ou filtre de contenu (`refusal`, `content_policy_violation`).
     ContentFilter,
+    /// 400 causé par une image jointe (trop lourde, format refusé, illisible) : la
+    /// boucle relance une fois sans les images (issue #231).
+    AttachmentRejected,
     Cancelled,
     Other,
 }
@@ -435,6 +438,15 @@ impl LlmError {
     pub fn billed(mut self) -> Self {
         self.maybe_billed = true;
         self
+    }
+
+    /// Ce qu'on dit au propriétaire d'une image refusée : trop lourde, format refusé…
+    pub fn attachment_motif(&self) -> &'static str {
+        self.error_type
+            .as_deref()
+            .and_then(crate::attachment::motif)
+            .or_else(|| crate::attachment::motif(&self.message))
+            .unwrap_or(crate::attachment::DEFAULT_MOTIF)
     }
 
     /// Classe une réponse HTTP.
@@ -492,6 +504,9 @@ impl LlmError {
                     || lower.contains("prompt is too long")
                 {
                     LlmErrorKind::ContextLength
+                } else if matches!(status, 400 | 422) && crate::attachment::motif(&lower).is_some()
+                {
+                    LlmErrorKind::AttachmentRejected
                 } else {
                     match status {
                         401 | 403 => LlmErrorKind::Auth,
@@ -556,13 +571,13 @@ pub fn kind_for_error_type(t: &str) -> Option<LlmErrorKind> {
         | "invalid_prompt"
         | "precondition_failed"
         | "unprocessable"
-        | "max_tokens_exceeded"
-        | "invalid_image"
+        | "max_tokens_exceeded" => LlmErrorKind::BadRequest,
+        "invalid_image"
         | "image_too_large"
         | "image_too_small"
         | "unsupported_image_format"
         | "image_not_found"
-        | "image_download_failed" => LlmErrorKind::BadRequest,
+        | "image_download_failed" => LlmErrorKind::AttachmentRejected,
         _ => return None,
     })
 }

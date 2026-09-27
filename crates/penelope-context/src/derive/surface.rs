@@ -73,7 +73,8 @@ impl Surface {
 
     /// La requête avant les niveaux 0, 2 et 4 : le système (le dernier `conv.system`,
     /// sinon `fallback_system`, le préfixe construit par les tuiles), la note de fusion,
-    /// les nœuds visibles, et la consigne de relance d'une tentative restée sans réponse.
+    /// les nœuds visibles, et la consigne de relance d'une tentative restée sans réponse ;
+    /// une image refusée par le fournisseur y est remplacée par sa mention.
     pub fn request_messages(&self, fallback_system: &str) -> Vec<ChatMessage> {
         let system = self
             .system
@@ -93,6 +94,8 @@ impl Surface {
         {
             out.push(ChatMessage::user(prompt));
         }
+        // Comme la boucle sur la copie qu'elle envoie (#231).
+        self.rejected_images.prepare(&mut out);
         out
     }
 }

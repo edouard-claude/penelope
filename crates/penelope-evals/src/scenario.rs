@@ -80,6 +80,10 @@ pub struct Spec {
     /// requêtes reçues sont relevées (`http_request`).
     #[serde(default)]
     pub http: Vec<http::Route>,
+    /// Modèles que le catalogue dit lire les images (`openrouter:…` ou nu) : une photo
+    /// leur est montrée telle quelle, sans passer par le modèle de vision.
+    #[serde(default)]
+    pub vision_models: Vec<String>,
     pub steps: Vec<Step>,
 }
 
@@ -156,6 +160,10 @@ pub enum Step {
         /// boucle le réclame entre deux appels (steering, épopée #208, T13).
         #[serde(default)]
         steer: Option<String>,
+        /// Photos jointes, chemins relatifs au workspace (fichiers semés par `[[files]]`),
+        /// comme la passerelle les enregistre.
+        #[serde(default)]
+        photos: Vec<String>,
     },
     /// Message mis en file sans être joué : le suivant l'absorbe (messages fusionnés).
     Enqueue { text: String },
@@ -267,6 +275,13 @@ impl Step {
                 text,
                 crash: None,
                 steer: None,
+                photos,
+            } if !photos.is_empty() => format!("message : {text} (photos : {})", photos.join(", ")),
+            Step::Message {
+                text,
+                crash: None,
+                steer: None,
+                ..
             } => format!("message : {text}"),
             Step::Message {
                 text,
@@ -312,7 +327,8 @@ pub enum ScriptLine {
         calls: Vec<ToolCall>,
     },
     /// `kind` : `transient`, `rate_limited`, `context_length`, `auth`, `bad_request`,
-    /// `unknown_model`, `payment_required`, `content_filter`, `cancelled`, `other`.
+    /// `unknown_model`, `payment_required`, `content_filter`, `attachment_rejected`,
+    /// `cancelled`, `other`.
     Error {
         kind: String,
         message: String,
@@ -380,6 +396,7 @@ fn error_kind(name: &str) -> LlmErrorKind {
         "unknown_model" => LlmErrorKind::UnknownModel,
         "payment_required" => LlmErrorKind::PaymentRequired,
         "content_filter" => LlmErrorKind::ContentFilter,
+        "attachment_rejected" | "attachmentrejected" => LlmErrorKind::AttachmentRejected,
         "cancelled" => LlmErrorKind::Cancelled,
         _ => LlmErrorKind::Other,
     }

@@ -471,6 +471,47 @@ fn an_attempt_adds_the_retry_prompt_until_an_answer() {
     );
 }
 
+/// Une image refusée par le fournisseur (#231) reste dans la surface ; la requête
+/// dérivée porte sa mention, dès le refus et pour la suite, comme la boucle l'envoie.
+#[test]
+fn a_rejected_image_is_replaced_in_the_derived_request_only() {
+    let photo = "data:image/gif;base64,R0lGODlh";
+    let mut j = Journal::default();
+    j.observe(KIND_TURN_STARTED);
+    let mut p = user("vois", false);
+    p.content.push(Content::ImageUrl {
+        url: photo.into(),
+        detail: None,
+    });
+    let at = j.conv(ConvEvent::User(p));
+    let before = j.derive().unwrap().request_messages("S");
+    assert!(before[1].has_images());
+    j.raw(
+        KIND_ATTACHMENT_REJECTED,
+        serde_json::to_value(AttachmentRejectedPayload {
+            model: "m".into(),
+            motif: "trop lourde".into(),
+            error: "image exceeds 5 MB maximum".into(),
+            images: vec![penelope_llm::attachment::image_key(photo)],
+        })
+        .unwrap(),
+    );
+    j.assistant("pas vue");
+    j.observe(KIND_TURN_FINISHED);
+    j.user("et après ?");
+    let surface = j.derive().unwrap();
+    assert!(
+        surface.messages[&at].message.has_images(),
+        "la surface garde l'image"
+    );
+    let m = surface.request_messages("S");
+    assert!(!m.iter().any(ChatMessage::has_images));
+    assert_eq!(
+        m[1].content[1],
+        Content::text("[image retirée : refusée par le fournisseur (trop lourde)]")
+    );
+}
+
 /// La note de fusion suit les messages système de tête, résumés compris, et disparaît
 /// au tour suivant.
 #[test]

@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod attachment;
 pub mod cache;
 pub mod catalog;
 pub mod codex;

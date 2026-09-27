@@ -30,6 +30,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
+mod attachments;
 mod attempts;
 mod decisions;
 mod events;

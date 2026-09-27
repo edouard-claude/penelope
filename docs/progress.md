@@ -12,6 +12,39 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.6
+
+Une photo refusée par le fournisseur (400 : image trop lourde, format refusé, illisible)
+faisait échouer le tour, **et tous les suivants** : vérifié par un test rouge avant le
+correctif, la photo reste dans l'historique projeté et chaque requête de la session la
+renvoie, donc reprend le même refus. Cause : `from_status` classait ce 400 en
+`BadRequest`, ni réessayable ni récupérable ; la seule reprise hors boucle était la
+compaction sur `ContextLength`.
+
+- `LlmErrorKind::AttachmentRejected`, reconnu sur des motifs précis relevés dans des corps
+  d'erreur réels : types canoniques d'OpenRouter (`image_too_large`, `invalid_image`…) et
+  corps amont dans `metadata.raw`, Anthropic (`image exceeds 5 MB maximum`, `Image does not
+  match the provided media type`, `Could not process image`), OpenAI et le backend Codex
+  (`invalid_image_format`, `image_parse_error`). Un test par forme ; un 400 sans rapport
+  reste `BadRequest`, un 413 reste `ContextLength`. Mistral n'est joint que par OpenRouter :
+  son refus arrive avec le type canonique.
+- Reprise : la boucle remplace les images de la **copie envoyée** par « [image retirée :
+  refusée par le fournisseur (motif)] » et relance une fois ; un second refus échoue en le
+  disant. Toutes les images de la requête refusée sont retirées : le fournisseur ne dit
+  pas toujours laquelle. L'historique, les `conv.*` et le préfixe (prompt système) sont
+  intacts.
+- Le refus est écrit en `llm.attachment_rejected` (empreintes SHA-256 des images, jamais
+  leur contenu), que le pliage du journal lit aussi : le tour suivant part sans la photo,
+  sans nouveau refus, et la requête dérivée du journal reste celle envoyée.
+- La réponse du tour se termine par « Image non lue : refusée par le fournisseur (motif) »,
+  hors historique.
+- Tests : `penelope-llm/src/attachment.rs`, `penelope-agent/src/tests/attachments.rs`,
+  pliage dans `derive/tests.rs` ; scénario rejouable `piece-jointe-refusee` (pas `photos`
+  et `vision_models` ajoutés au harnais).
+- Hors lot : réduire à l'entrée une photo trop lourde (point 3 de l'issue).
+
+Closes #231.
+
 ### 1.0.5
 
 Une planification qui échouait à chaque exécution envoyait une alerte Telegram à chaque

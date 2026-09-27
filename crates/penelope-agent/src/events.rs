@@ -7,7 +7,7 @@
 //! contenus (`conv.*`) n'en sont pas : ils passent par `Conversation` et `AttemptSink`.
 
 use penelope_kernel::event::EventDraft;
-use penelope_kernel::journal::{KIND_TURN_FINISHED, KIND_TURN_STARTED};
+use penelope_kernel::journal::{KIND_ATTACHMENT_REJECTED, KIND_TURN_FINISHED, KIND_TURN_STARTED};
 use serde_json::Value;
 
 /// Un kind d'événement écrit par la boucle.
@@ -29,6 +29,8 @@ pub enum TurnEventKind {
     LlmRetried,
     /// Réponse servie par un autre modèle que celui demandé (repli d'OpenRouter).
     LlmFallbackUsed,
+    /// Images refusées par le fournisseur : la copie envoyée ne les porte plus (#231).
+    AttachmentRejected,
     /// Une approbation, ou un effet incertain, est tranché.
     ApprovalDecided,
     /// Le juge d'approbation a rendu un avis, ou n'a pas pu (#203).
@@ -37,7 +39,7 @@ pub enum TurnEventKind {
 
 impl TurnEventKind {
     /// Toutes les variantes, pour les tests.
-    pub const ALL: [TurnEventKind; 10] = [
+    pub const ALL: [TurnEventKind; 11] = [
         TurnEventKind::Started,
         TurnEventKind::Finished,
         TurnEventKind::Merged,
@@ -46,6 +48,7 @@ impl TurnEventKind {
         TurnEventKind::ToolResult,
         TurnEventKind::LlmRetried,
         TurnEventKind::LlmFallbackUsed,
+        TurnEventKind::AttachmentRejected,
         TurnEventKind::ApprovalDecided,
         TurnEventKind::ApprovalJudged,
     ];
@@ -61,6 +64,7 @@ impl TurnEventKind {
             TurnEventKind::ToolResult => "tool.result",
             TurnEventKind::LlmRetried => "llm.retried",
             TurnEventKind::LlmFallbackUsed => "llm.fallback_used",
+            TurnEventKind::AttachmentRejected => KIND_ATTACHMENT_REJECTED,
             TurnEventKind::ApprovalDecided => "approval.decided",
             TurnEventKind::ApprovalJudged => "approval.judged",
         }

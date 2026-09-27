@@ -4,12 +4,14 @@
 //! boucle les écrit par le noyau, `penelope-context` les relit et les plie, et les
 //! réexporte à l'identique sous `penelope_context::journal`.
 
+mod attachment;
 mod attempt;
 mod call;
 mod provenance;
 mod tiles;
 mod turn;
 
+pub use attachment::*;
 pub use attempt::*;
 pub use call::*;
 pub use provenance::*;

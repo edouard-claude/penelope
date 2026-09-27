@@ -13,6 +13,8 @@ pub(crate) struct CallFailure {
     pub message: String,
     /// Le provider a prouvé que la requête dépasse la fenêtre du modèle.
     pub context_length: bool,
+    /// Le provider refuse une image jointe, pour ce motif (#231).
+    pub attachment: Option<&'static str>,
 }
 
 impl CallFailure {
@@ -20,6 +22,7 @@ impl CallFailure {
         CallFailure {
             message: humanise_llm_error(e),
             context_length: e.kind == LlmErrorKind::ContextLength,
+            attachment: (e.kind == LlmErrorKind::AttachmentRejected).then(|| e.attachment_motif()),
         }
     }
 
@@ -27,6 +30,7 @@ impl CallFailure {
         CallFailure {
             message: message.into(),
             context_length: false,
+            attachment: None,
         }
     }
 }
@@ -363,6 +367,11 @@ fn humanise_llm_error(e: &LlmError) -> String {
         LlmErrorKind::ContextLength => format!(
             "la conversation dépasse la fenêtre du modèle ({msg}). `/compact` résume les \
              anciens échanges, `/new` repart d'une session vide"
+        ),
+        LlmErrorKind::AttachmentRejected => format!(
+            "le provider refuse une image jointe ({}) : {msg}. La renvoyer plus légère ou \
+             dans un autre format (JPEG, PNG)",
+            e.attachment_motif()
         ),
         LlmErrorKind::Transient => format!("provider indisponible pour l'instant ({msg})"),
         _ => e.to_string(),

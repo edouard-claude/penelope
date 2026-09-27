@@ -1,0 +1,22 @@
+name = "piece-jointe-refusee"
+description = """Pièce jointe refusée (#231) : le propriétaire envoie une photo, le fournisseur
+la refuse en 400 (`image exceeds 5 MB maximum`, corps d'Anthropic relayé par OpenRouter).
+La boucle relance une fois sans la photo, sur la copie envoyée seulement, et la réponse
+dit que l'image n'a pas été lue. Le journal garde la photo dans son `conv.user` et note
+le refus (`llm.attachment_rejected`) ; le tour suivant part sans elle, sans nouveau
+refus."""
+pin_model = "main"
+vision_models = ["openrouter:deepseek/deepseek-v4-pro"]
+
+[[files]]
+path = "photo.gif"
+content = "GIF89a\u0001\u0000\u0001\u0000\u0000\u0000\u0000,\u0000\u0000\u0000\u0000\u0001\u0000\u0001\u0000\u0000\u0002\u0002D\u0001\u0000;"
+
+[[steps]]
+kind = "message"
+text = "que vois-tu sur cette photo ?"
+photos = ["photo.gif"]
+
+[[steps]]
+kind = "message"
+text = "et sinon, tu es là ?"
