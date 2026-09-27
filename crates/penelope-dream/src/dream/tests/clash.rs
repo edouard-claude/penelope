@@ -318,3 +318,64 @@ async fn an_added_substitution_of_the_owner_preference_asks() {
     let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();
     assert!(!profil.contains("vouvoy"), "{profil}");
 }
+
+/// #230 : une entrée que les réponses du propriétaire contredisent (4 fois, aucune
+/// confirmation) n'est plus servie d'office, et la consolidation la lui soumet une fois.
+/// « Tout » la retire ; « Rien » la garde, et la passe suivante la rend servie.
+#[tokio::test]
+async fn a_contested_entry_is_submitted_once_then_retired_or_kept() {
+    for retire in [true, false] {
+        let (_dir, d, _p) = daemon().await;
+        let s = &d.services;
+        let vault = tutoiement(s).await;
+        for _ in 0..4 {
+            s.memory.record_outcome("PORT1", false).await.unwrap();
+        }
+        assert!(s.memory.hidden_uids().await.unwrap().contains("PORT1"));
+
+        let o = run(&d, &d.hooks.messenger, false).await.unwrap();
+        assert!(
+            o.report
+                .questions
+                .iter()
+                .any(|q| q.contains("contredite 4 fois")),
+            "{:?}",
+            o.report.questions
+        );
+        let cards: Vec<_> = s
+            .approvals
+            .pending(10)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|a| a.payload["contested"] == true)
+            .collect();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].payload["uid"], "PORT1");
+        run(&d, &d.hooks.messenger, false).await.unwrap();
+        assert_eq!(s.approvals.pending(10).await.unwrap().len(), 1, "une fois");
+
+        let id = cards[0].id.as_str();
+        if retire {
+            s.approvals
+                .decide(id, &penelope_hitl::Decision::approve_once("cli"))
+                .await
+                .unwrap();
+            assert_eq!(
+                crate::ingest::apply_memory_proposal(&d, id).await.unwrap(),
+                1
+            );
+            let raw = std::fs::read_to_string(vault.join("memoire.md")).unwrap();
+            assert!(!raw.contains("PORT1"), "{raw}");
+        } else {
+            s.approvals
+                .decide(id, &penelope_hitl::Decision::deny("cli", None))
+                .await
+                .unwrap();
+            run(&d, &d.hooks.messenger, false).await.unwrap();
+            assert!(!s.memory.hidden_uids().await.unwrap().contains("PORT1"));
+            let sig = s.memory.signals_of("PORT1").await.unwrap();
+            assert_eq!((sig.successes, sig.contradictions), (0, 0));
+        }
+    }
+}

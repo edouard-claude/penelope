@@ -570,3 +570,35 @@ fn predicates_are_lowercased_and_sparse() {
     let w = crate::vault::When::parse("tache=code").unwrap();
     assert_eq!(w.evaluate(&p), crate::vault::WhenMatch::Satisfied);
 }
+
+/// #230 : la réponse suivante du propriétaire juge le souvenir servi, et dans le doute ne
+/// dit rien.
+#[test]
+fn the_next_owner_reply_judges_a_used_memory_conservatively() {
+    let rule = "Facturer ACME en euros";
+    assert_eq!(outcome_of(rule, "Parfait, envoie-la."), Some(true));
+    assert_eq!(outcome_of(rule, "Merci. Et pour Albatros ?"), Some(true));
+    assert_eq!(
+        outcome_of(rule, "Non, ici pour ACME on facture en dollars."),
+        Some(false)
+    );
+    assert_eq!(
+        outcome_of(rule, "Je t'ai dit que la facture ACME part en dollars"),
+        Some(false)
+    );
+    // Correction, mais sur autre chose : aucun signal plutôt qu'un faux.
+    assert_eq!(
+        outcome_of(rule, "Non, je parlais du serveur de build."),
+        None
+    );
+    // Marqueur au milieu du message : ce n'est pas une reprise franche.
+    assert_eq!(
+        outcome_of(rule, "Envoie la facture ACME, plutôt ce soir."),
+        None
+    );
+    assert_eq!(
+        outcome_of(rule, "nonobstant, la facture ACME est prête"),
+        Some(true)
+    );
+    assert_eq!(outcome_of(rule, "   "), None);
+}

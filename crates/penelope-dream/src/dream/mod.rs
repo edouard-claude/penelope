@@ -161,7 +161,8 @@ async fn run_locked(d: &Context, dry_run: bool) -> anyhow::Result<DreamOutcome> 
         }
         let candidates = s.candidates.pending(None).await?;
         report.candidates_seen = candidates.len() as u32;
-        let groups = group(candidates, cfg.memory.dedup_jaccard);
+        let mut groups = group(candidates, cfg.memory.dedup_jaccard);
+        accepted_sessions(s, &mut groups).await;
         report.groups = groups.len() as u32;
         if !dry_run {
             set_phase(s, &run_id, "rem").await?;
@@ -303,6 +304,29 @@ async fn harvest_decisions(s: &Services) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Sessions où l'écart a été suivi d'une réponse acceptée : pour chaque membre, le
+/// premier verdict du propriétaire noté dans sa session après l'observation (issue #230).
+async fn accepted_sessions(s: &Services, groups: &mut [CandidateGroup]) {
+    for g in groups
+        .iter_mut()
+        .filter(|g| g.ctype == penelope_memory::CandidateType::Ecart)
+    {
+        let mut accepted = BTreeSet::new();
+        for m in &g.members {
+            let Some(sid) = &m.session_id else { continue };
+            let verdicts = penelope_vault::usage_feedback::turn_outcomes(s, sid).await;
+            if verdicts
+                .iter()
+                .find(|(at, _)| at.as_str() >= m.observed_at.as_str())
+                .is_some_and(|(_, ok)| *ok)
+            {
+                accepted.insert(sid.clone());
+            }
+        }
+        g.successful_sessions = accepted.len() as u32;
+    }
+}
+
 /// Verdict d'un groupe tranché sans le modèle : ses candidats, leur état, la raison.
 type Gated = (Vec<String>, &'static str, Option<String>);
 
@@ -340,6 +364,11 @@ fn gate_groups<'g>(
                     .push(format!("« {} » : {reason}", short(&g.representative.text)));
                 gated.push((ids, "rejected", Some(reason)));
             }
+            // Rien ne change d'état : le groupe repasse la nuit suivante (issue #230).
+            Gate::Wait(reason) => report.sorted.push(format!(
+                "⏳ en attente « {} » : {reason}",
+                short(&g.representative.text)
+            )),
         }
     }
     (admitted, gated)
@@ -696,6 +725,8 @@ async fn after_pass(
             )
         })
         .collect();
+    // Entrées que les réponses du propriétaire contredisent : soumises une fois (#230).
+    submit_contested(s, report).await;
     let (lint, proposals) = wiki_review(s, vault).await;
     report.lint = lint.summary();
     report.lint_problems = lint.problems() as u32;
@@ -731,7 +762,7 @@ use candidates::{Clash, Item, ids_for, is_journal, nearby_batch, short, sort_and
 #[cfg(test)]
 use candidates::{Neighbour, contradiction};
 pub use clash::file_unanswered_clash;
-use clash::{ask_about_clash, expired_journal, unused_entries};
+use clash::{ask_about_clash, expired_journal, submit_contested, unused_entries};
 use consolidate::{CallOutcome, consolidate};
 pub use digest::digest_text;
 #[cfg(test)]

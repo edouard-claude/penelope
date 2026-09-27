@@ -57,7 +57,39 @@ fois, par l'intégrateur :
 OPENROUTER_API_KEY=… cargo test -p penelope-evals --test mem_longitudinal -- --ignored --nocapture
 ```
 
-Closes #224.
+**Mémoire : les réponses du propriétaire deviennent des signaux d'usage (#230).**
+`Signals::record_outcome` n'était appelé nulle part : succès et contradictions valaient 0
+pour toute la mémoire, `contested_*` était « sans effet », et un écart devenait une
+exception sur ses seules occurrences, sans preuve qu'il avait marché.
+
+- Le message suivant du propriétaire juge chaque souvenir dont la réponse d'avant s'est
+  servie : sans marqueur de correction, succès ; ouvert sur une correction (« non, »,
+  « je t'ai dit… ») qui reprend un mot du souvenir, contradiction ; tout le reste, rien.
+  Seuls les messages du propriétaire jugent (pas une relance, pas une reprise), un tour
+  échoué entre les deux annule le jugement, et chaque signal est journalisé
+  (`memory.outcome`).
+- `contested_confidence` et `contested_min_observations` ont un effet : une entrée assez
+  jugée (4 observations) de confiance `(succès + 1) / (succès + contradictions + 2)` sous
+  0,5 n'est plus servie d'office (instantané, rappel automatique ; la recherche explicite
+  la trouve), et la consolidation suivante la soumet une fois au propriétaire : « Tout »
+  la retire, « Rien » la garde et remet ses signaux à zéro.
+- Un écart ne devient une exception qu'après une réponse acceptée dans deux sessions
+  distinctes (`memory.promotion.ecart_min_successes = 2`), à côté des occurrences. Sous
+  ses seuils, il attend au lieu d'être rejeté : rejeté dès la première nuit, il ne
+  pouvait jamais réunir ses deux jours distincts.
+
+Tests : `the_next_owner_reply_judges_a_used_memory_conservatively`,
+`a_contested_entry_is_no_longer_served_automatically`,
+`an_ecart_needs_accepted_answers_in_distinct_sessions` (memory) ;
+`the_owner_reply_records_a_success_or_a_contradiction`,
+`no_signal_without_a_clear_owner_verdict` (vault) ;
+`an_ecart_waits_for_accepted_answers_in_distinct_sessions`,
+`a_contested_entry_is_submitted_once_then_retired_or_kept` (dream) ; scénario
+`memoire-signaux-d-usage` (rappel, « parfait, merci » puis « non, … » : un succès, une
+contradiction sur l'uid rappelé). La suite réseau ci-dessus vérifie aussi que
+`mem_longitudinal` ne baisse pas.
+
+Closes #224, closes #230.
 
 ### 1.0.7
 

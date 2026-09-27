@@ -295,7 +295,12 @@ impl TelegramGateway {
                     }
                 };
                 let decided = decide_approval(s, &approval_id, &decision).await?;
+                // Entrée contestée (#230) : la proposition est son retrait.
+                let contested = approval.payload["contested"].as_bool() == Some(true);
                 let note = match (accept, decided.recorded()) {
+                    (false, true) if contested => "👍 Gardée : elle sera de nouveau servie \
+                        après la prochaine consolidation."
+                        .to_string(),
                     (false, true) => {
                         "🗑 Propositions écartées : rien n'entre en mémoire.".to_string()
                     }
@@ -311,6 +316,7 @@ impl TelegramGateway {
                         )
                         .await
                         {
+                            Ok(_) if contested => "🗑 Retirée de la mémoire.".to_string(),
                             Ok(n) if confirm => format!(
                                 "✅ {n} règle(s) confirmée(s) : elles entrent en mémoire à la \
                                  prochaine consolidation (`/dream` pour tout de suite)."

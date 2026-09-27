@@ -96,10 +96,15 @@ impl Services {
         let lcm = Lcm::new(store.clone(), clock.clone());
         let context = ContextEngine::new(history, lcm, estimator, catalog.clone(), clock.clone());
 
-        let memory = MemoryIndex::new(store.clone(), clock.clone()).with_half_life({
-            let config = config.clone();
-            move || config.config().memory.half_life_days
-        });
+        let memory = MemoryIndex::new(store.clone(), clock.clone())
+            .with_half_life({
+                let config = config.clone();
+                move || config.config().memory.half_life_days
+            })
+            .with_contested({
+                let config = config.clone();
+                move || contested_thresholds(&config)
+            });
         let candidates = CandidateStore::new(store.clone(), clock.clone());
         let intents = IntentStore::new(store.clone(), clock.clone());
         let skills = SkillRegistry::new(store.clone());
@@ -216,10 +221,15 @@ impl Services {
                     move || config.config().owner.timezone.clone()
                 }),
             llm_state: LlmStateMachine::new(store.clone(), clock.clone()),
-            memory: MemoryIndex::new(store.clone(), clock.clone()).with_half_life({
-                let config = config.clone();
-                move || config.config().memory.half_life_days
-            }),
+            memory: MemoryIndex::new(store.clone(), clock.clone())
+                .with_half_life({
+                    let config = config.clone();
+                    move || config.config().memory.half_life_days
+                })
+                .with_contested({
+                    let config = config.clone();
+                    move || contested_thresholds(&config)
+                }),
             candidates: CandidateStore::new(store.clone(), clock.clone()),
             intents: IntentStore::new(store.clone(), clock.clone()),
             skills: SkillRegistry::new(store.clone()),
@@ -380,6 +390,12 @@ pub const SUBSYSTEMS: &[&str] = &[
     "runners",
     "sandbox",
 ];
+
+/// Seuils d'une entrée contestée, relus à chaque lecture de l'index (issue #230).
+fn contested_thresholds(config: &ConfigStore) -> (f64, u32) {
+    let p = &config.config().memory.promotion;
+    (p.contested_confidence, p.contested_min_observations)
+}
 
 #[cfg(test)]
 mod tests {

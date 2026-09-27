@@ -115,6 +115,22 @@ pub async fn apply_memory_proposal(d: &Context, approval_id: &str) -> anyhow::Re
         return Ok(confirmed);
     }
     let vault = crate::helpers::vault_dir(s);
+    // Entrée contestée (issue #230) : « Tout » accepte la proposition de la retirer.
+    if a.payload["contested"].as_bool() == Some(true) {
+        let uid = a.payload["uid"].as_str().unwrap_or_default();
+        let retired = crate::vault_ops::forget(s, &vault, uid)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        s.kv_set(&flag, &(retired as usize).to_string()).await?;
+        let _ = s.kv_delete(&format!("memory.contested.{uid}")).await;
+        s.events
+            .append(EventDraft::new(
+                "memory.contested_retired",
+                json!({"approval": approval_id, "uid": uid, "retired": retired}),
+            ))
+            .await?;
+        return Ok(retired as usize);
+    }
     // Découpage d'une entrée fourre-tout (issue #145) : les faits prennent le niveau de
     // l'entrée d'origine, qui est retirée une fois tous écrits.
     if a.payload["split"].as_bool() == Some(true) {

@@ -443,12 +443,13 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `memory.promotion.ecart_min_occurrences` | `3` | Occurrences minimales d'un écart pour devenir une exception. |
 | `memory.promotion.ecart_min_sessions` | `3` | Sessions distinctes minimales d'un écart. |
 | `memory.promotion.ecart_min_days` | `2` | Jours distincts minimaux d'un écart. |
+| `memory.promotion.ecart_min_successes` | `2` | Sessions distinctes minimales où l'écart a été suivi d'un message du propriétaire qui accepte la réponse (sans correction) : un écart vu mais repris ne devient pas une exception. |
 | `memory.promotion.fact_min_recalls` | `2` | Ignoré depuis 0.14.0 : faits, préférences, décisions et corrections passent par la grille de tri (issue #37). Gardé pour qu'une configuration existante reste valide. |
 | `memory.promotion.fact_min_importance` | `8` | Ignoré depuis 0.14.0 (grille de tri, issue #37). |
 | `memory.promotion.preference_min_sessions` | `2` | Ignoré depuis 0.14.0 (grille de tri, issue #37). |
 | `memory.promotion.max_retire_ratio` | `0.2` | Part maximale des entrées d'un fichier retirées en une nuit. |
-| `memory.promotion.contested_confidence` | `0.5` | Confiance d'une règle contestée. Sans effet dans cette version. |
-| `memory.promotion.contested_min_observations` | `4` | Observations minimales d'une règle contestée. Sans effet dans cette version. |
+| `memory.promotion.contested_confidence` | `0.5` | Confiance sous laquelle une entrée est contestée : `(succès + 1) / (succès + contradictions + 2)`, mesurée sur les réponses suivantes du propriétaire. Contestée, elle n'est plus servie d'office et la consolidation suivante propose de la retirer. |
+| `memory.promotion.contested_min_observations` | `4` | Observations (succès + contradictions) avant qu'une entrée puisse être contestée. |
 | `memory.intents.cooldown` | `"24h"` | Délai minimal entre deux déclenchements d'une intention. |
 | `memory.intents.fire_budget` | `3` | Déclenchements au plus d'une intention. |
 | `memory.intents.expiry` | `"90d"` | Durée de vie d'une intention. |

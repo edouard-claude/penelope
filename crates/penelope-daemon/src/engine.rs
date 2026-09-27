@@ -71,16 +71,14 @@ impl Daemon {
         self.handle.record_turn();
         // Un tour a pu écrire en mémoire ou créer une intention : vecteurs manquants.
         embeddings::spawn_backfill(self.embedder());
+        let said = turn.payload["text"].as_str().unwrap_or_default();
         // Retour d'usage (#105) : un souvenir servi n'est utile que si la réponse le
-        // reprend ; un tour qui attend une approbation garde sa liste pour sa reprise.
+        // reprend ; un tour qui attend une approbation garde sa liste pour sa reprise. Un
+        // message du propriétaire juge aussi la réponse d'avant (#230).
+        let owner = turn.kind == TurnKind::Message;
         match &outcome {
             TurnOutcome::Answered { text: answer, .. } => {
-                let said = turn
-                    .payload
-                    .get("text")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or_default();
-                usage_feedback::judge(&self.services, &turn.session_id, said, answer).await;
+                usage_feedback::judge(&self.services, &turn.session_id, owner, said, answer).await;
             }
             TurnOutcome::AwaitingApproval { .. } => {}
             _ => usage_feedback::forget(&self.services, &turn.session_id).await,
@@ -89,11 +87,6 @@ impl Daemon {
         if let (TurnKind::Message, TurnOutcome::Answered { text: answer, .. }) =
             (turn.kind, &outcome)
         {
-            let said = turn
-                .payload
-                .get("text")
-                .and_then(|t| t.as_str())
-                .unwrap_or_default();
             // Un accord court (« ok », « go ») relit la proposition qu'il accepte (#108).
             let previous = if review::is_short_agreement(said) {
                 review::previous_answer(&self.services, &turn.session_id).await

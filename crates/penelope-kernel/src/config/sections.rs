@@ -199,6 +199,10 @@ pub struct Promotion {
     pub ecart_min_sessions: u32,
     /// Jours distincts minimaux d'un écart.
     pub ecart_min_days: u32,
+    /// Sessions distinctes minimales où l'écart a été suivi d'un message du propriétaire
+    /// qui accepte la réponse (sans correction) : un écart vu mais repris ne devient pas
+    /// une exception.
+    pub ecart_min_successes: u32,
     /// Ignoré depuis 0.14.0 : faits, préférences, décisions et corrections passent par la
     /// grille de tri (issue #37). Gardé pour qu'une configuration existante reste valide.
     pub fact_min_recalls: u32,
@@ -208,9 +212,11 @@ pub struct Promotion {
     pub preference_min_sessions: u32,
     /// Part maximale des entrées d'un fichier retirées en une nuit.
     pub max_retire_ratio: f64,
-    /// Confiance d'une règle contestée. Sans effet dans cette version.
+    /// Confiance sous laquelle une entrée est contestée : `(succès + 1) / (succès +
+    /// contradictions + 2)`, mesurée sur les réponses suivantes du propriétaire. Contestée,
+    /// elle n'est plus servie d'office et la consolidation suivante propose de la retirer.
     pub contested_confidence: f64,
-    /// Observations minimales d'une règle contestée. Sans effet dans cette version.
+    /// Observations (succès + contradictions) avant qu'une entrée puisse être contestée.
     pub contested_min_observations: u32,
 }
 
@@ -220,6 +226,7 @@ impl Default for Promotion {
             ecart_min_occurrences: 3,
             ecart_min_sessions: 3,
             ecart_min_days: 2,
+            ecart_min_successes: 2,
             fact_min_recalls: 2,
             fact_min_importance: 8,
             preference_min_sessions: 2,

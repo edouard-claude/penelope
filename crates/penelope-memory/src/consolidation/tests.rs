@@ -16,13 +16,13 @@ fn ecart(day: &str, session: &str, when: &str) -> Candidate {
     c
 }
 
-/// CA 6 (apprentissage) : 3 fois dans 3 sessions sur 2 jours ⇒ exception ;
-/// 2 fois seulement ⇒ pas de promotion.
+/// CA 6 (apprentissage) : 3 fois dans 3 sessions sur 2 jours, acceptée dans 2 sessions
+/// au moins ⇒ exception ; 2 fois seulement ⇒ pas encore, le groupe attend (#230).
 #[test]
 fn ca_6_2_ecart_promotion_thresholds() {
     let g = PromotionGates::default();
 
-    let three = group(
+    let mut three = group(
         vec![
             ecart("2026-09-10", "s1", "client=client-x"),
             ecart("2026-09-11", "s2", "client=client-x"),
@@ -30,6 +30,7 @@ fn ca_6_2_ecart_promotion_thresholds() {
         ],
         0.9,
     );
+    three[0].successful_sessions = 2;
     assert_eq!(gate(&three[0], &g), Gate::Promote);
 
     let two = group(
@@ -40,8 +41,35 @@ fn ca_6_2_ecart_promotion_thresholds() {
         0.9,
     );
     let verdict = gate(&two[0], &g);
-    assert!(!verdict.is_promote());
+    assert!(matches!(verdict, Gate::Wait(_)), "{verdict:?}");
     assert!(verdict.reason().unwrap().contains("minimum 3/3/2"));
+}
+
+/// #230 : un écart vu trois fois mais jamais suivi d'une réponse acceptée (ou dans une
+/// seule session) ne devient pas une exception : une erreur répétée n'est pas une règle.
+/// Il attend, sans être rejeté : les succès peuvent venir.
+#[test]
+fn an_ecart_needs_accepted_answers_in_distinct_sessions() {
+    let g = PromotionGates::default();
+    let mut three = group(
+        vec![
+            ecart("2026-09-10", "s1", "client=client-x"),
+            ecart("2026-09-11", "s2", "client=client-x"),
+            ecart("2026-09-11", "s3", "client=client-x"),
+        ],
+        0.9,
+    );
+    for accepted in [0, 1] {
+        three[0].successful_sessions = accepted;
+        let verdict = gate(&three[0], &g);
+        assert!(matches!(verdict, Gate::Wait(_)), "{accepted} : {verdict:?}");
+        assert!(
+            verdict.reason().unwrap().contains("(minimum 2)"),
+            "{verdict:?}"
+        );
+    }
+    three[0].successful_sessions = 2;
+    assert_eq!(gate(&three[0], &g), Gate::Promote);
 }
 
 #[test]
@@ -56,8 +84,8 @@ fn ecart_needs_a_single_day_span_of_two() {
         0.9,
     );
     assert!(
-        !gate(&same_day[0], &g).is_promote(),
-        "un seul jour ne suffit pas"
+        matches!(gate(&same_day[0], &g), Gate::Wait(_)),
+        "un seul jour ne suffit pas : l'écart attend le suivant"
     );
 }
 
@@ -135,6 +163,7 @@ fn ca_6_3_correction_scoping() {
         max_importance: 8,
         origins: [Origin::Owner].into_iter().collect(),
         members,
+        successful_sessions: 0,
     };
     assert_eq!(gate(&merged, &g), Gate::Sort);
 }

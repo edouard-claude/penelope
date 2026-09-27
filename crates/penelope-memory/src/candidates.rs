@@ -190,6 +190,9 @@ pub struct CandidateGroup {
     pub distinct_days: u32,
     pub max_importance: u8,
     pub origins: BTreeSet<Origin>,
+    /// Sessions distinctes où le message suivant du propriétaire a accepté la réponse
+    /// (issue #230) : mesuré par la consolidation, 0 tant qu'elle ne l'a pas fait.
+    pub successful_sessions: u32,
 }
 
 impl CandidateGroup {
@@ -261,6 +264,7 @@ pub fn group(candidates: Vec<Candidate>, jaccard_threshold: f64) -> Vec<Candidat
             max_importance,
             origins,
             members: unique,
+            successful_sessions: 0,
         });
     }
     out

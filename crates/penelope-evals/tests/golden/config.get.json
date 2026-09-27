@@ -179,6 +179,7 @@
           "ecart_min_occurrences": "integer",
           "ecart_min_sessions": "integer",
           "ecart_min_days": "integer",
+          "ecart_min_successes": "integer",
           "fact_min_recalls": "integer",
           "fact_min_importance": "integer",
           "preference_min_sessions": "integer",

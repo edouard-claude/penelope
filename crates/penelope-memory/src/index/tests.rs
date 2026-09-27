@@ -516,3 +516,58 @@ async fn entries_are_read_back_by_slug_without_retired_ones() {
     assert_eq!(uids, ["u1", "u2"]);
     assert!(i.by_slug("inconnue").await.unwrap().is_empty());
 }
+
+/// #230 : `contested_*` a un effet. Une entrée contredite au-delà des seuils n'est plus
+/// servie d'office (ni rappel automatique, ni instantané), la recherche explicite la
+/// trouve encore ; sous le nombre d'observations, ou gardée par le propriétaire, elle
+/// reste servie. Les seuils se relisent à chaque lecture.
+#[tokio::test]
+async fn a_contested_entry_is_no_longer_served_automatically() {
+    let thresholds = std::sync::Arc::new(std::sync::Mutex::new((0.5, 4u32)));
+    let i = index(TestClock::default()).with_contested({
+        let t = thresholds.clone();
+        move || *t.lock().unwrap()
+    });
+    for uid in ["conteste", "confirme"] {
+        i.upsert(
+            &simple_entry(uid, "Déployer le vendredi soir", Level::Coeur, "2026-09-16"),
+            &prov(),
+        )
+        .await
+        .unwrap();
+    }
+    for _ in 0..3 {
+        i.record_outcome("conteste", false).await.unwrap();
+        i.record_outcome("confirme", true).await.unwrap();
+    }
+    i.record_outcome("confirme", false).await.unwrap();
+    assert!(
+        i.hidden_uids().await.unwrap().is_empty(),
+        "3 observations < 4"
+    );
+    i.record_outcome("conteste", false).await.unwrap();
+    assert_eq!(i.contested_uids().await.unwrap(), vec!["conteste"]);
+    assert!(i.hidden_uids().await.unwrap().contains("conteste"));
+
+    let auto = SearchFilter {
+        automatic: true,
+        limit: 10,
+        ..Default::default()
+    };
+    let served = i
+        .search("déployer vendredi", None, &auto, &[])
+        .await
+        .unwrap();
+    assert!(served.iter().all(|h| h.entry.uid != "conteste"));
+    let explicit = i
+        .search("déployer vendredi", None, &SearchFilter::explicit(), &[])
+        .await
+        .unwrap();
+    assert!(explicit.iter().any(|h| h.entry.uid == "conteste"));
+
+    *thresholds.lock().unwrap() = (0.1, 4);
+    assert!(i.contested_uids().await.unwrap().is_empty(), "seuil relu");
+    *thresholds.lock().unwrap() = (0.5, 4);
+    i.reset_outcomes("conteste").await.unwrap();
+    assert!(i.contested_uids().await.unwrap().is_empty(), "gardée");
+}

@@ -394,3 +394,68 @@ fn a_distant_neighbour_does_not_clash() {
         "sans vecteur, le Jaccard décide seul"
     );
 }
+
+/// Un écart observé dans `session` le `day`.
+async fn ecart_seen(s: &Services, day: &str, session: &str) {
+    let mut c = Candidate::new(
+        CandidateType::Ecart,
+        "Pour le client X, le backend s'écrit en Go",
+        Origin::Owner,
+        "interactive",
+        &format!("{day}T10:00:00.000Z"),
+    )
+    .in_session(session)
+    .with_subject("langage-backend");
+    c.quand = When::parse("client=client-x").ok();
+    s.candidates.record(vec![c], 5).await.unwrap();
+}
+
+/// Le propriétaire répond à la réponse d'un tour de `session` (après l'observation).
+async fn owner_replies(s: &Services, session: &str, reply: &str) {
+    use penelope_vault::usage_feedback::judge;
+    judge(
+        s,
+        session,
+        true,
+        "écris le service",
+        "Voici le service en Go.",
+    )
+    .await;
+    judge(s, session, true, reply, "D'accord.").await;
+}
+
+/// #230 : un écart vu trois fois ne devient une exception que s'il a été suivi d'une
+/// réponse acceptée dans deux sessions distinctes. Sinon il attend, sans être rejeté ;
+/// les succès venus, la nuit suivante le soumet au modèle.
+#[tokio::test]
+async fn an_ecart_waits_for_accepted_answers_in_distinct_sessions() {
+    let (_dir, d, p) = daemon().await;
+    let s = &d.services;
+    ecart_seen(s, "2026-09-10", "s1").await;
+    ecart_seen(s, "2026-09-11", "s2").await;
+    ecart_seen(s, "2026-09-11", "s3").await;
+    owner_replies(s, "s1", "parfait").await;
+    owner_replies(s, "s2", "Non, pas comme ça : en Rust.").await;
+
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
+    assert_eq!(o.report.calls, 0, "rien soumis au modèle : {:?}", o.report);
+    assert!(
+        o.report
+            .sorted
+            .iter()
+            .any(|l| l.contains("écart accepté dans 1 session(s) distincte(s) (minimum 2)")),
+        "{:?}",
+        o.report.sorted
+    );
+    assert_eq!(
+        s.candidates.pending(None).await.unwrap().len(),
+        3,
+        "en attente"
+    );
+
+    owner_replies(s, "s3", "merci, c'est bon").await;
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
+    assert!(o.report.calls >= 1, "soumis au modèle : {:?}", o.report);
+    let asked = p.requests().last().unwrap().messages.last().unwrap().text();
+    assert!(asked.contains("écart déjà admis"), "{asked}");
+}

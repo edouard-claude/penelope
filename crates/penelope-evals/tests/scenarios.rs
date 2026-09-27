@@ -79,6 +79,7 @@ scenario_cases! {
     outils_fichiers_et_shell => "outils-fichiers-et-shell",
     outils_memoire => "outils-memoire",
     outils_memoire_contradiction => "outils-memoire-contradiction",
+    memoire_signaux_d_usage => "memoire-signaux-d-usage",
     outils_skills => "outils-skills",
     outils_soi => "outils-soi",
     outils_historique => "outils-historique",
