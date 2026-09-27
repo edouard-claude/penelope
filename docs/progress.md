@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.12
+### 1.0.10
 
 - Constat (#242, suite du point 3 de #231) : une photo plus lourde que ce que le
   fournisseur accepte partait telle quelle, se faisait refuser (reprise de la 1.0.6) et
