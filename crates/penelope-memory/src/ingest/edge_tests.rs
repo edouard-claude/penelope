@@ -67,6 +67,19 @@ fn truncated_html_keeps_what_came_before() {
     assert!(t.contains("Un"), "{t}");
 }
 
+/// #223 : un `<` isolé dans du texte brut (comparaison, flèche, code) n'est pas une
+/// balise ; le texte qui le précède n'est pas doublé.
+#[test]
+fn a_lone_less_than_is_kept_once() {
+    assert_eq!(html_to_text("a < b"), "a < b");
+    assert_eq!(html_to_text("x <- y"), "x <- y");
+    assert_eq!(html_to_text("<p>Un</p>2 < 3"), "\nUn\n2 < 3");
+    assert_eq!(
+        html_to_text("<p>Bonjour</p><!-- jamais fermé").trim(),
+        "Bonjour"
+    );
+}
+
 /// Le nom d'un document devient un slug sans accents ni ponctuation.
 #[test]
 fn file_names_become_accentless_slugs() {

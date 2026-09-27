@@ -468,6 +468,70 @@ async fn schedule_move_sends_a_schedule_here_or_home() {
     assert_eq!(home.value["destination"], "conv 42");
 }
 
+/// #223 : l'outil `schedule_delete` refuse un identifiant inconnu, avec le message de
+/// la RPC, de Telegram et de la CLI (#221) ; le modèle ne peut plus annoncer supprimée
+/// une planification qui tourne encore. `schedule_move` refuse de même ; une
+/// planification existante se supprime toujours.
+#[tokio::test]
+async fn schedule_delete_rejects_an_unknown_id() {
+    use penelope_app::tool_executor::ToolExecutor;
+    use penelope_executor::executor::{NativeToolExecutor, ToolEnv};
+    let (d, _clock, _rec) = harness().await;
+    let s = d.services.clone();
+    s.channel.delivery.set(Some(Arc::new(Places)));
+    let env = ToolEnv {
+        session_id: "s1".into(),
+        run_id: None,
+        origin: Origin::Cli,
+        workspaces: vec![],
+        in_workflow: false,
+        turn_model: None,
+    };
+    let mut x = NativeToolExecutor::new(s.clone(), env);
+    x.orchestrator = d.ports.orchestrator.get();
+
+    let err = x
+        .execute("schedule_delete", &json!({"id": "sch_absent"}))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("planification inconnue : sch_absent"),
+        "{err}"
+    );
+    let err = x
+        .execute(
+            "schedule_move",
+            &json!({"id": "sch_absent", "to": "private"}),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("sch_absent"), "{err}");
+
+    let sched = s
+        .schedules
+        .create(
+            TriggerKind::Cron,
+            json!({"expr": "0 9 * * *"}),
+            json!({"type": "notify", "template": "🧭 Veille"}),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    let done = x
+        .execute("schedule_delete", &json!({"id": sched.id}))
+        .await
+        .unwrap();
+    assert_eq!(done.value["deleted"], true);
+    let listed = s.schedules.list().await.unwrap();
+    assert!(
+        listed
+            .iter()
+            .all(|x| x.id != sched.id || x.state == "deleted"),
+        "{listed:?}"
+    );
+}
+
 /// #133 : répéter un message déjà parti, c'est le même texte à la mise en forme près,
 /// l'un dans l'autre, ou le même corps sous un autre en-tête ; un autre message n'en
 /// est pas un.

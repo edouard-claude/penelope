@@ -73,7 +73,7 @@ impl NativeToolExecutor {
                 self.scheduler()?
                     .schedule_delete(&str_arg(args, "id")?)
                     .await
-                    .map_err(ToolError::Other)?;
+                    .map_err(ToolError::Invalid)?;
                 json!({"deleted": true})
             }
 

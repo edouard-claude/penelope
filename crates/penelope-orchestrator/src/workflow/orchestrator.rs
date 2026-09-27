@@ -102,13 +102,19 @@ impl penelope_executor::executor::Orchestrator for WorkflowOrchestrator {
     }
 
     async fn schedule_delete(&self, id: &str) -> Result<(), String> {
-        self.context
+        let found = self
+            .context
             .services
             .schedules
             .set_state(id, "deleted")
             .await
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        // Un identifiant inconnu n'est pas une suppression réussie : même refus que la
+        // RPC, Telegram et la CLI (#221, #223).
+        if !found {
+            return Err(format!("planification inconnue : {id}"));
+        }
+        Ok(())
     }
 
     async fn start_workflow(
