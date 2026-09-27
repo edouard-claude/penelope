@@ -50,6 +50,7 @@ scenario_cases! {
     crash_deux_vies => "crash-deux-vies",
     approbation_apres_redemarrage => "approbation-apres-redemarrage",
     redemarrages_en_serie => "redemarrages-en-serie",
+    redemarrage_telegram => "redemarrage-telegram",
     outils_niveau_1_et_compaction => "outils-niveau-1-et-compaction",
     message_pendant_un_lot => "message-pendant-un-lot",
     commandes_systeme => "commandes-systeme",

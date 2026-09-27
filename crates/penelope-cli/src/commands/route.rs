@@ -13,7 +13,7 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Status => (m::STATUS, json!({})),
         Command::Metrics => (m::METRICS, json!({})),
         Command::Doctor => (m::DOCTOR, json!({})),
-        Command::Restart => (m::RESTART, json!({})),
+        Command::Restart => (m::RESTART, json!({"by": "cli", "why": "penelope restart"})),
         Command::Import(ImportCmd::Hermes {
             path,
             dry_run,

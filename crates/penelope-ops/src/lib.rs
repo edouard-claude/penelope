@@ -2,7 +2,7 @@
 //!
 //! Diagnostic (`doctor`), mise à jour et retour arrière (`upgrade`), sauvegarde, import
 //! d'une instance Hermes, connexion et quota de l'abonnement Codex, installation de skills
-//! tierces et de leurs dépendances, purge et rétention, opérations sur les sessions (fork,
+//! tierces et de leurs dépendances, purge et rétention, trace de vie du daemon (arrêts demandés), opérations sur les sessions (fork,
 //! retour arrière, export, reconstruction). Au-dessus de `penelope-app` et de `penelope-vault`,
 //! sous le daemon, qui compose la méthode RPC `doctor` avec ses propres contrôles
 //! (`rpc/methods/doctor.rs`) ; la crate ne connaît ni le daemon ni l'hôte MCP.
@@ -14,6 +14,7 @@ pub mod codex_auth;
 pub mod codex_quota;
 pub mod doctor;
 pub mod hermes;
+pub mod lifecycle;
 pub mod purge;
 pub mod session_ops;
 pub mod skill_deps;

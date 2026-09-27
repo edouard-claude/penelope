@@ -100,6 +100,10 @@ impl Harness<'_> {
         if !turns.is_empty() {
             v["turns"] = json!(turns);
         }
+        // Un arrêt demandé depuis le chat dit son origine, comme par la socket (#225).
+        if d.handle.is_shutting_down() {
+            v["stop"] = json!(d.handle.stop_reason());
+        }
         Ok(v)
     }
 

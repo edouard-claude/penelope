@@ -627,28 +627,31 @@ pub fn process_exists(pid: u32) -> bool {
 /// l'OS : les motifs Windows contiennent des chemins littéraux `C:\`, interdits partout
 /// ailleurs par le test d'architecture.
 /// Attend une demande d'arrêt : Ctrl-C, ou `SIGTERM` envoyé par `launchd` / `systemd`.
+/// Rend le nom du signal reçu, pour le journal (issue #225).
 ///
 /// Les signaux Unix n'ont le droit d'exister que dans ce crate (§2.10) : le daemon
 /// n'appelle que cette fonction.
-pub async fn shutdown_signal() {
+pub async fn shutdown_signal() -> &'static str {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
         match signal(SignalKind::terminate()) {
             Ok(mut term) => {
                 tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {}
-                    _ = term.recv() => {}
+                    _ = tokio::signal::ctrl_c() => "SIGINT",
+                    _ = term.recv() => "SIGTERM",
                 }
             }
             Err(_) => {
                 let _ = tokio::signal::ctrl_c().await;
+                "SIGINT"
             }
         }
     }
     #[cfg(not(unix))]
     {
         let _ = tokio::signal::ctrl_c().await;
+        "Ctrl-C"
     }
 }
 

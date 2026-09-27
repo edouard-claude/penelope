@@ -124,6 +124,7 @@ impl Harness<'_> {
         if d.handle.is_shutting_down() {
             out["shutting_down"] = json!(true);
             out["wants_restart"] = json!(d.handle.wants_restart());
+            out["stop"] = json!(d.handle.stop_reason());
         }
         Ok(out)
     }

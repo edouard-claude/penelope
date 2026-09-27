@@ -62,7 +62,9 @@ impl TelegramGateway {
                 })
             }
             "restart" => {
-                rpc.call(m::RESTART, json!({})).await?;
+                let why = "/restart, confirmé";
+                rpc.call(m::RESTART, json!({"by": "telegram", "why": why}))
+                    .await?;
                 Done::quiet("🔁 Redémarrage demandé")
             }
             "session.close" => {
