@@ -6,7 +6,10 @@
 //!   `{{artifact:1}}`, `{{node:1}}`, `{{llm:1}}`, `{{run:1}}`, `{{dream:1}}`, numéroté
 //!   dans l'ordre de première apparition ; un autre préfixe garde son nom (`sch_…` en
 //!   `{{sch:1}}`) ; un ULID nu devient `{{ulid:1}}` ;
-//! - la version du workspace devient `{{version}}` : un bump ne réécrit pas les attendus ;
+//! - la version du workspace devient `{{version}}` là où elle désigne Pénélope (`v1.0.0`
+//!   d'un tag ou d'un lien, « version 1.0.0 », champs `version` et `current` d'un objet
+//!   qui n'est pas une définition de skill ou de workflow) : un bump ne réécrit pas les
+//!   attendus, et le `version = "1.0.0"` d'une skill reste une donnée ;
 //! - un ULID en minuscules, marqueur tiré au sort (balise `<commande-…>` du juge des
 //!   commandes shell), devient `{{marker:1}}` ;
 //! - le fichier de notes d'une session (`notes/<titre>-<6 derniers caractères de son
@@ -21,7 +24,8 @@
 //! - un texte qui répond à un motif `masks` du scénario (mémoire du processus, contrôles
 //!   propres à l'hôte) devient `{{masked}}` ;
 //! - une estimation de jetons (`tokens_est`) devient `{{tokens}}` quand l'objet qui la
-//!   porte cite la racine temporaire : sa longueur change d'une machine à l'autre.
+//!   porte cite la racine temporaire ou la version : leur longueur change d'une machine
+//!   ou d'un bump à l'autre.
 
 use regex::Regex;
 use serde_json::Value;
@@ -61,6 +65,15 @@ const SIZE_KEYS: &[&str] = &["tokens_est"];
 /// Clés dont la valeur est un jeton aléatoire.
 const RANDOM_KEYS: &[&str] = &["callback_data"];
 
+/// Clés dont la valeur, égale à la version du workspace, désigne Pénélope.
+const VERSION_KEYS: &[&str] = &["version", "current"];
+
+/// Clés d'une définition (skill, workflow) : sa `version` est une donnée, pas Pénélope.
+const DEFINITION_KEYS: &[&str] = &["name", "id", "description"];
+
+/// Version du workspace, telle que les attendus la remplacent.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub struct Normaliser {
     start_ms: i64,
     homes: Vec<String>,
@@ -75,6 +88,8 @@ pub struct Normaliser {
     duration: Regex,
     stamp: Regex,
     hex: Regex,
+    /// La version précédée de `v` ou de « version », sans suite de numéro collée.
+    version: Regex,
     masks: Vec<Regex>,
     /// Textes exacts propres au rejeu (adresse du faux serveur HTTP) et leur jeton.
     literals: Vec<(String, String)>,
@@ -109,6 +124,11 @@ impl Normaliser {
             )
             .expect("regex RFC 3339"),
             hex: Regex::new(r"\b[0-9a-f]{64}\b").expect("regex sha256"),
+            version: Regex::new(&format!(
+                r"(\bv|\bversion )({})([^0-9A-Za-z.\-]|$)",
+                regex::escape(VERSION)
+            ))
+            .expect("regex version"),
             masks: Vec::new(),
             literals: Vec::new(),
         }
@@ -138,7 +158,8 @@ impl Normaliser {
             Value::String(s) => Value::String(self.text(&s)),
             Value::Array(items) => Value::Array(items.into_iter().map(|x| self.value(x)).collect()),
             Value::Object(map) => {
-                let mentions_home = self.mentions_home(&map);
+                let mentions_home = self.mentions_home(&map) || self.mentions_version(&map);
+                let definition = DEFINITION_KEYS.iter().any(|k| map.contains_key(*k));
                 let mut out = serde_json::Map::new();
                 for (k, v) in map {
                     let v = if HASH_KEYS.contains(&k.as_str()) && v.is_string() {
@@ -149,6 +170,11 @@ impl Normaliser {
                         Value::String("{{ms}}".into())
                     } else if mentions_home && SIZE_KEYS.contains(&k.as_str()) && v.is_number() {
                         Value::String("{{tokens}}".into())
+                    } else if !definition
+                        && VERSION_KEYS.contains(&k.as_str())
+                        && v.as_str() == Some(VERSION)
+                    {
+                        Value::String("{{version}}".into())
                     } else {
                         self.value(v)
                     };
@@ -169,6 +195,13 @@ impl Normaliser {
             .any(|h| !h.is_empty() && raw.contains(h.as_str()))
     }
 
+    /// Vrai si l'objet cite la version de Pénélope (même règle que `text`) : une
+    /// estimation de jetons voisine change avec sa longueur à chaque bump.
+    fn mentions_version(&self, map: &serde_json::Map<String, Value>) -> bool {
+        self.version
+            .is_match(&Value::Object(map.clone()).to_string())
+    }
+
     /// Normalise un texte : chemins, identifiants, horodatages, hachages.
     pub fn text(&mut self, s: &str) -> String {
         let mut out = s.to_string();
@@ -183,7 +216,10 @@ impl Normaliser {
                 out = out.replace(home, "{{home}}");
             }
         }
-        out = out.replace(env!("CARGO_PKG_VERSION"), "{{version}}");
+        out = self
+            .version
+            .replace_all(&out, "${1}{{version}}${3}")
+            .into_owned();
         let ulid = self.ulid.clone();
         let out = ulid
             .replace_all(&out, |caps: &regex::Captures| {
@@ -367,6 +403,34 @@ mod tests {
         let v = n.value(json!({"callback_data": "a:oOC3riTSHISF", "text": "• Mémoire : 35 Mo"}));
         assert_eq!(v["callback_data"], "{{action}}");
         assert_eq!(v["text"], "• {{masked}}");
+    }
+
+    /// La version d'une skill ou d'un workflow reste une donnée, même quand elle vaut
+    /// celle du workspace (1.0.0) ; la version de Pénélope devient `{{version}}`.
+    #[test]
+    fn only_the_version_of_penelope_becomes_a_token() {
+        let mut n = Normaliser::new(START, Path::new("/tmp/racine-v"));
+        let status = n.value(json!({"version": VERSION, "uptime_s": 0}));
+        assert_eq!(status["version"], "{{version}}");
+        let upgrade = n.value(json!({"current": VERSION, "latest": "9.9.9"}));
+        assert_eq!(upgrade["current"], "{{version}}");
+        let skill = n.value(json!({"name": "releve", "version": VERSION}));
+        assert_eq!(skill["version"], VERSION);
+        let wf = n.value(json!({"metadata": {"id": "cr", "version": VERSION}}));
+        assert_eq!(wf["metadata"]["version"], VERSION);
+        assert_eq!(
+            n.text(&format!("blob/v{VERSION}/docs · version {VERSION} ·")),
+            "blob/v{{version}}/docs · version {{version}} ·"
+        );
+        assert_eq!(
+            n.text(&format!("\"version\": \"{VERSION}\"")),
+            format!("\"version\": \"{VERSION}\"")
+        );
+        assert_eq!(n.text(&format!("v{VERSION}.1")), format!("v{VERSION}.1"));
+        let near = n.value(json!({"text": format!("v{VERSION}"), "tokens_est": 7}));
+        assert_eq!(near["tokens_est"], "{{tokens}}");
+        let data = n.value(json!({"text": format!("\"version\": \"{VERSION}\""), "tokens_est": 7}));
+        assert_eq!(data["tokens_est"], 7);
     }
 
     #[test]

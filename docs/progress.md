@@ -12,6 +12,24 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.0
+
+La V1. Même comportement pour le propriétaire que la 0.17.62, code réorganisé : 27 crates,
+architecture hexagonale tenue par `penelope-archtest`, journal d'événements comme source
+unique de vérité (décision 0017), un scénario rejouable par commande Telegram, outil natif
+et méthode RPC. Le détail est dans les sections `1.0.0-alpha.1` à `1.0.0-rc.1` ci-dessous.
+
+La 1.0.0-rc.1 a été installée sur l'instance réelle le 27/09 par `penelope upgrade --tag` :
+binaire re-signé « Penelope Dev », redémarrage confirmé, Telegram en écoute,
+`history verify` sans divergence sur 70 sessions. La 1.0.0 est le même code.
+
+- Scénarios : la version du workspace n'est plus remplacée que là où elle désigne
+  Pénélope (`v1.0.0` d'un lien, « version 1.0.0 », champs `version` et `current` hors
+  définition de skill ou de workflow). En 1.0.0, le remplacement aveugle prenait aussi le
+  `version = "1.0.0"` des skills et workflows (quatre scénarios rouges). Un `tokens_est`
+  voisin de la version est masqué : il changeait avec la longueur du numéro à chaque bump
+  (cause du rouge de `outils-soi` après la rc.1).
+
 ### 1.0.0-rc.1
 
 La V1 passe sur `main` (PR #226, épopée #208). Aucun changement de comportement depuis la
