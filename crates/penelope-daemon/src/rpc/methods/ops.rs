@@ -67,12 +67,11 @@ impl Rpc {
                 );
                 Ok(json!({"text": penelope_observe::metrics::render()}))
             }
-            method::SHUTDOWN => {
-                self.daemon.handle.shutdown();
-                Ok(json!({"ok": true}))
-            }
-            method::RESTART => {
-                self.daemon.handle.request_restart();
+            method::SHUTDOWN | method::RESTART => {
+                let restart = method == method::RESTART;
+                self.daemon
+                    .handle
+                    .stop(penelope_app::ports::Stop::from_params(p, restart));
                 Ok(json!({"ok": true}))
             }
             // Jobs d'outils (issue #204) : ce qui tourne hors des tours.

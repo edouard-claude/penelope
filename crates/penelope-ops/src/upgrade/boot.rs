@@ -108,9 +108,13 @@ pub fn arm_watchdog(after: Duration) {
     std::thread::spawn(move || {
         std::thread::sleep(after);
         if !CONFIRMED.load(Ordering::SeqCst) {
+            let secs = after.as_secs();
+            tracing::error!(
+                secs,
+                "mise à jour : santé non confirmée, arrêt pour retour arrière"
+            );
             eprintln!(
-                "mise à jour : santé non confirmée après {} s, arrêt pour retour arrière",
-                after.as_secs()
+                "mise à jour : santé non confirmée après {secs} s, arrêt pour retour arrière"
             );
             std::process::exit(75);
         }

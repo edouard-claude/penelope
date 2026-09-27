@@ -169,6 +169,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
 }
 
 async fn daemon(cli: &Cli) -> CliResult<()> {
+    use penelope_ops::lifecycle;
     use penelope_ops::upgrade::{self, Boot};
     // Nouveau binaire à l'essai : ce démarrage est compté avant d'ouvrir quoi que ce soit,
     // pour qu'un plantage plus loin mène aussi au retour arrière.
@@ -176,7 +177,11 @@ async fn daemon(cli: &Cli) -> CliResult<()> {
         .map_err(|e| CliError::Io(e.to_string()))?;
     match upgrade::on_boot_now(&dirs.state(), penelope_daemon::VERSION) {
         Boot::RolledBack { from, to } => {
-            // L'ancien binaire est au même chemin : `KeepAlive` le relance (issue #36).
+            // L'ancien binaire est au même chemin : `KeepAlive` le relance (issue #36). Le
+            // journal n'est pas encore ouvert : la trace de vie le lui dira (#225).
+            let why = format!("retour arrière automatique, {from} non confirmée");
+            let stop = lifecycle::Stop::new("mise à jour", why, true);
+            lifecycle::on_stop(&dirs.state(), &from, Some(&stop));
             return Err(CliError::Io(format!(
                 "la version {from} n'a pas confirmé son démarrage : binaire {to} remis en \
                  place, le service repart avec lui"
@@ -208,10 +213,29 @@ async fn daemon(cli: &Cli) -> CliResult<()> {
         cfg.observability.log_retention_days,
         !service,
     );
-    tracing::info!(version = penelope_daemon::VERSION, "Pénélope démarre");
+    // Le démarrage dit ce qui l'a précédé : arrêt demandé (par qui) ou non propre (#225).
+    let state = d.services.platform.dirs.state();
+    let previous = lifecycle::on_start(&state, penelope_daemon::VERSION);
+    tracing::info!(
+        version = penelope_daemon::VERSION,
+        arret_precedent = previous.as_deref().unwrap_or("aucun (premier démarrage)"),
+        "Pénélope démarre"
+    );
     let d = std::sync::Arc::new(d);
     let gw = penelope_gateway_telegram::compose(&d).await; // avant `run` (#12, T29)
-    d.run(gw).await.map_err(|e| CliError::Io(e.to_string()))
+    let handle = d.handle.clone();
+    let run = d.run(gw).await;
+    let stop = handle.stop_reason();
+    let why = stop.as_ref().map(|s| s.to_string());
+    tracing::info!(
+        version = penelope_daemon::VERSION,
+        arret = why
+            .as_deref()
+            .unwrap_or("sans demande (sortie de la boucle principale)"),
+        "Pénélope s'arrête"
+    );
+    lifecycle::on_stop(&state, penelope_daemon::VERSION, stop.as_ref());
+    run.map_err(|e| CliError::Io(e.to_string()))
 }
 
 mod approval_stats;

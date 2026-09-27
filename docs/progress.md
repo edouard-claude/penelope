@@ -12,6 +12,27 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.1
+
+Un redémarrage demandé depuis Telegram ne laissait aucune trace au journal : le 27/09 à
+07h18, rien entre le dernier inventaire et « Pénélope démarre ». Cause : `shutdown` et
+`restart` (RPC, donc `/restart` et `penelope restart`) et le redémarrage d'après une mise à
+jour posaient le drapeau d'arrêt sans rien écrire ; seul le signal écrivait `arrêt demandé`,
+sans dire lequel. Le journal, lui, s'écrit sans tampon : rien n'était perdu à la sortie.
+
+- Tout arrêt passe par `Handle::stop` : ligne `INFO` `arrêt demandé` avec `par` (`signal`,
+  `cli`, `telegram`, `mise à jour`, `rpc`), `motif` (`SIGTERM`, `/restart, confirmé`,
+  `version x installée`…) et `redemarrage` ; `shutdown` et `restart` prennent `by`/`why`.
+- `Pénélope s'arrête` avec la version et l'origine ; `state/daemon-run.json` la garde, et
+  `Pénélope démarre` cite `arret_precedent` : l'arrêt demandé, ou un arrêt non propre si la
+  version précédente tournait encore. Le retour arrière automatique (#36) y est inscrit ;
+  l'arrêt du chien de garde (sortie 75) est journalisé.
+- Tests : `stop_journal` (restart par la RPC, ligne relue dans le fichier, rouge avant),
+  `lifecycle`, précédence dans `Handle` ; scénario `redemarrage-telegram`, `rpc-arret` relève
+  l'origine.
+
+Closes #225
+
 ### 1.0.0
 
 La V1. Même comportement pour le propriétaire que la 0.17.62, code réorganisé : 27 crates,

@@ -1,0 +1,13 @@
+name = "redemarrage-telegram"
+description = """Redémarrage demandé depuis Telegram (issue #225) : `/restart` montre la question,
+le clic sur « Confirmer » demande le redémarrage. L'issue du clic relève l'origine de
+l'arrêt que le daemon journalise et garde pour le démarrage suivant : par `telegram`,
+pour `/restart` confirmé, avec redémarrage."""
+
+[[steps]]
+kind = "telegram"
+text = "/restart"
+
+[[steps]]
+kind = "telegram"
+click = "✅ Confirmer"

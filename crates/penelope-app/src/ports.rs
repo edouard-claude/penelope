@@ -10,7 +10,7 @@ use penelope_mcp::supervisor::ServerStatus;
 use serde_json::Value;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, LockResult, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, LockResult, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// Providers des modèles, construits à la demande (`Daemon::provider_for` jusqu'ici).
 #[async_trait::async_trait]
@@ -94,11 +94,55 @@ pub struct Supervision {
     pub events: EventLog,
 }
 
+/// Un arrêt demandé : qui (`signal`, `cli`, `telegram`, `mise à jour`, `rpc`), pourquoi,
+/// et s'il doit être suivi d'un redémarrage. Écrit au journal au moment de la demande et
+/// relu au démarrage suivant (issue #225).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Stop {
+    pub by: String,
+    pub why: String,
+    pub restart: bool,
+}
+
+impl Stop {
+    pub fn new(by: &str, why: impl Into<String>, restart: bool) -> Stop {
+        Stop {
+            by: by.to_string(),
+            why: why.into(),
+            restart,
+        }
+    }
+
+    /// Méthodes RPC `shutdown` et `restart` : l'appelant se nomme par `by` et `why` ;
+    /// à défaut, la socket seule est connue.
+    pub fn from_params(p: &Value, restart: bool) -> Stop {
+        let text = |k: &str| p[k].as_str().filter(|s| !s.trim().is_empty());
+        let method = if restart { "restart" } else { "shutdown" };
+        Stop::new(
+            text("by").unwrap_or("rpc"),
+            text("why").map_or_else(|| format!("méthode `{method}`"), str::to_string),
+            restart,
+        )
+    }
+}
+
+impl std::fmt::Display for Stop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let what = if self.restart {
+            "redémarrage"
+        } else {
+            "arrêt"
+        };
+        write!(f, "{what} demandé par {} ({})", self.by, self.why)
+    }
+}
+
 /// Poignée de contrôle du daemon : signal d'arrêt et de redémarrage, compteurs.
 #[derive(Clone)]
 pub struct Handle {
     shutdown: Arc<AtomicBool>,
     restart: Arc<AtomicBool>,
+    reason: Arc<Mutex<Option<Stop>>>,
     started_at_ms: i64,
     turns_done: Arc<AtomicU64>,
 }
@@ -108,6 +152,7 @@ impl Handle {
         Handle {
             shutdown: Arc::new(AtomicBool::new(false)),
             restart: Arc::new(AtomicBool::new(false)),
+            reason: Arc::new(Mutex::new(None)),
             started_at_ms,
             turns_done: Arc::new(AtomicU64::new(0)),
         }
@@ -118,6 +163,35 @@ impl Handle {
     pub fn request_restart(&self) {
         self.restart.store(true, Ordering::SeqCst);
         self.shutdown.store(true, Ordering::SeqCst);
+    }
+    /// Arrêt (ou redémarrage) avec son origine, journalisée tout de suite : la première
+    /// demande est celle qui reste, sauf un redémarrage qui suit un simple arrêt, pour
+    /// que l'origine gardée dise la même chose que `wants_restart` (issue #225).
+    pub fn stop(&self, stop: Stop) {
+        tracing::info!(
+            par = %stop.by,
+            motif = %stop.why,
+            redemarrage = stop.restart,
+            "arrêt demandé"
+        );
+        {
+            let mut reason = self.reason.lock().unwrap_or_else(|p| p.into_inner());
+            if reason.as_ref().is_none_or(|r| stop.restart && !r.restart) {
+                *reason = Some(stop.clone());
+            }
+        }
+        if stop.restart {
+            self.request_restart();
+        } else {
+            self.shutdown();
+        }
+    }
+    /// L'origine de l'arrêt en cours, s'il a été demandé par `stop`.
+    pub fn stop_reason(&self) -> Option<Stop> {
+        self.reason
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
     pub fn is_shutting_down(&self) -> bool {
         self.shutdown.load(Ordering::SeqCst)
@@ -399,5 +473,35 @@ pub trait Admin: Send + Sync {
     ) -> Result<Value, String> {
         let _ = (session_id, origin, args);
         Err("vocal indisponible hors du daemon".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #225 : la première origine reste, sauf un redémarrage demandé après un simple arrêt ;
+    /// sans `by` ni `why`, la socket seule est nommée.
+    #[test]
+    fn the_stop_reason_keeps_the_first_request_unless_a_restart_follows() {
+        let h = Handle::new(0);
+        assert_eq!(h.stop_reason(), None);
+        h.stop(Stop::from_params(&serde_json::json!({}), false));
+        assert_eq!(
+            h.stop_reason(),
+            Some(Stop::new("rpc", "méthode `shutdown`", false))
+        );
+        h.stop(Stop::new("signal", "SIGTERM", false));
+        assert_eq!(h.stop_reason().unwrap().by, "rpc");
+        let tg = serde_json::json!({"by": "telegram", "why": "/restart, confirmé"});
+        h.stop(Stop::from_params(&tg, true));
+        let r = h.stop_reason().unwrap();
+        assert!(h.is_shutting_down() && h.wants_restart());
+        assert_eq!(
+            r.to_string(),
+            "redémarrage demandé par telegram (/restart, confirmé)"
+        );
+        h.stop(Stop::new("mise à jour", "version 9.9.9 installée", true));
+        assert_eq!(h.stop_reason(), Some(r));
     }
 }

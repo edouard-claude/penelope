@@ -18,7 +18,7 @@
 //! les sources se met à jour par `make deploy`.
 
 pub use crate::helpers::{is_source_build, running_binary};
-use crate::ports::{Handle, Slot};
+use crate::ports::{Handle, Slot, Stop};
 use penelope_app::services::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_platform::handoff::HandOff;
@@ -561,10 +561,17 @@ pub async fn rpc(s: &Arc<Services>, handle: &Handle, p: &Value) -> anyhow::Resul
         v["restart"] = json!(true);
         return Ok(v);
     }
+    let why = match v["installed"].as_str() {
+        Some(to) => format!("version {to} installée"),
+        None => format!(
+            "retour arrière manuel vers {}",
+            v["to"].as_str().unwrap_or("?")
+        ),
+    };
     let handle = handle.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(1500)).await;
-        handle.request_restart();
+        handle.stop(Stop::new("mise à jour", why, true));
     });
     v["restart"] = json!(true);
     Ok(v)

@@ -274,8 +274,8 @@ impl Daemon {
                     tracing::error!(error = %e, "socket RPC arrêtée");
                 }
             }
-            _ = penelope_platform::process::shutdown_signal() => {
-                tracing::info!("arrêt demandé");
+            signal = penelope_platform::process::shutdown_signal() => {
+                self.handle.stop(penelope_app::ports::Stop::new("signal", signal, false));
             }
         }
 
