@@ -106,7 +106,7 @@ else
 fi
 
 # 4. Le filet de migration, sur une fixture de la dernière 0.17 publiée dans progress.md.
-last=$(sed -n 's/^### \(0\.17\.[0-9]*\)$/\1/p' docs/progress.md | sort -t. -k3 -n | tail -1)
+last=$(sed -n 's/^### \(0\.17\.[0-9]*\)$/\1/p' docs/progress-0.17.md | sort -t. -k3 -n | tail -1)
 test_file=crates/penelope-store/tests/migration_from_0_17.rs
 fixture=crates/penelope-store/tests/fixtures/penelope-$last.db
 if [ ! -f "$test_file" ]; then

@@ -34,11 +34,11 @@ jobs:
         with:
           fetch-depth: 0   # check-budget.sh compare HEAD à sa base git (#209)
 
-      # Chaque branche porte sa ligne de version (#212) : `0.` sur `main`, `1.0.0-` sur
-      # `v1`. Un lot qui apporte la version de l'autre branche (rétroportage, fusion mal
-      # résolue sur les seize lignes de `Cargo.toml`) échoue ici, avant de coûter une
-      # suite et, sur `main`, avant que `livraison` ne pose un tag `v1*`. Ailleurs
-      # (pull request, autre branche), pas de contrainte.
+      # Chaque branche porte sa ligne de version (#212) : `1.` et au-delà sur `main` depuis
+      # la bascule (#208), `1.0.0-` sur `v1` tant qu'elle existe. Un rétroportage depuis la
+      # branche `0.17` qui ramènerait une version 0.x sur `main` échoue ici, avant que
+      # `livraison` ne pose un tag en arrière. Ailleurs (pull request, autre branche), pas de
+      # contrainte.
       - name: La branche porte sa version
         run: |
           set -euo pipefail
@@ -47,8 +47,8 @@ jobs:
           case "$GITHUB_REF" in
             refs/heads/main)
               case "$version" in
-                0.*) ;;
-                *) echo "::error::sur main, la version du workspace commence par « 0. » (lue : ${version}) ; la 1.0.0-alpha.N vit sur v1 (#212)"; exit 1 ;;
+                0.*) echo "::error::sur main, la version du workspace est 1.x depuis la bascule (lue : ${version}) ; la 0.17 vit sur la branche 0.17 (#208)"; exit 1 ;;
+                *) ;;
               esac ;;
             refs/heads/v1)
               case "$version" in
