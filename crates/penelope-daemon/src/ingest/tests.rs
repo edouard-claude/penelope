@@ -198,15 +198,15 @@ async fn an_approved_proposal_is_written_once() {
     assert_eq!(notes.matches("3 octobre").count(), 1);
 }
 
-/// #145 : les trois boutons d'une carte de contradiction. « Remplacer » retire
-/// l'ancienne entrée, « Exception » écrit la nouvelle avec son contexte, « Ignorer »
-/// écarte le candidat et ne touche pas à la mémoire.
+/// #145 : les trois boutons d'une carte de contradiction. « Remplacer » retire l'ancienne
+/// entrée et écrit la nouvelle à son niveau (#224), « Exception » l'écrit avec son contexte,
+/// « Ignorer » écarte le candidat et ne touche pas à la mémoire.
 #[tokio::test]
 async fn the_three_buttons_of_a_clash_card_decide() {
-    for (action, expect_old, expect_new) in [
-        ("memory_reject", true, false),
-        ("memory_as_exception", true, true),
-        ("memory_accept", false, true),
+    for (action, expect_old, expect_new, file) in [
+        ("memory_reject", true, false, "notes.md"),
+        ("memory_as_exception", true, true, "notes.md"),
+        ("memory_accept", false, true, "profil.md"),
     ] {
         let (_dir, d, _p, _r) = daemon().await;
         let s = &d.services;
@@ -251,7 +251,7 @@ async fn the_three_buttons_of_a_clash_card_decide() {
             expect_old,
             "{action} : ancienne entrée"
         );
-        let written = std::fs::read_to_string(vault.join("notes.md")).unwrap_or_default();
+        let written = std::fs::read_to_string(vault.join(file)).unwrap_or_default();
         assert_eq!(
             written.contains("Jamais de réponse en anglais"),
             expect_new,

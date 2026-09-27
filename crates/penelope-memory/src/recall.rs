@@ -195,6 +195,47 @@ pub fn used_in_answer(entry: &str, asked: &str, answer: &str) -> bool {
     hits >= if own.len() <= 4 { 1 } else { 2 }
 }
 
+/// Ce que la réponse suivante du propriétaire dit d'un souvenir dont la réponse d'avant
+/// s'est servie (issue #230) : `Some(true)` succès, `Some(false)` contradiction, `None`
+/// dans le doute. **Conservateur** : un faux « contredit » rétrograderait une bonne règle.
+///
+/// ```text
+///  réponse suivante                                   signal
+///  sans aucun marqueur de correction                  succès
+///  ouvre sur une correction (« non, », « je t'ai      contradiction, si elle reprend
+///  dit… ») et reprend un mot du souvenir              un mot distinctif du souvenir
+///  tout le reste (« plutôt » au milieu, correction    aucun
+///  sur un autre sujet, message vide)
+/// ```
+pub fn outcome_of(entry: &str, reply: &str) -> Option<bool> {
+    let r = reply.trim().to_lowercase();
+    if r.is_empty() {
+        return None;
+    }
+    if !crate::candidates::looks_like_correction(&r) {
+        return Some(true);
+    }
+    const OPENERS: &[&str] = &[
+        "non",
+        "mais non",
+        "ah non",
+        "pas comme ça",
+        "c'est faux",
+        "faux",
+        "ce n'est pas",
+        "je t'ai dit",
+        "je t'avais dit",
+        "j'ai dit",
+    ];
+    let opens = OPENERS.iter().any(|o| {
+        r.strip_prefix(o)
+            .is_some_and(|rest| rest.chars().next().is_none_or(|c| !c.is_alphanumeric()))
+    });
+    let own = distinctive(entry);
+    let touches = distinctive(&r).iter().any(|w| own.contains(w));
+    (opens && touches).then_some(false)
+}
+
 /// Intention de rappel détectée dans un message (§6.7 voie 2).
 pub fn shows_recall_intent(message: &str) -> bool {
     let m = message.to_lowercase();

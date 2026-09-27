@@ -55,12 +55,23 @@ pub async fn apply_contradiction(
                 Err(e) => format!("❌ {e}"),
             }
         }
-        // Remplacer : l'ancienne entrée est retirée, la nouvelle prend sa place.
+        // Remplacer : l'ancienne entrée est retirée, la nouvelle prend sa place, à son
+        // niveau. Écrite dans `notes.md`, une préférence remplacée quittait le profil et
+        // n'était plus injectée (issue #224).
         _ => {
+            let level = s
+                .memory
+                .get(uid)
+                .await
+                .ok()
+                .flatten()
+                .map(|e| e.level)
+                .filter(|l| matches!(l, Level::Profil | Level::Coeur | Level::Projet))
+                .unwrap_or(Level::Cure);
             let removed = crate::vault_ops::forget(s, &vault, uid)
                 .await
                 .unwrap_or(false);
-            match crate::vault_ops::remember(s, &vault, Level::Cure, &proposed, "dream").await {
+            match crate::vault_ops::remember(s, &vault, level, &proposed, "dream").await {
                 Ok(_) if removed => "♻️ Remplacé : l'ancienne entrée est retirée.".to_string(),
                 Ok(_) => "🧠 Écrit : l'ancienne entrée était déjà partie.".to_string(),
                 Err(e) => format!("❌ {e}"),
@@ -104,6 +115,22 @@ pub async fn apply_memory_proposal(d: &Context, approval_id: &str) -> anyhow::Re
         return Ok(confirmed);
     }
     let vault = crate::helpers::vault_dir(s);
+    // Entrée contestée (issue #230) : « Tout » accepte la proposition de la retirer.
+    if a.payload["contested"].as_bool() == Some(true) {
+        let uid = a.payload["uid"].as_str().unwrap_or_default();
+        let retired = crate::vault_ops::forget(s, &vault, uid)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        s.kv_set(&flag, &(retired as usize).to_string()).await?;
+        let _ = s.kv_delete(&format!("memory.contested.{uid}")).await;
+        s.events
+            .append(EventDraft::new(
+                "memory.contested_retired",
+                json!({"approval": approval_id, "uid": uid, "retired": retired}),
+            ))
+            .await?;
+        return Ok(retired as usize);
+    }
     // Découpage d'une entrée fourre-tout (issue #145) : les faits prennent le niveau de
     // l'entrée d'origine, qui est retirée une fois tous écrits.
     if a.payload["split"].as_bool() == Some(true) {

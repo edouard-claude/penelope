@@ -155,12 +155,13 @@ impl MemoryIndex {
             .await
     }
 
-    /// Entrées à ne pas injecter d'office : expirées à ce jour. `sensible` n'est plus qu'un
-    /// marqueur : le vault est privé, une information client ou d'infrastructure utile se
-    /// garde et se sert (issue #37).
+    /// Entrées à ne pas injecter d'office : expirées à ce jour, ou contestées (#230).
+    /// `sensible` n'est plus qu'un marqueur : le vault est privé, une information client
+    /// ou d'infrastructure utile se garde et se sert (issue #37).
     pub async fn hidden_uids(&self) -> penelope_store::Result<std::collections::HashSet<String>> {
         let today: String = self.clock.now_rfc3339().chars().take(10).collect();
-        self.store
+        let mut hidden: std::collections::HashSet<String> = self
+            .store
             .read(move |c| {
                 let mut st = c.prepare(
                     "SELECT uid FROM mem_flags
@@ -168,6 +169,45 @@ impl MemoryIndex {
                 )?;
                 let rows = st.query_map([today], |r| r.get(0))?;
                 Ok(rows.collect::<Result<_, _>>()?)
+            })
+            .await?;
+        hidden.extend(self.contested_uids().await?);
+        Ok(hidden)
+    }
+
+    /// Entrées actives **contestées** (§6.8, issue #230) : assez jugées par les réponses du
+    /// propriétaire (`succès + contradictions ≥ contested_min_observations`) et de
+    /// confiance sous `contested_confidence`, la formule de
+    /// [`crate::vault::Practice::confidence`] : `(succès + 1) / (succès + contradictions
+    /// + 2)`. Lu à chaque rappel automatique : une seule requête.
+    pub async fn contested_uids(&self) -> penelope_store::Result<Vec<String>> {
+        let (threshold, min_obs) = self.contested_thresholds();
+        self.store
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT s.uid FROM mem_signals s JOIN mem_entries e ON e.uid = s.uid
+                     WHERE e.statut != 'retiree'
+                       AND s.successes + s.contradictions >= ?1
+                       AND (s.successes + 1.0) / (s.successes + s.contradictions + 2.0) < ?2
+                     ORDER BY s.uid",
+                )?;
+                let rows = st.query_map(params![min_obs.max(1), threshold], |r| r.get(0))?;
+                Ok(rows.collect::<Result<_, _>>()?)
+            })
+            .await
+    }
+
+    /// Le propriétaire garde une entrée contestée : ses succès et contradictions repartent
+    /// de zéro, elle est de nouveau servie d'office (issue #230).
+    pub async fn reset_outcomes(&self, uid: &str) -> penelope_store::Result<()> {
+        let uid = uid.to_string();
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "UPDATE mem_signals SET successes = 0, contradictions = 0 WHERE uid = ?1",
+                    [&uid],
+                )?;
+                Ok(())
             })
             .await
     }

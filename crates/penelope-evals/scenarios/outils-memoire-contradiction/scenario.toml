@@ -1,0 +1,18 @@
+name = "outils-memoire-contradiction"
+description = """Une préférence du profil n'est pas défaite en silence (issue #224) : le
+propriétaire demande le tutoiement, le modèle l'écrit au profil (`mem_remember`). Plus tard
+il dit préférer le vouvoiement ; le modèle veut l'écrire à côté, et l'outil refuse en
+nommant l'entrée contredite et son uid : deux règles opposées ne cohabitent pas dans ce qui
+est injecté d'office. Le modèle pose alors la question au propriétaire au lieu de trancher."""
+pin_model = "main"
+
+[config]
+"tools.approval_mode" = "auto"
+
+[[steps]]
+kind = "message"
+text = "tutoie-moi toujours, s'il te plaît"
+
+[[steps]]
+kind = "message"
+text = "en fait je préfère qu'on se vouvoie"

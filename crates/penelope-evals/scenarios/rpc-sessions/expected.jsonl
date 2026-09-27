@@ -44,6 +44,7 @@
 {"type":"observed","name":"sessions","row":{"title":"(session purgée)","state":"active","model_alias":null,"budget_usd":null,"metadata":{}}}
 {"type":"observed","name":"kv","row":{"k":"cli.session","v":"{{session:2}}"}}
 {"type":"observed","name":"kv","row":{"k":"session.approval_mode.{{session:2}}","v":"reads"}}
+{"type":"observed","name":"kv","row":{"k":"session.judged.{{session:1}}","v":[]}}
 {"type":"observed","name":"kv","row":{"k":"session.model_last.{{session:1}}","v":"main"}}
 {"type":"observed","name":"kv","row":{"k":"session.model_last.why.{{session:1}}","v":""}}
 {"type":"observed","name":"kv","row":{"k":"session.model_pin.{{session:1}}","v":"main"}}

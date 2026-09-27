@@ -1,0 +1,45 @@
+name = "memoire-signaux-d-usage"
+description = """Le propriétaire juge ce que la mémoire a fait dire (issue #230). Un souvenir
+de fond (« le client Martin est basé à Grenoble ») n'est servi que par le rappel
+automatique. La réponse s'en sert ; le message suivant (« parfait, merci ») l'accepte :
+un succès. Plus tard la même question, la même réponse, et le propriétaire reprend
+(« non, le client Martin est à Lyon maintenant ») : une contradiction. Chaque signal est
+journalisé (`memory.outcome`) ; le monde montre les compteurs de `mem_signals`."""
+pin_model = "main"
+
+[config]
+"memory.core_budget_tokens" = 0
+"memory.project_budget_tokens" = 0
+
+[[files]]
+root = "vault"
+path = "memoire.md"
+content = """# Mémoire de fond
+
+## Clients
+- Le client Martin est basé à Grenoble <!-- depuis: 2026-06-01 --> ^01MARTIN
+"""
+
+[[observe]]
+name = "signaux"
+sql = "SELECT uid, recalls, useful_recalls, successes, contradictions FROM mem_signals ORDER BY uid"
+
+[[steps]]
+kind = "rpc"
+method = "mem.reindex"
+
+[[steps]]
+kind = "message"
+text = "Rappelle-moi où est basé le client Martin"
+
+[[steps]]
+kind = "message"
+text = "parfait, merci"
+
+[[steps]]
+kind = "message"
+text = "Rappelle-moi où est basé le client Martin"
+
+[[steps]]
+kind = "message"
+text = "Non, le client Martin est à Lyon maintenant."

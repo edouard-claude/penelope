@@ -23,6 +23,8 @@ pub struct PromotionGates {
     pub ecart_min_occurrences: u32,
     pub ecart_min_sessions: u32,
     pub ecart_min_days: u32,
+    /// Sessions distinctes où l'écart a été suivi d'une réponse acceptée (issue #230).
+    pub ecart_min_successes: u32,
     pub max_retire_ratio: f64,
 }
 
@@ -32,6 +34,7 @@ impl Default for PromotionGates {
             ecart_min_occurrences: 3,
             ecart_min_sessions: 3,
             ecart_min_days: 2,
+            ecart_min_successes: 2,
             max_retire_ratio: 0.20,
         }
     }
@@ -43,6 +46,7 @@ impl PromotionGates {
             ecart_min_occurrences: p.ecart_min_occurrences,
             ecart_min_sessions: p.ecart_min_sessions,
             ecart_min_days: p.ecart_min_days,
+            ecart_min_successes: p.ecart_min_successes,
             max_retire_ratio: p.max_retire_ratio,
         }
     }
@@ -59,6 +63,11 @@ pub enum Gate {
     Propose(String),
     /// Refusé, avec la raison (affichée dans le digest).
     Reject(String),
+    /// Pas encore : le groupe reste en attente et repasse la nuit suivante, jusqu'à ses
+    /// seuils ou son expiration (`memory.expire_ecart_days`). Un écart sous ses seuils
+    /// était rejeté dès la première nuit : ses deux jours distincts ne pouvaient jamais
+    /// s'accumuler (issue #230).
+    Wait(String),
 }
 
 impl Gate {
@@ -67,7 +76,7 @@ impl Gate {
     }
     pub fn reason(&self) -> Option<&str> {
         match self {
-            Gate::Propose(r) | Gate::Reject(r) => Some(r),
+            Gate::Propose(r) | Gate::Reject(r) | Gate::Wait(r) => Some(r),
             Gate::Promote | Gate::Sort => None,
         }
     }
@@ -105,7 +114,7 @@ pub fn gate(g: &CandidateGroup, gates: &PromotionGates) -> Gate {
                 || g.distinct_sessions < gates.ecart_min_sessions
                 || g.distinct_days < gates.ecart_min_days
             {
-                return Gate::Reject(format!(
+                return Gate::Wait(format!(
                     "écart vu {} fois dans {} sessions sur {} jours (minimum {}/{}/{})",
                     g.occurrences,
                     g.distinct_sessions,
@@ -113,6 +122,15 @@ pub fn gate(g: &CandidateGroup, gates: &PromotionGates) -> Gate {
                     gates.ecart_min_occurrences,
                     gates.ecart_min_sessions,
                     gates.ecart_min_days
+                ));
+            }
+            // Une trajectoire d'erreur répétée n'est pas une règle : l'écart doit avoir été
+            // suivi d'une réponse acceptée par le propriétaire dans des sessions distinctes,
+            // pas seulement vu (issue #230, veille Hermes #117398).
+            if g.successful_sessions < gates.ecart_min_successes {
+                return Gate::Wait(format!(
+                    "écart accepté dans {} session(s) distincte(s) (minimum {})",
+                    g.successful_sessions, gates.ecart_min_successes
                 ));
             }
             match g.common_when() {

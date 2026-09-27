@@ -60,23 +60,63 @@ pub(super) fn contradiction(
         }) =
             penelope_memory::consolidation::detect_contradiction(&probe, &e.text, e.quand.as_ref())
         {
-            // Les deux entrées **tronquées** : une question qui recopie un dossier de
-            // 3 000 caractères n'est pas une question (issue #145).
-            return Some(Clash {
-                question: format!(
-                    "Tu as dit « {} », j'avais « {} » : je remplace, j'ajoute une \
-                     exception, ou j'ignore ?",
-                    short(&proposed),
-                    short(&existing)
-                ),
-                existing_uid: e.uid.clone(),
-                existing: existing.clone(),
-                proposed: proposed.clone(),
-                quand: candidate.quand.as_ref().map(|w| w.render()),
-            });
+            return Some(Clash::new(&e.uid, &existing, &proposed, candidate));
         }
     }
     None
+}
+
+impl Clash {
+    fn new(existing_uid: &str, existing: &str, proposed: &str, candidate: &Candidate) -> Clash {
+        // Les deux entrées **tronquées** : une question qui recopie un dossier de
+        // 3 000 caractères n'est pas une question (issue #145).
+        Clash {
+            question: format!(
+                "Tu as dit « {} », j'avais « {} » : je remplace, j'ajoute une \
+                 exception, ou j'ignore ?",
+                short(proposed),
+                short(existing)
+            ),
+            existing_uid: existing_uid.to_string(),
+            existing: existing.to_string(),
+            proposed: proposed.to_string(),
+            quand: candidate.quand.as_ref().map(|w| w.render()),
+        }
+    }
+}
+
+/// Réécriture d'une préférence du propriétaire (issue #224) : un `supersede_entry` ou un
+/// `replace_entry` qui vise son profil devient la même question qu'une contradiction ;
+/// une entrée qu'il a écrite ailleurs aussi, quand c'est une règle qui la remplace (un
+/// fait, lui, se date : #145). Le modèle qui propose de remplacer **est** le détecteur :
+/// aucune heuristique n'a à voir que « vouvoyer » défait « tutoyer ». Seule une
+/// correction explicite du propriétaire (« non, … », type `correction`, origine `owner`)
+/// remplace sans question, et une précision qui garde l'ancien texte entier n'enlève
+/// rien.
+pub(super) fn owner_rule_rewrite(
+    g: &CandidateGroup,
+    op: &Operation,
+    snap: &VaultSnapshot,
+) -> Option<Clash> {
+    use penelope_memory::grid::normalized;
+    let (uid, text) = match op {
+        Operation::SupersedeEntry { uid, text, .. } | Operation::ReplaceEntry { uid, text } => {
+            (uid, text)
+        }
+        _ => return None,
+    };
+    use penelope_memory::CandidateType::{Correction, Decision, Preference};
+    let rule = matches!(g.ctype, Preference | Decision);
+    let protected = snap.in_profile(uid) || (rule && snap.owner_uids.contains(uid));
+    if !protected || (g.ctype == Correction && g.has_owner_origin()) {
+        return None;
+    }
+    let existing = snap.uid_text.get(uid)?;
+    let widened = normalized(text).contains(&normalized(existing));
+    if matches!(op, Operation::ReplaceEntry { .. }) && widened {
+        return None;
+    }
+    Some(Clash::new(uid, existing, text, &g.representative))
 }
 
 /// Candidat soumis au modèle, avec ses souvenirs proches.
@@ -250,6 +290,14 @@ pub(super) fn sort_and_plan(
         let item = &items[n - 1];
         match &placements[n - 1] {
             Some(Placement::Durable) => {
+                if let Some(clash) = owner_rule_rewrite(item.group, op, snap) {
+                    let ids: Vec<String> =
+                        item.group.members.iter().map(|m| m.id.clone()).collect();
+                    report.questions.push(clash.question.clone());
+                    clashes.push((clash, ids.clone()));
+                    updates.push((ids, "question", None));
+                    continue;
+                }
                 if let Operation::AddEntry { text, .. } = op {
                     // Jamais doublée : un texte déjà en mémoire ne s'ajoute pas.
                     if !seen.insert(normalized(text)) {

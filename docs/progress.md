@@ -12,6 +12,89 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.8
+
+**Mémoire : une préférence du propriétaire ne se remplace plus sans lui (#224).** La
+suite réseau `mem_longitudinal` perdait le tutoiement la nuit du jour 10 (5/7, 71 %).
+Cause : seul un `add_entry` passait par le contrôle de contradiction ; un
+`supersede_entry` ou un `replace_entry` proposé par le modèle réécrivait la ligne du profil
+sans question, et l'heuristique ne voyait qu'une négation (« toujours » contre
+« jamais »), jamais une valeur mise à la place d'une autre (tu contre vous).
+
+- Le rêve pose la carte de contradiction (Remplacer, Exception, Ignorer) au lieu
+  d'appliquer un `supersede_entry` ou un `replace_entry` qui vise le profil, ou une entrée
+  écrite par le propriétaire quand c'est une règle qui la remplace. Passent sans question :
+  la correction explicite du propriétaire (type `correction`, « non, … »), la précision qui
+  garde l'ancien texte entier, la mise à jour d'un fait hors du profil.
+- Le contrôle de contradiction voit la substitution : deux valeurs d'une même famille
+  exclusive (tutoiement et vouvoiement, langue, devise, jour de la semaine) sur le même
+  sujet. Les garde-fous de #145 tiennent : ni fait ni écart, borne et rapport de longueur,
+  contexte distinct, similarité 0,80.
+- « Remplacer » sur une carte écrit la nouvelle entrée au niveau de l'ancienne : une
+  préférence remplacée partait dans `notes.md`, qui n'est pas injecté d'office.
+- `mem_remember` refuse d'écrire au profil ou au cœur une entrée qui en contredit une
+  autre, et nomme l'uid à trancher avec le propriétaire (scénario
+  `outils-memoire-contradiction`) ; un niveau inconnu est refusé au lieu d'aller dans
+  `notes.md` (le schéma le refusait déjà).
+- `mem_longitudinal` : critères tutoiement et vouvoiement sous toutes leurs formes
+  (« tutoyer » était compté absent) ; la question tu/vous se prouve par une carte ou la
+  section « Questions sans réponse », plus par tout `DREAMS.md` (son tri recopiait le
+  candidat du jour 1 : le critère passait à vide) ; le mardi, un fait, se cherche aussi
+  dans `notes.md` et `entites/`. En échec, le dossier est gardé avec `preuves/`
+  (réponses entières, digest, appels d'outils, événements de mémoire, cartes).
+- Banc `mem-bench`, jeu `style-de-reponse` : « désormais vouvoie-moi » remplaçait le
+  tutoiement en silence, c'était l'attendu ; le jeu dit maintenant ce que le propriétaire
+  répond à la carte (`cartes`, « remplacer »), et le banc le joue par le chemin des
+  boutons.
+
+Tests : `a_substituted_value_is_a_contradiction`,
+`a_substitution_needs_two_different_values_on_one_subject` (memory) ;
+`a_preference_does_not_supersede_the_owner_profile_without_asking`,
+`corrections_precisions_and_facts_still_rewrite_without_a_card`,
+`an_entry_written_by_the_owner_is_protected_outside_the_profile`,
+`an_added_substitution_of_the_owner_preference_asks` (dream) ;
+`mem_remember_refuses_an_unknown_level_and_a_contradicted_profile` (executor). Rouges
+avant le correctif. Sans clé de fournisseur ici, la suite réseau reste à lancer, trois
+fois, par l'intégrateur :
+
+```bash
+OPENROUTER_API_KEY=… cargo test -p penelope-evals --test mem_longitudinal -- --ignored --nocapture
+```
+
+**Mémoire : les réponses du propriétaire deviennent des signaux d'usage (#230).**
+`Signals::record_outcome` n'était appelé nulle part : succès et contradictions valaient 0
+pour toute la mémoire, `contested_*` était « sans effet », et un écart devenait une
+exception sur ses seules occurrences, sans preuve qu'il avait marché.
+
+- Le message suivant du propriétaire juge chaque souvenir dont la réponse d'avant s'est
+  servie : sans marqueur de correction, succès ; ouvert sur une correction (« non, »,
+  « je t'ai dit… ») qui reprend un mot du souvenir, contradiction ; tout le reste, rien.
+  Seuls les messages du propriétaire jugent (pas une relance, pas une reprise), un tour
+  échoué entre les deux annule le jugement, et chaque signal est journalisé
+  (`memory.outcome`).
+- `contested_confidence` et `contested_min_observations` ont un effet : une entrée assez
+  jugée (4 observations) de confiance `(succès + 1) / (succès + contradictions + 2)` sous
+  0,5 n'est plus servie d'office (instantané, rappel automatique ; la recherche explicite
+  la trouve), et la consolidation suivante la soumet une fois au propriétaire : « Tout »
+  la retire, « Rien » la garde et remet ses signaux à zéro.
+- Un écart ne devient une exception qu'après une réponse acceptée dans deux sessions
+  distinctes (`memory.promotion.ecart_min_successes = 2`), à côté des occurrences. Sous
+  ses seuils, il attend au lieu d'être rejeté : rejeté dès la première nuit, il ne
+  pouvait jamais réunir ses deux jours distincts.
+
+Tests : `the_next_owner_reply_judges_a_used_memory_conservatively`,
+`a_contested_entry_is_no_longer_served_automatically`,
+`an_ecart_needs_accepted_answers_in_distinct_sessions` (memory) ;
+`the_owner_reply_records_a_success_or_a_contradiction`,
+`no_signal_without_a_clear_owner_verdict` (vault) ;
+`an_ecart_waits_for_accepted_answers_in_distinct_sessions`,
+`a_contested_entry_is_submitted_once_then_retired_or_kept` (dream) ; scénario
+`memoire-signaux-d-usage` (rappel, « parfait, merci » puis « non, … » : un succès, une
+contradiction sur l'uid rappelé). La suite réseau ci-dessus vérifie aussi que
+`mem_longitudinal` ne baisse pas.
+
+Closes #224, closes #230.
+
 ### 1.0.7
 
 La documentation en prose décrivait encore la 0.17 ou la branche `v1` : « 17 crates »

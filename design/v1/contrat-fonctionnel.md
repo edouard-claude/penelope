@@ -480,10 +480,11 @@ cette version » est acceptée mais pas lue : la V1 peut la garder inerte, pas l
   `dream_retry_wait = "2m"`, `consolidation_reasoning = "auto"`,
   `consolidation_reasoning_tokens = 16000`, `digest_cron = "0 8 * * *"`,
   `promotion.ecart_min_occurrences = 3`, `promotion.ecart_min_sessions = 3`,
-  `promotion.ecart_min_days = 2`, `promotion.fact_min_recalls = 2` (ignoré depuis 0.14.0),
+  `promotion.ecart_min_days = 2`, `promotion.ecart_min_successes = 2` (1.0.8),
+  `promotion.fact_min_recalls = 2` (ignoré depuis 0.14.0),
   `promotion.fact_min_importance = 8` (ignoré), `promotion.preference_min_sessions = 2`
-  (ignoré), `promotion.max_retire_ratio = 0.2`, `promotion.contested_confidence = 0.5`
-  (sans effet), `promotion.contested_min_observations = 4` (sans effet),
+  (ignoré), `promotion.max_retire_ratio = 0.2`, `promotion.contested_confidence = 0.5`,
+  `promotion.contested_min_observations = 4` (effet depuis la 1.0.8, #230),
   `intents.cooldown = "24h"`, `intents.fire_budget = 3`, `intents.expiry = "90d"`,
   `intents.max_per_turn = 3`, `prune_episodic_days = 180` (sans effet),
   `expire_ecart_days = 90`.
@@ -1334,7 +1335,7 @@ sections à jour.
 - Clés de configuration acceptées mais sans effet (voir 1.6) : `telegram.topics`,
   `text_limit`, `caption_limit`, `webhook_url`, `allow_groups`, `memory.dedup_cosine`,
   `episode_idle`, `episode_topic_shift` (valeurs codées : 2 h et 0,35), `promotion.fact_*`,
-  `preference_min_sessions`, `contested_*`, `prune_episodic_days`, `mcp.registry_mode`,
+  `preference_min_sessions`, `prune_episodic_days`, `mcp.registry_mode`,
   `default_timeout`, `preferred_protocol`, `idle_timeout`, `max_concurrency_per_server`,
   `restart_backoff_max`, `observability.otlp_endpoint`, `prometheus`,
   `workflows.default_max_iterations`, `upgrade.channel`, `health_timeout`,

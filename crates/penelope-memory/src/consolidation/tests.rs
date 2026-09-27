@@ -16,13 +16,13 @@ fn ecart(day: &str, session: &str, when: &str) -> Candidate {
     c
 }
 
-/// CA 6 (apprentissage) : 3 fois dans 3 sessions sur 2 jours ⇒ exception ;
-/// 2 fois seulement ⇒ pas de promotion.
+/// CA 6 (apprentissage) : 3 fois dans 3 sessions sur 2 jours, acceptée dans 2 sessions
+/// au moins ⇒ exception ; 2 fois seulement ⇒ pas encore, le groupe attend (#230).
 #[test]
 fn ca_6_2_ecart_promotion_thresholds() {
     let g = PromotionGates::default();
 
-    let three = group(
+    let mut three = group(
         vec![
             ecart("2026-09-10", "s1", "client=client-x"),
             ecart("2026-09-11", "s2", "client=client-x"),
@@ -30,6 +30,7 @@ fn ca_6_2_ecart_promotion_thresholds() {
         ],
         0.9,
     );
+    three[0].successful_sessions = 2;
     assert_eq!(gate(&three[0], &g), Gate::Promote);
 
     let two = group(
@@ -40,8 +41,35 @@ fn ca_6_2_ecart_promotion_thresholds() {
         0.9,
     );
     let verdict = gate(&two[0], &g);
-    assert!(!verdict.is_promote());
+    assert!(matches!(verdict, Gate::Wait(_)), "{verdict:?}");
     assert!(verdict.reason().unwrap().contains("minimum 3/3/2"));
+}
+
+/// #230 : un écart vu trois fois mais jamais suivi d'une réponse acceptée (ou dans une
+/// seule session) ne devient pas une exception : une erreur répétée n'est pas une règle.
+/// Il attend, sans être rejeté : les succès peuvent venir.
+#[test]
+fn an_ecart_needs_accepted_answers_in_distinct_sessions() {
+    let g = PromotionGates::default();
+    let mut three = group(
+        vec![
+            ecart("2026-09-10", "s1", "client=client-x"),
+            ecart("2026-09-11", "s2", "client=client-x"),
+            ecart("2026-09-11", "s3", "client=client-x"),
+        ],
+        0.9,
+    );
+    for accepted in [0, 1] {
+        three[0].successful_sessions = accepted;
+        let verdict = gate(&three[0], &g);
+        assert!(matches!(verdict, Gate::Wait(_)), "{accepted} : {verdict:?}");
+        assert!(
+            verdict.reason().unwrap().contains("(minimum 2)"),
+            "{verdict:?}"
+        );
+    }
+    three[0].successful_sessions = 2;
+    assert_eq!(gate(&three[0], &g), Gate::Promote);
 }
 
 #[test]
@@ -56,8 +84,8 @@ fn ecart_needs_a_single_day_span_of_two() {
         0.9,
     );
     assert!(
-        !gate(&same_day[0], &g).is_promote(),
-        "un seul jour ne suffit pas"
+        matches!(gate(&same_day[0], &g), Gate::Wait(_)),
+        "un seul jour ne suffit pas : l'écart attend le suivant"
     );
 }
 
@@ -135,6 +163,7 @@ fn ca_6_3_correction_scoping() {
         max_importance: 8,
         origins: [Origin::Owner].into_iter().collect(),
         members,
+        successful_sessions: 0,
     };
     assert_eq!(gate(&merged, &g), Gate::Sort);
 }
@@ -554,6 +583,106 @@ fn a_file_is_not_a_rule_and_two_unrelated_directives_do_not_clash() {
         detect_contradiction(&vraie, "Toujours répondre en anglais aux clients", None),
         Some(Contradiction::NeedsQuestion { .. })
     ));
+}
+
+/// #224 : une valeur mise à la place d'une autre sur le même sujet est une contradiction,
+/// même sans polarité opposée ni vocabulaire commun. La nuit du jour 10 de
+/// `mem_longitudinal`, « je préfère qu'on se vouvoie » a remplacé le tutoiement sans
+/// question.
+#[test]
+fn a_substituted_value_is_a_contradiction() {
+    let pref = |text: &str| {
+        Candidate::new(
+            CandidateType::Preference,
+            text,
+            Origin::Owner,
+            "interactive",
+            "t",
+        )
+    };
+    for (candidate, existing) in [
+        (
+            "Je préfère qu'on se vouvoie.",
+            "Toujours tutoyer le propriétaire.",
+        ),
+        (
+            "Le propriétaire préfère être vouvoyé.",
+            "Tutoyer le propriétaire dans les réponses.",
+        ),
+        (
+            "Facturer ACME en euros.",
+            "Facturer ACME en dollars américains.",
+        ),
+        (
+            "Les réunions d'équipe ont lieu le jeudi.",
+            "Les réunions d'équipe ont lieu le mardi matin.",
+        ),
+    ] {
+        assert!(
+            matches!(
+                detect_contradiction(&pref(candidate), existing, None),
+                Some(Contradiction::NeedsQuestion { .. })
+            ),
+            "« {candidate} » contre « {existing} »"
+        );
+        assert!(contradicts(existing, candidate), "symétrique");
+    }
+}
+
+/// Ce que la substitution ne doit pas attraper : la même valeur redite, deux valeurs
+/// citées ensemble, un sujet différent, un mot qui ressemble (« européen » n'est pas
+/// « euro »), et toujours les garde-fous de #145 (fait, longueur, contexte distinct).
+#[test]
+fn a_substitution_needs_two_different_values_on_one_subject() {
+    let pref = |text: &str| {
+        Candidate::new(
+            CandidateType::Preference,
+            text,
+            Origin::Owner,
+            "interactive",
+            "t",
+        )
+    };
+    for (candidate, existing) in [
+        (
+            "Rappel : pour ACME, la facture part en dollars.",
+            "Facturer ACME en dollars.",
+        ),
+        (
+            "Pour ACME, facturer en dollars américains, pas en euros.",
+            "Facturer ACME en euros.",
+        ),
+        (
+            "Rédiger les commits en anglais.",
+            "Répondre aux clients en français.",
+        ),
+        (
+            "Viser les clients européens.",
+            "Facturer les clients en dollars.",
+        ),
+        ("Tutoie-moi toujours.", "Toujours tutoyer le propriétaire."),
+    ] {
+        assert!(
+            detect_contradiction(&pref(candidate), existing, None).is_none(),
+            "« {candidate} » contre « {existing} »"
+        );
+    }
+    let fait = Candidate::new(
+        CandidateType::Fait,
+        "Le propriétaire est vouvoyé par ses clients.",
+        Origin::Owner,
+        "interactive",
+        "t",
+    );
+    assert!(detect_contradiction(&fait, "Toujours tutoyer le propriétaire.", None).is_none());
+    let dossier = format!("Tutoyer. {}", "Contexte du dossier client. ".repeat(20));
+    assert!(detect_contradiction(&pref("Vouvoyer le propriétaire."), &dossier, None).is_none());
+    let mut scoped = pref("Vouvoyer le propriétaire devant le client ACME.");
+    scoped.quand = When::parse("client=acme").ok();
+    assert_eq!(
+        detect_contradiction(&scoped, "Toujours tutoyer le propriétaire.", None),
+        Some(Contradiction::DistinctContext)
+    );
 }
 
 #[test]

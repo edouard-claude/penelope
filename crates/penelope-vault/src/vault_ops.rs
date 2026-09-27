@@ -156,6 +156,21 @@ pub async fn remember_with(
     Ok(uid)
 }
 
+/// Entrée d'un niveau injecté d'office (profil, cœur) que `text` contredirait : une
+/// négation ou une valeur substituée sur le même sujet (issue #224). Les autres niveaux
+/// ne sont pas servis d'office : deux notes qui divergent s'y datent.
+pub async fn contradicted(s: &Services, level: Level, text: &str) -> Option<IndexedEntry> {
+    if !matches!(level, Level::Profil | Level::Coeur) {
+        return None;
+    }
+    s.memory
+        .by_level(level)
+        .await
+        .ok()?
+        .into_iter()
+        .find(|e| penelope_memory::consolidation::contradicts(&e.text, text))
+}
+
 /// Retire une entrée du vault et de l'index.
 pub async fn forget(s: &Services, vault: &Path, uid: &str) -> Result<bool, String> {
     let Some(entry) = s.memory.get(uid).await.map_err(|e| e.to_string())? else {

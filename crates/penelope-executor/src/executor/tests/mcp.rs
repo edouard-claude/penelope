@@ -180,6 +180,49 @@ async fn memory_tools_write_through_the_vault() {
     assert_eq!(gone.value["forgotten"], true);
 }
 
+/// #224 : un niveau inconnu est refusé, jamais rangé en silence dans `notes.md`, et une
+/// préférence qui en défait une autre du profil (tu contre vous) n'y est pas écrite à côté :
+/// le modèle reçoit l'uid à trancher avec le propriétaire. Après `mem_forget`, elle passe.
+#[tokio::test]
+async fn mem_remember_refuses_an_unknown_level_and_a_contradicted_profile() {
+    let (_d, x) = executor().await;
+    let e = x
+        .execute(
+            "mem_remember",
+            &json!({"niveau":"profile","texte":"Tutoyer"}),
+        )
+        .await
+        .unwrap_err();
+    // Le schéma le refuse déjà ; le repli de l'exécuteur, qui ne devait jamais servir,
+    // refuse aussi au lieu d'écrire.
+    assert!(e.for_model().contains("hors énumération"), "{e}");
+
+    let tu = x
+        .execute(
+            "mem_remember",
+            &json!({"niveau":"profil","texte":"Toujours tutoyer le propriétaire"}),
+        )
+        .await
+        .unwrap();
+    let uid = tu.value["uid"].as_str().unwrap().to_string();
+    let vous = json!({"niveau":"profil","texte":"Le propriétaire préfère être vouvoyé"});
+    let said = x
+        .execute("mem_remember", &vous)
+        .await
+        .unwrap_err()
+        .for_model();
+    assert!(
+        said.contains(&uid) && said.contains("demande au propriétaire"),
+        "{said}"
+    );
+    // Ailleurs qu'au profil et au cœur, rien n'est servi d'office : pas de contrôle.
+    let cure = json!({"niveau":"cure","texte":"Le propriétaire préfère être vouvoyé"});
+    x.execute("mem_remember", &cure).await.unwrap();
+    // Tranché par le propriétaire : l'ancienne oubliée, la nouvelle s'écrit.
+    x.execute("mem_forget", &json!({"uid": uid})).await.unwrap();
+    x.execute("mem_remember", &vous).await.unwrap();
+}
+
 #[tokio::test]
 async fn workflow_only_tools_are_refused_in_chat() {
     let (_d, x) = executor().await;

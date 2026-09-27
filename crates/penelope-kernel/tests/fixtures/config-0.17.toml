@@ -188,6 +188,7 @@ expire_ecart_days = 90
 ecart_min_occurrences = 3
 ecart_min_sessions = 3
 ecart_min_days = 2
+ecart_min_successes = 2
 fact_min_recalls = 2
 fact_min_importance = 8
 preference_min_sessions = 2

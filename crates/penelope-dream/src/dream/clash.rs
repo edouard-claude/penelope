@@ -171,3 +171,89 @@ pub(super) async fn unused_entries(d: &Context, day: &str) -> Vec<String> {
         })
         .collect()
 }
+
+/// Entrées contestées (issue #230) : plus servies d'office depuis que les réponses du
+/// propriétaire les contredisent (`memory.promotion.contested_*`), elles lui sont
+/// soumises une fois. La carte propose le retrait : « Tout » retire l'entrée
+/// ([`crate::ingest::apply_memory_proposal`]), « Rien » la garde, et la passe suivante
+/// remet ses succès et contradictions à zéro : elle est de nouveau servie. Sans réponse,
+/// la carte ne se repose pas et l'entrée reste hors de l'injection.
+pub(super) async fn submit_contested(s: &Services, report: &mut DreamReport) {
+    let uids = match s.memory.contested_uids().await {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::warn!(error = %e, "entrées contestées illisibles");
+            return;
+        }
+    };
+    for uid in uids {
+        let key = format!("memory.contested.{uid}");
+        if let Some(card) = s.kv_get(&key).await.ok().flatten() {
+            let kept = s
+                .approvals
+                .get(&card)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|a| a.state == penelope_hitl::ApprovalState::Denied);
+            if kept {
+                let _ = s.memory.reset_outcomes(&uid).await;
+                let _ = s.kv_delete(&key).await;
+                let _ = s
+                    .events
+                    .append(EventDraft::new(
+                        "memory.contested_kept",
+                        json!({"uid": uid, "approval": card}),
+                    ))
+                    .await;
+            }
+            continue;
+        }
+        let Ok(Some(e)) = s.memory.get(&uid).await else {
+            continue;
+        };
+        let sig = s.memory.signals_of(&uid).await.unwrap_or_default();
+        let line = format!(
+            "Retirer « {} » : contredite {} fois, confirmée {} fois par tes réponses ; \
+             plus servie d'office",
+            short(&e.text),
+            sig.contradictions,
+            sig.successes
+        );
+        let card = s
+            .approvals
+            .create(
+                penelope_hitl::ApprovalKind::MemoryProposal,
+                "mémoire",
+                penelope_kernel::risk::RiskClass::Write,
+                json!({
+                    "contested": true,
+                    "uid": uid,
+                    "existing": short(&e.text),
+                    "file": e.file,
+                    "source": e.file,
+                    "items": [line],
+                }),
+                vec!["Tout".into(), "Rien".into()],
+                None,
+                None,
+                false,
+            )
+            .await;
+        match card {
+            Ok(a) => {
+                let _ = s.kv_set(&key, a.id.as_str()).await;
+                report.questions.push(line);
+                let _ = s
+                    .events
+                    .append(EventDraft::new(
+                        "memory.contested",
+                        json!({"uid": uid, "approval": a.id.as_str(),
+                               "successes": sig.successes, "contradictions": sig.contradictions}),
+                    ))
+                    .await;
+            }
+            Err(e) => tracing::warn!(error = %e, %uid, "carte d'entrée contestée non posée"),
+        }
+    }
+}

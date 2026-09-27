@@ -237,6 +237,9 @@ pub fn rrf(fts_rank: Option<usize>, vec_rank: Option<usize>, k: f64) -> f64 {
 
 /// Demi-vie lue à chaque recherche : `memory.half_life_days` s'applique à chaud (#86).
 type HalfLife = std::sync::Arc<dyn Fn() -> f64 + Send + Sync>;
+/// Seuils d'une entrée contestée, lus à chaque lecture : confiance et observations
+/// (`memory.promotion.contested_*`, issue #230).
+type Contested = std::sync::Arc<dyn Fn() -> (f64, u32) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct MemoryIndex {
@@ -244,6 +247,7 @@ pub struct MemoryIndex {
     clock: SharedClock,
     params: ScoreParams,
     half_life: Option<HalfLife>,
+    contested: Option<Contested>,
     /// Vecteurs décodés par les recherches : un filtre appliqué trop tard se voit ici.
     vectors_decoded: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
@@ -255,6 +259,7 @@ impl MemoryIndex {
             clock,
             params: ScoreParams::default(),
             half_life: None,
+            contested: None,
             vectors_decoded: Default::default(),
         }
     }
@@ -263,6 +268,24 @@ impl MemoryIndex {
     pub fn with_half_life(mut self, f: impl Fn() -> f64 + Send + Sync + 'static) -> Self {
         self.half_life = Some(std::sync::Arc::new(f));
         self
+    }
+
+    /// Seuils de contestation relus à chaque lecture (configuration à chaud, #230). Sans
+    /// eux, les valeurs par défaut de la configuration.
+    pub fn with_contested(mut self, f: impl Fn() -> (f64, u32) + Send + Sync + 'static) -> Self {
+        self.contested = Some(std::sync::Arc::new(f));
+        self
+    }
+
+    /// Seuils de contestation en vigueur : `(confiance, observations)`.
+    pub fn contested_thresholds(&self) -> (f64, u32) {
+        match &self.contested {
+            Some(f) => f(),
+            None => {
+                let p = penelope_kernel::config::Promotion::default();
+                (p.contested_confidence, p.contested_min_observations)
+            }
+        }
     }
 
     /// Vecteurs décodés depuis la création de l'index (diagnostic et tests, #87).
