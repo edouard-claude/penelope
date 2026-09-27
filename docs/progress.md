@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.10
+### 1.0.11
 
 **Mémoire : « Retiens que… » reste la parole du propriétaire sans citation mot pour mot
 (#245).** La suite réseau `mem_longitudinal` perdait « réunions du mardi » 3 fois sur 3 :
