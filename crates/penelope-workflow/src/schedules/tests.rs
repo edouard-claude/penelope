@@ -338,7 +338,86 @@ fn event_and_watch_triggers_have_no_schedule() {
         next_run: None,
         runs: 0,
         last_error: None,
+        failures_in_a_row: 0,
+        alerted_reason: None,
     };
     assert!(s.next_after(0, "UTC").is_none());
     s.validate("UTC").unwrap();
+}
+
+/// #229 : chaque chemin qui enregistre un échec allonge la série (déclenchement raté,
+/// exécution ratée, tour raté) ; un déclenchement réussi l'attend ; un succès la clôt et
+/// ne rend sa longueur que si une alerte en était partie.
+#[tokio::test]
+async fn every_failure_path_extends_the_streak_and_a_success_closes_it() {
+    let clock = TestClock::default();
+    let s = schedules(clock.clone());
+    let sched = s
+        .create(
+            TriggerKind::Interval,
+            json!({"every_ms": 60000}),
+            json!({"type":"prompt","prompt":"veille"}),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    let streak = |s: ScheduleStore, id: String| async move {
+        s.get(&id).await.unwrap().unwrap().failures_in_a_row
+    };
+    s.advance(&sched.id, Some("canal injoignable"))
+        .await
+        .unwrap();
+    s.mark_run(&sched.id, Some("serveur absent")).await.unwrap();
+    s.record_outcome(&sched.id, Some("modèle en panne"))
+        .await
+        .unwrap();
+    assert_eq!(streak(s.clone(), sched.id.clone()).await, 3);
+    s.advance(&sched.id, None).await.unwrap();
+    assert_eq!(
+        streak(s.clone(), sched.id.clone()).await,
+        3,
+        "un tour lancé n'est pas encore un succès"
+    );
+    assert_eq!(
+        s.record_outcome(&sched.id, None).await.unwrap(),
+        None,
+        "aucune alerte partie : rien à annoncer"
+    );
+    assert_eq!(streak(s.clone(), sched.id.clone()).await, 0);
+
+    s.record_outcome(&sched.id, Some("modèle en panne"))
+        .await
+        .unwrap();
+    assert_eq!(
+        s.alert_due(&sched.id, "modèle en panne").await.unwrap(),
+        Some(1)
+    );
+    s.record_outcome(&sched.id, Some("modèle en panne"))
+        .await
+        .unwrap();
+    assert_eq!(
+        s.alert_due(&sched.id, "modèle en panne").await.unwrap(),
+        None
+    );
+    assert_eq!(s.mark_run(&sched.id, None).await.unwrap(), Some(2));
+    let after = s.get(&sched.id).await.unwrap().unwrap();
+    assert_eq!((after.failures_in_a_row, after.alerted_reason), (0, None));
+}
+
+/// #229 : ce qui alerte dans une série au même motif (premier échec, paliers), et ce qui
+/// fait un motif : sans identifiant ni horodatage, mais avec son code.
+#[test]
+fn failure_steps_and_motifs() {
+    let steps: Vec<u32> = (1..=400).filter(|n| failure_step(*n)).collect();
+    assert_eq!(steps, vec![5, 20, 100, 200, 300, 400]);
+    assert_eq!(
+        failure_motif("fournisseur indisponible (requête gen-1759000001-a1b2c3)"),
+        failure_motif("fournisseur indisponible (requête gen-1759000002-a1b2c3)")
+    );
+    assert_eq!(
+        failure_motif("tour annulé le 2026-09-27T08:00:00Z (session s_01K5N0Q5T3B9V8X2M4R7C6A1E0)"),
+        "tour annulé le # (session #)"
+    );
+    assert_ne!(failure_motif("HTTP 429"), failure_motif("HTTP 500"));
+    assert_ne!(failure_motif("quota épuisé"), failure_motif("clé refusée"));
 }

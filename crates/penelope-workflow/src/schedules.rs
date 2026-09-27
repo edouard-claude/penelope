@@ -83,6 +83,13 @@ pub struct Schedule {
     pub next_run: Option<String>,
     pub runs: u64,
     pub last_error: Option<String>,
+    /// Exécutions ratées à la suite, remises à zéro au premier succès (#229).
+    #[serde(default)]
+    pub failures_in_a_row: u32,
+    /// Motif normalisé de la dernière alerte de la série en cours ; `None` : aucune
+    /// alerte n'est partie depuis le dernier succès.
+    #[serde(skip)]
+    pub alerted_reason: Option<String>,
 }
 
 impl Schedule {
@@ -273,6 +280,8 @@ impl ScheduleStore {
             next_run: None,
             runs: 0,
             last_error: None,
+            failures_in_a_row: 0,
+            alerted_reason: None,
         };
         s.validate(&self.timezone)?;
         let next = s
@@ -357,8 +366,13 @@ impl ScheduleStore {
             .await
     }
 
-    /// Marque l'exécution et programme la suivante.
-    pub async fn mark_run(&self, id: &str, error: Option<&str>) -> penelope_store::Result<()> {
+    /// Marque l'exécution et programme la suivante. Rend, pour un succès, la série alertée
+    /// qu'il clôt (voir [`ScheduleStore::record_outcome`]).
+    pub async fn mark_run(
+        &self,
+        id: &str,
+        error: Option<&str>,
+    ) -> penelope_store::Result<Option<u32>> {
         let sched = self.get(id).await?;
         let next = sched
             .as_ref()
@@ -371,12 +385,16 @@ impl ScheduleStore {
         );
         self.store
             .write(move |tx| {
+                let closed = streak_closed(tx, &id, err.is_none())?;
                 tx.execute(
-                    "UPDATE schedules SET last_run = ?2, next_run = ?3, runs = runs + 1,
-                        last_error = ?4, updated_at = ?2 WHERE id = ?1",
+                    &format!(
+                        "UPDATE schedules SET last_run = ?2, next_run = ?3, runs = runs + 1,
+                            last_error = ?4, updated_at = ?2, {} WHERE id = ?1",
+                        streak("?4")
+                    ),
                     params![id, now, next, err],
                 )?;
-                Ok(())
+                Ok(closed)
             })
             .await
     }
@@ -396,9 +414,13 @@ impl ScheduleStore {
         );
         self.store
             .write(move |tx| {
+                // Un déclenchement réussi n'est pas encore une exécution : la série attend
+                // l'issue du tour. Un déclenchement en échec en est une, ratée.
                 tx.execute(
                     "UPDATE schedules SET next_run = ?2, updated_at = ?3,
-                        last_error = COALESCE(?4, last_error) WHERE id = ?1",
+                        last_error = COALESCE(?4, last_error),
+                        failures_in_a_row = failures_in_a_row + (?4 IS NOT NULL)
+                     WHERE id = ?1",
                     params![id, next, now, err],
                 )?;
                 Ok(())
@@ -407,12 +429,15 @@ impl ScheduleStore {
     }
 
     /// Issue d'une exécution menée jusqu'au bout : réussie, elle compte (`runs`, `last_run`)
-    /// et efface l'erreur ; sinon seule l'erreur est gardée (issue #39).
+    /// et efface l'erreur ; sinon seule l'erreur est gardée (issue #39). La série d'échecs
+    /// suit (#229) : un échec l'allonge, un succès la clôt. Rend, pour un succès qui clôt
+    /// une série déjà alertée, son nombre d'échecs : le propriétaire, prévenu de la panne,
+    /// l'est aussi de son retour.
     pub async fn record_outcome(
         &self,
         id: &str,
         error: Option<&str>,
-    ) -> penelope_store::Result<()> {
+    ) -> penelope_store::Result<Option<u32>> {
         let (id, now, err) = (
             id.to_string(),
             self.clock.now_rfc3339(),
@@ -420,18 +445,58 @@ impl ScheduleStore {
         );
         self.store
             .write(move |tx| {
+                let closed = streak_closed(tx, &id, err.is_none())?;
                 match err {
                     None => tx.execute(
-                        "UPDATE schedules SET runs = runs + 1, last_run = ?2, last_error = NULL,
-                            updated_at = ?2 WHERE id = ?1",
+                        &format!(
+                            "UPDATE schedules SET runs = runs + 1, last_run = ?2,
+                                last_error = NULL, updated_at = ?2, {} WHERE id = ?1",
+                            streak("NULL")
+                        ),
                         params![id, now],
                     )?,
                     Some(e) => tx.execute(
-                        "UPDATE schedules SET last_error = ?3, updated_at = ?2 WHERE id = ?1",
+                        &format!(
+                            "UPDATE schedules SET last_error = ?3, updated_at = ?2, {}
+                             WHERE id = ?1",
+                            streak("?3")
+                        ),
                         params![id, now, e],
                     )?,
                 };
-                Ok(())
+                Ok(closed)
+            })
+            .await
+    }
+
+    /// Décide si l'échec qui vient d'être enregistré mérite une alerte (#229) : le premier
+    /// de la série, un motif (normalisé) différent de celui de la dernière alerte, ou un
+    /// palier ([`failure_step`]). Sinon il est tu, et compté. L'alerte décidée est notée
+    /// dans la même transaction : deux échecs simultanés n'alertent pas deux fois.
+    /// Rend la longueur de la série si l'alerte doit partir.
+    pub async fn alert_due(&self, id: &str, reason: &str) -> penelope_store::Result<Option<u32>> {
+        let (id, motif) = (id.to_string(), failure_motif(reason));
+        self.store
+            .write(move |tx| {
+                let row: Option<(i64, Option<String>)> = tx
+                    .query_row(
+                        "SELECT failures_in_a_row, alerted_reason FROM schedules WHERE id = ?1",
+                        [&id],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .ok();
+                let Some((failures, alerted)) = row else {
+                    return Ok(Some(1));
+                };
+                let failures = failures.max(1) as u32;
+                let due = alerted.as_deref() != Some(motif.as_str()) || failure_step(failures);
+                if due {
+                    tx.execute(
+                        "UPDATE schedules SET alerted_reason = ?2 WHERE id = ?1",
+                        params![id, motif],
+                    )?;
+                }
+                Ok(due.then_some(failures))
             })
             .await
     }
@@ -627,7 +692,69 @@ impl ScheduleStore {
 }
 
 const SELECT: &str = "SELECT id, kind, spec, target, dedup, state, last_run, next_run, runs,
-     last_error FROM schedules";
+     last_error, failures_in_a_row, alerted_reason FROM schedules";
+
+/// Tenue de la série dans un `UPDATE` dont le paramètre `error` porte l'erreur (NULL : un
+/// succès) : un échec l'allonge, un succès la remet à zéro et oublie la dernière alerte
+/// (#229).
+fn streak(error: &str) -> String {
+    format!(
+        "failures_in_a_row = CASE WHEN {error} IS NULL THEN 0 ELSE failures_in_a_row + 1 END,
+         alerted_reason = CASE WHEN {error} IS NULL THEN NULL ELSE alerted_reason END"
+    )
+}
+
+/// Série alertée que clôt un succès, lue avant qu'il la remette à zéro.
+fn streak_closed(
+    tx: &penelope_store::rusqlite::Transaction<'_>,
+    id: &str,
+    success: bool,
+) -> penelope_store::rusqlite::Result<Option<u32>> {
+    if !success {
+        return Ok(None);
+    }
+    let row: Option<(i64, Option<String>)> = tx
+        .query_row(
+            "SELECT failures_in_a_row, alerted_reason FROM schedules WHERE id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok();
+    Ok(match row {
+        Some((n, Some(_))) if n > 0 => Some(n as u32),
+        _ => None,
+    })
+}
+
+/// Paliers où une série au même motif est rappelée : 5, 20, 100, puis toutes les 100
+/// exécutions ratées. Une planification horaire cassée depuis des semaines ne se tait
+/// jamais tout à fait (#39), sans répéter vingt-quatre fois par jour la même chose.
+pub fn failure_step(failures: u32) -> bool {
+    matches!(failures, 5 | 20) || (failures >= 100 && failures.is_multiple_of(100))
+}
+
+/// Motif d'un échec, ce qui compte pour dire « c'est la même panne » (#229) : l'erreur
+/// sans ce qui change d'une exécution à l'autre. Un mot de huit caractères ou plus qui
+/// contient un chiffre est un identifiant, un horodatage ou une empreinte
+/// (`gen-1759000001-a1b2c3`, `2026-09-27T08:00:00Z`, `sch_01K5…`) : il devient `#`. Un
+/// code court (`429`, `HTTP 500`) reste, pour qu'un changement de cause se voie.
+pub fn failure_motif(reason: &str) -> String {
+    reason
+        .split_whitespace()
+        .map(|w| {
+            let core = w.trim_matches(|c: char| !c.is_alphanumeric());
+            if core.chars().count() >= 8 && core.chars().any(|c| c.is_ascii_digit()) {
+                w.replacen(core, "#", 1)
+            } else {
+                w.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(300)
+        .collect()
+}
 
 fn row_to_schedule(
     r: &penelope_store::rusqlite::Row<'_>,
@@ -647,6 +774,8 @@ fn row_to_schedule(
         next_run: r.get(7)?,
         runs: r.get::<_, i64>(8)? as u64,
         last_error: r.get(9)?,
+        failures_in_a_row: r.get::<_, i64>(10)?.max(0) as u32,
+        alerted_reason: r.get(11)?,
     })
 }
 

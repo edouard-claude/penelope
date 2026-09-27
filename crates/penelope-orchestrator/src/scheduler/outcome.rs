@@ -262,12 +262,16 @@ pub async fn trigger_outcome(
         }
         TurnOutcome::Cancelled => (Some("exécution interrompue".to_string()), true),
     };
-    if let Err(e) = s
+    match s
         .schedules
         .record_outcome(schedule_id, error.as_deref())
         .await
     {
-        tracing::warn!(schedule = %schedule_id, error = %e, "issue de planification non enregistrée");
+        Ok(Some(failures)) => recovered(d, ports, &sched, failures).await,
+        Ok(None) => {}
+        Err(e) => {
+            tracing::warn!(schedule = %schedule_id, error = %e, "issue de planification non enregistrée")
+        }
     }
     if let (Some(reason), true) = (error, warn) {
         alert(d, ports, &sched, &reason).await;

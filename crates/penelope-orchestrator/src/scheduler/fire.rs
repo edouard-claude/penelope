@@ -216,30 +216,72 @@ pub async fn label(s: &Services, sched: &Schedule) -> String {
     }
 }
 
-/// Alerte : une planification n'a pas pu s'exécuter (issue #39). Jamais de silence.
+/// Alerte : une planification n'a pas pu s'exécuter (issue #39). L'échec entre toujours
+/// au journal ; le message part au premier échec de la série, quand le motif change, et
+/// aux paliers (#229) : une planification cassée n'en envoie pas un à chaque exécution,
+/// que le propriétaire finirait par ne plus lire. Appelée après l'enregistrement de
+/// l'échec, qui a allongé la série.
 pub async fn alert(d: &Context, ports: &Ports, sched: &Schedule, reason: &str) {
-    let text = format!(
-        "⚠️ La planification « {} » n'a pas pu s'exécuter : {reason}",
-        label(&d.services, sched).await
-    );
-    let origin = target_origin(&d.services, sched);
-    let _ = d
-        .services
+    let s = &d.services;
+    let due = match s.schedules.alert_due(&sched.id, reason).await {
+        Ok(due) => due,
+        Err(e) => {
+            tracing::warn!(schedule = %sched.id, error = %e, "série d'échecs illisible : alerte envoyée");
+            Some(1)
+        }
+    };
+    let _ = s
         .events
         .append(penelope_kernel::event::EventDraft::new(
             "schedule.failed",
-            json!({"schedule": sched.id, "reason": reason}),
+            json!({"schedule": sched.id, "reason": reason, "alerted": due.is_some()}),
         ))
         .await;
+    let Some(failures) = due else {
+        tracing::info!(schedule = %sched.id, "échec de planification au même motif : alerte tue");
+        return;
+    };
+    let streak = if failures > 1 {
+        format!(" ({failures} échecs de suite)")
+    } else {
+        String::new()
+    };
+    let text = format!(
+        "⚠️ La planification « {} » n'a pas pu s'exécuter{streak} : {reason}",
+        label(s, sched).await
+    );
+    let origin = target_origin(s, sched);
     if let Some(tg) = ports.delivery.get()
         && tg.schedule_alert(&origin, &sched.id, &text).await.is_ok()
     {
         return;
     }
+    send(ports, sched, &origin, &text).await;
+}
+
+/// Retour au succès d'une planification dont la panne avait été signalée (#229).
+pub async fn recovered(d: &Context, ports: &Ports, sched: &Schedule, failures: u32) {
+    let s = &d.services;
+    let _ = s
+        .events
+        .append(penelope_kernel::event::EventDraft::new(
+            "schedule.recovered",
+            json!({"schedule": sched.id, "failures": failures}),
+        ))
+        .await;
+    let text = format!(
+        "✅ La planification « {} » est rétablie après {failures} échec{}.",
+        label(s, sched).await,
+        if failures > 1 { "s" } else { "" }
+    );
+    send(ports, sched, &target_origin(s, sched), &text).await;
+}
+
+async fn send(ports: &Ports, sched: &Schedule, origin: &Origin, text: &str) {
     match ports.messenger.get() {
         Some(m) => {
-            if let Err(e) = m.send_text(&origin, &text).await {
-                tracing::warn!(schedule = %sched.id, error = %e, "alerte de planification non envoyée");
+            if let Err(e) = m.send_text(origin, text).await {
+                tracing::warn!(schedule = %sched.id, error = %e, "message de planification non envoyé");
             }
         }
         None => tracing::warn!(schedule = %sched.id, "{text}"),

@@ -116,3 +116,13 @@ CREATE INDEX messages_unsealed ON messages(session_id, seq)
 DROP TABLE projections_workflow;
 DROP TABLE projections_approval;
 "#;
+
+/// Série d'échecs d'une planification (#229) : une planification cassée n'alerte plus à
+/// chaque exécution, mais au premier échec, au changement de motif et à des paliers.
+/// `failures_in_a_row` compte les exécutions ratées à la suite ; `alerted_reason` garde
+/// le motif normalisé de la dernière alerte de la série (NULL : aucune alerte encore).
+/// Les deux reviennent à zéro au premier succès.
+pub(super) const SQL_0022: &str = r#"
+ALTER TABLE schedules ADD COLUMN failures_in_a_row INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE schedules ADD COLUMN alerted_reason TEXT;
+"#;

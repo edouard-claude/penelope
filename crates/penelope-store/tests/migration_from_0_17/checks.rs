@@ -166,6 +166,15 @@ pub(super) fn check_seeded_rows(c: &Connection) {
         ("cron", SESSION_ID)
     );
     assert!(legacy.is_none(), "forme d'après la migration 0009");
+    // 0022 (#229) : la planification migrée part d'une série d'échecs vide.
+    let (failures, alerted): (i64, Option<String>) = c
+        .query_row(
+            "SELECT failures_in_a_row, alerted_reason FROM schedules WHERE id = ?1",
+            [SCHEDULE_ID],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("colonnes de la série");
+    assert_eq!((failures, alerted), (0, None));
 
     assert_eq!(count(c, "SELECT count(*) FROM tg_outbox"), 1);
     let (out_state, message_id): (String, i64) = c

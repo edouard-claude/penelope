@@ -59,6 +59,7 @@ scenario_cases! {
     commandes_approbations => "commandes-approbations",
     commandes_memoire => "commandes-memoire",
     commandes_workflows => "commandes-workflows",
+    commande_planification_en_echec => "commande-planification-en-echec",
     commandes_extensions => "commandes-extensions",
     // Méthodes RPC (critère 7, R10), une famille par scénario.
     rpc_sessions => "rpc-sessions",

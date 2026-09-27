@@ -348,8 +348,13 @@ pub(super) fn schedules_text(v: &Value) -> String {
             t.push_str(&format!("   ↳ prochain : {next}\n"));
         }
         if let Some(e) = sc["last_error"].as_str() {
+            // La série dit depuis quand ça dure : ses alertes sont espacées (#229).
+            let streak = match sc["failures_in_a_row"].as_u64().unwrap_or(0) {
+                0 | 1 => String::new(),
+                n => format!(" ({n} échecs de suite)"),
+            };
             t.push_str(&format!(
-                "   ↳ erreur : {}\n",
+                "   ↳ erreur{streak} : {}\n",
                 e.chars().take(160).collect::<String>()
             ));
         }

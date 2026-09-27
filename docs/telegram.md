@@ -264,7 +264,7 @@ Workflows (4)
 | `/help` | familles, puis un bouton par commande |
 | `/wf`, `/run` | ▶️ prépare un plan en conversation, ℹ️ étapes et paramètres ; `/run <workflow>` accepte aussi des paramètres dans la demande |
 | `/runs`, `/resume` | état et étape de chaque run, ⏸ ▶️ ⏹ (confirmé), 🔎 détail ; `/resume` ne montre que les runs en pause ou bloqués |
-| `/schedules` | ⚡ déclencher, ⏸/▶️, 📍 livrer dans cette conversation, 🗑 (confirmé) ; où livre chaque planification et sa dernière erreur ; `/schedules ici <id>` dans un sujet l'y déplace ; une exécution en échec arrive en alerte avec « Relancer maintenant » |
+| `/schedules` | ⚡ déclencher, ⏸/▶️, 📍 livrer dans cette conversation, 🗑 (confirmé) ; où livre chaque planification, sa dernière erreur et ses échecs de suite ; `/schedules ici <id>` dans un sujet l'y déplace ; une exécution en échec arrive en alerte avec « Relancer maintenant » au premier échec, quand la raison change et aux paliers (5, 20, 100), puis « rétablie » au retour |
 | `/mcp` | par serveur : détail, 🔄 redémarrer, 🧪 tester ; le détail ajoute 📜 journal, ⏻ activer ou désactiver, 🔐 autoriser |
 | `/models` | un modèle, puis l'alias auquel l'affecter ; 🔎 chercher |
 | `/projet` | sujet de travail de la session : un bouton par projet connu du vault, et « Aucun » ; la mémoire d'office s'y limite |
