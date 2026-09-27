@@ -119,6 +119,53 @@ pub(super) fn owner_rule_rewrite(
     Some(Clash::new(uid, existing, text, &g.representative))
 }
 
+/// Candidats dits par le propriétaire, gardés, pour lesquels le modèle n'a rien écrit :
+/// l'entrée est leur propre texte (issue #245). Un « non endossé » du modèle ne vient
+/// d'ordinaire avec aucune opération, et le fait resterait en attente chaque nuit.
+fn quoted_without_operation(
+    items: &[Item<'_>],
+    response: &penelope_memory::grid::Consolidation,
+    placements: &[Option<penelope_memory::grid::Placement>],
+) -> Vec<(Option<usize>, Operation)> {
+    use penelope_memory::CandidateType::{Correction, Decision, Preference};
+    let handled: BTreeSet<usize> = response
+        .operations
+        .iter()
+        .map(|(n, _)| n)
+        .chain(response.noops.iter().map(|(n, _)| n))
+        .filter_map(|n| *n)
+        .collect();
+    items
+        .iter()
+        .enumerate()
+        .filter(|(i, it)| {
+            it.group.owner_quote().is_some()
+                && !handled.contains(&(i + 1))
+                && matches!(
+                    placements[*i],
+                    Some(penelope_memory::grid::Placement::Durable)
+                )
+        })
+        .map(|(i, it)| {
+            let g = it.group;
+            let file = match g.ctype {
+                Preference | Decision | Correction => "profil.md",
+                _ => "memoire.md",
+            };
+            let op = Operation::AddEntry {
+                file: file.into(),
+                section: None,
+                text: g.representative.text.clone(),
+                importance: Some(g.max_importance),
+                declencheurs: None,
+                expire: None,
+                sensible: None,
+            };
+            (Some(i + 1), op)
+        })
+        .collect()
+}
+
 /// Candidat soumis au modèle, avec ses souvenirs proches.
 pub(super) struct Item<'a> {
     pub(super) group: &'a CandidateGroup,
@@ -252,17 +299,27 @@ pub(super) fn sort_and_plan(
             placements.push(None);
             continue;
         };
+        // Dit par le propriétaire, sa phrase à l'appui : endossé par construction, quoi
+        // qu'en pense le modèle (issue #245).
+        let quoted = g.owner_quote().is_some();
+        let v = &penelope_memory::grid::Verdict {
+            endosse: v.endosse || quoted,
+            ..v.clone()
+        };
         let place = v.placement(day);
         let (icon, detail) = match &place {
             Placement::Durable => ("✅", String::new()),
             Placement::Journal { expire } => ("🗓", format!(" jusqu'au {expire}")),
             Placement::Ignored(why) => ("⏭", format!(" ({why})")),
         };
-        let why = if v.justification.trim().is_empty() {
+        let mut why = if v.justification.trim().is_empty() {
             "sans justification".to_string()
         } else {
             v.justification.trim().replace('\n', " ")
         };
+        if quoted {
+            why.push_str(" · dit par le propriétaire");
+        }
         report.sorted.push(format!(
             "{icon} {} « {text} »{detail} : {} · {why}",
             place.label(),
@@ -277,10 +334,11 @@ pub(super) fn sort_and_plan(
         placements.push(Some(place));
     }
 
+    let quoted = quoted_without_operation(items, response, &placements);
     let mut ops = Vec::new();
     let mut journal_text: BTreeMap<usize, String> = BTreeMap::new();
     let mut seen: BTreeSet<String> = snap.texts.clone();
-    for (candidat, op) in &response.operations {
+    for (candidat, op) in response.operations.iter().chain(&quoted) {
         let Some(n) = candidat.filter(|n| *n >= 1 && *n <= items.len()) else {
             report
                 .rejected

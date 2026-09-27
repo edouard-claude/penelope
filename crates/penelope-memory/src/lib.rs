@@ -17,6 +17,7 @@ pub mod grid;
 pub mod index;
 pub mod ingest;
 pub mod intents;
+pub mod owner_quote;
 pub mod provenance;
 pub mod quality;
 pub mod recall;

@@ -9,8 +9,8 @@
 //! aucune promotion de contenu non fiable.
 //!
 //! En échec, le dossier de la passe est gardé et son chemin affiché : le vault (dont
-//! `DREAMS.md`), la base, et `preuves/` (réponses entières et digest, appels d'outils,
-//! événements de mémoire, cartes en attente). Une seule passe ne tranche rien : le modèle
+//! `DREAMS.md`), la base, et `preuves/` (réponses entières et digest, appels d'outils avec
+//! leurs arguments, candidats et leur origine, événements de mémoire, cartes en attente). Une seule passe ne tranche rien : le modèle
 //! varie d'une passe à l'autre (issue #224).
 
 use penelope_evals::live;
@@ -96,15 +96,42 @@ async fn keep_evidence(
     let out = root.join("preuves");
     std::fs::create_dir_all(&out).unwrap();
     std::fs::write(out.join("reponses.txt"), answers.join("\n\n")).unwrap();
-    let mut tools = String::new();
+    let (mut tools, mut calls) = (String::new(), String::new());
     for sid in sessions {
         for e in s.events.session_events(sid, 0).await.unwrap_or_default() {
             if e.kind == "conv.assistant" || e.kind == "conv.tool_result" {
                 tools.push_str(&format!("{sid} {} {}\n", e.kind, e.payload));
             }
+            // Un appel par ligne, arguments et résultat côte à côte : l'origine d'un
+            // `mem_note` se lit sans recouper deux événements (issue #245).
+            if e.kind == "runtime.tool" {
+                let p = &e.payload;
+                let line = serde_json::json!({
+                    "session": sid, "outil": p["tool"], "ok": p["ok"],
+                    "arguments": p["args"], "resultat": p["result"],
+                });
+                calls.push_str(&format!("{line}\n"));
+            }
         }
     }
     std::fs::write(out.join("outils.jsonl"), tools).unwrap();
+    std::fs::write(out.join("appels.jsonl"), calls).unwrap();
+    // Tous les candidats, gardés ou non : origine, phrase du propriétaire, sort.
+    let candidates: Vec<String> = s
+        .store
+        .read(|c| {
+            let mut st = c.prepare(
+                "SELECT json_object('texte', text, 'type', ctype, 'origine', origin,
+                        'dit_par_le_proprietaire', owner_quote, 'etat', state,
+                        'motif', reject_reason, 'source', source_ref, 'jour', day)
+                 FROM mem_candidates ORDER BY observed_at",
+            )?;
+            let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .unwrap_or_default();
+    std::fs::write(out.join("candidats.jsonl"), candidates.join("\n")).unwrap();
     let memory: Vec<String> = s
         .events
         .range(0, 100_000)

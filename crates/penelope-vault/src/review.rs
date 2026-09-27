@@ -8,6 +8,7 @@ use penelope_llm::catalog::strip_provider;
 use penelope_llm::provider::{CancelToken, collect_stream};
 use penelope_llm::types::{ChatMessage, ChatRequest};
 use penelope_memory::candidates::{looks_like_correction, stated_as_a_rule};
+use penelope_memory::owner_quote::owner_statement;
 use penelope_memory::vault::When;
 use penelope_memory::{Candidate, CandidateType, Level, Origin, Provenance};
 use serde_json::{Value, json};
@@ -365,13 +366,16 @@ pub async fn review(
         })
         .await;
 
-    record_candidates(
+    // Un contenu transféré n'est pas la parole du propriétaire (issue #245).
+    let owner = (!user_text.contains("<<<DONNÉES NON FIABLES")).then_some(user_text);
+    record_reviewed(
         s,
         &response.message.text(),
         session_id,
         &format!("turn:{turn_id}"),
         looks_like_correction(user_text),
         max,
+        owner,
     )
     .await
 }
@@ -385,6 +389,20 @@ pub async fn record_candidates(
     source_ref: &str,
     correction: bool,
     max: usize,
+) -> anyhow::Result<usize> {
+    record_reviewed(s, raw, session_id, source_ref, correction, max, None).await
+}
+
+/// [`record_candidates`], avec le message du propriétaire du tour relu : un candidat qui
+/// en reprend de près une phrase est sa parole, phrase à l'appui (issue #245).
+async fn record_reviewed(
+    s: &penelope_app::services::Services,
+    raw: &str,
+    session_id: &str,
+    source_ref: &str,
+    correction: bool,
+    max: usize,
+    owner: Option<&str>,
 ) -> anyhow::Result<usize> {
     let now = s.clock.now_rfc3339();
     let candidates = parse_candidates(raw, max)
@@ -418,6 +436,9 @@ pub async fn record_candidates(
                 .with_importance(importance);
             if let Some(w) = when {
                 c = c.with_when(w);
+            }
+            if let Some(q) = owner.and_then(|m| owner_statement(&text, m)) {
+                c = c.said_by_owner(&penelope_observe::redact::redact(&q));
             }
             c.source_ref = Some(source_ref.to_string());
             Some(c)
@@ -607,6 +628,46 @@ mod secret_tests {
 
     /// Issue #37 : un secret dicté part dans le magasin ; le candidat, le journal du jour et
     /// l'index n'en gardent que la référence.
+    /// Issue #245 : la relecture d'un tour rend au propriétaire le fait qu'il a dicté, avec
+    /// sa phrase ; la déduction voisine reste à l'agent, et rien ne passe pour un message
+    /// transféré.
+    #[tokio::test]
+    async fn a_reviewed_fact_the_owner_dictated_stays_the_owners() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
+        let s = penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
+            .await
+            .unwrap();
+        let said = "Retiens que nos réunions d'équipe ont lieu le mardi matin à 9 h.";
+        let raw = r#"{"candidats": [
+            {"type": "fait", "texte": "Les réunions d'équipe ont lieu le mardi matin à 9h.", "importance": 7},
+            {"type": "fait", "texte": "Le propriétaire ne prend aucun rendez-vous client le mardi avant midi.", "importance": 6}]}"#;
+        record_reviewed(&s, raw, "s1", "turn:t1", false, 5, Some(said))
+            .await
+            .unwrap();
+        let pending = s.candidates.pending(None).await.unwrap();
+        let by = |needle: &str| pending.iter().find(|c| c.text.contains(needle)).unwrap();
+        assert_eq!(by("réunions").origin, Origin::Owner);
+        assert_eq!(
+            by("réunions").owner_quote.as_deref(),
+            Some("Retiens que nos réunions d'équipe ont lieu le mardi matin à 9 h")
+        );
+        assert_eq!(by("rendez-vous").origin, Origin::Agent);
+        assert_eq!(by("rendez-vous").owner_quote, None);
+
+        // Sans message du propriétaire (épisode, contenu transféré) : rien ne change.
+        record_candidates(&s, raw, "s2", "turn:t2", false, 5)
+            .await
+            .unwrap();
+        let pending = s.candidates.pending(None).await.unwrap();
+        assert!(
+            pending
+                .iter()
+                .filter(|c| c.session_id.as_deref() == Some("s2"))
+                .all(|c| c.origin == Origin::Agent && c.owner_quote.is_none())
+        );
+    }
+
     #[tokio::test]
     async fn a_secret_in_a_candidate_is_shelved_and_referenced() {
         let dir = tempfile::tempdir().unwrap();

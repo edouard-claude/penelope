@@ -1,0 +1,3 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "mem_note", "arguments": {"type": "fait", "texte": "Les réunions d'équipe ont lieu le mardi matin à 9 h (fuseau Indian/Reunion).", "importance": 8}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "mem_note", "arguments": {"type": "fait", "texte": "Le propriétaire est indisponible pour des rendez-vous clients avant midi."}}]}}
+{"text": "C'est retenu : les réunions d'équipe le mardi à 9 h."}

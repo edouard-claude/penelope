@@ -1,0 +1,14 @@
+name = "outils-memoire-sans-citation"
+description = """Un fait dicté par le propriétaire reste le sien sans citation mot pour mot
+(issue #245) : « Retiens que nos réunions d'équipe ont lieu le mardi matin à 9 h ». Le
+modèle le note reformulé, fuseau en plus, sans `citation` (`mem_note`) : l'outil retrouve
+la phrase dans le message du tour et rend l'origine `owner`. Il note ensuite une déduction
+à lui, absente du message : elle reste d'origine `agent`."""
+pin_model = "main"
+
+[config]
+"tools.approval_mode" = "auto"
+
+[[steps]]
+kind = "message"
+text = "Retiens que nos réunions d'équipe ont lieu le mardi matin à 9 h."

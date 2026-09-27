@@ -14,6 +14,35 @@ La charte et les spécifications sont dans `design/v1/`.
 
 ### 1.0.10
 
+**Mémoire : « Retiens que… » reste la parole du propriétaire sans citation mot pour mot
+(#245).** La suite réseau `mem_longitudinal` perdait « réunions du mardi » 3 fois sur 3 :
+le propriétaire écrit « Retiens que nos réunions d'équipe ont lieu le mardi matin à 9 h »,
+Pénélope répond « C'est retenu », puis le rêve écarte le fait comme « ni dit ni confirmé
+par le propriétaire ». Cause, lue dans les preuves de la passe : l'appel `mem_note` du
+jour 9 n'a pas de `citation` (texte reformulé, fuseau ajouté), et la relecture du tour le
+type `fait` ; les deux candidats partent d'origine `agent`, et le tri ne voit que cette
+origine.
+
+- `penelope_memory::owner_quote` : recouvrement déterministe entre un candidat et une
+  phrase du propriétaire (mots pleins, accents et pluriels ramenés ; au moins 3 mots
+  communs, 75 % de la phrase dans le candidat, 70 % du candidat venu de la phrase, même
+  polarité).
+- `mem_note` sans citation retrouvée, et la relecture d'un tour, marquent `owner` le
+  candidat qui reprend une phrase du message du propriétaire **de ce tour** ; la phrase
+  est gardée (`mem_candidates.owner_quote`, migration 0023, effacée par la purge). Jamais
+  depuis un tour interne, un déclencheur, une relance ou un contenu transféré.
+- Le tri reçoit la ligne « dit par le propriétaire : « … » », et un candidat qui la porte
+  est endossé par construction : sans opération du modèle, son texte est écrit tel quel.
+- `mem_longitudinal` garde aussi `appels.jsonl` (arguments et résultat de chaque appel)
+  et `candidats.jsonl` (origine, phrase, sort).
+
+Tests : `an_owner_fact_noted_without_citation_is_kept` (rouge avant le correctif),
+`a_reviewed_fact_the_owner_dictated_stays_the_owners`, les cas de `owner_quote`, scénario
+`outils-memoire-sans-citation`. Ce qui tenait tient : citation mot pour mot (#24),
+déduction de l'agent écartée, contenu non fiable jamais promu.
+
+Closes #245
+
 - Constat (#242, suite du point 3 de #231) : une photo plus lourde que ce que le
   fournisseur accepte partait telle quelle, se faisait refuser (reprise de la 1.0.6) et
   n'était pas lue ; au-delà de 10 Mo, la passerelle la refusait même quand Telegram en

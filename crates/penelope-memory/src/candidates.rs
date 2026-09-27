@@ -65,6 +65,9 @@ pub struct Candidate {
     pub source_ref: Option<String>,
     /// Anti-boucle : le texte vient d'un rappel mémoire, pas d'une observation.
     pub from_memory: bool,
+    /// Phrase du propriétaire que le candidat reprend, retrouvée dans son message du tour
+    /// (issue #245) : montrée au tri, elle rend le candidat endossé.
+    pub owner_quote: Option<String>,
 }
 
 impl Candidate {
@@ -92,7 +95,15 @@ impl Candidate {
             reject_reason: None,
             source_ref: None,
             from_memory: false,
+            owner_quote: None,
         }
+    }
+
+    /// Candidat dit par le propriétaire : origine `owner`, avec sa phrase.
+    pub fn said_by_owner(mut self, quote: &str) -> Self {
+        self.origin = Origin::Owner;
+        self.owner_quote = Some(quote.to_string());
+        self
     }
 
     pub fn with_when(mut self, w: When) -> Self {
@@ -198,6 +209,17 @@ pub struct CandidateGroup {
 impl CandidateGroup {
     pub fn has_owner_origin(&self) -> bool {
         self.origins.contains(&Origin::Owner)
+    }
+    /// Phrase du propriétaire qu'un membre reprend (issue #245), jamais pour un groupe
+    /// où entre un contenu non fiable.
+    pub fn owner_quote(&self) -> Option<&str> {
+        if self.origins.contains(&Origin::Untrusted) {
+            return None;
+        }
+        self.members
+            .iter()
+            .filter(|m| m.origin == Origin::Owner)
+            .find_map(|m| m.owner_quote.as_deref())
     }
     /// Signature `quand` commune, si les membres sont compatibles.
     pub fn common_when(&self) -> Option<When> {
@@ -305,8 +327,9 @@ impl CandidateStore {
                     tx.execute(
                         "INSERT OR REPLACE INTO mem_candidates(id, ctype, text, quand, importance,
                             origin, session_id, session_kind, observed_at, day, subject_key,
-                            target_slug, state, reject_reason, source_ref, from_memory)
-                         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+                            target_slug, state, reject_reason, source_ref, from_memory,
+                            owner_quote)
+                         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
                         params![
                             c.id,
                             c.ctype.as_str(),
@@ -323,7 +346,8 @@ impl CandidateStore {
                             c.state,
                             c.reject_reason,
                             c.source_ref,
-                            c.from_memory as i64
+                            c.from_memory as i64,
+                            c.owner_quote
                         ],
                     )?;
                 }
@@ -341,7 +365,7 @@ impl CandidateStore {
                 let mut st = c.prepare(
                     "SELECT id, ctype, text, quand, importance, origin, session_id, session_kind,
                             observed_at, day, subject_key, target_slug, state, reject_reason,
-                            source_ref, from_memory
+                            source_ref, from_memory, owner_quote
                      FROM mem_candidates
                      WHERE state IN ('new','grouped','deferred')
                        AND (?1 IS NULL OR observed_at >= ?1)
@@ -366,7 +390,7 @@ impl CandidateStore {
                 let mut st = c.prepare(
                     "SELECT id, ctype, text, quand, importance, origin, session_id, session_kind,
                             observed_at, day, subject_key, target_slug, state, reject_reason,
-                            source_ref, from_memory
+                            source_ref, from_memory, owner_quote
                      FROM mem_candidates
                      WHERE state = 'question'
                      ORDER BY observed_at",
@@ -524,6 +548,7 @@ fn row_to_candidate(
         reject_reason: r.get(13)?,
         source_ref: r.get(14)?,
         from_memory: r.get::<_, i64>(15)? != 0,
+        owner_quote: r.get(16)?,
     })
 }
 
