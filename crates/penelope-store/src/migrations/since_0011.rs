@@ -126,3 +126,9 @@ pub(super) const SQL_0022: &str = r#"
 ALTER TABLE schedules ADD COLUMN failures_in_a_row INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE schedules ADD COLUMN alerted_reason TEXT;
 "#;
+
+/// Phrase du propriétaire derrière un candidat (#245) : retrouvée dans son message du
+/// tour, elle est montrée au tri et rend le candidat endossé. NULL : aucune.
+pub(super) const SQL_0023: &str = r#"
+ALTER TABLE mem_candidates ADD COLUMN owner_quote TEXT;
+"#;

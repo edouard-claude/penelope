@@ -114,26 +114,27 @@ impl NativeToolExecutor {
                 let (texte, _) = penelope_vault::secret_shelf::shelve(s, &str_arg(args, "texte")?)
                     .map_err(ToolError::Denied)?;
                 penelope_vault::vault_ops::write_filter(&texte).map_err(ToolError::Denied)?;
-                // Une règle dictée par le propriétaire compte comme la sienne, à condition
-                // d'en citer l'extrait mot pour mot (issue #24).
+                // Une règle dictée par le propriétaire compte comme la sienne : citée mot
+                // pour mot (issue #24), ou reprise de près d'une phrase de son message du
+                // tour, « Retiens que X » noté sans citation (issue #245).
                 let citation = args.get("citation").and_then(|v| v.as_str());
-                let from_owner = match citation {
-                    Some(c) => self.cited_by_owner(c).await?,
-                    None => false,
-                };
-                let origin = if from_owner {
-                    penelope_memory::Origin::Owner
-                } else {
-                    penelope_memory::Origin::Agent
+                let quote = match citation {
+                    Some(c) if self.cited_by_owner(c).await? => Some(c.to_string()),
+                    _ => self.said_by_owner(&texte).await?,
                 };
                 let mut c = penelope_memory::Candidate::new(
                     ctype,
                     &texte,
-                    origin,
+                    penelope_memory::Origin::Agent,
                     "interactive",
                     &s.clock.now_rfc3339(),
                 )
                 .in_session(&self.env.session_id);
+                if let Some(q) = &quote {
+                    // La phrase part au modèle de tri : un secret n'y passe pas en clair.
+                    c = c.said_by_owner(&penelope_observe::redact::redact(q));
+                }
+                let origin = c.origin;
                 if let Some(i) = u_arg(args, "importance") {
                     c = c.with_importance(i.clamp(1, 10) as u8);
                 }
@@ -148,10 +149,11 @@ impl NativeToolExecutor {
                 json!({
                     "noted": n == 1,
                     "origine": origin.as_str(),
-                    "remarque": match (citation.is_some(), from_owner) {
-                        (_, true) => "citation vérifiée : consolidé comme une règle du propriétaire au prochain rêve",
-                        (true, false) => "citation introuvable mot pour mot dans les messages du propriétaire de ce tour : la règle lui sera demandée",
-                        (false, false) => "consolidé lors du prochain rêve",
+                    "remarque": match (citation, quote.as_deref()) {
+                        (Some(c), Some(q)) if c == q => "citation vérifiée : consolidé comme une règle du propriétaire au prochain rêve",
+                        (_, Some(_)) => "repris d'une phrase du propriétaire de ce tour : consolidé comme sa parole au prochain rêve",
+                        (Some(_), None) => "citation introuvable mot pour mot dans les messages du propriétaire de ce tour : la règle lui sera demandée",
+                        (None, None) => "consolidé lors du prochain rêve",
                     },
                 })
             }

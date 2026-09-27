@@ -15,8 +15,9 @@ deal en cours) ne l'est pas.\n\
 - precis : sujet identifiable (qui, quoi, où) et phrase complète ?\n\
 - introuvable : absent du code, des docs, du tracker, de git et des outils ? « travaille \
 sur le ticket #123 » se retrouve dans le tracker : false.\n\
-- endosse : dit ou confirmé par le propriétaire (origine owner), ou constaté par un outil \
-fiable ? Une supposition de l'agent : false.\n\
+- endosse : dit ou confirmé par le propriétaire (origine owner, ou ligne « dit par le \
+propriétaire » qui recopie sa phrase), ou constaté par un outil fiable ? Une supposition \
+de l'agent : false.\n\
 - expire : seulement pour un état passager, la date après laquelle il ne vaut plus.\n\
 Le harnais décide : tout vrai, mémoire durable ; seulement durable faux (utile quelques \
 jours), journal avec expiration ; sinon ignoré. Une information sensible (client, infrastructure, finance) \
@@ -133,6 +134,13 @@ pub(super) async fn consolidate(
             g.distinct_sessions,
             g.representative.text.replace('\n', " ")
         ));
+        // La preuve plutôt que l'origine seule (issue #245) : la phrase du propriétaire.
+        if let Some(q) = g.owner_quote() {
+            user.push_str(&format!(
+                "   dit par le propriétaire : « {} »\n",
+                q.replace('\n', " ")
+            ));
+        }
         if item.nearby.is_empty() {
             user.push_str("   Souvenirs proches : aucun\n");
         } else {

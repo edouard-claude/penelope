@@ -5,7 +5,7 @@
 //! ```text
 //!  session.purge <id>
 //!     messages, messages_fts, message_context, lcm_*, artifacts (fichiers compris)
-//!     llm_requests, turn_queue.payload, tg_updates.payload, mem_candidates.text
+//!     llm_requests, turn_queue.payload, tg_updates.payload, mem_candidates.text/owner_quote
 //!     effects.request/result, tg_outbox, approval_requests.payload, mcp_tasks, tool_jobs,
 //!     workflow_runs et workflow_step_log des runs de la session (#78)
 //!     prompt_snapshots que la session seule référençait, et usage.system_hash (#205)
@@ -129,7 +129,7 @@ pub async fn session(s: &Services, session_id: &str, reason: &str) -> anyhow::Re
                 [&sid],
             )?;
             let candidates = tx.execute(
-                "UPDATE mem_candidates SET text = '(purgé)', source_ref = NULL
+                "UPDATE mem_candidates SET text = '(purgé)', source_ref = NULL, owner_quote = NULL
                  WHERE session_id = ?1",
                 [&sid],
             )?;

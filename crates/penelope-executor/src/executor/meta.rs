@@ -47,19 +47,12 @@ impl NativeToolExecutor {
         Ok(o)
     }
 
-    /// Vrai si `citation` figure mot pour mot (espaces et casse près) dans un message du
-    /// propriétaire du tour en cours : messages utilisateur depuis la dernière réponse
-    /// finale, hors déclencheurs, relances et contenus transférés.
-    pub(super) async fn cited_by_owner(&self, citation: &str) -> ToolResult<bool> {
-        let norm = |t: &str| {
-            t.split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .to_lowercase()
-        };
-        let needle = norm(citation);
-        if needle.chars().count() < 8 || matches!(self.env.origin, Origin::Internal { .. }) {
-            return Ok(false);
+    /// Messages du propriétaire du tour en cours : messages utilisateur depuis la dernière
+    /// réponse finale, hors déclencheurs, relances et contenus transférés. Vide pour un
+    /// tour interne.
+    async fn owner_turn_messages(&self) -> ToolResult<Vec<String>> {
+        if matches!(self.env.origin, Origin::Internal { .. }) {
+            return Ok(Vec::new());
         }
         let s = &self.services;
         let sid = self.env.session_id.clone();
@@ -80,6 +73,7 @@ impl NativeToolExecutor {
             .load(&self.env.session_id, (last - 60).max(0))
             .await
             .map_err(|e| ToolError::Other(e.to_string()))?;
+        let mut out = Vec::new();
         for e in entries.iter().rev() {
             let m = &e.message;
             match m.role {
@@ -92,14 +86,42 @@ impl NativeToolExecutor {
                     {
                         continue;
                     }
-                    if norm(&text).contains(&needle) {
-                        return Ok(true);
-                    }
+                    out.push(text);
                 }
                 _ => {}
             }
         }
-        Ok(false)
+        Ok(out)
+    }
+
+    /// Vrai si `citation` figure mot pour mot (espaces et casse près) dans un message du
+    /// propriétaire du tour en cours.
+    pub(super) async fn cited_by_owner(&self, citation: &str) -> ToolResult<bool> {
+        let norm = |t: &str| {
+            t.split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase()
+        };
+        let needle = norm(citation);
+        if needle.chars().count() < 8 {
+            return Ok(false);
+        }
+        Ok(self
+            .owner_turn_messages()
+            .await?
+            .iter()
+            .any(|t| norm(t).contains(&needle)))
+    }
+
+    /// Phrase d'un message du propriétaire du tour que `texte` reprend de près, même
+    /// reformulé (issue #245) : « Retiens que X » noté sans citation reste sa parole.
+    pub(super) async fn said_by_owner(&self, texte: &str) -> ToolResult<Option<String>> {
+        Ok(self
+            .owner_turn_messages()
+            .await?
+            .iter()
+            .find_map(|m| penelope_memory::owner_quote::owner_statement(texte, m)))
     }
 
     pub(super) async fn tool_search(&self, args: &Value) -> ToolResult<ToolOutcome> {
