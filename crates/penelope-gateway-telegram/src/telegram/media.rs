@@ -24,8 +24,7 @@ impl TelegramGateway {
             chat_id,
             message_id,
             topic_id,
-            file_ids,
-            file_size,
+            sizes,
             media_group,
             caption,
             ..
@@ -34,10 +33,13 @@ impl TelegramGateway {
             return Ok(());
         };
         let reply_to = Some(message_id);
-        let Some(file_id) = file_ids.last() else {
+        if sizes.is_empty() {
             return Ok(());
-        };
-        if file_size.unwrap_or(0) as usize > penelope_app::media::IMAGE_MAX_BYTES {
+        }
+        // La plus grande taille qui tient : une version plus légère plutôt qu'un refus
+        // (issue #242). Le fournisseur n'est connu qu'au tour, qui réduit au besoin.
+        let max = penelope_app::media::IMAGE_MAX_BYTES;
+        let Some(photo) = penelope_telegram::largest_photo_within(&sizes, max) else {
             return self
                 .reply(
                     chat_id,
@@ -46,9 +48,9 @@ impl TelegramGateway {
                     "📷 Photo trop lourde (10 Mo au plus).",
                 )
                 .await;
-        }
+        };
         self.react(chat_id, message_id, reaction::RECEIVED);
-        let saved = match self.bot.download_file(file_id).await {
+        let saved = match self.bot.download_file(&photo.file_id).await {
             Ok((bytes, _)) => penelope_app::media::save_photo(&self.daemon.services, &bytes),
             Err(e) => Err(format!("téléchargement impossible : {e}")),
         };

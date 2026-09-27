@@ -14,10 +14,23 @@ impl Core {
         turn_id: &str,
     ) -> ChatMessage {
         let s = &self.services;
+        let sees = s
+            .catalog
+            .get(penelope_llm::catalog::strip_provider(model_id))
+            .map(|i| i.accepts_images())
+            .unwrap_or(false);
+        // L'image est réduite pour le modèle qui la lira (issue #242).
+        let (cfg, describe) = (s.config.config(), penelope_executor::vision::Task::Describe);
+        let describer = cfg.alias_model(&penelope_executor::vision::alias_for(&cfg, describe));
+        let reader = if sees {
+            model_id
+        } else {
+            describer.unwrap_or(model_id)
+        };
         let mut urls = Vec::new();
         let mut unreadable = 0;
         for p in images {
-            match penelope_app::media::data_url(p) {
+            match penelope_app::media::model_data_url(s, p, reader, session_id).await {
                 Ok(u) => urls.push(u),
                 Err(e) => {
                     tracing::warn!(error = %e, "photo illisible");
@@ -50,11 +63,6 @@ impl Core {
                 saved.join(", ")
             ));
         }
-        let sees = s
-            .catalog
-            .get(penelope_llm::catalog::strip_provider(model_id))
-            .map(|i| i.accepts_images())
-            .unwrap_or(false);
         if sees && !urls.is_empty() {
             let mut content = vec![penelope_llm::types::Content::text(request)];
             content.extend(

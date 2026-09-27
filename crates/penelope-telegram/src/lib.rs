@@ -54,9 +54,7 @@ pub enum Incoming {
         message_id: i64,
         topic_id: Option<i64>,
         /// Tailles de la photo, de la plus petite à la plus grande.
-        file_ids: Vec<String>,
-        /// Poids de la plus grande taille, s'il est annoncé.
-        file_size: Option<i64>,
+        sizes: Vec<PhotoSize>,
         media_group: Option<String>,
         caption: Option<String>,
     },
@@ -167,6 +165,39 @@ impl Incoming {
             _ => None,
         }
     }
+}
+
+/// Une taille d'une photo (`PhotoSize`) : Telegram en propose plusieurs, réduites de
+/// son côté.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PhotoSize {
+    pub file_id: String,
+    pub width: u32,
+    pub height: u32,
+    /// Poids annoncé, s'il l'est.
+    pub file_size: Option<i64>,
+}
+
+impl PhotoSize {
+    fn parse(p: &Value) -> Option<PhotoSize> {
+        let side = |k: &str| p.get(k).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        Some(PhotoSize {
+            file_id: p.get("file_id")?.as_str()?.to_string(),
+            width: side("width"),
+            height: side("height"),
+            file_size: p.get("file_size").and_then(|v| v.as_i64()),
+        })
+    }
+}
+
+/// La plus grande taille dont le poids annoncé tient sous `max_bytes` (issue #242) : une
+/// photo lourde n'est pas perdue quand Telegram en propose une version plus légère. Une
+/// taille sans poids annoncé passe ; `None` si aucune ne tient.
+pub fn largest_photo_within(sizes: &[PhotoSize], max_bytes: usize) -> Option<&PhotoSize> {
+    sizes
+        .iter()
+        .filter(|p| p.file_size.unwrap_or(0) as usize <= max_bytes)
+        .max_by_key(|p| (p.width.max(p.height), p.file_size.unwrap_or(0)))
 }
 
 /// `from.id` d'un message écrit en administrateur anonyme : le bot `GroupAnonymousBot`
@@ -343,14 +374,7 @@ pub fn classify(update: &Value, access: &Access) -> Incoming {
             from_id,
             message_id,
             topic_id,
-            file_ids: photos
-                .iter()
-                .filter_map(|p| p.get("file_id").and_then(|v| v.as_str()).map(String::from))
-                .collect(),
-            file_size: photos
-                .last()
-                .and_then(|p| p.get("file_size"))
-                .and_then(|v| v.as_i64()),
+            sizes: photos.iter().filter_map(PhotoSize::parse).collect(),
             media_group: msg
                 .get("media_group_id")
                 .and_then(|v| v.as_str())
@@ -622,12 +646,18 @@ mod tests {
             &Access::owner_only(OWNER),
         ) {
             Incoming::Photo {
-                media_group,
-                file_ids,
-                ..
+                media_group, sizes, ..
             } => {
                 assert_eq!(media_group.as_deref(), Some("g1"));
-                assert_eq!(file_ids.len(), 1);
+                assert_eq!(
+                    sizes,
+                    vec![PhotoSize {
+                        file_id: "f1".into(),
+                        width: 100,
+                        height: 100,
+                        file_size: Some(1000),
+                    }]
+                );
             }
             other => panic!("{other:?}"),
         }
@@ -642,6 +672,36 @@ mod tests {
             classify(&updates::voice(3, OWNER, OWNER), &Access::owner_only(OWNER)),
             Incoming::Voice { .. }
         ));
+    }
+
+    /// #242 : la plus grande taille qui tient sous la limite, pas forcément la dernière.
+    #[test]
+    fn the_largest_photo_size_within_the_limit_is_chosen() {
+        let size = |id: &str, side: u32, bytes: Option<i64>| PhotoSize {
+            file_id: id.into(),
+            width: side,
+            height: side * 3 / 4,
+            file_size: bytes,
+        };
+        let sizes = vec![
+            size("s", 320, Some(20_000)),
+            size("m", 1_280, Some(3_000_000)),
+            size("x", 4_000, Some(12_000_000)),
+        ];
+        let limit = 10 * 1024 * 1024;
+        assert_eq!(largest_photo_within(&sizes, limit).unwrap().file_id, "m");
+        assert_eq!(
+            largest_photo_within(&sizes, 50_000_000).unwrap().file_id,
+            "x"
+        );
+        assert!(largest_photo_within(&sizes[2..], limit).is_none());
+        assert_eq!(
+            largest_photo_within(&[size("n", 800, None)], limit)
+                .unwrap()
+                .file_id,
+            "n"
+        );
+        assert!(largest_photo_within(&[], limit).is_none());
     }
 
     #[test]

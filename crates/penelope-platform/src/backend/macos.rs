@@ -570,6 +570,36 @@ pub fn power_manager() -> Box<dyn crate::power::PowerManager> {
     Box::new(crate::power::CountingPower::caffeinate())
 }
 
+// ------------------------------------------------------------------ images
+
+/// `sips`, livré avec macOS : rééchantillonne et réencode en JPEG (issue #242).
+pub struct SipsShrinker;
+
+impl crate::image::ImageShrinker for SipsShrinker {
+    fn shrink(&self, src: &Path, dst: &Path, max_side: u32) -> Result<()> {
+        let out = Command::new("/usr/bin/sips")
+            .args(["-s", "format", "jpeg", "-s", "formatOptions", "85", "-Z"])
+            .arg(max_side.to_string())
+            .arg(src)
+            .arg("--out")
+            .arg(dst)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| PlatformError::Process(format!("sips : {e}")))?;
+        if !out.status.success() || !dst.is_file() {
+            return Err(PlatformError::Process(format!(
+                "sips : {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        Ok(())
+    }
+}
+
+pub fn image_shrinker() -> Box<dyn crate::image::ImageShrinker> {
+    Box::new(SipsShrinker)
+}
+
 // ------------------------------------------------------------------ doctor
 
 /// Contrôles propres à macOS (§2.11). Chaque échec porte une commande corrective

@@ -111,6 +111,12 @@ du tour (sauf `approval.decided`, qui ne l'est pas) :
 | `approval.decided` | une carte d'approbation, ou un effet au sort incertain, est tranchée ; la première décision gagne | `id`, `approved`, `via`, `window` ; pour un effet incertain, `effect` et `choice` |
 | `approval.judged` | le juge d'approbation (#203) a jugé une ligne `shell_exec` sans motif possible, ou n'a pas pu | `command_sha` (seize caractères du SHA-256 de la ligne, jamais la ligne), `mode`, `outcome` (`carte`, `auto_read`, `regle_pouvoirs`, `echec`) ; jugée : `verdict`, `powers`, `hosts`, `model`, `duration_ms`, `cost_usd`, `rule` ; en échec : `failure` (`indisponible`, `delai`, `schema`) et `detail` |
 
+Avant l'appel, une photo trop lourde pour le fournisseur du modèle qui la lira (5 Mo en
+base64 et 8 000 px de côté pour Anthropic) est réduite par l'outil du système (`sips`
+sous macOS) : `media.image_reduced`, attaché à la session, porte `model`, `path` (la
+photo reçue, gardée intacte), `before_bytes`, `after_bytes`, `before` et `after`
+(`LxH`). Sans outil ou en échec, la photo part telle quelle (#242).
+
 Les événements `conv.*` portent le **contenu** de la conversation, pour que le journal
 se suffise (épopée #208, `design/v1/source-de-verite.md` §2.2). Chaque payload a
 `"v": 1` et, pour ceux qui changent ce que le modèle lit, `surface` : `{"op":"append"}`

@@ -102,6 +102,51 @@ impl RejectedImages {
     }
 }
 
+/// Ce qu'un fournisseur accepte d'une image : le poids de l'image **encodée en base64**,
+/// comme il la mesure dans la requête, et le grand côté en pixels (issue #242). Une image
+/// au-delà est réduite avant l'envoi plutôt que refusée puis retirée.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageLimits {
+    pub max_encoded_bytes: usize,
+    pub max_side: u32,
+}
+
+impl ImageLimits {
+    /// Anthropic : `image exceeds 5 MB maximum: … bytes > 5242880 bytes` sur les octets
+    /// base64, et 8 000 px de côté.
+    pub const ANTHROPIC: ImageLimits = ImageLimits {
+        max_encoded_bytes: 5 * 1024 * 1024,
+        max_side: 8_000,
+    };
+    /// Les autres (OpenAI, Gemini, Mistral par OpenRouter) : 20 Mo, au-delà des 10 Mo
+    /// qu'une photo reçue peut peser ; rien n'est réduit pour eux.
+    pub const DEFAULT: ImageLimits = ImageLimits {
+        max_encoded_bytes: 20 * 1024 * 1024,
+        max_side: 16_000,
+    };
+
+    /// Vrai si une image de `bytes` octets bruts et de grand côté `side` passe.
+    pub fn fits(&self, bytes: usize, side: Option<u32>) -> bool {
+        encoded_len(bytes) <= self.max_encoded_bytes && side.is_none_or(|s| s <= self.max_side)
+    }
+}
+
+/// Longueur en base64 de `bytes` octets.
+pub fn encoded_len(bytes: usize) -> usize {
+    bytes.div_ceil(3) * 4
+}
+
+/// Les limites d'image du fournisseur qui sert `model_id` (`anthropic/claude-…` par
+/// OpenRouter, ou un nom `claude-…` servi ailleurs).
+pub fn image_limits(model_id: &str) -> ImageLimits {
+    let model = crate::catalog::strip_provider(model_id).to_lowercase();
+    if model.starts_with("anthropic/") || model.contains("claude") {
+        ImageLimits::ANTHROPIC
+    } else {
+        ImageLimits::DEFAULT
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::types::{LlmError, LlmErrorKind};
@@ -256,5 +301,34 @@ mod tests {
         assert_eq!(messages[0].content[1], Content::text(text));
         assert_eq!(messages[2].content[1], Content::text(text));
         assert_eq!(messages[1].content[1], img("data:b"));
+    }
+
+    /// #242 : la limite est celle du fournisseur, mesurée sur l'image encodée.
+    #[test]
+    fn image_limits_follow_the_provider() {
+        use super::{ImageLimits, encoded_len, image_limits};
+        assert_eq!(
+            image_limits("openrouter:anthropic/claude-sonnet-4.5"),
+            ImageLimits::ANTHROPIC
+        );
+        assert_eq!(
+            image_limits("anthropic/claude-opus-4"),
+            ImageLimits::ANTHROPIC
+        );
+        assert_eq!(
+            image_limits("deepseek/deepseek-v4-pro"),
+            ImageLimits::DEFAULT
+        );
+        assert_eq!(image_limits("codex:gpt-5"), ImageLimits::DEFAULT);
+        assert_eq!(encoded_len(3), 4);
+        assert_eq!(encoded_len(4), 8);
+        let a = ImageLimits::ANTHROPIC;
+        // 4 Mo bruts pèsent 5,3 Mo en base64 : au-delà des 5 Mo d'Anthropic.
+        assert!(!a.fits(4_000_000, Some(2_000)));
+        assert!(a.fits(3_900_000, Some(2_000)));
+        assert!(!a.fits(1_000, Some(8_001)));
+        assert!(a.fits(1_000, None));
+        // Une photo reçue (10 Mo au plus) passe telle quelle ailleurs.
+        assert!(ImageLimits::DEFAULT.fits(10 * 1024 * 1024, Some(4_000)));
     }
 }

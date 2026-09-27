@@ -164,6 +164,18 @@ pub fn power_manager() -> Box<dyn crate::power::PowerManager> {
     Box::new(crate::power::CountingPower::noop())
 }
 
+pub struct StubShrinker;
+
+impl crate::image::ImageShrinker for StubShrinker {
+    fn shrink(&self, _src: &Path, _dst: &Path, _max_side: u32) -> Result<()> {
+        Err(unsupported("la réduction d'image"))
+    }
+}
+
+pub fn image_shrinker() -> Box<dyn crate::image::ImageShrinker> {
+    Box::new(StubShrinker)
+}
+
 pub fn doctor_checks() -> Vec<crate::DoctorItem> {
     vec![crate::DoctorItem {
         id: "platform.backend".into(),
