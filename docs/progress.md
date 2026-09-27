@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.11
+### 1.0.9
 
 **Gel : le cliquet garde les plafonds de couverture (#243).** Un plafond de
 `[coverage.uncovered]` remonté à la main dans un lot passait la CI. Cause :
