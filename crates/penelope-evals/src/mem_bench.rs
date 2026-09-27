@@ -275,12 +275,18 @@ pub async fn answer_cards(d: &Arc<Daemon>, f: &Fixture) -> usize {
         .collect();
     for (card, answer) in cards.iter().zip(&f.cartes) {
         let (action, decision) = match answer.as_str() {
-            "remplacer" => ("memory_accept", penelope_hitl::Decision::approve_once("bench")),
+            "remplacer" => (
+                "memory_accept",
+                penelope_hitl::Decision::approve_once("bench"),
+            ),
             "exception" => (
                 "memory_as_exception",
                 penelope_hitl::Decision::approve_once("bench"),
             ),
-            _ => ("memory_reject", penelope_hitl::Decision::deny("bench", None)),
+            _ => (
+                "memory_reject",
+                penelope_hitl::Decision::deny("bench", None),
+            ),
         };
         s.approvals
             .decide(card.id.as_str(), &decision)
