@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.4
+### 1.0.5
 
 Une planification qui échouait à chaque exécution envoyait une alerte Telegram à chaque
 échec : 24 messages identiques par jour pour une planification horaire cassée, que le
@@ -36,6 +36,8 @@ propriétaire finit par ne plus lire. Cause : `alert()` partait sans condition, 
   `doctor` ; scénario `commande-planification-en-echec` (`/schedules` avant et après).
 
 Closes #229.
+
+### 1.0.4
 
 Deux petits défauts relevés en corrigeant #219 à #221.
 
