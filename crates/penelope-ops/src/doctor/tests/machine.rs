@@ -90,4 +90,16 @@ async fn a_failing_schedule_is_named() {
         c.detail,
         format!("1 en échec : {} (canal injoignable)", sched.id)
     );
+    // #229 : la série qui dure se lit ici, même quand ses alertes se taisent.
+    s.schedules
+        .record_outcome(&sched.id, Some("canal injoignable"))
+        .await
+        .unwrap();
+    assert_eq!(
+        schedules_check(&s).await.detail,
+        format!(
+            "1 en échec : {} (2 échecs de suite, canal injoignable)",
+            sched.id
+        )
+    );
 }

@@ -201,7 +201,14 @@ async fn finish(
     let prompt = sched.target_kind() == Some(TargetKind::Prompt);
     match (&error, &result) {
         (None, Ok(true)) if prompt => s.schedules.advance(&sched.id, None).await?,
-        (None, _) => s.schedules.mark_run(&sched.id, None).await?,
+        (None, _) => {
+            // Un sondage sans nouveauté d'un prompt en panne est son retour (#229).
+            if let Some(failures) = s.schedules.mark_run(&sched.id, None).await?
+                && prompt
+            {
+                recovered(d, ports, sched, failures).await;
+            }
+        }
         (Some(e), _) => {
             s.schedules.advance(&sched.id, Some(e)).await?;
             if prompt {
@@ -236,7 +243,7 @@ mod triggers;
 mod wake;
 pub use digest::{DigestFeed, digest_inputs};
 use fire::fire;
-pub use fire::{alert, create, label};
+pub use fire::{alert, create, label, recovered};
 use origin::target_origin;
 pub use origin::{destination, due_today, listing, place_name, retarget};
 use outcome::{cancelled_triggers, save_state};

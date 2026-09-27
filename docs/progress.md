@@ -12,6 +12,31 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.5
+
+Une planification qui échouait à chaque exécution envoyait une alerte Telegram à chaque
+échec : 24 messages identiques par jour pour une planification horaire cassée, que le
+propriétaire finit par ne plus lire. Cause : `alert()` partait sans condition, et la table
+`schedules` ne gardait que la dernière erreur, sans série.
+
+- Migration `0022_schedule_failure_streak` : `failures_in_a_row` (allongée par chaque
+  échec enregistré, remise à zéro au premier succès) et `alerted_reason`, le motif de la
+  dernière alerte de la série.
+- L'alerte part au premier échec, quand le motif normalisé change (un mot de huit
+  caractères ou plus avec un chiffre, identifiant ou horodatage, devient `#` ; un code
+  court comme `429` reste), et aux paliers 5, 20, 100 puis toutes les 100, avec « (N échecs
+  de suite) ». Sinon elle se tait ; `schedule.failed` entre toujours au journal, avec
+  `alerted`. Le principe « jamais de silence » (#39) tient : la première part toujours.
+- Au succès qui clôt une série alertée : « ✅ … est rétablie après N échecs »
+  (`schedule.recovered`).
+- `/schedules` et `doctor` montrent la série en cours (« 3 échecs de suite »).
+- Tests : dix échecs au même motif donnent deux alertes puis « rétablie après 10 échecs »,
+  un motif qui change alerte (`scheduler/tests.rs`) ; chaque chemin d'échec allonge la
+  série, paliers et motifs (`schedules/tests.rs`) ; migration unitaire et fixture 0.17.62 ;
+  `doctor` ; scénario `commande-planification-en-echec` (`/schedules` avant et après).
+
+Closes #229.
+
 ### 1.0.4
 
 Deux petits défauts relevés en corrigeant #219 à #221.

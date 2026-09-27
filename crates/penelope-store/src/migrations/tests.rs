@@ -301,3 +301,32 @@ fn sealing_drops_the_dead_projections_and_indexes_unsealed_rows() {
         .unwrap();
     assert!(plan.contains("messages_unsealed"), "{plan}");
 }
+
+/// #229 : une planification d'avant la série part d'une série vide, sans alerte en cours.
+#[test]
+fn an_existing_schedule_starts_with_no_failure_streak() {
+    let mut c = Connection::open_in_memory().unwrap();
+    migrate(&mut c).unwrap();
+    c.execute_batch(
+        "ALTER TABLE schedules DROP COLUMN failures_in_a_row;
+         ALTER TABLE schedules DROP COLUMN alerted_reason;
+         DELETE FROM schema_migrations WHERE version = '0022_schedule_failure_streak';",
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO schedules(id, kind, spec, target, dedup, state, created_at, updated_at,
+            last_error)
+         VALUES('sch_1', 'cron', '{}', '{}', '{}', 'active', 't', 't', 'panne')",
+        [],
+    )
+    .unwrap();
+    migrate(&mut c).unwrap();
+    let (failures, alerted): (i64, Option<String>) = c
+        .query_row(
+            "SELECT failures_in_a_row, alerted_reason FROM schedules WHERE id = 'sch_1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((failures, alerted), (0, None));
+}

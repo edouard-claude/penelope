@@ -26,7 +26,8 @@
       "last_run": "null",
       "next_run": "string",
       "runs": "integer",
-      "last_error": "null"
+      "last_error": "null",
+      "failures_in_a_row": "integer"
     }
   }
 }

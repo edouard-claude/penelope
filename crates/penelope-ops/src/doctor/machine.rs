@@ -259,7 +259,8 @@ pub(super) fn install_mode(exe: &std::path::Path, launched: Option<&str>) -> Doc
     }
 }
 
-/// Planifications actives dont la dernière exécution a échoué (issue #39).
+/// Planifications actives dont la dernière exécution a échoué (issue #39), avec leur
+/// série d'échecs quand elle dure (#229) : une alerte tue reste visible ici.
 pub async fn schedules_check(s: &Services) -> DoctorCheck {
     const ID: &str = "schedules";
     const LABEL: &str = "Planifications";
@@ -269,9 +270,17 @@ pub async fn schedules_check(s: &Services) -> DoctorCheck {
         .iter()
         .filter(|x| x.state == "active")
         .filter_map(|x| {
-            x.last_error
-                .as_ref()
-                .map(|e| format!("{} ({})", x.id, e.chars().take(120).collect::<String>()))
+            let streak = match x.failures_in_a_row {
+                0 | 1 => String::new(),
+                n => format!("{n} échecs de suite, "),
+            };
+            x.last_error.as_ref().map(|e| {
+                format!(
+                    "{} ({streak}{})",
+                    x.id,
+                    e.chars().take(120).collect::<String>()
+                )
+            })
         })
         .collect();
     if failing.is_empty() {

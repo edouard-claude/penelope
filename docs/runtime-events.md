@@ -47,7 +47,9 @@ mesuré ou estimé. Les événements de session et HITL portent leur cycle de vi
 les événements préexistants couvrent les tours, runs, étapes, intents, planifications
 et erreurs. L'ordonnanceur émet aussi `schedule.fired` après un déclenchement réussi ;
 un créneau parti plus de cinq minutes après son heure y ajoute `planned` (l'heure prévue)
-et `late` (la phrase qui l'annonce au propriétaire).
+et `late` (la phrase qui l'annonce au propriétaire). `schedule.failed` suit chaque exécution
+ratée (`alerted` : l'alerte est partie ou s'est tue, série en cours au même motif) et
+`schedule.recovered` le succès qui clôt une série alertée (#229).
 
 `host.woke` dit que la machine sort de veille : l'horloge murale a avancé de plus de 60 s
 de plus que l'horloge monotone entre deux passages de l'ordonnanceur. Il porte `slept_ms`

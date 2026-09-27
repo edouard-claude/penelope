@@ -1,0 +1,52 @@
+name = "commande-planification-en-echec"
+description = """Une planification qui échoue à la suite n'alerte pas à chaque exécution (#229) :
+une veille créée par la socket (`schedule.add`) est lancée trois fois (`schedule.run_now`)
+contre un modèle en panne, au même motif à l'identifiant de requête près. Une seule alerte
+part, la première ; `/schedules` montre la série (« 3 échecs de suite »). La quatrième
+exécution répond : la réponse part, suivie de « rétablie après 3 échecs », et `/schedules`
+ne montre plus d'erreur. Le monde relève la série remise à zéro."""
+pin_model = "main"
+messenger = true
+# Le bouton « ⚡ » cite la fin de l'identifiant de la planification, tiré au sort.
+masks = ["⚡ cron [0-9A-Z]{6}"]
+
+[config]
+"models.routing.classifier" = false
+
+[[observe]]
+name = "planifications"
+sql = "SELECT kind, state, runs, last_error, failures_in_a_row, alerted_reason FROM schedules ORDER BY created_at, rowid"
+
+[[steps]]
+kind = "rpc"
+method = "schedule.add"
+bind = "veille"
+params = { kind = "cron", spec = { expr = "0 8 * * *" }, target = { type = "prompt", label = "Veille du matin", prompt = "fais la veille du matin" } }
+
+[[steps]]
+kind = "rpc"
+method = "schedule.run_now"
+params = { id = "$veille.id" }
+
+[[steps]]
+kind = "rpc"
+method = "schedule.run_now"
+params = { id = "$veille.id" }
+
+[[steps]]
+kind = "rpc"
+method = "schedule.run_now"
+params = { id = "$veille.id" }
+
+[[steps]]
+kind = "telegram"
+text = "/schedules"
+
+[[steps]]
+kind = "rpc"
+method = "schedule.run_now"
+params = { id = "$veille.id" }
+
+[[steps]]
+kind = "telegram"
+text = "/schedules"

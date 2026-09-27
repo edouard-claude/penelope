@@ -1589,8 +1589,13 @@ ne l'arrête plus. Un rappel manqué pendant un arrêt part une fois au redémar
 **Jamais de silence.** Si l'exécution d'un prompt planifié est annulée, échoue ou atteint
 son budget, le propriétaire reçoit « ⚠️ La planification « … » n'a pas pu s'exécuter :
 <raison> » avec « 🔁 Relancer maintenant » et « 📅 Voir la planification ». Une
-exécution ne compte (`runs`, `last_run`) qu'une fois menée à terme ; sinon la raison
-reste dans `last_error`, visible dans `/schedules` et `penelope doctor`. Créer une
+planification qui reste en panne ne répète pas ce message à chaque exécution : il part
+au premier échec, quand la raison change (identifiants et horodatages mis à part), et
+aux paliers de 5, 20 et 100 échecs de suite, puis toutes les 100, avec « (N échecs de
+suite) » ; au premier succès, « ✅ … est rétablie après N échecs ». Une exécution ne
+compte (`runs`, `last_run`) qu'une fois menée à terme ; sinon la raison reste dans
+`last_error` et la série dans `failures_in_a_row`, visibles dans `/schedules` et
+`penelope doctor`. Créer une
 planification identique à une planification active (même déclencheur, prompt quasi
 identique) est signalé dans la réponse de création.
 
