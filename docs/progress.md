@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.6
+### 1.0.3
 
 Pénélope ne savait pas qu'elle avait dormi (veille du 26/09, OpenClaw #158592). Un
 créneau manqué pendant une veille partait au réveil comme s'il était à l'heure, les
