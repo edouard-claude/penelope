@@ -12,6 +12,27 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.11
+
+**Gel : le cliquet garde les plafonds de couverture (#243).** Un plafond de
+`[coverage.uncovered]` remonté à la main dans un lot passait la CI. Cause :
+`ratchet.rs` attendait une table de planchers `[coverage.crates]` que `budget.toml` n'a
+jamais eue, et ne comparait pas `[coverage.uncovered]` à sa base git.
+
+- `[coverage.uncovered]` est une table de plafonds par crate, comme `[crates]` : une
+  valeur qui monte ou une entrée retirée est refusée sans trailer `Dérogation-budget: #N` ;
+  une valeur qui descend et une crate nouvelle (`coverage-check.sh --update`) passent. Le
+  message nomme la table, les mêmes crates figurant dans `[crates]`.
+- `coverage.crates` est retiré du cliquet.
+- `scripts/coverage-check.sh` reste manuel (vingt minutes et plus) ; CLAUDE.md dit quand le
+  lancer.
+- Tests : `an_uncovered_ceiling_that_rises_is_refused`,
+  `an_uncovered_ceiling_that_falls_or_a_new_crate_passes`,
+  `a_removed_uncovered_ceiling_is_refused` ; les tests existants du cliquet passent
+  inchangés, hormis le plancher `coverage.crates` retiré.
+
+Closes #243
+
 ### 1.0.8
 
 **Mémoire : une préférence du propriétaire ne se remplace plus sans lui (#224).** La

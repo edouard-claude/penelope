@@ -94,6 +94,13 @@ mois, relus par `git log --grep=Dérogation-budget`.
 La sortie normale d'un correctif qui fait déborder un fichier de la liste : déplacer un
 test dans `tests.rs`, pas le trailer.
 
+R9, la couverture : `[coverage.uncovered]` plafonne les lignes non couvertes par crate.
+Le cliquet de la CI refuse un plafond qui monte ou disparaît, mais **la mesure ne tourne
+pas en CI** (`cargo llvm-cov`, vingt minutes et plus) : `scripts/coverage-check.sh` se
+lance à la main, avant de pousser un lot qui ajoute du code produit sans ses tests, qui
+retire des tests ou qui crée une crate ; `--update` abaisse ensuite les plafonds à la
+mesure et y ajoute la crate nouvelle.
+
 **Releases 1.x.** La variable de dépôt `V1_RELEASES=1` autorise `release.yml` à publier
 une 1.x (#212). `penelope upgrade` ignore une version à suffixe (`1.0.0-rc.1`) : une
 pré-release ne s'installe que par `penelope upgrade --tag`.

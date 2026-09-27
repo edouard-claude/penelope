@@ -398,10 +398,9 @@ jamais qu'à la mesure.
   bloc `impl Daemon`, que R6 réserve à quatre fichiers ; le couper demande de convertir
   des méthodes en fonctions sur `Core` ou sur un port, comme T33 l'a fait pour
   `engine.rs` (533 lignes).
-- **Cliquet de R9** : `scripts/check-budget.sh` (`ratchet.rs`) ne surveille pas
-  `[coverage.uncovered]` ; il attend encore des planchers `[coverage.crates]`, que le
-  budget n'a pas. Une remontée écrite à la main d'un plafond de couverture ne serait pas
-  refusée en CI, et la mesure elle-même n'y tourne pas.
+- **Mesure de R9** : le cliquet refuse en CI un plafond de `[coverage.uncovered]` qui
+  monte (#243), mais la mesure elle-même (`scripts/coverage-check.sh`) n'y tourne pas :
+  elle est manuelle.
 - **Journal** : l'archive d'un `/rewind` n'est pas encore un fork par référence (elle
   n'a pas de journal à elle) ; un retour arrière qui coupe dans le préfixe scellé empêche
   la mère de se replier (décision 0017, écarts restants).
