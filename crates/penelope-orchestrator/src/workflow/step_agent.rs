@@ -104,9 +104,14 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
     };
 
     loop {
-        let tiers =
+        let mut tiers =
             penelope_conversation::build_tiers(s, &step.prompt, &[], Some(&run_state_line(ctx)))
                 .await;
+        // Comme un tour de conversation : le préfixe envoyé entre au journal et le
+        // contexte volatil reste avec son message ; ce que le modèle lit se replie du
+        // journal (source de vérité, épopée #208), dans une étape comme dans un chat.
+        let held = penelope_conversation::prefix::held_prefix(s, &session).await?;
+        penelope_conversation::prefix::settle(s, &session, held, &mut tiers).await?;
         let conv = SessionConversation::new(s.clone(), &session, &model_id, tiers, 0);
         let outcome = AgentLoop::new(ctx.d.agent.clone(), provider.clone())
             .run_conversation(&spec, &conv, &exec, &NullSink)
