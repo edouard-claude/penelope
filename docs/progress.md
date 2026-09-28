@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.15
+### 1.0.16
 
 **Workflows : le plan approuvé s'exécute en phases durables (#191, T3 de #185).** Depuis
 #186, « Vas-y » ne faisait que marquer le plan prêt : rien ne l'exécutait, et le bouton
@@ -40,6 +40,8 @@ reprendre.
   (Telegram) et `rpc-plans` (RPC), avec l'étape `drive` du harnais.
 
 Closes #191.
+
+### 1.0.15
 
 `penelope secret set` en SSH échouait sur l'instance réelle : « écriture dans le Trousseau
 refusée (security, code 36) ». La commande écrivait toujours elle-même dans le Trousseau,
