@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.16
+### 1.0.15
 
 `penelope secret set` en SSH échouait sur l'instance réelle : « écriture dans le Trousseau
 refusée (security, code 36) ». La commande écrivait toujours elle-même dans le Trousseau,
