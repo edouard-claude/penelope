@@ -99,6 +99,11 @@ pub mod chunks {
     }
 }
 
+/// Commande qui déverrouille le Trousseau de connexion pour la session en cours, à
+/// proposer quand l'écriture rend `SecretLocked` (#252).
+pub const KEYCHAIN_UNLOCK_COMMAND: &str =
+    "security unlock-keychain ~/Library/Keychains/login.keychain-db";
+
 pub trait SecretStore: Send + Sync {
     /// Nom du backend actif (`penelope secret backend`).
     fn backend(&self) -> String;

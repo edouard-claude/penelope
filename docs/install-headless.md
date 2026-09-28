@@ -138,10 +138,21 @@ aussi :
 pbpaste | penelope secret set openrouter_api_key
 ```
 
-La commande fonctionne sans daemon, donc avant le tout premier démarrage. Elle affiche le
-nom, le backend et la longueur de la valeur, jamais la valeur elle-même. Un daemon déjà
-lancé prend une nouvelle clé en compte au tour suivant ; le jeton Telegram, lui, demande
-`penelope restart`.
+Quand le daemon répond, la commande lui confie la valeur par la socket locale (`0600`,
+jeton de session) et c'est lui qui écrit : lancé par launchd dans la session graphique, il
+a accès au Trousseau, alors qu'en SSH le Trousseau de connexion est verrouillé pour la
+commande (`security` sort en code 36, #252). Sans daemon, donc avant le tout premier
+démarrage, la commande écrit elle-même. Si le Trousseau est alors verrouillé, elle le dit
+et propose les deux issues : démarrer le daemon (`penelope start`) puis relancer, ou
+déverrouiller le Trousseau pour la session :
+
+```bash
+security unlock-keychain ~/Library/Keychains/login.keychain-db
+```
+
+Elle affiche le nom, le backend, la voie suivie (`via` : `daemon` ou `direct`) et la
+longueur de la valeur, jamais la valeur elle-même. Un daemon déjà lancé prend une nouvelle
+clé en compte au tour suivant ; le jeton Telegram, lui, demande `penelope restart`.
 
 ```bash
 penelope secret list

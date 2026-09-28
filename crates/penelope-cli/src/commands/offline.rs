@@ -1,6 +1,7 @@
 //! Les commandes hors daemon : elles marchent sans socket, pour l'édition en SSH et la
 //! CI (`paths`, `doctor`, `config validate`, `wf validate`, `eval`, `secret set`) et pour
-//! le service lui-même (`install`, `start`, `stop`, `uninstall`).
+//! le service lui-même (`install`, `start`, `stop`, `uninstall`). `secret set` confie
+//! toutefois la valeur au daemon quand il répond (#252).
 
 use super::*;
 
@@ -82,7 +83,7 @@ pub(super) fn paths(cli: &Cli) -> CliResult<()> {
 
 /// `penelope secret set <nom>` : la valeur vient de l'entrée standard, jamais d'un
 /// argument, et n'est **jamais** réaffichée.
-pub(super) fn set_secret(cli: &Cli, name: String) -> CliResult<()> {
+pub(super) async fn set_secret(cli: &Cli, name: String) -> CliResult<()> {
     penelope_platform::validate_secret_name(&name).map_err(|e| CliError::Usage(e.to_string()))?;
 
     let raw = penelope_platform::terminal::read_secret(&format!(
@@ -100,24 +101,65 @@ pub(super) fn set_secret(cli: &Cli, name: String) -> CliResult<()> {
 
     let dirs = penelope_platform::resolve_directories(cli.home.clone())
         .map_err(|e| CliError::Io(e.to_string()))?;
-    dirs.ensure_all().map_err(|e| CliError::Io(e.to_string()))?;
-    let store = penelope_platform::backend::secret_store(dirs.as_ref())
-        .map_err(|e| CliError::Io(e.to_string()))?;
-    store
-        .set(&name, value)
-        .map_err(|e| CliError::Io(e.to_string()))?;
-
-    output::print(
-        &json!({
-            "name": name,
-            "backend": store.backend(),
-            "bytes": value.len(),
-            "stored": true,
-        }),
-        cli.json,
-    );
+    let out = store_secret(&dirs.socket_path(), &name, value, || {
+        dirs.ensure_all().map_err(|e| CliError::Io(e.to_string()))?;
+        penelope_platform::backend::secret_store(dirs.as_ref())
+            .map_err(|e| CliError::Io(e.to_string()))
+    })
+    .await?;
+    output::print(&out, cli.json);
     Ok(())
 }
+
+/// Enregistre un secret par le daemon s'il répond, sinon directement (#252).
+///
+/// En SSH, le Trousseau de connexion est verrouillé pour la CLI ; le daemon, lancé par
+/// launchd dans la session graphique, y a accès. La valeur ne passe que par la socket
+/// locale (0600, jeton de session). Un daemon qui répond mais refuse n'entraîne pas
+/// d'écriture directe : son erreur est rendue telle quelle.
+pub(super) async fn store_secret(
+    socket: &std::path::Path,
+    name: &str,
+    value: &str,
+    direct: impl FnOnce() -> CliResult<Box<dyn penelope_platform::SecretStore>>,
+) -> CliResult<Value> {
+    match call(socket, m::SECRET_SET, json!({"name": name, "value": value})).await {
+        Ok(_) => {
+            let backend = call(socket, m::SECRET_BACKEND, json!({}))
+                .await
+                .ok()
+                .and_then(|v| v["backend"].as_str().map(str::to_string));
+            return Ok(json!({
+                "name": name,
+                "via": "daemon",
+                "backend": backend,
+                "bytes": value.len(),
+                "stored": true,
+            }));
+        }
+        Err(CliError::DaemonUnreachable(_)) => {}
+        Err(e) => return Err(e),
+    }
+    let store = direct()?;
+    store.set(name, value).map_err(|e| match e {
+        penelope_platform::PlatformError::SecretLocked(_) => CliError::Io(format!(
+            "{e}\n→ le Trousseau est verrouillé pour cette session (SSH) : démarrer le \
+             daemon (`penelope start`), qui y a accès, puis relancer \
+             `penelope secret set {name}`\n→ ou le déverrouiller pour cette session : \
+             `{}`, puis relancer",
+            penelope_platform::KEYCHAIN_UNLOCK_COMMAND
+        )),
+        e => CliError::Io(e.to_string()),
+    })?;
+    Ok(json!({
+        "name": name,
+        "via": "direct",
+        "backend": store.backend(),
+        "bytes": value.len(),
+        "stored": true,
+    }))
+}
+
 /// `doctor` en deux temps (issue #99) : ce qui se vérifie sans le daemon d'abord, puis
 /// ses propres contrôles. Un daemon muet ou absent est un contrôle en échec, en tête du
 /// rapport, pas une commande qui pend.

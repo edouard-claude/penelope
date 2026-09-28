@@ -12,6 +12,19 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.16
+
+`penelope secret set` en SSH échouait sur l'instance réelle : « écriture dans le Trousseau
+refusée (security, code 36) ». La commande écrivait toujours elle-même dans le Trousseau,
+verrouillé pour une session SSH, alors que le daemon lancé par launchd y a accès et sert
+déjà `secret.set`. Désormais la valeur, lue à l'invite comme avant, est confiée au daemon
+par la socket locale quand il répond ; sans daemon, la commande écrit elle-même, et un
+Trousseau verrouillé (erreur typée `SecretLocked` côté plateforme) donne un message qui dit
+quoi faire : `penelope start`, ou `security unlock-keychain`. `secret rm` passait déjà par
+le daemon. Tests : faux daemon qui reçoit `secret.set`, écriture directe sans daemon, message
+d'aide en code 36, faux `security` en code 36 ; la valeur n'apparaît dans aucune sortie.
+Closes #252.
+
 ### 1.0.14
 
 **Telegram : une trace lisible des outils d'un tour (#222).** Pendant un tour, rien ne
