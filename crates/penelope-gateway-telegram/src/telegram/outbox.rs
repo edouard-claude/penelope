@@ -178,8 +178,21 @@ impl TelegramGateway {
         chat_id: i64,
         topic_id: Option<i64>,
         method: &str,
-        mut payload: Value,
+        payload: Value,
     ) -> anyhow::Result<()> {
+        self.outbox_enqueue(chat_id, topic_id, method, payload)
+            .await
+            .map(|_| ())
+    }
+    /// Comme [`Self::outbox_push`], et rend l'identifiant de la ligne : la trace des
+    /// outils y relit le `message_id` une fois le message parti (issue #222).
+    pub(super) async fn outbox_enqueue(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        method: &str,
+        mut payload: Value,
+    ) -> anyhow::Result<String> {
         if let Some(o) = payload.as_object_mut() {
             o.retain(|_, v| !v.is_null());
             // Ce qui part sur Telegram et reste dans la file est rédigé comme les
@@ -208,19 +221,20 @@ impl TelegramGateway {
             method.to_string(),
             s.clock.now_rfc3339(),
         );
+        let row = id.clone();
         s.store
             .write(move |tx| {
                 tx.execute(
                     "INSERT INTO tg_outbox(id, chat_id, topic_id, method, payload, state,
                         attempts, created_at)
                      VALUES(?1, ?2, ?3, ?4, ?5, 'pending', 0, ?6)",
-                    params![id, chat_id, topic_id, method, payload.to_string(), now],
+                    params![row, chat_id, topic_id, method, payload.to_string(), now],
                 )?;
                 Ok(())
             })
             .await?;
         self.outbox_wake.notify_one();
-        Ok(())
+        Ok(id)
     }
     pub(super) async fn outbox_loop(self: Arc<Self>) {
         while !self.shutting_down() {

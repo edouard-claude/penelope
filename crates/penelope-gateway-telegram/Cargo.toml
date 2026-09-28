@@ -69,5 +69,7 @@ tempfile.workspace = true
 regex.workspace = true
 # Transport en boucle locale des serveurs MCP simulés.
 penelope-mcp.workspace = true
+# Catalogue des outils natifs : chacun doit avoir sa famille dans la trace (#222).
+penelope-tools.workspace = true
 # Horloge virtuelle des tests (`test-util`), comme le daemon.
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util", "test-util"] }

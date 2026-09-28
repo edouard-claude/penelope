@@ -1578,6 +1578,7 @@ dependencies = [
  "penelope-skills",
  "penelope-store",
  "penelope-telegram",
+ "penelope-tools",
  "penelope-vault",
  "penelope-workflow",
  "regex",

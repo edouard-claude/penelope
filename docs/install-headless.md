@@ -299,6 +299,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `telegram.burst_chars` | `20000` | Caractères cumulés à partir desquels elle demande de même. 0 : jamais. |
 | `telegram.home.chat` | `0` | Identifiant du chat (un groupe : `-100…`). 0 : le chat privé du propriétaire. |
 | `telegram.home.topic` | `0` | Sujet du groupe (`message_thread_id`). 0 : le sujet « Général ». |
+| `telegram.tool_trace` | `"compact"` | Trace des outils d'un tour (issue #222) : une bulle éditée en place qui groupe les appels consécutifs (« 💻 shell_exec · echo test (×4) ✅ »). `off` (aucune bulle), `compact` (l'outil et son argument principal, sans argument dans un groupe), `full` (plus un extrait du résultat, en privé seulement). Arguments et extraits sont caviardés. |
 
 **[providers]**
 

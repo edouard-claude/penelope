@@ -4,6 +4,10 @@
 //! pendant l'étape (texte, boutons) deviennent son issue ; l'état en base est relevé par
 //! le monde, comme pour les autres étapes (critère 7, épopée #208).
 //!
+//! La boucle de la trace des outils tourne pendant l'étape (#222) : sa bulle est créée par
+//! la file d'envoi, et sa seule modification part une fois la file vidée, après la
+//! réponse ; le rejeu ne dépend pas du minutage.
+//!
 //! La passerelle est construite pour l'étape et relâchée à sa fin : ses jetons de
 //! boutons vivent en base (`ActionStore`), un clic d'une étape suivante les retrouve,
 //! et aucune copie du daemon ne survit à la vie (un redémarrage l'attend). Elle n'est
@@ -110,6 +114,26 @@ impl Harness<'_> {
     /// La mise à jour, le travail détaché qu'elle lance, les tours qu'elle met en file
     /// (joués comme le pool de runners), puis la file d'envoi vidée.
     async fn play(&self, g: &Arc<TelegramGateway>, update: &Value) -> anyhow::Result<Vec<Value>> {
+        // La trace des outils (#222) suit le bus : abonnée avant la mise à jour, elle
+        // pose sa bulle au premier appel et la close une fois la file vidée.
+        let trace = g.spawn_trace();
+        let turns = self.play_update(g, update).await;
+        for _ in 0..SETTLE_MAX {
+            if g.traces_idle() {
+                break;
+            }
+            tokio::time::sleep(SETTLE_STEP).await;
+            g.flush_outbox().await?;
+        }
+        trace.abort();
+        turns
+    }
+
+    async fn play_update(
+        &self,
+        g: &Arc<TelegramGateway>,
+        update: &Value,
+    ) -> anyhow::Result<Vec<Value>> {
         g.process_update(update).await?;
         self.settle().await;
         let d = self.daemon()?;

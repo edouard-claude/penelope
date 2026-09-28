@@ -240,6 +240,9 @@ pub struct Bot {
     /// limite d'un message par seconde vise les messages, et mettre les aperçus dans la
     /// même file retardait la réponse finale d'autant (issue #70).
     preview_limiter: RateLimiter,
+    /// Seau des modifications de la trace des outils (issue #222) : une modification en
+    /// attente ne réserve pas le créneau de la réponse finale.
+    trace_limiter: RateLimiter,
     clock: penelope_kernel::clock::SharedClock,
 }
 
@@ -291,6 +294,7 @@ impl Bot {
             // Deux aperçus par seconde : assez pour un brouillon tous les 700 ms et ses
             // réactions, sans inonder l'API.
             preview_limiter: RateLimiter::new((rate_per_second * 2.0).max(2.0)),
+            trace_limiter: RateLimiter::new(rate_per_second),
             clock,
         }
     }
@@ -517,6 +521,44 @@ impl Bot {
             }),
         )
         .await
+    }
+
+    /// Modifie la bulle de trace des outils (issue #222) : un seul essai, sur son propre
+    /// seau. Un 429 n'est pas attendu huit fois comme dans [`Bot::call`] : la
+    /// modification perdue est rattrapée par la suivante, qui porte le dernier état. Un
+    /// contenu identique (`message is not modified`) n'est pas un échec.
+    pub async fn edit_trace(&self, chat_id: i64, message_id: i64, html: &str) -> TgResult<()> {
+        let wait = self
+            .trace_limiter
+            .delay_for(chat_id, self.clock.now_ms())
+            .await;
+        if wait > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(wait as u64)).await;
+        }
+        let body = json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": html,
+            "parse_mode": "HTML",
+            "link_preview_options": {"is_disabled": true},
+        });
+        let resp = self.transport.call(method::EDIT_MESSAGE_TEXT, body).await?;
+        if resp.ok {
+            return Ok(());
+        }
+        let code = resp.error_code.unwrap_or(0);
+        let description = resp.description.unwrap_or_default();
+        if code == 429 {
+            let secs = resp.parameters.and_then(|p| p.retry_after).unwrap_or(1);
+            self.trace_limiter
+                .apply_retry_after(chat_id, self.clock.now_ms(), secs)
+                .await;
+            return Err(TgError::RateLimited(secs));
+        }
+        if description.contains("not modified") {
+            return Ok(());
+        }
+        Err(TgError::Api { code, description })
     }
 
     /// Envoie un message vocal OGG/Opus (issue #41), en réponse éventuelle à un message.

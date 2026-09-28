@@ -12,6 +12,44 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.14
+
+**Telegram : une trace lisible des outils d'un tour (#222).** Pendant un tour, rien ne
+restait dans la conversation de ce que Pénélope exécutait : la ligne d'état du brouillon
+(#121) était remplacée à l'appel suivant, n'existait qu'en privé, et cinq appels
+identiques passaient sans qu'on le sache.
+
+- Une bulle par tour, posée au premier appel d'outil et modifiée en place :
+  `💻 shell_exec · <code>echo test</code> (×4) ✅`. Une icône par famille (table
+  exhaustive, un test parcourt le catalogue), l'argument principal (commande, chemin,
+  adresse, requête ; jamais un texte libre), `tool_call` déballé, un outil MCP en
+  `serveur · outil`. Les appels consécutifs identiques se groupent ; les résultats vont au
+  plus ancien appel ouvert du même nom (un lot parallèle garde son ordre) ; `❌ 2/4` si
+  c'est mixte, `🚫` pour un appel refusé avant exécution, `⏹` pour un appel sans résultat
+  à la fin du tour.
+- Le cœur n'a pas bougé : il émet déjà `ToolCall` et `ToolResult` sur le bus ; la boucle
+  `telegram.trace` de la passerelle les rend (frontière #214).
+- Création par `tg_outbox` (la bulle part avant la réponse, rédigée) ; modifications par
+  appel direct, sur un seau à part et en un seul essai (`Bot::edit_trace`) : un 429 ne
+  retarde plus la réponse, un `not modified` n'est plus une note d'échec. Une modification
+  en vol au plus, toutes les 1,5 s en privé et 3 s en groupe ; la dernière attend que la
+  file du chat soit vide (#70).
+- `telegram.tool_trace` : `off`, `compact` (défaut : l'argument en privé, les familles
+  seules en groupe), `full` (plus un extrait du résultat en privé). Relu à chaque tour.
+  Arguments et extraits caviardés (l'extrait ne l'était pas à la source). Au-delà de
+  3 800 caractères, « … et N appel(s) de plus » puis l'appel courant.
+- Session en arrière-plan : pas de bulle, et une bulle se fige si la session quitte le
+  premier plan (#10). Bulle ouverte inscrite sous `tg.trace.open` : un redémarrage en plein
+  tour la clôt au démarrage suivant (« interrompu par un redémarrage »).
+- Tests : `trace::tests` (familles, argument principal, regroupement, appariement, statuts,
+  modes et groupes, échappement, secrets, troncature), `tests::trace` (bulle unique avant
+  la réponse et cadence, sans outil, `off` et rechargement à chaud, sujet de groupe,
+  arrière-plan, bulle orpheline), `a_trace_edit_is_tried_once_on_its_own_bucket`, lecture
+  de la clé ; scénario `trace-des-outils` (le harnais lance la boucle), attendu de
+  `commandes-approbations` régénéré pour sa bulle.
+
+Closes #222.
+
 ### 1.0.13
 
 **Juge d'approbation : un jeu de décisions local, opt-in et exportable (#233).** Les

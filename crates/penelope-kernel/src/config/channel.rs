@@ -78,6 +78,24 @@ pub struct Telegram {
     /// n'appartiennent à aucune session — alertes de budget, rappels, digest du rêve,
     /// veille, cartes OAuth, élicitations sans conversation. Vide : le chat privé.
     pub home: TelegramHome,
+    /// Trace des outils d'un tour (issue #222) : une bulle éditée en place qui groupe les
+    /// appels consécutifs (« 💻 shell_exec · echo test (×4) ✅ »). `off` (aucune bulle),
+    /// `compact` (l'outil et son argument principal, sans argument dans un groupe),
+    /// `full` (plus un extrait du résultat, en privé seulement). Arguments et extraits
+    /// sont caviardés.
+    pub tool_trace: ToolTrace,
+}
+
+/// Trace des outils d'un tour sur Telegram (issue #222).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolTrace {
+    Off,
+    /// Par défaut : le propriétaire voit ce qui tourne sans ouvrir `penelope logs`, et
+    /// l'extrait du résultat, plus bavard, reste à demander.
+    #[default]
+    Compact,
+    Full,
 }
 
 /// Foyer du propriétaire sur Telegram (issue #143) : le chat privé n'est plus lu dès que
@@ -122,6 +140,7 @@ impl Default for Telegram {
             burst_messages: 5,
             burst_chars: 20_000,
             home: TelegramHome::default(),
+            tool_trace: ToolTrace::default(),
         }
     }
 }

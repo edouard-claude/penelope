@@ -104,6 +104,8 @@ scenario_cases! {
     rpc_autorisation_mcp => "rpc-autorisation-mcp",
     rpc_mise_a_jour => "rpc-mise-a-jour",
     rpc_installation_skill => "rpc-installation-skill",
+    // Trace des outils sur Telegram (#222) : une bulle, créée puis modifiée en place.
+    trace_des_outils => "trace-des-outils",
 }
 
 #[test]
