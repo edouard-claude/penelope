@@ -322,9 +322,11 @@ qu'elle a reçu et demande quoi en faire.
 « Ingérer sans répondre » passe par l'ingestion de documents : fiche source dans le vault,
 passages indexés, propositions de mémoire, sans réponse par morceau.
 
-`/stop` arrête le tour en cours **et** vide la file de la session, puis dit ce qui a été
-arrêté (« ⏹ Tour arrêté, 26 message(s) en attente annulé(s). ») et nomme les runs qui
-restent ouverts, avec leur identifiant et leur état.
+`/stop` arrête le tour en cours **et** vide la file de la session, met en pause les runs
+des plans lancés depuis cette conversation (« Vas-y », #191 : un run en pause ne repart
+pas seul), puis dit ce qui a été arrêté (« ⏹ Tour arrêté, 26 message(s) en attente
+annulé(s). ») et nomme les autres runs qui restent ouverts, avec leur identifiant et leur
+état.
 
 `/stop tout` vide en plus les files des autres sessions du chat **et des sous-agents dont
 le parent est dans ce chat**, met en pause les runs `running`, et **nomme** les runs
@@ -403,10 +405,15 @@ Une adresse de retour OAuth collée (`code=` et `state=`, avec ou sans `http://`
 l'autorisation en attente et ne part jamais vers le modèle.
 
 Un workflow proposé en conversation passe par `workflow_plan`. Sa carte affiche le but,
-les étapes typées et la version dans le même sujet. Une réponse corrige le plan ; une
-nouvelle carte remplace la version courante. « Vas-y » approuve la version montrée et
-la conserve pour T3 de #185, sans lancer encore de run. Un bouton d'une ancienne version
-est rejeté. `workflow_start` ne lance plus directement depuis Telegram.
+les étapes typées, la version et l'empreinte de la révision dans le même sujet. Une
+réponse corrige le plan ; une nouvelle carte remplace la version courante. « Vas-y (vN) »
+approuve la révision montrée et lance **un** run qui l'exécute en phases (voir
+[Workflows](workflows.md#plan-approuvé-exécuté-en-phases)) ; un second clic est déjà
+traité. Le bouton d'une autre révision est refusé comme clic périmé, même si son numéro
+de version est repris par un plan suivant. Après la spécification, les tests et le code,
+une carte d'OK attend dans le sujet avec la sortie de la phase : « Continuer », « Laisse
+filer » (plus de carte d'OK jusqu'au prochain point dur) ou « Arrêter ».
+`workflow_start` ne lance plus directement depuis Telegram.
 Les approbations d'outils d'un run gardent aussi cette destination : la carte, le clic
 Autoriser ou Refuser, « Déjà tranché », la seconde confirmation destructive et la réponse
 de budget reviennent dans le sujet du run. La destination de la carte est conservée en

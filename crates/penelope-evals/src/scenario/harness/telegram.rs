@@ -31,6 +31,8 @@ const FIRST_MESSAGE_ID: i64 = 1000;
 const SETTLE_STEP: Duration = Duration::from_millis(20);
 const SETTLE_QUIET: u32 = 5;
 const SETTLE_MAX: u32 = 250;
+/// Passages du pilote au plus, dans une étape `drive`.
+const DRIVE_PASSES: usize = 20;
 
 /// Le chat du propriétaire, d'une étape à l'autre et d'une vie à l'autre : le transport
 /// garde ses appels (les identifiants de messages en dépendent), les numéros de mise à
@@ -76,7 +78,7 @@ impl Harness<'_> {
             }
             _ => anyhow::bail!("`telegram` : `text` ou `click`, l'un des deux"),
         };
-        let g = TelegramGateway::with_transport(d.core.clone(), self.telegram.transport.clone());
+        let g = self.gateway(&d);
         let (messenger, delivery) = (d.hooks.messenger.get(), d.hooks.delivery.get());
         d.hooks.messenger.set(Some(g.clone() as Arc<_>));
         d.hooks.delivery.set(Some(g.clone() as Arc<_>));
@@ -85,6 +87,44 @@ impl Harness<'_> {
         d.hooks.delivery.set(delivery);
         drop(g);
         let turns = result?;
+        let mut v = self.screens().await;
+        if !turns.is_empty() {
+            v["turns"] = json!(turns);
+        }
+        // Un arrêt demandé depuis le chat dit son origine, comme par la socket (#225).
+        if d.handle.is_shutting_down() {
+            v["stop"] = json!(d.handle.stop_reason());
+        }
+        Ok(v)
+    }
+
+    fn gateway(&self, d: &penelope_daemon::runtime::Daemon) -> Arc<TelegramGateway> {
+        TelegramGateway::with_transport(d.core.clone(), self.telegram.transport.clone())
+    }
+
+    /// Étape `drive` (#191) : le pilote passe sur les runs, la passerelle branchée pour
+    /// leurs cartes, jusqu'à ce qu'un passage ne change plus rien.
+    pub(super) async fn drive(&mut self) -> anyhow::Result<Value> {
+        let d = self.daemon()?;
+        let cx = penelope_daemon::workflow::orchestrator_of(&d.core).context;
+        let g = self.gateway(&d);
+        let (messenger, delivery) = (d.hooks.messenger.get(), d.hooks.delivery.get());
+        d.hooks.messenger.set(Some(g.clone() as Arc<_>));
+        d.hooks.delivery.set(Some(g.clone() as Arc<_>));
+        let result = drive_until_still(&cx).await;
+        let flushed = g.flush_outbox().await;
+        d.hooks.messenger.set(messenger);
+        d.hooks.delivery.set(delivery);
+        drop(g);
+        let runs = result?;
+        flushed?;
+        let mut v = self.screens().await;
+        v["runs"] = json!(runs);
+        Ok(v)
+    }
+
+    /// Les écrans envoyés depuis la dernière étape qui les a relevés.
+    async fn screens(&mut self) -> Value {
         let calls = self.telegram.transport.calls().await;
         let fresh = &calls[self.telegram.reported..];
         let screens: Vec<Value> = fresh.iter().filter_map(|(m, b)| screen(m, b)).collect();
@@ -101,14 +141,7 @@ impl Harness<'_> {
         if !reactions.is_empty() {
             v["reactions"] = json!(reactions);
         }
-        if !turns.is_empty() {
-            v["turns"] = json!(turns);
-        }
-        // Un arrêt demandé depuis le chat dit son origine, comme par la socket (#225).
-        if d.handle.is_shutting_down() {
-            v["stop"] = json!(d.handle.stop_reason());
-        }
-        Ok(v)
+        v
     }
 
     /// La mise à jour, le travail détaché qu'elle lance, les tours qu'elle met en file
@@ -194,6 +227,36 @@ impl Harness<'_> {
             )
         })
     }
+}
+
+/// Passages du pilote jusqu'au repos : chaque run `running` avance, dans l'ordre de
+/// démarrage, tant qu'un passage fait bouger un run (borné). Rend l'état de chaque run.
+async fn drive_until_still(cx: &penelope_orchestrator::Context) -> anyhow::Result<Vec<Value>> {
+    use penelope_workflow::RunState;
+    let s = &cx.services;
+    let snapshot = || async {
+        let mut runs = s.runs.list(None, 50).await?;
+        runs.sort_by(|a, b| a.started_at.cmp(&b.started_at).then(a.id.cmp(&b.id)));
+        anyhow::Ok(runs)
+    };
+    let mut before = snapshot().await?;
+    for _ in 0..DRIVE_PASSES {
+        for run in before.iter().filter(|r| r.state == RunState::Running) {
+            penelope_orchestrator::workflow::drive(cx, &run.id).await?;
+        }
+        let after = snapshot().await?;
+        if after == before {
+            break;
+        }
+        before = after;
+    }
+    Ok(before
+        .iter()
+        .map(|r| {
+            json!({"run": r.id, "workflow": r.workflow_id, "state": r.state.as_str(),
+                   "step": r.current_step, "iterations": r.iterations, "error": r.error})
+        })
+        .collect())
 }
 
 /// Un appel du transport tel que le propriétaire le voit : méthode, texte ou légende,

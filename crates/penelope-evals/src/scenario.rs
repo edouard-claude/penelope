@@ -180,6 +180,11 @@ pub enum Step {
     },
     /// Avance de l'horloge de test (`10m`, `3h`, `2d`).
     AdvanceClock { by: String },
+    /// Le pilote des workflows passe (#191) : chaque run `running` avance jusqu'à
+    /// attendre, s'arrêter ou finir, jusqu'à ce qu'un passage ne change plus rien. Ses
+    /// cartes (progression, OK de phase) partent par la vraie passerelle Telegram, comme
+    /// dans une étape `telegram` ; l'issue dit où en est chaque run.
+    Drive,
     /// Services détruits puis reconstruits sur le même répertoire, reprise au démarrage,
     /// tours en attente joués.
     Restart,
@@ -313,6 +318,7 @@ impl Step {
                 )
             }
             Step::AdvanceClock { by } => format!("horloge : +{by}"),
+            Step::Drive => "pilote des workflows".into(),
             Step::Restart => "redémarrage".into(),
             Step::Approve => "approbation".into(),
             Step::Usage { prompt } => format!("dernier appel facturé : {prompt} tokens"),

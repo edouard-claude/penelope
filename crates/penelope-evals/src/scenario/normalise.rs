@@ -10,6 +10,8 @@
 //!   d'un tag ou d'un lien, « version 1.0.0 », champs `version` et `current` d'un objet
 //!   qui n'est pas une définition de skill ou de workflow) : un bump ne réécrit pas les
 //!   attendus, et le `version = "1.0.0"` d'une skill reste une donnée ;
+//! - l'identifiant du run d'un plan approuvé (`r_plan_` et 24 hexadécimaux, dérivé de la
+//!   session, #191) devient `{{run:1}}`, comme un run ordinaire ;
 //! - un ULID en minuscules, marqueur tiré au sort (balise `<commande-…>` du juge des
 //!   commandes shell), devient `{{marker:1}}` ;
 //! - le fichier de notes d'une session (`notes/<titre>-<6 derniers caractères de son
@@ -82,6 +84,7 @@ pub struct Normaliser {
     /// Suffixes de fichiers de notes de session (`-xa9cdw.md`) et leur jeton.
     note_suffixes: Vec<(String, String)>,
     ulid: Regex,
+    plan_run: Regex,
     marker: Regex,
     /// Une durée mesurée dans un JSON rendu en texte (résultat d'outil relu par le modèle),
     /// une ou plusieurs fois échappé.
@@ -119,6 +122,7 @@ impl Normaliser {
             ))
             .expect("regex durée"),
             ulid: Regex::new(r"\b(?:([a-z]+)_)?([0-9A-HJKMNP-TV-Z]{26})\b").expect("regex ULID"),
+            plan_run: Regex::new(r"\br_plan_[0-9a-f]{24}\b").expect("regex run de plan"),
             stamp: Regex::new(
                 r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})",
             )
@@ -219,6 +223,10 @@ impl Normaliser {
         out = self
             .version
             .replace_all(&out, "${1}{{version}}${3}")
+            .into_owned();
+        let plan_run = self.plan_run.clone();
+        let out = plan_run
+            .replace_all(&out, |caps: &regex::Captures| self.token("run", &caps[0]))
             .into_owned();
         let ulid = self.ulid.clone();
         let out = ulid

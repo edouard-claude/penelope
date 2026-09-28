@@ -269,6 +269,7 @@ impl Harness<'_> {
                     Ok(json!({"clock": self.clock.now_rfc3339()}))
                 }
                 Step::Restart => self.restart().await,
+                Step::Drive => self.drive().await,
                 Step::Rpc {
                     method,
                     params,

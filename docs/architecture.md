@@ -100,7 +100,7 @@ exclus), mesurées à la 1.0.3 :
 | `penelope-orchestrator` | moteur de workflows et ordonnanceur | agent, app, conversation, dream, executor, hitl, kernel, llm, mcp, observe, platform, store, tools, vault, workflow | 7 534 |
 | `penelope-daemon` | composition, moteur des tours, coureurs, supervision, RPC | toutes les crates ci-dessus sauf telegram | 14 799 |
 | `penelope-gateway-telegram` | la passerelle Telegram, adaptateur pilotant | agent, app, context, conversation, daemon, dream, executor, hitl, kernel, llm, mcp-host, memory, observe, ops, orchestrator, platform, skills, store, telegram, vault, workflow | 21 320 |
-| `penelope-evals` | suites déterministes, scénarios rejouables, rejeu | agent, app, context, conversation, daemon, dream, executor, gateway-telegram, hitl, kernel, llm, mcp, mcp-host, memory, observe, ops, platform, skills, store, telegram, tools, vault, workflow | 6 746 |
+| `penelope-evals` | suites déterministes, scénarios rejouables, rejeu | agent, app, context, conversation, daemon, dream, executor, gateway-telegram, hitl, kernel, llm, mcp, mcp-host, memory, observe, ops, orchestrator, platform, skills, store, telegram, tools, vault, workflow | 6 746 |
 | `penelope-cli` | le binaire `penelope` : CLI, client RPC, composition | agent, daemon, evals, gateway-telegram, kernel, observe, ops, platform, store, telegram, tools, workflow | 4 143 |
 | `penelope-archtest` | les règles d'architecture et le gel | aucune | 3 998 |
 
