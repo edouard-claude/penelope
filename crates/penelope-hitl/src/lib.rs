@@ -10,6 +10,7 @@
 pub mod cmdline;
 pub mod policy;
 pub mod powers;
+pub mod samples;
 
 pub use policy::{PolicyEngine, PolicyRule, RuleScope};
 
@@ -352,7 +353,11 @@ impl ApprovalStore {
     }
 
     pub async fn decide(&self, id: &str, d: &Decision) -> Result<ApprovalRequest> {
-        let (id_s, now) = (id.to_string(), self.clock.now_rfc3339());
+        let (id_s, now, now_ms) = (
+            id.to_string(),
+            self.clock.now_rfc3339(),
+            self.clock.now_ms(),
+        );
         let state = if d.approved {
             ApprovalState::Approved
         } else {
@@ -383,6 +388,10 @@ impl ApprovalStore {
                         (window == "always").then_some(window.clone())
                     ],
                 )?;
+                // L'issue de l'échantillon, s'il y en a un (#233), avec la carte.
+                if n > 0 {
+                    samples::settle_in(tx, &id_s, state.as_str(), Some(&via), &now, now_ms)?;
+                }
                 Ok(n > 0)
             })
             .await?;
@@ -500,10 +509,15 @@ impl ApprovalStore {
             .await?)
     }
 
+    /// Ce que garde le jeu de décisions du juge (#233) : volume, plus ancien, issues.
+    pub async fn sample_stats(&self) -> Result<samples::SampleStats> {
+        Ok(self.store.read(|c| Ok(samples::stats(c)?)).await?)
+    }
+
     /// Expire les demandes dépassées. Le run correspondant passe en `blocked`, avec
     /// reprise possible par `/resume` (§9.2).
     pub async fn expire_due(&self) -> Result<Vec<ApprovalRequest>> {
-        let now = self.clock.now_rfc3339();
+        let (now, now_ms) = (self.clock.now_rfc3339(), self.clock.now_ms());
         Ok(self
             .store
             .write(move |tx| {
@@ -520,6 +534,14 @@ impl ApprovalStore {
                     tx.execute(
                         "UPDATE approval_requests SET state='expired', decided_at=?2 WHERE id=?1",
                         params![r.id.as_str(), now],
+                    )?;
+                    samples::settle_in(
+                        tx,
+                        r.id.as_str(),
+                        "expired",
+                        Some("expiration"),
+                        &now,
+                        now_ms,
                     )?;
                 }
                 Ok(v)

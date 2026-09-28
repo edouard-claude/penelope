@@ -240,6 +240,8 @@ pub async fn run_with(s: &Services, daemon: Vec<DoctorCheck>) -> Vec<DoctorCheck
     checks.push(glued_lines_check(s).await);
     // Le juge d'approbation : son mode, et ce qu'il a jugé en sept jours (#203).
     checks.push(approval_judge_check(s).await);
+    // Le jeu de décisions du juge, s'il est collecté (#233).
+    checks.push(approval_dataset_check(s).await);
 
     // Le rédacteur rend, sur toutes les formes connues (#153).
     checks.push(redactor_check().await);

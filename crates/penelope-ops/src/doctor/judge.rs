@@ -92,6 +92,49 @@ pub async fn approval_judge_check(s: &Services) -> DoctorCheck {
     DoctorCheck::ok(ID, LABEL, detail)
 }
 
+/// Le jeu de décisions du juge (#233) : collecte active ou non, volume, plus ancien
+/// échantillon, répartition des issues. Informatif : jamais en échec.
+pub async fn approval_dataset_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "approval_dataset";
+    const LABEL: &str = "Jeu de décisions du juge";
+    let dataset = s.config.config().observability.dataset.clone();
+    let Ok(st) = s.approvals.sample_stats().await else {
+        return DoctorCheck::fail(ID, LABEL, "table `approval_samples` illisible", None);
+    };
+    let state = if dataset.approvals {
+        "collecte active"
+    } else {
+        "collecte désactivée (`observability.dataset.approvals`)"
+    };
+    let retention = match dataset.retention_days {
+        0 => "gardés sans limite".to_string(),
+        d => format!("gardés {d} jours"),
+    };
+    if st.total == 0 {
+        return DoctorCheck::ok(ID, LABEL, format!("{state} ; aucun échantillon"));
+    }
+    let oldest = st
+        .oldest
+        .as_deref()
+        .map(|d| d.chars().take(10).collect::<String>())
+        .unwrap_or_default();
+    let outcomes = st
+        .outcomes
+        .iter()
+        .map(|(o, n)| format!("{o} {n}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    DoctorCheck::ok(
+        ID,
+        LABEL,
+        format!(
+            "{state} ; {} échantillon(s) depuis le {oldest}, {retention} ; issues : {outcomes} \
+             (`penelope dataset export --kind approvals`)",
+            st.total
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +224,44 @@ mod tests {
             .unwrap();
         let c = approval_judge_check(&s).await;
         assert!(c.ok && c.detail.contains("mode off"), "{c:?}");
+    }
+
+    /// `doctor` dit l'état de la collecte, le volume, le plus ancien et les issues (#233).
+    #[tokio::test]
+    async fn doctor_says_what_the_decision_dataset_holds() {
+        let (_d, s) = services().await;
+        let c = approval_dataset_check(&s).await;
+        assert!(c.ok && c.detail.contains("collecte désactivée"), "{c:?}");
+        assert!(c.detail.contains("aucun échantillon"), "{c:?}");
+        s.store
+            .write(|tx| {
+                for (call, outcome) in [("c1", Some("auto")), ("c2", Some("auto")), ("c3", None)] {
+                    tx.execute(
+                        "INSERT INTO approval_samples(created_at, created_ms, session_id,
+                            call_id, command_sha, input, floors, outcome)
+                         VALUES('2026-09-01T10:00:00.000Z', 0, 's1', ?1, 'x', '{}', '{}', ?2)",
+                        penelope_store::rusqlite::params![call, outcome],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        s.config
+            .mutate("test", |c| {
+                c.observability.dataset.approvals = true;
+                Ok(vec!["observability.dataset.approvals".into()])
+            })
+            .unwrap();
+        let c = approval_dataset_check(&s).await;
+        assert!(c.ok, "{c:?}");
+        assert!(
+            c.detail.contains(
+                "collecte active ; 3 échantillon(s) depuis le 2026-09-01, gardés 365 jours ; \
+                 issues : auto 2, en_attente 1"
+            ),
+            "{}",
+            c.detail
+        );
     }
 }

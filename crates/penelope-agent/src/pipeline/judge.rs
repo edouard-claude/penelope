@@ -37,6 +37,32 @@ pub(crate) enum JudgeStep {
     Auto(Verdict),
 }
 
+/// L'étape du juge et, s'il a été appelé, ce que le jeu de décisions en garde (#233) :
+/// sa sortie complète, ou son échec.
+pub(crate) struct Judged {
+    pub step: JudgeStep,
+    pub sample: Option<Value>,
+}
+
+impl Judged {
+    /// La carte d'aujourd'hui, sans juge.
+    fn card() -> Self {
+        Judged {
+            step: JudgeStep::Card(None),
+            sample: None,
+        }
+    }
+}
+
+/// Empreinte d'une ligne : seize caractères du SHA-256, la seule trace de la ligne dans
+/// `approval.judged`, et la clé de jointure avec le jeu de décisions (#233).
+pub(super) fn command_sha(command: &str) -> String {
+    penelope_kernel::canonical::sha256_hex(command.as_bytes())
+        .chars()
+        .take(16)
+        .collect()
+}
+
 /// Les quatre conditions de #203.
 fn eligible(info: &CallInfo, verdict: &Verdict, args: &Value) -> bool {
     info.effective_name == "shell_exec"
@@ -46,7 +72,7 @@ fn eligible(info: &CallInfo, verdict: &Verdict, args: &Value) -> bool {
 }
 
 /// Répertoire de travail de l'appel : `cwd` (relatif au workspace), sinon le workspace.
-fn cwd_of(args: &Value, workspace: Option<&Path>) -> Option<PathBuf> {
+pub(super) fn cwd_of(args: &Value, workspace: Option<&Path>) -> Option<PathBuf> {
     match args.get("cwd").and_then(|v| v.as_str()) {
         Some(c) if Path::new(c).is_absolute() => powers::normalise_path(c, None).map(PathBuf::from),
         Some(c) => powers::normalise_path(c, workspace).map(PathBuf::from),
@@ -135,7 +161,7 @@ impl AgentLoop {
         info: &CallInfo,
         args: &Value,
         verdict: &Verdict,
-    ) -> anyhow::Result<JudgeStep> {
+    ) -> anyhow::Result<Judged> {
         let s = &self.services;
         let mode = s.config.config().approval.judge;
         let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
@@ -144,7 +170,7 @@ impl AgentLoop {
             || command.trim().is_empty()
             || !eligible(info, verdict, args)
         {
-            return Ok(JudgeStep::Card(None));
+            return Ok(Judged::card());
         }
         // Une règle du propriétaire qui nomme une famille de la ligne prime : le juge ne
         // la voit pas.
@@ -153,7 +179,7 @@ impl AgentLoop {
             .await?
             .is_some()
         {
-            return Ok(JudgeStep::Card(None));
+            return Ok(Judged::card());
         }
         let cwd = cwd_of(args, workspace);
         let workspaces: Vec<PathBuf> = workspace.map(Path::to_path_buf).into_iter().collect();
@@ -172,10 +198,7 @@ impl AgentLoop {
         )
         .await
         .unwrap_or(Err(penelope_app::judge::JudgeFailure::Timeout));
-        let hash: String = penelope_kernel::canonical::sha256_hex(command.as_bytes())
-            .chars()
-            .take(16)
-            .collect();
+        let hash = command_sha(command);
         let j = match judged {
             Ok(j) => j,
             Err(failure) => {
@@ -190,7 +213,15 @@ impl AgentLoop {
                     }),
                 )
                 .await?;
-                return Ok(JudgeStep::Card(None));
+                return Ok(Judged {
+                    step: JudgeStep::Card(None),
+                    sample: Some(json!({
+                        "mode": mode.as_str(),
+                        "outcome": "echec",
+                        "failure": failure.kind(),
+                        "detail": failure.detail(),
+                    })),
+                });
             }
         };
         let network = args.get("network") == Some(&Value::Bool(true));
@@ -228,18 +259,36 @@ impl AgentLoop {
             }),
         )
         .await?;
-        if let Some(auto) = step {
-            return Ok(JudgeStep::Auto(auto.verdict));
-        }
-        Ok(JudgeStep::Card(Some(json!({
+        // La sortie complète, sous les noms du schéma du juge, pour le jeu de décisions.
+        let sample = Some(json!({
+            "mode": mode.as_str(),
+            "outcome": outcome,
             "verdict": j.verdict.as_str(),
-            "powers": powers_list,
-            "paths": j.paths,
-            "hosts": j.hosts,
-            "why": j.why,
+            "pouvoirs": powers_list,
+            "chemins": j.paths,
+            "hotes": j.hosts,
+            "pourquoi": j.why,
             "model": j.model,
-            "grant": grant,
-        }))))
+            "duration_ms": j.duration_ms,
+        }));
+        if let Some(auto) = step {
+            return Ok(Judged {
+                step: JudgeStep::Auto(auto.verdict),
+                sample,
+            });
+        }
+        Ok(Judged {
+            step: JudgeStep::Card(Some(json!({
+                "verdict": j.verdict.as_str(),
+                "powers": powers_list,
+                "paths": j.paths,
+                "hosts": j.hosts,
+                "why": j.why,
+                "model": j.model,
+                "grant": grant,
+            }))),
+            sample,
+        })
     }
 
     /// Ce que le jugement permet sans carte : une lecture pure en `auto_read`, ou une

@@ -1342,6 +1342,7 @@ dependencies = [
  "penelope-daemon",
  "penelope-evals",
  "penelope-gateway-telegram",
+ "penelope-hitl",
  "penelope-kernel",
  "penelope-llm",
  "penelope-observe",

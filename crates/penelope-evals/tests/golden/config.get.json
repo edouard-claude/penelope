@@ -243,7 +243,11 @@
         "log_retention_days": "integer",
         "log_level": "string",
         "runtime_stream_bind": "string",
-        "runtime_consumers": []
+        "runtime_consumers": [],
+        "dataset": {
+          "approvals": "bool",
+          "retention_days": "integer"
+        }
       },
       "tools": {
         "shell": "string",

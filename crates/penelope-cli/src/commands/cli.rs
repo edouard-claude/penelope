@@ -138,6 +138,9 @@ pub enum Command {
         #[command(subcommand)]
         cmd: Option<ApprovalsCmd>,
     },
+    /// Jeux de données locaux (#233) : `export` les écrit en JSONL, sans daemon.
+    #[command(subcommand)]
+    Dataset(DatasetCmd),
     /// Autorise une demande.
     Approve {
         id: String,

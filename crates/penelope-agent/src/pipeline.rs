@@ -5,6 +5,7 @@ use super::*;
 pub(super) mod decide;
 pub(super) mod judge;
 pub(super) mod policy;
+pub(super) mod sample;
 
 pub use decide::{CallContext, CallId};
 use decide::{
@@ -14,6 +15,7 @@ use decide::{
 use judge::JudgeStep;
 use policy::PolicyStage;
 pub use policy::{ApprovalMode, declared_allow, local_draft_allow};
+use sample::{Issue, Seen};
 
 /// Résolution des appels en attente.
 /// Lectures lancées ensemble, au plus (issue #85).
@@ -335,7 +337,7 @@ impl AgentLoop {
         }
         // 5. Juge (#203) : seulement sur une carte `shell_exec` sans motif possible. Il
         // enrichit la carte, ou la retire quand un contrôle déterministe le confirme.
-        let judged = match self
+        let stage = self
             .judge_stage(
                 spec,
                 policy_workspace.as_deref(),
@@ -343,10 +345,20 @@ impl AgentLoop {
                 &effective_args,
                 &verdict,
             )
-            .await?
-        {
+            .await?;
+        // Ce que le jeu de décisions garde de l'appel (#233), quelle que soit l'issue.
+        let seen = Seen {
+            call_id: &call.id,
+            workspace: policy_workspace.as_deref(),
+            info: &info,
+            args: &effective_args,
+            verdict: &verdict,
+            judge: stage.sample.as_ref(),
+        };
+        let judged = match stage.step {
             JudgeStep::Auto(v) => {
                 tracing::info!(session = %spec.session_id, layer = ?v.layer, reason = %v.reason, "appel autorisé sans carte");
+                self.sample_call(spec, &seen, Issue::Auto).await;
                 return Ok(Decided::Step(Step::Execute {
                     call,
                     info,
@@ -357,6 +369,7 @@ impl AgentLoop {
         };
         match verdict.decision {
             PolicyDecision::Deny => {
+                self.sample_call(spec, &seen, Issue::Denied).await;
                 return Ok(Decided::Step(Step::Record(
                     call,
                     Refusal::Policy {
@@ -411,13 +424,16 @@ impl AgentLoop {
                     reason: verdict.reason.clone(),
                     double,
                 });
+                // Après la carte, hors de son chemin : l'issue viendra de sa décision.
+                self.sample_call(spec, &seen, Issue::Card(approval.id.0.clone()))
+                    .await;
                 return Ok(Decided::Stop(Terminal::Stop(
                     TurnOutcome::AwaitingApproval {
                         approval_id: approval.id.0,
                     },
                 )));
             }
-            PolicyDecision::Auto => {}
+            PolicyDecision::Auto => self.sample_call(spec, &seen, Issue::Auto).await,
         }
         // Lecture pure autorisée d'office : elle peut partir avec ses voisines.
         let parallel =
@@ -557,6 +573,7 @@ impl AgentLoop {
         outcome: ToolOutcome,
         nudge: &mut Option<String>,
     ) -> anyhow::Result<()> {
+        self.sample_execution(spec, call, info, &outcome).await;
         penelope_observe::metrics::counter_inc(
             "penelope_tool_calls_total",
             &[

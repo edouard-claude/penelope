@@ -18,6 +18,7 @@ mod guards;
 mod judge;
 mod policy;
 mod run_loop;
+mod samples;
 mod steering;
 mod turn_bounds;
 

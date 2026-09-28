@@ -8,14 +8,19 @@ use penelope_hitl::powers::Power;
 use penelope_kernel::config::JudgeMode;
 
 /// Un juge qui rend toujours la même réponse et compte ses appels.
-struct FakeJudge {
+pub(super) struct FakeJudge {
     answer: Mutex<Result<Judgement, JudgeFailure>>,
     seen: Mutex<Vec<String>>,
     hang: bool,
 }
 
 impl FakeJudge {
-    fn says(verdict: JudgeVerdict, powers: &[Power], paths: &[&str], hosts: &[&str]) -> Arc<Self> {
+    pub(super) fn says(
+        verdict: JudgeVerdict,
+        powers: &[Power],
+        paths: &[&str],
+        hosts: &[&str],
+    ) -> Arc<Self> {
         Arc::new(FakeJudge {
             answer: Mutex::new(Ok(Judgement {
                 powers: powers.to_vec(),
@@ -32,7 +37,7 @@ impl FakeJudge {
         })
     }
 
-    fn fails(failure: JudgeFailure) -> Arc<Self> {
+    pub(super) fn fails(failure: JudgeFailure) -> Arc<Self> {
         Arc::new(FakeJudge {
             answer: Mutex::new(Err(failure)),
             seen: Mutex::new(Vec::new()),
@@ -58,10 +63,10 @@ impl Judge for FakeJudge {
 
 /// Un exécuteur dont le workspace est un vrai répertoire, et dont la classe de risque de
 /// `shell_exec` se règle.
-struct WsExecutor {
+pub(super) struct WsExecutor {
     inner: CountingExecutor,
-    ws: std::path::PathBuf,
-    risk: RiskClass,
+    pub(super) ws: std::path::PathBuf,
+    pub(super) risk: RiskClass,
 }
 
 #[async_trait::async_trait]
@@ -92,16 +97,16 @@ impl ToolExecutor for WsExecutor {
     }
 }
 
-struct Bench {
+pub(super) struct Bench {
     _dir: tempfile::TempDir,
-    s: Arc<AgentServices>,
+    pub(super) s: Arc<AgentServices>,
     p: Arc<MockProvider>,
-    e: WsExecutor,
-    sid: String,
+    pub(super) e: WsExecutor,
+    pub(super) sid: String,
     asked: AtomicUsize,
 }
 
-async fn bench(judge: Arc<FakeJudge>, mode: JudgeMode) -> Bench {
+pub(super) async fn bench(judge: Arc<FakeJudge>, mode: JudgeMode) -> Bench {
     let (dir, s, p) = setup().await;
     let s = Arc::new(AgentServices {
         judge,
@@ -131,7 +136,11 @@ async fn bench(judge: Arc<FakeJudge>, mode: JudgeMode) -> Bench {
 
 impl Bench {
     /// Un tour qui demande `command` ; rend la carte posée, s'il y en a une.
-    async fn ask(&self, tool: &str, args: Value) -> Option<penelope_hitl::ApprovalRequest> {
+    pub(super) async fn ask(
+        &self,
+        tool: &str,
+        args: Value,
+    ) -> Option<penelope_hitl::ApprovalRequest> {
         // Un identifiant d'appel neuf à chaque tour : une décision prise sur un appel
         // précédent ne vaut pas pour celui-ci.
         let id = format!("c{}", self.asked.fetch_add(1, Ordering::SeqCst));
@@ -153,15 +162,15 @@ impl Bench {
         }
     }
 
-    async fn shell(&self, command: &str) -> Option<penelope_hitl::ApprovalRequest> {
+    pub(super) async fn shell(&self, command: &str) -> Option<penelope_hitl::ApprovalRequest> {
         self.ask("shell_exec", json!({"command": command})).await
     }
 
-    fn ran(&self) -> usize {
+    pub(super) fn ran(&self) -> usize {
         self.e.inner.calls.load(Ordering::SeqCst)
     }
 
-    async fn judged(&self) -> Vec<Value> {
+    pub(super) async fn judged(&self) -> Vec<Value> {
         self.s
             .events
             .session_events(&self.sid, 0)
@@ -174,7 +183,7 @@ impl Bench {
     }
 }
 
-const LISTING: &str = "cd tmp && ls -la | jq .";
+pub(super) const LISTING: &str = "cd tmp && ls -la | jq .";
 
 /// `cd tmp && ls -la | jq .` en `auto_read` : lecture pure dans le workspace, sans carte.
 #[tokio::test]

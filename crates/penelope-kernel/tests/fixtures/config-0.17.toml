@@ -268,6 +268,10 @@ name = "tableau"
 token_secret = "${SECRET:runtime_tableau}"
 kinds = ["runtime.tool", "runtime.llm"]
 
+[observability.dataset]
+approvals = false
+retention_days = 365
+
 [tools]
 background_after = "120s"
 jobs_per_session = 3

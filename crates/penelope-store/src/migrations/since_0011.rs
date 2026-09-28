@@ -132,3 +132,37 @@ ALTER TABLE schedules ADD COLUMN alerted_reason TEXT;
 pub(super) const SQL_0023: &str = r#"
 ALTER TABLE mem_candidates ADD COLUMN owner_quote TEXT;
 "#;
+
+/// Jeu de décisions du juge d'approbation (#233) : un échantillon par ligne `shell_exec`
+/// vue par la politique, quand `observability.dataset.approvals` est vrai. La ligne y est
+/// telle que le juge la reçoit (secrets masqués, commentaires retirés). Une ligne est
+/// écrite une fois, puis complétée une fois par la décision (`outcome`) et une fois par
+/// l'exécution (`executed_at`) : jamais réécrite. Sa rétention est la sienne
+/// (`observability.dataset.retention_days`), la purge d'une session la supprime.
+pub(super) const SQL_0024: &str = r#"
+CREATE TABLE approval_samples (
+  id           INTEGER PRIMARY KEY,
+  v            INTEGER NOT NULL DEFAULT 1,  -- version du schéma de l'échantillon
+  created_at   TEXT NOT NULL,
+  created_ms   INTEGER NOT NULL,
+  session_id   TEXT NOT NULL,
+  turn_id      TEXT,
+  call_id      TEXT NOT NULL,
+  command_sha  TEXT NOT NULL,               -- même empreinte que `approval.judged`
+  input        TEXT NOT NULL,               -- {command, cwd, workspaces, network}
+  floors       TEXT NOT NULL,               -- {policy, layer, risk, rule, sans_motif}
+  judge        TEXT,                        -- sortie du juge ou échec ; NULL : pas appelé
+  approval_id  TEXT,                        -- carte posée, s'il y en a une
+  outcome      TEXT,                        -- auto|approved|denied|expired|cancelled
+  via          TEXT,
+  decided_at   TEXT,
+  decision_ms  INTEGER,
+  exit_code    INTEGER,
+  exec_ms      INTEGER,
+  executed_at  TEXT,
+  UNIQUE(session_id, call_id)
+);
+CREATE INDEX approval_samples_created ON approval_samples(created_at);
+CREATE INDEX approval_samples_approval ON approval_samples(approval_id)
+  WHERE approval_id IS NOT NULL;
+"#;
