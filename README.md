@@ -255,7 +255,7 @@ de haut en bas :
 
 - `penelope-store` ne dépend de rien et réexporte `rusqlite` : aucune crate métier ne
   connaît le pilote SQL (seule la CLI ouvre la base elle-même, en lecture seule, pour
-  `penelope approvals stats`).
+  `penelope approvals stats` et `penelope dataset export`).
 - `penelope-platform` isole tout ce qui est spécifique à un OS. Un chemin littéral, un
   appel shell, un signal Unix ou une API Keychain ailleurs fait échouer le test
   d'architecture.

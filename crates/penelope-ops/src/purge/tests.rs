@@ -4,6 +4,7 @@ use penelope_llm::types::ChatMessage;
 use std::sync::Arc;
 
 mod audit;
+mod samples;
 
 async fn services() -> (
     tempfile::TempDir,

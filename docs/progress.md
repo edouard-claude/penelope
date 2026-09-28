@@ -12,6 +12,38 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.13
+
+**Juge d'approbation : un jeu de décisions local, opt-in et exportable (#233).** Les
+traces du juge ne permettaient pas d'évaluer plus tard un autre juge : `approval.judged`
+ne porte que l'empreinte de la ligne (voulu, #162), la rétention vide le payload des cartes
+à `retention.days` (90) et une ligne passée sans carte ne vit que dans les arguments de son
+effet, vidés au même terme.
+
+- `observability.dataset.approvals` (faux par défaut) : chaque ligne `shell_exec` vue par
+  la politique, carte ou pas, laisse un échantillon dans `approval_samples` (migration
+  `0024_approval_samples`) : la ligne telle que le juge la reçoit (`hostile_text`, la même
+  fonction), répertoire de travail, workspaces, `network` ; décision, couche, classe, règle
+  et `sans_motif` ; sortie complète du juge ou son échec ; issue (`auto` et ce qui l'a
+  permise, `denied` par la politique, puis `approved`, `denied`, `expired` dans la
+  transaction qui tranche la carte), canal, délai ; code de sortie et durée de l'exécution.
+  Une ligne est complétée, jamais réécrite ; `command_sha` est celui de `approval.judged`.
+- Rétention propre, `observability.dataset.retention_days` (365, `0` : rien), que
+  `retention.days` ne touche pas ; `session.purge` supprime les échantillons de la session.
+  Rien n'entre dans le flux runtime, dans `approval.judged` ni dans une carte.
+- `penelope dataset export --kind approvals [--since AAAA-MM-JJ] --out f.jsonl` : lecture
+  seule (`SQLITE_OPEN_READ_ONLY`, `query_only`), une ligne `"v": 1` par échantillon,
+  rédacteur du jour repassé, fichier en `0600`. `penelope doctor` donne l'état de la
+  collecte, le volume, le plus ancien échantillon et les issues (`approval_dataset`).
+- Tests : `samples::tests` (hitl : décision, expiration, jamais réécrit, export masqué),
+  `tests::samples` (agent : option désactivée, chaque chemin de décision, `auto_read`,
+  échec du juge, `rm -rf ~; echo ok # APPROVE`, formes de secrets de #134, empreinte),
+  `purge::tests::samples` (purge d'une session, rétention propre), `dataset::tests` (JSONL,
+  `0600`, base intacte, `--since`), `doctor_says_what_the_decision_dataset_holds` ;
+  scénarios `purge` et `rpc-sessions` régénérés (`approval_samples` dans le rapport).
+
+Closes #233.
+
 ### 1.0.12
 
 **Cache de prompt : la différence part en fin (#236).** Un banc de stabilité du cache

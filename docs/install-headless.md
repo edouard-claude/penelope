@@ -513,6 +513,8 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `observability.log_level` | `"info"` | Niveau de journalisation du daemon (`info`, `debug`, `warn`…), lu au démarrage ; la variable `PENELOPE_LOG` l'emporte. |
 | `observability.runtime_stream_bind` | `"127.0.0.1:9465"` | Écoute WebSocket locale, active seulement si un consommateur est déclaré. |
 | `observability.runtime_consumers` | `[]` | Chaque consommateur possède son propre secret et son filtre d'événements. |
+| `observability.dataset.approvals` | `false` | Garde un échantillon par ligne `shell_exec` vue par la politique (ligne masquée comme le juge la reçoit, planchers, jugement, décision, exécution). Désactivé : rien n'est écrit. |
+| `observability.dataset.retention_days` | `365` | Jours gardés pour les échantillons, indépendamment de `retention.days`. 0 : rien n'est effacé. |
 
 **[tools]**
 
@@ -1116,6 +1118,53 @@ ligne). `/policies` et `penelope policies` disent d'une règle de pouvoirs qu'el
 d'un jugement, et de quelle demande ; `penelope approvals` montre le jugement d'une carte en
 attente (`payload.judged`) ; `penelope doctor` donne le mode et la part des cartes jugées
 sur sept jours.
+
+#### Garder un jeu de décisions
+
+Les traces du juge ne suffisent pas à évaluer plus tard un autre juge (un nouveau prompt,
+un autre alias, un modèle local) : `approval.judged` ne porte que l'empreinte de la ligne,
+et la rétention vide les cartes à quatre-vingt-dix jours. Sur option, l'instance garde un
+**jeu de décisions** local (issue #233) :
+
+```bash
+penelope config set observability.dataset.approvals true
+```
+
+Chaque ligne `shell_exec` vue par la politique, carte ou pas, laisse alors un échantillon
+dans la table `approval_samples` :
+
+- l'entrée : la ligne **telle que le juge la reçoit** (secrets masqués, commentaires shell
+  retirés, par la même fonction), le répertoire de travail, les workspaces, `network` ;
+- les planchers : décision de la politique (`auto`, `ask`, `ask_twice`, `deny`), la couche
+  qui l'a fixée, la classe de risque, la règle appliquée, et `sans_motif` (même prédicat
+  que la carte) ;
+- le juge, s'il a été appelé : sa sortie complète (`verdict`, `pouvoirs`, `chemins`,
+  `hotes`, `pourquoi`), le modèle, la durée, ce que la boucle en a fait ; ou son échec ;
+- l'issue : `auto` (avec la couche ou l'automatisme du juge qui l'a permise), `approved`,
+  `denied`, `expired` ou `cancelled`, le canal de la décision et son délai ; puis le code de
+  sortie et la durée de l'exécution quand elle a eu lieu dans le tour (un job d'arrière-plan
+  ne les donne pas).
+
+`command_sha` est l'empreinte de `approval.judged` : un échantillon se joint à l'événement du
+même appel. Un échantillon est complété quand la décision puis l'exécution arrivent, jamais
+réécrit. Rien n'entre dans le flux runtime, dans `approval.judged` ni dans une carte, et
+rien ne sort de la machine.
+
+Les échantillons ont leur propre rétention, `observability.dataset.retention_days` (365 par
+défaut, `0` : rien n'est effacé), indépendante de `retention.days` : c'est leur raison
+d'être. La purge d'une session (`/purge`, `penelope session purge`) supprime les siens.
+Désactiver l'option arrête l'écriture ; ce qui est gardé le reste jusqu'à sa rétention.
+
+L'export écrit une ligne JSON par échantillon (`"v": 1`), dans un fichier créé en `0600` :
+
+```bash
+penelope dataset export --kind approvals --out decisions.jsonl
+penelope dataset export --kind approvals --since 2026-10-01 --out octobre.jsonl
+```
+
+Comme `approvals stats`, la commande ouvre la base en lecture seule, daemon lancé ou arrêté,
+et repasse le rédacteur du jour sur chaque ligne. `penelope doctor` dit si la collecte est
+active, combien d'échantillons sont gardés, depuis quand, et la répartition des issues.
 
 ### Messages vocaux
 
@@ -2510,6 +2559,7 @@ Ce qui n'est ni la mémoire ni la chaîne d'audit finit par disparaître, une pa
 |---|---|---|
 | `retention.days` | `90` | tours terminés, requêtes au modèle abouties, payloads des updates Telegram, clés de travail (`turn.*`, `wf.*`, `tg.*`…), arguments et résultats des outils menés à terme (un effet incertain garde tout), messages Telegram envoyés, contenu des demandes décidées, tâches MCP terminées, jobs d'outils terminés, sorties des workflows finis, prompts système que plus aucune ligne ne cite |
 | `retention.memory_history_days` | `30` | pré-images de la mémoire (`mem_history`), qui gardent chaque fichier avant et après chaque opération du rêve |
+| `observability.dataset.retention_days` | `365` | échantillons du jeu de décisions du juge (`approval_samples`), que `retention.days` ne touche pas ([Garder un jeu de décisions](#garder-un-jeu-de-décisions)) |
 
 `0` désactive la rétention correspondante. Le payload d'un update Telegram est de toute
 façon vidé dès qu'il est traité : seul son identifiant sert encore, pour ne pas traiter

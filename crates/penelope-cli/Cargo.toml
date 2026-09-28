@@ -41,6 +41,9 @@ penelope-evals.workspace = true
 # La règle « toujours » qui ne crée pas de règle (`always_creates_no_rule`), lue par
 # `approvals stats` depuis la boucle d'agent (T30 : plus par le daemon).
 penelope-agent.workspace = true
+# Le jeu de décisions du juge (`penelope dataset export`, #233) : la lecture des
+# échantillons vit à côté de leur écriture, dans le crate des approbations.
+penelope-hitl.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

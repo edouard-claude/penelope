@@ -13,6 +13,7 @@ pub use cli::{
     AuditCmd, Cli, Command, ConfigCmd, HistoryCmd, ImportCmd, McpCmd, MemCmd, ModelCmd,
     ScheduleCmd, SecretCmd, SessionCmd, SkillCmd, StoreCmd, VaultCmd, WfCmd,
 };
+use dataset::DatasetCmd;
 use interactive::{chat, model_auth, onboard};
 #[cfg(test)]
 use logs::filter_log_lines;
@@ -37,6 +38,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Approvals {
             cmd: Some(ApprovalsCmd::Stats { days }),
         } => return approval_stats::run(&cli, *days),
+        Command::Dataset(cmd) => return dataset::run(&cli, cmd),
         Command::Doctor => return doctor(&cli).await,
         Command::Config(ConfigCmd::Validate { file }) => {
             return validate_config(&cli, file.clone());
@@ -240,6 +242,7 @@ async fn daemon(cli: &Cli) -> CliResult<()> {
 
 mod approval_stats;
 mod cli;
+mod dataset;
 mod interactive;
 mod logs;
 mod offline;

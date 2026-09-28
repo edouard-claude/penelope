@@ -469,6 +469,31 @@ pub struct Observability {
     pub runtime_stream_bind: String,
     /// Chaque consommateur possède son propre secret et son filtre d'événements.
     pub runtime_consumers: Vec<RuntimeConsumer>,
+    /// Jeux de données locaux, gardés au-delà de la rétention générale (#233).
+    pub dataset: Dataset,
+}
+
+/// Jeux de données locaux (#233) : ce que l'instance garde pour évaluer plus tard un autre
+/// juge. Rien ne sort de la machine ; `penelope dataset export` l'écrit dans un fichier.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Dataset {
+    /// Garde un échantillon par ligne `shell_exec` vue par la politique (ligne masquée
+    /// comme le juge la reçoit, planchers, jugement, décision, exécution). Désactivé :
+    /// rien n'est écrit.
+    pub approvals: bool,
+    /// Jours gardés pour les échantillons, indépendamment de `retention.days`. 0 : rien
+    /// n'est effacé.
+    pub retention_days: u32,
+}
+
+impl Default for Dataset {
+    fn default() -> Self {
+        Dataset {
+            approvals: false,
+            retention_days: 365,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -490,6 +515,7 @@ impl Default for Observability {
             log_level: "info".into(),
             runtime_stream_bind: "127.0.0.1:9465".into(),
             runtime_consumers: Vec::new(),
+            dataset: Dataset::default(),
         }
     }
 }

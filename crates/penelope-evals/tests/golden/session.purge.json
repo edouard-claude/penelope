@@ -22,6 +22,7 @@
         "tg_outbox": "integer",
         "effects": "integer",
         "approvals": "integer",
+        "approval_samples": "integer",
         "mcp_tasks": "integer",
         "tool_jobs": "integer",
         "workflow_steps": "integer",

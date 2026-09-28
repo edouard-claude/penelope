@@ -10,6 +10,7 @@
 //!     workflow_runs et workflow_step_log des runs de la session (#78)
 //!     prompt_snapshots que la session seule référençait, et usage.system_hash (#205)
 //!     prompt_snapshots cités par ses conv.system et par aucune autre session (T17)
+//!     approval_samples : les échantillons du jeu de décisions, supprimés (#233)
 //!     events : payload remplacé, hash d'origine conservé (audit.purge)
 //!     sessions nées d'un fork : nommées dans le rapport, elles perdent leur préfixe
 //!
@@ -20,7 +21,9 @@
 //!     `retention.days`, vidés ;
 //!     prompts système que plus aucune ligne ne cite ;
 //!     payloads des `conv.attempt` (texte partiel), hash gardé dans event_purges (T17) ;
-//!     pré-images de la mémoire au-delà de `retention.memory_history_days`.
+//!     pré-images de la mémoire au-delà de `retention.memory_history_days` ;
+//!     échantillons du jeu de décisions au-delà de `observability.dataset.retention_days`,
+//!     et d'elle seule : `retention.days` ne les touche pas (#233).
 //! ```
 //!
 //! Un effet vidé garde sa ligne, son état et sa clé d'idempotence : un rejeu reste
@@ -116,6 +119,10 @@ pub async fn session(s: &Services, session_id: &str, reason: &str) -> anyhow::Re
             let caches = HistoryStore::purge_session_in(tx, &sid)?;
             let (messages, nodes, prompts) = (caches.messages, caches.nodes, caches.prompts);
             let artifacts = tx.execute("DELETE FROM artifacts WHERE session_id = ?1", [&sid])?;
+            // Le jeu de décisions garde les lignes plus longtemps que le reste (#233) ; la
+            // purge d'une session les emporte quand même.
+            let samples =
+                tx.execute("DELETE FROM approval_samples WHERE session_id = ?1", [&sid])?;
             // La ligne comptable reste, avec ses jetons et son coût : seule la clé qui
             // menait au texte est coupée.
             tx.execute(
@@ -163,6 +170,7 @@ pub async fn session(s: &Services, session_id: &str, reason: &str) -> anyhow::Re
                     "tg_outbox": outbox,
                     "effects": effects,
                     "approvals": approvals,
+                    "approval_samples": samples,
                     "mcp_tasks": tasks,
                     "tool_jobs": jobs,
                     "workflow_steps": steps,
@@ -484,6 +492,8 @@ pub async fn retention(s: &Services) -> anyhow::Result<Value> {
     let general = (days > 0).then(|| cutoff(days));
     let stamp = s.clock.now_rfc3339();
     let history = (history_days > 0).then(|| cutoff(history_days));
+    let samples_days = cfg.observability.dataset.retention_days;
+    let samples_cutoff = (samples_days > 0).then(|| cutoff(samples_days));
 
     let report = s
         .store
@@ -576,6 +586,10 @@ pub async fn retention(s: &Services) -> anyhow::Result<Value> {
             if let Some(c) = &history {
                 history_rows = tx.execute("DELETE FROM mem_history WHERE ts < ?1", [c])?;
             }
+            let mut samples = 0;
+            if let Some(c) = &samples_cutoff {
+                samples = tx.execute("DELETE FROM approval_samples WHERE created_at < ?1", [c])?;
+            }
             Ok(json!({
                 "turns": turns,
                 "llm_requests": requests,
@@ -591,6 +605,7 @@ pub async fn retention(s: &Services) -> anyhow::Result<Value> {
                 "workflow_steps": steps,
                 "workflow_runs": runs,
                 "conv_attempts": attempts,
+                "approval_samples": samples,
             }))
         })
         .await?;
