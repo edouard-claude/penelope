@@ -181,6 +181,11 @@ pub mod method {
     pub const WF_RUNS: &str = "wf.runs";
     pub const WF_TRACE: &str = "wf.trace";
     pub const WF_CONTROL: &str = "wf.control";
+    /// Plan conversationnel d'une session : révisions, empreinte, runs lancés (#191).
+    pub const WF_PLAN_SHOW: &str = "wf.plan.show";
+    /// « Vas-y » : approuve la révision nommée (version et empreinte) et lance son run,
+    /// une seule fois (#191).
+    pub const WF_PLAN_GO: &str = "wf.plan.go";
 
     pub const SCHEDULE_LIST: &str = "schedule.list";
     pub const SCHEDULE_ADD: &str = "schedule.add";
@@ -308,6 +313,8 @@ pub mod method {
         WF_RUNS,
         WF_TRACE,
         WF_CONTROL,
+        WF_PLAN_SHOW,
+        WF_PLAN_GO,
         SCHEDULE_LIST,
         SCHEDULE_ADD,
         SCHEDULE_RM,

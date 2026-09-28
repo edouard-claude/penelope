@@ -124,6 +124,27 @@ impl TelegramGateway {
                     .await?;
             let mut sessions = 0;
             let mut runs = 0;
+            // Les runs des plans lancés depuis cette conversation s'arrêtent avec elle
+            // (#191) : mis en pause, ils ne repartent pas seuls. `/stop tout` les compte
+            // avec les autres, plus bas.
+            let mut stopped_plans: Vec<String> = Vec::new();
+            if !tout {
+                let cx = penelope_daemon::workflow::context_of(d);
+                for run in penelope_orchestrator::workflow::plan_runs_of(s, &session).await? {
+                    if run.state == penelope_workflow::RunState::Running
+                        && penelope_orchestrator::workflow::control(
+                            &cx,
+                            &run.id,
+                            &penelope_workflow::Control::Pause,
+                        )
+                        .await
+                        .is_ok()
+                    {
+                        runs += 1;
+                        stopped_plans.push(run.id);
+                    }
+                }
+            }
             // Les runs ouverts de ce chat, quel que soit leur état : un run `blocked`
             // paraît « en cours » au propriétaire, et c'est précisément celui que
             // `/stop tout` ignorait en répondant « Rien à arrêter » (issue #155).
@@ -138,7 +159,7 @@ impl TelegramGateway {
                         penelope_workflow::RunState::Running
                             | penelope_workflow::RunState::Blocked
                             | penelope_workflow::RunState::Paused
-                    )
+                    ) && !stopped_plans.contains(&r.id)
                 })
                 .collect();
             let mut left: Vec<String> = Vec::new();

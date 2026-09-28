@@ -1,0 +1,14 @@
+{
+  "method": "wf.plan.go",
+  "params": {
+    "session": "s_inconnue",
+    "version": 1,
+    "fingerprint": "0"
+  },
+  "response": {
+    "error": {
+      "code": -32603,
+      "message": "string"
+    }
+  }
+}

@@ -80,13 +80,7 @@ pub async fn go(
             .map_err(err)?
             .into_iter()
             .find(|p| p.plan.version() == version && p.fingerprint() == fingerprint)
-            .ok_or_else(|| {
-                format!(
-                    "clic périmé : ce bouton lance le plan v{version}, la conversation en est \
-                     au plan v{} ; valide la dernière carte",
-                    active.plan.version()
-                )
-            })?
+            .ok_or_else(|| stale(version, &active))?
     };
     let (run, created) = launch(d, session, &draft, origin).await?;
     Ok(Launched {
@@ -94,6 +88,23 @@ pub async fn go(
         created,
         draft,
     })
+}
+
+/// Le refus d'un bouton qui ne montre pas la révision courante.
+fn stale(version: u64, active: &PlanDraft) -> String {
+    let current = active.plan.version();
+    if version == current {
+        format!(
+            "clic périmé : ce bouton montre une autre révision que le plan v{current} en cours \
+             (empreinte {}) ; valide la dernière carte",
+            &active.fingerprint()[..12]
+        )
+    } else {
+        format!(
+            "clic périmé : ce bouton lance le plan v{version}, la conversation en est au plan \
+             v{current} ; valide la dernière carte"
+        )
+    }
 }
 
 /// Crée le run d'un plan approuvé, ou rend celui qui existe.

@@ -277,12 +277,15 @@ impl Messenger for TelegramGateway {
     ) -> Result<(), String> {
         let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
         let version = draft.plan.version();
+        // Le bouton porte la révision exacte : un clic sur une carte d'une autre révision
+        // est refusé, même si son numéro de version est réutilisé par un plan suivant.
+        let fingerprint = draft.fingerprint();
         let token = self
             .actions
             .create(
                 k::SCREEN_DO,
                 "wf.plan.go",
-                json!({"params":{"session":session,"version":version},"back":null}),
+                json!({"params":{"session":session,"version":version,"fingerprint":fingerprint},"back":null}),
                 24 * 3_600_000,
                 true,
             )
@@ -290,16 +293,29 @@ impl Messenger for TelegramGateway {
             .map_err(|e| e.to_string())?;
         let mut lines = vec![format!("📋 Plan v{version} · {}", draft.plan.goal())];
         for (index, step) in draft.plan.steps().iter().enumerate() {
-            lines.push(format!("{}. {:?} — {}", index + 1, step.phase, step.title));
+            lines.push(format!(
+                "{}. {} — {}",
+                index + 1,
+                step.phase.label(),
+                step.title
+            ));
         }
-        lines.push("\nRéponds dans cette conversation pour corriger le plan, ou valide-le.".into());
+        lines.push(format!(
+            "\nEmpreinte {} · une carte d'OK après la spécification, les tests et le code.\n\
+             Réponds dans cette conversation pour corriger le plan, ou valide-le.",
+            &fingerprint[..12]
+        ));
         self.send_screen(
             chat_id,
             topic_id,
             None,
             screens::Screen {
                 text: lines.join("\n"),
-                rows: vec![vec![ButtonSpec::callback("✅ Vas-y", &token.token, "")]],
+                rows: vec![vec![ButtonSpec::callback(
+                    &format!("✅ Vas-y (v{version})"),
+                    &token.token,
+                    "",
+                )]],
             },
             None,
         )

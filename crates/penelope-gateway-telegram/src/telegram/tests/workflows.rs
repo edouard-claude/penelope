@@ -488,54 +488,92 @@ async fn a_workflow_launch_card_cannot_bypass_the_plan_gate() {
     assert!(sent.iter().any(|m| m.contains("plan")), "{sent:?}");
 }
 
+/// #191 : « Vas-y » lance le run du plan exact, une fois ; la carte d'une révision
+/// dépassée est refusée ; `/stop` dans la conversation met ce run en pause.
 #[tokio::test]
-async fn plan_go_button_persists_approval_without_starting_a_run() {
+async fn plan_go_launches_one_run_refuses_a_stale_card_and_stop_pauses_it() {
     use penelope_workflow::plan::{Phase, Plan, PlanDraft, PlanGate, PlanStep, PlanStore};
     let (_d, g, t, _p) = gateway().await;
-    let plans = PlanStore::new(g.daemon.services.store.clone());
-    let draft = PlanDraft {
+    let s = &g.daemon.services;
+    let plans = PlanStore::new(s.store.clone());
+    let origin = Origin::Telegram {
+        chat_id: OWNER,
+        topic_id: None,
+        message_id: None,
+    };
+    let session = g.daemon.chat_session_for(&origin).await.unwrap();
+    let v1 = PlanDraft {
         workflow_id: "build-verify".into(),
         params: json!({"objectif":"réparer le build"}),
         brief: Some("Bug de build".into()),
         plan: Plan::new(
             "Réparer le build",
-            vec![PlanStep::new(Phase::Tests, "Reproduire l'échec")],
+            vec![
+                PlanStep::new(Phase::Tests, "Reproduire l'échec"),
+                PlanStep::new(Phase::Implementation, "Corriger"),
+                PlanStep::new(Phase::Review, "Relire"),
+            ],
         )
         .unwrap(),
     };
-    plans.save("plan-session", &draft).await.unwrap();
-    let origin = Origin::Telegram {
-        chat_id: OWNER,
-        topic_id: Some(21),
-        message_id: Some(400),
-    };
-    g.send_plan_card(&origin, "plan-session", &draft)
-        .await
+    plans.create(&session, &v1).await.unwrap();
+    g.send_plan_card(&origin, &session, &v1).await.unwrap();
+    g.flush_outbox().await.unwrap();
+    let stale = button(&t, "Vas-y").await;
+    let mut v2 = v1.clone();
+    v2.revise(1, "Réparer le build et sa CI", v1.plan.steps().to_vec())
         .unwrap();
+    plans.replace(&session, &v1, &v2).await.unwrap();
+    g.send_plan_card(&origin, &session, &v2).await.unwrap();
     g.flush_outbox().await.unwrap();
     let go = button(&t, "Vas-y").await;
-    g.process_update(&updates::callback(401, OWNER, &go, 1401))
+    assert_ne!(stale, go);
+
+    g.process_update(&updates::callback(401, OWNER, &stale, 1401))
         .await
         .unwrap();
     settle_click(&g).await;
+    assert!(s.runs.list(None, 5).await.unwrap().is_empty());
+    let draft = plans.get(&session).await.unwrap().unwrap();
     assert_eq!(
-        plans
-            .get("plan-session")
-            .await
-            .unwrap()
-            .unwrap()
-            .plan
-            .gate(),
-        PlanGate::Ready
+        draft.plan.gate(),
+        PlanGate::Review,
+        "le clic périmé n'approuve rien"
     );
+
+    g.process_update(&updates::callback(402, OWNER, &go, 1402))
+        .await
+        .unwrap();
+    settle_click(&g).await;
+    let draft = plans.get(&session).await.unwrap().unwrap();
+    assert_eq!(draft.plan.gate(), PlanGate::Ready);
+    let runs = s.runs.list(None, 5).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(
+        runs[0].id,
+        penelope_workflow::plan::plan_run_id(&session, &v2.fingerprint())
+    );
+    let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
     assert!(
-        g.daemon
-            .services
-            .runs
-            .list(None, 5)
-            .await
+        sent.iter()
+            .any(|m| m.contains(&runs[0].id) && m.contains("lancé")),
+        "{sent:?}"
+    );
+
+    g.process_update(&updates::text_message(403, OWNER, OWNER, "/stop"))
+        .await
+        .unwrap();
+    g.flush_outbox().await.unwrap();
+    assert_eq!(
+        s.runs.get(&runs[0].id).await.unwrap().unwrap().state,
+        penelope_workflow::RunState::Paused
+    );
+    let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+    assert!(
+        sent.last()
             .unwrap()
-            .is_empty()
+            .contains("1 run(s) de workflow mis en pause"),
+        "{sent:?}"
     );
 }
 
