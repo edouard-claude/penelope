@@ -174,6 +174,9 @@ impl ChannelDelivery for TelegramGateway {
             }
             return;
         }
+        // La bulle de trace des outils du tour part avant la réponse, par construction :
+        // ses appels sont déjà sur le bus, la boucle les lit avant qu'on enfile (#222).
+        self.trace_barrier().await;
         let result: anyhow::Result<()> = async {
             match outcome {
                 TurnOutcome::Answered { text, .. } => {

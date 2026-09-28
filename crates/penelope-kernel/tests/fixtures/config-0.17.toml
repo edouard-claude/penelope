@@ -31,6 +31,7 @@ allowed_chats = [-1001234567890]
 text_group_window_ms = 2000
 burst_messages = 5
 burst_chars = 20000
+tool_trace = "compact"
 
 [telegram.home]
 chat = -1001234567890

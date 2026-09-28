@@ -7,6 +7,9 @@
 //!   limité en fréquence, jamais bloquant ;
 //! - **envoi** : les réponses finales, cartes et retours de commandes passent par
 //!   `tg_outbox`, dans l'ordre, avec reprise et repli en texte brut.
+//!
+//! S'y ajoute la **trace des outils** (#222, `trace.rs`) : une bulle par tour, éditée en
+//! place, qui dit quels outils tournent.
 
 use penelope_agent::{TurnEvent, TurnOutcome};
 use penelope_app::bus::{BusKind, ChannelDelivery, Origin};
@@ -47,6 +50,7 @@ mod onboarding;
 mod outbox;
 mod screens;
 mod sessions_menu;
+mod trace;
 mod usage;
 
 use bursts::{Held, TextBurst};
@@ -97,6 +101,13 @@ pub struct TelegramGateway {
     /// Intervalle de renvoi de l'indicateur, en millisecondes (Telegram l'efface au bout
     /// de cinq secondes).
     activity_every_ms: std::sync::atomic::AtomicU64,
+    /// Bulles de trace ouvertes (`tg.trace.open`) : lues et réécrites sous verrou (#222).
+    trace_lock: tokio::sync::Mutex<()>,
+    /// Tours suivis par la trace, ou dont la bulle est en train d'être close.
+    trace_busy: std::sync::atomic::AtomicUsize,
+    /// Demandes de rattrapage adressées à la boucle de trace : `deliver` attend qu'elle ait
+    /// lu tout le bus avant d'enfiler la réponse (#222). `None` : pas de boucle.
+    trace_sync: std::sync::Mutex<Option<trace::live::SyncTx>>,
 }
 
 impl TelegramGateway {
@@ -151,6 +162,9 @@ impl TelegramGateway {
             held_lock: tokio::sync::Mutex::new(()),
             activities: Arc::new(std::sync::Mutex::new(HashMap::new())),
             activity_every_ms: std::sync::atomic::AtomicU64::new(4_000),
+            trace_lock: tokio::sync::Mutex::new(()),
+            trace_busy: std::sync::atomic::AtomicUsize::new(0),
+            trace_sync: std::sync::Mutex::new(None),
             daemon,
             bot,
         })
@@ -195,8 +209,13 @@ impl TelegramGateway {
         if let Err(e) = self.announce_uncertain_effects().await {
             tracing::warn!(error = %e, "effets incertains non annoncés");
         }
+        // Bulles de trace d'une vie précédente : closes, jamais laissées sur « ⏳ » (#222).
+        if let Err(e) = self.close_orphan_traces().await {
+            tracing::warn!(error = %e, "traces d'outils non closes");
+        }
         // Surveillées : une panique relance la boucle au lieu de rendre le bot muet (#84).
         let (a, b, c, m) = (self.clone(), self.clone(), self.clone(), self.clone());
+        let t = self.clone();
         let sup = self.daemon.supervision();
         Ok(vec![
             penelope_app::tasks::spawn_supervised(&sup, "telegram.poll", move || {
@@ -204,6 +223,9 @@ impl TelegramGateway {
             }),
             penelope_app::tasks::spawn_supervised(&sup, "telegram.drafts", move || {
                 b.clone().draft_loop()
+            }),
+            penelope_app::tasks::spawn_supervised(&sup, "telegram.trace", move || {
+                t.clone().trace_loop()
             }),
             penelope_app::tasks::spawn_supervised(&sup, "telegram.outbox", move || {
                 c.clone().outbox_loop()

@@ -30,7 +30,8 @@
         "home": {
           "chat": "integer",
           "topic": "integer"
-        }
+        },
+        "tool_trace": "string"
       },
       "providers": {
         "openrouter": {

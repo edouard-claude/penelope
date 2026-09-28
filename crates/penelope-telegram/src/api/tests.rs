@@ -201,3 +201,34 @@ async fn reactions_use_the_prd_emojis() {
     let body = &m.calls().await[0].1;
     assert_eq!(body["reaction"][0]["emoji"], "⚙️");
 }
+
+/// #222 : une modification de la trace des outils ne s'essaie qu'une fois, sur son seau :
+/// un 429 ne la fait pas dormir huit fois et ne retarde pas les messages ; un contenu
+/// identique n'est pas un échec.
+#[tokio::test]
+async fn a_trace_edit_is_tried_once_on_its_own_bucket() {
+    use penelope_kernel::clock::Clock;
+    let m = MockTransport::new();
+    let clock = Arc::new(TestClock::default());
+    let b = Bot::new(m.clone(), 100.0, clock.clone());
+    let chat = 42;
+    m.fail_once(429, "Too Many Requests", Some(30)).await;
+    let started = std::time::Instant::now();
+    let e = b.edit_trace(chat, 7, "💻 shell_exec").await.unwrap_err();
+    assert!(matches!(e, TgError::RateLimited(30)), "{e:?}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(m.calls_to(method::EDIT_MESSAGE_TEXT).await.len(), 1);
+    assert_eq!(
+        b.limiter.delay_for(chat, clock.now_ms()).await,
+        0,
+        "le 429 d'une trace ne retarde pas la réponse"
+    );
+
+    m.fail_once(400, "Bad Request: message is not modified", None)
+        .await;
+    let b = bot(m.clone());
+    b.edit_trace(chat, 7, "💻 shell_exec").await.unwrap();
+    m.fail_once(400, "Bad Request: message to edit not found", None)
+        .await;
+    assert!(b.edit_trace(chat, 7, "x").await.is_err());
+}

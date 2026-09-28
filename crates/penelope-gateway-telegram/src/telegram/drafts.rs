@@ -19,21 +19,12 @@ fn activity_for(tool: &str) -> &'static str {
 }
 
 /// Résumé d'un appel d'outil pour la ligne d'état du brouillon : la commande, le
-/// chemin, la requête ou l'adresse, raccourcis (issue #121).
+/// chemin, la requête ou l'adresse, raccourcis (issue #121). L'argument est celui de la
+/// trace des outils, `tool_call` déballé (issue #222).
 fn tool_status(name: &str, args: &Value) -> String {
-    let detail = ["command", "path", "query", "url", "name", "id"]
-        .iter()
-        .find_map(|k| args.get(*k).and_then(|v| v.as_str()))
-        .map(|d| {
-            let d = d.split_whitespace().collect::<Vec<_>>().join(" ");
-            if d.chars().count() > 60 {
-                format!("{}…", d.chars().take(59).collect::<String>())
-            } else {
-                d
-            }
-        });
-    match detail {
-        Some(d) => format!("⚙️ {name} · {d}"),
+    let (name, args) = super::trace::unwrap_call(name, args);
+    match super::trace::main_arg(&name, &args) {
+        Some(d) => format!("⚙️ {name} · {}", super::trace::one_line(&d, 60)),
         None => format!("⚙️ {name}…"),
     }
 }
