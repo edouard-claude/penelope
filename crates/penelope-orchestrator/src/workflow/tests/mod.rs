@@ -60,6 +60,7 @@ fn owner() -> Origin {
 
 mod control;
 mod driver;
+mod plan;
 mod runs;
 mod shell_tool;
 mod steps;

@@ -49,7 +49,7 @@ async fn admit_held(d: &Context) -> anyhow::Result<()> {
         if s.kv_get(&key).await?.is_none() {
             continue;
         }
-        let Some(wf) = s.workflows.get(&run.workflow_id) else {
+        let Some(wf) = workflow_of(s, &run).await else {
             continue;
         };
         let running = s
@@ -105,7 +105,7 @@ async fn drive_claimed(
         if run.state != RunState::Running || cancel.is_cancelled() {
             return Ok(run.state);
         }
-        let Some(wf) = s.workflows.get(&run.workflow_id) else {
+        let Some(wf) = workflow_of(s, &run).await else {
             return finish(d, &run, RunState::Failed, "workflow retiré du registre").await;
         };
         let run = refresh_spent(s, run).await?;
@@ -144,14 +144,20 @@ async fn drive_claimed(
         }
 
         let metadata = session_metadata(s, &run.session_id).await;
-        let next = choose(
-            &step.transitions,
-            &EvalContext {
-                step_result: &result,
-                step_output: &output,
-                metadata: &metadata,
-            },
-        );
+        let eval = EvalContext {
+            step_result: &result,
+            step_output: &output,
+            metadata: &metadata,
+        };
+        let next = choose(&step.transitions, &eval);
+        // Un arrêt voulu par le workflow dit sa raison (tag de sa transition) : « limite de
+        // reprises atteinte », « arrêt demandé par le propriétaire » (#191).
+        let stop_reason = step
+            .transitions
+            .iter()
+            .find(|t| penelope_workflow::conditions::evaluate(&t.condition, &eval))
+            .filter(|t| t.goto == BLOCKED && !t.tag.is_empty())
+            .map(|t| t.tag.clone());
         // Sortie d'un sous-groupe par sa transition taguée : la boucle s'arrête là.
         if let Some(tag) = penelope_workflow::validate::escape_tag(&wf, &step, &next) {
             let _ = s
@@ -197,11 +203,14 @@ async fn drive_claimed(
             return finish(d, &run, RunState::Done, "").await;
         }
         if next == BLOCKED {
-            let reason = format!(
-                "aucune transition de `{}` ne convient au résultat `{}`",
-                step.id,
-                result.as_str()
-            );
+            let reason = match stop_reason {
+                Some(tag) => format!("`{}` → {} : {tag}", step.id, result.as_str()),
+                None => format!(
+                    "aucune transition de `{}` ne convient au résultat `{}`",
+                    step.id,
+                    result.as_str()
+                ),
+            };
             return finish(d, &run, RunState::Blocked, &reason).await;
         }
     }
@@ -289,10 +298,7 @@ pub(super) async fn finish(
             .session(&run.session_id),
         )
         .await;
-    if let (Some(run), Some(wf)) = (
-        s.runs.get(&run.id).await?,
-        s.workflows.get(&run.workflow_id),
-    ) {
+    if let (Some(run), Some(wf)) = (s.runs.get(&run.id).await?, workflow_of(s, run).await) {
         progress(d, &run, &wf, None).await;
     }
     if run.parent_run.is_some() {
@@ -398,9 +404,8 @@ pub async fn raise_budget(
     if usd.is_none() && tokens.is_none() {
         anyhow::bail!("rien à relever : `--usd <montant>` et/ou `--tokens <nombre>`");
     }
-    let wf = s
-        .workflows
-        .get(&run.workflow_id)
+    let wf = workflow_of(s, &run)
+        .await
         .ok_or_else(|| anyhow::anyhow!("workflow retiré du registre"))?;
     let mut b = effective_budget(s, &run, &wf.settings.budget).await;
     if let Some(u) = usd {

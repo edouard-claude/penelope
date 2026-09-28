@@ -22,7 +22,7 @@ pub async fn control(
     // on le dit au lieu de le faire (issue #136).
     if *op == Control::Resume
         && run.state == RunState::Blocked
-        && let Some(wf) = s.workflows.get(&run.workflow_id)
+        && let Some(wf) = workflow_of(s, &run).await
     {
         let current = refresh_spent(s, run.clone()).await?;
         let budget = effective_budget(s, &current, &wf.settings.budget).await;
@@ -63,9 +63,8 @@ pub async fn control(
             let Some(step_id) = run.current_step.clone() else {
                 anyhow::bail!("aucune étape à passer");
             };
-            let wf = s
-                .workflows
-                .get(&run.workflow_id)
+            let wf = workflow_of(s, &run)
+                .await
                 .ok_or_else(|| anyhow::anyhow!("workflow retiré du registre"))?;
             let step = wf
                 .step(&step_id)
@@ -124,9 +123,8 @@ pub async fn answer(
     if visit != expected {
         anyhow::bail!("cette question n'est plus d'actualité");
     }
-    let wf = s
-        .workflows
-        .get(&run.workflow_id)
+    let wf = workflow_of(s, &run)
+        .await
         .ok_or_else(|| anyhow::anyhow!("workflow retiré du registre"))?;
     let def = wf
         .step(&step)
@@ -174,7 +172,7 @@ pub async fn form_of(s: &Services, run_id: &str, visit: &str) -> Option<Value> {
     if visit != format!("{step}.{}", run.iterations) {
         return None;
     }
-    let wf = s.workflows.get(&run.workflow_id)?;
+    let wf = workflow_of(s, &run).await?;
     let id = wf.step(&step)?.input.strip_prefix("form:")?.to_string();
     wf.settings.forms.get(&id).cloned()
 }

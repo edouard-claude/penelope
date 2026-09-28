@@ -109,19 +109,7 @@ pub async fn start_run_briefed(
         Some(p) => s.runs.get(p).await.ok().flatten().and_then(|r| r.workdir),
         None => None,
     };
-    let workdir = match (
-        wf.settings.workspace.strip_prefix("persistent:"),
-        parent_workdir,
-    ) {
-        (Some(name), _) => s
-            .platform
-            .dirs
-            .data()
-            .join("workspaces")
-            .join(penelope_platform::slugify(name)),
-        (None, Some(dir)) => std::path::PathBuf::from(dir),
-        (None, None) => s.platform.dirs.state().join("runs").join(&run.id),
-    };
+    let workdir = workdir_for(s, &wf, &run.id, parent_workdir);
     std::fs::create_dir_all(&workdir).map_err(|e| format!("{}: {e}", workdir.display()))?;
     s.runs
         .set_workdir(&run.id, &workdir.to_string_lossy())
@@ -160,6 +148,29 @@ pub async fn start_run_briefed(
     progress(d, &run, &wf, None).await;
     d.workflows.wake();
     Ok(run)
+}
+
+/// Répertoire de travail d'un run : l'espace persistant nommé, sinon celui du parent,
+/// sinon le sien sous `state/runs`.
+pub(super) fn workdir_for(
+    s: &Services,
+    wf: &Workflow,
+    run_id: &str,
+    parent_workdir: Option<String>,
+) -> std::path::PathBuf {
+    match (
+        wf.settings.workspace.strip_prefix("persistent:"),
+        parent_workdir,
+    ) {
+        (Some(name), _) => s
+            .platform
+            .dirs
+            .data()
+            .join("workspaces")
+            .join(penelope_platform::slugify(name)),
+        (None, Some(dir)) => std::path::PathBuf::from(dir),
+        (None, None) => s.platform.dirs.state().join("runs").join(run_id),
+    }
 }
 
 /// Paramètres effectifs : valeurs par défaut, obligatoires vérifiés, inconnus refusés.

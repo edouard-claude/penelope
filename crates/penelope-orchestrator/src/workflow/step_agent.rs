@@ -2,10 +2,17 @@
 
 use super::*;
 
-/// `agent` : un tour d'agent dans la session du run, jusqu'à `step_done()`.
+/// `agent` : un tour d'agent dans la session du run, jusqu'à `step_done()`. Avec
+/// `context: fresh`, dans une session neuve propre à la visite (#191).
 pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     let s = &ctx.d.services;
     let (run, step) = (ctx.run, ctx.step);
+    let fresh = step.context == "fresh";
+    let session = if fresh {
+        fresh_session(ctx).await?
+    } else {
+        run.session_id.clone()
+    };
     let started_key = visit_key("agent", run, &step.id);
     let done_key = step_done_key(&run.id);
     let mut nudges: u32 = match s.kv_get(&started_key).await? {
@@ -21,7 +28,10 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
                     }
                 })
                 .await?;
-            let prompt = with_brief(ctx, ctx.render(&step.prompt).await).await;
+            let mut prompt = with_brief(ctx, ctx.render(&step.prompt).await).await;
+            if fresh {
+                prompt.push_str(&prior_outputs(ctx));
+            }
             let text = format!(
                 "[Workflow `{}`, étape `{}` : {}]\n\n{prompt}\n\nRépertoire de travail : `{}`. \
                  Quand l'étape est terminée, appelle `return_value` si un résultat est \
@@ -35,7 +45,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
                 },
                 ctx.workdir().display()
             );
-            record_user(s, &run.session_id, &text).await?;
+            record_user(s, &session, &text).await?;
             s.kv_set(&started_key, "0").await?;
             0
         }
@@ -48,7 +58,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
         .pending(500)
         .await?
         .into_iter()
-        .find(|a| a.session_id.as_deref() == Some(run.session_id.as_str()));
+        .find(|a| a.session_id.as_deref() == Some(session.as_str()));
     if let Some(a) = waiting {
         send_approval_once(ctx, a.id.as_str()).await;
         return Ok(StepOutcome::Waiting(format!("approbation {}", a.id)));
@@ -68,7 +78,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
         Ok(p) => p,
         Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
     };
-    let exec = ctx.executor().await;
+    let exec = ctx.executor_in(&session).await;
     let mut allowed = step.tools.clone();
     if !allowed.is_empty() {
         for always in ["step_done", "return_value", "session_metadata"] {
@@ -83,7 +93,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
         tools.extend(m.eager_tools().await);
     }
     let spec = TurnSpec {
-        session_id: run.session_id.clone(),
+        session_id: session.clone(),
         run_id: Some(run.id.clone()),
         turn_id: None,
         model_id: model_id.clone(),
@@ -97,7 +107,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
         let tiers =
             penelope_conversation::build_tiers(s, &step.prompt, &[], Some(&run_state_line(ctx)))
                 .await;
-        let conv = SessionConversation::new(s.clone(), &run.session_id, &model_id, tiers, 0);
+        let conv = SessionConversation::new(s.clone(), &session, &model_id, tiers, 0);
         let outcome = AgentLoop::new(ctx.d.agent.clone(), provider.clone())
             .run_conversation(&spec, &conv, &exec, &NullSink)
             .await?;
@@ -158,12 +168,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
         } else {
             ctx.render(&step.nudge_prompt).await
         };
-        record_user(
-            s,
-            &run.session_id,
-            &format!("[relance du workflow] {nudge}"),
-        )
-        .await?;
+        record_user(s, &session, &format!("[relance du workflow] {nudge}")).await?;
         s.kv_set(&started_key, &nudges.to_string()).await?;
     }
 }
