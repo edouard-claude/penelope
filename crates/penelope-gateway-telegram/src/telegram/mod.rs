@@ -105,6 +105,9 @@ pub struct TelegramGateway {
     trace_lock: tokio::sync::Mutex<()>,
     /// Tours suivis par la trace, ou dont la bulle est en train d'être close.
     trace_busy: std::sync::atomic::AtomicUsize,
+    /// Demandes de rattrapage adressées à la boucle de trace : `deliver` attend qu'elle ait
+    /// lu tout le bus avant d'enfiler la réponse (#222). `None` : pas de boucle.
+    trace_sync: std::sync::Mutex<Option<trace::live::SyncTx>>,
 }
 
 impl TelegramGateway {
@@ -161,6 +164,7 @@ impl TelegramGateway {
             activity_every_ms: std::sync::atomic::AtomicU64::new(4_000),
             trace_lock: tokio::sync::Mutex::new(()),
             trace_busy: std::sync::atomic::AtomicUsize::new(0),
+            trace_sync: std::sync::Mutex::new(None),
             daemon,
             bot,
         })

@@ -29,7 +29,9 @@ identiques passaient sans qu'on le sache.
   à la fin du tour.
 - Le cœur n'a pas bougé : il émet déjà `ToolCall` et `ToolResult` sur le bus ; la boucle
   `telegram.trace` de la passerelle les rend (frontière #214).
-- Création par `tg_outbox` (la bulle part avant la réponse, rédigée) ; modifications par
+- Création par `tg_outbox`, rédigée. La bulle part avant la réponse **par construction** :
+  `deliver` demande à la boucle de lire tout ce que le bus porte déjà (les appels du tour
+  y sont publiés avant l'issue) et n'enfile la réponse qu'après l'acquittement. Modifications par
   appel direct, sur un seau à part et en un seul essai (`Bot::edit_trace`) : un 429 ne
   retarde plus la réponse, un `not modified` n'est plus une note d'échec. Une modification
   en vol au plus, toutes les 1,5 s en privé et 3 s en groupe ; la dernière attend que la
@@ -43,7 +45,7 @@ identiques passaient sans qu'on le sache.
   tour la clôt au démarrage suivant (« interrompu par un redémarrage »).
 - Tests : `trace::tests` (familles, argument principal, regroupement, appariement, statuts,
   modes et groupes, échappement, secrets, troncature), `tests::trace` (bulle unique avant
-  la réponse et cadence, sans outil, `off` et rechargement à chaud, sujet de groupe,
+  la réponse et cadence, réponse prête avant que la boucle ait lu l'appel, sans outil, `off` et rechargement à chaud, sujet de groupe,
   arrière-plan, bulle orpheline), `a_trace_edit_is_tried_once_on_its_own_bucket`, lecture
   de la clé ; scénario `trace-des-outils` (le harnais lance la boucle), attendu de
   `commandes-approbations` régénéré pour sa bulle.

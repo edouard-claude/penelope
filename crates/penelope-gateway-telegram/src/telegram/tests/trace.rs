@@ -279,3 +279,42 @@ async fn an_orphan_bubble_is_closed_at_start() {
     assert_eq!(g.close_orphan_traces().await.unwrap(), 0);
     assert_eq!(t.calls_to(tg::EDIT_MESSAGE_TEXT).await.len(), 1);
 }
+
+/// La course forcée : la réponse est prête alors que la boucle de trace n'a pas encore lu
+/// l'appel d'outil du tour (aucun point de suspension entre l'appel et `deliver`). La
+/// réponse attend que la boucle ait rattrapé le bus : la bulle est enfilée avant elle.
+#[tokio::test]
+async fn the_answer_waits_for_its_bubble_even_when_the_trace_lags() {
+    let (_d, g, t, _p) = gateway().await;
+    let loop_ = g.spawn_trace();
+    let origin = Origin::Telegram {
+        chat_id: OWNER,
+        topic_id: None,
+        message_id: Some(5),
+    };
+    let bus = &g.daemon.bus;
+    let event = |kind| penelope_app::bus::BusEvent {
+        turn_id: "t-course".into(),
+        session_id: "s-course".into(),
+        origin: origin.clone(),
+        kind,
+    };
+    bus.publish(event(BusKind::Started));
+    bus.publish(event(BusKind::Event(TurnEvent::ToolCall {
+        name: "fs_read".into(),
+        args: json!({"path": "notes.txt"}),
+    })));
+    let outcome = TurnOutcome::Answered {
+        text: "Réponse prête.".into(),
+        iterations: 2,
+        cost_usd: 0.0,
+    };
+    g.deliver("t-course", "s-course", &origin, &outcome).await;
+    g.flush_outbox().await.unwrap();
+    let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert!(sent[0].starts_with("📄 fs_read"), "{sent:?}");
+    assert!(sent[1].contains("Réponse prête."), "{sent:?}");
+    g.daemon.handle.shutdown();
+    let _ = tokio::time::timeout(Duration::from_secs(2), loop_).await;
+}

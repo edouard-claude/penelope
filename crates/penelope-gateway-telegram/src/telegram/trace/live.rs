@@ -27,8 +27,14 @@ const FOCUS_EVERY: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_millis(250);
 /// Attente maximale de la file du chat avant la dernière modification.
 const FINAL_WAIT: Duration = Duration::from_secs(60);
+/// Attente maximale du rattrapage de la boucle par `deliver` : au-delà, la boucle est
+/// bloquée et la réponse ne l'attend plus.
+const BARRIER_WAIT: Duration = Duration::from_secs(10);
 /// Bulles ouvertes, par tour : `kv` n'a pas de listage par préfixe, d'où une seule clé.
 pub(crate) const OPEN_KEY: &str = "tg.trace.open";
+
+/// Canal des demandes de rattrapage : chacune est acquittée une fois le bus lu.
+pub(crate) type SyncTx = tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>;
 
 /// Une bulle ouverte, telle qu'elle survit à un redémarrage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,21 +122,69 @@ impl TelegramGateway {
         self: Arc<Self>,
         mut rx: tokio::sync::broadcast::Receiver<Arc<penelope_app::bus::BusEvent>>,
     ) {
+        let (tx, mut sync) = tokio::sync::mpsc::unbounded_channel();
+        if let Ok(mut g) = self.trace_sync.lock() {
+            *g = Some(tx);
+        }
         let mut lives: HashMap<String, Live> = HashMap::new();
         while !self.shutting_down() {
-            match tokio::time::timeout(TICK, rx.recv()).await {
-                Err(_) => {}
-                Ok(Ok(ev)) => self.on_event(&mut lives, ev).await,
-                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
-                    for l in lives.values_mut() {
-                        l.trace.mark_incomplete();
+            tokio::select! {
+                ev = rx.recv() => match ev {
+                    Ok(ev) => self.on_event(&mut lives, ev).await,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        for l in lives.values_mut() {
+                            l.trace.mark_incomplete();
+                        }
                     }
+                    Err(_) => break,
+                },
+                Some(ack) = sync.recv() => {
+                    self.catch_up(&mut rx, &mut lives).await;
+                    let _ = ack.send(());
                 }
-                Ok(Err(_)) => break,
+                _ = tokio::time::sleep(TICK) => {}
             }
             for l in lives.values_mut() {
                 self.maybe_edit(l).await;
             }
+        }
+        if let Ok(mut g) = self.trace_sync.lock() {
+            *g = None;
+        }
+    }
+
+    /// Lit tout ce que le bus a déjà reçu : un appel publié avant la demande a sa bulle
+    /// enfilée quand elle est acquittée.
+    async fn catch_up(
+        self: &Arc<Self>,
+        rx: &mut tokio::sync::broadcast::Receiver<Arc<penelope_app::bus::BusEvent>>,
+        lives: &mut HashMap<String, Live>,
+    ) {
+        loop {
+            match rx.try_recv() {
+                Ok(ev) => self.on_event(lives, ev).await,
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                    for l in lives.values_mut() {
+                        l.trace.mark_incomplete();
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+    }
+
+    /// Attend que la boucle de trace ait lu tout ce que le bus porte déjà. Sans boucle
+    /// (trace jamais lancée, arrêtée), rien à attendre.
+    pub(crate) async fn trace_barrier(&self) {
+        let (ack, done) = tokio::sync::oneshot::channel();
+        let sent = match self.trace_sync.lock() {
+            Ok(g) => g.as_ref().is_some_and(|tx| tx.send(ack).is_ok()),
+            Err(_) => false,
+        };
+        if sent && tokio::time::timeout(BARRIER_WAIT, done).await.is_err() {
+            tracing::warn!(
+                "boucle de trace des outils en retard : réponse envoyée sans l'attendre"
+            );
         }
     }
 
