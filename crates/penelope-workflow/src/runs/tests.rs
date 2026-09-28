@@ -383,3 +383,35 @@ fn limits_are_checked() {
     );
     assert_eq!(check_limits(&base, &budget, t0 + 120_000), Limit::WallClock);
 }
+
+/// #191 : le run d'un plan approuvé naît une fois ; un second lancement du même plan,
+/// même après que le premier a avancé, retrouve la ligne sans la réécrire.
+#[tokio::test]
+async fn a_run_created_under_a_chosen_id_exists_once() {
+    let rs = runs(TestClock::default()).await;
+    let w = workflow();
+    let (first, created) = rs
+        .create_as("r_plan_x", &w, "s1", json!({"x": 1}))
+        .await
+        .unwrap();
+    assert!(created);
+    assert_eq!(first.current_step.as_deref(), Some("un"));
+    rs.advance(
+        "r_plan_x",
+        "un",
+        &StepResult::Success,
+        json!({}),
+        "deux",
+        None,
+    )
+    .await
+    .unwrap();
+    let (again, created) = rs
+        .create_as("r_plan_x", &w, "s1", json!({"x": 2}))
+        .await
+        .unwrap();
+    assert!(!created);
+    assert_eq!(again.current_step.as_deref(), Some("deux"));
+    assert_eq!(again.params, json!({"x": 1}));
+    assert_eq!(rs.list(None, 10).await.unwrap().len(), 1);
+}

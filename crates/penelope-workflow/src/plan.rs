@@ -3,6 +3,9 @@
 use penelope_store::{Store, StoreError, rusqlite::params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+pub mod execution;
 
 /// La phase donne au moteur un sens stable, même si l'ordre des pas est proposé
 /// librement par l'orchestrateur.
@@ -71,6 +74,8 @@ pub enum PlanError {
     StaleVersion(u64, u64),
     #[error("la version du plan ne peut plus être incrémentée")]
     VersionOverflow,
+    #[error("le plan n'est pas approuvé : rien ne s'exécute avant « vas-y »")]
+    NotApproved,
 }
 
 impl Plan {
@@ -184,7 +189,40 @@ pub struct PlanDraft {
     pub plan: Plan,
 }
 
+/// Ce qui est haché pour l'empreinte : tout ce que le run exécutera, rien d'autre.
+#[derive(Serialize)]
+struct Fingerprinted<'a> {
+    workflow_id: &'a str,
+    params: &'a Value,
+    brief: &'a Option<String>,
+    version: u64,
+    goal: &'a str,
+    steps: &'a [PlanStep],
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 impl PlanDraft {
+    /// Empreinte de la révision exacte : but, étapes, version, paramètres et brief. Un
+    /// bouton la porte ; une autre révision, même de même numéro, a une autre empreinte.
+    pub fn fingerprint(&self) -> String {
+        let raw = serde_json::to_vec(&Fingerprinted {
+            workflow_id: &self.workflow_id,
+            params: &self.params,
+            brief: &self.brief,
+            version: self.plan.version(),
+            goal: self.plan.goal(),
+            steps: self.plan.steps(),
+        })
+        .unwrap_or_default();
+        hex_sha256(&raw)
+    }
+
     fn check_version(&self, expected: u64) -> Result<(), PlanError> {
         (self.plan.version() == expected)
             .then_some(())
@@ -210,6 +248,14 @@ impl PlanDraft {
         self.check_version(expected)?;
         self.plan.approve()
     }
+}
+
+/// Identifiant du run d'un plan approuvé : dérivé de la session et de l'empreinte, il
+/// rend la création idempotente par la clé primaire. Un double clic, un clic rejoué après
+/// un redémarrage ou deux surfaces qui lancent le même plan retrouvent le même run.
+pub fn plan_run_id(session: &str, fingerprint: &str) -> String {
+    let digest = hex_sha256(format!("{session}\n{fingerprint}").as_bytes());
+    format!("r_plan_{}", &digest[..24])
 }
 
 #[derive(Clone)]
