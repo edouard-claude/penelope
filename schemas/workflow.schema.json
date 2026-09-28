@@ -424,6 +424,14 @@
             "type": "string"
           }
         },
+        "context": {
+          "type": "string",
+          "enum": [
+            "run",
+            "fresh"
+          ],
+          "description": "`agent` : `run` (défaut, la session du run) ou `fresh`, une session neuve par visite qui ne voit que sa consigne et les sorties rendues avant elle."
+        },
         "outputSchema": {
           "type": [
             "object",

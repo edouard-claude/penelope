@@ -234,6 +234,21 @@ pub fn validate(w: &Workflow, file_stem: Option<&str>, known: &Known) -> Report 
     r
 }
 
+/// Contexte d'une étape `agent` : celui du run, ou une session neuve (#191).
+fn check_context(r: &mut Report, s: &Step, path: &str) {
+    match (s.kind.as_str(), s.context.as_str()) {
+        (_, "") | ("agent", "run" | "fresh") => {}
+        ("agent", other) => r.error(
+            format!("{path}/context"),
+            format!("attendu `run` ou `fresh`, reçu `{other}`"),
+        ),
+        (kind, _) => r.error(
+            format!("{path}/context"),
+            format!("`context` ne vaut que pour une étape `agent`, pas `{kind}`"),
+        ),
+    }
+}
+
 fn validate_step(
     r: &mut Report,
     s: &Step,
@@ -410,6 +425,8 @@ fn validate_step(
         }
         _ => {}
     }
+
+    check_context(r, s, path);
 
     // Alias de modèle.
     if !s.model.is_empty()

@@ -201,6 +201,11 @@ pub struct Step {
     pub tools: Vec<String>,
     #[serde(rename = "outputSchema")]
     pub output_schema: Option<Value>,
+    /// `agent` : `run` (défaut, la session du run) ou `fresh` : une session neuve par
+    /// visite, qui ne voit ni la conversation du propriétaire ni les échanges des autres
+    /// étapes, seulement sa consigne et les sorties rendues avant elle (#191).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub context: String,
 
     // --- shell ---
     /// Chaîne, ou table par OS (`unix`, `macos`, `linux`, `windows`), §2.10.
@@ -280,6 +285,7 @@ impl Default for Step {
             nudge_prompt: String::new(),
             tools: Vec::new(),
             output_schema: None,
+            context: String::new(),
             command: Value::Null,
             cwd: String::new(),
             success_exit_codes: vec![0],

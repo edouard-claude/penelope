@@ -225,6 +225,48 @@ fn each_rule_names_its_path_and_its_fault() {
 }
 
 /// Le nom du fichier fait foi pour l'identifiant.
+/// #191 : `context` n'admet que `run` et `fresh`, et seulement sur une étape `agent`.
+#[test]
+fn context_is_run_or_fresh_on_an_agent_step_only() {
+    let cases: &[(&str, Mutation)] = &[
+        ("attendu `run` ou `fresh`", |w| {
+            second(
+                w,
+                Step {
+                    prompt: "résume".into(),
+                    context: "ailleurs".into(),
+                    ..step("agent")
+                },
+            )
+        }),
+        ("ne vaut que pour une étape `agent`", |w| {
+            w.steps[1].context = "fresh".into()
+        }),
+    ];
+    for (want, mutate) in cases {
+        let mut w = base();
+        mutate(&mut w);
+        let r = validate(&w, None, &known());
+        assert!(
+            r.errors()
+                .iter()
+                .any(|i| i.path == "/steps/1/context" && i.message.contains(want)),
+            "attendu « {want} », reçu : {:?}",
+            r.errors().iter().map(|i| i.to_string()).collect::<Vec<_>>()
+        );
+    }
+    let mut ok = base();
+    second(
+        &mut ok,
+        Step {
+            prompt: "résume".into(),
+            context: "fresh".into(),
+            ..step("agent")
+        },
+    );
+    assert!(validate(&ok, None, &known()).is_valid());
+}
+
 #[test]
 fn the_file_name_must_match_the_id() {
     let r = validate(&base(), Some("autre.workflow"), &known());

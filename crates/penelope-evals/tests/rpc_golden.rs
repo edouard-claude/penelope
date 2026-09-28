@@ -415,6 +415,8 @@ fn params_of(m: &str) -> Value {
         method::WF_RUN => json!({"id": "inconnu", "params": {}}),
         method::WF_TRACE => json!({"run": "r_inconnu"}),
         method::WF_CONTROL => json!({"run": "r_inconnu", "op": "pause"}),
+        method::WF_PLAN_SHOW => json!({"session": "s_inconnue"}),
+        method::WF_PLAN_GO => json!({"session": "s_inconnue", "version": 1, "fingerprint": "0"}),
         method::SCHEDULE_ADD => json!({
             "kind": "cron",
             "spec": {"expr": "0 9 * * 1"},

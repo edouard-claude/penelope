@@ -106,6 +106,9 @@ scenario_cases! {
     rpc_installation_skill => "rpc-installation-skill",
     // Trace des outils sur Telegram (#222) : une bulle, créée puis modifiée en place.
     trace_des_outils => "trace-des-outils",
+    // Plan approuvé exécuté en phases durables (#191), par Telegram puis par la RPC.
+    plan_en_phases => "plan-en-phases",
+    rpc_plans => "rpc-plans",
 }
 
 #[test]

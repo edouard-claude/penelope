@@ -116,13 +116,19 @@ impl StepCtx<'_> {
     }
 
     pub(super) async fn executor(&self) -> NativeToolExecutor {
+        self.executor_in(&self.run.session_id).await
+    }
+
+    /// Exécuteur des outils d'une étape qui parle dans `session` (la session neuve d'une
+    /// étape `context: fresh`, sinon celle du run).
+    pub(super) async fn executor_in(&self, session: &str) -> NativeToolExecutor {
         let d = self.d;
         let mut workspaces = vec![self.workdir()];
         workspaces.extend(penelope_executor::executor::default_workspaces(self.s()));
         let mut exec = NativeToolExecutor::new(
             d.services.clone(),
             ToolEnv {
-                session_id: self.run.session_id.clone(),
+                session_id: session.to_string(),
                 run_id: Some(self.run.id.clone()),
                 origin: origin_of(self.s(), &self.run.id).await,
                 workspaces,

@@ -129,8 +129,41 @@ impl RunStore {
         parent: Option<&str>,
         depth: u32,
     ) -> penelope_store::Result<Run> {
-        let run = Run {
-            id: format!("r_{}", penelope_kernel::ids::Ulid::new()),
+        let mut run = self.draft(
+            format!("r_{}", penelope_kernel::ids::Ulid::new()),
+            workflow,
+            session_id,
+            params,
+        );
+        run.workdir = workdir.map(String::from);
+        run.parent_run = parent.map(String::from);
+        run.depth = depth;
+        self.insert(run.clone()).await?;
+        Ok(run)
+    }
+
+    /// Crée un run de premier niveau sous un identifiant choisi par l'appelant, une seule
+    /// fois : si la ligne existe déjà, elle est rendue telle quelle avec `false`. Le run
+    /// d'un plan approuvé (#191) tient ainsi son unicité de la clé primaire.
+    pub async fn create_as(
+        &self,
+        id: &str,
+        workflow: &Workflow,
+        session_id: &str,
+        params: Value,
+    ) -> penelope_store::Result<(Run, bool)> {
+        let run = self.draft(id.to_string(), workflow, session_id, params);
+        let created = self.insert(run).await?;
+        let run = self
+            .get(id)
+            .await?
+            .ok_or_else(|| penelope_store::StoreError::other("run introuvable"))?;
+        Ok((run, created))
+    }
+
+    fn draft(&self, id: String, workflow: &Workflow, session_id: &str, params: Value) -> Run {
+        Run {
+            id,
             workflow_id: workflow.metadata.id.clone(),
             session_id: session_id.to_string(),
             params,
@@ -142,24 +175,28 @@ impl RunStore {
             iterations: 0,
             max_iterations: workflow.settings.max_iterations,
             step_outputs: json!({}),
-            workdir: workdir.map(String::from),
+            workdir: None,
             spent_usd: 0.0,
             spent_tokens: 0,
             started_at: self.clock.now_rfc3339(),
             finished_at: None,
             result: None,
             error: None,
-            parent_run: parent.map(String::from),
-            depth,
-        };
-        let row = run.clone();
+            parent_run: None,
+            depth: 0,
+        }
+    }
+
+    /// Insère la ligne ; `false` si un run de même identifiant existe déjà.
+    async fn insert(&self, row: Run) -> penelope_store::Result<bool> {
         self.store
             .write(move |tx| {
-                tx.execute(
+                let n = tx.execute(
                     "INSERT INTO workflow_runs(id, workflow_id, session_id, params, state,
                         current_step, phase, iterations, max_iterations, step_outputs, workdir,
                         started_at, updated_at, parent_run, depth)
-                     VALUES(?1,?2,?3,?4,'running',?5,?6,0,?7,'{}',?8,?9,?9,?10,?11)",
+                     VALUES(?1,?2,?3,?4,'running',?5,?6,0,?7,'{}',?8,?9,?9,?10,?11)
+                     ON CONFLICT(id) DO NOTHING",
                     params![
                         row.id,
                         row.workflow_id,
@@ -174,10 +211,9 @@ impl RunStore {
                         row.depth as i64
                     ],
                 )?;
-                Ok(())
+                Ok(n == 1)
             })
-            .await?;
-        Ok(run)
+            .await
     }
 
     pub async fn get(&self, run_id: &str) -> penelope_store::Result<Option<Run>> {

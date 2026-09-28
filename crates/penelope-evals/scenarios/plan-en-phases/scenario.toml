@@ -1,0 +1,66 @@
+name = "plan-en-phases"
+description = """Un plan approuvé exécuté en phases durables, par Telegram (#191, T3 de #185).
+Le propriétaire demande une correction ; le modèle propose un plan (`workflow_plan`),
+le propriétaire le fait réviser (v2, une vérification ajoutée). Le « Vas-y » de la
+carte v1 est un clic périmé : refusé, rien ne part. Celui de la v2 lance un seul run.
+Le pilote exécute la spécification dans une session neuve et s'arrête sur la carte
+d'OK ; le daemon redémarre au milieu : le pilote ne rejoue rien et ne renvoie pas la
+carte. « Continuer », puis les tests et leur carte ; « Laisse filer » : le code, une
+revue contradictoire qui refuse et renvoie au code, la reprise, la revue qui accepte et
+la vérification, sans autre carte d'OK. Un second clic sur « Vas-y (v2) » est déjà
+traité : aucun second run. Le monde : un run et son chemin, une session neuve par
+phase, où aucun agent n'a vu la conversation du propriétaire."""
+
+[config]
+"models.routing.classifier" = false
+
+[[observe]]
+name = "runs"
+sql = "SELECT workflow_id, state, current_step, iterations, error FROM workflow_runs ORDER BY started_at, rowid"
+
+[[observe]]
+name = "etapes"
+sql = "SELECT step_id, result FROM workflow_step_log ORDER BY id"
+
+[[steps]]
+kind = "telegram"
+text = "Corrige /stop pour qu'il arrête aussi le run en cours, et propose-moi un plan."
+
+[[steps]]
+kind = "telegram"
+text = "Ajoute une vérification finale par les tests."
+
+[[steps]]
+kind = "telegram"
+click = "Vas-y (v1)"
+
+[[steps]]
+kind = "telegram"
+click = "Vas-y (v2)"
+
+[[steps]]
+kind = "drive"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "drive"
+
+[[steps]]
+kind = "telegram"
+click = "Continuer"
+
+[[steps]]
+kind = "drive"
+
+[[steps]]
+kind = "telegram"
+click = "Laisse filer"
+
+[[steps]]
+kind = "drive"
+
+[[steps]]
+kind = "telegram"
+click = "Vas-y (v2)"

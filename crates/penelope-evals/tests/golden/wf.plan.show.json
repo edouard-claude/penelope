@@ -1,0 +1,12 @@
+{
+  "method": "wf.plan.show",
+  "params": {
+    "session": "s_inconnue"
+  },
+  "response": {
+    "error": {
+      "code": -32000,
+      "message": "string"
+    }
+  }
+}

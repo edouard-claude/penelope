@@ -1,0 +1,70 @@
+name = "rpc-plans"
+description = """Un plan approuvé piloté par la socket locale (#191) : le modèle propose un plan
+(`workflow_plan`), `wf.plan.show` le montre avec son empreinte. `wf.plan.go` avec une
+empreinte qui n'est pas celle du plan est refusé (clic périmé) ; avec la bonne, il
+approuve et lance un run, et rejoué, il rend le même run (`created` faux). Le pilote
+exécute la spécification et s'arrête sur la carte d'OK ; le daemon redémarre, puis
+`wf.control answer` répond « Laisse filer » : le code et la revue bouclent, la revue
+refuse trois fois et le run s'arrête à la limite de deux reprises, avec sa raison.
+`wf.plan.show` et `wf.trace` rendent ensuite le run bloqué et son chemin."""
+pin_model = "main"
+
+[[observe]]
+name = "runs"
+sql = "SELECT workflow_id, state, current_step, iterations, error FROM workflow_runs ORDER BY started_at, rowid"
+
+[[steps]]
+kind = "message"
+text = "Prépare un plan pour un rapport hebdomadaire des runs."
+
+[[steps]]
+kind = "rpc"
+method = "wf.plan.show"
+params = { session = "$session" }
+bind = "plan"
+pick = ["/fingerprint", "/draft/workflow_id", "/draft/plan/version", "/draft/plan/gate", "/draft/plan/steps", "/runs"]
+
+[[steps]]
+kind = "rpc"
+method = "wf.plan.go"
+params = { session = "$session", version = 1, fingerprint = "une-autre-revision" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "wf.plan.go"
+params = { session = "$session", version = 1, fingerprint = "$plan.fingerprint" }
+bind = "go"
+pick = ["/created", "/gate", "/version", "/run/id", "/run/workflow_id", "/run/state", "/run/current_step"]
+
+[[steps]]
+kind = "rpc"
+method = "wf.plan.go"
+params = { session = "$session", version = 1, fingerprint = "$plan.fingerprint" }
+pick = ["/created", "/run/id", "/run/state"]
+
+[[steps]]
+kind = "drive"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "rpc"
+method = "wf.control"
+params = { run = "$go.run.id", op = "answer", choice = "Laisse filer" }
+
+[[steps]]
+kind = "drive"
+
+[[steps]]
+kind = "rpc"
+method = "wf.plan.show"
+params = { session = "$session" }
+pick = ["/draft/plan/gate", "/runs/*/id", "/runs/*/state", "/runs/*/error"]
+
+[[steps]]
+kind = "rpc"
+method = "wf.trace"
+params = { run = "$go.run.id" }
+pick = ["/*/step", "/*/result"]

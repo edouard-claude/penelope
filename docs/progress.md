@@ -12,6 +12,35 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.16
+
+**Workflows : le plan approuvé s'exécute en phases durables (#191, T3 de #185).** Depuis
+#186, « Vas-y » ne faisait que marquer le plan prêt : rien ne l'exécutait, et le bouton
+ne portait que le numéro de version, qu'un plan suivant de la même conversation pouvait
+reprendre.
+
+- Le plan approuvé est compilé en workflow du moteur de runs : un pas, une étape `agent`
+  en `context: fresh` (session neuve par visite, sans l'historique du propriétaire), le
+  modèle choisi par phase ; un plan de deux pas sans juge reste à un seul agent. Carte
+  d'OK après la spécification, les tests et le code (« Continuer », « Laisse filer »,
+  « Arrêter ») ; revue et vérification renvoient au code au plus deux fois, puis arrêtent
+  le run avec sa raison. Le chemin est déplié à la compilation : l'étape courante dit où
+  en est le run.
+- « Vas-y (vN) » porte l'empreinte de la révision : un clic périmé est refusé. Le run
+  (`r_plan_…`) dérive de la session et de l'empreinte, sa ligne n'est insérée qu'une fois
+  (`RunStore::create_as`) : ni double clic ni reprise ne lancent un second run.
+  `wf.plan.show` et `wf.plan.go` en donnent l'équivalent par la socket. `/stop` met en
+  pause les runs des plans de la conversation.
+- Une étape `agent` journalise son préfixe comme un tour de chat : ce que le modèle lit
+  se replie du journal (épopée #208), et la reprise d'une visite après redémarrage ne
+  rejoue pas sa consigne.
+- Tests : compilation pure (gates, laisse filer, bornes, mono-agent, empreinte),
+  orchestrateur (clic périmé, un seul run, contexte neuf, redémarrage pendant un agent et
+  entre deux phases, refus), passerelle (`Vas-y`, `/stop`), scénarios `plan-en-phases`
+  (Telegram) et `rpc-plans` (RPC), avec l'étape `drive` du harnais.
+
+Closes #191.
+
 ### 1.0.15
 
 `penelope secret set` en SSH échouait sur l'instance réelle : « écriture dans le Trousseau

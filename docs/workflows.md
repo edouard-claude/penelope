@@ -154,7 +154,7 @@ par identifiant.
 
 | Type | Champs propres | Ce qu'il fait |
 |---|---|---|
-| `agent` | `prompt` (obligatoire), `nudgePrompt`, `model`, `tools`, `agentId` | Un tour d'agent dans la session du run |
+| `agent` | `prompt` (obligatoire), `nudgePrompt`, `model`, `tools`, `agentId`, `context` | Un tour d'agent dans la session du run, ou dans une session neuve (`context: fresh`) |
 | `sub_agent` | `prompt` (obligatoire), `outputSchema`, `subAgentType` | Un sous-agent isolé qui rend une sortie structurée |
 | `shell` | `command` (obligatoire), `cwd`, `successExitCodes`, `network` | Une commande, sous bac à sable ; réseau coupé sauf `network: true` (montré dans l'aperçu) ou `sandbox.shell_network` |
 | `tool` | `tool` (obligatoire), `args` | Un outil natif ou MCP, arguments validés contre son schéma |
@@ -163,6 +163,13 @@ par identifiant.
 | `workflow` | `workflowId` (obligatoire), `params` | Un sous-workflow, profondeur bornée |
 | `wait` | `on` | Attend un événement, un cron, un délai ou une tâche MCP |
 | `verify` | `verifier` ou `checks`, `criteriaKey` | Vérifications mécaniques puis jugement du modèle ; `project_tests` relit la commande validée dans `session_metadata.verification`, sinon celle de `project` |
+
+`context: fresh` donne à chaque visite de l'étape une session neuve, fille de celle du
+run : l'agent ne voit ni la conversation du propriétaire ni les échanges des autres
+étapes, seulement sa consigne, le brief et les sorties (`content` de `return_value`)
+rendues avant lui, les six dernières. Une reprise après redémarrage retrouve la session
+de la visite et continue la conversation, sans rejouer la consigne. Le préfixe de toute
+étape `agent` entre au journal comme celui d'un tour de chat.
 
 Les enfants d'un `parallel` sont limités à `sub_agent`, `shell` et `tool` : un `agent` ou
 un `user` en parallèle rendrait la conversation incompréhensible.
@@ -431,12 +438,54 @@ Telegram ; les questions d'une étape `user` arrivent avec leurs boutons.
 En conversation Telegram, Pénélope complète les paramètres avec ses outils, demande
 ce qui manque, puis propose un plan avec `workflow_plan` (`goal`, `steps`, `params`,
 `brief`). Les corrections et retours arrière créent de nouvelles versions. Une carte
-dans le sujet d'origine montre le plan et son bouton « Vas-y ». Ce clic persiste l'état
-approuvé ; l'exécution de ce plan viendra avec T3 de #185. Le lancement direct avec
+dans le sujet d'origine montre le plan et son bouton « Vas-y (vN) ». Ce clic approuve la
+révision montrée et lance son run (section suivante). Le lancement direct avec
 `workflow_start` est refusé dans une conversation Telegram. `/run <id>` passe toujours
 par cette conversation, même quand des paramètres sont fournis. La CLI et les runs
 techniques continuent d'utiliser le moteur existant. Une nouvelle demande dans la même
-session conserve le plan approuvé précédent pour T3.
+session conserve le plan approuvé précédent, et son run.
+
+## Plan approuvé exécuté en phases
+
+Un plan approuvé (#191, T3 de #185) est compilé en workflow du moteur de runs, puis
+exécuté comme n'importe quel run : durable, repris au redémarrage, piloté par
+`wf control`, arrêté par `/stop`.
+
+- **Rien avant « vas-y ».** Un plan en revue ne compile pas. « Vas-y » porte la version
+  et l'**empreinte** de la révision montrée (but, pas, version, paramètres, brief) ; un
+  bouton d'une autre révision est refusé comme clic périmé.
+- **Un seul run par plan.** L'identifiant du run (`r_plan_…`) dérive de la session et de
+  l'empreinte : un double clic, un clic rejoué après un redémarrage ou `wf.plan.go`
+  rendent le même run. La définition compilée (`plan-<empreinte>`), le lien vers le plan,
+  l'origine et le brief sont écrits avant la ligne du run.
+- **Une phase, un agent à contexte neuf.** Chaque pas devient une étape `agent` en
+  `context: fresh`. L'orchestrateur choisit le modèle par phase, résolu sur la
+  configuration au lancement : `reasoning` pour spécifier et relire, le rôle `code` pour
+  les tests et le code, `main` pour vérifier. Un plan de deux pas au plus, sans revue ni
+  vérification, reste à **un seul agent**.
+- **Cartes d'OK.** À la fin de la spécification, des tests et du code, une étape `user`
+  montre la sortie de la phase : « Continuer », « Laisse filer » ou « Arrêter ». « Laisse
+  filer » saute les cartes d'OK ordinaires qui suivent, jamais un point dur : le gate
+  « vas-y » est avant le run, la limite de reprises arrête le run, et les gates de PR et
+  de production (#192, #193) n'en seront pas. « Arrêter » bloque le run avec sa raison ;
+  rien ne le relance seul.
+- **Revue contradictoire bornée.** Une revue ou une vérification rend `passed` ou `failed`
+  par `return_value`. `failed` renvoie au début du dernier bloc de code, au plus deux
+  fois ; la troisième fois, le run s'arrête (« limite de 2 reprises atteinte »). Le budget
+  et les itérations du workflow d'origine bornent le reste.
+
+Tout le chemin est déplié à la compilation : l'identifiant d'étape porte le numéro de
+reprise et « laisse filer » (`e3-code-r1-libre`, `ok-e1`), si bien que la ligne du run
+suffit à savoir où il en est. `wf.plan.show` rend le plan, son empreinte et ses runs ;
+`wf.plan.go` est le « vas-y » de la socket.
+
+```
+  e1-spec ─► ok-e1 ─Continuer─► e2-tests ─► ok-e2 ─► e3-code ─► ok-e3 ─► e4-revue ─passed─► $done
+               │                                                          │
+               └─Laisse filer─► e2-tests-libre ─► e3-code-libre ─► …      └─failed─► e3-code-r1 ─► …
+```
+
+Rejouer : `cargo test -p penelope-evals --test scenarios plan_en_phases rpc_plans`.
 
 ## Limites actuelles
 
@@ -444,5 +493,7 @@ session conserve le plan approuvé précédent pour T3.
   les commandes viennent des cibles `make`.
 - Une tâche MCP n'est suivie qu'une fois connue de l'étape `wait` : un appel d'outil qui
   rend une tâche n'enregistre rien tout seul.
+- Un run de plan approuvé s'arrête après sa vérification : la PR dev, la CI et les E2E
+  externes viennent avec #192, le gate de production avec #193.
 
 Voir [progress.md](progress.md).

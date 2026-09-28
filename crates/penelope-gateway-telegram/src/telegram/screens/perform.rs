@@ -216,20 +216,45 @@ impl TelegramGateway {
                 let version = p["version"]
                     .as_u64()
                     .ok_or_else(|| anyhow::anyhow!("version manquante"))?;
-                let plans = penelope_workflow::plan::PlanStore::new(s.store.clone());
-                let mut draft = plans
-                    .get(&session)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("plan introuvable"))?;
-                let previous = draft.clone();
-                draft.approve(version).map_err(|e| anyhow::anyhow!("{e}"))?;
-                plans.replace(&session, &previous, &draft).await?;
+                let origin = penelope_app::bus::Origin::Telegram {
+                    chat_id,
+                    topic_id,
+                    message_id: None,
+                };
+                // Une carte d'avant l'empreinte (0.17.56) ne porte que la version : elle
+                // ne vaut que pour la révision courante de ce numéro.
+                let fingerprint = match p["fingerprint"].as_str() {
+                    Some(f) => f.to_string(),
+                    None => penelope_workflow::plan::PlanStore::new(s.store.clone())
+                        .get(&session)
+                        .await?
+                        .filter(|draft| draft.plan.version() == version)
+                        .map(|draft| draft.fingerprint())
+                        .unwrap_or_default(),
+                };
+                let launched = penelope_orchestrator::workflow::go_plan(
+                    &penelope_daemon::workflow::context_of(d),
+                    &session,
+                    version,
+                    &fingerprint,
+                    &origin,
+                )
+                .await
+                .map_err(anyhow::Error::msg)?;
+                let plan = &launched.draft.plan;
+                let verb = if launched.created {
+                    "lancé"
+                } else {
+                    "déjà lancé"
+                };
                 Done::note(
                     "Plan approuvé",
                     format!(
-                        "✅ Plan v{} de « {} » approuvé et conservé. Prêt pour l'exécution par la prochaine tranche.",
-                        draft.plan.version(),
-                        draft.plan.goal()
+                        "✅ Plan v{} de « {} » approuvé : run `{}` {verb}. Une carte d'OK \
+                         suivra chaque phase ; `/stop` l'arrête.",
+                        plan.version(),
+                        plan.goal(),
+                        launched.run.id,
                     ),
                 )
             }

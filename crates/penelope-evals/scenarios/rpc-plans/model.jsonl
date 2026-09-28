@@ -1,0 +1,16 @@
+{"tool_calls": {"text": "", "calls": [{"id": "p1", "name": "workflow_plan", "arguments": {"id": "build-verify", "goal": "Rapport hebdomadaire des runs", "steps": [{"phase": "specification", "title": "Définir le format du rapport"}, {"phase": "implementation", "title": "Écrire le rapport"}, {"phase": "review", "title": "Relire le rapport"}], "params": {"objectif": "rapport"}}}]}}
+{"text": "Plan v1 proposé ; il attend ton « vas-y »."}
+{"tool_calls": {"text": "", "calls": [{"id": "sa", "name": "return_value", "arguments": {"result": "completed", "content": "SPEC : un tableau par workflow, runs et coût."}}, {"id": "sb", "name": "step_done", "arguments": {}}]}}
+{"text": "Spécification rendue."}
+{"tool_calls": {"text": "", "calls": [{"id": "ca", "name": "return_value", "arguments": {"result": "completed", "content": "RAPPORT v1"}}, {"id": "cb", "name": "step_done", "arguments": {}}]}}
+{"text": "Rapport rendu."}
+{"tool_calls": {"text": "", "calls": [{"id": "ra", "name": "return_value", "arguments": {"result": "failed", "content": "REVUE : le coût manque."}}, {"id": "rb", "name": "step_done", "arguments": {}}]}}
+{"text": "Revue rendue."}
+{"tool_calls": {"text": "", "calls": [{"id": "c2a", "name": "return_value", "arguments": {"result": "completed", "content": "RAPPORT v2"}}, {"id": "c2b", "name": "step_done", "arguments": {}}]}}
+{"text": "Rapport repris."}
+{"tool_calls": {"text": "", "calls": [{"id": "r2a", "name": "return_value", "arguments": {"result": "failed", "content": "REVUE : le coût est faux."}}, {"id": "r2b", "name": "step_done", "arguments": {}}]}}
+{"text": "Revue rendue."}
+{"tool_calls": {"text": "", "calls": [{"id": "c3a", "name": "return_value", "arguments": {"result": "completed", "content": "RAPPORT v3"}}, {"id": "c3b", "name": "step_done", "arguments": {}}]}}
+{"text": "Rapport repris."}
+{"tool_calls": {"text": "", "calls": [{"id": "r3a", "name": "return_value", "arguments": {"result": "failed", "content": "REVUE : toujours faux."}}, {"id": "r3b", "name": "step_done", "arguments": {}}]}}
+{"text": "Revue rendue."}

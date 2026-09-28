@@ -116,6 +116,34 @@ impl Rpc {
                 .await?;
                 Ok(json!({"state": state.as_str()}))
             }
+            method::WF_PLAN_SHOW => {
+                let session = required_str(p, "session")?;
+                let draft = penelope_workflow::plan::PlanStore::new(s.store.clone())
+                    .get(&session)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("plan introuvable pour la session `{session}`")
+                    })?;
+                let runs = penelope_orchestrator::workflow::plan_runs_of(s, &session).await?;
+                Ok(json!({"fingerprint": draft.fingerprint(), "draft": draft, "runs": runs}))
+            }
+            method::WF_PLAN_GO => {
+                let session = required_str(p, "session")?;
+                let version = p["version"]
+                    .as_u64()
+                    .ok_or_else(|| anyhow::anyhow!("paramètre `version` manquant"))?;
+                let launched = penelope_orchestrator::workflow::go_plan(
+                    &context_of(&self.daemon),
+                    &session,
+                    version,
+                    &required_str(p, "fingerprint")?,
+                    &penelope_app::helpers::owner_origin_of(s),
+                )
+                .await
+                .map_err(anyhow::Error::msg)?;
+                Ok(json!({"run": launched.run, "created": launched.created,
+                          "version": version, "gate": launched.draft.plan.gate()}))
+            }
             method::SCHEDULE_LIST => Ok(json!(penelope_orchestrator::scheduler::listing(s).await?)),
             // Nouvelle destination, sans recréer la planification (#124) : `private`, ou
             // `chat_id` et `topic_id`.
