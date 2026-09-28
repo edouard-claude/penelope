@@ -280,8 +280,9 @@ fn workflow_validate_works_without_a_daemon() {
     );
 }
 
-/// `secret set` doit vivre hors du RPC : une installation neuve se configure
-/// avant le premier démarrage du daemon.
+/// `secret set` ne passe pas par la table de routage : une installation neuve se
+/// configure avant le premier démarrage du daemon, et la commande choisit elle-même
+/// entre le daemon et l'écriture directe (#252).
 #[test]
 fn setting_a_secret_never_goes_through_the_rpc() {
     let c = parse(&["secret", "set", "openrouter_api_key"]);
@@ -310,15 +311,170 @@ async fn a_secret_value_on_the_command_line_is_refused_with_guidance() {
     );
 }
 
-#[test]
-fn a_secret_name_must_be_a_slug() {
+#[tokio::test]
+async fn a_secret_name_must_be_a_slug() {
     let cli = parse(&["--home", "/srv/pen", "secret", "set", "pas un nom"]);
     let name = match &cli.command {
         Command::Secret(SecretCmd::Set { name, .. }) => name.clone(),
         other => panic!("{other:?}"),
     };
-    let e = set_secret(&cli, name).unwrap_err();
+    let e = set_secret(&cli, name).await.unwrap_err();
     assert!(e.to_string().contains("nom de secret invalide"), "{e}");
+}
+
+/// Magasin de test pour `secret set` : garde les noms écrits, ou refuse comme un
+/// Trousseau verrouillé (`security` en code 36).
+struct FakeStore {
+    locked: bool,
+    written: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+}
+
+impl penelope_platform::SecretStore for FakeStore {
+    fn backend(&self) -> String {
+        "faux magasin".into()
+    }
+    fn get(&self, _: &str) -> penelope_platform::Result<Option<String>> {
+        Ok(None)
+    }
+    fn set(&self, name: &str, value: &str) -> penelope_platform::Result<()> {
+        if self.locked {
+            return Err(penelope_platform::PlatformError::SecretLocked(
+                "écriture dans le Trousseau refusée (security, code 36)".into(),
+            ));
+        }
+        self.written
+            .lock()
+            .unwrap()
+            .push((name.into(), value.into()));
+        Ok(())
+    }
+    fn delete(&self, _: &str) -> penelope_platform::Result<()> {
+        Ok(())
+    }
+    fn list(&self) -> penelope_platform::Result<Vec<String>> {
+        Ok(vec![])
+    }
+}
+
+/// Faux daemon : répond à chaque requête reçue sur la socket et la garde.
+fn fake_daemon(
+    sock: &std::path::Path,
+) -> (
+    tokio::task::JoinHandle<()>,
+    std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let listener = tokio::net::UnixListener::bind(sock).unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let task = tokio::spawn(async move {
+        while let Ok((s, _)) = listener.accept().await {
+            let (read, mut write) = s.into_split();
+            let Ok(Some(line)) = BufReader::new(read).lines().next_line().await else {
+                continue;
+            };
+            let req: Value = serde_json::from_str(&line).unwrap();
+            let result = match req["method"].as_str() {
+                Some(m::SECRET_SET) => json!({"name": req["params"]["name"], "stored": true}),
+                Some(m::SECRET_BACKEND) => json!({"backend": "Trousseau du daemon"}),
+                other => panic!("méthode inattendue : {other:?}"),
+            };
+            log.lock().unwrap().push(req.clone());
+            let resp = json!({"jsonrpc": "2.0", "id": req["id"], "result": result});
+            write
+                .write_all(format!("{resp}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+    });
+    (task, seen)
+}
+
+/// #252 : en SSH, le Trousseau est verrouillé pour la CLI mais pas pour le daemon lancé
+/// par launchd. Quand le daemon répond, c'est lui qui écrit ; rien n'est écrit en direct
+/// et la valeur n'apparaît pas dans la sortie.
+#[tokio::test]
+async fn a_running_daemon_stores_the_secret_itself() {
+    let dir = tempfile::Builder::new()
+        .prefix("pnl")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let sock = dir.path().join("rpc.sock");
+    let (daemon, seen) = fake_daemon(&sock);
+    let value = "jeton-tres-secret-0123456789";
+
+    let out = store_secret(&sock, "ent1_identifiant", value, || {
+        panic!("le daemon répond : aucune écriture directe")
+    })
+    .await
+    .unwrap();
+
+    let seen = seen.lock().unwrap().clone();
+    let set = seen
+        .iter()
+        .find(|r| r["method"] == m::SECRET_SET)
+        .expect("secret.set reçu");
+    assert_eq!(set["params"]["name"], "ent1_identifiant");
+    assert_eq!(set["params"]["value"], value);
+    assert_eq!(out["via"], "daemon");
+    assert_eq!(out["backend"], "Trousseau du daemon");
+    assert_eq!(out["bytes"], value.len());
+    assert!(!out.to_string().contains(value), "{out}");
+    daemon.abort();
+}
+
+/// Sans daemon (installation neuve, service arrêté), la commande écrit elle-même comme
+/// avant #252.
+#[tokio::test]
+async fn without_a_daemon_the_secret_is_written_directly() {
+    let dir = tempfile::tempdir().unwrap();
+    let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let store = FakeStore {
+        locked: false,
+        written: written.clone(),
+    };
+    let value = "jeton-tres-secret-0123456789";
+
+    let out = store_secret(&dir.path().join("rpc.sock"), "essai", value, || {
+        Ok(Box::new(store))
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(
+        *written.lock().unwrap(),
+        vec![("essai".to_string(), value.to_string())]
+    );
+    assert_eq!(out["via"], "direct");
+    assert_eq!(out["backend"], "faux magasin");
+    assert!(!out.to_string().contains(value), "{out}");
+}
+
+/// #252 : sans daemon et Trousseau verrouillé, le message dit quoi faire au lieu de
+/// s'arrêter au code de `security`.
+#[tokio::test]
+async fn a_locked_keychain_without_daemon_says_what_to_do() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = FakeStore {
+        locked: true,
+        written: Default::default(),
+    };
+    let value = "jeton-tres-secret-0123456789";
+
+    let e = store_secret(&dir.path().join("rpc.sock"), "essai", value, || {
+        Ok(Box::new(store))
+    })
+    .await
+    .unwrap_err();
+
+    let msg = e.to_string();
+    assert!(msg.contains("code 36"), "{msg}");
+    assert!(msg.contains("penelope start"), "{msg}");
+    assert!(
+        msg.contains("security unlock-keychain ~/Library/Keychains/login.keychain-db"),
+        "{msg}"
+    );
+    assert!(!msg.contains(value), "{msg}");
 }
 
 /// #124 : `penelope schedule move` vise une conversation ou la conversation privée,

@@ -373,8 +373,10 @@ pub enum SecretCmd {
     /// standard si elle est redirigée.
     ///
     /// Elle n'est jamais un argument de la ligne de commande : elle resterait dans
-    /// l'historique du shell et serait visible dans `ps`. Fonctionne **sans daemon**,
-    /// pour qu'une installation neuve puisse être configurée avant le premier démarrage.
+    /// l'historique du shell et serait visible dans `ps`. Quand le daemon répond, c'est
+    /// lui qui écrit (il a accès au Trousseau, verrouillé en SSH) ; sinon la commande
+    /// écrit elle-même, pour qu'une installation neuve soit configurée avant le premier
+    /// démarrage.
     ///
     /// En SSH, coller la valeur à l'invite : `pbpaste` lirait le presse-papiers distant.
     Set {

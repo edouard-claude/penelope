@@ -393,3 +393,29 @@ fn keychain_holds_a_long_secret_and_forgets_it() {
     assert_eq!(store.get(name).unwrap(), None);
     assert!(store.list().unwrap().is_empty());
 }
+
+/// #252 : en SSH, le Trousseau de connexion est verrouillé pour le processus et
+/// `security` sort en 36. L'erreur est typée pour que la CLI dise quoi faire ; un autre
+/// refus reste une erreur ordinaire.
+#[test]
+fn a_locked_keychain_is_a_typed_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let write_fake = |name: &str, code: i32| {
+        let fake = dir.path().join(name);
+        std::fs::write(&fake, format!("#!/bin/sh\ncat >/dev/null\nexit {code}\n")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        fake
+    };
+    let value = "jeton-tres-secret-0123456789";
+
+    let locked = KeychainStore::with_program(dir.path(), &write_fake("verrouille", 36));
+    let err = locked.set("essai", value).unwrap_err();
+    assert!(matches!(err, PlatformError::SecretLocked(_)), "{err:?}");
+    let text = err.to_string();
+    assert!(text.contains("code 36") && !text.contains(value), "{text}");
+
+    let refused = KeychainStore::with_program(dir.path(), &write_fake("refuse", 1));
+    let err = refused.set("essai", value).unwrap_err();
+    assert!(matches!(err, PlatformError::Secret(_)), "{err:?}");
+}

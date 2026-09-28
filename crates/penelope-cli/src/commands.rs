@@ -18,6 +18,8 @@ use interactive::{chat, model_auth, onboard};
 #[cfg(test)]
 use logs::filter_log_lines;
 use logs::logs;
+#[cfg(test)]
+use offline::store_secret;
 use offline::{doctor, eval_local, paths, service, set_secret, validate_config, validate_workflow};
 use penelope_kernel::api::method as m;
 use render::*;
@@ -60,7 +62,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
                      générer une nouvelle (pour un bot : /revoke chez @BotFather)"
                 )));
             }
-            return set_secret(&cli, name.clone());
+            return set_secret(&cli, name.clone()).await;
         }
         Command::Install | Command::Uninstall | Command::Start | Command::Stop => {
             return service(&cli);

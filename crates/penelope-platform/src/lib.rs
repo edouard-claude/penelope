@@ -33,7 +33,7 @@ pub use image::ImageShrinker;
 pub use power::{PowerManager, SleepGuard};
 pub use process::{ProcessHost, ProcessSpec, UnixProcessHost, which};
 pub use sandbox::{Coverage, Profile, ProfileKind, Sandbox};
-pub use secrets::{MemorySecretStore, SecretStore, validate_secret_name};
+pub use secrets::{KEYCHAIN_UNLOCK_COMMAND, MemorySecretStore, SecretStore, validate_secret_name};
 pub use service::{ServiceManager, ServiceStatus};
 
 use std::path::PathBuf;
@@ -55,6 +55,11 @@ pub enum PlatformError {
 
     #[error("secrets : {0}")]
     Secret(String),
+
+    /// Trousseau verrouillé pour ce processus (`security` sort en 36), typiquement en
+    /// SSH : l'appelant peut proposer une autre voie (#252).
+    #[error("secrets : {0}")]
+    SecretLocked(String),
 
     #[error("service : {0}")]
     Service(String),

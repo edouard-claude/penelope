@@ -56,6 +56,10 @@ pub fn native_directories() -> Result<Box<dyn Directories>> {
 /// Chemin du binaire du Trousseau.
 const SECURITY: &str = "/usr/bin/security";
 
+/// Code de sortie de `security` quand le Trousseau est verrouillé pour le processus :
+/// constaté en SSH sur l'instance réelle (#252).
+const LOCKED_EXIT: i32 = 36;
+
 /// Trousseau macOS piloté par `/usr/bin/security` (exécutable, jamais un shell).
 pub struct KeychainStore {
     account: String,
@@ -163,11 +167,16 @@ impl KeychainStore {
             .wait_with_output()
             .map_err(|e| PlatformError::Secret(format!("security : {e}")))?;
         if !out.status.success() {
-            return Err(PlatformError::Secret(format!(
-                "écriture dans le Trousseau refusée (security, code {}) ; trousseau \
-                 verrouillé, ou item protégé par une autre application",
-                out.status.code().unwrap_or(-1)
-            )));
+            let code = out.status.code().unwrap_or(-1);
+            let message = format!(
+                "écriture dans le Trousseau refusée (security, code {code}) ; trousseau \
+                 verrouillé, ou item protégé par une autre application"
+            );
+            return Err(if code == LOCKED_EXIT {
+                PlatformError::SecretLocked(message)
+            } else {
+                PlatformError::Secret(message)
+            });
         }
         Ok(())
     }
