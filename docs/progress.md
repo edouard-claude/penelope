@@ -54,7 +54,30 @@ montré trois défauts, et la suite locale un quatrième.
   `rpc-inference-locale` ; suite `live-local` (tour, outil exécuté, deux tours avec le
   premier jeton, repli) verte contre `mlx_lm.server` et Qwen3-1.7B.
 
+**Inférence locale : un modèle local homonyme d'un modèle d'OpenRouter en prenait
+l'entrée, et le prix (#259).** Le catalogue rangeait tous les modèles sous leur
+identifiant nu : le catalogue d'un serveur local qui sert `qwen/qwen3-8b` (LM Studio)
+écrasait l'entrée d'OpenRouter, et le coût d'un appel se lisait sous le nom rendu par le
+serveur, au prix d'OpenRouter quand il coïncidait.
+
+- Les modèles d'un endpoint local sont rangés à part dans le catalogue. Un identifiant
+  `local:` ou `openai_compat:` ne lit que ceux-là ; `openrouter:` ou `codex:` jamais ; un
+  identifiant nu d'abord OpenRouter, puis le modèle local. Le rafraîchissement
+  d'OpenRouter garde les modèles locaux. Le coût d'un appel se lit chez le fournisseur
+  qui l'a servi.
+- Les lectures du catalogue (fenêtre de compaction, prix du résumeur, outils d'un alias,
+  `self_status`, rêve, vault) passent l'identifiant complet au lieu de le dénuder : un
+  alias local y lit sa propre fenêtre.
+- Replis : la liste `models` confiée à OpenRouter ne contient que des modèles
+  d'OpenRouter, dès le plan de relance (le corps les filtrait déjà) ; un repli local
+  derrière un modèle d'OpenRouter est joué par la boucle après l'échec.
+- Documentation : le tableau mémoire et taille de modèle est dit estimation, pas mesure.
+- Tests : collision au catalogue dans les deux sens, coût nul d'un appel local homonyme
+  (corps capturé rejoué), plan de relance, repli de bout en bout d'OpenRouter en panne
+  vers un faux serveur local.
+
 Closes #259.
+
 
 ### 1.0.21
 

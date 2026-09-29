@@ -7,7 +7,6 @@
 use base64::Engine;
 use penelope_app::ports::ProviderSource;
 use penelope_app::services::Services;
-use penelope_llm::catalog::strip_provider;
 use penelope_llm::provider::{CancelToken, collect_stream};
 use penelope_llm::types::{ChatMessage, ChatRequest, Content};
 use serde_json::{Value, json};
@@ -28,7 +27,7 @@ pub async fn generate(
         .alias_model(&alias)
         .ok_or_else(|| format!("aucun modèle pour l'alias `{alias}` du rôle `image_generate`"))?
         .to_string();
-    if let Some(info) = s.catalog.get(strip_provider(&model))
+    if let Some(info) = s.catalog.get(&model)
         && !info.output_modalities.iter().any(|m| m == "image")
     {
         return Err(format!(

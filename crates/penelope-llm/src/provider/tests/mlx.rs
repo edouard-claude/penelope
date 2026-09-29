@@ -252,3 +252,48 @@ async fn served_models_are_read_without_the_catalog() {
         .unwrap_err();
     assert_eq!(e.kind, LlmErrorKind::Transient);
 }
+
+/// #259 : un serveur local qui sert un modèle au nom d'un modèle d'OpenRouter
+/// (`qwen/qwen3-8b` chez LM Studio) ne prend pas son prix : l'appel local coûte 0 $,
+/// et l'entrée d'OpenRouter garde son prix après le catalogue du serveur.
+#[tokio::test]
+async fn a_local_model_named_like_an_openrouter_one_costs_nothing() {
+    let catalog = Catalog::new();
+    let mut routed = crate::catalog::ModelInfo::minimal("qwen/qwen3-8b", "openrouter", 40_960);
+    routed.price_prompt = 1e-6;
+    routed.price_completion = 2e-6;
+    catalog.replace(vec![routed], 1);
+    let served = r#"{"data":[{"id":"qwen/qwen3-8b"}]}"#;
+    let sse = QWEN3_TEXT.replace("mlx-community/Qwen3-1.7B-4bit", "qwen/qwen3-8b");
+    let (url, _) = routed_server(vec![
+        ("/models", json_response("200 OK", served)),
+        ("/chat/completions", sse_response(&sse)),
+    ])
+    .await;
+    let p = OpenAiCompatProvider::new(url, "", catalog.clone()).unwrap();
+    p.fetch_models().await.unwrap();
+    assert_eq!(
+        catalog
+            .get("openrouter:qwen/qwen3-8b")
+            .unwrap()
+            .price_prompt,
+        1e-6,
+        "l'entrée d'OpenRouter n'est pas écrasée"
+    );
+    let model = "local:qwen/qwen3-8b";
+    let rx = p
+        .chat_stream(
+            ChatRequest {
+                model: model.into(),
+                messages: vec![ChatMessage::user("x")],
+                ..Default::default()
+            },
+            CancelToken::new(),
+        )
+        .await
+        .unwrap();
+    let r = collect_stream(rx, model, p.name(), &catalog).await.unwrap();
+    assert_eq!(r.model, "qwen/qwen3-8b");
+    assert!(r.usage.prompt > 0);
+    assert_eq!(r.cost_usd, 0.0, "pas le prix d'OpenRouter");
+}

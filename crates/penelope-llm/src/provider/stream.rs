@@ -235,7 +235,7 @@ pub async fn collect_stream_observed(
         Some(c) => (c, false),
         None => (
             catalog
-                .get(&actual_model)
+                .get_served(provider, &actual_model)
                 .map(|i| i.cost(&usage))
                 .unwrap_or(0.0),
             true,

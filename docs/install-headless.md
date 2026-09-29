@@ -860,8 +860,9 @@ python3 -m venv ~/mlx && ~/mlx/bin/pip install mlx-lm
 **Choisir le modèle selon la mémoire.** En 4 bits, les poids pèsent environ 0,55 Go par
 milliard de paramètres (mesuré : Qwen3-1.7B, 0,94 Go ; Llama-3.2-1B, 0,68 Go). Il faut
 laisser de la place au cache du contexte (qui grandit avec la conversation), à macOS et à
-Pénélope : viser des poids sous la moitié de la mémoire unifiée. Estimations tirées de
-cette règle, pas de mesures :
+Pénélope : viser des poids sous la moitié de la mémoire unifiée. **Le tableau qui suit est
+une estimation calculée avec cette règle, pas une mesure** : aucun de ces modèles n'a été
+chargé sur ces machines, et seul le MacBook Air M2 de 24 Go des chiffres plus bas a servi.
 
 | Mémoire | Poids visés (4 bits) | Taille de modèle |
 |---|---|---|
@@ -920,11 +921,17 @@ models = ["mlx-community/Qwen3-8B-4bit"]
 penelope local install mlx-community/Qwen3-8B-4bit --endpoint mlx --server ~/mlx/bin/mlx_lm.server
 ```
 
+Un serveur local peut nommer un modèle comme OpenRouter (`qwen/qwen3-8b` chez LM
+Studio) : le catalogue range les modèles locaux à part, un alias `local:` ne prend jamais
+le prix ni la fenêtre du modèle d'OpenRouter homonyme, et un appel local compte 0 $.
+
 **Rôles et repli.** Un modèle local plus faible dégrade la qualité sans le dire : on peut
 n'affecter en local que certains rôles (`fast` pour le classifieur et la revue de mémoire,
 `summarizer` pour la compaction) et garder `main` chez OpenRouter, ou l'inverse. Le repli
 d'un alias local vers OpenRouter se déclare comme les autres ; il joue quand le serveur est
-arrêté ou en erreur avant le premier jeton :
+arrêté ou en erreur avant le premier jeton. L'inverse marche aussi : derrière un modèle
+d'OpenRouter, un repli local n'entre pas dans la liste de repli qu'OpenRouter gère
+lui-même (elle ne contient que ses modèles) ; Pénélope le joue quand OpenRouter a échoué.
 
 ```bash
 penelope model set cloud openrouter:deepseek/deepseek-v4-flash

@@ -179,7 +179,7 @@ async fn summarise(
     turn_id: Option<&str>,
 ) -> Result<(Value, f64), SummaryFailure> {
     let s = &d.services;
-    let info = s.catalog.get(strip_provider(model));
+    let info = s.catalog.get(model);
     let effort = info.as_ref().and_then(|i| i.lightest_effort());
     let structured = info
         .as_ref()

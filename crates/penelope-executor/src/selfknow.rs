@@ -298,7 +298,7 @@ async fn model_sections(
 ) {
     let routing = &cfg.models.routing;
     let model_view = |id: &str| {
-        let info = s.catalog.get(penelope_llm::catalog::strip_provider(id));
+        let info = s.catalog.get(id);
         json!({
             "id": id,
             "known_in_catalog": if s.catalog.is_empty() { Value::Null } else { json!(info.is_some()) },

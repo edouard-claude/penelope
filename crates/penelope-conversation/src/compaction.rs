@@ -325,11 +325,7 @@ pub async fn last_prompt(s: &Services, session_id: &str) -> Option<(u64, i64)> {
 /// Seuil de la compaction de fond pour le modèle de conversation d'une session.
 pub fn background_threshold(s: &Services, model_id: &str) -> u64 {
     let cfg = s.config.config();
-    let params = CompactionParams::from_config(
-        &cfg,
-        s.catalog.window_of(strip_provider(model_id)),
-        model_id,
-    );
+    let params = CompactionParams::from_config(&cfg, s.catalog.window_of(model_id), model_id);
     params.background_threshold_tokens(params.background_margin)
 }
 
@@ -525,12 +521,9 @@ async fn compact_inner(
     let model = penelope_app::codex_scope::background(&d.services, &model, "compaction").await;
     let provider = d.provider_for(&model).await.map_err(anyhow::Error::msg)?;
     let conversation = conversation_model(d, session_id).await;
-    let params = CompactionParams::from_config(
-        &cfg,
-        s.catalog.window_of(strip_provider(&conversation)),
-        &conversation,
-    );
-    let window = s.catalog.window_of(strip_provider(&model));
+    let params =
+        CompactionParams::from_config(&cfg, s.catalog.window_of(&conversation), &conversation);
+    let window = s.catalog.window_of(&model);
 
     for pass in 0..MAX_PASSES {
         let force = pass == 0 && matches!(trigger, Trigger::Manual | Trigger::Overflow);

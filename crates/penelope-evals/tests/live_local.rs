@@ -259,8 +259,8 @@ async fn the_second_turn_reuses_the_prefix() {
     );
 }
 
-/// Faux OpenRouter : rend une réponse courte en SSE et garde les requêtes reçues.
-async fn fake_openrouter() -> (String, Arc<Mutex<Vec<String>>>) {
+/// Faux serveur : rend `response` à chaque requête et garde les requêtes reçues.
+async fn fake_server(response: String) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -293,21 +293,96 @@ async fn fake_openrouter() -> (String, Arc<Mutex<Vec<String>>>) {
             log.lock()
                 .unwrap()
                 .push(String::from_utf8_lossy(&got).to_string());
-            let sse = [
-                r#"data: {"id":"gen-repli","model":"faux/repli","provider":"Faux","choices":[{"index":0,"delta":{"role":"assistant","content":"Réponse du repli."},"finish_reason":"stop"}]}"#,
-                r#"data: {"id":"gen-repli","model":"faux/repli","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14,"cost":0.0001}}"#,
-                "data: [DONE]",
-            ]
-            .iter()
-            .map(|e| format!("{e}\n\n"))
-            .collect::<String>();
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{sse}"
-            );
-            let _ = sock.write_all(resp.as_bytes()).await;
+            let _ = sock.write_all(response.as_bytes()).await;
         }
     });
-    (format!("http://{addr}/api/v1"), seen)
+    (format!("http://{addr}"), seen)
+}
+
+/// Une réponse SSE courte, au format d'OpenRouter comme de mlx_lm.server.
+fn sse_answer(model: &str, text: &str) -> String {
+    let sse = [
+        format!(
+            r#"data: {{"id":"gen-1","model":"{model}","choices":[{{"index":0,"delta":{{"role":"assistant","content":"{text}"}},"finish_reason":"stop"}}]}}"#
+        ),
+        format!(
+            r#"data: {{"id":"gen-1","model":"{model}","choices":[],"usage":{{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}}}"#
+        ),
+        "data: [DONE]".to_string(),
+    ]
+    .iter()
+    .map(|e| format!("{e}\n\n"))
+    .collect::<String>();
+    format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{sse}")
+}
+
+/// Faux OpenRouter qui répond.
+async fn fake_openrouter() -> (String, Arc<Mutex<Vec<String>>>) {
+    let (base, seen) = fake_server(sse_answer("faux/repli", "Réponse du repli.")).await;
+    (format!("{base}/api/v1"), seen)
+}
+
+/// #259 : derrière un modèle d'OpenRouter en panne, le repli local est joué par la
+/// boucle ; il ne part jamais dans la liste `models` de repli d'OpenRouter.
+#[tokio::test]
+async fn a_failing_openrouter_model_falls_back_to_the_local_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = r#"{"error":{"code":503,"message":"surcharge"}}"#;
+    let down = format!(
+        "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let (openrouter, or_seen) = fake_server(down).await;
+    let local_model = "mlx-community/Qwen3-1.7B-4bit";
+    let (local, local_seen) = fake_server(sse_answer(local_model, "Réponse locale.")).await;
+    let clock: SharedClock = Arc::new(SystemClock);
+    let d = live::local_daemon(
+        dir.path(),
+        clock,
+        &format!("{local}/v1"),
+        &format!("local:{local_model}"),
+        Some(&format!("{openrouter}/api/v1")),
+    )
+    .await;
+    d.publish_config("test", |c| {
+        c.models
+            .aliases
+            .insert("main".into(), "openrouter:faux/principal".into());
+        c.models
+            .aliases
+            .insert("maison".into(), format!("local:{local_model}"));
+        c.models
+            .routing
+            .fallback
+            .insert("main".into(), vec!["cloud".into(), "maison".into()]);
+        Ok(vec!["models".into()])
+    })
+    .unwrap();
+    let sid = session(&d).await;
+    let answer = tokio::time::timeout(Duration::from_secs(60), live::turn(&d, &sid, "Bonjour ?"))
+        .await
+        .expect("le tour ne se bloque pas");
+    assert_eq!(answer, "Réponse locale.");
+    let sent = or_seen.lock().unwrap().clone();
+    assert!(!sent.is_empty(), "OpenRouter a été essayé d'abord");
+    for r in &sent {
+        assert!(
+            !r.contains("Qwen3-1.7B"),
+            "un modèle local est parti chez OpenRouter : {r}"
+        );
+    }
+    assert!(
+        sent.iter()
+            .any(|r| r.contains(r#""models":["faux/repli"]"#)),
+        "la liste d'OpenRouter garde son repli OpenRouter : {sent:?}"
+    );
+    assert!(
+        local_seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.contains(&format!(r#""model":"{local_model}""#)))
+    );
 }
 
 /// #259 : serveur local arrêté, le tour passe au repli OpenRouter de l'alias et y répond.
