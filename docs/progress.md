@@ -78,7 +78,6 @@ serveur, au prix d'OpenRouter quand il coïncidait.
 
 Closes #259.
 
-
 ### 1.0.21
 
 **Machine : Pénélope ne voyait que dix-sept binaires connus (#260).** Un outil posé par
