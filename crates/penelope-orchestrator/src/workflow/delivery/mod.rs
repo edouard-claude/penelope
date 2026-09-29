@@ -391,6 +391,22 @@ async fn ci(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
             "Aucune PR dev enregistrée pour ce run : la CI se lit sur le commit de la PR.".into(),
         ));
     };
+    // L'échéance d'abord : le pilote repasse toutes les cinq secondes, le dépôt, le
+    // coffre et le forgeur ne sont relus qu'à la lecture suivante de la CI.
+    let now = s.clock.now_ms().max(0) as u64;
+    let key = visit_key("ci", ctx.run, &ctx.step.id);
+    let mut poll: Value = s
+        .kv_get(&key)
+        .await?
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| json!({"since": now, "next": 0, "polls": 0, "failures": 0}));
+    let at = |k: &str| poll[k].as_u64().unwrap_or(0);
+    if now < at("next") {
+        return Ok(StepOutcome::Waiting(format!(
+            "CI : prochaine lecture dans {} s",
+            (at("next") - now).div_ceil(1000)
+        )));
+    }
     let p = match project(ctx, PURPOSE).await {
         Ok(p) => p,
         Err(o) => return Ok(o),
@@ -411,20 +427,6 @@ async fn ci(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
             "Pas de CI pour ce projet (`ci.provider = \"none\"`) : rien à attendre.".into(),
             json!({"ci": {"provider": "none", "sha": sha}}),
         ));
-    }
-    let now = s.clock.now_ms().max(0) as u64;
-    let key = visit_key("ci", ctx.run, &ctx.step.id);
-    let mut poll: Value = s
-        .kv_get(&key)
-        .await?
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_else(|| json!({"since": now, "next": 0, "polls": 0, "failures": 0}));
-    let at = |k: &str| poll[k].as_u64().unwrap_or(0);
-    if now < at("next") {
-        return Ok(StepOutcome::Waiting(format!(
-            "CI : prochaine lecture dans {} s",
-            (at("next") - now).div_ceil(1000)
-        )));
     }
     let (polls, failures, since) = (at("polls") as u32, at("failures") as u32, at("since"));
     let evidence = |verdict: &str, detail: &str| {
