@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.22
+### 1.0.21
 
 **Machine : Pénélope ne voyait que dix-sept binaires connus (#260).** Un outil posé par
 `npm -g`, `uv tool` ou `cargo install`, Safari 27 et son serveur MCP natif, le pont MCP
