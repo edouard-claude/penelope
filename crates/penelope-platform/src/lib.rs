@@ -98,6 +98,8 @@ pub struct Platform {
     pub processes: UnixProcessHost,
     /// Réduction d'une image trop lourde pour le fournisseur (issue #242).
     pub images: Box<dyn ImageShrinker>,
+    /// Où la carte de l'environnement regarde (#260) : la machine, ou rien en test.
+    pub discovery: discover::Discovery,
 }
 
 impl Platform {
@@ -116,6 +118,7 @@ impl Platform {
             power: backend::power_manager(),
             processes,
             images: backend::image_shrinker(),
+            discovery: discover::Discovery::of_this_machine(),
         })
     }
 
@@ -131,6 +134,7 @@ impl Platform {
             power: Box::new(power::CountingPower::noop()),
             processes,
             images: Box::new(image::NoShrinker),
+            discovery: discover::Discovery::none(),
             dirs,
         })
     }
@@ -263,6 +267,10 @@ mod tests {
         assert!(p.dirs.vault().is_dir());
         assert!(p.dirs.pid_dir().is_dir());
         assert_eq!(p.secrets.backend(), "mémoire (tests)");
+        // #260 : une plateforme de test ne découvre rien de la machine qui la porte.
+        let d = &p.discovery;
+        assert!(d.path.is_empty() && d.app_dirs.is_empty() && d.offers.is_empty());
+        assert!(!d.hardware && !d.default_ports);
     }
 
     #[test]

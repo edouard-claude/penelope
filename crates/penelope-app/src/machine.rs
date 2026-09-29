@@ -219,7 +219,7 @@ fn hardware_words(h: &Hardware) -> Option<String> {
 
 /// Détecte l'état de la machine. Bloquant (un `which` par binaire, quelques sondes) : à
 /// appeler sous `spawn_blocking`.
-pub fn detect(cfg: &Config, host: &HostStatus) -> Inventory {
+pub fn detect(cfg: &Config, host: &HostStatus, path: &std::ffi::OsStr) -> Inventory {
     let mut wanted: Vec<String> = KNOWN.iter().map(|s| s.to_string()).collect();
     // Les ajouts du propriétaire viennent après les connus, triés : deux configurations
     // identiques donnent le même ordre, donc la même ligne.
@@ -237,7 +237,7 @@ pub fn detect(cfg: &Config, host: &HostStatus) -> Inventory {
     let mut present = Vec::new();
     let mut missing = Vec::new();
     for name in &wanted {
-        let Some(path) = penelope_platform::process::which(name) else {
+        let Some(path) = penelope_platform::process::which_in(name, path) else {
             missing.push(name.clone());
             continue;
         };
@@ -358,9 +358,10 @@ pub async fn refresh(s: &Services) -> anyhow::Result<Inventory> {
     let cfg = s.config.config();
     let platform = s.platform.clone();
     let now = s.clock.now_ms() / 1000;
+    // Le PATH de la découverte de la plateforme : vide en test, aucune sonde ne part.
     let mut inv = tokio::task::spawn_blocking(move || {
         let host = platform.host_status(now);
-        detect(&cfg, &host)
+        detect(&cfg, &host, &platform.discovery.path)
     })
     .await?;
     match crate::environment::refresh(s).await {
@@ -626,11 +627,12 @@ mod tests {
         assert!(!inv.checked_at.is_empty(), "la passe est horodatée");
         let back = cached(&s).await.unwrap();
         assert_eq!(back, inv);
-        // `sh` existe sur toute machine qui fait tourner la suite : la détection marche.
-        assert!(
-            back.tool("git").is_some() || !back.missing.is_empty(),
-            "la détection a bien tourné : {back:?}"
-        );
+        // La plateforme de test ne regarde rien (#260) : aucun binaire trouvé, aucune sonde
+        // lancée, le résultat ne dépend pas de la machine qui fait tourner la suite.
+        assert!(back.present.is_empty(), "{back:?}");
+        assert_eq!(back.missing.len(), KNOWN.len());
+        let env = crate::environment::cached(&s).await.unwrap();
+        assert!(env.tools.is_empty() && env.apps.is_empty() && env.hardware.is_none());
         // La ligne ne porte jamais l'horodatage, sinon le préfixe change chaque heure.
         assert!(!back.prompt_line().contains(&back.checked_at));
     }

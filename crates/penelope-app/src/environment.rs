@@ -138,8 +138,9 @@ impl Environment {
     }
 }
 
-/// Où regarder. En production, la machine ([`Sources::of`]) ; en test, un faux PATH, de
-/// fausses applications, pas de sonde du matériel ni des ports par défaut.
+/// Où regarder : la découverte de la plateforme ([`Sources::of`]) — la machine pour le
+/// daemon réel, rien pour une plateforme de test — ou, dans un test qui l'exige, un faux
+/// PATH et de fausses applications.
 #[derive(Debug, Clone, Default)]
 pub struct Sources {
     pub path: OsString,
@@ -152,16 +153,15 @@ pub struct Sources {
 }
 
 impl Sources {
-    /// La machine : le PATH effectif de Pénélope (celui du propriétaire, complété des
-    /// emplacements usuels), ses dossiers d'applications, les sondes de son OS.
+    /// Ce que la plateforme dit de regarder (`Platform::discovery`).
     pub fn of(s: &Services) -> Self {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let d = &s.platform.discovery;
         Sources {
-            path: penelope_platform::process::search_path(),
-            app_dirs: discover::application_dirs(home.as_deref()),
-            offers: discover::offer_probes().to_vec(),
-            hardware: true,
-            default_ports: true,
+            path: d.path.clone(),
+            app_dirs: d.app_dirs.clone(),
+            offers: d.offers.clone(),
+            hardware: d.hardware,
+            default_ports: d.default_ports,
             mcp_dir: s.platform.dirs.mcp_d(),
         }
     }

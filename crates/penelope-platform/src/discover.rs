@@ -12,9 +12,47 @@
 use crate::process::probe_command;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+/// Où la découverte regarde. Porté par la plateforme, comme `images` : le daemon réel
+/// regarde la machine ([`Discovery::of_this_machine`]), une plateforme de test ne regarde
+/// rien ([`Discovery::none`]). Sans cela, chaque test qui démarre un daemon lançait
+/// `system_profiler`, `brew list`, `npm ls -g` et lisait toutes les applications : sur
+/// un runner chargé, `chat_socket` expirait (#260).
+#[derive(Debug, Clone, Default)]
+pub struct Discovery {
+    /// PATH où chercher les exécutables et les gestionnaires ; vide : aucun.
+    pub path: OsString,
+    pub app_dirs: Vec<PathBuf>,
+    pub offers: Vec<OfferProbe>,
+    /// Lire le matériel (`system_profiler`).
+    pub hardware: bool,
+    /// Sonder les ports par défaut des moteurs d'inférence connus, même non installés.
+    pub default_ports: bool,
+}
+
+impl Discovery {
+    /// La machine : le PATH effectif (celui du propriétaire, complété des emplacements
+    /// usuels), ses dossiers d'applications, les sondes de son OS.
+    pub fn of_this_machine() -> Discovery {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        Discovery {
+            path: crate::process::search_path(),
+            app_dirs: application_dirs(home.as_deref()),
+            offers: offer_probes().to_vec(),
+            hardware: true,
+            default_ports: true,
+        }
+    }
+
+    /// Rien : ni PATH, ni application, ni sonde. Une passe ne lance aucun processus et ne
+    /// touche pas au réseau.
+    pub fn none() -> Discovery {
+        Discovery::default()
+    }
+}
 
 /// Un exécutable trouvé dans un dossier du PATH.
 #[derive(Debug, Clone, PartialEq, Eq)]
