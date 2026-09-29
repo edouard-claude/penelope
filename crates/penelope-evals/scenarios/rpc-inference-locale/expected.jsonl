@@ -7,3 +7,5 @@
 {"type":"audit","ok":true,"checked":2,"purged":0}
 {"type":"http_request","method":"GET","path":"/v1/models"}
 {"type":"http_request","method":"GET","path":"/v1/models"}
+{"type":"http_request","method":"GET","path":"/v1/models"}
+{"type":"http_request","method":"GET","path":"/v1/models"}
