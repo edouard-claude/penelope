@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.20
+### 1.0.18
 
 **Masquage : un mot ordinaire lu après `key=` n'est plus masqué partout ; deux tests
 instables rendus déterministes (#258).** Le rédacteur apprenait (#134) toute valeur
