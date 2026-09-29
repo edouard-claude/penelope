@@ -167,7 +167,7 @@ async fn project(ctx: &StepCtx<'_>, purpose: &str) -> Result<Project, StepOutcom
     let Some(dir) = project_dir(ctx).await else {
         return Err(blocked(format!(
             "Pour {purpose}, je ne sais pas quel dépôt livrer : aucune phase n'a déclaré \
-             `project.dir` (`session_metadata`, op `set`, clé `project`, entrée \
+             `project.dir` (`session_metadata`, op `set`, clé « project », entrée \
              `{{\"dir\": \"<dépôt>\"}}`) et l'espace du run n'est pas un dépôt git. Déclare-le, puis \
              « Réessayer »."
         )));

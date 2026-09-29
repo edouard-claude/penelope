@@ -355,10 +355,15 @@ fn a_judged_plan_that_writes_code_is_delivered_after_its_last_verdict() {
     );
     let code = &w.step("e3-code").unwrap().prompt;
     assert!(
-        code.contains("clé `project`"),
+        code.contains("clé « project »"),
         "le code déclare son dépôt : {code}"
     );
-    assert!(!w.step("e2-tests").unwrap().prompt.contains("clé `project`"));
+    assert!(
+        !w.step("e2-tests")
+            .unwrap()
+            .prompt
+            .contains("clé « project »")
+    );
 }
 
 #[test]
@@ -382,7 +387,7 @@ fn only_a_plan_that_writes_code_and_ends_with_a_judge_opens_a_pr() {
             "{steps:?} n'est pas livré"
         );
         assert!(
-            !w.steps.iter().any(|s| s.prompt.contains("clé `project`")),
+            !w.steps.iter().any(|s| s.prompt.contains("clé « project »")),
             "{steps:?} : aucune consigne de livraison"
         );
         let report = validate(&w, None, &known());
