@@ -106,6 +106,12 @@ impl Harness<'_> {
         let gateway = self.install_mcp(&daemon, &services).await?;
         if first {
             self.seed_files(&services)?;
+            for (key, value) in &self.spec.kv {
+                services
+                    .kv_set(key, value)
+                    .await
+                    .context("`[kv]` du scénario")?;
+            }
             self.session = daemon
                 .chat_session_for(&Origin::Cli)
                 .await

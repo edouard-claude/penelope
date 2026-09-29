@@ -1335,6 +1335,38 @@ L'accueil (`penelope onboard outils`) propose désormais l'inventaire détecté 
 de départ au lieu d'une page blanche. Ce que tu déclares reste prioritaire sur ce qui est
 détecté.
 
+#### La carte de l'environnement
+
+La même passe dresse aussi une **carte** de la machine (issue #260), au-delà des binaires
+connus, rangée dans `machine.environment` :
+
+- le matériel : puce, mémoire (unifiée sur Apple Silicon), cœurs CPU et GPU, par
+  `system_profiler` (ni numéro de série, ni écrans) ;
+- tous les exécutables du PATH, avec leur **source** (`brew`, `npm`, `uv`, `pipx`,
+  `cargo`, `système`, `PATH`) et leur version quand le gestionnaire la donne
+  (`brew list`, `npm ls -g`, `uv tool list`, `pipx list`, `cargo install --list`) ;
+- les applications de `/Applications`, `/System/Applications` et `~/Applications`, avec la
+  version de leur `Info.plist` ;
+- les **capacités** : MCP exposés par des applications (Safari 27 par
+  `safaridriver --mcp`, Xcode par `xcrun mcpbridge`) ou déclarés dans `mcp.d`, serveurs
+  d'inférence locaux (Ollama, LM Studio, `mlx_lm`, llama.cpp, `mlx-audio`, vLLM, ou un
+  fournisseur local déclaré) sondés par `GET /models` sur la boucle locale, avec les
+  modèles servis.
+
+Chaque sonde a un délai court ; aucune ne tourne pendant un tour. La ligne système n'en
+garde que des noms stables (puce et mémoire, applications qui exposent un MCP, moteurs
+d'inférence installés ou déclarés) et renvoie à l'outil `env_explore`, qui cherche dans la
+carte par besoin (« navigateur », « compilateur Swift », « MCP », « inférence locale ») ou
+par nom. Découvrir n'autorise rien : lancer un outil trouvé passe par `shell_exec`, sa
+politique et ses approbations.
+
+Une capacité trouvée et non branchée (un MCP exposé que `mcp.d` ne déclare pas, un serveur
+qui sert des modèles sans fournisseur qui le vise) t'est **proposée une fois** ; rien
+n'est écrit dans `mcp.d` ni dans `[providers]`. La date de la proposition est gardée
+(`machine.proposed`, visible dans `env_explore`) : un refus n'est pas redemandé. `doctor`
+résume la carte (`machine.environment`) et dit ce qui a changé depuis la passe précédente
+(`machine.changes` : outils apparus, disparus, mis à jour).
+
 ### Outils natifs
 
 Ce que le modèle peut appeler sans serveur MCP, avec la classe de risque qui décide de
@@ -1390,6 +1422,7 @@ et `/stop` interrompt tout le lot.
 | `artifact_read` | read | Lecture paginée d'un artefact ; le curseur n'avance que des octets renvoyés. |
 | `ask_user` | read | Pose une question au propriétaire et attend sa réponse. |
 | `config_set` | write | Modifie un réglage de sa propre configuration et indique son moment d'effet. (à la demande) |
+| `env_explore` | read | Carte de ta machine, dressée hors des tours (démarrage, chaque heure, `doctor`) : exécutables du PATH et des gestionnaires (brew, npm, uv, pipx, cargo) avec source et version, applications et versions, MCP exposés par des applications, serveurs d'inférence locaux et leurs modèles, matériel. (à la demande) |
 | `fs_edit` | write | Remplace une portion exacte d'un fichier. |
 | `fs_list` | read | Liste le contenu d'un répertoire du workspace. |
 | `fs_read` | read | Lit un fichier du workspace autorisé, avec pagination par lignes. |

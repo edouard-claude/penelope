@@ -349,6 +349,28 @@ pub(super) fn self_knowledge() -> Vec<ToolSpec> {
             false,
         ),
         spec(
+            "env_explore",
+            RiskClass::Read,
+            "Carte de ta machine, dressée hors des tours (démarrage, chaque heure, \
+             `doctor`) : exécutables du PATH et des gestionnaires (brew, npm, uv, pipx, \
+             cargo) avec source et version, applications et versions, MCP exposés par des \
+             applications, serveurs d'inférence locaux et leurs modèles, matériel. `need` \
+             cherche par besoin (« navigateur », « compilateur Swift », « MCP », « inférence \
+             locale ») ou par nom ; sans argument, le sommaire. Lecture seule : découvrir \
+             n'autorise rien, lancer un outil passe par `shell_exec` et ses approbations.",
+            obj(
+                json!({
+                    "need": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["tools", "apps", "capabilities", "hardware"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200}
+                }),
+                &[],
+            ),
+            true,
+            false,
+            false,
+        ),
+        spec(
             "self_docs",
             RiskClass::Read,
             "Documentation de ta propre version, embarquée dans le binaire : le dépôt \

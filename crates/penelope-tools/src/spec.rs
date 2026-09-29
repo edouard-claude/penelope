@@ -89,6 +89,7 @@ pub fn all() -> Vec<ToolSpec> {
 /// (17 outils d'usage courant et les trois méta-outils) tient sous 20 définitions.
 pub const ON_DEMAND: &[&str] = &[
     "config_set",
+    "env_explore",
     "git_branch",
     "git_clone",
     "git_commit",

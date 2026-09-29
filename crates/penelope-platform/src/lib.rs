@@ -15,6 +15,7 @@ pub mod audio;
 pub mod backend;
 pub mod codesign;
 pub mod dirs;
+pub mod discover;
 pub mod handoff;
 pub mod host;
 pub mod image;

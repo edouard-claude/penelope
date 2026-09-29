@@ -47,6 +47,7 @@ const PARALLEL_SAFE: &[&str] = &[
     "workflow_status",
     "self_status",
     "self_docs",
+    "env_explore",
     "tool_search",
     "tool_describe",
 ];

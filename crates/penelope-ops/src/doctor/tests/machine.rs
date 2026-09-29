@@ -103,3 +103,69 @@ async fn a_failing_schedule_is_named() {
         )
     );
 }
+
+/// #260 : `doctor` résume la carte et dit ce qui a changé depuis la passe précédente,
+/// ou, sans changement, quand la machine a bougé pour la dernière fois.
+#[test]
+fn doctor_says_what_changed_on_the_machine() {
+    use crate::environment::{Capability, Changes, Environment, Found};
+    let mut env = Environment {
+        tools: vec![Found {
+            name: "gh".into(),
+            source: "brew".into(),
+            version: Some("2.63.0".into()),
+            ..Default::default()
+        }],
+        capabilities: vec![Capability {
+            kind: "mcp".into(),
+            id: "safari".into(),
+            name: "Safari".into(),
+            via: "safaridriver --mcp".into(),
+            origin: "application".into(),
+            ..Default::default()
+        }],
+        checked_at: "2026-09-29T10:00:00Z".into(),
+        ..Default::default()
+    };
+    let checks = environment_checks(&env);
+    assert_eq!(checks[0].id, "machine.environment");
+    assert!(
+        checks[0].detail.contains("1 outil(s) (brew 1)"),
+        "{}",
+        checks[0].detail
+    );
+    assert!(
+        checks[0].detail.contains("mcp Safari (non branché)"),
+        "{}",
+        checks[0].detail
+    );
+    assert!(
+        checks[1].detail.contains("première passe"),
+        "{}",
+        checks[1].detail
+    );
+
+    env.changes = Some(Changes {
+        since: "2026-09-29T09:00:00Z".into(),
+        at: "2026-09-29T10:00:00Z".into(),
+        appeared: vec!["ollama (brew)".into()],
+        disappeared: vec!["application Numbers".into()],
+        updated: vec!["gh (brew) : 2.62.0 → 2.63.0".into()],
+    });
+    let now = &environment_checks(&env)[1];
+    assert_eq!(
+        now.detail,
+        "depuis la passe du 2026-09-29T09:00:00Z : apparus : ollama (brew) ; disparus : \
+         application Numbers ; mis à jour : gh (brew) : 2.62.0 → 2.63.0"
+    );
+
+    env.checked_at = "2026-09-29T11:00:00Z".into();
+    let later = &environment_checks(&env)[1];
+    assert!(
+        later
+            .detail
+            .starts_with("rien depuis la passe du 2026-09-29T10:00:00Z"),
+        "{}",
+        later.detail
+    );
+}

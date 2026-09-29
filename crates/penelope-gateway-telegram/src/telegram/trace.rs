@@ -123,7 +123,7 @@ pub(crate) fn family_of(name: &str) -> Option<Family> {
         "send_message" | "send_voice" | "send_file" | "ask_user" => Family::Channel,
         "skill_search" | "skill_load" | "skill_propose" | "skill_patch" => Family::Skills,
         "image_inspect" | "image_generate" => Family::Images,
-        "self_status" | "self_docs" | "config_set" => Family::Himself,
+        "self_status" | "self_docs" | "env_explore" | "config_set" => Family::Himself,
         "tool_search" | "tool_describe" => Family::Tools,
         _ => return None,
     })

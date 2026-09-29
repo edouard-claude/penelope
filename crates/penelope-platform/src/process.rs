@@ -271,11 +271,16 @@ pub fn search_path() -> std::ffi::OsString {
 }
 
 pub fn which(program: &str) -> Option<PathBuf> {
+    which_in(program, &search_path())
+}
+
+/// [`which`] dans un PATH donné : la découverte de l'environnement (#260) cherche dans
+/// celui qu'on lui passe, ce qui la rend testable sur un faux PATH.
+pub fn which_in(program: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
     let p = Path::new(program);
     if p.is_absolute() || program.contains(std::path::MAIN_SEPARATOR) {
         return p.is_file().then(|| p.to_path_buf());
     }
-    let path = search_path();
     let exts: Vec<String> = if cfg!(windows) {
         std::env::var("PATHEXT")
             .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
@@ -285,7 +290,7 @@ pub fn which(program: &str) -> Option<PathBuf> {
     } else {
         vec![String::new()]
     };
-    for dir in std::env::split_paths(&path) {
+    for dir in std::env::split_paths(path) {
         for ext in &exts {
             let candidate = dir.join(format!("{program}{ext}"));
             if candidate.is_file() {

@@ -1,0 +1,2 @@
+{"tool_calls": {"text": "", "calls": [{"id": "e1", "name": "env_explore", "arguments": {"need": "navigateur"}}, {"id": "e2", "name": "env_explore", "arguments": {"need": "inférence locale"}}]}}
+{"text": "Pour naviguer : Safari 27.0, qui expose un serveur MCP (`safaridriver --mcp`, je te l'ai déjà proposé), et Firefox 156. Pour un modèle local : Ollama répond sur 127.0.0.1:11434 avec qwen3-coder:30b ; avec 128 Go de mémoire unifiée, un modèle plus gros passerait. Rien n'est branché sans ton accord."}

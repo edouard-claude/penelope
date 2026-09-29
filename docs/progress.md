@@ -12,6 +12,41 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.22
+
+**Machine : Pénélope ne voyait que dix-sept binaires connus (#260).** Un outil posé par
+`npm -g`, `uv tool` ou `cargo install`, Safari 27 et son serveur MCP natif, le pont MCP
+de Xcode, un serveur d'inférence local, la puce et la mémoire unifiée : rien de cela
+n'était dans ce qu'elle savait de sa machine. L'inventaire de #156 cherchait une liste
+fermée (`KNOWN`) ; le reste se découvrait en tâtonnant par `shell_exec`.
+
+- Carte de l'environnement (`penelope-app/src/environment.rs`, clé `machine.environment`),
+  au même rythme que l'inventaire (démarrage, chaque heure, `doctor`), jamais dans un
+  tour : matériel (`system_profiler`), tous les exécutables du PATH avec leur source et
+  leur version (liens `Cellar`/`node_modules`/`uv/tools`, listes de `brew`, `npm`, `uv`,
+  `pipx`, `cargo`), applications et version de leur `Info.plist`, MCP exposés
+  (`safaridriver --mcp`, `xcrun mcpbridge`) ou déclarés dans `mcp.d`, serveurs
+  d'inférence sur la boucle locale (`GET /models`) et leurs modèles. Les accès propres à
+  macOS vivent dans `penelope-platform` (`discover`), stub explicite ailleurs.
+- Ligne T1 : puce et mémoire, applications qui exposent un MCP, moteurs d'inférence
+  installés ou déclarés, renvoi à `env_explore` ; ni version, ni modèle servi, ni état
+  d'un serveur.
+- Outil `env_explore` (lecture seule, à la demande) plutôt qu'une section de
+  `self_status` : il cherche par besoin (« navigateur », « compilateur Swift », « MCP »,
+  « inférence locale ») là où `self_status` décrit un état ; sans argument, un sommaire.
+- Une capacité non branchée est proposée une fois au propriétaire (`machine.proposed`) ;
+  rien n'est écrit dans `mcp.d` ni dans `[providers]`.
+- `doctor` : `machine.environment` (la carte en une ligne) et `machine.changes` (outils,
+  applications, capacités apparus, disparus, mis à jour depuis la passe précédente).
+- Scénarios : `[kv]` sème un état de fond ; `outils-environnement` cherche un navigateur
+  et une inférence locale sur une carte semée.
+- Tests : faux PATH et faux `brew list`/`cargo install --list` (outil hors `KNOWN` avec
+  sa source), application factice avec `Info.plist`, faux `xcrun`/`safaridriver`, faux
+  serveur `/v1/models`, ligne T1 identique après une mise à jour d'outil, changements vus
+  par `doctor`, recherche par besoin, proposition unique.
+
+Closes #260.
+
 ### 1.0.20
 
 **Workflows : gate humain avant la PR vers la production (#193, T5 de #185).** Depuis
