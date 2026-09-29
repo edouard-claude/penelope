@@ -19,6 +19,9 @@ chrono.workspace = true
 chrono-tz.workspace = true
 regex.workspace = true
 sha2.workspace = true
+# La configuration de livraison d'un projet est `.penelope/delivery.toml` dans son dépôt
+# (#192), comme `.penelope/deploy.toml` : lue avec le `toml` du workspace.
+toml.workspace = true
 penelope-kernel.workspace = true
 penelope-store.workspace = true
 penelope-observe.workspace = true

@@ -55,6 +55,9 @@ pub struct Spec {
     /// Fichiers semés dans le workspace par défaut avant la première étape.
     #[serde(default)]
     pub files: Vec<SeedFile>,
+    /// Dépôts git semés dans le workspace après les fichiers (#192).
+    #[serde(default)]
+    pub repos: Vec<SeedRepo>,
     /// Outils d'un serveur MCP simulé, exposés au modèle et inscrits au registre.
     #[serde(default)]
     pub mcp_tools: Vec<McpTool>,
@@ -117,6 +120,19 @@ pub struct SeedFile {
     /// `memory.vault_path`) ou `skills` (le répertoire des skills).
     #[serde(default)]
     pub root: SeedRoot,
+}
+
+/// Un dépôt git dans le workspace : `base` porte un commit vide, `branch` en part avec
+/// tout ce que `[[files]]` a semé sous `path` (sauf `.penelope/`, ignoré : la
+/// configuration y porte l'adresse du faux serveur, qui change à chaque rejeu). Son
+/// remote `origin` est un dépôt nu voisin, `<path>.origin.git`, où `base` est poussée.
+/// Auteur et dates fixes : les mêmes commits à chaque rejeu.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeedRepo {
+    pub path: String,
+    pub base: String,
+    pub branch: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]

@@ -150,7 +150,7 @@ travaille dans l'espace de son parent, sauf s'il demande un espace persistant.
 `forms` déclare les formulaires des étapes `user` (voir plus bas) : un JSON Schema d'objet
 par identifiant.
 
-## Les neuf types d'étapes
+## Les dix types d'étapes
 
 | Type | Champs propres | Ce qu'il fait |
 |---|---|---|
@@ -163,6 +163,7 @@ par identifiant.
 | `workflow` | `workflowId` (obligatoire), `params` | Un sous-workflow, profondeur bornée |
 | `wait` | `on` | Attend un événement, un cron, un délai ou une tâche MCP |
 | `verify` | `verifier` ou `checks`, `criteriaKey` | Vérifications mécaniques puis jugement du modèle ; `project_tests` relit la commande validée dans `session_metadata.verification`, sinon celle de `project` |
+| `delivery` | `delivery` (`pull_request`, `ci`, `e2e`) | Livraison en dev : PR vers la branche de développement, verdict de la CI, vérification externe de l'environnement de dev (voir « Livraison en dev ») |
 
 `context: fresh` donne à chaque visite de l'étape une session neuve, fille de celle du
 run : l'agent ne voit ni la conversation du propriétaire ni les échanges des autres
@@ -466,9 +467,9 @@ exécuté comme n'importe quel run : durable, repris au redémarrage, piloté pa
 - **Cartes d'OK.** À la fin de la spécification, des tests et du code, une étape `user`
   montre la sortie de la phase : « Continuer », « Laisse filer » ou « Arrêter ». « Laisse
   filer » saute les cartes d'OK ordinaires qui suivent, jamais un point dur : le gate
-  « vas-y » est avant le run, la limite de reprises arrête le run, et les gates de PR et
-  de production (#192, #193) n'en seront pas. « Arrêter » bloque le run avec sa raison ;
-  rien ne le relance seul.
+  « vas-y » est avant le run, la limite de reprises arrête le run, la livraison en dev
+  n'a pas de variante libre, le gate de production (#193) non plus. « Arrêter » bloque le
+  run avec sa raison ; rien ne le relance seul.
 - **Revue contradictoire bornée.** Une revue ou une vérification rend `passed` ou `failed`
   par `return_value`. `failed` renvoie au début du dernier bloc de code, au plus deux
   fois ; la troisième fois, le run s'arrête (« limite de 2 reprises atteinte »). Le budget
@@ -480,12 +481,89 @@ suffit à savoir où il en est. `wf.plan.show` rend le plan, son empreinte et se
 `wf.plan.go` est le « vas-y » de la socket.
 
 ```
-  e1-spec ─► ok-e1 ─Continuer─► e2-tests ─► ok-e2 ─► e3-code ─► ok-e3 ─► e4-revue ─passed─► $done
+  e1-spec ─► ok-e1 ─Continuer─► e2-tests ─► ok-e2 ─► e3-code ─► ok-e3 ─► e4-revue ─passed─► livraison
                │                                                          │
                └─Laisse filer─► e2-tests-libre ─► e3-code-libre ─► …      └─failed─► e3-code-r1 ─► …
 ```
 
 Rejouer : `cargo test -p penelope-evals --test scenarios plan_en_phases rpc_plans`.
+
+## Livraison en dev
+
+Un plan qui écrit du code et finit par une revue ou une vérification est **livré** (#192,
+T4 de #185) : le `passed` de ce dernier juge ne termine plus le run, il ouvre la PR vers
+la branche de développement, attend la CI du projet, puis vérifie l'environnement de dev
+depuis l'extérieur. Un plan sans code, ou sans juge final, n'ouvre aucune PR : personne
+n'a dit que le travail satisfait.
+
+```
+  juge ─passed─► livraison-pr ─passed─► livraison-ci ─passed─► livraison-e2e ─passed─► $done
+                    │                      │                      │
+                    └─► carte « livraison bloquée » : Réessayer (la même étape) ou Arrêter
+```
+
+**Le dépôt.** La phase de code reçoit la consigne de travailler dans le dépôt, sur une
+branche de travail, de commiter et de déclarer le dépôt : `session_metadata`, op `set`, clé
+`project`, entrée `{"dir": "<dépôt>"}` (un chemin relatif se lit comme pour les outils
+de fichiers). La livraison pousse cette branche, sous le même nom, sur le remote du dépôt ;
+elle refuse une tête détachée, la branche de dev elle-même et des changements suivis non
+commités.
+
+**La configuration** est `.penelope/delivery.toml` dans le dépôt. Ce que le dépôt dit de
+lui-même la complète ; le reste n'est **jamais supposé** :
+
+```toml
+[forge]
+kind = "gitlab"            # github | gitlab ; déduit d'un remote github.com ou gitlab.com
+api = "https://git.exemple.fr/api/v4"   # déduit de l'hôte du remote
+repo = "equipe/service"    # déduit du chemin du remote
+remote = "origin"
+token_secret = "gitlab_token"           # défaut : github_token ou gitlab_token
+
+[branches]
+dev = "develop"            # obligatoire
+
+[ci]
+provider = "gitlab"        # github | gitlab | none ; déduit de .github/workflows ou .gitlab-ci.yml
+timeout_minutes = 60
+
+[e2e]
+url = "https://dev.exemple.fr"          # obligatoire
+
+[[e2e.checks]]
+path = "/health"           # http (défaut) : statut attendu `status`, sinon tout 2xx
+contains = "ok"
+
+[[e2e.checks]]
+kind = "graphql"           # POST {"query": …} sur /graphql : ni `errors`, ni `data` nul
+query = "{ version }"
+
+[[e2e.checks]]
+kind = "command"           # l'outil E2E du projet (Playwright, Maestro…), E2E_BASE_URL posé
+command = "npx playwright test"
+```
+
+Sans contrôle déclaré, un `GET` de l'URL de dev doit répondre 2xx. Le jeton se pose par
+`penelope secret set gitlab_token`. Une information absente pose la carte avec **la
+liste des clés manquantes**, pourquoi chacune compte et le fichier où l'écrire ; « Réessayer »
+relit la configuration.
+
+**Une seule PR par run.** Le push et l'ouverture passent par le ledger, planifiés avant
+l'appel, sous une clé qui ne dépend ni du commit ni de la visite. Avant d'ouvrir, la
+livraison cherche sur le forgeur une PR de la branche vers la branche de dev : après un
+arrêt brutal pendant l'ouverture, elle est **retrouvée**, jamais ouverte deux fois.
+« Réessayer » après une CI rouge ne rouvre rien.
+
+**CI et E2E sont deux résultats.** La CI se lit sur le commit poussé (check runs et
+statuts GitHub, pipelines GitLab), à intervalle croissant de 15 s à 5 min : en attente,
+le run attend ; rouge, la carte le dit avec les contrôles en échec ; sans verdict après
+`ci.timeout_minutes`, ou injoignable trois lectures d'affilée (« CI indisponible »), la
+carte aussi. L'E2E joue tous ses contrôles, même après un rouge, et garde ses preuves
+(requête, statut, extrait de réponse, durée) dans la sortie de l'étape (`wf trace`) et dans
+`livraison/e2e-<n>.json` de l'espace du run. Chaque résultat vert est dit dans le sujet.
+
+Rejouer : `cargo test -p penelope-evals --test scenarios livraison_dev plan_en_phases`,
+et `cargo test -p penelope-orchestrator delivery` contre les faux forgeurs GitHub et GitLab.
 
 ## Limites actuelles
 
@@ -493,7 +571,11 @@ Rejouer : `cargo test -p penelope-evals --test scenarios plan_en_phases rpc_plan
   les commandes viennent des cibles `make`.
 - Une tâche MCP n'est suivie qu'une fois connue de l'étape `wait` : un appel d'outil qui
   rend une tâche n'enregistre rien tout seul.
-- Un run de plan approuvé s'arrête après sa vérification : la PR dev, la CI et les E2E
-  externes viennent avec #192, le gate de production avec #193.
+- Un run de plan livré s'arrête après l'E2E de dev : le gate de production et la PR vers
+  la production viennent avec #193. Aucune PR ni aucun déploiement de production n'est
+  automatique.
+- La livraison ne lit que la CI du forgeur (GitHub, GitLab) ; une CI externe au forgeur
+  se déclare `none`. Corriger une CI rouge passe par un nouveau commit et un nouveau plan :
+  « Réessayer » relit la CI du même commit (utile après une relance sur le forgeur).
 
 Voir [progress.md](progress.md).

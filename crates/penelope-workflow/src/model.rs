@@ -251,6 +251,12 @@ pub struct Step {
     pub criteria_key: String,
     pub verifier: String,
     pub checks: Vec<Value>,
+
+    // --- delivery ---
+    /// `delivery` : `pull_request` (PR vers la branche de développement), `ci` (verdict de
+    /// la CI du projet) ou `e2e` (vérification externe de l'environnement de dev), #192.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub delivery: String,
 }
 
 /// Défaut de [`Step::quote`] : citer (issue #154). Une fonction, parce que `serde` ne sait
@@ -303,6 +309,7 @@ impl Default for Step {
             criteria_key: "criteria".into(),
             verifier: String::new(),
             checks: Vec::new(),
+            delivery: String::new(),
         }
     }
 }
@@ -457,6 +464,7 @@ pub const STEP_KINDS: &[&str] = &[
     "workflow",
     "wait",
     "verify",
+    "delivery",
 ];
 
 /// Types autorisés comme enfants d'un `parallel` (§12.6).

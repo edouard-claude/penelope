@@ -142,6 +142,34 @@ fn the_schema_accepts_the_shapes_the_prd_describes() {
     assert!(errors.is_empty(), "{errors:#?}");
 }
 
+/// Un plan approuvé et livré (#192) est compilé en workflow : ses étapes `delivery` et
+/// ses cartes de livraison respectent la référence publiée.
+#[test]
+fn a_compiled_plan_with_its_delivery_satisfies_the_schema() {
+    use penelope_workflow::plan::execution::{Limits, compile};
+    use penelope_workflow::plan::{Phase, Plan, PlanDraft, PlanStep};
+    let mut plan = Plan::new(
+        "Livrer",
+        vec![
+            PlanStep::new(Phase::Implementation, "Coder"),
+            PlanStep::new(Phase::Review, "Relire"),
+        ],
+    )
+    .unwrap();
+    plan.approve().unwrap();
+    let draft = PlanDraft {
+        workflow_id: "build-verify".into(),
+        params: json!({}),
+        brief: None,
+        plan,
+    };
+    let w = compile(&draft, &Limits::default()).unwrap();
+    assert!(w.steps.iter().any(|s| s.kind == "delivery"));
+    let instance: Value = serde_json::from_str(&w.to_json()).unwrap();
+    let errors = schema::validate(&workflow_schema(), &instance);
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
 #[test]
 fn the_schema_itself_is_well_formed() {
     let s = workflow_schema();

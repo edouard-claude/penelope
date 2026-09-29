@@ -199,6 +199,7 @@ async fn with_brief(ctx: &StepCtx<'_>, prompt: String) -> String {
 
 mod context;
 mod control;
+mod delivery;
 mod driver;
 mod orchestrator;
 mod plan_run;
@@ -212,6 +213,7 @@ mod step_verify;
 
 pub use context::Context;
 pub use control::{answer, control, form_of};
+use delivery::delivery_step;
 pub use driver::{drive, drive_all, driver_loop, effective_budget, raise_budget};
 use driver::{finish, limit_reason, refresh_spent, session_metadata};
 pub use orchestrator::WorkflowOrchestrator;

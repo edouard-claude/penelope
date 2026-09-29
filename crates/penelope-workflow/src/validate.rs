@@ -249,6 +249,30 @@ fn check_context(r: &mut Report, s: &Step, path: &str) {
     }
 }
 
+/// Action d'une étape `delivery` (#192), et seulement d'elle.
+fn check_delivery(r: &mut Report, s: &Step, path: &str) {
+    let action = s.delivery.as_str();
+    if s.kind != "delivery" {
+        if !action.is_empty() {
+            r.error(
+                format!("{path}/delivery"),
+                format!(
+                    "`delivery` ne vaut que pour une étape `delivery`, pas `{}`",
+                    s.kind
+                ),
+            );
+        }
+    } else if !crate::delivery::ACTIONS.contains(&action) {
+        r.error(
+            format!("{path}/delivery"),
+            format!(
+                "attendu {}, reçu `{action}`",
+                crate::delivery::ACTIONS.join(", ")
+            ),
+        );
+    }
+}
+
 fn validate_step(
     r: &mut Report,
     s: &Step,
@@ -427,6 +451,7 @@ fn validate_step(
     }
 
     check_context(r, s, path);
+    check_delivery(r, s, path);
 
     // Alias de modèle.
     if !s.model.is_empty()

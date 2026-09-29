@@ -16,9 +16,14 @@
 //!
 //! « Laisse filer » saute les cartes d'OK ordinaires qui suivent, jamais un point dur : le
 //! gate « vas-y » est avant le run, l'arrêt sur limite de reprises est un `$blocked`, et
-//! les gates de PR et de production des tranches suivantes (#192, #193) n'en seront pas.
+//! la livraison (#192) n'a pas de variante libre, pas plus que le gate de production
+//! (#193).
+//!
+//! Un plan qui écrit du code et finit par un juge est livré : le `passed` de ce dernier
+//! juge mène à la PR dev, à la CI et à l'E2E ([`crate::delivery`]) au lieu de `$done`.
 
 use super::{Phase, PlanDraft, PlanError, PlanStep};
+use crate::delivery;
 use crate::model::{
     BLOCKED, Budget, Concurrency, DONE, Metadata, Phase as RunPhase, Settings, Step, Transition,
     Workflow,
@@ -42,6 +47,24 @@ pub const MAX_REWORKS: u32 = 2;
 /// Un plan de deux pas au plus, sans revue ni vérification, reste à un seul agent : un
 /// système multi-agents ne vaut pas son coût pour une petite demande.
 const SINGLE_AGENT_STEPS: usize = 2;
+
+/// Le plan est-il livré en dev (#192) ? Il écrit du code et son dernier pas est un juge :
+/// c'est le `passed` de ce juge qui dit que le travail satisfait les tests et la revue.
+/// Un plan sans juge n'a personne pour le dire, et n'ouvre donc aucune PR.
+pub fn delivers(steps: &[PlanStep]) -> bool {
+    steps.iter().any(|s| s.phase == Phase::Implementation)
+        && steps.last().is_some_and(|s| s.phase.is_judge())
+}
+
+/// Ce que le code d'un plan livré doit laisser à la livraison : un dépôt déclaré, une
+/// branche de travail, des commits. Pousser et ouvrir la PR reviennent à la livraison.
+/// Ni `key=` ni « project » entre accents graves : le masquage des secrets apprend la
+/// valeur d'un `key=` lu ailleurs (#134) et la masquerait selon ce que le processus a vu.
+const DELIVERED_CODE: &str = "\nCe plan sera livré en dev : travaille dans le dépôt du \
+     projet, sur une branche de travail (pas la branche de développement), commite tes \
+     changements et déclare le dépôt par `session_metadata` (op `set`, clé « project », \
+     entrée `{\"dir\": \"<chemin du dépôt>\"}`). Ne pousse pas et n'ouvre pas de PR : la \
+     livraison s'en charge.";
 
 /// Comment le plan est exécuté.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,12 +232,17 @@ pub fn compile(draft: &PlanDraft, limits: &Limits) -> Result<Workflow, PlanError
     match Mode::of(steps) {
         Mode::Single => out.push(single_step(&header, steps)),
         Mode::Phased => {
+            let delivered = delivers(steps);
             let compiler = Compiler {
                 steps,
                 header: &header,
                 max_reworks: limits.max_reworks,
+                end: if delivered { delivery::ENTRY } else { DONE },
             };
             out = compiler.unfold();
+            if delivered {
+                out.extend(delivery::tail(DONE));
+            }
         }
     }
     let goal: String = plan.goal().chars().take(60).collect();
@@ -301,6 +329,8 @@ struct Compiler<'a> {
     steps: &'a [PlanStep],
     header: &'a str,
     max_reworks: u32,
+    /// Où va le run quand le dernier pas est franchi : `$done`, ou la livraison.
+    end: &'a str,
 }
 
 impl Compiler<'_> {
@@ -312,7 +342,7 @@ impl Compiler<'_> {
                 s.phase.slug(),
                 suffix(n.reworks, n.free)
             ),
-            None => DONE.into(),
+            None => self.end.into(),
         }
     }
 
@@ -387,12 +417,17 @@ impl Compiler<'_> {
             context: "fresh".into(),
             model: step.phase.model_alias().into(),
             prompt: format!(
-                "{}\n\nTa tâche : étape {} ({}) — {}.\n{}",
+                "{}\n\nTa tâche : étape {} ({}) — {}.\n{}{}",
                 self.header,
                 n.index + 1,
                 step.phase.label(),
                 step.title,
-                step.phase.instruction()
+                step.phase.instruction(),
+                if step.phase == Phase::Implementation && self.end == delivery::ENTRY {
+                    DELIVERED_CODE
+                } else {
+                    ""
+                }
             ),
             ..Default::default()
         };

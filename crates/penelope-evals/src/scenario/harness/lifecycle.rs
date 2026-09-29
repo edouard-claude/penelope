@@ -162,12 +162,15 @@ impl Harness<'_> {
 
     fn seed_files(&self, services: &Services) -> anyhow::Result<()> {
         for f in &self.spec.files {
-            write_under(
-                services,
-                f.root,
-                &f.path,
-                &f.content.repeat(f.repeat.max(1)),
-            )?;
+            let content = f.content.repeat(f.repeat.max(1));
+            let content = match &self.http {
+                Some(h) => content.replace("{{http}}", h.base()),
+                None => content,
+            };
+            write_under(services, f.root, &f.path, &content)?;
+        }
+        for r in &self.spec.repos {
+            seed_repo(&workspace_of(services), r)?;
         }
         Ok(())
     }
@@ -605,4 +608,51 @@ fn write_under(
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&path, content).with_context(|| format!("fichier écrit {}", path.display()))
+}
+
+/// `git` pour un dépôt semé : sans la configuration de l'hôte, auteur et dates fixes.
+fn seed_git(dir: &Path, args: &[&str]) -> anyhow::Result<()> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "commit.gpgsign=false", "-c", "core.autocrlf=false"])
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "Pénélope")
+        .env("GIT_AUTHOR_EMAIL", "penelope@exemple.fr")
+        .env("GIT_COMMITTER_NAME", "Pénélope")
+        .env("GIT_COMMITTER_EMAIL", "penelope@exemple.fr")
+        .env("GIT_AUTHOR_DATE", "2026-09-28T12:00:00+00:00")
+        .env("GIT_COMMITTER_DATE", "2026-09-28T12:00:00+00:00")
+        .output()
+        .context("git")?;
+    anyhow::ensure!(
+        out.status.success(),
+        "git {args:?} : {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Ok(())
+}
+
+/// Sème un dépôt `[[repos]]` : `base` vide poussée sur un remote nu, `branch` avec les
+/// fichiers semés.
+fn seed_repo(workspace: &Path, r: &crate::scenario::SeedRepo) -> anyhow::Result<()> {
+    let dir = workspace.join(&r.path);
+    let remote = workspace.join(format!("{}.origin.git", r.path));
+    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(&remote)?;
+    seed_git(&remote, &["init", "-q", "--bare"])?;
+    seed_git(&dir, &["init", "-q", "-b", &r.base])?;
+    std::fs::write(dir.join(".git/info/exclude"), ".penelope/\n")?;
+    seed_git(&dir, &["commit", "-q", "--allow-empty", "-m", "départ"])?;
+    seed_git(
+        &dir,
+        &["remote", "add", "origin", &remote.to_string_lossy()],
+    )?;
+    seed_git(&dir, &["push", "-q", "origin", &r.base])?;
+    seed_git(&dir, &["checkout", "-q", "-b", &r.branch])?;
+    seed_git(&dir, &["add", "."])?;
+    seed_git(&dir, &["commit", "-q", "-m", "travail"])?;
+    Ok(())
 }
