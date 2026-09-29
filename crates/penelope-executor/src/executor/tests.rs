@@ -654,25 +654,7 @@ async fn a_vault_note_written_outside_the_vault_is_flagged() {
     std::fs::create_dir_all(&vault).unwrap();
     let note = "---\ntype: source\n---\n# M5 Ultra\n";
 
-    // Vault hors des workspaces : le préfixe n'ouvre rien.
-    let e = x
-        .execute(
-            "fs_write",
-            &json!({"path": "vault:sources/x.md", "content": note}),
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(e, ToolError::Denied(_)), "{e}");
-
-    x.services
-        .config
-        .mutate("test", |c| {
-            c.sandbox
-                .workspaces
-                .push(vault.to_string_lossy().into_owned());
-            Ok(vec!["sandbox.workspaces".into()])
-        })
-        .unwrap();
+    // Vault hors des workspaces (l'instance réelle) : le préfixe l'ouvre.
     let r = x
         .execute(
             "fs_write",
@@ -682,6 +664,41 @@ async fn a_vault_note_written_outside_the_vault_is_flagged() {
         .unwrap();
     assert!(vault.join("sources/x.md").exists());
     assert!(!r.text.contains("hors du vault"), "{}", r.text);
+
+    // Un secret n'entre pas dans le vault, ni par écriture ni par édition.
+    let secret = format!("mot de passe ghp_{}", "a".repeat(36));
+    let e = x
+        .execute(
+            "fs_write",
+            &json!({"path": "vault:sources/cle.md", "content": secret}),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(e, ToolError::Denied(_)), "{e}");
+    assert!(!vault.join("sources/cle.md").exists());
+    let e = x
+        .execute(
+            "fs_edit",
+            &json!({"path": "vault:sources/x.md", "old": "# M5 Ultra", "new": secret}),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(e, ToolError::Denied(_)), "{e}");
+
+    // Sans préfixe, le chemin absolu du vault suit la règle des workspaces.
+    let abs = vault.join("sources/x.md").display().to_string();
+    let e = x
+        .execute("fs_read", &json!({"path": abs}))
+        .await
+        .unwrap_err();
+    assert!(matches!(e, ToolError::Denied(_)), "{e}");
+    // Le workspace accepte le même texte : le filtre ne vaut que pour le vault.
+    x.execute(
+        "fs_write",
+        &json!({"path": "brouillons/cle.txt", "content": secret}),
+    )
+    .await
+    .unwrap();
 
     let r = x
         .execute(
@@ -709,4 +726,25 @@ async fn a_vault_note_written_outside_the_vault_is_flagged() {
         .await
         .unwrap();
     assert!(r.text.contains("M5 Ultra"), "{}", r.text);
+}
+
+/// #256 : un sous-agent à la liste de racines restreinte ne reçoit pas le vault par le
+/// préfixe.
+#[tokio::test]
+async fn a_restricted_sub_agent_does_not_get_the_vault() {
+    let (dir, x) = executor().await;
+    let own = dir.path().join("run");
+    std::fs::create_dir_all(&own).unwrap();
+    let mut env = x.env.clone();
+    env.workspaces = vec![penelope_platform::sandbox::normalise(&own)];
+    let sub = NativeToolExecutor::new(x.services.clone(), env);
+    let e = sub
+        .execute(
+            "fs_write",
+            &json!({"path": "vault:sources/x.md", "content": "# x\n"}),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(e, ToolError::Denied(_)), "{e}");
+    assert!(!own.join("vault:sources").exists());
 }

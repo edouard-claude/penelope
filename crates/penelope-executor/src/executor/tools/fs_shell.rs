@@ -2,6 +2,19 @@
 
 use super::*;
 
+/// Une écriture `vault:` entre en mémoire : elle passe le filtre des secrets du vault,
+/// comme `mem_note` (issue #256).
+fn vault_write_filter(args: &Value, text: &str) -> ToolResult<()> {
+    let by_prefix = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .is_some_and(|p| p.starts_with(penelope_tools::fs::VAULT_PREFIX));
+    if by_prefix {
+        penelope_vault::vault_ops::secret_filter(text).map_err(ToolError::Denied)?;
+    }
+    Ok(())
+}
+
 impl NativeToolExecutor {
     /// Fichiers.
     pub(super) async fn fs_tools(
@@ -63,6 +76,7 @@ impl NativeToolExecutor {
                 let lock = self.locks.for_path(&p);
                 let _g = lock.lock().await;
                 let content = str_arg(args, "content")?;
+                vault_write_filter(args, &content)?;
                 let mut v = penelope_tools::fs::write(&p, &content)?;
                 if let Some(w) = self.outside_vault_warning(&p, &content) {
                     v["avertissement"] = json!(w);
@@ -71,12 +85,14 @@ impl NativeToolExecutor {
             }
             "fs_edit" => {
                 let p = self.path_arg(args, "path")?;
+                let new = str_arg(args, "new")?;
+                vault_write_filter(args, &new)?;
                 let lock = self.locks.for_path(&p);
                 let _g = lock.lock().await;
                 penelope_tools::fs::edit(
                     &p,
                     &str_arg(args, "old")?,
-                    &str_arg(args, "new")?,
+                    &new,
                     b_arg(args, "replace_all").unwrap_or(false),
                 )?
             }

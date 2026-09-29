@@ -226,12 +226,7 @@ impl NativeToolExecutor {
     /// Racines réellement autorisées pour cet appel : les racines propres au contexte restent
     /// en tête, celles issues de `sandbox.workspaces` suivent la configuration vivante (#163).
     fn workspaces(&self) -> Vec<PathBuf> {
-        let follows_config = self
-            .env
-            .workspaces
-            .iter()
-            .any(|root| self.configured_workspaces_at_start.contains(root));
-        if !follows_config {
+        if !self.follows_config() {
             // Un sous-agent peut recevoir une liste volontairement restreinte : ne jamais
             // l'élargir avec les workspaces généraux de la configuration.
             return self.env.workspaces.clone();
@@ -251,6 +246,14 @@ impl NativeToolExecutor {
         roots
     }
 
+    /// Faux pour un sous-agent à la liste de racines volontairement restreinte.
+    fn follows_config(&self) -> bool {
+        self.env
+            .workspaces
+            .iter()
+            .any(|root| self.configured_workspaces_at_start.contains(root))
+    }
+
     fn workspace(&self) -> PathBuf {
         self.workspaces()
             .into_iter()
@@ -258,11 +261,13 @@ impl NativeToolExecutor {
             .unwrap_or_else(std::env::temp_dir)
     }
 
-    /// Chemin du modèle résolu : `vault:…` vise le vault, dans la limite des workspaces
-    /// (issue #256).
+    /// Chemin du modèle résolu : `vault:…` vise le vault, même hors des workspaces
+    /// (issue #256), sauf pour un sous-agent restreint, qui garde sa seule liste.
     fn resolve_path(&self, raw: &str) -> ToolResult<PathBuf> {
-        let vault = penelope_app::helpers::vault_dir(&self.services);
-        penelope_tools::fs::resolve_in(raw, &self.workspaces(), Some(&vault))
+        let vault = self
+            .follows_config()
+            .then(|| penelope_app::helpers::vault_dir(&self.services));
+        penelope_tools::fs::resolve_in(raw, &self.workspaces(), vault.as_deref())
     }
 
     fn path_arg(&self, args: &Value, key: &str) -> ToolResult<PathBuf> {

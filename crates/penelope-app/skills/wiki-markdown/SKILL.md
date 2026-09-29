@@ -20,9 +20,9 @@ outils `mem_*` appliquent ces règles d'eux-mêmes ; elles valent pour toute éc
 Les chemins de cette skill sont relatifs au vault. Avec les outils `fs_*`, préfixe-les de
 `vault:` : `fs_write` sur `vault:sources/<slug>.md`, `vault:attachments/<id>-fr.vtt`. Un
 chemin relatif nu (`sources/x.md`) vise le workspace : la note y est écrite, mais ni
-indexée ni versionnée, et le résultat de l'outil le signale. Si le vault n'est pas parmi
-les workspaces autorisés, `vault:` est refusé : le dire au propriétaire
-(`sandbox.workspaces`), ne pas écrire ailleurs.
+indexée ni versionnée, et le résultat de l'outil le signale. `vault:` ouvre le vault même
+hors des workspaces autorisés ; un secret y est refusé, comme en mémoire. Ne pas passer
+par `shell_exec` pour écrire une note.
 
 ## Propriétés YAML
 

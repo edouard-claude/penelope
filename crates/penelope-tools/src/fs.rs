@@ -43,16 +43,17 @@ pub fn resolve(path: &str, workspaces: &[PathBuf]) -> ToolResult<PathBuf> {
 }
 
 /// Résout un chemin contre les workspaces autorisés ; `vault:…` contre le vault (#256).
-/// Le préfixe ne change que la base d'un chemin relatif : le résultat reste dans le
-/// vault et passe la même barrière des workspaces, donc un vault absent de
-/// `sandbox.workspaces` reste fermé.
+/// Le vault est la mémoire de l'agent : ce préfixe l'ouvre même absent de
+/// `sandbox.workspaces`, et n'ouvre que lui. Le résultat est borné au vault, liens
+/// symboliques compris ; un chemin absolu vers le vault, sans préfixe, suit la règle
+/// des workspaces.
 pub fn resolve_in(path: &str, workspaces: &[PathBuf], vault: Option<&Path>) -> ToolResult<PathBuf> {
     let Some(rest) = path.strip_prefix(VAULT_PREFIX) else {
         return resolve_plain(path, workspaces);
     };
     let Some(vault) = vault else {
         return Err(ToolError::Denied(format!(
-            "`{path}` : aucun vault connu ici, donner un chemin du workspace"
+            "`{path}` : aucun vault ouvert ici, donner un chemin du workspace"
         )));
     };
     let root = normalise(vault);
@@ -60,12 +61,8 @@ pub fn resolve_in(path: &str, workspaces: &[PathBuf], vault: Option<&Path>) -> T
     if !candidate.starts_with(&root) {
         return Err(ToolError::Denied(format!("`{path}` sort du vault")));
     }
-    resolve_plain(&candidate.to_string_lossy(), workspaces).map_err(|e| match e {
-        ToolError::Denied(_) => ToolError::Denied(format!(
-            "`{path}` : le vault ({}) n'est pas dans les workspaces autorisés \
-             (sandbox.workspaces)",
-            root.display()
-        )),
+    resolve_plain(&candidate.to_string_lossy(), &[root]).map_err(|e| match e {
+        ToolError::Denied(_) => ToolError::Denied(format!("`{path}` sort du vault")),
         other => other,
     })
 }

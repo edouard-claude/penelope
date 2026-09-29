@@ -20,10 +20,13 @@ alerte (#256).** Depuis le 22/09, les fiches de la skill YouTube (`sources/<slug
 `fs_write` résout un chemin relatif contre le premier workspace, et rien ne remarquait
 une note de forme vault hors du vault.
 
-- Préfixe `vault:` pour les outils `fs_*` (`vault:sources/x.md`) : résolu contre le
-  vault, borné au vault, puis soumis à la même barrière des workspaces. Un vault absent
-  de `sandbox.workspaces` reste fermé ; sans vault connu, le préfixe est refusé plutôt
-  que pris pour un nom de dossier.
+- Préfixe `vault:` pour les outils `fs_*` (`vault:sources/x.md`), cité dans leur
+  description : il ouvre le vault même absent de `sandbox.workspaces` (c'est le cas de
+  l'instance), et n'ouvre que lui : ni `..`, ni lien symbolique qui en sort, ni pour un
+  sous-agent à racines restreintes. Un chemin absolu vers le vault, sans préfixe, suit
+  la règle des workspaces. Toute écriture `vault:` (`fs_write`, `fs_edit`) passe le
+  filtre des secrets du vault. Sans vault ouvert, le préfixe est refusé plutôt que pris
+  pour un nom de dossier. L'index suit au prochain `penelope mem reindex`.
 - `fs_write` d'une note de forme vault (dossier `sources/`, `attachments/`, `concepts/`,
   `entites/`, ou `type` propre au vault) hors du vault : l'écriture est faite, le
   résultat porte un `avertissement` avec le chemin `vault:…`. Un brouillon passe sans mot.
@@ -31,9 +34,11 @@ une note de forme vault hors du vault.
   et donne la commande `rsync` puis `penelope mem reindex`.
 - La skill livrée `wiki-markdown` (1.1.0) emploie le préfixe ; le préambule de
   `skill_load` le rappelle à une skill qui cite des chemins du vault sans lui.
-- Tests : résolution (vault, workspace, `vault:../`, vault hors workspaces, sans vault),
-  prédicat de forme, exécuteur (écriture, avertissement, brouillon, relecture), `doctor`,
-  préambule ; scénario `outils-vault-prefixe`.
+- Tests : résolution (vault hors workspaces, chemin absolu sans préfixe, `vault:../`,
+  lien sortant, sans vault), prédicat de forme, exécuteur (écriture, secret refusé en
+  écriture et en édition, avertissement, brouillon, relecture, sous-agent restreint),
+  `doctor`, préambule ; scénario `outils-vault-prefixe` sans le vault dans les
+  workspaces. Les surfaces des scénarios suivent les descriptions des outils `fs_*`.
 
 Closes #256.
 
