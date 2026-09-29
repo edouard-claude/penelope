@@ -186,3 +186,52 @@ async fn a_driven_run_keeps_the_machine_awake_until_it_stops() {
     );
     assert_eq!(power.power.active(), 0, "relâchée quand le run s'arrête");
 }
+
+/// La borne de durée mesure le travail du run, pas l'attente du propriétaire (#193) : une
+/// question laissée deux heures ne bloque rien ; le temps qui suit la réponse compte.
+#[tokio::test]
+async fn the_wall_clock_bound_does_not_count_the_owner_wait() {
+    let e = env().await;
+    let mut raw = wf(
+        "patient",
+        "choisir",
+        json!([
+            {"id": "choisir", "name": "On y va ?", "type": "user",
+             "template": "question", "choices": ["Oui"],
+             "transitions": [{"goto": "attendre"}]},
+            {"id": "attendre", "type": "wait", "on": {"event": "jamais.vu"},
+             "transitions": [{"goto": "$done"}]}
+        ]),
+    );
+    raw["settings"]["budget"]["maxWallMs"] = json!(600_000);
+    install(&e.d, raw).await;
+    let run = start_run(&e.d, "patient", json!({}), &owner(), None, 0)
+        .await
+        .unwrap();
+    assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Running);
+    e.clock.advance_ms(2 * 3_600_000);
+    assert_eq!(
+        drive(&e.d, &run.id).await.unwrap(),
+        RunState::Running,
+        "deux heures de réflexion ne sont pas du travail"
+    );
+    let r = e.d.services.runs.get(&run.id).await.unwrap().unwrap();
+    let visit = format!("choisir.{}", r.iterations);
+    answer(&e.d, &run.id, &visit, "Oui", None).await.unwrap();
+    assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Running);
+    e.clock.advance_ms(5 * 60_000);
+    assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Running);
+    e.clock.advance_ms(6 * 60_000);
+    assert_eq!(
+        drive(&e.d, &run.id).await.unwrap(),
+        RunState::Blocked,
+        "onze minutes d'attente d'un événement dépassent la borne de dix"
+    );
+    let r = e.d.services.runs.get(&run.id).await.unwrap().unwrap();
+    assert!(
+        r.error
+            .unwrap_or_default()
+            .contains("durée maximale atteinte"),
+        "la borne tient toujours pour le travail"
+    );
+}

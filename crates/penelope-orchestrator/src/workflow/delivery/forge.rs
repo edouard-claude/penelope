@@ -20,11 +20,25 @@ pub struct PullRequest {
     pub number: u64,
     pub url: String,
     pub state: String,
+    /// Branches source et cible, quand le forgeur les dit.
+    pub head: Option<String>,
+    pub base: Option<String>,
+    /// Le commit que porte la PR (#193).
+    pub head_sha: Option<String>,
+    pub merged: bool,
+    /// Fusionnée : le commit qu'elle a laissé sur la branche cible (commit de fusion, de
+    /// squash, ou sa tête pour une avance rapide).
+    pub merge_sha: Option<String>,
+    pub body: String,
 }
 
 impl PullRequest {
     pub fn to_json(&self) -> Value {
         json!({"number": self.number, "url": self.url, "state": self.state})
+    }
+
+    pub fn is_open(&self) -> bool {
+        matches!(self.state.as_str(), "open" | "opened")
     }
 }
 
@@ -134,20 +148,49 @@ impl Forge {
     }
 
     fn read_pr(&self, v: &Value) -> Option<PullRequest> {
-        let (number, url) = match self.target.kind {
-            ForgeKind::GitHub => (v["number"].as_u64()?, v["html_url"].as_str()?),
-            ForgeKind::GitLab => (v["iid"].as_u64()?, v["web_url"].as_str()?),
+        let text = |x: &Value| x.as_str().map(String::from);
+        let state = v["state"].as_str().unwrap_or_default().to_string();
+        let merged_into = |keys: &[&str]| keys.iter().find_map(|k| text(&v[*k]));
+        let pr = match self.target.kind {
+            ForgeKind::GitHub => PullRequest {
+                number: v["number"].as_u64()?,
+                url: v["html_url"].as_str()?.to_string(),
+                head: text(&v["head"]["ref"]),
+                base: text(&v["base"]["ref"]),
+                head_sha: text(&v["head"]["sha"]),
+                merged: !v["merged_at"].is_null(),
+                merge_sha: (!v["merged_at"].is_null())
+                    .then(|| merged_into(&["merge_commit_sha"]).or(text(&v["head"]["sha"])))
+                    .flatten(),
+                body: v["body"].as_str().unwrap_or_default().to_string(),
+                state,
+            },
+            ForgeKind::GitLab => PullRequest {
+                number: v["iid"].as_u64()?,
+                url: v["web_url"].as_str()?.to_string(),
+                head: text(&v["source_branch"]),
+                base: text(&v["target_branch"]),
+                head_sha: text(&v["sha"]),
+                merged: state == "merged",
+                merge_sha: (state == "merged")
+                    .then(|| merged_into(&["merge_commit_sha", "squash_commit_sha", "sha"]))
+                    .flatten(),
+                body: v["description"].as_str().unwrap_or_default().to_string(),
+                state,
+            },
         };
-        Some(PullRequest {
-            number,
-            url: url.to_string(),
-            state: v["state"].as_str().unwrap_or_default().to_string(),
-        })
+        Some(pr)
     }
 
     /// La PR de `head` vers `base`, ouverte ou non : celle d'une vie antérieure du run
     /// est retrouvée plutôt que recréée.
     pub async fn find_pr(&self, head: &str, base: &str) -> Result<Option<PullRequest>, ForgeError> {
+        Ok(self.list_prs(head, base).await?.into_iter().next())
+    }
+
+    /// Les PR de `head` vers `base`, dans tous leurs états. Une réponse qui nomme d'autres
+    /// branches que celles demandées n'est pas crue : la PR ne compte pas.
+    pub async fn list_prs(&self, head: &str, base: &str) -> Result<Vec<PullRequest>, ForgeError> {
         let (url, query) = match self.target.kind {
             ForgeKind::GitHub => {
                 let owner = self.target.repo.split('/').next().unwrap_or_default();
@@ -172,8 +215,16 @@ impl Forge {
         let v = self
             .send(self.request(reqwest::Method::GET, &url).query(&query))
             .await?;
+        let matches =
+            |found: &Option<String>, wanted: &str| found.as_deref().is_none_or(|f| f == wanted);
         Ok(v.as_array()
-            .and_then(|a| a.iter().find_map(|p| self.read_pr(p))))
+            .map(|a| {
+                a.iter()
+                    .filter_map(|p| self.read_pr(p))
+                    .filter(|p| matches(&p.head, head) && matches(&p.base, base))
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     /// Ouvre la PR de `head` vers `base`.

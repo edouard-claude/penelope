@@ -6,7 +6,7 @@
 //! `delivery`, chacune suivie de sa carte « livraison bloquée » :
 //!
 //! ```text
-//!  juge ─passed─► livraison-pr ─passed─► livraison-ci ─passed─► livraison-e2e ─passed─► fin
+//!  juge ─passed─► livraison-pr ─passed─► livraison-ci ─passed─► livraison-e2e ─passed─► gate prod
 //!                    │                      │                      │
 //!                    └─► carte ◄────────────┴──────────────────────┘  (échec, information
 //!                        Réessayer ─► la même étape                     manquante)
@@ -19,8 +19,12 @@
 //! l'orchestrateur. Rien n'y est supposé : un forgeur, une branche de dev, une CI ou une
 //! URL que ni la configuration ni le dépôt ne donnent devient une demande ciblée au
 //! propriétaire, sur la carte.
+//!
+//! Après l'E2E vient le gate de production ([`gate`], #193) : un bilan vérifiable, puis
+//! l'approbation humaine explicite avant de proposer la PR dev → prod.
 
 pub mod config;
+pub mod gate;
 pub mod verdicts;
 
 use crate::model::{BLOCKED, Phase as RunPhase, Step, Transition};
@@ -29,10 +33,16 @@ use crate::model::{BLOCKED, Phase as RunPhase, Step, Transition};
 pub const PULL_REQUEST: &str = "pull_request";
 pub const CI: &str = "ci";
 pub const E2E: &str = "e2e";
-pub const ACTIONS: &[&str] = &[PULL_REQUEST, CI, E2E];
+/// Gate de production (#193) : le bilan vérifié, puis la PR dev → prod approuvée.
+pub const PROD_REPORT: &str = "prod_report";
+pub const PROD_PULL_REQUEST: &str = "prod_pull_request";
+pub const ACTIONS: &[&str] = &[PULL_REQUEST, CI, E2E, PROD_REPORT, PROD_PULL_REQUEST];
 
 /// Première étape de la livraison, où va la dernière revue acceptée.
 pub const ENTRY: &str = "livraison-pr";
+/// Étapes dont le bilan de production relit la sortie.
+pub const CI_STEP: &str = "livraison-ci";
+pub const E2E_STEP: &str = "livraison-e2e";
 
 /// Choix de la carte « livraison bloquée ».
 pub const RETRY: &str = "Réessayer";
@@ -56,12 +66,12 @@ const STAGES: [Stage; 3] = [
     },
     Stage {
         action: CI,
-        id: "livraison-ci",
+        id: CI_STEP,
         name: "Livraison · CI",
     },
     Stage {
         action: E2E,
-        id: "livraison-e2e",
+        id: E2E_STEP,
         name: "Livraison · E2E dev",
     },
 ];
@@ -85,24 +95,30 @@ pub fn tail(end: &str) -> Vec<Step> {
             ],
             ..Default::default()
         });
-        out.push(Step {
-            id: card,
-            name: format!("{} bloquée", stage.name),
-            kind: "user".into(),
-            phase: RunPhase::Waiting,
-            template: "question".into(),
-            choices: vec![RETRY.into(), STOP.into()],
-            transitions: vec![
-                Transition::on_result(stage.id, RETRY),
-                Transition {
-                    tag: "livraison arrêtée par le propriétaire".into(),
-                    ..Transition::on_result(BLOCKED, STOP)
-                },
-            ],
-            ..Default::default()
-        });
+        out.push(blocked_card(stage.id, stage.name));
     }
     out
+}
+
+/// La carte « livraison bloquée » d'une étape : « Réessayer » la rejoue, « Arrêter »
+/// bloque le run.
+fn blocked_card(stage: &str, name: &str) -> Step {
+    Step {
+        id: format!("{stage}-bloquee"),
+        name: format!("{name} bloquée"),
+        kind: "user".into(),
+        phase: RunPhase::Waiting,
+        template: "question".into(),
+        choices: vec![RETRY.into(), STOP.into()],
+        transitions: vec![
+            Transition::on_result(stage, RETRY),
+            Transition {
+                tag: "livraison arrêtée par le propriétaire".into(),
+                ..Transition::on_result(BLOCKED, STOP)
+            },
+        ],
+        ..Default::default()
+    }
 }
 
 #[cfg(test)]

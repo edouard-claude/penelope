@@ -12,6 +12,45 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.20
+
+**Workflows : gate humain avant la PR vers la production (#193, T5 de #185).** Depuis
+#192, un plan livré s'arrêtait après l'E2E de dev : rien ne présentait le bilan au
+propriétaire ni ne proposait la PR dev → prod, et la borne de durée d'un run (`maxWallMs`,
+deux heures par défaut) comptait l'attente d'une carte : une approbation donnée le
+lendemain aurait trouvé le run bloqué.
+
+- Après `livraison-e2e`, trois étapes : `livraison-bilan` (le bilan vérifié : plan et run
+  exacts, PR dev, commit, CI et E2E de ce commit, preuves, heure, empreinte), `gate-prod`
+  (« Proposer la PR prod », « Re-vérifier », « Refuser »), `livraison-prod`. Aucune n'a
+  de variante « laisse filer ». `branches.prod` est demandée avant toute carte.
+- Le clic n'est pas cru sur parole : un plan révisé depuis arrête le run ; un bilan plus
+  vieux que `prod.max_age_minutes`, une PR dev avancée d'un commit ou une CI qui n'est plus
+  verte le rendent périmé, le run refait PR, CI et E2E et pose une carte neuve, l'ancienne
+  ne vaut plus rien. La PR dev doit être fusionnée ; fusionnée après le bilan (ou sur un
+  autre commit), elle rend le bilan périmé : CI du commit de fusion puis E2E de dev refaits
+  avant toute carte ou PR prod. Un refus bloque le run pour de bon.
+- Au plus une PR prod par run : effet au ledger sous une clé qui ne dépend que du run,
+  marque du run dans la description, recherche sur le forgeur avant l'ouverture ; un envoi
+  interrompu par un redémarrage est terminé sans rejuger le bilan. Lien dans le sujet ; ni
+  fusion ni déploiement, qui suivent la politique du projet.
+- L'attente d'une étape `user` ne compte plus dans la borne de durée d'un run : elle mesure
+  le travail, pas le temps d'une décision.
+- Tests : logique pure du gate (chemin, branche de prod, fraîcheur, bilan), orchestrateur
+  contre les faux forgeurs GitHub et GitLab (tout vert sans clic et redémarrage : zéro PR ;
+  approbation puis redémarrage : une seule PR, lien dans le sujet ; PR ouverte avant un
+  arrêt retrouvée ; bilan vieilli, commit avancé, CI rouge, PR dev fusionnée après le
+  bilan (re-vérifiée sur le commit de fusion), E2E rouge après fusion : aucune PR ;
+  refus durable ; nouvelle révision ; PR dev non fusionnée), borne de durée du pilote,
+  scénario `livraison-prod` (clic, redémarrage, une MR prod, second clic refusé) et
+  `livraison-dev` qui finit sur la carte, sans MR prod.
+
+Avec #186, #191 et #192, l'épopée #185 est livrée : plan révisable et gate « vas-y »,
+phases à contexte neuf avec checkpoints et revue bornée, PR dev automatique, CI et E2E
+externes sur GitHub et GitLab, reprise sans doublon, et gate humain avant la production.
+
+Closes #193, closes #185.
+
 ### 1.0.19
 
 **Mémoire : une note écrite par un chemin du vault atterrissait dans le workspace, sans

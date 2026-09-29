@@ -267,13 +267,14 @@ fn context_is_run_or_fresh_on_an_agent_step_only() {
     assert!(validate(&ok, None, &known()).is_valid());
 }
 
-/// #192 : une étape `delivery` nomme l'une de ses trois actions, et elle seule en porte une.
+/// #192, #193 : une étape `delivery` nomme l'une de ses actions, et elle seule en porte une.
 #[test]
 fn delivery_names_one_of_its_actions_on_a_delivery_step_only() {
     let cases: &[(&str, Mutation)] = &[
-        ("attendu pull_request, ci, e2e, reçu ``", |w| {
-            second(w, step("delivery"))
-        }),
+        (
+            "attendu pull_request, ci, e2e, prod_report, prod_pull_request, reçu ``",
+            |w| second(w, step("delivery")),
+        ),
         ("reçu `deploy`", |w| {
             second(
                 w,

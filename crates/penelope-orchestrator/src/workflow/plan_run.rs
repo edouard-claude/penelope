@@ -19,6 +19,13 @@ fn link_key(run_id: &str) -> String {
     format!("wf.plan.link.{run_id}")
 }
 
+/// Le lien d'un run de plan vers la révision qu'il exécute : `session`, `version`,
+/// `fingerprint`, `workflow`. Un run lancé hors plan n'en a pas.
+pub(super) async fn plan_link(s: &Services, run_id: &str) -> Option<Value> {
+    let raw = s.kv_get(&link_key(run_id)).await.ok().flatten()?;
+    serde_json::from_str(&raw).ok()
+}
+
 /// Le workflow d'un run : la définition compilée d'un plan approuvé, sinon le registre.
 pub async fn workflow_of(s: &Services, run: &Run) -> Option<Workflow> {
     if run.id.starts_with("r_plan_")

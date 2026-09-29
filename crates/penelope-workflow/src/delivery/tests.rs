@@ -62,7 +62,7 @@ fn the_tail_chains_pr_ci_and_e2e_each_with_its_blocking_card() {
             .iter()
             .filter(|s| s.kind == "delivery")
             .map(|s| s.delivery.as_str())
-            .eq(ACTIONS.iter().copied())
+            .eq(ACTIONS[..3].iter().copied())
     );
 }
 

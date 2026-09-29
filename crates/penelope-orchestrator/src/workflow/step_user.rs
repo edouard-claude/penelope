@@ -7,6 +7,12 @@ pub(super) async fn user_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> 
     let s = ctx.s();
     let (run, step) = (ctx.run, ctx.step);
     if let Some(raw) = s.kv_get(&visit_key("answer", run, &step.id)).await? {
+        // L'attente de la réponse ne compte pas dans la borne de durée du run (#193).
+        if let Some(at) = asked_since(s, run, &step.id).await {
+            let waited = (s.clock.now_ms() - at).max(0);
+            s.kv_set(&visit_key("waited", run, &step.id), &waited.to_string())
+                .await?;
+        }
         let v: Value = serde_json::from_str(&raw).unwrap_or(json!({}));
         let choice = v["choice"].as_str().unwrap_or("répondu").to_string();
         return Ok(done(
@@ -38,6 +44,11 @@ pub(super) async fn user_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> 
             .map_err(anyhow::Error::msg)?;
         }
         s.kv_set(&asked_key, "1").await?;
+        s.kv_set(
+            &visit_key("asked_at", run, &step.id),
+            &s.clock.now_ms().to_string(),
+        )
+        .await?;
         let _ = s
             .events
             .append(

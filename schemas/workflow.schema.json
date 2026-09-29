@@ -430,9 +430,11 @@
           "enum": [
             "pull_request",
             "ci",
-            "e2e"
+            "e2e",
+            "prod_report",
+            "prod_pull_request"
           ],
-          "description": "`delivery` : `pull_request` ouvre ou retrouve la PR vers la branche de développement, `ci` attend le verdict de la CI du projet, `e2e` vérifie l'environnement de dev depuis l'extérieur. Forgeur, branches, CI et URL de dev viennent de `.penelope/delivery.toml` du dépôt."
+          "description": "`delivery` : `pull_request` ouvre ou retrouve la PR vers la branche de développement, `ci` attend le verdict de la CI du projet, `e2e` vérifie l'environnement de dev depuis l'extérieur, `prod_report` présente le bilan vérifié avant la production, `prod_pull_request` propose la PR dev → prod après approbation humaine, une seule fois. Forgeur, branches, CI et URL de dev viennent de `.penelope/delivery.toml` du dépôt."
         },
         "context": {
           "type": "string",

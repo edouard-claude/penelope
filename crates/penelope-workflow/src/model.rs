@@ -254,7 +254,8 @@ pub struct Step {
 
     // --- delivery ---
     /// `delivery` : `pull_request` (PR vers la branche de développement), `ci` (verdict de
-    /// la CI du projet) ou `e2e` (vérification externe de l'environnement de dev), #192.
+    /// la CI du projet) ou `e2e` (vérification externe de l'environnement de dev), #192 ;
+    /// `prod_report` (bilan vérifié) ou `prod_pull_request` (PR dev → prod approuvée), #193.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub delivery: String,
 }

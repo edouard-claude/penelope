@@ -320,13 +320,29 @@ fn a_judged_plan_that_writes_code_is_delivered_after_its_last_verdict() {
         PASSED,
         PASSED,
     ];
-    results.extend([delivery::PASSED; 3]);
+    results.extend([delivery::PASSED; 4]);
     let path = walk(&w, &results);
     assert_eq!(
         &path[6..],
-        ["livraison-pr", "livraison-ci", "livraison-e2e", DONE],
-        "« laisse filer » ne saute aucune étape de livraison"
+        [
+            "livraison-pr",
+            "livraison-ci",
+            "livraison-e2e",
+            delivery::gate::REPORT_STEP,
+            delivery::gate::GATE_STEP
+        ],
+        "« laisse filer » ne saute ni la livraison ni le gate de production"
     );
+    // Seul le clic du propriétaire mène à la PR de production ; un refus arrête le run.
+    let mut approved = results.clone();
+    approved.extend([delivery::gate::APPROVE, delivery::PASSED]);
+    assert_eq!(
+        &walk(&w, &approved)[10..],
+        [delivery::gate::GATE_STEP, delivery::gate::PROD_STEP, DONE]
+    );
+    let mut refused = results.clone();
+    refused.push(delivery::gate::REFUSE);
+    assert_eq!(walk(&w, &refused).last().unwrap(), BLOCKED);
     // Une livraison bloquée pose sa carte ; « Réessayer » rejoue l'étape, « Arrêter »
     // bloque le run.
     let mut blocked = results[..6].to_vec();

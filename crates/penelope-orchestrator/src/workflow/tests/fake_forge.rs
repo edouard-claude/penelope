@@ -1,7 +1,7 @@
 //! Faux forgeurs GitHub et GitLab (#192) : un serveur HTTP local qui sert le peu d'API
 //! qu'emploie la livraison (PR, CI d'un commit) et l'environnement de dev, avec un état
 //! que le test fait évoluer (CI en attente puis verte, forgeur en panne, PR déjà
-//! ouverte par une vie antérieure du daemon).
+//! ouverte par une vie antérieure du daemon, PR dev fusionnée ou avancée d'un commit).
 
 use penelope_workflow::delivery::config::ForgeKind;
 use serde_json::{Value, json};
@@ -92,8 +92,49 @@ impl FakeForge {
         let kind = self.kind;
         self.with(|w| {
             let n = w.prs.len() as u64 + 1;
-            w.prs.push(pr(kind, &base_url, n, head, base));
+            w.prs.push(pr(kind, &base_url, n, head, base, ""));
         });
+    }
+
+    /// La PR `n` porte maintenant le commit `sha` (#193).
+    pub fn head(&self, n: u64, sha: &str) {
+        let kind = self.kind;
+        self.with(|w| {
+            let p = &mut w.prs[n as usize - 1];
+            match kind {
+                ForgeKind::GitHub => p["head"]["sha"] = json!(sha),
+                ForgeKind::GitLab => p["sha"] = json!(sha),
+            }
+        });
+    }
+
+    /// Le propriétaire fusionne la PR `n`, qui laisse le commit de fusion `merge` sur la
+    /// branche cible (#193).
+    pub fn merge(&self, n: u64, merge: &str) {
+        let kind = self.kind;
+        self.with(|w| {
+            let p = &mut w.prs[n as usize - 1];
+            p["merge_commit_sha"] = json!(merge);
+            match kind {
+                ForgeKind::GitHub => {
+                    p["state"] = json!("closed");
+                    p["merged_at"] = json!("2026-09-29T10:00:00Z");
+                }
+                ForgeKind::GitLab => p["state"] = json!("merged"),
+            }
+        });
+    }
+
+    /// Les PR vers `base`, dans tous leurs états.
+    pub fn prs_to(&self, base: &str) -> Vec<Value> {
+        let kind = self.kind;
+        self.with(|w| {
+            w.prs
+                .iter()
+                .filter(|p| base_ref(kind, p) == base)
+                .cloned()
+                .collect()
+        })
     }
 
     /// CI d'un commit, comme un forgeur la rend : `pending`, `green` ou `red`.
@@ -122,18 +163,27 @@ impl FakeForge {
     }
 }
 
-fn pr(kind: ForgeKind, base_url: &str, n: u64, head: &str, base: &str) -> Value {
+fn pr(kind: ForgeKind, base_url: &str, n: u64, head: &str, base: &str, body: &str) -> Value {
     match kind {
         ForgeKind::GitHub => json!({
             "number": n, "state": "open",
             "html_url": format!("{base_url}/{REPO}/pull/{n}"),
-            "head": {"ref": head}, "base": {"ref": base},
+            "head": {"ref": head, "sha": null}, "base": {"ref": base},
+            "merged_at": null, "body": body,
         }),
         ForgeKind::GitLab => json!({
             "iid": n, "state": "opened",
             "web_url": format!("{base_url}/{REPO}/-/merge_requests/{n}"),
-            "source_branch": head, "target_branch": base,
+            "source_branch": head, "target_branch": base, "sha": null,
+            "description": body,
         }),
+    }
+}
+
+fn base_ref(kind: ForgeKind, p: &Value) -> String {
+    match kind {
+        ForgeKind::GitHub => p["base"]["ref"].as_str().unwrap_or_default().to_string(),
+        ForgeKind::GitLab => p["target_branch"].as_str().unwrap_or_default().to_string(),
     }
 }
 
@@ -276,10 +326,7 @@ fn route(
         ),
         ForgeKind::GitLab => p["source_branch"].as_str().unwrap_or_default().to_string(),
     };
-    let base_of = |p: &Value| match kind {
-        ForgeKind::GitHub => p["base"]["ref"].as_str().unwrap_or_default().to_string(),
-        ForgeKind::GitLab => p["target_branch"].as_str().unwrap_or_default().to_string(),
-    };
+    let base_of = |p: &Value| base_ref(kind, p);
     match (method, rest) {
         ("GET", "/pulls" | "/merge_requests") => {
             let found: Vec<Value> = w
@@ -295,7 +342,11 @@ fn route(
             let n = w.prs.len() as u64 + 1;
             let head = body[head_key].as_str().unwrap_or_default();
             let base = body[base_key].as_str().unwrap_or_default();
-            let created = pr(kind, base_url, n, head, base);
+            let text = body["body"]
+                .as_str()
+                .or(body["description"].as_str())
+                .unwrap_or_default();
+            let created = pr(kind, base_url, n, head, base, text);
             w.prs.push(created.clone());
             (201, created.to_string())
         }
