@@ -108,11 +108,13 @@ impl FakeForge {
         });
     }
 
-    /// Le propriétaire fusionne la PR `n` (#193).
-    pub fn merge(&self, n: u64) {
+    /// Le propriétaire fusionne la PR `n`, qui laisse le commit de fusion `merge` sur la
+    /// branche cible (#193).
+    pub fn merge(&self, n: u64, merge: &str) {
         let kind = self.kind;
         self.with(|w| {
             let p = &mut w.prs[n as usize - 1];
+            p["merge_commit_sha"] = json!(merge);
             match kind {
                 ForgeKind::GitHub => {
                     p["state"] = json!("closed");

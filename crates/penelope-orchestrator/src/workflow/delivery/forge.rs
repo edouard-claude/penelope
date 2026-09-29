@@ -26,6 +26,9 @@ pub struct PullRequest {
     /// Le commit que porte la PR (#193).
     pub head_sha: Option<String>,
     pub merged: bool,
+    /// Fusionnée : le commit qu'elle a laissé sur la branche cible (commit de fusion, de
+    /// squash, ou sa tête pour une avance rapide).
+    pub merge_sha: Option<String>,
     pub body: String,
 }
 
@@ -147,6 +150,7 @@ impl Forge {
     fn read_pr(&self, v: &Value) -> Option<PullRequest> {
         let text = |x: &Value| x.as_str().map(String::from);
         let state = v["state"].as_str().unwrap_or_default().to_string();
+        let merged_into = |keys: &[&str]| keys.iter().find_map(|k| text(&v[*k]));
         let pr = match self.target.kind {
             ForgeKind::GitHub => PullRequest {
                 number: v["number"].as_u64()?,
@@ -155,6 +159,9 @@ impl Forge {
                 base: text(&v["base"]["ref"]),
                 head_sha: text(&v["head"]["sha"]),
                 merged: !v["merged_at"].is_null(),
+                merge_sha: (!v["merged_at"].is_null())
+                    .then(|| merged_into(&["merge_commit_sha"]).or(text(&v["head"]["sha"])))
+                    .flatten(),
                 body: v["body"].as_str().unwrap_or_default().to_string(),
                 state,
             },
@@ -165,6 +172,9 @@ impl Forge {
                 base: text(&v["target_branch"]),
                 head_sha: text(&v["sha"]),
                 merged: state == "merged",
+                merge_sha: (state == "merged")
+                    .then(|| merged_into(&["merge_commit_sha", "squash_commit_sha", "sha"]))
+                    .flatten(),
                 body: v["description"].as_str().unwrap_or_default().to_string(),
                 state,
             },

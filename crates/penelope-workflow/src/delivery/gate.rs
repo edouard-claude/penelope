@@ -166,9 +166,12 @@ pub struct Bilan {
     pub plan: Option<PlanRef>,
     pub forge: String,
     pub repo: String,
-    /// Branche de travail et commit vérifié.
+    /// Branche de travail et commit que porte la PR dev.
     pub head: String,
     pub sha: String,
+    /// Le commit que la CI et l'E2E ont vérifié : celui de la PR dev, ou son commit de
+    /// fusion dans la branche de dev une fois fusionnée.
+    pub verified_sha: String,
     pub dev_branch: String,
     pub prod_branch: String,
     pub dev_pr_number: u64,
@@ -211,16 +214,22 @@ impl Bilan {
             ),
             None => format!("run `{}`", self.run),
         };
+        let verified = short(&self.verified_sha, 8);
         let ci = if self.ci == "none" {
             "pas de CI déclarée (`ci.provider = \"none\"`)".to_string()
         } else {
-            format!("verte : {}", self.ci_detail)
+            format!("verte sur `{verified}` : {}", self.ci_detail)
+        };
+        let merged = if self.verified_sha == self.sha {
+            String::new()
+        } else {
+            format!(", fusionnée : commit de fusion `{verified}`")
         };
         format!(
             "- Version : {plan}\n\
-             - PR dev : {} (`{}` → `{}`, commit `{}`)\n\
+             - PR dev : {} (`{}` → `{}`, commit `{}`){merged}\n\
              - CI : {ci}\n\
-             - E2E : vert sur {}, {} contrôle(s), preuves `{}`",
+             - E2E : vert sur {} depuis `{verified}`, {} contrôle(s), preuves `{}`",
             self.dev_pr_url,
             self.head,
             self.dev_branch,
@@ -275,6 +284,8 @@ pub struct Seen {
     pub active_plan: Option<PlanRef>,
     /// Le commit que porte la PR dev sur le forgeur.
     pub dev_pr_head: Option<String>,
+    /// Fusionnée : son commit de fusion dans la branche de dev.
+    pub dev_pr_merge: Option<String>,
     /// La CI relue sur le commit vérifié ; `None` si elle n'a pas été relue.
     pub ci: Option<CiVerdict>,
 }
@@ -319,6 +330,19 @@ pub fn freshness(b: &Bilan, seen: &Seen, max_age_ms: u64) -> Freshness {
         None => {
             return Freshness::Stale("le forgeur ne dit plus quel commit porte la PR dev".into());
         }
+    }
+    // Une fusion après le bilan a pu redéployer l'environnement de dev depuis le commit de
+    // fusion : ce que l'E2E avait vu ne dit plus rien de lui.
+    if let Some(merge) = seen.dev_pr_merge.as_deref()
+        && merge != b.verified_sha
+    {
+        return Freshness::Stale(format!(
+            "la PR dev a été fusionnée dans `{}` depuis le bilan (commit de fusion `{}`, le bilan \
+             vérifiait `{}`) : l'environnement de dev a pu être redéployé",
+            b.dev_branch,
+            short(merge, 8),
+            short(&b.verified_sha, 8)
+        ));
     }
     if b.ci != "none" {
         match &seen.ci {

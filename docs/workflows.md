@@ -600,8 +600,12 @@ branche de dev.
   CI et E2E et pose une carte neuve. Le bouton de l'ancienne carte ne vaut plus rien (sa
   visite d'étape est passée : « Déjà traité ») ;
 - la PR dev doit être fusionnée dans la branche de dev, sans quoi la PR dev → prod ne
-  porterait pas le travail : la carte le dit, « Réessayer » relit (l'approbation tient tant
-  que le bilan est frais).
+  porterait pas le travail : la carte le dit, « Réessayer » relit ;
+- une PR dev fusionnée **après** le bilan (ou fusionnée avec un autre commit que celui
+  vérifié) rend le bilan périmé : l'environnement de dev a pu être redéployé depuis le
+  commit de fusion. Le run refait la CI **de ce commit de fusion**, puis l'E2E de dev, et
+  pose une carte neuve ; aucune PR prod entre les deux, aucune si l'E2E est rouge. Le bilan
+  approuvable est donc celui du commit de fusion.
 
 **Au plus une PR prod par run.** L'effet est au ledger sous une clé qui ne dépend que du
 run, planifié avant l'appel ; la PR porte la marque du run dans sa description et elle
@@ -627,9 +631,9 @@ et `cargo test -p penelope-orchestrator prod`.
 - Une tâche MCP n'est suivie qu'une fois connue de l'étape `wait` : un appel d'outil qui
   rend une tâche n'enregistre rien tout seul.
 - Le gate de production propose la PR dev → prod ; il ne la fusionne pas et ne déploie
-  rien. L'E2E porte sur l'environnement de dev au moment du bilan ; une fusion de la PR
-  dev qui redéploie cet environnement n'est pas re-vérifiée avant la PR prod, sauf
-  « Re-vérifier » ou bilan périmé.
+  rien. L'E2E vérifie l'environnement de dev depuis l'extérieur : Pénélope ne sait pas
+  quel commit y est déployé, elle suppose que le déploiement de dev suit la branche de dev
+  (le commit de fusion) une fois la CI de ce commit passée.
 - La livraison ne lit que la CI du forgeur (GitHub, GitLab) ; une CI externe au forgeur
   se déclare `none`. Corriger une CI rouge passe par un nouveau commit et un nouveau plan :
   « Réessayer » relit la CI du même commit (utile après une relance sur le forgeur).

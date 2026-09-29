@@ -6,6 +6,9 @@
 use super::delivery::{Bench, DEV, PROD, WORK, bench, configure, git, restarted};
 use super::fake_forge::REPO;
 use super::*;
+
+/// Commit de fusion de la PR dev dans `develop`.
+const MERGE: &str = "feedface0000111122223333444455556666777788";
 use penelope_kernel::effects::{EffectKind, EffectSpec};
 use penelope_workflow::delivery::config::ForgeKind;
 use penelope_workflow::delivery::gate::{self, APPROVE, GATE_STEP, PROD_STEP, RECHECK, REFUSE};
@@ -45,10 +48,14 @@ impl Bench {
         git(&self.dir, &["rev-parse", "HEAD"])
     }
 
-    /// La PR dev porte le commit vérifié et le propriétaire l'a fusionnée dans `develop`.
-    fn land_dev_pr(&self) {
+    /// Le propriétaire fusionne la PR dev (sur le commit vérifié) dans `develop`, puis
+    /// fait re-vérifier : la carte neuve porte le bilan du commit de fusion.
+    async fn land_dev_pr(&self, run: &str) {
         self.forge.head(1, &self.sha());
-        self.forge.merge(1);
+        self.forge.merge(1, MERGE);
+        self.answer(run, RECHECK).await;
+        assert_eq!(drive(&self.e.d, run).await.unwrap(), RunState::Running);
+        assert_eq!(self.at(run).await, GATE_STEP, "{}", self.last_question());
     }
 
     fn prod_prs(&self) -> Vec<Value> {
@@ -73,14 +80,15 @@ impl Bench {
 #[tokio::test]
 async fn all_green_without_a_click_proposes_nothing_and_the_wait_survives_a_restart() {
     let (b, run) = at_the_gate(ForgeKind::GitHub).await;
-    b.land_dev_pr();
+    b.land_dev_pr(&run).await;
     let card = b.last_question();
     for part in [
         "Bilan vérifié avant la production",
         "/pull/1",
         &format!("`{WORK}` → `{DEV}`"),
         &format!("commit `{}`", &b.sha()[..8]),
-        "CI : verte",
+        "fusionnée : commit de fusion `feedface`",
+        "CI : verte sur `feedface`",
         "E2E : vert",
         &format!("`{DEV}` → `{PROD}`"),
         "ni fusionnée ni déployée",
@@ -108,14 +116,14 @@ async fn all_green_without_a_click_proposes_nothing_and_the_wait_survives_a_rest
     );
     assert_eq!(
         b.gate_cards(),
-        1,
+        2,
         "l'attente est durable, la carte n'est pas reposée"
     );
 }
 
 async fn approval_then_restart_opens_one_prod_pr(kind: ForgeKind) {
     let (b, run) = at_the_gate(kind).await;
-    b.land_dev_pr();
+    b.land_dev_pr(&run).await;
     let before = b.run(&run).await;
     let old_visit = b.visit(&before);
     b.answer(&run, APPROVE).await;
@@ -174,7 +182,7 @@ async fn gitlab_approval_then_restart_opens_exactly_one_prod_mr() {
 #[tokio::test]
 async fn a_prod_pr_opened_before_a_crash_is_found_not_reopened() {
     let (b, run) = at_the_gate(ForgeKind::GitLab).await;
-    b.land_dev_pr();
+    b.land_dev_pr(&run).await;
     b.answer(&run, APPROVE).await;
     let s = &b.e.d.services;
     let session = b.run(&run).await.session_id;
@@ -231,7 +239,7 @@ async fn a_prod_pr_opened_before_a_crash_is_found_not_reopened() {
 #[tokio::test]
 async fn a_stale_report_opens_nothing_and_its_old_button_is_void() {
     let (b, run) = at_the_gate(ForgeKind::GitHub).await;
-    b.land_dev_pr();
+    b.land_dev_pr(&run).await;
     let old_visit = b.visit(&b.run(&run).await);
 
     // Le propriétaire clique deux heures plus tard : le bilan ne tient plus.
@@ -249,7 +257,7 @@ async fn a_stale_report_opens_nothing_and_its_old_button_is_void() {
     assert!(texts.contains("Bilan périmé"), "{texts}");
     // PR, CI et E2E refaits, une nouvelle carte posée ; l'ancienne ne vaut plus rien.
     assert_eq!(b.at(&run).await, GATE_STEP);
-    assert_eq!(b.gate_cards(), 2);
+    assert_eq!(b.gate_cards(), 3);
     assert!(
         answer(&b.e.d, &run, &old_visit, APPROVE, None)
             .await
@@ -293,7 +301,7 @@ async fn a_stale_report_opens_nothing_and_its_old_button_is_void() {
 #[tokio::test]
 async fn a_refusal_is_final_and_durable() {
     let (b, run) = at_the_gate(ForgeKind::GitHub).await;
-    b.land_dev_pr();
+    b.land_dev_pr(&run).await;
     b.answer(&run, REFUSE).await;
     assert_eq!(drive(&b.e.d, &run).await.unwrap(), RunState::Blocked);
     let reason = b.run(&run).await.error.unwrap_or_default();
@@ -316,7 +324,7 @@ async fn a_refusal_is_final_and_durable() {
 #[tokio::test]
 async fn a_new_revision_of_the_plan_voids_the_approval() {
     let (b, run) = at_the_gate(ForgeKind::GitHub).await;
-    b.land_dev_pr();
+    b.land_dev_pr(&run).await;
     // Le run exécute la révision approuvée du plan de sa conversation.
     let s = &b.e.d.services;
     let steps = vec![
@@ -375,8 +383,14 @@ async fn an_unmerged_dev_pr_holds_the_approved_prod_pr_until_retry() {
     assert!(q.contains("n'est pas fusionnée dans `develop`"), "{q}");
     assert!(b.prod_prs().is_empty());
 
-    b.forge.merge(1);
+    // Fusionnée après le bilan : le bilan se ré-établit sur le commit de fusion, puis une
+    // carte neuve est approuvée.
+    b.forge.merge(1, MERGE);
     b.answer(&run, RETRY).await;
+    drive(&b.e.d, &run).await.unwrap();
+    assert_eq!(b.at(&run).await, GATE_STEP);
+    assert!(b.prod_prs().is_empty());
+    b.answer(&run, APPROVE).await;
     assert_eq!(drive(&b.e.d, &run).await.unwrap(), RunState::Done);
     assert_eq!(b.prod_prs().len(), 1);
 }
@@ -402,4 +416,61 @@ async fn the_prod_branch_is_asked_for_before_any_card() {
         0,
         "pas d'approbation sans branche de production"
     );
+}
+
+/// La PR dev fusionnée après le bilan : l'environnement de dev a pu être redéployé depuis le
+/// commit de fusion. Le clic ne propose rien ; CI puis E2E sont refaits sur ce commit et une
+/// carte neuve est posée. Un E2E rouge après la fusion n'en pose aucune.
+#[tokio::test]
+async fn a_dev_pr_merged_after_the_report_is_verified_again_on_its_merge_commit() {
+    let (b, run) = at_the_gate(ForgeKind::GitHub).await;
+    let checks = |sha: &str| {
+        b.forge
+            .requests(&format!("GET /repos/{REPO}/commits/{sha}/check-runs"))
+            .len()
+    };
+    assert_eq!(checks(MERGE), 0);
+    b.forge.head(1, &b.sha());
+    b.forge.merge(1, MERGE);
+    b.answer(&run, APPROVE).await;
+    assert_eq!(drive(&b.e.d, &run).await.unwrap(), RunState::Running);
+    assert!(b.prod_prs().is_empty(), "aucune PR prod entre les deux");
+    let r = b.run(&run).await;
+    let stale = r.step_outputs[PROD_STEP]["stale"].as_str().unwrap();
+    assert!(stale.contains("fusionnée dans `develop`"), "{stale}");
+    assert_eq!(r.step_outputs["livraison-ci"]["ci"]["sha"], MERGE);
+    assert_eq!(r.step_outputs["livraison-e2e"]["e2e"]["sha"], MERGE);
+    assert_eq!(checks(MERGE), 1, "la CI lue sur le commit de fusion");
+    assert_eq!(b.at(&run).await, GATE_STEP);
+    assert_eq!(b.gate_cards(), 2);
+    assert!(b.last_question().contains("commit de fusion `feedface`"));
+    assert_eq!(
+        b.forge.requests("POST").len(),
+        1,
+        "la PR dev n'est pas rouverte"
+    );
+
+    b.answer(&run, APPROVE).await;
+    assert_eq!(drive(&b.e.d, &run).await.unwrap(), RunState::Done);
+    assert_eq!(b.prod_prs().len(), 1);
+}
+
+#[tokio::test]
+async fn a_red_e2e_after_the_merge_proposes_nothing() {
+    let (b, run) = at_the_gate(ForgeKind::GitLab).await;
+    b.forge.head(1, &b.sha());
+    b.forge.merge(1, MERGE);
+    b.forge.with(|w| {
+        w.dev.insert("/".into(), (502, "redéploiement raté".into()));
+    });
+    b.answer(&run, APPROVE).await;
+    drive(&b.e.d, &run).await.unwrap();
+    assert_eq!(b.at(&run).await, "livraison-e2e-bloquee");
+    let r = b.run(&run).await;
+    assert_eq!(r.step_outputs["livraison-e2e"]["e2e"]["sha"], MERGE);
+    assert!(
+        b.prod_prs().is_empty(),
+        "E2E rouge après fusion : aucune MR prod"
+    );
+    assert_eq!(b.gate_cards(), 1);
 }

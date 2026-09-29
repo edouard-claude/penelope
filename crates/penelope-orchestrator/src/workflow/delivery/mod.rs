@@ -317,43 +317,87 @@ async fn pull_request(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     // Une seule PR par run : la clé ne dépend ni du commit ni de la visite.
     let request = json!({"forge": target.kind.as_str(), "api": target.api, "repo": target.repo,
                          "head": head, "base": target.dev_branch});
-    let pr = match plan_effect(ctx, EffectKind::Http, "delivery.pull_request", request).await? {
-        Err(Some(v)) => v,
-        Err(None) => return Ok(StepOutcome::Waiting("PR dev en cours d'ouverture".into())),
-        Ok(id) => match open_once(ctx, &forge, &head).await {
-            Ok(v) => {
-                s.effects.complete(&id, v.clone()).await?;
-                v
-            }
-            Err(e) => {
-                s.effects.fail(&id, e.to_string()).await?;
-                return Ok(blocked(format!("Pour {PURPOSE} : {e}.")));
-            }
-        },
-    };
+    let (pr, replayed) =
+        match plan_effect(ctx, EffectKind::Http, "delivery.pull_request", request).await? {
+            Err(Some(v)) => (v, true),
+            Err(None) => return Ok(StepOutcome::Waiting("PR dev en cours d'ouverture".into())),
+            Ok(id) => match open_once(ctx, &forge, &head).await {
+                Ok(v) => {
+                    s.effects.complete(&id, v.clone()).await?;
+                    (v, false)
+                }
+                Err(e) => {
+                    s.effects.fail(&id, e.to_string()).await?;
+                    return Ok(blocked(format!("Pour {PURPOSE} : {e}.")));
+                }
+            },
+        };
     let found = pr["found"].as_bool().unwrap_or(false);
     let url = pr["url"].as_str().unwrap_or_default().to_string();
     let base = &target.dev_branch;
+    let noun = target.kind.request_noun();
+    // Une PR déjà ouverte a pu être fusionnée depuis (#193) : l'environnement de dev a pu
+    // être redéployé depuis le commit de fusion, c'est lui que la CI et l'E2E vérifient.
+    let merged = if replayed {
+        match forge.list_prs(&head, base).await {
+            Ok(prs) => prs
+                .into_iter()
+                .find(|p| Some(p.number) == pr["number"].as_u64() && p.merged),
+            Err(e) => {
+                return Ok(blocked(format!(
+                    "Pour {PURPOSE}, la PR dev ne se relit pas : {e}. « Réessayer » la relit."
+                )));
+            }
+        }
+    } else {
+        None
+    };
+    let (sha, verified, text) = match merged.as_ref().and_then(|m| m.merge_sha.clone()) {
+        Some(merge) => {
+            // La tête que la PR a fusionnée, pas forcément le commit local.
+            let merged_head = merged
+                .as_ref()
+                .and_then(|m| m.head_sha.clone())
+                .unwrap_or(sha);
+            let text = format!(
+                "{noun} dev fusionnée dans `{base}` : {url} (`{head}` → `{base}`, commit `{}`) ; \
+                 CI et E2E vérifiés sur le commit de fusion `{}`",
+                short(&merged_head),
+                short(&merge)
+            );
+            (merged_head, merge, text)
+        }
+        None => {
+            let verb = if found { "retrouvée" } else { "ouverte" };
+            let text = format!(
+                "{noun} dev {verb} : {url} (`{head}` → `{base}`, commit `{}`)",
+                short(&sha)
+            );
+            (sha.clone(), sha, text)
+        }
+    };
     let state = json!({"dir": dir, "forge": target.kind.as_str(), "repo": target.repo,
-                       "head": head, "base": base, "sha": sha, "pr": pr});
+                       "head": head, "base": base, "sha": sha, "verified_sha": verified,
+                       "merged": merged.is_some(), "pr": pr});
     s.kv_set(&state_key(&ctx.run.id), &state.to_string())
         .await?;
-    let noun = target.kind.request_noun();
-    let verb = if found { "retrouvée" } else { "ouverte" };
-    note(
-        ctx,
-        "pr",
-        &format!("🔀 {noun} dev {verb} : {url} (`{head}` → `{base}`)"),
-    )
-    .await;
+    note(ctx, "pr", &format!("🔀 {text}")).await;
     Ok(outcome(
         StepResult::Passed,
-        format!(
-            "{noun} dev {verb} : {url} (`{head}` → `{base}`, commit `{}`)",
-            short(&sha)
-        ),
-        json!({"pr": pr, "head": head, "base": base, "sha": sha, "forge": target.kind.as_str()}),
+        text,
+        json!({"pr": pr, "head": head, "base": base, "sha": sha, "verified_sha": verified,
+               "forge": target.kind.as_str()}),
     ))
+}
+
+/// Le commit que la CI et l'E2E vérifient : celui de la PR dev, ou son commit de fusion
+/// dans la branche de dev une fois fusionnée (#193).
+fn verified_sha(state: &Value) -> String {
+    state["verified_sha"]
+        .as_str()
+        .or(state["sha"].as_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// Cherche la PR de la branche sur le forgeur, puis l'ouvre si elle n'existe pas.
@@ -423,7 +467,7 @@ async fn ci(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         Ok(plan) => plan,
         Err(m) => return Ok(asked(PURPOSE, &p.dir, &m)),
     };
-    let sha = state["sha"].as_str().unwrap_or_default().to_string();
+    let sha = verified_sha(&state);
     let url = state["pr"]["url"].as_str().unwrap_or_default().to_string();
     if plan.provider.is_none() {
         return Ok(outcome(
@@ -525,7 +569,7 @@ async fn e2e_stage(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
     let proofs = e2e::run(ctx, &plan, &p.dir).await;
     let sha = state_of(s, &ctx.run.id)
         .await
-        .and_then(|st| st["sha"].as_str().map(String::from))
+        .map(|st| verified_sha(&st))
         .unwrap_or_default();
     let evidence = json!({
         "url": plan.url,

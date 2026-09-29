@@ -74,17 +74,19 @@ pub(super) async fn report(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         ));
     };
     let sha = text(&state["sha"]);
+    let verified_sha = verified_sha(&state);
     let (ci, e2e) = (
         &ctx.run.step_outputs[CI_STEP],
         &ctx.run.step_outputs[E2E_STEP],
     );
     // Le bilan ne dit que ce qui a été vérifié sur ce commit-là.
-    let verified = |out: &Value, sha_of: &Value| out["result"] == PASSED && sha_of == &json!(sha);
+    let verified =
+        |out: &Value, sha_of: &Value| out["result"] == PASSED && sha_of == &json!(verified_sha);
     if !verified(ci, &ci["ci"]["sha"]) || !verified(e2e, &e2e["e2e"]["sha"]) {
         return Ok(blocked(format!(
             "Pour {PURPOSE} : la CI et l'E2E du commit `{}` ne sont pas tous deux verts. \
              « Réessayer » relit le bilan.",
-            short(&sha)
+            short(&verified_sha)
         )));
     }
     let plan = match plans(s, &ctx.run.id).await {
@@ -103,6 +105,7 @@ pub(super) async fn report(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         repo: text(&state["repo"]),
         head: text(&state["head"]),
         sha,
+        verified_sha,
         dev_branch: target.dev_branch.clone(),
         prod_branch: target.prod_branch.clone(),
         dev_pr_number: state["pr"]["number"].as_u64().unwrap_or_default(),
@@ -232,12 +235,16 @@ async fn still_valid(
     let ci = if bilan.ci == "none" {
         None
     } else {
-        forge.ci(&bilan.sha).await.ok()
+        forge.ci(&bilan.verified_sha).await.ok()
     };
     let seen = Seen {
         now_ms: s.clock.now_ms().max(0) as u64,
         active_plan: active,
         dev_pr_head: dev_pr.as_ref().and_then(|p| p.head_sha.clone()),
+        dev_pr_merge: dev_pr
+            .as_ref()
+            .filter(|p| p.merged)
+            .and_then(|p| p.merge_sha.clone()),
         ci,
     };
     match gate::freshness(bilan, &seen, target.max_age_ms) {

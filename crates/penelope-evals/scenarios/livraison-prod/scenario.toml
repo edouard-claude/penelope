@@ -2,14 +2,15 @@ name = "livraison-prod"
 description = """Le gate de production d'un plan livré, par Telegram (#193, T5 de #185). Le
 plan de deux pas (code, revue) est lancé par « Vas-y » ; la livraison ouvre la merge request
 vers `develop`, la CI est verte, l'E2E de dev passe. Le run présente alors le bilan vérifié
-(plan et run exacts, MR dev, commit, CI, E2E et ses preuves) sur une carte
-d'approbation. Trente minutes passent sans clic : rien n'est proposé. Le propriétaire a
-fusionné la MR dev et clique « Proposer la PR prod » ; le daemon redémarre aussitôt. À la
-reprise, l'approbation tient : le bilan est relu (MR dev fusionnée sur le commit vérifié,
-CI toujours verte), la MR `develop` → `main` est cherchée, absente, puis ouverte une fois,
-son lien dit dans le sujet. Un second clic sur la même carte est refusé. Le monde : deux
-merge requests postées (dev, puis prod), trois effets au ledger, le run terminé ; rien
-n'est fusionné ni déployé."""
+(plan et run exacts, MR dev, commit, CI, E2E et ses preuves) sur une carte d'approbation.
+Trente minutes passent sans clic : rien n'est proposé. Le propriétaire fusionne la MR dev
+puis clique « Proposer la PR prod » : la fusion est postérieure au bilan, l'environnement de
+dev a pu être redéployé depuis le commit de fusion. Aucune MR prod : la CI est relue sur le
+commit de fusion, l'E2E refait, une carte neuve posée. Le propriétaire l'approuve ; le
+daemon redémarre aussitôt. À la reprise, l'approbation tient : le bilan est relu, la MR
+`develop` → `main` est cherchée, absente, puis ouverte une fois, son lien dit dans le sujet.
+Un clic rejoué est refusé. Le monde : deux merge requests postées (dev, puis prod), trois
+effets au ledger, le run terminé ; rien n'est fusionné ni déployé par Pénélope."""
 
 [config]
 "models.routing.classifier" = false
@@ -46,12 +47,12 @@ path = "service"
 base = "develop"
 branch = "penelope/stop"
 
-# Première lecture : aucune MR dev. Ensuite : la MR dev, fusionnée par le propriétaire, sur
-# le commit vérifié ; aucune MR `develop` → `main` n'existe encore.
+# Première lecture : aucune MR dev. Ensuite : la MR dev, fusionnée par le propriétaire après
+# le bilan, avec son commit de fusion ; aucune MR `develop` → `main` n'existe encore.
 [[http]]
 path = "/projects/equipe%2Fservice/merge_requests"
 method = "GET"
-bodies = ["[]", """[{"iid": 7, "state": "merged", "source_branch": "penelope/stop", "target_branch": "develop", "sha": "e1fbadedf3f8bd8dac92fd8be0d3ecd3692a24c6", "web_url": "{{http}}/equipe/service/-/merge_requests/7"}]"""]
+bodies = ["[]", """[{"iid": 7, "state": "merged", "source_branch": "penelope/stop", "target_branch": "develop", "sha": "e1fbadedf3f8bd8dac92fd8be0d3ecd3692a24c6", "merge_commit_sha": "c0ffee0000111122223333444455556666777788", "web_url": "{{http}}/equipe/service/-/merge_requests/7"}]"""]
 
 [[http]]
 path = "/projects/equipe%2Fservice/merge_requests"
@@ -105,6 +106,13 @@ kind = "drive"
 [[steps]]
 kind = "advance_clock"
 by = "30m"
+
+[[steps]]
+kind = "drive"
+
+[[steps]]
+kind = "telegram"
+click = "Proposer la PR prod"
 
 [[steps]]
 kind = "drive"

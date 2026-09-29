@@ -27,7 +27,9 @@ lendemain aurait trouvé le run bloqué.
 - Le clic n'est pas cru sur parole : un plan révisé depuis arrête le run ; un bilan plus
   vieux que `prod.max_age_minutes`, une PR dev avancée d'un commit ou une CI qui n'est plus
   verte le rendent périmé, le run refait PR, CI et E2E et pose une carte neuve, l'ancienne
-  ne vaut plus rien. La PR dev doit être fusionnée. Un refus bloque le run pour de bon.
+  ne vaut plus rien. La PR dev doit être fusionnée ; fusionnée après le bilan (ou sur un
+  autre commit), elle rend le bilan périmé : CI du commit de fusion puis E2E de dev refaits
+  avant toute carte ou PR prod. Un refus bloque le run pour de bon.
 - Au plus une PR prod par run : effet au ledger sous une clé qui ne dépend que du run,
   marque du run dans la description, recherche sur le forgeur avant l'ouverture ; un envoi
   interrompu par un redémarrage est terminé sans rejuger le bilan. Lien dans le sujet ; ni
@@ -37,7 +39,8 @@ lendemain aurait trouvé le run bloqué.
 - Tests : logique pure du gate (chemin, branche de prod, fraîcheur, bilan), orchestrateur
   contre les faux forgeurs GitHub et GitLab (tout vert sans clic et redémarrage : zéro PR ;
   approbation puis redémarrage : une seule PR, lien dans le sujet ; PR ouverte avant un
-  arrêt retrouvée ; bilan vieilli, commit avancé, CI rouge : aucune PR et bouton périmé ;
+  arrêt retrouvée ; bilan vieilli, commit avancé, CI rouge, PR dev fusionnée après le
+  bilan (re-vérifiée sur le commit de fusion), E2E rouge après fusion : aucune PR ;
   refus durable ; nouvelle révision ; PR dev non fusionnée), borne de durée du pilote,
   scénario `livraison-prod` (clic, redémarrage, une MR prod, second clic refusé) et
   `livraison-dev` qui finit sur la carte, sans MR prod.

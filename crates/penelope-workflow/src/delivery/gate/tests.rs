@@ -30,6 +30,7 @@ fn bilan() -> Bilan {
         repo: "equipe/service".into(),
         head: "penelope/stop".into(),
         sha: "0123456789abcdef".into(),
+        verified_sha: "0123456789abcdef".into(),
         dev_branch: "develop".into(),
         prod_branch: "main".into(),
         dev_pr_number: 7,
@@ -48,6 +49,7 @@ fn seen() -> Seen {
         now_ms: 1_000_000 + 5 * 60_000,
         active_plan: Some(plan(3, "abcdef0123456789")),
         dev_pr_head: Some("0123456789abcdef".into()),
+        dev_pr_merge: None,
         ci: Some(CiVerdict::Green("pipeline 41 au vert".into())),
     }
 }
@@ -216,7 +218,8 @@ fn the_report_names_what_is_approved_and_its_fingerprint_follows_it() {
         "`r_plan_1`",
         "merge_requests/7",
         "commit `01234567`",
-        "pipeline 41 au vert",
+        "verte sur `01234567` : pipeline 41 au vert",
+        "depuis `01234567`",
         "2 contrôle(s), preuves `livraison/e2e-9.json`",
         "Valable 60 min",
         "`develop` → `main`",
@@ -234,4 +237,28 @@ fn the_report_names_what_is_approved_and_its_fingerprint_follows_it() {
     assert_ne!(other.fingerprint(), b.fingerprint());
     let raw = serde_json::to_string(&b).unwrap();
     assert_eq!(serde_json::from_str::<Bilan>(&raw).unwrap(), b);
+}
+
+#[test]
+fn a_merge_after_the_report_makes_it_stale_until_the_merge_commit_is_verified() {
+    // Fusionnée après le bilan, sur le commit vérifié ou un autre : périmé.
+    let mut s = seen();
+    s.dev_pr_merge = Some("feedface00001111".into());
+    let Freshness::Stale(why) = freshness(&bilan(), &s, HOUR) else {
+        panic!("fusion après le bilan");
+    };
+    assert!(
+        why.contains("fusionnée dans `develop`") && why.contains("`feedface`"),
+        "{why}"
+    );
+    // Le bilan ré-établi sur le commit de fusion, lui, tient.
+    let mut b = bilan();
+    b.verified_sha = "feedface00001111".into();
+    assert_eq!(freshness(&b, &s, HOUR), Freshness::Fresh);
+    let text = b.render(HOUR);
+    assert!(
+        text.contains("fusionnée : commit de fusion `feedface`"),
+        "{text}"
+    );
+    assert!(text.contains("verte sur `feedface`"), "{text}");
 }
