@@ -23,7 +23,7 @@ pub mod upgrade;
 
 // Modules du socle et du vault, sous les chemins que les fichiers déplacés du daemon
 // nomment encore (`crate::helpers`…).
-pub(crate) use penelope_app::{bus, codex_scope, helpers, machine, ports};
+pub(crate) use penelope_app::{bus, codex_scope, environment, helpers, machine, ports};
 pub(crate) use penelope_vault::{
     embeddings, episodes, mem_split, session_notes, vault_inventory, vault_ops,
 };

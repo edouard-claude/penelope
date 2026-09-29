@@ -13,6 +13,7 @@ pub mod codex_scope;
 pub mod conversation;
 pub mod elicitation;
 pub mod engine;
+pub mod environment;
 pub mod frozen_tools;
 pub mod gateway;
 pub mod helpers;

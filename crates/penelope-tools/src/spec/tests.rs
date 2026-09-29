@@ -59,6 +59,7 @@ fn every_prd_tool_is_present() {
         "image_inspect",
         "self_status",
         "self_docs",
+        "env_explore",
         "config_set",
         "job_status",
         "job_wait",

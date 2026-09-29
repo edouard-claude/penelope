@@ -27,7 +27,7 @@ impl NativeToolExecutor {
                 self.git_tools(name, args, cancel).await
             }
             "http_fetch" => self.http_tools(name, args, cancel).await,
-            "self_status" | "self_docs" | "config_set" | "time_now" => {
+            "self_status" | "self_docs" | "env_explore" | "config_set" | "time_now" => {
                 self.self_tools(name, args, cancel).await
             }
             "schedule_create" | "schedule_list" | "schedule_move" | "schedule_delete" => {

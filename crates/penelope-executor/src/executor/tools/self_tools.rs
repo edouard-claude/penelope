@@ -31,6 +31,24 @@ impl NativeToolExecutor {
                 .map_err(|e| ToolError::Io(e.to_string()))?
             }
             "self_docs" => crate::selfdocs::tool(args).map_err(ToolError::Invalid)?,
+            // La carte de la machine (#260) : la dernière passe de fond, jamais une sonde
+            // dans le tour.
+            "env_explore" => {
+                use penelope_app::environment;
+                let env = environment::cached(s).await;
+                let proposed = environment::propose::proposed(s).await;
+                let limit = args
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .map_or(50, |n| n.clamp(1, 200) as usize);
+                environment::explore::explore(
+                    env.as_ref(),
+                    args.get("need").and_then(|v| v.as_str()),
+                    args.get("kind").and_then(|v| v.as_str()),
+                    limit,
+                    &proposed,
+                )
+            }
             "config_set" => {
                 let path = str_arg(args, "path")?;
                 if let Some(why) = crate::selfknow::forbidden_path(&path) {

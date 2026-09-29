@@ -56,6 +56,10 @@ pub async fn machine_checks(s: &Services) -> Vec<DoctorCheck> {
         ));
     }
 
+    if let Some(env) = crate::environment::cached(s).await {
+        out.extend(environment_checks(&env));
+    }
+
     // Une forge installée mais déconnectée : le réflexe n'est pas émis, le modèle
     // repartira sur `http_fetch`. C'est exactement l'incident de #156.
     for bin in ["gh", "glab"] {
@@ -71,6 +75,79 @@ pub async fn machine_checks(s: &Services) -> Vec<DoctorCheck> {
             ));
         }
     }
+    out
+}
+
+/// #260 : la carte de l'environnement, et ce qui a changé depuis la passe précédente.
+pub(super) fn environment_checks(env: &crate::environment::Environment) -> Vec<DoctorCheck> {
+    let mut by_source: std::collections::BTreeMap<&str, usize> = Default::default();
+    for t in &env.tools {
+        *by_source.entry(t.source.as_str()).or_default() += 1;
+    }
+    let sources = by_source
+        .iter()
+        .map(|(k, n)| format!("{k} {n}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let caps = env
+        .capabilities
+        .iter()
+        .map(|c| {
+            let state = match (c.kind.as_str(), c.reachable, c.declared) {
+                ("inference", Some(true), _) => format!("{} modèle(s)", c.models.len()),
+                ("inference", Some(false), _) => "ne répond pas".into(),
+                (_, _, true) => "branché".into(),
+                _ => "non branché".into(),
+            };
+            format!("{} {} ({state})", c.kind, c.name)
+        })
+        .collect::<Vec<_>>();
+    let mut out = vec![DoctorCheck::ok(
+        "machine.environment",
+        "Carte de l'environnement",
+        format!(
+            "{} outil(s) ({sources}), {} application(s), capacités : {}",
+            env.tools.len(),
+            env.apps.len(),
+            if caps.is_empty() {
+                "aucune".to_string()
+            } else {
+                caps.join(", ")
+            }
+        ),
+    )];
+    const LABEL: &str = "Changements de la machine";
+    let detail = match &env.changes {
+        None => "aucun changement vu depuis la première passe".to_string(),
+        Some(c) => {
+            let list = |label: &str, v: &[String]| {
+                (!v.is_empty()).then(|| {
+                    let more = v.len().saturating_sub(12);
+                    let head = v.iter().take(12).cloned().collect::<Vec<_>>().join(", ");
+                    if more > 0 {
+                        format!("{label} : {head} et {more} autre(s)")
+                    } else {
+                        format!("{label} : {head}")
+                    }
+                })
+            };
+            let parts: Vec<String> = [
+                list("apparus", &c.appeared),
+                list("disparus", &c.disappeared),
+                list("mis à jour", &c.updated),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            let when = if c.at == env.checked_at {
+                format!("depuis la passe du {}", c.since)
+            } else {
+                format!("rien depuis la passe du {} ; la dernière fois", c.at)
+            };
+            format!("{when} : {}", parts.join(" ; "))
+        }
+    };
+    out.push(DoctorCheck::ok("machine.changes", LABEL, detail));
     out
 }
 

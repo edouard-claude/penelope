@@ -83,6 +83,10 @@ pub struct Spec {
     /// requêtes reçues sont relevées (`http_request`).
     #[serde(default)]
     pub http: Vec<http::Route>,
+    /// Valeurs semées dans `kv` avant la première étape : un état que le daemon dresse
+    /// hors des tours, comme la carte de la machine (`machine.environment`, #260).
+    #[serde(default)]
+    pub kv: std::collections::BTreeMap<String, String>,
     /// Modèles que le catalogue dit lire les images (`openrouter:…` ou nu) : une photo
     /// leur est montrée telle quelle, sans passer par le modèle de vision.
     #[serde(default)]

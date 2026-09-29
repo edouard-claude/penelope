@@ -1,0 +1,36 @@
+name = "outils-environnement"
+description = """La carte de la machine (#260) lue par `env_explore`, sans aucune sonde dans le
+tour : la carte est semée dans `kv` comme la passe de fond l'aurait rangée (outils du PATH
+et des gestionnaires, applications, MCP exposés par Safari et Xcode, Ollama qui sert un
+modèle, matériel). Le propriétaire demande de quoi naviguer et de quoi faire tourner un
+modèle en local : le modèle cherche par besoin (« navigateur », « inférence locale ») et
+trouve Safari, son MCP déjà proposé (`proposed_at`), Firefox, `safaridriver`, puis Ollama
+et son modèle, avec la mémoire unifiée qui en décide. Rien n'est branché ni lancé."""
+pin_model = "main"
+
+[kv]
+"machine.environment" = '''
+{"hardware":{"model":"MacBook Pro","chip":"Apple M5 Max","memory_gb":128,"cpu_cores":18,"performance_cores":6,"efficiency_cores":12,"gpu_cores":40},
+ "tools":[
+  {"name":"ffmpeg","source":"brew","version":"7.1.1","path":"/opt/homebrew/bin/ffmpeg"},
+  {"name":"gh","source":"brew","version":"2.101.0","path":"/opt/homebrew/bin/gh"},
+  {"name":"ollama","source":"brew","version":"0.12.3","path":"/opt/homebrew/bin/ollama"},
+  {"name":"rg","source":"brew","package":"ripgrep","version":"15.1.0","path":"/opt/homebrew/bin/rg"},
+  {"name":"safaridriver","source":"PATH","path":"/System/Cryptexes/App/usr/bin/safaridriver"},
+  {"name":"swiftc","source":"système","path":"/usr/bin/swiftc"},
+  {"name":"vibe","source":"uv","package":"mistral-vibe","version":"2.9.4","path":"/Users/moi/.local/bin/vibe"}],
+ "apps":[
+  {"name":"Firefox","bundle_id":"org.mozilla.firefox","version":"156.0.1","path":"/Applications/Firefox.app"},
+  {"name":"Safari","bundle_id":"com.apple.Safari","version":"27.0","path":"/Applications/Safari.app"},
+  {"name":"Xcode","bundle_id":"com.apple.dt.Xcode","version":"27.0","path":"/Applications/Xcode.app"}],
+ "capabilities":[
+  {"kind":"mcp","id":"safari","name":"Safari","via":"safaridriver --mcp","origin":"application","declared":false},
+  {"kind":"mcp","id":"xcode","name":"Xcode","via":"xcrun mcpbridge","origin":"application","declared":false},
+  {"kind":"inference","id":"inference:11434","name":"Ollama","via":"http://127.0.0.1:11434/v1","origin":"outil","declared":false,"reachable":true,"models":["qwen3-coder:30b"]}],
+ "checked_at":"2026-01-01T00:00:00Z"}
+'''
+"machine.proposed" = '{"safari":"2026-01-01T00:00:05Z"}'
+
+[[steps]]
+kind = "message"
+text = "qu'est-ce que j'ai sur cette machine pour naviguer, et pour faire tourner un modèle en local ?"

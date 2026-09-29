@@ -379,6 +379,13 @@ async fn machine_loop(d: Arc<Daemon>) {
             ),
             Err(e) => tracing::warn!(error = %e, "inventaire de la machine"),
         }
+        // Capacités trouvées et non branchées : proposées une fois au propriétaire (#260).
+        if let Some(m) = d.hooks.messenger()
+            && let Err(e) =
+                penelope_app::environment::propose::propose(&d.services, m.as_ref()).await
+        {
+            tracing::warn!(error = %e, "proposition des capacités");
+        }
         sleep_or_shutdown(&d, Duration::from_secs(3600)).await;
     }
 }

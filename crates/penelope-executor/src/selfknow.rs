@@ -627,6 +627,7 @@ mod tests {
             }],
             missing: vec!["glab".into()],
             checked_at: "2026-09-21T09:00:00+04:00".into(),
+            ..Default::default()
         };
         s.kv_set(
             penelope_app::machine::KV_KEY,

@@ -84,6 +84,7 @@ scenario_cases! {
     memoire_signaux_d_usage => "memoire-signaux-d-usage",
     outils_skills => "outils-skills",
     outils_soi => "outils-soi",
+    outils_environnement => "outils-environnement",
     outils_historique => "outils-historique",
     outils_http_garde => "outils-http-garde",
     outils_workflows => "outils-workflows",

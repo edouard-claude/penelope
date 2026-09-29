@@ -17,8 +17,10 @@
 //! `brew upgrade gh` ne doit rien changer au prompt. Les versions restent dans
 //! `self_status`, qui n'est lu que sur demande.
 
+use crate::environment::Environment;
 use crate::services::Services;
 use penelope_kernel::config::Config;
+use penelope_platform::discover::Hardware;
 use penelope_platform::host::HostStatus;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -80,12 +82,35 @@ pub struct Inventory {
     pub missing: Vec<String>,
     /// Horodatage de la passe. Hors de la ligne système, par construction.
     pub checked_at: String,
+    /// Puce, mémoire, cœurs (#260) : ils décident des modèles locaux possibles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware: Option<Hardware>,
+    /// Applications qui exposent un MCP (#260), par nom : `Safari`, `Xcode`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp: Vec<String>,
+    /// Moteurs d'inférence locaux installés ou déclarés (#260), par nom.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inference: Vec<String>,
+    /// La carte détaillée existe (`machine.environment`) : la ligne renvoie à
+    /// `env_explore`.
+    #[serde(default)]
+    pub mapped: bool,
 }
 
 impl Inventory {
     /// Le binaire nommé, s'il est là.
     pub fn tool(&self, name: &str) -> Option<&Tool> {
         self.present.iter().find(|t| t.name == name)
+    }
+
+    /// Reprend de la carte (#260) ce que la ligne T1 en dit : des noms, jamais une
+    /// version, un modèle servi ni l'état d'un serveur, qui changent sans que la machine
+    /// change.
+    pub fn with_environment(&mut self, env: &Environment) {
+        self.hardware = env.hardware.clone();
+        self.mcp = env.mcp_names();
+        self.inference = env.inference_names();
+        self.mapped = true;
     }
 
     /// Présent **et** connecté : le seul état qui autorise une règle de réflexe vers une
@@ -104,10 +129,11 @@ impl Inventory {
         } else {
             "réseau accordé par appel"
         };
-        let mut line = format!(
-            "Machine : {} {}, bac à sable `{}`, {net}",
-            self.os, self.arch, self.sandbox_profile
-        );
+        let mut line = format!("Machine : {} {}", self.os, self.arch);
+        if let Some(hw) = self.hardware.as_ref().and_then(hardware_words) {
+            line.push_str(&format!(" ({hw})"));
+        }
+        line.push_str(&format!(", bac à sable `{}`, {net}", self.sandbox_profile));
 
         let (linked, plain): (Vec<&Tool>, Vec<&Tool>) =
             self.present.iter().partition(|t| t.account.is_some());
@@ -136,6 +162,22 @@ impl Inventory {
             }
         ));
 
+        if !self.mcp.is_empty() {
+            line.push_str(&format!(
+                " · MCP exposés par des applications : {}",
+                self.mcp.join(", ")
+            ));
+        }
+        if !self.inference.is_empty() {
+            line.push_str(&format!(
+                " · inférence locale : {}",
+                self.inference.join(", ")
+            ));
+        }
+        if self.mapped {
+            line.push_str(" · carte complète (outils, applications, versions) : `env_explore`");
+        }
+
         let reflexes: Vec<&str> = REFLEX
             .iter()
             .filter(|(bin, _)| {
@@ -159,9 +201,25 @@ impl Inventory {
     }
 }
 
+/// Le matériel en quelques mots : `Apple M5 Max, 128 Go unifiés, GPU 40 cœurs`.
+fn hardware_words(h: &Hardware) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(chip) = &h.chip {
+        parts.push(chip.clone());
+    }
+    if let Some(gb) = h.memory_gb {
+        let unified = h.chip.as_deref().is_some_and(|c| c.starts_with("Apple"));
+        parts.push(format!("{gb} Go{}", if unified { " unifiés" } else { "" }));
+    }
+    if let Some(n) = h.gpu_cores {
+        parts.push(format!("GPU {n} cœurs"));
+    }
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
 /// Détecte l'état de la machine. Bloquant (un `which` par binaire, quelques sondes) : à
 /// appeler sous `spawn_blocking`.
-pub fn detect(cfg: &Config, host: &HostStatus) -> Inventory {
+pub fn detect(cfg: &Config, host: &HostStatus, path: &std::ffi::OsStr) -> Inventory {
     let mut wanted: Vec<String> = KNOWN.iter().map(|s| s.to_string()).collect();
     // Les ajouts du propriétaire viennent après les connus, triés : deux configurations
     // identiques donnent le même ordre, donc la même ligne.
@@ -179,7 +237,7 @@ pub fn detect(cfg: &Config, host: &HostStatus) -> Inventory {
     let mut present = Vec::new();
     let mut missing = Vec::new();
     for name in &wanted {
-        let Some(path) = penelope_platform::process::which(name) else {
+        let Some(path) = penelope_platform::process::which_in(name, path) else {
             missing.push(name.clone());
             continue;
         };
@@ -199,6 +257,7 @@ pub fn detect(cfg: &Config, host: &HostStatus) -> Inventory {
         present,
         missing,
         checked_at: String::new(),
+        ..Default::default()
     }
 }
 
@@ -292,16 +351,28 @@ fn login_in(text: &str, want: Field) -> String {
     String::new()
 }
 
-/// Relance la détection et range le résultat dans `kv`.
+/// Relance la détection et range le résultat dans `kv`, avec la carte de
+/// l'environnement (#260). Une carte en échec n'empêche pas l'inventaire : la ligne garde
+/// alors ce que la carte précédente en disait.
 pub async fn refresh(s: &Services) -> anyhow::Result<Inventory> {
     let cfg = s.config.config();
     let platform = s.platform.clone();
     let now = s.clock.now_ms() / 1000;
+    // Le PATH de la découverte de la plateforme : vide en test, aucune sonde ne part.
     let mut inv = tokio::task::spawn_blocking(move || {
         let host = platform.host_status(now);
-        detect(&cfg, &host)
+        detect(&cfg, &host, &platform.discovery.path)
     })
     .await?;
+    match crate::environment::refresh(s).await {
+        Ok(env) => inv.with_environment(&env),
+        Err(e) => {
+            tracing::warn!(error = %e, "carte de l'environnement");
+            if let Some(env) = crate::environment::cached(s).await {
+                inv.with_environment(&env);
+            }
+        }
+    }
     inv.checked_at = s.clock.now_rfc3339();
     s.kv_set(KV_KEY, &serde_json::to_string(&inv)?).await?;
     Ok(inv)
@@ -404,6 +475,7 @@ mod tests {
             ],
             missing: vec!["glab".into(), "yt-dlp".into()],
             checked_at: "2026-09-21T09:00:00+04:00".into(),
+            ..Default::default()
         }
     }
 
@@ -555,11 +627,12 @@ mod tests {
         assert!(!inv.checked_at.is_empty(), "la passe est horodatée");
         let back = cached(&s).await.unwrap();
         assert_eq!(back, inv);
-        // `sh` existe sur toute machine qui fait tourner la suite : la détection marche.
-        assert!(
-            back.tool("git").is_some() || !back.missing.is_empty(),
-            "la détection a bien tourné : {back:?}"
-        );
+        // La plateforme de test ne regarde rien (#260) : aucun binaire trouvé, aucune sonde
+        // lancée, le résultat ne dépend pas de la machine qui fait tourner la suite.
+        assert!(back.present.is_empty(), "{back:?}");
+        assert_eq!(back.missing.len(), KNOWN.len());
+        let env = crate::environment::cached(&s).await.unwrap();
+        assert!(env.tools.is_empty() && env.apps.is_empty() && env.hardware.is_none());
         // La ligne ne porte jamais l'horodatage, sinon le préfixe change chaque heure.
         assert!(!back.prompt_line().contains(&back.checked_at));
     }
