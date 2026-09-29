@@ -11,6 +11,7 @@
 //!
 //! [branches]
 //! dev = "develop"                    # obligatoire : jamais supposée
+//! prod = "main"                      # obligatoire pour la PR vers la production (#193)
 //!
 //! [ci]
 //! provider = "gitlab"                # github | gitlab | none ; déduit des fichiers de CI
@@ -23,6 +24,9 @@
 //! path = "/health"
 //! status = 200
 //! contains = "ok"
+//!
+//! [prod]
+//! max_age_minutes = 60               # au-delà, le bilan est périmé et se re-vérifie
 //! ```
 //!
 //! Ce qui manque est rendu en [`Missing`] : la clé, et pourquoi elle compte. Chaque étape
@@ -43,6 +47,7 @@ pub struct FileConfig {
     pub branches: Branches,
     pub ci: CiSection,
     pub e2e: E2eSection,
+    pub prod: ProdSection,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -59,6 +64,8 @@ pub struct ForgeSection {
 #[serde(default, deny_unknown_fields)]
 pub struct Branches {
     pub dev: Option<String>,
+    /// Branche de production, cible de la PR dev → prod (#193) : jamais supposée.
+    pub prod: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -66,6 +73,14 @@ pub struct Branches {
 pub struct CiSection {
     pub provider: Option<String>,
     pub timeout_minutes: Option<u64>,
+}
+
+/// Gate de production (#193).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProdSection {
+    /// Âge maximal du bilan approuvé : au-delà, CI et E2E sont re-vérifiés avant toute PR.
+    pub max_age_minutes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -279,7 +294,7 @@ pub fn remote_name(cfg: &FileConfig) -> String {
         .unwrap_or_else(|| "origin".into())
 }
 
-fn non_empty(v: &Option<String>) -> Option<String> {
+pub(super) fn non_empty(v: &Option<String>) -> Option<String> {
     v.as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())

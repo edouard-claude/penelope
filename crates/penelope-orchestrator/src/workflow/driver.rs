@@ -110,7 +110,8 @@ async fn drive_claimed(
         };
         let run = refresh_spent(s, run).await?;
         let budget = effective_budget(s, &run, &wf.settings.budget).await;
-        let limit = check_limits(&run, &budget, s.clock.now_ms());
+        let now = s.clock.now_ms() - owner_wait_ms(s, &run, &wf).await;
+        let limit = check_limits(&run, &budget, now);
         if limit != Limit::Ok {
             let reason = limit_reason(&limit, &run, &budget);
             return finish(d, &run, RunState::Blocked, &reason).await;
@@ -214,6 +215,41 @@ async fn drive_claimed(
             return finish(d, &run, RunState::Blocked, &reason).await;
         }
     }
+}
+
+/// Temps passé à attendre le propriétaire (étapes `user`), attente en cours comprise. La
+/// borne de durée d'un run mesure son travail, pas le temps que prend une décision
+/// humaine : un gate de production approuvé le lendemain reste approuvable (#193).
+async fn owner_wait_ms(s: &Services, run: &Run, wf: &Workflow) -> i64 {
+    let prefix = format!("wf.waited.{}.%", run.id);
+    let answered: i64 = s
+        .store
+        .read(move |c| {
+            Ok(c.query_row(
+                "SELECT COALESCE(SUM(CAST(v AS INTEGER)), 0) FROM kv WHERE k LIKE ?1",
+                [prefix],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap_or(0);
+    let current = match run.current_step.as_deref().and_then(|id| wf.step(id)) {
+        Some(step) if step.kind == "user" => asked_since(s, run, &step.id)
+            .await
+            .map_or(0, |at| (s.clock.now_ms() - at).max(0)),
+        _ => 0,
+    };
+    answered + current
+}
+
+/// Quand la question de la visite courante d'une étape `user` est partie.
+pub(super) async fn asked_since(s: &Services, run: &Run, step_id: &str) -> Option<i64> {
+    s.kv_get(&visit_key("asked_at", run, step_id))
+        .await
+        .ok()
+        .flatten()?
+        .parse()
+        .ok()
 }
 
 /// Exécute une étape, avec relances (`retry`) sur échec.

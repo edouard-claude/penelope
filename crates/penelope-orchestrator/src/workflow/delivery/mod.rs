@@ -1,5 +1,6 @@
 //! Étapes `delivery` (T4 de #185, issue #192) : la PR vers la branche de dev, la CI du
-//! projet, puis l'environnement de dev vérifié depuis l'extérieur.
+//! projet, puis l'environnement de dev vérifié depuis l'extérieur ; le gate de production
+//! (T5, issue #193) est dans [`prod`].
 //!
 //! Chaque étape relit le dépôt et `.penelope/delivery.toml` à chaque visite : une
 //! configuration complétée par le propriétaire après une carte « livraison bloquée » est
@@ -14,12 +15,13 @@ use super::*;
 use penelope_kernel::effects::{EffectKind, UnknownDecision};
 use penelope_workflow::delivery::config::{self, CONFIG_PATH, Discovered, FileConfig, Missing};
 use penelope_workflow::delivery::verdicts::{CI_UNAVAILABLE_LIMIT, CiVerdict, ci_backoff_ms};
-use penelope_workflow::delivery::{CI, E2E, PULL_REQUEST};
+use penelope_workflow::delivery::{CI, E2E, PROD_PULL_REQUEST, PROD_REPORT, PULL_REQUEST};
 use std::path::{Path, PathBuf};
 
 mod e2e;
 mod forge;
 mod git;
+mod prod;
 
 use forge::{Forge, ForgeError};
 
@@ -28,6 +30,8 @@ pub(super) async fn delivery_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutco
         PULL_REQUEST => pull_request(ctx).await?,
         CI => ci(ctx).await?,
         E2E => e2e_stage(ctx).await?,
+        PROD_REPORT => prod::report(ctx).await?,
+        PROD_PULL_REQUEST => prod::pull_request(ctx).await?,
         other => done(
             StepResult::Error,
             json!({"error": format!("action de livraison inconnue `{other}`")}),

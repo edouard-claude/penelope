@@ -8,8 +8,11 @@ par `.gitlab-ci.yml`, pousse la branche de travail sur le remote du dépôt, che
 merge request vers `develop`, n'en trouve pas et l'ouvre. La CI est en cours : le run
 attend. Le daemon redémarre ; une minute plus tard la CI est verte, puis l'E2E de
 l'environnement de dev (HTTP et GraphQL) passe : deux résultats distincts, chacun dit
-dans le sujet. Un second « Vas-y » rend le même run. Le monde : une seule merge request
-ouverte (un seul POST), un push et une PR au ledger, les preuves de l'E2E."""
+dans le sujet. Vient le gate de production (#193) : le bilan vérifié (plan, MR dev,
+commit, CI, E2E) et la carte d'approbation ; tout est vert mais personne ne clique, donc
+aucune merge request vers `main`. Un second « Vas-y » rend le même run. Le monde : une
+seule merge request ouverte (un seul POST), un push et une PR au ledger, les preuves de
+l'E2E, le run en attente sur `gate-prod`."""
 
 [config]
 "models.routing.classifier" = false
@@ -31,6 +34,7 @@ repo = "equipe/service"
 
 [branches]
 dev = "develop"
+prod = "main"
 
 [e2e]
 url = "{{http}}/dev"

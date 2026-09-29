@@ -1,0 +1,129 @@
+name = "livraison-prod"
+description = """Le gate de production d'un plan livré, par Telegram (#193, T5 de #185). Le
+plan de deux pas (code, revue) est lancé par « Vas-y » ; la livraison ouvre la merge request
+vers `develop`, la CI est verte, l'E2E de dev passe. Le run présente alors le bilan vérifié
+(plan et run exacts, MR dev, commit, CI, E2E et ses preuves) sur une carte
+d'approbation. Trente minutes passent sans clic : rien n'est proposé. Le propriétaire a
+fusionné la MR dev et clique « Proposer la PR prod » ; le daemon redémarre aussitôt. À la
+reprise, l'approbation tient : le bilan est relu (MR dev fusionnée sur le commit vérifié,
+CI toujours verte), la MR `develop` → `main` est cherchée, absente, puis ouverte une fois,
+son lien dit dans le sujet. Un second clic sur la même carte est refusé. Le monde : deux
+merge requests postées (dev, puis prod), trois effets au ledger, le run terminé ; rien
+n'est fusionné ni déployé."""
+
+[config]
+"models.routing.classifier" = false
+
+[[files]]
+path = "service/stop.txt"
+content = "/stop met en pause les runs de la conversation.\n"
+
+[[files]]
+path = "service/.gitlab-ci.yml"
+content = "tests:\n  script: make test\n"
+
+[[files]]
+path = "service/.penelope/delivery.toml"
+content = """[forge]
+kind = "gitlab"
+api = "{{http}}"
+repo = "equipe/service"
+
+[branches]
+dev = "develop"
+prod = "main"
+
+[e2e]
+url = "{{http}}/dev"
+
+[[e2e.checks]]
+path = "/health"
+contains = "ok"
+"""
+
+[[repos]]
+path = "service"
+base = "develop"
+branch = "penelope/stop"
+
+# Première lecture : aucune MR dev. Ensuite : la MR dev, fusionnée par le propriétaire, sur
+# le commit vérifié ; aucune MR `develop` → `main` n'existe encore.
+[[http]]
+path = "/projects/equipe%2Fservice/merge_requests"
+method = "GET"
+bodies = ["[]", """[{"iid": 7, "state": "merged", "source_branch": "penelope/stop", "target_branch": "develop", "sha": "e1fbadedf3f8bd8dac92fd8be0d3ecd3692a24c6", "web_url": "{{http}}/equipe/service/-/merge_requests/7"}]"""]
+
+[[http]]
+path = "/projects/equipe%2Fservice/merge_requests"
+method = "POST"
+status = 201
+bodies = ["""{"iid": 7, "state": "opened", "source_branch": "penelope/stop", "target_branch": "develop", "web_url": "{{http}}/equipe/service/-/merge_requests/7"}""", """{"iid": 8, "state": "opened", "source_branch": "develop", "target_branch": "main", "web_url": "{{http}}/equipe/service/-/merge_requests/8"}"""]
+
+[[http]]
+path = "/projects/equipe%2Fservice/pipelines"
+body = """[{"id": 41, "status": "success"}]"""
+
+[[http]]
+path = "/dev/health"
+body = """{"status": "ok"}"""
+
+[[observe]]
+name = "runs"
+sql = "SELECT workflow_id, state, current_step, iterations, error FROM workflow_runs ORDER BY started_at, rowid"
+
+[[observe]]
+name = "etapes"
+sql = "SELECT step_id, result FROM workflow_step_log ORDER BY id"
+
+[[observe]]
+name = "effets"
+sql = "SELECT kind, tool, state FROM effects WHERE tool LIKE 'delivery.%' ORDER BY created_at, rowid"
+
+[[steps]]
+kind = "rpc"
+method = "secret.set"
+params = { name = "gitlab_token", value = "jeton-de-test" }
+
+[[steps]]
+kind = "telegram"
+text = "Livre le correctif de /stop du dépôt service, jusqu'à la production si je l'approuve."
+
+[[steps]]
+kind = "telegram"
+click = "Vas-y (v1)"
+
+[[steps]]
+kind = "drive"
+
+[[steps]]
+kind = "telegram"
+click = "Continuer"
+
+[[steps]]
+kind = "drive"
+
+[[steps]]
+kind = "advance_clock"
+by = "30m"
+
+[[steps]]
+kind = "drive"
+
+[[steps]]
+kind = "telegram"
+click = "Proposer la PR prod"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "rpc"
+method = "secret.set"
+params = { name = "gitlab_token", value = "jeton-de-test" }
+
+[[steps]]
+kind = "drive"
+
+[[steps]]
+kind = "telegram"
+click = "Proposer la PR prod"

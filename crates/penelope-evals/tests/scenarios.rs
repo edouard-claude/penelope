@@ -111,6 +111,7 @@ scenario_cases! {
     plan_en_phases => "plan-en-phases",
     rpc_plans => "rpc-plans",
     livraison_dev => "livraison-dev",
+    livraison_prod => "livraison-prod",
 }
 
 #[test]

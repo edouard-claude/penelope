@@ -10,10 +10,11 @@ use penelope_workflow::delivery::config::ForgeKind;
 use penelope_workflow::delivery::{self, RETRY, STOP};
 use std::path::{Path, PathBuf};
 
-const WORK: &str = "penelope/stop";
-const DEV: &str = "develop";
+pub(super) const WORK: &str = "penelope/stop";
+pub(super) const DEV: &str = "develop";
+pub(super) const PROD: &str = "main";
 
-fn git(dir: &Path, args: &[&str]) -> String {
+pub(super) fn git(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -31,7 +32,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 
 /// Un dépôt de travail sur `penelope/stop`, dont le remote `origin` est un dépôt nu local
 /// où `develop` existe déjà. `ci` : fichier de CI commité (découverte de la CI).
-fn repository(root: &Path, ci: Option<&str>) -> PathBuf {
+pub(super) fn repository(root: &Path, ci: Option<&str>) -> PathBuf {
     let remote = root.join("remote.git");
     let work = root.join("depot");
     std::fs::create_dir_all(&remote).unwrap();
@@ -59,11 +60,11 @@ fn repository(root: &Path, ci: Option<&str>) -> PathBuf {
 }
 
 /// `.penelope/delivery.toml` pointé sur le faux forgeur : le remote est local, forgeur,
-/// API et dépôt sont donc déclarés. Le fichier n'est pas suivi : il ne rend pas le dépôt
+/// API et dépôt sont donc déclarés, avec les branches de dev et de production. Le fichier n'est pas suivi : il ne rend pas le dépôt
 /// « sale ».
-fn configure(dir: &Path, forge: &FakeForge, ci: &str, checks: &str) {
+pub(super) fn configure(dir: &Path, forge: &FakeForge, ci: &str, checks: &str) {
     let raw = format!(
-        "[forge]\nkind = \"{}\"\napi = \"{}\"\nrepo = \"{REPO}\"\n\n[branches]\ndev = \"{DEV}\"\n\n\
+        "[forge]\nkind = \"{}\"\napi = \"{}\"\nrepo = \"{REPO}\"\n\n[branches]\ndev = \"{DEV}\"\nprod = \"{PROD}\"\n\n\
          {ci}\n[e2e]\nurl = \"{}\"\n{checks}",
         forge.kind.as_str(),
         forge.base,
@@ -73,13 +74,13 @@ fn configure(dir: &Path, forge: &FakeForge, ci: &str, checks: &str) {
     std::fs::write(dir.join(".penelope/delivery.toml"), raw).unwrap();
 }
 
-struct Bench {
-    e: Env,
-    forge: FakeForge,
-    dir: PathBuf,
+pub(super) struct Bench {
+    pub(super) e: Env,
+    pub(super) forge: FakeForge,
+    pub(super) dir: PathBuf,
 }
 
-async fn bench(kind: ForgeKind, ci_file: Option<&str>) -> Bench {
+pub(super) async fn bench(kind: ForgeKind, ci_file: Option<&str>) -> Bench {
     let e = env().await;
     let forge = FakeForge::start(kind).await;
     let dir = repository(&e.d.dir.path().join("projets"), ci_file);
@@ -87,22 +88,27 @@ async fn bench(kind: ForgeKind, ci_file: Option<&str>) -> Bench {
 }
 
 impl Bench {
-    fn token(&self) {
+    pub(super) fn token(&self) {
         let name = self.forge.kind.default_token_secret();
         self.e.d.services.platform.secrets.set(name, TOKEN).unwrap();
     }
 
     /// Un run dont le plan a été accepté par sa dernière revue : il entre en livraison.
     async fn start(&self) -> String {
+        self.start_with(delivery::tail(DONE)).await
+    }
+
+    /// Un run qui commence à la livraison et suit `steps`.
+    pub(super) async fn start_with(&self, steps: Vec<penelope_workflow::model::Step>) -> String {
         let s = &self.e.d.services;
-        let steps = serde_json::to_value(delivery::tail(DONE)).unwrap();
+        let steps = serde_json::to_value(steps).unwrap();
         install(
             &self.e.d,
             json!({
                 "metadata": {"id": "livrer", "name": "Plan v1 · Rendre /stop définitif",
                              "description": "Plan approuvé v1", "parameters": []},
                 "entryStep": delivery::ENTRY,
-                "settings": {"maxIterations": 30, "budget": {"maxUsd": 1.0}},
+                "settings": {"maxIterations": 80, "budget": {"maxUsd": 1.0}},
                 "steps": steps,
             }),
         )
@@ -122,21 +128,21 @@ impl Bench {
         run.id
     }
 
-    async fn run(&self, id: &str) -> Run {
+    pub(super) async fn run(&self, id: &str) -> Run {
         self.e.d.services.runs.get(id).await.unwrap().unwrap()
     }
 
-    async fn at(&self, id: &str) -> String {
+    pub(super) async fn at(&self, id: &str) -> String {
         self.run(id).await.current_step.unwrap_or_default()
     }
 
-    async fn answer(&self, id: &str, choice: &str) {
+    pub(super) async fn answer(&self, id: &str, choice: &str) {
         let r = self.run(id).await;
         let visit = format!("{}.{}", r.current_step.unwrap(), r.iterations);
         answer(&self.e.d, id, &visit, choice, None).await.unwrap();
     }
 
-    fn last_question(&self) -> String {
+    pub(super) fn last_question(&self) -> String {
         self.e
             .r
             .questions()
@@ -147,7 +153,7 @@ impl Bench {
 }
 
 /// Le daemon redémarre : même base, aucun pilote ne tient plus le run.
-fn restarted(e: &Env) -> Context {
+pub(super) fn restarted(e: &Env) -> Context {
     Context {
         workflows: Arc::new(State::with_ports(e.d.ports.clone())),
         ..e.d.cx.clone()

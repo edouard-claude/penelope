@@ -20,7 +20,9 @@
 //! (#193).
 //!
 //! Un plan qui écrit du code et finit par un juge est livré : le `passed` de ce dernier
-//! juge mène à la PR dev, à la CI et à l'E2E ([`crate::delivery`]) au lieu de `$done`.
+//! juge mène à la PR dev, à la CI et à l'E2E ([`crate::delivery`]) au lieu de `$done`,
+//! puis au bilan et à l'approbation humaine avant toute PR vers la production
+//! ([`crate::delivery::gate`]).
 
 use super::{Phase, PlanDraft, PlanError, PlanStep};
 use crate::delivery;
@@ -241,7 +243,8 @@ pub fn compile(draft: &PlanDraft, limits: &Limits) -> Result<Workflow, PlanError
             };
             out = compiler.unfold();
             if delivered {
-                out.extend(delivery::tail(DONE));
+                out.extend(delivery::tail(delivery::gate::REPORT_STEP));
+                out.extend(delivery::gate::steps(DONE));
             }
         }
     }
