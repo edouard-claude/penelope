@@ -12,6 +12,37 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.17
+
+**Workflows : un plan approuvé est livré en dev, PR, CI puis E2E externe (#192, T4 de
+#185).** Depuis #191, un plan qui écrit du code s'arrêtait après sa dernière revue : la
+PR, la CI et la vérification de l'environnement de dev restaient à faire à la main.
+
+- Le `passed` du dernier juge d'un plan qui écrit du code mène à trois étapes `delivery`
+  (nouveau type, validé et publié dans le schéma) : `livraison-pr`, `livraison-ci`,
+  `livraison-e2e`. Chacune est suivie d'une carte « livraison bloquée » (Réessayer,
+  Arrêter) ; aucune n'a de variante « laisse filer ». Un plan sans code ou sans juge
+  final n'ouvre pas de PR.
+- Forgeur, branche de dev, CI et URL de dev viennent de `.penelope/delivery.toml` du
+  dépôt, complété par le dépôt lui-même (remote github.com ou gitlab.com, fichiers de
+  CI). Rien n'est supposé, ni GitHub ni `main` : ce qui manque est demandé sur la carte,
+  clé par clé, avec le fichier où l'écrire ; un jeton absent, avec la commande qui le pose.
+- Une seule PR par run : push et ouverture passent par le ledger, planifiés avant
+  l'appel, et la PR est cherchée sur le forgeur avant d'être ouverte ; après un arrêt
+  brutal, elle est retrouvée. CI (lue sur le commit poussé, à intervalle croissant,
+  bornée ; rouge, sans verdict ou indisponible) et E2E (HTTP, GraphQL, ou l'outil du
+  projet ; preuves dans la sortie de l'étape et `livraison/e2e-N.json`) sont deux
+  résultats distincts, chacun dit dans le sujet.
+- Tests : logique pure (configuration, découverte, verdicts CI et E2E, chemin compilé),
+  orchestrateur contre de faux forgeurs GitHub et GitLab (PR unique, MR retrouvée après
+  un arrêt pendant son ouverture, CI en attente, verte, rouge, indisponible, sans verdict,
+  E2E vert et rouge, configuration et jeton absents, travail non commité), scénario
+  `livraison-dev` (Telegram, redémarrage pendant la CI, un seul POST), `plan-en-phases`
+  qui finit sur la carte de livraison. Le harnais sème des dépôts git (`[[repos]]`) et
+  sert des corps successifs (`bodies`).
+
+Closes #192.
+
 ### 1.0.16
 
 **Workflows : le plan approuvé s'exécute en phases durables (#191, T3 de #185).** Depuis
