@@ -6,47 +6,53 @@ use super::*;
 /// les lignes qui la citent ; elle reste masquée dans les journaux (#26, #134).
 #[test]
 fn a_store_value_without_secret_shape_is_masked_but_not_forbidden() {
+    let r = Redactor::default();
     for v in [
         "proprietaire-207@exemple.fr",
         "https://redmine-207.interne.exemple/projects/penelope",
         "identifiant-de-connexion-207",
     ] {
-        register_secret(v);
+        r.register(v);
         let line = format!("- écrire à {v} pour le compte rendu");
-        assert_eq!(forbidden_secret(&line), None, "{line}");
-        assert!(!contains_secret(&line), "{line}");
-        assert_eq!(secret_kind(&line), None, "{line}");
-        assert!(!redact(&line).contains(v), "journaux : masqué quand même");
-        forget_secret(v);
+        assert_eq!(r.forbidden_secret(&line), None, "{line}");
+        assert!(!r.contains_secret(&line), "{line}");
+        assert_eq!(r.secret_kind(&line), None, "{line}");
+        assert!(!r.redact(&line).contains(v), "journaux : masqué quand même");
     }
 }
 
 /// Une valeur du magasin qui a la forme d'un secret, recopiée en clair, reste interdite.
 #[test]
 fn a_secret_shaped_store_value_stays_forbidden() {
+    let r = Redactor::default();
     let v = "Qm7vT2xK9pLw4ZrB8nYc3HsD6fJa1GuE5oRq0XkNwy";
-    register_secret(v);
-    let f = forbidden_secret(&format!("- la clé du service est {v}")).expect("interdit");
+    r.register(v);
+    let f = r
+        .forbidden_secret(&format!("- la clé du service est {v}"))
+        .expect("interdit");
     assert_eq!(f.kind, "secret enregistré");
     assert_eq!(f.fragment, "Qm7v…");
     assert!(f.certain);
-    forget_secret(v);
 }
 
 /// Ce qui a été lu depuis le démarrage ne change pas le verdict : le critère ne dépend que
 /// du texte et du magasin.
 #[test]
 fn a_learned_value_does_not_change_the_verdict() {
+    let r = Redactor::default();
     let line = "- le paramètre vaut ab207cd34ef56gh78 dans la doc";
-    assert_eq!(forbidden_secret(line), None);
-    learn_secrets("const cfg = { apiKey: 'ab207cd34ef56gh78' };");
-    assert_eq!(forbidden_secret(line), None);
+    assert_eq!(r.forbidden_secret(line), None);
+    r.learn_secrets("const cfg = { apiKey: 'ab207cd34ef56gh78' };");
+    assert_eq!(r.forbidden_secret(line), None);
 }
 
 /// Un vrai jeton est nommé et cité par son début.
 #[test]
 fn a_provider_key_is_named_with_its_fragment() {
-    let f = forbidden_secret("- mot de passe ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+    let r = Redactor::default();
+    let f = r
+        .forbidden_secret("- mot de passe ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        .unwrap();
     assert_eq!(f.kind, "jeton github");
     assert_eq!(f.fragment, "ghp_…");
     assert!(f.certain);
@@ -56,13 +62,14 @@ fn a_provider_key_is_named_with_its_fragment() {
 /// Luhn est vraie ; les cas de #132 restent refusés.
 #[test]
 fn a_numeric_identifier_in_prose_is_not_a_card() {
+    let r = Redactor::default();
     let id = "100000000000009";
     assert!(luhn(id));
     for line in [
         format!("- la page Meta `{id}` publie le lundi"),
         format!("- la page Meta {id} publie le lundi"),
     ] {
-        assert_eq!(forbidden_secret(&line), None, "{line}");
+        assert_eq!(r.forbidden_secret(&line), None, "{line}");
     }
     for card in [
         "4539 1488 0343 6467",
@@ -73,7 +80,7 @@ fn a_numeric_identifier_in_prose_is_not_a_card() {
         "cb=4539-1488-0343-6467",
         "Visa se terminant par 4539148803436467",
     ] {
-        let f = forbidden_secret(card).unwrap_or_else(|| panic!("{card}"));
+        let f = r.forbidden_secret(card).unwrap_or_else(|| panic!("{card}"));
         assert_eq!(f.kind, "numéro de carte", "{card}");
         assert_eq!(f.fragment, "…6467", "{card}");
         assert!(f.certain);
@@ -84,10 +91,15 @@ fn a_numeric_identifier_in_prose_is_not_a_card() {
 /// aléatoire l'est.
 #[test]
 fn an_assignment_is_certain_only_for_a_secret_shaped_value() {
-    let f = forbidden_secret("- le jeton se construit : token = base64url(<champs>)").unwrap();
+    let r = Redactor::default();
+    let f = r
+        .forbidden_secret("- le jeton se construit : token = base64url(<champs>)")
+        .unwrap();
     assert_eq!(f.kind, "affectation de secret");
     assert!(!f.certain, "{f:?}");
-    let f = forbidden_secret("KEY = \"Zx9kQ2mV7pLr4TbW1nHs8YcD3fGa6JuE0oIq5*RtKyNw2BvX\"").unwrap();
+    let f = r
+        .forbidden_secret("KEY = \"Zx9kQ2mV7pLr4TbW1nHs8YcD3fGa6JuE0oIq5*RtKyNw2BvX\"")
+        .unwrap();
     assert_eq!(f.kind, "affectation de secret");
     assert!(f.certain, "{f:?}");
     assert_eq!(f.fragment, "Zx9k…");

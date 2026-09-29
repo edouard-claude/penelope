@@ -624,9 +624,7 @@ async fn a_step_that_times_out_records_its_result_and_moves_on() {
         "delai",
         "reflechir",
         json!([
-            // Le modèle répond en 5 s ; 1,5 s laisse à la préparation du tour le temps
-            // d'atteindre l'appel, même quand les tests voisins chargent la machine.
-            {"id": "reflechir", "type": "agent", "prompt": "réfléchis", "timeoutMs": 1500,
+            {"id": "reflechir", "type": "agent", "prompt": "réfléchis", "timeoutMs": 200,
              "transitions": [
                 {"goto": "$done", "condition": {"type": "step_result", "result": "timeout"}},
                 {"goto": "reflechir"}
@@ -644,11 +642,21 @@ async fn a_step_that_times_out_records_its_result_and_moves_on() {
     let after = e.d.services.runs.get(&run.id).await.unwrap().unwrap();
     assert_eq!(after.state, RunState::Done);
     let log = e.d.services.runs.trace(&run.id).await.unwrap();
-    assert!(
-        log.iter().any(|l| l["result"] == "timeout"),
-        "le résultat doit être enregistré : {log:?}"
+    // Un seul passage, quelle que soit la charge (issue #258). Le délai couvre toute
+    // l'étape, préparation du tour comprise : l'échéance tombe avant ou pendant l'appel au
+    // modèle, selon la machine. Exiger « un appel » mesurait la vitesse de la préparation ;
+    // l'invariant est qu'aucun second passage ne relance le modèle.
+    let passes: Vec<_> = log.iter().filter(|l| l["step"] == "reflechir").collect();
+    assert_eq!(passes.len(), 1, "un seul passage : {log:?}");
+    assert_eq!(
+        passes[0]["result"], "timeout",
+        "résultat enregistré : {log:?}"
     );
-    assert_eq!(e.p.call_count(), 1, "un seul appel au modèle");
+    assert!(
+        e.p.call_count() <= 1,
+        "jamais relancé : {}",
+        e.p.call_count()
+    );
 }
 
 /// #56 : dans un `parallel`, un enfant qui expire n'emporte pas ses frères.

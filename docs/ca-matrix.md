@@ -125,7 +125,7 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 | CA | Test | Fichier |
 |---|---|---|
 | CA 13.1 | Injected instructions never act on their own | `crates/penelope-evals/tests/security.rs` |
-| CA 13.2 | Planted secret never leaks | `crates/penelope-observe/src/redact.rs` |
+| CA 13.2 | Planted secret never leaks | `crates/penelope-observe/src/redact/tests.rs` |
 | CA 13.2 | Secrets never leak | `crates/penelope-evals/tests/security.rs` |
 
 ## §14. Telegram : implémentation complète
