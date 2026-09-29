@@ -7,8 +7,10 @@ Le pilote exécute la spécification dans une session neuve et s'arrête sur la 
 d'OK ; le daemon redémarre au milieu : le pilote ne rejoue rien et ne renvoie pas la
 carte. « Continuer », puis les tests et leur carte ; « Laisse filer » : le code, une
 revue contradictoire qui refuse et renvoie au code, la reprise, la revue qui accepte et
-la vérification, sans autre carte d'OK. Un second clic sur « Vas-y (v2) » est déjà
-traité : aucun second run. Le monde : un run et son chemin, une session neuve par
+la vérification, sans autre carte d'OK. Acceptée, la vérification fait entrer le plan en
+livraison (#192) : aucune phase n'a déclaré de dépôt, la carte « livraison bloquée » le
+demande au lieu de le supposer. Un second clic sur « Vas-y (v2) » est déjà traité :
+aucun second run. Le monde : un run et son chemin, une session neuve par
 phase, où aucun agent n'a vu la conversation du propriétaire."""
 
 [config]

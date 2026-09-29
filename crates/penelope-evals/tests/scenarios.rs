@@ -109,6 +109,7 @@ scenario_cases! {
     // Plan approuvé exécuté en phases durables (#191), par Telegram puis par la RPC.
     plan_en_phases => "plan-en-phases",
     rpc_plans => "rpc-plans",
+    livraison_dev => "livraison-dev",
 }
 
 #[test]

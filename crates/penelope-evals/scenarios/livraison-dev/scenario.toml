@@ -1,0 +1,128 @@
+name = "livraison-dev"
+description = """Un plan approuvé livré en dev, par Telegram (#192, T4 de #185). Le
+propriétaire demande de livrer un correctif du dépôt `service` ; le modèle propose un plan
+de deux pas (code, revue), « Vas-y » le lance. La phase de code déclare le dépôt
+(`session_metadata` key=`project`) ; la revue accepte. La livraison lit
+`.penelope/delivery.toml` (forgeur GitLab déclaré, faux serveur local), découvre la CI
+par `.gitlab-ci.yml`, pousse la branche de travail sur le remote du dépôt, cherche la
+merge request vers `develop`, n'en trouve pas et l'ouvre. La CI est en cours : le run
+attend. Le daemon redémarre ; une minute plus tard la CI est verte, puis l'E2E de
+l'environnement de dev (HTTP et GraphQL) passe : deux résultats distincts, chacun dit
+dans le sujet. Un second « Vas-y » rend le même run. Le monde : une seule merge request
+ouverte (un seul POST), un push et une PR au ledger, les preuves de l'E2E."""
+
+[config]
+"models.routing.classifier" = false
+
+[[files]]
+path = "service/stop.txt"
+content = "/stop met en pause les runs de la conversation.\n"
+
+[[files]]
+path = "service/.gitlab-ci.yml"
+content = "tests:\n  script: make test\n"
+
+[[files]]
+path = "service/.penelope/delivery.toml"
+content = """[forge]
+kind = "gitlab"
+api = "{{http}}"
+repo = "equipe/service"
+
+[branches]
+dev = "develop"
+
+[e2e]
+url = "{{http}}/dev"
+
+[[e2e.checks]]
+path = "/health"
+contains = "ok"
+
+[[e2e.checks]]
+kind = "graphql"
+query = "{ version }"
+"""
+
+[[repos]]
+path = "service"
+base = "develop"
+branch = "penelope/stop"
+
+[[http]]
+path = "/projects/equipe%2Fservice/merge_requests"
+method = "GET"
+body = "[]"
+
+[[http]]
+path = "/projects/equipe%2Fservice/merge_requests"
+method = "POST"
+status = 201
+body = """{"iid": 7, "state": "opened", "web_url": "{{http}}/equipe/service/-/merge_requests/7"}"""
+
+[[http]]
+path = "/projects/equipe%2Fservice/pipelines"
+bodies = ["""[{"id": 41, "status": "running"}]""", """[{"id": 41, "status": "success"}]"""]
+
+[[http]]
+path = "/dev/health"
+body = """{"status": "ok"}"""
+
+[[http]]
+path = "/dev/graphql"
+method = "POST"
+body = """{"data": {"version": "1.4.2"}}"""
+
+[[observe]]
+name = "runs"
+sql = "SELECT workflow_id, state, current_step, iterations, error FROM workflow_runs ORDER BY started_at, rowid"
+
+[[observe]]
+name = "etapes"
+sql = "SELECT step_id, result FROM workflow_step_log ORDER BY id"
+
+[[observe]]
+name = "effets"
+sql = "SELECT kind, tool, state FROM effects WHERE tool LIKE 'delivery.%' ORDER BY created_at, rowid"
+
+[[steps]]
+kind = "rpc"
+method = "secret.set"
+params = { name = "gitlab_token", value = "jeton-de-test" }
+
+[[steps]]
+kind = "telegram"
+text = "Livre le correctif de /stop du dépôt service en dev, propose-moi un plan."
+
+[[steps]]
+kind = "telegram"
+click = "Vas-y (v1)"
+
+[[steps]]
+kind = "drive"
+
+[[steps]]
+kind = "telegram"
+click = "Continuer"
+
+[[steps]]
+kind = "drive"
+
+[[steps]]
+kind = "restart"
+
+[[steps]]
+kind = "rpc"
+method = "secret.set"
+params = { name = "gitlab_token", value = "jeton-de-test" }
+
+[[steps]]
+kind = "advance_clock"
+by = "1m"
+
+[[steps]]
+kind = "drive"
+
+[[steps]]
+kind = "telegram"
+click = "Vas-y (v1)"

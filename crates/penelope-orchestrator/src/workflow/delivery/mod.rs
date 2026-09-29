@@ -141,16 +141,26 @@ async fn project_dir(ctx: &StepCtx<'_>) -> Option<PathBuf> {
             .or_else(|| m["project"]["dir"].as_str())
             .filter(|d| !d.trim().is_empty());
         if let Some(dir) = declared {
-            let dir = PathBuf::from(dir);
-            return Some(if dir.is_absolute() {
-                dir
-            } else {
-                ctx.workdir().join(dir)
-            });
+            return Some(resolve_dir(ctx, Path::new(dir)));
         }
     }
     let workdir = ctx.workdir();
     workdir.join(".git").exists().then_some(workdir)
+}
+
+/// Un chemin relatif se lit comme les outils de fichiers le lisent : dans l'espace du
+/// run, puis dans les workspaces configurés, le premier où il existe.
+fn resolve_dir(ctx: &StepCtx<'_>, dir: &Path) -> PathBuf {
+    if dir.is_absolute() {
+        return dir.to_path_buf();
+    }
+    let mut roots = vec![ctx.workdir()];
+    roots.extend(penelope_executor::executor::default_workspaces(ctx.s()));
+    roots
+        .iter()
+        .map(|root| root.join(dir))
+        .find(|candidate| candidate.exists())
+        .unwrap_or_else(|| roots[0].join(dir))
 }
 
 async fn project(ctx: &StepCtx<'_>, purpose: &str) -> Result<Project, StepOutcome> {

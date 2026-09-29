@@ -42,6 +42,10 @@ pub struct Route {
     pub status: Option<u16>,
     #[serde(default)]
     pub body: String,
+    /// Corps servis dans l'ordre des appels, le dernier répété, à la place de `body` :
+    /// une CI en cours puis verte (#192).
+    #[serde(default)]
+    pub bodies: Vec<String>,
     #[serde(default = "json_type")]
     pub content_type: String,
     /// En-tête `Location` d'une redirection (retour d'un serveur d'autorisation).
@@ -81,12 +85,14 @@ impl Server {
             .context("faux serveur HTTP")?;
         let base = format!("http://{}", listener.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let calls = Arc::new(Mutex::new(vec![0usize; routes.len()]));
         let (routes, seen, b) = (Arc::new(routes), requests.clone(), base.clone());
         let task = tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
-                let (routes, seen, b) = (routes.clone(), seen.clone(), b.clone());
+                let (routes, seen, b, calls) =
+                    (routes.clone(), seen.clone(), b.clone(), calls.clone());
                 tokio::spawn(async move {
-                    let _ = serve(stream, &routes, &seen, &b).await;
+                    let _ = serve(stream, &routes, &seen, &b, &calls).await;
                 });
             }
         });
@@ -183,14 +189,21 @@ async fn serve(
     routes: &[Route],
     seen: &Mutex<Vec<Value>>,
     base: &str,
+    calls: &Mutex<Vec<usize>>,
 ) -> anyhow::Result<()> {
     let req = read_request(&mut stream).await?;
     lock(seen).push(record(&req));
-    let route = routes.iter().find(|r| {
+    let found = routes.iter().position(|r| {
         r.path == req.path
             && r.method
                 .as_deref()
                 .is_none_or(|m| m.eq_ignore_ascii_case(&req.method))
+    });
+    let route = found.map(|i| &routes[i]);
+    let served = found.map_or(0, |i| {
+        let mut c = lock(calls);
+        c[i] += 1;
+        c[i] - 1
     });
     let fill = |s: &str| {
         let mut out = s.replace("{{http}}", base);
@@ -203,7 +216,9 @@ async fn serve(
         Some(r) => (
             r.status
                 .unwrap_or(if r.location.is_some() { 302 } else { 200 }),
-            if r.zip.is_empty() {
+            if !r.bodies.is_empty() {
+                fill(&r.bodies[served.min(r.bodies.len() - 1)]).into_bytes()
+            } else if r.zip.is_empty() {
                 fill(&r.body).into_bytes()
             } else {
                 zip_of(&r.zip)?
