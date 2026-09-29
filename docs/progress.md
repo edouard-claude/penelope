@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.18
+### 1.0.20
 
 **Workflows : gate humain avant la PR vers la production (#193, T5 de #185).** Depuis
 #192, un plan livré s'arrêtait après l'E2E de dev : rien ne présentait le bilan au
