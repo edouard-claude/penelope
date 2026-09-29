@@ -391,9 +391,23 @@ mod tests {
             method: None,
             status: None,
             body: body.into(),
+            bodies: Vec::new(),
             content_type: json_type(),
             location: None,
             zip: BTreeMap::new(),
+        }
+    }
+
+    /// `bodies` : un corps par appel, dans l'ordre, le dernier répété (#192).
+    #[tokio::test]
+    async fn successive_bodies_are_served_in_order_then_the_last_one_repeats() {
+        let mut ci = route("/ci", "");
+        ci.bodies = vec![r#"{"n": 1}"#.into(), r#"{"n": 2}"#.into()];
+        let server = Server::start(vec![ci]).await.unwrap();
+        let url = format!("{}/ci", server.base());
+        for n in [1, 2, 2] {
+            let seen = open(&server, &url).await.unwrap();
+            assert_eq!(seen["body"]["n"], n);
         }
     }
 
