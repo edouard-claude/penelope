@@ -81,6 +81,15 @@ pub fn size_filter(level: Level, text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Secrets seuls, pour un fichier écrit dans le vault par `fs_write` ou `fs_edit`
+/// (issue #256) : une transcription peut citer n'importe quoi, un secret jamais.
+pub fn secret_filter(text: &str) -> Result<(), String> {
+    match penelope_observe::redact::forbidden_secret(text) {
+        Some(f) => Err(refusal(&f)),
+        None => Ok(()),
+    }
+}
+
 /// Comme [`write_filter`], pour un bloc de plusieurs lignes (notes de travail).
 pub fn write_filter_block(text: &str) -> Result<(), String> {
     if let Some(f) = penelope_observe::redact::forbidden_secret(text) {

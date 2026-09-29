@@ -12,6 +12,36 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.19
+
+**Mémoire : une note écrite par un chemin du vault atterrissait dans le workspace, sans
+alerte (#256).** Depuis le 22/09, les fiches de la skill YouTube (`sources/<slug>.md`,
+`attachments/<id>.vtt`) partaient dans `workspace/` : ni indexées ni versionnées.
+`fs_write` résout un chemin relatif contre le premier workspace, et rien ne remarquait
+une note de forme vault hors du vault.
+
+- Préfixe `vault:` pour les outils `fs_*` (`vault:sources/x.md`), cité dans leur
+  description : il ouvre le vault même absent de `sandbox.workspaces` (c'est le cas de
+  l'instance), et n'ouvre que lui : ni `..`, ni lien symbolique qui en sort, ni pour un
+  sous-agent à racines restreintes. Un chemin absolu vers le vault, sans préfixe, suit
+  la règle des workspaces. Toute écriture `vault:` (`fs_write`, `fs_edit`) passe le
+  filtre des secrets du vault. Sans vault ouvert, le préfixe est refusé plutôt que pris
+  pour un nom de dossier. L'index suit au prochain `penelope mem reindex`.
+- `fs_write` d'une note de forme vault (dossier `sources/`, `attachments/`, `concepts/`,
+  `entites/`, ou `type` propre au vault) hors du vault : l'écriture est faite, le
+  résultat porte un `avertissement` avec le chemin `vault:…`. Un brouillon passe sans mot.
+- `doctor` : contrôle `vault.dead_zone`, qui compte ces notes dans le premier workspace
+  et donne la commande `rsync` puis `penelope mem reindex`.
+- La skill livrée `wiki-markdown` (1.1.0) emploie le préfixe ; le préambule de
+  `skill_load` le rappelle à une skill qui cite des chemins du vault sans lui.
+- Tests : résolution (vault hors workspaces, chemin absolu sans préfixe, `vault:../`,
+  lien sortant, sans vault), prédicat de forme, exécuteur (écriture, secret refusé en
+  écriture et en édition, avertissement, brouillon, relecture, sous-agent restreint),
+  `doctor`, préambule ; scénario `outils-vault-prefixe` sans le vault dans les
+  workspaces. Les surfaces des scénarios suivent les descriptions des outils `fs_*`.
+
+Closes #256.
+
 ### 1.0.18
 
 **Masquage : un mot ordinaire lu après `key=` n'est plus masqué partout ; deux tests

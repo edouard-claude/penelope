@@ -1,0 +1,22 @@
+name = "outils-vault-prefixe"
+description = """Préfixe `vault:` des outils de fichiers (issue #256). Comme sur l'instance, le
+vault n'est pas parmi les workspaces autorisés : le préfixe l'ouvre quand même. Le modèle écrit la fiche d'une vidéo par `vault:sources/…` : elle va
+dans le vault, sans remarque. Il écrit ensuite une seconde fiche par le chemin relatif nu
+`sources/…`, comme le faisait la skill YouTube : l'écriture réussit dans le workspace, et
+le résultat d'outil dit qu'elle n'est ni indexée ni versionnée, avec le chemin `vault:…`
+visé. Un brouillon Markdown ordinaire passe sans remarque. Il relit enfin la fiche par
+`vault:`. Le monde montre les résultats d'outils et les fichiers du workspace."""
+pin_model = "main"
+
+[config]
+"tools.approval_mode" = "auto"
+
+[[files]]
+root = "vault"
+path = "index.md"
+content = """# Index
+"""
+
+[[steps]]
+kind = "message"
+text = "range les fiches des vidéos M5 Ultra et BLAST dans le vault, et garde un brouillon du plan"

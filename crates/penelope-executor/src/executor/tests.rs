@@ -642,3 +642,109 @@ fn mcp_results_render_their_text_blocks() {
     let v = json!({"content":[], "structuredContent":{"total": 3}});
     assert!(render_mcp_result(&v).contains("\"total\": 3"));
 }
+
+/// #256 : `vault:` écrit dans le vault ; une note de forme vault écrite par chemin
+/// relatif atterrit dans le workspace, réussit, et le résultat le dit. Un brouillon
+/// ordinaire passe sans remarque.
+#[tokio::test]
+async fn a_vault_note_written_outside_the_vault_is_flagged() {
+    let (dir, x) = executor().await;
+    let ws = dir.path().join("ws");
+    let vault = penelope_app::helpers::vault_dir(&x.services);
+    std::fs::create_dir_all(&vault).unwrap();
+    let note = "---\ntype: source\n---\n# M5 Ultra\n";
+
+    // Vault hors des workspaces (l'instance réelle) : le préfixe l'ouvre.
+    let r = x
+        .execute(
+            "fs_write",
+            &json!({"path": "vault:sources/x.md", "content": note}),
+        )
+        .await
+        .unwrap();
+    assert!(vault.join("sources/x.md").exists());
+    assert!(!r.text.contains("hors du vault"), "{}", r.text);
+
+    // Un secret n'entre pas dans le vault, ni par écriture ni par édition.
+    let secret = format!("mot de passe ghp_{}", "a".repeat(36));
+    let e = x
+        .execute(
+            "fs_write",
+            &json!({"path": "vault:sources/cle.md", "content": secret}),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(e, ToolError::Denied(_)), "{e}");
+    assert!(!vault.join("sources/cle.md").exists());
+    let e = x
+        .execute(
+            "fs_edit",
+            &json!({"path": "vault:sources/x.md", "old": "# M5 Ultra", "new": secret}),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(e, ToolError::Denied(_)), "{e}");
+
+    // Sans préfixe, le chemin absolu du vault suit la règle des workspaces.
+    let abs = vault.join("sources/x.md").display().to_string();
+    let e = x
+        .execute("fs_read", &json!({"path": abs}))
+        .await
+        .unwrap_err();
+    assert!(matches!(e, ToolError::Denied(_)), "{e}");
+    // Le workspace accepte le même texte : le filtre ne vaut que pour le vault.
+    x.execute(
+        "fs_write",
+        &json!({"path": "brouillons/cle.txt", "content": secret}),
+    )
+    .await
+    .unwrap();
+
+    let r = x
+        .execute(
+            "fs_write",
+            &json!({"path": "sources/y.md", "content": note}),
+        )
+        .await
+        .unwrap();
+    assert!(ws.join("sources/y.md").exists(), "l'écriture réussit");
+    assert!(r.text.contains("hors du vault"), "{}", r.text);
+    assert!(r.text.contains("vault:sources/y.md"), "{}", r.text);
+
+    let r = x
+        .execute(
+            "fs_write",
+            &json!({"path": "brouillons/plan.md", "content": "# Plan\n- relire\n"}),
+        )
+        .await
+        .unwrap();
+    assert!(!r.text.contains("hors du vault"), "{}", r.text);
+
+    // Lire par le préfixe rend la même note.
+    let r = x
+        .execute("fs_read", &json!({"path": "vault:sources/x.md"}))
+        .await
+        .unwrap();
+    assert!(r.text.contains("M5 Ultra"), "{}", r.text);
+}
+
+/// #256 : un sous-agent à la liste de racines restreinte ne reçoit pas le vault par le
+/// préfixe.
+#[tokio::test]
+async fn a_restricted_sub_agent_does_not_get_the_vault() {
+    let (dir, x) = executor().await;
+    let own = dir.path().join("run");
+    std::fs::create_dir_all(&own).unwrap();
+    let mut env = x.env.clone();
+    env.workspaces = vec![penelope_platform::sandbox::normalise(&own)];
+    let sub = NativeToolExecutor::new(x.services.clone(), env);
+    let e = sub
+        .execute(
+            "fs_write",
+            &json!({"path": "vault:sources/x.md", "content": "# x\n"}),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(e, ToolError::Denied(_)), "{e}");
+    assert!(!own.join("vault:sources").exists());
+}

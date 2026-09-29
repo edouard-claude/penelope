@@ -8,7 +8,8 @@ pub(super) fn files() -> Vec<ToolSpec> {
         spec(
             "fs_read",
             RiskClass::Read,
-            "Lit un fichier du workspace autorisé, avec pagination par lignes.",
+            "Lit un fichier du workspace autorisé, avec pagination par lignes. \
+             `vault:<chemin>` vise le vault.",
             obj(
                 json!({
                     "path": {"type":"string"},
@@ -24,7 +25,7 @@ pub(super) fn files() -> Vec<ToolSpec> {
         spec(
             "fs_list",
             RiskClass::Read,
-            "Liste le contenu d'un répertoire du workspace.",
+            "Liste le contenu d'un répertoire du workspace. `vault:<chemin>` vise le vault.",
             obj(
                 json!({
                     "path": {"type":"string"},
@@ -40,7 +41,8 @@ pub(super) fn files() -> Vec<ToolSpec> {
         spec(
             "fs_search",
             RiskClass::Read,
-            "Recherche une expression régulière dans les fichiers du workspace.",
+            "Recherche une expression régulière dans les fichiers du workspace. \
+             `vault:<chemin>` vise le vault.",
             obj(
                 json!({
                     "pattern": {"type":"string"},
@@ -58,7 +60,8 @@ pub(super) fn files() -> Vec<ToolSpec> {
             "fs_write",
             RiskClass::Write,
             "Écrit un fichier dans le workspace. Un point de reprise git est posé si le \
-             workspace est un dépôt.",
+             workspace est un dépôt. Une note de mémoire va dans le vault : \
+             `vault:sources/x.md` (un chemin relatif nu vise le workspace).",
             obj(
                 json!({
                     "path": {"type":"string"},
@@ -74,7 +77,8 @@ pub(super) fn files() -> Vec<ToolSpec> {
             "fs_edit",
             RiskClass::Write,
             "Remplace une portion exacte d'un fichier. Échoue si la portion n'est pas \
-             unique : c'est ce qui empêche une édition au mauvais endroit.",
+             unique : c'est ce qui empêche une édition au mauvais endroit. \
+             `vault:<chemin>` vise le vault.",
             obj(
                 json!({
                     "path": {"type":"string"},

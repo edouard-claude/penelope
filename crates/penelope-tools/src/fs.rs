@@ -34,8 +34,40 @@ impl FileLocks {
     }
 }
 
-/// Résout un chemin demandé par le modèle contre les workspaces autorisés.
+/// Préfixe d'un chemin relatif au vault : `vault:sources/x.md` (issue #256).
+pub const VAULT_PREFIX: &str = "vault:";
+
+/// Résout un chemin demandé par le modèle, sans vault connu : `vault:…` est refusé.
 pub fn resolve(path: &str, workspaces: &[PathBuf]) -> ToolResult<PathBuf> {
+    resolve_in(path, workspaces, None)
+}
+
+/// Résout un chemin contre les workspaces autorisés ; `vault:…` contre le vault (#256).
+/// Le vault est la mémoire de l'agent : ce préfixe l'ouvre même absent de
+/// `sandbox.workspaces`, et n'ouvre que lui. Le résultat est borné au vault, liens
+/// symboliques compris ; un chemin absolu vers le vault, sans préfixe, suit la règle
+/// des workspaces.
+pub fn resolve_in(path: &str, workspaces: &[PathBuf], vault: Option<&Path>) -> ToolResult<PathBuf> {
+    let Some(rest) = path.strip_prefix(VAULT_PREFIX) else {
+        return resolve_plain(path, workspaces);
+    };
+    let Some(vault) = vault else {
+        return Err(ToolError::Denied(format!(
+            "`{path}` : aucun vault ouvert ici, donner un chemin du workspace"
+        )));
+    };
+    let root = normalise(vault);
+    let candidate = normalise(&root.join(rest.trim_start_matches(['/', '\\'])));
+    if !candidate.starts_with(&root) {
+        return Err(ToolError::Denied(format!("`{path}` sort du vault")));
+    }
+    resolve_plain(&candidate.to_string_lossy(), &[root]).map_err(|e| match e {
+        ToolError::Denied(_) => ToolError::Denied(format!("`{path}` sort du vault")),
+        other => other,
+    })
+}
+
+fn resolve_plain(path: &str, workspaces: &[PathBuf]) -> ToolResult<PathBuf> {
     if workspaces.is_empty() {
         return Err(ToolError::Denied(
             "aucun workspace autorisé n'est configuré".into(),

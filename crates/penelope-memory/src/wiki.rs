@@ -23,6 +23,27 @@ pub const ATTACHMENTS_DIR: &str = "attachments";
 /// Journal des opérations, en ajout seul.
 pub const LOG_FILE: &str = "log.md";
 
+/// Dossiers qui n'ont de sens que dans le vault (issue #256).
+pub const VAULT_ONLY_DIRS: [&str; 4] = ["sources", ATTACHMENTS_DIR, "concepts", "entites"];
+/// Types de note propres au vault : `index`, `notes` ou `log` se rencontrent ailleurs.
+const VAULT_ONLY_TYPES: [&str; 5] = ["source", "concept", "entite", "pratique", "journal"];
+
+/// Fichier qui a la forme d'une note du vault : sous un dossier propre au vault, ou note
+/// Markdown dont le `type` n'existe que là. Hors du vault, il n'est ni indexé ni
+/// versionné (issue #256) ; un brouillon ordinaire n'a pas cette forme.
+pub fn vault_shaped(rel: &str, content: &str) -> bool {
+    let rel = rel.trim_start_matches("./");
+    let top = rel.split('/').next().unwrap_or_default();
+    if rel.contains('/') && VAULT_ONLY_DIRS.contains(&top) {
+        return true;
+    }
+    rel.ends_with(".md")
+        && frontmatter::parse(content)
+            .ok()
+            .and_then(|fm| fm.str("type").map(|t| VAULT_ONLY_TYPES.contains(&t)))
+            .unwrap_or(false)
+}
+
 /// Type (`type:`) d'une note selon son emplacement ; `None` pour une note libre.
 pub fn note_type(rel: &str) -> Option<&'static str> {
     let rel = rel.trim_start_matches("./");

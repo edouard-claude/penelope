@@ -78,6 +78,53 @@ fn resolve_without_workspace_denies_everything() {
     assert!(resolve("a.rs", &[]).is_err());
 }
 
+/// #256 : `vault:` vise le vault, même absent des workspaces, et rien que lui ; un chemin
+/// absolu vers le vault, sans préfixe, suit la règle des workspaces.
+#[test]
+fn the_vault_prefix_opens_the_vault_and_only_it() {
+    let d = tempfile::tempdir().unwrap();
+    let ws = d.path().join("workspace");
+    let vault = d.path().join("vault");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&vault).unwrap();
+    let real_vault = vault.canonicalize().unwrap();
+    let only_ws = vec![normalise(&ws)];
+
+    // Vault hors des workspaces : le préfixe l'ouvre.
+    assert_eq!(
+        resolve_in("vault:sources/x.md", &only_ws, Some(&vault)).unwrap(),
+        real_vault.join("sources/x.md")
+    );
+    assert_eq!(
+        resolve_in("vault:/sources/x.md", &only_ws, Some(&vault)).unwrap(),
+        real_vault.join("sources/x.md")
+    );
+    // Un chemin relatif ordinaire va toujours au premier workspace.
+    assert_eq!(
+        resolve_in("sources/x.md", &only_ws, Some(&vault)).unwrap(),
+        ws.canonicalize().unwrap().join("sources/x.md")
+    );
+    // Sans préfixe, le chemin absolu du vault reste refusé.
+    let abs = vault.join("sources/x.md").display().to_string();
+    let e = resolve_in(&abs, &only_ws, Some(&vault)).unwrap_err();
+    assert!(e.to_string().contains("hors des workspaces"), "{e}");
+
+    // Rien hors du vault : `..`, ni un lien symbolique qui en sort.
+    let e = resolve_in("vault:../workspace/x.md", &only_ws, Some(&vault)).unwrap_err();
+    assert!(e.to_string().contains("sort du vault"), "{e}");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&ws, vault.join("fuite")).unwrap();
+        let e = resolve_in("vault:fuite/x.md", &only_ws, Some(&vault)).unwrap_err();
+        assert!(e.to_string().contains("sort du vault"), "{e}");
+    }
+
+    // Sans vault ouvert (`resolve`), le préfixe est refusé plutôt que pris pour un nom.
+    let e = resolve("vault:sources/x.md", &only_ws).unwrap_err();
+    assert!(matches!(e, ToolError::Denied(_)), "{e}");
+    assert!(!ws.join("vault:sources").exists());
+}
+
 #[test]
 fn read_paginates_and_numbers_lines() {
     let (d, _) = ws();

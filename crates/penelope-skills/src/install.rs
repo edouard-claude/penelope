@@ -397,7 +397,8 @@ pub fn portage_note(skill: &Skill) -> Option<String> {
         .filter(|(claude, _)| mentions_word(&skill.body, claude))
         .collect();
     let glued = glued_examples(&skill.body);
-    if mapped.is_empty() && glued.is_empty() {
+    let vault_paths = cites_vault_paths(&skill.body);
+    if mapped.is_empty() && glued.is_empty() && !vault_paths {
         return None;
     }
     let mut lines = vec![
@@ -436,9 +437,27 @@ pub fn portage_note(skill: &Skill) -> Option<String> {
         ));
         lines.push(String::new());
     }
+    // Relatif, `sources/x.md` va au workspace : ni indexé ni versionné (issue #256).
+    if vault_paths {
+        lines.push(
+            "**Chemins du vault.** Cette skill cite des chemins relatifs au vault \
+             (`sources/…`, `attachments/…`) : pour les outils `fs_*`, écris-les \
+             `vault:sources/…`. Un chemin relatif nu vise le workspace, hors du vault."
+                .to_string(),
+        );
+        lines.push(String::new());
+    }
     lines.push("---".into());
     lines.push(String::new());
     Some(lines.join("\n"))
+}
+
+/// Le corps cite un chemin relatif au vault (`` `sources/…` ``) sans le préfixe `vault:`.
+fn cites_vault_paths(body: &str) -> bool {
+    !body.contains("vault:")
+        && ["sources/", "attachments/", "concepts/", "entites/"]
+            .iter()
+            .any(|d| body.contains(&format!("`{d}")))
 }
 
 /// Exemples de la skill qui collent plusieurs commandes sur une ligne (issue #150), en
@@ -633,6 +652,25 @@ mod tests {
             note.contains("Une commande par appel"),
             "la consigne est dans la note : {note}"
         );
+    }
+
+    /// #256 : la skill YouTube écrivait `sources/<slug>.md`, chemin du vault ; relatif,
+    /// il atterrissait dans le workspace. Une skill qui cite des chemins du vault reçoit le
+    /// préfixe au chargement ; celle qui l'emploie déjà, rien.
+    #[test]
+    fn a_skill_citing_vault_paths_is_told_the_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yt/SKILL.md");
+        let skill = |body: &str| {
+            let raw = format!("---\nname: yt\ndescription: d\n---\n{body}");
+            let mut sk = parse_skill(&path, &raw, Scope::User).unwrap();
+            sk.path = path.clone();
+            sk
+        };
+        let note = portage_note(&skill("Écrire la fiche `sources/<slug>.md`.\n")).unwrap();
+        assert!(note.contains("`vault:sources/…`"), "{note}");
+        assert!(portage_note(&skill("Écrire `vault:sources/<slug>.md`.\n")).is_none());
+        assert!(portage_note(&skill("Lire `src/sources.rs`.\n")).is_none());
     }
 
     #[test]

@@ -377,6 +377,8 @@ async fn the_wiki_markdown_skill_is_bundled() {
     let skill = s.skills.get("wiki-markdown").expect("skill livrée");
     assert_eq!(skill.scope, penelope_skills::Scope::Bundled);
     assert!(skill.body.contains("Propriétés YAML") && skill.body.contains("log.md"));
+    // #256 : un chemin du vault nu atterrissait dans le workspace.
+    assert!(skill.body.contains("`vault:sources/<slug>.md`"));
     assert!(s.skills.errors().is_empty(), "{:?}", s.skills.errors());
 
     let user = s.platform.dirs.skills().join("wiki-markdown");

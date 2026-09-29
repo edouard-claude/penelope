@@ -86,6 +86,108 @@ pub async fn vault_index_check(s: &Services) -> DoctorCheck {
     }
 }
 
+/// #256 : notes de forme vault dans le premier workspace, là où atterrit un chemin
+/// relatif (`sources/…`). Zone morte : ni indexées ni versionnées. Les autres workspaces
+/// (dépôts du propriétaire) ne sont pas parcourus : un `sources/` y est légitime.
+pub async fn vault_dead_zone_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "vault.dead_zone";
+    const LABEL: &str = "Notes du vault hors du vault";
+    let vault = crate::helpers::canonical_workspace(&crate::helpers::vault_dir(s));
+    let Some(ws) = crate::helpers::default_workspaces(s).into_iter().next() else {
+        return DoctorCheck::ok(ID, LABEL, "aucun workspace");
+    };
+    if ws.starts_with(&vault) {
+        return DoctorCheck::ok(ID, LABEL, "le workspace est dans le vault");
+    }
+    let found = {
+        let (ws, vault) = (ws.clone(), vault.clone());
+        tokio::task::spawn_blocking(move || dead_zone(&ws, &vault))
+            .await
+            .unwrap_or_default()
+    };
+    if found.is_empty() {
+        return DoctorCheck::ok(ID, LABEL, format!("aucune dans {}", ws.display()));
+    }
+    let in_dir = |f: &String, d: &str| f.starts_with(&format!("{d}/"));
+    let dirs = penelope_memory::wiki::VAULT_ONLY_DIRS;
+    let mut fix: Vec<String> = dirs
+        .iter()
+        .filter(|d| found.iter().any(|f| in_dir(f, d)))
+        .map(|d| {
+            format!(
+                "rsync -a --ignore-existing --remove-source-files {}/{d}/ {}/{d}/",
+                ws.display(),
+                vault.display()
+            )
+        })
+        .collect();
+    if found.iter().any(|f| !dirs.iter().any(|d| in_dir(f, d))) {
+        fix.push("déplacer les autres notes nommées dans le vault".into());
+    }
+    fix.push("penelope mem reindex".into());
+    DoctorCheck::fail(
+        ID,
+        LABEL,
+        format!(
+            "{} fichier(s) dans {}, ni indexés ni versionnés : {}{}",
+            found.len(),
+            ws.display(),
+            found.iter().take(5).cloned().collect::<Vec<_>>().join(", "),
+            if found.len() > 5 { "…" } else { "" }
+        ),
+        Some(fix.join(" ; ")),
+    )
+}
+
+/// Chemins relatifs au workspace des fichiers de forme vault, triés. Parcours borné, sans
+/// dossiers cachés, ni le vault s'il est dedans.
+fn dead_zone(ws: &std::path::Path, vault: &std::path::Path) -> Vec<String> {
+    const MAX_DEPTH: usize = 8;
+    const MAX_FILES: usize = 20_000;
+    const MAX_NOTE_BYTES: u64 = 1024 * 1024;
+    let mut found = Vec::new();
+    let mut seen = 0usize;
+    let mut stack = vec![(ws.to_path_buf(), 0usize)];
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name == "target" || name == "node_modules" {
+                continue;
+            }
+            let Ok(meta) = e.metadata() else { continue };
+            if meta.is_dir() {
+                if depth < MAX_DEPTH && !p.starts_with(vault) {
+                    stack.push((p, depth + 1));
+                }
+                continue;
+            }
+            seen += 1;
+            if seen > MAX_FILES {
+                stack.clear();
+                break;
+            }
+            let Ok(rel) = p.strip_prefix(ws) else {
+                continue;
+            };
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            let content = if rel.ends_with(".md") && meta.len() <= MAX_NOTE_BYTES {
+                std::fs::read_to_string(&p).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            if penelope_memory::wiki::vault_shaped(&rel, &content) {
+                found.push(rel);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
 /// Alias `embedding` joignable (issue #11) : sans lui, la recherche reste lexicale.
 pub async fn embedding_check(emb: &crate::embeddings::Embedder) -> DoctorCheck {
     const ID: &str = "embedding";

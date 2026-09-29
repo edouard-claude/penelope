@@ -22,6 +22,7 @@ impl Rpc {
                 let mut checks = super::doctor::run(s, self.daemon.hooks.mcp_supervisor()).await;
                 checks.push(penelope_ops::doctor::embedding_check(&self.daemon.embedder()).await);
                 checks.push(penelope_ops::doctor::vault_index_check(s).await);
+                checks.push(penelope_ops::doctor::vault_dead_zone_check(s).await);
                 checks.extend(penelope_ops::doctor::coherence_checks(s).await);
                 checks.push(penelope_ops::doctor::logs_secret_check(s));
                 checks.push(penelope_ops::doctor::stored_secret_check(s).await);
