@@ -78,6 +78,45 @@ fn resolve_without_workspace_denies_everything() {
     assert!(resolve("a.rs", &[]).is_err());
 }
 
+/// #256 : `vault:` vise le vault, jamais au-delà de ce que les workspaces permettent déjà.
+#[test]
+fn the_vault_prefix_resolves_against_the_vault_without_widening_access() {
+    let d = tempfile::tempdir().unwrap();
+    let ws = d.path().join("workspace");
+    let vault = d.path().join("vault");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&vault).unwrap();
+    let real_vault = vault.canonicalize().unwrap();
+    let both = vec![normalise(&ws), normalise(&vault)];
+
+    assert_eq!(
+        resolve_in("vault:sources/x.md", &both, Some(&vault)).unwrap(),
+        real_vault.join("sources/x.md")
+    );
+    // Un chemin relatif ordinaire va toujours au premier workspace.
+    assert_eq!(
+        resolve_in("sources/x.md", &both, Some(&vault)).unwrap(),
+        ws.canonicalize().unwrap().join("sources/x.md")
+    );
+    // `vault:/…` reste dans le vault, `vault:../…` n'en sort pas.
+    assert_eq!(
+        resolve_in("vault:/sources/x.md", &both, Some(&vault)).unwrap(),
+        real_vault.join("sources/x.md")
+    );
+    let e = resolve_in("vault:../workspace/x.md", &both, Some(&vault)).unwrap_err();
+    assert!(e.to_string().contains("sort du vault"), "{e}");
+
+    // Vault hors des workspaces autorisés : le préfixe n'ouvre rien.
+    let only_ws = vec![normalise(&ws)];
+    let e = resolve_in("vault:sources/x.md", &only_ws, Some(&vault)).unwrap_err();
+    assert!(matches!(e, ToolError::Denied(_)), "{e}");
+    assert!(e.to_string().contains("sandbox.workspaces"), "{e}");
+    // Sans vault connu (`resolve`), le préfixe est refusé plutôt que pris pour un nom.
+    let e = resolve("vault:sources/x.md", &both).unwrap_err();
+    assert!(matches!(e, ToolError::Denied(_)), "{e}");
+    assert!(!ws.join("vault:sources").exists());
+}
+
 #[test]
 fn read_paginates_and_numbers_lines() {
     let (d, _) = ws();

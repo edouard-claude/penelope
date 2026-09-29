@@ -1,7 +1,7 @@
 ---
 name: wiki-markdown
 description: Règles d'écriture du vault, un wiki Markdown (propriétés YAML, wikilinks, identifiants de bloc, log.md), à suivre avant toute note écrite ou modifiée à la main.
-version: 1.0.0
+version: 1.1.0
 declencheurs:
   - vault
   - wiki
@@ -14,6 +14,15 @@ declencheurs:
 Le vault est un wiki Markdown : des fichiers texte, des propriétés YAML, des wikilinks. Il
 reste valide à tout moment, y compris quand le propriétaire l'édite en même temps. Les
 outils `mem_*` appliquent ces règles d'eux-mêmes ; elles valent pour toute écriture directe.
+
+## Écrire dans le vault, pas à côté
+
+Les chemins de cette skill sont relatifs au vault. Avec les outils `fs_*`, préfixe-les de
+`vault:` : `fs_write` sur `vault:sources/<slug>.md`, `vault:attachments/<id>-fr.vtt`. Un
+chemin relatif nu (`sources/x.md`) vise le workspace : la note y est écrite, mais ni
+indexée ni versionnée, et le résultat de l'outil le signale. Si le vault n'est pas parmi
+les workspaces autorisés, `vault:` est refusé : le dire au propriétaire
+(`sandbox.workspaces`), ne pas écrire ailleurs.
 
 ## Propriétés YAML
 
@@ -58,6 +67,8 @@ outils `mem_*` appliquent ces règles d'eux-mêmes ; elles valent pour toute éc
 - Ne jamais renommer ni déplacer une note sans réécrire tous les wikilinks qui la visent.
 
 ## Emplacements
+
+Relatifs au vault ; avec `fs_*`, `vault:` devant.
 
 - `journal/AAAA-MM-JJ.md` : note du jour, `type: journal` et `date`.
 - `sources/<slug>.md` : fiche d'un document ; l'original, immuable, est dans `attachments/`.

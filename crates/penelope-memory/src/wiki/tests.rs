@@ -223,3 +223,29 @@ fn log_lines_are_greppable_and_appended() {
     assert!(second.starts_with(&first[..first.find("updated").unwrap()]));
     assert!(second.contains("type: log") && second.contains("updated: 2026-09-18"));
 }
+
+/// #256 : ce qui n'a de sens que dans le vault se reconnaît à son dossier ou à son type ;
+/// un brouillon Markdown ordinaire, ou un README de dépôt, ne l'est pas.
+#[test]
+fn a_vault_shaped_file_is_told_from_a_draft() {
+    let note = "---\ntype: source\ncreated: 2026-09-22\n---\n# Vidéo\n";
+    assert!(vault_shaped("sources/m5-ultra.md", ""));
+    assert!(vault_shaped("attachments/abc-fr.vtt", ""));
+    assert!(vault_shaped("./concepts/harnais.md", ""));
+    assert!(vault_shaped("entites/acme.md", ""));
+    assert!(vault_shaped("brouillons/m5-ultra.md", note));
+    assert!(vault_shaped(
+        "a.md",
+        "---\r\ntype: concept\r\n---\r\n# Harnais\r\n"
+    ));
+
+    assert!(!vault_shaped("brouillons/plan.md", "# Plan\n- relire\n"));
+    assert!(!vault_shaped(
+        "README.md",
+        "---\ntitle: Projet\n---\n# Projet\n"
+    ));
+    assert!(!vault_shaped("docs/index.md", "---\ntype: index\n---\n"));
+    // Le type ne compte que pour une note Markdown.
+    assert!(!vault_shaped("export.json", note));
+    assert!(!vault_shaped("src/sources.rs", ""));
+}

@@ -47,7 +47,7 @@ impl NativeToolExecutor {
             }
             "fs_search" => {
                 let root = match args.get("path").and_then(|v| v.as_str()) {
-                    Some(p) if !p.is_empty() => penelope_tools::fs::resolve(p, &self.workspaces())?,
+                    Some(p) if !p.is_empty() => self.resolve_path(p)?,
                     _ => self.workspace(),
                 };
                 let pattern = str_arg(args, "pattern")?;
@@ -62,7 +62,12 @@ impl NativeToolExecutor {
                 let p = self.path_arg(args, "path")?;
                 let lock = self.locks.for_path(&p);
                 let _g = lock.lock().await;
-                penelope_tools::fs::write(&p, &str_arg(args, "content")?)?
+                let content = str_arg(args, "content")?;
+                let mut v = penelope_tools::fs::write(&p, &content)?;
+                if let Some(w) = self.outside_vault_warning(&p, &content) {
+                    v["avertissement"] = json!(w);
+                }
+                v
             }
             "fs_edit" => {
                 let p = self.path_arg(args, "path")?;
@@ -79,6 +84,30 @@ impl NativeToolExecutor {
             other => return Err(ToolError::Unknown(other.to_string())),
         };
         Ok(ToolOutcome::ok(v))
+    }
+
+    /// Note de forme vault écrite dans un workspace hors du vault (issue #256) : elle ne
+    /// sera ni indexée ni versionnée. L'écriture est faite ; le modèle l'apprend ici, avec
+    /// le chemin `vault:…` qu'il visait sans doute. Un brouillon ordinaire passe sans mot.
+    fn outside_vault_warning(&self, written: &Path, content: &str) -> Option<String> {
+        let vault = canonical_workspace(&penelope_app::helpers::vault_dir(&self.services));
+        if written.starts_with(&vault) {
+            return None;
+        }
+        let rel = self
+            .workspaces()
+            .iter()
+            .filter_map(|w| written.strip_prefix(w).ok())
+            .min_by_key(|r| r.components().count())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        penelope_memory::wiki::vault_shaped(&rel, content).then(|| {
+            format!(
+                "écrit hors du vault ({}) : ni indexé ni versionné ; pour le vault, \
+                 `vault:{rel}`",
+                vault.display()
+            )
+        })
     }
 
     /// Shell.

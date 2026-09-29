@@ -1,0 +1,5 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "fs_write", "arguments": {"path": "vault:sources/m5-ultra.md", "content": "---\ntype: source\n---\n# M5 Ultra\n"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "fs_write", "arguments": {"path": "sources/blast.md", "content": "---\ntype: source\n---\n# BLAST\n"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c3", "name": "fs_write", "arguments": {"path": "brouillons/plan.md", "content": "# Plan\n- relire les fiches\n"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c4", "name": "fs_read", "arguments": {"path": "vault:sources/m5-ultra.md"}}]}}
+{"text": "La fiche M5 Ultra est dans le vault. Celle de BLAST est partie dans le workspace, hors du vault : je la réécris par `vault:sources/blast.md` si tu veux."}

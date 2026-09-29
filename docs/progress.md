@@ -12,6 +12,31 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.19
+
+**Mémoire : une note écrite par un chemin du vault atterrissait dans le workspace, sans
+alerte (#256).** Depuis le 22/09, les fiches de la skill YouTube (`sources/<slug>.md`,
+`attachments/<id>.vtt`) partaient dans `workspace/` : ni indexées ni versionnées.
+`fs_write` résout un chemin relatif contre le premier workspace, et rien ne remarquait
+une note de forme vault hors du vault.
+
+- Préfixe `vault:` pour les outils `fs_*` (`vault:sources/x.md`) : résolu contre le
+  vault, borné au vault, puis soumis à la même barrière des workspaces. Un vault absent
+  de `sandbox.workspaces` reste fermé ; sans vault connu, le préfixe est refusé plutôt
+  que pris pour un nom de dossier.
+- `fs_write` d'une note de forme vault (dossier `sources/`, `attachments/`, `concepts/`,
+  `entites/`, ou `type` propre au vault) hors du vault : l'écriture est faite, le
+  résultat porte un `avertissement` avec le chemin `vault:…`. Un brouillon passe sans mot.
+- `doctor` : contrôle `vault.dead_zone`, qui compte ces notes dans le premier workspace
+  et donne la commande `rsync` puis `penelope mem reindex`.
+- La skill livrée `wiki-markdown` (1.1.0) emploie le préfixe ; le préambule de
+  `skill_load` le rappelle à une skill qui cite des chemins du vault sans lui.
+- Tests : résolution (vault, workspace, `vault:../`, vault hors workspaces, sans vault),
+  prédicat de forme, exécuteur (écriture, avertissement, brouillon, relecture), `doctor`,
+  préambule ; scénario `outils-vault-prefixe`.
+
+Closes #256.
+
 ### 1.0.18
 
 **Masquage : un mot ordinaire lu après `key=` n'est plus masqué partout ; deux tests

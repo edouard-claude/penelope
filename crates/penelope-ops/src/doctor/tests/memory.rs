@@ -80,3 +80,38 @@ async fn the_embedding_probe_says_why_search_stays_lexical() {
     let c = embedding_check(&emb).await;
     assert!(c.ok && c.detail.contains("8 dimensions"), "{c:?}");
 }
+
+/// #256 : une note de forme vault dans le workspace est une zone morte (ni indexée ni
+/// versionnée) ; `doctor` la compte et donne de quoi la rapatrier. Un brouillon ne compte
+/// pas.
+#[tokio::test]
+async fn a_vault_note_left_in_the_workspace_is_reported() {
+    let (_d, s) = services().await;
+    let ws = crate::helpers::default_workspaces(&s).remove(0);
+    std::fs::create_dir_all(ws.join("brouillons")).unwrap();
+    std::fs::write(ws.join("brouillons/plan.md"), "# Plan\n").unwrap();
+    let c = vault_dead_zone_check(&s).await;
+    assert!(c.ok, "{c:?}");
+
+    std::fs::create_dir_all(ws.join("sources")).unwrap();
+    std::fs::create_dir_all(ws.join("attachments")).unwrap();
+    std::fs::write(ws.join("sources/m5.md"), "---\ntype: source\n---\n# M5\n").unwrap();
+    std::fs::write(ws.join("attachments/m5-fr.vtt"), "WEBVTT\n").unwrap();
+    std::fs::write(
+        ws.join("brouillons/export.md"),
+        "---\ntype: concept\n---\n# Export\n",
+    )
+    .unwrap();
+    let c = vault_dead_zone_check(&s).await;
+    assert!(!c.ok, "{c:?}");
+    assert!(c.detail.starts_with("3 fichier(s)"), "{}", c.detail);
+    assert!(c.detail.contains("sources/m5.md"), "{}", c.detail);
+    assert!(c.detail.contains("brouillons/export.md"), "{}", c.detail);
+    let fix = c.fix.unwrap();
+    let vault = crate::helpers::vault_dir(&s);
+    assert!(
+        fix.contains(&format!("{}/sources/", vault.display())),
+        "{fix}"
+    );
+    assert!(fix.contains("penelope mem reindex"), "{fix}");
+}

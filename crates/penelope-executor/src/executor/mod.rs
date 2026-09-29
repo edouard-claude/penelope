@@ -258,14 +258,20 @@ impl NativeToolExecutor {
             .unwrap_or_else(std::env::temp_dir)
     }
 
+    /// Chemin du modèle résolu : `vault:…` vise le vault, dans la limite des workspaces
+    /// (issue #256).
+    fn resolve_path(&self, raw: &str) -> ToolResult<PathBuf> {
+        let vault = penelope_app::helpers::vault_dir(&self.services);
+        penelope_tools::fs::resolve_in(raw, &self.workspaces(), Some(&vault))
+    }
+
     fn path_arg(&self, args: &Value, key: &str) -> ToolResult<PathBuf> {
-        let raw = str_arg(args, key)?;
-        penelope_tools::fs::resolve(&raw, &self.workspaces())
+        self.resolve_path(&str_arg(args, key)?)
     }
 
     fn cwd_arg(&self, args: &Value) -> ToolResult<PathBuf> {
         match args.get("cwd").and_then(|v| v.as_str()) {
-            Some(c) if !c.is_empty() => penelope_tools::fs::resolve(c, &self.workspaces()),
+            Some(c) if !c.is_empty() => self.resolve_path(c),
             _ => Ok(self.workspace()),
         }
     }

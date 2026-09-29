@@ -2084,6 +2084,15 @@ texte sans entrées, des lignes sans uid) est nommé par `penelope vault check`,
 modèle, qui dit « je ne trouve rien dans ce que j'ai indexé » plutôt que « cela n'existe
 pas ».
 
+**Écrire dans le vault par les outils de fichiers.** Un chemin relatif de `fs_*` vise le
+premier workspace, pas le vault : `sources/x.md` atterrit dans `workspace/sources/`, ni
+indexé ni versionné (issue #256). Le préfixe `vault:` vise le vault (`vault:sources/x.md`)
+et n'ouvre rien de plus que `sandbox.workspaces` : si le vault n'y figure pas, il est
+refusé. Une note de forme vault (dossier `sources/`, `attachments/`, `concepts/`,
+`entites/`, ou `type` de note du vault) écrite hors du vault l'est quand même, et le
+résultat de l'outil le dit ; `penelope doctor` (contrôle `vault.dead_zone`) compte celles
+du workspace et donne la commande qui les rapatrie.
+
 **Wiki Markdown.** Le vault reste un wiki Markdown valide à tout moment, même édité à la
 main pendant que Pénélope écrit :
 

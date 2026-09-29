@@ -642,3 +642,71 @@ fn mcp_results_render_their_text_blocks() {
     let v = json!({"content":[], "structuredContent":{"total": 3}});
     assert!(render_mcp_result(&v).contains("\"total\": 3"));
 }
+
+/// #256 : `vault:` écrit dans le vault ; une note de forme vault écrite par chemin
+/// relatif atterrit dans le workspace, réussit, et le résultat le dit. Un brouillon
+/// ordinaire passe sans remarque.
+#[tokio::test]
+async fn a_vault_note_written_outside_the_vault_is_flagged() {
+    let (dir, x) = executor().await;
+    let ws = dir.path().join("ws");
+    let vault = penelope_app::helpers::vault_dir(&x.services);
+    std::fs::create_dir_all(&vault).unwrap();
+    let note = "---\ntype: source\n---\n# M5 Ultra\n";
+
+    // Vault hors des workspaces : le préfixe n'ouvre rien.
+    let e = x
+        .execute(
+            "fs_write",
+            &json!({"path": "vault:sources/x.md", "content": note}),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(e, ToolError::Denied(_)), "{e}");
+
+    x.services
+        .config
+        .mutate("test", |c| {
+            c.sandbox
+                .workspaces
+                .push(vault.to_string_lossy().into_owned());
+            Ok(vec!["sandbox.workspaces".into()])
+        })
+        .unwrap();
+    let r = x
+        .execute(
+            "fs_write",
+            &json!({"path": "vault:sources/x.md", "content": note}),
+        )
+        .await
+        .unwrap();
+    assert!(vault.join("sources/x.md").exists());
+    assert!(!r.text.contains("hors du vault"), "{}", r.text);
+
+    let r = x
+        .execute(
+            "fs_write",
+            &json!({"path": "sources/y.md", "content": note}),
+        )
+        .await
+        .unwrap();
+    assert!(ws.join("sources/y.md").exists(), "l'écriture réussit");
+    assert!(r.text.contains("hors du vault"), "{}", r.text);
+    assert!(r.text.contains("vault:sources/y.md"), "{}", r.text);
+
+    let r = x
+        .execute(
+            "fs_write",
+            &json!({"path": "brouillons/plan.md", "content": "# Plan\n- relire\n"}),
+        )
+        .await
+        .unwrap();
+    assert!(!r.text.contains("hors du vault"), "{}", r.text);
+
+    // Lire par le préfixe rend la même note.
+    let r = x
+        .execute("fs_read", &json!({"path": "vault:sources/x.md"}))
+        .await
+        .unwrap();
+    assert!(r.text.contains("M5 Ultra"), "{}", r.text);
+}
