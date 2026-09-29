@@ -56,6 +56,14 @@ pub fn delivers(steps: &[PlanStep]) -> bool {
         && steps.last().is_some_and(|s| s.phase.is_judge())
 }
 
+/// Ce que le code d'un plan livré doit laisser à la livraison : un dépôt déclaré, une
+/// branche de travail, des commits. Pousser et ouvrir la PR reviennent à la livraison.
+const DELIVERED_CODE: &str = "\nCe plan sera livré en dev : travaille dans le dépôt du \
+     projet, sur une branche de travail (pas la branche de développement), commite tes \
+     changements et déclare le dépôt par `session_metadata` op=`set` key=`project` \
+     entry=`{\"dir\": \"<chemin du dépôt>\"}`. Ne pousse pas et n'ouvre pas de PR : la \
+     livraison s'en charge.";
+
 /// Comment le plan est exécuté.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -407,12 +415,17 @@ impl Compiler<'_> {
             context: "fresh".into(),
             model: step.phase.model_alias().into(),
             prompt: format!(
-                "{}\n\nTa tâche : étape {} ({}) — {}.\n{}",
+                "{}\n\nTa tâche : étape {} ({}) — {}.\n{}{}",
                 self.header,
                 n.index + 1,
                 step.phase.label(),
                 step.title,
-                step.phase.instruction()
+                step.phase.instruction(),
+                if step.phase == Phase::Implementation && self.end == delivery::ENTRY {
+                    DELIVERED_CODE
+                } else {
+                    ""
+                }
             ),
             ..Default::default()
         };

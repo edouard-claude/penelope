@@ -196,7 +196,19 @@ async fn phases_run_in_fresh_contexts_wait_for_ok_and_a_review_sends_back_to_cod
     phase(&e, "r", "failed", "REVUE : le cas /stop tout manque");
     phase(&e, "c2", "completed", "CODE v2");
     phase(&e, "r2", "passed", "REVUE : bon");
-    assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Done);
+    // La revue accepte : le plan écrit du code, il entre en livraison (#192). Aucune phase
+    // n'a déclaré de dépôt : la carte le demande, rien n'est supposé.
+    assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Running);
+    assert_eq!(
+        current(&e, &run.id).await.current_step.as_deref(),
+        Some("livraison-pr-bloquee")
+    );
+    let asked = e.r.questions().last().unwrap().clone();
+    assert!(
+        asked.1.contains("je ne sais pas quel dépôt livrer"),
+        "{asked:?}"
+    );
+    assert_eq!(asked.2, ["Réessayer", "Arrêter"]);
 
     let trace: Vec<String> = s
         .runs
@@ -216,13 +228,14 @@ async fn phases_run_in_fresh_contexts_wait_for_ok_and_a_review_sends_back_to_cod
             "e3-code-libre",
             "e4-revue-libre",
             "e3-code-r1-libre",
-            "e4-revue-r1-libre"
+            "e4-revue-r1-libre",
+            "livraison-pr"
         ]
     );
     assert_eq!(
         e.r.questions().len(),
-        2,
-        "laisse filer : plus de carte d'OK"
+        3,
+        "laisse filer : plus de carte d'OK, seulement celle de la livraison"
     );
 
     // Aucun agent ne voit la conversation du propriétaire ; chacun a sa session.

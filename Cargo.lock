@@ -1798,6 +1798,7 @@ dependencies = [
  "penelope-tools",
  "penelope-vault",
  "penelope-workflow",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

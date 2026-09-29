@@ -353,6 +353,12 @@ fn a_judged_plan_that_writes_code_is_delivered_after_its_last_verdict() {
             .any(|s| s.id.starts_with("livraison") && s.id.contains("libre")),
         "une seule livraison, quel que soit le chemin"
     );
+    let code = &w.step("e3-code").unwrap().prompt;
+    assert!(
+        code.contains("key=`project`"),
+        "le code déclare son dépôt : {code}"
+    );
+    assert!(!w.step("e2-tests").unwrap().prompt.contains("key=`project`"));
 }
 
 #[test]
@@ -374,6 +380,10 @@ fn only_a_plan_that_writes_code_and_ends_with_a_judge_opens_a_pr() {
         assert!(
             !w.steps.iter().any(|s| s.kind == "delivery"),
             "{steps:?} n'est pas livré"
+        );
+        assert!(
+            !w.steps.iter().any(|s| s.prompt.contains("key=`project`")),
+            "{steps:?} : aucune consigne de livraison"
         );
         let report = validate(&w, None, &known());
         assert!(report.is_valid(), "{:#?}", report.issues);
