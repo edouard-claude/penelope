@@ -267,6 +267,51 @@ fn context_is_run_or_fresh_on_an_agent_step_only() {
     assert!(validate(&ok, None, &known()).is_valid());
 }
 
+/// #192 : une étape `delivery` nomme l'une de ses trois actions, et elle seule en porte une.
+#[test]
+fn delivery_names_one_of_its_actions_on_a_delivery_step_only() {
+    let cases: &[(&str, Mutation)] = &[
+        ("attendu pull_request, ci, e2e, reçu ``", |w| {
+            second(w, step("delivery"))
+        }),
+        ("reçu `deploy`", |w| {
+            second(
+                w,
+                Step {
+                    delivery: "deploy".into(),
+                    ..step("delivery")
+                },
+            )
+        }),
+        ("ne vaut que pour une étape `delivery`", |w| {
+            w.steps[1].delivery = "ci".into()
+        }),
+    ];
+    for (want, mutate) in cases {
+        let mut w = base();
+        mutate(&mut w);
+        let r = validate(&w, None, &known());
+        assert!(
+            r.errors()
+                .iter()
+                .any(|i| i.path == "/steps/1/delivery" && i.message.contains(want)),
+            "attendu « {want} », reçu : {:?}",
+            r.errors().iter().map(|i| i.to_string()).collect::<Vec<_>>()
+        );
+    }
+    for action in crate::delivery::ACTIONS {
+        let mut ok = base();
+        second(
+            &mut ok,
+            Step {
+                delivery: (*action).into(),
+                ..step("delivery")
+            },
+        );
+        assert!(validate(&ok, None, &known()).is_valid(), "{action}");
+    }
+}
+
 #[test]
 fn the_file_name_must_match_the_id() {
     let r = validate(&base(), Some("autre.workflow"), &known());

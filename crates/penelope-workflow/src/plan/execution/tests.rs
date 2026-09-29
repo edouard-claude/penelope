@@ -114,8 +114,15 @@ fn every_ordinary_phase_waits_for_the_owner_ok() {
     assert_eq!(
         path,
         [
-            "e1-spec", "ok-e1", "e2-tests", "ok-e2", "e3-code", "ok-e3", "e4-revue", "e5-verif",
-            DONE
+            "e1-spec",
+            "ok-e1",
+            "e2-tests",
+            "ok-e2",
+            "e3-code",
+            "ok-e3",
+            "e4-revue",
+            "e5-verif",
+            delivery::ENTRY
         ]
     );
     let ok = w.step("ok-e1").unwrap();
@@ -146,7 +153,7 @@ fn letting_it_run_skips_ordinary_checkpoints_but_not_the_review_stop() {
             "e3-code-libre",
             "e4-revue-libre",
             "e5-verif-libre",
-            DONE
+            delivery::ENTRY
         ]
     );
     // En roue libre, la limite de reprises arrête toujours le run.
@@ -206,7 +213,7 @@ fn a_failed_review_goes_back_to_code_within_its_bound() {
             "ok-e3-r1",
             "e4-revue-r1",
             "e5-verif-r1",
-            DONE
+            delivery::ENTRY
         ]
     );
     let refusals = [
@@ -300,4 +307,75 @@ fn the_fingerprint_names_the_exact_revision() {
         compile(&a, &Limits::default()).unwrap().metadata.id,
         workflow_id(&a.fingerprint())
     );
+}
+
+#[test]
+fn a_judged_plan_that_writes_code_is_delivered_after_its_last_verdict() {
+    let w = compile(&draft(full()), &Limits::default()).unwrap();
+    let mut results = vec![
+        "completed",
+        LET_RUN,
+        "completed",
+        "completed",
+        PASSED,
+        PASSED,
+    ];
+    results.extend([delivery::PASSED; 3]);
+    let path = walk(&w, &results);
+    assert_eq!(
+        &path[6..],
+        ["livraison-pr", "livraison-ci", "livraison-e2e", DONE],
+        "« laisse filer » ne saute aucune étape de livraison"
+    );
+    // Une livraison bloquée pose sa carte ; « Réessayer » rejoue l'étape, « Arrêter »
+    // bloque le run.
+    let mut blocked = results[..6].to_vec();
+    blocked.extend([
+        delivery::PASSED,
+        "failed",
+        delivery::RETRY,
+        "blocked",
+        delivery::STOP,
+    ]);
+    assert_eq!(
+        &walk(&w, &blocked)[7..],
+        [
+            "livraison-ci",
+            "livraison-ci-bloquee",
+            "livraison-ci",
+            "livraison-ci-bloquee",
+            BLOCKED
+        ]
+    );
+    assert!(
+        !w.steps
+            .iter()
+            .any(|s| s.id.starts_with("livraison") && s.id.contains("libre")),
+        "une seule livraison, quel que soit le chemin"
+    );
+}
+
+#[test]
+fn only_a_plan_that_writes_code_and_ends_with_a_judge_opens_a_pr() {
+    assert!(delivers(&full()));
+    let without_code = vec![
+        PlanStep::new(Phase::Specification, "Rédiger"),
+        PlanStep::new(Phase::Review, "Relire"),
+    ];
+    let unjudged = vec![
+        PlanStep::new(Phase::Implementation, "Coder"),
+        PlanStep::new(Phase::Review, "Relire"),
+        PlanStep::new(Phase::Implementation, "Finir"),
+    ];
+    let single = vec![PlanStep::new(Phase::Implementation, "Coder")];
+    for steps in [without_code, unjudged, single] {
+        assert!(!delivers(&steps), "{steps:?}");
+        let w = compile(&draft(steps.clone()), &Limits::default()).unwrap();
+        assert!(
+            !w.steps.iter().any(|s| s.kind == "delivery"),
+            "{steps:?} n'est pas livré"
+        );
+        let report = validate(&w, None, &known());
+        assert!(report.is_valid(), "{:#?}", report.issues);
+    }
 }
