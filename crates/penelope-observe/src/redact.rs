@@ -4,8 +4,13 @@
 //! - **motifs génériques** (clés, bearer, JWT, clés privées, numéros de carte) ;
 //! - **valeurs connues** enregistrées par le `SecretStore` : un secret déjà chargé en
 //!   mémoire est masqué même s'il ne correspond à aucun motif.
+//!
+//! Ces valeurs vivent dans un [`Redactor`]. Le processus en a un, derrière les fonctions
+//! libres de ce module ; un test en crée un neuf, pour ne voir ni les secrets ni les
+//! valeurs apprises des tests voisins (issue #258).
 
 use regex::Regex;
+use std::collections::VecDeque;
 use std::sync::{Arc, OnceLock, RwLock};
 
 pub const MASK: &str = "[secret masqué]";
@@ -54,7 +59,7 @@ fn patterns() -> &'static Patterns {
         // Affectation explicite d'un secret dans un texte de configuration ou du code :
         // `password = x`, `"password": "x"`, `'x-api-key': 'x'`, `KEY = "x"` (issue #134).
         add(
-            r#"(?i)\b(?:(?:x[_-])?api[_-]?key|apikey|key|client[_-]?secret|secret|password|passwd|pwd|access[_-]?token|auth[_-]?token|token|private[_-]?key)\b["']?\s*[:=]\s*["']?(?P<v>[^\s"',)}]{8,})"#,
+            r#"(?i)\b(?:(?:x[_-])?api[_-]?key|apikey|key|client[_-]?secret|secret|password|passwd|pwd|access[_-]?token|auth[_-]?token|token|private[_-]?key)\b["'`]?\s*[:=]\s*["'`]?(?P<v>[^\s"'`,)}]{8,})"#,
             "affectation de secret",
         );
         Patterns { rules }
@@ -82,94 +87,165 @@ fn without_references(input: &str) -> std::borrow::Cow<'_, str> {
     )
 }
 
-/// Valeurs exactes à masquer, alimentées par le `SecretStore` au chargement.
-static KNOWN: OnceLock<RwLock<Vec<Arc<str>>>> = OnceLock::new();
-
-fn known() -> &'static RwLock<Vec<Arc<str>>> {
-    KNOWN.get_or_init(|| RwLock::new(Vec::new()))
+/// Secrets enregistrés par le `SecretStore` et valeurs apprises dans ce que l'agent a lu
+/// (issue #134). Le processus en tient un seul, [`Redactor::global`] ; un test en crée un
+/// neuf (issue #258).
+#[derive(Default)]
+pub struct Redactor {
+    /// Valeurs exactes à masquer, alimentées par le `SecretStore` au chargement.
+    known: RwLock<Vec<Arc<str>>>,
+    /// Valeurs apprises, bornées : les plus anciennes cèdent la place, jamais un secret
+    /// enregistré.
+    learned: RwLock<VecDeque<Arc<str>>>,
 }
 
-/// Enregistre une valeur de secret à masquer partout. Les valeurs de moins de
-/// 6 caractères sont ignorées (trop de faux positifs).
-pub fn register_secret(value: &str) {
-    if value.len() < 6 {
-        return;
-    }
-    if let Ok(mut g) = known().write()
-        && !g.iter().any(|v| &**v == value)
-    {
-        g.push(Arc::from(value));
-    }
-}
-
-/// Valeurs apprises dans ce que l'agent a lu (issue #134), bornées : les plus anciennes
-/// cèdent la place, jamais un secret enregistré.
-static LEARNED: OnceLock<RwLock<std::collections::VecDeque<Arc<str>>>> = OnceLock::new();
 const LEARNED_MAX: usize = 2_000;
 
-fn learned() -> &'static RwLock<std::collections::VecDeque<Arc<str>>> {
-    LEARNED.get_or_init(|| RwLock::new(std::collections::VecDeque::new()))
+impl Redactor {
+    /// Le rédacteur du processus, derrière les fonctions libres de ce module.
+    pub fn global() -> &'static Redactor {
+        static R: OnceLock<Redactor> = OnceLock::new();
+        R.get_or_init(Redactor::default)
+    }
+
+    /// Enregistre une valeur de secret à masquer partout. Les valeurs de moins de
+    /// 6 caractères sont ignorées (trop de faux positifs).
+    pub fn register(&self, value: &str) {
+        if value.len() < 6 {
+            return;
+        }
+        if let Ok(mut g) = self.known.write()
+            && !g.iter().any(|v| &**v == value)
+        {
+            g.push(Arc::from(value));
+        }
+    }
+
+    pub fn forget(&self, value: &str) {
+        if let Ok(mut g) = self.known.write() {
+            g.retain(|v| &**v != value);
+        }
+    }
+
+    pub fn registered_count(&self) -> usize {
+        self.known.read().map(|g| g.len()).unwrap_or(0)
+    }
+
+    /// Secrets enregistrés et valeurs apprises, à masquer ou à reconnaître.
+    fn known_values(&self) -> Vec<Arc<str>> {
+        let mut v: Vec<Arc<str>> = self.known.read().map(|g| g.clone()).unwrap_or_default();
+        if let Ok(g) = self.learned.read() {
+            v.extend(g.iter().cloned());
+        }
+        v
+    }
 }
 
-/// Secrets enregistrés et valeurs apprises, à masquer ou à reconnaître.
-fn known_values() -> Vec<Arc<str>> {
-    let mut v: Vec<Arc<str>> = known().read().map(|g| g.clone()).unwrap_or_default();
-    if let Ok(g) = learned().read() {
-        v.extend(g.iter().cloned());
-    }
-    v
+/// Enregistre une valeur de secret à masquer partout : voir [`Redactor::register`].
+pub fn register_secret(value: &str) {
+    Redactor::global().register(value);
 }
 
 pub fn forget_secret(value: &str) {
-    if let Ok(mut g) = known().write() {
-        g.retain(|v| &**v != value);
-    }
+    Redactor::global().forget(value);
 }
 
 pub fn registered_count() -> usize {
-    known().read().map(|g| g.len()).unwrap_or(0)
+    Redactor::global().registered_count()
 }
 
-/// Masque tout secret détecté. Idempotent : appliquer deux fois donne le même texte.
+/// Masque tout secret détecté : voir [`Redactor::redact`].
 pub fn redact(input: &str) -> String {
-    // Les références `${SECRET:nom}` traversent la rédaction intactes (issue #37). Le
-    // découpage est **linéaire** : chaque segment entre deux références est rédigé par
-    // `redact_segment`, qui ne se rappelle jamais.
-    //
-    // Cette fonction s'appelait elle-même sur les segments (issue #153). Un texte portant
-    // `${SECRET:` sans référence complète derrière — `${SECRET:…}` avec le caractère « … »,
-    // ou une ligne coupée au milieu d'une référence — passait le `contains`, `find_iter` ne
-    // trouvait rien, et `redact(&input[0..])` repartait sur le **même** texte, sans fin. Six
-    // lignes de ce genre, écrites par Pénélope en expliquant la syntaxe, ont fait déborder
-    // la pile du thread écrivain au démarrage et revenir en arrière les 0.17.30 et 0.17.31.
-    let mut out = String::with_capacity(input.len());
-    let mut last = 0;
-    for m in reference_re().find_iter(input) {
-        out.push_str(&redact_segment(&input[last..m.start()]));
-        out.push_str(m.as_str());
-        last = m.end();
-    }
-    out.push_str(&redact_segment(&input[last..]));
-    out
+    Redactor::global().redact(input)
 }
 
-/// Rédige un texte qui ne contient **aucune** référence complète : c'est le seul endroit
-/// où les règles s'appliquent, et il ne se rappelle pas lui-même.
-fn redact_segment(input: &str) -> String {
-    let mut out = input.to_string();
+/// Redaction récursive d'une valeur JSON : voir [`Redactor::redact_json`].
+pub fn redact_json(v: &serde_json::Value) -> serde_json::Value {
+    Redactor::global().redact_json(v)
+}
 
-    for v in known_values() {
-        if out.contains(&*v) {
-            out = out.replace(&*v, MASK);
+/// Retient les secrets d'un texte lu par l'agent : voir [`Redactor::learn_secrets`].
+pub fn learn_secrets(text: &str) {
+    Redactor::global().learn_secrets(text)
+}
+
+/// Voir [`Redactor::forbidden_secret`].
+pub fn forbidden_secret(input: &str) -> Option<Forbidden> {
+    Redactor::global().forbidden_secret(input)
+}
+
+/// Voir [`Redactor::contains_secret`].
+pub fn contains_secret(input: &str) -> bool {
+    Redactor::global().contains_secret(input)
+}
+
+/// Voir [`Redactor::secret_kind`].
+pub fn secret_kind(input: &str) -> Option<&'static str> {
+    Redactor::global().secret_kind(input)
+}
+
+/// Voir [`Redactor::secret_fragment`].
+pub fn secret_fragment(input: &str) -> Option<String> {
+    Redactor::global().secret_fragment(input)
+}
+
+/// Voir [`Redactor::secret_spans`].
+pub fn secret_spans(input: &str) -> Vec<SecretSpan> {
+    Redactor::global().secret_spans(input)
+}
+
+/// Voir [`Redactor::leaked_secret_kind`].
+pub fn leaked_secret_kind(line: &str) -> Option<&'static str> {
+    Redactor::global().leaked_secret_kind(line)
+}
+
+/// Voir [`Redactor::stored_secret_kind`].
+pub fn stored_secret_kind(text: &str) -> Option<&'static str> {
+    Redactor::global().stored_secret_kind(text)
+}
+
+impl Redactor {
+    /// Masque tout secret détecté. Idempotent : appliquer deux fois donne le même texte.
+    pub fn redact(&self, input: &str) -> String {
+        // Les références `${SECRET:nom}` traversent la rédaction intactes (issue #37). Le
+        // découpage est **linéaire** : chaque segment entre deux références est rédigé par
+        // `redact_segment`, qui ne se rappelle jamais.
+        //
+        // Cette fonction s'appelait elle-même sur les segments (issue #153). Un texte portant
+        // `${SECRET:` sans référence complète derrière — `${SECRET:…}` avec le caractère « … »,
+        // ou une ligne coupée au milieu d'une référence — passait le `contains`, `find_iter` ne
+        // trouvait rien, et `redact(&input[0..])` repartait sur le **même** texte, sans fin. Six
+        // lignes de ce genre, écrites par Pénélope en expliquant la syntaxe, ont fait déborder
+        // la pile du thread écrivain au démarrage et revenir en arrière les 0.17.30 et 0.17.31.
+        let mut out = String::with_capacity(input.len());
+        let mut last = 0;
+        for m in reference_re().find_iter(input) {
+            out.push_str(&self.redact_segment(&input[last..m.start()]));
+            out.push_str(m.as_str());
+            last = m.end();
         }
+        out.push_str(&self.redact_segment(&input[last..]));
+        out
     }
 
-    for (re, _label) in &patterns().rules {
-        if re.is_match(&out) {
-            out = re.replace_all(&out, MASK).into_owned();
+    /// Rédige un texte qui ne contient **aucune** référence complète : c'est le seul endroit
+    /// où les règles s'appliquent, et il ne se rappelle pas lui-même.
+    fn redact_segment(&self, input: &str) -> String {
+        let mut out = input.to_string();
+
+        for v in self.known_values() {
+            if out.contains(&*v) {
+                out = out.replace(&*v, MASK);
+            }
         }
+
+        for (re, _label) in &patterns().rules {
+            if re.is_match(&out) {
+                out = re.replace_all(&out, MASK).into_owned();
+            }
+        }
+        redact_random_tokens(&redact_card_numbers(&out))
     }
-    redact_random_tokens(&redact_card_numbers(&out))
 }
 
 /// Jeton long et aléatoire (clé sans préfixe connu, recopiée d'un fichier) : 40
@@ -241,26 +317,59 @@ fn looks_random(t: &str) -> bool {
     entropy >= 4.3
 }
 
-/// Retient comme secrets connus les valeurs repérées par motif dans un texte lu par
-/// l'agent (fichier, sortie de commande) : recopiées ensuite dans une commande, un
-/// message ou une demande, elles sont masquées partout où la rédaction passe (issue
-/// #134). Rien n'est rangé ni écrit : la liste vit le temps du processus.
-pub fn learn_secrets(text: &str) {
-    let clean = &*without_references(text);
-    for span in secret_spans(clean) {
-        let value = &clean[span.start..span.end];
-        if span.kind == "secret enregistré" || value.len() < 6 {
-            continue;
-        }
-        if let Ok(mut g) = learned().write()
-            && !g.iter().any(|v| &**v == value)
-        {
-            if g.len() >= LEARNED_MAX {
-                g.pop_front();
+impl Redactor {
+    /// Retient comme secrets connus les valeurs repérées par motif dans un texte lu par
+    /// l'agent (fichier, sortie de commande) : recopiées ensuite dans une commande, un
+    /// message ou une demande, elles sont masquées partout où la rédaction passe (issue
+    /// #134). Rien n'est rangé ni écrit : la liste vit le temps du processus.
+    ///
+    /// Seule une valeur qui a la forme d'un secret est retenue ([`learnable`]) : un mot
+    /// ordinaire placé après `key=` serait sinon masqué partout, pour tout le processus
+    /// (issue #258).
+    pub fn learn_secrets(&self, text: &str) {
+        let clean = &*without_references(text);
+        for span in self.secret_spans(clean) {
+            let value = &clean[span.start..span.end];
+            if !learnable(span.kind, value) {
+                continue;
             }
-            g.push_back(Arc::from(value));
+            if let Ok(mut g) = self.learned.write()
+                && !g.iter().any(|v| &**v == value)
+            {
+                if g.len() >= LEARNED_MAX {
+                    g.pop_front();
+                }
+                g.push_back(Arc::from(value));
+            }
         }
     }
+}
+
+/// Valeur repérée qu'on peut retenir pour la masquer ailleurs (issue #258). Un motif de
+/// fournisseur (`sk-`, `ghp_`, JWT…) a déjà la forme d'un secret. Une affectation et un
+/// `Bearer`/`Basic` ne désignent qu'une place, où l'on trouve aussi des mots ordinaires :
+/// key=`project`, `api_key = os.environ[…]`, `token = self.token`, « Basic
+/// authentication ». On n'en retient qu'un jeton : l'alphabet d'un jeton, lettres et
+/// chiffres mêlés, ou un jeton aléatoire au sens de [`random_token`].
+fn learnable(kind: &str, value: &str) -> bool {
+    const LEARNED_MIN: usize = 6;
+    const TOKEN_MIN: usize = 8;
+    if kind == "secret enregistré" || value.len() < LEARNED_MIN {
+        return false;
+    }
+    let symbols = match kind {
+        ASSIGNMENT => "+/=_*~!$#%^&-",
+        // Un jeton porteur peut être un JWT, fait de trois parties séparées par des points.
+        "bearer" => "+/=_*~!$#%^&-.",
+        _ => return true,
+    };
+    random_token(value)
+        || (value.len() >= TOKEN_MIN
+            && value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || symbols.contains(c))
+            && value.chars().any(|c| c.is_ascii_alphabetic())
+            && value.chars().any(|c| c.is_ascii_digit()))
 }
 
 fn card_re() -> &'static Regex {
@@ -342,11 +451,13 @@ fn card_to_refuse(input: &str) -> Option<std::ops::Range<usize>> {
     })
 }
 
-/// Fragment d'un secret détecté, masqué au milieu, pour qu'un refus dise quoi retirer
-/// sans l'exposer (issue #132) : les quatre derniers chiffres d'une carte, les quatre
-/// premiers caractères d'une clé.
-pub fn secret_fragment(input: &str) -> Option<String> {
-    forbidden_secret(input).map(|f| f.fragment)
+impl Redactor {
+    /// Fragment d'un secret détecté, masqué au milieu, pour qu'un refus dise quoi retirer
+    /// sans l'exposer (issue #132) : les quatre derniers chiffres d'une carte, les quatre
+    /// premiers caractères d'une clé.
+    pub fn secret_fragment(&self, input: &str) -> Option<String> {
+        self.forbidden_secret(input).map(|f| f.fragment)
+    }
 }
 
 /// Clé de Luhn.
@@ -384,58 +495,60 @@ pub struct Forbidden {
 
 const ASSIGNMENT: &str = "affectation de secret";
 
-/// Le critère unique de ce qui n'a pas le droit d'être **gardé** : mémoire (§6.10),
-/// consolidation, entités, skills, et contrôle du vault (issue #207). Motifs, numéro de
-/// carte, et valeur du magasin **si elle a la forme d'un secret**.
-///
-/// Masquer et accuser sont deux usages : `redact` masque aussi les valeurs apprises en
-/// lecture (#134) et toute valeur du magasin, identifiant de connexion ou URL compris, où
-/// un faux positif ne coûte rien. Ici un faux positif interdit un mot ordinaire du vault,
-/// et un verdict qui dépendrait de ce que le processus a lu changerait sans que le texte
-/// ait bougé : ni valeur apprise, ni valeur du magasin sans forme de secret.
-pub fn forbidden_secret(input: &str) -> Option<Forbidden> {
-    let input = &*without_references(input);
-    let head = |v: &str| format!("{}…", v.chars().take(4).collect::<String>());
-    // Du plus sûr au moins sûr : l'affectation générique vient en dernier.
-    for (re, label) in &patterns().rules {
-        if *label == ASSIGNMENT {
-            continue;
+impl Redactor {
+    /// Le critère unique de ce qui n'a pas le droit d'être **gardé** : mémoire (§6.10),
+    /// consolidation, entités, skills, et contrôle du vault (issue #207). Motifs, numéro de
+    /// carte, et valeur du magasin **si elle a la forme d'un secret**.
+    ///
+    /// Masquer et accuser sont deux usages : `redact` masque aussi les valeurs apprises en
+    /// lecture (#134) et toute valeur du magasin, identifiant de connexion ou URL compris, où
+    /// un faux positif ne coûte rien. Ici un faux positif interdit un mot ordinaire du vault,
+    /// et un verdict qui dépendrait de ce que le processus a lu changerait sans que le texte
+    /// ait bougé : ni valeur apprise, ni valeur du magasin sans forme de secret.
+    pub fn forbidden_secret(&self, input: &str) -> Option<Forbidden> {
+        let input = &*without_references(input);
+        let head = |v: &str| format!("{}…", v.chars().take(4).collect::<String>());
+        // Du plus sûr au moins sûr : l'affectation générique vient en dernier.
+        for (re, label) in &patterns().rules {
+            if *label == ASSIGNMENT {
+                continue;
+            }
+            if let Some(c) = re.captures(input) {
+                let m = c.name("v").or_else(|| c.get(0)).expect("capture complète");
+                return Some(Forbidden {
+                    kind: label,
+                    fragment: head(m.as_str()),
+                    certain: true,
+                });
+            }
         }
-        if let Some(c) = re.captures(input) {
-            let m = c.name("v").or_else(|| c.get(0)).expect("capture complète");
+        if let Some(r) = card_to_refuse(input) {
+            let digits: String = input[r].chars().filter(|c| c.is_ascii_digit()).collect();
             return Some(Forbidden {
-                kind: label,
-                fragment: head(m.as_str()),
+                kind: "numéro de carte",
+                fragment: format!("…{}", &digits[digits.len() - 4..]),
                 certain: true,
             });
         }
+        let registered = self.known.read().map(|g| g.clone()).unwrap_or_default();
+        if let Some(v) = registered
+            .iter()
+            .find(|v| secret_shaped(v) && input.contains(&***v))
+        {
+            return Some(Forbidden {
+                kind: "secret enregistré",
+                fragment: head(v),
+                certain: true,
+            });
+        }
+        let (re, _) = patterns().rules.iter().find(|(_, l)| *l == ASSIGNMENT)?;
+        let value = re.captures(input)?.name("v")?.as_str();
+        Some(Forbidden {
+            kind: ASSIGNMENT,
+            fragment: head(value),
+            certain: random_token(value),
+        })
     }
-    if let Some(r) = card_to_refuse(input) {
-        let digits: String = input[r].chars().filter(|c| c.is_ascii_digit()).collect();
-        return Some(Forbidden {
-            kind: "numéro de carte",
-            fragment: format!("…{}", &digits[digits.len() - 4..]),
-            certain: true,
-        });
-    }
-    let registered = known().read().map(|g| g.clone()).unwrap_or_default();
-    if let Some(v) = registered
-        .iter()
-        .find(|v| secret_shaped(v) && input.contains(&***v))
-    {
-        return Some(Forbidden {
-            kind: "secret enregistré",
-            fragment: head(v),
-            certain: true,
-        });
-    }
-    let (re, _) = patterns().rules.iter().find(|(_, l)| *l == ASSIGNMENT)?;
-    let value = re.captures(input)?.name("v")?.as_str();
-    Some(Forbidden {
-        kind: ASSIGNMENT,
-        fragment: head(value),
-        certain: random_token(value),
-    })
 }
 
 /// Valeur qui a la forme d'un secret : un motif connu, ou un jeton aléatoire. Une
@@ -458,40 +571,42 @@ fn random_token(v: &str) -> bool {
         && (looks_random(v) || looks_hex_blob(v))
 }
 
-/// Vrai si le texte contient un secret qui n'a pas le droit d'être gardé : voir
-/// [`forbidden_secret`], dont c'est le raccourci.
-pub fn contains_secret(input: &str) -> bool {
-    forbidden_secret(input).is_some()
-}
+impl Redactor {
+    /// Vrai si le texte contient un secret qui n'a pas le droit d'être gardé : voir
+    /// [`forbidden_secret`], dont c'est le raccourci.
+    pub fn contains_secret(&self, input: &str) -> bool {
+        self.forbidden_secret(input).is_some()
+    }
 
-/// Secret laissé en clair dans un journal : valeur enregistrée ou jeton reconnaissable.
-/// Les affectations génériques (`token = …`) sont ignorées, trop fréquentes dans les
-/// traces légitimes.
-pub fn leaked_secret_kind(line: &str) -> Option<&'static str> {
-    let line = &*without_references(line);
-    if known_values().iter().any(|v| line.contains(&**v)) {
-        return Some("secret enregistré");
+    /// Secret laissé en clair dans un journal : valeur enregistrée ou jeton reconnaissable.
+    /// Les affectations génériques (`token = …`) sont ignorées, trop fréquentes dans les
+    /// traces légitimes.
+    pub fn leaked_secret_kind(&self, line: &str) -> Option<&'static str> {
+        let line = &*without_references(line);
+        if self.known_values().iter().any(|v| line.contains(&**v)) {
+            return Some("secret enregistré");
+        }
+        patterns()
+            .rules
+            .iter()
+            .filter(|(_, label)| *label != "affectation de secret")
+            .find(|(re, _)| re.is_match(line))
+            .map(|(_, label)| *label)
     }
-    patterns()
-        .rules
-        .iter()
-        .filter(|(_, label)| *label != "affectation de secret")
-        .find(|(re, _)| re.is_match(line))
-        .map(|(_, label)| *label)
-}
 
-/// Secret resté en clair dans ce qui est stocké (demandes d'approbation, file Telegram) :
-/// valeur connue, motif (affectations comprises) ou jeton long et aléatoire. Pour
-/// `doctor` (issue #134).
-pub fn stored_secret_kind(text: &str) -> Option<&'static str> {
-    let text = &*without_references(text);
-    if known_values().iter().any(|v| text.contains(&**v)) {
-        return Some("secret enregistré");
+    /// Secret resté en clair dans ce qui est stocké (demandes d'approbation, file Telegram) :
+    /// valeur connue, motif (affectations comprises) ou jeton long et aléatoire. Pour
+    /// `doctor` (issue #134).
+    pub fn stored_secret_kind(&self, text: &str) -> Option<&'static str> {
+        let text = &*without_references(text);
+        if self.known_values().iter().any(|v| text.contains(&**v)) {
+            return Some("secret enregistré");
+        }
+        if let Some((_, label)) = patterns().rules.iter().find(|(re, _)| re.is_match(text)) {
+            return Some(label);
+        }
+        (redact_random_tokens(text) != text).then_some("jeton aléatoire")
     }
-    if let Some((_, label)) = patterns().rules.iter().find(|(re, _)| re.is_match(text)) {
-        return Some(label);
-    }
-    (redact_random_tokens(text) != text).then_some("jeton aléatoire")
 }
 
 /// Secret repéré dans un texte : position de la **valeur** (sans le mot-clé qui la
@@ -503,89 +618,91 @@ pub struct SecretSpan {
     pub kind: &'static str,
 }
 
-/// Valeurs de secrets d'un texte, dans l'ordre, sans chevauchement (issue #37) : de quoi
-/// ranger chaque valeur dans le magasin et ne garder en mémoire qu'une référence. Les
-/// numéros de carte n'en font pas partie : ils ne se rangent pas, ils se refusent.
-pub fn secret_spans(input: &str) -> Vec<SecretSpan> {
-    let input = &*without_references(input);
-    let mut found: Vec<SecretSpan> = Vec::new();
-    // Motifs d'abord : à position égale, la nature reconnue l'emporte sur « secret
-    // enregistré » (le tri qui suit est stable).
-    for (re, label) in &patterns().rules {
-        for c in re.captures_iter(input) {
-            let m = c.name("v").or_else(|| c.get(0)).expect("capture complète");
-            found.push(SecretSpan {
-                start: m.start(),
-                end: m.end(),
-                kind: label,
-            });
-        }
-    }
-    {
-        for v in known_values() {
-            for (start, _) in input.match_indices(&*v) {
+impl Redactor {
+    /// Valeurs de secrets d'un texte, dans l'ordre, sans chevauchement (issue #37) : de quoi
+    /// ranger chaque valeur dans le magasin et ne garder en mémoire qu'une référence. Les
+    /// numéros de carte n'en font pas partie : ils ne se rangent pas, ils se refusent.
+    pub fn secret_spans(&self, input: &str) -> Vec<SecretSpan> {
+        let input = &*without_references(input);
+        let mut found: Vec<SecretSpan> = Vec::new();
+        // Motifs d'abord : à position égale, la nature reconnue l'emporte sur « secret
+        // enregistré » (le tri qui suit est stable).
+        for (re, label) in &patterns().rules {
+            for c in re.captures_iter(input) {
+                let m = c.name("v").or_else(|| c.get(0)).expect("capture complète");
                 found.push(SecretSpan {
-                    start,
-                    end: start + v.len(),
-                    kind: "secret enregistré",
+                    start: m.start(),
+                    end: m.end(),
+                    kind: label,
                 });
             }
         }
-    }
-    // Le plus long l'emporte à position égale ; un secret contenu dans un autre disparaît.
-    found.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
-    let mut out: Vec<SecretSpan> = Vec::new();
-    for f in found {
-        match out.last_mut() {
-            Some(last) if f.start < last.end => {
-                last.end = last.end.max(f.end);
+        {
+            for v in self.known_values() {
+                for (start, _) in input.match_indices(&*v) {
+                    found.push(SecretSpan {
+                        start,
+                        end: start + v.len(),
+                        kind: "secret enregistré",
+                    });
+                }
             }
-            _ => out.push(f),
         }
-    }
-    out
-}
-
-/// Nature du secret interdit ([`forbidden_secret`]), pour nommer un refus.
-pub fn secret_kind(input: &str) -> Option<&'static str> {
-    forbidden_secret(input).map(|f| f.kind)
-}
-
-/// Redaction récursive d'une valeur JSON (payloads d'événements, arguments d'outils).
-pub fn redact_json(v: &serde_json::Value) -> serde_json::Value {
-    use serde_json::Value;
-    match v {
-        Value::String(s) => Value::String(redact(s)),
-        Value::Array(a) => Value::Array(a.iter().map(redact_json).collect()),
-        Value::Object(m) => {
-            let mut out = serde_json::Map::new();
-            for (k, val) in m {
-                let sensitive = matches!(
-                    k.to_ascii_lowercase().as_str(),
-                    "password"
-                        | "passwd"
-                        | "secret"
-                        | "token"
-                        | "api_key"
-                        | "apikey"
-                        | "authorization"
-                        | "private_key"
-                        | "client_secret"
-                        | "access_token"
-                        | "refresh_token"
-                );
-                out.insert(
-                    k.clone(),
-                    if sensitive && val.is_string() {
-                        Value::String(MASK.into())
-                    } else {
-                        redact_json(val)
-                    },
-                );
+        // Le plus long l'emporte à position égale ; un secret contenu dans un autre disparaît.
+        found.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+        let mut out: Vec<SecretSpan> = Vec::new();
+        for f in found {
+            match out.last_mut() {
+                Some(last) if f.start < last.end => {
+                    last.end = last.end.max(f.end);
+                }
+                _ => out.push(f),
             }
-            Value::Object(out)
         }
-        other => other.clone(),
+        out
+    }
+
+    /// Nature du secret interdit ([`forbidden_secret`]), pour nommer un refus.
+    pub fn secret_kind(&self, input: &str) -> Option<&'static str> {
+        self.forbidden_secret(input).map(|f| f.kind)
+    }
+
+    /// Redaction récursive d'une valeur JSON (payloads d'événements, arguments d'outils).
+    pub fn redact_json(&self, v: &serde_json::Value) -> serde_json::Value {
+        use serde_json::Value;
+        match v {
+            Value::String(s) => Value::String(self.redact(s)),
+            Value::Array(a) => Value::Array(a.iter().map(|v| self.redact_json(v)).collect()),
+            Value::Object(m) => {
+                let mut out = serde_json::Map::new();
+                for (k, val) in m {
+                    let sensitive = matches!(
+                        k.to_ascii_lowercase().as_str(),
+                        "password"
+                            | "passwd"
+                            | "secret"
+                            | "token"
+                            | "api_key"
+                            | "apikey"
+                            | "authorization"
+                            | "private_key"
+                            | "client_secret"
+                            | "access_token"
+                            | "refresh_token"
+                    );
+                    out.insert(
+                        k.clone(),
+                        if sensitive && val.is_string() {
+                            Value::String(MASK.into())
+                        } else {
+                            self.redact_json(val)
+                        },
+                    );
+                }
+                Value::Object(out)
+            }
+            other => other.clone(),
+        }
     }
 }
 
@@ -593,265 +710,4 @@ pub fn redact_json(v: &serde_json::Value) -> serde_json::Value {
 mod forbidden_tests;
 
 #[cfg(test)]
-mod tests {
-
-    /// #153 : une référence `${SECRET:` **sans** accolade fermante ne doit pas faire
-    /// boucler la rédaction. Six lignes de ce genre, écrites par Pénélope en expliquant
-    /// la syntaxe, ont fait déborder la pile du thread écrivain au démarrage et revenir
-    /// en arrière les versions 0.17.30 et 0.17.31.
-    ///
-    /// Le test ne peut pas observer l'ancien comportement : un débordement de pile abat
-    /// le processus (`abort`), il ne se rattrape pas. Il vérifie donc que la rédaction
-    /// **rend**, et que les références complètes traversent toujours intactes.
-    #[test]
-    fn an_orphan_secret_reference_never_loops() {
-        for orphan in [
-            "secrets via ${SECRET:…}",
-            "${SECRET:timeperformance</pre>",
-            "<code>${SECRET:…}</code> supporté dans",
-            "${SECRET:",
-            "${SECRET:nom sans accolade",
-            "${SECRET:a} puis ${SECRET:",
-        ] {
-            let out = redact(orphan);
-            assert!(!out.is_empty(), "« {orphan} » doit rendre un texte");
-        }
-        // Ce que #37 garantit ne bouge pas : une référence complète traverse intacte,
-        // même à côté d'une orpheline.
-        // Une orpheline est un texte comme un autre : ni référence, ni secret à masquer
-        // quand rien derrière elle n'en a la forme.
-        assert_eq!(
-            redact("${SECRET:telegram_bot_token} et ${SECRET:"),
-            "${SECRET:telegram_bot_token} et ${SECRET:"
-        );
-        assert_eq!(
-            redact("avant ${SECRET:a} milieu ${SECRET:b} après"),
-            "avant ${SECRET:a} milieu ${SECRET:b} après"
-        );
-    }
-
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn masks_bearer_and_jwt() {
-        let s = "Authorization: Bearer abcdefghijklmnop1234";
-        assert!(!redact(s).contains("abcdefghijklmnop"));
-        let jwt = "eyJhbGciOi.eyJzdWIiOjE.SflKxwRJSMeKK";
-        assert_eq!(redact(jwt), MASK);
-    }
-
-    #[test]
-    fn masks_provider_keys() {
-        for k in [
-            "sk-or-v1-0123456789abcdef0123456789abcdef",
-            "ghp_0123456789abcdef0123456789abcdef",
-            "AKIAIOSFODNN7EXAMPLE",
-            "xoxb-1234567890-abcdefghij",
-        ] {
-            let out = redact(&format!("clé = {k} fin"));
-            assert!(!out.contains(k), "non masqué : {k} → {out}");
-        }
-    }
-
-    #[test]
-    fn masks_telegram_bot_token() {
-        let t = "123456789:AAH-abcdefghijklmnopqrstuvwxyz012345";
-        assert!(!redact(t).contains("AAH-"));
-    }
-
-    #[test]
-    fn card_number_uses_luhn() {
-        // Numéro de test Visa valide au sens de Luhn.
-        assert_eq!(
-            redact("carte 4111 1111 1111 1111 fin"),
-            format!("carte {MASK} fin")
-        );
-        // Une suite de chiffres qui ne passe pas Luhn n'est pas masquée.
-        let ident = "1234567890123456";
-        assert!(!luhn(ident));
-        assert!(redact(&format!("ref {ident}")).contains(ident));
-    }
-
-    /// #148 : le `Grant` Codex est parti en clair parce qu'il était **en hexadécimal** :
-    /// deux familles de caractères seulement, donc invisible aux règles d'entropie. Une
-    /// empreinte SHA-256, elle, reste lisible.
-    #[test]
-    fn a_long_hex_run_is_masked_but_a_sha256_digest_is_not() {
-        let grant = "7b22616363657373".repeat(200);
-        assert!(grant.len() > 3_000);
-        let red = redact(&format!("security: unknown command \"{grant}"));
-        assert!(
-            !red.contains("7b22616363657373"),
-            "hexadécimal en clair : {red}"
-        );
-        assert!(red.contains(MASK), "{red}");
-
-        // 64 caractères exactement : une empreinte, on la garde.
-        let digest = "a3f1".repeat(16);
-        assert_eq!(digest.len(), 64);
-        let line = format!("skill revue-de-code body_hash {digest}");
-        assert_eq!(redact(&line), line, "une empreinte reste lisible");
-
-        // 65 et plus : ce n'est plus une empreinte.
-        let long = format!("{digest}b");
-        assert!(redact(&long).contains(MASK), "{long}");
-
-        // Ce qui n'est pas de l'hexadécimal n'est pas concerné par cette règle.
-        let path = "/Users/edouard/Library/Application-Support/Penelope/secret-names.json";
-        assert_eq!(redact(path), path);
-    }
-
-    #[test]
-    fn registered_secret_is_masked_even_without_pattern() {
-        register_secret("motdepasseordinaire");
-        let out = redact("le mot est motdepasseordinaire ici");
-        assert!(!out.contains("motdepasseordinaire"), "{out}");
-        forget_secret("motdepasseordinaire");
-    }
-
-    #[test]
-    fn short_values_are_not_registered() {
-        let before = registered_count();
-        register_secret("abc");
-        assert_eq!(registered_count(), before);
-    }
-
-    #[test]
-    fn redaction_is_idempotent() {
-        let s = "Bearer abcdefghijklmnop1234";
-        let a = redact(s);
-        assert_eq!(redact(&a), a);
-    }
-
-    #[test]
-    fn json_sensitive_keys_are_masked() {
-        let v = json!({"api_key":"quelquechose","nested":{"token":"xyz"},"ok":"visible"});
-        let r = redact_json(&v);
-        assert_eq!(r["api_key"], MASK);
-        assert_eq!(r["nested"]["token"], MASK);
-        assert_eq!(r["ok"], "visible");
-    }
-
-    /// #134 : une clé sans préfixe connu, recopiée d'un fichier dans une commande, est
-    /// masquée quand elle est stockée ou journalisée : par son affectation (`KEY = "…"`,
-    /// `'x-api-key': '…'`, `"password": "…"`), par sa forme (jeton long et aléatoire), ou
-    /// parce qu'elle a été lue plus tôt. Un chemin, une URL, un hachage, un identifiant
-    /// lisible restent intacts.
-    #[test]
-    fn a_key_copied_from_a_file_is_masked_where_it_is_stored() {
-        let key = "Zx9kQ2mV7pLr4TbW1nHs8YcD3fGa6JuE0oIq5*RtKyNw2BvXe7LmPz4SdHj1Ua";
-        let command = format!("python3 - <<'EOF'\nKEY = \"{key}\"\nprint(1)\nEOF");
-        assert!(!redact(&command).contains(key), "{}", redact(&command));
-        let js = "headers: { 'x-api-key': 'dev-secret-aaaa1111' }";
-        assert!(
-            !redact(js).contains("dev-secret-aaaa1111"),
-            "{}",
-            redact(js)
-        );
-        let py = r#"login({"email": "a@b.fr", "password": "Motdepasse2026"})"#;
-        assert!(!redact(py).contains("Motdepasse2026"), "{}", redact(py));
-        // Une valeur lue plus tôt, recopiée seule, est masquée aussi.
-        learn_secrets("const cfg = { apiKey: 'ab12cd34ef56gh78' };");
-        assert!(!redact(r#"{"p": "ab12cd34ef56gh78"}"#).contains("ab12cd34ef56gh78"));
-        for kept in [
-            "https://github.com/edouard-claude/penelope/releases/tag/v0.17.10",
-            "/Users/essai/Code/agent/penelope/crates/penelope-daemon/src/executor.rs",
-            "a_failing_command_of_41_lines_is_returned_whole_and_more",
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            "s_01M2TAQFBTN50F030S73RWZFME",
-        ] {
-            assert_eq!(redact(kept), kept, "{kept}");
-        }
-    }
-
-    /// #132 : un nombre collé à un identifiant n'est pas une carte pour le filtre
-    /// d'écriture ; une vraie carte, isolée ou nommée, l'est toujours ; les journaux
-    /// masquent toujours tout nombre qui passe Luhn et la longueur (#26).
-    #[test]
-    fn a_number_inside_an_identifier_is_not_a_card() {
-        let id = "command-output:38228-1743576040856618";
-        assert!(luhn("1743576040856618"), "le cas vécu passe bien Luhn");
-        assert!(!contains_secret(id), "{id}");
-        assert_eq!(secret_kind(id), None);
-        assert_eq!(secret_kind("id=4539148803436467"), None);
-        assert_eq!(secret_kind("run/4539148803436467/log"), None);
-        for card in [
-            "4539 1488 0343 6467",
-            "ma carte 4539148803436467.",
-            "carte 4539148803436467",
-            "carte:4539148803436467",
-            "cb=4539-1488-0343-6467",
-        ] {
-            assert_eq!(secret_kind(card), Some("numéro de carte"), "{card}");
-        }
-        assert_eq!(
-            secret_fragment("ma carte 4539 1488 0343 6467").as_deref(),
-            Some("…6467")
-        );
-        assert_eq!(
-            secret_fragment("clé sk-0123456789abcdefgh").as_deref(),
-            Some("sk-0…")
-        );
-        assert!(redact(id).contains(MASK), "journaux : masqué quand même");
-    }
-
-    #[test]
-    fn contains_secret_detects_card_and_key() {
-        assert!(contains_secret("ma carte 4111111111111111"));
-        assert!(contains_secret("sk-0123456789abcdefgh"));
-        assert!(!contains_secret("une phrase tout à fait banale"));
-        assert_eq!(
-            secret_kind("ma carte 4111111111111111"),
-            Some("numéro de carte")
-        );
-    }
-
-    /// CA 13 : un secret planté n'apparaît dans aucun log, événement ou message.
-    #[test]
-    fn ca_13_2_planted_secret_never_leaks() {
-        let secret = "sk-or-v1-deadbeefdeadbeefdeadbeefdeadbeef";
-        register_secret(secret);
-        let event = json!({
-            "tool": "http_fetch",
-            "args": {"headers": {"Authorization": format!("Bearer {secret}")}},
-            "log": format!("appel avec {secret}"),
-        });
-        let out = serde_json::to_string(&redact_json(&event)).unwrap();
-        assert!(!out.contains("deadbeef"), "{out}");
-        forget_secret(secret);
-    }
-
-    #[test]
-    fn secret_spans_point_at_values_only() {
-        let t = "Stripe de test : sk_test_FauxCle0123456, et password: Hunter2Hunter2 ; \
-                 jeton ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.";
-        let spans = secret_spans(t);
-        let values: Vec<&str> = spans.iter().map(|s| &t[s.start..s.end]).collect();
-        assert_eq!(
-            values,
-            vec![
-                "sk_test_FauxCle0123456",
-                "Hunter2Hunter2",
-                "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            ]
-        );
-        assert_eq!(spans[0].kind, "clé stripe");
-        // Clé OpenRouter : deux motifs, une seule valeur.
-        let k = "clé sk-or-v1-0123456789abcdef0123456789";
-        assert_eq!(secret_spans(k).len(), 1);
-        assert!(secret_spans("carte 4111 1111 1111 1111").is_empty());
-        assert!(secret_spans("client cus_NffrFeUfNV2Hib").is_empty());
-        // Une référence à un secret rangé n'est pas un secret, et survit à la redaction.
-        let r = "clé Stripe : ${SECRET:cle-stripe-test-1f2e3d4c}, password: Hunter2Hunter2";
-        assert_eq!(secret_kind("${SECRET:cle-stripe-test-1f2e3d4c}"), None);
-        assert!(!contains_secret("${SECRET:cle-stripe-test-1f2e3d4c}"));
-        let spans = secret_spans(r);
-        assert_eq!(spans.len(), 1);
-        assert_eq!(&r[spans[0].start..spans[0].end], "Hunter2Hunter2");
-        assert_eq!(
-            redact(r),
-            format!("clé Stripe : ${{SECRET:cle-stripe-test-1f2e3d4c}}, {MASK}")
-        );
-    }
-}
+mod tests;

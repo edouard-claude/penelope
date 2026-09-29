@@ -12,6 +12,32 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.18
+
+**Masquage : un mot ordinaire lu après `key=` n'est plus masqué partout ; deux tests
+instables rendus déterministes (#258).** Le rédacteur apprenait (#134) toute valeur
+repérée après `key=`, `token =`, `password:`, `Bearer` ou `Basic`, puis la masquait
+partout pour tout le processus : key=`project` lu une fois, et « project » devenait
+« [secret masqué] » dans une consigne (#192) ; de même `os.environ[`, `self.token`,
+« authentication ». Ses valeurs vivaient dans deux `static` partagés par tous les tests :
+`short_values_are_not_registered` a échoué en CI le 29/09.
+
+- Seule une valeur à forme de jeton (alphabet de jeton, lettres et chiffres mêlés, ou
+  jeton aléatoire) est apprise d'une affectation ou d'un en-tête d'autorisation ; les
+  motifs de fournisseur le restent tels quels. L'accent grave délimite la valeur comme un
+  guillemet. L'affectation reste masquée sur place.
+- L'état du rédacteur devient un type `Redactor` ; les fonctions libres délèguent à celui
+  du processus, et les tests de `penelope-observe` travaillent chacun sur un neuf.
+- `poisoned_or_changed_tools_are_flagged_and_lose_their_rules` attendait la règle
+  révoquée puis lisait l'avis, posé après l'écriture d'un événement : il attend l'avis,
+  dernier effet. Le test du délai d'étape (#56) exigeait que le modèle soit appelé avant
+  l'échéance : il vérifie un seul passage dans la trace, et retrouve ses 200 ms.
+- Tests : mots ordinaires non appris (sept cas) et jetons toujours appris, deux
+  rédacteurs isolés ; assertions de #134, #207 et CA 13 inchangées. Chaque test
+  concerné passe 20 fois de suite dans la suite de son crate.
+
+Closes #258.
+
 ### 1.0.17
 
 **Workflows : un plan approuvé est livré en dev, PR, CI puis E2E externe (#192, T4 de
