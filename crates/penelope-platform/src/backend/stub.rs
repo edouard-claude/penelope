@@ -160,6 +160,15 @@ pub fn service_manager(_dirs: &dyn Directories) -> Result<Box<dyn ServiceManager
     Ok(Box::new(StubService))
 }
 
+/// LaunchAgent d'un serveur d'inférence (#259) : macOS seulement.
+pub fn agent_manager(
+    _dirs: &dyn Directories,
+    _label: &str,
+    _args: Vec<String>,
+) -> Result<Box<dyn ServiceManager>> {
+    Ok(Box::new(StubService))
+}
+
 pub fn power_manager() -> Box<dyn crate::power::PowerManager> {
     Box::new(crate::power::CountingPower::noop())
 }

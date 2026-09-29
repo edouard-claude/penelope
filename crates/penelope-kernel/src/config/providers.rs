@@ -9,8 +9,22 @@ pub struct Providers {
     pub local: LocalProvider,
     /// Backend Codex d'un abonnement ChatGPT (issue #142).
     pub codex: Codex,
-    /// Endpoints OpenAI-compatibles supplémentaires (embeddings, STT…).
+    /// Endpoints OpenAI-compatibles supplémentaires : chacun sert les modèles de sa liste
+    /// `models` (#259), par exemple mlx_lm.server pour le texte à côté de mlx-audio.
     pub extra: BTreeMap<String, LocalProvider>,
+}
+
+impl Providers {
+    /// Endpoint qui sert un modèle `local:` ou `openai_compat:` (nom sans préfixe) :
+    /// l'endpoint supplémentaire actif qui le liste, sinon `providers.local` s'il est
+    /// actif (#259). `penelope-llm` route selon la même règle.
+    pub fn local_endpoint(&self, model: &str) -> Option<(&str, &LocalProvider)> {
+        self.extra
+            .iter()
+            .find(|(_, e)| e.enabled && e.models.iter().any(|m| m == model))
+            .map(|(name, e)| (name.as_str(), e))
+            .or_else(|| self.local.enabled.then_some(("local", &self.local)))
+    }
 }
 
 /// Préfixes de fournisseur reconnus dans un identifiant `fournisseur:modèle` (§10.2).
@@ -220,7 +234,8 @@ pub struct LocalProvider {
     pub api_key: String,
     /// Endpoint actif.
     pub enabled: bool,
-    /// Modèles servis par l'endpoint.
+    /// Modèles servis par l'endpoint ; pour un endpoint de `providers.extra`, les seuls
+    /// qui y partent (`local:<modèle>`), les autres restant à `providers.local` (#259).
     pub models: Vec<String>,
     /// Silence toléré pendant un flux, comme pour OpenRouter.
     pub stream_idle_timeout: String,

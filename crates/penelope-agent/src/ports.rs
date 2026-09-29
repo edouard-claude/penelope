@@ -28,6 +28,16 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+/// Fournisseur du modèle d'un repli (#259) : un repli `openrouter:` d'un modèle `local:`
+/// part chez OpenRouter, pas chez le serveur local du modèle principal.
+#[async_trait::async_trait]
+pub trait FallbackProviders: Send + Sync {
+    async fn fallback_provider(
+        &self,
+        model_id: &str,
+    ) -> Result<Arc<dyn penelope_llm::Provider>, String>;
+}
+
 /// Ce que la boucle reçoit : les registres qu'elle touche et ses ports.
 #[derive(Clone)]
 pub struct AgentServices {

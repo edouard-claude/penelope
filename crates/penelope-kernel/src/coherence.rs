@@ -168,9 +168,13 @@ pub fn contradictions(c: &Config) -> Vec<Contradiction> {
                 c.providers.openrouter.enabled,
                 "providers.openrouter.enabled",
             ),
-            Some("openai_compat") => (
+            // `local:` et `openai_compat:` visent le même endpoint ; un endpoint de
+            // `providers.extra` actif qui liste le modèle le sert aussi (#259).
+            Some("openai_compat" | "local") => (
                 "local",
-                c.providers.local.enabled,
+                model
+                    .split_once(':')
+                    .is_some_and(|(_, m)| c.providers.local_endpoint(m).is_some()),
                 "providers.local.enabled",
             ),
             _ => continue,
@@ -364,6 +368,48 @@ mod tests {
         assert!(msg("budget.turn_checkpoint_usd").contains("n'arriverait jamais"));
         assert!(msg("context.max_prompt_tokens").contains("chaque tour compacterait"));
         assert!(msg("budget.alert_ratio").contains("à chaque appel"));
+    }
+
+    /// #259 : un alias `local:` sous un rôle, sans endpoint qui le serve, est nommé ; un
+    /// endpoint de `providers.extra` actif qui liste le modèle suffit, même
+    /// `providers.local` éteint.
+    #[test]
+    fn a_local_alias_needs_an_endpoint_that_serves_it() {
+        let mut c = Config::sample(42);
+        c.providers.local.enabled = false;
+        c.models
+            .aliases
+            .insert("main".into(), "local:mlx-community/Qwen3-8B-4bit".into());
+        let warned = |c: &Config| {
+            contradictions(c)
+                .iter()
+                .any(|x| x.message.contains("`local:mlx-community/Qwen3-8B-4bit`"))
+        };
+        assert!(warned(&c));
+        let mut mlx = crate::config::LocalProvider {
+            base_url: "http://127.0.0.1:8081/v1".into(),
+            models: vec!["mlx-community/Qwen3-8B-4bit".into()],
+            ..Default::default()
+        };
+        c.providers.extra.insert("mlx".into(), mlx.clone());
+        assert!(warned(&c), "un endpoint éteint ne sert rien");
+        mlx.enabled = true;
+        c.providers.extra.insert("mlx".into(), mlx);
+        assert!(!warned(&c));
+        assert_eq!(
+            c.providers
+                .local_endpoint("mlx-community/Qwen3-8B-4bit")
+                .map(|(n, _)| n),
+            Some("mlx")
+        );
+        assert!(c.providers.local_endpoint("whisper-default").is_none());
+        c.providers.local.enabled = true;
+        assert_eq!(
+            c.providers
+                .local_endpoint("whisper-default")
+                .map(|(n, _)| n),
+            Some("local")
+        );
     }
 
     /// Les hôtes privés reconnus, et ceux qui ne le sont pas.

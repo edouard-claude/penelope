@@ -392,3 +392,64 @@ fn debug_and_usage_frames_with_empty_choices_are_harmless() {
     assert!(matches!(out[0], StreamChunk::Started { .. }));
     assert!(a.text.is_empty() && a.finish.is_none());
 }
+
+/// #259 : seule la forme exacte d'un appel est relue ; le reste demeure du texte.
+#[test]
+fn only_an_exact_text_call_to_a_declared_tool_is_read() {
+    let tools = vec!["addition".to_string()];
+    let call = |t: &str| text_tool_call(t, &tools);
+    let c = call(r#" <|python_tag|> {"name": "addition", "arguments": "{\"a\": 1}"} "#).unwrap();
+    assert_eq!(
+        (c.name.as_str(), c.arguments.clone()),
+        ("addition", serde_json::json!({"a": 1}))
+    );
+    assert_eq!(
+        call(r#"{"name": "addition"}"#).unwrap().arguments,
+        serde_json::json!({})
+    );
+    for prose in [
+        r#"Voici l'appel : {"name": "addition", "parameters": {}}"#,
+        r#"{"name": "addition", "parameters": {}, "résultat": 3}"#,
+        r#"{"name": "addition", "parameters": [1, 2]}"#,
+        r#"[{"name": "addition", "parameters": {}}]"#,
+        r#"{"name": "addition", "parameters": {}"#,
+        r#"{"nom": "addition"}"#,
+    ] {
+        assert!(call(prose).is_none(), "{prose}");
+    }
+}
+
+/// Le marqueur coupé par le transport est attendu ; un texte qui s'en écarte part aussitôt,
+/// et une réponse qui commence par `{` sans être un appel est rendue entière à la fin.
+#[test]
+fn a_held_start_is_released_as_soon_as_it_cannot_be_a_call() {
+    let frame = |t: &str| {
+        serde_json::json!({"id": "1", "model": "m", "choices": [{"delta": {"content": t}}]})
+            .to_string()
+    };
+    let deltas = |out: Vec<StreamChunk>| -> String {
+        out.into_iter()
+            .filter_map(|c| match c {
+                StreamChunk::Delta { text } => Some(text),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut a = StreamAccumulator::new().with_text_tool_calls(vec!["addition".into()]);
+    assert_eq!(deltas(a.push_payload(&frame("<|py"))), "");
+    assert_eq!(deltas(a.push_payload(&frame("rint"))), "<|pyrint");
+    assert_eq!(deltas(a.push_payload(&frame(" suite"))), " suite");
+
+    let mut a = StreamAccumulator::new().with_text_tool_calls(vec!["addition".into()]);
+    assert_eq!(deltas(a.push_payload(&frame("{x} est "))), "");
+    assert_eq!(deltas(a.push_payload(&frame("une variable."))), "");
+    let end = a.push_payload("[DONE]");
+    assert!(matches!(
+        end.last(),
+        Some(StreamChunk::Done {
+            finish: FinishReason::Stop
+        })
+    ));
+    assert_eq!(deltas(end), "{x} est une variable.");
+    assert_eq!(a.text, "{x} est une variable.");
+}

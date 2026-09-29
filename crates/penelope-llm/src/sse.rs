@@ -146,6 +146,13 @@ pub struct StreamAccumulator {
     pub refusal: String,
     started: bool,
     partial_calls: BTreeMap<i64, PartialCall>,
+    /// Outils déclarés par la requête, quand le serveur peut rendre un appel en texte
+    /// (#259) ; vide, le texte passe toujours en direct.
+    text_tools: Vec<String>,
+    /// Début de réponse retenu tant qu'il peut encore être un appel rendu en texte.
+    held: String,
+    /// Le texte passe en direct : la réponse a commencé autrement que par un appel.
+    passing: bool,
 }
 
 #[derive(Default, Clone)]
@@ -155,15 +162,69 @@ struct PartialCall {
     args: String,
 }
 
+/// Jeton spécial par lequel Llama 3.x ouvre un appel d'outil.
+const PYTHON_TAG: &str = "<|python_tag|>";
+
 impl StreamAccumulator {
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Reconnaît les appels d'outils rendus en texte, pour les outils nommés (#259).
+    ///
+    /// Un serveur local ne lit les appels que des modèles dont il connaît le format :
+    /// mlx_lm.server laisse ceux de Llama 3.2 en texte (`<|python_tag|>{"name": …,
+    /// "parameters": {…}}`, ou l'objet nu) et finit en `stop`. La boucle aurait montré
+    /// l'appel au propriétaire comme une réponse. Le début d'une réponse qui peut être
+    /// un tel appel est retenu jusqu'à la fin du flux, puis rendu en appel s'il en est
+    /// un, en texte sinon.
+    pub fn with_text_tool_calls(mut self, tools: Vec<String>) -> Self {
+        self.text_tools = tools;
+        self
+    }
+
+    /// Texte reçu : publié en direct, ou retenu tant qu'il peut être un appel.
+    fn push_text(&mut self, t: &str, out: &mut Vec<StreamChunk>) {
+        if self.text_tools.is_empty() || self.passing {
+            self.text.push_str(t);
+            out.push(StreamChunk::Delta { text: t.into() });
+            return;
+        }
+        self.held.push_str(t);
+        let start = self.held.trim_start();
+        let maybe_call = start.is_empty()
+            || start.starts_with('{')
+            || start.starts_with(PYTHON_TAG)
+            || PYTHON_TAG.starts_with(start);
+        if !maybe_call {
+            self.passing = true;
+            let held = std::mem::take(&mut self.held);
+            self.text.push_str(&held);
+            out.push(StreamChunk::Delta { text: held });
+        }
+    }
+
+    /// Fin du flux : le texte retenu devient un appel, ou repart en texte.
+    fn flush_held(&mut self) -> Vec<StreamChunk> {
+        let held = std::mem::take(&mut self.held);
+        if held.is_empty() {
+            return Vec::new();
+        }
+        // Un appel natif a déjà été lu : le texte qui l'accompagne reste du texte.
+        let native = !self.partial_calls.is_empty() || self.finish == Some(FinishReason::ToolCalls);
+        if !native && let Some(call) = text_tool_call(&held, &self.text_tools) {
+            self.finish = Some(FinishReason::ToolCalls);
+            return vec![StreamChunk::ToolCall(call)];
+        }
+        self.text.push_str(&held);
+        vec![StreamChunk::Delta { text: held }]
+    }
+
     /// Traite une charge utile `data:`. Renvoie les fragments à publier.
     pub fn push_payload(&mut self, data: &str) -> Vec<StreamChunk> {
         if data.trim() == "[DONE]" {
-            let mut out = self.flush_tool_calls();
+            let mut out = self.flush_held();
+            out.extend(self.flush_tool_calls());
             out.push(StreamChunk::Done {
                 finish: self.finish.unwrap_or(FinishReason::Stop),
             });
@@ -176,9 +237,11 @@ impl StreamAccumulator {
         // Erreur au milieu du flux : le 200 est déjà parti, l'erreur arrive en fragment,
         // au premier niveau, avec `finish_reason: "error"` dans `choices`.
         if let Some(err) = v.get("error") {
+            // Objet chez OpenRouter, chaîne nue chez mlx_lm.server (#259).
             let mut message = err
                 .get("message")
                 .and_then(|m| m.as_str())
+                .or_else(|| err.as_str())
                 .unwrap_or("erreur du provider")
                 .to_string();
             if let Some(p) = v.get("provider").and_then(|p| p.as_str()) {
@@ -255,8 +318,7 @@ impl StreamAccumulator {
             if let Some(t) = delta.get("content").and_then(|c| c.as_str())
                 && !t.is_empty()
             {
-                self.text.push_str(t);
-                out.push(StreamChunk::Delta { text: t.into() });
+                self.push_text(t, &mut out);
             }
             // Certains modèles exposent le raisonnement séparément. OpenRouter envoie le
             // même texte en `reasoning` et en `reasoning_content` : on n'en lit qu'un.
@@ -405,6 +467,35 @@ pub fn merge_reasoning_details(parts: &[Value]) -> Option<Value> {
     Some(Value::Array(
         merged.into_values().map(Value::Object).collect(),
     ))
+}
+
+/// Appel d'outil rendu en texte (#259) : le message entier est un objet `{"name": …,
+/// "parameters"|"arguments": …}`, précédé ou non de `<|python_tag|>`, et nomme un outil
+/// déclaré. Toute autre forme reste du texte : une réponse qui cite du JSON n'est pas un
+/// appel.
+pub fn text_tool_call(text: &str, tools: &[String]) -> Option<ToolCall> {
+    let body = text.trim();
+    let body = body.strip_prefix(PYTHON_TAG).unwrap_or(body).trim();
+    let v: Value = serde_json::from_str(body).ok()?;
+    let obj = v.as_object()?;
+    let name = obj.get("name")?.as_str()?;
+    if !tools.iter().any(|t| t == name) {
+        return None;
+    }
+    let args = match obj.get("parameters").or_else(|| obj.get("arguments")) {
+        None => Value::Object(Default::default()),
+        Some(Value::String(raw)) => parse_arguments(raw),
+        Some(a @ Value::Object(_)) => a.clone(),
+        Some(_) => return None,
+    };
+    if obj.len() > 2 {
+        return None;
+    }
+    Some(ToolCall {
+        id: "call_0".into(),
+        name: name.to_string(),
+        arguments: args,
+    })
 }
 
 /// Décode les arguments d'un appel d'outil. Un JSON invalide est conservé brut : le

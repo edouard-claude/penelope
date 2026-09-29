@@ -338,7 +338,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `providers.local.base_url` | `"http://127.0.0.1:8080/v1"` | Adresse de l'endpoint OpenAI-compatible. |
 | `providers.local.api_key` | `""` | Clé éventuelle, par référence au magasin de secrets. |
 | `providers.local.enabled` | `false` | Endpoint actif. |
-| `providers.local.models` | `[]` | Modèles servis par l'endpoint. |
+| `providers.local.models` | `[]` | Modèles servis par l'endpoint ; pour un endpoint de `providers.extra`, les seuls qui y partent (`local:<modèle>`), les autres restant à `providers.local` (#259). |
 | `providers.local.stream_idle_timeout` | `"120s"` | Silence toléré pendant un flux, comme pour OpenRouter. |
 | `providers.local.context_window` | `32768` | Fenêtre de contexte annoncée pour les modèles servis par cet endpoint, quand `GET /models` ne la donne pas. |
 | `providers.codex.enabled` | `false` | Fournisseur actif. Faux tant que le compte n'est pas connecté (`penelope model auth codex`). |
@@ -358,7 +358,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `providers.extra.<nom>.base_url` | – | Adresse de l'endpoint OpenAI-compatible. |
 | `providers.extra.<nom>.api_key` | – | Clé éventuelle, par référence au magasin de secrets. |
 | `providers.extra.<nom>.enabled` | – | Endpoint actif. |
-| `providers.extra.<nom>.models` | – | Modèles servis par l'endpoint. |
+| `providers.extra.<nom>.models` | – | Modèles servis par l'endpoint ; pour un endpoint de `providers.extra`, les seuls qui y partent (`local:<modèle>`), les autres restant à `providers.local` (#259). |
 | `providers.extra.<nom>.stream_idle_timeout` | – | Silence toléré pendant un flux, comme pour OpenRouter. |
 | `providers.extra.<nom>.context_window` | – | Fenêtre de contexte annoncée pour les modèles servis par cet endpoint, quand `GET /models` ne la donne pas. |
 
@@ -832,6 +832,143 @@ de 5 h, une fenêtre hebdomadaire). Pénélope le lit, le range, et l'affiche da
 `quota_stop_ratio` (0,95) : Pénélope se met en retrait **avant** l'appel et laisse le repli
 OpenRouter jouer, plutôt que d'aller chercher un refus. Un quota atteint n'est pas une
 panne : le message dit l'heure de retour.
+
+### Inférence locale sur Mac
+
+Sur un Mac Apple Silicon, un modèle peut tourner sur la machine elle-même, servi par
+`mlx_lm.server` (MLX d'Apple) en endpoint OpenAI-compatible. Pénélope l'appelle comme
+OpenRouter : un alias `local:<modèle>` le vise, OpenRouter reste le repli. Rien ne sort de
+la machine, et un appel local compte 0 $ (les jetons sont comptés, le coût est nul).
+
+```
+ alias main ─► local:mlx-community/Qwen3-8B-4bit ─► mlx_lm.server (127.0.0.1:8080, LaunchAgent)
+      │ serveur arrêté, avant le premier jeton : un essai après 1 s, puis
+      └──────► repli cloud ─► openrouter:deepseek/deepseek-v4-flash
+```
+
+**Installer MLX** dans un environnement Python à part, puis télécharger le modèle (le
+serveur ne sert que ce qui est dans le cache Hugging Face) :
+
+```bash
+python3 -m venv ~/mlx && ~/mlx/bin/pip install mlx-lm
+```
+
+```bash
+~/mlx/bin/hf download mlx-community/Qwen3-8B-4bit
+```
+
+**Choisir le modèle selon la mémoire.** En 4 bits, les poids pèsent environ 0,55 Go par
+milliard de paramètres (mesuré : Qwen3-1.7B, 0,94 Go ; Llama-3.2-1B, 0,68 Go). Il faut
+laisser de la place au cache du contexte (qui grandit avec la conversation), à macOS et à
+Pénélope : viser des poids sous la moitié de la mémoire unifiée. Estimations tirées de
+cette règle, pas de mesures :
+
+| Mémoire | Poids visés (4 bits) | Taille de modèle |
+|---|---|---|
+| 16 Go | 8 Go au plus | jusqu'à 14 milliards |
+| 32 Go | 16 Go au plus | jusqu'à 30 milliards |
+| 128 Go (M5 Max) | 64 Go au plus | jusqu'à 110 milliards |
+
+Pour les outils, préférer un modèle dont `mlx_lm.server` lit les appels : avec Qwen3, il
+rend de vrais `tool_calls`. Avec Llama 3.2, il ne sait pas les lire (« model does not
+support tool calling » dans son journal) et les laisse en texte, `<|python_tag|>{"name":
+…, "parameters": {…}}` ou l'objet nu : Pénélope les relit et les exécute quand le message
+entier est un tel appel vers un outil proposé, mais les arguments arrivent souvent en
+chaînes (`"17"`) et le modèle doit se corriger. Qwen3 réfléchit avant de répondre ;
+`mlx_lm.server` ignore le réglage de raisonnement de Pénélope, il s'éteint au serveur :
+`--chat-template-args '{"enable_thinking":false}'`.
+
+**Le démarrer et le faire relancer.** `penelope local install` écrit un LaunchAgent
+(`com.penelope.inference.local`, `KeepAlive`) qui lance le serveur sur l'adresse de
+`providers.local.base_url`, à l'ouverture de session, et le relance s'il tombe. Il ajoute
+`--max-tokens 16384` : sans lui, le serveur coupe chaque réponse à 512 jetons, et
+Pénélope n'envoie pas de plafond au tour.
+
+```bash
+penelope local install mlx-community/Qwen3-8B-4bit --server ~/mlx/bin/mlx_lm.server
+```
+
+La commande dit ce qui manque encore (endpoint à activer, alias à poser). Ensuite :
+
+```bash
+penelope config set providers.local.enabled true
+```
+
+```bash
+penelope model set main local:mlx-community/Qwen3-8B-4bit
+```
+
+`penelope local status` donne l'état du LaunchAgent, `penelope local uninstall` l'arrête et
+le retire ; ses journaux sont `inference.local.out.log` et `inference.local.err.log`, à côté
+de ceux du daemon. Le serveur n'a pas d'authentification : la commande refuse une adresse
+autre que `127.0.0.1`. Une fois le modèle téléchargé, `HF_HUB_OFFLINE=1` dans
+l'environnement du LaunchAgent l'empêche de contacter Hugging Face.
+
+**À côté de la voix.** `providers.local` sert souvent déjà mlx-audio (voix) sur le port
+8080. Le serveur de texte prend alors un endpoint de `providers.extra`, sur un autre port,
+avec la liste des modèles qu'il sert : un alias `local:` d'un modèle listé part chez lui,
+les autres chez `providers.local`.
+
+```toml
+[providers.extra.mlx]
+enabled = true
+base_url = "http://127.0.0.1:8081/v1"
+models = ["mlx-community/Qwen3-8B-4bit"]
+```
+
+```bash
+penelope local install mlx-community/Qwen3-8B-4bit --endpoint mlx --server ~/mlx/bin/mlx_lm.server
+```
+
+**Rôles et repli.** Un modèle local plus faible dégrade la qualité sans le dire : on peut
+n'affecter en local que certains rôles (`fast` pour le classifieur et la revue de mémoire,
+`summarizer` pour la compaction) et garder `main` chez OpenRouter, ou l'inverse. Le repli
+d'un alias local vers OpenRouter se déclare comme les autres ; il joue quand le serveur est
+arrêté ou en erreur avant le premier jeton :
+
+```bash
+penelope model set cloud openrouter:deepseek/deepseek-v4-flash
+```
+
+```bash
+penelope config set models.routing.fallback.main '["cloud"]'
+```
+
+**Diagnostic.** `penelope doctor` sonde chaque endpoint local qui sert un alias de texte
+(contrôle `local.<endpoint>`) : serveur joignable, modèles visés servis, fenêtre (celle
+annoncée, sinon `context_window`, `mlx_lm.server` ne l'annonçant pas), et part de l'entrée
+relue du cache du serveur sur sept jours. Un serveur arrêté est signalé avec la commande
+qui le relance. Un endpoint qui ne sert que la voix n'est pas sondé.
+
+**Chiffres mesurés** le 29/09/2026 sur un MacBook Air M2 (`Mac14,2`), 24 Go,
+macOS 27.0, `mlx-lm` 0.31.3 (MLX 0.32.3), modèle `mlx-community/Qwen3-1.7B-4bit`, pendant
+que d'autres compilations chargeaient la machine :
+
+| Mesure | Valeur |
+|---|---|
+| Prompt d'un tour de Pénélope (système, outils, message) | 4 420 jetons environ |
+| Premier jeton, 1ᵉʳ tour, cache froid | 8,9 s et 13,6 s (deux essais) |
+| Premier jeton, 2ᵉ tour de la même session | 0,86 s, 4 576 des 4 666 jetons relus du cache |
+| Réponse complète par `penelope chat`, deux messages | 15,9 s puis 7,3 s |
+| Appel d'outil (`self_status`) exécuté puis réponse | 2 appels au modèle, 40 s |
+| Même serveur, raisonnement éteint (`enable_thinking` à `false`) : premier jeton à froid | 9,1 s |
+| Idem, préfixe déjà en cache (nouvelle session, même prompt système) | 0,36 à 0,45 s |
+| Idem, tour outillé complet (2 appels au modèle) | 11,5 s |
+| Repli sur OpenRouter, serveur arrêté | 1,1 s (un essai après 1 s) |
+| Coût enregistré | 0 $ |
+
+Le serveur garde le préfixe entre les requêtes (cache de prompt de `mlx_lm.server`, actif
+par défaut) : c'est lui qui fait passer le premier jeton de plus de 8 s à moins d'une
+seconde, et qui rend payant le préfixe stable de Pénélope. Le prompt système et les
+outils étant les mêmes d'une session à l'autre, une nouvelle session trouve déjà ses
+4 400 premiers jetons en cache. Un redémarrage du serveur vide ce cache. La suite `live-local` refait ces
+mesures sur la machine qui la lance :
+
+```bash
+PENELOPE_LIVE_LOCAL_MODEL=local:mlx-community/Qwen3-1.7B-4bit penelope eval live-local
+```
+
+(`PENELOPE_LIVE_LOCAL_URL` si le serveur n'écoute pas sur `http://127.0.0.1:8080/v1`.)
 
 ### Coûts
 

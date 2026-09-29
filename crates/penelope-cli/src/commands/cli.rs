@@ -220,6 +220,38 @@ pub enum Command {
     Store(StoreCmd),
     /// Lance une suite d'évaluation depuis les sources (`cargo test`), sans daemon.
     Eval { suite: String },
+    /// Serveur d'inférence locale (mlx_lm.server) en LaunchAgent, sans daemon (#259).
+    #[command(subcommand)]
+    Local(LocalCmd),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum LocalCmd {
+    /// Installe mlx_lm.server en LaunchAgent sur l'adresse de l'endpoint, et le démarre ;
+    /// launchd le relance s'il tombe.
+    Install {
+        /// Modèle MLX servi (`mlx-community/Qwen3-8B-4bit`).
+        model: String,
+        /// Endpoint servi : `local` (`providers.local`) ou un nom de `providers.extra`.
+        #[arg(long, default_value = "local")]
+        endpoint: String,
+        /// Chemin de `mlx_lm.server` ; par défaut, celui du PATH.
+        #[arg(long)]
+        server: Option<PathBuf>,
+        /// Plafond de sortie par réponse : le défaut du serveur (512) coupe les réponses.
+        #[arg(long, default_value_t = 16_384)]
+        max_tokens: u32,
+    },
+    /// Arrête le serveur et retire son LaunchAgent.
+    Uninstall {
+        #[arg(long, default_value = "local")]
+        endpoint: String,
+    },
+    /// État du LaunchAgent du serveur.
+    Status {
+        #[arg(long, default_value = "local")]
+        endpoint: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

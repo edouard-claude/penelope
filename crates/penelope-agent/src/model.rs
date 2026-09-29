@@ -60,6 +60,7 @@ impl AgentLoop {
 
         loop {
             let model_id = plan.model().to_string();
+            let provider = self.provider_of(&model_id, plan.is_primary()).await;
             let request = ChatRequest {
                 model: model_id.clone(),
                 messages: fit_modalities(&messages, &s.catalog, &model_id),
@@ -90,7 +91,7 @@ impl AgentLoop {
                         session_id: Some(&spec.session_id),
                         run_id: spec.run_id.as_deref(),
                         model: &model_id,
-                        provider: self.provider.name(),
+                        provider: provider.name(),
                         keys,
                     },
                     &body,
@@ -99,11 +100,7 @@ impl AgentLoop {
             s.llm_state.dispatching(&llm_id).await?;
             attempts.sent(&llm_id);
 
-            let stream = match self
-                .provider
-                .chat_stream(request, spec.cancel.clone())
-                .await
-            {
+            let stream = match provider.chat_stream(request, spec.cancel.clone()).await {
                 Ok(st) => st,
                 Err(e) => {
                     s.llm_state
@@ -112,7 +109,7 @@ impl AgentLoop {
                     let action = plan.on_error(&e, Phase::BeforeStream, spec.cancel.is_cancelled());
                     let fell_back = matches!(action, RetryAction::Fallback { .. });
                     let cause = failure_cause(false, fell_back);
-                    let attempt = self.failed_attempt(&model_id, &e, &llm_id, cause);
+                    let attempt = failed_attempt(provider.name(), &model_id, &e, &llm_id, cause);
                     attempts.record(s, spec, attempt).await;
                     match action {
                         RetryAction::RetrySame { wait_s: secs } => {
@@ -176,14 +173,8 @@ impl AgentLoop {
                 StreamChunk::ToolCall(_) => shown.store(true, std::sync::atomic::Ordering::SeqCst),
                 _ => {}
             };
-            match collect_stream_observed(
-                stream,
-                &model_id,
-                self.provider.name(),
-                &s.catalog,
-                &observe,
-            )
-            .await
+            match collect_stream_observed(stream, &model_id, provider.name(), &s.catalog, &observe)
+                .await
             {
                 Ok(r) => {
                     s.llm_state.completed(&llm_id).await?;
@@ -221,8 +212,9 @@ impl AgentLoop {
                     };
                     let action = plan.on_error(&e, phase, spec.cancel.is_cancelled());
                     let fell_back = matches!(action, RetryAction::Fallback { .. });
+                    let cause = failure_cause(true, fell_back);
                     let mut attempt =
-                        self.failed_attempt(&model_id, &e, &llm_id, failure_cause(true, fell_back));
+                        failed_attempt(provider.name(), &model_id, &e, &llm_id, cause);
                     let text = partial.into_attempt(&mut attempt);
                     attempts.record(s, spec, attempt).await;
                     match action {
@@ -260,21 +252,37 @@ impl AgentLoop {
 }
 
 impl AgentLoop {
-    /// La tentative d'un appel qui a échoué : modèle, fournisseur, erreur et requête.
-    fn failed_attempt(
-        &self,
-        model_id: &str,
-        e: &LlmError,
-        llm_id: &str,
-        cause: AttemptCause,
-    ) -> Attempt {
-        Attempt {
-            model: Some(model_id.to_string()),
-            provider: Some(self.provider.name().to_string()),
-            error: Some(e.to_string()),
-            llm_request_id: Some(llm_id.to_string()),
-            ..Attempt::new(cause)
+    /// Le fournisseur d'une tentative : celui du tour pour le modèle principal, celui de
+    /// son modèle pour un repli (#259). Un repli sans fournisseur (compte Codex absent)
+    /// reste sur celui du tour, comme avant.
+    async fn provider_of(&self, model_id: &str, primary: bool) -> Arc<dyn Provider> {
+        let Some(source) = self.providers.as_ref().filter(|_| !primary) else {
+            return self.provider.clone();
+        };
+        match source.fallback_provider(model_id).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(model = %model_id, error = %e, "repli sans fournisseur propre");
+                self.provider.clone()
+            }
         }
+    }
+}
+
+/// La tentative d'un appel qui a échoué : modèle, fournisseur, erreur et requête.
+fn failed_attempt(
+    provider: &str,
+    model_id: &str,
+    e: &LlmError,
+    llm_id: &str,
+    cause: AttemptCause,
+) -> Attempt {
+    Attempt {
+        model: Some(model_id.to_string()),
+        provider: Some(provider.to_string()),
+        error: Some(e.to_string()),
+        llm_request_id: Some(llm_id.to_string()),
+        ..Attempt::new(cause)
     }
 }
 

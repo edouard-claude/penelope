@@ -103,6 +103,7 @@ scenario_cases! {
     compaction_sur_le_prefixe => "compaction-sur-le-prefixe",
     // Les quatre dernières méthodes RPC, contre l'hôte masqué et un faux serveur local.
     rpc_diagnostic => "rpc-diagnostic",
+    rpc_inference_locale => "rpc-inference-locale",
     rpc_autorisation_mcp => "rpc-autorisation-mcp",
     rpc_mise_a_jour => "rpc-mise-a-jour",
     rpc_installation_skill => "rpc-installation-skill",
