@@ -327,6 +327,11 @@ fn message_line(sid: &str, e: &Entry) -> Value {
     line
 }
 
+/// Vrai pour un dépôt git nu : `HEAD`, `objects/` et `refs/` à la racine du dossier.
+fn is_bare_repo(dir: &Path) -> bool {
+    dir.join("HEAD").is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir()
+}
+
 /// Lignes de fichiers, par chemin trié, sous `root`.
 fn files(root: &Path, dir: &Path) -> anyhow::Result<Vec<Value>> {
     let mut out = Vec::new();
@@ -338,7 +343,10 @@ fn files(root: &Path, dir: &Path) -> anyhow::Result<Vec<Value>> {
     entries.sort();
     for path in entries {
         if path.is_dir() {
-            if path.file_name().is_some_and(|n| n == ".git") {
+            // L'intérieur d'un dépôt git (`.git/` ou dépôt nu d'un faux remote) dépend de la
+            // version de git et de la machine (`ignorecase`, `precomposeunicode` sous macOS) :
+            // il n'est jamais un résultat du scénario.
+            if path.file_name().is_some_and(|n| n == ".git") || is_bare_repo(&path) {
                 continue;
             }
             out.extend(files(root, &path)?);
@@ -382,4 +390,25 @@ where
             Ok(out)
         })
         .await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// L'intérieur d'un dépôt nu (faux remote d'un scénario) n'entre pas dans la photo :
+    /// son `config` change avec la version de git et la machine.
+    #[test]
+    fn a_bare_repository_is_left_out_of_the_files() {
+        let root = tempfile::tempdir().unwrap();
+        let bare = root.path().join("service.origin.git");
+        std::fs::create_dir_all(bare.join("objects")).unwrap();
+        std::fs::create_dir_all(bare.join("refs")).unwrap();
+        std::fs::write(bare.join("HEAD"), "ref: refs/heads/dev\n").unwrap();
+        std::fs::write(bare.join("config"), "[core]\n\tbare = true\n").unwrap();
+        std::fs::write(root.path().join("notes.md"), "gardé").unwrap();
+        let lines = files(root.path(), root.path()).unwrap();
+        let paths: Vec<&str> = lines.iter().filter_map(|l| l["path"].as_str()).collect();
+        assert_eq!(paths, ["notes.md"]);
+    }
 }
