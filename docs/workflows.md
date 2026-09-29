@@ -163,7 +163,7 @@ par identifiant.
 | `workflow` | `workflowId` (obligatoire), `params` | Un sous-workflow, profondeur bornée |
 | `wait` | `on` | Attend un événement, un cron, un délai ou une tâche MCP |
 | `verify` | `verifier` ou `checks`, `criteriaKey` | Vérifications mécaniques puis jugement du modèle ; `project_tests` relit la commande validée dans `session_metadata.verification`, sinon celle de `project` |
-| `delivery` | `delivery` (`pull_request`, `ci`, `e2e`) | Livraison en dev : PR vers la branche de développement, verdict de la CI, vérification externe de l'environnement de dev (voir « Livraison en dev ») |
+| `delivery` | `delivery` (`pull_request`, `ci`, `e2e`, `prod_report`, `prod_pull_request`) | Livraison en dev : PR vers la branche de développement, verdict de la CI, vérification externe de l'environnement de dev (voir « Livraison en dev ») ; bilan vérifié et PR dev → prod après approbation humaine (voir « Gate de production ») |
 
 `context: fresh` donne à chaque visite de l'étape une session neuve, fille de celle du
 run : l'agent ne voit ni la conversation du propriétaire ni les échanges des autres
@@ -497,7 +497,7 @@ depuis l'extérieur. Un plan sans code, ou sans juge final, n'ouvre aucune PR : 
 n'a dit que le travail satisfait.
 
 ```
-  juge ─passed─► livraison-pr ─passed─► livraison-ci ─passed─► livraison-e2e ─passed─► $done
+  juge ─passed─► livraison-pr ─passed─► livraison-ci ─passed─► livraison-e2e ─passed─► gate de production
                     │                      │                      │
                     └─► carte « livraison bloquée » : Réessayer (la même étape) ou Arrêter
 ```
@@ -522,6 +522,7 @@ token_secret = "gitlab_token"           # défaut : github_token ou gitlab_token
 
 [branches]
 dev = "develop"            # obligatoire
+prod = "main"              # obligatoire pour le gate de production (#193)
 
 [ci]
 provider = "gitlab"        # github | gitlab | none ; déduit de .github/workflows ou .gitlab-ci.yml
@@ -541,6 +542,9 @@ query = "{ version }"
 [[e2e.checks]]
 kind = "command"           # l'outil E2E du projet (Playwright, Maestro…), E2E_BASE_URL posé
 command = "npx playwright test"
+
+[prod]
+max_age_minutes = 60       # âge maximal d'un bilan approuvable (défaut : 60)
 ```
 
 Sans contrôle déclaré, un `GET` de l'URL de dev doit répondre 2xx. Le jeton se pose par
@@ -565,15 +569,67 @@ carte aussi. L'E2E joue tous ses contrôles, même après un rouge, et garde ses
 Rejouer : `cargo test -p penelope-evals --test scenarios livraison_dev plan_en_phases`,
 et `cargo test -p penelope-orchestrator delivery` contre les faux forgeurs GitHub et GitLab.
 
+## Gate de production
+
+Après l'E2E de dev, un run livré ne propose rien seul (#193, T5 de #185) : même tout vert,
+**aucune PR vers la production sans le clic du propriétaire**.
+
+```
+  livraison-e2e ─► livraison-bilan ─► gate-prod ─Proposer la PR prod─► livraison-prod ─passed─► $done
+                        │                │ Re-vérifier ─► livraison-pr         │ bilan périmé ─► livraison-pr
+                        │                │ Refuser ─► run bloqué               │ plan révisé ─► run bloqué
+                        └─► carte bloquée (branche de prod absente…)          └─► carte bloquée (PR dev non fusionnée…)
+```
+
+**Le bilan.** `livraison-bilan` fige ce qui vient d'être vérifié : le plan exact (version
+et empreinte) et le run, la PR dev, sa branche et son commit, la CI et l'E2E de **ce**
+commit (avec le fichier des preuves) et l'heure ; son empreinte reste dans la trace du
+run. La carte d'approbation le montre, avec trois choix : « Proposer la PR prod », « Re-vérifier » (PR,
+CI et E2E refaits, puis une carte neuve), « Refuser » (le run s'arrête, « PR prod refusée
+par le propriétaire », et le reste après un redémarrage ; le reprendre le termine sans rien
+proposer). `branches.prod` est demandée avant toute carte ; elle ne peut pas être la
+branche de dev.
+
+**Le clic n'est pas cru sur parole.** Juste avant la PR, `livraison-prod` relit :
+
+- le plan actif de la conversation : une révision plus récente (un autre plan, ou la même
+  version d'un autre contenu) arrête le run, sans PR ;
+- l'âge du bilan (`prod.max_age_minutes`), le commit que porte la PR dev sur le forgeur et
+  la CI de ce commit : un bilan trop vieux, une PR dev avancée d'un commit ou une CI qui
+  n'est plus verte le rendent **périmé**. Aucune PR : le sujet le dit, le run refait PR,
+  CI et E2E et pose une carte neuve. Le bouton de l'ancienne carte ne vaut plus rien (sa
+  visite d'étape est passée : « Déjà traité ») ;
+- la PR dev doit être fusionnée dans la branche de dev, sans quoi la PR dev → prod ne
+  porterait pas le travail : la carte le dit, « Réessayer » relit (l'approbation tient tant
+  que le bilan est frais).
+
+**Au plus une PR prod par run.** L'effet est au ledger sous une clé qui ne dépend que du
+run, planifié avant l'appel ; la PR porte la marque du run dans sa description et elle
+est cherchée sur le forgeur (sa marque, puis une PR dev → prod déjà ouverte) avant d'être
+ouverte. Une approbation suivie d'un redémarrage, même pendant l'ouverture, donne une
+seule PR ; un envoi interrompu est terminé sans rejuger un bilan déjà approuvé. Le lien
+part dans le sujet du run.
+
+**Le déploiement reste hors de l'automatisme** : Pénélope ne fusionne pas la PR de
+production et ne déploie rien ; le déploiement suit la politique du projet.
+
+L'attente du propriétaire ne compte pas dans la borne de durée du run (`maxWallMs`) :
+elle mesure le travail, pas le temps d'une décision. Une carte d'approbation laissée une
+nuit reste approuvable ; le temps qui suit la réponse compte de nouveau.
+
+Rejouer : `cargo test -p penelope-evals --test scenarios livraison_prod livraison_dev`
+et `cargo test -p penelope-orchestrator prod`.
+
 ## Limites actuelles
 
 - Le contenu de `.penelope/deploy.toml` n'est pas encore interprété : c'est un marqueur,
   les commandes viennent des cibles `make`.
 - Une tâche MCP n'est suivie qu'une fois connue de l'étape `wait` : un appel d'outil qui
   rend une tâche n'enregistre rien tout seul.
-- Un run de plan livré s'arrête après l'E2E de dev : le gate de production et la PR vers
-  la production viennent avec #193. Aucune PR ni aucun déploiement de production n'est
-  automatique.
+- Le gate de production propose la PR dev → prod ; il ne la fusionne pas et ne déploie
+  rien. L'E2E porte sur l'environnement de dev au moment du bilan ; une fusion de la PR
+  dev qui redéploie cet environnement n'est pas re-vérifiée avant la PR prod, sauf
+  « Re-vérifier » ou bilan périmé.
 - La livraison ne lit que la CI du forgeur (GitHub, GitLab) ; une CI externe au forgeur
   se déclare `none`. Corriger une CI rouge passe par un nouveau commit et un nouveau plan :
   « Réessayer » relit la CI du même commit (utile après une relance sur le forgeur).
