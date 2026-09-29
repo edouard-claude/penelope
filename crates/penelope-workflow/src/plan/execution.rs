@@ -58,10 +58,11 @@ pub fn delivers(steps: &[PlanStep]) -> bool {
 
 /// Ce que le code d'un plan livré doit laisser à la livraison : un dépôt déclaré, une
 /// branche de travail, des commits. Pousser et ouvrir la PR reviennent à la livraison.
+/// Pas de `key=` dans la consigne : le masquage des secrets le prendrait pour un jeton.
 const DELIVERED_CODE: &str = "\nCe plan sera livré en dev : travaille dans le dépôt du \
      projet, sur une branche de travail (pas la branche de développement), commite tes \
-     changements et déclare le dépôt par `session_metadata` op=`set` key=`project` \
-     entry=`{\"dir\": \"<chemin du dépôt>\"}`. Ne pousse pas et n'ouvre pas de PR : la \
+     changements et déclare le dépôt par `session_metadata` (op `set`, clé `project`, \
+     entrée `{\"dir\": \"<chemin du dépôt>\"}`). Ne pousse pas et n'ouvre pas de PR : la \
      livraison s'en charge.";
 
 /// Comment le plan est exécuté.

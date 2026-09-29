@@ -624,7 +624,9 @@ async fn a_step_that_times_out_records_its_result_and_moves_on() {
         "delai",
         "reflechir",
         json!([
-            {"id": "reflechir", "type": "agent", "prompt": "réfléchis", "timeoutMs": 200,
+            // Le modèle répond en 5 s ; 1,5 s laisse à la préparation du tour le temps
+            // d'atteindre l'appel, même quand les tests voisins chargent la machine.
+            {"id": "reflechir", "type": "agent", "prompt": "réfléchis", "timeoutMs": 1500,
              "transitions": [
                 {"goto": "$done", "condition": {"type": "step_result", "result": "timeout"}},
                 {"goto": "reflechir"}

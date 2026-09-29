@@ -503,8 +503,8 @@ n'a dit que le travail satisfait.
 ```
 
 **Le dépôt.** La phase de code reçoit la consigne de travailler dans le dépôt, sur une
-branche de travail, de commiter et de déclarer le dépôt : `session_metadata` op=`set`
-key=`project` entry=`{"dir": "<dépôt>"}` (un chemin relatif se lit comme pour les outils
+branche de travail, de commiter et de déclarer le dépôt : `session_metadata`, op `set`, clé
+`project`, entrée `{"dir": "<dépôt>"}` (un chemin relatif se lit comme pour les outils
 de fichiers). La livraison pousse cette branche, sous le même nom, sur le remote du dépôt ;
 elle refuse une tête détachée, la branche de dev elle-même et des changements suivis non
 commités.
