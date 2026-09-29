@@ -24,6 +24,11 @@ pub const DEFAULT_LOCAL_WINDOW: u64 = 32_768;
 /// Fenêtre d'un modèle local : ce que `GET /models` en dit (vLLM, llama.cpp, LM Studio),
 /// sinon la valeur configurée (issue #53).
 pub(super) fn local_window(m: &Value, configured: u64) -> u64 {
+    announced_window(m).unwrap_or(configured)
+}
+
+/// Fenêtre qu'une entrée de `GET /models` annonce, s'il en annonce une.
+pub(super) fn announced_window(m: &Value) -> Option<u64> {
     for path in [
         "context_length",
         "max_model_len",
@@ -32,11 +37,11 @@ pub(super) fn local_window(m: &Value, configured: u64) -> u64 {
     ] {
         for value in [m.get(path), m.get("meta").and_then(|x| x.get(path))] {
             if let Some(n) = value.and_then(|v| v.as_u64()).filter(|n| *n > 0) {
-                return n;
+                return Some(n);
             }
         }
     }
-    configured
+    None
 }
 
 /// Transforme une réponse HTTP en flux de fragments.
@@ -230,7 +235,7 @@ pub async fn collect_stream_observed(
         Some(c) => (c, false),
         None => (
             catalog
-                .get(&actual_model)
+                .get_served(provider, &actual_model)
                 .map(|i| i.cost(&usage))
                 .unwrap_or(0.0),
             true,

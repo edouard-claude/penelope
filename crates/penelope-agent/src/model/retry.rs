@@ -91,13 +91,18 @@ impl RetryPlan {
         self.attempt == 0
     }
 
-    /// Replis confiés au serveur dans la requête (OpenRouter), sinon aucun.
+    /// Replis confiés au serveur dans la requête (OpenRouter), sinon aucun. Seuls ceux
+    /// d'OpenRouter y partent : un repli local ou Codex n'a rien à faire dans la liste
+    /// `models` d'OpenRouter, il est joué ici après l'échec (#259).
     pub(crate) fn server_fallbacks(&self) -> Vec<String> {
-        if self.server_side_fallback {
-            self.fallback_models.clone()
-        } else {
-            Vec::new()
+        if !self.server_side_fallback {
+            return Vec::new();
         }
+        self.fallback_models
+            .iter()
+            .filter(|m| penelope_llm::catalog::provider_of(m) == "openrouter")
+            .cloned()
+            .collect()
     }
 
     /// Nouvelles tentatives d'avant flux faites sur le modèle en cours.

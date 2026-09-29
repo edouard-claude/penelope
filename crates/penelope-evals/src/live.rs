@@ -90,6 +90,18 @@ pub async fn daemon(root: &Path, clock: SharedClock) -> Arc<Daemon> {
 
 /// Un tour complet de conversation CLI ; renvoie le texte de la réponse.
 pub async fn turn(d: &Arc<Daemon>, session: &str, text: &str) -> String {
+    match turn_outcome(d, session, text).await {
+        penelope_agent::TurnOutcome::Answered { text, .. } => text,
+        other => panic!("tour sans réponse : {other:?}"),
+    }
+}
+
+/// Un tour complet de conversation CLI, et son issue telle quelle.
+pub async fn turn_outcome(
+    d: &Arc<Daemon>,
+    session: &str,
+    text: &str,
+) -> penelope_agent::TurnOutcome {
     let id = d
         .enqueue_message(session, text, &Origin::Cli, None)
         .await
@@ -105,8 +117,58 @@ pub async fn turn(d: &Arc<Daemon>, session: &str, text: &str) -> String {
             None => tokio::time::sleep(Duration::from_millis(50)).await,
         }
     };
-    match penelope_daemon::runner::process(d, turn, Duration::from_secs(30)).await {
-        penelope_agent::TurnOutcome::Answered { text, .. } => text,
-        other => panic!("tour sans réponse : {other:?}"),
+    penelope_daemon::runner::process(d, turn, Duration::from_secs(30)).await
+}
+
+/// Daemon de test dont les alias de conversation visent un serveur d'inférence local
+/// (#259) : `providers.local` sur `base_url`, OpenRouter éteint sauf si `openrouter`
+/// donne l'adresse d'un faux OpenRouter, qui sert alors l'alias de repli `cloud`. Le
+/// classifieur est éteint : chaque tour ne fait que ses propres appels.
+pub async fn local_daemon(
+    root: &Path,
+    clock: SharedClock,
+    base_url: &str,
+    model: &str,
+    openrouter: Option<&str>,
+) -> Arc<Daemon> {
+    let s = Services::for_tests(root.to_path_buf(), clock)
+        .await
+        .expect("services");
+    if openrouter.is_some() {
+        s.platform
+            .secrets
+            .set("openrouter_api_key", "sk-or-v1-faux-openrouter-local")
+            .expect("secret");
     }
+    let d = Arc::new(Daemon::from_services(Arc::new(s)));
+    let (base_url, model) = (base_url.to_string(), model.to_string());
+    let openrouter = openrouter.map(String::from);
+    d.publish_config("live-local", move |c| {
+        c.providers.local.enabled = true;
+        c.providers.local.base_url = base_url;
+        c.providers.openrouter.enabled = openrouter.is_some();
+        if let Some(url) = openrouter {
+            c.providers.openrouter.base_url = url;
+            c.models
+                .aliases
+                .insert("cloud".into(), "openrouter:faux/repli".into());
+            c.models
+                .routing
+                .fallback
+                .insert("main".into(), vec!["cloud".into()]);
+        }
+        for alias in ["main", "fast", "reasoning", "summarizer"] {
+            c.models.aliases.insert(alias.to_string(), model.clone());
+        }
+        c.models.routing.classifier = false;
+        c.tools.approval_mode = "auto".into();
+        Ok(vec![
+            "providers".into(),
+            "models.aliases".into(),
+            "models.routing".into(),
+            "tools.approval_mode".into(),
+        ])
+    })
+    .expect("configuration");
+    d
 }

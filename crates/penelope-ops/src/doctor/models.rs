@@ -278,8 +278,7 @@ pub(super) async fn tool_calling_check(s: &Services) -> DoctorCheck {
         if !alias_needs_tools(&cfg, alias) {
             continue;
         }
-        let bare = penelope_llm::catalog::strip_provider(model);
-        if s.catalog.get(bare).map(|i| i.supports_tools()) == Some(false) {
+        if s.catalog.get(model).map(|i| i.supports_tools()) == Some(false) {
             sans.push(format!("`{alias}` → `{model}`"));
         }
     }

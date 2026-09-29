@@ -88,7 +88,7 @@ impl SessionConversation {
 
     fn params(&self) -> CompactionParams {
         let cfg = self.services.config.config();
-        let window = self.services.catalog.window_of(self.bare_model());
+        let window = self.services.catalog.window_of(&self.model_id);
         CompactionParams::from_config(&cfg, window, &self.model_id)
     }
 

@@ -12,6 +12,72 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.22
+
+**Inférence locale sur Mac : un tour réel prouvé contre `mlx_lm.server`, et le repli sur
+OpenRouter qui ne partait jamais (#259).** Aucun test ne faisait de tour contre un serveur
+local. Les corps réels de `mlx_lm.server` 0.31.3 (capturés sur un MacBook Air M2) ont
+montré trois défauts, et la suite locale un quatrième.
+
+- Repli : la boucle envoyait le modèle de repli au fournisseur du modèle principal. Un
+  alias `local:` qui se repliait sur `openrouter:` rappelait le serveur local arrêté avec
+  le nom du modèle OpenRouter, quatre fois, et le tour finissait en erreur. Chaque repli
+  part désormais chez le fournisseur de son modèle (`AgentLoop::with_providers`).
+- Appels d'outils rendus en texte : Llama 3.2 sous `mlx_lm.server` rend
+  `<|python_tag|>{"name": …, "parameters": {…}}` ou l'objet nu, et finit en `stop` ; la
+  boucle l'affichait comme une réponse. Le fournisseur OpenAI-compatible le relit en appel
+  quand le message entier est cet objet et nomme un outil proposé ; le début d'une
+  réponse qui peut en être un est retenu jusqu'à la fin du flux, le reste part en direct.
+  Qwen3 rend de vrais `tool_calls`, lus tels quels.
+- Erreurs `{"error": "…"}` (chaîne nue) : le message devenait « erreur du provider ». Il
+  est gardé, au statut HTTP comme au milieu du flux.
+- `providers.extra` était déclaré sans être branché : un endpoint actif y sert les modèles
+  de sa liste `models`, pour faire tourner le texte (mlx_lm) à côté de la voix
+  (mlx-audio). La cohérence de configuration en tient compte et nomme maintenant un alias
+  `local:` sans endpoint, comme `openai_compat:`.
+- `doctor` : contrôle `local.<endpoint>` pour chaque endpoint qui sert un alias de texte
+  (joignable, modèles servis, fenêtre, part de l'entrée relue du cache sur sept jours),
+  avec la commande qui relance le serveur ; rien pour une instance sans endpoint local.
+- `penelope local install|status|uninstall` : `mlx_lm.server` en LaunchAgent
+  (`com.penelope.inference.<endpoint>`, relancé par launchd), sur l'adresse de
+  l'endpoint, bouclage seulement, `--max-tokens 16384` (le défaut du serveur, 512, coupe
+  les réponses). Vérifié sur la machine : processus tué, relancé par launchd.
+- Documentation : section « Inférence locale sur Mac » d'`install-headless.md`
+  (installation, modèle selon la mémoire, rôles, repli, supervision, chiffres mesurés :
+  premier jeton de 8,9 à 13,6 s à froid pour 4 420 jetons, 0,86 s au second tour avec
+  4 576 jetons relus du cache ; coût 0 $).
+- Tests : corps capturés rejoués (texte et raisonnement, appels natifs simple et double,
+  appels en texte avec ou sans outil proposé, erreurs, catalogue, sonde), repli de bout
+  en bout contre un faux OpenRouter (sans serveur, dans la CI), `doctor` (sans endpoint,
+  voix seule, serveur arrêté, sans modèle, modèle absent, cache mesuré, endpoint
+  supplémentaire), cohérence, routage, plist, arguments du serveur ; scénario
+  `rpc-inference-locale` ; suite `live-local` (tour, outil exécuté, deux tours avec le
+  premier jeton, repli) verte contre `mlx_lm.server` et Qwen3-1.7B.
+
+**Inférence locale : un modèle local homonyme d'un modèle d'OpenRouter en prenait
+l'entrée, et le prix (#259).** Le catalogue rangeait tous les modèles sous leur
+identifiant nu : le catalogue d'un serveur local qui sert `qwen/qwen3-8b` (LM Studio)
+écrasait l'entrée d'OpenRouter, et le coût d'un appel se lisait sous le nom rendu par le
+serveur, au prix d'OpenRouter quand il coïncidait.
+
+- Les modèles d'un endpoint local sont rangés à part dans le catalogue. Un identifiant
+  `local:` ou `openai_compat:` ne lit que ceux-là ; `openrouter:` ou `codex:` jamais ; un
+  identifiant nu d'abord OpenRouter, puis le modèle local. Le rafraîchissement
+  d'OpenRouter garde les modèles locaux. Le coût d'un appel se lit chez le fournisseur
+  qui l'a servi.
+- Les lectures du catalogue (fenêtre de compaction, prix du résumeur, outils d'un alias,
+  `self_status`, rêve, vault) passent l'identifiant complet au lieu de le dénuder : un
+  alias local y lit sa propre fenêtre.
+- Replis : la liste `models` confiée à OpenRouter ne contient que des modèles
+  d'OpenRouter, dès le plan de relance (le corps les filtrait déjà) ; un repli local
+  derrière un modèle d'OpenRouter est joué par la boucle après l'échec.
+- Documentation : le tableau mémoire et taille de modèle est dit estimation, pas mesure.
+- Tests : collision au catalogue dans les deux sens, coût nul d'un appel local homonyme
+  (corps capturé rejoué), plan de relance, repli de bout en bout d'OpenRouter en panne
+  vers un faux serveur local.
+
+Closes #259.
+
 ### 1.0.21
 
 **Machine : Pénélope ne voyait que dix-sept binaires connus (#260).** Un outil posé par

@@ -1,6 +1,7 @@
 use super::*;
 
 mod compat;
+mod mlx;
 mod server;
 
 /// #142 : un modèle `codex:` n'est servi que par le fournisseur Codex. Sans compte
@@ -16,6 +17,7 @@ fn a_codex_model_never_falls_back_to_another_provider() {
         compat: Some(Arc::new(
             OpenAiCompatProvider::new("http://127.0.0.1:1", "", catalog.clone()).unwrap(),
         )),
+        extra: Vec::new(),
         codex: None,
         catalog,
     };

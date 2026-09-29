@@ -14,7 +14,6 @@ use penelope_app::ports::ProviderSource;
 use penelope_app::services::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_kernel::risk::RiskClass;
-use penelope_llm::catalog::strip_provider;
 use penelope_llm::provider::{CancelToken, collect_stream};
 use penelope_llm::types::{ChatMessage, ChatRequest};
 use penelope_memory::{IndexedEntry, Level};
@@ -131,7 +130,7 @@ async fn cut(
         .provider_for(&model)
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
-    let info = s.catalog.get(strip_provider(&model));
+    let info = s.catalog.get(&model);
     tokio::time::timeout(TIMEOUT, async {
         let mut last_quality = ProposalQuality::Empty;
         for attempt in 0..2 {

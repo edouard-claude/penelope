@@ -464,6 +464,9 @@ impl LlmError {
             .map(String::from);
 
         let message = match err {
+            // `{"error": "…"}` : mlx_lm.server rend l'erreur en chaîne nue ; lue comme un
+            // objet, elle devenait « erreur du provider » (#259).
+            Some(Value::String(s)) => s.chars().take(400).collect(),
             Some(e) => {
                 let mut m = e
                     .get("message")

@@ -120,6 +120,12 @@ pub fn all_suites() -> Vec<Suite> {
             "Streaming, outils, raisonnement, image",
             "§10",
         ),
+        s(
+            "live-local",
+            true,
+            "Tour, outil, préfixe et repli contre un serveur MLX local",
+            "§10, #259",
+        ),
         s("live-telegram", true, "Bot de test réel", "§14"),
         s(
             "ab-hermes",
@@ -216,6 +222,21 @@ pub fn cargo_filter(suite: &str) -> Option<(&'static str, Vec<String>)> {
         "mem-longitudinal" => live("mem_longitudinal"),
         "mem-bench-live" => live("mem_bench"),
         "live-openrouter" => live("live_openrouter"),
+        // Le test du repli ne demande pas de serveur : il tourne aussi avec la suite.
+        "live-local" => {
+            let (sub, args) = live("live_local");
+            let args = args
+                .into_iter()
+                .map(|a| {
+                    if a == "--ignored" {
+                        "--include-ignored".into()
+                    } else {
+                        a
+                    }
+                })
+                .collect();
+            (sub, args)
+        }
         "live-telegram" => live("live_telegram"),
         "ab-hermes" => live("ab_hermes"),
         _ => return None,
@@ -246,6 +267,7 @@ pub fn required_env(suite: &str) -> &'static [&'static str] {
         "ctx-recall" | "mem-longitudinal" | "mem-bench-live" | "live-openrouter" => {
             &["OPENROUTER_API_KEY"]
         }
+        "live-local" => &["PENELOPE_LIVE_LOCAL_MODEL"],
         "live-telegram" => &[
             "PENELOPE_LIVE_TELEGRAM_TOKEN",
             "PENELOPE_LIVE_TELEGRAM_CHAT",
@@ -277,6 +299,7 @@ mod tests {
             "ctx-recall",
             "mem-longitudinal",
             "live-openrouter",
+            "live-local",
             "live-telegram",
             "ab-hermes",
             "mem-bench",
@@ -284,7 +307,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "suite manquante : {expected}");
         }
-        assert_eq!(all_suites().len(), 18);
+        assert_eq!(all_suites().len(), 19);
     }
 
     #[test]
@@ -308,9 +331,11 @@ mod tests {
             let cmd = cargo_filter(s.name);
             assert!(cmd.is_some(), "suite sans commande : {}", s.name);
             let (_, args) = cmd.unwrap();
+            let ignored = args
+                .iter()
+                .any(|a| a == "--ignored" || a == "--include-ignored");
             assert_eq!(
-                args.contains(&"--ignored".to_string()),
-                s.network,
+                ignored, s.network,
                 "{} : seules les suites réseau lancent les tests ignorés",
                 s.name
             );

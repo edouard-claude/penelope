@@ -54,6 +54,53 @@ impl OpenAiCompatProvider {
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
+
+    /// Ce que le serveur sert, lu par `GET /models` sans toucher au catalogue : le
+    /// contrôle `doctor` d'un serveur local (#259). Le délai borne un serveur qui accepte
+    /// la connexion sans répondre.
+    pub async fn served_models(&self, timeout: std::time::Duration) -> Result<Vec<ServedModel>> {
+        let mut r = self
+            .http
+            .get(format!("{}/models", self.base_url))
+            .timeout(timeout);
+        if !self.api_key.is_empty() {
+            r = r.bearer_auth(&self.api_key);
+        }
+        let resp = r.send().await.map_err(map_reqwest_error)?;
+        let status = resp.status().as_u16();
+        let body = resp.text().await.map_err(map_reqwest_error)?;
+        if status >= 400 {
+            return Err(LlmError::from_status(status, &body));
+        }
+        let v: Value = serde_json::from_str(&body).map_err(|_| {
+            LlmError::new(
+                LlmErrorKind::Other,
+                format!(
+                    "`GET /models` illisible : {}",
+                    body.chars().take(200).collect::<String>()
+                ),
+            )
+        })?;
+        Ok(v.get("data")
+            .and_then(|d| d.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|m| {
+                Some(ServedModel {
+                    id: m.get("id")?.as_str()?.to_string(),
+                    window: announced_window(m),
+                })
+            })
+            .collect())
+    }
+}
+
+/// Un modèle servi par un endpoint local, et la fenêtre qu'il annonce (#259).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedModel {
+    pub id: String,
+    /// `None` : le serveur ne la dit pas (mlx_lm.server), la fenêtre configurée vaut.
+    pub window: Option<u64>,
 }
 
 /// `POST {base}/embeddings` au format OpenAI, commun à OpenRouter et aux serveurs
@@ -162,12 +209,15 @@ impl Provider for OpenAiCompatProvider {
             r = r.bearer_auth(&self.api_key);
         }
         let resp = r.send().await.map_err(map_reqwest_error)?;
+        // Un serveur local laisse en texte les appels des modèles dont il ne connaît pas
+        // le format (Llama 3.2 sous mlx_lm.server) : ils sont relus (#259).
+        let tools = req.tools.iter().map(|t| t.name.clone()).collect();
         stream_from_response(
             resp,
             cancel,
             self.label.clone(),
             self.stream_idle,
-            Box::new(StreamAccumulator::new()),
+            Box::new(StreamAccumulator::new().with_text_tool_calls(tools)),
         )
         .await
     }

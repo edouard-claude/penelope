@@ -12,7 +12,6 @@ pub use crate::concepts::index_source;
 use penelope_hitl::{ApprovalKind, ApprovalState};
 use penelope_kernel::event::EventDraft;
 use penelope_kernel::risk::RiskClass;
-use penelope_llm::catalog::strip_provider;
 use penelope_llm::provider::{CancelToken, collect_stream};
 use penelope_llm::types::{ChatMessage, ChatRequest};
 use penelope_memory::ingest as doc;
@@ -397,7 +396,7 @@ async fn summarise(
         .ok_or_else(|| format!("aucun modèle pour l'alias `{alias}` du rôle `memory_review`"))?
         .to_string();
     let provider = d.provider_for(&model).await?;
-    let info = s.catalog.get(strip_provider(&model));
+    let info = s.catalog.get(&model);
     let effort = info.as_ref().and_then(|i| i.lightest_effort());
     let structured = info
         .as_ref()

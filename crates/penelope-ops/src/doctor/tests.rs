@@ -161,6 +161,7 @@ use penelope_kernel::clock::TestClock;
 use std::sync::Arc;
 
 mod coherence;
+mod local;
 mod machine;
 mod memory;
 mod run;

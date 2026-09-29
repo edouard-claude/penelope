@@ -69,7 +69,7 @@ async fn request(d: &Context, job: &SummaryJob) -> Option<ChatRequest> {
         return None;
     }
     let bare = strip_provider(&model);
-    let params = CompactionParams::from_config(&cfg, s.catalog.window_of(bare), &model);
+    let params = CompactionParams::from_config(&cfg, s.catalog.window_of(&model), &model);
     let entries = s.context.projected_entries(sid).await.ok()?;
     let ctx = s.context.build_from_entries(
         &entries,
@@ -145,10 +145,7 @@ fn cheaper(d: &Context, job: &SummaryJob, model: &str, prefix_tokens: u64, consi
         .alias_model(&cfg.role_alias("compaction"))
         .unwrap_or_default()
         .to_string();
-    let (Some(conv), Some(summ)) = (
-        s.catalog.get(strip_provider(model)),
-        s.catalog.get(strip_provider(&summarizer)),
-    ) else {
+    let (Some(conv), Some(summ)) = (s.catalog.get(model), s.catalog.get(&summarizer)) else {
         return false;
     };
     let estimator = &s.context.estimator;

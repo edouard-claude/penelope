@@ -45,23 +45,51 @@ pub fn launchd_plist(
     logs: &std::path::Path,
     path: &str,
 ) -> String {
-    let mut args = format!(
-        "        <string>{}</string>\n        <string>daemon</string>\n",
-        xml_escape(&exe.to_string_lossy())
-    );
+    let mut args = vec![exe.to_string_lossy().to_string(), "daemon".to_string()];
     if let Some(h) = home {
-        args.push_str(&format!(
-            "        <string>--home</string>\n        <string>{}</string>\n",
-            xml_escape(&h.to_string_lossy())
-        ));
+        args.push("--home".into());
+        args.push(h.to_string_lossy().to_string());
     }
+    agent_plist(
+        SERVICE_LABEL,
+        &args,
+        &logs.join("daemon.out.log"),
+        &logs.join("daemon.err.log"),
+        &[("PENELOPE_SERVICE", "1"), ("PATH", path)],
+    )
+}
+
+/// `plist` d'un LaunchAgent relancé par launchd (`KeepAlive`), au démarrage de session
+/// (`RunAtLoad`), sans bridage (`ProcessType=Interactive`) : le daemon, ou un serveur
+/// d'inférence local (#259).
+pub fn agent_plist(
+    label: &str,
+    args: &[String],
+    out: &std::path::Path,
+    err: &std::path::Path,
+    env: &[(&str, &str)],
+) -> String {
+    let args: String = args
+        .iter()
+        .map(|a| format!("        <string>{}</string>\n", xml_escape(a)))
+        .collect();
+    let env: String = env
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "        <key>{}</key>\n        <string>{}</string>\n",
+                xml_escape(k),
+                xml_escape(v)
+            )
+        })
+        .collect();
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>{SERVICE_LABEL}</string>
+    <string>{label}</string>
     <key>ProgramArguments</key>
     <array>
 {args}    </array>
@@ -77,27 +105,34 @@ pub fn launchd_plist(
     <string>{err}</string>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>PENELOPE_SERVICE</key>
-        <string>1</string>
-        <key>PATH</key>
-        <string>{path}</string>
-    </dict>
+{env}    </dict>
 </dict>
 </plist>
 "#,
-        out = xml_escape(&logs.join("daemon.out.log").to_string_lossy()),
-        err = xml_escape(&logs.join("daemon.err.log").to_string_lossy()),
-        path = xml_escape(path),
+        label = xml_escape(label),
+        out = xml_escape(&out.to_string_lossy()),
+        err = xml_escape(&err.to_string_lossy()),
     )
+}
+
+/// Label du LaunchAgent qui fait tourner le serveur d'inférence d'un endpoint (#259) :
+/// `com.penelope.inference.local` pour `providers.local`.
+pub fn inference_label(endpoint: &str) -> String {
+    format!("com.penelope.inference.{endpoint}")
+}
+
+/// Fichier d'un LaunchAgent de l'utilisateur, d'après son label.
+pub fn launch_agent_path(label: &str) -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|h| {
+        PathBuf::from(h)
+            .join("Library/LaunchAgents")
+            .join(format!("{label}.plist"))
+    })
 }
 
 /// Fichier du LaunchAgent de l'utilisateur (`~/Library/LaunchAgents/com.penelope.daemon.plist`).
 pub fn launchd_plist_path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|h| {
-        PathBuf::from(h)
-            .join("Library/LaunchAgents")
-            .join(format!("{SERVICE_LABEL}.plist"))
-    })
+    launch_agent_path(SERVICE_LABEL)
 }
 
 /// Programme lancé par un `plist` : première chaîne de `ProgramArguments`.
@@ -228,6 +263,38 @@ mod tests {
             "/usr/bin",
         );
         assert!(p.contains("/opt/a&amp;b/penelope"));
+    }
+
+    /// #259 : le serveur d'inférence a son label, ses arguments et ses journaux, et
+    /// launchd le relance comme le daemon.
+    #[test]
+    fn an_inference_agent_is_kept_alive_under_its_own_label() {
+        let label = inference_label("local");
+        let args = [
+            "/opt/mlx/bin/mlx_lm.server",
+            "--model",
+            "mlx-community/Qwen3-8B-4bit",
+        ]
+        .map(String::from);
+        let p = agent_plist(
+            &label,
+            &args,
+            Path::new("/tmp/logs/inference-local.out.log"),
+            Path::new("/tmp/logs/inference-local.err.log"),
+            &[("PATH", "/usr/bin")],
+        );
+        assert!(p.contains("<string>com.penelope.inference.local</string>"));
+        assert!(p.contains("<key>KeepAlive</key>\n    <true/>"));
+        assert_eq!(
+            launchd_program(&p).as_deref(),
+            Some("/opt/mlx/bin/mlx_lm.server")
+        );
+        assert!(p.contains("<string>mlx-community/Qwen3-8B-4bit</string>"));
+        assert!(p.contains("inference-local.err.log"));
+        assert!(!p.contains("PENELOPE_SERVICE"), "ce n'est pas le daemon");
+        assert!(launch_agent_path(&label).is_some_and(|f| {
+            f.ends_with("Library/LaunchAgents/com.penelope.inference.local.plist")
+        }));
     }
 
     #[test]

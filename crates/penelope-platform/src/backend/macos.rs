@@ -406,19 +406,44 @@ pub fn sandbox_wrapper(profile: &Profile, program: &Path, args: &[String]) -> Re
 // ------------------------------------------------------------------ service
 
 pub struct LaunchdService {
+    label: String,
     plist: PathBuf,
     logs: PathBuf,
+    /// Programme et arguments d'un LaunchAgent autre que le daemon : un serveur
+    /// d'inférence local (#259). `None` : le daemon.
+    agent: Option<Vec<String>>,
 }
 
 impl LaunchdService {
     pub fn new(dirs: &dyn Directories) -> Result<Self> {
+        Self::with_label(dirs, SERVICE_LABEL, None)
+    }
+
+    /// LaunchAgent d'un autre programme que le daemon, sous son propre label (#259).
+    pub fn agent(dirs: &dyn Directories, label: &str, args: Vec<String>) -> Result<Self> {
+        Self::with_label(dirs, label, Some(args))
+    }
+
+    fn with_label(dirs: &dyn Directories, label: &str, agent: Option<Vec<String>>) -> Result<Self> {
         let home = home_dir().ok_or_else(|| PlatformError::NotFound("HOME non défini".into()))?;
         Ok(LaunchdService {
+            label: label.to_string(),
             plist: home
                 .join("Library/LaunchAgents")
-                .join(format!("{SERVICE_LABEL}.plist")),
+                .join(format!("{label}.plist")),
             logs: dirs.logs(),
+            agent,
         })
+    }
+
+    /// Préfixe des journaux : `daemon`, ou le label sans `com.penelope.`.
+    fn log_stem(&self) -> &str {
+        if self.agent.is_none() {
+            return "daemon";
+        }
+        self.label
+            .strip_prefix("com.penelope.")
+            .unwrap_or(&self.label)
     }
 
     fn uid() -> String {
@@ -452,8 +477,8 @@ impl ServiceManager for LaunchdService {
         {
             use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
             std::fs::set_permissions(&self.logs, std::fs::Permissions::from_mode(0o700))?;
-            for name in ["daemon.out.log", "daemon.err.log"] {
-                let path = self.logs.join(name);
+            for kind in ["out", "err"] {
+                let path = self.logs.join(format!("{}.{kind}.log", self.log_stem()));
                 std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
@@ -466,10 +491,20 @@ impl ServiceManager for LaunchdService {
             std::fs::create_dir_all(p)?;
         }
         let path = crate::process::search_path();
-        std::fs::write(
-            &self.plist,
-            launchd_plist(exe, home, &self.logs, &path.to_string_lossy()),
-        )?;
+        let content = match &self.agent {
+            Some(args) => {
+                let log = |kind: &str| self.logs.join(format!("{}.{kind}.log", self.log_stem()));
+                crate::service::agent_plist(
+                    &self.label,
+                    args,
+                    &log("out"),
+                    &log("err"),
+                    &[("PATH", &path.to_string_lossy())],
+                )
+            }
+            None => launchd_plist(exe, home, &self.logs, &path.to_string_lossy()),
+        };
+        std::fs::write(&self.plist, content)?;
         // `bootstrap` est l'API moderne ; `load -w` reste le repli sur les anciens macOS.
         let out = Self::launchctl(&["bootstrap", &Self::domain(), &self.plist.to_string_lossy()]);
         if out.map(|o| !o.status.success()).unwrap_or(true) {
@@ -479,7 +514,7 @@ impl ServiceManager for LaunchdService {
     }
 
     fn uninstall(&self) -> Result<()> {
-        let target = format!("{}/{SERVICE_LABEL}", Self::domain());
+        let target = format!("{}/{}", Self::domain(), self.label);
         let _ = Self::launchctl(&["bootout", &target]);
         let _ = Self::launchctl(&["unload", "-w", &self.plist.to_string_lossy()]);
         if self.plist.exists() {
@@ -489,16 +524,21 @@ impl ServiceManager for LaunchdService {
     }
 
     fn start(&self) -> Result<()> {
-        let target = format!("{}/{SERVICE_LABEL}", Self::domain());
+        let target = format!("{}/{}", Self::domain(), self.label);
         // Après un `stop`, le service est déchargé : il faut le recharger avant de le lancer.
         let loaded = Self::launchctl(&["print", &target])
             .map(|o| o.status.success())
             .unwrap_or(false);
         if !loaded {
             if !self.plist.exists() {
-                return Err(PlatformError::Service(
-                    "service non installé : `penelope install`".into(),
-                ));
+                return Err(PlatformError::Service(format!(
+                    "service non installé : `{}`",
+                    if self.agent.is_some() {
+                        "penelope local install"
+                    } else {
+                        "penelope install"
+                    }
+                )));
             }
             let out =
                 Self::launchctl(&["bootstrap", &Self::domain(), &self.plist.to_string_lossy()])
@@ -525,7 +565,7 @@ impl ServiceManager for LaunchdService {
     fn stop(&self) -> Result<()> {
         // `kill SIGTERM` ne suffit pas : avec `KeepAlive`, launchd relance aussitôt. On
         // décharge le service ; le plist reste en place, `start` le recharge.
-        let target = format!("{}/{SERVICE_LABEL}", Self::domain());
+        let target = format!("{}/{}", Self::domain(), self.label);
         let out = Self::launchctl(&["bootout", &target])
             .map_err(|e| PlatformError::Service(e.to_string()))?;
         if !out.status.success() {
@@ -543,7 +583,7 @@ impl ServiceManager for LaunchdService {
 
     fn status(&self) -> Result<ServiceStatus> {
         let installed = self.plist.exists();
-        let target = format!("{}/{SERVICE_LABEL}", Self::domain());
+        let target = format!("{}/{}", Self::domain(), self.label);
         let out = Self::launchctl(&["print", &target]).ok();
         let text = out
             .as_ref()
@@ -563,7 +603,10 @@ impl ServiceManager for LaunchdService {
             detail: if installed {
                 format!("plist : {}", self.plist.display())
             } else {
-                "non installé (penelope install)".into()
+                match self.agent {
+                    Some(_) => "non installé (penelope local install)".into(),
+                    None => "non installé (penelope install)".into(),
+                }
             },
         })
     }
@@ -571,6 +614,16 @@ impl ServiceManager for LaunchdService {
 
 pub fn service_manager(dirs: &dyn Directories) -> Result<Box<dyn ServiceManager>> {
     Ok(Box::new(LaunchdService::new(dirs)?))
+}
+
+/// LaunchAgent d'un serveur que Pénélope fait tourner (`label`, programme et arguments),
+/// relancé par launchd comme le daemon (#259). `install` ignore ses arguments.
+pub fn agent_manager(
+    dirs: &dyn Directories,
+    label: &str,
+    args: Vec<String>,
+) -> Result<Box<dyn ServiceManager>> {
+    Ok(Box::new(LaunchdService::agent(dirs, label, args)?))
 }
 
 // ------------------------------------------------------------------ alimentation

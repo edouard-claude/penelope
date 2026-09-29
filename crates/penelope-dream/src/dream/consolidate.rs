@@ -169,7 +169,7 @@ pub(super) async fn consolidate(
         ));
     }
 
-    let info = s.catalog.get(strip_provider(&model));
+    let info = s.catalog.get(&model);
     // Le tri d'un candidat gagne à être réfléchi : le raisonnement est gardé et budgété,
     // et seul `memory.consolidation_reasoning = "off"` l'éteint (décision du 21/09,
     // issue #152). `max_tokens` borne la sortie **raisonnement compris** chez OpenRouter :

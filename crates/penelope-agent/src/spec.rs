@@ -25,6 +25,8 @@ pub struct AgentLoop {
     pub max_iterations: u32,
     /// Messages du propriétaire arrivés pendant le tour (§3.4) ; `None` : aucun.
     pub(crate) inbox: Option<Arc<dyn Inbox>>,
+    /// Fournisseurs des modèles de repli (#259) ; `None` : le repli passe par `provider`.
+    pub(crate) providers: Option<Arc<dyn FallbackProviders>>,
 }
 
 /// Appels au modèle par tour : au-delà, le tour s'arrête ; « Continuer » en redonne
@@ -42,7 +44,15 @@ impl AgentLoop {
             provider,
             max_iterations: TURN_CALLS,
             inbox: None,
+            providers: None,
         }
+    }
+
+    /// Un repli part chez le fournisseur de son modèle, pas chez celui du modèle principal
+    /// (#259) : un repli `openrouter:` d'un modèle `local:` visait le serveur local arrêté.
+    pub fn with_providers(mut self, providers: Arc<dyn FallbackProviders>) -> Self {
+        self.providers = Some(providers);
+        self
     }
 
     /// Réclame les messages arrivés pendant le tour aux points de contrôle (§3.4).

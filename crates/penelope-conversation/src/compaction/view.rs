@@ -29,8 +29,7 @@ pub async fn context_view(
         .or_else(|| last.as_ref().map(|l| l.2.clone()))
         .unwrap_or_default();
     let cfg = s.config.config();
-    let params =
-        CompactionParams::from_config(&cfg, s.catalog.window_of(strip_provider(&model)), &model);
+    let params = CompactionParams::from_config(&cfg, s.catalog.window_of(&model), &model);
     let sid = session_id.to_string();
     let last_compaction: Option<String> = s
         .store

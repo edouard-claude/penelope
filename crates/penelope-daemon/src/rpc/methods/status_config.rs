@@ -63,7 +63,7 @@ impl Rpc {
                     .aliases
                     .iter()
                     .map(|(alias, model)| {
-                        let info = s.catalog.get(penelope_llm::catalog::strip_provider(model));
+                        let info = s.catalog.get(model);
                         json!({
                             "alias": alias,
                             "model": model,
@@ -152,8 +152,7 @@ impl Rpc {
                 }
                 // Un alias qui sert un rôle à outils doit viser un modèle qui en appelle :
                 // l'émulation n'existe plus (issue #54, décision 0009).
-                let bare_new = penelope_llm::catalog::strip_provider(&model);
-                if s.catalog.get(bare_new).map(|i| i.supports_tools()) == Some(false)
+                if s.catalog.get(&model).map(|i| i.supports_tools()) == Some(false)
                     && penelope_ops::doctor::alias_needs_tools(&s.config.config(), &alias)
                 {
                     anyhow::bail!(
@@ -168,7 +167,7 @@ impl Rpc {
                 // avertissement, pas un refus — le propriétaire peut avoir ses raisons.
                 let reasoning_note = s
                     .catalog
-                    .get(bare_new)
+                    .get(&model)
                     .filter(|_| {
                         penelope_ops::doctor::alias_serves_extraction(&s.config.config(), &alias)
                     })
@@ -189,8 +188,7 @@ impl Rpc {
                 })?;
                 self.daemon.invalidate_providers().await;
                 // Un catalogue chargé permet de prévenir d'une faute de frappe.
-                let bare = penelope_llm::catalog::strip_provider(&model);
-                let known = s.catalog.is_empty() || s.catalog.get(bare).is_some();
+                let known = s.catalog.is_empty() || s.catalog.get(&model).is_some();
                 let mut out = json!({"generation": g, "alias": alias, "model": model,
                                      "known": known});
                 // La clé n'apparaît que s'il y a quelque chose à dire : le rendu générique

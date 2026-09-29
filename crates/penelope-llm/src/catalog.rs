@@ -156,8 +156,17 @@ impl Catalog {
         self.inner.load_full()
     }
 
+    /// Remplace le catalogue d'OpenRouter ; les modèles d'un endpoint local, rangés à
+    /// part, restent (#259).
     pub fn replace(&self, models: Vec<ModelInfo>, fetched_at_ms: i64) {
-        let map = models.into_iter().map(|m| (m.id.clone(), m)).collect();
+        let mut map: BTreeMap<String, ModelInfo> = self
+            .snapshot()
+            .models
+            .iter()
+            .filter(|(k, _)| k.starts_with(LOCAL_KEY))
+            .map(|(k, m)| (k.clone(), m.clone()))
+            .collect();
+        map.extend(models.into_iter().map(|m| (key_of(&m), m)));
         self.inner.store(Arc::new(CatalogData {
             models: map,
             fetched_at_ms,
@@ -170,7 +179,7 @@ impl Catalog {
         let cur = self.snapshot();
         let mut map = cur.models.clone();
         for m in models {
-            map.insert(m.id.clone(), m);
+            map.insert(key_of(&m), m);
         }
         self.inner.store(Arc::new(CatalogData {
             models: map,
@@ -178,9 +187,35 @@ impl Catalog {
         }));
     }
 
+    /// Entrée d'un modèle `fournisseur:modèle`. Un modèle `local:` ou `openai_compat:` ne
+    /// se lit que dans les entrées de l'endpoint local : un identifiant qui coïncide avec
+    /// un modèle d'OpenRouter n'en prend ni le prix ni la fenêtre (#259). Un identifiant
+    /// nu est d'abord un modèle d'OpenRouter, puis, à défaut, un modèle local ; un
+    /// identifiant `openrouter:` ou `codex:` n'est jamais local.
     pub fn get(&self, id: &str) -> Option<ModelInfo> {
         let bare = strip_provider(id);
-        self.snapshot().models.get(bare).cloned()
+        let snap = self.snapshot();
+        let local = || snap.models.get(&format!("{LOCAL_KEY}{bare}")).cloned();
+        if is_local_provider(provider_of(id)) {
+            return local();
+        }
+        let found = snap.models.get(bare).cloned();
+        // Seul un identifiant nu peut être local ; `openrouter:` ou `codex:` non.
+        if id == bare {
+            found.or_else(local)
+        } else {
+            found
+        }
+    }
+
+    /// Entrée du modèle qu'un fournisseur dit avoir servi (`model` de la réponse, sans
+    /// préfixe) : c'est elle qui donne le prix d'un appel (#259).
+    pub fn get_served(&self, provider: &str, served: &str) -> Option<ModelInfo> {
+        if is_local_provider(provider) {
+            self.get(&format!("local:{}", strip_provider(served)))
+        } else {
+            self.get(served)
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -219,6 +254,24 @@ impl Catalog {
     /// Fenêtre de contexte, avec repli prudent si le modèle est inconnu.
     pub fn window_of(&self, id: &str) -> u64 {
         self.get(id).map(|m| m.context_window).unwrap_or(128_000)
+    }
+}
+
+/// Vrai pour le fournisseur d'un endpoint OpenAI-compatible (`ModelInfo::provider`,
+/// `Provider::name`).
+fn is_local_provider(p: &str) -> bool {
+    matches!(p, "openai_compat" | "local")
+}
+/// Préfixe de clé des modèles d'un endpoint local : ils ne partagent pas l'espace des
+/// identifiants d'OpenRouter (#259).
+const LOCAL_KEY: &str = "local:";
+
+/// Clé d'une entrée : l'identifiant, préfixé pour un modèle d'endpoint local.
+fn key_of(m: &ModelInfo) -> String {
+    if is_local_provider(&m.provider) {
+        format!("{LOCAL_KEY}{}", m.id)
+    } else {
+        m.id.clone()
     }
 }
 
@@ -382,6 +435,58 @@ mod tests {
         assert!(!m.produces_images());
         assert_eq!(m.max_output, Some(32_000));
         assert!(!models[1].supports_tools());
+    }
+
+    /// #259 : un modèle local dont l'identifiant coïncide avec un modèle d'OpenRouter
+    /// n'écrase pas son entrée, ni dans un sens ni dans l'autre ; chacun lit la sienne.
+    #[test]
+    fn a_local_model_never_shadows_an_openrouter_entry() {
+        let c = Catalog::new();
+        let mut routed = ModelInfo::minimal("qwen/qwen3-8b", "openrouter", 40_960);
+        routed.price_prompt = 1e-6;
+        c.replace(vec![routed], 1);
+        c.upsert(vec![ModelInfo::minimal(
+            "qwen/qwen3-8b",
+            "openai_compat",
+            32_768,
+        )]);
+        assert_eq!(c.len(), 2);
+        let or = c.get("openrouter:qwen/qwen3-8b").unwrap();
+        assert_eq!(
+            (or.provider.as_str(), or.price_prompt),
+            ("openrouter", 1e-6)
+        );
+        assert_eq!(c.get("qwen/qwen3-8b").unwrap().provider, "openrouter");
+        let local = c.get("local:qwen/qwen3-8b").unwrap();
+        assert_eq!((local.price_prompt, local.context_window), (0.0, 32_768));
+        assert_eq!(
+            c.get("openai_compat:qwen/qwen3-8b").unwrap().provider,
+            "openai_compat"
+        );
+        assert_eq!(c.window_of("local:qwen/qwen3-8b"), 32_768);
+        assert_eq!(c.window_of("openrouter:qwen/qwen3-8b"), 40_960);
+        assert_eq!(
+            c.get_served("openai_compat", "qwen/qwen3-8b")
+                .unwrap()
+                .price_prompt,
+            0.0
+        );
+        assert_eq!(
+            c.get_served("openrouter", "qwen/qwen3-8b")
+                .unwrap()
+                .price_prompt,
+            1e-6
+        );
+
+        // Le rafraîchissement d'OpenRouter garde les modèles locaux.
+        c.replace(Vec::new(), 2);
+        assert!(c.get("local:qwen/qwen3-8b").is_some());
+        assert!(c.get("openrouter:qwen/qwen3-8b").is_none());
+        // Un identifiant nu sans modèle d'OpenRouter trouve le modèle local.
+        assert_eq!(c.get("qwen/qwen3-8b").unwrap().provider, "openai_compat");
+        // Un modèle local absent ne prend pas l'entrée d'OpenRouter.
+        c.replace(vec![ModelInfo::minimal("a/b", "openrouter", 1)], 3);
+        assert!(c.get("local:a/b").is_none());
     }
 
     #[test]

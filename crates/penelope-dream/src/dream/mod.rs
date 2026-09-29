@@ -12,7 +12,6 @@ use crate::ports::Slot;
 use crate::{Context, DigestInputs, DigestSource};
 use penelope_app::services::Services;
 use penelope_kernel::event::EventDraft;
-use penelope_llm::catalog::strip_provider;
 use penelope_llm::provider::{CancelToken, collect_stream};
 use penelope_llm::types::{ChatMessage, ChatRequest, LlmError, LlmErrorKind};
 use penelope_memory::candidates::{Candidate, CandidateGroup, group};

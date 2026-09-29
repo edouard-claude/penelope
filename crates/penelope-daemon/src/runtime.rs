@@ -81,6 +81,17 @@ impl Providers {
     }
 }
 
+/// Le fournisseur de chaque repli d'un tour (#259).
+#[async_trait::async_trait]
+impl penelope_agent::FallbackProviders for Providers {
+    async fn fallback_provider(
+        &self,
+        model_id: &str,
+    ) -> Result<Arc<dyn penelope_llm::Provider>, String> {
+        penelope_app::ports::ProviderSource::provider_for(self, model_id).await
+    }
+}
+
 #[async_trait::async_trait]
 impl penelope_app::ports::ProviderSource for Providers {
     /// Provider d'un modèle. La construction est retentée tant qu'elle échoue : une clé

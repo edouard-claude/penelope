@@ -8,6 +8,7 @@ use penelope_kernel::api::DoctorCheck;
 
 mod coherence;
 mod judge;
+mod local;
 mod machine;
 mod memory;
 mod models;
@@ -15,6 +16,7 @@ mod secrets;
 
 pub use coherence::*;
 pub use judge::*;
+pub use local::*;
 pub use machine::*;
 pub use memory::*;
 pub use models::*;
@@ -169,6 +171,8 @@ pub async fn run_with(s: &Services, daemon: Vec<DoctorCheck>) -> Vec<DoctorCheck
 
     // Un alias de conversation vers un modèle sans tool calling ne marchera pas (#54).
     checks.push(tool_calling_check(s).await);
+    // Le serveur local d'un alias de texte : joignable, modèles servis, cache (#259).
+    checks.extend(local_inference_checks(s).await);
 
     // Bac à sable : ce qu'une commande peut lire malgré tout (#68), et où elle peut
     // l'envoyer (#106).

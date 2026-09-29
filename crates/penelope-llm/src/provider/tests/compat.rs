@@ -6,7 +6,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Faux serveur à plusieurs connexions : chaque requête reçoit la réponse de la première
 /// route dont le chemin est préfixe ; les requêtes reçues sont rendues, dans l'ordre.
-async fn routed_server(
+pub(super) async fn routed_server(
     routes: Vec<(&'static str, String)>,
 ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -60,14 +60,14 @@ async fn routed_server(
     (format!("http://{addr}/v1"), seen)
 }
 
-fn json_response(status: &str, body: &str) -> String {
+pub(super) fn json_response(status: &str, body: &str) -> String {
     format!(
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
 }
 
-fn sse_response(body: &str) -> String {
+pub(super) fn sse_response(body: &str) -> String {
     format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}")
 }
 

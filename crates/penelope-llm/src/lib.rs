@@ -66,20 +66,16 @@ pub fn build_providers(
     };
 
     let compat = if cfg.providers.local.enabled {
-        let key = secrets
-            .expand(&cfg.providers.local.api_key)
-            .unwrap_or_default();
-        if !key.is_empty() {
-            penelope_observe::register_secret(&key);
-        }
-        Some(std::sync::Arc::new(
-            OpenAiCompatProvider::new(&cfg.providers.local.base_url, key, catalog.clone())?
-                .with_stream_idle(idle_of(&cfg.providers.local.stream_idle_timeout))
-                .with_window(cfg.providers.local.context_window),
-        ))
+        Some(local_endpoint(&cfg.providers.local, secrets, &catalog)?)
     } else {
         None
     };
+    // Les endpoints supplémentaires, chacun pour les modèles qu'il liste : le serveur de
+    // texte (mlx_lm.server) à côté de celui de la voix (mlx-audio) (#259).
+    let mut extra = Vec::new();
+    for e in cfg.providers.extra.values().filter(|e| e.enabled) {
+        extra.push((e.models.clone(), local_endpoint(e, secrets, &catalog)?));
+    }
 
     // Codex : le daemon détient la connexion au compte ChatGPT (jetons, rotation,
     // verrou) ; ici, on ne branche que ce qu'il fournit (issue #142).
@@ -111,9 +107,27 @@ pub fn build_providers(
     Ok(ProviderSet {
         openrouter,
         compat,
+        extra,
         codex,
         catalog,
     })
+}
+
+/// Un endpoint OpenAI-compatible de la configuration, clé résolue.
+fn local_endpoint(
+    e: &penelope_kernel::config::LocalProvider,
+    secrets: &dyn penelope_platform::SecretStore,
+    catalog: &Catalog,
+) -> Result<std::sync::Arc<OpenAiCompatProvider>> {
+    let key = secrets.expand(&e.api_key).unwrap_or_default();
+    if !key.is_empty() {
+        penelope_observe::register_secret(&key);
+    }
+    Ok(std::sync::Arc::new(
+        OpenAiCompatProvider::new(&e.base_url, key, catalog.clone())?
+            .with_stream_idle(idle_of(&e.stream_idle_timeout))
+            .with_window(e.context_window),
+    ))
 }
 
 /// Ce que le daemon apporte au fournisseur Codex : la source de jetons (il tient le
@@ -228,6 +242,39 @@ mod tests {
             set.get("openai_compat:whisper").unwrap().name(),
             "openai_compat"
         );
+    }
+
+    /// #259 : un modèle listé par un endpoint de `providers.extra` actif part chez lui,
+    /// les autres modèles locaux chez `providers.local` ; un endpoint éteint n'existe pas.
+    #[test]
+    fn an_extra_endpoint_serves_the_models_it_lists() {
+        let secrets = MemorySecretStore::with(&[("openrouter_api_key", "sk-or-v1-x123456789")]);
+        let mut cfg = Config::sample(1);
+        cfg.providers.local.enabled = true;
+        let mlx = penelope_kernel::config::LocalProvider {
+            enabled: true,
+            base_url: "http://127.0.0.1:8081/v1".into(),
+            models: vec!["mlx-community/Qwen3-8B-4bit".into()],
+            ..Default::default()
+        };
+        cfg.providers.extra.insert("mlx".into(), mlx.clone());
+        cfg.providers.extra.insert(
+            "eteint".into(),
+            penelope_kernel::config::LocalProvider {
+                enabled: false,
+                ..mlx
+            },
+        );
+        let set = build_providers(&cfg, &secrets, Catalog::new(), None).unwrap();
+        assert_eq!(set.extra.len(), 1);
+        let same = |a: &std::sync::Arc<dyn Provider>, b: &std::sync::Arc<OpenAiCompatProvider>| {
+            std::ptr::addr_eq(std::sync::Arc::as_ptr(a), std::sync::Arc::as_ptr(b))
+        };
+        let text = set.get("local:mlx-community/Qwen3-8B-4bit").unwrap();
+        assert!(same(&text, &set.extra[0].1));
+        assert_eq!(set.extra[0].1.base_url(), "http://127.0.0.1:8081/v1");
+        let voice = set.get("openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit");
+        assert!(same(&voice.unwrap(), set.compat.as_ref().unwrap()));
     }
 
     struct NoTokens;

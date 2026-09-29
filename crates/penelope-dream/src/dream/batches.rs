@@ -306,7 +306,7 @@ pub(super) const LONE_WATCH: usize = 8;
 /// Limite de sortie du modèle de consolidation : celle du catalogue, sinon 16 000.
 pub(super) fn output_cap(d: &Context, cfg: &penelope_kernel::config::Config) -> u32 {
     cfg.alias_model(&cfg.role_alias("compaction"))
-        .and_then(|m| d.services.catalog.get(strip_provider(m)))
+        .and_then(|m| d.services.catalog.get(m))
         .and_then(|i| i.max_output)
         .map(|m| m.min(32_000) as u32)
         .unwrap_or(16_000)

@@ -215,3 +215,29 @@ fn openrouter_carries_the_fallbacks_in_the_request() {
     let plan = RetryPlan::new("m/a", &["m/b".to_string()], true, 3);
     assert_eq!(plan.server_fallbacks(), vec!["m/b".to_string()]);
 }
+
+/// #259 : derrière un modèle d'OpenRouter, un repli local ne part pas dans la liste
+/// `models` d'OpenRouter ; OpenRouter en panne, la boucle le joue après l'échec.
+#[test]
+fn a_local_fallback_is_played_by_the_loop_not_by_openrouter() {
+    let fallbacks = vec![
+        "openrouter:m/b".to_string(),
+        "local:mlx-community/Qwen3-8B-4bit".to_string(),
+    ];
+    let mut plan = RetryPlan::new("openrouter:m/a", &fallbacks, true, 3);
+    assert_eq!(plan.server_fallbacks(), vec!["openrouter:m/b".to_string()]);
+    assert_eq!(plan.on_error(&err(T, None), BeforeStream, false), wait(1));
+    assert_eq!(
+        plan.on_error(&err(T, None), BeforeStream, false),
+        fallback("openrouter:m/b")
+    );
+    assert_eq!(
+        plan.on_error(&err(T, None), BeforeStream, false),
+        wait(1),
+        "un essai sur le repli d'OpenRouter, un autre modèle restant"
+    );
+    assert_eq!(
+        plan.on_error(&err(T, None), BeforeStream, false),
+        fallback("local:mlx-community/Qwen3-8B-4bit")
+    );
+}

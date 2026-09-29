@@ -19,7 +19,6 @@ use penelope_app::ports::ProviderSource;
 use penelope_app::services::Services;
 use penelope_kernel::event::EventDraft;
 use penelope_kernel::session::{Session, SessionKind};
-use penelope_llm::catalog::strip_provider;
 use penelope_llm::provider::{CancelToken, collect_stream};
 use penelope_llm::types::{ChatMessage, ChatRequest, Role};
 use penelope_memory::{Level, Origin, Provenance};
@@ -300,7 +299,7 @@ pub async fn ingest(
         .provider_for(&model)
         .await
         .map_err(anyhow::Error::msg)?;
-    let info = s.catalog.get(strip_provider(&model));
+    let info = s.catalog.get(&model);
     let effort = info.as_ref().and_then(|i| i.lightest_effort());
     let structured = info
         .as_ref()

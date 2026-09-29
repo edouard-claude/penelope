@@ -241,12 +241,14 @@ use openai_compat::embed_openai;
 pub use openai_compat::*;
 pub use openrouter::*;
 pub use stream::*;
-use stream::{local_window, map_reqwest_error};
+use stream::{announced_window, local_window, map_reqwest_error};
 
 /// Fabrique de providers à partir de la configuration.
 pub struct ProviderSet {
     pub openrouter: Option<Arc<OpenRouterProvider>>,
     pub compat: Option<Arc<OpenAiCompatProvider>>,
+    /// Endpoints actifs de `providers.extra`, avec les modèles que chacun sert (#259).
+    pub extra: Vec<(Vec<String>, Arc<OpenAiCompatProvider>)>,
     /// Backend Codex d'un abonnement ChatGPT, quand un compte est connecté (issue #142).
     pub codex: Option<Arc<crate::codex::CodexProvider>>,
     pub catalog: Catalog,
@@ -265,11 +267,17 @@ impl ProviderSet {
                 .clone()
                 .map(|p| p as Arc<dyn Provider>)
                 .or_else(|| self.compat.clone().map(|p| p as Arc<dyn Provider>)),
-            _ => self
-                .compat
-                .clone()
-                .map(|p| p as Arc<dyn Provider>)
-                .or_else(|| self.openrouter.clone().map(|p| p as Arc<dyn Provider>)),
+            // Même règle que `Providers::local_endpoint` : l'endpoint supplémentaire qui
+            // liste le modèle, sinon `providers.local` (#259).
+            _ => {
+                let bare = crate::catalog::strip_provider(model_id);
+                self.extra
+                    .iter()
+                    .find(|(models, _)| models.iter().any(|m| m == bare))
+                    .map(|(_, p)| p.clone() as Arc<dyn Provider>)
+                    .or_else(|| self.compat.clone().map(|p| p as Arc<dyn Provider>))
+                    .or_else(|| self.openrouter.clone().map(|p| p as Arc<dyn Provider>))
+            }
         }
     }
 }
