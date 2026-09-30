@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.26
+### 1.0.27
 
 **Trace des outils : deux modes résumés, `resume` sans modèle et `narre` par un petit
 modèle local (#273).** Constat du 30/09 : pendant un tour un peu long, la bulle `compact`
@@ -56,6 +56,8 @@ des outils appelés.
   distant sur le rôle `trace` est facturé à chaque modification, `doctor` le dit.
 
 Closes #273.
+
+### 1.0.26
 
 **Détecteur d'injection : `hidden_unicode` prenait l'emoji 🏃‍♀️ pour des caractères cachés
 (#271).** Chaque message WhatsApp lu par MCP dont le nom de conversation contient un emoji
