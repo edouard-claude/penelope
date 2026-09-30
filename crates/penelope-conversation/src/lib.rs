@@ -241,6 +241,16 @@ impl Conversation for SessionConversation {
         Ok(entries.iter().map(|e| e.message.clone()).collect())
     }
 
+    /// Le `seq` du message dans l'historique : attribué une fois, jamais repris.
+    async fn pending_anchor(&self) -> anyhow::Result<Option<String>> {
+        let (s, sid) = (&self.services, &self.session_id);
+        let entries = s.context.tail(sid, TAIL_ENTRIES).await?;
+        Ok(entries
+            .iter()
+            .rposition(|e| penelope_app::conversation::carries_tool_calls(&e.message))
+            .map(|i| entries[i].seq.to_string()))
+    }
+
     fn prompt_prefix(&self) -> Option<penelope_app::conversation::PromptPrefix> {
         Some(penelope_app::conversation::PromptPrefix::of(&self.tiers))
     }

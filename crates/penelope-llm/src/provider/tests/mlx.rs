@@ -132,6 +132,54 @@ async fn a_llama_call_rendered_as_text_becomes_a_tool_call() {
     );
 }
 
+/// #266 : un appel relu depuis le texte n'a pas d'identifiant du serveur. Le sien est
+/// dérivé de l'identifiant de la réponse et de son indice, jamais une constante : deux
+/// réponses qui rendent le même appel donnent deux identifiants, sans quoi les deux appels
+/// partageaient leur clé d'idempotence et le second était rejoué sans s'exécuter.
+#[tokio::test]
+async fn a_text_call_takes_its_id_from_the_response() {
+    const FIRST: &str = "chatcmpl-0911a69d-de6b-4605-adfc-b43e3677941c";
+    const SECOND: &str = "chatcmpl-5e1c0a2b-8f3d-4c6e-9a7b-1d2e3f4a5b6c";
+    assert!(
+        LLAMA_TOOL.contains(FIRST),
+        "le corps capturé porte cet identifiant"
+    );
+    let (first, _) = replay(LLAMA_TOOL, vec![addition()]).await;
+    let (second, _) = replay(&LLAMA_TOOL.replace(FIRST, SECOND), vec![addition()]).await;
+    let (a, b) = (&first.message.tool_calls[0], &second.message.tool_calls[0]);
+    assert_eq!(
+        (a.name.as_str(), &a.arguments),
+        (b.name.as_str(), &b.arguments)
+    );
+    assert_eq!(a.id, format!("call_{FIRST}_0"));
+    assert_eq!(b.id, format!("call_{SECOND}_0"));
+}
+
+/// Le corps nu de Llama (`LLAMA_TEXT`) : même règle. Un appel natif nommé par le serveur
+/// (Qwen3) garde l'identifiant du serveur.
+#[tokio::test]
+async fn a_bare_text_call_takes_its_id_from_the_response_too() {
+    let (bare, _) = replay(LLAMA_TEXT, vec![addition()]).await;
+    assert_eq!(
+        bare.message.tool_calls[0].id,
+        "call_chatcmpl-eeae170f-3dd5-44fb-ba78-0e3b12e1132a_0"
+    );
+    let (two, _) = replay(QWEN3_TWO_TOOLS, vec![addition()]).await;
+    let ids: Vec<&str> = two
+        .message
+        .tool_calls
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "f476f7f6-e415-4793-893f-073a278c4cd9",
+            "b52f34ae-b9f9-4af9-a285-ff1ed14eef04"
+        ]
+    );
+}
+
 /// Sans outil déclaré, ou pour un outil inconnu de la requête, le même texte reste du
 /// texte : la normalisation ne fabrique pas d'appel que personne n'a proposé.
 #[tokio::test]

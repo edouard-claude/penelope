@@ -122,7 +122,7 @@ impl AgentLoop {
     pub(crate) async fn sample_execution(
         &self,
         spec: &TurnSpec,
-        call: &ToolCall,
+        call_id: &str,
         info: &CallInfo,
         outcome: &ToolOutcome,
     ) {
@@ -132,7 +132,7 @@ impl AgentLoop {
         }
         let (exit, duration) = execution_of(&outcome.value);
         if let Err(e) = ApprovalSamples::new(s.store.clone(), s.clock.clone())
-            .executed(&spec.session_id, &call.id, exit, duration)
+            .executed(&spec.session_id, call_id, exit, duration)
             .await
         {
             tracing::warn!(session = %spec.session_id, erreur = %e, "exécution non échantillonnée");

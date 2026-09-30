@@ -25,6 +25,8 @@ pub enum TurnEventKind {
     LoopAborted,
     /// Un appel d'outil a rendu son résultat.
     ToolResult,
+    /// Un appel en attente porte un identifiant que la session a déjà vu (#266).
+    CallIdReused,
     /// Nouvel essai du même modèle après une erreur d'avant flux.
     LlmRetried,
     /// Réponse servie par un autre modèle que celui demandé (repli d'OpenRouter).
@@ -39,13 +41,14 @@ pub enum TurnEventKind {
 
 impl TurnEventKind {
     /// Toutes les variantes, pour les tests.
-    pub const ALL: [TurnEventKind; 11] = [
+    pub const ALL: [TurnEventKind; 12] = [
         TurnEventKind::Started,
         TurnEventKind::Finished,
         TurnEventKind::Merged,
         TurnEventKind::EmptyAnswer,
         TurnEventKind::LoopAborted,
         TurnEventKind::ToolResult,
+        TurnEventKind::CallIdReused,
         TurnEventKind::LlmRetried,
         TurnEventKind::LlmFallbackUsed,
         TurnEventKind::AttachmentRejected,
@@ -62,6 +65,7 @@ impl TurnEventKind {
             TurnEventKind::EmptyAnswer => "turn.empty_answer",
             TurnEventKind::LoopAborted => "turn.loop_aborted",
             TurnEventKind::ToolResult => "tool.result",
+            TurnEventKind::CallIdReused => "tool.call_id_reused",
             TurnEventKind::LlmRetried => "llm.retried",
             TurnEventKind::LlmFallbackUsed => "llm.fallback_used",
             TurnEventKind::AttachmentRejected => KIND_ATTACHMENT_REJECTED,
