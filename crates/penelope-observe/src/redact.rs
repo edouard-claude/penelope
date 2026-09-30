@@ -1,7 +1,8 @@
 //! Redaction des secrets dans les logs, événements, résumés et messages (§13.1).
 //!
 //! Deux niveaux :
-//! - **motifs génériques** (clés, bearer, JWT, clés privées, numéros de carte) ;
+//! - **motifs génériques** (clés, bearer, JWT, clés privées, numéros de carte, affectations
+//!   `password = …`, mot de passe dicté en prose « le mot de passe c'est … ») ;
 //! - **valeurs connues** enregistrées par le `SecretStore` : un secret déjà chargé en
 //!   mémoire est masqué même s'il ne correspond à aucun motif.
 //!
@@ -60,7 +61,16 @@ fn patterns() -> &'static Patterns {
         // `password = x`, `"password": "x"`, `'x-api-key': 'x'`, `KEY = "x"` (issue #134).
         add(
             r#"(?i)\b(?:(?:x[_-])?api[_-]?key|apikey|key|client[_-]?secret|secret|password|passwd|pwd|access[_-]?token|auth[_-]?token|token|private[_-]?key)\b["'`]?\s*[:=]\s*["'`]?(?P<v>[^\s"'`,)}]{8,})"#,
-            "affectation de secret",
+            ASSIGNMENT,
+        );
+        // Mot de passe dicté en prose, comme le propriétaire le dit et le modèle de relecture
+        // le reformule : « le mot de passe du serveur de dev, c'est … », « mdp : … », « the
+        // password is … » (issue #284). Jusqu'à huit mots de contexte, puis un verbe ou un
+        // deux-points ; la valeur tient en un mot et doit avoir la forme d'un mot de passe
+        // ([`dictated_value`]) : « le mot de passe est obligatoire » n'en donne pas.
+        add(
+            r#"(?i)\b(?:mots? de passe|mdp|password|passwd)\b(?:\s+[^\s:=,«»"`]+){0,8}?\s*,?\s*(?:\b(?:c[’']est|est|sera|is)\b|[:=])\s*[«"'`]?\s*(?P<v>[^\s"'`«»\[\],;)}]{6,})"#,
+            DICTATED,
         );
         Patterns { rules }
     })
@@ -239,13 +249,74 @@ impl Redactor {
             }
         }
 
-        for (re, _label) in &patterns().rules {
-            if re.is_match(&out) {
-                out = re.replace_all(&out, MASK).into_owned();
+        for (re, label) in &patterns().rules {
+            if !re.is_match(&out) {
+                continue;
             }
+            out = if *label == DICTATED {
+                // La phrase reste lisible : seule la valeur est masquée, et seulement si elle
+                // a la forme d'un mot de passe.
+                re.replace_all(&out, |c: &regex::Captures<'_>| {
+                    let whole = c.get(0).expect("capture complète");
+                    let v = c.name("v").expect("valeur capturée");
+                    match dictated_value(v.as_str()) {
+                        Some(value) => format!(
+                            "{}{MASK}{}",
+                            &whole.as_str()[..v.start() - whole.start()],
+                            &v.as_str()[value.len()..]
+                        ),
+                        None => whole.as_str().to_string(),
+                    }
+                })
+                .into_owned()
+            } else {
+                re.replace_all(&out, MASK).into_owned()
+            };
         }
         redact_random_tokens(&redact_card_numbers(&out))
     }
+}
+
+/// Valeur d'un mot de passe dicté, sans le point qui finit la phrase, si elle en a la
+/// forme : six caractères au moins et deux classes parmi minuscules, majuscules, chiffres
+/// et symboles (issue #284). « Soleil2026 », « Hiver!2026 », « Livebox-A1B2 » en sont ;
+/// « obligatoire », « celui » n'en sont pas. Un mot de passe tout en minuscules ou dit en
+/// plusieurs mots échappe à ce critère : c'est la limite assumée.
+fn dictated_value(v: &str) -> Option<&str> {
+    let v = v.trim_end_matches(['.', '…']);
+    let classes = [
+        v.chars().any(char::is_lowercase),
+        v.chars().any(char::is_uppercase),
+        v.chars().any(|c| c.is_ascii_digit()),
+        v.chars().any(|c| !c.is_alphanumeric()),
+    ]
+    .iter()
+    .filter(|b| **b)
+    .count();
+    (v.chars().count() >= 6 && classes >= 2).then_some(v)
+}
+
+/// Valeurs qu'un motif repère dans `input` : la capture `v` s'il en a une, sinon le motif
+/// entier. Un mot de passe dicté n'est retenu que si la valeur en a la forme.
+fn values_of<'a>(
+    re: &'a Regex,
+    label: &'static str,
+    input: &'a str,
+) -> impl Iterator<Item = std::ops::Range<usize>> + 'a {
+    re.captures_iter(input).filter_map(move |c| {
+        let m = c.name("v").or_else(|| c.get(0)).expect("capture complète");
+        if label == DICTATED {
+            let value = dictated_value(m.as_str())?;
+            return Some(m.start()..m.start() + value.len());
+        }
+        Some(m.range())
+    })
+}
+
+/// Motifs qui ne désignent qu'une **place** (après `key=`, après « le mot de passe est ») :
+/// la valeur qui s'y trouve n'a pas forcément la forme d'un secret.
+fn names_a_place(label: &str) -> bool {
+    label == ASSIGNMENT || label == DICTATED
 }
 
 /// Jeton long et aléatoire (clé sans préfixe connu, recopiée d'un fichier) : 40
@@ -358,7 +429,7 @@ fn learnable(kind: &str, value: &str) -> bool {
         return false;
     }
     let symbols = match kind {
-        ASSIGNMENT => "+/=_*~!$#%^&-",
+        ASSIGNMENT | DICTATED => "+/=_*~!$#%^&-",
         // Un jeton porteur peut être un JWT, fait de trois parties séparées par des points.
         "bearer" => "+/=_*~!$#%^&-.",
         _ => return true,
@@ -494,6 +565,8 @@ pub struct Forbidden {
 }
 
 const ASSIGNMENT: &str = "affectation de secret";
+/// Mot de passe dicté en prose (issue #284).
+const DICTATED: &str = "mot de passe";
 
 impl Redactor {
     /// Le critère unique de ce qui n'a pas le droit d'être **gardé** : mémoire (§6.10),
@@ -508,9 +581,10 @@ impl Redactor {
     pub fn forbidden_secret(&self, input: &str) -> Option<Forbidden> {
         let input = &*without_references(input);
         let head = |v: &str| format!("{}…", v.chars().take(4).collect::<String>());
-        // Du plus sûr au moins sûr : l'affectation générique vient en dernier.
+        // Du plus sûr au moins sûr : l'affectation générique et le mot de passe dicté
+        // viennent en dernier.
         for (re, label) in &patterns().rules {
-            if *label == ASSIGNMENT {
+            if names_a_place(label) {
                 continue;
             }
             if let Some(c) = re.captures(input) {
@@ -541,13 +615,18 @@ impl Redactor {
                 certain: true,
             });
         }
-        let (re, _) = patterns().rules.iter().find(|(_, l)| *l == ASSIGNMENT)?;
-        let value = re.captures(input)?.name("v")?.as_str();
-        Some(Forbidden {
-            kind: ASSIGNMENT,
-            fragment: head(value),
-            certain: random_token(value),
-        })
+        patterns()
+            .rules
+            .iter()
+            .filter(|(_, l)| names_a_place(l))
+            .find_map(|(re, label)| {
+                let value = &input[values_of(re, label, input).next()?];
+                Some(Forbidden {
+                    kind: label,
+                    fragment: head(value),
+                    certain: random_token(value),
+                })
+            })
     }
 }
 
@@ -558,7 +637,7 @@ fn secret_shaped(v: &str) -> bool {
         || patterns()
             .rules
             .iter()
-            .any(|(re, label)| *label != ASSIGNMENT && re.is_match(v))
+            .any(|(re, label)| !names_a_place(label) && re.is_match(v))
 }
 
 /// Jeton d'un seul tenant, sans `@`, `.` ni `:` (qui font les adresses et les URL), de 20
@@ -589,8 +668,8 @@ impl Redactor {
         patterns()
             .rules
             .iter()
-            .filter(|(_, label)| *label != "affectation de secret")
-            .find(|(re, _)| re.is_match(line))
+            .filter(|(_, label)| *label != ASSIGNMENT)
+            .find(|(re, label)| values_of(re, label, line).next().is_some())
             .map(|(_, label)| *label)
     }
 
@@ -602,7 +681,11 @@ impl Redactor {
         if self.known_values().iter().any(|v| text.contains(&**v)) {
             return Some("secret enregistré");
         }
-        if let Some((_, label)) = patterns().rules.iter().find(|(re, _)| re.is_match(text)) {
+        if let Some((_, label)) = patterns()
+            .rules
+            .iter()
+            .find(|(re, label)| values_of(re, label, text).next().is_some())
+        {
             return Some(label);
         }
         (redact_random_tokens(text) != text).then_some("jeton aléatoire")
@@ -628,11 +711,10 @@ impl Redactor {
         // Motifs d'abord : à position égale, la nature reconnue l'emporte sur « secret
         // enregistré » (le tri qui suit est stable).
         for (re, label) in &patterns().rules {
-            for c in re.captures_iter(input) {
-                let m = c.name("v").or_else(|| c.get(0)).expect("capture complète");
+            for r in values_of(re, label, input) {
                 found.push(SecretSpan {
-                    start: m.start(),
-                    end: m.end(),
+                    start: r.start,
+                    end: r.end,
                     kind: label,
                 });
             }
