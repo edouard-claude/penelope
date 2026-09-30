@@ -185,6 +185,62 @@ fn an_ordinary_word_after_a_keyword_is_not_learned() {
     }
 }
 
+/// #284 : un mot de passe dicté en prose (« le mot de passe c'est … »), sans mot-clé
+/// anglais ni `:`/`=`, est un secret à ranger : la valeur seule est pointée et masquée, la
+/// phrase reste lisible. Une phrase qui parle du mot de passe sans le donner ne l'est pas.
+#[test]
+fn a_dictated_password_is_a_secret_span() {
+    let r = Redactor::default();
+    for (text, value) in [
+        (
+            "Le mot de passe du serveur de développement, c'est Soleil2026.",
+            "Soleil2026",
+        ),
+        ("le mot de passe c’est Soleil2026", "Soleil2026"),
+        (
+            "Le mot de passe du wifi de l'agence est « Livebox-A1B2 ».",
+            "Livebox-A1B2",
+        ),
+        ("mdp : Toto1234", "Toto1234"),
+        ("the password is Welcome2026", "Welcome2026"),
+        (
+            "Le nouveau mot de passe root de la base de prod sera Hiver!2026",
+            "Hiver!2026",
+        ),
+        (
+            "le mot de passe est celui du wifi, c'est Soleil2026",
+            "Soleil2026",
+        ),
+    ] {
+        let spans = r.secret_spans(text);
+        assert_eq!(spans.len(), 1, "{text}");
+        assert_eq!(&text[spans[0].start..spans[0].end], value, "{text}");
+        assert_eq!(spans[0].kind, "mot de passe", "{text}");
+        let masked = r.redact(text);
+        assert!(!masked.contains(value), "{masked}");
+        assert!(masked.contains(MASK), "{masked}");
+        let lower = masked.to_lowercase();
+        assert!(
+            lower.contains("mot de passe") || lower.contains("mdp") || lower.contains("password"),
+            "la phrase reste lisible : {masked}"
+        );
+        assert_eq!(r.redact(&masked), masked, "idempotent : {masked}");
+    }
+    for plain in [
+        "Le mot de passe du wifi est obligatoire pour les invités",
+        "Un mot de passe fort est recommandé",
+        "Le mot de passe de la base de prod est stocké dans le trousseau",
+        "le mot de passe est celui du wifi",
+        "Le mot de passe du wifi a changé hier",
+        "le mot de passe Brest Soleil2026",
+        "la commande pwd est /Users/edouard",
+        "le mot de passe c'est [secret masqué].",
+    ] {
+        assert!(r.secret_spans(plain).is_empty(), "{plain}");
+        assert_eq!(r.redact(plain), plain);
+    }
+}
+
 #[test]
 fn redaction_is_idempotent() {
     let r = Redactor::default();

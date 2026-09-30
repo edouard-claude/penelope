@@ -139,6 +139,12 @@ mod tests {
         let n = secret_name(s.kind, wifi, s.start, s.end);
         assert!(n.starts_with("secret-invite-agence-"), "{n}");
         penelope_platform::validate_secret_name(&n).unwrap();
+        // #284 : un mot de passe dicté porte sa nature et son contexte.
+        let dictated = "Le mot de passe du serveur de développement, c'est Soleil2026.";
+        let s = &penelope_observe::redact::secret_spans(dictated)[0];
+        let n = secret_name(s.kind, dictated, s.start, s.end);
+        assert!(n.starts_with("mot-de-passe-serveur-developpement-"), "{n}");
+        penelope_platform::validate_secret_name(&n).unwrap();
     }
 
     #[test]

@@ -822,4 +822,63 @@ mod daemon_tests {
         let system = p.requests()[0].messages[0].text();
         assert!(system.contains("au plus 5 candidats"), "{system}");
     }
+
+    /// #284 : reproduit le 18/09 avec une valeur factice. Un mot de passe dicté, sans
+    /// préfixe de fournisseur ni entropie, relu par le modèle en candidat « fait » avec la
+    /// valeur, part au magasin : ni le candidat, ni sa citation, ni le journal ne la gardent.
+    #[tokio::test]
+    async fn a_review_shelves_a_dictated_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
+        let s = Arc::new(
+            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
+                .await
+                .unwrap(),
+        );
+        let p = Arc::new(MockProvider::new());
+        let providers = penelope_app::testing::MockProviders::new(p.clone());
+        s.publish_config("test", |c| {
+            c.memory.review_max_candidates = 5;
+            Ok(vec!["memory.review_max_candidates".into()])
+        })
+        .unwrap();
+        p.reply(
+            r#"{"candidats": [{"type": "fait", "texte": "Le mot de passe du serveur de développement, c'est Soleil2026.", "importance": 6}]}"#,
+        );
+        let n = review(
+            &s,
+            providers.as_ref(),
+            "s1",
+            "t1",
+            "retiens que le mot de passe du serveur de dev c'est Soleil2026, j'en aurai besoin pour la démo",
+            "Noté : je le range au magasin de secrets.",
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(n, 1);
+        let pending = s.candidates.pending(None).await.unwrap();
+        let c = &pending[0];
+        assert!(!c.text.contains("Soleil2026"), "{}", c.text);
+        let names = crate::secret_shelf::references(&c.text);
+        assert_eq!(names.len(), 1, "{}", c.text);
+        assert!(names[0].starts_with("mot-de-passe-"), "{}", names[0]);
+        assert_eq!(
+            s.platform.secrets.get(&names[0]).unwrap().as_deref(),
+            Some("Soleil2026")
+        );
+        assert!(
+            c.owner_quote
+                .as_deref()
+                .is_none_or(|q| !q.contains("Soleil2026")),
+            "{:?}",
+            c.owner_quote
+        );
+        let vault = penelope_app::helpers::vault_dir(&s);
+        for e in std::fs::read_dir(vault.join("journal")).unwrap().flatten() {
+            let raw = std::fs::read_to_string(e.path()).unwrap();
+            assert!(!raw.contains("Soleil2026"), "{raw}");
+            assert!(raw.contains("${SECRET:mot-de-passe-"), "{raw}");
+        }
+    }
 }

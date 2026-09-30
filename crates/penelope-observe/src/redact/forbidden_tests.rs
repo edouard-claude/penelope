@@ -87,6 +87,29 @@ fn a_numeric_identifier_in_prose_is_not_a_card() {
     }
 }
 
+/// #284 : un mot de passe dicté en prose est interdit dans ce qui est gardé, nommé et cité
+/// par son début ; sans forme de jeton, il n'est pas certain. Une phrase qui parle du mot
+/// de passe sans le donner passe, et `password: …` reste une affectation.
+#[test]
+fn a_dictated_password_is_forbidden_but_not_certain() {
+    let r = Redactor::default();
+    let f = r
+        .forbidden_secret("- Le mot de passe du serveur de dev est Soleil2026.")
+        .expect("interdit");
+    assert_eq!(f.kind, "mot de passe");
+    assert_eq!(f.fragment, "Sole…");
+    assert!(!f.certain, "{f:?}");
+    assert!(r.contains_secret("mdp : Toto1234"));
+    assert_eq!(
+        r.forbidden_secret("- Le mot de passe du wifi est obligatoire"),
+        None
+    );
+    assert_eq!(
+        r.forbidden_secret("password: Hunter2Hunter2").unwrap().kind,
+        "affectation de secret"
+    );
+}
+
 /// Une affectation qui décrit un schéma n'est pas certaine ; une affectation de jeton
 /// aléatoire l'est.
 #[test]

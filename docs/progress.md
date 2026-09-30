@@ -35,6 +35,44 @@ plus loin, pouvait sauter.
 
 Closes #283.
 
+**Un mot de passe dicté (« le mot de passe c'est … ») part au magasin de secrets (#284).**
+Le 18/09, un mot de passe de développement dicté par le propriétaire a fini en clair dans un
+candidat (`mem_candidates`, rejeté « imprécis »), dans `journal/2026-09-18.md` et donc dans
+l'historique git du vault, alors que le prompt de relecture demande un candidat « fait » avec
+la valeur, que `secret_shelf::shelve` range ensuite.
+
+- Cause : le seul motif générique de `penelope-observe::redact`, « affectation de secret »,
+  exige un mot-clé anglais (`password`, `key`, `token`…) **et** un `:` ou `=`. Une phrase
+  dictée puis reformulée par le modèle n'a ni l'un ni l'autre : `secret_spans` vide, `shelve`
+  rend le texte tel quel, `write_filter` ne voit rien. Sans préfixe de fournisseur ni entropie
+  élevée, aucun autre motif ne rattrapait la valeur.
+- Correctif (`redact.rs`) : motif « mot de passe » : `mot de passe | mdp | password |
+  passwd`, jusqu'à huit mots de contexte, puis `est | c'est | sera | is | : | =`, guillemet
+  ouvrant facultatif, valeur d'un mot de six caractères au moins ayant la forme d'un mot de
+  passe (deux classes parmi minuscules, majuscules, chiffres, symboles). Traité comme
+  l'affectation : rangé par `shelve` sous `mot-de-passe-<contexte>-<empreinte>`, refusé par
+  `write_filter`, masqué par `redact` (la valeur seule, la phrase reste lisible), `certain`
+  seulement pour un jeton aléatoire. « Le mot de passe est obligatoire », « le mot de passe
+  est celui du wifi » ne sont pas des secrets.
+- Tests : `secret_spans` et `redact` sur sept tournures (virgule, apostrophe typographique,
+  guillemets, `mdp :`, anglais, `sera`, connecteur après un « est » de prose) et huit phrases
+  ordinaires ; `forbidden_secret` nomme « mot de passe », fragment `Sole…`, non certain ;
+  `secret_name` porte nature et contexte ; `review()` avec un modèle scripté et une valeur
+  factice : le magasin a la valeur, le candidat, sa citation et le journal n'ont que la
+  référence. Scénario `purge` régénéré : sa surface (rédigée à l'enregistrement) masque
+  désormais « le mot de passe du wifi est framboise-42 » ; le modèle reçoit la phrase
+  entière, rien d'autre ne change.
+- Ce qui continue de marcher : affectations `password: …`, clés de fournisseurs, cartes
+  refusées, valeurs du magasin sans forme de secret non interdites, mots ordinaires après un
+  mot-clé non appris (#258), rédaction idempotente, références `${SECRET:…}` intactes.
+- Constat annexe, sans correctif : un nom de modèle a été remplacé par `${SECRET:…}` dans un
+  candidat ; `secret_spans` prend toute valeur de huit caractères après `key|token|secret…
+  [:=]`, sans le test de forme que `learnable` et `certain` appliquent. Limites assumées :
+  une valeur en plusieurs mots ou tout en minuscules n'est pas reconnue ; la valeur du 18/09
+  reste dans l'historique git du vault (à purger ou faire tourner côté instance).
+
+Closes #284.
+
 ### 1.0.30
 
 **Mémoire : `DREAMS.md` était indexé, le rapport des rêves remontait dans le rappel
