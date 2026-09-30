@@ -12,6 +12,29 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.31
+
+**Relecture : les plus importants survivent à la coupe, et le modèle connaît la limite
+(#283).** Audit du 30/09 sur l'instance, vingt relectures relues à la main : une relecture
+de tour a gardé un menu de cantine d'importance 2 alors qu'un candidat plus important, rendu
+plus loin, pouvait sauter.
+
+- Cause : `parse_candidates` s'arrêtait au `max`-ième candidat valide dans l'ordre de
+  sortie du modèle ; `CandidateStore::record` trie bien, mais recevait une liste déjà
+  coupée. Ni le prompt de tour ni celui d'épisode ne disaient la limite au modèle.
+- Correctif (`review.rs`, `episodes.rs`) : tous les candidats valides sont gardés, la
+  bonification à 8 d'une correction (tour correctif) s'applique, puis tri stable par
+  importance décroissante (l'ordre du modèle départage) et coupe à
+  `memory.review_max_candidates`. Les deux prompts deviennent des fonctions de `max` :
+  « au plus N candidats, les plus importants d'abord ».
+- Tests : sept candidats aux importances mêlées, `max` 5, les cinq plus importants dans
+  l'ordre attendu ; une correction à 3 dans un tour correctif passe à 8 avant la coupe ;
+  la requête envoyée au modèle porte la limite (tour et épisode).
+- Ce qui continue de marcher : filtre de forme et de secret des candidats, `max` 1 rend un
+  candidat, `record` reste borné, le journal du jour reçoit une ligne par candidat gardé.
+
+Closes #283.
+
 ### 1.0.30
 
 **Mémoire : `DREAMS.md` était indexé, le rapport des rêves remontait dans le rappel
