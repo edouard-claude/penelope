@@ -114,7 +114,7 @@ Ce que mesure chaque plafond :
 |---|---|
 | `maxUsd` | Coût facturé des appels du run, d'après le ledger d'usage : la borne de référence |
 | `maxTokens` | Tokens **facturés** : entrée hors cache plus sortie. Un préfixe servi par le cache (au dixième du prix) ne compte pas : c'est l'économie voulue (décision 0008) |
-| `maxWallMs` | Durée depuis le démarrage du run |
+| `maxWallMs` | Durée de travail du run, depuis son démarrage ; l'attente d'une étape `user` (une carte laissée une nuit) ne compte pas (1.0.20, #193) |
 | `maxIterations` | Étapes exécutées |
 
 Avant 0.17.20, `maxTokens` comptait l'entrée entière : un run d'agent qui renvoie un
@@ -444,7 +444,10 @@ révision montrée et lance son run (section suivante). Le lancement direct avec
 `workflow_start` est refusé dans une conversation Telegram. `/run <id>` passe toujours
 par cette conversation, même quand des paramètres sont fournis. La CLI et les runs
 techniques continuent d'utiliser le moteur existant. Une nouvelle demande dans la même
-session conserve le plan approuvé précédent, et son run.
+session conserve le plan approuvé précédent, et son run. `/stop` dans la conversation met
+en pause les runs des plans qu'elle a lancés, en plus du tour et des jobs en cours (1.0.16 ;
+voir [telegram.md](telegram.md#commandes)) ; `/resume <run>` ou `wf control <run> resume`
+les reprend.
 
 ## Plan approuvé exécuté en phases
 

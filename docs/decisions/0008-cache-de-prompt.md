@@ -1,6 +1,9 @@
 # 0008 — Cache de prompt : rien ne bouge avant le dernier message
 
-Statut : acceptée. Portée : §5 (moteur de contexte), §10 (providers), §16 (coûts).
+Statut : acceptée, complétée par #236 (1.0.12, 27 septembre 2026) : le point 3 tient
+toujours pour le préfixe lui-même, mais la différence n'attend plus, elle part en fin de
+prompt (voir « Conséquences »). Portée : §5 (moteur de contexte), §10 (providers), §16
+(coûts).
 
 ## Contexte
 
@@ -40,7 +43,26 @@ de contexte ou de raisonnement déjà vus est moins cher que recalculer tout ce 
 
 ## Conséquences
 
-Un nouveau souvenir, une skill ou un serveur MCP ajoutés en pleine conversation
-n'apparaissent dans le prompt qu'après 5 min de pause ou à la prochaine compaction ; leurs
-outils restent appelables tout de suite. Les anciens messages gardent l'heure et le rappel
-de leur tour.
+Telles qu'écrites le jour de la décision : un nouveau souvenir, une skill ou un serveur
+MCP ajoutés en pleine conversation n'apparaissaient dans le prompt qu'après 5 min de
+pause ou à la prochaine compaction ; leurs outils restaient appelables tout de suite. Les
+anciens messages gardent l'heure et le rappel de leur tour.
+
+Depuis #236 (1.0.12), un banc de dix harnais ayant montré que le meilleur ajoute la
+différence en fin quand le fichier d'instructions change :
+
+- le préfixe retenu part toujours inchangé, et le message qui suit le changement porte
+  dans son contexte volatil un bloc `<mise-a-jour>` : lignes retirées et ajoutées de
+  chaque tuile, la tuile dite réécrite au-delà de 1 500 caractères, les skills chargées
+  dont le corps a changé. Une seule fois : la différence est journalisée
+  (`prompt.updated`) quand elle part avec son message, la suivante ne porte que ce qui
+  est nouveau depuis (`penelope-conversation/src/prefix.rs`) ;
+- la liste d'outils suit la même frontière que le préfixe (premier tour, pause plus
+  longue que le cache, compaction) et est resservie telle quelle entre deux
+  (`penelope_app::frozen_tools`) ; d'ici là, `tool_call` atteint l'outil découvert ;
+- l'appel de résumé peut relire le préfixe de la conversation au prix du cache
+  (`context.compaction_on_prefix` : `auto`, `always`, `never`) plutôt que repartir d'un
+  système à lui.
+
+Le préfixe modifié attend donc toujours un cache froid (point 3) ; ce qui a changé, c'est
+que le modèle le sait dès le message suivant.

@@ -52,8 +52,9 @@ un journal plus ancien et dit quoi révoquer.
 textes de la file Telegram passent par la même rédaction : secrets enregistrés, formats
 connus (clés de fournisseurs, bearer, JWT, clé privée), affectations (`password = …`,
 `"password": "…"`, `'x-api-key': '…'`, `KEY = "…"`), numéros de carte, jetons longs et
-aléatoires, et toute valeur que l'agent a lue ainsi plus tôt (un fichier de configuration,
-une sortie de commande) puis recopiée ailleurs. La carte d'approbation montre la commande
+aléatoires, et toute valeur **à forme de jeton** que l'agent a lue ainsi plus tôt (un
+fichier de configuration, une sortie de commande) puis recopiée ailleurs ; un mot
+ordinaire lu après `key=` n'est pas appris, sinon il serait masqué partout (1.0.18, #258). La carte d'approbation montre la commande
 exacte, valeurs masquées (« 🔒 2 valeur(s) masquée(s) ») ; la commande **exécutée**, un
 `fs_write` ou tout ce qui s'exécute ne sont jamais modifiés. La consigne de `shell_exec`
 demande de ne pas recopier un secret lu dans une commande, mais de le lire dans son fichier
@@ -683,7 +684,8 @@ classifier = true (défaut)
 classifier = false
   message ─────────────────────────────────────────► main
 panne avant le premier jeton
-  main ─► fast ; reasoning ─► main       (fallback, fait par OpenRouter)
+  main ─► fast ; reasoning ─► main       (fallback : par OpenRouter entre ses modèles,
+                                          par Pénélope vers un autre fournisseur, 1.0.22)
 flux coupé avant tout texte (429, surcharge)
   même modèle après 2 s ─► modèle de repli
 flux coupé après du texte
@@ -1826,6 +1828,15 @@ planification et le jour (« Veille agents IA · 17/09 »), et répond dans le c
 sujet d'origine : fermer la conversation où la planification est née (`/new`, `/close`)
 ne l'arrête plus. Un rappel manqué pendant un arrêt part une fois au redémarrage.
 
+**Sortie de veille** (1.0.3, #228). L'ordonnanceur remarque qu'il a dormi quand l'horloge
+murale a avancé de plus de 60 s de plus que l'horloge monotone entre deux passages
+(`host.woke`, avec la durée). Avant de rattraper quoi que ce soit, une passe de santé sonde
+le canal et relance les serveurs MCP dégradés (`host.health`). Puis les créneaux manqués
+partent, une fois chacun : un créneau parti plus de cinq minutes après son heure le dit,
+en tête de la notification ou dans le prompt, « ⏰ Exécution en retard : prévue à 8h30,
+lancée à 10h02 après une veille de 3 h 32. » ; plusieurs créneaux manqués d'une même
+planification sont comptés et partent en un seul run.
+
 **Jamais de silence.** Si l'exécution d'un prompt planifié est annulée, échoue ou atteint
 son budget, le propriétaire reçoit « ⚠️ La planification « … » n'a pas pu s'exécuter :
 <raison> » avec « 🔁 Relancer maintenant » et « 📅 Voir la planification ». Une
@@ -1898,6 +1909,18 @@ voit ; sinon le modèle de l'alias `vision` la décrit (texte visible recopié) 
 description rejoint le message. Plusieurs photos envoyées d'un coup forment un seul
 message, qui garde le chemin de chaque photo ; `image_inspect` y revient (voir
 « Travailler sur une interface »).
+
+**Taille.** Telegram propose plusieurs tailles d'une photo : la passerelle prend la plus
+grande sous 10 Mo et ne refuse que si aucune ne tient (1.0.10, #242). Le fournisseur du
+modèle qui la lira, celui du tour ou celui de l'alias `vision`, a sa limite : 5 Mo en
+base64 et 8 000 px de côté chez Anthropic, 20 Mo ailleurs. Au-delà, l'outil du système
+(`sips` sous macOS) réduit la photo, en plusieurs essais au besoin, jamais sous 512 px de
+côté ; la réduction est journalisée (`media.image_reduced`, tailles avant et après) et la
+photo reçue reste intacte pour `image_inspect`. Sans outil ou en échec, l'original part.
+Si le fournisseur refuse quand même l'image (`llm.attachment_rejected`, 1.0.6, #231), elle
+est retirée de la copie envoyée et la requête relancée une fois ; la réponse finit par
+« Image non lue : refusée par le fournisseur (motif) », l'historique la garde, et les
+tours suivants partent sans elle plutôt que de reprendre le même refus.
 
 Un document PDF, DOCX, HTML, Markdown ou texte est ingéré : son texte devient une fiche
 `vault/sources/<nom>.md`, découpée en passages que `mem_search` retrouve, et un résumé
@@ -2002,8 +2025,13 @@ sinon par les mots). Le modèle choisit : ajouter, mettre à jour, **remplacer**
 (`supersede` : l'ancienne entrée est retirée, la nouvelle porte `remplace: <uid>` et
 `depuis`) ou ne rien faire. Un texte déjà en mémoire n'est jamais ajouté une seconde fois ;
 une contradiction non tranchée devient une question, un changement de défaut une
-proposition. Chaque décision, avec ses critères et sa justification, est écrite dans la
-section « Tri » de `DREAMS.md`.
+proposition. Un `supersede` ou un `replace` proposé par le modèle qui vise **le profil**,
+ou une entrée que le propriétaire a écrite quand c'est une règle qui la remplace, ne
+s'applique pas : il devient la carte de contradiction ci-dessous (1.0.8, #224). Passent
+sans carte : la correction explicite du propriétaire (type `correction`, « non, … »), la
+précision qui garde l'ancien texte entier, la mise à jour d'un fait hors du profil. Chaque
+décision, avec ses critères et sa justification, est écrite dans la section « Tri » de
+`DREAMS.md`.
 
 **La forme du digest.** Le digest du matin (08:00, `memory.digest_cron`) part au foyer
 (`telegram.home`) et tient en **une bulle**. Il dit, dans cet ordre : ce que la nuit a
@@ -2028,8 +2056,10 @@ aussi dans `penelope doctor`. Au-delà de `telegram.max_fragments`, le message p
 **Les questions se tranchent au bouton.** Une contradiction ne part jamais en texte libre :
 elle devient une carte `memory_proposal` à part du digest, qui cite les deux entrées
 tronquées à 80 caractères avec leur wikilink, et porte trois boutons — **Remplacer**
-(l'ancienne entrée est retirée), **Exception** (les deux cohabitent, la nouvelle porte son
-contexte), **Ignorer** (le candidat est écarté, la mémoire ne bouge pas). Le digest n'en
+(l'ancienne entrée est retirée, la nouvelle est écrite **au niveau de l'ancienne** : une
+préférence remplacée reste au profil, elle ne part pas dans `notes.md`), **Exception**
+(les deux cohabitent, la nouvelle porte son contexte), **Ignorer** (le candidat est
+écarté, la mémoire ne bouge pas). Le digest n'en
 donne que le compte. Sans réponse, la carte n'est pas reposée le lendemain : elle est
 rappelée puis rangée dans `DREAMS.md` sous « Questions sans réponse », et le candidat
 reste listé par `penelope mem candidates`.
@@ -2039,10 +2069,14 @@ tête de la première phrase (« Toujours… », « Jamais… », « Ne pas… �
 le sujet commun se mesure en Jaccard (0,4) **et** par la similarité d'embedding du voisin
 (0,80) ; deux énoncés au-delà de la borne d'une entrée, ou dont les longueurs sont dans un
 rapport de plus de trois, ne se comparent pas ; un `fait` et un `écart` ne contredisent
-rien, ils se datent.
+rien, ils se datent. Une contradiction, c'est aussi **une valeur mise à la place d'une
+autre** dans une famille exclusive, sur le même sujet : tutoiement contre vouvoiement, une
+langue, une devise, un jour de la semaine (1.0.8) ; les mêmes garde-fous s'appliquent.
 
 **Une entrée, un fait.** `mem_remember` refuse un texte de plus de 300 caractères et
-demande de le découper ; `mem_note` (notes de travail) reste sans borne. Pour les entrées
+demande de le découper ; `mem_note` (notes de travail) reste sans borne. `mem_remember`
+refuse aussi d'écrire au profil ou au cœur une entrée qui en contredit une autre, et nomme
+l'uid à trancher avec le propriétaire (1.0.8) ; un niveau inconnu est refusé. Pour les entrées
 déjà écrites, `penelope mem split <uid>` propose un découpage en faits courts — les
 données financières personnelles (solde, salaire, épargne) restent hors de la mémoire de
 fond — par une carte, jamais par une écriture directe. Une réponse vide, sans puces
@@ -2137,6 +2171,19 @@ l'usage de chaque souvenir proche (« rappelé 12 fois, utile 9 ») comme une pr
 placement reste calculé des cinq critères. Servi dans un workflow ou un sous-agent, où
 aucune réponse ne se juge, un souvenir ne voit que sa date de rappel mise à jour.
 
+**Succès et contradictions** (1.0.8, #230). C'est le message suivant du propriétaire qui
+juge chaque souvenir dont la réponse d'avant s'est servie : sans marqueur de correction,
+un succès ; ouvert sur une correction (« non, », « je t'ai dit… ») qui reprend un mot du
+souvenir, une contradiction ; tout le reste, rien. Seuls ses messages jugent (ni une
+relance ni une reprise), un tour échoué entre les deux annule le jugement, et chaque signal
+est journalisé (`memory.outcome`). Une entrée assez jugée (`contested_min_observations`,
+4) dont la confiance `(succès + 1) / (succès + contradictions + 2)` passe sous
+`contested_confidence` (0,5) n'est plus servie d'office (la recherche explicite la trouve
+encore) ; la consolidation suivante la soumet une fois : « Tout » la retire, « Rien » la
+garde et remet ses signaux à zéro. Un écart ne devient une exception qu'après une réponse
+acceptée dans deux sessions distinctes (`memory.promotion.ecart_min_successes`) ; sous ses
+seuils, il attend au lieu d'être rejeté.
+
 ```bash
 penelope mem signals 01MARTIN
 ```
@@ -2192,8 +2239,13 @@ OPENROUTER_API_KEY=… penelope eval mem-bench-live
 
 **Règles dictées.** Une règle que tu énonces et que Pénélope note avec `mem_note` porte ta
 citation exacte : retrouvée dans tes messages récents, elle compte comme venant de toi.
-Notée sans citation (ou avec une citation absente de tes messages), elle passe quand même
-la grille ; si rien ne montre que tu l'as dite ou confirmée, elle n'est pas endossée et
+Notée sans citation, ou reformulée (« Retiens que nos réunions ont lieu le mardi à 9 h »
+noté avec un fuseau ajouté), elle compte encore comme venant de toi si elle reprend une
+phrase de **ton message du même tour** (1.0.11, #245 : au moins trois mots pleins en
+commun, la plus grande part de la phrase dans le candidat et du candidat dans la phrase,
+même polarité) ; la phrase est gardée avec le candidat, et le tri l'écrit tel quel. Jamais
+depuis un tour interne, un déclencheur, une relance ou un contenu transféré. Si rien ne
+montre que tu l'as dite ou confirmée, elle passe la grille mais n'est pas endossée, et
 reste écartée, sans question. Les règles rejetées par une version antérieure pour leur
 seule origine se remettent en file :
 
@@ -2366,6 +2418,20 @@ et « 📝 Remplir le formulaire » reste à un bouton. Une question arrive avec
 la donne. Un outil soumis à approbation (écriture, push) envoie sa carte comme en
 conversation, et le run reprend après la décision. Un arrêt du daemon reprend chaque run
 à son étape courante sans refaire une commande ou un appel déjà passés.
+
+**Un plan approuvé s'exécute en phases, puis se livre** (1.0.16 à 1.0.20, épopée #185).
+Le « Vas-y (vN) » d'un plan compile le plan en workflow : une étape `agent` par pas, en
+contexte neuf, le modèle choisi par phase, une carte d'OK après la spécification, les tests
+et le code, une revue bornée à deux reprises. Un plan qui écrit du code enchaîne ensuite
+trois étapes `delivery` : la PR vers la branche de dev, la CI du commit poussé, un E2E
+depuis l'extérieur ; forgeur, branches, CI et URL de dev se lisent dans
+`.penelope/delivery.toml` du dépôt, complété par le dépôt lui-même (remote GitHub ou
+GitLab, fichiers de CI), et ce qui manque est demandé clé par clé sur la carte. Une seule
+PR par run, même après un arrêt brutal. Puis un bilan vérifié et le gate humain :
+« Proposer la PR prod », « Re-vérifier », « Refuser » ; un bilan périmé (trop vieux, PR
+dev avancée, CI plus verte) refait le chemin avant toute carte neuve. Pénélope ne fusionne
+ni ne déploie. Le détail, les clés et les rejeux sont dans
+[workflows.md](workflows.md#plan-approuvé-exécuté-en-phases).
 
 Les runs se pilotent aussi en ligne de commande :
 
@@ -2603,6 +2669,27 @@ de la boucle, comptée, versée au journal d'audit (`daemon.task_panicked`), pui
 repart après 1 s, 2 s, 4 s… jusqu'à 5 min. Un tour qui panique échoue proprement : son
 runner continue, le verrou de la session est rendu et le message d'échec arrive. `penelope
 doctor` signale toute boucle relancée dans la dernière heure, ou qui ne tourne plus.
+
+### Veille et réveil
+
+Un Mac sans écran dort quand rien ne le retient. Pénélope tient l'assertion anti-veille
+(`caffeinate -i -w <pid du daemon>`, qui s'arrête avec lui) pendant un tour, un job
+d'outil jusqu'à sa conclusion et un run de workflow piloté, et la relâche à toute sortie,
+erreur et panique comprises (1.0.3, #228). Entre deux, la machine peut dormir. Au réveil,
+l'ordonnanceur le remarque (`host.woke`), une passe de santé sonde le canal et relance les
+serveurs MCP dégradés (`host.health`), puis les créneaux manqués partent une fois chacun,
+en disant leur retard (voir « Rappels et tâches planifiées »). `penelope doctor` donne
+l'état d'alimentation.
+
+### Arrêts journalisés
+
+Tout arrêt passe par le même chemin et laisse une ligne `INFO` `arrêt demandé` au journal
+(1.0.1, #225) avec `par` (`signal`, `cli`, `telegram`, `mise à jour`, `rpc`), `motif`
+(`SIGTERM`, `/restart, confirmé`, `version x installée`…) et `redemarrage`. « Pénélope
+s'arrête » cite la version et l'origine ; `state/daemon-run.json` les garde, et « Pénélope
+démarre » cite `arret_precedent` : l'arrêt demandé, ou un arrêt non propre si la version
+précédente tournait encore. Le retour arrière automatique d'une mise à jour et l'arrêt du
+chien de garde y sont inscrits aussi.
 
 ### Coupure de courant
 
@@ -2979,5 +3066,8 @@ penelope approve <id> --effect done
 
 Tout ce que décrit ce guide fonctionne. Restent : le mode webhook de Telegram,
 l'interprétation de `.penelope/deploy.toml` (le déploiement passe par les cibles `make`),
-et l'OCR des pages scannées d'un PDF qui a aussi du texte. Voir
-[progress.md](progress.md) pour l'état exact.
+et l'OCR des pages scannées d'un PDF qui a aussi du texte. Le gate de production d'un
+plan livré ne fusionne pas la PR et ne déploie rien : la fusion et le déploiement suivent
+la politique du projet ; et seule la CI du forgeur (GitHub ou GitLab) est lue, pas celle
+d'un autre système. Un portage Linux n'est pas prévu (issues #196 à #202, fermées le
+29 septembre 2026). Voir [progress.md](progress.md) pour l'état exact.
