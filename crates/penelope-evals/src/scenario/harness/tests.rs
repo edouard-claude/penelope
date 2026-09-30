@@ -183,6 +183,7 @@ async fn life(dir: &std::path::Path) -> super::Life {
         services,
         daemon,
         gateway: None,
+        mcp: None,
     }
 }
 

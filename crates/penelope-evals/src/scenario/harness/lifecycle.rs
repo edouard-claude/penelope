@@ -103,7 +103,7 @@ impl Harness<'_> {
             }
         }
         daemon.set_provider_override(self.provider(&services)?);
-        let gateway = self.install_mcp(&daemon, &services).await?;
+        let (gateway, mcp) = self.install_mcp(&daemon, &services).await?;
         if first {
             self.seed_files(&services)?;
             for (key, value) in &self.spec.kv {
@@ -128,6 +128,7 @@ impl Harness<'_> {
             services,
             daemon,
             gateway,
+            mcp,
         });
         Ok(serde_json::to_value(report)?)
     }
@@ -259,23 +260,28 @@ impl Harness<'_> {
     }
 
     /// Inscrit les outils simulés au registre (ils y survivent à un redémarrage, comme
-    /// ceux d'un vrai serveur) et branche la passerelle.
+    /// ceux d'un vrai serveur) et branche la passerelle ; ou, avec `[[mcp_servers]]`, le
+    /// vrai superviseur, rendu pour que son entretien suive l'horloge.
     async fn install_mcp(
         &self,
         daemon: &Daemon,
         services: &Arc<Services>,
-    ) -> anyhow::Result<Option<Arc<Gateway>>> {
+    ) -> anyhow::Result<(
+        Option<Arc<Gateway>>,
+        Option<Arc<penelope_mcp_host::McpSupervisor>>,
+    )> {
         if !self.spec.mcp_servers.is_empty() {
             anyhow::ensure!(
                 self.spec.mcp_tools.is_empty(),
                 "`[[mcp_tools]]` (passerelle simulée) et `[[mcp_servers]]` (superviseur) \
                  s'excluent"
             );
-            super::rpc::install_supervisor(daemon, services, &self.spec.mcp_servers).await;
-            return Ok(None);
+            let sup =
+                super::rpc::install_supervisor(daemon, services, &self.spec.mcp_servers).await;
+            return Ok((None, Some(sup)));
         }
         if self.spec.mcp_tools.is_empty() {
-            return Ok(None);
+            return Ok((None, None));
         }
         let now = services.clock.now_rfc3339();
         let mut by_server: BTreeMap<String, Vec<RegisteredTool>> = BTreeMap::new();
@@ -305,7 +311,7 @@ impl Harness<'_> {
             .map_err(|_| anyhow::anyhow!("branchement MCP verrouillé"))?;
         *slot = Some(gateway.clone() as Arc<dyn McpGateway>);
         drop(slot);
-        Ok(Some(gateway))
+        Ok((Some(gateway), None))
     }
 
     /// Nouvelle vie sur le même répertoire : reprise, puis les tours en attente sont joués.
@@ -338,8 +344,11 @@ pub(super) async fn shut_down(life: Life, name: &str) -> bool {
         services,
         daemon,
         gateway,
+        mcp,
     } = life;
     drop(gateway);
+    // Le superviseur tient une copie des services : la relâcher avant de les compter.
+    drop(mcp);
     // L'orchestrateur tient une copie du daemon : la relâcher, sinon la vie ne finit pas.
     if let Ok(mut slot) = daemon.hooks.orchestrator.write() {
         *slot = None;

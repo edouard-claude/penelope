@@ -6,8 +6,12 @@ use crate::transport::Transport;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::Semaphore;
+
+/// Délai de la sonde de santé (`ping` ou `server/discover`).
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Ce que la négociation a établi.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -30,6 +34,9 @@ pub struct McpClient {
     log_level: Option<String>,
     /// Demandes du serveur que le client sait satisfaire (capacités annoncées).
     features: ClientFeatures,
+    /// Le serveur a répondu `-32601` à `ping` (le serveur MCP de Slack, #276) : la sonde
+    /// ne l'envoie plus sur cette session.
+    ping_unsupported: AtomicBool,
 }
 
 impl McpClient {
@@ -58,6 +65,7 @@ impl McpClient {
             permits: Arc::new(Semaphore::new(max_concurrency.max(1))),
             log_level: None,
             features,
+            ping_unsupported: AtomicBool::new(false),
         };
 
         // En mode historique, le handshake se termine par `notifications/initialized`.
@@ -264,15 +272,33 @@ impl McpClient {
     // ------------------------------------------------------------ divers
 
     /// Santé : `ping` sur les versions antérieures, `server/discover` léger en 2026-07-28.
+    ///
+    /// Un serveur qui répond `-32601 Method not found` à `ping` (le serveur MCP de Slack,
+    /// #276) est vivant : une réponse JSON-RPC prouve le transport et le serveur. Le refus
+    /// est retenu pour la session et `ping` n'est plus envoyé ; seul un silence (délai) ou
+    /// une coupure reste une panne. La tolérance ne vaut que pour `ping` : un `-32601` sur
+    /// `tools/call` reste une erreur.
     pub async fn health(&self) -> Result<()> {
         if self.negotiated.stateless {
-            self.call("server/discover", json!({}), Some(Duration::from_secs(10)))
+            self.call("server/discover", json!({}), Some(HEALTH_TIMEOUT))
                 .await?;
-        } else {
-            self.call("ping", json!({}), Some(Duration::from_secs(10)))
-                .await?;
+            return Ok(());
         }
-        Ok(())
+        if self.ping_unsupported.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        match self.call("ping", json!({}), Some(HEALTH_TIMEOUT)).await {
+            Ok(_) => Ok(()),
+            Err(McpError::Rpc { code, .. }) if code == METHOD_NOT_FOUND => {
+                self.ping_unsupported.store(true, Ordering::Relaxed);
+                tracing::debug!(
+                    server = %self.name,
+                    "le serveur ne sert pas `ping` : sonde de santé retenue pour cette session"
+                );
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Niveau de log : `_meta.logLevel` en 2026-07-28, `logging/setLevel` avant.

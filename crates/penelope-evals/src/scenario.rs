@@ -100,6 +100,10 @@ pub struct McpServer {
     pub name: String,
     /// Noms des outils que le serveur annonce.
     pub tools: Vec<String>,
+    /// Le serveur sert `ping` ; à `false`, il répond `-32601 Method not found`, comme le
+    /// serveur MCP de Slack (#276).
+    #[serde(default = "yes")]
+    pub ping: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -198,7 +202,9 @@ pub enum Step {
         #[serde(default)]
         click: Option<String>,
     },
-    /// Avance de l'horloge de test (`10m`, `3h`, `2d`).
+    /// Avance de l'horloge de test (`10m`, `3h`, `2d`). Avec `[[mcp_servers]]`,
+    /// l'entretien du superviseur passe ensuite, comme sa boucle l'aurait fait : sonde de
+    /// santé d'un serveur silencieux depuis une minute, arrêt d'un serveur lazy inactif.
     AdvanceClock { by: String },
     /// Le pilote des workflows passe (#191) : chaque run `running` avance jusqu'à
     /// attendre, s'arrêter ou finir, jusqu'à ce qu'un passage ne change plus rien. Ses
@@ -294,6 +300,10 @@ pub enum Crash {
 
 fn one() -> usize {
     1
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn seed_tokens() -> u64 {

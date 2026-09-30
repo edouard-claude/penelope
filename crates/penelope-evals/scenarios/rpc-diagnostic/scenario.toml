@@ -1,6 +1,8 @@
 name = "rpc-diagnostic"
 description = """Le diagnostic par la socket locale, comme `penelope doctor`, joué en entier après un
-tour, une skill déposée et un serveur MCP déclaré. Seuls les contrôles propres à Pénélope
+tour, une skill déposée et deux serveurs MCP déclarés, dont un qui répond `-32601` à `ping`
+comme celui de Slack (#276) : après deux minutes de silence, l'entretien les sonde tous
+deux et `mcp.list` les montre `ready`, sans erreur. Seuls les contrôles propres à Pénélope
 sont comparés, par une liste explicite (`only`) dans l'ordre où `doctor` les rend :
 propriétaire, conversations, secrets attendus, intégrité de la base et chaîne d'audit,
 écrivain, clés inconnues, rétention, stabilité du prompt, journal, jobs d'outils, jour
@@ -20,6 +22,12 @@ pin_model = "main"
 [[mcp_servers]]
 name = "forge"
 tools = ["create_pr", "list_issues"]
+
+# Le serveur MCP de Slack répond `-32601 Method not found` à `ping` (#276).
+[[mcp_servers]]
+name = "slack"
+tools = ["send_message"]
+ping = false
 
 [[files]]
 root = "skills"
@@ -44,6 +52,21 @@ method = "skill.reload"
 kind = "rpc"
 method = "mcp.add"
 params = { name = "forge", toml = "command = \"/opt/mcp/forge\"\ntimeout = \"20s\"\n" }
+
+[[steps]]
+kind = "rpc"
+method = "mcp.add"
+params = { name = "slack", toml = "url = \"https://mcp.slack.com/mcp\"\n" }
+
+# Deux minutes de silence : l'entretien sonde les deux serveurs ; `slack` refuse `ping`
+# et reste `ready` (#276).
+[[steps]]
+kind = "advance_clock"
+by = "2m"
+
+[[steps]]
+kind = "rpc"
+method = "mcp.list"
 
 [[steps]]
 kind = "rpc"

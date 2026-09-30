@@ -466,21 +466,38 @@ fn readable(v: Value) -> Value {
 }
 
 /// Le vrai superviseur MCP, branché sur un connecteur de test : aucun processus lancé,
-/// chaque serveur servi rend ses outils. Relit `mcp.d/` à chaque vie.
+/// chaque serveur servi rend ses outils ; `ping = false` le fait répondre `-32601` à
+/// `ping`, comme le serveur MCP de Slack (#276). Relit `mcp.d/` à chaque vie.
 pub(super) async fn install_supervisor(
     daemon: &Daemon,
     services: &Arc<Services>,
     servers: &[McpServer],
-) {
-    use penelope_mcp_host::testing::{FakeConnector, server, tool};
+) -> Arc<penelope_mcp_host::McpSupervisor> {
+    use penelope_mcp_host::testing::{FakeConnector, Handler, server, tool};
     let fake = Arc::new(FakeConnector::default());
     for srv in servers {
         let tools: Vec<Value> = srv.tools.iter().map(|t| tool(t, json!({}))).collect();
-        fake.serve(&srv.name, server(Arc::new(std::sync::Mutex::new(tools))));
+        let base = server(Arc::new(std::sync::Mutex::new(tools)));
+        let handler: Handler = if srv.ping {
+            base
+        } else {
+            Arc::new(move |m, p| {
+                if m == "ping" {
+                    return Err(penelope_mcp::McpError::Rpc {
+                        code: penelope_mcp::protocol::METHOD_NOT_FOUND,
+                        message: "Method not found: ping".into(),
+                        data: None,
+                    });
+                }
+                base(m, p)
+            })
+        };
+        fake.serve(&srv.name, handler);
     }
     let sup = penelope_mcp_host::testing::supervisor(services.clone(), fake);
     sup.reload().await;
-    daemon.hooks.set_mcp(sup);
+    daemon.hooks.set_mcp(sup.clone());
+    sup
 }
 
 #[cfg(test)]

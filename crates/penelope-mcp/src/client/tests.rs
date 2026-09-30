@@ -479,3 +479,62 @@ async fn health_probe_depends_on_version() {
         .count();
     assert_eq!(n, 2, "négociation + sonde de santé");
 }
+
+fn method_not_found(method: &str) -> McpError {
+    McpError::Rpc {
+        code: METHOD_NOT_FOUND,
+        message: format!("Method not found: {method}"),
+        data: None,
+    }
+}
+
+/// Le serveur MCP de Slack, 2025-06-18, répond `-32601 Method not found` à `ping`
+/// (#276). Une réponse JSON-RPC prouve que le transport et le serveur sont vivants : la
+/// sonde passe, le refus est retenu pour la session et `ping` n'est plus envoyé.
+#[tokio::test]
+async fn a_server_that_refuses_ping_is_alive_and_is_not_pinged_again() {
+    let tr = LoopbackTransport::new("http", |m, _| match m {
+        "server/discover" | "ping" => Err(method_not_found(m)),
+        "initialize" => Ok(json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "Slack MCP", "version": "1.0.0"}
+        })),
+        _ => Ok(json!({})),
+    });
+    let c = client(tr.clone()).await;
+    c.health().await.unwrap();
+    c.health().await.unwrap();
+    let pings = tr
+        .call_log()
+        .await
+        .iter()
+        .filter(|(m, _)| m == "ping")
+        .count();
+    assert_eq!(pings, 1, "le refus est retenu pour la session");
+}
+
+/// La tolérance ne vaut que pour `ping` : un serveur muet reste une panne, et `-32601`
+/// sur `tools/call` (outil retiré) reste une erreur.
+#[tokio::test]
+async fn a_mute_server_still_fails_and_method_not_found_on_a_call_stays_an_error() {
+    let tr = LoopbackTransport::new("http", |m, _| match m {
+        "server/discover" | "tools/call" => Err(method_not_found(m)),
+        "initialize" => Ok(json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "muet"}
+        })),
+        "ping" => Err(McpError::Timeout {
+            method: "ping".into(),
+            ms: 10_000,
+        }),
+        _ => Ok(json!({})),
+    });
+    let c = client(tr.clone()).await;
+    assert!(matches!(c.health().await, Err(McpError::Timeout { .. })));
+    assert!(matches!(
+        c.call_tool("retire", json!({}), None, None).await,
+        Err(McpError::Rpc { code, .. }) if code == METHOD_NOT_FOUND
+    ));
+}
