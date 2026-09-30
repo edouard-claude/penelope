@@ -402,6 +402,41 @@ impl MemoryIndex {
             .await
     }
 
+    /// Fichiers du vault qui ont encore une entrée vivante dans l'index.
+    pub async fn files(&self) -> penelope_store::Result<Vec<String>> {
+        self.store
+            .read(|c| {
+                let mut st = c.prepare(
+                    "SELECT DISTINCT file FROM mem_entries WHERE statut != 'retiree' ORDER BY file",
+                )?;
+                let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+                Ok(rows.collect::<Result<_, _>>()?)
+            })
+            .await
+    }
+
+    /// Retire toutes les entrées vivantes d'un fichier, comme [`Self::retire`] une à une :
+    /// c'est ce qui sort de l'index un fichier devenu exclu (issue #282). Rend le nombre
+    /// d'entrées retirées.
+    pub async fn retire_file(&self, file: &str) -> penelope_store::Result<usize> {
+        let (file, now) = (file.to_string(), self.clock.now_rfc3339());
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "DELETE FROM mem_fts WHERE uid IN
+                       (SELECT uid FROM mem_entries WHERE file = ?1 AND statut != 'retiree')",
+                    [&file],
+                )?;
+                let n = tx.execute(
+                    "UPDATE mem_entries SET statut='retiree', retired_at=?2
+                     WHERE file = ?1 AND statut != 'retiree'",
+                    params![file, now],
+                )?;
+                Ok(n)
+            })
+            .await
+    }
+
     pub async fn get(&self, uid: &str) -> penelope_store::Result<Option<IndexedEntry>> {
         let uid = uid.to_string();
         self.store

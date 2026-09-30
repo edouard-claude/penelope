@@ -11,6 +11,7 @@
 //! | `sources/*.md` | oui, par passages | documents ingérés |
 //! | `inbox/` | non | en attente d'ingestion |
 //! | `accueil/`, `audits/` | non | comptes rendus : l'accueil écrit dans le profil |
+//! | `log.md`, `DREAMS.md` | non | journaux techniques en ajout seul : opérations, rapport des rêves (#282) |
 //! | `index.md`, `concepts/_a-definir.md`, `archive/`, fichiers cachés | non | pages générées ou archivées |
 //! | autre format (`.pdf`, `.docx`, `.txt`…) hors `sources/` | non | à envoyer pour ingestion |
 
@@ -51,6 +52,9 @@ pub fn excluded(rel: &str) -> Option<&'static str> {
         }
         _ if rel == penelope_memory::wiki::LOG_FILE => {
             Some("journal des opérations, en ajout seul")
+        }
+        _ if rel == penelope_memory::wiki::DREAMS_FILE => {
+            Some("compte rendu des rêves, en ajout seul")
         }
         _ if rel == crate::concepts::INDEX || rel == crate::concepts::TO_DEFINE => {
             Some("page générée")
@@ -281,5 +285,71 @@ mod tests {
             "{inv:?}"
         );
         assert!(inv.not_indexed[1].reason.contains("texte sans entrées"));
+    }
+
+    /// Issue #282 : `DREAMS.md` est un compte rendu en ajout seul, pas une connaissance.
+    /// Sur l'instance, il pesait 1 375 entrées sur 4 257 et le rappel ramenait des
+    /// verdicts de tri et des candidats écartés. Il est exclu avec son motif, ses entrées
+    /// déjà indexées sortent à la réindexation, et la note voisine reste indexée.
+    #[tokio::test]
+    async fn the_dream_report_is_excluded_and_its_entries_leave_on_reindex() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(TestClock::default());
+        let s = Arc::new(
+            Services::for_tests(dir.path().to_path_buf(), clock)
+                .await
+                .unwrap(),
+        );
+        let vault = penelope_app::helpers::vault_dir(&s);
+        std::fs::create_dir_all(&vault).unwrap();
+        let dreams = "# Revue\n\n## Rêve du 2026-09-29 (`d_1`)\n\n### Tri\n\
+                      - ⏭ ignoré « le café était chaud » : trivial\n\
+                      - 📓 journal « appel avec Martin » : épisodique\n";
+        std::fs::write(vault.join("DREAMS.md"), dreams).unwrap();
+        std::fs::write(
+            vault.join("notes.md"),
+            "# Notes\n\n- Le client Martin est basé à Lyon\n",
+        )
+        .unwrap();
+        // Une entrée du rapport indexée par une version antérieure.
+        let mut stale = penelope_memory::index::simple_entry(
+            "01JSTALE",
+            "⏭ ignoré « le café était chaud » : trivial",
+            penelope_memory::Level::Revue,
+            "2026-09-29",
+        );
+        stale.file = "DREAMS.md".into();
+        let prov = penelope_memory::Provenance::owner("reindex", "maintenance", "2026-09-29");
+        s.memory.upsert(&stale, &prov).await.unwrap();
+
+        crate::vault_ops::reindex(&s, &vault).await.unwrap();
+
+        let inv = inventory(&s).await.unwrap();
+        assert_eq!(inv.entries, 1, "{inv:?}");
+        assert_eq!(inv.indexed_files, 1, "{inv:?}");
+        assert!(inv.not_indexed.is_empty(), "{inv:?}");
+        let gap = inv
+            .excluded
+            .iter()
+            .find(|g| g.path == "DREAMS.md")
+            .expect("exclu, avec son motif");
+        assert_eq!(gap.reason, "compte rendu des rêves, en ajout seul");
+        let stale = s.memory.get("01JSTALE").await.unwrap().unwrap();
+        assert_eq!(stale.statut, "retiree");
+        assert!(
+            s.memory
+                .by_level(penelope_memory::Level::Revue)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        // Le rapport n'est pas réécrit : pas de `^uid` posé sur ses lignes de tri.
+        assert_eq!(
+            std::fs::read_to_string(vault.join("DREAMS.md")).unwrap(),
+            dreams
+        );
+        // Une note voisine est indexée et tenue par son uid.
+        let raw = std::fs::read_to_string(vault.join("notes.md")).unwrap();
+        assert!(raw.contains("Lyon ^"), "{raw}");
     }
 }

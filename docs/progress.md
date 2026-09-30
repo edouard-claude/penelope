@@ -12,6 +12,41 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.30
+
+**Mémoire : `DREAMS.md` était indexé, le rapport des rêves remontait dans le rappel
+(#282).** Relevé sur l'instance (1.0.22) : 1 375 entrées sur 4 257, un tiers de l'index,
+venaient de `DREAMS.md`, le compte rendu des passes de consolidation (tri, motifs d'écart,
+questions sans réponse) qui grossit à chaque nuit et à chaque ingestion. Le rappel et
+`mem_search` pouvaient ramener un verdict de tri ou le texte d'un candidat **rejeté** à la
+place d'une note, ce qui contredit la décision du tri. Test rouge avant le correctif : un
+vault avec `DREAMS.md` et une note, une entrée du rapport déjà indexée ; après `reindex`,
+l'index gardait quatre entrées au lieu d'une et `DREAMS.md` n'était pas listé comme exclu.
+
+- Cause : `vault_inventory::excluded` écartait `log.md` (« journal des opérations, en
+  ajout seul »), `inbox/`, `accueil/`, `audits/`, `archive/`, les notes de session,
+  `attachments/` et les pages générées, mais pas `DREAMS.md`, du même genre ; et `reindex`
+  ne retirait jamais les entrées d'un fichier qu'il ne relit plus.
+- Correctif : `penelope_memory::wiki::DREAMS_FILE`, constante partagée par l'écrivain du
+  rapport (rêve, nuit sans consolidation, question sans réponse), l'instantané, le niveau
+  `Revue` et le type de note ; `excluded` la range avec le motif « compte rendu des rêves,
+  en ajout seul », donc `vault check`, `doctor` et le rappel la traitent comme `log.md`.
+  `reindex` commence par retirer (`retire_file`, même statut `retiree` que la suppression
+  manuelle) les entrées de tout fichier exclu encore présent dans l'index, puis le saute :
+  ses lignes ne reçoivent plus de `^uid`.
+- Tests : `the_dream_report_is_excluded_and_its_entries_leave_on_reindex` (l'index ne
+  garde que la note, l'entrée du rapport passe `retiree`, le fichier est dans `excluded`
+  avec son motif et n'est pas réécrit) ; `no_reindex_advice_on_an_excluded_file` couvre
+  `DREAMS.md`.
+- Ce qui continue de marcher : le rapport s'écrit toujours dans `DREAMS.md` (tests
+  `apply`, `clash`, `digest` de penelope-dream) ; `Level::from_path("DREAMS.md")` reste
+  `Revue` ; `log.md` et les autres exclusions inchangées ; la provenance et les signaux
+  d'une entrée retirée sont conservés comme pour `forget`.
+- Sur l'instance : `penelope mem reindex` doit rendre environ 2 900 entrées, aucune de
+  `DREAMS.md`.
+
+Closes #282.
+
 ### 1.0.29
 
 **Trace narrée : le prompt du rôle `trace` refait au banc, budget porté à 1 200 ms,

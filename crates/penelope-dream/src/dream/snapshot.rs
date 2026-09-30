@@ -41,7 +41,7 @@ impl VaultSnapshot {
             if rel.starts_with("sources/")
                 || rel.starts_with("journal/")
                 || rel.starts_with("inbox/")
-                || rel == "DREAMS.md"
+                || rel == DREAMS_FILE
             {
                 continue;
             }

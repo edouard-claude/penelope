@@ -71,7 +71,7 @@ pub async fn file_unanswered_clash(s: &Services, a: &penelope_hitl::ApprovalRequ
         short(&proposed),
         short(&existing)
     );
-    let r = crate::vault_ops::update_note(&vault, "DREAMS.md", None, &day, |raw| {
+    let r = crate::vault_ops::update_note(&vault, DREAMS_FILE, None, &day, |raw| {
         const SECTION: &str = "## Questions sans réponse";
         let mut body = if raw.trim().is_empty() {
             "# Revue\n".to_string()
