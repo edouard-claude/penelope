@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.27
+### 1.0.28
 
 **Serveurs MCP : `{data}` n'était pas développé dans les valeurs de `env` (#270).** Une
 déclaration `mcp.d/whatsapp.toml` avec `WA_DATA_DIR = "{data}/mcp-data/whatsapp"` passait
@@ -46,6 +46,8 @@ le profil `full`.
   conseil du bac à sable pour un refus d'écriture sans gabarit.
 
 Closes #270.
+
+### 1.0.27
 
 **Trace des outils : deux modes résumés, `resume` sans modèle et `narre` par un petit
 modèle local (#273).** Constat du 30/09 : pendant un tour un peu long, la bulle `compact`
