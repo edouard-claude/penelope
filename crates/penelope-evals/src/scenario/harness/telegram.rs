@@ -12,6 +12,11 @@
 //! boutons vivent en base (`ActionStore`), un clic d'une étape suivante les retrouve,
 //! et aucune copie du daemon ne survit à la vie (un redémarrage l'attend). Elle n'est
 //! pas inscrite auprès du courtier d'élicitation, qui n'a pas de retrait.
+//!
+//! Un clic sur une opération travaille dans une tâche détachée (issue #73) : l'étape ne
+//! se conclut pas tant qu'elle court (`clicks_idle`), quel que soit son silence ; sur un
+//! runner chargé, « Vas-y » mettait parfois plus de 100 ms avant sa première carte, qui
+//! glissait dans l'étape suivante (#269).
 
 use super::{HEARTBEAT, Harness, outcome_json};
 use anyhow::Context as _;
@@ -27,7 +32,8 @@ use std::time::Duration;
 const OWNER: i64 = 42;
 /// Premier identifiant de message rendu par le transport simulé, moins un.
 const FIRST_MESSAGE_ID: i64 = 1000;
-/// Pas d'attente du travail détaché, et nombre de pas sans nouvel envoi qui le dit fini.
+/// Pas d'attente du travail détaché, nombre de pas sans nouvel envoi qui le dit fini, et
+/// plafond de pas au-delà duquel un clic encore en vol est une erreur de l'étape.
 const SETTLE_STEP: Duration = Duration::from_millis(20);
 const SETTLE_QUIET: u32 = 5;
 const SETTLE_MAX: u32 = 250;
@@ -38,7 +44,7 @@ const DRIVE_PASSES: usize = 20;
 /// garde ses appels (les identifiants de messages en dépendent), les numéros de mise à
 /// jour ne reviennent jamais (`tg_updates` déduplique).
 pub(super) struct Chat {
-    transport: Arc<MockTransport>,
+    pub(super) transport: Arc<MockTransport>,
     reported: usize,
     update_id: i64,
 }
@@ -152,7 +158,7 @@ impl Harness<'_> {
         let trace = g.spawn_trace();
         let turns = self.play_update(g, update).await;
         for _ in 0..SETTLE_MAX {
-            if g.traces_idle() {
+            if g.traces_idle() && g.clicks_idle() {
                 break;
             }
             tokio::time::sleep(SETTLE_STEP).await;
@@ -168,30 +174,38 @@ impl Harness<'_> {
         update: &Value,
     ) -> anyhow::Result<Vec<Value>> {
         g.process_update(update).await?;
-        self.settle().await;
+        self.settle(g).await?;
         let d = self.daemon()?;
         let mut turns = Vec::new();
         while let Some(turn) = self.claim().await? {
             turns.push(outcome_json(&runner::process(&d, turn, HEARTBEAT).await));
-            self.settle().await;
+            self.settle(g).await?;
         }
         g.flush_outbox().await?;
         Ok(turns)
     }
 
-    /// Attend que plus rien ne parte pendant `SETTLE_QUIET` pas (clic, export, audit
-    /// détachés, issue #69 et #73).
-    async fn settle(&self) {
+    /// Attend que plus rien ne parte pendant `SETTLE_QUIET` pas (export, audit détachés,
+    /// issue #69) et qu'aucun clic ne travaille plus (issue #73, #269) : le silence d'une
+    /// tâche qui n'a pas encore envoyé sa carte ne conclut pas l'étape. Un clic qui court
+    /// encore au plafond est une erreur, jamais une attente sans fin.
+    async fn settle(&self, g: &TelegramGateway) -> anyhow::Result<()> {
         let (mut last, mut quiet) = (usize::MAX, 0);
         for _ in 0..SETTLE_MAX {
             tokio::time::sleep(SETTLE_STEP).await;
             let n = self.telegram.transport.calls().await.len();
             quiet = if n == last { quiet + 1 } else { 0 };
             last = n;
-            if quiet >= SETTLE_QUIET {
-                return;
+            if quiet >= SETTLE_QUIET && g.clicks_idle() {
+                return Ok(());
             }
         }
+        anyhow::ensure!(
+            g.clicks_idle(),
+            "le travail détaché d'un clic court encore après {} s : l'étape ne peut pas conclure",
+            (SETTLE_STEP * SETTLE_MAX).as_secs()
+        );
+        Ok(())
     }
 
     /// Le bouton dont le libellé contient `label`, sur le dernier message envoyé ou

@@ -256,3 +256,43 @@ async fn a_second_deny_says_already_decided() {
     );
     assert!(sent.iter().any(|x| x.contains("Déjà tranché")), "{sent:?}");
 }
+
+/// #269 : le travail détaché d'un clic sur une opération est compté dès que la mise à
+/// jour est traitée, et jusqu'à sa dernière carte ; ici le retrait du clavier traîne.
+#[tokio::test]
+async fn a_click_counts_as_in_flight_until_its_detached_work_is_done() {
+    let (_d, g, t, _p) = gateway().await;
+    assert!(g.clicks_idle());
+    t.set_call_delay(tg::EDIT_MESSAGE_REPLY_MARKUP, Duration::from_millis(200))
+        .await;
+    let token = button_for(&g, k::SCREEN_DO, "noop").await;
+    g.process_update(&updates::callback(71_000, OWNER, &token, 900))
+        .await
+        .unwrap();
+    assert!(!g.clicks_idle(), "la tâche du clic court encore");
+    for _ in 0..100 {
+        if g.clicks_idle() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(g.clicks_idle(), "la tâche du clic n'a pas rendu la main");
+    g.flush_outbox().await.unwrap();
+    let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+    assert!(sent.iter().any(|x| x.contains("Annulé")), "{sent:?}");
+}
+
+/// #269 : une tâche de clic qui panique rend quand même son compteur, sinon le harnais
+/// attendrait jusqu'à son plafond.
+#[tokio::test]
+async fn a_panicking_click_task_leaves_no_click_in_flight() {
+    let (_d, g, _t, _p) = gateway().await;
+    let in_flight = super::super::screens::ClickInFlight::start(&g);
+    assert!(!g.clicks_idle());
+    let task = tokio::spawn(async move {
+        let _in_flight = in_flight;
+        panic!("opération d'écran en panique");
+    });
+    assert!(task.await.is_err());
+    assert!(g.clicks_idle());
+}
