@@ -268,6 +268,40 @@ async fn doctor_names_what_is_broken_and_how_to_fix_it() {
     assert!(!by_id("mcp.invalid.casse").ok);
 }
 
+/// #276 : un serveur qui répond `-32601` à `ping` (Slack) reste `ready` après la sonde
+/// d'entretien ; `doctor` le dit sain au lieu d'avertir « connecting : erreur JSON-RPC
+/// -32601 : Method not found: ping ».
+#[tokio::test]
+async fn doctor_does_not_warn_about_a_server_that_refuses_ping() {
+    let (_d, s, clock, fake, sup) = setup().await;
+    let base = server(two_tools());
+    fake.serve(
+        "slack",
+        Arc::new(move |m, p| {
+            if m == "ping" {
+                return Err(penelope_mcp::McpError::Rpc {
+                    code: penelope_mcp::protocol::METHOD_NOT_FOUND,
+                    message: "Method not found: ping".into(),
+                    data: None,
+                });
+            }
+            base(m, p)
+        }),
+    );
+    declare(&sup, "slack", "");
+    sup.reload().await;
+    sup.call("mcp__slack__list_issues", &json!({}), Default::default())
+        .await
+        .unwrap();
+    clock.advance_ms(2 * 60_000);
+    sup.maintenance().await;
+
+    let checks = super::mcp_checks(&s, &*sup).await;
+    let slack = checks.iter().find(|c| c.id == "mcp.slack").unwrap();
+    assert!(slack.ok, "{slack:?}");
+    assert!(slack.detail.contains("2 outil(s)"), "{slack:?}");
+}
+
 /// Les contrôles de `doctor` qui lisent le daemon sont toujours servis (#204, #205).
 #[tokio::test]
 async fn doctor_keeps_the_daemon_checks() {

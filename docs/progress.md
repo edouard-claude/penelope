@@ -12,6 +12,42 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.29
+
+**MCP : un serveur qui répond `-32601` à `ping` reste `ready` (#276).** Constat du 30/09
+sur l'instance (1.0.22) : le serveur MCP de Slack (protocole 2025-06-18) sert ses 26
+outils et `penelope mcp test slack` passe, mais `mcp list` le montre `connecting` avec
+« erreur JSON-RPC -32601 : Method not found: ping » et `doctor` avertit, avec une
+correction (`mcp restart`) qui ne change rien.
+
+- Cause : la sonde d'entretien (`health()`, après 60 s de silence) envoie `ping` ; Slack
+  répond `-32601 Method not found`, compté comme une panne : `connection_lost` ferme la
+  connexion, pose l'erreur et l'état `connecting`. Le serveur lazy ne repart qu'au
+  prochain appel d'outil, puis retombe une minute plus tard.
+- Correctif (`penelope-mcp`, `client.rs`) : une réponse `-32601` à `ping` prouve que le
+  transport et le serveur sont vivants ; la sonde passe, le refus est retenu sur la
+  session (`ping` n'est plus envoyé) et journalisé une fois en `debug`. Un serveur muet
+  (délai) ou coupé reste une panne ; `-32601` sur `tools/call` reste une erreur. Le
+  serveur reste `ready`, `doctor` le dit sain (« N outil(s), M appel(s) »).
+- Tests : client, `a_server_that_refuses_ping_is_alive_and_is_not_pinged_again` (rouge
+  avant) et `a_mute_server_still_fails_and_method_not_found_on_a_call_stays_an_error` ;
+  superviseur, `a_server_that_refuses_ping_stays_ready_through_maintenance` (rouge avant :
+  `connecting`, `running: false`, l'erreur de l'issue) ; `doctor`,
+  `doctor_does_not_warn_about_a_server_that_refuses_ping`. Scénario `rpc-diagnostic` :
+  second serveur `slack` déclaré par `mcp.add` (`ping = false`, nouveau champ de
+  `[[mcp_servers]]`), `advance_clock 2m`, puis `mcp.list` montre les deux serveurs `ready`
+  sans erreur et `doctor` rend `mcp.slack` sain. Harnais : avec `[[mcp_servers]]`,
+  l'entretien du superviseur passe après chaque `advance_clock`, comme sa boucle l'aurait
+  fait ; sans le correctif, le scénario rend `slack` en `connecting` avec l'erreur.
+- Ce qui continue de marcher : `maintenance_stops_idle_servers_and_checks_health` (serveur
+  perdu ⇒ panne), `health_probe_depends_on_version` (`server/discover` en 2026-07-28),
+  les scénarios `rpc-mcp-et-import` et `rpc-autorisation-mcp`, sans `advance_clock`,
+  inchangés.
+- Limite : un serveur sans `ping` n'est plus sondé pendant son silence ; sa coupure se
+  voit au prochain appel d'outil.
+
+Closes #276.
+
 ### 1.0.26
 
 **Trace des outils : deux modes résumés, `resume` sans modèle et `narre` par un petit
