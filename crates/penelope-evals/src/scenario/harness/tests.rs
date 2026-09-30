@@ -205,3 +205,66 @@ async fn a_leaked_reference_is_reported_and_does_not_hang() {
     assert!(!shut_down(life, "fuite").await);
     assert_eq!(std::sync::Arc::strong_count(&leak), 1);
 }
+
+/// Un clic sur une opération répond au toast puis travaille dans une tâche détachée
+/// (issue #73) ; l'étape `telegram` attend cette tâche, même quand sa carte met 300 ms à
+/// partir, plus que le silence qui concluait l'étape (#269). Le bouton « Annuler »
+/// (`noop`) dit son issue dans la conversation, une fois le clavier retiré : c'est ce
+/// retrait que le transport fait traîner.
+#[tokio::test]
+async fn a_telegram_step_waits_for_the_detached_work_of_a_click() {
+    use penelope_telegram::api::{BotTransport as _, method};
+    let scenario = crate::scenario::Scenario {
+        dir: std::path::PathBuf::new(),
+        spec: toml::from_str("name = \"clic-lent\"\nsteps = []\n").unwrap(),
+        script: Vec::new(),
+    };
+    let mut h = super::Harness::start(&scenario, crate::scenario::Mode::Replay)
+        .await
+        .unwrap();
+    let transport = h.telegram.transport.clone();
+    let action = {
+        // Rien de la vie n'est gardé au-delà : sa fermeture n'attend personne.
+        let d = h.daemon().unwrap();
+        penelope_telegram::ActionStore::new(d.services.store.clone(), d.services.clock.clone(), 42)
+            .create(
+                penelope_telegram::actions::kind::SCREEN_DO,
+                "noop",
+                json!({}),
+                60_000,
+                true,
+            )
+            .await
+            .unwrap()
+    };
+    transport
+        .call(
+            method::SEND_MESSAGE,
+            json!({"chat_id": 42, "text": "Écran", "reply_markup": {"inline_keyboard":
+                [[{"text": "Annuler", "callback_data": action.token}]]}}),
+        )
+        .await
+        .unwrap();
+    transport
+        .set_call_delay(
+            method::EDIT_MESSAGE_REPLY_MARKUP,
+            std::time::Duration::from_millis(300),
+        )
+        .await;
+
+    let v = h.telegram(None, Some("Annuler")).await.unwrap();
+
+    let texts: Vec<&str> = v["screens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s["text"].as_str())
+        .collect();
+    assert!(
+        texts.iter().any(|t| t.contains("Annulé")),
+        "l'étape s'est conclue sans la carte du clic : {texts:?}"
+    );
+    if let Some(life) = h.life.take() {
+        shut_down(life, "clic-lent").await;
+    }
+}

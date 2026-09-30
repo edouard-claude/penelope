@@ -112,38 +112,8 @@ struct Harness<'a> {
 
 pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
     let spec = &scenario.spec;
-    let clock = Arc::new(match &spec.clock {
-        Some(raw) => TestClock::new(
-            chrono::DateTime::parse_from_rfc3339(raw)
-                .with_context(|| format!("horloge de départ `{raw}`"))?
-                .timestamp_millis(),
-        ),
-        None => TestClock::default(),
-    });
-    let start_ms = clock.now_ms();
-    let mut h = Harness {
-        spec,
-        mode,
-        root: tempfile::tempdir().context("répertoire temporaire")?,
-        clock,
-        script: Arc::new(Mutex::new(scenario.script.iter().cloned().collect())),
-        seen: Arc::new(Mutex::new(Vec::new())),
-        recorded: Arc::new(Mutex::new(Vec::new())),
-        sent: Arc::new(Mutex::new(Vec::new())),
-        script_errors: Arc::new(Mutex::new(Vec::new())),
-        life: None,
-        db: None,
-        session: String::new(),
-        bound: BTreeMap::new(),
-        outcomes: Vec::new(),
-        crashed: false,
-        telegram: telegram::Chat::default(),
-        http: match spec.http.is_empty() {
-            true => None,
-            false => Some(crate::scenario::http::Server::start(spec.http.clone()).await?),
-        },
-    };
-    h.boot(true).await?;
+    let mut h = Harness::start(scenario, mode).await?;
+    let start_ms = h.clock.now_ms();
     h.run_steps().await?;
     if let Some(e) = lock(&h.script_errors).first() {
         anyhow::bail!("model.jsonl cite un identifiant introuvable : {e}");
@@ -210,6 +180,46 @@ fn workspace_of(services: &Services) -> PathBuf {
         .into_iter()
         .next()
         .unwrap_or_else(|| services.platform.dirs.data().join("workspace"))
+}
+
+impl<'a> Harness<'a> {
+    /// Le harnais d'un scénario, sa première vie démarrée : horloge de départ, script,
+    /// faux serveur HTTP, services et daemon sur un répertoire neuf.
+    async fn start(scenario: &'a Scenario, mode: Mode) -> anyhow::Result<Harness<'a>> {
+        let spec = &scenario.spec;
+        let clock = Arc::new(match &spec.clock {
+            Some(raw) => TestClock::new(
+                chrono::DateTime::parse_from_rfc3339(raw)
+                    .with_context(|| format!("horloge de départ `{raw}`"))?
+                    .timestamp_millis(),
+            ),
+            None => TestClock::default(),
+        });
+        let mut h = Harness {
+            spec,
+            mode,
+            root: tempfile::tempdir().context("répertoire temporaire")?,
+            clock,
+            script: Arc::new(Mutex::new(scenario.script.iter().cloned().collect())),
+            seen: Arc::new(Mutex::new(Vec::new())),
+            recorded: Arc::new(Mutex::new(Vec::new())),
+            sent: Arc::new(Mutex::new(Vec::new())),
+            script_errors: Arc::new(Mutex::new(Vec::new())),
+            life: None,
+            db: None,
+            session: String::new(),
+            bound: BTreeMap::new(),
+            outcomes: Vec::new(),
+            crashed: false,
+            telegram: telegram::Chat::default(),
+            http: match spec.http.is_empty() {
+                true => None,
+                false => Some(crate::scenario::http::Server::start(spec.http.clone()).await?),
+            },
+        };
+        h.boot(true).await?;
+        Ok(h)
+    }
 }
 
 impl Harness<'_> {

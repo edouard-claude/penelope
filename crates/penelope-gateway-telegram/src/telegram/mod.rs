@@ -108,6 +108,9 @@ pub struct TelegramGateway {
     /// Demandes de rattrapage adressées à la boucle de trace : `deliver` attend qu'elle ait
     /// lu tout le bus avant d'enfiler la réponse (#222). `None` : pas de boucle.
     trace_sync: std::sync::Mutex<Option<trace::live::SyncTx>>,
+    /// Tâches détachées de clics encore en vol (issue #73) : le harnais de scénarios les
+    /// attend avant de conclure une étape (#269).
+    clicks_busy: std::sync::atomic::AtomicUsize,
 }
 
 impl TelegramGateway {
@@ -165,9 +168,15 @@ impl TelegramGateway {
             trace_lock: tokio::sync::Mutex::new(()),
             trace_busy: std::sync::atomic::AtomicUsize::new(0),
             trace_sync: std::sync::Mutex::new(None),
+            clicks_busy: std::sync::atomic::AtomicUsize::new(0),
             daemon,
             bot,
         })
+    }
+
+    /// Aucun clic dont le travail détaché court encore.
+    pub fn clicks_idle(&self) -> bool {
+        self.clicks_busy.load(std::sync::atomic::Ordering::SeqCst) == 0
     }
 
     /// Branche la passerelle dans le daemon (messages, livraison).

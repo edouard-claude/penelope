@@ -2,9 +2,9 @@
 //! contiennent, en lignes JSON (une par objet, `type` en tête), avant normalisation.
 //!
 //! Ordre des lignes : sessions (création), puis pour chaque session ses messages et ses
-//! nœuds de résumé ; événements du journal (ordre d'écriture) ; tours ; effets ; requêtes
-//! LLM ; approbations ; artefacts ; usage ; `tg_outbox` ; fichiers du workspace ;
-//! vérification de la chaîne d'audit.
+//! nœuds de résumé ; événements du journal (ordre d'écriture) ; tours ; effets (par
+//! création de leur session, puis par appel) ; requêtes LLM ; approbations ; artefacts ;
+//! usage ; `tg_outbox` ; fichiers du workspace ; vérification de la chaîne d'audit.
 
 use penelope_app::services::Services;
 use penelope_context::transcript::Entry;
@@ -88,12 +88,16 @@ pub async fn dump(s: &Services, workspace: &Path) -> anyhow::Result<Vec<Value>> 
     );
 
     // Les lectures parallèles (#85) planifient leurs effets en même temps : l'ordre
-    // d'insertion n'est pas reproductible, celui des appels l'est.
+    // d'insertion n'est pas reproductible, celui des appels l'est. Les sessions vont par
+    // création, pas par identifiant : un ULID tiré sur l'horloge murale ordonne au
+    // hasard deux sessions nées dans la même milliseconde (#269).
     lines.extend(
         rows(
             s,
-            "SELECT id, session_id, step_id, kind, tool, state, attempts, idempotent, request
-             FROM effects ORDER BY session_id, step_id, tool, rowid",
+            "SELECT e.id, e.session_id, e.step_id, e.kind, e.tool, e.state, e.attempts,
+                    e.idempotent, e.request
+             FROM effects e LEFT JOIN sessions s ON s.id = e.session_id
+             ORDER BY s.created_at, s.rowid, e.session_id, e.step_id, e.tool, e.rowid",
             |r| {
                 let request: String = r.get(8)?;
                 Ok(json!({
@@ -395,6 +399,55 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use penelope_kernel::clock::TestClock;
+    use penelope_kernel::ids::Ulid;
+    use penelope_store::rusqlite::params;
+    use std::sync::Arc;
+
+    /// Deux sessions dont les identifiants (ULID tirés sur l'horloge murale) s'ordonnent
+    /// à l'inverse de leur création : leurs effets suivent la création, pas
+    /// l'identifiant, sinon deux rejeux numérotent `{{effect:N}}` différemment (#269).
+    #[tokio::test]
+    async fn effects_follow_the_creation_order_of_their_session_not_its_ulid() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::default());
+        let s = Services::for_tests(dir.path().to_path_buf(), clock)
+            .await
+            .unwrap();
+        // La première session née porte le plus grand identifiant.
+        let first = format!("s_{}", Ulid::from_parts(2_000, 7));
+        let second = format!("s_{}", Ulid::from_parts(1_000, 7));
+        let born = [
+            (first.clone(), "2026-01-01T00:00:00Z"),
+            (second.clone(), "2026-01-01T00:00:01Z"),
+        ];
+        s.store
+            .write(move |tx| {
+                for (i, (id, at)) in born.iter().enumerate() {
+                    tx.execute(
+                        "INSERT INTO sessions(id, kind, created_at, updated_at)
+                         VALUES(?1, 'chat', ?2, ?2)",
+                        params![id, at],
+                    )?;
+                    tx.execute(
+                        "INSERT INTO effects(id, session_id, idem_key, kind, tool, request,
+                            state, created_at, updated_at)
+                         VALUES(?1, ?2, ?1, 'tool', 'fs_read', '{}', 'completed', ?3, ?3)",
+                        params![format!("e_{i}"), id, at],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let lines = dump(&s, &dir.path().join("workspace")).await.unwrap();
+        let sessions: Vec<&str> = lines
+            .iter()
+            .filter(|l| l["type"] == "effect")
+            .filter_map(|l| l["session"].as_str())
+            .collect();
+        assert_eq!(sessions, [first.as_str(), second.as_str()]);
+    }
 
     /// L'intérieur d'un dépôt nu (faux remote d'un scénario) n'entre pas dans la photo :
     /// son `config` change avec la version de git et la machine.

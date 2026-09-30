@@ -54,6 +54,27 @@ impl Screen {
     }
 }
 
+/// Le travail détaché d'un clic, compté tant qu'il court : la garde redescend le compteur
+/// à la fin de la tâche, même si elle panique (#269).
+pub(super) struct ClickInFlight(std::sync::Arc<TelegramGateway>);
+
+impl ClickInFlight {
+    /// Compté avant le `spawn` : qui lit le compteur après `process_update` voit la tâche.
+    pub(super) fn start(g: &std::sync::Arc<TelegramGateway>) -> ClickInFlight {
+        g.clicks_busy
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        ClickInFlight(g.clone())
+    }
+}
+
+impl Drop for ClickInFlight {
+    fn drop(&mut self) {
+        self.0
+            .clicks_busy
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Résultat d'une opération d'écran.
 struct Done {
     toast: String,
@@ -366,7 +387,9 @@ impl TelegramGateway {
                     action.args["params"].clone(),
                     action.args["back"].clone(),
                 );
+                let in_flight = ClickInFlight::start(self);
                 tokio::spawn(async move {
+                    let _in_flight = in_flight;
                     let done = match Box::pin(me.perform(chat_id, topic_id, &target, &params)).await
                     {
                         Ok(d) => d,

@@ -12,6 +12,43 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.25
+
+**Scénarios : deux rejeux de `plan-en-phases` différaient par intermittence sur la CI
+Linux (#269).** Le rejeu unique contre `expected.jsonl` passait ; c'est
+`two_replays_of_every_scenario_are_identical`, sous la charge de toute la suite, qui
+tombait. Deux tests rouges avant le correctif : une étape `telegram` dont le clic met 300 ms
+à envoyer sa carte se concluait sans elle ; et deux sessions dont les ULID s'ordonnent à
+l'inverse de leur création voyaient leurs effets relevés dans l'ordre des identifiants.
+
+- Cause 1 : un clic sur une opération d'écran répond au toast puis travaille dans une
+  tâche détachée (`tokio::spawn(perform(…))`, issue #73) ; le harnais concluait l'étape
+  après cinq pas de 20 ms sans nouvel envoi, sans savoir qu'une tâche courait. Pour
+  « Vas-y », `go_plan` puis `launch` font une dizaine d'accès SQLite avant la première
+  carte : sur un runner chargé, elle glissait dans l'étape suivante, `drive` photographiait
+  les runs avant leur création, et tout se décalait jusqu'à la fin.
+- Cause 2 : le relevé du monde triait les effets par `session_id`, un ULID tiré sur
+  l'horloge murale : deux sessions nées dans la même milliseconde s'ordonnaient au hasard,
+  et la numérotation `{{effect:N}}` avec elles.
+- Correctif : `TelegramGateway` compte ses clics en vol (`clicks_idle`), compté avant le
+  `spawn` et redescendu par une garde `Drop`, donc aussi quand la tâche panique ;
+  `settle()` et `play` du harnais ne concluent plus tant qu'un clic court, avec un plafond
+  de cinq secondes et une erreur qui le dit. Les effets sont triés par création de leur
+  session (`sessions.created_at, rowid`), puis par appel comme avant.
+- Attendus régénérés : seuls des numéros `{{effect:N}}` bougent, vérifié ligne à ligne.
+- Tests : le clic lent et l'ordre des effets dans `penelope-evals` ; le compteur d'un clic
+  réel et la garde sous panique dans la passerelle ;
+  `two_replays_of_every_scenario_are_identical` cinq fois de suite avec la suite complète
+  en parallèle.
+- Ce qui continue de marcher : les clics traités en ligne (« Continuer », « Laisse
+  filer », « Déjà traité ») ne passent pas par le compteur et gardent leur attente par le
+  silence ; l'ordre des effets d'une même session est inchangé (`step_id, tool, rowid`) ;
+  un effet sans session reste en tête, comme avant.
+- Limite connue : les tâches lancées depuis `perform` lui-même (`upgrade.install`,
+  `burst.ingest`) ne sont pas comptées ; aucun scénario ne les clique.
+
+Closes #269.
+
 ### 1.0.24
 
 **Idempotence : un appel rendu en texte par un modèle local recevait toujours `call_0`, et

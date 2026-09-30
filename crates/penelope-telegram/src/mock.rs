@@ -27,6 +27,9 @@ struct State {
     files: std::collections::BTreeMap<String, Vec<u8>>,
     /// Lenteur simulée d'un téléchargement (issue #69).
     download_delay: std::time::Duration,
+    /// Lenteur simulée d'un appel, par méthode : le travail détaché d'un clic qui tarde
+    /// à envoyer sa carte (#269).
+    call_delays: std::collections::BTreeMap<String, std::time::Duration>,
 }
 
 /// Transport simulé.
@@ -114,6 +117,15 @@ impl MockTransport {
         self.state.lock().await.download_delay = d;
     }
 
+    /// Chaque appel de `method` dort `d` avant d'être enregistré et servi.
+    pub async fn set_call_delay(&self, method: &str, d: std::time::Duration) {
+        self.state
+            .lock()
+            .await
+            .call_delays
+            .insert(method.to_string(), d);
+    }
+
     pub async fn clear(&self) {
         let mut g = self.state.lock().await;
         g.calls.clear();
@@ -152,6 +164,13 @@ impl BotTransport for MockTransport {
     }
 
     async fn call(&self, method: &str, body: Value) -> TgResult<ApiResponse> {
+        // Le verrou est relâché pendant l'attente : `calls()` reste lisible.
+        let delay = self.state.lock().await.call_delays.get(method).copied();
+        if let Some(d) = delay
+            && !d.is_zero()
+        {
+            tokio::time::sleep(d).await;
+        }
         let mut g = self.state.lock().await;
         if let Some(m) = g.transport_failures.pop_front() {
             return Err(TgError::Transport(m));
